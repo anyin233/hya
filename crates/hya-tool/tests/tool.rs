@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use hya_proto::{ToolName, ToolSchema};
 use hya_tool::{
     Action, Decision, InteractionPlane, LspPlane, Mode, PermissionPlane, PermissionRules,
-    QuestionAnswer, Resource, Rule, SkillPlane, SpawnerPlane, TodoPlane, Tool, ToolCtx,
+    QuestionAnswer, Resource, Rule, SkillPlane, SpawnerPlane, TodoPlane, Tool, ToolCtx, ToolError,
     ToolPermission, ToolRegistry, WebSearchPlane,
 };
 use serde_json::{Value, json};
@@ -38,6 +38,7 @@ fn ctx_with(rules: Vec<Rule>, workdir: PathBuf) -> ToolCtx {
     let (interaction, _irx) = InteractionPlane::new();
     let (spawner, _srx) = SpawnerPlane::new();
     ToolCtx {
+        workflows: hya_tool::WorkflowPlane::disconnected(),
         permission,
         interaction,
         spawner,
@@ -475,6 +476,7 @@ async fn shell_happy_and_cancelled() {
     assert_eq!(out["exit_code"], 0);
 
     let cancelled = ToolCtx {
+        workflows: hya_tool::WorkflowPlane::disconnected(),
         permission: ctx.permission.clone(),
         interaction: ctx.interaction.clone(),
         spawner: ctx.spawner.clone(),
@@ -509,6 +511,7 @@ async fn task_tool_is_lead_only() {
     let (interaction, _irx) = InteractionPlane::new();
     let (spawner, _srx) = SpawnerPlane::new();
     let ctx = ToolCtx {
+        workflows: hya_tool::WorkflowPlane::disconnected(),
         permission,
         interaction,
         spawner,
@@ -540,6 +543,7 @@ async fn ask_user_select_returns_index_and_answer() {
     let (interaction, mut irx) = InteractionPlane::new();
     let (spawner, _srx) = SpawnerPlane::new();
     let ctx = ToolCtx {
+        workflows: hya_tool::WorkflowPlane::disconnected(),
         permission,
         interaction,
         spawner,
@@ -639,6 +643,121 @@ async fn find_matches_glob_with_metadata() {
             .await
             .is_err()
     );
+}
+
+#[tokio::test]
+async fn find_resolves_relative_path_under_workdir() {
+    let dir = tempdir();
+    tokio::fs::create_dir_all(dir.join("src/sub"))
+        .await
+        .unwrap();
+    tokio::fs::write(dir.join("src/a.rs"), "fn a(){}")
+        .await
+        .unwrap();
+    tokio::fs::write(dir.join("src/sub/b.txt"), "bb")
+        .await
+        .unwrap();
+    tokio::fs::write(dir.join("c.txt"), "ccc").await.unwrap();
+    let reg = ToolRegistry::builtins();
+    let find = reg.get("find").unwrap();
+    let ctx = ctx_with(vec![allow(Action::Glob, "*")], dir);
+
+    let out = find
+        .execute(&ctx, json!({ "pattern": "*", "path": "src" }))
+        .await
+        .unwrap();
+
+    let mut paths: Vec<String> = out["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["path"].as_str().unwrap().to_string())
+        .collect();
+    paths.sort();
+    assert_eq!(paths.len(), 2);
+    assert!(paths[0].ends_with("src/a.rs"));
+    assert!(paths[1].ends_with("src/sub/b.txt"));
+    assert!(paths.iter().all(|p| !p.ends_with("c.txt")));
+}
+
+#[tokio::test]
+async fn find_accepts_absolute_path_inside_workdir() {
+    let dir = tempdir();
+    tokio::fs::create_dir_all(dir.join("deep")).await.unwrap();
+    tokio::fs::write(dir.join("x.rs"), "fn x(){}")
+        .await
+        .unwrap();
+    tokio::fs::write(dir.join("deep/y.md"), "hello md!")
+        .await
+        .unwrap();
+    let reg = ToolRegistry::builtins();
+    let find = reg.get("find").unwrap();
+    let ctx = ctx_with(vec![allow(Action::Glob, "*")], dir.clone());
+
+    let out = find
+        .execute(
+            &ctx,
+            json!({ "pattern": "*", "path": dir.to_string_lossy() }),
+        )
+        .await
+        .unwrap();
+
+    let results = out["results"].as_array().unwrap();
+    assert_eq!(results.len(), 2);
+    let x = results
+        .iter()
+        .find(|r| r["path"].as_str().unwrap().ends_with("x.rs"))
+        .unwrap();
+    assert_eq!(x["size"], 8);
+}
+
+#[tokio::test]
+async fn find_rejects_absolute_path_outside_workdir() {
+    let dir = tempdir();
+    let outside = tempdir();
+    tokio::fs::write(outside.join("secret.txt"), "s")
+        .await
+        .unwrap();
+    let reg = ToolRegistry::builtins();
+    let find = reg.get("find").unwrap();
+    let ctx = ctx_with(
+        vec![
+            allow(Action::Glob, "*"),
+            deny(Action::ExternalDirectory, "*"),
+        ],
+        dir,
+    );
+
+    let err = find
+        .execute(
+            &ctx,
+            json!({ "pattern": "*", "path": outside.to_string_lossy() }),
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(err, ToolError::Permission(_)));
+}
+
+#[tokio::test]
+async fn find_rejects_parent_traversal_out_of_workdir() {
+    let dir = tempdir();
+    let reg = ToolRegistry::builtins();
+    let find = reg.get("find").unwrap();
+    let ctx = ctx_with(
+        vec![
+            allow(Action::Glob, "*"),
+            deny(Action::ExternalDirectory, "*"),
+        ],
+        dir,
+    );
+
+    let err = find
+        .execute(&ctx, json!({ "pattern": "*", "path": "../" }))
+        .await
+        .unwrap_err();
+
+    assert!(matches!(err, ToolError::Permission(_)));
 }
 
 #[tokio::test]

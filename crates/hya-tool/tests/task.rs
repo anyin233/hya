@@ -36,6 +36,7 @@ fn ctx_with_session(rules: Vec<Rule>, spawner: SpawnerPlane, session: SessionId)
     let (interaction, _irx) = InteractionPlane::new();
     let operation = ToolOperation::from_tool_call(ToolCallId::new());
     ToolCtx {
+        workflows: hya_tool::WorkflowPlane::disconnected(),
         permission,
         interaction,
         spawner: spawner.for_session(session),

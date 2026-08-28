@@ -261,6 +261,11 @@ impl E2eEnv {
         Ok(!self.fake.requests()?.is_empty())
     }
 
+    /// Every chat-completions request body FakeLlm has recorded.
+    pub fn fake_requests(&self) -> Result<Vec<Value>, E2eError> {
+        self.fake.requests()
+    }
+
     /// GET JSON from the backend (Compat/native paths).
     pub async fn get_json(&self, path: &str) -> Result<Value, E2eError> {
         let url = format!("{}{path}", self.backend.url);

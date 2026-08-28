@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::future::Future;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -251,6 +252,79 @@ impl SpawnRequestSink for BoundSpawnRequestSink {
     }
 }
 
+/// A workflow-tool request bound to the triggering turn's runtime snapshot.
+pub struct BoundWorkflowRequest {
+    binding: TurnBinding,
+    request: hya_tool::WorkflowRequest,
+}
+
+impl BoundWorkflowRequest {
+    /// Consume into the retained turn binding and the raw tool-plane request.
+    #[must_use]
+    pub fn into_parts(self) -> (TurnBinding, hya_tool::WorkflowRequest) {
+        (self.binding, self.request)
+    }
+}
+
+/// Core-owned sender for turn-bound workflow requests.
+#[derive(Clone)]
+pub struct BoundWorkflowSender {
+    tx: tokio::sync::mpsc::Sender<BoundWorkflowRequest>,
+}
+
+impl BoundWorkflowSender {
+    /// Create a bounded channel pair for the host's workflow worker loop.
+    #[must_use]
+    pub fn with_capacity(
+        capacity: usize,
+    ) -> (Self, tokio::sync::mpsc::Receiver<BoundWorkflowRequest>) {
+        let capacity = capacity.clamp(1, 65_535);
+        let (tx, rx) = tokio::sync::mpsc::channel(capacity);
+        (Self { tx }, rx)
+    }
+
+    fn disconnected() -> Self {
+        let (sender, receiver) = Self::with_capacity(1);
+        drop(receiver);
+        sender
+    }
+
+    /// Derive a raw tool-plane facade closed over one already-resolved turn.
+    #[must_use]
+    pub fn for_binding(&self, binding: &TurnBinding) -> hya_tool::WorkflowPlane {
+        hya_tool::WorkflowPlane::from_sink(Arc::new(BoundWorkflowSink {
+            tx: self.tx.clone(),
+            binding: binding.clone(),
+        }))
+    }
+}
+
+struct BoundWorkflowSink {
+    tx: tokio::sync::mpsc::Sender<BoundWorkflowRequest>,
+    binding: TurnBinding,
+}
+
+impl hya_tool::WorkflowRequestSink for BoundWorkflowSink {
+    fn try_send(
+        &self,
+        request: hya_tool::WorkflowRequest,
+    ) -> Result<(), hya_tool::WorkflowSendError> {
+        self.tx
+            .try_send(BoundWorkflowRequest {
+                binding: self.binding.clone(),
+                request,
+            })
+            .map_err(|error| match error {
+                tokio::sync::mpsc::error::TrySendError::Full(_) => {
+                    hya_tool::WorkflowSendError::Full
+                }
+                tokio::sync::mpsc::error::TrySendError::Closed(_) => {
+                    hya_tool::WorkflowSendError::Closed
+                }
+            })
+    }
+}
+
 /// Central session runtime: persistence, providers, tools, and turn execution.
 ///
 /// Construct with [`SessionEngine::new`], then chain `with_*` builders for
@@ -259,11 +333,16 @@ impl SpawnRequestSink for BoundSpawnRequestSink {
 pub struct SessionEngine {
     store: SessionStore,
     providers: Arc<ProviderRouter>,
+    /// Cross-model failover plane: preferred [`ModelRef`] → its ordered
+    /// candidate chain (the preferred model itself first). Empty by default,
+    /// which keeps turn streaming byte-identical to a direct router call.
+    model_fallbacks: HashMap<ModelRef, Vec<ModelRef>>,
     runtime: Arc<RuntimeRegistry>,
     catalog_refresh: Option<Arc<dyn RuntimeCatalogRefresh>>,
     permission: PermissionPlane,
     interaction: InteractionPlane,
     spawner: BoundSpawnSender,
+    workflows: BoundWorkflowSender,
     mailbox: MailboxPlane,
     todo: TodoPlane,
     websearch: WebSearchPlane,
@@ -293,6 +372,7 @@ impl SessionEngine {
     ) -> Self {
         let (interaction, _rx) = InteractionPlane::new();
         let spawner = BoundSpawnSender::disconnected();
+        let workflows = BoundWorkflowSender::disconnected();
         let mailbox = MailboxPlane::disconnected();
         let todo = TodoPlane::default();
         let websearch = WebSearchPlane::default();
@@ -301,11 +381,13 @@ impl SessionEngine {
         Self {
             store,
             providers,
+            model_fallbacks: HashMap::new(),
             runtime,
             catalog_refresh: None,
             permission,
             interaction,
             spawner,
+            workflows,
             mailbox,
             todo,
             websearch,
@@ -332,6 +414,28 @@ impl SessionEngine {
         self
     }
 
+    /// Install the cross-model failover plane: preferred [`ModelRef`] → its
+    /// ordered candidate chain (the preferred model itself first, matching
+    /// `ResolvedCategory.fallback_chain` semantics).
+    ///
+    /// Chains whose first candidate is not the preferred model are ignored
+    /// rather than half-honored. With the default empty plane every request
+    /// streams through its single preferred model exactly as before.
+    #[must_use]
+    pub fn with_model_fallbacks(mut self, fallbacks: HashMap<ModelRef, Vec<ModelRef>>) -> Self {
+        self.model_fallbacks = fallbacks
+            .into_iter()
+            .filter(|(preferred, chain)| chain.first() == Some(preferred))
+            .collect();
+        self
+    }
+
+    /// Ordered cross-model candidates for a preferred model (preferred
+    /// first), or `None` when no chain is configured for it.
+    pub(crate) fn model_fallback_chain(&self, preferred: &ModelRef) -> Option<&[ModelRef]> {
+        Some(self.model_fallbacks.get(preferred)?.as_slice())
+    }
+
     /// Install plugin/host hooks for command/tool/chat interception and events.
     #[must_use]
     pub fn with_hooks(mut self, hooks: Arc<dyn HookDispatcher>) -> Self {
@@ -344,6 +448,13 @@ impl SessionEngine {
     pub fn with_sidecar_environment(mut self, environment: Arc<dyn SidecarEnvironment>) -> Self {
         self.sidecar_environment = Some(environment);
         self
+    }
+
+    /// Environment used to resolve per-agent bound sidecar factories, mirroring
+    /// the task-tool spawn path; `None` outside application-owned engines.
+    #[must_use]
+    pub fn sidecar_environment(&self) -> Option<Arc<dyn SidecarEnvironment>> {
+        self.sidecar_environment.clone()
     }
 
     /// Install optional catalog refresh before root runtime binds.
@@ -364,6 +475,17 @@ impl SessionEngine {
     #[must_use]
     pub fn with_spawn_sender(mut self, spawner: BoundSpawnSender) -> Self {
         self.spawner = spawner;
+        self
+    }
+
+    /// Install the host-side receiver pair that serves `workflow` tool runs.
+    ///
+    /// Mirrors [`Self::with_spawn_sender`]: the engine owns this sender for its
+    /// whole life, and the host worker owns an `Arc<SessionEngine>` while it
+    /// drains, so queued requests always find a live executor.
+    #[must_use]
+    pub fn with_workflow_sender(mut self, workflows: BoundWorkflowSender) -> Self {
+        self.workflows = workflows;
         self
     }
 

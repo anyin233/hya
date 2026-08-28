@@ -19,7 +19,8 @@ use hya_core::{CategoryEntry, CategoryRegistry, SubagentLimits};
 use hya_mcp::McpServerConfig;
 use hya_plugin::config::PluginEntry;
 use hya_provider::{
-    HttpProvider, ProviderKind, ProviderRouter, ReasoningEffort, resolve_default_reasoning,
+    AuthRefresher, BearerResolver, HttpProvider, ProviderKind, ProviderRouter, ReasoningEffort,
+    resolve_default_reasoning,
 };
 use hya_tool::{
     InvocationPolicy, InvocationRule, Mode, PermissionModel, PermissionTarget, WebSearchConfig,
@@ -1469,6 +1470,33 @@ fn choose_default(file_default: Option<String>, models: &[ModelEntry]) -> String
         .unwrap_or_default()
 }
 
+/// Map OAuth failures onto provider errors exactly as the bearer-resolver
+/// route already does: re-login/entitlement issues are human actions and stay
+/// non-retryable `ProviderError::AuthExpired` for router/engine failover.
+fn map_oauth_error(err: crate::oauth::OAuthError) -> hya_provider::ProviderError {
+    use hya_provider::ProviderError;
+
+    match err {
+        crate::oauth::OAuthError::NeedsLogin {
+            provider,
+            oauth_type,
+            reason,
+        } => ProviderError::AuthExpired {
+            provider: provider.clone(),
+            hint: format!(
+                "{reason}. Re-login: hya-backend oauth login --provider {provider} --type {oauth_type}"
+            ),
+        },
+        crate::oauth::OAuthError::Entitlement { provider, detail } => ProviderError::AuthExpired {
+            provider,
+            hint: format!(
+                "not entitled for API access ({detail}); API key path or subscription upgrade required"
+            ),
+        },
+        other => ProviderError::Http(other.to_string()),
+    }
+}
+
 /// Load hya's config into a ready router. `Ok(None)` means no usable config
 /// (no file, empty, or no providers) — the caller should use the offline provider.
 pub fn load() -> anyhow::Result<Option<ResolvedConfig>> {
@@ -1520,33 +1548,22 @@ pub fn load() -> anyhow::Result<Option<ResolvedConfig>> {
             provider = provider.with_grok_session_auth(env!("CARGO_PKG_VERSION"), "grok-cli");
         }
         if credential.use_oauth_refresh {
-            let provider_id = p.id.clone();
-            provider = provider.with_bearer_resolver(Arc::new(move || {
-                crate::oauth::ensure_access_token(&provider_id).map_err(|err| {
-                    use hya_provider::ProviderError;
-                    match err {
-                        crate::oauth::OAuthError::NeedsLogin {
-                            provider,
-                            oauth_type,
-                            reason,
-                        } => ProviderError::AuthExpired {
-                            provider: provider.clone(),
-                            hint: format!(
-                                "{reason}. Re-login: hya-backend oauth login --provider {provider} --type {oauth_type}"
-                            ),
-                        },
-                        crate::oauth::OAuthError::Entitlement { provider, detail } => {
-                            ProviderError::AuthExpired {
-                                provider,
-                                hint: format!(
-                                    "not entitled for API access ({detail}); API key path or subscription upgrade required"
-                                ),
-                            }
-                        }
-                        other => ProviderError::Http(other.to_string()),
-                    }
-                })
-            }));
+            let resolver_id = p.id.clone();
+            let refresher_id = p.id.clone();
+            let resolver: BearerResolver = Arc::new(move || {
+                crate::oauth::ensure_access_token(&resolver_id).map_err(map_oauth_error)
+            });
+            provider = provider.with_bearer_resolver(resolver);
+            // Auth-recovery level: when a streamed request is rejected with a
+            // pre-stream 401/403, force one credential refresh (single-flight,
+            // rotated-refresh-token safe) and retry inside the route's existing
+            // attempt budget. `AuthExpired` stays non-retryable here too.
+            let refresher: AuthRefresher = Arc::new(move |stale_token: &str| {
+                crate::oauth::force_refresh_access_token(&refresher_id, stale_token)
+                    .map(|_fresh| ())
+                    .map_err(map_oauth_error)
+            });
+            provider = provider.with_auth_refresher(refresher);
         }
         router = router.with(Arc::new(provider));
         authorized.push(p);

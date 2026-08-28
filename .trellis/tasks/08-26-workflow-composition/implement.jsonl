@@ -1,0 +1,7 @@
+{"file": ".trellis/tasks/08-26-workflow-composition/design.md", "reason": "Seam inventory + decisions 1-7 governing the engine, CLI, and tool implementation"}
+{"file": "docs/adr/0013-user-assembled-agent-workflows.md", "reason": "ADR: composition reuses governed subagent machinery instead of a second execution path"}
+{"file": "docs/workflows.md", "reason": "User-facing format/run-surface contract that docs and tests must stay in sync with"}
+{"file": "crates/hya-core/src/workflow/run.rs", "reason": "Round 2 review fix: resolve_agent mirrors the task path per TARGET agent - own agent_roster_for_binding roster, hard-required resource policy, and sidecar factory from engine.sidecar_environment(); WorkflowRunContext.agents (caller-roster threading) removed; loop worker resume + verifier gate specs carry the resolved contexts and the verifier resolves once up front"}
+{"file": "crates/hya-core/src/engine.rs", "reason": "Add SessionEngine::sidecar_environment() getter so core surfaces reuse the app-installed BundleSidecarEnvironment exactly like the task spawn path"}
+{"file": "crates/hya-backend/src/workflow_cmd.rs", "reason": "CLI run context drops the caller roster field; stage members self-resolve via the engine"}
+{"file": "crates/hya-app/src/runtime.rs", "reason": "Workflow tool-plane request no longer forwards the caller roster; workflow members inherit their own contexts through the shared engine accessors"}

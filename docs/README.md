@@ -18,7 +18,8 @@ If you want to run hya:
 4. [TUI Keybindings](tui-keybindings.md) — slash commands, leader chords, and the command palette
 5. [TUI Reference](tui-reference.md) — screens, transcript, dialogs, and prompt behavior
 6. [Skills](skills.md) — discovery, skill tool, and authoring
-7. [Troubleshooting](troubleshooting.md)
+7. [Workflows](workflows.md) — user-authored stage DAGs over subagent teams
+8. [Troubleshooting](troubleshooting.md)
 
 If you want to compare hya with adjacent coding agents:
 
@@ -73,6 +74,7 @@ If you want to understand the codebase:
 | [TUI Keybindings](tui-keybindings.md) | Full keyboard shortcuts, slash commands, leader chords, and which-key. |
 | [TUI Reference](tui-reference.md) | User-facing screens, transcript, dialogs, prompt, and overlays. |
 | [Skills](skills.md) | Skill discovery paths, skill tool, and authoring. |
+| [Workflows](workflows.md) | User-authored workflow DAGs: stages, needs edges, fan-out/fan-in joins, loop verification, discovery roots, and `workflow` CLI. |
 | [Plugin protocol](plugin-protocol.md) | Native stdio JSON-RPC ABI for out-of-process plugins. |
 | [Compat plugins](compat-plugins.md) | Bun adapter for OpenCode/Compat JS plugins over the native host. |
 | [AgentBundle Authoring](agent-bundle-authoring.md) | Package, inspect, install, list, describe, and uninstall public AgentBundles, including static and Bun-sidecar forms. |

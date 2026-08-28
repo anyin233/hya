@@ -852,3 +852,158 @@ Bumping the version means updating **all** of these together:
 - A regression proving unchanged behaviour when no usage is reported.
 - A cross-turn test that eviction alone avoids the summarizer.
 - A test that the event log retains full tool output after an evicted turn.
+
+---
+
+## Scenario: Replay-Safe Provider Recovery And Liveness
+
+### 1. Scope / Trigger
+
+- Trigger: changes to HTTP request retries, route ordering, OAuth refresh,
+  category model chains, response-header deadlines, or SSE liveness.
+- Applies to `hya-provider` transport/router code and the `hya-core` turn path.
+
+### 2. Signatures
+
+- `HttpProvider::with_auth_refresher(AuthRefresher)` installs one forced-refresh
+  callback for a failed bearer value.
+- `HttpProvider::with_response_header_timeout(Duration)` overrides the
+  per-attempt header deadline; the default is 60 seconds.
+- `HttpProvider::with_idle_timeout(Duration)` overrides the established SSE
+  frame-idle deadline; the default is five minutes.
+- `SessionEngine::with_model_fallbacks(HashMap<ModelRef, Vec<ModelRef>>)` installs
+  ordered category chains whose first candidate must equal the map key.
+
+### 3. Contracts
+
+- Recovery is allowed only before an `EventStream` exists. A returned stream is
+  the strict no-replay boundary for request retries, route failover, model
+  failover, and auth refresh.
+- One HTTP route uses at most three request attempts for transport errors, 429,
+  and 5xx. A valid bounded `Retry-After` overrides exponential jittered backoff.
+- A pre-stream 401/403 may force-refresh once, only while an attempt slot remains.
+  Header resolution runs again and the token must differ from the failed value.
+- Router failover preserves model identity and advances to the next matching
+  route only after a retryable pre-stream failure.
+- Core model fallback re-enters the router with the next category candidate on a
+  retryable pre-stream error or `UnknownModel`; it never consumes non-retryable
+  protocol, compatibility, decode, or human-action auth errors.
+- The header deadline is a retryable transport failure. The SSE idle deadline is
+  delivered once on the established stream and is not retryable. A stream that
+  keeps producing frames has no total lifetime deadline.
+
+### 4. Validation & Error Matrix
+
+- Invalid fallback chain head -> ignore that chain; the preferred model keeps
+  single-model behavior instead of partially honoring an unsafe order.
+- Transport/header timeout, 429, or 5xx before stream -> bounded same-route
+  retry, then matching-route/model-chain failover when available.
+- 401/403 with no refresher, failed refresh, unchanged token, or no remaining
+  attempt -> original status error; no synthetic auth success.
+- `AuthExpired`, incompatible request, decode error, or other non-retryable
+  failure -> surface immediately without advancing a route/model chain.
+- SSE idle after headers -> one stream error; zero replay or failover.
+
+### 5. Good/Base/Bad Cases
+
+- Good: a header-stalled first route exhausts its bounded attempts, then a second
+  route serves the request before any event exists.
+- Base: a healthy stream resets its five-minute window on every frame and may run
+  longer than five minutes in total.
+- Bad: wrapping the complete stream in a request timeout or replaying a request
+  after one streamed event; either can duplicate visible output and tool effects.
+
+### 6. Tests Required
+
+- Paused-time HTTP tests cover attempt count, backoff, bounded `Retry-After`,
+  response-body deadline, header timeout, and one forced refresh inside budget.
+- Router tests cover matching-route order, retryable/non-retryable classification,
+  and zero failover after stream construction.
+- Core tests cover configured chain order, forward suffixes, `UnknownModel`,
+  non-retryable termination, and no fallback after stream construction.
+- SSE tests cover first-frame idle, inter-frame reset, one timeout error, and a
+  continuously active stream with no total lifetime cap.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```rust
+// A total timeout crosses the replay boundary and aborts healthy long streams.
+timeout(Duration::from_secs(300), provider.stream(request, session, message)).await
+```
+
+#### Correct
+
+```rust
+// Bound headers before stream ownership; bound silence inside the stream pump.
+let response = timeout(header_deadline, request.send()).await??;
+pump(response, decoder, tx, stream_idle_deadline);
+```
+
+---
+
+## Scenario: File Tool Workdir Containment
+
+### 1. Scope / Trigger
+
+- Trigger: adding or changing a file tool path argument, default search root, or
+  external-directory permission check.
+- Applies to read/write/edit/find/glob/grep and future filesystem tools.
+
+### 2. Signatures
+
+- File tools resolve user paths with `resolve_file(&ToolCtx.workdir, path)`.
+- Directory traversal then calls `assert_external_directory(ctx, &root, true)`
+  before reading, walking, or mutating the target.
+- An omitted `find.path` means the bound workdir; it does not mean process cwd.
+
+### 3. Contracts
+
+- Relative paths resolve under the Session workdir.
+- Absolute in-workdir paths and the omitted workdir default proceed without an
+  external-directory grant.
+- Absolute paths and `..` traversal outside the workdir use the same permission
+  plane as every other file tool. A tool must not normalize away the escape and
+  then operate directly.
+- Containment is an authorization rule, not a search-result filter: reject the
+  root before any partial result is returned.
+
+### 4. Validation & Error Matrix
+
+- Relative in-workdir path -> resolve and execute.
+- Absolute in-workdir path -> execute.
+- Absolute out-of-workdir path without grant -> `ToolError::Permission`.
+- Parent traversal out of workdir without grant -> `ToolError::Permission`.
+- Omitted path -> search exactly the Session workdir.
+
+### 5. Good/Base/Bad Cases
+
+- Good: `find {"path":"src"}` searches `<workdir>/src`.
+- Base: `find {}` searches the whole workdir and needs no external assertion.
+- Bad: `PathBuf::from(input.path)` makes a relative path process-cwd dependent
+  and lets `../outside` bypass the shared permission contract.
+
+### 6. Tests Required
+
+- Every path-taking file tool needs relative, absolute in-workdir, absolute
+  outside, and parent-traversal behavior tests where applicable.
+- A containment regression must assert the typed permission failure, not only an
+  empty result or OS error.
+- Mutation proof for `find` replaces the shared resolution with `PathBuf::from`;
+  the relative/outside/traversal tests must fail.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```rust
+let root = PathBuf::from(input.path.unwrap_or_else(|| ".".to_string()));
+```
+
+#### Correct
+
+```rust
+let root = resolve_file(&ctx.workdir, input.path.as_deref().unwrap_or("."))?;
+assert_external_directory(ctx, &root, true).await?;
+```

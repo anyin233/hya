@@ -60,7 +60,14 @@ mod utf8_bom;
 mod webfetch;
 mod websearch;
 mod websearch_response;
+/// User-authored workflow plane and the `workflow` tool.
+pub mod workflow_plane;
 mod write;
+pub use workflow_plane::{
+    WorkflowAction, WorkflowOutcome, WorkflowPlane, WorkflowReply, WorkflowReplyPayload,
+    WorkflowRequest, WorkflowRequestSink, WorkflowSendError, WorkflowStageOutcome, WorkflowSummary,
+    WorkflowTool,
+};
 
 pub use agents::AgentDef;
 pub use formatter::{

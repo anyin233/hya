@@ -1,0 +1,6 @@
+{"file":".trellis/spec/backend/index.md","reason":"Rust workspace conventions for recovered backend changes."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Provider/tool failure contracts."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Baseline Rust test and release gates."}
+{"file":".trellis/spec/frontend/index.md","reason":"TUI package conventions for recovered tracked changes."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Baseline TypeScript verification."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Classify and verify the mixed recovered tree end to end."}

@@ -4,14 +4,17 @@
 
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use hya_proto::{Event, Message, MessageId, ModelRef, SessionId};
-use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue};
+use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue, RETRY_AFTER};
 use secrecy::{ExposeSecret as _, SecretString};
 use serde_json::{Value, json};
-use tokio::sync::mpsc;
+use tokio::{
+    sync::mpsc,
+    time::{sleep, timeout},
+};
 use tokio_stream::wrappers::ReceiverStream;
 
 mod stream;
@@ -26,6 +29,35 @@ use crate::{
     ProviderError, ProviderModel, append_capabilities_identity, append_identity_bytes,
     append_identity_count, append_identity_optional_bytes,
 };
+
+const MAX_REQUEST_ATTEMPTS: usize = 3;
+const BASE_RETRY_DELAY: Duration = Duration::from_millis(100);
+const MAX_RETRY_AFTER: Duration = Duration::from_secs(30);
+const ERROR_BODY_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Bounded wait for response headers on each streamed-completion attempt.
+///
+/// Reasoning endpoints behind large prompt contexts can legitimately take tens
+/// of seconds to produce status line + headers, so 60s sits well above real
+/// pre-header latency while keeping a hung route bounded and operator-visible.
+/// A deadline miss becomes [`ProviderError::Transport`], which the existing
+/// `is_retryable_before_stream()` classification feeds back through the normal
+/// attempt/backoff/router-failover path unchanged. Configurable per route via
+/// [`HttpProvider::with_response_header_timeout`].
+const RESPONSE_HEADER_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Bounded silence between SSE frames on an established stream.
+///
+/// The window opens as soon as headers arrive (covering the wait for the first
+/// event) and resets on every delivered frame, so continuously streaming
+/// responses have unlimited lifetime. Five minutes is deliberately generous:
+/// live providers emit deltas, summaries, or keep-alive traffic far more often
+/// even during long reasoning pauses, so normal think time cannot trip it,
+/// while a wedged connection dies in bounded time. A miss is a post-stream
+/// failure under the no-replay boundary: it surfaces exactly once and is never
+/// retried or failed over. Configurable per route via
+/// [`HttpProvider::with_idle_timeout`].
+const STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Which upstream HTTP protocol shape an [`HttpProvider`] speaks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -64,6 +96,17 @@ impl ProviderKind {
 /// Optional live bearer source for re-resolving tokens on each stream.
 pub type BearerResolver = Arc<dyn Fn() -> Result<String, ProviderError> + Send + Sync>;
 
+/// Optional forced-refresh hook for the pre-stream auth-recovery level.
+///
+/// Invoked at most once per streamed request when a pre-stream HTTP 401/403
+/// response suggests the resolved credential expired server-side even though
+/// earlier resolutions succeeded. The hook receives the credential material
+/// used by the failed request; on success [`HttpProvider`] re-resolves auth
+/// headers exactly once and retries inside the existing
+/// [`MAX_REQUEST_ATTEMPTS`] budget. If the hook is absent, fails, or leaves
+/// the credential unchanged, the original status error surfaces unchanged.
+pub type AuthRefresher = Arc<dyn Fn(&str) -> Result<(), ProviderError> + Send + Sync>;
+
 enum AuthStyle {
     Bearer(SecretString),
     /// ChatGPT Codex OAuth: Bearer JWT plus optional account id header.
@@ -96,10 +139,13 @@ pub struct HttpProvider {
     google_base: Option<String>,
     auth: AuthStyle,
     bearer_resolver: Option<BearerResolver>,
+    auth_refresher: Option<AuthRefresher>,
     models: HashSet<String>,
     model_reasoning_variants: BTreeMap<String, Vec<String>>,
     caps: Capabilities,
     kind: ProviderKind,
+    response_header_timeout: Duration,
+    stream_idle_timeout: Duration,
 }
 
 fn sensitive(value: &str) -> Result<HeaderValue, ProviderError> {
@@ -126,8 +172,12 @@ impl HttpProvider {
         models: impl IntoIterator<Item = String>,
     ) -> Result<Self, ProviderError> {
         // Security: never follow redirects (reqwest keeps `x-api-key` across a
-        // cross-origin 3xx). Connect-timeout only — a read timeout would abort
-        // long streaming completions.
+        // cross-origin 3xx). Connect-timeout only — a blanket read/total timeout
+        // would abort long streaming completions. Liveness comes from the much
+        // narrower RESPONSE_HEADER_TIMEOUT (per attempt) and STREAM_IDLE_TIMEOUT
+        // (between SSE frames) instead.
+        // Timeout overrides are not part of `configured_identity_v1`: they tune
+        // liveness, not what the route serves, like the fixed connect timeout.
         let client = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(Duration::from_secs(10))
@@ -178,6 +228,7 @@ impl HttpProvider {
             google_base,
             auth,
             bearer_resolver: None,
+            auth_refresher: None,
             models: models.into_iter().collect(),
             model_reasoning_variants: BTreeMap::new(),
             kind,
@@ -189,6 +240,8 @@ impl HttpProvider {
                 max_context: 200_000,
                 ..Capabilities::default()
             },
+            response_header_timeout: RESPONSE_HEADER_TIMEOUT,
+            stream_idle_timeout: STREAM_IDLE_TIMEOUT,
         })
     }
 
@@ -243,6 +296,16 @@ impl HttpProvider {
         self
     }
 
+    /// Attach the single-shot forced-refresh hook (auth-recovery level).
+    ///
+    /// See [`AuthRefresher`] for the contract. Strictly pre-stream: once an
+    /// event stream is established nothing is refreshed or replayed.
+    #[must_use]
+    pub fn with_auth_refresher(mut self, refresher: AuthRefresher) -> Self {
+        self.auth_refresher = Some(refresher);
+        self
+    }
+
     /// Attach per-model reasoning variant lists (replaces kind defaults for those ids).
     #[must_use]
     pub fn with_model_reasoning_variants(
@@ -253,6 +316,24 @@ impl HttpProvider {
         self
     }
 
+    /// Override the bounded response-header wait ([`RESPONSE_HEADER_TIMEOUT`])
+    /// for this route — for gateways slower than the default anticipates, and
+    /// for tests exercising the deadline.
+    #[must_use]
+    pub fn with_response_header_timeout(mut self, duration: Duration) -> Self {
+        self.response_header_timeout = duration;
+        self
+    }
+
+    /// Override the bounded SSE idle wait ([`STREAM_IDLE_TIMEOUT`]) for this
+    /// route — for links with longer silences than the default assumes, and for
+    /// tests exercising the deadline.
+    #[must_use]
+    pub fn with_idle_timeout(mut self, duration: Duration) -> Self {
+        self.stream_idle_timeout = duration;
+        self
+    }
+
     fn resolve_bearer(&self, fallback: &SecretString) -> Result<String, ProviderError> {
         if let Some(resolver) = &self.bearer_resolver {
             return resolver();
@@ -260,12 +341,30 @@ impl HttpProvider {
         Ok(fallback.expose_secret().clone())
     }
 
-    fn auth_headers(&self, model_override: Option<&str>) -> Result<HeaderMap, ProviderError> {
-        let mut headers = HeaderMap::new();
+    /// Credential material this route authenticates with right now, honoring
+    /// the bearer resolver when present. Feeds the forced-refresh hook so the
+    /// caller can detect rotations that happened underneath a failing request.
+    fn active_credential(&self) -> Result<String, ProviderError> {
         match &self.auth {
+            AuthStyle::Bearer(key)
+            | AuthStyle::CodexSession { token: key, .. }
+            | AuthStyle::GrokSession { token: key, .. } => self.resolve_bearer(key),
+            AuthStyle::Anthropic { key, .. } | AuthStyle::Google(key) => {
+                Ok(key.expose_secret().clone())
+            }
+        }
+    }
+
+    fn auth_headers(
+        &self,
+        model_override: Option<&str>,
+    ) -> Result<(HeaderMap, Option<String>), ProviderError> {
+        let mut headers = HeaderMap::new();
+        let refresh_credential = match &self.auth {
             AuthStyle::Bearer(key) => {
                 let token = self.resolve_bearer(key)?;
                 headers.insert(AUTHORIZATION, sensitive(&format!("Bearer {token}"))?);
+                Some(token)
             }
             AuthStyle::CodexSession { token, account_id } => {
                 let token = self.resolve_bearer(token)?;
@@ -276,6 +375,7 @@ impl HttpProvider {
                         sensitive(account_id)?,
                     );
                 }
+                Some(token)
             }
             AuthStyle::GrokSession {
                 token,
@@ -302,6 +402,7 @@ impl HttpProvider {
                         request_header_value(model)?,
                     );
                 }
+                Some(token)
             }
             AuthStyle::Anthropic { key, version } => {
                 headers.insert(
@@ -313,29 +414,110 @@ impl HttpProvider {
                     HeaderValue::from_str(version)
                         .map_err(|_| ProviderError::Http("invalid version header".to_string()))?,
                 );
+                None
             }
             AuthStyle::Google(key) => {
                 headers.insert(
                     HeaderName::from_static("x-goog-api-key"),
                     sensitive(key.expose_secret())?,
                 );
+                None
             }
-        }
-        Ok(headers)
+        };
+        Ok((headers, refresh_credential))
     }
 
     fn request_headers(
         &self,
         extra: &BTreeMap<String, String>,
         model_override: Option<&str>,
-    ) -> Result<HeaderMap, ProviderError> {
-        let mut headers = self.auth_headers(model_override)?;
+    ) -> Result<(HeaderMap, Option<String>), ProviderError> {
+        let (mut headers, mut refresh_credential) = self.auth_headers(model_override)?;
         for (name, value) in extra {
             let header_name = HeaderName::from_bytes(name.as_bytes())
                 .map_err(|_| ProviderError::Http("invalid request header name".to_string()))?;
+            if header_name == AUTHORIZATION {
+                // A call-scoped Authorization override did not use the route's
+                // bearer, so the route must not refresh its stored credential.
+                refresh_credential = None;
+            }
             headers.insert(header_name, request_header_value(value)?);
         }
-        Ok(headers)
+        Ok((headers, refresh_credential))
+    }
+
+    async fn send_stream_request(
+        &self,
+        url: &str,
+        body: &Value,
+        extra_headers: &BTreeMap<String, String>,
+        model_override: Option<&str>,
+    ) -> Result<reqwest::Response, ProviderError> {
+        // Auth-recovery level: the forced-refresh retry fires at most once per
+        // request and always occupies one of the MAX_REQUEST_ATTEMPTS slots
+        // below — it never extends the budget, so broken credentials cannot
+        // degrade into a refresh/retry loop. Once a response succeeds, no
+        // refresh or retry exists anymore (no-replay boundary above us).
+        let mut auth_recovered = false;
+        for attempt in 0..MAX_REQUEST_ATTEMPTS {
+            // Resolve auth exactly once per attempt. The captured value is the
+            // credential this request sent, even if another concurrent request
+            // rotates storage before this response is handled.
+            let (headers, attempted_credential) =
+                self.request_headers(extra_headers, model_override)?;
+            let result = timeout(
+                self.response_header_timeout,
+                self.client.post(url).headers(headers).json(body).send(),
+            )
+            .await;
+            let error = match result {
+                Ok(Ok(response)) if response.status().is_success() => return Ok(response),
+                Ok(Ok(response)) => {
+                    let status = response.status().as_u16();
+                    let try_refresh = !auth_recovered
+                        && self.auth_refresher.is_some()
+                        && (status == 401 || status == 403)
+                        // Budget integrity: only fire while the retried
+                        // request still fits inside the attempt cap.
+                        && attempt + 1 < MAX_REQUEST_ATTEMPTS;
+                    if try_refresh && let Some(refresher) = &self.auth_refresher {
+                        let original = response_error(response).await;
+                        let stale = attempted_credential;
+                        let hooked = stale
+                            .as_deref()
+                            .is_some_and(|token| refresher(token).is_ok());
+                        let rotated = hooked
+                            && stale.is_some_and(|before| {
+                                self.active_credential()
+                                    .is_ok_and(|current| current != before)
+                            });
+                        if rotated {
+                            auth_recovered = true;
+                            continue;
+                        }
+                        // Hook absent, failing, or yielding the same
+                        // credential: surface the original status unchanged.
+                        return Err(original);
+                    }
+                    response_error(response).await
+                }
+                Ok(Err(error)) => ProviderError::Transport(error.to_string()),
+                // Headers never arrived within the deadline: classify exactly
+                // like other pre-stream transport failures so the remaining
+                // attempts and router failover still run.
+                Err(_elapsed) => ProviderError::Transport(format!(
+                    "no response headers within {:#?}",
+                    self.response_header_timeout
+                )),
+            };
+            if attempt + 1 == MAX_REQUEST_ATTEMPTS || !error.is_retryable_before_stream() {
+                return Err(error);
+            }
+            sleep(retry_delay(&error, attempt)).await;
+        }
+        Err(ProviderError::Transport(
+            "provider request exhausted without a response".to_string(),
+        ))
     }
 
     /// Whether this route speaks the Responses wire and has `/responses/compact`.
@@ -415,6 +597,14 @@ impl HttpProvider {
             }
             None => identity.push(0),
         }
+        append_identity_bytes(&mut identity, b"auth-refresher-slot")?;
+        match &self.auth_refresher {
+            Some(_) => {
+                identity.push(1);
+                append_identity_bytes(&mut identity, self.id.as_bytes())?;
+            }
+            None => identity.push(0),
+        }
         Some(identity)
     }
 }
@@ -462,6 +652,51 @@ fn append_auth_identity(output: &mut Vec<u8>, auth: &AuthStyle) -> Option<()> {
         }
     }
     Some(())
+}
+
+async fn response_error(response: reqwest::Response) -> ProviderError {
+    let status = response.status().as_u16();
+    let retry_after = response
+        .headers()
+        .get(RETRY_AFTER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(parse_retry_after);
+    let text = timeout(ERROR_BODY_TIMEOUT, response.text())
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .unwrap_or_default();
+    let message = text.chars().take(500).collect();
+    ProviderError::HttpStatus {
+        status,
+        message,
+        retry_after,
+    }
+}
+
+fn parse_retry_after(value: &str) -> Option<Duration> {
+    if let Ok(seconds) = value.trim().parse::<u64>() {
+        return Some(Duration::from_secs(seconds).min(MAX_RETRY_AFTER));
+    }
+    let retry_at = httpdate::parse_http_date(value).ok()?;
+    Some(
+        retry_at
+            .duration_since(SystemTime::now())
+            .unwrap_or_default()
+            .min(MAX_RETRY_AFTER),
+    )
+}
+
+fn retry_delay(error: &ProviderError, attempt: usize) -> Duration {
+    if let Some(delay) = error.retry_after() {
+        return delay.min(MAX_RETRY_AFTER);
+    }
+    let exponent = u32::try_from(attempt).unwrap_or(u32::MAX).min(8);
+    let base = BASE_RETRY_DELAY.saturating_mul(2_u32.saturating_pow(exponent));
+    let jitter_percent = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(100, |elapsed| 75 + elapsed.subsec_nanos() % 51);
+    base.saturating_mul(jitter_percent) / 100
 }
 
 #[async_trait]
@@ -520,21 +755,10 @@ impl Provider for HttpProvider {
         let model_override =
             matches!(self.auth, AuthStyle::GrokSession { .. }).then_some(req.model.as_str());
         let resp = self
-            .client
-            .post(&url)
-            .headers(self.request_headers(&req.headers, model_override)?)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| ProviderError::Http(e.to_string()))?;
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
-            let snippet = text.get(..500).unwrap_or(text.as_str());
-            return Err(ProviderError::Http(format!("{status}: {snippet}")));
-        }
+            .send_stream_request(&url, &body, &req.headers, model_override)
+            .await?;
         let (tx, rx) = mpsc::channel::<Result<Event, ProviderError>>(64);
-        tokio::spawn(stream::pump(resp, decoder, tx));
+        tokio::spawn(stream::pump(resp, decoder, tx, self.stream_idle_timeout));
         Ok(Box::pin(ReceiverStream::new(rx)))
     }
 
@@ -563,10 +787,11 @@ impl Provider for HttpProvider {
         });
         let model_override =
             matches!(self.auth, AuthStyle::GrokSession { .. }).then_some(model_id.as_str());
+        let (headers, _) = self.request_headers(&BTreeMap::new(), model_override)?;
         let resp = self
             .client
             .post(&url)
-            .headers(self.request_headers(&BTreeMap::new(), model_override)?)
+            .headers(headers)
             .json(&body)
             .send()
             .await
@@ -597,6 +822,13 @@ mod tests {
     use super::*;
     use crate::{DevProvider, FakeProvider, ProviderRouter};
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn retry_after_seconds_are_parsed_and_bounded() {
+        assert_eq!(parse_retry_after("5"), Some(Duration::from_secs(5)));
+        assert_eq!(parse_retry_after("600"), Some(MAX_RETRY_AFTER));
+        assert_eq!(parse_retry_after("not-a-delay"), None);
+    }
 
     fn provider() -> Result<HttpProvider, ProviderError> {
         HttpProvider::new(

@@ -37,6 +37,7 @@ fn ctx_with_formatter(rules: Vec<Rule>, workdir: PathBuf, formatter: FormatterPl
     let (interaction, _irx) = InteractionPlane::new();
     let (spawner, _srx) = SpawnerPlane::new();
     ToolCtx {
+        workflows: hya_tool::WorkflowPlane::disconnected(),
         permission,
         interaction,
         spawner,

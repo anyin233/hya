@@ -392,3 +392,24 @@ instead of aborting — `fail_after_claim` can park on
 `std::future::pending::<()>()` — and the drain loop must be made stop-aware in
 the same change. The invariant is also recorded at the `with_spawn_sender` call
 site in `crates/hya-app/src/runtime.rs`, which is where it would be broken.
+
+### 5. Invariant: Workflow-intake shutdown
+
+The Workflow host has one worker and at most one in-flight
+`handle_workflow_request`. Lifecycle shutdown must select the shared supervisor
+stop token against that execution. When stop wins, it must:
+
+1. cancel the `WorkflowRequest.cancel` token;
+2. keep awaiting the governed request so member/session cleanup finishes; and
+3. exit the worker before `SpawnSupervisorLifecycle::shutdown` returns.
+
+Do not only watch `stop` around `rx.recv()`: once a request is dequeued, a
+provider or independent verifier can remain pending indefinitely. Do not merely
+drop `handle_workflow_request`, either: governed members run in spawned tasks and
+need the cooperative token to reach their Turn cancellation boundary.
+
+Behavior contract:
+`runtime::tests::workflow_supervisor_stop_drains_an_in_flight_run` parks a real
+Workflow member inside the provider, cancels lifecycle stop, and requires both
+the supervisor and tool reply to become terminal. Replacing the in-flight
+`select!` with a plain `.await` must make this regression time out.

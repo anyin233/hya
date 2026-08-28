@@ -48,6 +48,39 @@ pub fn ensure_access_token_in(dir: &Path, provider: &str) -> Result<String, OAut
     pollster_or_block(async move { ensure_access_token_in_async_ref(&dir, &provider).await })
 }
 
+/// Force-refresh `provider`'s access token, bypassing the expiry skew check.
+///
+/// Entry point for the 401/403 auth-recovery level: the upstream just rejected
+/// the credential we resolved, so freshness by local clock no longer matters.
+/// Single-flight and rotated-refresh-token safe — see [`force_refresh_with`].
+pub fn force_refresh_access_token(
+    provider: &str,
+    stale_access_token: &str,
+) -> Result<String, OAuthError> {
+    let dir =
+        crate::auth::auth_dir().ok_or_else(|| OAuthError::Config("no config directory".into()))?;
+    force_refresh_access_token_in(&dir, provider, stale_access_token)
+}
+
+/// [`force_refresh_access_token`] under an explicit auth directory.
+pub fn force_refresh_access_token_in(
+    dir: &Path,
+    provider: &str,
+    stale_access_token: &str,
+) -> Result<String, OAuthError> {
+    let dir = dir.to_path_buf();
+    let provider = provider.to_string();
+    let stale = stale_access_token.to_string();
+    let closure_provider = provider.clone();
+    pollster_or_block(async move {
+        force_refresh_with(&dir, &provider, &stale, move |latest| {
+            let provider = closure_provider.clone();
+            async move { refresh_credential(&provider, &latest).await }
+        })
+        .await
+    })
+}
+
 async fn ensure_access_token_in_async_ref(
     dir: &Path,
     provider: &str,
@@ -87,6 +120,47 @@ async fn refresh_and_store(
         return Ok(refreshed.access_token);
     }
     let refreshed = refresh_credential(provider, &oauth).await?;
+    save_credential_in(dir, provider, &AuthCredential::OAuth(refreshed.clone()))?;
+    Ok(refreshed.access_token)
+}
+
+async fn force_refresh_with<F, Fut>(
+    dir: &Path,
+    provider: &str,
+    stale_access_token: &str,
+    network_refresh: F,
+) -> Result<String, OAuthError>
+where
+    F: Fn(OAuthCredential) -> Fut,
+    Fut: std::future::Future<Output = Result<OAuthCredential, OAuthError>>,
+{
+    let cred = load_credential_in(dir, provider).ok_or_else(|| OAuthError::NeedsLogin {
+        provider: provider.to_string(),
+        oauth_type: "unknown".into(),
+        reason: "no saved credentials".into(),
+    })?;
+    let oauth = match cred {
+        AuthCredential::Api { token } => return Ok(token),
+        AuthCredential::OAuth(oauth) => oauth,
+    };
+
+    // Same single-flight process lock as refresh_and_store so concurrent
+    // streams recovering from 401 cannot burn a rotated refresh token.
+    let _guard = refresh_lock().lock().await;
+
+    // Re-read past the lock. Unlike refresh_and_store the comparison is not a
+    // skew check but token identity: when storage already moved past the exact
+    // access token that failed upstream, some other stream refreshed for us,
+    // so skip the network refresh entirely and reuse its result.
+    if let Some(AuthCredential::OAuth(latest)) = load_credential_in(dir, provider) {
+        if latest.access_token != stale_access_token {
+            return Ok(latest.access_token);
+        }
+        let refreshed = network_refresh(latest).await?;
+        save_credential_in(dir, provider, &AuthCredential::OAuth(refreshed.clone()))?;
+        return Ok(refreshed.access_token);
+    }
+    let refreshed = network_refresh(oauth).await?;
     save_credential_in(dir, provider, &AuthCredential::OAuth(refreshed.clone()))?;
     Ok(refreshed.access_token)
 }
@@ -181,7 +255,8 @@ where
 mod tests {
     use super::*;
     use crate::auth::{save_credential_in, save_token_in};
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn tempdir() -> std::path::PathBuf {
@@ -259,5 +334,73 @@ mod tests {
         assert_eq!(grok.kind, "oauth");
         assert_eq!(grok.oauth_type, Some(OAuthType::GrokBuild));
         assert!(!grok.expired);
+    }
+
+    #[tokio::test]
+    async fn concurrent_forced_refreshes_perform_one_network_refresh() {
+        let dir = tempdir();
+        let expires = (time::OffsetDateTime::now_utc() - time::Duration::hours(1))
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap();
+        save_credential_in(
+            &dir,
+            "codex",
+            &AuthCredential::OAuth(OAuthCredential {
+                oauth_type: OAuthType::OpenaiCodex,
+                access_token: "stale-t0".into(),
+                refresh_token: "rt-0".into(),
+                expires_at: expires,
+                account_id: Some("acct-1".into()),
+                id_token: None,
+            }),
+        )
+        .unwrap();
+
+        // Eight streams all rejected with 401 against "stale-t0" force a
+        // refresh simultaneously: exactly one network refresh may happen and
+        // every caller must leave with the same rotated access token.
+        let network_calls = Arc::new(AtomicUsize::new(0));
+        let mut handles = Vec::new();
+        for _ in 0..8 {
+            let task_dir = dir.clone();
+            let task_calls = Arc::clone(&network_calls);
+            handles.push(tokio::spawn(async move {
+                force_refresh_with(&task_dir, "codex", "stale-t0", move |latest| {
+                    let calls = Arc::clone(&task_calls);
+                    async move {
+                        calls.fetch_add(1, Ordering::SeqCst);
+                        // Widen the contention window so slower followers must
+                        // queue behind the refresh instead of racing past it.
+                        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                        Ok::<_, OAuthError>(OAuthCredential {
+                            oauth_type: latest.oauth_type,
+                            access_token: format!("rotated-{}", latest.access_token),
+                            refresh_token: format!("rt-next-{}", latest.refresh_token),
+                            expires_at: (time::OffsetDateTime::now_utc()
+                                + time::Duration::hours(2))
+                            .format(&time::format_description::well_known::Rfc3339)
+                            .unwrap(),
+                            account_id: latest.account_id.clone(),
+                            id_token: latest.id_token.clone(),
+                        })
+                    }
+                })
+                .await
+                .expect("forced refresh should succeed for every waiter")
+            }));
+        }
+        let mut tokens = Vec::new();
+        for handle in handles {
+            tokens.push(handle.await.expect("task join"));
+        }
+
+        assert!(tokens.iter().all(|token| token == "rotated-stale-t0"));
+        assert_eq!(network_calls.load(Ordering::SeqCst), 1);
+        match load_credential_in(&dir, "codex") {
+            Some(AuthCredential::OAuth(stored)) => {
+                assert_eq!(stored.access_token, "rotated-stale-t0")
+            }
+            other => panic!("expected stored oauth credential, got {other:?}"),
+        }
     }
 }

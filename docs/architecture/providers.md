@@ -14,7 +14,7 @@ It converts upstream LLM APIs into hya's canonical event stream.
 | `Decoder` | Incrementally converts SSE frame data into `Event`s. |
 | `Capabilities` | Fixed capability flags and context budget advertised for a model claim (see [Capabilities](#capabilities)). |
 | `CompletionRequest` | Normalized request containing model, system prompt, messages, tools, sampling options, reasoning effort, and request headers. |
-| `ProviderError` | Encode, HTTP, resolve, decode, and auth-expiry failures (see [Errors](#errors)). |
+| `ProviderError` | Encode, transport, HTTP status, resolve, decode, and auth-expiry failures (see [Errors](#errors)). |
 
 `preflight` rejects tool-using requests if the chosen route does not support
 streaming tool calls.
@@ -92,7 +92,9 @@ leaves `reasoning_request` false.
 | Variant | Display | Typical cause | Troubleshooting |
 | --- | --- | --- | --- |
 | `Json` | `json: …` | Serde failure while encoding a body or parsing a stream frame. | No dedicated entry; inspect the JSON payload and stream frames. |
-| `Http(String)` | `http: …` | Non-2xx status, in-stream error frame, invalid request header name/value, or client build failure. | No dedicated entry; check status body, base URL, and headers. |
+| `Http(String)` | `http: …` | In-stream provider error frame, invalid request header name/value, or client build failure. | No dedicated entry; check the provider payload, base URL, and headers. |
+| `Transport(String)` | `transport: …` | Request transport failed before an event stream was returned. | Check provider reachability and connection health. This class is eligible for bounded retry/failover before stream ownership passes to the caller. |
+| `HttpStatus { status, message, retry_after }` | `http status <code>: …` | Upstream returned a non-success response before the stream began. | HTTP 429 and 5xx are retryable; other statuses fail immediately. `Retry-After`, when valid, is retained as a bounded delay. |
 | `UnknownModel(String)` | `unknown provider for model: …` | No route's `capabilities()` returned `Some` for the ref. | [`../troubleshooting.md`](../troubleshooting.md) — *unknown provider for model*. |
 | `Incompatible(String)` | `incompatible route: …` | Preflight failure, or an unsupported part (for example media on a non-Google route). | No dedicated entry yet; for media MIME failures see [Media parts](#media-parts-non-google-routes) below and switch to a `kind: google` route when you need attachments. |
 | `Decode(String)` | `decode: …` | Malformed or truncated stream / compact-window payload. | No dedicated entry; inspect SSE frames. |
@@ -104,11 +106,16 @@ leaves `reasoning_request` false.
 providers (insertion order via `with`).
 
 **Resolution.** `resolve` returns the **first** provider whose
-`capabilities(&model)` is `Some`. When two configured routes both serve the same
-bare model id, the earlier insertion wins — the usual tie-break when two
-OpenAI-compatible gateways list overlapping models.
+`capabilities(&model)` is `Some`. `stream` also starts with that route. When two
+configured routes both serve the same bare model id, registration order is the
+failover order: an earlier route wins unless it returns a retryable pre-stream
+failure after exhausting its own request retries.
 
-If no route supports the model, `stream` returns `UnknownModel`.
+Transport failures, HTTP 429, and HTTP 5xx can advance to the next matching
+route. Other errors fail immediately. Once any provider returns an
+`EventStream`, the router never replays the request; later SSE errors stay on
+that stream. This no-replay boundary prevents duplicated event output and tool
+side effects. If no route supports the model, `stream` returns `UnknownModel`.
 
 **Reasoning strip.** Before dispatch, if the resolved route's capabilities do
 **not** set `reasoning_request`, the router clears
@@ -130,6 +137,31 @@ overlaps in practice; the mechanism and sort key differ.
 in insertion order, or returns `None` if **any** provider returns `None` or an
 empty identity (fail closed). See [Configured Identity](#configured-identity).
 
+## Cross-Model Chain Failover (hya-core)
+
+Same-model route failover above is the first of two recovery levels. The second
+lives in the session engine (`hya-core`): `SessionEngine::with_model_fallbacks`
+installs a plane mapping each preferred `ModelRef` to its ordered candidate
+chain, populated from configured `categories:` entries when the app runtime
+builds the engine. Members resolved onto a category candidate — including a
+servability pick that is not the configured preference — carry the forward
+suffix of their chain.
+
+**When it advances.** Only while no `EventStream` exists. If the preferred
+model fails with an error classified by `is_retryable_before_stream()`, or no
+route claims it at all (`UnknownModel`), the engine re-issues the identical
+completion request against the next chain entry and logs the switch via
+`tracing::warn` (from/to model). Each attempt re-enters `ProviderRouter::stream`,
+so preflight and reasoning-stripping keep applying per route. Non-retryable
+errors (authentication expiry, protocol incompatibility, decode failures) fail
+the turn immediately without consuming the chain. With no chain configured the
+engine makes exactly one direct router call — behavior is unchanged.
+
+**Shared no-replay boundary.** Both levels stop recovering at the same line:
+once a provider returns an event stream, model selection is final. A mid-stream
+SSE error is delivered once to the turn, unchanged, and is never retried,
+replayed, or failed over onto another model.
+
 ## HTTP Provider
 
 [`http.rs`](../../crates/hya-provider/src/http.rs) is the shared live-provider
@@ -141,7 +173,7 @@ implementation. It owns:
 - protocol encoder/decoder
 - served model ids
 - static capability metadata
-- optional bearer resolver and per-model reasoning variant lists
+- optional bearer resolver, auth refresher, per-route liveness deadlines, and per-model reasoning variant lists
 
 ### Construction
 
@@ -162,6 +194,9 @@ Builder methods layered on top:
 | `with_codex_session_auth` | Upgrade auth to Codex session headers (no-op unless kind is `OpenAiCodex`). |
 | `with_grok_session_auth` | Upgrade auth to Grok session headers (no-op unless kind is `GrokBuild`). |
 | `with_bearer_resolver` | Resolve the bearer token on each stream (hot-reload OAuth). |
+| `with_auth_refresher` | On a pre-stream 401/403, force-refresh the failed bearer once inside the existing attempt budget. |
+| `with_response_header_timeout` | Override the 60-second per-attempt response-header deadline. |
+| `with_idle_timeout` | Override the five-minute SSE frame-idle deadline. |
 
 Session-auth upgrades are no-ops for other kinds so callers can chain
 unconditionally.
@@ -187,9 +222,19 @@ Five auth styles: **Bearer**, **CodexSession**, **GrokSession**, **Anthropic**,
 - **Redirects disabled** (`Policy::none`) so an `x-api-key` (or other secret
   header) cannot be forwarded cross-origin on a 3xx.
 - **Connect timeout: 10 seconds.**
-- **No read / total timeout** — a long streaming completion is never aborted
-  mid-stream by the client. Consequence: a hung upstream that has already
-  accepted the connection will not time out on hya's side.
+- **Response-header timeout: 60 seconds per attempt.** A route that accepts the
+  connection but does not return headers fails as a retryable transport error.
+- **Pre-stream retries:** at most three request attempts for transport errors,
+  HTTP 429, and HTTP 5xx. Backoff is exponential with jitter; a valid
+  `Retry-After` value takes precedence and is capped at 30 seconds. Reading a
+  non-success response body for diagnostics is capped at 2 seconds so an error
+  body cannot prevent the next retry.
+- **SSE frame-idle timeout: five minutes.** The window starts when response
+  headers arrive and resets after every frame. Missing the deadline ends the
+  established stream once; it is never retried or failed over because stream
+  ownership has already crossed the no-replay boundary.
+- **No total completion lifetime timeout.** A completion that keeps delivering
+  frames may run indefinitely.
 - Auth header values are marked **sensitive** on `HeaderValue` so reqwest/tracing
   will not log them.
 - Anthropic routes hardcode `anthropic-version: **2023-06-01**`. That value is

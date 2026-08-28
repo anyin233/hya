@@ -2,7 +2,10 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicUsize, Ordering},
+};
 
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -46,6 +49,46 @@ impl RecordingProvider {
         Self {
             capabilities,
             recorded: Mutex::new(None),
+        }
+    }
+}
+
+struct FailingProvider {
+    calls: AtomicUsize,
+    fail_after_stream_start: bool,
+    retryable: bool,
+}
+
+#[async_trait]
+impl Provider for FailingProvider {
+    fn id(&self) -> &str {
+        "failing"
+    }
+
+    fn capabilities(&self, _model: &ModelRef) -> Option<Capabilities> {
+        Some(Capabilities::default())
+    }
+
+    async fn stream(
+        &self,
+        _req: CompletionRequest,
+        _session: SessionId,
+        _message: MessageId,
+    ) -> Result<EventStream, ProviderError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        let failure = if self.retryable {
+            ProviderError::Transport("connection reset".to_string())
+        } else {
+            ProviderError::HttpStatus {
+                status: 400,
+                message: "invalid request".to_string(),
+                retry_after: None,
+            }
+        };
+        if self.fail_after_stream_start {
+            Ok(Box::pin(futures::stream::iter([Err(failure)])))
+        } else {
+            Err(failure)
         }
     }
 }
@@ -159,6 +202,112 @@ async fn router_clears_reasoning_for_provider_without_reasoning_request() {
 
     let recorded = provider.recorded.lock().unwrap();
     assert_eq!(recorded.as_ref().unwrap().reasoning, None);
+}
+
+#[tokio::test]
+async fn router_fails_over_after_retryable_pre_stream_failure() {
+    let primary = Arc::new(FailingProvider {
+        calls: AtomicUsize::new(0),
+        fail_after_stream_start: false,
+        retryable: true,
+    });
+    let backup = Arc::new(RecordingProvider::new(Capabilities::default()));
+    let router = ProviderRouter::new()
+        .with(primary.clone())
+        .with(backup.clone());
+    let req = CompletionRequest {
+        model: ModelRef::new("shared-model"),
+        system: None,
+        messages: Vec::new(),
+        tools: Vec::new(),
+        temperature: None,
+        max_output_tokens: None,
+        reasoning: None,
+        headers: Default::default(),
+    };
+
+    let events = router
+        .stream(req, SessionId::new(), MessageId::new())
+        .await
+        .unwrap()
+        .collect::<Vec<_>>()
+        .await;
+
+    assert!(events.iter().all(Result::is_ok));
+    assert_eq!(primary.calls.load(Ordering::SeqCst), 1);
+    assert!(backup.recorded.lock().unwrap().is_some());
+}
+
+#[tokio::test]
+async fn router_does_not_fail_over_after_non_retryable_failure() {
+    let primary = Arc::new(FailingProvider {
+        calls: AtomicUsize::new(0),
+        fail_after_stream_start: false,
+        retryable: false,
+    });
+    let backup = Arc::new(RecordingProvider::new(Capabilities::default()));
+    let router = ProviderRouter::new()
+        .with(primary.clone())
+        .with(backup.clone());
+    let req = CompletionRequest {
+        model: ModelRef::new("shared-model"),
+        system: None,
+        messages: Vec::new(),
+        tools: Vec::new(),
+        temperature: None,
+        max_output_tokens: None,
+        reasoning: None,
+        headers: Default::default(),
+    };
+
+    let error = match router.stream(req, SessionId::new(), MessageId::new()).await {
+        Err(error) => error,
+        Ok(_) => panic!("non-retryable failure must be returned"),
+    };
+
+    assert!(matches!(
+        error,
+        ProviderError::HttpStatus { status: 400, .. }
+    ));
+    assert_eq!(primary.calls.load(Ordering::SeqCst), 1);
+    assert!(backup.recorded.lock().unwrap().is_none());
+}
+
+#[tokio::test]
+async fn router_does_not_fail_over_after_stream_is_returned() {
+    let primary = Arc::new(FailingProvider {
+        calls: AtomicUsize::new(0),
+        fail_after_stream_start: true,
+        retryable: true,
+    });
+    let backup = Arc::new(RecordingProvider::new(Capabilities::default()));
+    let router = ProviderRouter::new()
+        .with(primary.clone())
+        .with(backup.clone());
+    let req = CompletionRequest {
+        model: ModelRef::new("shared-model"),
+        system: None,
+        messages: Vec::new(),
+        tools: Vec::new(),
+        temperature: None,
+        max_output_tokens: None,
+        reasoning: None,
+        headers: Default::default(),
+    };
+
+    let events = router
+        .stream(req, SessionId::new(), MessageId::new())
+        .await
+        .unwrap()
+        .collect::<Vec<_>>()
+        .await;
+
+    assert!(matches!(
+        events.as_slice(),
+        [Err(ProviderError::Transport(_))]
+    ));
+    assert_eq!(primary.calls.load(Ordering::SeqCst), 1);
+    assert!(backup.recorded.lock().unwrap().is_none());
 }
 
 #[tokio::test]
