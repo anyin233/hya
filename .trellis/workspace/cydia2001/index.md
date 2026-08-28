@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 17
-- **Last Active**: 2026-08-06
+- **Total Sessions**: 18
+- **Last Active**: 2026-08-28
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~603 | Active |
+| `journal-1.md` | ~677 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 18 | 2026-08-28 | Complete user-composed Workflow platform | `b8c7c7e7` | `main` |
 | 17 | 2026-08-06 | E2E suite hardening: land swarm branch, gate CI, cover swarm tools, measure coverage, enforce the registry | `16bde844`, `fa04b489`, `607c24be`, `0acfc919`, `ce7584db`, `a6ff136f`, `c315cac3`, `db2f2cc7`, `f23229a4`, `fbdad8a1`, `6cb254af`, `fee38938` | `main` |
 | 16 | 2026-07-22 | Make TypeScript TUI the default | `0fd9f80d` | `main` |
 | 15 | 2026-07-22 | Remove agent tool-call round limit | `46db2229` | `main` |
