@@ -19,6 +19,7 @@ hya-provider = { path = "crates/hya-provider" }
 hya-tool = { path = "crates/hya-tool" }
 hya-store = { path = "crates/hya-store" }
 hya-core = { path = "crates/hya-core" }
+hya-workflow = { path = "crates/hya-workflow" }
 hya-server = { path = "crates/hya-server" }
 hya-mcp = { path = "crates/hya-mcp" }
 hya-plugin = { path = "crates/hya-plugin" }

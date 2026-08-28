@@ -1,148 +1,151 @@
 # Workflows
 
-A **workflow** is a user-authored file that composes hya's subagent teams into
-a reusable DAG of stages. hya ships **zero** built-in workflows — you assemble
-your own, stage by stage; nothing hardcodes a plan→impl→review pipeline.
+A Workflow is a Markdown document that composes authorized Agents into a
+directed acyclic graph. The compiler validates the complete document before the
+runtime creates a child Session or sends mail.
 
-## Where workflows live
+## Discovery
 
-| Root | Path |
+| Precedence | Path |
 | --- | --- |
-| Project | `<workdir>/.hya/workflows/*.yaml` (or `.yml`, `.md`) |
-| User | `$HOME/.config/hya/workflows/` |
+| Project | `<workdir>/.hya/workflows/*.hya.md` |
+| User | `$HOME/.config/hya/workflows/*.hya.md` |
 
-Project files shadow user files with the same workflow name
-(first-name-wins, mirroring skill discovery). A markdown file must carry the
-whole definition in YAML frontmatter (`workflow.hya.md` style); everything
-after the closing fence is free-form documentation.
+Project sources take precedence over user sources with the same declared name.
+YAML-only files and the removed `stages:`/`needs:` format are not accepted.
 
-## Definition schema
+## Document format
 
-```yaml
-name: feature
-description: explore then implement from two angles, then review both
+```markdown
+---
+kind: Workflow
+name: feature-delivery
+description: Plan, implement, and review one request.
 inputs:
-  target: what to explore       # values supplied per run; all keys required
-on_member_failure: fail_fast    # fail_fast (default) | collect_all
-stages:
-  - id: explore                 # kebab/snake id, unique
-    agent: explorer             # any agent your session may spawn (can_spawn)
-    prompt: "Explore {{inputs.target}}"
-
-  - id: impl_a                  # fan-out: same needs -> one parallel batch
-    agent: builder
-    needs: [explore]
-    prompt: "Implement A per:\n{{explore}}"
-
-  - id: impl_b
-    agent: builder
-    needs: [explore]
-    prompt: "Implement B per:\n{{explore}}"
-
-  - id: review                  # fan-in: joins BOTH upstream sections
-    agent: reviewer
-    needs: [impl_a, impl_b]
-    prompt: |
-      Review both implementations:
-      {{impl_a}}
-      {{impl_b}}
+  request: Work request to complete.
+on_failure: collect_all
+nodes:
+  plan:
+    title: Produce plan
+    agent: workflow-planner
+    directive: Plan {{input.request}}.
+  impl_a:
+    title: Implement core
+    agent: workflow-implementer
+    directive: Implement the core path.
+  impl_b:
+    title: Implement tests
+    agent: workflow-implementer
+    directive: Implement contract tests.
+  review:
+    title: Review result
+    agent: workflow-reviewer
+    directive: Review all direct predecessor evidence.
+---
+flowchart TD
+  plan --> impl_a & impl_b
+  impl_a & impl_b --> review
 ```
 
-### Rules
+The graph grammar is intentionally small:
 
-- **DAG only**: `needs:` edges are validated at plan time; cycles,
-  self-dependencies, dangling refs, and forward template references are
-  rejected before anything spawns.
-- **Placeholders**: `{{inputs.key}}` for run inputs, `{{stage_id}}` for an
-  upstream result. Each upstream renders as a bounded section (default cap
-  4000 chars) headed by its stage id and terminal status, in declaration order.
-- **Fan-out/fan-in**: stages whose dependencies resolve at the same topological
-  level execute as ONE parallel member batch. Joins see every upstream's
-  section.
-- **Join contract**: `on_member_failure` is yours to declare. `fail_fast`
-  aborts downstream work on any failed member. `collect_all` continues and
-  marks failed upstreams as `FAILED` in the joined directive so the joining
-  stage can reason about partial results.
-- **Loop stages**: `mode: loop` with a required `verify: {agent, until}` block
-  iterates through hya's shared iteration driver. The verifier runs in a fresh
-  child session per judgment (independent stop authority) and answers strict
-  JSON `{"met": bool, "reason": str}`; malformed output counts as not-met.
-- **Budgets are non-negotiable**: execution goes through the same governed team
-  path as the task tool (`pre_admit_team` / `run_pre_admitted_team`), so
-  max-depth, streaming-concurrency, and per-run spawn budgets from
-  `[subagents]` config bound your DAG exactly like model-decided batches.
-- **Failure semantics**: a stage whose member errors during streaming is
-  reported `failed`. Under `fail_fast` (default) every downstream stage is
-  skipped and the run ends failed; under `collect_all` remaining stages still
-  run and failed upstreams are declared `FAILED` inside joined directives. A
-  loop stage capped without verification keeps its worker output but does not
-  carry the verified marker. Unknown or unauthorized stage agents and workflows
-  whose declared stage count exceeds the run budget are rejected before any
-  member spawns.
+- The first non-comment line is `flowchart TD`.
+- A standalone identifier declares an isolated node.
+- `a --> b`, `a --> b & c`, and `a & b --> c` declare edges.
+- A line that starts with `%%` is a comment.
+- Labels, shapes, subgraphs, edge labels, style directives, self-edges, and
+  cycles are invalid.
+- Every frontmatter node must occur in the graph. Every graph node must have a
+  frontmatter definition.
+
+First graph occurrence defines stable Stage order. Incoming edge declaration
+defines direct-predecessor order at a join.
+
+## Inputs and evidence
+
+All declared inputs are required. `{{input.<name>}}` is the only public
+placeholder. Missing, unknown, malformed, and undeclared input references fail
+before authorization and scheduling.
+
+Edges carry data automatically. A downstream directive receives one
+`<workflow-upstream>` block. It contains only direct predecessors, in compiled
+predecessor order. Each entry contains the Stage id, Agent id, terminal status,
+and at most 4,000 bytes of UTF-8-safe output. Full child transcripts stay in the
+child Sessions.
+
+`on_failure` has two values:
+
+- `fail_fast` (default): finish the admitted level, mark later Stages skipped,
+  and finish the run failed.
+- `collect_all`: continue eligible Stages with explicit failed evidence, then
+  finish the run failed if any Stage failed.
+
+## Loop Stages
+
+```yaml
+mode: loop
+verify:
+  agent: workflow-reviewer
+  until: The implementation satisfies the request.
+  max_iterations: 3
+```
+
+Loop repetition uses the shared `IterationDriver`. A fresh verifier Session is
+the stop authority for each judgment. The worker cannot finish its own loop by
+claiming success.
+
+## Resident actors
+
+```yaml
+actor: planner
+```
+
+An actor key routes sequential Stages to one resident Session. Repeating an
+Agent id without `actor` still creates distinct transient Sessions. The target
+Agent must declare resident spawn lifecycle. An actor key on a transient Agent,
+a resident Agent without an actor key, an actor key bound to different Agent
+ids, or same-level reuse of one actor key fails before execution.
+
+The first and later actor directives are durable mail. A Stage completes only
+after the team Projection shows that its captured inbox boundary is consumed,
+resident work is absent, and the actor is idle or failed.
+
+## Governance
+
+The executor resolves every worker and verifier through the caller's immutable
+runtime binding. Each target keeps its own roster, resource policy, sidecar, and
+spawn lifecycle. The complete worst-case run budget is reserved before the
+first child or mail effect. Same-level transient Stages run as one governed Team
+batch. Loop and resident work continue to use the existing iteration and
+resident supervisors.
+
+Cancellation stops new admissions, cancels transient work, stops active
+run-owned resident work, waits for admitted boundaries, and returns a truthful
+cancelled report.
 
 ## CLI
 
 ```sh
-hya-backend workflow list            # discovered workflows + stage ids
-hya-backend workflow info feature    # full graph, join contract, verify blocks
+hya-backend workflow list
+hya-backend workflow info feature-delivery
+hya-backend workflow run feature-delivery \
+  --input request="Fix parser retries"
 ```
 
-## Running workflows
+`workflow run` prints one terminal row for every compiled Stage. `--json`
+emits the same report as JSON. Input values split on the first `=`.
 
-### From the shell
+Agents can use the governed `workflow` tool:
 
-```sh
-hya-backend workflow list                  # discovered workflows + stage ids
-hya-backend workflow info feature          # graph, join contract, verify blocks
-hya-backend workflow run feature \
-  --input target=src/parser.rs              # execute the DAG now
-```
-
-`workflow run` executes in-process against your configured providers, printing
-one row per stage (`[done]` / `[failed]`) with its bounded output; `--json`
-emits the machine-readable report instead. Every `--input key=value` pair
-splits on the first `=` (values may contain further `=` signs) and must match
-the declared inputs exactly: a missing declared input or an undeclared key
-aborts with a clear error before any stage spawns, as does a run that ends
-`failed`/`cancelled`.
-
-### From an agent session
-
-Agents get the same power through the governed **`workflow` tool**:
-
-- `{"action": "list"}` summarizes discovered files.
-- `{"action": "run", "name": "feature", "inputs": { ... }}` launches the DAG
-  mid-session. Permission-wise a run asserts the task class scoped to
-  `workflow:<name>`, so existing ask/deny rules for subagent work apply.
-
-Both surfaces route through the identical core executor, which uses the same
-pre-admitted team batch path as the task tool — see *Budgets* below.
-
-#### Member execution contexts mirror the task tool
-
-Every stage runs with the context its TARGET agent would get from the task
-tool, resolved up front through the same engine accessors:
-
-- **Authorization**: each stage agent must be spawnable by the calling agent
-  (`can_spawn`), checked before any member session is created — a typo aborts
-  the run instead of failing mid-DAG.
-- **Delegation**: a stage member's own reachable roster comes from the STAGE
-  agent's `can_spawn`, never from the caller's broader roster. A stage whose
-  agent cannot itself spawn further targets gets a refused `task` call inside
-  that stage; delegation still works when the target lists it.
-- **Resources & sidecars**: resource/tool policies and Bundle sidecar factories
-  resolve per stage agent exactly as for task-spawned members, so bundle tools
-  and hooks stay available (and absent when the bundle declares none).
-
-The same resolution applies to loop workers across iterations and to every
-independent verifier judgment session.
-
-Authoring a file makes it discoverable immediately; there is no install step.
+- `{"action": "list"}` lists discovered Workflows.
+- `{"action": "run", "name": "feature-delivery", "inputs": { ... }}` runs
+  the selected graph in the current Session tree.
 
 ## Library surface
 
-`hya-core::workflow` exposes `WorkflowDef` parsing (`load_workflow_file`,
-`load_workflow_by_name`, `discover_workflow_files`), planning (`build_plan`:
-cycle detection + levelization + placeholder closure), and execution
-(`run_workflow`) over any `SessionEngine` + `TurnBinding`. See
-ADR-0013 for the design rationale.
+`hya-workflow::compile(WorkflowSource)` is the only authoring construction
+path. It returns a read-only `CompiledWorkflow` with metadata, normalized
+Stages and levels, automatic join rendering, and a canonical revision.
+
+`hya-core::run_workflow` accepts only a `CompiledWorkflow` plus a resolved
+`WorkflowRunContext`. It does not parse source or rebuild the plan.

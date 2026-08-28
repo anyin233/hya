@@ -289,6 +289,23 @@ impl SubagentGovernor {
             .unwrap_or(self.limits.per_run_budget)
     }
 
+    /// Return an exact in-process reservation without disturbing durable
+    /// operation debits owned by other schedulers under the same root.
+    pub(crate) fn refund_reserved(&self, root: SessionId, units: u64) {
+        let mut budgets = self.lock_budgets();
+        let Some(remaining) = budgets.remaining.get_mut(&root) else {
+            return;
+        };
+        *remaining = remaining
+            .saturating_add(units)
+            .min(self.limits.per_run_budget);
+        let restored = *remaining == self.limits.per_run_budget;
+        let has_operations = budgets.operations.values().any(|debit| debit.root == root);
+        if restored && !has_operations {
+            budgets.remaining.remove(&root);
+        }
+    }
+
     /// Release a completed root's budget entry so long-lived roots do not leak.
     pub fn release(&self, root: SessionId) {
         let mut budgets = self.lock_budgets();

@@ -21,11 +21,23 @@ static NEXT_TEST_DIR: AtomicU64 = AtomicU64::new(0);
 /// A bundle defines exactly one agent, so a fixture asking for N agents becomes
 /// N single-agent bundles.
 pub fn test_catalog(agents: &[(&str, AgentRole, &[&str])]) -> Arc<AgentCatalog> {
+    let with_lifecycle = agents
+        .iter()
+        .map(|(stable_id, role, can_spawn)| {
+            (*stable_id, *role, SpawnLifecycle::Transient, *can_spawn)
+        })
+        .collect::<Vec<_>>();
+    test_catalog_with_lifecycles(&with_lifecycle)
+}
+
+/// Build one installed test bundle per Agent with an explicit spawn lifecycle.
+pub fn test_catalog_with_lifecycles(
+    agents: &[(&str, AgentRole, SpawnLifecycle, &[&str])],
+) -> Arc<AgentCatalog> {
     let bundles = agents
         .iter()
-        // Built-in ids are compiled in; a fixture asking for one just gets it.
-        .filter(|(stable_id, _, _)| !hya_core::is_builtin_id(stable_id))
-        .map(|(stable_id, role, can_spawn)| PreparedBundle {
+        .filter(|(stable_id, _, _, _)| !hya_core::is_builtin_id(stable_id))
+        .map(|(stable_id, role, lifecycle, can_spawn)| PreparedBundle {
             format_version: 1,
             identity: BundleIdentity {
                 id: format!("hya/test-{stable_id}"),
@@ -43,7 +55,7 @@ pub fn test_catalog(agents: &[(&str, AgentRole, &[&str])]) -> Arc<AgentCatalog> 
                 prompt_digest: None,
                 model_policy: ModelPolicy::default(),
                 workdir: None,
-                spawn_lifecycle: SpawnLifecycle::Transient,
+                spawn_lifecycle: *lifecycle,
                 resource_view: ResourceView::default(),
                 can_spawn: can_spawn
                     .iter()

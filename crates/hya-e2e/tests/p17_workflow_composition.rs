@@ -12,31 +12,30 @@ use hya_e2e::{
 use hya_proto::Event;
 use serde_json::json;
 
-const WORKFLOW_YAML: &str = r#"
+const WORKFLOW_SOURCE: &str = r#"---
+kind: Workflow
 name: compose
-description: explore fans out to two impls; review joins both
-on_member_failure: collect_all
+description: Explore fans out to two implementations; review joins both.
+on_failure: collect_all
 inputs:
-  target: what to explore
-stages:
-  - id: explore
+  target: What to explore.
+nodes:
+  explore:
     agent: general
-    prompt: "EXPLORE {{inputs.target}}"
-  - id: impl_a
+    directive: EXPLORE {{input.target}}
+  impl_a:
     agent: general
-    needs: [explore]
-    prompt: "IMPL A per {{explore}}"
-  - id: impl_b
+    directive: IMPL A
+  impl_b:
     agent: general
-    needs: [explore]
-    prompt: "IMPL B per {{explore}}"
-  - id: review
+    directive: IMPL B
+  review:
     agent: general
-    needs: [impl_a, impl_b]
-    prompt: |
-      REVIEW both:
-      {{impl_a}}
-      {{impl_b}}
+    directive: REVIEW both
+---
+flowchart TD
+  explore --> impl_a & impl_b
+  impl_a & impl_b --> review
 "#;
 
 #[tokio::test]
@@ -47,8 +46,8 @@ async fn p17_user_authored_workflow_runs_fan_out_fan_in_via_tool() {
     let env = E2eEnvBuilder::new()
         .yolo(true)
         .project_file(
-            ".hya/workflows/compose.yaml",
-            WORKFLOW_YAML.as_bytes().to_vec(),
+            ".hya/workflows/compose.hya.md",
+            WORKFLOW_SOURCE.as_bytes().to_vec(),
         )
         .scripts(vec![
             tool_step(
@@ -121,12 +120,7 @@ async fn p17_user_authored_workflow_runs_fan_out_fan_in_via_tool() {
                 .contains(needle)
         })
     };
-    for directive in [
-        "\"EXPLORE the parser\"",
-        "IMPL A per",
-        "IMPL B per",
-        "REVIEW both:",
-    ] {
+    for directive in ["\"EXPLORE the parser\"", "IMPL A", "IMPL B", "REVIEW both"] {
         assert!(
             contains(directive),
             "member directive `{directive}` must reach a member; {}",
@@ -134,8 +128,8 @@ async fn p17_user_authored_workflow_runs_fan_out_fan_in_via_tool() {
         );
     }
     assert!(
-        contains("## upstream stage `impl_a`") && contains("## upstream stage `impl_b`"),
-        "join directive must embed both fanned-in sections; {}",
+        contains("<stage id=\\\"impl_a\\\"") && contains("<stage id=\\\"impl_b\\\""),
+        "join directive must embed both fanned-in evidence entries; {}",
         env.diagnostics()
     );
 }

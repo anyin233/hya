@@ -13,15 +13,15 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
 use async_trait::async_trait;
 use futures::stream;
-use hya_bundle::AgentRole;
+use hya_bundle::{AgentRole, SpawnLifecycle};
 use hya_core::{
-    CreateSession, EventBus, FailurePolicy, SessionEngine, SubagentGovernor, SubagentLimits,
-    WorkflowDef, WorkflowStatus, load_workflow_file, run_workflow,
+    CompiledWorkflow, CreateSession, EventBus, FailurePolicy, SessionEngine, SubagentGovernor,
+    SubagentLimits, WorkflowStatus, load_workflow_file, run_workflow,
 };
 use hya_proto::{AgentName, Event, FinishReason, Message, MessageId, ModelRef, Part, SessionId};
 use hya_provider::{
@@ -30,6 +30,7 @@ use hya_provider::{
 };
 use hya_store::SessionStore;
 use hya_tool::{PermissionPlane, PermissionRules, Tool, ToolRegistry};
+use hya_workflow::{WorkflowSource, compile};
 use tokio_util::sync::CancellationToken;
 
 /// Records every completion request (session + rendered user prompt text) and
@@ -39,6 +40,7 @@ use tokio_util::sync::CancellationToken;
 /// answers `{"met": bool}` taken from `verdicts[N-1]` (missing entries count as
 /// met), which lets loop tests pin exactly when the stop decision happens.
 struct RecordingProvider {
+    systems: Mutex<Vec<(SessionId, Option<String>)>>,
     requests: Mutex<Vec<(SessionId, String)>>,
     verdicts: Mutex<Vec<bool>>,
     hang_verifier: AtomicBool,
@@ -51,6 +53,7 @@ impl RecordingProvider {
             requests: Mutex::new(Vec::new()),
             verdicts: Mutex::new(Vec::new()),
             hang_verifier: AtomicBool::new(false),
+            systems: Mutex::new(Vec::new()),
             verifier_started: tokio::sync::Notify::new(),
         })
     }
@@ -88,6 +91,11 @@ impl RecordingProvider {
 
     fn prompts(&self) -> Vec<(SessionId, String)> {
         self.requests.lock().unwrap().clone()
+    }
+
+    /// Effective system prompt observed for each completed provider request.
+    fn systems(&self) -> Vec<(SessionId, Option<String>)> {
+        self.systems.lock().unwrap().clone()
     }
 }
 
@@ -161,11 +169,15 @@ impl Provider for RecordingProvider {
 impl RecordingProvider {
     fn complete(
         &self,
-        _req: &CompletionRequest,
+        req: &CompletionRequest,
         session: SessionId,
         user_text: String,
         reply: String,
     ) -> Result<EventStream, ProviderError> {
+        self.systems
+            .lock()
+            .unwrap()
+            .push((session, req.system.clone()));
         self.requests.lock().unwrap().push((session, user_text));
         let events = FakeProvider::materialize(
             &[FakeStep::Text(reply), FakeStep::Finish(FinishReason::Stop)],
@@ -175,6 +187,115 @@ impl RecordingProvider {
         Ok(Box::pin(stream::iter(
             events.into_iter().map(Ok::<Event, ProviderError>),
         )))
+    }
+}
+
+/// Provider barrier that can finish only when two same-level Stage streams are
+/// polled concurrently.
+struct BarrierProvider {
+    barrier: tokio::sync::Barrier,
+    entered: AtomicUsize,
+}
+
+impl BarrierProvider {
+    /// Create a two-member overlap barrier.
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            barrier: tokio::sync::Barrier::new(2),
+            entered: AtomicUsize::new(0),
+        })
+    }
+}
+
+#[async_trait]
+impl Provider for BarrierProvider {
+    fn id(&self) -> &str {
+        "fake"
+    }
+
+    fn capabilities(&self, _model: &ModelRef) -> Option<Capabilities> {
+        Some(Capabilities {
+            streaming_tool_calls: true,
+            parallel_tool_calls: true,
+            max_context: 200_000,
+            ..Capabilities::default()
+        })
+    }
+
+    async fn stream(
+        &self,
+        request: CompletionRequest,
+        session: SessionId,
+        _message: MessageId,
+    ) -> Result<EventStream, ProviderError> {
+        let parallel = request.messages.iter().any(|message| {
+            matches!(message, Message::User { parts, .. } if parts.iter().any(|part| {
+                matches!(part, Part::Text { text, .. } if text.starts_with("PARALLEL"))
+            }))
+        });
+        if parallel {
+            self.entered.fetch_add(1, Ordering::SeqCst);
+            self.barrier.wait().await;
+        }
+        let events = FakeProvider::materialize(
+            &[
+                FakeStep::Text("OVERLAPPED".to_string()),
+                FakeStep::Finish(FinishReason::Stop),
+            ],
+            session,
+            MessageId::new(),
+        );
+        Ok(Box::pin(stream::iter(
+            events.into_iter().map(Ok::<Event, ProviderError>),
+        )))
+    }
+}
+
+/// Provider that exposes resident work admission, then remains pending until
+/// the supervisor cancels the resident turn.
+struct ResidentHangingProvider {
+    started: tokio::sync::Notify,
+}
+
+impl ResidentHangingProvider {
+    /// Create one hanging resident provider.
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            started: tokio::sync::Notify::new(),
+        })
+    }
+
+    /// Wait until the resident provider call starts.
+    async fn wait_started(&self) {
+        tokio::time::timeout(std::time::Duration::from_secs(2), self.started.notified())
+            .await
+            .expect("resident provider call starts");
+    }
+}
+
+#[async_trait]
+impl Provider for ResidentHangingProvider {
+    fn id(&self) -> &str {
+        "fake"
+    }
+
+    fn capabilities(&self, _model: &ModelRef) -> Option<Capabilities> {
+        Some(Capabilities {
+            streaming_tool_calls: true,
+            parallel_tool_calls: true,
+            max_context: 200_000,
+            ..Capabilities::default()
+        })
+    }
+
+    async fn stream(
+        &self,
+        _request: CompletionRequest,
+        _session: SessionId,
+        _message: MessageId,
+    ) -> Result<EventStream, ProviderError> {
+        self.started.notify_one();
+        futures::future::pending::<Result<EventStream, ProviderError>>().await
     }
 }
 
@@ -202,19 +323,22 @@ async fn engine_with_limits(
     )
 }
 
-const TWO_STAGE_YAML: &str = r#"
+const TWO_STAGE_WORKFLOW: &str = r#"---
+kind: Workflow
 name: feature-flow
-description: explore then build
+description: Explore then build.
 inputs:
-  target: what to explore
-stages:
-  - id: explore
+  target: What to explore.
+nodes:
+  explore:
     agent: explorer
-    prompt: "EXPLORE {{inputs.target}}"
-  - id: build
+    directive: EXPLORE {{input.target}}
+  build:
     agent: builder
-    needs: [explore]
-    prompt: "BUILD from\n{{explore}}"
+    directive: BUILD from direct evidence.
+---
+flowchart TD
+  explore --> build
 "#;
 
 fn write_workflow(workdir: &std::path::Path, file_name: &str, body: &str) -> PathBuf {
@@ -223,6 +347,11 @@ fn write_workflow(workdir: &std::path::Path, file_name: &str, body: &str) -> Pat
     let path = dir.join(file_name);
     std::fs::write(&path, body).unwrap();
     path
+}
+
+/// Compile one in-memory Workflow fixture through the public authoring seam.
+fn compile_workflow(name: &str, source: &str) -> CompiledWorkflow {
+    compile(WorkflowSource::new(name, source)).unwrap()
 }
 
 fn catalog() -> Arc<hya_core::AgentCatalog> {
@@ -252,8 +381,8 @@ async fn start_lead(engine: &Arc<SessionEngine>) -> SessionId {
 #[tokio::test]
 async fn two_stage_workflow_runs_in_order_and_hands_off_evidence() {
     let workdir = support::TestDir::new("workflow-two-stage");
-    let path = write_workflow(workdir.path(), "feature.yaml", TWO_STAGE_YAML);
-    let def: WorkflowDef = load_workflow_file(&path).unwrap();
+    let path = write_workflow(workdir.path(), "feature.hya.md", TWO_STAGE_WORKFLOW);
+    let def = load_workflow_file(&path).unwrap();
 
     let provider = RecordingProvider::new();
     let engine = engine(provider.clone()).await;
@@ -272,6 +401,7 @@ async fn two_stage_workflow_runs_in_order_and_hands_off_evidence() {
             caller: "build".to_string(),
             base_agent: base,
             inputs: BTreeMap::from([("target".to_string(), "the retry paths".to_string())]),
+            resident_supervisor: None,
         },
         CancellationToken::new(),
     )
@@ -307,29 +437,30 @@ async fn two_stage_workflow_runs_in_order_and_hands_off_evidence() {
 /// reviewer joins BOTH worker outputs; review verdicts converge.
 #[tokio::test]
 async fn fan_out_then_fan_in_joins_all_upstream_outputs() {
-    let yaml = r#"
+    let source = r#"---
+kind: Workflow
 name: fan-flow
-description: plan fans out to two impls then reviews both
-stages:
-  - id: plan
+description: Plan fans out to two implementations, then reviews both.
+nodes:
+  plan:
     agent: planner
-    prompt: "PLAN"
-  - id: impl_a
+    directive: PLAN
+  impl_a:
     agent: builder
-    needs: [plan]
-    prompt: "IMPL A per\n{{plan}}"
-  - id: impl_b
+    directive: IMPL A
+  impl_b:
     agent: builder
-    needs: [plan]
-    prompt: "IMPL B per\n{{plan}}"
-  - id: review
+    directive: IMPL B
+  review:
     agent: reviewer
-    needs: [impl_a, impl_b]
-    prompt: "REVIEW both:\n{{impl_a}}\n{{impl_b}}"
+    directive: REVIEW both
+---
+flowchart TD
+  plan --> impl_a & impl_b
+  impl_a & impl_b --> review
 "#;
     let workdir = support::TestDir::new("workflow-fan");
-    let path = write_workflow(workdir.path(), "fan.yaml", yaml);
-    let def = load_workflow_file(&path).unwrap();
+    let def = compile_workflow("fan.hya.md", source);
 
     let provider = RecordingProvider::new();
     let engine = engine(provider.clone()).await;
@@ -348,6 +479,7 @@ stages:
             caller: "build".to_string(),
             base_agent: base,
             inputs: BTreeMap::new(),
+            resident_supervisor: None,
         },
         CancellationToken::new(),
     )
@@ -370,39 +502,98 @@ stages:
 
     let (_, review_prompt) = prompts
         .iter()
-        .find(|(_, text)| text.starts_with("REVIEW both:"))
+        .find(|(_, text)| text.starts_with("REVIEW both"))
         .expect("review prompt appears once");
     assert!(
-        review_prompt.contains("## upstream stage `impl_a`")
-            && review_prompt.contains("## upstream stage `impl_b`"),
+        review_prompt.contains("<stage id=\"impl_a\"")
+            && review_prompt.contains("<stage id=\"impl_b\""),
         "join stage receives both fanned-in sections: {review_prompt:?}"
     );
+}
+
+/// Same-level transient Stages enter provider execution together through one
+/// governed batch; a sequential scheduler deadlocks at this barrier.
+#[tokio::test]
+async fn same_level_transient_stages_overlap_provider_execution() {
+    let source = r#"---
+kind: Workflow
+name: overlap-flow
+description: Two independent Stages overlap.
+nodes:
+  left:
+    agent: builder
+    directive: PARALLEL left
+  right:
+    agent: builder
+    directive: PARALLEL right
+---
+flowchart TD
+  left
+  right
+"#;
+    let workflow = compile_workflow("overlap.hya.md", source);
+    let provider = BarrierProvider::new();
+    let engine = engine(provider.clone()).await;
+    let lead = start_lead(&engine).await;
+    let binding = engine.bind_runtime(std::path::Path::new("/tmp")).unwrap();
+    let base = engine
+        .agent_spec_for_binding(&binding, &base_spec(), "build")
+        .unwrap();
+    let report = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        run_workflow(
+            engine,
+            lead,
+            &workflow,
+            hya_core::WorkflowRunContext {
+                binding,
+                caller: "build".to_string(),
+                base_agent: base,
+                inputs: BTreeMap::new(),
+                resident_supervisor: None,
+            },
+            CancellationToken::new(),
+        ),
+    )
+    .await
+    .expect("both provider calls must reach the barrier")
+    .unwrap();
+    assert_eq!(
+        report.status,
+        WorkflowStatus::Completed,
+        "reports={:?}, entered={}",
+        report.stages,
+        provider.entered.load(Ordering::SeqCst)
+    );
+    assert_eq!(provider.entered.load(Ordering::SeqCst), 2);
 }
 
 /// `on_member_failure: collect_all` keeps the DAG running: the failed stage is
 /// reported FAILED in the joined directive instead of aborting the workflow.
 #[tokio::test]
 async fn collect_all_policy_reports_failures_into_the_join() {
-    let yaml = r#"
+    let source = r#"---
+kind: Workflow
 name: tolerant-flow
-description: one impl may fail; review still aggregates
-on_member_failure: collect_all
-stages:
-  - id: good
+description: One implementation may fail; review still aggregates.
+on_failure: collect_all
+nodes:
+  good:
     agent: builder
-    prompt: "IMPL GOOD"
-  - id: bad
+    directive: IMPL GOOD
+  bad:
     agent: builder
-    prompt: "FAIL_ME IMPL BAD"
-  - id: review
+    directive: FAIL_ME IMPL BAD
+  review:
     agent: reviewer
-    needs: [good, bad]
-    prompt: "REVIEW all:\n{{good}}\n{{bad}}"
+    directive: REVIEW all
+---
+flowchart TD
+  good & bad --> review
 "#;
     let workdir = support::TestDir::new("workflow-collect-all");
-    let path = write_workflow(workdir.path(), "tolerant.yaml", yaml);
-    let def: WorkflowDef = load_workflow_file(&path).unwrap();
-    assert_eq!(def.on_member_failure, FailurePolicy::CollectAll);
+    let def = compile_workflow("tolerant.hya.md", source);
+    assert_eq!(def.definition().on_failure(), FailurePolicy::CollectAll);
 
     let provider = RecordingProvider::new();
     let engine = engine(provider.clone()).await;
@@ -421,27 +612,28 @@ stages:
             caller: "build".to_string(),
             base_agent: base,
             inputs: BTreeMap::new(),
+            resident_supervisor: None,
         },
         CancellationToken::new(),
     )
     .await
     .unwrap();
 
-    assert_eq!(report.status, WorkflowStatus::Completed);
+    assert_eq!(report.status, WorkflowStatus::Failed);
     let bad = report.stages.iter().find(|s| s.stage == "bad").unwrap();
     assert_eq!(bad.status.to_string(), "failed");
 
     let prompts = provider.prompts();
     let (_, review_prompt) = prompts
         .iter()
-        .find(|(_, text)| text.starts_with("REVIEW all:"))
+        .find(|(_, text)| text.starts_with("REVIEW all"))
         .expect("review still ran");
     assert!(
-        review_prompt.contains("`good`") && review_prompt.contains("WORKER_DONE"),
+        review_prompt.contains("id=\"good\"") && review_prompt.contains("WORKER_DONE"),
         "healthy upstream flows through"
     );
     assert!(
-        review_prompt.contains("`bad`") && review_prompt.contains("FAILED"),
+        review_prompt.contains("id=\"bad\"") && review_prompt.contains("status=\"failed\""),
         "failed upstream is declared to the joining stage: {review_prompt:?}"
     );
 }
@@ -451,27 +643,29 @@ stages:
 /// evidence instead of the executor returning early with a workflow error.
 #[tokio::test]
 async fn collect_all_applies_to_resumed_loop_worker_failures() {
-    let yaml = r#"
+    let source = r#"---
+kind: Workflow
 name: tolerant-loop
-description: a later loop round may fail; review still aggregates
-on_member_failure: collect_all
-stages:
-  - id: build
+description: A later loop round may fail; review still aggregates.
+on_failure: collect_all
+nodes:
+  build:
     agent: builder
-    prompt: "BUILD first round"
+    directive: BUILD first round
     mode: loop
     verify:
       agent: reviewer
       until: FAIL_LOOP_RESUME
       max_iterations: 3
-  - id: review
+  review:
     agent: reviewer
-    needs: [build]
-    prompt: "REVIEW loop:\n{{build}}"
+    directive: REVIEW loop
+---
+flowchart TD
+  build --> review
 "#;
     let workdir = support::TestDir::new("workflow-collect-loop-failure");
-    let path = write_workflow(workdir.path(), "tolerant-loop.yaml", yaml);
-    let def: WorkflowDef = load_workflow_file(&path).unwrap();
+    let def = compile_workflow("tolerant-loop.hya.md", source);
     let provider = RecordingProvider::new();
     provider.script_verdict(false);
     let engine = engine(provider.clone()).await;
@@ -490,13 +684,14 @@ stages:
             caller: "build".to_string(),
             base_agent: base,
             inputs: BTreeMap::new(),
+            resident_supervisor: None,
         },
         CancellationToken::new(),
     )
     .await
     .expect("collect_all must turn the loop error into failed evidence");
 
-    assert_eq!(report.status, WorkflowStatus::Completed);
+    assert_eq!(report.status, WorkflowStatus::Failed);
     let build = report
         .stages
         .iter()
@@ -512,9 +707,9 @@ stages:
     let prompts = provider.prompts();
     let (_, review_prompt) = prompts
         .iter()
-        .find(|(_, text)| text.starts_with("REVIEW loop:"))
+        .find(|(_, text)| text.starts_with("REVIEW loop"))
         .expect("review receives loop evidence");
-    assert!(review_prompt.contains("`build`") && review_prompt.contains("FAILED"));
+    assert!(review_prompt.contains("id=\"build\"") && review_prompt.contains("status=\"failed\""));
 }
 
 fn base_spec() -> hya_core::AgentSpec {
@@ -551,7 +746,7 @@ async fn setup(workdir_label: &str) -> Run {
 
 async fn run_def(
     run: &Run,
-    def: &WorkflowDef,
+    def: &CompiledWorkflow,
     inputs: BTreeMap<String, String>,
 ) -> Result<hya_core::WorkflowRunReport, hya_core::WorkflowError> {
     let base = run
@@ -567,55 +762,47 @@ async fn run_def(
             caller: "build".to_string(),
             base_agent: base,
             inputs,
+            resident_supervisor: None,
         },
         CancellationToken::new(),
     )
     .await
 }
 
-#[tokio::test]
-async fn duplicate_stage_ids_are_rejected() {
-    let yaml = r#"
-name: dup-flow
-description: d
+#[test]
+fn old_stage_list_sources_are_rejected() {
+    let old_source = r#"
+name: old-flow
+description: The removed Stage-list format.
 stages:
-  - id: a
+  - id: run
     agent: builder
-    prompt: p
-  - id: a
-    agent: builder
-    prompt: q
+    prompt: Run.
 "#;
-    let def = serde_norway::from_str::<WorkflowDef>(yaml).unwrap();
-    let run = setup("dup").await;
-    let error = run_def(&run, &def, BTreeMap::new())
-        .await
-        .expect_err("duplicate ids must fail");
-    assert!(error.to_string().contains("duplicate stage id"), "{error}");
+    let error = compile(WorkflowSource::new("old.yaml", old_source)).unwrap_err();
     assert!(
-        run.provider.prompts().is_empty(),
-        "validation must fail before any member turn"
+        error.message().contains("must start with YAML frontmatter"),
+        "{error}"
     );
 }
 
 #[tokio::test]
 async fn missing_declared_input_fails_before_any_spawn() {
-    let yaml = r#"
+    let source = r#"---
+kind: Workflow
 name: input-flow
-description: d
+description: Require one run input.
 inputs:
-  target: required
-stages:
-  - id: s
+  target: Required target.
+nodes:
+  run:
     agent: builder
-    prompt: "do {{inputs.target}}"
+    directive: Do {{input.target}}.
+---
+flowchart TD
+  run
 "#;
-    let path = write_workflow(
-        std::path::Path::new("/tmp/hya-workflow-neg-input"),
-        "input.yaml",
-        yaml,
-    );
-    let def = load_workflow_file(&path).unwrap();
+    let def = compile_workflow("input.hya.md", source);
     let run = setup("input").await;
     let error = run_def(&run, &def, BTreeMap::new())
         .await
@@ -629,15 +816,19 @@ stages:
 
 #[tokio::test]
 async fn unknown_stage_agent_is_rejected_before_spawn() {
-    let yaml = r#"
+    let source = r#"---
+kind: Workflow
 name: ghost-flow
-description: d
-stages:
-  - id: s
+description: Reference an unavailable Agent.
+nodes:
+  run:
     agent: ghost-agent-not-installed
-    prompt: p
+    directive: Run.
+---
+flowchart TD
+  run
 "#;
-    let def = serde_norway::from_str::<WorkflowDef>(yaml).unwrap();
+    let def = compile_workflow("ghost.hya.md", source);
     let run = setup("ghost").await;
     let error = run_def(&run, &def, BTreeMap::new())
         .await
@@ -655,22 +846,25 @@ stages:
 
 #[tokio::test]
 async fn per_run_budget_overflow_is_rejected_up_front() {
-    let yaml = r#"
+    let source = r#"---
+kind: Workflow
 name: wide-flow
-description: three stages exceed a two-slot budget
-stages:
-  - id: one
+description: Three Stages exceed a two-slot budget.
+nodes:
+  one:
     agent: builder
-    prompt: p
-  - id: two
+    directive: One.
+  two:
     agent: builder
-    prompt: p
-  - id: three
+    directive: Two.
+  three:
     agent: reviewer
-    needs: [one, two]
-    prompt: j
+    directive: Three.
+---
+flowchart TD
+  one & two --> three
 "#;
-    let def = serde_norway::from_str::<WorkflowDef>(yaml).unwrap();
+    let def = compile_workflow("wide.hya.md", source);
     let provider = RecordingProvider::new();
     let engine = engine_with_limits(
         provider.clone(),
@@ -694,6 +888,7 @@ stages:
             caller: "build".to_string(),
             base_agent: base,
             inputs: BTreeMap::new(),
+            resident_supervisor: None,
         },
         CancellationToken::new(),
     )
@@ -713,28 +908,36 @@ stages:
 /// report marks the run Failed while keeping the failed level's evidence.
 #[tokio::test]
 async fn fail_fast_aborts_downstream_levels() {
-    let yaml = r#"
+    let source = r#"---
+kind: Workflow
 name: abort-flow
-description: d
-on_member_failure: fail_fast
-stages:
-  - id: broken
+description: Fail-fast skips downstream Stages.
+on_failure: fail_fast
+nodes:
+  broken:
     agent: builder
-    prompt: "FAIL_ME explode"
-  - id: after
+    directive: FAIL_ME explode
+  after:
     agent: reviewer
-    needs: [broken]
-    prompt: "should never render {{broken}}"
+    directive: Should never run.
+---
+flowchart TD
+  broken --> after
 "#;
-    let def = serde_norway::from_str::<WorkflowDef>(yaml).unwrap();
+    let def = compile_workflow("abort.hya.md", source);
     let run = setup("fail-fast").await;
     let report = run_def(&run, &def, BTreeMap::new())
         .await
         .expect("workflow completes with failure semantics");
     assert_eq!(report.status, WorkflowStatus::Failed);
-    assert_eq!(report.stages.len(), 1, "downstream stage must not run");
+    assert_eq!(
+        report.stages.len(),
+        2,
+        "terminal reports retain every Stage"
+    );
     assert_eq!(report.stages[0].stage, "broken");
     assert_eq!(report.stages[0].status.to_string(), "failed");
+    assert_eq!(report.stages[1].status, hya_core::StageStatus::Skipped);
     // The scripted failure errors during streaming, so no request ever
     // completes; downstream never renders.
     assert!(run.provider.prompts().is_empty());
@@ -747,20 +950,24 @@ stages:
 /// the report records the verified outcome.
 #[tokio::test]
 async fn loop_stage_verifier_owns_the_stop_decision() {
-    let yaml = r#"
+    let source = r#"---
+kind: Workflow
 name: loop-flow
-description: verify-gated build stage
-stages:
-  - id: build
+description: Verify-gated build Stage.
+nodes:
+  build:
     agent: builder
+    directive: LOOP_BUILD the thing
     mode: loop
     verify:
       agent: reviewer
-      until: tests pass
+      until: Tests pass.
       max_iterations: 4
-    prompt: "LOOP_BUILD the thing"
+---
+flowchart TD
+  build
 "#;
-    let def = serde_norway::from_str::<WorkflowDef>(yaml).unwrap();
+    let def = compile_workflow("loop.hya.md", source);
     let provider = RecordingProvider::new();
     provider.script_verdict(false); // first judgment: not yet met
     provider.script_verdict(true); // second judgment: met -> stop
@@ -779,6 +986,7 @@ stages:
             caller: "build".to_string(),
             base_agent: base,
             inputs: BTreeMap::new(),
+            resident_supervisor: None,
         },
         CancellationToken::new(),
     )
@@ -831,22 +1039,25 @@ stages:
 /// never returns cannot keep a cancelled Workflow or engine shutdown pending.
 #[tokio::test]
 async fn workflow_cancellation_stops_an_inflight_loop_verifier() {
-    let yaml = r#"
+    let source = r#"---
+kind: Workflow
 name: cancellable-loop
-description: verifier cancellation reaches its governed member
-stages:
-  - id: build
+description: Verifier cancellation reaches its governed member.
+nodes:
+  build:
     agent: builder
-    prompt: "BUILD before verifier"
+    directive: BUILD before verifier
     mode: loop
     verify:
       agent: reviewer
-      until: tests pass
+      until: Tests pass.
       max_iterations: 3
+---
+flowchart TD
+  build
 "#;
     let workdir = support::TestDir::new("workflow-cancel-verifier");
-    let path = write_workflow(workdir.path(), "cancellable-loop.yaml", yaml);
-    let def: WorkflowDef = load_workflow_file(&path).unwrap();
+    let def = compile_workflow("cancellable-loop.hya.md", source);
     let provider = RecordingProvider::new();
     provider.script_hanging_verifier();
     let engine = engine(provider.clone()).await;
@@ -867,6 +1078,7 @@ stages:
                 caller: "build".to_string(),
                 base_agent: base,
                 inputs: BTreeMap::new(),
+                resident_supervisor: None,
             },
             run_cancel,
         )
@@ -881,6 +1093,336 @@ stages:
         .expect("Workflow task must not panic")
         .expect("cancellation is a terminal report, not a core error");
     assert_eq!(report.status, WorkflowStatus::Cancelled);
+}
+
+/// Sequential Stages with one explicit actor key reuse one resident Session and
+/// cross two durable mail boundaries; the first directive is mail, not an
+/// implicit registration wake.
+#[tokio::test]
+async fn sequential_actor_stages_reuse_one_resident_session() {
+    let source = r#"---
+kind: Workflow
+name: resident-flow
+description: Reuse one resident planner across two sequential Stages.
+nodes:
+  draft:
+    agent: resident-planner
+    actor: planner
+    directive: Draft the plan.
+  refine:
+    agent: resident-planner
+    actor: planner
+    directive: Refine the plan.
+---
+flowchart TD
+  draft --> refine
+"#;
+    let workflow = compile_workflow("resident.hya.md", source);
+    let provider = RecordingProvider::new();
+    let catalog = support::test_catalog_with_lifecycles(&[(
+        "resident-planner",
+        AgentRole::Subagent,
+        SpawnLifecycle::Resident,
+        &[],
+    )]);
+    let (engine, _events) = engine_parts(provider.clone(), catalog, None).await;
+    let supervisor = hya_core::ResidentSupervisor::start(engine.clone());
+    let lead = start_lead(&engine).await;
+    let binding = engine.bind_runtime(std::path::Path::new("/tmp")).unwrap();
+    let base = engine
+        .agent_spec_for_binding(&binding, &base_spec(), "build")
+        .unwrap();
+
+    let report = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        run_workflow(
+            engine.clone(),
+            lead,
+            &workflow,
+            hya_core::WorkflowRunContext {
+                binding,
+                caller: "build".to_string(),
+                base_agent: base,
+                inputs: BTreeMap::new(),
+                resident_supervisor: Some(supervisor),
+            },
+            CancellationToken::new(),
+        ),
+    )
+    .await
+    .expect("resident Workflow settles")
+    .unwrap();
+
+    assert_eq!(report.status, WorkflowStatus::Completed);
+    assert_eq!(report.stages[0].session, report.stages[1].session);
+    let session = report.stages[0]
+        .session
+        .as_deref()
+        .expect("resident session");
+    assert_eq!(
+        provider
+            .prompts()
+            .iter()
+            .filter(|(candidate, _)| candidate.to_string() == session)
+            .count(),
+        2,
+        "one provider activation per Stage in the same resident Session"
+    );
+
+    let systems = provider.systems();
+    assert_eq!(systems.len(), 2);
+    assert!(
+        systems[0]
+            .1
+            .as_deref()
+            .is_some_and(|prompt| prompt.contains("resident-planner prompt")
+                && prompt.contains("stage: draft")),
+        "first activation uses the target Agent prompt plus Workflow context"
+    );
+    assert!(
+        systems[1]
+            .1
+            .as_deref()
+            .is_some_and(|prompt| prompt.contains("resident-planner prompt")
+                && prompt.contains("stage: refine")),
+        "later actor activation replaces only its Workflow context layer"
+    );
+
+    let root = engine.read_projection(lead).await.unwrap();
+    assert_eq!(root.team.inboxes.values().map(Vec::len).sum::<usize>(), 2);
+    let resident = root
+        .team
+        .roster
+        .values()
+        .find(|entry| entry.session.to_string() == session)
+        .expect("resident roster row");
+    assert!(resident.resident_cursor >= 2);
+    assert!(resident.resident_work.is_none());
+    let mail_events = engine
+        .replay(lead)
+        .await
+        .unwrap()
+        .iter()
+        .filter(|envelope| matches!(envelope.event, Event::MailSent { .. }))
+        .count();
+    assert_eq!(mail_events, 2, "both Stage directives are durable mail");
+}
+
+/// Workflow cancellation stops an in-flight resident turn, waits for its
+/// durable boundary to settle, and never reports while resident work remains.
+#[tokio::test]
+async fn workflow_cancellation_settles_inflight_resident_stage() {
+    let source = r#"---
+kind: Workflow
+name: cancel-resident
+description: Cancel one active resident Stage.
+nodes:
+  work:
+    agent: resident-worker
+    actor: worker
+    directive: Hang until cancelled.
+---
+flowchart TD
+  work
+"#;
+    let workflow = compile_workflow("cancel-resident.hya.md", source);
+    let provider = ResidentHangingProvider::new();
+    let catalog = support::test_catalog_with_lifecycles(&[(
+        "resident-worker",
+        AgentRole::Subagent,
+        SpawnLifecycle::Resident,
+        &[],
+    )]);
+    let (engine, _events) = engine_parts(provider.clone(), catalog, None).await;
+    let supervisor = hya_core::ResidentSupervisor::start(engine.clone());
+    let lead = start_lead(&engine).await;
+    let binding = engine.bind_runtime(std::path::Path::new("/tmp")).unwrap();
+    let base = engine
+        .agent_spec_for_binding(&binding, &base_spec(), "build")
+        .unwrap();
+    let cancel = CancellationToken::new();
+    let run_cancel = cancel.clone();
+    let run = tokio::spawn({
+        let engine = engine.clone();
+        async move {
+            run_workflow(
+                engine,
+                lead,
+                &workflow,
+                hya_core::WorkflowRunContext {
+                    binding,
+                    caller: "build".to_string(),
+                    base_agent: base,
+                    inputs: BTreeMap::new(),
+                    resident_supervisor: Some(supervisor),
+                },
+                run_cancel,
+            )
+            .await
+        }
+    });
+
+    provider.wait_started().await;
+    cancel.cancel();
+    let report = tokio::time::timeout(std::time::Duration::from_secs(2), run)
+        .await
+        .expect("resident cancellation must settle")
+        .expect("Workflow task must not panic")
+        .unwrap();
+    assert_eq!(report.status, WorkflowStatus::Cancelled);
+    assert_eq!(report.stages[0].status, hya_core::StageStatus::Cancelled);
+    let projection = engine.read_projection(lead).await.unwrap();
+    let resident = projection
+        .team
+        .roster
+        .values()
+        .find(|entry| entry.agent_type.as_str() == "resident-worker")
+        .expect("resident roster row remains replay-visible");
+    assert!(resident.resident_work.is_none());
+}
+
+/// Agent ids are definitions, not identities: transient reuse creates distinct
+/// Sessions, while two explicit actor keys create two resident Sessions.
+#[tokio::test]
+async fn actor_keys_not_agent_ids_control_session_reuse() {
+    let source = r#"---
+kind: Workflow
+name: identity-flow
+description: Contrast transient and actor identity.
+nodes:
+  first:
+    agent: builder
+    directive: First transient.
+  second:
+    agent: builder
+    directive: Second transient.
+  actor_a:
+    agent: resident-planner
+    actor: alpha
+    directive: Resident alpha.
+  actor_b:
+    agent: resident-planner
+    actor: beta
+    directive: Resident beta.
+---
+flowchart TD
+  first --> second
+  second --> actor_a & actor_b
+"#;
+    let workflow = compile_workflow("identity.hya.md", source);
+    let provider = RecordingProvider::new();
+    let catalog = support::test_catalog_with_lifecycles(&[
+        (
+            "builder",
+            AgentRole::Subagent,
+            SpawnLifecycle::Transient,
+            &[],
+        ),
+        (
+            "resident-planner",
+            AgentRole::Subagent,
+            SpawnLifecycle::Resident,
+            &[],
+        ),
+    ]);
+    let (engine, _events) = engine_parts(provider, catalog, None).await;
+    let supervisor = hya_core::ResidentSupervisor::start(engine.clone());
+    let lead = start_lead(&engine).await;
+    let binding = engine.bind_runtime(std::path::Path::new("/tmp")).unwrap();
+    let base = engine
+        .agent_spec_for_binding(&binding, &base_spec(), "build")
+        .unwrap();
+    let report = run_workflow(
+        engine.clone(),
+        lead,
+        &workflow,
+        hya_core::WorkflowRunContext {
+            binding,
+            caller: "build".to_string(),
+            base_agent: base,
+            inputs: BTreeMap::new(),
+            resident_supervisor: Some(supervisor),
+        },
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(report.status, WorkflowStatus::Completed);
+    assert_ne!(report.stages[0].session, report.stages[1].session);
+    assert_ne!(report.stages[2].session, report.stages[3].session);
+    assert_eq!(
+        engine
+            .read_projection(lead)
+            .await
+            .unwrap()
+            .team
+            .roster
+            .values()
+            .filter(|entry| entry.agent_type.as_str() == "resident-planner")
+            .count(),
+        2
+    );
+}
+
+/// A provider failure in a resident activation becomes typed failed Stage
+/// evidence and leaves no in-flight resident work behind.
+#[tokio::test]
+async fn resident_stage_failure_is_terminal_evidence() {
+    let source = r#"---
+kind: Workflow
+name: failed-resident
+description: Surface one resident provider failure.
+nodes:
+  fail:
+    agent: resident-worker
+    actor: worker
+    directive: FAIL_ME resident turn.
+---
+flowchart TD
+  fail
+"#;
+    let workflow = compile_workflow("failed-resident.hya.md", source);
+    let provider = RecordingProvider::new();
+    let catalog = support::test_catalog_with_lifecycles(&[(
+        "resident-worker",
+        AgentRole::Subagent,
+        SpawnLifecycle::Resident,
+        &[],
+    )]);
+    let (engine, _events) = engine_parts(provider, catalog, None).await;
+    let supervisor = hya_core::ResidentSupervisor::start(engine.clone());
+    let lead = start_lead(&engine).await;
+    let binding = engine.bind_runtime(std::path::Path::new("/tmp")).unwrap();
+    let base = engine
+        .agent_spec_for_binding(&binding, &base_spec(), "build")
+        .unwrap();
+    let report = run_workflow(
+        engine.clone(),
+        lead,
+        &workflow,
+        hya_core::WorkflowRunContext {
+            binding,
+            caller: "build".to_string(),
+            base_agent: base,
+            inputs: BTreeMap::new(),
+            resident_supervisor: Some(supervisor),
+        },
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(report.status, WorkflowStatus::Failed);
+    assert_eq!(report.stages[0].status, hya_core::StageStatus::Failed);
+    let projection = engine.read_projection(lead).await.unwrap();
+    let resident = projection
+        .team
+        .roster
+        .values()
+        .find(|entry| entry.agent_type.as_str() == "resident-worker")
+        .expect("resident roster row");
+    assert!(resident.resident_work.is_none());
 }
 
 // ---------------------------------------------------------------------------
@@ -1055,25 +1597,33 @@ fn tool_results_for(
 /// own `can_spawn`, not inherited from the caller's broader roster.
 #[tokio::test]
 async fn stage_members_resolve_their_own_can_spawn_roster() {
-    const ISOLATED_YAML: &str = r#"
+    const ISOLATED_WORKFLOW: &str = r#"---
+kind: Workflow
 name: isolated-flow
-description: worker cannot delegate further
-stages:
-  - id: only
+description: Worker cannot delegate further.
+nodes:
+  only:
     agent: worker
-    prompt: "ROSTER_PROBE_ISOLATED"
+    directive: ROSTER_PROBE_ISOLATED
+---
+flowchart TD
+  only
 "#;
-    const DELEGATING_YAML: &str = r#"
+    const DELEGATING_WORKFLOW: &str = r#"---
+kind: Workflow
 name: delegating-flow
-description: delegate may hand off to helper only
-stages:
-  - id: spawn_step
+description: Delegate may hand off to helper only.
+nodes:
+  spawn_step:
     agent: delegate
-    prompt: "ROSTER_PROBE_DELEGATE"
+    directive: ROSTER_PROBE_DELEGATE
+---
+flowchart TD
+  spawn_step
 "#;
 
-    let isolated: WorkflowDef = serde_norway::from_str(ISOLATED_YAML).unwrap();
-    let delegating: WorkflowDef = serde_norway::from_str(DELEGATING_YAML).unwrap();
+    let isolated = compile_workflow("isolated.hya.md", ISOLATED_WORKFLOW);
+    let delegating = compile_workflow("delegating.hya.md", DELEGATING_WORKFLOW);
 
     let provider = ProbeProvider::new("list_agents");
     let catalog = support::test_catalog(&[
@@ -1093,6 +1643,7 @@ stages:
         caller: "build".to_string(),
         base_agent: base.clone(),
         inputs: BTreeMap::new(),
+        resident_supervisor: None,
     };
 
     // Parent authority control: the caller's OWN roster spans every target, so
@@ -1322,20 +1873,24 @@ impl hya_core::sidecar::SidecarHandle for MarkerSidecarHandle {
 /// context — resolver order pins builder (worker) then reviewer (verifier).
 #[tokio::test]
 async fn loop_worker_and_verifier_reuse_target_execution_contexts() {
-    const LOOP_SIDECAR_YAML: &str = r#"
+    const LOOP_SIDECAR_WORKFLOW: &str = r#"---
+kind: Workflow
 name: sidecar-loop-flow
-description: verified build stage carrying sidecar bindings
-stages:
-  - id: make
+description: Verified build Stage carrying sidecar bindings.
+nodes:
+  make:
     agent: builder
+    directive: SIDECAR_PROBE
     mode: loop
     verify:
       agent: reviewer
-      until: marker reached
+      until: Marker reached.
       max_iterations: 3
-    prompt: "SIDECAR_PROBE"
+---
+flowchart TD
+  make
 "#;
-    let def: WorkflowDef = serde_norway::from_str(LOOP_SIDECAR_YAML).unwrap();
+    let def = compile_workflow("sidecar-loop.hya.md", LOOP_SIDECAR_WORKFLOW);
 
     let provider = ProbeProvider::new("sidecar_ping");
     let environment = OnlyBuilderSidecarEnvironment::new();
@@ -1362,6 +1917,7 @@ stages:
             caller: "build".to_string(),
             base_agent: base,
             inputs: BTreeMap::new(),
+            resident_supervisor: None,
         },
         CancellationToken::new(),
     )

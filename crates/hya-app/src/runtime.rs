@@ -3282,6 +3282,7 @@ impl Drop for SpawnSupervisorLifecycle {
 #[must_use]
 pub struct BuiltSessionEngine {
     engine: Arc<SessionEngine>,
+    resident_supervisor: Arc<ResidentSupervisor>,
     asks: Option<tokio::sync::mpsc::UnboundedReceiver<AskRequest>>,
     questions: Option<tokio::sync::mpsc::UnboundedReceiver<QuestionRequest>>,
     mcp_control: Arc<dyn hya_server::McpControl>,
@@ -3294,6 +3295,12 @@ impl BuiltSessionEngine {
     #[must_use]
     pub fn engine(&self) -> Arc<SessionEngine> {
         Arc::clone(&self.engine)
+    }
+
+    /// Shared resident scheduling owner used by Workflow actor activations.
+    #[must_use]
+    pub fn resident_supervisor(&self) -> Arc<ResidentSupervisor> {
+        Arc::clone(&self.resident_supervisor)
     }
 
     /// Take the permission-ask receiver exactly once.
@@ -3385,6 +3392,7 @@ fn spawn_workflow_supervisor(
     mut rx: tokio::sync::mpsc::Receiver<BoundWorkflowRequest>,
     engine: Arc<SessionEngine>,
     base: AgentSpec,
+    resident_supervisor: Arc<ResidentSupervisor>,
     stop: tokio_util::sync::CancellationToken,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
@@ -3399,7 +3407,8 @@ fn spawn_workflow_supervisor(
             };
             let (binding, request) = bound_request.into_parts();
             let request_cancel = request.cancel.clone();
-            let execution = handle_workflow_request(&engine, &base, binding, request);
+            let execution =
+                handle_workflow_request(&engine, &base, &resident_supervisor, binding, request);
             tokio::pin!(execution);
             tokio::select! {
                 biased;
@@ -3421,6 +3430,7 @@ fn spawn_workflow_supervisor(
 async fn handle_workflow_request(
     engine: &Arc<SessionEngine>,
     base: &AgentSpec,
+    resident_supervisor: &Arc<ResidentSupervisor>,
     binding: TurnBinding,
     request: hya_tool::WorkflowRequest,
 ) {
@@ -3446,7 +3456,15 @@ async fn handle_workflow_request(
         hya_tool::WorkflowAction::List => list_workflows(binding.workdir()),
         hya_tool::WorkflowAction::Run { name, inputs } => {
             run_named_workflow(
-                engine, base, &binding, parent, &caller, &name, inputs, cancel,
+                engine,
+                base,
+                resident_supervisor,
+                &binding,
+                parent,
+                &caller,
+                &name,
+                inputs,
+                cancel,
             )
             .await
         }
@@ -3462,15 +3480,24 @@ fn list_workflows(workdir: &std::path::Path) -> hya_tool::WorkflowReply {
     for path in discover_workflow_files(workdir) {
         let display = path.display().to_string();
         match load_workflow_file(&path) {
-            Ok(def) => {
-                if summaries.iter().any(|s| s.name == def.name) {
-                    continue; // shadowed by an earlier root
+            Ok(workflow) => {
+                let definition = workflow.definition();
+                if summaries
+                    .iter()
+                    .any(|summary| summary.name == definition.name())
+                {
+                    continue;
                 }
                 summaries.push(WorkflowSummary {
-                    name: def.name.clone(),
-                    description: def.description.clone(),
+                    name: definition.name().to_string(),
+                    description: definition.description().to_string(),
                     path: display,
-                    stages: def.stages.iter().map(|s| s.id.clone()).collect(),
+                    stages: workflow
+                        .plan()
+                        .stages()
+                        .iter()
+                        .map(|stage| stage.id().to_string())
+                        .collect(),
                     error: None,
                 });
             }
@@ -3495,6 +3522,7 @@ fn list_workflows(workdir: &std::path::Path) -> hya_tool::WorkflowReply {
 async fn run_named_workflow(
     engine: &Arc<SessionEngine>,
     base: &AgentSpec,
+    resident_supervisor: &Arc<ResidentSupervisor>,
     binding: &TurnBinding,
     lead: hya_proto::SessionId,
     caller: &str,
@@ -3512,6 +3540,7 @@ async fn run_named_workflow(
         caller: caller.to_string(),
         base_agent: base.clone(),
         inputs,
+        resident_supervisor: Some(resident_supervisor.clone()),
     };
     let report = match run_workflow(engine.clone(), lead, &def, context, cancel).await {
         Ok(report) => report,
@@ -4397,7 +4426,7 @@ async fn build_session_engine_with_mcp_defer(
         agent.clone(),
         spawn_router,
         categories,
-        resident_supervisor,
+        resident_supervisor.clone(),
         sidecar_environment,
     );
     // Serve `workflow` tool requests from a dedicated worker loop sharing the
@@ -4406,6 +4435,7 @@ async fn build_session_engine_with_mcp_defer(
         workflow_rx,
         engine.clone(),
         agent.clone(),
+        resident_supervisor.clone(),
         lifecycle.stop.clone(),
     ));
     // Drive the event-sourced mailbox: append MailSent/Channel*/AgentRegistered to
@@ -4413,6 +4443,7 @@ async fn build_session_engine_with_mcp_defer(
     tokio::spawn(run_mailbox_service(engine.clone(), mailbox_rx));
     Ok(BuiltSessionEngine {
         engine,
+        resident_supervisor,
         asks: Some(asks),
         questions: Some(questions),
         mcp_control,
@@ -9893,14 +9924,18 @@ agent:
         let workflow_dir = workdir.join(".hya/workflows");
         std::fs::create_dir_all(&workflow_dir).unwrap();
         std::fs::write(
-            workflow_dir.join("shutdown-flow.yaml"),
-            r#"
+            workflow_dir.join("shutdown-flow.hya.md"),
+            r#"---
+kind: Workflow
 name: shutdown-flow
-description: hold one governed member until lifecycle shutdown
-stages:
-  - id: hold
+description: Hold one governed member until lifecycle shutdown.
+nodes:
+  hold:
     agent: explore
-    prompt: "WAIT FOR SHUTDOWN"
+    directive: WAIT FOR SHUTDOWN
+---
+flowchart TD
+  hold
 "#,
         )
         .unwrap();
@@ -9959,8 +9994,14 @@ stages:
             .for_binding(&binding)
             .for_session_with_agents(lead, agents);
         let stop = CancellationToken::new();
-        let supervisor =
-            spawn_workflow_supervisor(workflow_rx, Arc::clone(&engine), base, stop.clone());
+        let resident_supervisor = ResidentSupervisor::start(Arc::clone(&engine));
+        let supervisor = spawn_workflow_supervisor(
+            workflow_rx,
+            Arc::clone(&engine),
+            base,
+            resident_supervisor,
+            stop.clone(),
+        );
         let (interaction, _interaction_rx) = InteractionPlane::new();
         let (spawner, _spawner_rx) = SpawnerPlane::new();
         let ctx = ToolCtx {
@@ -15162,18 +15203,25 @@ export default {
             workdir: &std::path::Path,
             stage_agent: &str,
         ) -> hya_core::WorkflowRunReport {
-            let def_yaml = format!(
-                r#"
+            let source = format!(
+                r#"---
+kind: Workflow
 name: nested-task-flow
-description: one stage whose member attempts a nested task
-stages:
-  - id: worker_stage
+description: One Stage whose member attempts a nested task.
+nodes:
+  worker_stage:
     agent: {stage_agent}
-    prompt: "NESTED_TASK_STAGE"
+    directive: NESTED_TASK_STAGE
+---
+flowchart TD
+  worker_stage
 "#
             );
-            let def: hya_core::WorkflowDef =
-                serde_norway::from_str(&def_yaml).expect("valid workflow definition");
+            let def = hya_workflow::compile(hya_workflow::WorkflowSource::new(
+                "nested-task.hya.md",
+                &source,
+            ))
+            .expect("valid Workflow definition");
             let lead = engine
                 .create(CreateSession {
                     parent: None,
@@ -15192,6 +15240,7 @@ stages:
                 caller: base.name.to_string(),
                 base_agent: caller_base,
                 inputs: std::collections::BTreeMap::new(),
+                resident_supervisor: None,
             };
             hya_core::run_workflow(
                 engine.clone(),
