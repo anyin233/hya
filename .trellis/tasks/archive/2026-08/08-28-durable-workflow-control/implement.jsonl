@@ -1,0 +1,7 @@
+{"file":".trellis/spec/backend/index.md","reason":"Rust proto/store/core/app/server/SDK conventions."}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Event replay and persistence contracts without a parallel table."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Stable typed control and transport errors."}
+{"file":".trellis/spec/backend/task-tool.md","reason":"ToolOperation identity, actor claims, and governed dispatch."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Projection/control/API TDD and quality gates."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Trace Events through Projection, server, SDK, and clients."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Keep one control adapter and existing transports."}

@@ -1,0 +1,5 @@
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Review TUI behavior, tests, and visual proof."}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Review plugin composition and terminal layout."}
+{"file":".trellis/spec/frontend/state-management.md","reason":"Detect polling, duplicate providers, or local reducers."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Review exhaustive typed state handling."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Review synchronized backend-to-sidebar data flow."}

@@ -1,0 +1,4 @@
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Review compiler/runtime correctness and behavior tests."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Review source-located and runtime errors."}
+{"file":".trellis/spec/backend/task-tool.md","reason":"Review governed execution and durable actor boundaries."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Detect duplicate scheduling or planning mechanisms."}

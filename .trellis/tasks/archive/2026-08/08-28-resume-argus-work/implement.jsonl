@@ -1,0 +1,11 @@
+{"file":".trellis/spec/backend/index.md","reason":"Backend package and Rust architecture entry rules."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Typed cross-layer failure and context conventions."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Rust quality, test, and review contracts."}
+{"file":".trellis/spec/backend/task-tool.md","reason":"Governed subagent operation and durable admission contracts reused by Workflow."}
+{"file":".trellis/spec/frontend/index.md","reason":"TypeScript TUI package entry rules."}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Solid/OpenTUI component and plugin composition rules."}
+{"file":".trellis/spec/frontend/state-management.md","reason":"Single synchronized frontend state ownership."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Typed DTO and exhaustive state handling."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Frontend test and quality contracts."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"End-to-end data-flow and contract verification across crates and TUI."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Reuse existing scheduler, plugin, projection, and transport seams."}

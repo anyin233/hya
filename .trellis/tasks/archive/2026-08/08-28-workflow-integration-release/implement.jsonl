@@ -1,0 +1,8 @@
+{"file":".trellis/spec/backend/index.md","reason":"Final Rust package and architecture rules."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Final Rust CI-equivalent and release gates."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Final error-contract consistency."}
+{"file":".trellis/spec/frontend/index.md","reason":"Final TypeScript TUI architecture rules."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Final Bun, PTY, and visual gates."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Final DTO/status conformance."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Final end-to-end integration and documentation audit."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Final duplicate-module cleanup."}
