@@ -96,6 +96,7 @@ fn ctx_with(workdir: PathBuf, lsp: LspPlane, formatter: FormatterPlane) -> ToolC
     let (interaction, _irx) = InteractionPlane::new();
     let (spawner, _srx) = SpawnerPlane::new();
     ToolCtx {
+        workflows: hya_tool::WorkflowPlane::disconnected(),
         permission,
         interaction,
         spawner,

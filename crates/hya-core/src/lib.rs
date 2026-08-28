@@ -49,6 +49,8 @@ pub mod sidecar;
 pub mod subagent;
 /// Session title generation helpers.
 pub mod title;
+/// User-authored workflow DAGs over the governed team primitives.
+pub mod workflow;
 /// Git worktree and tmux helpers for isolated workers.
 pub mod workspace;
 
@@ -70,8 +72,9 @@ pub use completion::{
     GoalEvaluator, IterationDriver, ModelGoalEvaluator, RunOutcome, SafetyCaps, Verdict, run_goal,
 };
 pub use engine::{
-    AdmissionMemberIdentity, AgentSpec, BoundSpawnRequest, BoundSpawnSender, CreateSession,
-    RuntimeCatalogRefresh, SessionEngine, SpawnAdmissionOutcome,
+    AdmissionMemberIdentity, AgentSpec, BoundSpawnRequest, BoundSpawnSender, BoundWorkflowRequest,
+    BoundWorkflowSender, CreateSession, RuntimeCatalogRefresh, SessionEngine,
+    SpawnAdmissionOutcome,
 };
 pub use error::CoreError;
 pub use hooks::{
@@ -103,5 +106,11 @@ pub use subagent::{
     MemberEvidence, MemberSpec, MemberStatus, TeamAdmissionError, TeamEvidenceEnvelope,
     pre_admit_team, project_envelope, project_envelope_for_actor, run_pre_admitted_member,
     run_pre_admitted_team, run_pre_admitted_team_for_actor, run_team,
+};
+pub use workflow::{
+    FailurePolicy, StageDef, StageMode, StageReport, StageStatus, VerifySpec, WorkflowDef,
+    WorkflowError, WorkflowPlan, WorkflowRunContext, WorkflowRunReport, WorkflowStatus, build_plan,
+    discover_workflow_files, load_workflow_by_name, load_workflow_file, run_workflow,
+    workflow_dirs_for_workdir,
 };
 pub use workspace::{TmuxPaneManager, WorktreeManager};

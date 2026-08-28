@@ -1,0 +1,4 @@
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Review recovered Rust behavior and complete gates."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Review retry/timeout/tool error semantics."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Review recovered TUI/adapter state."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Review path ownership and release consistency."}

@@ -14,13 +14,14 @@ use hya_bundle::{BundleCatalog, SpawnLifecycle};
 use hya_core::agent_catalog::{AgentCatalog, AgentDefinition};
 use hya_core::{
     AdmissionMemberIdentity, AgentResourcePolicy, AgentSpec, BoundSidecarFactory,
-    BoundSpawnRequest, BoundSpawnSender, CategoryRegistry, CompactionConfig, CoreError,
-    CreateSession, EventBus, MemberEvidence, MemberSpec, MemberStatus, ModelSummarizer,
-    OperationReservation, PromptEnv, ResidentSupervisor, RuntimeRegistry, SessionEngine,
-    SidecarEnvironment, SidecarHandle, SidecarLifecycle, SidecarStart, SpawnAdmissionOutcome,
-    SubagentGovernor, Summarizer, TeamEvidenceEnvelope, TurnBinding, build_system_prompt,
-    project_envelope, project_envelope_for_actor, run_mailbox_service, run_pre_admitted_member,
-    run_pre_admitted_team, run_pre_admitted_team_for_actor,
+    BoundSpawnRequest, BoundSpawnSender, BoundWorkflowRequest, BoundWorkflowSender,
+    CategoryRegistry, CompactionConfig, CoreError, CreateSession, EventBus, MemberEvidence,
+    MemberSpec, MemberStatus, ModelSummarizer, OperationReservation, PromptEnv, ResidentSupervisor,
+    RuntimeRegistry, SessionEngine, SidecarEnvironment, SidecarHandle, SidecarLifecycle,
+    SidecarStart, SpawnAdmissionOutcome, SubagentGovernor, Summarizer, TeamEvidenceEnvelope,
+    TurnBinding, build_system_prompt, discover_workflow_files, load_workflow_by_name,
+    load_workflow_file, project_envelope, project_envelope_for_actor, run_mailbox_service,
+    run_pre_admitted_member, run_pre_admitted_team, run_pre_admitted_team_for_actor, run_workflow,
 };
 
 // Single discovery/date implementation lives in hya-core; re-export for callers.
@@ -48,7 +49,7 @@ use hya_tool::{
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::OpenOptions;
 use std::io::Write;
 
@@ -3216,6 +3217,8 @@ impl ForegroundTransientAdmissionPreparation {
 struct SpawnSupervisorLifecycle {
     stop: tokio_util::sync::CancellationToken,
     join: Option<tokio::task::JoinHandle<()>>,
+    /// Adjacent worker loops sharing the same stop token (workflow runs).
+    extra_joins: Vec<tokio::task::JoinHandle<()>>,
 }
 
 impl SpawnSupervisorLifecycle {
@@ -3223,22 +3226,43 @@ impl SpawnSupervisorLifecycle {
         self.stop.cancel();
         if let Some(join) = self.join.take() {
             match join.await {
-                Ok(()) => Ok(()),
-                Err(error) if error.is_cancelled() => Err(CoreError::Invalid(
-                    "spawn supervisor cancelled during shutdown".to_string(),
-                )),
-                Err(error) => Err(CoreError::Invalid(format!(
-                    "spawn supervisor failed during shutdown: {error}"
-                ))),
+                Ok(()) => {}
+                Err(error) if error.is_cancelled() => {
+                    return Err(CoreError::Invalid(
+                        "spawn supervisor cancelled during shutdown".to_string(),
+                    ));
+                }
+                Err(error) => {
+                    return Err(CoreError::Invalid(format!(
+                        "spawn supervisor failed during shutdown: {error}"
+                    )));
+                }
             }
-        } else {
-            Ok(())
         }
+        for join in self.extra_joins.drain(..) {
+            match join.await {
+                Ok(()) => {}
+                Err(error) if error.is_cancelled() => {
+                    return Err(CoreError::Invalid(
+                        "workflow supervisor cancelled during shutdown".to_string(),
+                    ));
+                }
+                Err(error) => {
+                    return Err(CoreError::Invalid(format!(
+                        "workflow supervisor failed during shutdown: {error}"
+                    )));
+                }
+            }
+        }
+        Ok(())
     }
 
     fn drop_stop(&mut self) {
         self.stop.cancel();
         if let Some(join) = self.join.take() {
+            join.abort();
+        }
+        for join in self.extra_joins.drain(..) {
             join.abort();
         }
     }
@@ -3350,6 +3374,162 @@ pub fn spawn_team_supervisor(
     // Test/helper entry: lifecycle is intentionally detached; production uses
     // BuiltSessionEngine ownership. Drop still nonblocking-aborts on process end.
     std::mem::forget(_lifecycle);
+}
+
+/// Serve queued `workflow` tool requests for the lifetime of the engine.
+///
+/// One worker loop, one in-flight run: user DAGs are long-lived multi-agent
+/// executions and the governor's per-run budget already bounds each run's total
+/// fan-out, so extra intra-process parallelism would only add contention.
+fn spawn_workflow_supervisor(
+    mut rx: tokio::sync::mpsc::Receiver<BoundWorkflowRequest>,
+    engine: Arc<SessionEngine>,
+    base: AgentSpec,
+    stop: tokio_util::sync::CancellationToken,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        loop {
+            let bound_request = tokio::select! {
+                biased;
+                _ = stop.cancelled() => break,
+                bound_request = rx.recv() => match bound_request {
+                    Some(request) => request,
+                    None => break,
+                },
+            };
+            let (binding, request) = bound_request.into_parts();
+            let request_cancel = request.cancel.clone();
+            let execution = handle_workflow_request(&engine, &base, binding, request);
+            tokio::pin!(execution);
+            tokio::select! {
+                biased;
+                _ = stop.cancelled() => {
+                    // Shutdown must not wait forever behind a stalled provider or
+                    // verifier. Cancel cooperatively, then await the governed run
+                    // so it can finish member/session cleanup before this worker exits.
+                    request_cancel.cancel();
+                    execution.await;
+                    break;
+                }
+                _ = &mut execution => {}
+            }
+        }
+    })
+}
+
+/// Execute or discover one framed workflow request against the caller session.
+async fn handle_workflow_request(
+    engine: &Arc<SessionEngine>,
+    base: &AgentSpec,
+    binding: TurnBinding,
+    request: hya_tool::WorkflowRequest,
+) {
+    let hya_tool::WorkflowRequest {
+        parent,
+        action,
+        cancel,
+        reply,
+        ..
+    } = request;
+    let caller = match engine.read_projection(parent).await {
+        Ok(projection) => projection.session.agent.map(|agent| agent.to_string()),
+        Err(error) => {
+            let _ = reply.send(Err(format!("resolve caller session: {error}")));
+            return;
+        }
+    };
+    let Some(caller) = caller else {
+        let _ = reply.send(Err("workflow caller session has no agent".to_string()));
+        return;
+    };
+    let result = match action {
+        hya_tool::WorkflowAction::List => list_workflows(binding.workdir()),
+        hya_tool::WorkflowAction::Run { name, inputs } => {
+            run_named_workflow(
+                engine, base, &binding, parent, &caller, &name, inputs, cancel,
+            )
+            .await
+        }
+    };
+    let _ = reply.send(result);
+}
+
+/// Discover workflows across the workdir roots; earlier (shadowing) wins on
+/// duplicate names, mirroring `load_workflow_by_name` resolution order.
+fn list_workflows(workdir: &std::path::Path) -> hya_tool::WorkflowReply {
+    use hya_tool::{WorkflowReplyPayload, WorkflowSummary};
+    let mut summaries: Vec<WorkflowSummary> = Vec::new();
+    for path in discover_workflow_files(workdir) {
+        let display = path.display().to_string();
+        match load_workflow_file(&path) {
+            Ok(def) => {
+                if summaries.iter().any(|s| s.name == def.name) {
+                    continue; // shadowed by an earlier root
+                }
+                summaries.push(WorkflowSummary {
+                    name: def.name.clone(),
+                    description: def.description.clone(),
+                    path: display,
+                    stages: def.stages.iter().map(|s| s.id.clone()).collect(),
+                    error: None,
+                });
+            }
+            Err(error) => summaries.push(WorkflowSummary {
+                name: path
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+                description: String::new(),
+                path: display,
+                stages: Vec::new(),
+                error: Some(error.to_string()),
+            }),
+        }
+    }
+    Ok(WorkflowReplyPayload::List(summaries))
+}
+
+/// Load, authorize, and execute one named workflow through the governed core
+/// executor (`run_workflow` internally uses the pre-admitted team batch path).
+#[allow(clippy::too_many_arguments)]
+async fn run_named_workflow(
+    engine: &Arc<SessionEngine>,
+    base: &AgentSpec,
+    binding: &TurnBinding,
+    lead: hya_proto::SessionId,
+    caller: &str,
+    name: &str,
+    inputs: BTreeMap<String, String>,
+    cancel: tokio_util::sync::CancellationToken,
+) -> hya_tool::WorkflowReply {
+    use hya_tool::{WorkflowOutcome, WorkflowReplyPayload, WorkflowStageOutcome};
+    let def = match load_workflow_by_name(std::path::Path::new(binding.workdir()), name) {
+        Ok(def) => def,
+        Err(error) => return Err(error.to_string()),
+    };
+    let context = hya_core::WorkflowRunContext {
+        binding: binding.clone(),
+        caller: caller.to_string(),
+        base_agent: base.clone(),
+        inputs,
+    };
+    let report = match run_workflow(engine.clone(), lead, &def, context, cancel).await {
+        Ok(report) => report,
+        Err(error) => return Err(error.to_string()),
+    };
+    Ok(WorkflowReplyPayload::Run(WorkflowOutcome {
+        status: report.status.to_string(),
+        stages: report
+            .stages
+            .iter()
+            .map(|stage| WorkflowStageOutcome {
+                stage: stage.stage.clone(),
+                agent: stage.agent.clone(),
+                status: stage.status.to_string(),
+                output: stage.output.clone(),
+            })
+            .collect(),
+    }))
 }
 
 fn observe_foreground_handler_join(joined: Option<Result<(), tokio::task::JoinError>>) {
@@ -3878,6 +4058,7 @@ fn spawn_team_supervisor_with_environment(
     SpawnSupervisorLifecycle {
         stop,
         join: Some(join),
+        extra_joins: Vec::new(),
     }
 }
 
@@ -3927,6 +4108,27 @@ pub async fn build_session_engine(
         },
     )
     .await
+}
+
+/// Seed the engine's cross-model failover plane from configured categories.
+///
+/// Every candidate position seeds its forward suffix chain (`candidate[k..]`),
+/// so members resolved onto a servability-picked candidate — not only the
+/// configured preference — keep working failover for their whole lifetime.
+/// Single-candidate categories contribute nothing (there is no cross-model
+/// step). When two categories share a preferred model the first category in
+/// canonical key order wins; identical configs collapse to the same chain.
+fn category_model_fallbacks(categories: &CategoryRegistry) -> HashMap<ModelRef, Vec<ModelRef>> {
+    let mut fallbacks: HashMap<ModelRef, Vec<ModelRef>> = HashMap::new();
+    for (_, candidates) in categories.resolution_candidates() {
+        for (offset, candidate) in candidates.iter().enumerate() {
+            let forward = candidates[offset..].to_vec();
+            if forward.len() > 1 {
+                fallbacks.entry(candidate.clone()).or_insert(forward);
+            }
+        }
+    }
+    fallbacks
 }
 
 async fn build_session_engine_with_mcp_defer(
@@ -3998,6 +4200,7 @@ async fn build_session_engine_with_mcp_defer(
         .unwrap_or(tokio::sync::Semaphore::MAX_PERMITS)
         .clamp(1, tokio::sync::Semaphore::MAX_PERMITS);
     let (spawn_sender, spawn_rx) = BoundSpawnSender::with_capacity(spawn_queue_capacity);
+    let (workflow_sender, workflow_rx) = BoundWorkflowSender::with_capacity(spawn_queue_capacity);
     let (mailbox, mailbox_rx) = MailboxPlane::new();
     let summarizer: Arc<dyn Summarizer> =
         Arc::new(ModelSummarizer::new(router.clone(), agent.model.clone()));
@@ -4011,6 +4214,10 @@ async fn build_session_engine_with_mcp_defer(
     let mut engine_builder = SessionEngine::new(store, router, runtime, permission, bus)
         .with_catalog_refresh(catalog_refresh)
         .with_sidecar_environment(sidecar_environment.clone())
+        // Route `categories:` failover chains into the engine's cross-model
+        // plane so turn-time pre-stream failures advance through the ordered
+        // candidates instead of failing the whole turn.
+        .with_model_fallbacks(category_model_fallbacks(&categories))
         .with_compaction(summarizer, compaction_config())
         .with_formatter(formatter_config::load_plane())
         .with_websearch(WebSearchPlane::configured(websearch))
@@ -4035,6 +4242,10 @@ async fn build_session_engine_with_mcp_defer(
         // moving out of the engine, or the supervisor stopping holding the engine
         // -- the drain branch must be made stop-aware in the same change.
         .with_spawn_sender(spawn_sender)
+        // INVARIANT (workflow-intake liveness): mirrors `with_spawn_sender` --
+        // the engine owns this sender and the workflow worker owns an
+        // `Arc<SessionEngine>`, so queued requests always find a live executor.
+        .with_workflow_sender(workflow_sender)
         .with_mailbox(mailbox)
         .with_governor(governor);
     if !plugin_host.is_empty() {
@@ -4180,7 +4391,7 @@ async fn build_session_engine_with_mcp_defer(
             .await
             .context("recreate recovered resident runtime owner")?;
     }
-    let lifecycle = spawn_team_supervisor_with_environment(
+    let mut lifecycle = spawn_team_supervisor_with_environment(
         spawn_rx,
         engine.clone(),
         agent.clone(),
@@ -4189,6 +4400,14 @@ async fn build_session_engine_with_mcp_defer(
         resident_supervisor,
         sidecar_environment,
     );
+    // Serve `workflow` tool requests from a dedicated worker loop sharing the
+    // team supervisor's stop token; runs go through the governed core executor.
+    lifecycle.extra_joins.push(spawn_workflow_supervisor(
+        workflow_rx,
+        engine.clone(),
+        agent.clone(),
+        lifecycle.stop.clone(),
+    ));
     // Drive the event-sourced mailbox: append MailSent/Channel*/AgentRegistered to
     // the team-root log and serve roster/channel reads (ADR-0001).
     tokio::spawn(run_mailbox_service(engine.clone(), mailbox_rx));
@@ -9666,6 +9885,124 @@ agent:
             .expect("idempotent shutdown after drain");
     }
 
+    /// Lifecycle stop must cancel and drain the Workflow request that currently
+    /// owns the single worker slot, even when its provider never returns.
+    #[tokio::test]
+    async fn workflow_supervisor_stop_drains_an_in_flight_run() {
+        let workdir = tempdir();
+        let workflow_dir = workdir.join(".hya/workflows");
+        std::fs::create_dir_all(&workflow_dir).unwrap();
+        std::fs::write(
+            workflow_dir.join("shutdown-flow.yaml"),
+            r#"
+name: shutdown-flow
+description: hold one governed member until lifecycle shutdown
+stages:
+  - id: hold
+    agent: explore
+    prompt: "WAIT FOR SHUTDOWN"
+"#,
+        )
+        .unwrap();
+
+        let provider_gate = Arc::new(ProviderGate {
+            entered: tokio::sync::Notify::new(),
+            release: tokio::sync::Notify::new(),
+        });
+        let router = Arc::new(ProviderRouter::new().with(Arc::new(CountingDevProvider {
+            calls: Arc::new(AtomicUsize::new(0)),
+            inner: DevProvider::new(),
+            gate: Some(Arc::clone(&provider_gate)),
+        })));
+        let runtime = Arc::new(RuntimeRegistry::from_snapshot(
+            ToolRegistry::builtins().snapshot(),
+            builtin_agent_catalog().unwrap(),
+        ));
+        let (permission, _permission_rx) =
+            PermissionPlane::new(PermissionRules::new(vec![Rule::new(
+                Action::Task,
+                "*",
+                Mode::Allow,
+            )]));
+        let (workflow_sender, workflow_rx) = BoundWorkflowSender::with_capacity(1);
+        let engine = Arc::new(
+            SessionEngine::new(
+                SessionStore::connect_memory().await.unwrap(),
+                router,
+                runtime,
+                permission.clone(),
+                EventBus::default(),
+            )
+            .with_workflow_sender(workflow_sender.clone()),
+        );
+        let base = AgentSpec {
+            name: AgentName::new("build"),
+            model: ModelRef::new("dev"),
+            system_prompt: "build".to_string(),
+            workdir: workdir.clone(),
+            reasoning: None,
+        };
+        let lead = engine
+            .create(CreateSession {
+                parent: None,
+                agent: base.name.clone(),
+                model: base.model.clone(),
+                workdir: workdir.to_string_lossy().into_owned(),
+            })
+            .await
+            .unwrap();
+        let binding = engine.bind_runtime(&workdir).unwrap();
+        let agents = engine
+            .agent_roster_for_binding(&binding, base.name.as_str())
+            .unwrap();
+        let workflows = workflow_sender
+            .for_binding(&binding)
+            .for_session_with_agents(lead, agents);
+        let stop = CancellationToken::new();
+        let supervisor =
+            spawn_workflow_supervisor(workflow_rx, Arc::clone(&engine), base, stop.clone());
+        let (interaction, _interaction_rx) = InteractionPlane::new();
+        let (spawner, _spawner_rx) = SpawnerPlane::new();
+        let ctx = ToolCtx {
+            workflows,
+            permission: permission.for_session(lead),
+            interaction: interaction.for_session(lead),
+            spawner,
+            operation: ToolOperation::from_tool_call(hya_proto::ToolCallId::new()),
+            mailbox: MailboxPlane::disconnected(),
+            session: Some(lead),
+            parent_session: None,
+            todo: TodoPlane::default(),
+            skills: SkillPlane::default(),
+            websearch: WebSearchPlane::default(),
+            lsp: LspPlane::default(),
+            formatter: FormatterPlane::default(),
+            agents: Default::default(),
+            workdir,
+            cancel: CancellationToken::new(),
+        };
+        let run = tokio::spawn(async move {
+            hya_tool::WorkflowTool
+                .execute(&ctx, json!({"action": "run", "name": "shutdown-flow"}))
+                .await
+        });
+
+        tokio::time::timeout(Duration::from_secs(2), provider_gate.entered.notified())
+            .await
+            .expect("Workflow member must reach the gated provider");
+        stop.cancel();
+        tokio::time::timeout(Duration::from_secs(2), supervisor)
+            .await
+            .expect("Workflow supervisor must stop after cancelling its in-flight run")
+            .expect("Workflow supervisor must not panic");
+        let output = tokio::time::timeout(Duration::from_secs(2), run)
+            .await
+            .expect("cancelled Workflow tool request must receive a terminal reply")
+            .expect("Workflow tool task must not panic")
+            .expect("Workflow cancellation is a terminal run outcome");
+        assert_eq!(output["metadata"]["status"], "cancelled");
+    }
+
     /// Explicit shutdown must still abort in-flight handlers.
     ///
     /// Only a closed intake drains them (see the supervisor's request-loop exit
@@ -14495,6 +14832,7 @@ export default {
         let (interaction, _interaction_rx) = InteractionPlane::new();
         let (spawner, _spawner_rx) = SpawnerPlane::new();
         let ctx = ToolCtx {
+            workflows: hya_tool::WorkflowPlane::disconnected(),
             permission: permission.for_session(session),
             interaction: interaction.for_session(session),
             spawner,
@@ -14667,5 +15005,338 @@ export default {
         std::fs::remove_dir_all(executable_staging).expect("cleanup executable staging");
         std::fs::remove_dir_all(static_turn_dir).expect("cleanup static turn directory");
         std::fs::remove_dir_all(static_staging).expect("cleanup static staging");
+    }
+
+    #[test]
+    fn category_model_fallbacks_seeds_forward_suffix_chains() {
+        let mut entries = HashMap::new();
+        entries.insert(
+            "deep".to_string(),
+            CategoryEntry::from_candidates(&[
+                "provider/first".to_string(),
+                "provider/second".to_string(),
+                "provider/third".to_string(),
+            ])
+            .expect("non-empty candidates"),
+        );
+        entries.insert(
+            "single".to_string(),
+            CategoryEntry::from_candidates(&["provider/only".to_string()])
+                .expect("non-empty candidates"),
+        );
+        let fallbacks = category_model_fallbacks(&CategoryRegistry::from_entries(entries));
+
+        assert_eq!(fallbacks.len(), 2, "mid-chain pick and preference only");
+        assert_eq!(
+            fallbacks
+                .get(&ModelRef::new("provider/first"))
+                .map(Vec::as_slice),
+            Some(
+                ["provider/first", "provider/second", "provider/third"]
+                    .map(ModelRef::new)
+                    .as_slice()
+            )
+        );
+        assert_eq!(
+            fallbacks
+                .get(&ModelRef::new("provider/second"))
+                .map(Vec::as_slice),
+            Some(
+                ["provider/second", "provider/third"]
+                    .map(ModelRef::new)
+                    .as_slice()
+            ),
+            "servability picks mid-chain keep forward failover"
+        );
+        assert!(!fallbacks.contains_key(&ModelRef::new("provider/only")));
+        assert_eq!(
+            category_model_fallbacks(&CategoryRegistry::default()).len(),
+            0
+        );
+    }
+
+    /// Regression contract for user-assembled workflows: a stage member's
+    /// nested `task` call is resolved against the STAGE agent's OWN roster —
+    /// exactly like the task-tool path resolves any spawn target. A target the
+    /// parent may spawn must still be refused inside a stage whose agent has no
+    /// matching `can_spawn`, and spawned end-to-end when it does.
+    #[tokio::test]
+    async fn workflow_stage_nested_task_follows_the_stage_agents_own_roster() {
+        let _env = StableEnvGuard::acquire();
+        let make_bundle = |stable_id: &str, can_spawn: &[&str]| {
+            let can_spawn: Vec<_> = can_spawn.iter().map(|id| AgentName::new(*id)).collect();
+            PreparedBundle {
+                format_version: 1,
+                identity: BundleIdentity {
+                    id: format!("hya/workflow-roster-{stable_id}"),
+                    version: "0.0.0".to_string(),
+                    publisher: "hya-tests".to_string(),
+                },
+                digest: format!("test-only-{stable_id}"),
+                agent: PreparedAgent {
+                    id: AgentName::new(stable_id),
+                    description: None,
+                    role: AgentRole::Subagent,
+                    color: None,
+                    prompt: Some(format!("{stable_id} prompt")),
+                    prompt_source: None,
+                    prompt_digest: None,
+                    model_policy: ModelPolicy::default(),
+                    workdir: None,
+                    spawn_lifecycle: SpawnLifecycle::Transient,
+                    resource_view: ResourceView::default(),
+                    can_spawn,
+                    hook_refs: Vec::new(),
+                },
+                tools: Vec::new(),
+                skills: Vec::new(),
+                mcp: Vec::new(),
+                hooks: Vec::new(),
+                extensions: Vec::new(),
+            }
+        };
+        async fn stage_stack(
+            scripts: Vec<Vec<FakeStep>>,
+            bundles: &[PreparedBundle],
+            workdir: &std::path::Path,
+        ) -> (
+            Arc<SessionEngine>,
+            AgentSpec,
+            tokio::sync::broadcast::Receiver<hya_proto::Envelope>,
+            SpawnSupervisorLifecycle,
+        ) {
+            let provider = Arc::new(FakeProvider::scripted_turns(scripts));
+            let router = Arc::new(ProviderRouter::new().with(provider));
+            let catalog = Arc::new(to_agent_catalog(
+                BundleCatalog::from_prepared(bundles).expect("valid workflow roster bundles"),
+            ));
+            let runtime = Arc::new(RuntimeRegistry::from_snapshot(
+                ToolRegistry::builtins().snapshot(),
+                catalog,
+            ));
+            let rules = PermissionRules::new(vec![Rule::new(Action::Task, "*", Mode::Allow)]);
+            let (permission, _permission_rx) = PermissionPlane::new(rules);
+            let bus = EventBus::default();
+            let events = bus.subscribe();
+            let (spawn_sender, spawn_rx) = BoundSpawnSender::with_capacity(8);
+            let engine = Arc::new(
+                SessionEngine::new(
+                    SessionStore::connect_memory()
+                        .await
+                        .expect("in-memory store"),
+                    router.clone(),
+                    runtime,
+                    permission,
+                    bus,
+                )
+                .with_spawn_sender(spawn_sender),
+            );
+            let base = AgentSpec {
+                name: AgentName::new("build"),
+                model: ModelRef::new("fake"),
+                system_prompt: "workflow stage base".to_string(),
+                workdir: workdir.to_path_buf(),
+                reasoning: None,
+            };
+            let resident_supervisor = ResidentSupervisor::start(Arc::clone(&engine));
+            let supervisor = spawn_team_supervisor_with_environment(
+                spawn_rx,
+                Arc::clone(&engine),
+                base.clone(),
+                router,
+                Arc::new(CategoryRegistry::default()),
+                resident_supervisor,
+                Arc::new(BundleSidecarEnvironment {
+                    command: None,
+                    staging_root: tempdir(),
+                    terminate_notify: None,
+                    test_observer: None,
+                    uniform_probe: None,
+                }),
+            );
+            (engine, base, events, supervisor)
+        }
+        async fn run_stage_workflow(
+            engine: &Arc<SessionEngine>,
+            base: &AgentSpec,
+            workdir: &std::path::Path,
+            stage_agent: &str,
+        ) -> hya_core::WorkflowRunReport {
+            let def_yaml = format!(
+                r#"
+name: nested-task-flow
+description: one stage whose member attempts a nested task
+stages:
+  - id: worker_stage
+    agent: {stage_agent}
+    prompt: "NESTED_TASK_STAGE"
+"#
+            );
+            let def: hya_core::WorkflowDef =
+                serde_norway::from_str(&def_yaml).expect("valid workflow definition");
+            let lead = engine
+                .create(CreateSession {
+                    parent: None,
+                    agent: base.name.clone(),
+                    model: base.model.clone(),
+                    workdir: workdir.to_string_lossy().into_owned(),
+                })
+                .await
+                .expect("lead session");
+            let binding = engine.bind_runtime(workdir).expect("bind workflow run");
+            let caller_base = engine
+                .agent_spec_for_binding(&binding, base, base.name.as_str())
+                .expect("base spec resolution");
+            let context = hya_core::WorkflowRunContext {
+                binding,
+                caller: base.name.to_string(),
+                base_agent: caller_base,
+                inputs: std::collections::BTreeMap::new(),
+            };
+            hya_core::run_workflow(
+                engine.clone(),
+                lead,
+                &def,
+                context,
+                CancellationToken::new(),
+            )
+            .await
+            .expect("workflow completes")
+        }
+
+        // ---- Phase 1: refusal. `isolated_worker` cannot itself spawn
+        // `general`, even though the CALLER (`build`) is authorized to do so.
+        {
+            let bundles = vec![make_bundle("isolated_worker", &[])];
+            let workdir = tempdir();
+            let scripts = vec![
+                vec![
+                    FakeStep::ToolCall {
+                        name: "task".to_string(),
+                        input: json!({
+                            "description": "nested attempt",
+                            "prompt": "GRANDCHILD_WORK",
+                            "subagent_type": "general"
+                        }),
+                    },
+                    FakeStep::Finish(FinishReason::ToolCalls),
+                ],
+                vec![
+                    FakeStep::Text("worker gave up".to_string()),
+                    FakeStep::Finish(FinishReason::Stop),
+                ],
+            ];
+            let (engine, base, mut events, supervisor) =
+                stage_stack(scripts, &bundles, &workdir).await;
+            let report = run_stage_workflow(&engine, &base, &workdir, "isolated_worker").await;
+            drop(supervisor);
+            assert_eq!(report.status, hya_core::WorkflowStatus::Completed);
+            assert_eq!(report.stages.len(), 1);
+            assert_eq!(report.stages[0].status.to_string(), "done");
+            let child = report.stages[0]
+                .session
+                .as_deref()
+                .expect("member session")
+                .to_string();
+            let rejections: Vec<String> = {
+                let mut out = Vec::new();
+                while let Ok(envelope) = events.try_recv() {
+                    if let Event::ToolError {
+                        session,
+                        message_text,
+                        ..
+                    } = envelope.event
+                    {
+                        out.push((session.to_string(), message_text));
+                    }
+                }
+                out.into_iter()
+                    .filter(|(session, text)| {
+                        *session == child && text.contains("AGENT_SPAWN_NOT_ALLOWED")
+                    })
+                    .map(|(_, text)| text)
+                    .collect()
+            };
+            assert!(
+                rejections.iter().any(|text| text.contains("`general`")),
+                "the stage's task call must be refused for its own roster: {rejections:?}"
+            );
+            // No grandchild session may exist anywhere in the team tree.
+            let sessions = engine.store().list_sessions().await.expect("sessions");
+            assert_eq!(
+                sessions.len(),
+                2,
+                "only the lead and the stage member exist; grandchild must not spawn"
+            );
+        }
+
+        // ---- Positive control: the SAME production seam that resolves every
+        // member spawn (including workflow children's nested task calls)
+        // accepts `general` for the DELEGATING stage roster and refuses it for
+        // the ISOLATED stage roster, while the caller keeps both stages.
+        {
+            let bundles = vec![
+                make_bundle("isolated_worker", &[]),
+                make_bundle("delegating_worker", &["general"]),
+            ];
+            let catalog =
+                BundleCatalog::from_prepared(&bundles).expect("valid workflow roster bundles");
+            let catalog = Arc::new(to_agent_catalog(catalog));
+            let runtime = Arc::new(RuntimeRegistry::from_snapshot(
+                ToolRegistry::builtins().snapshot(),
+                catalog,
+            ));
+            let router = Arc::new(ProviderRouter::new());
+            let store = SessionStore::connect_memory().await.expect("store");
+            let engine = Arc::new(SessionEngine::new(
+                store,
+                router,
+                runtime,
+                PermissionPlane::new(PermissionRules::default()).0,
+                EventBus::default(),
+            ));
+            let workdir = tempdir();
+            let binding = engine.bind_runtime(&workdir).expect("bind");
+            let member = |target: &str| SpawnMember {
+                description: "nested".to_string(),
+                prompt: "GRANDCHILD_WORK".to_string(),
+                subagent_type: target.to_string(),
+                task_id: None,
+                model: None,
+                category: None,
+                inline_agent: None,
+                resident: false,
+            };
+            let delegating_roster = engine
+                .agent_roster_for_binding(&binding, "delegating_worker")
+                .expect("delegating roster");
+            assert!(
+                authorize_spawn_target(
+                    &binding,
+                    delegating_roster.as_ref(),
+                    "delegating_worker",
+                    &member("general"),
+                )
+                .is_ok(),
+                "own can_spawn grants delegation"
+            );
+            let isolated_roster = engine
+                .agent_roster_for_binding(&binding, "isolated_worker")
+                .expect("isolated roster");
+            let refused = authorize_spawn_target(
+                &binding,
+                isolated_roster.as_ref(),
+                "isolated_worker",
+                &member("general"),
+            )
+            .expect_err("empty own roster must refuse");
+            assert!(
+                matches!(refused, SpawnError::AgentSpawnNotAllowed { ref agent_id, .. } if agent_id == "general"),
+                "unexpected refusal: {refused:?}"
+            );
+            // Caller authority is untouched: both stages remain admittable.
+            assert!(binding.resolve_spawn("build", "isolated_worker").is_ok());
+            assert!(binding.resolve_spawn("build", "delegating_worker").is_ok());
+        }
     }
 }

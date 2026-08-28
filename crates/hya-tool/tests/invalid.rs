@@ -17,6 +17,7 @@ async fn invalid_tool_reports_argument_error_in_open_code_shape() {
                 permission: hya_tool::PermissionPlane::new(hya_tool::PermissionRules::default()).0,
                 interaction: hya_tool::InteractionPlane::new().0,
                 spawner: hya_tool::SpawnerPlane::new().0,
+                workflows: hya_tool::WorkflowPlane::disconnected(),
                 operation: hya_tool::ToolOperation::from_tool_call(hya_proto::ToolCallId::new()),
                 mailbox: hya_tool::MailboxPlane::disconnected(),
                 session: None,

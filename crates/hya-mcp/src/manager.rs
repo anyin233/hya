@@ -353,6 +353,7 @@ for line in sys.stdin:
             permission,
             interaction,
             spawner,
+            workflows: hya_tool::WorkflowPlane::disconnected(),
             operation: hya_tool::ToolOperation::from_tool_call(hya_proto::ToolCallId::new()),
             mailbox: hya_tool::MailboxPlane::disconnected(),
             session: None,

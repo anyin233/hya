@@ -17,7 +17,10 @@ use thiserror::Error;
 use crate::auth::{AuthCredential, OAuthType};
 use crate::config::{self, OAuthConfigModel};
 
-pub use ensure::{ensure_access_token, ensure_access_token_in, oauth_status_in};
+pub use ensure::{
+    ensure_access_token, ensure_access_token_in, force_refresh_access_token,
+    force_refresh_access_token_in, oauth_status_in,
+};
 pub use grok_build::login_grok_build;
 pub use models_catalog::{CatalogModel, fetch_oauth_models};
 pub use openai_codex::{login_openai_codex, login_openai_codex_device};

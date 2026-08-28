@@ -224,6 +224,21 @@ projection — never from disk.
 _Avoid_: directory, registry, member list
 
 
+### Workflows
+
+**Workflow**:
+A user-authored DAG of Stages stored as one file under `.hya/workflows` (or the
+user config dir). Composes governed team spawns into a reusable graph. hya ships
+zero built-in workflows; users assemble their own — no preset pipeline.
+_Avoid_: preset pipeline, macro, script
+
+**Stage**:
+One node of a Workflow: an agent id (resolved through the caller's can_spawn
+authorization), a prompt template with `{{inputs.key}}` / `{{stage_id}}`
+placeholders, and `needs:` edges. Same-level stages run as one parallel
+governed member batch; downstream stages join bounded upstream sections.
+_Avoid_: step chain (stages form a DAG, not a chain), task (that's the work item)
+
 ### Surfaces
 
 **TUI**:

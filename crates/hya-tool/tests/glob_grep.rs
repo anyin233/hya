@@ -43,6 +43,7 @@ fn ctx_with(workdir: PathBuf) -> ToolCtx {
     let (interaction, _irx) = InteractionPlane::new();
     let (spawner, _srx) = SpawnerPlane::new();
     ToolCtx {
+        workflows: hya_tool::WorkflowPlane::disconnected(),
         permission,
         interaction,
         spawner,
@@ -66,6 +67,7 @@ fn ctx_with_rules(workdir: PathBuf, rules: Vec<Rule>) -> ToolCtx {
     let (interaction, _irx) = InteractionPlane::new();
     let (spawner, _srx) = SpawnerPlane::new();
     ToolCtx {
+        workflows: hya_tool::WorkflowPlane::disconnected(),
         permission,
         interaction,
         spawner,

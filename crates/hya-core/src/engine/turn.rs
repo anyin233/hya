@@ -2,9 +2,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use hya_proto::{
-    CompactionStrategy, Event, FinishReason, Message, MessageId, Role, SessionId, TokenUsage,
-    ToolCallId,
+    CompactionStrategy, Event, FinishReason, Message, MessageId, ModelRef, Role, SessionId,
+    TokenUsage, ToolCallId,
 };
+use hya_provider::{CompletionRequest, EventStream, ProviderError};
 use hya_store::ActorClaim;
 use hya_tool::{Action, AgentDef, Mode, PermissionPlane, ResolvedTool, Rule, ToolCtx, ToolError};
 use tokio_util::sync::CancellationToken;
@@ -171,6 +172,57 @@ async fn shutdown_sidecar(handle: &mut Option<Box<dyn SidecarHandle>>) -> Result
 }
 
 impl SessionEngine {
+    /// Open the completion stream for `request`, walking the configured
+    /// cross-model fallback plane while no event stream exists yet.
+    ///
+    /// Each candidate re-enters [`ProviderRouter::stream`], so preflight and
+    /// reasoning-stripping keep applying per route. A retryable pre-stream
+    /// failure (`is_retryable_before_stream`) or an unrouted candidate
+    /// (`UnknownModel`) advances to the next chain entry; any other error —
+    /// and everything that happens after an [`EventStream`] was returned —
+    /// stops selection immediately. STRICT NO-REPLAY: once a stream is
+    /// returned this never switches models or replays, so mid-stream errors
+    /// surface exactly once, unchanged.
+    async fn stream_with_model_fallback(
+        &self,
+        request: CompletionRequest,
+        session: SessionId,
+        message: MessageId,
+    ) -> Result<EventStream, ProviderError> {
+        // Candidate order for this turn. An unconfigured plane yields exactly
+        // one candidate — the preferred model — reproducing today's direct
+        // router call; each configured chain starts with its own key.
+        let candidates: &[ModelRef] = match self.model_fallback_chain(&request.model) {
+            Some(chain) => chain,
+            None => std::slice::from_ref(&request.model),
+        };
+        debug_assert_eq!(candidates.first(), Some(&request.model));
+        for (index, candidate) in candidates.iter().enumerate() {
+            let mut attempt = request.clone();
+            attempt.model = candidate.clone();
+            match self.providers.stream(attempt, session, message).await {
+                Ok(stream) => return Ok(stream),
+                Err(error) => {
+                    let advance = (error.is_retryable_before_stream()
+                        || matches!(error, ProviderError::UnknownModel(_)))
+                        && index + 1 < candidates.len();
+                    if !advance {
+                        return Err(error);
+                    }
+                    tracing::warn!(
+                        from = %candidate,
+                        to = %candidates[index + 1],
+                        error = %error,
+                        "pre-stream provider failure; advancing cross-model fallback chain"
+                    );
+                }
+            }
+        }
+        // Unreachable: `advance` requires a successor candidate, so the final
+        // iteration always returns `Ok` or `Err` above.
+        unreachable!("cross-model fallback iteration must terminate")
+    }
+
     /// Run one model/tool turn for `session` until stop or cancel.
     pub async fn run_turn(
         &self,
@@ -454,22 +506,27 @@ impl SessionEngine {
                 // Same Arc for nested spawn scope; no re-discovery.
                 guidance: guidance.clone(),
             };
-            let (outcome, sidecar_lost) = match sidecar_loss {
+            let outcome = match sidecar_loss {
                 Some(loss_token) => {
                     tokio::select! {
                         biased;
-                        _ = loss_token.cancelled() => (Err(CoreError::Cancelled), true),
-                        outcome = self.run_turn_rounds(session, message, &agent, execution) => (outcome, false),
+                        _ = cancel.cancelled() => Ok(FinishReason::Cancelled),
+                        _ = loss_token.cancelled() => Err(CoreError::Cancelled),
+                        outcome = self.run_turn_rounds(session, message, &agent, execution) => outcome,
                     }
                 }
-                None => (
-                    self.run_turn_rounds(session, message, &agent, execution)
-                        .await,
-                    false,
-                ),
+                None => {
+                    tokio::select! {
+                        biased;
+                        _ = cancel.cancelled() => Ok(FinishReason::Cancelled),
+                        outcome = self.run_turn_rounds(session, message, &agent, execution) => outcome,
+                    }
+                }
             };
-            if sidecar_lost
-                && let Ok(projection) = self.store.read_projection(session).await
+            if matches!(
+                &outcome,
+                Ok(FinishReason::Cancelled) | Err(CoreError::Cancelled)
+            ) && let Ok(projection) = self.store.read_projection(session).await
                 && projection
                     .session
                     .messages
@@ -777,7 +834,9 @@ impl SessionEngine {
                 (None, _) => None,
             };
             self.validate_actor_claim(actor_claim).await?;
-            let stream = self.providers.stream(request, session, message).await?;
+            let stream = self
+                .stream_with_model_fallback(request, session, message)
+                .await?;
             let step = rounds;
             self.emit_for_actor(
                 actor_claim,
@@ -883,6 +942,10 @@ impl SessionEngine {
                     {
                         Ok(permission) => {
                             let ctx = ToolCtx {
+                                workflows: self
+                                    .workflows
+                                    .for_binding(binding)
+                                    .for_session_with_agents(session, agents.clone()),
                                 permission,
                                 interaction: self.interaction.for_session(session),
                                 spawner: self

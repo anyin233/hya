@@ -28,6 +28,14 @@ Reference for work intentionally left for a future pass. The pi-parity waves
   poll/refresh). CLI: `hya oauth login --provider … --type openai-codex|grok-build`
   with `--device` / `--loopback` / `--browser` flags; see `docs/cli.md` and
   `docs/configuration.md`.
+- **`find` workdir scoping fix** — resolved against the confirmed defect below:
+  `FindTool` now resolves its optional `path` through
+  `resolve_file(&ctx.workdir, …)` and contains the result with
+  `assert_external_directory`, matching `glob` / `grep` / read / edit
+  behaviour — relative paths resolve under the working directory, while
+  absolute out-of-workdir paths and `..` traversal require external-directory
+  permission instead of being searched silently. The default no-`path`
+  behaviour (searching the whole working directory) is unchanged.
 
 ## Notes
 
@@ -45,12 +53,6 @@ confirmed against the source directly.
 
 ### Confirmed
 
-- **`find` does not scope paths to the workdir.** `GlobTool` resolves its input
-  through `resolve_file(&ctx.workdir, path)`, but `FindTool` uses
-  `PathBuf::from(path)` directly
-  ([`crates/hya-tool/src/tool.rs:1010`](../crates/hya-tool/src/tool.rs)). A
-  relative path is therefore not resolved against the workdir, and an absolute
-  path outside it is not rejected, unlike every neighbouring file tool.
 - **The `task` tool description contradicts the implementation.** The advertised
   description at `crates/hya-tool/src/task.rs:113` says background launches
   "currently require foreground execution in hya", while `task.rs:261` rejects only

@@ -35,6 +35,7 @@ use crate::task::TaskTool;
 use crate::todo::{TodoPlane, TodoWriteTool};
 use crate::webfetch::WebFetchTool;
 use crate::websearch::{WebSearchPlane, WebSearchTool};
+use crate::workflow_plane::{WorkflowPlane, WorkflowTool};
 use crate::write::WriteTool;
 
 /// Failure returned from tool execution and mapped to wire `error.type` strings by the engine.
@@ -108,6 +109,9 @@ pub struct ToolCtx {
     pub interaction: InteractionPlane,
     /// Subagent spawn plane for the `task` tool.
     pub spawner: SpawnerPlane,
+    /// User-authored workflow plane for the `workflow` tool (disconnected
+    /// unless a workflow host is wired; see `workflow_plane`).
+    pub workflows: WorkflowPlane,
     /// Persisted operation identity for this tool call.
     pub operation: ToolOperation,
     /// Team mailbox plane (disconnected outside a running team).
@@ -329,6 +333,7 @@ impl ToolRegistry {
             Arc::new(ListAgentsTool),
             Arc::new(AskUserTool),
             Arc::new(TaskTool),
+            Arc::new(WorkflowTool),
             Arc::new(SendTool),
             Arc::new(AnnounceTool),
             Arc::new(RosterTool),
@@ -1027,13 +1032,14 @@ impl Tool for FindTool {
     async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError> {
         let input: FindInput =
             serde_json::from_value(input).map_err(|e| ToolError::Input(e.to_string()))?;
-        let root = input
-            .path
-            .clone()
-            .map_or_else(|| ctx.workdir.clone(), PathBuf::from);
+        let root = input.path.as_deref().map_or_else(
+            || ctx.workdir.clone(),
+            |path| resolve_file(&ctx.workdir, path),
+        );
         ctx.permission
             .assert(Action::Glob, Resource::Glob(input.pattern.clone()))
             .await?;
+        assert_external_directory(ctx, &root, true).await?;
         let mut files = Vec::new();
         walk(&root, &mut files);
         let mut rows: Vec<(String, u64)> = Vec::new();

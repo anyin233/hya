@@ -2,7 +2,14 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use std::{collections::BTreeMap, time::Duration};
+use std::{
+    collections::BTreeMap,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::Duration,
+};
 
 use futures::StreamExt as _;
 use hya_proto::{
@@ -14,8 +21,8 @@ use hya_provider::{
 };
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
-use tokio::net::TcpListener;
-use tokio::sync::oneshot;
+use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::{Notify, oneshot};
 use tokio::time::timeout;
 
 #[derive(Debug)]
@@ -23,6 +30,132 @@ struct CapturedRequest {
     raw: String,
     headers: String,
     body: String,
+}
+
+#[tokio::test]
+async fn http_provider_retries_retryable_status_before_returning_a_stream() {
+    let (base_url, attempts) = start_retry_server().await;
+    let provider = HttpProvider::new(
+        "openai",
+        ProviderKind::OpenAiCompatible,
+        &base_url,
+        "test-token".to_string(),
+        ["gpt-5".to_string()],
+    )
+    .unwrap();
+    let req = CompletionRequest {
+        model: ModelRef::new("gpt-5"),
+        system: None,
+        messages: Vec::new(),
+        tools: Vec::new(),
+        temperature: None,
+        max_output_tokens: None,
+        reasoning: None,
+        headers: Default::default(),
+    };
+
+    let events = provider
+        .stream(req, SessionId::new(), MessageId::new())
+        .await
+        .unwrap()
+        .collect::<Vec<_>>()
+        .await;
+
+    assert!(events.iter().all(Result::is_ok));
+    assert_eq!(attempts.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn http_provider_retries_a_route_that_never_sends_response_headers() {
+    let (base_url, connections) = start_stalled_header_server().await;
+    let provider = HttpProvider::new(
+        "openai",
+        ProviderKind::OpenAiCompatible,
+        &base_url,
+        "test-token".to_string(),
+        ["gpt-5".to_string()],
+    )
+    .unwrap()
+    .with_response_header_timeout(Duration::from_millis(200));
+    let req = CompletionRequest {
+        model: ModelRef::new("gpt-5"),
+        system: None,
+        messages: Vec::new(),
+        tools: Vec::new(),
+        temperature: None,
+        max_output_tokens: None,
+        reasoning: None,
+        headers: Default::default(),
+    };
+
+    // Attempt one sits past the shortened header deadline; recovery must come
+    // from the bounded timeout plus the standard retry path inside this
+    // real-clock guard. Without the timeout the guard fires instead.
+    let events = timeout(Duration::from_secs(15), async {
+        provider
+            .stream(req, SessionId::new(), MessageId::new())
+            .await
+            .unwrap()
+            .collect::<Vec<_>>()
+            .await
+    })
+    .await
+    .expect("header stall should hit the deadline and retry within the guard");
+
+    // A second connection happens only if attempt one exhausted the deadline.
+    assert_eq!(connections.load(Ordering::SeqCst), 2);
+    assert!(events.iter().all(Result::is_ok));
+}
+
+#[tokio::test]
+async fn http_provider_idle_stall_yields_one_error_without_second_request() {
+    let (base_url, connections) = start_stalled_mid_stream_server().await;
+    let provider = HttpProvider::new(
+        "openai",
+        ProviderKind::OpenAiCompatible,
+        &base_url,
+        "test-token".to_string(),
+        ["gpt-5".to_string()],
+    )
+    .unwrap()
+    .with_idle_timeout(Duration::from_millis(250));
+    let req = CompletionRequest {
+        model: ModelRef::new("gpt-5"),
+        system: None,
+        messages: Vec::new(),
+        tools: Vec::new(),
+        temperature: None,
+        max_output_tokens: None,
+        reasoning: None,
+        headers: Default::default(),
+    };
+
+    let events = timeout(Duration::from_secs(15), async {
+        provider
+            .stream(req, SessionId::new(), MessageId::new())
+            .await
+            .unwrap()
+            .collect::<Vec<_>>()
+            .await
+    })
+    .await
+    .expect("post-header idle stall should end the stream within the guard");
+
+    assert_eq!(
+        connections.load(Ordering::SeqCst),
+        1,
+        "post-stream failures sit behind the no-replay boundary"
+    );
+    assert_eq!(events.len(), 1);
+    match &events[0] {
+        Err(ProviderError::Http(message)) => {
+            assert!(
+                message.contains("no SSE frame"),
+                "unexpected error: {message}"
+            );
+        }
+        other => panic!("expected a single idle-stall error, got {other:?}"),
+    }
 }
 
 #[tokio::test]
@@ -844,6 +977,247 @@ async fn http_provider_posts_anthropic_compatible_body_to_mock_endpoint() {
     assert!(text_deltas.iter().any(|delta| delta == mock_text));
 }
 
+#[tokio::test]
+async fn http_provider_forces_single_auth_refresh_on_401_and_retries_once() {
+    let (base_url, connections, requests) = start_scripted_server(vec![
+        "HTTP/1.1 401 Unauthorized\r\ncontent-length: 12\r\nconnection: close\r\n\r\nstale token.\n".to_string(),
+        "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\ndata: [DONE]\n\n".to_string(),
+    ])
+    .await;
+    let token = Arc::new(std::sync::Mutex::new("expired-token".to_string()));
+    let refresh_calls = Arc::new(AtomicUsize::new(0));
+    let resolver_token = Arc::clone(&token);
+    let refresher_token = Arc::clone(&token);
+    let refresher_calls = Arc::clone(&refresh_calls);
+    let provider = HttpProvider::new(
+        "openai",
+        ProviderKind::OpenAiCompatible,
+        &base_url,
+        "static-unused".to_string(),
+        ["gpt-5".to_string()],
+    )
+    .unwrap()
+    .with_bearer_resolver(Arc::new(move || Ok(resolver_token.lock().unwrap().clone())))
+    .with_auth_refresher(Arc::new(move |_failed_token| {
+        *refresher_token.lock().unwrap() = "fresh-token".to_string();
+        refresher_calls.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }));
+    let req = CompletionRequest {
+        model: ModelRef::new("gpt-5"),
+        system: None,
+        messages: Vec::new(),
+        tools: Vec::new(),
+        temperature: None,
+        max_output_tokens: None,
+        reasoning: None,
+        headers: Default::default(),
+    };
+
+    let events = timeout(Duration::from_secs(15), async {
+        provider
+            .stream(req, SessionId::new(), MessageId::new())
+            .await
+            .expect("recovered request should establish a stream")
+            .collect::<Vec<_>>()
+            .await
+    })
+    .await
+    .expect("forced-refresh recovery should complete within the guard");
+
+    assert!(events.iter().all(Result::is_ok));
+    assert_eq!(connections.load(Ordering::SeqCst), 2);
+    assert_eq!(refresh_calls.load(Ordering::SeqCst), 1);
+    let captured = requests.lock().unwrap();
+    assert_eq!(captured.len(), 2);
+    assert!(
+        captured[0]
+            .headers
+            .to_ascii_lowercase()
+            .contains("authorization: bearer expired-token")
+    );
+    assert!(
+        captured[1]
+            .headers
+            .to_ascii_lowercase()
+            .contains("authorization: bearer fresh-token")
+    );
+}
+
+#[tokio::test]
+async fn concurrent_401s_refresh_the_credential_used_by_each_request_once() {
+    let first_rotation = Arc::new(Notify::new());
+    let (base_url, connections) =
+        start_concurrent_unauthorized_server(Arc::clone(&first_rotation)).await;
+    let token_generation = Arc::new(AtomicUsize::new(0));
+    let refresh_calls = Arc::new(AtomicUsize::new(0));
+    let resolver_generation = Arc::clone(&token_generation);
+    let refresher_generation = Arc::clone(&token_generation);
+    let refresher_calls = Arc::clone(&refresh_calls);
+    let provider = Arc::new(
+        HttpProvider::new(
+            "openai",
+            ProviderKind::OpenAiCompatible,
+            &base_url,
+            "static-unused".to_string(),
+            ["gpt-5".to_string()],
+        )
+        .unwrap()
+        .with_bearer_resolver(Arc::new(move || {
+            let generation = resolver_generation.load(Ordering::SeqCst);
+            Ok(if generation == 0 {
+                "expired-token".to_string()
+            } else {
+                format!("fresh-token-{generation}")
+            })
+        }))
+        .with_auth_refresher(Arc::new(move |failed_token| {
+            let expected_generation = if failed_token == "expired-token" {
+                Some(0)
+            } else {
+                failed_token
+                    .strip_prefix("fresh-token-")
+                    .and_then(|value| value.parse::<usize>().ok())
+            };
+            if let Some(expected) = expected_generation
+                && refresher_generation
+                    .compare_exchange(expected, expected + 1, Ordering::SeqCst, Ordering::SeqCst)
+                    .is_ok()
+            {
+                let call = refresher_calls.fetch_add(1, Ordering::SeqCst) + 1;
+                if call == 1 {
+                    first_rotation.notify_one();
+                }
+            }
+            Ok(())
+        })),
+    );
+    let request = CompletionRequest {
+        model: ModelRef::new("gpt-5"),
+        system: None,
+        messages: Vec::new(),
+        tools: Vec::new(),
+        temperature: None,
+        max_output_tokens: None,
+        reasoning: None,
+        headers: Default::default(),
+    };
+
+    let first = provider.stream(request.clone(), SessionId::new(), MessageId::new());
+    let second = provider.stream(request, SessionId::new(), MessageId::new());
+    let (first, second) = timeout(Duration::from_secs(15), async {
+        tokio::join!(first, second)
+    })
+    .await
+    .expect("both concurrent requests should recover within the guard");
+    let first_events = first.unwrap().collect::<Vec<_>>().await;
+    let second_events = second.unwrap().collect::<Vec<_>>().await;
+
+    assert!(first_events.iter().all(Result::is_ok));
+    assert!(second_events.iter().all(Result::is_ok));
+    assert_eq!(connections.load(Ordering::SeqCst), 4);
+    assert_eq!(
+        refresh_calls.load(Ordering::SeqCst),
+        1,
+        "both requests sent the same expired token, so only one network refresh is valid"
+    );
+    assert_eq!(token_generation.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn http_provider_surfaces_401_after_a_single_forced_refresh_attempt() {
+    let unauthorized = "HTTP/1.1 401 Unauthorized\r\ncontent-length: 12\r\nconnection: close\r\n\r\nstale token.\n"
+        .to_string();
+    let (base_url, connections, _requests) =
+        start_scripted_server(vec![unauthorized.clone(), unauthorized]).await;
+    let refresh_calls = Arc::new(AtomicUsize::new(0));
+    // The hook really rotates the live credential: connection one fails on
+    // "expired-token", recovery installs "fresh-token", but the server still
+    // answers 401. Only then must the original status surface, unrefreshed.
+    let token = Arc::new(std::sync::Mutex::new("expired-token".to_string()));
+    let resolver_token = Arc::clone(&token);
+    let refresher_token = Arc::clone(&token);
+    let refresher_calls = Arc::clone(&refresh_calls);
+    let provider = HttpProvider::new(
+        "openai",
+        ProviderKind::OpenAiCompatible,
+        &base_url,
+        "static-unused".to_string(),
+        ["gpt-5".to_string()],
+    )
+    .unwrap()
+    .with_bearer_resolver(Arc::new(move || Ok(resolver_token.lock().unwrap().clone())))
+    .with_auth_refresher(Arc::new(move |_failed_token| {
+        *refresher_token.lock().unwrap() = "fresh-token".to_string();
+        refresher_calls.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }));
+    let req = CompletionRequest {
+        model: ModelRef::new("gpt-5"),
+        system: None,
+        messages: Vec::new(),
+        tools: Vec::new(),
+        temperature: None,
+        max_output_tokens: None,
+        reasoning: None,
+        headers: Default::default(),
+    };
+
+    let result = timeout(
+        Duration::from_secs(15),
+        provider.stream(req, SessionId::new(), MessageId::new()),
+    )
+    .await
+    .expect("401 recovery must surface an error without hanging");
+
+    let Err(error) = result else {
+        panic!("401 without recovery budget must fail before any stream");
+    };
+    assert!(
+        matches!(&error, ProviderError::HttpStatus { status: 401, .. }),
+        "expected the original 401 surfaced unchanged, got {error:?}"
+    );
+    assert_eq!(connections.load(Ordering::SeqCst), 2);
+    assert_eq!(refresh_calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn http_provider_without_refresher_makes_one_connection_on_401() {
+    let (base_url, connections, _requests) = start_scripted_server(vec![
+        "HTTP/1.1 401 Unauthorized\r\ncontent-length: 12\r\nconnection: close\r\n\r\nstale token.\n"
+            .to_string(),
+    ])
+    .await;
+    let provider = HttpProvider::new(
+        "openai",
+        ProviderKind::OpenAiCompatible,
+        &base_url,
+        "test-token".to_string(),
+        ["gpt-5".to_string()],
+    )
+    .unwrap();
+    let req = CompletionRequest {
+        model: ModelRef::new("gpt-5"),
+        system: None,
+        messages: Vec::new(),
+        tools: Vec::new(),
+        temperature: None,
+        max_output_tokens: None,
+        reasoning: None,
+        headers: Default::default(),
+    };
+
+    let result = provider
+        .stream(req, SessionId::new(), MessageId::new())
+        .await;
+
+    assert!(matches!(
+        result,
+        Err(ProviderError::HttpStatus { status: 401, .. })
+    ));
+    assert_eq!(connections.load(Ordering::SeqCst), 1);
+}
+
 fn content_length(headers: &str) -> usize {
     headers
         .lines()
@@ -889,6 +1263,192 @@ async fn response_events(kind: ProviderKind, response: &str) -> Vec<Result<Event
         .unwrap()
         .collect()
         .await
+}
+
+async fn read_request_head(socket: &mut TcpStream) {
+    let mut buf = Vec::new();
+    let mut chunk = [0_u8; 1024];
+    loop {
+        let n = socket.read(&mut chunk).await.unwrap();
+        assert!(n != 0, "socket closed before request completed");
+        buf.extend_from_slice(&chunk[..n]);
+        if buf.windows(4).any(|window| window == b"\r\n\r\n") {
+            // The JSON body may still be arriving; neither stall nor success
+            // branches depend on it (success responds over the buffered bytes,
+            // matching the existing mock servers here).
+            break;
+        }
+    }
+}
+
+/// Connection 1 receives the request and then falls silent before response
+/// headers; every later connection receives a complete successful SSE reply.
+async fn start_stalled_header_server() -> (String, Arc<AtomicUsize>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let server_attempts = attempts.clone();
+    tokio::spawn(async move {
+        loop {
+            let (socket, _) = listener.accept().await.unwrap();
+            let seq = server_attempts.fetch_add(1, Ordering::SeqCst);
+            tokio::spawn(async move {
+                let mut socket = socket;
+                read_request_head(&mut socket).await;
+                if seq == 0 {
+                    // Stall exactly where the response-header deadline bites.
+                    futures::future::pending::<()>().await;
+                }
+                socket
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\ndata: [DONE]\n\n",
+                    )
+                    .await
+                    .unwrap();
+            });
+        }
+    });
+    (format!("http://{addr}"), attempts)
+}
+
+/// Responds with successful stream headers immediately, then sends no SSE
+/// frame and never closes the socket.
+async fn start_stalled_mid_stream_server() -> (String, Arc<AtomicUsize>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let connections = Arc::new(AtomicUsize::new(0));
+    let server_connections = connections.clone();
+    tokio::spawn(async move {
+        loop {
+            let (socket, _) = listener.accept().await.unwrap();
+            server_connections.fetch_add(1, Ordering::SeqCst);
+            tokio::spawn(async move {
+                let mut socket = socket;
+                read_request_head(&mut socket).await;
+                socket
+                    .write_all(b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n")
+                    .await
+                    .unwrap();
+                // Hold the connection open in silence so the idle deadline is
+                // the only way the client can make progress.
+                futures::future::pending::<()>().await;
+            });
+        }
+    });
+    (format!("http://{addr}"), connections)
+}
+
+async fn start_retry_server() -> (String, Arc<AtomicUsize>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let server_attempts = attempts.clone();
+    tokio::spawn(async move {
+        for response in [
+            "HTTP/1.1 503 Service Unavailable\r\ncontent-length: 4\r\nretry-after: 0\r\nconnection: close\r\n\r\nbusy".to_string(),
+            "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\ndata: [DONE]\n\n".to_string(),
+        ] {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            server_attempts.fetch_add(1, Ordering::SeqCst);
+            let mut buf = Vec::new();
+            let mut chunk = [0_u8; 1024];
+            loop {
+                let n = socket.read(&mut chunk).await.unwrap();
+                assert!(n != 0, "socket closed before request headers");
+                buf.extend_from_slice(&chunk[..n]);
+                if buf.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            socket.write_all(response.as_bytes()).await.unwrap();
+        }
+    });
+    (format!("http://{addr}"), attempts)
+}
+
+/// Sequential scripted-response server: connection N receives `responses[N]`,
+/// and every request head/body pair is recorded for assertions.
+async fn start_scripted_server(
+    responses: Vec<String>,
+) -> (
+    String,
+    Arc<AtomicUsize>,
+    Arc<std::sync::Mutex<Vec<CapturedRequest>>>,
+) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let connections = Arc::new(AtomicUsize::new(0));
+    let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let server_connections = Arc::clone(&connections);
+    let server_requests = Arc::clone(&requests);
+    tokio::spawn(async move {
+        for response in responses {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            server_connections.fetch_add(1, Ordering::SeqCst);
+            let mut buf = Vec::new();
+            let mut chunk = [0_u8; 1024];
+            let header_end = loop {
+                let n = socket.read(&mut chunk).await.unwrap();
+                assert!(n != 0, "socket closed before request headers");
+                buf.extend_from_slice(&chunk[..n]);
+                if let Some(pos) = buf.windows(4).position(|window| window == b"\r\n\r\n") {
+                    break pos + 4;
+                }
+            };
+            let headers = String::from_utf8_lossy(&buf[..header_end]).to_string();
+            let body_len = content_length(&headers);
+            while buf.len() < header_end + body_len {
+                let n = socket.read(&mut chunk).await.unwrap();
+                assert!(n != 0, "socket closed before request body");
+                buf.extend_from_slice(&chunk[..n]);
+            }
+            let body_end = header_end + body_len;
+            server_requests.lock().unwrap().push(CapturedRequest {
+                raw: String::from_utf8_lossy(&buf[..body_end]).to_string(),
+                headers,
+                body: String::from_utf8_lossy(&buf[header_end..body_end]).to_string(),
+            });
+            socket.write_all(response.as_bytes()).await.unwrap();
+        }
+    });
+    (format!("http://{addr}"), connections, requests)
+}
+
+/// Hold two requests that used the original bearer, release the second 401 only
+/// after the first request rotates storage, then serve both retries.
+async fn start_concurrent_unauthorized_server(
+    first_rotation: Arc<Notify>,
+) -> (String, Arc<AtomicUsize>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let connections = Arc::new(AtomicUsize::new(0));
+    let server_connections = Arc::clone(&connections);
+    tokio::spawn(async move {
+        let (mut first, _) = listener.accept().await.unwrap();
+        server_connections.fetch_add(1, Ordering::SeqCst);
+        let (mut second, _) = listener.accept().await.unwrap();
+        server_connections.fetch_add(1, Ordering::SeqCst);
+        read_request_head(&mut first).await;
+        read_request_head(&mut second).await;
+        let unauthorized =
+            b"HTTP/1.1 401 Unauthorized\r\ncontent-length: 0\r\nconnection: close\r\n\r\n";
+        first.write_all(unauthorized).await.unwrap();
+        first_rotation.notified().await;
+        second.write_all(unauthorized).await.unwrap();
+
+        for _ in 0..2 {
+            let (mut retry, _) = listener.accept().await.unwrap();
+            server_connections.fetch_add(1, Ordering::SeqCst);
+            read_request_head(&mut retry).await;
+            retry
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\ndata: [DONE]\n\n",
+                )
+                .await
+                .unwrap();
+        }
+    });
+    (format!("http://{addr}"), connections)
 }
 
 async fn start_sse_server(response: String) -> (String, oneshot::Receiver<CapturedRequest>) {

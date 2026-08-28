@@ -185,6 +185,7 @@ impl SessionEngine {
             {
                 Ok(permission) => {
                     let ctx = ToolCtx {
+                        workflows: hya_tool::WorkflowPlane::disconnected(),
                         permission,
                         interaction: self.interaction.for_session(session),
                         spawner: self.spawner.for_binding(binding).for_session_with_agents(

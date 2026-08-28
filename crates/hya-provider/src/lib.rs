@@ -13,7 +13,7 @@
 //! Call order for a live turn: router [`ProviderRouter::resolve`] → [`preflight`] →
 //! [`Provider::stream`] → HTTP SSE → [`Decoder::push`] / [`Decoder::finish`].
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, time::Duration};
 
 /// Anthropic Messages protocol and stream decoder.
 pub mod anthropic;
@@ -27,7 +27,7 @@ pub mod google;
 pub mod http;
 /// OpenAI Chat Completions and Responses protocols and decoders.
 pub mod openai;
-/// First-match model routing across configured providers.
+/// Ordered model routing with safe pre-stream provider failover.
 pub mod router;
 mod wire;
 
@@ -40,7 +40,7 @@ pub use anthropic::{AnthropicDecoder, AnthropicMessagesProtocol};
 pub use dev::DevProvider;
 pub use fake::{FakeProvider, FakeStep};
 pub use google::{GoogleDecoder, GoogleProtocol};
-pub use http::{BearerResolver, HttpProvider, ProviderKind};
+pub use http::{AuthRefresher, BearerResolver, HttpProvider, ProviderKind};
 pub use openai::{
     COMPACT_CONTEXT_MARKER, OpenAiChatDecoder, OpenAiChatProtocol, OpenAiResponsesDecoder,
     OpenAiResponsesProtocol, RESPONSES_COMPACT_ITEMS_MARKER, encode_input_items,
@@ -68,9 +68,22 @@ pub enum ProviderError {
     /// JSON body or frame (de)serialization failed.
     #[error("json: {0}")]
     Json(#[from] serde_json::Error),
-    /// Non-2xx HTTP, stream HTTP error frame, bad header, or client build failure.
+    /// Provider API error frame, bad header, or HTTP client construction failure.
     #[error("http: {0}")]
     Http(String),
+    /// Request transport failed before an HTTP response established the event stream.
+    #[error("transport: {0}")]
+    Transport(String),
+    /// Upstream returned a non-success HTTP response before the event stream began.
+    #[error("http status {status}: {message}")]
+    HttpStatus {
+        /// Numeric HTTP status returned by the upstream provider.
+        status: u16,
+        /// Bounded response-body detail for diagnostics.
+        message: String,
+        /// Provider-requested delay parsed from `Retry-After`, when present.
+        retry_after: Option<Duration>,
+    },
     /// No registered route claimed the model ref via [`Provider::capabilities`].
     #[error("unknown provider for model: {0}")]
     UnknownModel(String),
@@ -88,6 +101,32 @@ pub enum ProviderError {
         /// Operator-facing recovery hint (e.g. re-login command).
         hint: String,
     },
+}
+
+impl ProviderError {
+    /// Whether a request that produced no event stream may be retried or failed over safely.
+    #[must_use]
+    pub fn is_retryable_before_stream(&self) -> bool {
+        match self {
+            Self::Transport(_) => true,
+            Self::HttpStatus { status, .. } => *status == 429 || (500..=599).contains(status),
+            Self::Json(_)
+            | Self::Http(_)
+            | Self::UnknownModel(_)
+            | Self::Incompatible(_)
+            | Self::Decode(_)
+            | Self::AuthExpired { .. } => false,
+        }
+    }
+
+    /// Delay requested by the upstream for a retryable HTTP response.
+    #[must_use]
+    pub fn retry_after(&self) -> Option<Duration> {
+        match self {
+            Self::HttpStatus { retry_after, .. } => *retry_after,
+            _ => None,
+        }
+    }
 }
 
 /// Fixed capability flags and context budget advertised when a route claims a model.
@@ -284,6 +323,41 @@ pub fn resolve_default_reasoning(
     }
 
     supported_efforts.into_iter().max()
+}
+
+#[cfg(test)]
+mod provider_error_tests {
+    use std::time::Duration;
+
+    use super::ProviderError;
+
+    #[test]
+    fn only_transient_pre_stream_failures_are_retryable() {
+        assert!(ProviderError::Transport("reset".to_string()).is_retryable_before_stream());
+        for status in [429, 500, 503, 599] {
+            assert!(
+                ProviderError::HttpStatus {
+                    status,
+                    message: String::new(),
+                    retry_after: None,
+                }
+                .is_retryable_before_stream(),
+                "status {status} should be retryable"
+            );
+        }
+        for status in [400, 401, 403, 404] {
+            assert!(
+                !ProviderError::HttpStatus {
+                    status,
+                    message: String::new(),
+                    retry_after: Some(Duration::from_secs(1)),
+                }
+                .is_retryable_before_stream(),
+                "status {status} should not be retryable"
+            );
+        }
+        assert!(!ProviderError::Decode("truncated".to_string()).is_retryable_before_stream());
+    }
 }
 
 #[cfg(test)]
