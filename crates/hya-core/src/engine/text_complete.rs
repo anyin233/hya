@@ -36,6 +36,12 @@ impl TextPartAccumulator {
             | Event::ModelSwitched { .. }
             | Event::SessionStatus { .. }
             | Event::CommandExecuted { .. }
+            | Event::WorkflowSelected { .. }
+            | Event::WorkflowRunStarted { .. }
+            | Event::WorkflowStageStarted { .. }
+            | Event::WorkflowStageMemberLinked { .. }
+            | Event::WorkflowStageFinished { .. }
+            | Event::WorkflowRunFinished { .. }
             | Event::MessageStarted { .. }
             | Event::TurnBindingRecorded { .. }
             | Event::UserPromptContextRecorded { .. }

@@ -10,7 +10,7 @@ use http_body_util::BodyExt;
 use serde_json::Value;
 use tower::ServiceExt;
 
-use hya_sdk::error::{Result, SdkError};
+use hya_sdk::error::{decode_http_error, Result, SdkError};
 use hya_sdk::{ApiClient, Transport, DIRECTORY_HEADER};
 
 /// A [`Transport`] that routes every request through the in-process hya `Router` instead of HTTP.
@@ -80,10 +80,7 @@ impl Transport for HyaNativeTransport {
             .to_bytes();
 
         if !status.is_success() {
-            return Err(SdkError::Http(format!(
-                "status {} for {method} {path}",
-                status.as_u16()
-            )));
+            return Err(decode_http_error(status.as_u16(), &bytes));
         }
         if bytes.is_empty() {
             return Ok(Value::Null);
@@ -153,17 +150,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn non_2xx_is_sdkerror_http() {
+    async fn non_2xx_preserves_structured_status_and_body() {
         let rt = offline_runtime().await;
         let transport = HyaNativeTransport::new(rt.router().clone(), "/tmp");
         let err = transport
             .request("GET", "/session/zzz", None)
             .await
             .expect_err("a bogus session id should be a non-2xx error");
-        assert!(
-            matches!(err, SdkError::Http(_)),
-            "expected SdkError::Http, got {err:?}"
-        );
+        let SdkError::HttpStatus(error) = err else {
+            panic!("expected SdkError::HttpStatus, got {err:?}");
+        };
+        assert_eq!(error.status, 400);
+        assert!(!error.raw_body.is_empty());
     }
 
     #[tokio::test]

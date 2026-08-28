@@ -119,16 +119,24 @@ fn collect_directory(root: &Path, dir: &Path, files: &mut Vec<PathBuf>) -> Resul
     Ok(())
 }
 
+/// Minimal source-manifest discriminator used before strict kind parsing.
+#[derive(Debug, Deserialize)]
+pub(crate) struct SourceKind {
+    /// Manifest payload kind (`AgentBundle` or `WorkflowBundle`).
+    pub kind: String,
+}
+
+/// Strict source manifest shape for the unchanged singular AgentBundle grammar.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct SourceManifest {
+pub(crate) struct SourceAgentManifest {
     pub kind: String,
     pub identity: BundleIdentity,
     #[serde(default)]
     pub resources: SourceResources,
     #[serde(default)]
     pub extensions: SourceExtensions,
-    /// The one agent this bundle defines.
+    /// The one Agent this bundle defines.
     pub agent: SourceAgent,
     /// Keys removed with the single-agent format. Captured only so prepare can
     /// name them; `deny_unknown_fields` alone gives an unhelpful serde message.
@@ -136,6 +144,41 @@ pub(crate) struct SourceManifest {
     pub api_version: Option<IgnoredAny>,
     #[serde(default)]
     pub agents: Option<IgnoredAny>,
+}
+
+/// Strict source manifest shape for a WorkflowBundle.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SourceWorkflowManifest {
+    pub kind: String,
+    pub identity: BundleIdentity,
+    /// The one Workflow source declaration owned by this bundle.
+    pub workflow: SourceWorkflow,
+    /// Candidate Agent set from which the exact compiled closure is selected.
+    pub agents: Vec<SourceAgent>,
+    #[serde(default)]
+    pub resources: SourceResources,
+    #[serde(default)]
+    pub extensions: SourceExtensions,
+}
+
+/// Workflow source declaration in a WorkflowBundle manifest.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SourceWorkflow {
+    /// Workflow-local identity that must equal the compiled name.
+    pub id: String,
+    /// Relative path to the Workflow Markdown document.
+    pub path: String,
+}
+
+/// Strictly dispatched source manifest.
+#[derive(Debug)]
+pub(crate) enum SourceManifest {
+    /// Singular AgentBundle manifest.
+    Agent(Box<SourceAgentManifest>),
+    /// WorkflowBundle manifest.
+    Workflow(Box<SourceWorkflowManifest>),
 }
 
 #[derive(Debug, Deserialize)]

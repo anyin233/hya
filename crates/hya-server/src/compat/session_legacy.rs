@@ -79,7 +79,7 @@ async fn init_session(
     Json(req): Json<InitSessionPayload>,
 ) -> Result<Response, ApiError> {
     let session = parse_session(&id)?;
-    if st.runs.is_busy(session) {
+    if st.is_busy(session) {
         return Ok(super::errors::legacy_bad_request("Bad request"));
     }
     match run_session_init(&st, session, req).await {
@@ -104,7 +104,10 @@ async fn command(
         }
         Err(error) => return Err(error),
     };
-    let Some(run) = st.runs.start(session) else {
+    if let Some(result) = crate::workflow::intercept_slash(&st, session, &req).await? {
+        return Ok(Json(result).into_response());
+    }
+    let Some(run) = st.start_run(session) else {
         return Ok(super::errors::legacy_bad_request("Bad request"));
     };
     let workdir = super::reference::session_workdir(&st, session).await;
@@ -146,7 +149,7 @@ async fn shell(
         }
         Err(error) => return Err(error),
     }
-    let Some(run) = st.runs.start(session) else {
+    let Some(run) = st.start_run(session) else {
         return Ok(super::errors::session_busy(session));
     };
     let (message, _finish) = st
@@ -191,8 +194,7 @@ pub(in crate::compat) async fn run_session_init(
         return Err(ApiError::conflict("prompt message id already exists"));
     }
     let run = st
-        .runs
-        .start(session)
+        .start_run(session)
         .ok_or_else(|| ApiError::bad_request("Bad request"))?;
     let mut turn = init_agent_with_guidance(st, session).await;
     turn.agent.model = ModelRef::new(format!("{}/{}", req.provider_id, req.model_id));
@@ -229,7 +231,13 @@ pub(in crate::compat) async fn load_session(
         return Err(ApiError::not_found("session not found"));
     }
     let projection = Projection::from_events(&envs);
-    projection::snapshot(session, &envs, &projection, started_hint)
+    let persisted_workflow = projection.session.workflow.clone().unwrap_or_default();
+    let workflow = st
+        .workflow_control
+        .decorate(session, persisted_workflow)
+        .await
+        .map_err(ApiError::workflow)?;
+    projection::snapshot(session, &envs, &projection, started_hint, workflow)
         .ok_or_else(|| ApiError::not_found("session not found"))
 }
 

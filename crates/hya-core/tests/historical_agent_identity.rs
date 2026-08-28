@@ -15,8 +15,8 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use hya_bundle::{
-    AgentRole, BundleCatalog, BundleIdentity, ModelPolicy, PreparedAgent, PreparedBundle,
-    ResourceView, SpawnLifecycle,
+    AgentRole, BundleCatalog, BundleIdentity, ModelPolicy, PreparedAgent, PreparedAgentBundle,
+    PreparedInstallableBundle, ResourceView, SpawnLifecycle,
 };
 use hya_core::{AgentCatalog, AgentSpec, CreateSession, EventBus, RuntimeRegistry, SessionEngine};
 use hya_proto::{AgentName, Event, FinishReason, ModelRef, Role};
@@ -74,34 +74,36 @@ fn catalog_without_historical() -> Arc<AgentCatalog> {
     // `build` and `general` are now compiled-in built-ins.
     let bundles = ["base"]
         .into_iter()
-        .map(|stable_id| PreparedBundle {
-            format_version: 1,
-            identity: BundleIdentity {
-                id: format!("hya/historical-identity-{stable_id}"),
-                version: "0.0.0".to_string(),
-                publisher: "hya-tests".to_string(),
-            },
-            digest: format!("test-only-{stable_id}"),
-            agent: PreparedAgent {
-                id: AgentName::new(stable_id),
-                description: None,
-                role: AgentRole::Main,
-                color: None,
-                prompt: Some(format!("{stable_id} prompt")),
-                prompt_source: None,
-                prompt_digest: None,
-                model_policy: ModelPolicy::default(),
-                workdir: None,
-                spawn_lifecycle: SpawnLifecycle::Transient,
-                resource_view: ResourceView::default(),
-                can_spawn: Vec::new(),
-                hook_refs: Vec::new(),
-            },
-            tools: Vec::new(),
-            skills: Vec::new(),
-            mcp: Vec::new(),
-            hooks: Vec::new(),
-            extensions: Vec::new(),
+        .map(|stable_id| {
+            PreparedInstallableBundle::Agent(Box::new(PreparedAgentBundle {
+                format_version: 2,
+                identity: BundleIdentity {
+                    id: format!("hya/historical-identity-{stable_id}"),
+                    version: "0.0.0".to_string(),
+                    publisher: "hya-tests".to_string(),
+                },
+                digest: format!("test-only-{stable_id}"),
+                agent: PreparedAgent {
+                    id: AgentName::new(stable_id),
+                    description: None,
+                    role: AgentRole::Main,
+                    color: None,
+                    prompt: Some(format!("{stable_id} prompt")),
+                    prompt_source: None,
+                    prompt_digest: None,
+                    model_policy: ModelPolicy::default(),
+                    workdir: None,
+                    spawn_lifecycle: SpawnLifecycle::Transient,
+                    resource_view: ResourceView::default(),
+                    can_spawn: Vec::new(),
+                    hook_refs: Vec::new(),
+                },
+                tools: Vec::new(),
+                skills: Vec::new(),
+                mcp: Vec::new(),
+                hooks: Vec::new(),
+                extensions: Vec::new(),
+            }))
         })
         .collect::<Vec<_>>();
     let bundles = BundleCatalog::from_prepared(&bundles).expect("valid bundle catalog");

@@ -18,8 +18,10 @@ use crate::client::{ChildGuard, PluginClient};
 use crate::config::PluginSpec;
 use crate::error::PluginError;
 use crate::messages::{
-    EventNotificationParams, HookName, HookPosture, HostInfo, METHOD_EVENT, ToolCallReply, ToolInfo,
+    EventNotificationParams, HookName, HookPosture, HostInfo, METHOD_EVENT, PluginContributionSet,
+    ToolCallReply, ToolInfo,
 };
+
 use crate::plugin_tool::PluginTool;
 
 mod connection;
@@ -66,10 +68,17 @@ impl PreparedPlugin {
         &self.conn.canonical_declaration
     }
 
+    /// Typed tool, Skill, hook, and workspace-adapter declarations.
+    #[must_use]
+    pub fn contributions(&self) -> &PluginContributionSet {
+        &self.conn.contributions
+    }
+
     /// Tool adapters for this plugin only (`inputSchema.type` must be `"object"`).
     #[must_use]
     pub fn tools(&self) -> Vec<Arc<dyn Tool>> {
         self.conn
+            .contributions
             .tools
             .iter()
             .filter_map(|tool| PluginTool::try_new(self.conn.clone(), tool.clone()))
@@ -85,8 +94,7 @@ struct LiveClient {
 pub(crate) struct PluginConn {
     pub(crate) id: String,
     pub(crate) hooks: HashMap<HookName, HookPosture>,
-    pub(crate) tools: Vec<ToolInfo>,
-    pub(crate) workspace_adapters: Vec<WorkspaceAdapterInfo>,
+    pub(crate) contributions: PluginContributionSet,
     canonical_declaration: Arc<[u8]>,
     pub(crate) timeout: Duration,
     command: Vec<String>,
@@ -246,12 +254,12 @@ fn validate_initialize(
             got: init.plugin.id.clone(),
         });
     }
-    Ok(())
+    init.contributions.validate(configured_id)
 }
 
 fn canonical_initialize(init: &crate::messages::InitializeResult) -> Result<Vec<u8>, PluginError> {
     let mut declaration = init.clone();
-    declaration.hooks.sort_by_key(|hook| {
+    declaration.contributions.hooks.sort_by_key(|hook| {
         (
             hook.name,
             hook.posture.map_or("", |posture| match posture {
@@ -260,7 +268,7 @@ fn canonical_initialize(init: &crate::messages::InitializeResult) -> Result<Vec<
             }),
         )
     });
-    declaration.tools.sort_by(|left, right| {
+    declaration.contributions.tools.sort_by(|left, right| {
         left.name
             .cmp(&right.name)
             .then_with(|| left.description.cmp(&right.description))
@@ -270,13 +278,22 @@ fn canonical_initialize(init: &crate::messages::InitializeResult) -> Result<Vec<
                     .cmp(&canonical_json(&right.input_schema).to_string())
             })
     });
-    declaration.workspace_adapters.sort_by(|left, right| {
-        (&left.r#type, &left.name, &left.description).cmp(&(
-            &right.r#type,
-            &right.name,
-            &right.description,
-        ))
+    declaration.contributions.skills.sort_by(|left, right| {
+        left.id
+            .cmp(&right.id)
+            .then_with(|| left.content.cmp(&right.content))
+            .then_with(|| left.digest.cmp(&right.digest))
     });
+    declaration
+        .contributions
+        .workspace_adapters
+        .sort_by(|left, right| {
+            (&left.r#type, &left.name, &left.description).cmp(&(
+                &right.r#type,
+                &right.name,
+                &right.description,
+            ))
+        });
     let value =
         serde_json::to_value(declaration).map_err(|error| PluginError::Json(error.to_string()))?;
     serde_json::to_vec(&canonical_json(&value))
@@ -355,12 +372,44 @@ impl PluginHost {
         self.plugins.iter().map(|conn| conn.id.clone()).collect()
     }
 
+    /// Typed contribution sets per plugin id in declared load order.
+    #[must_use]
+    pub fn contributions(&self) -> Vec<(&str, &PluginContributionSet)> {
+        self.plugins
+            .iter()
+            .map(|conn| (conn.id.as_str(), &conn.contributions))
+            .collect()
+    }
+
     /// Raw tool declarations per plugin id (before `PluginTool` filtering).
     #[must_use]
     pub fn declared_tools(&self) -> Vec<(&str, &[ToolInfo])> {
         self.plugins
             .iter()
-            .map(|conn| (conn.id.as_str(), conn.tools.as_slice()))
+            .map(|conn| (conn.id.as_str(), conn.contributions.tools.as_slice()))
+            .collect()
+    }
+
+    /// Workspace adapters from every plugin's initialize contribution set, concatenated.
+    #[must_use]
+    pub fn workspace_adapters(&self) -> Vec<WorkspaceAdapterInfo> {
+        self.plugins
+            .iter()
+            .flat_map(|conn| conn.contributions.workspace_adapters.iter().cloned())
+            .collect()
+    }
+
+    /// All plugin tools as host [`Tool`] adapters.
+    #[must_use]
+    pub fn tools(&self) -> Vec<Arc<dyn Tool>> {
+        self.plugins
+            .iter()
+            .flat_map(|conn| {
+                conn.contributions
+                    .tools
+                    .iter()
+                    .filter_map(|tool| PluginTool::try_new(conn.clone(), tool.clone()))
+            })
             .collect()
     }
 
@@ -370,28 +419,6 @@ impl PluginHost {
         self.plugins
             .iter()
             .map(|conn| PreparedPlugin { conn: conn.clone() })
-            .collect()
-    }
-
-    /// Workspace adapters from every plugin's initialize reply, concatenated.
-    #[must_use]
-    pub fn workspace_adapters(&self) -> Vec<WorkspaceAdapterInfo> {
-        self.plugins
-            .iter()
-            .flat_map(|conn| conn.workspace_adapters.iter().cloned())
-            .collect()
-    }
-
-    /// All plugin tools as host [`Tool`] adapters (invalid schemas silently dropped).
-    #[must_use]
-    pub fn tools(&self) -> Vec<Arc<dyn Tool>> {
-        self.plugins
-            .iter()
-            .flat_map(|conn| {
-                conn.tools
-                    .iter()
-                    .filter_map(|tool| PluginTool::try_new(conn.clone(), tool.clone()))
-            })
             .collect()
     }
 
@@ -425,8 +452,8 @@ mod tests {
 
     use super::canonical_initialize;
     use crate::messages::{
-        HookName, HookPosture, HookRegistration, InitializeResult, PROTOCOL_VERSION, PluginInfo,
-        PluginKindWire, ToolInfo,
+        HookName, HookPosture, HookRegistration, InitializeResult, PROTOCOL_VERSION,
+        PluginContributionSet, PluginInfo, PluginKindWire, ToolInfo,
     };
 
     fn declaration() -> InitializeResult {
@@ -437,43 +464,46 @@ mod tests {
                 version: "1.0.0".to_string(),
                 kind: PluginKindWire::Rust,
             },
-            hooks: vec![
-                HookRegistration {
-                    name: HookName::PermissionAsk,
-                    posture: Some(HookPosture::Safe),
-                },
-                HookRegistration {
-                    name: HookName::CommandExecuteBefore,
-                    posture: Some(HookPosture::Open),
-                },
-            ],
-            tools: vec![
-                ToolInfo {
-                    name: "zeta".to_string(),
-                    description: "zeta tool".to_string(),
-                    input_schema: json!({
-                        "properties": { "second": { "type": "string" }, "first": { "type": "boolean" } },
-                        "type": "object"
-                    }),
-                },
-                ToolInfo {
-                    name: "alpha".to_string(),
-                    description: "alpha tool".to_string(),
-                    input_schema: json!({ "type": "object" }),
-                },
-            ],
-            workspace_adapters: vec![
-                WorkspaceAdapterInfo {
-                    r#type: "vcs".to_string(),
-                    name: "zeta".to_string(),
-                    description: "zeta adapter".to_string(),
-                },
-                WorkspaceAdapterInfo {
-                    r#type: "vcs".to_string(),
-                    name: "alpha".to_string(),
-                    description: "alpha adapter".to_string(),
-                },
-            ],
+            contributions: PluginContributionSet {
+                hooks: vec![
+                    HookRegistration {
+                        name: HookName::PermissionAsk,
+                        posture: Some(HookPosture::Safe),
+                    },
+                    HookRegistration {
+                        name: HookName::CommandExecuteBefore,
+                        posture: Some(HookPosture::Open),
+                    },
+                ],
+                tools: vec![
+                    ToolInfo {
+                        name: "zeta".to_string(),
+                        description: "zeta tool".to_string(),
+                        input_schema: json!({
+                            "properties": { "second": { "type": "string" }, "first": { "type": "boolean" } },
+                            "type": "object"
+                        }),
+                    },
+                    ToolInfo {
+                        name: "alpha".to_string(),
+                        description: "alpha tool".to_string(),
+                        input_schema: json!({ "type": "object" }),
+                    },
+                ],
+                skills: Vec::new(),
+                workspace_adapters: vec![
+                    WorkspaceAdapterInfo {
+                        r#type: "vcs".to_string(),
+                        name: "zeta".to_string(),
+                        description: "zeta adapter".to_string(),
+                    },
+                    WorkspaceAdapterInfo {
+                        r#type: "vcs".to_string(),
+                        name: "alpha".to_string(),
+                        description: "alpha adapter".to_string(),
+                    },
+                ],
+            },
         }
     }
 
@@ -481,10 +511,11 @@ mod tests {
     fn initialize_declaration_is_order_independent_and_complete() {
         let original = declaration();
         let mut reordered = original.clone();
-        reordered.hooks.reverse();
-        reordered.tools.reverse();
-        reordered.workspace_adapters.reverse();
-        reordered.tools[1].input_schema = json!({
+        reordered.contributions.hooks.reverse();
+        reordered.contributions.tools.reverse();
+        reordered.contributions.workspace_adapters.reverse();
+
+        reordered.contributions.tools[1].input_schema = json!({
             "type": "object",
             "properties": { "first": { "type": "boolean" }, "second": { "type": "string" } }
         });
@@ -496,21 +527,23 @@ mod tests {
         );
 
         let mut changed_hook = original.clone();
-        changed_hook.hooks[0].posture = Some(HookPosture::Open);
+        changed_hook.contributions.hooks[0].posture = Some(HookPosture::Open);
+
         assert_ne!(
             canonical,
             canonical_initialize(&changed_hook).unwrap_or_default()
         );
 
         let mut changed_tool = original.clone();
-        changed_tool.tools[0].description = "changed".to_string();
+        changed_tool.contributions.tools[0].description = "changed".to_string();
+
         assert_ne!(
             canonical,
             canonical_initialize(&changed_tool).unwrap_or_default()
         );
 
         let mut changed_adapter = original;
-        changed_adapter.workspace_adapters[0].description = "changed".to_string();
+        changed_adapter.contributions.workspace_adapters[0].description = "changed".to_string();
         assert_ne!(
             canonical,
             canonical_initialize(&changed_adapter).unwrap_or_default()

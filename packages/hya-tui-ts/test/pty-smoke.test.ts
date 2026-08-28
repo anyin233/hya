@@ -600,6 +600,7 @@ async function runChildObservation(columns: number) {
         const confirmMainInput = async (start: number, marker: string) => {
           try {
             await writeInput(escapeKey)
+            await waitForMain(start, `${marker} Main focus`)
             await writeInput(marker)
             await waitFor(async () => {
               const frame = (await output()).slice(start)

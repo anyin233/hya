@@ -5,7 +5,7 @@ import path from "node:path"
 import { pathToFileURL } from "node:url"
 import { z } from "zod"
 
-import { loadLocalPluginHooks } from "../src/loader/init"
+import { loadLocalPluginContributions } from "../src/loader/init"
 
 const HookSchema = z.object({
   marker: z.string(),
@@ -33,7 +33,7 @@ test("loads local plugin hooks sequentially and passes tuple options", async () 
     'export const plugin = async (_input, options) => ({ marker: "second", options })',
   )
 
-  const loaded = await loadLocalPluginHooks(
+  const loaded = await loadLocalPluginContributions(
     [pathToFileURL(first).href, [pathToFileURL(second).href, { flag: true }]],
     {},
   )
@@ -77,7 +77,7 @@ test("loads npm plugin server entrypoints from config-relative node_modules", as
   )
 
   // When: the loader receives the package name from an Compat config entry.
-  const loaded = await loadLocalPluginHooks(
+  const loaded = await loadLocalPluginContributions(
     [["hya-test-compat-plugin", { source: "config" }]],
     {},
     configFile,
@@ -122,7 +122,7 @@ test("loads npm plugin main when no server export exists", async () => {
   )
 
   // When: the loader receives that package name from an Compat config entry.
-  const loaded = await loadLocalPluginHooks(
+  const loaded = await loadLocalPluginContributions(
     ["hya-test-main-plugin"],
     {},
     configFile,
@@ -136,7 +136,7 @@ test("loads npm plugin main when no server export exists", async () => {
 })
 
 test("ignores deprecated Compat plugin package names", async () => {
-  const loaded = await loadLocalPluginHooks(
+  const loaded = await loadLocalPluginContributions(
     ["compat-openai-codex-auth", "compat-copilot-auth"],
     {},
   )
@@ -160,7 +160,7 @@ test("isolates import and init failures while preserving later plugins", async (
     'export default { id: "good", server: async () => ({ marker: "good" }) }',
   )
 
-  const loaded = await loadLocalPluginHooks(
+  const loaded = await loadLocalPluginContributions(
     [
       pathToFileURL(badImport).href,
       pathToFileURL(badInit).href,

@@ -1,8 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{
-    BundleError, PreparedAgent, PreparedBundle, PreparedCatalog, PreparedResource,
-    prepare::validate_hook_local_id,
+    BundleError, PreparedAgent, PreparedCatalog, PreparedInstallableBundle, PreparedResource,
+    PreparedWorkflow, prepare::validate_hook_local_id,
 };
 
 const SEMANTIC_IDENTITY_DOMAIN_V1: &[u8] = b"hya.bundle-catalog.semantic-identity/v1";
@@ -34,11 +34,13 @@ impl ExportKind {
     }
 }
 
-/// Pure immutable catalog built only from already-prepared Bundle data.
+/// Pure immutable catalog built only from prepared installable bundle data.
 #[derive(Debug)]
 pub struct BundleCatalog {
-    bundles: Vec<PreparedBundle>,
-    agents: BTreeMap<String, usize>,
+    bundles: Vec<PreparedInstallableBundle>,
+    agents: BTreeMap<String, (usize, usize)>,
+    workflows: BTreeMap<String, (usize, usize)>,
+    workflow_names: BTreeMap<String, Vec<(usize, usize)>>,
     resources: BTreeMap<(ExportKind, String), (usize, usize)>,
     local_resources: BTreeMap<(String, ExportKind, String), String>,
     semantic_identity_v1: Option<Vec<u8>>,
@@ -46,58 +48,74 @@ pub struct BundleCatalog {
 }
 
 impl BundleCatalog {
-    /// Build a catalog by indexing already-prepared bundles.
+    /// Build a catalog by indexing already-prepared installable payloads.
     ///
-    /// Rejects empty input, duplicate bundle/agent ids, namespace/alias collisions,
-    /// and non-empty `resources.mcp` (unsupported executable feature). Hook local
-    /// ids are validated. Does **not** set semantic-identity provenance; use
-    /// [`Self::from_verified_catalogs`] when digest-backed identity is required.
-    pub fn from_prepared(bundles: &[PreparedBundle]) -> Result<Self, BundleError> {
+    /// Rejects duplicate bundle/Agent ids, namespace/alias collisions, and
+    /// unsupported MCP or hook declarations. Empty input is valid.
+    pub fn from_prepared(bundles: &[PreparedInstallableBundle]) -> Result<Self, BundleError> {
         let mut catalog = Self {
             bundles: bundles.to_vec(),
             agents: BTreeMap::new(),
+            workflows: BTreeMap::new(),
+            workflow_names: BTreeMap::new(),
             resources: BTreeMap::new(),
             local_resources: BTreeMap::new(),
             semantic_identity_v1: None,
             verified_catalog_records: None,
         };
         let mut bundle_ids = BTreeSet::new();
-        let mut stable_agent_id = BTreeSet::new();
+        let mut stable_agent_ids = BTreeSet::new();
         for (bundle_index, bundle) in catalog.bundles.iter().enumerate() {
-            if !bundle.mcp.is_empty() {
+            if !bundle.mcp().is_empty() {
                 return Err(BundleError::UnsupportedBundleFeature {
-                    bundle_id: bundle.identity.id.clone(),
+                    bundle_id: bundle.identity().id.clone(),
                     feature: "resources.mcp".to_string(),
                 });
             }
-            for hook in &bundle.hooks {
-                validate_hook_local_id(&bundle.identity.id, &hook.local_id)?;
-            }
-            if !bundle_ids.insert(bundle.identity.id.as_str()) {
+            if !bundle_ids.insert(bundle.identity().id.as_str()) {
                 return Err(BundleError::DuplicateBundleId {
-                    bundle_id: bundle.identity.id.clone(),
+                    bundle_id: bundle.identity().id.clone(),
                 });
             }
-            let agent = &bundle.agent;
-            if !stable_agent_id.insert(agent.id.as_str()) {
-                return Err(BundleError::DuplicateStableAgentId {
-                    stable_id: agent.id.as_str().to_string(),
-                });
+            for (agent_index, agent) in bundle.agents().iter().enumerate() {
+                if !stable_agent_ids.insert(agent.id.as_str()) {
+                    return Err(BundleError::DuplicateStableAgentId {
+                        stable_id: agent.id.as_str().to_string(),
+                    });
+                }
+                for reference in [
+                    agent.id.as_str().to_string(),
+                    format!("bundle:{}/agent/{}", bundle.identity().id, agent.id),
+                ] {
+                    if catalog
+                        .agents
+                        .insert(reference.clone(), (bundle_index, agent_index))
+                        .is_some()
+                    {
+                        return Err(BundleError::NamespaceCollision {
+                            bundle_id: bundle.identity().id.clone(),
+                            name: reference,
+                        });
+                    }
+                }
             }
-            for reference in [
-                agent.id.as_str().to_string(),
-                format!("bundle:{}/agent/{}", bundle.identity.id, agent.id),
-            ] {
+            if let Some(workflow) = bundle.workflow() {
+                let qualified = format!("bundle:{}/workflow/{}", bundle.identity().id, workflow.id);
                 if catalog
-                    .agents
-                    .insert(reference.clone(), bundle_index)
+                    .workflows
+                    .insert(qualified.clone(), (bundle_index, 0))
                     .is_some()
                 {
                     return Err(BundleError::NamespaceCollision {
-                        bundle_id: bundle.identity.id.clone(),
-                        name: reference,
+                        bundle_id: bundle.identity().id.clone(),
+                        name: qualified,
                     });
                 }
+                catalog
+                    .workflow_names
+                    .entry(workflow.id.clone())
+                    .or_default()
+                    .push((bundle_index, 0));
             }
             for kind in [
                 ExportKind::Tool,
@@ -106,7 +124,7 @@ impl BundleCatalog {
                 ExportKind::Hook,
                 ExportKind::Extension,
             ] {
-                for (resource_index, resource) in resources(bundle, kind).iter().enumerate() {
+                for (resource_index, resource) in bundle.resources(kind).iter().enumerate() {
                     let qualified = resource.stable_id.clone();
                     if catalog
                         .resources
@@ -114,36 +132,36 @@ impl BundleCatalog {
                         .is_some()
                     {
                         return Err(BundleError::NamespaceCollision {
-                            bundle_id: bundle.identity.id.clone(),
+                            bundle_id: bundle.identity().id.clone(),
                             name: qualified,
                         });
                     }
                     for name in std::iter::once(resource.local_id.as_str())
                         .chain(resource.aliases.iter().map(String::as_str))
                     {
-                        let key = (bundle.identity.id.clone(), kind, name.to_string());
+                        let key = (bundle.identity().id.clone(), kind, name.to_string());
                         if catalog
                             .local_resources
                             .insert(key, resource.stable_id.clone())
                             .is_some()
                         {
                             return Err(BundleError::AliasCollision {
-                                bundle_id: bundle.identity.id.clone(),
+                                bundle_id: bundle.identity().id.clone(),
                                 name: name.to_string(),
                             });
                         }
                     }
                 }
             }
+            for hook in bundle.hooks() {
+                validate_hook_local_id(&bundle.identity().id, &hook.local_id)?;
+            }
         }
         Ok(catalog)
     }
 
-    /// Build a catalog from one or more verified [`PreparedCatalog`]s and record
-    /// semantic-identity provenance from their digests/bytes.
-    ///
-    /// Flattens all bundles, then runs the same indexing rules as
-    /// [`Self::from_prepared`]. On success, `semantic_identity_v1()` is `Some`.
+    /// Build a catalog from verified [`PreparedCatalog`]s and record semantic
+    /// identity provenance from their prepared digests and payload kinds.
     pub fn from_verified_catalogs(catalogs: &[&PreparedCatalog]) -> Result<Self, BundleError> {
         let bundles = catalogs
             .iter()
@@ -156,13 +174,12 @@ impl BundleCatalog {
         Ok(catalog)
     }
 
-    /// Merge additional verified catalogs into this catalog, preserving prior
-    /// provenance records when this instance was built via
-    /// [`Self::from_verified_catalogs`].
+    /// Merge additional verified catalogs while preserving prior provenance.
     ///
-    /// Fails with [`BundleError::PreparedEncode`] if `self` has no verified
-    /// provenance (plain [`Self::from_prepared`] catalogs cannot be extended
-    /// this way).
+    /// # Errors
+    ///
+    /// Returns [`BundleError::PreparedEncode`] when this catalog lacks verified
+    /// provenance or when the merged semantic identity cannot be encoded.
     pub fn with_verified_catalogs(
         &self,
         catalogs: &[&PreparedCatalog],
@@ -197,13 +214,13 @@ impl BundleCatalog {
         self.semantic_identity_v1.as_deref()
     }
 
-    /// All prepared bundles held by this catalog.
+    /// All prepared installable payloads held by this catalog.
     #[must_use]
-    pub fn bundles(&self) -> &[PreparedBundle] {
+    pub fn bundles(&self) -> &[PreparedInstallableBundle] {
         &self.bundles
     }
 
-    /// Resolve an agent by stable id or `bundle:{id}/agent/{id}` reference.
+    /// Resolve an Agent by stable id or `bundle:{id}/agent/{id}` reference.
     #[must_use]
     pub fn resolve_agent(&self, reference: &str) -> Option<&PreparedAgent> {
         self.resolve_agent_entry(reference).map(|(_, agent)| agent)
@@ -212,8 +229,34 @@ impl BundleCatalog {
     /// Like [`Self::resolve_agent`], also returning the owning bundle id.
     #[must_use]
     pub fn resolve_agent_entry(&self, reference: &str) -> Option<(&str, &PreparedAgent)> {
-        let bundle = self.bundles.get(*self.agents.get(reference)?)?;
-        Some((bundle.identity.id.as_str(), &bundle.agent))
+        let (bundle_index, agent_index) = *self.agents.get(reference)?;
+        let bundle = self.bundles.get(bundle_index)?;
+        Some((
+            bundle.identity().id.as_str(),
+            bundle.agents().get(agent_index)?,
+        ))
+    }
+
+    /// Resolve a Workflow by its exact qualified id or an unambiguous bare id.
+    #[must_use]
+    pub fn resolve_workflow(&self, reference: &str) -> Option<&PreparedWorkflow> {
+        self.resolve_workflow_entry(reference)
+            .map(|(_, workflow)| workflow)
+    }
+
+    /// Like [`Self::resolve_workflow`], also returning the owning bundle id.
+    #[must_use]
+    pub fn resolve_workflow_entry(&self, reference: &str) -> Option<(&str, &PreparedWorkflow)> {
+        let slot = if reference.starts_with("bundle:") {
+            self.workflows.get(reference).copied()
+        } else {
+            self.workflow_names
+                .get(reference)
+                .filter(|candidates| candidates.len() == 1)
+                .and_then(|candidates| candidates.first().copied())
+        }?;
+        let bundle = self.bundles.get(slot.0)?;
+        Some((bundle.identity().id.as_str(), bundle.workflow()?))
     }
 
     /// All prepared resources of `kind` for `bundle_id`, if that bundle exists.
@@ -225,8 +268,8 @@ impl BundleCatalog {
     ) -> Option<&[PreparedResource]> {
         self.bundles
             .iter()
-            .find(|bundle| bundle.identity.id == bundle_id)
-            .map(|bundle| resources(bundle, kind))
+            .find(|bundle| bundle.identity().id == bundle_id)
+            .map(|bundle| bundle.resources(kind))
     }
 
     /// Resolve a resource by local id, alias, or qualified `bundle:…` name.
@@ -258,27 +301,20 @@ impl BundleCatalog {
             };
             qualified
         };
-        let Some((bundle, resource)) = self.resources.get(&(kind, qualified.to_string())) else {
+        let Some((bundle_index, resource_index)) =
+            self.resources.get(&(kind, qualified.to_string()))
+        else {
             return Err(unknown_resource(bundle_id, kind, reference));
         };
         let owner = self
             .bundles
-            .get(*bundle)
+            .get(*bundle_index)
             .ok_or_else(|| unknown_resource(bundle_id, kind, reference))?;
-        let resource = resources(owner, kind)
-            .get(*resource)
+        let resource = owner
+            .resources(kind)
+            .get(*resource_index)
             .ok_or_else(|| unknown_resource(bundle_id, kind, reference))?;
-        Ok((owner.identity.id.as_str(), resource))
-    }
-}
-
-fn resources(bundle: &PreparedBundle, kind: ExportKind) -> &[PreparedResource] {
-    match kind {
-        ExportKind::Tool => &bundle.tools,
-        ExportKind::Skill => &bundle.skills,
-        ExportKind::Mcp => &bundle.mcp,
-        ExportKind::Hook => &bundle.hooks,
-        ExportKind::Extension => &bundle.extensions,
+        Ok((owner.identity().id.as_str(), resource))
     }
 }
 
@@ -297,15 +333,15 @@ fn encode_verified_catalog_records(
     for catalog in catalogs {
         let mut record = Vec::new();
         append_bytes(&mut record, catalog.digest.as_bytes())?;
-
         let mut bundles = catalog.bundles.iter().collect::<Vec<_>>();
         bundles.sort_by(|left, right| compare_bundle_identity(left, right));
         append_count(&mut record, bundles.len())?;
         for bundle in bundles {
-            append_bytes(&mut record, bundle.identity.id.as_bytes())?;
-            append_bytes(&mut record, bundle.identity.version.as_bytes())?;
-            append_bytes(&mut record, bundle.identity.publisher.as_bytes())?;
-            append_bytes(&mut record, bundle.digest.as_bytes())?;
+            append_bytes(&mut record, bundle.kind().as_str().as_bytes())?;
+            append_bytes(&mut record, bundle.identity().id.as_bytes())?;
+            append_bytes(&mut record, bundle.identity().version.as_bytes())?;
+            append_bytes(&mut record, bundle.identity().publisher.as_bytes())?;
+            append_bytes(&mut record, bundle.digest().as_bytes())?;
         }
         records.push(record);
     }
@@ -323,24 +359,28 @@ fn encode_semantic_identity_v1(records: &[Vec<u8>]) -> Result<Vec<u8>, BundleErr
     Ok(identity)
 }
 
-fn compare_bundle_identity(left: &PreparedBundle, right: &PreparedBundle) -> std::cmp::Ordering {
-    left.identity
+fn compare_bundle_identity(
+    left: &PreparedInstallableBundle,
+    right: &PreparedInstallableBundle,
+) -> std::cmp::Ordering {
+    left.identity()
         .id
         .as_bytes()
-        .cmp(right.identity.id.as_bytes())
+        .cmp(right.identity().id.as_bytes())
         .then_with(|| {
-            left.identity
+            left.identity()
                 .version
                 .as_bytes()
-                .cmp(right.identity.version.as_bytes())
+                .cmp(right.identity().version.as_bytes())
         })
         .then_with(|| {
-            left.identity
+            left.identity()
                 .publisher
                 .as_bytes()
-                .cmp(right.identity.publisher.as_bytes())
+                .cmp(right.identity().publisher.as_bytes())
         })
-        .then_with(|| left.digest.as_bytes().cmp(right.digest.as_bytes()))
+        .then_with(|| left.kind().as_str().cmp(right.kind().as_str()))
+        .then_with(|| left.digest().as_bytes().cmp(right.digest().as_bytes()))
 }
 
 fn append_count(bytes: &mut Vec<u8>, count: usize) -> Result<(), BundleError> {

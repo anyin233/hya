@@ -17,24 +17,25 @@ use hya_core::{
     BoundSpawnRequest, BoundSpawnSender, BoundWorkflowRequest, BoundWorkflowSender,
     CategoryRegistry, CompactionConfig, CoreError, CreateSession, EventBus, MemberEvidence,
     MemberSpec, MemberStatus, ModelSummarizer, OperationReservation, PromptEnv, ResidentSupervisor,
-    RuntimeRegistry, SessionEngine, SidecarEnvironment, SidecarHandle, SidecarLifecycle,
-    SidecarStart, SpawnAdmissionOutcome, SubagentGovernor, Summarizer, TeamEvidenceEnvelope,
-    TurnBinding, build_system_prompt, discover_workflow_files, load_workflow_by_name,
-    load_workflow_file, project_envelope, project_envelope_for_actor, run_mailbox_service,
-    run_pre_admitted_member, run_pre_admitted_team, run_pre_admitted_team_for_actor, run_workflow,
+    RuntimeRegistry, RuntimeSourceKind, SessionEngine, SidecarEnvironment, SidecarHandle,
+    SidecarLifecycle, SidecarStart, SpawnAdmissionOutcome, SubagentGovernor, Summarizer,
+    TeamEvidenceEnvelope, TurnBinding, build_system_prompt, project_envelope,
+    project_envelope_for_actor, run_mailbox_service, run_pre_admitted_member,
+    run_pre_admitted_team, run_pre_admitted_team_for_actor,
 };
 
 // Single discovery/date implementation lives in hya-core; re-export for callers.
 pub use hya_core::{discover_context_files, today};
 use hya_mcp::McpServerConfig;
-use hya_plugin::HostInfo;
 use hya_plugin::client::{ChildGuard, PluginClient};
 use hya_plugin::config::PluginSpec;
 use hya_plugin::messages::{
     ActivationLifecycle, ActivationMetadata, HookName, HookRegistration, PluginKindWire, ToolInfo,
 };
+use hya_plugin::{HostInfo, PluginContributionSet};
 use hya_proto::{
     AgentName, MemberId, ModelRef, OwnerRunId, SessionId, SubagentMode, ToolName, ToolSchema,
+    WorkflowDelivery,
 };
 use hya_provider::{DevProvider, ProviderRouter, ReasoningEffort};
 use hya_store::{
@@ -56,21 +57,21 @@ use std::io::Write;
 use crate::config;
 use crate::runtime_reconcile::{
     DesiredSource, PreparedFailure, PreparedResult, RuntimeMcpControl, RuntimeReconciler, SourceId,
-    prepare_desired_source, prepared_plugin_source,
+    adapt_prepared_bundle_skills, prepare_desired_source, prepared_plugin_source,
 };
 use crate::spawn_intent::{PriorStartV1, SpawnIntentInputV1, SpawnIntentV1};
 use crate::{InstalledBundleRefresh, bundle_registry_path, formatter_config, plugins};
 
-/// Agent catalog for a process with no installed bundles yet.
+/// Agent catalog for a process before installed bundles are refreshed.
 ///
-/// Built-in agents are compiled into the binary (`hya_core::builtin_agents`),
-/// so a fresh install starts with an empty installed-bundle catalog and still
-/// resolves every built-in. `from_verified_catalogs(&[])` (not `from_prepared`)
-/// is deliberate: it records verified provenance for the empty set, which keeps
-/// the runtime semantic fingerprint available.
+/// Rust-native built-in agents and the build-prepared first-party WorkflowBundle
+/// are published together. Installed rows are merged later by the root refresh.
+/// The first-party payload is decoded and verified before the runtime starts.
 pub fn builtin_agent_catalog() -> anyhow::Result<Arc<AgentCatalog>> {
-    let bundles = BundleCatalog::from_verified_catalogs(&[])
-        .context("build empty installed AgentBundle catalog")?;
+    let first_party = crate::installed_bundle_refresh::first_party_catalog()
+        .context("decode embedded first-party WorkflowBundle")?;
+    let bundles = BundleCatalog::from_verified_catalogs(&[&first_party])
+        .context("build first-party WorkflowBundle catalog")?;
     let catalog =
         AgentCatalog::new(Arc::new(bundles)).context("build agent catalog over built-ins")?;
     Ok(Arc::new(catalog))
@@ -96,7 +97,7 @@ pub fn offline_router(model_override: Option<String>) -> (ProviderRouter, String
     )
 }
 
-fn process_owner_run_id() -> OwnerRunId {
+pub(crate) fn process_owner_run_id() -> OwnerRunId {
     static OWNER_RUN_ID: OnceLock<OwnerRunId> = OnceLock::new();
     *OWNER_RUN_ID.get_or_init(OwnerRunId::new)
 }
@@ -799,18 +800,23 @@ impl BoundSidecarFactory for BundleSidecarFactory {
             validate_bundle_sidecar_hooks(
                 &self.binding,
                 &self.stable_agent_id,
-                &initialized.hooks,
+                &initialized.contributions.hooks,
+            )?;
+            validate_bundle_sidecar_skills(
+                &self.binding,
+                &self.stable_agent_id,
+                &initialized.contributions,
             )?;
             let tools = bind_bundle_sidecar_tools(
                 &self.binding,
                 &self.stable_agent_id,
                 &client,
-                &initialized.tools,
+                &initialized.contributions.tools,
             )?;
-            let hooks = (!initialized.hooks.is_empty()).then(|| {
+            let hooks = (!initialized.contributions.hooks.is_empty()).then(|| {
                 Arc::new(hya_plugin::ActivationHookDispatcher::new(
                     client.clone(),
-                    &initialized.hooks,
+                    &initialized.contributions.hooks,
                 )) as Arc<dyn hya_core::hooks::HookDispatcher>
             });
             Ok::<_, CoreError>((tools, hooks))
@@ -1125,6 +1131,40 @@ fn validate_bundle_sidecar_hooks(
         )));
     }
     Ok(())
+}
+
+/// Require a bundle sidecar's Skill declaration set to match signed prepared bytes.
+fn validate_bundle_sidecar_skills(
+    binding: &TurnBinding,
+    stable_agent_id: &str,
+    contributions: &PluginContributionSet,
+) -> Result<(), CoreError> {
+    let policy = binding.agent_resource_policy(stable_agent_id)?;
+    let bundle_id = policy.bundle_id().ok_or_else(|| {
+        CoreError::Invalid(format!(
+            "bundle sidecar agent `{stable_agent_id}` has no owning bundle"
+        ))
+    })?;
+    let selected = policy
+        .selected_bundle_skill_ids()
+        .iter()
+        .map(String::as_str)
+        .collect::<std::collections::BTreeSet<_>>();
+    let resources = binding
+        .bundle_catalog()
+        .bundle_resources(bundle_id, hya_bundle::ExportKind::Skill)
+        .ok_or_else(|| {
+            CoreError::Invalid(format!(
+                "bundle `{bundle_id}` has no prepared Skill namespace"
+            ))
+        })?
+        .iter()
+        .filter(|resource| selected.contains(resource.stable_id.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    adapt_prepared_bundle_skills(bundle_id, &resources, contributions)
+        .map(|_| ())
+        .map_err(|error| CoreError::Invalid(format!("bundle sidecar Skill declaration: {error}")))
 }
 
 fn validate_activation_id(activation_id: &str) -> Result<(), CoreError> {
@@ -3283,6 +3323,7 @@ impl Drop for SpawnSupervisorLifecycle {
 pub struct BuiltSessionEngine {
     engine: Arc<SessionEngine>,
     resident_supervisor: Arc<ResidentSupervisor>,
+    workflow_control: crate::WorkflowControl,
     asks: Option<tokio::sync::mpsc::UnboundedReceiver<AskRequest>>,
     questions: Option<tokio::sync::mpsc::UnboundedReceiver<QuestionRequest>>,
     mcp_control: Arc<dyn hya_server::McpControl>,
@@ -3301,6 +3342,12 @@ impl BuiltSessionEngine {
     #[must_use]
     pub fn resident_supervisor(&self) -> Arc<ResidentSupervisor> {
         Arc::clone(&self.resident_supervisor)
+    }
+
+    /// Shared durable Workflow control adapter for direct and server surfaces.
+    #[must_use]
+    pub fn workflow_control(&self) -> crate::WorkflowControl {
+        self.workflow_control.clone()
     }
 
     /// Take the permission-ask receiver exactly once.
@@ -3336,6 +3383,54 @@ impl BuiltSessionEngine {
 impl Drop for BuiltSessionEngine {
     fn drop(&mut self) {
         self.lifecycle.drop_stop();
+    }
+}
+/// Adapt the app-owned Workflow control to the dependency-inverted server port.
+impl hya_server::WorkflowControl for crate::WorkflowControl {
+    fn execute(
+        &self,
+        session: SessionId,
+        command: hya_proto::WorkflowCommand,
+        delivery: WorkflowDelivery,
+    ) -> hya_server::WorkflowControlFuture<'_> {
+        Box::pin(async move {
+            crate::WorkflowControl::execute(
+                self,
+                session,
+                crate::WorkflowInvocation {
+                    delivery,
+                    ..crate::WorkflowInvocation::default()
+                },
+                command,
+                tokio_util::sync::CancellationToken::new(),
+            )
+            .await
+            .map_err(|error| hya_server::WorkflowControlError::new(error.code(), error.to_string()))
+        })
+    }
+
+    fn decorate(
+        &self,
+        session: SessionId,
+        state: hya_proto::WorkflowProjection,
+    ) -> hya_server::WorkflowDecorationFuture<'_> {
+        Box::pin(async move {
+            crate::WorkflowControl::decorate(self, session, state)
+                .await
+                .map_err(|error| {
+                    hya_server::WorkflowControlError::new(error.code(), error.to_string())
+                })
+        })
+    }
+
+    fn active_run(&self, session: SessionId) -> Option<hya_proto::WorkflowRunId> {
+        crate::WorkflowControl::active_run(self, session)
+            .ok()
+            .flatten()
+    }
+
+    fn cancel(&self, session: SessionId) -> bool {
+        self.cancel_run(session)
     }
 }
 
@@ -3390,9 +3485,7 @@ pub fn spawn_team_supervisor(
 /// fan-out, so extra intra-process parallelism would only add contention.
 fn spawn_workflow_supervisor(
     mut rx: tokio::sync::mpsc::Receiver<BoundWorkflowRequest>,
-    engine: Arc<SessionEngine>,
-    base: AgentSpec,
-    resident_supervisor: Arc<ResidentSupervisor>,
+    control: crate::WorkflowControl,
     stop: tokio_util::sync::CancellationToken,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
@@ -3407,8 +3500,7 @@ fn spawn_workflow_supervisor(
             };
             let (binding, request) = bound_request.into_parts();
             let request_cancel = request.cancel.clone();
-            let execution =
-                handle_workflow_request(&engine, &base, &resident_supervisor, binding, request);
+            let execution = handle_workflow_request(&control, binding, request);
             tokio::pin!(execution);
             tokio::select! {
                 biased;
@@ -3426,139 +3518,34 @@ fn spawn_workflow_supervisor(
     })
 }
 
-/// Execute or discover one framed workflow request against the caller session.
+/// Execute one framed workflow request through the app-owned control seam.
 async fn handle_workflow_request(
-    engine: &Arc<SessionEngine>,
-    base: &AgentSpec,
-    resident_supervisor: &Arc<ResidentSupervisor>,
+    control: &crate::WorkflowControl,
     binding: TurnBinding,
     request: hya_tool::WorkflowRequest,
 ) {
     let hya_tool::WorkflowRequest {
         parent,
-        action,
+        operation,
+        command,
         cancel,
         reply,
-        ..
     } = request;
-    let caller = match engine.read_projection(parent).await {
-        Ok(projection) => projection.session.agent.map(|agent| agent.to_string()),
-        Err(error) => {
-            let _ = reply.send(Err(format!("resolve caller session: {error}")));
-            return;
-        }
-    };
-    let Some(caller) = caller else {
-        let _ = reply.send(Err("workflow caller session has no agent".to_string()));
-        return;
-    };
-    let result = match action {
-        hya_tool::WorkflowAction::List => list_workflows(binding.workdir()),
-        hya_tool::WorkflowAction::Run { name, inputs } => {
-            run_named_workflow(
-                engine,
-                base,
-                resident_supervisor,
-                &binding,
-                parent,
-                &caller,
-                &name,
-                inputs,
-                cancel,
-            )
-            .await
-        }
-    };
+    let result = control
+        .execute(
+            parent,
+            crate::WorkflowInvocation {
+                caller: None,
+                operation: Some(operation),
+                binding: Some(binding),
+                delivery: WorkflowDelivery::Finished,
+            },
+            command,
+            cancel,
+        )
+        .await
+        .map_err(|error| hya_tool::WorkflowHostError::new(error.code(), error.to_string()));
     let _ = reply.send(result);
-}
-
-/// Discover workflows across the workdir roots; earlier (shadowing) wins on
-/// duplicate names, mirroring `load_workflow_by_name` resolution order.
-fn list_workflows(workdir: &std::path::Path) -> hya_tool::WorkflowReply {
-    use hya_tool::{WorkflowReplyPayload, WorkflowSummary};
-    let mut summaries: Vec<WorkflowSummary> = Vec::new();
-    for path in discover_workflow_files(workdir) {
-        let display = path.display().to_string();
-        match load_workflow_file(&path) {
-            Ok(workflow) => {
-                let definition = workflow.definition();
-                if summaries
-                    .iter()
-                    .any(|summary| summary.name == definition.name())
-                {
-                    continue;
-                }
-                summaries.push(WorkflowSummary {
-                    name: definition.name().to_string(),
-                    description: definition.description().to_string(),
-                    path: display,
-                    stages: workflow
-                        .plan()
-                        .stages()
-                        .iter()
-                        .map(|stage| stage.id().to_string())
-                        .collect(),
-                    error: None,
-                });
-            }
-            Err(error) => summaries.push(WorkflowSummary {
-                name: path
-                    .file_stem()
-                    .map(|s| s.to_string_lossy().into_owned())
-                    .unwrap_or_default(),
-                description: String::new(),
-                path: display,
-                stages: Vec::new(),
-                error: Some(error.to_string()),
-            }),
-        }
-    }
-    Ok(WorkflowReplyPayload::List(summaries))
-}
-
-/// Load, authorize, and execute one named workflow through the governed core
-/// executor (`run_workflow` internally uses the pre-admitted team batch path).
-#[allow(clippy::too_many_arguments)]
-async fn run_named_workflow(
-    engine: &Arc<SessionEngine>,
-    base: &AgentSpec,
-    resident_supervisor: &Arc<ResidentSupervisor>,
-    binding: &TurnBinding,
-    lead: hya_proto::SessionId,
-    caller: &str,
-    name: &str,
-    inputs: BTreeMap<String, String>,
-    cancel: tokio_util::sync::CancellationToken,
-) -> hya_tool::WorkflowReply {
-    use hya_tool::{WorkflowOutcome, WorkflowReplyPayload, WorkflowStageOutcome};
-    let def = match load_workflow_by_name(std::path::Path::new(binding.workdir()), name) {
-        Ok(def) => def,
-        Err(error) => return Err(error.to_string()),
-    };
-    let context = hya_core::WorkflowRunContext {
-        binding: binding.clone(),
-        caller: caller.to_string(),
-        base_agent: base.clone(),
-        inputs,
-        resident_supervisor: Some(resident_supervisor.clone()),
-    };
-    let report = match run_workflow(engine.clone(), lead, &def, context, cancel).await {
-        Ok(report) => report,
-        Err(error) => return Err(error.to_string()),
-    };
-    Ok(WorkflowReplyPayload::Run(WorkflowOutcome {
-        status: report.status.to_string(),
-        stages: report
-            .stages
-            .iter()
-            .map(|stage| WorkflowStageOutcome {
-                stage: stage.stage.clone(),
-                agent: stage.agent.clone(),
-                status: stage.status.to_string(),
-                output: stage.output.clone(),
-            })
-            .collect(),
-    }))
 }
 
 fn observe_foreground_handler_join(joined: Option<Result<(), tokio::task::JoinError>>) {
@@ -4170,6 +4157,13 @@ async fn build_session_engine_with_mcp_defer(
     options: EngineBuildOptions,
 ) -> anyhow::Result<BuiltSessionEngine> {
     let owner_run_id = process_owner_run_id();
+    store
+        .claim_runtime_owner(owner_run_id)
+        .context("claim runtime owner before startup recovery")?;
+    store
+        .recover_nonterminal_workflows(owner_run_id, "backend startup recovery")
+        .await
+        .context("recover nonterminal Workflows before spawn readiness")?;
     let mut recovered_claims = Vec::new();
     for actor_id in store
         .active_actor_ids()
@@ -4207,7 +4201,14 @@ async fn build_session_engine_with_mcp_defer(
         .collect::<BTreeMap<_, _>>();
     let defer_mcp = options.defer_mcp && !mcp.is_empty();
     let catalog = builtin_agent_catalog()?;
+    let static_sources =
+        crate::installed_bundle_refresh::static_bundle_skill_sources(catalog.bundles().as_ref())?;
     let runtime = Arc::new(RuntimeRegistry::new(registry, catalog));
+    if !static_sources.is_empty() {
+        runtime.refresh(|candidate| {
+            candidate.replace_sources_of_kind(RuntimeSourceKind::Bundle, static_sources)
+        })?;
+    }
     let catalog_refresh = Arc::new(InstalledBundleRefresh::new(bundle_registry_path()));
 
     let rules = PermissionRules::new(vec![
@@ -4420,6 +4421,12 @@ async fn build_session_engine_with_mcp_defer(
             .await
             .context("recreate recovered resident runtime owner")?;
     }
+    let workflow_control = crate::WorkflowControl::new(
+        engine.clone(),
+        agent.clone(),
+        resident_supervisor.clone(),
+        owner_run_id,
+    );
     let mut lifecycle = spawn_team_supervisor_with_environment(
         spawn_rx,
         engine.clone(),
@@ -4433,9 +4440,7 @@ async fn build_session_engine_with_mcp_defer(
     // team supervisor's stop token; runs go through the governed core executor.
     lifecycle.extra_joins.push(spawn_workflow_supervisor(
         workflow_rx,
-        engine.clone(),
-        agent.clone(),
-        resident_supervisor.clone(),
+        workflow_control.clone(),
         lifecycle.stop.clone(),
     ));
     // Drive the event-sourced mailbox: append MailSent/Channel*/AgentRegistered to
@@ -4444,6 +4449,7 @@ async fn build_session_engine_with_mcp_defer(
     Ok(BuiltSessionEngine {
         engine,
         resident_supervisor,
+        workflow_control,
         asks: Some(asks),
         questions: Some(questions),
         mcp_control,
@@ -4479,7 +4485,13 @@ fn prepared_plugin_results(
         .map(|source| {
             let id = source.id().configured_id();
             if let Some(plugin) = prepared.get(id) {
-                PreparedResult::from(prepared_plugin_source(plugin.clone()))
+                match prepared_plugin_source(plugin.clone()) {
+                    Ok(prepared) => PreparedResult::from(prepared),
+                    Err(error) => PreparedResult::from(PreparedFailure::new(
+                        source.id().clone(),
+                        format!("PLUGIN_CONTRIBUTION_INVALID: {error}"),
+                    )),
+                }
             } else {
                 let error = failures.get(id).map_or_else(
                     || "PLUGIN_START_FAILED: no observed result".to_string(),
@@ -4609,10 +4621,12 @@ impl HyaRuntime {
             .take_asks()
             .ok_or_else(|| anyhow::anyhow!("BuiltSessionEngine asks receiver already taken"))?;
         let mcp_control = built.mcp_control();
+        let workflow_control = Arc::new(built.workflow_control());
         let plugin_host = built.plugin_host();
         let mut state = hya_server::AppState::new(engine.clone(), agent)
             .with_question_requests(questions)
             .with_mcp_control(mcp_control)
+            .with_workflow_control(workflow_control)
             .with_workspace_adapters(plugin_host.workspace_adapters())
             .with_default_agent(runtime.default_agent.clone());
         state = state.with_permission_requests(asks);
@@ -4655,18 +4669,30 @@ mod tests {
         AgentCatalog::new(Arc::new(bundles)).expect("valid agent catalog")
     }
 
+    /// Wrap one prepared singular AgentBundle for a closed catalog payload.
+    fn agent_bundle(bundle: PreparedAgentBundle) -> PreparedInstallableBundle {
+        PreparedInstallableBundle::Agent(Box::new(bundle))
+    }
+
+    /// Wrap prepared singular AgentBundles for a closed catalog payload.
+    fn agent_bundles(
+        bundles: impl IntoIterator<Item = PreparedAgentBundle>,
+    ) -> Vec<PreparedInstallableBundle> {
+        bundles.into_iter().map(agent_bundle).collect()
+    }
+
     use super::*;
     use async_trait::async_trait;
     use hya_bundle::{
-        AgentRole, BundleIdentity, BundleSource, ModelPolicy, PreparedAgent, PreparedBundle,
-        PreparedResource, ResourceView, SourceFile, prepare_package,
+        AgentRole, BundleIdentity, BundleSource, ModelPolicy, PreparedAgent, PreparedAgentBundle,
+        PreparedInstallableBundle, PreparedResource, ResourceView, SourceFile, prepare_package,
     };
     use hya_core::{CategoryEntry, run_team};
     use hya_plugin::messages::{METHOD_TOOL_CALL, ToolCallParams, ToolInfo};
     use hya_plugin::protocol::Frame;
     use hya_proto::{
         Event, FinishReason, MailEndpoint, MailKind, MemberRunStatus, OwnerRunId, RosterStatus,
-        SubagentMode, ToolName, ToolSchema,
+        SubagentMode, ToolName, ToolSchema, WorkflowIdentity, WorkflowRevision, WorkflowStagePlan,
     };
     use hya_provider::{
         Capabilities, CompletionRequest, EventStream, FakeProvider, FakeStep, HttpProvider,
@@ -4864,11 +4890,19 @@ mod tests {
     }
 
     #[test]
-    fn builtin_agent_catalog_starts_with_no_installed_bundles() {
+    fn builtin_agent_catalog_includes_first_party_workflow_bundle() {
         let catalog = builtin_agent_catalog().expect("builtin agent catalog must build");
+        assert_eq!(
+            catalog.bundles().bundles().len(),
+            1,
+            "fresh process includes the immutable first-party WorkflowBundle"
+        );
         assert!(
-            catalog.bundles().bundles().is_empty(),
-            "a fresh process has no installed bundles"
+            catalog
+                .bundles()
+                .resolve_workflow("plan-impl-review")
+                .is_some(),
+            "first-party Workflow must be cataloged"
         );
         for id in ["build", "plan", "explore", "general", "hya-main"] {
             assert!(
@@ -4879,15 +4913,13 @@ mod tests {
     }
 
     #[test]
-    fn builtin_agent_catalog_retains_semantic_identity_when_empty() {
-        // The fingerprint must stay available on a fresh install; an empty
-        // installed catalog is "nothing to attest", not "unidentifiable".
+    fn builtin_agent_catalog_retains_semantic_identity_with_first_party() {
         let catalog = builtin_agent_catalog().expect("builtin agent catalog must build");
         assert!(
             catalog
                 .semantic_identity_v1()
                 .is_some_and(|identity| !identity.is_empty()),
-            "empty installed catalog must still yield a semantic identity"
+            "first-party catalog must yield a semantic identity"
         );
     }
 
@@ -9916,6 +9948,68 @@ agent:
             .expect("idempotent shutdown after drain");
     }
 
+    /// Building a new runtime owner terminalizes persisted Workflow work before
+    /// any supervisor can admit a Stage.
+    #[tokio::test]
+    async fn build_session_engine_interrupts_prior_workflow_owner() {
+        let store = SessionStore::connect_memory().await.unwrap();
+        let session = SessionId::new();
+        let run = hya_proto::WorkflowRunId::new();
+        let prior_owner = OwnerRunId::new();
+        assert_ne!(prior_owner, process_owner_run_id());
+        store
+            .append_event(
+                session,
+                &Event::WorkflowRunStarted {
+                    session,
+                    run,
+                    workflow: WorkflowIdentity {
+                        source: hya_proto::WorkflowSourceId::new("test:restart-flow"),
+                        name: "restart-flow".to_string(),
+                        revision: WorkflowRevision::from_bytes([1; 32]),
+                    },
+                    request_hash: "inputs".to_string(),
+                    owner: prior_owner,
+                    stages: vec![WorkflowStagePlan {
+                        id: "stage".to_string(),
+                        title: None,
+                        agent: hya_proto::AgentName::new("general"),
+                        mode: "once".to_string(),
+                        level: 0,
+                    }],
+                },
+            )
+            .await
+            .unwrap();
+        let (router, model) = offline_router(None);
+        let agent = agent_with_model(&model, None);
+
+        let mut built = build_session_engine(
+            store,
+            router,
+            &agent,
+            BTreeMap::new(),
+            Vec::new(),
+            (WebSearchConfig::default(), InvocationPolicy::default()),
+        )
+        .await
+        .unwrap();
+
+        let current = built
+            .engine()
+            .read_projection(session)
+            .await
+            .unwrap()
+            .session
+            .workflow
+            .unwrap()
+            .run
+            .unwrap();
+        assert_eq!(current.status, hya_proto::WorkflowRunStatus::Interrupted);
+        assert_eq!(current.error.as_deref(), Some("backend startup recovery"));
+        built.shutdown().await.unwrap();
+    }
+
     /// Lifecycle stop must cancel and drain the Workflow request that currently
     /// owns the single worker slot, even when its provider never returns.
     #[tokio::test]
@@ -9994,14 +10088,11 @@ flowchart TD
             .for_binding(&binding)
             .for_session_with_agents(lead, agents);
         let stop = CancellationToken::new();
-        let resident_supervisor = ResidentSupervisor::start(Arc::clone(&engine));
-        let supervisor = spawn_workflow_supervisor(
-            workflow_rx,
-            Arc::clone(&engine),
-            base,
-            resident_supervisor,
-            stop.clone(),
-        );
+        let owner = process_owner_run_id();
+        let resident_supervisor = ResidentSupervisor::start_with_owner(Arc::clone(&engine), owner);
+        let control =
+            crate::WorkflowControl::new(Arc::clone(&engine), base, resident_supervisor, owner);
+        let supervisor = spawn_workflow_supervisor(workflow_rx, control, stop.clone());
         let (interaction, _interaction_rx) = InteractionPlane::new();
         let (spawner, _spawner_rx) = SpawnerPlane::new();
         let ctx = ToolCtx {
@@ -10041,7 +10132,8 @@ flowchart TD
             .expect("cancelled Workflow tool request must receive a terminal reply")
             .expect("Workflow tool task must not panic")
             .expect("Workflow cancellation is a terminal run outcome");
-        assert_eq!(output["metadata"]["status"], "cancelled");
+        assert_eq!(output["kind"], "run");
+        assert_eq!(output["result"]["run"]["status"], "cancelled");
     }
 
     /// Explicit shutdown must still abort in-flight handlers.
@@ -11399,36 +11491,37 @@ You are the installed resident agent.
         // One bundle per agent; built-in ids come from the compiled-in registry.
         let bundles = stable_ids
             .iter()
-            .filter(|stable_id| !hya_core::is_builtin_id(stable_id))
-            .map(|stable_id| PreparedBundle {
-                format_version: 1,
-                identity: BundleIdentity {
-                    id: format!("hya/recovery-resolution-{stable_id}"),
-                    version: "0.0.0".to_string(),
-                    publisher: "hya-tests".to_string(),
-                },
-                digest: format!("test-only-{stable_id}"),
-                agent: PreparedAgent {
-                    id: AgentName::new(*stable_id),
-                    description: None,
-                    role: AgentRole::Main,
-                    color: None,
-                    prompt: Some(format!("{stable_id} recovery prompt")),
-                    prompt_source: None,
-                    prompt_digest: None,
-                    model_policy: ModelPolicy::default(),
-                    workdir: None,
-                    spawn_lifecycle: SpawnLifecycle::Transient,
-                    resource_view: ResourceView::default(),
-                    // Deliberately empty: recovery must not depend on can_spawn.
-                    can_spawn: Vec::new(),
-                    hook_refs: Vec::new(),
-                },
-                tools: Vec::new(),
-                skills: Vec::new(),
-                mcp: Vec::new(),
-                hooks: Vec::new(),
-                extensions: Vec::new(),
+            .map(|stable_id| {
+                PreparedInstallableBundle::Agent(Box::new(PreparedAgentBundle {
+                    format_version: 2,
+                    identity: BundleIdentity {
+                        id: format!("hya/recovery-resolution-{stable_id}"),
+                        version: "0.0.0".to_string(),
+                        publisher: "hya-tests".to_string(),
+                    },
+                    digest: format!("test-only-{stable_id}"),
+                    agent: PreparedAgent {
+                        id: AgentName::new(*stable_id),
+                        description: None,
+                        role: AgentRole::Main,
+                        color: None,
+                        prompt: Some(format!("{stable_id} recovery prompt")),
+                        prompt_source: None,
+                        prompt_digest: None,
+                        model_policy: ModelPolicy::default(),
+                        workdir: None,
+                        spawn_lifecycle: SpawnLifecycle::Transient,
+                        resource_view: ResourceView::default(),
+                        // Deliberately empty: recovery must not depend on can_spawn.
+                        can_spawn: Vec::new(),
+                        hook_refs: Vec::new(),
+                    },
+                    tools: Vec::new(),
+                    skills: Vec::new(),
+                    mcp: Vec::new(),
+                    hooks: Vec::new(),
+                    extensions: Vec::new(),
+                }))
             })
             .collect::<Vec<_>>();
         Arc::new(to_agent_catalog(
@@ -11439,7 +11532,7 @@ You are the installed resident agent.
     #[tokio::test]
     async fn recovered_resident_missing_definition_fails_closed_without_synthesis() {
         let workdir = tempdir();
-        let engine = engine_with_catalog(catalog_with_agents(&["build", "general"])).await;
+        let engine = engine_with_catalog(catalog_with_agents(&[])).await;
         let base = AgentSpec {
             name: AgentName::new("build"),
             model: ModelRef::new("base-model"),
@@ -11476,7 +11569,7 @@ You are the installed resident agent.
     async fn recovered_resident_exact_lookup_preserves_recorded_id_without_can_spawn() {
         let workdir = tempdir();
         // Agent present for exact lookup but not in anyone's can_spawn (empty lists).
-        let engine = engine_with_catalog(catalog_with_agents(&["build", "resident-helper"])).await;
+        let engine = engine_with_catalog(catalog_with_agents(&["resident-helper"])).await;
         let base = AgentSpec {
             name: AgentName::new("build"),
             model: ModelRef::new("base-model"),
@@ -11522,7 +11615,7 @@ You are the installed resident agent.
     async fn recovered_resident_uses_session_workdir_not_base_workdir() {
         let session_dir = tempdir();
         let base_dir = tempdir();
-        let engine = engine_with_catalog(catalog_with_agents(&["build", "resident-helper"])).await;
+        let engine = engine_with_catalog(catalog_with_agents(&["resident-helper"])).await;
         let base = AgentSpec {
             name: AgentName::new("build"),
             model: ModelRef::new("base-model"),
@@ -11559,8 +11652,8 @@ You are the installed resident agent.
                 can_spawn: can_spawn.iter().map(|id| AgentName::new(*id)).collect(),
                 hook_refs: Vec::new(),
             };
-            PreparedBundle {
-                format_version: 1,
+            PreparedInstallableBundle::Agent(Box::new(PreparedAgentBundle {
+                format_version: 2,
                 identity: BundleIdentity {
                     id: format!("hya/spawn-model-precedence-{stable_id}"),
                     version: "0.0.0".to_string(),
@@ -11573,7 +11666,7 @@ You are the installed resident agent.
                 mcp: Vec::new(),
                 hooks: Vec::new(),
                 extensions: Vec::new(),
-            }
+            }))
         };
         let bundles = vec![bundle("worker", AgentRole::Subagent, &[], model_policy)];
         Arc::new(to_agent_catalog(
@@ -11778,7 +11871,7 @@ You are the installed resident agent.
     async fn executable_spawn_resolution_captures_sidecar_factory_before_admission() {
         let workdir = tempdir();
         let engine = engine_with_catalog(Arc::new(to_agent_catalog(
-            BundleCatalog::from_prepared(&[materialized_bundle("executable")])
+            BundleCatalog::from_prepared(&agent_bundles([materialized_bundle("executable")]))
                 .expect("executable fixture catalog"),
         )))
         .await;
@@ -11874,7 +11967,8 @@ for line in sys.stdin:
         ];
         bundle.hooks.extend([before_hook, after_hook]);
         let catalog = Arc::new(to_agent_catalog(
-            BundleCatalog::from_prepared(&[bundle]).expect("activation hook fixture catalog"),
+            BundleCatalog::from_prepared(&agent_bundles([bundle]))
+                .expect("activation hook fixture catalog"),
         ));
         let runtime = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
         let turn_dir = tempdir();
@@ -11921,8 +12015,10 @@ for line in sys.stdin:
     #[tokio::test]
     async fn bundle_sidecar_hook_declarations_match_captured_selected_set() {
         let catalog = Arc::new(to_agent_catalog(
-            BundleCatalog::from_prepared(&[disjoint_materialized_bundle("selected-hooks")])
-                .expect("selected-hooks fixture catalog"),
+            BundleCatalog::from_prepared(&agent_bundles([disjoint_materialized_bundle(
+                "selected-hooks",
+            )]))
+            .expect("selected-hooks fixture catalog"),
         ));
         let runtime = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
         let turn_dir = tempdir();
@@ -11999,10 +12095,87 @@ for line in sys.stdin:
         );
     }
 
+    /// Sidecars must declare exactly the prepared Skills selected by their bound agent.
+    #[test]
+    fn bundle_sidecar_skill_declarations_match_captured_selected_set() {
+        let make_skill = |local_id: &str| {
+            let content = format!(
+                "---\nname: {local_id}\ndescription: {local_id} fixture\n---\n{local_id} body\n"
+            );
+            PreparedResource {
+                local_id: local_id.to_string(),
+                stable_id: format!("bundle:hya/materialized/skill/{local_id}"),
+                source_path: format!("resources/skills/{local_id}.md"),
+                digest: format!("{:x}", Sha256::digest(content.as_bytes())),
+                content,
+                aliases: Vec::new(),
+            }
+        };
+        let selected = make_skill("selected");
+        let unselected = make_skill("unselected");
+        let mut bundle = disjoint_materialized_bundle("selected-skills");
+        bundle
+            .agent
+            .resource_view
+            .allow
+            .push(selected.stable_id.clone());
+        bundle.skills = vec![selected.clone(), unselected.clone()];
+
+        let catalog = Arc::new(to_agent_catalog(
+            BundleCatalog::from_prepared(&agent_bundles([bundle]))
+                .expect("selected-skills fixture catalog"),
+        ));
+        let registry = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
+        let full_contributions = PluginContributionSet {
+            skills: [&selected, &unselected]
+                .into_iter()
+                .map(|resource| hya_plugin::SkillContribution {
+                    id: resource.local_id.clone(),
+                    content: resource.content.clone(),
+                    digest: resource.digest.clone(),
+                })
+                .collect(),
+            ..PluginContributionSet::default()
+        };
+        let source = crate::runtime_reconcile::prepared_static_bundle_source(
+            "hya/materialized",
+            &[selected.clone(), unselected.clone()],
+            &full_contributions,
+        )
+        .expect("prepare selected-skills runtime source")
+        .into_runtime_source();
+        registry
+            .refresh(|candidate| candidate.upsert_sources(vec![source]))
+            .expect("publish selected-skills runtime source");
+        let turn_dir = tempdir();
+        let binding = registry
+            .bind_turn(&turn_dir)
+            .expect("capture selected-skills turn binding");
+
+        let selected_contributions = PluginContributionSet {
+            skills: vec![hya_plugin::SkillContribution {
+                id: selected.local_id.clone(),
+                content: selected.content.clone(),
+                digest: selected.digest.clone(),
+            }],
+            ..PluginContributionSet::default()
+        };
+        assert!(validate_bundle_sidecar_skills(&binding, "alpha", &selected_contributions).is_ok());
+        assert!(
+            validate_bundle_sidecar_skills(&binding, "alpha", &full_contributions).is_err(),
+            "an unselected prepared Skill declaration must fail closed"
+        );
+        assert!(
+            validate_bundle_sidecar_skills(&binding, "alpha", &PluginContributionSet::default(),)
+                .is_err(),
+            "a missing selected Skill declaration must fail closed"
+        );
+    }
+
     #[tokio::test]
     async fn bundle_sidecar_handle_shutdown_reaps_child_and_removes_activation_staging() {
         let catalog = Arc::new(to_agent_catalog(
-            BundleCatalog::from_prepared(&[materialized_tool_bundle("shutdown")])
+            BundleCatalog::from_prepared(&agent_bundles([materialized_tool_bundle("shutdown")]))
                 .expect("shutdown fixture catalog"),
         ));
         let runtime = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
@@ -12072,8 +12245,10 @@ for line in sys.stdin:
     #[tokio::test]
     async fn bundle_sidecar_handle_drop_removes_activation_staging() {
         let catalog = Arc::new(to_agent_catalog(
-            BundleCatalog::from_prepared(&[materialized_tool_bundle("drop-cleanup")])
-                .expect("drop cleanup fixture catalog"),
+            BundleCatalog::from_prepared(&agent_bundles([materialized_tool_bundle(
+                "drop-cleanup",
+            )]))
+            .expect("drop cleanup fixture catalog"),
         ));
         let runtime = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
         let turn_dir = tempdir();
@@ -12136,8 +12311,10 @@ for line in sys.stdin:
     #[tokio::test]
     async fn bundle_sidecar_factory_start_cancellation_removes_activation_staging() {
         let catalog = Arc::new(to_agent_catalog(
-            BundleCatalog::from_prepared(&[materialized_tool_bundle("cancel-start")])
-                .expect("cancel-start fixture catalog"),
+            BundleCatalog::from_prepared(&agent_bundles([materialized_tool_bundle(
+                "cancel-start",
+            )]))
+            .expect("cancel-start fixture catalog"),
         ));
         let runtime = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
         let turn_dir = tempdir();
@@ -12225,7 +12402,7 @@ for line in sys.stdin:
     #[tokio::test]
     async fn bundle_sidecar_handle_exposes_transport_loss_token() {
         let catalog = Arc::new(to_agent_catalog(
-            BundleCatalog::from_prepared(&[materialized_tool_bundle("loss-token")])
+            BundleCatalog::from_prepared(&agent_bundles([materialized_tool_bundle("loss-token")]))
                 .expect("loss token fixture catalog"),
         ));
         let runtime = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
@@ -12342,9 +12519,9 @@ export default {
         let source = BundleSource::read_directory(&authoring_root)
             .expect("read directory-authored Bundle source");
         let prepared = prepare_package(source).expect("prepare directory-authored Bundle");
-        assert_eq!(prepared.bundles()[0].extensions.len(), 1);
+        assert_eq!(prepared.bundles()[0].extensions().len(), 1);
         assert_eq!(
-            prepared.bundles()[0].extensions[0].source_path,
+            prepared.bundles()[0].extensions()[0].source_path,
             "extensions/main.js"
         );
         let catalog = Arc::new(to_agent_catalog(
@@ -12419,7 +12596,8 @@ export default {
     async fn bundle_sidecar_factory_passes_materialized_extension_to_bun() {
         let bundle = materialized_bun_bundle("bun-extension");
         let catalog = Arc::new(to_agent_catalog(
-            BundleCatalog::from_prepared(&[bundle]).expect("Bun extension fixture catalog"),
+            BundleCatalog::from_prepared(&agent_bundles([bundle]))
+                .expect("Bun extension fixture catalog"),
         ));
         let runtime = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
         let turn_dir = tempdir();
@@ -12530,7 +12708,7 @@ export default {
         }
 
         let catalog = Arc::new(to_agent_catalog(
-            BundleCatalog::from_prepared(&bundles)
+            BundleCatalog::from_prepared(&agent_bundles(bundles))
                 .expect("disjoint Bun entrypoint fixture catalog"),
         ));
         let runtime = RuntimeRegistry::new(ToolRegistry::builtins(), Arc::clone(&catalog));
@@ -12661,7 +12839,8 @@ export default {
         );
 
         let catalog = Arc::new(to_agent_catalog(
-            BundleCatalog::from_prepared(&[bundle]).expect("generic Bun superset fixture catalog"),
+            BundleCatalog::from_prepared(&agent_bundles([bundle]))
+                .expect("generic Bun superset fixture catalog"),
         ));
         let runtime = RuntimeRegistry::new(ToolRegistry::builtins(), Arc::clone(&catalog));
         let turn_dir = tempdir();
@@ -12714,7 +12893,7 @@ export default {
     async fn transient_bun_bundle_runs_harness_tool_loop_and_reaps_sidecar() {
         let canonical = "bundle:hya/materialized/tool/echo";
         let catalog = Arc::new(to_agent_catalog(
-            BundleCatalog::from_prepared(&[materialized_bun_bundle("bun-e2e")])
+            BundleCatalog::from_prepared(&agent_bundles([materialized_bun_bundle("bun-e2e")]))
                 .expect("Bun E2E fixture catalog"),
         ));
         let provider = FakeProvider::scripted_turns(vec![
@@ -12949,7 +13128,8 @@ export default {
             .to_string(),
         );
         let catalog = Arc::new(to_agent_catalog(
-            BundleCatalog::from_prepared(&[bundle]).expect("root Bun hook fixture catalog"),
+            BundleCatalog::from_prepared(&agent_bundles([bundle]))
+                .expect("root Bun hook fixture catalog"),
         ));
         let provider = FakeProvider::scripted_turns(vec![
             vec![
@@ -13084,7 +13264,8 @@ export default {
             .to_string(),
         );
         let catalog = Arc::new(to_agent_catalog(
-            BundleCatalog::from_prepared(&[bundle]).expect("resident Bun fixture catalog"),
+            BundleCatalog::from_prepared(&agent_bundles([bundle]))
+                .expect("resident Bun fixture catalog"),
         ));
         let provider = FakeProvider::scripted_turns(vec![
             vec![
@@ -13341,7 +13522,8 @@ export default {
         let mut bundle = materialized_tool_bundle("bun-resident-loss");
         bundle.agent.spawn_lifecycle = SpawnLifecycle::Resident;
         let catalog = Arc::new(to_agent_catalog(
-            BundleCatalog::from_prepared(&[bundle]).expect("resident loss fixture catalog"),
+            BundleCatalog::from_prepared(&agent_bundles([bundle]))
+                .expect("resident loss fixture catalog"),
         ));
         let provider = FakeProvider::scripted_turns(vec![
             vec![
@@ -13563,8 +13745,10 @@ for line in sys.stdin:
         .expect("resident sidecar terminate cleanup must complete");
 
         let replacement = Arc::new(to_agent_catalog(
-            BundleCatalog::from_prepared(&[materialized_bundle("resident-replacement")])
-                .expect("replacement resident catalog"),
+            BundleCatalog::from_prepared(&agent_bundles([materialized_bundle(
+                "resident-replacement",
+            )]))
+            .expect("replacement resident catalog"),
         ));
         let replacement_generation = engine
             .runtime_registry()
@@ -13677,7 +13861,8 @@ for line in sys.stdin:
         let mut bundle = materialized_tool_bundle("bun-resident-running-loss");
         bundle.agent.spawn_lifecycle = SpawnLifecycle::Resident;
         let catalog = Arc::new(to_agent_catalog(
-            BundleCatalog::from_prepared(&[bundle]).expect("resident running loss fixture catalog"),
+            BundleCatalog::from_prepared(&agent_bundles([bundle]))
+                .expect("resident running loss fixture catalog"),
         ));
         let provider = FakeProvider::scripted_turns(vec![
             vec![
@@ -13908,8 +14093,10 @@ for line in sys.stdin:
             .await
             .expect("send queued resident running mail");
         let replacement = Arc::new(to_agent_catalog(
-            BundleCatalog::from_prepared(&[materialized_bundle("resident-running-replacement")])
-                .expect("replacement resident running catalog"),
+            BundleCatalog::from_prepared(&agent_bundles([materialized_bundle(
+                "resident-running-replacement",
+            )]))
+            .expect("replacement resident running catalog"),
         ));
         let replacement_generation = engine
             .runtime_registry()
@@ -14133,7 +14320,7 @@ for line in sys.stdin:
     #[tokio::test]
     async fn bundle_sidecar_rejects_task_context_hook_before_ack() {
         let catalog = Arc::new(to_agent_catalog(
-            BundleCatalog::from_prepared(&[materialized_bundle("unsupported-hook")])
+            BundleCatalog::from_prepared(&agent_bundles([materialized_bundle("unsupported-hook")]))
                 .expect("unsupported hook fixture catalog"),
         ));
         let runtime = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
@@ -14222,11 +14409,11 @@ for line in sys.stdin:
         }
     }
 
-    fn materialized_bundle(marker: &str) -> PreparedBundle {
+    fn materialized_bundle(marker: &str) -> PreparedAgentBundle {
         let mut resource_view = ResourceView::default();
         resource_view.allow.push("echo".to_string());
-        PreparedBundle {
-            format_version: 1,
+        PreparedAgentBundle {
+            format_version: 2,
             identity: BundleIdentity {
                 id: "hya/materialized".to_string(),
                 version: "0.0.0".to_string(),
@@ -14271,7 +14458,7 @@ for line in sys.stdin:
         }
     }
 
-    fn materialized_tool_bundle(marker: &str) -> PreparedBundle {
+    fn materialized_tool_bundle(marker: &str) -> PreparedAgentBundle {
         let mut bundle = materialized_bundle(marker);
         bundle.hooks.clear();
         bundle.agent.hook_refs.clear();
@@ -14280,7 +14467,7 @@ for line in sys.stdin:
 
     /// Two bundles with disjoint closures: `alpha` and `beta`, each owning its
     /// own tool, hook, and extension.
-    fn disjoint_materialized_bundles(marker: &str) -> Vec<PreparedBundle> {
+    fn disjoint_materialized_bundles(marker: &str) -> Vec<PreparedAgentBundle> {
         let alpha = disjoint_materialized_bundle(marker);
         let mut beta = alpha.clone();
         beta.identity.id = "hya/materialized-beta".to_string();
@@ -14317,7 +14504,7 @@ for line in sys.stdin:
         vec![alpha_only, beta]
     }
 
-    fn disjoint_materialized_bundle(marker: &str) -> PreparedBundle {
+    fn disjoint_materialized_bundle(marker: &str) -> PreparedAgentBundle {
         let alpha_path = "extensions/alpha.js";
         let beta_path = "extensions/beta.js";
         let alpha_tool = materialized_resource(marker, "tool", "echo", alpha_path);
@@ -14326,8 +14513,8 @@ for line in sys.stdin:
         let beta_tool = materialized_resource(marker, "tool", "beta", beta_path);
         let beta_hook = materialized_resource(marker, "hook", "tool.execute.before", beta_path);
         let beta_extension = materialized_resource(marker, "extension", "beta", beta_path);
-        PreparedBundle {
-            format_version: 1,
+        PreparedAgentBundle {
+            format_version: 2,
             identity: BundleIdentity {
                 id: "hya/materialized".to_string(),
                 version: "0.0.0".to_string(),
@@ -14384,7 +14571,7 @@ for line in sys.stdin:
         selector.extensions.clear();
 
         Arc::new(to_agent_catalog(
-            BundleCatalog::from_prepared(&[selector, owner])
+            BundleCatalog::from_prepared(&agent_bundles([selector, owner]))
                 .expect("cross-bundle materialization fixture catalog"),
         ))
     }
@@ -14410,7 +14597,7 @@ for line in sys.stdin:
         assert_eq!(reference, "bundle:hya/materialized/tool/echo");
     }
 
-    fn set_materialized_extension_content(bundle: &mut PreparedBundle, content: String) {
+    fn set_materialized_extension_content(bundle: &mut PreparedAgentBundle, content: String) {
         let digest = format!(
             "materialized-content-{:x}",
             Sha256::digest(content.as_bytes())
@@ -14427,7 +14614,7 @@ for line in sys.stdin:
     }
 
     fn set_materialized_extension_content_for_path(
-        bundle: &mut PreparedBundle,
+        bundle: &mut PreparedAgentBundle,
         source_path: &str,
         content: String,
     ) {
@@ -14448,7 +14635,7 @@ for line in sys.stdin:
         }
     }
 
-    fn materialized_bun_bundle(marker: &str) -> PreparedBundle {
+    fn materialized_bun_bundle(marker: &str) -> PreparedAgentBundle {
         let mut bundle = materialized_tool_bundle(marker);
         set_materialized_extension_content(
             &mut bundle,
@@ -14483,11 +14670,11 @@ export default {
     #[test]
     fn sidecar_resources_materialize_from_captured_turn_binding() {
         let old_catalog = Arc::new(to_agent_catalog(
-            BundleCatalog::from_prepared(&[materialized_bundle("old")])
+            BundleCatalog::from_prepared(&agent_bundles([materialized_bundle("old")]))
                 .expect("old fixture catalog"),
         ));
         let new_catalog = Arc::new(to_agent_catalog(
-            BundleCatalog::from_prepared(&[materialized_bundle("new")])
+            BundleCatalog::from_prepared(&agent_bundles([materialized_bundle("new")]))
                 .expect("new fixture catalog"),
         ));
         let runtime = RuntimeRegistry::new(ToolRegistry::builtins(), Arc::clone(&old_catalog));
@@ -14532,11 +14719,11 @@ export default {
     #[test]
     fn sidecar_materialization_uses_only_captured_agent_selected_closure() {
         let old_catalog = Arc::new(to_agent_catalog(
-            BundleCatalog::from_prepared(&disjoint_materialized_bundles("old"))
+            BundleCatalog::from_prepared(&agent_bundles(disjoint_materialized_bundles("old")))
                 .expect("old disjoint fixture catalog"),
         ));
         let new_catalog = Arc::new(to_agent_catalog(
-            BundleCatalog::from_prepared(&disjoint_materialized_bundles("new"))
+            BundleCatalog::from_prepared(&agent_bundles(disjoint_materialized_bundles("new")))
                 .expect("new disjoint fixture catalog"),
         ));
         let runtime = RuntimeRegistry::new(ToolRegistry::builtins(), Arc::clone(&old_catalog));
@@ -14618,7 +14805,7 @@ export default {
         bundle.extensions[1].stable_id = "bundle:hya/materialized/extension/alpha".to_string();
 
         let catalog = Arc::new(to_agent_catalog(
-            BundleCatalog::from_prepared(&[bundle])
+            BundleCatalog::from_prepared(&agent_bundles([bundle]))
                 .expect("ordered materialization fixture catalog"),
         ));
         let runtime = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
@@ -14654,13 +14841,14 @@ export default {
     #[tokio::test]
     async fn bundle_sidecar_tool_declaration_binds_canonical_captured_resource() {
         let old_catalog = Arc::new(to_agent_catalog(
-            BundleCatalog::from_prepared(&[materialized_bundle("old")])
+            BundleCatalog::from_prepared(&agent_bundles([materialized_bundle("old")]))
                 .expect("old fixture catalog"),
         ));
         let mut new_bundle = materialized_bundle("new");
         new_bundle.tools.clear();
         let new_catalog = Arc::new(to_agent_catalog(
-            BundleCatalog::from_prepared(&[new_bundle]).expect("new fixture catalog"),
+            BundleCatalog::from_prepared(&agent_bundles([new_bundle]))
+                .expect("new fixture catalog"),
         ));
         let runtime = RuntimeRegistry::new(ToolRegistry::builtins(), Arc::clone(&old_catalog));
         let turn_dir = tempdir();
@@ -14694,8 +14882,10 @@ export default {
     #[tokio::test]
     async fn bundle_sidecar_tool_declarations_match_captured_selected_set() {
         let catalog = Arc::new(to_agent_catalog(
-            BundleCatalog::from_prepared(&[disjoint_materialized_bundle("selected-tools")])
-                .expect("selected-tools fixture catalog"),
+            BundleCatalog::from_prepared(&agent_bundles([disjoint_materialized_bundle(
+                "selected-tools",
+            )]))
+            .expect("selected-tools fixture catalog"),
         ));
         let runtime = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
         let turn_dir = tempdir();
@@ -14752,7 +14942,7 @@ export default {
         bundle.agent.hook_refs = selected_hook_ids;
 
         let catalog = Arc::new(to_agent_catalog(
-            BundleCatalog::from_prepared(&[bundle])
+            BundleCatalog::from_prepared(&agent_bundles([bundle]))
                 .expect("order-independent declaration fixture catalog"),
         ));
         let runtime = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
@@ -14810,7 +15000,8 @@ export default {
         bundle.tools.clear();
         bundle.agent.resource_view = ResourceView::default();
         let catalog = Arc::new(to_agent_catalog(
-            BundleCatalog::from_prepared(&[bundle]).expect("hook-only fixture catalog"),
+            BundleCatalog::from_prepared(&agent_bundles([bundle]))
+                .expect("hook-only fixture catalog"),
         ));
         let runtime = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
         let turn_dir = tempdir();
@@ -14955,7 +15146,7 @@ export default {
         };
 
         let catalog = Arc::new(to_agent_catalog(
-            BundleCatalog::from_prepared(&[lead_bundle, worker_bundle])
+            BundleCatalog::from_prepared(&agent_bundles([lead_bundle, worker_bundle]))
                 .expect("selected-agent fixture catalog"),
         ));
         let runtime = RuntimeRegistry::new(ToolRegistry::builtins(), catalog);
@@ -14994,7 +15185,7 @@ export default {
     #[test]
     fn executable_bundle_builds_bound_sidecar_factory_while_static_bundle_stays_process_free() {
         let executable_catalog = Arc::new(to_agent_catalog(
-            BundleCatalog::from_prepared(&[materialized_bundle("executable")])
+            BundleCatalog::from_prepared(&agent_bundles([materialized_bundle("executable")]))
                 .expect("executable fixture catalog"),
         ));
         let executable_runtime = RuntimeRegistry::new(ToolRegistry::builtins(), executable_catalog);
@@ -15022,7 +15213,8 @@ export default {
         static_bundle.agent.hook_refs.clear();
         static_bundle.agent.resource_view = ResourceView::default();
         let static_catalog = Arc::new(to_agent_catalog(
-            BundleCatalog::from_prepared(&[static_bundle]).expect("static fixture catalog"),
+            BundleCatalog::from_prepared(&agent_bundles([static_bundle]))
+                .expect("static fixture catalog"),
         ));
         let static_runtime = RuntimeRegistry::new(ToolRegistry::builtins(), static_catalog);
         let static_turn_dir = tempdir();
@@ -15106,8 +15298,8 @@ export default {
         let _env = StableEnvGuard::acquire();
         let make_bundle = |stable_id: &str, can_spawn: &[&str]| {
             let can_spawn: Vec<_> = can_spawn.iter().map(|id| AgentName::new(*id)).collect();
-            PreparedBundle {
-                format_version: 1,
+            PreparedAgentBundle {
+                format_version: 2,
                 identity: BundleIdentity {
                     id: format!("hya/workflow-roster-{stable_id}"),
                     version: "0.0.0".to_string(),
@@ -15138,7 +15330,7 @@ export default {
         };
         async fn stage_stack(
             scripts: Vec<Vec<FakeStep>>,
-            bundles: &[PreparedBundle],
+            bundles: &[PreparedAgentBundle],
             workdir: &std::path::Path,
         ) -> (
             Arc<SessionEngine>,
@@ -15148,8 +15340,9 @@ export default {
         ) {
             let provider = Arc::new(FakeProvider::scripted_turns(scripts));
             let router = Arc::new(ProviderRouter::new().with(provider));
+            let bundles = agent_bundles(bundles.iter().cloned());
             let catalog = Arc::new(to_agent_catalog(
-                BundleCatalog::from_prepared(bundles).expect("valid workflow roster bundles"),
+                BundleCatalog::from_prepared(&bundles).expect("valid workflow roster bundles"),
             ));
             let runtime = Arc::new(RuntimeRegistry::from_snapshot(
                 ToolRegistry::builtins().snapshot(),
@@ -15328,9 +15521,12 @@ flowchart TD
                 make_bundle("isolated_worker", &[]),
                 make_bundle("delegating_worker", &["general"]),
             ];
-            let catalog =
+            let bundles = agent_bundles(bundles);
+            let bundles =
                 BundleCatalog::from_prepared(&bundles).expect("valid workflow roster bundles");
-            let catalog = Arc::new(to_agent_catalog(catalog));
+            let catalog = Arc::new(
+                AgentCatalog::new(Arc::new(bundles)).expect("valid workflow roster catalog"),
+            );
             let runtime = Arc::new(RuntimeRegistry::from_snapshot(
                 ToolRegistry::builtins().snapshot(),
                 catalog,

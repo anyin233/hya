@@ -35,10 +35,12 @@ pub(crate) async fn cmd_serve(
         .take_questions()
         .ok_or_else(|| anyhow::anyhow!("questions receiver missing"))?;
     let mcp_control = built.mcp_control();
+    let workflow_control = Arc::new(built.workflow_control());
     let plugin_host = built.plugin_host();
     let mut state = AppState::new(engine, agent)
         .with_question_requests(questions)
         .with_mcp_control(mcp_control)
+        .with_workflow_control(workflow_control)
         .with_workspace_adapters(plugin_host.workspace_adapters())
         .with_default_agent(runtime.default_agent.clone());
     if yolo {
@@ -175,10 +177,12 @@ pub(crate) async fn cmd_tui_hya(
         .take_questions()
         .ok_or_else(|| anyhow::anyhow!("questions receiver missing"))?;
     let mcp_control = built.mcp_control();
+    let workflow_control = Arc::new(built.workflow_control());
     let plugin_host = built.plugin_host();
     let mut state = AppState::new(engine, agent)
         .with_question_requests(questions)
         .with_mcp_control(mcp_control)
+        .with_workflow_control(workflow_control)
         .with_workspace_adapters(plugin_host.workspace_adapters())
         .with_default_agent(runtime.default_agent.clone());
     if yolo {

@@ -3,13 +3,13 @@
 use std::str::FromStr;
 use std::time::Duration;
 
-use hya_bundle::{BundleCatalog, PreparedBundle, PreparedCatalog};
+use hya_bundle::{BundleCatalog, PreparedCatalog, PreparedInstallableBundle};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use sqlx::{Row, Sqlite, Transaction};
 
 use crate::StoreError;
 
-/// SQLite registry of installed AgentBundles and generation counter.
+/// SQLite registry of installed bundles and generation counter.
 #[derive(Clone, Debug)]
 pub struct BundleRegistry {
     pool: sqlx::SqlitePool,
@@ -52,7 +52,7 @@ struct LoadedBundleRegistrySnapshot {
 #[derive(Debug)]
 struct LoadedBundleRegistryRecord {
     record: BundleRegistryRecord,
-    prepared: PreparedBundle,
+    prepared: PreparedInstallableBundle,
 }
 
 impl LoadedBundleRegistrySnapshot {
@@ -175,9 +175,9 @@ impl BundleRegistry {
     /// Validate the candidate against the installed catalog, then insert or
     /// replace under an immediate lock.
     ///
-    /// `reserved_agent_ids` are the compiled-in built-in agent ids. A bundle
-    /// that claims one is rejected here rather than at catalog publish time, so
-    /// the operator sees the failure at install.
+    /// `reserved_agent_ids` are the compiled-in built-in Agent ids. A bundle
+    /// that claims any one in its complete Agent closure is rejected here rather
+    /// than at catalog publish time, so the operator sees the failure at install.
     pub async fn install(
         &self,
         reserved_agent_ids: &[&str],
@@ -196,15 +196,18 @@ impl BundleRegistry {
             ));
         };
         let incoming = incoming.clone();
-        let bundle_id = incoming.identity.id.clone();
-        if reserved_agent_ids.contains(&incoming.agent.id.as_str()) {
-            return Err(StoreError::BundleAgentIdReserved {
-                bundle_id,
-                agent_id: incoming.agent.id.as_str().to_string(),
-            });
+        let identity = incoming.identity();
+        let bundle_id = identity.id.clone();
+        for agent in incoming.agents() {
+            if reserved_agent_ids.contains(&agent.id.as_str()) {
+                return Err(StoreError::BundleAgentIdReserved {
+                    bundle_id,
+                    agent_id: agent.id.as_str().to_string(),
+                });
+            }
         }
-        let version = incoming.identity.version.clone();
-        let publisher = incoming.identity.publisher.clone();
+        let version = identity.version.clone();
+        let publisher = identity.publisher.clone();
 
         let mut transaction = self
             .pool
@@ -383,9 +386,10 @@ impl BundleRegistry {
                     bundle_id: record.bundle_id.clone(),
                 });
             };
-            if prepared_bundle.identity.id.as_str() != record.bundle_id.as_str()
-                || prepared_bundle.identity.version.as_str() != record.version.as_str()
-                || prepared_bundle.identity.publisher.as_str() != record.publisher.as_str()
+            let identity = prepared_bundle.identity();
+            if identity.id.as_str() != record.bundle_id.as_str()
+                || identity.version.as_str() != record.version.as_str()
+                || identity.publisher.as_str() != record.publisher.as_str()
             {
                 return Err(StoreError::BundleRegistryCorrupt {
                     bundle_id: record.bundle_id.clone(),

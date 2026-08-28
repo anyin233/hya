@@ -769,7 +769,7 @@ impl SessionEngine {
         });
     }
 
-    fn publish_envelope(&self, envelope: Envelope) {
+    pub(crate) fn publish_envelope(&self, envelope: Envelope) {
         if let Some(hooks) = &self.hooks {
             hooks.dispatch_event(&envelope);
         }

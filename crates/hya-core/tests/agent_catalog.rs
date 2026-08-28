@@ -9,15 +9,15 @@ use std::sync::Arc;
 
 use hya_bundle::{
     AgentRole, BundleCatalog, BundleError, BundleIdentity, ModelPolicy, PreparedAgent,
-    PreparedBundle, ResourceView, SpawnLifecycle,
+    PreparedAgentBundle, PreparedInstallableBundle, ResourceView, SpawnLifecycle,
 };
 use hya_core::{AgentCatalog, AgentOrigin};
 use hya_proto::AgentName;
 
 /// One installed bundle holding one agent with the given spawn graph.
-fn installed(bundle_id: &str, agent_id: &str, can_spawn: &[&str]) -> PreparedBundle {
-    PreparedBundle {
-        format_version: 1,
+fn installed(bundle_id: &str, agent_id: &str, can_spawn: &[&str]) -> PreparedInstallableBundle {
+    PreparedInstallableBundle::Agent(Box::new(PreparedAgentBundle {
+        format_version: 2,
         identity: BundleIdentity {
             id: bundle_id.to_string(),
             version: "1.0.0".to_string(),
@@ -44,10 +44,10 @@ fn installed(bundle_id: &str, agent_id: &str, can_spawn: &[&str]) -> PreparedBun
         mcp: Vec::new(),
         hooks: Vec::new(),
         extensions: Vec::new(),
-    }
+    }))
 }
 
-fn catalog(bundles: &[PreparedBundle]) -> AgentCatalog {
+fn catalog(bundles: &[PreparedInstallableBundle]) -> AgentCatalog {
     let bundles = BundleCatalog::from_prepared(bundles).expect("bundle catalog");
     AgentCatalog::new(Arc::new(bundles)).expect("agent catalog")
 }

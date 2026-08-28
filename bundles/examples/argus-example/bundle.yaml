@@ -1,0 +1,49 @@
+kind: WorkflowBundle
+identity:
+  id: hya/argus-example
+  version: 1.0.0
+  publisher: hya
+workflow:
+  id: argus
+  path: workflows/argus.hya.md
+agents:
+  - id: argus-investigator
+    role: subagent
+    prompt: prompts/investigator.md
+    spawn_lifecycle: transient
+  - id: argus-planner
+    role: subagent
+    prompt: prompts/planner.md
+    spawn_lifecycle: transient
+  - id: argus-implementer
+    role: subagent
+    prompt: prompts/implementer.md
+    spawn_lifecycle: transient
+  - id: argus-test-engineer
+    role: subagent
+    prompt: prompts/test-engineer.md
+    spawn_lifecycle: transient
+  - id: argus-architecture-reviewer
+    role: subagent
+    prompt: prompts/architecture-reviewer.md
+    spawn_lifecycle: transient
+  - id: argus-quality-reviewer
+    role: subagent
+    prompt: prompts/quality-reviewer.md
+    spawn_lifecycle: transient
+  - id: argus-synthesizer
+    role: subagent
+    prompt: prompts/synthesizer.md
+    spawn_lifecycle: transient
+  - id: argus-behavior-verifier
+    role: subagent
+    prompt: prompts/behavior-verifier.md
+    spawn_lifecycle: transient
+  - id: argus-scope-verifier
+    role: subagent
+    prompt: prompts/scope-verifier.md
+    spawn_lifecycle: transient
+  - id: argus-final-verifier
+    role: subagent
+    prompt: prompts/final-verifier.md
+    spawn_lifecycle: transient

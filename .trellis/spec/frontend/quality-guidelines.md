@@ -212,3 +212,88 @@ summary: string(input.summary, `${path}.summary`),
 ```typescript
 summary: optionalString(input.summary, `${path}.summary`) ?? "",
 ```
+
+---
+
+## Scenario: Returning from a subagent observation hydrates pending interactions
+
+### 1. Scope / Trigger
+
+- Trigger: changes to read-only subagent panes, Main-pane focus ownership,
+  descendant Permission or Question presentation, or global event recovery.
+
+### 2. Signatures
+
+- `focusMainPromptOwnership(...)` synchronously focuses the Main workspace and
+  prompt.
+- `sdk.client.permission.list()` and `sdk.client.question.list()` return the
+  current pending interactions across Sessions.
+- `sync.set("permission" | "question", sessionID, rows)` updates the existing
+  synchronized stores used by the Session route.
+
+### 3. Contracts
+
+- A subagent observation is read-only. Pending descendant interactions render
+  only after focus returns to Main.
+- Escape transfers focus first, then performs one hydration through the existing
+  SDK and sync context. SSE remains the primary live path; this hydration is not
+  a timer, poller, or second client.
+- Filter hydrated rows to Session ids in the current run tree. Unrelated Session
+  interactions must not enter the owning Session prompt.
+- If the run tree is unavailable, focus still returns to Main without an
+  interaction request. A failed hydration keeps existing state and reports a
+  contextual error toast.
+
+### 4. Validation & Error Matrix
+
+- Descendant Permission pending after observation -> Main renders the Permission
+  prompt after Escape.
+- Descendant Question pending after observation -> Main renders the Question
+  prompt after Escape.
+- Interaction belongs to another tree -> exclude it.
+- Missing run tree -> focus Main; make no hydration request.
+- Permission or Question list failure -> preserve current state and show an
+  error; never leave the observation focused.
+
+### 5. Good / Base / Bad Cases
+
+- Good: a long-lived SSE connection reconnects or misses an event; Escape from a
+  grandchild observation hydrates the still-pending Permission and renders it in
+  Main.
+- Base: SSE already populated the stores; hydration replaces them with the same
+  server state.
+- Bad: type a marker immediately after Escape before Main focus is observable,
+  or render a descendant prompt while its observation pane still owns focus.
+
+### 6. Tests Required
+
+- Unit: Main focus dispatch precedes prompt focus and does not steal focus from
+  a modal.
+- PTY at 80 and 120 columns: observation input stays inert; Escape restores the
+  Main draft; a descendant Permission remains pending, renders in Main, and can
+  be answered exactly once.
+- The PTY must wait for Main-focus evidence before sending the next semantic
+  input; time sleeps alone do not prove terminal focus ownership.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```typescript
+await writeInput(escapeKey)
+await writeInput(marker)
+```
+
+This races terminal focus transfer and can send the marker to the read-only
+observation.
+
+#### Correct
+
+```typescript
+await writeInput(escapeKey)
+await waitForMain(start, "Main focus")
+await writeInput(marker)
+```
+
+The Session route follows the same order: transfer focus synchronously, then
+hydrate pending descendant interactions through the existing SDK/sync state.

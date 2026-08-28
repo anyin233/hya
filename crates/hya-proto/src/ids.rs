@@ -313,11 +313,9 @@ impl ActorEpoch {
     }
 }
 
-/// Per-process diagnostic identity for resident claim ownership.
-///
-/// This type is intentionally not serializable: it is an internal execution
-/// capability component, not part of the public event or API wire protocol.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+/// Per-process diagnostic identity for runtime ownership and recovery fences.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct OwnerRunId(
     /// Random per-process owner UUID.
     Uuid,
@@ -360,12 +358,13 @@ pub struct ActorClaim {
     pub owner_run_id: OwnerRunId,
 }
 
-/// Internal durable-admission identity derived from the persisted tool call.
+/// Durable operation identity derived from the persisted tool call.
 ///
-/// The fixed namespace separates admission identities from every other UUID
+/// The fixed namespace separates operation identities from every other UUID
 /// domain. There is exactly one operation identity for a given tool call; it
 /// is never minted independently.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct OperationId(
     /// Namespace-derived UUID for this tool-call operation.
     Uuid,
@@ -405,10 +404,28 @@ impl std::fmt::Display for OperationId {
 
 uuid_id!(TeamRunId, "team", "Team-run identity (`team_` + UUIDv7).");
 uuid_id!(
+    WorkflowRunId,
+    "wfrun",
+    "Durable Workflow run identity (`wfrun_` + UUIDv7)."
+);
+uuid_id!(
     MemberId,
     "mbr",
     "Subagent member id on a parent log (`mbr_` + UUIDv7)."
 );
+
+const WORKFLOW_RUN_ID_NAMESPACE: Uuid = Uuid::from_u128(0x19aa_6124_335d_54fb_b7e1_c271_82d6_6638);
+
+impl WorkflowRunId {
+    /// Derive the single durable Workflow run id for one Tool operation.
+    #[must_use]
+    pub fn from_operation(operation: OperationId) -> Self {
+        Self::from_uuid(Uuid::new_v5(
+            &WORKFLOW_RUN_ID_NAMESPACE,
+            operation.as_uuid().as_bytes(),
+        ))
+    }
+}
 uuid_id!(GoalId, "goal", "Goal-mode run id (`goal_` + UUIDv7).");
 uuid_id!(LoopRunId, "loop", "Loop-mode run id (`loop_` + UUIDv7).");
 uuid_id!(

@@ -36,8 +36,8 @@ placeholders, and could admit work before the complete run cost was known.
 ## Consequences
 
 - Authors see one graph language and one validation result before execution.
-- The compiler, not author declaration order, owns deterministic Stage and join
-  ordering.
+- Graph declaration order, normalized by the compiler, owns deterministic Stage
+  and join ordering; YAML map order does not.
 - Source-format changes do not add a second scheduler or Projection.
 - Full child transcripts remain in child Sessions; joins receive capped direct
   predecessor evidence only.

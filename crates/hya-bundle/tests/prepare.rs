@@ -30,6 +30,164 @@ agent:
     BundleSource::new(root, files)
 }
 
+/// Build one minimal WorkflowBundle source with an optional unreachable Agent.
+fn workflow_source(include_orphan: bool) -> BundleSource {
+    let manifest = format!(
+        r#"kind: WorkflowBundle
+identity:
+  id: hya/workflow-demo
+  version: 1.0.0
+  publisher: hya
+workflow:
+  id: demo
+  path: workflows/demo.hya.md
+agents:
+  - id: worker
+    role: subagent
+    prompt: prompts/worker.md
+    spawn_lifecycle: transient
+{}
+"#,
+        if include_orphan {
+            "  - id: orphan\n    role: subagent\n    prompt: prompts/orphan.md\n    spawn_lifecycle: transient"
+        } else {
+            ""
+        }
+    );
+    let workflow = br#"---
+kind: Workflow
+name: demo
+description: One packaged Workflow.
+nodes:
+  execute:
+    agent: worker
+    directive: Execute the request.
+---
+flowchart TD
+  execute
+"#;
+    let mut files = vec![
+        SourceFile::new("bundle.yaml", manifest.into_bytes()),
+        SourceFile::new("workflows/demo.hya.md", workflow.to_vec()),
+        SourceFile::new("prompts/worker.md", b"Execute carefully.\n".to_vec()),
+    ];
+    if include_orphan {
+        files.push(SourceFile::new(
+            "prompts/orphan.md",
+            b"This Agent is unreachable.\n".to_vec(),
+        ));
+    }
+    BundleSource::new("workflow-source", files)
+}
+
+/// Build a WorkflowBundle whose compiled stage points at the requested Agent.
+fn workflow_source_with_stage_agent(stage_agent: &str) -> BundleSource {
+    let manifest = br#"kind: WorkflowBundle
+identity:
+  id: hya/workflow-missing-agent
+  version: 1.0.0
+  publisher: hya
+workflow:
+  id: demo
+  path: workflows/demo.hya.md
+agents:
+  - id: worker
+    role: subagent
+    prompt: prompts/worker.md
+    spawn_lifecycle: transient
+"#;
+    let workflow = format!(
+        r#"---
+kind: Workflow
+name: demo
+description: Missing Agent Workflow.
+nodes:
+  execute:
+    agent: {stage_agent}
+    directive: Execute the request.
+---
+flowchart TD
+  execute
+"#
+    );
+    BundleSource::new(
+        "workflow-missing-agent",
+        vec![
+            SourceFile::new("bundle.yaml", manifest.as_slice()),
+            SourceFile::new("workflows/demo.hya.md", workflow.into_bytes()),
+            SourceFile::new("prompts/worker.md", b"Execute carefully.".as_slice()),
+        ],
+    )
+}
+
+/// Build a WorkflowBundle with a verifier and a transitive Agent spawn edge.
+fn workflow_source_with_verifier_closure(
+    include_verifier: bool,
+    include_helper: bool,
+) -> BundleSource {
+    let verifier = include_verifier.then_some(
+        "  - id: verifier\n    role: subagent\n    prompt: prompts/verifier.md\n    spawn_lifecycle: transient\n",
+    );
+    let helper = include_helper.then_some(
+        "  - id: helper\n    role: subagent\n    prompt: prompts/helper.md\n    spawn_lifecycle: transient\n",
+    );
+    let manifest = format!(
+        r#"kind: WorkflowBundle
+identity:
+  id: hya/workflow-closure
+  version: 1.0.0
+  publisher: hya
+workflow:
+  id: closure
+  path: workflows/closure.hya.md
+agents:
+  - id: worker
+    role: subagent
+    prompt: prompts/worker.md
+    spawn_lifecycle: transient
+    can_spawn:
+      - helper
+{}{}"#,
+        verifier.unwrap_or_default(),
+        helper.unwrap_or_default(),
+    );
+    let workflow = br#"---
+kind: Workflow
+name: closure
+description: Verifier and helper Workflow.
+nodes:
+  execute:
+    agent: worker
+    directive: Execute the request.
+    mode: loop
+    verify:
+      agent: verifier
+      until: the result is valid
+      max_iterations: 2
+---
+flowchart TD
+  execute
+"#;
+    let mut files = vec![
+        SourceFile::new("bundle.yaml", manifest.into_bytes()),
+        SourceFile::new("workflows/closure.hya.md", workflow.as_slice()),
+        SourceFile::new("prompts/worker.md", b"Execute carefully.".as_slice()),
+    ];
+    if include_verifier {
+        files.push(SourceFile::new(
+            "prompts/verifier.md",
+            b"Verify the result.".as_slice(),
+        ));
+    }
+    if include_helper {
+        files.push(SourceFile::new(
+            "prompts/helper.md",
+            b"Help the worker.".as_slice(),
+        ));
+    }
+    BundleSource::new("workflow-closure", files)
+}
+
 fn digest(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     let mut encoded = String::with_capacity(digest.len() * 2);
@@ -87,6 +245,31 @@ fn deterministic_prepare_is_independent_of_source_file_order() {
             .collect::<Vec<_>>(),
         ["hya/alpha"]
     );
+}
+
+/// WorkflowBundle preparation emits canonical v2 bytes with one closed payload kind.
+#[test]
+fn workflow_bundle_prepares_compiled_agent_closure_as_v2() {
+    let prepared = prepare_package(workflow_source(false));
+    let Ok(prepared) = prepared else {
+        panic!("WorkflowBundle preparation failed: {prepared:?}");
+    };
+    let document = serde_json::from_slice::<serde_json::Value>(prepared.bytes());
+    let Ok(document) = document else {
+        panic!("prepared WorkflowBundle was not JSON: {document:?}");
+    };
+
+    assert_eq!(document["format_version"], 2);
+    assert_eq!(document["bundles"][0]["kind"], "WorkflowBundle");
+    assert_eq!(document["bundles"][0]["workflow"]["id"], "demo");
+    assert_eq!(document["bundles"][0]["agents"][0]["id"], "worker");
+}
+
+/// WorkflowBundle preparation rejects Agents outside the compiled reachable closure.
+#[test]
+fn workflow_bundle_rejects_unreachable_extra_agent() {
+    let rejected = prepare_package(workflow_source(true));
+    assert!(rejected.is_err(), "unreachable Agent must fail preparation");
 }
 
 #[test]
@@ -152,7 +335,7 @@ fn prepared_decode_rejects_internally_consistent_noncanonical_vectors() {
     let bundle_digest = digest(&digest_input);
     bundle["digest"] = serde_json::Value::String(bundle_digest.clone());
     document["index"][0]["digest"] = serde_json::Value::String(bundle_digest);
-    document["index"][0]["stable_agent_id"] = serde_json::json!("alpha");
+    document["index"][0]["agent_ids"] = serde_json::json!(["alpha"]);
 
     let bytes = serde_json::to_vec(&document);
     let Ok(bytes) = bytes else {
@@ -482,7 +665,7 @@ fn normalized_source_paths_produce_identical_prepared_content() {
     assert_eq!(canonical.bytes(), dotted.bytes());
     assert_eq!(canonical.digest(), dotted.digest());
     assert_eq!(
-        canonical.bundles()[0].skills[0].source_path,
+        canonical.bundles()[0].skills()[0].source_path,
         "resources/skills/docs.md"
     );
 }
@@ -500,7 +683,92 @@ fn build_time_directory_reader_feeds_the_same_preparer() {
     };
     assert_eq!(prepared.index()[0].bundle_id, "hya/directory-fixture");
     assert_eq!(
-        prepared.bundles()[0].agent.prompt.as_deref(),
-        Some("You are the directory fixture.")
+        prepared.bundles()[0].agents()[0].prompt.as_deref(),
+        Some("You are the directory fixture."),
+    );
+}
+
+#[test]
+fn workflow_bundle_rejects_missing_stage_agent_with_typed_error() {
+    let result = prepare_package(workflow_source_with_stage_agent("missing"));
+    assert_eq!(
+        result.err(),
+        Some(BundleError::WorkflowAgentMissing {
+            bundle_id: "hya/workflow-missing-agent".to_string(),
+            agent_id: "missing".to_string(),
+            reference: "stage:execute".to_string(),
+        })
+    );
+}
+
+/// Reserved built-in ids cannot stand in for packaged Workflow closure members.
+#[test]
+fn workflow_bundle_rejects_reserved_builtin_stage_agent_as_missing_closure() {
+    let result = prepare_package(workflow_source_with_stage_agent("general"));
+    assert_eq!(
+        result.err(),
+        Some(BundleError::WorkflowAgentMissing {
+            bundle_id: "hya/workflow-missing-agent".to_string(),
+            agent_id: "general".to_string(),
+            reference: "stage:execute".to_string(),
+        })
+    );
+}
+
+/// A loop verifier is part of the exact Workflow Agent closure.
+#[test]
+fn workflow_bundle_rejects_missing_verifier_agent_with_typed_error() {
+    let result = prepare_package(workflow_source_with_verifier_closure(false, true));
+    assert_eq!(
+        result.err(),
+        Some(BundleError::WorkflowAgentMissing {
+            bundle_id: "hya/workflow-closure".to_string(),
+            agent_id: "verifier".to_string(),
+            reference: "verifier:execute".to_string(),
+        })
+    );
+}
+
+/// Recursive `can_spawn` targets are part of the exact Workflow Agent closure.
+#[test]
+fn workflow_bundle_rejects_missing_transitive_spawn_agent_with_typed_error() {
+    let result = prepare_package(workflow_source_with_verifier_closure(true, false));
+    assert_eq!(
+        result.err(),
+        Some(BundleError::WorkflowAgentMissing {
+            bundle_id: "hya/workflow-closure".to_string(),
+            agent_id: "helper".to_string(),
+            reference: "agent:worker".to_string(),
+        })
+    );
+}
+
+#[test]
+fn prepared_catalog_rejects_v1_bytes_without_upgrading_them() {
+    let bytes = br#"{"format_version":1,"bundles":[],"index":[]}"#;
+    let result = PreparedCatalog::decode(bytes, &digest(bytes));
+    assert_eq!(result.err(), Some(BundleError::NonCanonicalPreparedCatalog));
+}
+
+#[test]
+fn workflow_bundle_packages_stage_verifier_and_transitive_helper_agents() {
+    let prepared = prepare_package(workflow_source_with_verifier_closure(true, true));
+    let Ok(prepared) = prepared else {
+        panic!("Workflow closure preparation failed: {prepared:?}");
+    };
+    let [bundle] = prepared.bundles() else {
+        panic!("Workflow closure must prepare one bundle");
+    };
+    assert_eq!(
+        bundle
+            .agents()
+            .iter()
+            .map(|agent| agent.id.as_str())
+            .collect::<Vec<_>>(),
+        ["helper", "verifier", "worker"]
+    );
+    assert_eq!(
+        bundle.workflow().map(|workflow| workflow.id.as_str()),
+        Some("closure")
     );
 }

@@ -90,7 +90,7 @@ fn can_spawn_targets_are_recorded_verbatim_and_resolved_later() {
     let Ok(prepared) = prepared else {
         panic!("unresolved can_spawn target must still prepare: {prepared:?}");
     };
-    let lead = &prepared.bundles()[0].agent;
+    let lead = &prepared.bundles()[0].agents()[0];
     assert_eq!(
         lead.can_spawn
             .iter()
@@ -226,7 +226,7 @@ agent:
         panic!("valid resource view failed: {prepared:?}");
     };
 
-    let view = &prepared.bundles()[0].agent.resource_view;
+    let view = &prepared.bundles()[0].agents()[0].resource_view;
     assert_eq!(view.allow, ["bundle:hya/canonical-view/skill/docs"]);
     assert_eq!(view.deny, ["bundle:hya/canonical-view/skill/docs"]);
 }
@@ -383,8 +383,8 @@ agent:
         panic!("exact-path resource reuse was rejected: {positive:?}");
     };
     let bundle = &prepared.bundles()[0];
-    let tool = &bundle.tools[0];
-    let extension = &bundle.extensions[0];
+    let tool = &bundle.tools()[0];
+    let extension = &bundle.extensions()[0];
     assert_eq!(tool.source_path, "extensions/runtime.js");
     assert_eq!(extension.source_path, "extensions/runtime.js");
     assert_eq!(tool.content, extension.content);
@@ -533,21 +533,21 @@ agent:
     };
 
     let bundle = &prepared.bundles()[0];
-    let tool = &bundle.tools[0];
+    let tool = &bundle.tools()[0];
     assert_eq!(tool.stable_id, "bundle:hya/executable/tool/echo");
     assert_eq!(tool.source_path, "extensions/runtime.js");
     assert_eq!(tool.content, "export const runtime = true;\n");
     assert_eq!(tool.aliases, ["say"]);
     assert!(!tool.digest.is_empty());
 
-    let hook = &bundle.hooks[0];
+    let hook = &bundle.hooks()[0];
     assert_eq!(hook.stable_id, "bundle:hya/executable/hook/event");
     assert_eq!(hook.source_path, "extensions/runtime.js");
     assert_eq!(hook.content, "export const runtime = true;\n");
     assert!(hook.aliases.is_empty());
     assert_eq!(hook.digest, tool.digest);
 
-    let extension = &bundle.extensions[0];
+    let extension = &bundle.extensions()[0];
     assert_eq!(
         extension.stable_id,
         "bundle:hya/executable/extension/runtime"
@@ -557,7 +557,7 @@ agent:
     assert!(extension.aliases.is_empty());
     assert_eq!(extension.digest, tool.digest);
 
-    let agent = &bundle.agent;
+    let agent = &bundle.agents()[0];
     assert_eq!(
         agent.resource_view.allow,
         ["bundle:hya/executable/tool/echo"]
@@ -635,7 +635,7 @@ agent:
         let Ok(prepared) = prepared else {
             panic!("supported hook local ID `{local_id}` was rejected: {prepared:?}");
         };
-        let agent = &prepared.bundles()[0].agent;
+        let agent = &prepared.bundles()[0].agents()[0];
         assert_eq!(
             agent.hook_refs,
             [format!("bundle:hya/executable/hook/{local_id}")]
@@ -732,7 +732,7 @@ agent:
         let Ok(prepared) = prepared else {
             panic!("hook reference `{hook_ref}` was rejected: {prepared:?}");
         };
-        let agent = &prepared.bundles()[0].agent;
+        let agent = &prepared.bundles()[0].agents()[0];
         assert_eq!(agent.hook_refs, ["bundle:hya/executable/hook/event"]);
     }
 }

@@ -25,8 +25,9 @@ pub(super) async fn connect_one(
     let init = client.initialize(host.clone()).await?;
     validate_initialize(&spec.id, &init)?;
     let canonical_declaration = Arc::<[u8]>::from(canonical_initialize(&init)?);
+    let contributions = init.contributions.clone();
     let mut hooks = HashMap::new();
-    for registration in &init.hooks {
+    for registration in &contributions.hooks {
         let default = registration.name.default_posture();
         let declared = registration
             .posture
@@ -39,8 +40,7 @@ pub(super) async fn connect_one(
     let conn = Arc::new(PluginConn {
         id: spec.id,
         hooks,
-        tools: init.tools,
-        workspace_adapters: init.workspace_adapters,
+        contributions,
         canonical_declaration,
         timeout,
         command: spec.command,

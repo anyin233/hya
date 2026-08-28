@@ -1,5 +1,6 @@
 //! Store-layer failures: SQLite, migrations, JSON, admission, bundles, and claims.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use thiserror::Error;
@@ -119,6 +120,24 @@ pub enum StoreError {
     /// Corrupt or unparseable resident claim row data.
     #[error("resident actor claim: {0}")]
     ActorClaimData(String),
+    /// Another runtime/store handle owns the exclusive runtime-owner lock.
+    #[error("RUNTIME_OWNER_BUSY: runtime owner lock is already held")]
+    RuntimeOwnerBusy,
+    /// Startup recovery requires this store to hold the matching owner claim.
+    #[error("RUNTIME_OWNER_CLAIM_REQUIRED: matching runtime owner claim is required")]
+    RuntimeOwnerClaimRequired,
+    /// Runtime-owner lock file I/O failed.
+    #[error("runtime owner lock {path}: {source}")]
+    RuntimeOwnerLock {
+        /// Lock-file path used by this store.
+        path: PathBuf,
+        /// Underlying filesystem failure.
+        #[source]
+        source: Arc<std::io::Error>,
+    },
+    /// Malformed or inconsistent Workflow control mutation.
+    #[error("workflow control: {0}")]
+    WorkflowData(String),
     /// Mail append rejected by roster / permission / validation rules.
     #[error("mailbox rejected: {0}")]
     MailboxRejected(String),

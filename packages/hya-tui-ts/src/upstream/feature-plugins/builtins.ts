@@ -7,6 +7,7 @@ import SidebarFooter from "./sidebar/footer"
 import SidebarLsp from "./sidebar/lsp"
 import SidebarMcp from "./sidebar/mcp"
 import SidebarTodo from "./sidebar/todo"
+import SidebarWorkflow from "./sidebar/workflow"
 import DiffViewer from "./system/diff-viewer"
 import Notifications from "./system/notifications"
 import WhichKey from "./system/which-key"
@@ -18,6 +19,7 @@ export type BuiltinTuiPlugin = Omit<TuiPluginModule, "id"> & {
 }
 
 const BUILTINS = [
+  SidebarWorkflow,
   HomeFooter,
   HomeTips,
   SidebarContext,

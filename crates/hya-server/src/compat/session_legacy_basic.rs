@@ -125,7 +125,7 @@ pub(super) async fn remove_session(
     if let Err(response) = super::session_legacy::legacy_load_session(&st, session, None).await? {
         return Ok(response);
     }
-    st.runs.cancel(session);
+    st.cancel_run(session);
     let deleted = st.engine.delete_session(session).await?;
     Ok(Json(deleted).into_response())
 }
@@ -146,6 +146,6 @@ pub(super) async fn abort(
     Path(id): Path<String>,
 ) -> Result<Json<bool>, ApiError> {
     let session = parse_session(&id)?;
-    st.runs.cancel(session);
+    st.cancel_run(session);
     Ok(Json(true))
 }

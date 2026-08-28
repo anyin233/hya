@@ -13,6 +13,7 @@ use crate::client::Client;
 use crate::error::{Result, SdkError};
 use crate::store::StoredPart;
 use crate::types::{Agent, Config, Message, Session};
+use crate::workflow::{WorkflowCommand, WorkflowCommandResult, WorkflowProjection};
 
 /// Shared cell holding the real client once the backend connects.
 #[derive(Default)]
@@ -78,6 +79,20 @@ impl Client for PendingClient {
 
     async fn session_get(&self, session_id: &str) -> Result<Session> {
         self.slot.current()?.session_get(session_id).await
+    }
+    async fn workflow_command(
+        &self,
+        session_id: &str,
+        command: WorkflowCommand,
+    ) -> Result<WorkflowCommandResult> {
+        self.slot
+            .current()?
+            .workflow_command(session_id, command)
+            .await
+    }
+
+    async fn workflow_state(&self, session_id: &str) -> Result<WorkflowProjection> {
+        self.slot.current()?.workflow_state(session_id).await
     }
 
     async fn session_messages(&self, session_id: &str) -> Result<Vec<(Message, Vec<StoredPart>)>> {

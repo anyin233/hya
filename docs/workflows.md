@@ -6,13 +6,80 @@ runtime creates a child Session or sends mail.
 
 ## Discovery
 
-| Precedence | Path |
+| Precedence | Source |
 | --- | --- |
 | Project | `<workdir>/.hya/workflows/*.hya.md` |
 | User | `$HOME/.config/hya/workflows/*.hya.md` |
+| Bundle catalog | Installed and read-only first-party `WorkflowBundle` payloads |
 
-Project sources take precedence over user sources with the same declared name.
-YAML-only files and the removed `stages:`/`needs:` format are not accepted.
+Project sources take precedence over user and bundle sources with the same declared name. User sources take precedence over bundle sources. Two bundle sources with the same bare name are ambiguous; use the exact `bundle:<bundle-id>/workflow/<workflow-id>` source id. YAML-only Workflow documents and the removed `stages:`/`needs:` format are not accepted.
+
+## Packaging a WorkflowBundle
+
+A `WorkflowBundle` packages one compiled Workflow and its exact Agent closure. It is a distinct closed payload kind beside singular `AgentBundle`.
+
+The source must use `bundle.yaml`; `bundle.hya.md` is rejected because a multi-Agent payload has no unambiguous body prompt.
+
+```yaml
+kind: WorkflowBundle
+identity:
+  id: acme/feature-delivery
+  version: 1.0.0
+  publisher: acme
+workflow:
+  id: feature-delivery
+  path: workflows/feature-delivery.hya.md
+agents:
+  - id: workflow-worker
+    description: Executes the packaged Workflow.
+    role: subagent
+    prompt: prompts/workflow-worker.md
+    spawn_lifecycle: transient
+```
+
+The package closure also contains `workflows/feature-delivery.hya.md` in the document format below and `prompts/workflow-worker.md`.
+
+Preparation fails unless all of these conditions are true:
+
+- `workflow.path` matches `workflows/*.hya.md`, and `workflow.id` equals the compiled document `name`.
+- Every packaged Agent prompt path is under `prompts/`.
+- `agents:` contains every Stage Agent, verifier Agent, and recursive `can_spawn` target.
+- `agents:` contains no Agent outside that reachable closure. Built-in Agent ids are reserved and cannot substitute for packaged closure members.
+- Agent ids are globally unique across the prepared catalog.
+- Shared `resources` and `extensions` satisfy the same digest, path, resource-view, and executable-sidecar rules as an AgentBundle.
+
+Preparation stores the compiled Workflow source, source digest, compiler revision, sorted Agent closure, and shared resources in one canonical prepared payload. Install refresh publishes its Workflow, Agents, and prepared Skill contributions in one runtime generation. Existing turn bindings keep the old generation.
+
+The normal package commands accept both closed kinds:
+
+```sh
+hya-backend bundle install feature-delivery.hyabundle
+hya-backend bundle list
+hya-backend bundle info acme/feature-delivery
+```
+
+`bundle list` and `bundle info` report `kind=WorkflowBundle`, the Workflow id, and the packaged Agent ids.
+
+### Full Argus example
+
+The repository ships a complete ordinary WorkflowBundle source at
+[`bundles/examples/argus-example`](../bundles/examples/argus-example/). It uses
+the public graph, package, registry, catalog, and executor paths; no engine
+branch recognizes its topology. Package and install it from a source checkout:
+
+```sh
+scripts/package-argus-example.sh bundles/examples/argus-example /tmp/hya-argus-example.hyabundle
+hya-backend bundle install /tmp/hya-argus-example.hyabundle
+hya-backend bundle info hya/argus-example
+hya-backend workflow run argus --input request="Investigate and deliver the requested change"
+```
+
+Release archives include the same package as
+`examples/hya-argus-example.hyabundle`; install that file directly instead of
+repackaging it. The example contains investigation, planning, parallel
+implementation and test work, independent architecture and quality reviews,
+synthesis, and parallel/final verification. It is not installed or selected
+automatically.
 
 ## Document format
 
@@ -123,23 +190,70 @@ Cancellation stops new admissions, cancels transient work, stops active
 run-owned resident work, waits for admitted boundaries, and returns a truthful
 cancelled report.
 
-## CLI
+## Durable Session state
+
+Workflow selection and execution are Session state. The owning Session event
+log records selection, run start, Stage transitions, member links, and run
+finish. Replay reconstructs the latest Workflow Projection; it does not depend
+on child-process memory or a second read model.
+
+Restart reconciliation never replays Stage effects. A nonterminal run whose
+owner is provably dead becomes `interrupted`. A selected source that disappeared
+remains `unavailable`; a selected source whose revision changed remains `stale`.
+Both conditions require explicit reselection. hya never substitutes another
+same-name source for the selected identity.
+
+`hya_app::WorkflowControl` is the shared list, info, select, run, and state seam
+for CLI, Agent tool, native command, HTTP, SDK, and in-process transports. Only
+the core executor runs the compiled plan.
+
+## TUI and native Session commands
+
+The Session sidebar reads the typed Workflow Projection from normal bootstrap
+and `session.updated` synchronization. It shows selection/revision availability,
+run status, graph level, declaration-ordered active Stages, active/total Agent
+instances, Stage progress, and bounded current work. It does not poll, create a
+second SDK client, fold raw Workflow Events, or replace the existing run-tree
+roster used to navigate child Agents.
+
+Use the native command in the current Session:
+
+```text
+/workflow list
+/workflow info feature-delivery
+/workflow use feature-delivery
+/workflow run request=fix-parser-retries
+/workflow state
+```
+
+Native Workflow commands bypass parent-model admission. Selection and results
+use the normal command transcript path; selection does not remove existing
+messages. A run can also name the Workflow explicitly:
+`/workflow run feature-delivery request=fix-parser-retries`.
+
+## CLI and Agent tool
 
 ```sh
 hya-backend workflow list
 hya-backend workflow info feature-delivery
-hya-backend workflow run feature-delivery \
-  --input request="Fix parser retries"
+hya-backend --db sessions.db workflow use feature-delivery --session hysec_...
+hya-backend --db sessions.db workflow run feature-delivery \
+  --session hysec_... --input request="Fix parser retries"
+hya-backend --db sessions.db workflow state --session hysec_...
 ```
 
-`workflow run` prints one terminal row for every compiled Stage. `--json`
-emits the same report as JSON. Input values split on the first `=`.
+`workflow use` and `state` require an existing owning Session through
+`--session`. `workflow run` accepts `--session`; with it, the Workflow name may
+be omitted to use that Session's selection. Without it, the command creates a
+new Session and requires a name.
+`workflow run` prints one terminal row for every compiled Stage. `--json` emits
+the same shared result as JSON. Input values split on the first `=`. `--revision`
+adds an optimistic compiler-revision fence.
 
-Agents can use the governed `workflow` tool:
-
-- `{"action": "list"}` lists discovered Workflows.
-- `{"action": "run", "name": "feature-delivery", "inputs": { ... }}` runs
-  the selected graph in the current Session tree.
+Agents can use the governed `workflow` tool with
+`action=list|info|select|run|state`. `run` accepts `name`, `inputs`, an optional
+`expected_revision`, and an optional stable run id for idempotent retries. A
+run without `name` uses the Session's selected Workflow.
 
 ## Library surface
 

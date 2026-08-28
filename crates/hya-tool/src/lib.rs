@@ -64,8 +64,7 @@ mod websearch_response;
 pub mod workflow_plane;
 mod write;
 pub use workflow_plane::{
-    WorkflowAction, WorkflowOutcome, WorkflowPlane, WorkflowReply, WorkflowReplyPayload,
-    WorkflowRequest, WorkflowRequestSink, WorkflowSendError, WorkflowStageOutcome, WorkflowSummary,
+    WorkflowHostError, WorkflowPlane, WorkflowRequest, WorkflowRequestSink, WorkflowSendError,
     WorkflowTool,
 };
 

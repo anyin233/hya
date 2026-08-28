@@ -102,11 +102,13 @@ packages/hya-tui-ts/
 ```
 
 - **`src/hya`** — product-owned glue: paths/flags, branding constants, static
-  builtin plugin host, SDK bootstrap probe, startup tracing, audit surface for
-  branding guards.
+  builtin plugin host, SDK bootstrap probe, startup tracing, Workflow wire
+  validation/presentation, and audit surfaces.
 - **`src/upstream`** — retained frontend from OpenCode `packages/tui` (see
   [UPSTREAM.md](./UPSTREAM.md)), including `theme/assets/*.json` and
-  `assets/audio/*.mp3`.
+  `assets/audio/*.mp3`. The hya-owned
+  `feature-plugins/sidebar/workflow.tsx` adapter is the narrow exception needed
+  to register product state through the retained slot system.
 - **`scripts/`** — runtime preparation and artwork generation.
 - **`test/`** — architecture invariants and Track T integration tests.
 
@@ -121,8 +123,10 @@ packages/hya-tui-ts/
    (guarded by `test/branding-pruning.test.ts` and boundary import checks).
 5. **TSDoc / comments on vendored upstream files:** `src/upstream` is derived
    from upstream and re-synced as a tree. Do **not** add TSDoc or local-only
-   comment layers that a future re-sync would discard. Document hya-owned
-   behavior in this README, `src/hya/**`, or the repo docs under `docs/`.
+   comment layers that a future re-sync would discard. The hya-owned Workflow
+   sidebar adapter is explicitly exempt; keep its domain logic in
+   `src/hya/workflow-presentation.ts` and its upstream file limited to slot
+   rendering.
 
 ### Vendored-excluded TSDoc surface (R3)
 
@@ -143,7 +147,8 @@ re-sync does not silently drop comments:
 
 **S1 (hya-owned) carries TSDoc:** `src/main.tsx`, `src/hya/platform.ts`,
 `src/hya/product.ts`, `src/hya/audit.ts`, `src/hya/static-host.ts`,
-`src/hya/sdk-spine.tsx`, `src/hya/startup-trace.ts`.
+`src/hya/sdk-spine.tsx`, `src/hya/startup-trace.ts`, and
+`src/hya/workflow-presentation.ts`.
 
 ## Environment variables
 

@@ -6,7 +6,7 @@ use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const LIST_HEADER: &str = "NAME VERSION AGENT STATE";
+const LIST_HEADER: &str = "NAME VERSION AGENT STATE KIND WORKFLOW";
 const BUNDLE_ID: &str = "hya/valid-public";
 const BUNDLE_AGENT_ID: &str = "valid-public-lead";
 
@@ -31,6 +31,78 @@ fn unique_data_root() -> Result<PathBuf, Box<dyn std::error::Error>> {
     ));
     fs::create_dir(&data_root)?;
     Ok(data_root)
+}
+
+/// Build one minimal packaged Workflow source for installed CLI presentation tests.
+fn workflow_bundle_source() -> hya_bundle::BundleSource {
+    hya_bundle::BundleSource::new(
+        "workflow-info",
+        vec![
+            hya_bundle::SourceFile::new(
+                "bundle.yaml",
+                br#"kind: WorkflowBundle
+identity:
+  id: hya/workflow-info
+  version: 1.0.0
+  publisher: hya
+workflow:
+  id: demo
+  path: workflows/demo.hya.md
+agents:
+  - id: demo-worker
+    role: subagent
+    prompt: prompts/worker.md
+    spawn_lifecycle: transient
+"#,
+            ),
+            hya_bundle::SourceFile::new(
+                "workflows/demo.hya.md",
+                br#"---
+kind: Workflow
+name: demo
+description: Show one installed Workflow.
+nodes:
+  execute:
+    agent: demo-worker
+    directive: Execute.
+---
+flowchart TD
+  execute
+"#,
+            ),
+            hya_bundle::SourceFile::new(
+                "prompts/worker.md",
+                b"Execute the Workflow stage.\n".as_slice(),
+            ),
+        ],
+    )
+}
+
+/// Build a package that tries to replace the immutable first-party bundle id.
+fn first_party_collision_source() -> hya_bundle::BundleSource {
+    hya_bundle::BundleSource::new(
+        "first-party-collision",
+        vec![
+            hya_bundle::SourceFile::new(
+                "bundle.yaml",
+                br#"kind: AgentBundle
+identity:
+  id: hya/plan-impl-review
+  version: 9.9.9
+  publisher: attacker
+agent:
+  id: collision-agent
+  role: main
+  prompt: prompts/collision.md
+  spawn_lifecycle: transient
+"#,
+            ),
+            hya_bundle::SourceFile::new(
+                "prompts/collision.md",
+                b"This package must not replace a first-party bundle.\n".as_slice(),
+            ),
+        ],
+    )
 }
 
 fn bundle_command(data_root: &Path) -> Command {
@@ -83,7 +155,14 @@ fn bundle_install_list_info_uninstall_workflow() -> Result<(), Box<dyn std::erro
     let installed_row = list_lines.find(|line| line.split_whitespace().next() == Some(BUNDLE_ID));
     assert_eq!(
         installed_row.map(|line| line.split_whitespace().collect::<Vec<_>>()),
-        Some(vec![BUNDLE_ID, "1.0.0", BUNDLE_AGENT_ID, "active"]),
+        Some(vec![
+            BUNDLE_ID,
+            "1.0.0",
+            BUNDLE_AGENT_ID,
+            "active",
+            "AgentBundle",
+            "-",
+        ]),
         "bundle list omitted the installed row:\n{list_stdout}"
     );
 
@@ -101,7 +180,8 @@ fn bundle_install_list_info_uninstall_workflow() -> Result<(), Box<dyn std::erro
         "state=active",
         "immutable=false",
         "source_digest=df26abcab48d8f192f7f6af59fedc3445a5254d3f4b9e765b2676143b8ce5592",
-        "prepared_digest=1d36ac29eab07335cdf89dff96a3e142b8fcd3c9ef71d80d9af3a2f043e3aa39",
+        "prepared_digest=ef6480288e32417cb69674816ecad637ce8a5b74dcebf9f4a056d26a1e6a4aba",
+        "kind=AgentBundle",
         "agent=valid-public-lead",
     ] {
         assert!(
@@ -213,10 +293,8 @@ async fn private_info_is_opaque_and_install_does_not_mutate_registry()
 }
 
 #[test]
-fn bundle_list_is_empty_without_a_registry_and_creates_none()
+fn bundle_list_and_info_include_first_party_without_creating_registry()
 -> Result<(), Box<dyn std::error::Error>> {
-    // Built-in agents are compiled in, not bundles, so a fresh install lists no
-    // bundles at all and a read-only command must not create a registry.
     let data_root = unique_data_root()?;
     let registry_path = data_root.join("hya/bundles/registry.sqlite3");
     assert!(!registry_path.exists());
@@ -224,11 +302,14 @@ fn bundle_list_is_empty_without_a_registry_and_creates_none()
     let list = bundle_command(&data_root)
         .args(["bundle", "list"])
         .output()?;
-    assert_success("empty list", &list);
+    assert_success("first-party list", &list);
     let list_stdout = String::from_utf8(list.stdout)?;
     assert_eq!(
         list_stdout.lines().collect::<Vec<_>>(),
-        vec![LIST_HEADER],
+        vec![
+            LIST_HEADER,
+            "hya/plan-impl-review 1.0.0 plan-impl-review-implementer,plan-impl-review-planner,plan-impl-review-reviewer active WorkflowBundle plan-impl-review",
+        ],
         "unexpected bundle list:\n{list_stdout}"
     );
     assert!(
@@ -237,23 +318,76 @@ fn bundle_list_is_empty_without_a_registry_and_creates_none()
     );
 
     let info = bundle_command(&data_root)
-        .args(["bundle", "info", "hya/core-agents"])
+        .args(["bundle", "info", "hya/plan-impl-review"])
         .output()?;
-    assert!(
-        !info.status.success(),
-        "info for a never-installed bundle unexpectedly succeeded"
-    );
+    assert_success("first-party info", &info);
+    let info_stdout = String::from_utf8(info.stdout)?;
+    for expected in [
+        "name=hya/plan-impl-review",
+        "origin=first-party",
+        "format=prepared-v2",
+        "immutable=true",
+        "kind=WorkflowBundle",
+        "workflow=plan-impl-review",
+    ] {
+        assert!(
+            info_stdout.lines().any(|line| line == expected),
+            "first-party bundle info omitted {expected:?}:\n{info_stdout}"
+        );
+    }
     assert!(
         !registry_path.exists(),
-        "read-only bundle info created a bundle registry"
+        "read-only first-party bundle info created a bundle registry"
     );
 
     let uninstall = bundle_command(&data_root)
-        .args(["bundle", "uninstall", "hya/core-agents"])
+        .args(["bundle", "uninstall", "hya/plan-impl-review"])
         .output()?;
     assert!(
         !uninstall.status.success(),
-        "uninstall of a never-installed bundle unexpectedly succeeded"
+        "immutable first-party uninstall unexpectedly succeeded"
+    );
+    assert!(
+        String::from_utf8_lossy(&uninstall.stderr).contains("immutable first-party"),
+        "first-party uninstall must report immutability: {}",
+        String::from_utf8_lossy(&uninstall.stderr)
+    );
+    assert!(
+        !registry_path.exists(),
+        "rejected first-party uninstall created a bundle registry"
+    );
+
+    fs::remove_dir_all(&data_root)?;
+    Ok(())
+}
+
+/// Installation rejects package identities that collide with immutable first-party content.
+#[test]
+fn bundle_install_rejects_first_party_identity_collision_before_registry_mutation()
+-> Result<(), Box<dyn std::error::Error>> {
+    let data_root = unique_data_root()?;
+    let package = data_root.join("collision.hyabundle");
+    fs::write(
+        &package,
+        hya_bundle::write_public_package(&first_party_collision_source())?,
+    )?;
+
+    let install = bundle_command(&data_root)
+        .args(["bundle", "install"])
+        .arg(&package)
+        .output()?;
+    assert!(
+        !install.status.success(),
+        "colliding install unexpectedly succeeded"
+    );
+    let stderr = String::from_utf8(install.stderr)?;
+    assert!(
+        stderr.contains("duplicate bundle id `hya/plan-impl-review`"),
+        "colliding install reported the wrong error:\n{stderr}"
+    );
+    assert!(
+        !data_root.join("hya/bundles/registry.sqlite3").exists(),
+        "rejected first-party collision created a bundle registry"
     );
 
     fs::remove_dir_all(&data_root)?;
@@ -287,7 +421,8 @@ fn public_info_file_prepares_without_registry_mutation() -> Result<(), Box<dyn s
             "state: inspected",
             "immutable: false",
             "source_digest: df26abcab48d8f192f7f6af59fedc3445a5254d3f4b9e765b2676143b8ce5592",
-            "prepared_digest: 1d36ac29eab07335cdf89dff96a3e142b8fcd3c9ef71d80d9af3a2f043e3aa39",
+            "prepared_digest: ef6480288e32417cb69674816ecad637ce8a5b74dcebf9f4a056d26a1e6a4aba",
+            "kind: AgentBundle",
             "agent: valid-public-lead",
         ],
         "unexpected public package info:\n{stdout}"
@@ -429,6 +564,61 @@ You are the resource info lead.
     Ok(())
 }
 
+/// Installed WorkflowBundle list/info output names its payload and complete Agent closure.
+#[tokio::test]
+async fn workflow_bundle_list_and_info_show_kind_workflow_and_agents()
+-> Result<(), Box<dyn std::error::Error>> {
+    let data_root = unique_data_root()?;
+    let registry_parent = data_root.join("hya/bundles");
+    fs::create_dir_all(&registry_parent)?;
+    let registry_path = registry_parent.join("registry.sqlite3");
+    let prepared = hya_bundle::prepare_package(workflow_bundle_source())?;
+    let registry_path_string = registry_path.to_string_lossy().into_owned();
+    let registry = hya_store::BundleRegistry::connect(&registry_path_string).await?;
+    registry
+        .install(
+            &[],
+            hya_store::BundleInstallCandidate {
+                source_digest: [0x63; 32],
+                prepared_digest: prepared.digest().to_owned(),
+                prepared_bytes: prepared.bytes().to_vec(),
+                installed_at: 1_725_000_012,
+            },
+        )
+        .await?;
+    drop(registry);
+
+    let list = bundle_command(&data_root)
+        .args(["bundle", "list"])
+        .output()?;
+    assert_success("WorkflowBundle list", &list);
+    let list_stdout = String::from_utf8(list.stdout)?;
+    assert_eq!(
+        list_stdout.lines().collect::<Vec<_>>(),
+        vec![
+            "NAME VERSION AGENT STATE KIND WORKFLOW",
+            "hya/plan-impl-review 1.0.0 plan-impl-review-implementer,plan-impl-review-planner,plan-impl-review-reviewer active WorkflowBundle plan-impl-review",
+            "hya/workflow-info 1.0.0 demo-worker active WorkflowBundle demo",
+        ],
+        "unexpected WorkflowBundle list:\n{list_stdout}"
+    );
+
+    let info = bundle_command(&data_root)
+        .args(["bundle", "info", "hya/workflow-info"])
+        .output()?;
+    assert_success("WorkflowBundle info", &info);
+    let info_stdout = String::from_utf8(info.stdout)?;
+    for expected in ["kind=WorkflowBundle", "workflow=demo", "agent=demo-worker"] {
+        assert!(
+            info_stdout.lines().any(|line| line == expected),
+            "WorkflowBundle info omitted {expected:?}:\n{info_stdout}"
+        );
+    }
+
+    fs::remove_dir_all(&data_root)?;
+    Ok(())
+}
+
 #[tokio::test]
 async fn public_bun_bundle_install_publishes_resources_atomically()
 -> Result<(), Box<dyn std::error::Error>> {
@@ -468,24 +658,30 @@ async fn public_bun_bundle_install_publishes_resources_atomically()
     let Some(bundle) = prepared.bundles().first() else {
         return Err("prepared bundle is missing".into());
     };
-    assert_eq!(bundle.identity.id, "hya/archive-js");
-    assert_eq!(bundle.agent.id.as_str(), "archive-js-lead");
-    assert_eq!(bundle.tools.len(), 1);
-    assert_eq!(bundle.hooks.len(), 1);
-    assert_eq!(bundle.extensions.len(), 1);
-    assert_eq!(bundle.tools[0].stable_id, "bundle:hya/archive-js/tool/echo");
-    assert_eq!(bundle.tools[0].content, "export const runtime = true;\n");
+    assert_eq!(bundle.identity().id, "hya/archive-js");
+    let [agent] = bundle.agents() else {
+        return Err("prepared AgentBundle did not contain one Agent".into());
+    };
+    assert_eq!(agent.id.as_str(), "archive-js-lead");
+    assert_eq!(bundle.tools().len(), 1);
+    assert_eq!(bundle.hooks().len(), 1);
+    assert_eq!(bundle.extensions().len(), 1);
     assert_eq!(
-        bundle.hooks[0].stable_id,
+        bundle.tools()[0].stable_id,
+        "bundle:hya/archive-js/tool/echo"
+    );
+    assert_eq!(bundle.tools()[0].content, "export const runtime = true;\n");
+    assert_eq!(
+        bundle.hooks()[0].stable_id,
         "bundle:hya/archive-js/hook/event"
     );
-    assert_eq!(bundle.hooks[0].content, "export const runtime = true;\n");
+    assert_eq!(bundle.hooks()[0].content, "export const runtime = true;\n");
     assert_eq!(
-        bundle.extensions[0].stable_id,
+        bundle.extensions()[0].stable_id,
         "bundle:hya/archive-js/extension/runtime"
     );
     assert_eq!(
-        bundle.extensions[0].content,
+        bundle.extensions()[0].content,
         "export const runtime = true;\n"
     );
     drop(registry);

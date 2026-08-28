@@ -23,7 +23,8 @@ Installs three binaries and the Bun runtime:
   hya          user-facing shim that delegates to the adjacent hya-ts launcher
   hya-backend  backend CLI/API for login, exec, serve, and models
   hya-ts       TypeScript terminal frontend launcher
-  lib/hya/hya-tui-ts  prepared TypeScript runtime
+  lib/hya/hya-tui-ts      prepared TypeScript runtime
+  lib/hya/compat-adapter  production Compat sidecar and dependencies
 USAGE
 }
 
@@ -95,32 +96,37 @@ if [[ "$bin_dir" != /* ]]; then
   bin_dir="$(pwd -P)/$bin_dir"
 fi
 lib_dir="$(dirname "$bin_dir")/lib/hya"
+compat_source="$(pwd -P)/crates/hya-plugin-compat/adapter"
 
 tmp_hya="$bin_dir/.hya.tmp.$$"
 tmp_backend="$bin_dir/.hya-backend.tmp.$$"
 tmp_ts="$bin_dir/.hya-ts.tmp.$$"
 tmp_runtime="$lib_dir/.hya-tui-ts.tmp.$$"
+tmp_compat="$lib_dir/.compat-adapter.tmp.$$"
 bak_hya="$bin_dir/.hya.bak.$$"
 bak_backend="$bin_dir/.hya-backend.bak.$$"
 bak_ts="$bin_dir/.hya-ts.bak.$$"
 bak_runtime="$lib_dir/.hya-tui-ts.bak.$$"
+bak_compat="$lib_dir/.compat-adapter.bak.$$"
 rollback_enabled=0
 install_complete=0
 had_hya=0
 had_backend=0
 had_ts=0
 had_runtime=0
+had_compat=0
 placed_hya=0
 placed_backend=0
 placed_ts=0
 placed_runtime=0
+placed_compat=0
 
 cleanup_leftovers() {
   rm -f "$tmp_hya" "$tmp_backend" "$tmp_ts"
-  rm -rf "$tmp_runtime"
+  rm -rf "$tmp_runtime" "$tmp_compat"
   if [[ "$install_complete" -eq 1 ]]; then
     rm -f "$bak_hya" "$bak_backend" "$bak_ts"
-    rm -rf "$bak_runtime"
+    rm -rf "$bak_runtime" "$bak_compat"
   fi
 }
 
@@ -133,6 +139,7 @@ restore_install() {
   [[ "$placed_backend" -eq 1 ]] && rm -f "$bin_dir/hya-backend"
   [[ "$placed_ts" -eq 1 ]] && rm -f "$bin_dir/hya-ts"
   [[ "$placed_runtime" -eq 1 ]] && rm -rf "$lib_dir/hya-tui-ts"
+  [[ "$placed_compat" -eq 1 ]] && rm -rf "$lib_dir/compat-adapter"
   if [[ "$had_hya" -eq 1 && -e "$bak_hya" ]]; then
     mv -f "$bak_hya" "$bin_dir/hya"
   fi
@@ -144,6 +151,9 @@ restore_install() {
   fi
   if [[ "$had_runtime" -eq 1 && -e "$bak_runtime" ]]; then
     mv -f "$bak_runtime" "$lib_dir/hya-tui-ts"
+  fi
+  if [[ "$had_compat" -eq 1 && -e "$bak_compat" ]]; then
+    mv -f "$bak_compat" "$lib_dir/compat-adapter"
   fi
 }
 
@@ -179,17 +189,19 @@ preflight_path() {
 trap on_error ERR INT TERM
 say "Installing hya to $bin_dir"
 say "Installing hya-tui-ts to $lib_dir/hya-tui-ts"
+say "Installing Compat adapter to $lib_dir/compat-adapter"
 say "Rollback backup path: $bak_hya"
 say "Rollback backup path: $bak_backend"
 say "Rollback backup path: $bak_ts"
 say "Rollback backup path: $bak_runtime"
+say "Rollback backup path: $bak_compat"
 say "Permission preflight: $bin_dir"
 preflight_path "$bin_dir"
 preflight_path "$lib_dir"
 say "Bun preflight: bun"
 run bun --version
 run "${build_cmd[@]}"
-run mkdir -p "$bin_dir" "$lib_dir" "$tmp_runtime/src"
+run mkdir -p "$bin_dir" "$lib_dir" "$tmp_runtime/src" "$tmp_compat/src"
 run install -m 0755 "$target_dir/hya" "$tmp_hya"
 run install -m 0755 "$target_dir/hya-backend" "$tmp_backend"
 run install -m 0755 "$target_dir/hya-ts" "$tmp_ts"
@@ -198,6 +210,12 @@ run cp packages/hya-tui-ts/package.json packages/hya-tui-ts/bun.lock \
   packages/hya-tui-ts/LICENSE packages/hya-tui-ts/UPSTREAM.md \
   packages/hya-tui-ts/NOTICE "$tmp_runtime/"
 run cp -R packages/hya-tui-ts/src/. "$tmp_runtime/src/"
+run cp "$compat_source/package.json" "$compat_source/bun.lock" "$tmp_compat/"
+run cp -R "$compat_source/src/." "$tmp_compat/src/"
+say "+ (cd $tmp_compat && bun install --frozen-lockfile --production)"
+if [[ "$dry_run" -eq 0 ]]; then
+  (cd "$tmp_compat" && bun install --frozen-lockfile --production)
+fi
 say "+ (cd $tmp_runtime && bun install --frozen-lockfile --production)"
 if [[ "$dry_run" -eq 0 ]]; then
   (cd "$tmp_runtime" && bun install --frozen-lockfile --production)
@@ -220,6 +238,10 @@ if [[ -e "$lib_dir/hya-tui-ts" ]]; then
   had_runtime=1
   run mv "$lib_dir/hya-tui-ts" "$bak_runtime"
 fi
+if [[ -e "$lib_dir/compat-adapter" ]]; then
+  had_compat=1
+  run mv "$lib_dir/compat-adapter" "$bak_compat"
+fi
 placed_hya=1
 run mv -f "$tmp_hya" "$bin_dir/hya"
 placed_backend=1
@@ -228,6 +250,8 @@ placed_ts=1
 run mv -f "$tmp_ts" "$bin_dir/hya-ts"
 placed_runtime=1
 run mv "$tmp_runtime" "$lib_dir/hya-tui-ts"
+placed_compat=1
+run mv "$tmp_compat" "$lib_dir/compat-adapter"
 
 run "$bin_dir/hya" "$(pwd -P)" --server http://127.0.0.1:1 --bun /bin/true
 if [[ "$dry_run" -eq 0 ]]; then
@@ -241,6 +265,10 @@ if [[ "$dry_run" -eq 0 ]]; then
   test -f "$lib_dir/hya-tui-ts/UPSTREAM.md"
   test -f "$lib_dir/hya-tui-ts/NOTICE"
   test -d "$lib_dir/hya-tui-ts/node_modules"
+  test -f "$lib_dir/compat-adapter/package.json"
+  test -f "$lib_dir/compat-adapter/bun.lock"
+  test -f "$lib_dir/compat-adapter/src/main.ts"
+  test -d "$lib_dir/compat-adapter/node_modules"
   resolved=$(command -v hya 2>/dev/null || true)
   if [[ "$resolved" != "$bin_dir/hya" ]]; then
     echo "hya is not first on PATH. Add this to your shell profile: export PATH=\"$bin_dir:\$PATH\"" >&2
@@ -262,6 +290,10 @@ else
   say "+ test -f $lib_dir/hya-tui-ts/UPSTREAM.md"
   say "+ test -f $lib_dir/hya-tui-ts/NOTICE"
   say "+ test -d $lib_dir/hya-tui-ts/node_modules"
+  say "+ test -f $lib_dir/compat-adapter/package.json"
+  say "+ test -f $lib_dir/compat-adapter/bun.lock"
+  say "+ test -f $lib_dir/compat-adapter/src/main.ts"
+  say "+ test -d $lib_dir/compat-adapter/node_modules"
   say "+ PATH check: command -v hya must resolve to $bin_dir/hya"
 fi
 

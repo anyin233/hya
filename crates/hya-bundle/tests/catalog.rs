@@ -1,8 +1,8 @@
 //! Catalog assembly: bundle sources, duplicate detection, and the spawn graph.
 
 use hya_bundle::{
-    BundleCatalog, BundleError, BundleSource, ExportKind, PreparedCatalog, PreparedResource,
-    SourceFile, prepare_package,
+    BundleCatalog, BundleError, BundleSource, ExportKind, PreparedCatalog,
+    PreparedInstallableBundle, PreparedResource, SourceFile, prepare_package,
 };
 use sha2::{Digest, Sha256};
 
@@ -76,7 +76,7 @@ fn empty_prepared_catalog_is_accepted() {
 #[test]
 fn zero_bundle_prepared_document_yields_an_empty_catalog() {
     // Canonical empty prepared document: matching digest, valid shape, zero bundles.
-    let bytes = br#"{"format_version":1,"bundles":[],"index":[]}"#;
+    let bytes = br#"{"format_version":2,"bundles":[],"index":[]}"#;
     let expected_digest = digest(bytes);
     let prepared = PreparedCatalog::decode(bytes, &expected_digest);
     let Ok(prepared) = prepared else {
@@ -182,8 +182,8 @@ fn catalog_rejects_bundle_mcp_even_from_prepared_data() {
     let Ok(prepared) = prepared else {
         panic!("preparation failed: {prepared:?}");
     };
-    let [prepared_bundle] = prepared.bundles() else {
-        panic!("fixture must prepare exactly one bundle");
+    let [PreparedInstallableBundle::Agent(prepared_bundle)] = prepared.bundles() else {
+        panic!("fixture must prepare exactly one AgentBundle");
     };
     let mut bundle = prepared_bundle.clone();
     let content = "{}";
@@ -197,7 +197,7 @@ fn catalog_rejects_bundle_mcp_even_from_prepared_data() {
     });
 
     assert_eq!(
-        BundleCatalog::from_prepared(&[bundle]).err(),
+        BundleCatalog::from_prepared(&[PreparedInstallableBundle::Agent(bundle)]).err(),
         Some(BundleError::UnsupportedBundleFeature {
             bundle_id: "hya/catalog-mcp".to_string(),
             feature: "resources.mcp".to_string(),
@@ -240,15 +240,15 @@ agent:
     let Ok(prepared) = prepared else {
         panic!("preparation failed: {prepared:?}");
     };
-    let [prepared_bundle] = prepared.bundles() else {
-        panic!("fixture must prepare exactly one bundle");
+    let [PreparedInstallableBundle::Agent(prepared_bundle)] = prepared.bundles() else {
+        panic!("fixture must prepare exactly one AgentBundle");
     };
     let mut bundle = prepared_bundle.clone();
     bundle.hooks[0].local_id = "audit".to_string();
     bundle.hooks[0].stable_id = "bundle:hya/catalog-hook/hook/audit".to_string();
 
     assert_eq!(
-        BundleCatalog::from_prepared(&[bundle]).err(),
+        BundleCatalog::from_prepared(&[PreparedInstallableBundle::Agent(bundle)]).err(),
         Some(BundleError::UnsupportedBundleFeature {
             bundle_id: "hya/catalog-hook".to_string(),
             feature: "hook:audit".to_string(),
@@ -365,4 +365,101 @@ agent:
         panic!("qualified must parse kind from rightmost segments");
     };
     assert_eq!(qualified.content, "nested docs");
+}
+
+fn workflow_source(bundle_id: &str, workflow_id: &str, agent_id: &str) -> BundleSource {
+    let manifest = format!(
+        r#"kind: WorkflowBundle
+identity:
+  id: {bundle_id}
+  version: 1.0.0
+  publisher: hya
+workflow:
+  id: {workflow_id}
+  path: workflows/{workflow_id}.hya.md
+agents:
+  - id: {agent_id}
+    role: subagent
+    prompt: prompts/{agent_id}.md
+    spawn_lifecycle: transient
+"#
+    );
+    let workflow = format!(
+        r#"---
+kind: Workflow
+name: {workflow_id}
+description: Catalog Workflow.
+nodes:
+  run:
+    agent: {agent_id}
+    directive: Run the stage.
+---
+flowchart TD
+  run
+"#
+    );
+    BundleSource::new(
+        bundle_id,
+        vec![
+            SourceFile::new("bundle.yaml", manifest.into_bytes()),
+            SourceFile::new(
+                format!("workflows/{workflow_id}.hya.md"),
+                workflow.into_bytes(),
+            ),
+            SourceFile::new(
+                format!("prompts/{agent_id}.md"),
+                b"Run the stage.\n".as_slice(),
+            ),
+        ],
+    )
+}
+
+#[test]
+fn workflow_catalog_indexes_agents_and_qualified_workflow() {
+    let prepared = prepare_package(workflow_source("hya/workflow-catalog", "demo", "worker"));
+    let Ok(prepared) = prepared else {
+        panic!("WorkflowBundle preparation failed: {prepared:?}");
+    };
+    let catalog = BundleCatalog::from_prepared(prepared.bundles());
+    let Ok(catalog) = catalog else {
+        panic!("WorkflowBundle catalog construction failed: {catalog:?}");
+    };
+    let Some((owner, agent)) = catalog.resolve_agent_entry("worker") else {
+        panic!("Workflow Agent was not indexed");
+    };
+    assert_eq!(owner, "hya/workflow-catalog");
+    assert_eq!(agent.id.as_str(), "worker");
+    let Some((owner, workflow)) =
+        catalog.resolve_workflow_entry("bundle:hya/workflow-catalog/workflow/demo")
+    else {
+        panic!("qualified Workflow was not indexed");
+    };
+    assert_eq!(owner, "hya/workflow-catalog");
+    assert_eq!(workflow.id, "demo");
+    assert_eq!(catalog.resolve_workflow("demo"), Some(workflow));
+}
+
+#[test]
+fn workflow_catalog_rejects_ambiguous_bare_names_but_keeps_qualified_ids() {
+    let first = prepare_package(workflow_source("hya/workflow-one", "demo", "worker-one"));
+    let Ok(first) = first else {
+        panic!("first WorkflowBundle preparation failed: {first:?}");
+    };
+    let second = prepare_package(workflow_source("hya/workflow-two", "demo", "worker-two"));
+    let Ok(second) = second else {
+        panic!("second WorkflowBundle preparation failed: {second:?}");
+    };
+    let bundles = [first.bundles(), second.bundles()].concat();
+    let catalog = BundleCatalog::from_prepared(&bundles);
+    let Ok(catalog) = catalog else {
+        panic!("WorkflowBundle catalog construction failed: {catalog:?}");
+    };
+    assert!(catalog.resolve_workflow("demo").is_none());
+    assert!(
+        catalog
+            .resolve_workflow("bundle:hya/workflow-one/workflow/demo")
+            .is_some()
+    );
+    assert!(catalog.resolve_agent("worker-one").is_some());
+    assert!(catalog.resolve_agent("worker-two").is_some());
 }

@@ -34,12 +34,17 @@ mod mcp_control;
 mod pending;
 mod runs;
 mod state;
+mod workflow;
+mod workflow_control;
 
 pub use hya_proto::WorkspaceAdapterInfo;
 pub use hya_tool::FormatterStatus;
 pub use mcp_control::McpControl;
 pub use state::AppState;
 pub(crate) use state::ServerState;
+pub use workflow_control::{
+    WorkflowControl, WorkflowControlError, WorkflowControlFuture, WorkflowDecorationFuture,
+};
 
 /// Build the full HTTP app: Compat routes + native session routes + CORS.
 ///
@@ -48,6 +53,8 @@ pub(crate) use state::ServerState;
 /// - `POST /sessions/:id/prompt` — admit user prompt and run one turn
 /// - `POST /sessions/:id/command` — admit command prompt and run one turn
 /// - `POST /sessions/:id/shell` — run shell tool turn
+/// - `GET /sessions/:id/workflow` — return projected Workflow state
+/// - `POST /sessions/:id/workflow` — execute a typed Workflow command
 /// - `GET /sessions/:id/events` — replay envelopes (`?since_seq=`)
 /// - `GET /sessions/:id/stream` — SSE of live envelopes (emits `resync` on lag)
 ///
@@ -57,6 +64,8 @@ pub fn router(state: AppState) -> Router {
     let state = ServerState::new(state);
     Router::new()
         .merge(compat::router())
+        .merge(workflow::native_router())
+        .merge(workflow::compat_router())
         .route("/sessions", post(create_session))
         .route("/sessions/:id/prompt", post(prompt))
         .route("/sessions/:id/command", post(command))
@@ -81,6 +90,7 @@ fn cors() -> CorsLayer {
 pub struct ApiError {
     status: StatusCode,
     message: String,
+    code: Option<String>,
 }
 
 impl ApiError {
@@ -88,7 +98,25 @@ impl ApiError {
         Self {
             status,
             message: message.into(),
+            code: None,
         }
+    }
+
+    pub(crate) fn structured(
+        status: StatusCode,
+        code: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            status,
+            message: message.into(),
+            code: Some(code.into()),
+        }
+    }
+
+    pub(crate) fn workflow(error: crate::WorkflowControlError) -> Self {
+        let status = crate::workflow::error_status(&error);
+        Self::structured(status, error.code, error.message)
     }
 
     fn bad_request(message: impl Into<String>) -> Self {
@@ -126,6 +154,15 @@ impl From<hya_store::StoreError> for ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
+        if let Some(code) = self.code {
+            return (
+                self.status,
+                Json(serde_json::json!({
+                    "error": { "code": code, "message": self.message }
+                })),
+            )
+                .into_response();
+        }
         (self.status, self.message).into_response()
     }
 }
@@ -164,8 +201,7 @@ async fn prompt(
 ) -> Result<Json<PromptResponse>, ApiError> {
     let session = parse_session(&id)?;
     let run = st
-        .runs
-        .start(session)
+        .start_run(session)
         .ok_or_else(|| ApiError::conflict("session busy"))?;
     let message = st.engine.admit_user_prompt(session, req.text).await?;
     let finish = st.engine.run_turn(session, &st.agent, run.token()).await?;
@@ -176,21 +212,26 @@ async fn command(
     State(st): State<ServerState>,
     Path(id): Path<String>,
     Json(req): Json<CommandRequest>,
-) -> Result<Json<PromptResponse>, ApiError> {
+) -> Result<Response, ApiError> {
     let session = parse_session(&id)?;
+    if let Some(result) = workflow::intercept_slash(&st, session, &req).await? {
+        return Ok(Json(result).into_response());
+    }
     let run = st
-        .runs
-        .start(session)
+        .start_run(session)
         .ok_or_else(|| ApiError::conflict("session busy"))?;
-    let text = req
-        .text
-        .unwrap_or_else(|| command_prompt_text(&req.command, &req.arguments));
+    let CommandRequest {
+        command,
+        arguments,
+        text,
+    } = req;
+    let text = text.unwrap_or_else(|| command_prompt_text(&command, &arguments));
     let message = st
         .engine
-        .admit_command_prompt(session, req.command, req.arguments, text)
+        .admit_command_prompt(session, command, arguments, text)
         .await?;
     let finish = st.engine.run_turn(session, &st.agent, run.token()).await?;
-    Ok(Json(PromptResponse { message, finish }))
+    Ok(Json(PromptResponse { message, finish }).into_response())
 }
 
 async fn shell(
@@ -200,8 +241,7 @@ async fn shell(
 ) -> Result<Json<PromptResponse>, ApiError> {
     let session = parse_session(&id)?;
     let run = st
-        .runs
-        .start(session)
+        .start_run(session)
         .ok_or_else(|| ApiError::conflict("session busy"))?;
     let (message, finish) = st
         .engine

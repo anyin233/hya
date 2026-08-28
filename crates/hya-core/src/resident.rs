@@ -1678,22 +1678,24 @@ impl ResidentSupervisor {
         parent_claim: Option<&ActorClaim>,
         guidance: Option<Arc<str>>,
     ) -> Result<(SessionId, String), CoreError> {
-        self.spawn_resident_inner(
-            parent,
-            agent,
-            resolved,
-            ResidentRegistration::Armed(directive),
-            parent_claim,
-            guidance,
-        )
-        .await
+        let (session, handle, _) = self
+            .spawn_resident_inner(
+                parent,
+                agent,
+                resolved,
+                ResidentRegistration::Armed(directive),
+                parent_claim,
+                guidance,
+            )
+            .await?;
+        Ok((session, handle))
     }
 
     /// Create and register one resident without an implicit first turn.
     ///
     /// The caller must deliver work through durable mail after this returns.
     /// `registration_directive` is provenance only and must not contain the work
-    /// payload or input values.
+    /// payload or input values. Returns the Session, handle, and actual member id.
     pub async fn spawn_resident_parked(
         &self,
         parent: SessionId,
@@ -1702,7 +1704,7 @@ impl ResidentSupervisor {
         registration_directive: String,
         parent_claim: Option<&ActorClaim>,
         guidance: Option<Arc<str>>,
-    ) -> Result<(SessionId, String), CoreError> {
+    ) -> Result<(SessionId, String, MemberId), CoreError> {
         self.spawn_resident_inner(
             parent,
             agent,
@@ -1723,7 +1725,7 @@ impl ResidentSupervisor {
         registration: ResidentRegistration,
         parent_claim: Option<&ActorClaim>,
         guidance: Option<Arc<str>>,
-    ) -> Result<(SessionId, String), CoreError> {
+    ) -> Result<(SessionId, String, MemberId), CoreError> {
         let (registration_directive, initial) = match registration {
             ResidentRegistration::Armed(directive) => (directive.clone(), Some(directive)),
             ResidentRegistration::Parked(directive) => (directive, None),
@@ -1818,7 +1820,7 @@ impl ResidentSupervisor {
             },
         )
         .await?;
-        Ok((session, handle))
+        Ok((session, handle, member))
     }
 
     /// Replace one idle resident's in-process guidance before its next durable

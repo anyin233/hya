@@ -50,14 +50,133 @@ fn installed_candidate(
     let [bundle] = prepared.bundles() else {
         panic!("expected exactly one prepared bundle");
     };
-    assert_eq!(bundle.identity.id, "hya/installed-package");
-    assert_eq!(bundle.identity.version, version);
+    assert_eq!(bundle.identity().id, "hya/installed-package");
+    assert_eq!(bundle.identity().version, version);
     BundleInstallCandidate {
         source_digest,
         prepared_digest: prepared.digest().to_owned(),
         prepared_bytes: prepared.bytes().to_vec(),
         installed_at,
     }
+}
+
+/// Build one two-Agent WorkflowBundle install candidate.
+fn workflow_candidate(source_digest: [u8; 32]) -> BundleInstallCandidate {
+    let prepared = prepare_package(BundleSource::new(
+        "workflow-installed",
+        vec![
+            SourceFile::new(
+                "bundle.yaml",
+                br#"kind: WorkflowBundle
+identity:
+  id: hya/workflow-installed
+  version: 1.0.0
+  publisher: hya
+workflow:
+  id: release
+  path: workflows/release.hya.md
+agents:
+  - id: workflow-planner
+    role: subagent
+    prompt: prompts/planner.md
+    spawn_lifecycle: transient
+  - id: workflow-reviewer
+    role: subagent
+    prompt: prompts/reviewer.md
+    spawn_lifecycle: transient
+"#,
+            ),
+            SourceFile::new(
+                "workflows/release.hya.md",
+                br#"---
+kind: Workflow
+name: release
+description: Plan and review one release.
+nodes:
+  plan:
+    agent: workflow-planner
+    directive: Plan the release.
+  review:
+    agent: workflow-reviewer
+    directive: Review the release.
+---
+flowchart TD
+  plan --> review
+"#,
+            ),
+            SourceFile::new("prompts/planner.md", b"Plan carefully.\n".as_slice()),
+            SourceFile::new("prompts/reviewer.md", b"Review carefully.\n".as_slice()),
+        ],
+    ));
+    let Ok(prepared) = prepared else {
+        panic!("WorkflowBundle preparation failed: {prepared:?}");
+    };
+    BundleInstallCandidate {
+        source_digest,
+        prepared_digest: prepared.digest().to_owned(),
+        prepared_bytes: prepared.bytes().to_vec(),
+        installed_at: 1_725_000_010,
+    }
+}
+
+/// One registry transaction installs one Workflow and its complete Agent closure.
+#[tokio::test]
+async fn workflow_bundle_installs_as_one_row_and_one_generation() {
+    let path = temp_db();
+    let registry = BundleRegistry::connect(&path).await;
+    let Ok(registry) = registry else {
+        panic!("bundle registry connection failed: {registry:?}");
+    };
+
+    let installed = registry.install(&[], workflow_candidate([0x91; 32])).await;
+    let Ok(installed) = installed else {
+        panic!("WorkflowBundle install failed: {installed:?}");
+    };
+    assert_eq!(installed, BundleInstallOutcome::Installed { generation: 1 });
+
+    let snapshot = registry.snapshot().await;
+    let Ok(snapshot) = snapshot else {
+        panic!("bundle registry snapshot failed: {snapshot:?}");
+    };
+    assert_eq!(snapshot.generation, 1);
+    let [record] = snapshot.bundles.as_slice() else {
+        panic!("WorkflowBundle install must write exactly one registry row");
+    };
+    assert_eq!(record.bundle_id, "hya/workflow-installed");
+    let document = serde_json::from_slice::<serde_json::Value>(&record.prepared_bytes);
+    let Ok(document) = document else {
+        panic!("stored prepared WorkflowBundle was not JSON: {document:?}");
+    };
+    assert_eq!(document["bundles"][0]["workflow"]["id"], "release");
+    assert_eq!(
+        document["bundles"][0]["agents"].as_array().map(Vec::len),
+        Some(2)
+    );
+}
+
+/// A reserved id anywhere in a Workflow Agent closure rejects the full transaction.
+#[tokio::test]
+async fn workflow_bundle_reserved_agent_preserves_empty_registry() {
+    let path = temp_db();
+    let registry = BundleRegistry::connect(&path).await;
+    let Ok(registry) = registry else {
+        panic!("bundle registry connection failed: {registry:?}");
+    };
+
+    let rejected = registry
+        .install(&["workflow-reviewer"], workflow_candidate([0x92; 32]))
+        .await;
+    assert!(matches!(
+        rejected,
+        Err(StoreError::BundleAgentIdReserved { ref agent_id, .. })
+            if agent_id == "workflow-reviewer"
+    ));
+    let snapshot = registry.snapshot().await;
+    let Ok(snapshot) = snapshot else {
+        panic!("bundle registry snapshot failed: {snapshot:?}");
+    };
+    assert_eq!(snapshot.generation, 0);
+    assert!(snapshot.bundles.is_empty());
 }
 
 #[tokio::test]
@@ -221,9 +340,9 @@ You are the installed package lead.
     let [record] = snapshot.bundles.as_slice() else {
         panic!("expected exactly one installed bundle");
     };
-    assert_eq!(record.bundle_id, bundle.identity.id);
-    assert_eq!(record.version, bundle.identity.version);
-    assert_eq!(record.publisher, bundle.identity.publisher);
+    assert_eq!(record.bundle_id, bundle.identity().id);
+    assert_eq!(record.version, bundle.identity().version);
+    assert_eq!(record.publisher, bundle.identity().publisher);
     assert_eq!(record.source_digest, [0x11; 32]);
     assert_eq!(record.prepared_digest, prepared.digest());
     assert_eq!(record.prepared_bytes.as_slice(), prepared.bytes());

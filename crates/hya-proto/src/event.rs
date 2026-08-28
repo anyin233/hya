@@ -11,13 +11,17 @@
 use serde::{Deserialize, Serialize};
 
 use crate::ids::{
-    ActorEpoch, ConfigGeneration, EventSeq, MemberId, MessageId, PartId, SessionId, ToolCallId,
+    ActorEpoch, ConfigGeneration, EventSeq, MemberId, MessageId, OwnerRunId, PartId, SessionId,
+    ToolCallId, WorkflowRunId,
 };
 use crate::mail::{MailEndpoint, MailKind};
 use crate::message::{
     FinishReason, MemberRunStatus, Role, RosterStatus, SubagentMode, TokenUsage, ToolPartState,
 };
 use crate::model::{AgentName, ModelRef, ToolName};
+use crate::workflow::{
+    WorkflowIdentity, WorkflowMemberRole, WorkflowRunStatus, WorkflowStagePlan, WorkflowStageStatus,
+};
 
 /// Canonical runtime event stream: one tagged variant per discrete state change.
 ///
@@ -124,6 +128,75 @@ pub enum Event {
         arguments: String,
         /// User message id that was admitted.
         message: MessageId,
+    },
+    /// Select an exact compiled Workflow identity; the last event wins.
+    WorkflowSelected {
+        /// Session whose control state changes.
+        session: SessionId,
+        /// Stable source/name/revision identity.
+        workflow: WorkflowIdentity,
+    },
+    /// Begin one durable Workflow run and capture its declaration-ordered plan.
+    WorkflowRunStarted {
+        /// Session that owns the Workflow control state.
+        session: SessionId,
+        /// Stable run identity.
+        run: WorkflowRunId,
+        /// Exact compiled identity executed by this run.
+        workflow: WorkflowIdentity,
+        /// Canonical hash of source, caller, input pairs, and bound runtime.
+        request_hash: String,
+        /// Process owner that admitted this run.
+        owner: OwnerRunId,
+        /// Stable display/provenance plan; never directives, inputs, or outputs.
+        stages: Vec<WorkflowStagePlan>,
+    },
+    /// Mark one compiled Stage as active.
+    WorkflowStageStarted {
+        /// Session that owns the Workflow run.
+        session: SessionId,
+        /// Run that owns this Stage activation.
+        run: WorkflowRunId,
+        /// Compiled Stage id.
+        stage: String,
+    },
+    /// Link one canonical Member reference to a Workflow Stage.
+    WorkflowStageMemberLinked {
+        /// Session that owns the Workflow run.
+        session: SessionId,
+        /// Run that owns this member.
+        run: WorkflowRunId,
+        /// Compiled Stage id.
+        stage: String,
+        /// Member identity in the authoritative Session member projection.
+        member: MemberId,
+        /// Worker or independent verifier role.
+        role: WorkflowMemberRole,
+        /// Zero-based activation iteration.
+        iteration: u32,
+    },
+    /// Finish one Workflow Stage with a terminal status.
+    WorkflowStageFinished {
+        /// Session that owns the Workflow run.
+        session: SessionId,
+        /// Run that owns this Stage activation.
+        run: WorkflowRunId,
+        /// Compiled Stage id.
+        stage: String,
+        /// Terminal Stage status.
+        status: WorkflowStageStatus,
+    },
+    /// Finish one Workflow run with a terminal status.
+    WorkflowRunFinished {
+        /// Session that owns the Workflow run.
+        session: SessionId,
+        /// Run being terminalized.
+        run: WorkflowRunId,
+        /// Terminal run status.
+        status: WorkflowRunStatus,
+        /// Bounded terminal error detail, when present.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
     },
 
     // -------- message lifecycle --------
@@ -659,6 +732,12 @@ impl Event {
             | Event::ModelSwitched { session, .. }
             | Event::SessionStatus { session, .. }
             | Event::CommandExecuted { session, .. }
+            | Event::WorkflowSelected { session, .. }
+            | Event::WorkflowRunStarted { session, .. }
+            | Event::WorkflowStageStarted { session, .. }
+            | Event::WorkflowStageMemberLinked { session, .. }
+            | Event::WorkflowStageFinished { session, .. }
+            | Event::WorkflowRunFinished { session, .. }
             | Event::MessageStarted { session, .. }
             | Event::TurnBindingRecorded { session, .. }
             | Event::UserPromptContextRecorded { session, .. }

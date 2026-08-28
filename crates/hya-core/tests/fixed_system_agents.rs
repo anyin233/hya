@@ -13,8 +13,8 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use hya_bundle::{
-    AgentRole, BundleCatalog, BundleIdentity, ModelPolicy, PreparedAgent, PreparedBundle,
-    ResourceView, SpawnLifecycle,
+    AgentRole, BundleCatalog, BundleIdentity, ModelPolicy, PreparedAgent, PreparedAgentBundle,
+    PreparedInstallableBundle, ResourceView, SpawnLifecycle,
 };
 use hya_core::{
     AgentCatalog, AgentSpec, CompactionConfig, CreateSession, EventBus, ModelSummarizer,
@@ -180,42 +180,44 @@ fn catalog(agents: &[AgentFixture]) -> Arc<AgentCatalog> {
         .iter()
         // Built-in ids are compiled in; a fixture asking for one just gets it.
         .filter(|agent| !hya_core::is_builtin_id(&agent.stable_id))
-        .map(|agent| PreparedBundle {
-            format_version: 1,
-            identity: BundleIdentity {
-                id: format!("hya/fixed-system-{}", agent.stable_id),
-                version: "0.0.0".to_string(),
-                publisher: "hya-tests".to_string(),
-            },
-            digest: format!("test-only-{}", agent.stable_id),
-            agent: PreparedAgent {
-                id: AgentName::new(&agent.stable_id),
-                description: None,
-                role: agent.role,
-                color: None,
-                prompt: agent.prompt.clone(),
-                prompt_source: None,
-                prompt_digest: None,
-                model_policy: ModelPolicy {
-                    model: agent.model.clone(),
-                    category: None,
-                    reasoning: agent.reasoning.clone(),
+        .map(|agent| {
+            PreparedInstallableBundle::Agent(Box::new(PreparedAgentBundle {
+                format_version: 2,
+                identity: BundleIdentity {
+                    id: format!("hya/fixed-system-{}", agent.stable_id),
+                    version: "0.0.0".to_string(),
+                    publisher: "hya-tests".to_string(),
                 },
-                workdir: None,
-                spawn_lifecycle: SpawnLifecycle::Transient,
-                resource_view: ResourceView::default(),
-                can_spawn: agent
-                    .can_spawn
-                    .iter()
-                    .map(|id| AgentName::new(id.as_str()))
-                    .collect(),
-                hook_refs: Vec::new(),
-            },
-            tools: Vec::new(),
-            skills: Vec::new(),
-            mcp: Vec::new(),
-            hooks: Vec::new(),
-            extensions: Vec::new(),
+                digest: format!("test-only-{}", agent.stable_id),
+                agent: PreparedAgent {
+                    id: AgentName::new(&agent.stable_id),
+                    description: None,
+                    role: agent.role,
+                    color: None,
+                    prompt: agent.prompt.clone(),
+                    prompt_source: None,
+                    prompt_digest: None,
+                    model_policy: ModelPolicy {
+                        model: agent.model.clone(),
+                        category: None,
+                        reasoning: agent.reasoning.clone(),
+                    },
+                    workdir: None,
+                    spawn_lifecycle: SpawnLifecycle::Transient,
+                    resource_view: ResourceView::default(),
+                    can_spawn: agent
+                        .can_spawn
+                        .iter()
+                        .map(|id| AgentName::new(id.as_str()))
+                        .collect(),
+                    hook_refs: Vec::new(),
+                },
+                tools: Vec::new(),
+                skills: Vec::new(),
+                mcp: Vec::new(),
+                hooks: Vec::new(),
+                extensions: Vec::new(),
+            }))
         })
         .collect::<Vec<_>>();
     let bundles = BundleCatalog::from_prepared(&bundles).expect("valid bundle catalog");

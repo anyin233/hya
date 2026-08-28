@@ -187,6 +187,12 @@ fn part_timeline(envs: &[Envelope]) -> BTreeMap<MessageId, Vec<CompatPartCursor>
             | Event::SessionStatus { .. }
             | Event::UserPromptContextRecorded { .. }
             | Event::CommandExecuted { .. }
+            | Event::WorkflowSelected { .. }
+            | Event::WorkflowRunStarted { .. }
+            | Event::WorkflowStageStarted { .. }
+            | Event::WorkflowStageMemberLinked { .. }
+            | Event::WorkflowStageFinished { .. }
+            | Event::WorkflowRunFinished { .. }
             | Event::MessageStarted { .. }
             | Event::TurnBindingRecorded { .. }
             | Event::MessageFinished { .. }
@@ -349,6 +355,12 @@ fn part_times(envs: &[Envelope]) -> BTreeMap<PartId, CompatPartTime> {
             | Event::SessionStatus { .. }
             | Event::UserPromptContextRecorded { .. }
             | Event::CommandExecuted { .. }
+            | Event::WorkflowSelected { .. }
+            | Event::WorkflowRunStarted { .. }
+            | Event::WorkflowStageStarted { .. }
+            | Event::WorkflowStageMemberLinked { .. }
+            | Event::WorkflowStageFinished { .. }
+            | Event::WorkflowRunFinished { .. }
             | Event::StepStarted { .. }
             | Event::StepFinished { .. }
             | Event::MessageStarted { .. }

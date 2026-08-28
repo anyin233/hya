@@ -1,13 +1,13 @@
 use hya_proto::{
-    ActorClaim, Envelope, Event, EventSeq, FinishReason, MailEndpoint, MailKind, MemberRunStatus,
+    ActorClaim, Envelope, Event, FinishReason, MailEndpoint, MailKind, MemberRunStatus,
     PartProjection, Projection, Role, RosterEntry, RosterStatus, SessionId, SubagentMode,
     ToolPartState, now_millis, scope,
 };
-use sqlx::Row;
 
 use crate::{
     AdmissionRecord, RecoveredActorClaim, SessionStore, StoreError,
     admission::{abort_recovered_actor_admissions_in_transaction, decode_record},
+    append_event_in_transaction, replay_projection,
     resident_claim::fence_actor_claim,
 };
 
@@ -533,53 +533,6 @@ async fn append_resolved_channel_mail(
     )
     .await?;
     Ok((envelope, recipients))
-}
-
-async fn append_event_in_transaction(
-    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
-    session: SessionId,
-    event: Event,
-) -> Result<Envelope, StoreError> {
-    let ts_millis = now_millis();
-    let payload = serde_json::to_string(&event)?;
-    let row = sqlx::query(
-        "INSERT INTO event_log (session_id, payload, ts) VALUES (?, ?, ?) RETURNING seq",
-    )
-    .bind(session.storage_key())
-    .bind(payload)
-    .bind(ts_millis)
-    .fetch_one(&mut **tx)
-    .await?;
-    let seq: i64 = row.try_get("seq")?;
-    Ok(Envelope {
-        seq: EventSeq(seq.max(0) as u64),
-        ts_millis,
-        event,
-    })
-}
-
-async fn replay_projection(
-    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
-    session: SessionId,
-) -> Result<Projection, StoreError> {
-    let rows =
-        sqlx::query("SELECT seq, ts, payload FROM event_log WHERE session_id = ? ORDER BY seq")
-            .bind(session.storage_key())
-            .fetch_all(&mut **tx)
-            .await?;
-    let mut envelopes = Vec::with_capacity(rows.len());
-    for row in rows {
-        let seq: i64 = row.try_get("seq")?;
-        let ts_millis: i64 = row.try_get("ts")?;
-        let payload: String = row.try_get("payload")?;
-        let event: Event = serde_json::from_str(&payload)?;
-        envelopes.push(Envelope {
-            seq: EventSeq(seq.max(0) as u64),
-            ts_millis,
-            event,
-        });
-    }
-    Ok(Projection::from_events(&envelopes))
 }
 
 async fn has_active_claim(

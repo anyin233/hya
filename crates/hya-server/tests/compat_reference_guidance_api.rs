@@ -210,7 +210,12 @@ async fn request_json(
     let body = if bytes.is_empty() {
         Value::Null
     } else {
-        serde_json::from_slice(&bytes).unwrap()
+        serde_json::from_slice(&bytes).unwrap_or_else(|error| {
+            panic!(
+                "response body is not JSON: {error}; body={}",
+                String::from_utf8_lossy(&bytes)
+            )
+        })
     };
     (status, body)
 }

@@ -349,6 +349,12 @@ fn message_content_events(envs: &[Envelope]) -> BTreeMap<MessageId, Vec<ContentC
             | Event::SessionStatus { .. }
             | Event::UserPromptContextRecorded { .. }
             | Event::CommandExecuted { .. }
+            | Event::WorkflowSelected { .. }
+            | Event::WorkflowRunStarted { .. }
+            | Event::WorkflowStageStarted { .. }
+            | Event::WorkflowStageMemberLinked { .. }
+            | Event::WorkflowStageFinished { .. }
+            | Event::WorkflowRunFinished { .. }
             | Event::MessageStarted { .. }
             | Event::TurnBindingRecorded { .. }
             | Event::MessageFinished { .. }
@@ -408,6 +414,12 @@ fn message_times(envs: &[Envelope]) -> BTreeMap<MessageId, MessageTime> {
             | Event::SessionStatus { .. }
             | Event::UserPromptContextRecorded { .. }
             | Event::CommandExecuted { .. }
+            | Event::WorkflowSelected { .. }
+            | Event::WorkflowRunStarted { .. }
+            | Event::WorkflowStageStarted { .. }
+            | Event::WorkflowStageMemberLinked { .. }
+            | Event::WorkflowStageFinished { .. }
+            | Event::WorkflowRunFinished { .. }
             | Event::StepStarted { .. }
             | Event::StepFinished { .. }
             | Event::TurnBindingRecorded { .. }

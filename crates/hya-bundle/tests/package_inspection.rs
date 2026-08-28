@@ -236,20 +236,20 @@ fn public_archive_accepts_root_manifest_and_exact_referenced_files() {
     let Some(bundle) = prepared.bundles().first() else {
         panic!("inspection must prepare one bundle");
     };
-    assert_eq!(bundle.tools.len(), 1);
-    assert_eq!(bundle.hooks.len(), 1);
-    assert_eq!(bundle.extensions.len(), 1);
-    let Some(tool) = bundle.tools.first() else {
+    assert_eq!(bundle.tools().len(), 1);
+    assert_eq!(bundle.hooks().len(), 1);
+    assert_eq!(bundle.extensions().len(), 1);
+    let Some(tool) = bundle.tools().first() else {
         panic!("prepared bundle must contain the echo tool");
     };
     assert_eq!(tool.source_path, "extensions/runtime.js");
     assert_eq!(tool.content, "export const runtime = true;\n");
-    let Some(hook) = bundle.hooks.first() else {
+    let Some(hook) = bundle.hooks().first() else {
         panic!("prepared bundle must contain the event hook");
     };
     assert_eq!(hook.source_path, "extensions/runtime.js");
     assert_eq!(hook.content, "export const runtime = true;\n");
-    let Some(extension) = bundle.extensions.first() else {
+    let Some(extension) = bundle.extensions().first() else {
         panic!("prepared bundle must contain the runtime extension");
     };
     assert_eq!(extension.source_path, "extensions/runtime.js");
@@ -480,18 +480,18 @@ fn public_archive_matches_directory_source_prepared_identity_and_ignores_undecla
     for prepared in [&archive_prepared, &directory_prepared] {
         for bundle in prepared.bundles() {
             for resource in bundle
-                .tools
+                .tools()
                 .iter()
-                .chain(bundle.skills.iter())
-                .chain(bundle.mcp.iter())
-                .chain(bundle.hooks.iter())
-                .chain(bundle.extensions.iter())
+                .chain(bundle.skills().iter())
+                .chain(bundle.mcp().iter())
+                .chain(bundle.hooks().iter())
+                .chain(bundle.extensions().iter())
             {
                 assert_ne!(resource.source_path, "extensions/helper.js");
             }
             assert_ne!(
-                bundle.agent.prompt_source.as_deref(),
-                Some("extensions/helper.js")
+                bundle.agents()[0].prompt_source.as_deref(),
+                Some("extensions/helper.js"),
             );
         }
     }

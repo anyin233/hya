@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use self::helpers::{find_part, push_part, tool_input, upsert_tool};
 use crate::event::{Envelope, Event};
 use crate::ids::{
-    ActorEpoch, ConfigGeneration, MemberId, MessageId, PartId, SessionId, ToolCallId,
+    ActorEpoch, ConfigGeneration, MemberId, MessageId, PartId, SessionId, ToolCallId, WorkflowRunId,
 };
 use crate::mail::{MailEndpoint, MailKind};
 use crate::message::{
@@ -19,6 +19,10 @@ use crate::message::{
 };
 use crate::model::{AgentName, ModelRef, ToolName};
 use crate::scope;
+use crate::workflow::{
+    WorkflowMemberProjection, WorkflowProjection, WorkflowRunProjection, WorkflowRunStatus,
+    WorkflowStageProjection, WorkflowStageStatus,
+};
 
 /// Folded view of one session's transcript and metadata (not the team mailbox).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -49,6 +53,9 @@ pub struct SessionProjection {
     /// Empty for sessions that never spawned subagents.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub members: Vec<MemberProjection>,
+    /// Durable Workflow control state; independent from transcript messages.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow: Option<WorkflowProjection>,
 }
 
 /// A single spawned subagent as seen from its parent session. Carries only bounded
@@ -561,6 +568,16 @@ impl Projection {
         self.session.messages.iter_mut().find(|m| m.id == id)
     }
 
+    /// Return the newest run only when `id` still owns the Session view.
+    fn workflow_run_mut(&mut self, id: WorkflowRunId) -> Option<&mut WorkflowRunProjection> {
+        self.session
+            .workflow
+            .as_mut()?
+            .run
+            .as_mut()
+            .filter(|run| run.id == id)
+    }
+
     fn apply_event(&mut self, e: &Event) {
         match e {
             Event::SessionCreated {
@@ -603,6 +620,127 @@ impl Projection {
             }
             Event::ModelSwitched { model, .. } => {
                 self.session.model = Some(model.clone());
+            }
+            Event::WorkflowSelected { workflow, .. } => {
+                self.session
+                    .workflow
+                    .get_or_insert_with(WorkflowProjection::default)
+                    .selection = Some(workflow.clone());
+            }
+            Event::WorkflowRunStarted {
+                run,
+                workflow,
+                request_hash,
+                owner,
+                stages,
+                ..
+            } => {
+                let projection = self
+                    .session
+                    .workflow
+                    .get_or_insert_with(WorkflowProjection::default);
+                if projection.seen_runs.insert(*run) {
+                    projection.selection = Some(workflow.clone());
+                    projection.run = Some(WorkflowRunProjection {
+                        id: *run,
+                        workflow: workflow.clone(),
+                        request_hash: request_hash.clone(),
+                        owner: *owner,
+                        status: WorkflowRunStatus::Running,
+                        stages: stages
+                            .iter()
+                            .cloned()
+                            .map(|plan| WorkflowStageProjection {
+                                plan,
+                                status: WorkflowStageStatus::Pending,
+                                members: Vec::new(),
+                            })
+                            .collect(),
+                        error: None,
+                    });
+                }
+            }
+            Event::WorkflowStageStarted { run, stage, .. } => {
+                if let Some(current) = self.workflow_run_mut(*run)
+                    && current.status == WorkflowRunStatus::Running
+                    && let Some(existing) = current
+                        .stages
+                        .iter_mut()
+                        .find(|row| row.plan.id == *stage)
+                    && !existing.status.is_terminal()
+                {
+                    existing.status = WorkflowStageStatus::Running;
+                }
+            }
+            Event::WorkflowStageMemberLinked {
+                run,
+                stage,
+                member,
+                role,
+                iteration,
+                ..
+            } => {
+                if let Some(current) = self.workflow_run_mut(*run)
+                    && current.status == WorkflowRunStatus::Running
+                    && let Some(stage) = current
+                        .stages
+                        .iter_mut()
+                        .find(|row| row.plan.id == *stage)
+                    && !stage.members.iter().any(|row| {
+                        row.member == *member && row.role == *role && row.iteration == *iteration
+                    })
+                {
+                    stage.members.push(WorkflowMemberProjection {
+                        member: *member,
+                        role: *role,
+                        iteration: *iteration,
+                    });
+                }
+            }
+            Event::WorkflowStageFinished {
+                run,
+                stage,
+                status,
+                ..
+            } => {
+                if status.is_terminal()
+                    && let Some(current) = self.workflow_run_mut(*run)
+                    && current.status == WorkflowRunStatus::Running
+                    && let Some(stage) = current
+                        .stages
+                        .iter_mut()
+                        .find(|row| row.plan.id == *stage)
+                    && !stage.status.is_terminal()
+                {
+                    stage.status = *status;
+                }
+            }
+            Event::WorkflowRunFinished {
+                run,
+                status,
+                error,
+                ..
+            } => {
+                if status.is_terminal()
+                    && let Some(current) = self.workflow_run_mut(*run)
+                    && !current.status.is_terminal()
+                {
+                    current.status = *status;
+                    current.error = error.clone();
+                    if *status != WorkflowRunStatus::Completed {
+                        for stage in &mut current.stages {
+                            if stage.status == WorkflowStageStatus::Pending {
+                                stage.status = WorkflowStageStatus::Skipped;
+                            } else if stage.status == WorkflowStageStatus::Running {
+                                stage.status = if *status == WorkflowRunStatus::Cancelled {
+                                    WorkflowStageStatus::Cancelled
+                                } else {
+                                    WorkflowStageStatus::Failed
+                                };
+                            }
+                        }
+                    }
+                }
             }
             Event::MessageStarted { message, role, .. } => {
                 if self.message_mut(*message).is_none() {

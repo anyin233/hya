@@ -5,7 +5,7 @@
 
 # AgentBundle authoring
 
-Author and install a public `AgentBundle`. **A bundle defines exactly one agent**, so you install one bundle per specialist agent; built-in agents are compiled into the binary and are not bundles. Static-only Bundles remain process-free. A public executable Bundle may add one activation-scoped Bun Compat sidecar for Bundle-local tools, hooks, and event handlers; Harness remains the agent runtime.
+Author and install a public `AgentBundle`. **An AgentBundle defines exactly one agent**, so install one bundle per independent specialist. A packaged Workflow and its exact multi-Agent closure use the distinct `WorkflowBundle` payload in `docs/workflows.md`. Built-in agents are compiled into the binary and are not bundles. Static-only AgentBundles remain process-free. A public executable AgentBundle may add one activation-scoped Bun Compat sidecar for Bundle-local tools, hooks, and event handlers; Harness remains the agent runtime.
 
 Repository references:
 
@@ -21,17 +21,17 @@ Harness owns the agent prompt/model loop, task and mailbox input, tool permissio
 
 Harness's `SessionEngine` remains the only agent runtime. The sidecar never receives task/prompt/transcript or returns `MemberOutcome`; each executable activation owns one per-activation process.
 
-Static-only Bundles remain process-free. Bun Compat is the only executable sidecar implementation supported in 0.34.11.
+Static-only Bundles remain process-free. Bun Compat is the only executable sidecar implementation supported in 0.36.0.
 
 ## Source and exact package closure
 
-Use one root `bundle.hya.md` with both v1 markers:
+Use exactly one root manifest. `bundle.hya.md` supplies an AgentBundle body prompt; `bundle.yaml` uses an explicit `prompt:` path. Both forms require:
 
 ```yaml
 kind: AgentBundle
 ```
 
-For the Markdown form, a nonempty Markdown body remains the prompt for exactly one agent and needs no prompt field; omit frontmatter `prompt:`. An empty Markdown body plus explicit per-agent `prompt:` paths enables multiple agents; every agent in that form needs an explicit prompt path. No second manifest/schema/loader is introduced. A public archive contains the root `bundle.hya.md` plus exactly the normalized paths represented by the existing v1 agent prompt/resource/Extension contract, and nothing else. The archive rules are: undeclared directory files are ignored; unreferenced archive files are rejected. Missing declared files, wrapper directories, duplicate normalized paths, traversal, absolute paths, and non-regular files fail closed. Directory and archive forms of the same declared closure prepare to the same canonical identity and digest.
+For `bundle.hya.md`, a nonempty Markdown body is the prompt for the one Agent and excludes `prompt:`. An empty body can use one explicit Agent `prompt:` path. `agents:` is invalid for AgentBundle; use singular `agent:`. WorkflowBundle is a separate closed kind, always uses `bundle.yaml`, and packages one Workflow plus its exact reachable Agent closure. A public archive contains the root manifest plus exactly the normalized paths in the declared prompt/resource/Extension closure. The archive rules are: undeclared directory files are ignored; unreferenced archive files are rejected. Missing declared files, wrapper directories, duplicate normalized paths, traversal, absolute paths, and non-regular files fail closed. Directory and archive forms of the same declared closure prepare to the same canonical identity and digest.
 
 A minimal executable source tree is:
 
@@ -44,33 +44,28 @@ The manifest's Tool selector and JavaScript Extension entrypoint both reference 
 
 ## Selected Tool/Hook resources and the disjoint example
 
-The working split-entrypoint example is [`docs/examples/bun-disjoint`](docs/examples/bun-disjoint/) (`bun-disjoint`) and has this six-file layout:
+The working split-entrypoint example is [`docs/examples/bun-disjoint`](docs/examples/bun-disjoint/) (`bun-disjoint`) and has this two-file layout:
 
 ```text
 docs/examples/bun-disjoint/
 ├── bundle.hya.md
-├── prompts/
-│   ├── alpha.md
-│   ├── beta.md
-│   └── static.md
 └── extensions/
-    ├── alpha.js
-    └── beta.js
+    └── alpha.js
 ```
 
-From `docs/examples/bun-disjoint/`, archive exactly the root, three prompts, and two extensions:
+From `docs/examples/bun-disjoint/`, archive exactly the root and selected extension:
 
 ```sh
-7z a -t7z -mx=0 -ms=off bun-disjoint.hyabundle bundle.hya.md prompts/alpha.md prompts/beta.md prompts/static.md extensions/alpha.js extensions/beta.js
+7z a -t7z -mx=0 -ms=off bun-disjoint.hyabundle bundle.hya.md extensions/alpha.js
 ```
 
 `hook_refs` select Bundle-local Hook resources only; all `harness:hook/*` spellings reject. Harness host hooks stay outside AgentBundle metadata. They use the existing local/alias/canonical resource-reference grammar; prepare canonicalizes them to stable Hook resource IDs. The supported hook IDs are exactly `event`, `tool.execute.before`, and `tool.execute.after`; aliases do not rename hooks.
 
 Each selected Tool or Hook source path must exact-path match exactly one JavaScript Extension resource in the referenced resource's owning bundle; cross-bundle selection joins in the owner. Never basename/prefix/digest/alias inference. The activation rule is: only selected Tool/Hook resources determine a deduplicated deterministic entrypoint list; staged does not mean activated.
 
-Tool and Hook initialize declarations independently equal the selected expected sets regardless of order; missing, extra, duplicate, or unselected declarations reject. The contract is: tool-only reports zero hooks and hook-only reports zero tools. When authoring, generic superset modules are rejected and must be split; authors may instead select the complete set.
+Tool and Hook initialize declarations independently equal the selected expected sets regardless of order; missing, extra, duplicate, or unselected declarations reject. Selected Skill declarations also match prepared ids, bytes, and SHA-256 digests exactly. The contract is: tool-only reports zero hooks and hook-only reports zero tools. When authoring, generic superset modules are rejected and must be split; authors may instead select the complete set.
 
-The alpha and beta executable agents have disjoint selected closures: alpha selects `echo` and `event` from `extensions/alpha.js`, while beta selects `beta` and `tool.execute.before` from `extensions/beta.js`. The `docs-bun-static` agent selects neither and remains process-free. Do not add a second manifest/DTO/loader/import graph/provenance, schema, free Hook mapping, generic extension auto-load, or claim sandboxing.
+The example Agent selects `echo` and `event` from `extensions/alpha.js`. A second specialist ships as a second AgentBundle with its own closure; neither bundle can select the other's resources. A static AgentBundle selects no executable capability and remains process-free. Keep the one manifest/DTO/loader, one permission plane, and one Harness runtime.
 
 ## Sidecar ABI
 
@@ -118,4 +113,4 @@ hya bundle uninstall <bundle-id>
 
 ## Trust and unsupported combinations
 
-Only public Bundles are supported for activation in 0.34.11. Private inspection reports `authentication=unverified` and `payload=opaque`; private activation unsupported and generation-preserving. Raw Rust extensions, Bundle-declared MCP, and resource profiles without an enforceable current host mapping are unsupported. Structural and declared-digest checks do not establish publisher authenticity. There is no sandbox and no permission expansion. Do not add decryption, signatures, a marketplace, compilation on activation, native commands, arbitrary environment access, a second permission plane, or legacy agent-file discovery.
+Only public Bundles are supported for activation in 0.36.0. Private inspection reports `authentication=unverified` and `payload=opaque`; private activation is unsupported and generation-preserving. Raw Rust extensions, Bundle-declared MCP, and resource profiles without an enforceable current host mapping are unsupported. Structural and declared-digest checks do not establish publisher authenticity. There is no sandbox and no permission expansion. Do not add decryption, signatures, a marketplace, compilation on activation, native commands, arbitrary environment access, a second permission plane, or legacy agent-file discovery.

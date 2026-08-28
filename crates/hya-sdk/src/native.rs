@@ -323,10 +323,10 @@ impl Transport for NativeTransport {
             return Err(SdkError::Bridge(err));
         }
         if !(200..300).contains(&outcome.status) {
-            return Err(SdkError::Http(format!(
-                "status {} for {method} {path}",
-                outcome.status
-            )));
+            return Err(crate::error::decode_http_error(
+                outcome.status,
+                outcome.body.as_bytes(),
+            ));
         }
         if outcome.body.is_empty() {
             return Ok(Value::Null);

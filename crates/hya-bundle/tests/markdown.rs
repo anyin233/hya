@@ -34,7 +34,7 @@ fn single_markdown_requires_the_exact_filename_and_the_kind_marker() {
         panic!("valid single Markdown failed: {valid:?}");
     };
     assert_eq!(
-        valid.bundles()[0].agent.prompt.as_deref(),
+        valid.bundles()[0].agents()[0].prompt.as_deref(),
         Some("You are the Markdown lead.")
     );
 
@@ -97,7 +97,7 @@ agent:
     };
 
     assert_eq!(prepared.bundles().len(), 1);
-    let agent = &prepared.bundles()[0].agent;
+    let agent = &prepared.bundles()[0].agents()[0];
     assert_eq!(agent.id.as_str(), "markdown-alpha");
     assert_eq!(agent.prompt.as_deref(), Some("Alpha prompt."));
     assert_eq!(agent.prompt_source.as_deref(), Some("prompts/alpha.md"));

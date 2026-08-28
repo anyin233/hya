@@ -12,6 +12,7 @@ Compat-compatible HTTP/SSE route groups.
 - process-level `AgentSpec`
 - pending permission/question queues
 - a dependency-inverted MCP control handle supplied by `hya-app`
+- a dependency-inverted Workflow control handle supplied by `hya-app`
 - workspace adapter metadata
 - formatter status
 
@@ -32,6 +33,8 @@ projection, run registry, and pending queues.
 | `POST` | `/sessions/:id/prompt` | `PromptRequest` | `PromptResponse` |
 | `POST` | `/sessions/:id/command` | `CommandRequest` | `PromptResponse` |
 | `POST` | `/sessions/:id/shell` | `ShellRequest` | `PromptResponse` |
+| `GET` | `/sessions/:id/workflow` | none | `WorkflowCommandResult::State` |
+| `POST` | `/sessions/:id/workflow` | `WorkflowCommand` | `WorkflowCommandResult` |
 | `GET` | `/sessions/:id/events` | optional `since_seq` query | `Vec<Envelope>` |
 | `GET` | `/sessions/:id/stream` | none | SSE stream of envelopes |
 
@@ -46,10 +49,18 @@ Native and Compat handlers share `ApiError` constructors
 | Status | Constructor | Typical use |
 | --- | --- | --- |
 | `400 Bad Request` | `bad_request` | Unparseable session id (`invalid session id`); invalid Compat request bodies. |
+| `403 Forbidden` | structured Workflow error | A Stage or verifier Agent is not authorized for the caller. |
 | `404 Not Found` | `not_found` | Missing resources on Compat routes (message/part not found, permission request not found, etc.). Compat summarize/wait also map engine `Invalid("session not found")` here (see below). |
 | `409 Conflict` | `conflict` | Busy session (`session busy`) when a second run is started while one is active. |
+| `422 Unprocessable Entity` | structured Workflow error | Invalid Workflow source or required inputs. |
 | `503 Service Unavailable` | `service_unavailable` | Compat paths such as MCP control-handle failures and unavailable compact/summarize operations (for example summarizer not configured). |
 | `500 Internal Server Error` | `internal` | Default for every unhandled `CoreError` and `StoreError` (`From` impls → `ApiError::internal`). |
+
+Workflow failures use `{ "error": { "code", "message" } }`. Stable codes
+distinguish syntax, source/input validation, missing Session/source/selection,
+authorization, busy/stale/idempotency conflicts, runtime unavailability, and
+internal failures. Governed Stage failure remains a successful transport result
+with a terminal failed run.
 
 **`Invalid("session not found")`:** produced only by
 `summarize_session` / `summary_messages` when the projection has no session id
@@ -233,6 +244,7 @@ include:
 | Group | Examples | Backing implementation |
 | --- | --- | --- |
 | Sessions | `/session`, `/session/:id`, `/api/session`, `/api/session/:id/context`, `/api/session/:id/message`, prompt/command/shell/abort/fork/share/update/delete/revert/summarize routes | hya event log, projection, run registry, switch/session-state events, pending queues |
+| Workflows | `/session/:id/workflow`, `/api/session/:id/workflow` | the same app-owned typed Workflow control port and replay-derived Session Projection as native routes |
 | Events | `/event`, `/api/event`, `/global/event` | translated live envelopes, permission/question SSE frames, `resync` on envelope lag, heartbeat/`server.connected`; `/api/event` and `/global/event` also emit `session.next.step.*` (see above) |
 | Files/search | `/file`, `/file/content`, `/find`, `/find/file`, `/find/symbol`, `/api/fs/read/*path`, `/api/fs/list`, `/api/fs/find` | filesystem reads, ignore matching, MIME sniffing, fuzzy path search, optional `LspPlane` |
 | Catalogs/metadata | `/path`, `/agent`, `/command`, `/skill`, `/lsp`, `/formatter`, `/api/location`, `/api/agent`, `/api/command`, `/api/skill` | built-in catalog sources, prompt directories, local skills, formatter/LSP planes |

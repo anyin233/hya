@@ -10,9 +10,10 @@ central type is `SessionEngine` in
 
 - `SessionStore` for persistence.
 - `ProviderRouter` for model streaming.
-- `RuntimeRegistry` for one atomically published immutable tool/skill/MCP
-  snapshot, including source ownership metadata for MCP/plugin tool
-  contributions. `ToolRegistry` is only an offline candidate builder.
+- `RuntimeRegistry` for one atomically published immutable tool/skill/MCP and
+  Agent catalog snapshot, including source ownership metadata for Bundle,
+  MCP, and plugin contributions. `ToolRegistry` is only an offline candidate
+  builder.
 - `PermissionPlane` for allow/ask/deny decisions.
 - `InteractionPlane`, `SpawnerPlane`, `TodoPlane`, `WebSearchPlane`,
   `LspPlane`, and `FormatterPlane` for cross-cutting tool services.
@@ -153,6 +154,28 @@ side effects:
 | `replace_text_part` | `TextReplace` |
 | `replace_reasoning_part` | `ReasoningReplace` |
 | `update_tool_part` | `ToolPartUpdated` |
+
+## Durable Workflow Control
+
+Workflow state remains inside the Session event log and shared Projection. The
+durable sequence is `WorkflowSelected`, `WorkflowRunStarted`, Stage start/member
+link/finish events, then `WorkflowRunFinished`. Selection changes only the
+Workflow projection and preserves every transcript message. Stage output and
+directives remain in child Sessions rather than the owning root event payloads.
+
+`hya-app::WorkflowControl` is the one orchestration adapter for the CLI, Agent
+tool, native `/workflow` command, HTTP routes, SDK, and in-process transport. It
+builds a catalog from the pinned `TurnBinding`, preflights the complete graph,
+and delegates transient, loop, and resident work to existing core execution
+paths. The server and SDK decorate replayed state with runtime-only source
+availability and Agent activity; neither owns another reducer or scheduler.
+
+Run admission and Workflow selection use actor-fenced store transactions. A
+file-backed runtime holds an exclusive owner claim before recovery. Startup
+appends one `Interrupted` terminal event for each prior nonterminal run and
+never replays a Stage side effect. A selected source is executable only when
+its exact source identity and revision still exist; changed and missing sources
+remain visible as stale or unavailable.
 
 ## Assistant Turn Loop
 
@@ -377,11 +400,13 @@ closed.
 
 `RuntimeSnapshot` owns exactly one `BundleCatalog`. For installed bundles,
 `hya-app` reads the bundle registry generation before binding each new root turn
-and before TUI/catalog refresh, builds one complete built-ins-plus-installed
-public candidate, and publishes it atomically. An unchanged generation
-is a no-op; validation or load failure preserves the old snapshot. In-flight
-turns and child turns retain their pinned snapshot. There is no bundle watcher,
-per-provider-round or per-tool-call database check, or second catalog authority.
+and before TUI/catalog refresh, merges installed payloads with the build-prepared
+read-only first-party WorkflowBundle, adapts prepared static Skills through the
+shared contribution seam, and publishes the catalog and Bundle sources
+atomically. An unchanged generation is a no-op; validation or load failure
+preserves the old snapshot. In-flight and child turns retain their pinned
+snapshot. There is no bundle watcher, per-provider-round or per-tool-call
+database check, or second catalog authority.
 
 Core preserves that child pinning with a typed `BoundSpawnRequest` carrying the
 parent `TurnBinding` through the application supervisor into both transient and
@@ -410,7 +435,9 @@ one JS Extension in the referenced resource's owning bundle; the captured
 `TurnBinding` determines a deduplicated canonical entrypoint list, and
 staged-but-unselected Extensions never activate. Independently initialized
 Tool and Hook sets must each exactly equal the selected expected sets before
-model polling. A static selected view starts no process, and old bindings stay
+model polling. Selected Skill declarations must also exactly match the prepared
+local ids, bytes, and content digests. Prepared static Skills are published as
+source-owned parsed entries without a sidecar process. Old bindings remain
 generation-pinned. There is no second resolver, catalog, DTO, or import scan.
 
 Harness remains the sole agent/model/task/mailbox/event/`MemberOutcome` and

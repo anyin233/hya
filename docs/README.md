@@ -25,20 +25,22 @@ If you want to compare hya with adjacent coding agents:
 
 1. [hya, Pi, and Compat Feature Comparison](hya-pi-compat-comparison.md)
 
-If you want to package a public AgentBundle:
+If you want to package a public AgentBundle or WorkflowBundle:
 
 1. Run `hya bundle info -f example.hyabundle`, then
    `hya bundle install example.hyabundle`.
-2. Read [AgentBundle Authoring](agent-bundle-authoring.md). Sources use **exactly
-   one** root form: directory `bundle.yaml` (shipped built-ins) **or**
-   `bundle.hya.md` (markdown frontmatter form) — never both. Start from the
+2. Read [AgentBundle Authoring](agent-bundle-authoring.md) for singular Agent
+   payloads, or [Workflows](workflows.md#packaging-a-workflowbundle) for one
+   Workflow plus its exact reachable Agent closure. Sources use exactly one
+   root form: `bundle.yaml` for both kinds, or `bundle.hya.md` only for an
+   AgentBundle body prompt. Start from the
    [single-file static example](examples/bundle.hya.md), the
    [transient Bun example](examples/bun-transient/), the
    [resident Bun example](examples/bun-resident/), the
    [disjoint Bun example](examples/bun-disjoint/), or the
    [directory `bundle.yaml` layout](../crates/hya-bundle/tests/fixtures/directory/bundle.yaml),
-   and use the [bundle CLI reference](cli.md#bundle-commands). A bundle defines
-   exactly one agent; built-in agents are compiled in, not bundles.
+   and use the [bundle CLI reference](cli.md#bundle-commands). Built-in Agents
+   are compiled in and cannot be shadowed by either package kind.
 
 If you want the independent self-update path (0.34.13+):
 
@@ -74,10 +76,10 @@ If you want to understand the codebase:
 | [TUI Keybindings](tui-keybindings.md) | Full keyboard shortcuts, slash commands, leader chords, and which-key. |
 | [TUI Reference](tui-reference.md) | User-facing screens, transcript, dialogs, prompt, and overlays. |
 | [Skills](skills.md) | Skill discovery paths, skill tool, and authoring. |
-| [Workflows](workflows.md) | User-authored workflow DAGs: stages, needs edges, fan-out/fan-in joins, loop verification, discovery roots, and `workflow` CLI. |
+| [Workflows](workflows.md) | Workflow DAGs, governance, discovery, CLI/tool execution, and WorkflowBundle packaging. |
 | [Plugin protocol](plugin-protocol.md) | Native stdio JSON-RPC ABI for out-of-process plugins. |
 | [Compat plugins](compat-plugins.md) | Bun adapter for OpenCode/Compat JS plugins over the native host. |
-| [AgentBundle Authoring](agent-bundle-authoring.md) | Package, inspect, install, list, describe, and uninstall public AgentBundles, including static and Bun-sidecar forms. |
+| [AgentBundle Authoring](agent-bundle-authoring.md) | Package, inspect, install, list, describe, and uninstall singular public AgentBundles, including static and Bun-sidecar forms. |
 | [Secure self-update](self-update.md) | Independent `hya-updater` TCB: signed metadata, local package stage, smoke, owner-gated activation, break-glass installer. |
 | [Project Structure](project-structure.md) | Map repository paths, crates, modules, tests, and data flow. |
 | [Architecture Overview](architecture/overview.md) | Explain the crate boundary model and end-to-end request path. |

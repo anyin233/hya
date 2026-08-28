@@ -590,7 +590,10 @@ impl PluginClient {
         let value = self
             .call(METHOD_INITIALIZE, params, INITIALIZE_TIMEOUT)
             .await?;
-        serde_json::from_value(value).map_err(|e| PluginError::Json(e.to_string()))
+        let result = serde_json::from_value::<InitializeResult>(value)
+            .map_err(|error| PluginError::Json(error.to_string()))?;
+        result.contributions.validate(&result.plugin.id)?;
+        Ok(result)
     }
 }
 

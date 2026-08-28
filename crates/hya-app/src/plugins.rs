@@ -77,15 +77,38 @@ fn bundled_compat_adapter_command(bun: &Path) -> Vec<String> {
     ]
 }
 
+/// Resolve the production Compat adapter for configured plugins and bundle sidecars.
 fn bundled_compat_adapter_dir() -> PathBuf {
-    if let Some(dir) = non_empty_env_path("HYA_COMPAT_ADAPTER_DIR") {
-        return dir;
-    }
-    let cli_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    cli_dir
+    let executable = std::env::current_exe().unwrap_or_default();
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let workspace_root = manifest_dir
         .parent()
-        .map(|crates_dir| crates_dir.join("hya-plugin-compat/adapter"))
-        .unwrap_or_else(|| cli_dir.join("../hya-plugin-compat/adapter"))
+        .and_then(Path::parent)
+        .unwrap_or_else(|| Path::new("."));
+    resolve_compat_adapter_dir(
+        non_empty_env_path("HYA_COMPAT_ADAPTER_DIR"),
+        &executable,
+        workspace_root,
+    )
+}
+
+/// Resolve the Compat adapter in override, installed-adjacent, then workspace order.
+fn resolve_compat_adapter_dir(
+    override_dir: Option<PathBuf>,
+    executable: &Path,
+    workspace_root: &Path,
+) -> PathBuf {
+    if let Some(override_dir) = override_dir {
+        return override_dir;
+    }
+    let installed = executable
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("../lib/hya/compat-adapter");
+    if installed.join("src/main.ts").is_file() {
+        return installed;
+    }
+    workspace_root.join("crates/hya-plugin-compat/adapter")
 }
 
 fn find_bun() -> Option<PathBuf> {
@@ -215,6 +238,38 @@ mod tests {
                 .is_some_and(|path| path.ends_with("src/main.ts"))
         );
         assert_eq!(spec.timeout_ms, Some(1000));
+    }
+
+    /// Installed binaries resolve the adjacent production adapter before workspace source.
+    #[test]
+    fn compat_adapter_resolution_prefers_override_then_installed_then_workspace()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let root = std::env::temp_dir().join(format!(
+            "hya-compat-adapter-resolution-{}",
+            std::process::id()
+        ));
+        let executable = root.join("prefix/bin/hya-backend");
+        let installed = root.join("prefix/lib/hya/compat-adapter");
+        let workspace = root.join("workspace");
+        let executable_parent = executable
+            .parent()
+            .ok_or_else(|| std::io::Error::other("installed executable has no parent"))?;
+        std::fs::create_dir_all(executable_parent)?;
+        std::fs::create_dir_all(installed.join("src"))?;
+        std::fs::write(installed.join("src/main.ts"), "export {}\n")?;
+
+        assert_eq!(
+            super::resolve_compat_adapter_dir(None, &executable, &workspace),
+            executable_parent.join("../lib/hya/compat-adapter")
+        );
+        let explicit = root.join("explicit");
+        assert_eq!(
+            super::resolve_compat_adapter_dir(Some(explicit.clone()), &executable, &workspace),
+            explicit
+        );
+
+        std::fs::remove_dir_all(root)?;
+        Ok(())
     }
 
     #[test]

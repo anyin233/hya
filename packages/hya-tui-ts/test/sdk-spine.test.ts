@@ -14,7 +14,12 @@ test("public hya entry drives the upstream SDK bootstrap and event reducer", asy
   const { launch } = await import("../src/main")
   const { observeSdkSpine } = await import("../src/hya/sdk-spine")
   const requests: Array<{ path: string; directory: string | null }> = []
-  const session = {
+  const workflowIdentity = {
+    source: "project:release",
+    name: "release",
+    revision: "ab".repeat(32),
+  }
+  const initialSession = {
     id: "ses_live",
     title: "Live session",
     slug: "live-session",
@@ -22,7 +27,25 @@ test("public hya entry drives the upstream SDK bootstrap and event reducer", asy
     directory: project,
     version: "test",
     time: { created: 1, updated: 2 },
+    workflow: { selection: workflowIdentity, availability: "available" },
   }
+  const session = {
+    ...initialSession,
+    time: { created: 1, updated: 3 },
+    workflow: {
+      selection: workflowIdentity,
+      availability: "available",
+      run: {
+        id: "run-1",
+        workflow: workflowIdentity,
+        request_hash: "hash",
+        owner: "owner",
+        status: "completed",
+        stages: [],
+      },
+    },
+  }
+  const workflowStates = new Set<string>()
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
@@ -45,7 +68,7 @@ test("public hya entry drives the upstream SDK bootstrap and event reducer", asy
                     })}\n\n`,
                   ),
                 )
-              }, 25)
+              }, 50)
             },
           }),
           { headers: { "content-type": "text/event-stream" } },
@@ -71,6 +94,7 @@ test("public hya entry drives the upstream SDK bootstrap and event reducer", asy
         if (url.pathname === "/config/providers") return { providers: [], default: {} }
         if (url.pathname === "/provider") return { all: [], default: {}, connected: [] }
         if (url.pathname === "/experimental/capabilities") return { backgroundSubagents: false }
+        if (url.pathname === "/session") return [initialSession]
         if (url.pathname === "/config" || url.pathname === "/session/status") return {}
         if (url.pathname === "/mcp" || url.pathname === "/experimental/resource") return {}
         if (url.pathname === "/vcs") return { branch: "main" }
@@ -84,13 +108,22 @@ test("public hya entry drives the upstream SDK bootstrap and event reducer", asy
   const cwd = process.cwd()
 
   try {
-    await launch(["--url", server.url.toString(), "--project", project], async (input) => {
+    await launch(["--url", server.url.toString(), "--project", project, "--continue"], async (input) => {
       expect(input.url).toBe(server.url.toString())
       expect(input.directory).toBe(project)
       expect(input.config.mouse).toBe(true)
       expect(typeof input.pluginHost.start).toBe("function")
-      await observeSdkSpine(input, (state) => state.sync.session.some((item) => item.id === session.id))
+      await observeSdkSpine(input, (state) => {
+        const current = state.sync.session.find((item) => item.id === session.id) as
+          | ({ workflow?: { selection?: unknown; run?: { status?: string } } } & object)
+          | undefined
+        const workflow = current?.workflow
+        if (workflow?.run?.status) workflowStates.add(workflow.run.status)
+        else if (workflow?.selection) workflowStates.add("ready")
+        return workflowStates.has("ready") && workflowStates.has("completed")
+      })
     })
+    expect(workflowStates).toEqual(new Set(["ready", "completed"]))
 
     const paths = new Set(requests.map((request) => request.path))
     for (const required of [

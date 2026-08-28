@@ -14,22 +14,18 @@ pub fn workflow_dirs_for_workdir(workdir: &Path) -> Vec<PathBuf> {
     dirs
 }
 
-/// List candidate `*.hya.md` Workflow files in deterministic precedence order.
+/// List candidate `*.hya.md` Workflow files in one explicit directory.
 #[must_use]
-pub fn discover_workflow_files(workdir: &Path) -> Vec<PathBuf> {
-    let mut files = Vec::new();
-    for dir in workflow_dirs_for_workdir(workdir) {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        let mut names = entries
-            .filter_map(Result::ok)
-            .map(|entry| entry.path())
-            .filter(|path| path.is_file() && is_workflow_source(path))
-            .collect::<Vec<_>>();
-        names.sort();
-        files.extend(names);
-    }
+pub fn discover_workflow_files_in_root(root: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return Vec::new();
+    };
+    let mut files = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.is_file() && is_workflow_source(path))
+        .collect::<Vec<_>>();
+    files.sort();
     files
 }
 
@@ -46,37 +42,6 @@ pub fn load_workflow_file(path: &Path) -> Result<CompiledWorkflow, WorkflowError
     let source_name = path.display().to_string();
     hya_workflow::compile(hya_workflow::WorkflowSource::new(&source_name, &content))
         .map_err(WorkflowError::Compile)
-}
-
-/// Load the first compiled Workflow with the declared name.
-///
-/// Project candidates are inspected before user candidates. This makes a
-/// project document shadow a user document with the same declared name.
-///
-/// # Errors
-/// Returns the first source/compiler failure encountered or
-/// [`WorkflowError::Invalid`] when no discovered document declares `name`.
-pub fn load_workflow_by_name(
-    workdir: &Path,
-    name: &str,
-) -> Result<CompiledWorkflow, WorkflowError> {
-    for path in discover_workflow_files(workdir) {
-        let workflow = load_workflow_file(&path)?;
-        if workflow.definition().name() == name {
-            return Ok(workflow);
-        }
-    }
-    Err(WorkflowError::Invalid {
-        workflow: name.to_string(),
-        detail: format!(
-            "no Workflow named `{name}` under {}",
-            workflow_dirs_for_workdir(workdir)
-                .iter()
-                .map(|dir| dir.display().to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
-    })
 }
 
 /// Return whether a path uses the only accepted Workflow source suffix.
@@ -132,7 +97,7 @@ flowchart TD
         let _ = std::fs::remove_dir_all(root);
     }
 
-    /// Discovery accepts only the compiled Markdown suffix and sorts names.
+    /// Explicit-root discovery accepts only the compiled Markdown suffix and sorts names.
     #[test]
     fn discovery_rejects_legacy_yaml_and_orders_sources() {
         let root = test_root("discovery");
@@ -144,12 +109,12 @@ flowchart TD
                 .unwrap_or_else(|error| panic!("write fixture: {error}"));
         }
 
-        let files = discover_workflow_files(&root);
+        let files = discover_workflow_files_in_root(&directory);
         let names = files
             .iter()
             .filter_map(|path| path.file_name().and_then(|name| name.to_str()))
             .collect::<Vec<_>>();
-        assert!(names.starts_with(&["a.hya.md", "z.hya.md"]), "{names:?}");
+        assert_eq!(names, ["a.hya.md", "z.hya.md"]);
 
         let _ = std::fs::remove_dir_all(root);
     }

@@ -30,16 +30,28 @@ pub mod store;
 pub mod team;
 /// Serde wire types for config, sessions, messages, and events.
 pub mod types;
+/// Typed Workflow commands, results, and replay state.
+pub mod workflow;
+pub use workflow::{
+    MemberId, OwnerRunId, WorkflowAvailability, WorkflowCommand, WorkflowCommandResult,
+    WorkflowDelivery, WorkflowIdentity, WorkflowInfo, WorkflowMemberProjection, WorkflowMemberRole,
+    WorkflowProjection, WorkflowRevision, WorkflowRunId, WorkflowRunProjection, WorkflowRunResult,
+    WorkflowRunStatus, WorkflowSourceId, WorkflowStageInfo, WorkflowStagePlan,
+    WorkflowStageProjection, WorkflowStageStatus, WorkflowSummary,
+};
 
 mod client;
 pub use client::{ApiClient, Client, HttpClient, Transport};
-pub use error::SdkError;
+pub use error::{decode_http_error, SdkError, SdkHttpError};
 pub use events::stream_global_events;
 pub use native::{NativeBridge, NativeClient};
 pub use pending::{PendingClient, PendingSlot};
 pub use reducer::{Data, V2Event};
 pub use server::{default_session_db_path, hya_state_dir, ServerHandle, HYA_DB_ENV};
-pub use store::{MemberProjection, MessageStore, StoredPart};
+pub use store::{
+    MemberProjection, MessageStore, StoredPart, WorkflowActivity, WorkflowMemberActivity,
+    WorkflowStageActivity,
+};
 pub use team::{ChannelProjection, MailEndpoint, MailMessage, RosterEntry, TeamProjection};
 pub use types::{
     Agent, Config, EventPayload, GlobalEvent, Message, MessageTime, Part, Session, SessionMessage,

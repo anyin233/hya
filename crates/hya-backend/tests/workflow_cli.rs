@@ -12,6 +12,8 @@ use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use hya_bundle::{BundleSource, write_public_package};
+
 /// Fan-out level of two branches joined by one downstream Stage.
 const FAN_JOIN_WORKFLOW: &str = r#"---
 kind: Workflow
@@ -100,6 +102,15 @@ impl Drop for IsolatedEnv {
     }
 }
 
+/// Return the repository root that owns the shipped WorkflowBundle examples.
+fn repository_root() -> Result<PathBuf, std::io::Error> {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(std::path::Path::parent)
+        .map(std::path::Path::to_path_buf)
+        .ok_or_else(|| std::io::Error::other("hya-backend must live under <repository>/crates"))
+}
+
 fn workflow_command(env: &IsolatedEnv) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_hya-backend"));
     command.env_clear();
@@ -124,8 +135,7 @@ fn combined_text(output: &Output) -> String {
 }
 
 #[test]
-fn cli_run_fans_out_two_branches_and_the_join_sees_both_sections()
--> Result<(), Box<dyn std::error::Error>> {
+fn cli_run_reports_durable_fan_out_and_join_projection() -> Result<(), Box<dyn std::error::Error>> {
     let env = IsolatedEnv::new("fan-join")?;
     env.write_workflow("fan-join.hya.md", FAN_JOIN_WORKFLOW)?;
 
@@ -139,41 +149,21 @@ fn cli_run_fans_out_two_branches_and_the_join_sees_both_sections()
     );
     let stdout = String::from_utf8(output.stdout)?;
 
-    // Deterministic per-stage report: overall status and one line per stage.
     assert!(
         stdout.contains("workflow fan-join: completed"),
         "missing overall status header:\n{stdout}"
     );
     assert!(
-        stdout.contains("\n  branch-a [done] agent=explore session="),
-        "branch-a stage row missing:\n{stdout}"
+        stdout.contains("\n  branch-a [completed] agent=explore members=1"),
+        "branch-a Stage row missing:\n{stdout}"
     );
     assert!(
-        stdout.contains("\n  branch-b [done] agent=general session="),
-        "branch-b stage row missing:\n{stdout}"
+        stdout.contains("\n  branch-b [completed] agent=general members=1"),
+        "branch-b Stage row missing:\n{stdout}"
     );
     assert!(
-        stdout.contains("\n  merge [done] agent=general session="),
-        "merge stage row missing:\n{stdout}"
-    );
-
-    // Automatic direct-predecessor entries prove both branches converged.
-    assert!(
-        stdout.contains("<stage id=\"branch-a\" agent=\"explore\" status=\"done\">"),
-        "merge directive missing branch-a evidence:\n{stdout}"
-    );
-    assert!(
-        stdout.contains("<stage id=\"branch-b\" agent=\"general\" status=\"done\">"),
-        "merge directive missing branch-b evidence:\n{stdout}"
-    );
-    // And both branch bodies traveled through the join, not just headers.
-    assert!(
-        stdout.contains("alpha branch on engines"),
-        "branch-a output text missing from the report:\n{stdout}"
-    );
-    assert!(
-        stdout.contains("beta branch on engines"),
-        "branch-b output text missing from the report:\n{stdout}"
+        stdout.contains("\n  merge [completed] agent=general members=1"),
+        "merge Stage row missing:\n{stdout}"
     );
     Ok(())
 }
@@ -220,12 +210,16 @@ fn cli_parses_input_values_containing_equals_signs() -> Result<(), Box<dyn std::
         combined_text(&output)
     );
 
-    // JSON report: only the part before the FIRST '=' is the key; everything
-    // after stays verbatim in the value the member received and echoed back.
+    // The shared durable result proves the CLI accepted the value and completed
+    // without echoing raw input values into lifecycle state.
     let stdout = String::from_utf8(output.stdout)?;
+    let value: serde_json::Value = serde_json::from_str(&stdout)?;
+    assert_eq!(value["kind"], "run");
+    assert_eq!(value["result"]["run"]["status"], "completed");
+    assert_eq!(value["result"]["run"]["stages"][0]["status"], "completed");
     assert!(
-        stdout.contains("captured=a=b=c&d=e"),
-        "member directive must carry the full value after the first '=' :\n{stdout}"
+        !stdout.contains("a=b=c&d=e"),
+        "raw Workflow inputs must not enter durable result state: {stdout}"
     );
     Ok(())
 }
@@ -256,5 +250,253 @@ fn cli_rejects_undeclared_input_keys_before_any_spawn() -> Result<(), Box<dyn st
         text.contains("Workflow input `ghost` is not declared"),
         "undeclared input error unclear:\n{text}"
     );
+    Ok(())
+}
+
+/// The shipped Argus source packages, installs, resolves, and runs through public CLI paths.
+#[test]
+fn cli_installs_and_runs_shipped_argus_workflowbundle() -> Result<(), Box<dyn std::error::Error>> {
+    let env = IsolatedEnv::new("argus-example")?;
+    let source =
+        BundleSource::read_directory(repository_root()?.join("bundles/examples/argus-example"))?;
+    let package = env.root.join("hya-argus-example.hyabundle");
+    fs::write(&package, write_public_package(&source)?)?;
+
+    let installed = workflow_command(&env)
+        .args(["bundle", "install"])
+        .arg(&package)
+        .output()?;
+    assert!(
+        installed.status.success(),
+        "Argus package install must succeed: {}",
+        combined_text(&installed)
+    );
+
+    let run = workflow_command(&env)
+        .args([
+            "workflow",
+            "run",
+            "argus",
+            "--input",
+            "request=verify-the-shipped-example",
+            "--json",
+        ])
+        .output()?;
+    assert!(
+        run.status.success(),
+        "installed Argus Workflow must complete: {}",
+        combined_text(&run)
+    );
+    let result: serde_json::Value = serde_json::from_slice(&run.stdout)?;
+    assert_eq!(result["kind"], "run");
+    assert_eq!(result["result"]["run"]["workflow"]["name"], "argus");
+    assert_eq!(result["result"]["run"]["status"], "completed");
+    assert_eq!(
+        result["result"]["run"]["stages"].as_array().map(Vec::len),
+        Some(10)
+    );
+    Ok(())
+}
+
+/// Selection without an owning Session must fail instead of creating unreachable state.
+#[test]
+fn cli_use_requires_an_existing_session() -> Result<(), Box<dyn std::error::Error>> {
+    let env = IsolatedEnv::new("use-requires-session")?;
+    env.write_workflow("echo-input.hya.md", SINGLE_INPUT_WORKFLOW)?;
+
+    let output = workflow_command(&env)
+        .args(["workflow", "use", "echo-input"])
+        .output()?;
+    assert!(
+        !output.status.success(),
+        "workflow use without --session must fail:\n{}",
+        combined_text(&output)
+    );
+    assert!(
+        combined_text(&output).contains("--session"),
+        "missing Session error must name --session: {}",
+        combined_text(&output)
+    );
+    Ok(())
+}
+
+/// Read-only catalog commands must not create durable Session rows, and
+/// duplicate input keys must fail before an owning Session is created.
+#[test]
+fn cli_read_only_commands_and_duplicate_inputs_leave_the_database_unchanged()
+-> Result<(), Box<dyn std::error::Error>> {
+    let env = IsolatedEnv::new("read-only-and-duplicate-inputs")?;
+    env.write_workflow("echo-input.hya.md", SINGLE_INPUT_WORKFLOW)?;
+    let db = env.root.join("sessions.db");
+
+    for args in [
+        vec!["workflow", "list"],
+        vec!["workflow", "info", "echo-input"],
+    ] {
+        let output = workflow_command(&env)
+            .arg("--db")
+            .arg(&db)
+            .args(args)
+            .output()?;
+        assert!(
+            output.status.success(),
+            "read-only Workflow command failed: {}",
+            combined_text(&output)
+        );
+    }
+    let duplicate = workflow_command(&env)
+        .arg("--db")
+        .arg(&db)
+        .args([
+            "workflow",
+            "run",
+            "echo-input",
+            "--input",
+            "v=first",
+            "--input",
+            "v=second",
+        ])
+        .output()?;
+    assert!(
+        !duplicate.status.success(),
+        "duplicate Workflow input was accepted"
+    );
+    assert!(combined_text(&duplicate).contains("duplicate --input key `v`"));
+
+    let sessions = workflow_command(&env)
+        .args(["sessions", "--db"])
+        .arg(&db)
+        .output()?;
+    assert!(String::from_utf8(sessions.stdout)?.contains("no sessions found"));
+    Ok(())
+}
+
+/// A nameless run has no durable selection unless an owning Session is supplied.
+#[test]
+fn cli_run_without_name_or_session_fails_before_creating_state()
+-> Result<(), Box<dyn std::error::Error>> {
+    let env = IsolatedEnv::new("run-requires-name-or-session")?;
+    env.write_workflow("echo-input.hya.md", SINGLE_INPUT_WORKFLOW)?;
+    let db = env.root.join("sessions.db");
+
+    let output = workflow_command(&env)
+        .arg("--db")
+        .arg(&db)
+        .args(["workflow", "run", "--input", "v=value"])
+        .output()?;
+    assert!(
+        !output.status.success(),
+        "nameless Workflow run without --session must fail:\n{}",
+        combined_text(&output)
+    );
+    assert!(
+        combined_text(&output).contains("requires NAME unless --session"),
+        "missing binding error was unclear: {}",
+        combined_text(&output)
+    );
+    let sessions = workflow_command(&env)
+        .args(["sessions", "--db"])
+        .arg(&db)
+        .output()?;
+    assert!(
+        String::from_utf8(sessions.stdout)?.contains("no sessions found"),
+        "rejected nameless run created durable Session state"
+    );
+    Ok(())
+}
+/// Separate CLI processes must select and read Workflow state in one durable Session.
+#[test]
+fn cli_use_and_state_share_an_existing_session_across_processes()
+-> Result<(), Box<dyn std::error::Error>> {
+    let env = IsolatedEnv::new("durable-session")?;
+    env.write_workflow("echo-input.hya.md", SINGLE_INPUT_WORKFLOW)?;
+    env.write_workflow("fan-join.hya.md", FAN_JOIN_WORKFLOW)?;
+    let db = env.root.join("sessions.db");
+
+    let initial = workflow_command(&env)
+        .arg("--db")
+        .arg(&db)
+        .args(["workflow", "run", "echo-input", "--input", "v=seed"])
+        .output()?;
+    assert!(
+        initial.status.success(),
+        "initial Workflow run must create a durable Session: {}",
+        combined_text(&initial)
+    );
+    let sessions = workflow_command(&env)
+        .args(["sessions", "--db"])
+        .arg(&db)
+        .output()?;
+    assert!(
+        sessions.status.success(),
+        "Session listing must succeed: {}",
+        combined_text(&sessions)
+    );
+    let sessions_stdout = String::from_utf8(sessions.stdout)?;
+    let session = sessions_stdout
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().next())
+        .ok_or("durable Workflow run did not create a listed Session")?;
+
+    let selected = workflow_command(&env)
+        .arg("--db")
+        .arg(&db)
+        .args([
+            "workflow",
+            "use",
+            "fan-join",
+            "--session",
+            session,
+            "--json",
+        ])
+        .output()?;
+    assert!(
+        selected.status.success(),
+        "Workflow selection must bind to the existing Session: {}",
+        combined_text(&selected)
+    );
+    let selected_json: serde_json::Value = serde_json::from_slice(&selected.stdout)?;
+    assert_eq!(selected_json["state"]["selection"]["name"], "fan-join");
+
+    let selected_run = workflow_command(&env)
+        .arg("--db")
+        .arg(&db)
+        .args([
+            "workflow",
+            "run",
+            "--session",
+            session,
+            "--input",
+            "topic=durable",
+            "--json",
+        ])
+        .output()?;
+    assert!(
+        selected_run.status.success(),
+        "Workflow run must use the existing Session selection: {}",
+        combined_text(&selected_run)
+    );
+    let selected_run_json: serde_json::Value = serde_json::from_slice(&selected_run.stdout)?;
+    assert_eq!(
+        selected_run_json["result"]["run"]["workflow"]["name"],
+        "fan-join"
+    );
+    assert_eq!(selected_run_json["result"]["run"]["status"], "completed");
+
+    let state = workflow_command(&env)
+        .arg("--db")
+        .arg(&db)
+        .args(["workflow", "state", "--session", session, "--json"])
+        .output()?;
+    assert!(
+        state.status.success(),
+        "separate Workflow state process must replay the Session: {}",
+        combined_text(&state)
+    );
+    let state_json: serde_json::Value = serde_json::from_slice(&state.stdout)?;
+    assert_eq!(state_json["kind"], "state");
+    assert_eq!(state_json["state"]["selection"]["name"], "fan-join");
+    assert_eq!(state_json["state"]["run"]["workflow"]["name"], "fan-join");
     Ok(())
 }

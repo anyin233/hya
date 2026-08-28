@@ -41,15 +41,17 @@ async fn subscribe(State(st): State<ServerState>) -> axum::response::Response {
     });
     let initial = stream::once(async move { Ok::<_, Infallible>(connected) });
     let live_st = st.clone();
-    let live = BroadcastStream::new(st.engine.bus().subscribe()).filter_map(move |result| {
-        let st = live_st.clone();
-        async move {
-            match result {
-                Ok(envelope) => Some(Ok(json_event(&envelope_payload(&st, envelope).await))),
-                Err(_lagged) => Some(Ok(SseEvent::default().event("resync"))),
+    let live = BroadcastStream::new(st.engine.bus().subscribe())
+        .then(move |result| {
+            let st = live_st.clone();
+            async move {
+                match result {
+                    Ok(envelope) => sse_values(envelope_payloads(&st, envelope).await),
+                    Err(_lagged) => vec![Ok::<_, Infallible>(SseEvent::default().event("resync"))],
+                }
             }
-        }
-    });
+        })
+        .flat_map(stream::iter);
     let permissions =
         BroadcastStream::new(st.permission_requests.subscribe()).filter_map(|result| async move {
             match result {
@@ -88,26 +90,26 @@ async fn subscribe_api(
     let initial = stream::once(async move { Ok::<_, Infallible>(connected) });
     let live_st = st.clone();
     let perm_location = location_info.clone();
-    let live = BroadcastStream::new(st.engine.bus().subscribe()).filter_map(move |result| {
-        let st = live_st.clone();
-        let location_info = location_info.clone();
-        let requested_directory = requested_directory.clone();
-        async move {
-            match result {
-                Ok(envelope) => {
-                    if !envelope_matches_location(&st, &requested_directory, &envelope).await {
-                        return None;
+    let live = BroadcastStream::new(st.engine.bus().subscribe())
+        .then(move |result| {
+            let st = live_st.clone();
+            let location_info = location_info.clone();
+            let requested_directory = requested_directory.clone();
+            async move {
+                match result {
+                    Ok(envelope) => {
+                        if !envelope_matches_location(&st, &requested_directory, &envelope).await {
+                            return Vec::new();
+                        }
+                        sse_values(api_envelope_payloads(&st, &location_info, envelope).await)
                     }
-                    let payload = api_envelope_payload(&st, envelope).await;
-                    Some(Ok(json_event(&native_event_payload(
-                        &location_info,
-                        payload,
-                    ))))
+                    Err(_lagged) => {
+                        vec![Ok::<_, Infallible>(SseEvent::default().event("resync"))]
+                    }
                 }
-                Err(_lagged) => Some(Ok(SseEvent::default().event("resync"))),
             }
-        }
-    });
+        })
+        .flat_map(stream::iter);
     let question_location = perm_location.clone();
     let permissions =
         BroadcastStream::new(st.permission_requests.subscribe()).filter_map(move |result| {
@@ -165,19 +167,28 @@ async fn subscribe_global(State(st): State<ServerState>) -> axum::response::Resp
         );
     let live_st = st.clone();
     let live_directory = directory.clone();
-    let live = BroadcastStream::new(live_rx).filter_map(move |result| {
-        let st = live_st.clone();
-        let directory = live_directory.clone();
-        async move {
-            match result {
-                Ok(envelope) => {
-                    let payload = api_envelope_payload(&st, envelope).await;
-                    Some(Ok(json_event(&global_event_payload(&directory, payload))))
+    let live = BroadcastStream::new(live_rx)
+        .then(move |result| {
+            let st = live_st.clone();
+            let directory = live_directory.clone();
+            async move {
+                match result {
+                    Ok(envelope) => global_envelope_payloads(&st, envelope)
+                        .await
+                        .into_iter()
+                        .map(|payload| {
+                            Ok::<_, Infallible>(json_event(&global_event_payload(
+                                &directory, payload,
+                            )))
+                        })
+                        .collect::<Vec<_>>(),
+                    Err(_lagged) => {
+                        vec![Ok::<_, Infallible>(SseEvent::default().event("resync"))]
+                    }
                 }
-                Err(_lagged) => Some(Ok(SseEvent::default().event("resync"))),
             }
-        }
-    });
+        })
+        .flat_map(stream::iter);
     let permission_directory = directory.clone();
     let permission_requests = st.permission_requests.clone();
     let permissions = BroadcastStream::new(permission_rx)
@@ -219,6 +230,15 @@ async fn subscribe_global(State(st): State<ServerState>) -> axum::response::Resp
     ))))
 }
 
+async fn global_envelope_payloads(st: &ServerState, envelope: Envelope) -> Vec<Value> {
+    let raw = workflow_event(&envelope.event).then(|| fallback_payload(&envelope));
+    let adapted = api_envelope_payload(st, envelope).await;
+    match raw {
+        Some(raw) => vec![adapted, raw],
+        None => vec![adapted],
+    }
+}
+
 async fn recover_pending<F, Fut>(
     result: Result<Value, BroadcastStreamRecvError>,
     snapshot: F,
@@ -231,6 +251,47 @@ where
         Ok(value) => vec![value],
         Err(BroadcastStreamRecvError::Lagged(_)) => snapshot().await,
     }
+}
+
+fn workflow_event(event: &Event) -> bool {
+    matches!(
+        event,
+        Event::WorkflowSelected { .. }
+            | Event::WorkflowRunStarted { .. }
+            | Event::WorkflowStageStarted { .. }
+            | Event::WorkflowStageMemberLinked { .. }
+            | Event::WorkflowStageFinished { .. }
+            | Event::WorkflowRunFinished { .. }
+    )
+}
+
+async fn envelope_payloads(st: &ServerState, envelope: Envelope) -> Vec<Value> {
+    let raw = workflow_event(&envelope.event).then(|| fallback_payload(&envelope));
+    let adapted = envelope_payload(st, envelope).await;
+    match raw {
+        Some(raw) => vec![adapted, raw],
+        None => vec![adapted],
+    }
+}
+
+async fn api_envelope_payloads(
+    st: &ServerState,
+    location: &super::location::LocationInfo,
+    envelope: Envelope,
+) -> Vec<Value> {
+    let raw = workflow_event(&envelope.event).then(|| fallback_payload(&envelope));
+    let adapted = native_event_payload(location, api_envelope_payload(st, envelope).await);
+    match raw {
+        Some(raw) => vec![adapted, native_event_payload(location, raw)],
+        None => vec![adapted],
+    }
+}
+
+fn sse_values(values: Vec<Value>) -> Vec<Result<SseEvent, Infallible>> {
+    values
+        .into_iter()
+        .map(|value| Ok::<_, Infallible>(json_event(&value)))
+        .collect()
 }
 
 fn global_event_payload<T: Serialize>(directory: &str, payload: T) -> Value {
@@ -303,7 +364,13 @@ async fn envelope_payload(st: &ServerState, envelope: Envelope) -> Value {
         | Event::SessionShareSet { session, .. }
         | Event::SessionShareCleared { session }
         | Event::AgentSwitched { session, .. }
-        | Event::ModelSwitched { session, .. } => {
+        | Event::ModelSwitched { session, .. }
+        | Event::WorkflowSelected { session, .. }
+        | Event::WorkflowRunStarted { session, .. }
+        | Event::WorkflowStageStarted { session, .. }
+        | Event::WorkflowStageMemberLinked { session, .. }
+        | Event::WorkflowStageFinished { session, .. }
+        | Event::WorkflowRunFinished { session, .. } => {
             session_payload(st, &envelope, *session, "session.updated").await
         }
         Event::CommandExecuted {
@@ -506,6 +573,12 @@ async fn api_envelope_payload(st: &ServerState, envelope: Envelope) -> Value {
         | Event::AgentSwitched { .. }
         | Event::ModelSwitched { .. }
         | Event::CommandExecuted { .. }
+        | Event::WorkflowSelected { .. }
+        | Event::WorkflowRunStarted { .. }
+        | Event::WorkflowStageStarted { .. }
+        | Event::WorkflowStageMemberLinked { .. }
+        | Event::WorkflowStageFinished { .. }
+        | Event::WorkflowRunFinished { .. }
         | Event::MessageStarted { .. }
         | Event::TurnBindingRecorded { .. }
         | Event::MessageFinished { .. }

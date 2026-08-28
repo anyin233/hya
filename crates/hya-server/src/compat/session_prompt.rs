@@ -86,8 +86,7 @@ async fn prompt(
         None
     } else {
         Some(
-            st.runs
-                .start(session)
+            st.start_run(session)
                 .ok_or_else(|| ApiError::conflict("session busy"))?,
         )
     };
@@ -145,12 +144,14 @@ async fn command(
     State(st): State<ServerState>,
     Path(id): Path<String>,
     Json(req): Json<CommandRequest>,
-) -> Result<Json<MessageResponse>, ApiError> {
+) -> Result<Response, ApiError> {
     let session = parse_session(&id)?;
     let _snapshot = super::load_session(&st, session, None).await?;
+    if let Some(result) = crate::workflow::intercept_slash(&st, session, &req).await? {
+        return Ok(Json(result).into_response());
+    }
     let run = st
-        .runs
-        .start(session)
+        .start_run(session)
         .ok_or_else(|| ApiError::conflict("session busy"))?;
     let workdir = super::reference::session_workdir(&st, session).await;
     let CommandRequest {
@@ -178,7 +179,7 @@ async fn command(
         )
         .await?;
     let data = super::session_legacy::load_message(&st, session, message).await?;
-    Ok(Json(MessageResponse { data }))
+    Ok(Json(MessageResponse { data }).into_response())
 }
 
 async fn shell(
@@ -189,8 +190,7 @@ async fn shell(
     let session = parse_session(&id)?;
     super::load_session(&st, session, None).await?;
     let run = st
-        .runs
-        .start(session)
+        .start_run(session)
         .ok_or_else(|| ApiError::conflict("session busy"))?;
     let (message, _finish) = st
         .engine
@@ -242,6 +242,12 @@ fn admission_info(envs: &[Envelope], message: MessageId) -> Result<(u64, u64), A
             | Event::ModelSwitched { .. }
             | Event::SessionStatus { .. }
             | Event::CommandExecuted { .. }
+            | Event::WorkflowSelected { .. }
+            | Event::WorkflowRunStarted { .. }
+            | Event::WorkflowStageStarted { .. }
+            | Event::WorkflowStageMemberLinked { .. }
+            | Event::WorkflowStageFinished { .. }
+            | Event::WorkflowRunFinished { .. }
             | Event::UserPromptContextRecorded { .. }
             | Event::MessageStarted { .. }
             | Event::TurnBindingRecorded { .. }

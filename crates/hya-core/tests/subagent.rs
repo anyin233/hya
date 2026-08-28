@@ -7,8 +7,8 @@ mod support;
 use async_trait::async_trait;
 use futures::{FutureExt as _, stream};
 use hya_bundle::{
-    AgentRole, BundleCatalog, BundleIdentity, ModelPolicy, PreparedAgent, PreparedBundle,
-    PreparedResource, ResourceView, SpawnLifecycle,
+    AgentRole, BundleCatalog, BundleIdentity, ModelPolicy, PreparedAgent, PreparedAgentBundle,
+    PreparedInstallableBundle, PreparedResource, ResourceView, SpawnLifecycle,
 };
 use hya_core::{
     AdmissionMemberIdentity, AgentCatalog, AgentSpec, BoundSidecarFactory, BoundSpawnSender,
@@ -463,9 +463,9 @@ struct ImmediateSidecarHandle {
 
 const SIDECAR_PERMISSION_TOOL: &str = "bundle:hya/sidecar-permission/tool/echo";
 
-fn sidecar_permission_bundle(spawn_lifecycle: SpawnLifecycle) -> PreparedBundle {
-    PreparedBundle {
-        format_version: 1,
+fn sidecar_permission_bundle(spawn_lifecycle: SpawnLifecycle) -> PreparedAgentBundle {
+    PreparedAgentBundle {
+        format_version: 2,
         identity: BundleIdentity {
             id: "hya/sidecar-permission".to_string(),
             version: "0.0.0".to_string(),
@@ -6078,7 +6078,8 @@ async fn run_team_preserves_input_member_order_with_mixed_outcomes() {
     );
 }
 
-/// Wrap one prepared bundle as an agent catalog over the compiled-in built-ins.
-fn agent_catalog(bundle: PreparedBundle) -> Result<AgentCatalog, hya_bundle::BundleError> {
-    AgentCatalog::new(Arc::new(BundleCatalog::from_prepared(&[bundle])?))
+/// Wrap one prepared AgentBundle as an agent catalog over the compiled-in built-ins.
+fn agent_catalog(bundle: PreparedAgentBundle) -> Result<AgentCatalog, hya_bundle::BundleError> {
+    let bundles = [PreparedInstallableBundle::Agent(Box::new(bundle))];
+    AgentCatalog::new(Arc::new(BundleCatalog::from_prepared(&bundles)?))
 }

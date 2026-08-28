@@ -25,8 +25,20 @@ help=$(bash ./install.sh --help)
 script=$(<./install.sh)
 ci_workflow=$(<.github/workflows/ci.yml)
 release_workflow=$(<.github/workflows/release.yml)
+package_helper=$(<scripts/package-argus-example.sh)
+contains "$release_workflow" "scripts/package-argus-example.sh"
+contains "$release_workflow" "examples/hya-argus-example.hyabundle"
+[[ -x ./scripts/package-argus-example.sh ]] || fail "Argus package helper must be executable"
+contains "$package_helper" "package-bundle"
+not_contains "$package_helper" "7z a"
 contains "$script" "set -Eeuo pipefail"
+contains "$script" 'cd "$tmp_compat" && bun install --frozen-lockfile --production'
+not_contains "$script" 'cp -R "$compat_source/node_modules/."'
 contains "$script" "scripts/prune-sdk-server.ts"
+contains "$script" "crates/hya-plugin-compat/adapter"
+contains "$script" "lib/hya/compat-adapter"
+contains "$release_workflow" "crates/hya-plugin-compat/adapter"
+contains "$release_workflow" "lib/hya/compat-adapter"
 contains "$release_workflow" "scripts/prune-sdk-server.ts"
 contains "$script" "packages/hya-tui-ts/bunfig.toml"
 contains "$script" "packages/hya-tui-ts/tsconfig.json"
@@ -53,6 +65,7 @@ contains "$help" "--profile release|dev|debug"
 contains "$help" "--dry-run"
 contains "$help" "hya-ts"
 contains "$help" "lib/hya/hya-tui-ts"
+contains "$help" "lib/hya/compat-adapter"
 
 dry_run=$(bash ./install.sh --dry-run --prefix /tmp/hya-install-test --profile debug)
 contains "$dry_run" "Permission preflight: /tmp/hya-install-test/bin"
@@ -69,6 +82,8 @@ contains "$dry_run" "/tmp/hya-install-test/bin/.hya-backend.bak"
 contains "$dry_run" "/tmp/hya-install-test/bin/.hya-ts.bak"
 contains "$dry_run" "/tmp/hya-install-test/lib/hya/.hya-tui-ts.tmp"
 contains "$dry_run" "/tmp/hya-install-test/lib/hya/.hya-tui-ts.bak"
+contains "$dry_run" "/tmp/hya-install-test/lib/hya/.compat-adapter.tmp"
+contains "$dry_run" "/tmp/hya-install-test/lib/hya/.compat-adapter.bak"
 
 
 contains "$dry_run" "/tmp/hya-install-test/bin/hya"
@@ -157,11 +172,18 @@ fi
 [[ "$*" == "install --frozen-lockfile --production" ]]
 test -f package.json
 test -f bun.lock
+if grep -Fq '"name": "@hya/compat-adapter"' package.json; then
+  mkdir -p node_modules
+  cp -R "${HYA_TEST_COMPAT_NODE_MODULES:?}/." node_modules/
+  exit 0
+fi
 mkdir -p node_modules/runtime-dependency
 printf '%s\n' '{"name":"runtime-dependency"}' >node_modules/runtime-dependency/package.json
 mkdir -p node_modules/@opentui/solid
 printf '%s\n' '{"name":"@opentui/solid","exports":{"./preload":"./preload.js"}}' >node_modules/@opentui/solid/package.json
 : >node_modules/@opentui/solid/preload.js
+mkdir -p node_modules/@opencode-ai/plugin
+printf '%s\n' '{"name":"@opencode-ai/plugin"}' >node_modules/@opencode-ai/plugin/package.json
 sdk=node_modules/@opencode-ai/sdk
 mkdir -p "$sdk/dist/v2"
 cat >"$sdk/package.json" <<'SDK_PACKAGE'
@@ -186,8 +208,10 @@ touch "$sdk/dist/v2/client.d.ts" "$sdk/dist/index.js" "$sdk/dist/index.d.ts" \
 FAKE_BUN
 chmod +x "$fake_bin/bun"
 
+compat_node_modules="$(pwd -P)/crates/hya-plugin-compat/adapter/node_modules"
+[[ -d "$compat_node_modules" ]] || fail "missing Compat adapter test dependencies"
 PATH="$fake_bin:$install_root/bin:$PATH" CARGO_TARGET_DIR="$target" HYA_BUN_PREFLIGHT_MARKER="$fixture/bun-ready" HYA_REAL_BUN="$real_bun" \
-  bash ./install.sh --prefix "$install_root" --profile debug >/dev/null
+  HYA_TEST_COMPAT_NODE_MODULES="$compat_node_modules" bash ./install.sh --prefix "$install_root" --profile debug >/dev/null
 
 for name in hya hya-backend hya-ts; do
   [[ -x "$install_root/bin/$name" ]] || fail "missing installed binary: $name"
@@ -208,6 +232,29 @@ not_contains "$sdk_package" '"."'
 for path in test dist; do
   [[ ! -e "$runtime/$path" ]] || fail "installed runtime contains build/test-only path: $path"
 done
+compat_adapter="$install_root/lib/hya/compat-adapter"
+for path in package.json bun.lock src/main.ts node_modules/@opencode-ai/plugin/package.json node_modules/@opencode-ai/sdk/package.json; do
+  [[ -e "$compat_adapter/$path" ]] || fail "missing installed Compat adapter path: $path"
+done
+
+# Run the packaged adapter from outside the checkout. This verifies the release
+# artifact is self-contained and does not depend on HYA_COMPAT_ADAPTER_DIR.
+compat_probe="$fixture/compat-probe"
+compat_output="$fixture/compat-output"
+mkdir -p "$compat_probe"
+(
+  cd "$compat_probe"
+  env -u HYA_COMPAT_ADAPTER_DIR COMPAT_PURE=1 HYA_DIRECTORY="$compat_probe" HYA_WORKTREE="$compat_probe" \
+    "$real_bun" run "$compat_adapter/src/main.ts" >"$compat_output" <<'COMPAT_REQUESTS'
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":1,"host":{"name":"hya","version":"test"}}}
+{"jsonrpc":"2.0","id":2,"method":"shutdown","params":{}}
+COMPAT_REQUESTS
+)
+compat_result=$(<"$compat_output")
+contains "$compat_result" '"protocol_version":1'
+contains "$compat_result" '"hooks":[]'
+contains "$compat_result" '"tools":[]'
+contains "$compat_result" '"id":2,"result":{}'
 
 project="$fixture/project"
 mock_bun="$fixture/mock-bun"
@@ -236,20 +283,22 @@ contains "$invocation" "arg=--project"
 contains "$invocation" "arg=$(cd "$project" && pwd -P)"
 
 rollback_root="$fixture/rollback"
-mkdir -p "$rollback_root/bin" "$rollback_root/lib/hya/hya-tui-ts"
+mkdir -p "$rollback_root/bin" "$rollback_root/lib/hya/hya-tui-ts" "$rollback_root/lib/hya/compat-adapter"
 for name in hya hya-backend hya-ts; do
   printf 'old-%s\n' "$name" >"$rollback_root/bin/$name"
 done
 printf 'old-runtime\n' >"$rollback_root/lib/hya/hya-tui-ts/marker"
+printf 'old-compat\n' >"$rollback_root/lib/hya/compat-adapter/marker"
 
 if PATH="$fake_bin:$rollback_root/bin:$PATH" CARGO_TARGET_DIR="$target" HYA_BUN_PREFLIGHT_MARKER="$fixture/bun-ready" HYA_REAL_BUN="$real_bun" \
-  HYA_INSTALL_SMOKE_FAIL=hya-ts bash ./install.sh --bin-dir "$rollback_root/bin" --profile debug >/dev/null 2>&1; then
+  HYA_TEST_COMPAT_NODE_MODULES="$compat_node_modules" HYA_INSTALL_SMOKE_FAIL=hya-ts bash ./install.sh --bin-dir "$rollback_root/bin" --profile debug >/dev/null 2>&1; then
   fail "install should fail when a post-placement smoke fails"
 fi
 for name in hya hya-backend hya-ts; do
   [[ $(<"$rollback_root/bin/$name") == "old-$name" ]] || fail "rollback did not restore $name"
 done
 [[ $(<"$rollback_root/lib/hya/hya-tui-ts/marker") == old-runtime ]] || fail "rollback did not restore runtime"
+[[ $(<"$rollback_root/lib/hya/compat-adapter/marker") == old-compat ]] || fail "rollback did not restore Compat adapter"
 if compgen -G "$rollback_root/bin/.*.tmp.*" >/dev/null ||
   compgen -G "$rollback_root/bin/.*.bak.*" >/dev/null ||
   compgen -G "$rollback_root/lib/hya/.*.tmp.*" >/dev/null ||

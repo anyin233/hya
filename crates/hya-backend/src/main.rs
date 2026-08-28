@@ -360,7 +360,7 @@ async fn main() -> anyhow::Result<()> {
         Some(Command::Auth { command }) => auth_cmd::run(command).await,
         Some(Command::Agent { command }) => agent_cmd::run(command),
         Some(Command::Bundle { command }) => bundle_cmd::run(command).await,
-        Some(Command::Workflow { command }) => workflow_cmd::run(command).await,
+        Some(Command::Workflow { command }) => workflow_cmd::run(command, model, &db, yolo).await,
         Some(Command::Models {
             provider,
             verbose,

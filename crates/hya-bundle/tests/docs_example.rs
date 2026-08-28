@@ -54,7 +54,7 @@ fn docs_example_bundle_hya_md_prepares_deterministically() {
     assert_eq!(first.index().len(), 1);
 
     let bundle = &first.bundles()[0];
-    let agent = &bundle.agent;
+    let agent = &bundle.agents()[0];
     assert_eq!(agent.role, AgentRole::Main);
     assert_eq!(agent.spawn_lifecycle, SpawnLifecycle::Transient);
     assert!(
@@ -122,7 +122,10 @@ fn bundle_authoring_docs_capture_hook_and_entrypoint_contract() {
         ),
         ("tool-only", "tool-only reports zero hooks"),
         ("hook-only", "hook-only reports zero tools"),
-        ("one agent per bundle", "A bundle defines exactly one agent"),
+        (
+            "one agent per AgentBundle",
+            "An AgentBundle defines exactly one agent",
+        ),
         (
             "host-controlled tool plane",
             "derived from its origin, not declared",
@@ -254,8 +257,8 @@ fn bundle_cli_docs_distinguish_catalog_publication_from_activation_closure() {
         .join(" ");
 
     for marker in [
-        "publication validates the complete built-ins-plus-installed BundleCatalog",
-        "activation materializes only the selected agent's captured Tool/Hook capability closure and exact-path-matched JS Extension entrypoints",
+        "publication validates collisions against the immutable first-party catalog, the complete installed BundleCatalog, and reserved core Agent ids before atomic generation publication",
+        "activation materializes only the selected Agent's captured Tool/Hook/Skill capability closure and exact-path-matched JavaScript Extension entrypoints",
     ] {
         assert!(
             normalized.contains(marker),
@@ -266,6 +269,56 @@ fn bundle_cli_docs_distinguish_catalog_publication_from_activation_closure() {
         !normalized.contains("Publication and activation compile only the selected agent"),
         "docs/cli.md must not combine publication and activation into one selected closure"
     );
+}
+
+/// Ensure the user guide and generated architecture wiki explain the durable
+/// Workflow product surface instead of only the compiler internals.
+#[test]
+fn workflow_docs_cover_control_replay_and_tui_state() {
+    let paths = [
+        repository_root().join("docs/workflows.md"),
+        repository_root().join(".autors/hya/wiki/pages/architecture/workflow-composition.md"),
+    ];
+    let required_markers = [
+        "WorkflowBundle",
+        "session.updated",
+        "interrupted",
+        "unavailable",
+        "stale",
+        "TUI",
+        "sidebar",
+        "WorkflowControl",
+    ];
+
+    for path in paths {
+        let source = std::fs::read_to_string(&path).unwrap_or_else(|error| {
+            panic!(
+                "Workflow documentation must exist at {}: {error}",
+                path.display()
+            )
+        });
+        assert!(
+            source
+                .lines()
+                .filter(|line| !line.trim().is_empty())
+                .count()
+                >= 30,
+            "{} must contain a substantive Workflow explanation",
+            path.display()
+        );
+        for marker in required_markers {
+            assert!(
+                source.contains(marker),
+                "{} must contain Workflow contract marker `{marker}`",
+                path.display()
+            );
+        }
+        assert!(
+            !source.contains("Zero preset workflows"),
+            "{} must not claim that selectable first-party Workflows are absent",
+            path.display()
+        );
+    }
 }
 
 struct ExpectedAgent {
@@ -338,15 +391,15 @@ fn bun_examples_are_prepare_valid_and_deterministic() {
         assert_eq!(first.digest(), second.digest());
         assert_eq!(first.bundles().len(), 1);
         let bundle = &first.bundles()[0];
-        assert_eq!(bundle.identity.id, expected.bundle_id);
-        assert_eq!(bundle.tools.len(), 1);
-        assert_eq!(bundle.extensions.len(), 1);
-        assert!(bundle.skills.is_empty());
-        assert!(bundle.hooks.is_empty());
-        assert!(bundle.mcp.is_empty());
+        assert_eq!(bundle.identity().id, expected.bundle_id);
+        assert_eq!(bundle.tools().len(), 1);
+        assert_eq!(bundle.extensions().len(), 1);
+        assert!(bundle.skills().is_empty());
+        assert!(bundle.hooks().is_empty());
+        assert!(bundle.mcp().is_empty());
 
         {
-            let agent = &bundle.agent;
+            let agent = &bundle.agents()[0];
             let [expected_agent] = expected.agents else {
                 panic!("a bundle example declares exactly one agent");
             };
@@ -361,7 +414,7 @@ fn bun_examples_are_prepare_valid_and_deterministic() {
             assert_eq!(can_spawn.as_slice(), expected_agent.can_spawn);
         }
 
-        let tool = &bundle.tools[0];
+        let tool = &bundle.tools()[0];
         assert_eq!(tool.local_id, "echo");
         assert_eq!(tool.source_path, "extensions/runtime.js");
         assert_eq!(
@@ -371,7 +424,7 @@ fn bun_examples_are_prepare_valid_and_deterministic() {
         assert!(!tool.content.trim().is_empty());
         assert!(!tool.digest.trim().is_empty());
 
-        let extension = &bundle.extensions[0];
+        let extension = &bundle.extensions()[0];
         assert_eq!(extension.local_id, "runtime");
         assert_eq!(extension.source_path, "extensions/runtime.js");
         assert_eq!(
@@ -393,12 +446,12 @@ fn bun_disjoint_example_is_prepare_valid_and_captures_the_agent_closure() {
     assert_eq!(first.bundles().len(), 1);
 
     let bundle = &first.bundles()[0];
-    assert_eq!(bundle.identity.id, "hya/docs-bun-disjoint");
-    assert_eq!(bundle.tools.len(), 1);
-    assert_eq!(bundle.hooks.len(), 1);
-    assert_eq!(bundle.extensions.len(), 1);
-    assert!(bundle.skills.is_empty());
-    assert!(bundle.mcp.is_empty());
+    assert_eq!(bundle.identity().id, "hya/docs-bun-disjoint");
+    assert_eq!(bundle.tools().len(), 1);
+    assert_eq!(bundle.hooks().len(), 1);
+    assert_eq!(bundle.extensions().len(), 1);
+    assert!(bundle.skills().is_empty());
+    assert!(bundle.mcp().is_empty());
 
     fn find_resource<'a>(
         resources: &'a [hya_bundle::PreparedResource],
@@ -410,13 +463,13 @@ fn bun_disjoint_example_is_prepare_valid_and_captures_the_agent_closure() {
             .unwrap_or_else(|| panic!("prepared resource `{local_id}` is missing"))
     }
     let assert_matches_extension = |resource: &hya_bundle::PreparedResource| {
-        let extension = &bundle.extensions[0];
+        let extension = &bundle.extensions()[0];
         assert_eq!(resource.source_path, extension.source_path);
         assert_eq!(resource.content, extension.content);
         assert_eq!(resource.digest, extension.digest);
     };
 
-    let alpha = &bundle.agent;
+    let alpha = &bundle.agents()[0];
     assert_eq!(alpha.id.as_str(), "docs-bun-alpha");
     assert_eq!(alpha.role, AgentRole::Main);
     assert_eq!(alpha.spawn_lifecycle, SpawnLifecycle::Transient);
@@ -428,11 +481,11 @@ fn bun_disjoint_example_is_prepare_valid_and_captures_the_agent_closure() {
     );
     assert_eq!(alpha.hook_refs, ["bundle:hya/docs-bun-disjoint/hook/event"]);
 
-    let echo = find_resource(&bundle.tools, "echo");
+    let echo = find_resource(bundle.tools(), "echo");
     assert_eq!(echo.stable_id, "bundle:hya/docs-bun-disjoint/tool/echo");
     assert_matches_extension(echo);
 
-    let event = find_resource(&bundle.hooks, "event");
+    let event = find_resource(bundle.hooks(), "event");
     assert_eq!(event.stable_id, "bundle:hya/docs-bun-disjoint/hook/event");
     assert_matches_extension(event);
 }

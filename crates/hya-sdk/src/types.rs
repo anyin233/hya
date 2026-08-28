@@ -9,6 +9,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+use crate::workflow::WorkflowProjection;
+
 /// Server config. The full schema is large; we keep `theme` typed (used by the theme system)
 /// and retain everything else verbatim.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -79,6 +81,9 @@ pub struct Session {
     /// Working directory for the session when present.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub directory: Option<String>,
+    /// Replay-derived Workflow selection and newest run state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow: Option<WorkflowProjection>,
     /// Remaining session fields retained verbatim.
     #[serde(flatten)]
     pub rest: Map<String, Value>,
