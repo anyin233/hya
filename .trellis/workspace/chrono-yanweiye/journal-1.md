@@ -654,3 +654,24 @@ Closed all four E2E hardening follow-ups. Established root causes by measurement
 ### Next Steps
 
 - None - task complete
+
+
+## Session 18: Complete user-composed Workflow platform
+
+**Date**: 2026-08-28
+**Task**: Complete user-composed Workflow platform
+**Branch**: `main`
+
+### Summary
+
+Recovered Argus work and shipped the 0.36.0 Workflow compiler, governed runtime, WorkflowBundle packaging, durable control plane, synchronized TUI presentation, release docs, examples, and full verification gates.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b8c7c7e7` | (see git log) |
+
+### Status
+
+[OK] **Completed**
