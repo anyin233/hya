@@ -18,8 +18,8 @@ Turn the mixed, uncommitted Argus predecessor tree into one reviewed and pushed 
 - [x] `git diff --check` and release metadata checks pass for the classified tree.
 - [x] Provider, OAuth/fallback, `find`, Workflow foundation, and Trellis behavior have passing focused or recovered mutation evidence.
 - [x] Rust CI-equivalent gates, rebuilt backend Track P, Compat adapter checks, and TUI checks pass with zero failures.
-- [ ] Commit `chore(release): 0.35.2` contains only classified tracked files and is pushed to the configured upstream.
-- [ ] The remaining worktree contains only intentional planning/user state for the `0.36.0` Workflow cutover.
+- [x] Commit `chore(release): 0.35.2` contains only classified tracked files and is pushed to the configured upstream.
+- [x] The remaining worktree contains only intentional planning/user state for the `0.36.0` Workflow cutover.
 
 ## Exclusions
 
