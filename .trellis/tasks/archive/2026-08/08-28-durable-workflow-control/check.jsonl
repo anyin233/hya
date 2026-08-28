@@ -1,0 +1,5 @@
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Review state/control behavior and test coverage."}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Review event-sourced replay and idempotency."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Review stable error mapping and context."}
+{"file":".trellis/spec/backend/task-tool.md","reason":"Review operation identity and authorization retention."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Review route parity and complete durable data flow."}

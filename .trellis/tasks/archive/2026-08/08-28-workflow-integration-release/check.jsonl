@@ -1,0 +1,6 @@
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Review final Rust tests, docs, and release quality."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Review final failure semantics."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Review final TUI tests and actual visual proof."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Review final cross-language DTO consistency."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Review every parent acceptance path end to end."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Confirm obsolete and duplicate paths are removed."}

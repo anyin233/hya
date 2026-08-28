@@ -1,0 +1,7 @@
+{"file":".trellis/spec/backend/index.md","reason":"Rust bundle/plugin/app package conventions."}
+{"file":".trellis/spec/backend/directory-structure.md","reason":"Placement of new crate, example, adapter, and release assets."}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Atomic installed-bundle registry behavior without a new read model."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Typed prepare/catalog/plugin/install failures."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Package, plugin, store, and installer test contracts."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Trace source through prepare/install/catalog/runtime/release."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Preserve one package path and one plugin contribution seam."}

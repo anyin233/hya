@@ -1,0 +1,7 @@
+{"file":".trellis/spec/frontend/index.md","reason":"TypeScript TUI package entry rules."}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Solid/OpenTUI built-in plugin component rules."}
+{"file":".trellis/spec/frontend/state-management.md","reason":"Reuse SDKProvider/SyncProvider and event-driven state."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Typed Workflow DTO parsing and exhaustive status rendering."}
+{"file":".trellis/spec/frontend/hook-guidelines.md","reason":"Lifecycle-safe plugin registration and cleanup."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"TUI behavior, PTY, and visual verification contracts."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Keep sidebar state aligned with backend Projection."}

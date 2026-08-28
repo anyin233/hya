@@ -1,0 +1,5 @@
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Review deterministic packaging, atomic install, and tests."}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Review registry transaction and generation invariants."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Review fail-closed package/plugin diagnostics."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Review complete release-install-runtime contribution flow."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Detect a second bundle/plugin/catalog path."}

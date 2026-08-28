@@ -1,0 +1,33 @@
+{
+  "id": "resume-argus-work",
+  "name": "resume-argus-work",
+  "title": "Resume and complete Argus work",
+  "description": "",
+  "status": "completed",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P2",
+  "creator": "cydia2001",
+  "assignee": "cydia2001",
+  "createdAt": "2026-08-28",
+  "completedAt": "2026-08-28",
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [
+    "08-28-recovered-argus-baseline",
+    "08-28-workflow-language-runtime",
+    "08-28-workflow-bundles-examples",
+    "08-28-durable-workflow-control",
+    "08-28-workflow-tui-presentation",
+    "08-28-workflow-integration-release"
+  ],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {}
+}

@@ -1,0 +1,6 @@
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Review Rust correctness, tests, and quality gates."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Review typed errors and failure context."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Review TypeScript correctness and behavior tests."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Review DTO parsing and exhaustive statuses."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Review complete state/control/runtime/TUI data flow."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Detect duplicate schedulers, reducers, clients, and plugin paths."}
