@@ -12,35 +12,41 @@ use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// Fan-out level of two branches joined by one downstream stage; both branches
-/// run against builtin agents the offline `build` caller may spawn.
-const FAN_JOIN_YAML: &str = r#"
+/// Fan-out level of two branches joined by one downstream Stage.
+const FAN_JOIN_WORKFLOW: &str = r#"---
+kind: Workflow
 name: fan-join
-description: two parallel branches joined into one merge stage
+description: Two parallel branches joined into one merge Stage.
 inputs:
-  topic: subject every branch studies
-stages:
-  - id: branch-a
+  topic: Subject every branch studies.
+nodes:
+  branch-a:
     agent: explore
-    prompt: alpha branch on {{inputs.topic}}
-  - id: branch-b
+    directive: alpha branch on {{input.topic}}
+  branch-b:
     agent: general
-    prompt: beta branch on {{inputs.topic}}
-  - id: merge
+    directive: beta branch on {{input.topic}}
+  merge:
     agent: general
-    needs: [branch-a, branch-b]
-    prompt: "MERGED REPORT\n{{branch-a}}\n{{branch-b}}\nEND MERGE"
+    directive: MERGED REPORT
+---
+flowchart TD
+  branch-a & branch-b --> merge
 "#;
 
-const SINGLE_INPUT_YAML: &str = r#"
+const SINGLE_INPUT_WORKFLOW: &str = r#"---
+kind: Workflow
 name: echo-input
-description: one stage whose directive embeds {{inputs.v}}
+description: One Stage whose directive embeds the required input.
 inputs:
-  v: any value, equals signs included
-stages:
-  - id: capture
+  v: Any value, including equals signs.
+nodes:
+  capture:
     agent: general
-    prompt: captured={{inputs.v}}
+    directive: captured={{input.v}}
+---
+flowchart TD
+  capture
 "#;
 
 struct IsolatedEnv {
@@ -121,7 +127,7 @@ fn combined_text(output: &Output) -> String {
 fn cli_run_fans_out_two_branches_and_the_join_sees_both_sections()
 -> Result<(), Box<dyn std::error::Error>> {
     let env = IsolatedEnv::new("fan-join")?;
-    env.write_workflow("fan-join.yaml", FAN_JOIN_YAML)?;
+    env.write_workflow("fan-join.hya.md", FAN_JOIN_WORKFLOW)?;
 
     let output = workflow_command(&env)
         .args(["workflow", "run", "fan-join", "--input", "topic=engines"])
@@ -151,15 +157,14 @@ fn cli_run_fans_out_two_branches_and_the_join_sees_both_sections()
         "merge stage row missing:\n{stdout}"
     );
 
-    // The join's echoed directive is the only place these section headers can
-    // appear, so their presence proves BOTH branches converged into the merge.
+    // Automatic direct-predecessor entries prove both branches converged.
     assert!(
-        stdout.contains("## upstream stage `branch-a` (explore)"),
-        "merge directive missing branch-a section:\n{stdout}"
+        stdout.contains("<stage id=\"branch-a\" agent=\"explore\" status=\"done\">"),
+        "merge directive missing branch-a evidence:\n{stdout}"
     );
     assert!(
-        stdout.contains("## upstream stage `branch-b` (general)"),
-        "merge directive missing branch-b section:\n{stdout}"
+        stdout.contains("<stage id=\"branch-b\" agent=\"general\" status=\"done\">"),
+        "merge directive missing branch-b evidence:\n{stdout}"
     );
     // And both branch bodies traveled through the join, not just headers.
     assert!(
@@ -176,7 +181,7 @@ fn cli_run_fans_out_two_branches_and_the_join_sees_both_sections()
 #[test]
 fn cli_rejects_missing_declared_input_before_any_spawn() -> Result<(), Box<dyn std::error::Error>> {
     let env = IsolatedEnv::new("missing-input")?;
-    env.write_workflow("echo-input.yaml", SINGLE_INPUT_YAML)?;
+    env.write_workflow("echo-input.hya.md", SINGLE_INPUT_WORKFLOW)?;
 
     let output = workflow_command(&env)
         .args(["workflow", "run", "echo-input"])
@@ -186,12 +191,10 @@ fn cli_rejects_missing_declared_input_before_any_spawn() -> Result<(), Box<dyn s
         "run without the declared input must fail:\n{}",
         combined_text(&output)
     );
-    // The CLI-side guard fires before engine construction/spawn; its exact
-    // wording distinguishes it from the in-core execution-time check.
     let text = combined_text(&output);
     assert!(
-        text.contains("requires --input v=<value>"),
-        "missing-input error not reported with CLI guidance:\n{text}"
+        text.contains("required Workflow input `v` was not provided"),
+        "missing-input error not reported clearly:\n{text}"
     );
     Ok(())
 }
@@ -199,7 +202,7 @@ fn cli_rejects_missing_declared_input_before_any_spawn() -> Result<(), Box<dyn s
 #[test]
 fn cli_parses_input_values_containing_equals_signs() -> Result<(), Box<dyn std::error::Error>> {
     let env = IsolatedEnv::new("equals-value")?;
-    env.write_workflow("echo-input.yaml", SINGLE_INPUT_YAML)?;
+    env.write_workflow("echo-input.hya.md", SINGLE_INPUT_WORKFLOW)?;
 
     let output = workflow_command(&env)
         .args([
@@ -230,7 +233,7 @@ fn cli_parses_input_values_containing_equals_signs() -> Result<(), Box<dyn std::
 #[test]
 fn cli_rejects_undeclared_input_keys_before_any_spawn() -> Result<(), Box<dyn std::error::Error>> {
     let env = IsolatedEnv::new("unknown-input")?;
-    env.write_workflow("echo-input.yaml", SINGLE_INPUT_YAML)?;
+    env.write_workflow("echo-input.hya.md", SINGLE_INPUT_WORKFLOW)?;
 
     let output = workflow_command(&env)
         .args([
@@ -250,12 +253,8 @@ fn cli_rejects_undeclared_input_keys_before_any_spawn() -> Result<(), Box<dyn st
     );
     let text = combined_text(&output);
     assert!(
-        text.contains("does not declare input `ghost`"),
+        text.contains("Workflow input `ghost` is not declared"),
         "undeclared input error unclear:\n{text}"
-    );
-    assert!(
-        text.contains("declared inputs: v"),
-        "error should name the declared inputs:\n{text}"
     );
     Ok(())
 }

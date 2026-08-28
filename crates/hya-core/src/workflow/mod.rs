@@ -1,38 +1,43 @@
-//! User-authored workflow DAGs composed over the bounded subagent primitives.
+//! Governed execution and filesystem discovery for compiled Workflows.
 //!
-//! A workflow is one user-authored file describing a DAG of stages
-//! ([`WorkflowDef`]). [`plan`] levelizes the graph into parallel batches;
-//! [`run`](self) executes each batch through [`crate::subagent`]'s governed team
-//! path (`pre_admit_team` / `run_pre_admitted_team`) so user composition can
-//! never bypass depth, concurrency, or per-run spawn budgets. Fan-in is explicit:
-//! consuming-stage templates reference upstream bounded outputs with
-//! `{{stage_id}}` placeholders. hya ships **zero** built-in workflows; users opt
-//! in by authoring files under `<workdir>/.hya/workflows` (see [`parse`]).
+//! [`hya_workflow::compile`] owns author parsing and graph normalization. This
+//! module accepts only [`CompiledWorkflow`] and applies its immutable levels to
+//! the existing Team, iteration, and resident scheduling primitives.
 
-mod model;
-mod parse;
-mod plan;
 mod run;
+mod source;
 
 use thiserror::Error;
 
-pub use model::{FailurePolicy, StageDef, StageMode, VerifySpec, WorkflowDef};
-pub use parse::{
-    discover_workflow_files, load_workflow_by_name, load_workflow_file, workflow_dirs_for_workdir,
+pub use hya_workflow::{
+    CompiledWorkflow, FailurePolicy, StageMode, VerifySpec, WorkflowDefinition, WorkflowPlan,
+    WorkflowRevision, WorkflowStage,
 };
-pub use plan::{WorkflowPlan, build_plan};
 pub use run::{
-    MAX_STAGE_OUTPUT_CHARS, StageReport, StageStatus, WorkflowRunContext, WorkflowRunReport,
-    WorkflowStatus, run_workflow,
+    StageReport, StageStatus, WorkflowRunContext, WorkflowRunReport, WorkflowStatus, run_workflow,
+};
+pub use source::{
+    discover_workflow_files, load_workflow_by_name, load_workflow_file, workflow_dirs_for_workdir,
 };
 
 /// Failures surfaced by workflow parsing, planning, or execution.
 #[derive(Debug, Error)]
 pub enum WorkflowError {
-    /// The file could not be parsed as a workflow definition.
-    #[error("workflow parse: {0}")]
-    Parse(String),
-    /// The definition parsed but violates structural or graph rules.
+    /// A Workflow source could not be read.
+    #[error("Workflow source `{source_name}`: {detail}")]
+    Source {
+        /// Path or source identity.
+        source_name: String,
+        /// Read failure detail.
+        detail: String,
+    },
+    /// The shared compiler rejected a Workflow document.
+    #[error(transparent)]
+    Compile(#[from] hya_workflow::WorkflowCompileError),
+    /// Runtime values did not satisfy the compiled input/evidence contract.
+    #[error(transparent)]
+    Render(#[from] hya_workflow::WorkflowRenderError),
+    /// The compiled Workflow cannot run under the supplied runtime context.
     #[error("invalid workflow `{workflow}`: {detail}")]
     Invalid {
         /// Workflow name that failed validation.

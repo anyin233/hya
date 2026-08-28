@@ -57,6 +57,14 @@ pub type ResolvedResidentRuntime = (
     Option<Arc<dyn BoundSidecarFactory>>,
 );
 
+/// Initial activation policy for the shared resident registration path.
+enum ResidentRegistration {
+    /// Register and immediately arm the supplied directive.
+    Armed(String),
+    /// Register without an implicit first turn.
+    Parked(String),
+}
+
 /// Durable recovery disposition for a resident actor after restart.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ResidentRecovery {
@@ -156,8 +164,8 @@ struct SlotState {
     binding: TurnBinding,
     agents: Option<Arc<[AgentDef]>>,
     resources: Option<AgentResourcePolicy>,
-    /// In-process only: immutable guidance from the triggering spawn turn.
-    /// Never durable; recovery paths leave this `None`.
+    /// In-process activation guidance. Workflow actors replace this only while
+    /// idle, before durable mail wakes the next Stage. Recovery invents none.
     guidance: Option<Arc<str>>,
     /// Opaque request-scoped sidecar factory, retained only in memory.
     sidecar_factory: Option<Arc<dyn BoundSidecarFactory>>,
@@ -1670,6 +1678,56 @@ impl ResidentSupervisor {
         parent_claim: Option<&ActorClaim>,
         guidance: Option<Arc<str>>,
     ) -> Result<(SessionId, String), CoreError> {
+        self.spawn_resident_inner(
+            parent,
+            agent,
+            resolved,
+            ResidentRegistration::Armed(directive),
+            parent_claim,
+            guidance,
+        )
+        .await
+    }
+
+    /// Create and register one resident without an implicit first turn.
+    ///
+    /// The caller must deliver work through durable mail after this returns.
+    /// `registration_directive` is provenance only and must not contain the work
+    /// payload or input values.
+    pub async fn spawn_resident_parked(
+        &self,
+        parent: SessionId,
+        agent: AgentSpec,
+        resolved: ResolvedResidentRuntime,
+        registration_directive: String,
+        parent_claim: Option<&ActorClaim>,
+        guidance: Option<Arc<str>>,
+    ) -> Result<(SessionId, String), CoreError> {
+        self.spawn_resident_inner(
+            parent,
+            agent,
+            resolved,
+            ResidentRegistration::Parked(registration_directive),
+            parent_claim,
+            guidance,
+        )
+        .await
+    }
+
+    /// Shared resident creation path for armed and parked registrations.
+    async fn spawn_resident_inner(
+        &self,
+        parent: SessionId,
+        agent: AgentSpec,
+        resolved: ResolvedResidentRuntime,
+        registration: ResidentRegistration,
+        parent_claim: Option<&ActorClaim>,
+        guidance: Option<Arc<str>>,
+    ) -> Result<(SessionId, String), CoreError> {
+        let (registration_directive, initial) = match registration {
+            ResidentRegistration::Armed(directive) => (directive.clone(), Some(directive)),
+            ResidentRegistration::Parked(directive) => (directive, None),
+        };
         let (binding, agents, resources, sidecar_factory) = resolved;
         let (root, parent_depth) = self.engine.session_lineage(parent).await?;
         let session = match parent_claim {
@@ -1697,7 +1755,6 @@ impl ResidentSupervisor {
                     .await?
             }
         };
-        // The spawning agent's canonical path is the unit this resident joins.
         let parent_path = self
             .engine
             .resolve_handle(root, parent)
@@ -1707,10 +1764,8 @@ impl ResidentSupervisor {
             .assign_handle(root, &parent_path, agent.name.as_str())
             .await;
         let handle = scope::join_path(&parent_path, &leaf);
-        // Announce in the parent tree (observable), then bind the handle + resident
-        // mode in the team-root log.
         let member = MemberId::new();
-        let description: String = directive.chars().take(80).collect();
+        let description: String = registration_directive.chars().take(80).collect();
         match parent_claim {
             Some(claim) => {
                 self.engine
@@ -1724,8 +1779,7 @@ impl ResidentSupervisor {
                             subagent_type: agent.name.clone(),
                             description,
                             depth: parent_depth.saturating_add(1),
-                            directive: directive.clone(),
-                            // Supervisor-started: no originating tool call.
+                            directive: registration_directive.clone(),
                             tool_call: None,
                         }],
                     )
@@ -1741,7 +1795,7 @@ impl ResidentSupervisor {
                             subagent_type: agent.name.clone(),
                             description,
                             depth: parent_depth.saturating_add(1),
-                            directive: directive.clone(),
+                            directive: registration_directive,
                         },
                     )
                     .await?;
@@ -1758,13 +1812,43 @@ impl ResidentSupervisor {
                 resources,
             },
             ResidentActivation {
-                initial: Some(directive),
+                initial,
                 guidance,
                 sidecar_factory,
             },
         )
         .await?;
         Ok((session, handle))
+    }
+
+    /// Replace one idle resident's in-process guidance before its next durable
+    /// mail activation.
+    ///
+    /// # Errors
+    /// Returns [`CoreError::Invalid`] when the resident is unregistered or busy.
+    pub async fn set_resident_guidance(
+        &self,
+        session: SessionId,
+        guidance: Arc<str>,
+    ) -> Result<(), CoreError> {
+        let (root, _) = self.engine.session_lineage(session).await?;
+        let team = self
+            .teams()
+            .get(&root)
+            .cloned()
+            .ok_or_else(|| CoreError::Invalid("resident team is not registered".to_string()))?;
+        let mut state = team.lock();
+        let slot = state
+            .residents
+            .get_mut(&session)
+            .ok_or_else(|| CoreError::Invalid("resident session is not registered".to_string()))?;
+        if slot.status != SlotStatus::Idle || slot.has_work() || slot.initial_directive.is_some() {
+            return Err(CoreError::Invalid(
+                "resident guidance cannot change during active work".to_string(),
+            ));
+        }
+        slot.guidance = Some(guidance);
+        Ok(())
     }
 
     /// Register an already-created `session` as a resident of team `root`, arm it,

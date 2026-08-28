@@ -108,9 +108,9 @@ pub use subagent::{
     run_pre_admitted_team, run_pre_admitted_team_for_actor, run_team,
 };
 pub use workflow::{
-    FailurePolicy, StageDef, StageMode, StageReport, StageStatus, VerifySpec, WorkflowDef,
-    WorkflowError, WorkflowPlan, WorkflowRunContext, WorkflowRunReport, WorkflowStatus, build_plan,
-    discover_workflow_files, load_workflow_by_name, load_workflow_file, run_workflow,
-    workflow_dirs_for_workdir,
+    CompiledWorkflow, FailurePolicy, StageMode, StageReport, StageStatus, VerifySpec,
+    WorkflowDefinition, WorkflowError, WorkflowPlan, WorkflowRevision, WorkflowRunContext,
+    WorkflowRunReport, WorkflowStage, WorkflowStatus, discover_workflow_files,
+    load_workflow_by_name, load_workflow_file, run_workflow, workflow_dirs_for_workdir,
 };
 pub use workspace::{TmuxPaneManager, WorktreeManager};

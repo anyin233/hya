@@ -66,26 +66,8 @@ async fn run_workflow_command(
     let def = hya_core::load_workflow_by_name(&workdir, name)
         .map_err(|error| anyhow::anyhow!("{error}"))?;
     let inputs = parse_inputs(raw_inputs)?;
-    for key in def.inputs.keys() {
-        anyhow::ensure!(
-            inputs.contains_key(key),
-            "workflow `{}` requires --input {key}=<value> ({})",
-            def.name,
-            def.inputs.get(key).map(String::as_str).unwrap_or("")
-        );
-    }
-    for key in inputs.keys() {
-        anyhow::ensure!(
-            def.inputs.contains_key(key),
-            "workflow `{}` does not declare input `{key}`; declared inputs: {}",
-            def.name,
-            if def.inputs.is_empty() {
-                "(none)".to_string()
-            } else {
-                def.inputs.keys().cloned().collect::<Vec<_>>().join(", ")
-            }
-        );
-    }
+    def.validate_inputs(&inputs)
+        .map_err(|error| anyhow::anyhow!("workflow `{name}` input error: {error}"))?;
 
     crate::first_run_config_bootstrap(false)?;
     let store = hya_store::SessionStore::connect_memory()
@@ -125,6 +107,7 @@ async fn run_workflow_command(
     let binding = engine.bind_runtime(&workdir)?;
     let caller = agent.name.to_string();
     let base_agent = engine.agent_spec_for_binding(&binding, &agent, &caller)?;
+    let resident_supervisor = built.resident_supervisor();
 
     let report = hya_core::run_workflow(
         engine.clone(),
@@ -135,6 +118,7 @@ async fn run_workflow_command(
             caller,
             base_agent,
             inputs,
+            resident_supervisor: Some(resident_supervisor),
         },
         CancellationToken::new(),
     )
@@ -144,7 +128,7 @@ async fn run_workflow_command(
         Ok(report) => report,
         Err(error) => {
             built.shutdown().await.ok();
-            return Err(anyhow::anyhow!("workflow `{}` failed: {error}", def.name));
+            return Err(anyhow::anyhow!("workflow `{name}` failed: {error}"));
         }
     };
 
@@ -153,7 +137,7 @@ async fn run_workflow_command(
         let mut out = std::io::stdout().lock();
         writeln!(out, "{}", serde_json::to_string_pretty(&payload)?).context("write report")?;
     } else {
-        print_text_report(&def.name, &payload);
+        print_text_report(def.definition().name(), &payload);
     }
 
     built
@@ -165,7 +149,7 @@ async fn run_workflow_command(
     } else {
         Err(anyhow::anyhow!(
             "workflow `{}` ended {:?}",
-            def.name,
+            def.definition().name(),
             report.status
         ))
     }
@@ -205,21 +189,23 @@ fn list() -> anyhow::Result<()> {
     let files = hya_core::discover_workflow_files(&workdir);
     if files.is_empty() {
         println!(
-            "no workflows found — author YAML definitions under .hya/workflows/ \
-             (see docs/workflows.md)"
+            "no workflows found — author Workflow Markdown under .hya/workflows/ \
+             (files must end in .hya.md)"
         );
         return Ok(());
     }
     let mut out = std::io::stdout().lock();
     for path in files {
         let line = match hya_core::load_workflow_file(&path) {
-            Ok(def) => format!(
-                "{}\n  {} (stages: {})\n",
-                def.name,
+            Ok(workflow) => format!(
+                "{}\n  {} (Stages: {})\n",
+                workflow.definition().name(),
                 path.display(),
-                def.stages
+                workflow
+                    .plan()
+                    .stages()
                     .iter()
-                    .map(|stage| stage.id.as_str())
+                    .map(hya_core::WorkflowStage::id)
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
@@ -236,26 +222,45 @@ fn info(name: &str) -> anyhow::Result<()> {
     let workdir = std::env::current_dir().context("resolve current directory")?;
     let def = hya_core::load_workflow_by_name(&workdir, name)
         .map_err(|error| anyhow::anyhow!("{error}"))?;
-    println!("{} — {}", def.name, def.description);
+    let definition = def.definition();
+    let plan = def.plan();
+    println!("{} — {}", definition.name(), definition.description());
     println!(
-        "failure policy: {} | inputs: {}",
-        def.on_member_failure,
-        if def.inputs.is_empty() {
+        "failure policy: {} | inputs: {} | revision: {}",
+        definition.on_failure(),
+        if definition.inputs().is_empty() {
             "(none)".to_string()
         } else {
-            def.inputs.keys().cloned().collect::<Vec<_>>().join(", ")
-        }
+            definition
+                .inputs()
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ")
+        },
+        def.revision()
     );
-    for stage in &def.stages {
-        print!("  {}", stage.id);
-        if !stage.needs.is_empty() {
-            print!(" (after {})", stage.needs.join(", "));
+    for stage in plan.stages() {
+        print!("  {}", stage.id());
+        if !stage.predecessor_indices().is_empty() {
+            let predecessors = stage
+                .predecessor_indices()
+                .iter()
+                .map(|&index| plan.stages()[index].id())
+                .collect::<Vec<_>>()
+                .join(", ");
+            print!(" (after {predecessors})");
         }
-        println!(" <- agent `{}` [{}]", stage.agent, stage.mode);
-        if let Some(verify) = &stage.verify {
+        println!(" <- Agent `{}` [{}]", stage.agent(), stage.mode());
+        if let Some(actor) = stage.actor() {
+            println!("      actor: {actor}");
+        }
+        if let Some(verify) = stage.verify() {
             println!(
-                "      loop verify: agent `{}`, until: {}, max_iterations: {}",
-                verify.agent, verify.until, verify.max_iterations
+                "      loop verify: Agent `{}`, until: {}, max_iterations: {}",
+                verify.agent(),
+                verify.until(),
+                verify.max_iterations()
             );
         }
     }
