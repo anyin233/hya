@@ -12,11 +12,13 @@ use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
 use crate::engine::{
-    AdmissionMemberIdentity, AgentSpec, CreateSession, SessionEngine, scope_admission_member,
+    AdmissionMemberIdentity, AgentSpec, CreateSession, SessionEngine, TurnRequestContext,
+    scope_admission_member,
 };
 use crate::error::CoreError;
 use crate::hooks::scope_activation_hooks;
 use crate::sidecar::{BoundSidecarFactory, SidecarHandle, SidecarStart};
+use crate::workflow::WorkflowTurnRoute;
 use crate::{AgentResourcePolicy, TurnBinding};
 
 /// Assign each member its **leaf** name (`{type}-{ordinal}`) within `lead_path`'s
@@ -219,16 +221,59 @@ struct MemberRunOutcome {
     summary: String,
     sidecar: Option<Box<dyn SidecarHandle>>,
 }
-
-async fn run_member(
+struct MemberRunContext {
     engine: Arc<SessionEngine>,
     lead: SessionId,
     lead_path: String,
-    spec: MemberSpec,
-    handle: String,
     cancel: CancellationToken,
     actor_claim: Option<ActorClaim>,
+    workflow_route: Option<WorkflowTurnRoute>,
+}
+
+struct TeamRunContext {
+    engine: Arc<SessionEngine>,
+    lead: SessionId,
+    cancel: CancellationToken,
+    reserve_admission: bool,
+    actor_claim: Option<ActorClaim>,
+    admission: Option<AdmissionMemberIdentity>,
+    workflow_routes: Option<BTreeMap<MemberId, WorkflowTurnRoute>>,
+}
+impl TeamRunContext {
+    fn new(
+        engine: Arc<SessionEngine>,
+        lead: SessionId,
+        cancel: CancellationToken,
+        reserve_admission: bool,
+        actor_claim: Option<ActorClaim>,
+        admission: Option<AdmissionMemberIdentity>,
+        workflow_routes: Option<BTreeMap<MemberId, WorkflowTurnRoute>>,
+    ) -> Self {
+        Self {
+            engine,
+            lead,
+            cancel,
+            reserve_admission,
+            actor_claim,
+            admission,
+            workflow_routes,
+        }
+    }
+}
+
+async fn run_member(
+    context: MemberRunContext,
+    spec: MemberSpec,
+    handle: String,
 ) -> Result<MemberRunOutcome, CoreError> {
+    let MemberRunContext {
+        engine,
+        lead,
+        lead_path,
+        cancel,
+        actor_claim,
+        workflow_route,
+    } = context;
     engine.validate_actor_claim(actor_claim.as_ref()).await?;
     let child = if let Some(session) = spec.session {
         session
@@ -354,7 +399,7 @@ async fn run_member(
                 match spec.resources.clone() {
                     Some(resources) => {
                         engine
-                            .run_resolved_turn_with_sidecar_tools_for_actor(
+                            .run_resolved_turn_with_sidecar_tools_for_actor_and_workflow_route(
                                 child,
                                 &spec.agent,
                                 (
@@ -363,21 +408,29 @@ async fn run_member(
                                     resources,
                                     sidecar_tools.clone(),
                                 ),
-                                claim,
-                                cancel,
-                                spec.guidance.clone(),
+                                TurnRequestContext::new(
+                                    cancel,
+                                    &[],
+                                    spec.guidance.clone(),
+                                    Some(claim),
+                                    workflow_route.clone(),
+                                ),
                             )
                             .await?
                     }
                     None => {
                         engine
-                            .run_bound_turn_for_actor(
+                            .run_bound_turn_for_actor_with_workflow_route(
                                 child,
                                 &spec.agent,
                                 spec.binding.clone(),
-                                claim,
-                                cancel,
-                                spec.guidance.clone(),
+                                TurnRequestContext::new(
+                                    cancel,
+                                    &[],
+                                    spec.guidance.clone(),
+                                    Some(claim),
+                                    workflow_route.clone(),
+                                ),
                             )
                             .await?
                     }
@@ -388,18 +441,34 @@ async fn run_member(
                 match spec.resources {
                     Some(resources) => {
                         engine
-                            .run_resolved_turn_with_sidecar_tools(
+                            .run_resolved_turn_with_sidecar_tools_and_workflow_route(
                                 child,
                                 &spec.agent,
                                 (spec.binding, spec.agents.clone(), resources, sidecar_tools),
-                                cancel,
-                                spec.guidance,
+                                TurnRequestContext::new(
+                                    cancel,
+                                    &[],
+                                    spec.guidance,
+                                    None,
+                                    workflow_route.clone(),
+                                ),
                             )
                             .await?
                     }
                     None => {
                         engine
-                            .run_bound_turn(child, &spec.agent, spec.binding, cancel, spec.guidance)
+                            .run_bound_turn_with_workflow_route(
+                                child,
+                                &spec.agent,
+                                spec.binding,
+                                TurnRequestContext::new(
+                                    cancel,
+                                    &[],
+                                    spec.guidance,
+                                    None,
+                                    workflow_route.clone(),
+                                ),
+                            )
                             .await?
                     }
                 }
@@ -494,7 +563,11 @@ pub async fn run_team(
     specs: Vec<MemberSpec>,
     cancel: CancellationToken,
 ) -> Vec<MemberEvidence> {
-    run_team_inner(engine, lead, specs, cancel, true, None, None).await
+    run_team_inner(
+        TeamRunContext::new(engine, lead, cancel, true, None, None, None),
+        specs,
+    )
+    .await
 }
 
 /// Run a team whose complete member set was reserved by [`pre_admit_team`].
@@ -507,7 +580,11 @@ pub async fn run_pre_admitted_team(
     specs: Vec<MemberSpec>,
     cancel: CancellationToken,
 ) -> Vec<MemberEvidence> {
-    run_team_inner(engine, lead, specs, cancel, false, None, None).await
+    run_team_inner(
+        TeamRunContext::new(engine, lead, cancel, false, None, None, None),
+        specs,
+    )
+    .await
 }
 
 /// Run one member that has already been admitted by the durable scheduler.
@@ -522,13 +599,8 @@ pub async fn run_pre_admitted_member(
     admission: AdmissionMemberIdentity,
 ) -> Vec<MemberEvidence> {
     run_team_inner(
-        engine,
-        lead,
+        TeamRunContext::new(engine, lead, cancel, false, None, Some(admission), None),
         vec![member],
-        cancel,
-        false,
-        None,
-        Some(admission),
     )
     .await
 }
@@ -541,18 +613,49 @@ pub async fn run_pre_admitted_team_for_actor(
     cancel: CancellationToken,
     actor_claim: ActorClaim,
 ) -> Vec<MemberEvidence> {
-    run_team_inner(engine, lead, specs, cancel, false, Some(actor_claim), None).await
+    run_team_inner(
+        TeamRunContext::new(engine, lead, cancel, false, Some(actor_claim), None, None),
+        specs,
+    )
+    .await
 }
 
-async fn run_team_inner(
+/// Run a pre-admitted Workflow team with per-member request-local routes.
+///
+/// Ordinary `MemberSpec` callers remain unchanged; only Workflow activation
+/// metadata crosses this narrow helper into the turn engine.
+pub(crate) async fn run_pre_admitted_team_with_workflow(
     engine: Arc<SessionEngine>,
     lead: SessionId,
-    specs: Vec<MemberSpec>,
+    members: Vec<(MemberSpec, Option<WorkflowTurnRoute>)>,
     cancel: CancellationToken,
-    reserve_admission: bool,
     actor_claim: Option<ActorClaim>,
-    admission: Option<AdmissionMemberIdentity>,
 ) -> Vec<MemberEvidence> {
+    let mut specs = Vec::with_capacity(members.len());
+    let mut routes = BTreeMap::new();
+    for (spec, route) in members {
+        if let Some(route) = route {
+            routes.insert(spec.id, route);
+        }
+        specs.push(spec);
+    }
+    run_team_inner(
+        TeamRunContext::new(engine, lead, cancel, false, actor_claim, None, Some(routes)),
+        specs,
+    )
+    .await
+}
+async fn run_team_inner(context: TeamRunContext, specs: Vec<MemberSpec>) -> Vec<MemberEvidence> {
+    let TeamRunContext {
+        engine,
+        lead,
+        cancel,
+        reserve_admission,
+        actor_claim,
+        admission,
+        workflow_routes,
+    } = context;
+    let mut workflow_routes = workflow_routes.unwrap_or_default();
     let mut rejected: Vec<MemberEvidence> = Vec::new();
     let specs: Vec<MemberSpec> = if !reserve_admission {
         specs
@@ -614,7 +717,13 @@ async fn run_team_inner(
     let mut specs = specs;
     for spec in &mut specs {
         if let Some(session) = spec.session {
+            let old_id = spec.id;
             spec.id = resolve_member_id(&engine, lead, spec.id, session).await;
+            if spec.id != old_id
+                && let Some(route) = workflow_routes.remove(&old_id)
+            {
+                workflow_routes.insert(spec.id, route);
+            }
         }
     }
     let handles = assign_handles(&engine, root, &lead_path, &specs).await;
@@ -624,28 +733,41 @@ async fn run_team_inner(
         let engine = engine.clone();
         let child_cancel = cancel.child_token();
         let id = spec.id;
+        let workflow_route = workflow_routes.remove(&id);
+        let task_route = workflow_route.clone();
         let lead_path = lead_path.clone();
         let task = tokio::spawn(async move {
             scope_admission_member(
                 admission,
                 run_member(
-                    engine,
-                    lead,
-                    lead_path,
+                    MemberRunContext {
+                        engine,
+                        lead,
+                        lead_path,
+                        cancel: child_cancel,
+                        actor_claim,
+                        workflow_route: task_route,
+                    },
                     spec,
                     handle,
-                    child_cancel,
-                    actor_claim,
                 ),
             )
             .await
         });
-        member_tasks.push((id, task));
+        member_tasks.push((id, workflow_route, task));
     }
 
     let mut evidence = Vec::new();
-    for (id, task) in member_tasks {
-        let (entry, member_status, child, sidecar_handle) = match task.await {
+    for (id, workflow_route, task) in member_tasks {
+        let task_result = task.await;
+        if task_result.is_err()
+            && let Some(route) = workflow_route.as_ref()
+        {
+            let _ = route
+                .finalize(Some(hya_proto::WorkflowRouteFailureClass::Aborted))
+                .await;
+        }
+        let (entry, member_status, child, sidecar_handle) = match task_result {
             Ok(Ok(MemberRunOutcome {
                 child: session,
                 summary,

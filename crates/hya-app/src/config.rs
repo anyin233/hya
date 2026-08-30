@@ -1539,6 +1539,11 @@ pub fn load() -> anyhow::Result<Option<ResolvedConfig>> {
             p.models
                 .iter()
                 .map(|model| (model.id.clone(), model.reasoning_variants.clone())),
+        )
+        .with_model_reasoning_defaults(
+            p.models
+                .iter()
+                .map(|model| (model.id.clone(), model.reasoning_default)),
         );
         if credential.use_codex_session {
             provider = provider.with_codex_session_auth(credential.account_id.clone());

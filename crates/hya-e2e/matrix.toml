@@ -281,6 +281,14 @@ tags = ["pr", "workflow", "subagent"]
 timeout_secs = 180
 
 [[scenario]]
+id = "T2.14"
+title = "Workflow stage model routing and replay"
+track = "P"
+path = "crates/hya-e2e/tests/p19_workflow_model_routing.rs"
+tags = ["pr", "workflow", "routing", "replay"]
+timeout_secs = 180
+
+[[scenario]]
 id = "T3.1"
 title = "TUI real-backend permission reply"
 track = "T"

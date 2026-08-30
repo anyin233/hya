@@ -183,7 +183,10 @@ jobs:
           7z l -slt "$example_archive" >"$scratch/argus-listing.txt"
           grep -Fx "Path = bundle.yaml" "$scratch/argus-listing.txt"
           grep -Fx "Path = workflows/argus.hya.md" "$scratch/argus-listing.txt"
-          ! grep -F "bundles/examples/argus-example" "$scratch/argus-listing.txt"
+          if grep -F "bundles/examples/argus-example" "$scratch/argus-listing.txt"; then
+            echo "Argus archive must not contain its source-tree prefix" >&2
+            exit 1
+          fi
           project="$scratch/project"
           mock_bun="$scratch/mock-bun"
           bun_invocation="$scratch/bun-invocation"
@@ -216,9 +219,18 @@ jobs:
           for path in dist/index.js dist/index.d.ts dist/server.js dist/server.d.ts dist/v2/index.js dist/v2/index.d.ts dist/v2/server.js dist/v2/server.d.ts dist/process.js dist/process.d.ts; do
             test ! -e "$sdk/$path"
           done
-          ! grep -F '"."' "$sdk/package.json"
-          ! grep -F '"./server"' "$sdk/package.json"
-          ! grep -F '"./v2/server"' "$sdk/package.json"
+          if grep -F '"."' "$sdk/package.json"; then
+            echo "packaged SDK must not export the server root" >&2
+            exit 1
+          fi
+          if grep -F '"./server"' "$sdk/package.json"; then
+            echo "packaged SDK must not export the server entry" >&2
+            exit 1
+          fi
+          if grep -F '"./v2/server"' "$sdk/package.json"; then
+            echo "packaged SDK must not export the v2 server entry" >&2
+            exit 1
+          fi
           tar -tzf "dist/$ARCHIVE" > "$scratch/archive.txt"
           grep -Fx "$package_dir/bin/hya" "$scratch/archive.txt"
           grep -Fx "$package_dir/bin/hya-backend" "$scratch/archive.txt"
@@ -234,7 +246,10 @@ jobs:
           grep -Fx "$package_dir/lib/hya/compat-adapter/src/main.ts" "$scratch/archive.txt"
           grep -F "$package_dir/lib/hya/compat-adapter/node_modules/" "$scratch/archive.txt" >/dev/null
           grep -Fx "$package_dir/examples/hya-argus-example.hyabundle" "$scratch/archive.txt"
-          ! grep -F "$package_dir/bundles/examples/argus-example" "$scratch/archive.txt"
+          if grep -F "$package_dir/bundles/examples/argus-example" "$scratch/archive.txt"; then
+            echo "release archive must not contain the example source-tree prefix" >&2
+            exit 1
+          fi
 
       - name: Attest release assets
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be

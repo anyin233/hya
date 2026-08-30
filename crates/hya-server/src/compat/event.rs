@@ -260,6 +260,7 @@ fn workflow_event(event: &Event) -> bool {
             | Event::WorkflowRunStarted { .. }
             | Event::WorkflowStageStarted { .. }
             | Event::WorkflowStageMemberLinked { .. }
+            | Event::WorkflowStageRouteOutcome { .. }
             | Event::WorkflowStageFinished { .. }
             | Event::WorkflowRunFinished { .. }
     )
@@ -369,6 +370,7 @@ async fn envelope_payload(st: &ServerState, envelope: Envelope) -> Value {
         | Event::WorkflowRunStarted { session, .. }
         | Event::WorkflowStageStarted { session, .. }
         | Event::WorkflowStageMemberLinked { session, .. }
+        | Event::WorkflowStageRouteOutcome { session, .. }
         | Event::WorkflowStageFinished { session, .. }
         | Event::WorkflowRunFinished { session, .. } => {
             session_payload(st, &envelope, *session, "session.updated").await
@@ -588,6 +590,7 @@ async fn api_envelope_payload(st: &ServerState, envelope: Envelope) -> Value {
         | Event::WorkflowRunStarted { .. }
         | Event::WorkflowStageStarted { .. }
         | Event::WorkflowStageMemberLinked { .. }
+        | Event::WorkflowStageRouteOutcome { .. }
         | Event::WorkflowStageFinished { .. }
         | Event::WorkflowRunFinished { .. }
         | Event::MessageStarted { .. }

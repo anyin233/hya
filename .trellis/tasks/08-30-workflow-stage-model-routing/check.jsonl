@@ -1,0 +1,14 @@
+{"file":".trellis/spec/backend/workflow-control.md","reason":"Check event ownership, atomic admission, actor fencing, recovery, bounded errors, and replay/no-side-effect invariants."}
+{"file":".trellis/spec/backend/task-tool.md","reason":"Check that request-local Stage routes reuse governed admission, budgets, and typed spawn behavior without bypasses."}
+{"file":".trellis/spec/frontend/workflow-presentation.md","reason":"Check API/synchronized projection compatibility and confirm no polling, second client, or TUI route renderer was added."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Review for duplicate model/router/resolution logic and unnecessary abstractions across provider, core, app, and surfaces."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Review end-to-end field propagation, old-wire/default compatibility, error mapping, and parity test coverage."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Check release/version/changelog policy, newest-only root notes, historical archive, and locked release build requirements."}
+{"file":"docs/testing/process-e2e.md","reason":"Check production-binary FakeLlm process proof, public state/request oracles, no-live deterministic gates, and serial commands."}
+{"file":"crates/hya-e2e/matrix.toml","reason":"Check retained P17 and new routing scenario registration, path existence, and matrix coverage."}
+{"file":"docs/architecture/providers.md","reason":"Check per-model reasoning-default identity/fingerprint ordering, secret-free identity, and provider boundary reuse."}
+{"file":"crates/hya-e2e/README.md","reason":"Check exact backend binary and serial process-E2E command conventions."}
+{"file":"Cargo.toml","reason":"Check next-version source and workspace release metadata alignment."}
+{"file":"README.md","reason":"Check public version metadata and safe provider configuration documentation."}
+{"file":"packages/hya-tui-ts/package.json","reason":"Check TUI package version and consistent working-directory test/typecheck commands."}
+{"file":".github/workflows/release.yml","reason":"Review exact release workflow shell, immutable action pins, release environment, packaging/checksum, runtime legality, and binary smoke behavior."}

@@ -488,6 +488,22 @@ pub trait Provider: Send + Sync {
     fn id(&self) -> &str;
     /// `Some(caps)` claims `model` for this route; `None` leaves it for later routes.
     fn capabilities(&self, model: &ModelRef) -> Option<Capabilities>;
+    /// Default reasoning effort configured for a claimed model, when metadata exists.
+    ///
+    /// Providers without per-model metadata return `None`; callers must keep
+    /// that distinct from an explicit [`ReasoningEffort::Off`] value.
+    fn reasoning_default(&self, _model: &ModelRef) -> Option<ReasoningEffort> {
+        None
+    }
+    /// Report whether a claimed model supports one typed reasoning effort.
+    ///
+    /// `None` means this provider does not claim the model; `Some(false)` is a
+    /// claimed route with no support. Providers without per-model vocabulary
+    /// metadata fall back to their general reasoning-request capability.
+    fn supports_reasoning_effort(&self, model: &ModelRef, effort: ReasoningEffort) -> Option<bool> {
+        self.capabilities(model)
+            .map(|caps| effort == ReasoningEffort::Off || caps.reasoning_request)
+    }
 
     /// Return deterministic configured routing identity, excluding secrets and
     /// transient live state. Providers without a complete identity fail closed.

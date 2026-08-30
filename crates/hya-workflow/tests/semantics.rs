@@ -126,3 +126,159 @@ fn invalid_loop_and_actor_contracts_fail_compilation() {
         assert!(error.message().contains(message), "{error}");
     }
 }
+
+const ROUTED_REVISION_WORKFLOW: &str = r#"---
+kind: Workflow
+name: routed-revision
+description: Route fields are part of assignment semantics.
+nodes:
+  worker:
+    agent: workflow-worker
+    directive: Implement the request.
+    model:
+      id: primary-model
+      reasoning: low
+      fallback:
+        - id: fallback-a
+          reasoning: medium
+        - id: fallback-b
+  loop:
+    agent: workflow-loop-worker
+    directive: Verify the result.
+    mode: loop
+    verify:
+      agent: workflow-verifier
+      until: The result is complete.
+      model:
+        id: verifier-model
+        reasoning: high
+        fallback:
+          - id: verifier-fallback
+            reasoning: medium
+          - id: verifier-fallback-b
+---
+flowchart TD
+  worker --> loop
+"#;
+
+/// Every authored worker/verifier route field changes the conditional revision,
+/// while normalized formatting remains revision-neutral.
+#[test]
+fn canonical_revision_covers_every_model_route_field() {
+    let base = compile(WorkflowSource::new(
+        "routed-base.hya.md",
+        ROUTED_REVISION_WORKFLOW,
+    ))
+    .unwrap()
+    .revision();
+    let mutations = [
+        (
+            "worker presence",
+            ROUTED_REVISION_WORKFLOW.replace(
+                "    model:\n      id: primary-model\n      reasoning: low\n      fallback:\n        - id: fallback-a\n          reasoning: medium\n        - id: fallback-b\n",
+                "",
+            ),
+        ),
+        (
+            "verifier presence",
+            ROUTED_REVISION_WORKFLOW.replace(
+                "      model:\n        id: verifier-model\n        reasoning: high\n        fallback:\n          - id: verifier-fallback\n            reasoning: medium\n          - id: verifier-fallback-b\n",
+                "",
+            ),
+        ),
+        (
+            "worker preferred id value",
+            ROUTED_REVISION_WORKFLOW.replace("id: primary-model", "id: primary-model-new"),
+        ),
+        (
+            "worker preferred effort value",
+            ROUTED_REVISION_WORKFLOW.replace("reasoning: low", "reasoning: high"),
+        ),
+        (
+            "worker preferred effort presence",
+            ROUTED_REVISION_WORKFLOW.replace("      reasoning: low\n", ""),
+        ),
+        (
+            "worker fallback count",
+            ROUTED_REVISION_WORKFLOW.replace("        - id: fallback-b\n", ""),
+        ),
+        (
+            "worker fallback id value",
+            ROUTED_REVISION_WORKFLOW.replace("id: fallback-a", "id: fallback-a-new"),
+        ),
+        (
+            "worker fallback effort value",
+            ROUTED_REVISION_WORKFLOW.replace("reasoning: medium", "reasoning: high"),
+        ),
+        (
+            "worker fallback effort presence",
+            ROUTED_REVISION_WORKFLOW.replace(
+                "        - id: fallback-a\n          reasoning: medium\n",
+                "        - id: fallback-a\n",
+            ),
+        ),
+        (
+            "worker fallback order",
+            ROUTED_REVISION_WORKFLOW.replace(
+                "        - id: fallback-a\n          reasoning: medium\n        - id: fallback-b\n",
+                "        - id: fallback-b\n        - id: fallback-a\n          reasoning: medium\n",
+            ),
+        ),
+        (
+            "verifier preferred id value",
+            ROUTED_REVISION_WORKFLOW.replace("id: verifier-model", "id: verifier-model-new"),
+        ),
+        (
+            "verifier preferred effort value",
+            ROUTED_REVISION_WORKFLOW.replace("reasoning: high", "reasoning: low"),
+        ),
+        (
+            "verifier preferred effort presence",
+            ROUTED_REVISION_WORKFLOW.replace("        reasoning: high\n", ""),
+        ),
+        (
+            "verifier fallback count",
+            ROUTED_REVISION_WORKFLOW.replace("          - id: verifier-fallback-b\n", ""),
+        ),
+        (
+            "verifier fallback effort presence",
+            ROUTED_REVISION_WORKFLOW.replace(
+                "          - id: verifier-fallback\n            reasoning: medium\n",
+                "          - id: verifier-fallback\n",
+            ),
+        ),
+        (
+            "verifier fallback order",
+            ROUTED_REVISION_WORKFLOW.replace(
+                "          - id: verifier-fallback\n            reasoning: medium\n          - id: verifier-fallback-b\n",
+                "          - id: verifier-fallback-b\n          - id: verifier-fallback\n            reasoning: medium\n",
+            ),
+        ),
+        (
+            "verifier fallback id value",
+            ROUTED_REVISION_WORKFLOW.replace("id: verifier-fallback", "id: verifier-fallback-new"),
+        ),
+        (
+            "verifier fallback effort value",
+            ROUTED_REVISION_WORKFLOW.replace(
+                "id: verifier-fallback\n            reasoning: medium",
+                "id: verifier-fallback\n            reasoning: high",
+            ),
+        ),
+    ];
+    for (label, source) in mutations {
+        let compiled = compile(WorkflowSource::new("routed-mutated.hya.md", &source))
+            .unwrap_or_else(|error| panic!("{label}: {error}\n{source}"));
+        let revision = compiled.revision();
+        assert_ne!(base, revision, "{label} must change the revision");
+    }
+
+    let reformatted = ROUTED_REVISION_WORKFLOW
+        .replace("id: primary-model", "id: \"  primary-model  \"")
+        .replace("reasoning: low", "reasoning: \" low \"")
+        .replace("worker --> loop", "worker-->loop");
+    let reformatted_revision = compile(WorkflowSource::new("routed-format.hya.md", &reformatted))
+        .unwrap()
+        .revision();
+    assert_eq!(base, reformatted_revision);
+}

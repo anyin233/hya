@@ -199,6 +199,7 @@ fn part_timeline(envs: &[Envelope]) -> BTreeMap<MessageId, Vec<CompatPartCursor>
             | Event::WorkflowRunStarted { .. }
             | Event::WorkflowStageStarted { .. }
             | Event::WorkflowStageMemberLinked { .. }
+            | Event::WorkflowStageRouteOutcome { .. }
             | Event::WorkflowStageFinished { .. }
             | Event::WorkflowRunFinished { .. }
             | Event::MessageStarted { .. }
@@ -367,6 +368,7 @@ fn part_times(envs: &[Envelope]) -> BTreeMap<PartId, CompatPartTime> {
             | Event::WorkflowRunStarted { .. }
             | Event::WorkflowStageStarted { .. }
             | Event::WorkflowStageMemberLinked { .. }
+            | Event::WorkflowStageRouteOutcome { .. }
             | Event::WorkflowStageFinished { .. }
             | Event::WorkflowRunFinished { .. }
             | Event::StepStarted { .. }

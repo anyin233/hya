@@ -24,6 +24,7 @@ use crate::hooks::{
 };
 use crate::runtime_registry::CompiledResourceView;
 use crate::sidecar::{SidecarEnvironment, SidecarHandle, SidecarStart};
+use crate::workflow::WorkflowTurnRoute;
 use crate::{AgentResourcePolicy, TurnBinding};
 
 mod messages;
@@ -54,6 +55,35 @@ struct TurnExecution<'a> {
     actor_claim: Option<&'a ActorClaim>,
     /// Immutable triggering-turn guidance scoped into child SpawnerPlane.
     guidance: Option<Arc<str>>,
+    /// Request-local Workflow route, absent for ordinary Agent turns.
+    workflow_route: Option<&'a WorkflowTurnRoute>,
+}
+/// Request-local context shared by one governed turn activation.
+pub(crate) struct TurnRequestContext<'a> {
+    cancel: CancellationToken,
+    external_dirs: &'a [PathBuf],
+    guidance: Option<Arc<str>>,
+    actor_claim: Option<&'a ActorClaim>,
+    workflow_route: Option<WorkflowTurnRoute>,
+}
+
+impl<'a> TurnRequestContext<'a> {
+    /// Build one request-local turn context.
+    pub(crate) fn new(
+        cancel: CancellationToken,
+        external_dirs: &'a [PathBuf],
+        guidance: Option<Arc<str>>,
+        actor_claim: Option<&'a ActorClaim>,
+        workflow_route: Option<WorkflowTurnRoute>,
+    ) -> Self {
+        Self {
+            cancel,
+            external_dirs,
+            guidance,
+            actor_claim,
+            workflow_route,
+        }
+    }
 }
 
 struct ToolHookContext<'a> {
@@ -170,6 +200,40 @@ async fn shutdown_sidecar(handle: &mut Option<Box<dyn SidecarHandle>>) -> Result
         Ok(())
     }
 }
+fn workflow_provider_failure_class(error: &ProviderError) -> hya_proto::WorkflowRouteFailureClass {
+    use hya_proto::WorkflowRouteFailureClass as Class;
+    match error {
+        ProviderError::Transport(_) => Class::Transport,
+        ProviderError::HttpStatus { status, .. } => {
+            if *status == 429 {
+                Class::RateLimited
+            } else if (500..=599).contains(status) {
+                Class::Server
+            } else {
+                Class::Http
+            }
+        }
+        ProviderError::UnknownModel(_) => Class::UnknownModel,
+        ProviderError::AuthExpired { .. } => Class::Auth,
+        ProviderError::Incompatible(_) => Class::Incompatible,
+        ProviderError::Decode(_) => Class::Decode,
+        ProviderError::Json(_) | ProviderError::Http(_) => Class::Http,
+    }
+}
+
+fn workflow_failure_class(
+    error: &CoreError,
+    cancel: &CancellationToken,
+) -> hya_proto::WorkflowRouteFailureClass {
+    match error {
+        CoreError::Provider(error) => workflow_provider_failure_class(error),
+        CoreError::Cancelled if cancel.is_cancelled() => {
+            hya_proto::WorkflowRouteFailureClass::Cancelled
+        }
+        CoreError::Cancelled => hya_proto::WorkflowRouteFailureClass::Aborted,
+        _ => hya_proto::WorkflowRouteFailureClass::Internal,
+    }
+}
 
 impl SessionEngine {
     /// Open the completion stream for `request`, walking the configured
@@ -223,6 +287,53 @@ impl SessionEngine {
         // iteration always returns `Ok` or `Err` above.
         unreachable!("cross-model fallback iteration must terminate")
     }
+    /// Open one Workflow-assigned stream, starting at admission's candidate.
+    ///
+    /// The route remains request-local. Only pre-stream retryable failures can
+    /// advance it, and a returned stream is never replayed on another model.
+    async fn stream_with_workflow_route(
+        &self,
+        request: CompletionRequest,
+        session: SessionId,
+        message: MessageId,
+        route: &WorkflowTurnRoute,
+    ) -> Result<EventStream, ProviderError> {
+        let candidates = &route.route().candidates;
+        let mut pending_failure = None;
+        for index in route.route().selected_index..candidates.len() {
+            let candidate = &candidates[index];
+            route.begin_attempt(index);
+            let mut attempt = request.clone();
+            attempt.model = candidate.model.clone();
+            attempt.reasoning = Some(candidate.reasoning);
+            match self.providers.stream(attempt, session, message).await {
+                Ok(stream) => {
+                    route.selected(index, pending_failure);
+                    return Ok(stream);
+                }
+                Err(error) => {
+                    let failure = workflow_provider_failure_class(&error);
+                    pending_failure = Some(failure);
+                    let advance = (error.is_retryable_before_stream()
+                        || matches!(error, ProviderError::UnknownModel(_)))
+                        && index + 1 < candidates.len();
+                    route.record_failure(index, failure);
+                    if !advance {
+                        return Err(error);
+                    }
+                    tracing::warn!(
+                        from = %candidate.model,
+                        to = %candidates[index + 1].model,
+                        error = %error,
+                        "pre-stream Workflow route failure; advancing declared candidate"
+                    );
+                }
+            }
+        }
+        Err(ProviderError::UnknownModel(
+            "Workflow route has no candidate".to_string(),
+        ))
+    }
 
     /// Run one model/tool turn for `session` until stop or cancel.
     pub async fn run_turn(
@@ -234,14 +345,11 @@ impl SessionEngine {
         self.run_turn_with_external_dirs_and_claim(
             session,
             agent,
-            cancel,
-            (&[], None),
-            None,
             TurnActivation::Root,
+            TurnRequestContext::new(cancel, &[], None, None, None),
         )
         .await
     }
-
     /// Run a turn with temporary ExternalDirectory allow rules for `external_dirs`.
     pub async fn run_turn_with_external_dirs(
         &self,
@@ -253,14 +361,11 @@ impl SessionEngine {
         self.run_turn_with_external_dirs_and_claim(
             session,
             agent,
-            cancel,
-            (external_dirs, None),
-            None,
             TurnActivation::Root,
+            TurnRequestContext::new(cancel, external_dirs, None, None, None),
         )
         .await
     }
-
     /// Run a turn with optional external directories and request-scoped guidance.
     ///
     /// `guidance` is pre-rendered by the caller and composed once after Bundle
@@ -278,14 +383,11 @@ impl SessionEngine {
         self.run_turn_with_external_dirs_and_claim(
             session,
             agent,
-            cancel,
-            (external_dirs, guidance),
-            None,
             TurnActivation::Root,
+            TurnRequestContext::new(cancel, external_dirs, guidance, None, None),
         )
         .await
     }
-
     pub(crate) async fn run_bound_turn(
         &self,
         session: SessionId,
@@ -297,35 +399,46 @@ impl SessionEngine {
         self.run_turn_with_external_dirs_and_claim(
             session,
             agent,
-            cancel,
-            (&[], guidance),
-            None,
             TurnActivation::Bound(binding),
+            TurnRequestContext::new(cancel, &[], guidance, None, None),
         )
         .await
     }
 
-    pub(crate) async fn run_bound_turn_for_actor(
+    /// Run a bound turn with one request-local Workflow route.
+    pub(crate) async fn run_bound_turn_with_workflow_route(
         &self,
         session: SessionId,
         agent: &AgentSpec,
         binding: TurnBinding,
-        claim: &ActorClaim,
-        cancel: CancellationToken,
-        guidance: Option<Arc<str>>,
+        request: TurnRequestContext<'_>,
     ) -> Result<FinishReason, CoreError> {
         self.run_turn_with_external_dirs_and_claim(
             session,
             agent,
-            cancel,
-            (&[], guidance),
-            Some(claim),
             TurnActivation::Bound(binding),
+            request,
         )
         .await
     }
-
-    pub(crate) async fn run_resolved_turn_with_sidecar_tools(
+    /// Run an actor-fenced bound turn with one request-local Workflow route.
+    pub(crate) async fn run_bound_turn_for_actor_with_workflow_route(
+        &self,
+        session: SessionId,
+        agent: &AgentSpec,
+        binding: TurnBinding,
+        request: TurnRequestContext<'_>,
+    ) -> Result<FinishReason, CoreError> {
+        self.run_turn_with_external_dirs_and_claim(
+            session,
+            agent,
+            TurnActivation::Bound(binding),
+            request,
+        )
+        .await
+    }
+    /// Run a resolved turn with one request-local Workflow route.
+    pub(crate) async fn run_resolved_turn_with_sidecar_tools_and_workflow_route(
         &self,
         session: SessionId,
         agent: &AgentSpec,
@@ -335,27 +448,24 @@ impl SessionEngine {
             AgentResourcePolicy,
             Arc<[ResolvedTool]>,
         ),
-        cancel: CancellationToken,
-        guidance: Option<Arc<str>>,
+        request: TurnRequestContext<'_>,
     ) -> Result<FinishReason, CoreError> {
         let (binding, agents, resources, sidecar_tools) = resolved;
         self.run_turn_with_external_dirs_and_claim(
             session,
             agent,
-            cancel,
-            (&[], guidance),
-            None,
             TurnActivation::Resolved {
                 binding,
                 agents,
                 resources,
                 sidecar_tools,
             },
+            request,
         )
         .await
     }
-
-    pub(crate) async fn run_resolved_turn_with_sidecar_tools_for_actor(
+    /// Run an actor-fenced resolved turn with one request-local Workflow route.
+    pub(crate) async fn run_resolved_turn_with_sidecar_tools_for_actor_and_workflow_route(
         &self,
         session: SessionId,
         agent: &AgentSpec,
@@ -365,23 +475,19 @@ impl SessionEngine {
             AgentResourcePolicy,
             Arc<[ResolvedTool]>,
         ),
-        claim: &ActorClaim,
-        cancel: CancellationToken,
-        guidance: Option<Arc<str>>,
+        request: TurnRequestContext<'_>,
     ) -> Result<FinishReason, CoreError> {
         let (binding, agents, resources, sidecar_tools) = resolved;
         self.run_turn_with_external_dirs_and_claim(
             session,
             agent,
-            cancel,
-            (&[], guidance),
-            Some(claim),
             TurnActivation::Resolved {
                 binding,
                 agents,
                 resources,
                 sidecar_tools,
             },
+            request,
         )
         .await
     }
@@ -390,12 +496,16 @@ impl SessionEngine {
         &self,
         session: SessionId,
         agent: &AgentSpec,
-        cancel: CancellationToken,
-        request_context: (&[PathBuf], Option<Arc<str>>),
-        actor_claim: Option<&ActorClaim>,
         activation: TurnActivation,
+        request: TurnRequestContext<'_>,
     ) -> Result<FinishReason, CoreError> {
-        let (external_dirs, guidance) = request_context;
+        let TurnRequestContext {
+            cancel,
+            external_dirs,
+            guidance,
+            actor_claim,
+            workflow_route,
+        } = request;
         self.validate_actor_claim(actor_claim).await?;
         let projection = self.store.read_projection(session).await?;
         let workdir = session_workdir(agent, &projection);
@@ -506,6 +616,7 @@ impl SessionEngine {
                 actor_claim,
                 // Same Arc for nested spawn scope; no re-discovery.
                 guidance: guidance.clone(),
+                workflow_route: workflow_route.as_ref(),
             };
             let outcome = match sidecar_loss {
                 Some(loss_token) => {
@@ -524,6 +635,20 @@ impl SessionEngine {
                     }
                 }
             };
+            if let Some(route) = workflow_route.as_ref() {
+                let failure = match &outcome {
+                    Ok(FinishReason::Cancelled) => Some(if cancel.is_cancelled() {
+                        hya_proto::WorkflowRouteFailureClass::Cancelled
+                    } else {
+                        hya_proto::WorkflowRouteFailureClass::Aborted
+                    }),
+                    Err(error) => Some(workflow_failure_class(error, &cancel)),
+                    Ok(_) => None,
+                };
+                if let Some(failure) = failure {
+                    route.finalize(Some(failure)).await?;
+                }
+            }
             if matches!(
                 &outcome,
                 Ok(FinishReason::Cancelled) | Err(CoreError::Cancelled)
@@ -580,7 +705,7 @@ impl SessionEngine {
         };
         // A completed top-level (depth-0) turn ends the "run": release its per-run
         // subagent budget so long-lived root sessions do not leak budget entries and
-        // the next top-level turn starts with a fresh budget.
+
         if self.governor.is_some()
             && let Ok((root, 0)) = self.session_lineage(session).await
         {
@@ -605,6 +730,7 @@ impl SessionEngine {
             external_dirs,
             actor_claim,
             guidance,
+            workflow_route,
         } = execution;
         let mut rounds: u32 = 0;
         let mut total_tokens = None;
@@ -835,9 +961,23 @@ impl SessionEngine {
                 (None, _) => None,
             };
             self.validate_actor_claim(actor_claim).await?;
-            let stream = self
-                .stream_with_model_fallback(request, session, message)
-                .await?;
+            let stream = if let Some(route) = workflow_route {
+                match self
+                    .stream_with_workflow_route(request, session, message, route)
+                    .await
+                {
+                    Ok(stream) => stream,
+                    Err(error) => {
+                        route
+                            .finalize(Some(workflow_provider_failure_class(&error)))
+                            .await?;
+                        return Err(error.into());
+                    }
+                }
+            } else {
+                self.stream_with_model_fallback(request, session, message)
+                    .await?
+            };
             let step = rounds;
             self.emit_for_actor(
                 actor_claim,
@@ -849,9 +989,25 @@ impl SessionEngine {
                 },
             )
             .await?;
-            let stream_round = self
+            let stream_round = match self
                 .collect_stream_round(session, message, stream, actor_claim)
-                .await?;
+                .await
+            {
+                Ok(stream_round) => {
+                    if let Some(route) = workflow_route {
+                        route.finalize(None).await?;
+                    }
+                    stream_round
+                }
+                Err(error) => {
+                    if let Some(route) = workflow_route {
+                        route
+                            .finalize(Some(workflow_failure_class(&error, cancel)))
+                            .await?;
+                    }
+                    return Err(error);
+                }
+            };
             add_tokens(&mut total_tokens, stream_round.tokens);
             self.emit_for_actor(
                 actor_claim,

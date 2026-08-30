@@ -9,8 +9,10 @@ use hya_app::{
 };
 use hya_core::CreateSession;
 use hya_proto::{
-    SessionId, WorkflowInfo, WorkflowProjection, WorkflowRevision, WorkflowRunProjection,
-    WorkflowRunResult, WorkflowRunStatus, WorkflowStageStatus, WorkflowSummary,
+    SessionId, WorkflowInfo, WorkflowMemberRole, WorkflowModelAssignment,
+    WorkflowModelResolvedCandidate, WorkflowProjection, WorkflowRevision,
+    WorkflowRouteFailureClass, WorkflowRunProjection, WorkflowRunResult, WorkflowRunStatus,
+    WorkflowStagePlan, WorkflowStageRouteOutcome, WorkflowStageStatus, WorkflowSummary,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -335,6 +337,62 @@ fn print_info(workflow: &WorkflowInfo) {
         if let Some(actor) = &stage.actor {
             println!("      actor: {actor}");
         }
+        if let Some(assignment) = stage.worker_model.as_ref() {
+            print_model_assignment("worker model", assignment);
+        }
+        if let Some(assignment) = stage.verifier_model.as_ref() {
+            print_model_assignment("verifier model", assignment);
+        }
+    }
+}
+
+fn print_model_assignment(label: &str, assignment: &WorkflowModelAssignment) {
+    print!(
+        "      {label}: {} reasoning={}",
+        assignment.id,
+        assignment.reasoning.as_deref().unwrap_or("default")
+    );
+    for candidate in &assignment.fallback {
+        print!(
+            " -> {} reasoning={}",
+            candidate.id,
+            candidate.reasoning.as_deref().unwrap_or("default")
+        );
+    }
+    println!();
+}
+
+fn print_selected_model(label: &str, selected: &WorkflowModelResolvedCandidate) {
+    println!(
+        "      selected {label}: #{} {} reasoning={}",
+        selected.index, selected.id, selected.reasoning
+    );
+}
+
+fn print_stage_route_details(plan: &WorkflowStagePlan, outcomes: &[WorkflowStageRouteOutcome]) {
+    if let Some(assignment) = plan.worker_model.as_ref() {
+        print_model_assignment("worker model", assignment);
+    }
+    if let Some(selected) = plan.selected_worker_model.as_ref() {
+        print_selected_model("worker model", selected);
+    }
+    if let Some(assignment) = plan.verifier_model.as_ref() {
+        print_model_assignment("verifier model", assignment);
+    }
+    if let Some(selected) = plan.selected_verifier_model.as_ref() {
+        print_selected_model("verifier model", selected);
+    }
+    for outcome in outcomes {
+        println!(
+            "      route outcome: role={} iteration={} step={} candidate=#{} model={} reasoning={} class={}",
+            workflow_member_role_name(outcome.role),
+            outcome.iteration,
+            outcome.step,
+            outcome.candidate_index,
+            outcome.model,
+            outcome.reasoning,
+            route_failure_name(outcome.failure_class)
+        );
     }
 }
 
@@ -368,6 +426,7 @@ fn print_run(result: &WorkflowRunResult) {
             stage.plan.agent,
             stage.members.len()
         );
+        print_stage_route_details(&stage.plan, &stage.route_outcomes);
     }
     if let Some(error) = &result.run.error {
         println!("  error: {error}");
@@ -388,6 +447,7 @@ fn print_run_projection(run: &WorkflowRunProjection) {
             stage.plan.agent,
             stage.members.len()
         );
+        print_stage_route_details(&stage.plan, &stage.route_outcomes);
     }
 }
 
@@ -424,5 +484,29 @@ fn stage_status_name(status: WorkflowStageStatus) -> &'static str {
         WorkflowStageStatus::Failed => "failed",
         WorkflowStageStatus::Cancelled => "cancelled",
         WorkflowStageStatus::Skipped => "skipped",
+    }
+}
+
+fn workflow_member_role_name(role: WorkflowMemberRole) -> &'static str {
+    match role {
+        WorkflowMemberRole::Worker => "worker",
+        WorkflowMemberRole::Verifier => "verifier",
+    }
+}
+
+fn route_failure_name(class: WorkflowRouteFailureClass) -> &'static str {
+    match class {
+        WorkflowRouteFailureClass::None => "none",
+        WorkflowRouteFailureClass::Transport => "transport",
+        WorkflowRouteFailureClass::RateLimited => "rate_limited",
+        WorkflowRouteFailureClass::Server => "server",
+        WorkflowRouteFailureClass::UnknownModel => "unknown_model",
+        WorkflowRouteFailureClass::Auth => "auth",
+        WorkflowRouteFailureClass::Incompatible => "incompatible",
+        WorkflowRouteFailureClass::Http => "http",
+        WorkflowRouteFailureClass::Decode => "decode",
+        WorkflowRouteFailureClass::Internal => "internal",
+        WorkflowRouteFailureClass::Aborted => "aborted",
+        WorkflowRouteFailureClass::Cancelled => "cancelled",
     }
 }

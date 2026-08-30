@@ -5,9 +5,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use hya_core::{
-    AgentSpec, CompiledWorkflow, ResidentSupervisor, SessionEngine, TurnBinding, WorkflowError,
-    WorkflowRunContext, WorkflowStatus, discover_workflow_files_in_root, load_workflow_file,
-    prepare_workflow_run_for_actor, workflow_dirs_for_workdir,
+    AgentSpec, CategoryRegistry, CompiledWorkflow, ResidentSupervisor, SessionEngine, TurnBinding,
+    WorkflowError, WorkflowRoutingContext, WorkflowRunContext, WorkflowStatus,
+    discover_workflow_files_in_root, load_workflow_file, prepare_workflow_run_for_actor,
+    workflow_dirs_for_workdir,
 };
 use hya_proto::{
     Envelope, Event, OwnerRunId, SessionId, WorkflowAvailability, WorkflowCommand,
@@ -544,23 +545,27 @@ pub struct WorkflowControl {
     base_agent: AgentSpec,
     resident_supervisor: Arc<ResidentSupervisor>,
     owner: OwnerRunId,
+    routing: WorkflowRoutingContext,
     active_runs: Arc<std::sync::Mutex<BTreeMap<SessionId, ActiveWorkflowRun>>>,
 }
 
 impl WorkflowControl {
-    /// Construct the shared control adapter used by all execution surfaces.
+    /// Construct Workflow control with the process's configured route plane.
     #[must_use]
-    pub(crate) fn new(
+    pub(crate) fn new_with_routing(
         engine: Arc<SessionEngine>,
         base_agent: AgentSpec,
         resident_supervisor: Arc<ResidentSupervisor>,
         owner: OwnerRunId,
+        categories: Arc<CategoryRegistry>,
+        router: Arc<hya_provider::ProviderRouter>,
     ) -> Self {
         Self {
             engine,
             base_agent,
             resident_supervisor,
             owner,
+            routing: WorkflowRoutingContext::new(categories, router),
             active_runs: Arc::new(std::sync::Mutex::new(BTreeMap::new())),
         }
     }
@@ -840,6 +845,7 @@ impl WorkflowControl {
             base_agent: self.base_agent.clone(),
             inputs,
             resident_supervisor: Some(self.resident_supervisor.clone()),
+            routing: Some(self.routing.clone()),
         };
         let prepared = prepare_workflow_run_for_actor(
             self.engine.clone(),
@@ -851,6 +857,7 @@ impl WorkflowControl {
         )
         .await
         .map_err(map_workflow_preflight_error)?;
+        let stages = workflow_stage_plan(entry.workflow(), &prepared);
         let admission = self
             .engine
             .admit_workflow_run(
@@ -862,7 +869,7 @@ impl WorkflowControl {
                     workflow: entry.identity().clone(),
                     request_hash: request_hash.clone(),
                     owner: self.owner,
-                    stages: workflow_stage_plan(entry.workflow()),
+                    stages,
                 },
             )
             .await?;
@@ -1133,6 +1140,7 @@ fn workflow_event_run(event: &Event) -> Option<WorkflowRunId> {
         Event::WorkflowRunStarted { run, .. }
         | Event::WorkflowStageStarted { run, .. }
         | Event::WorkflowStageMemberLinked { run, .. }
+        | Event::WorkflowStageRouteOutcome { run, .. }
         | Event::WorkflowStageFinished { run, .. }
         | Event::WorkflowRunFinished { run, .. } => Some(*run),
         _ => None,
@@ -1194,26 +1202,75 @@ fn workflow_info(entry: &ResolvedWorkflow) -> WorkflowInfo {
                     .collect(),
                 actor: stage.actor().map(str::to_string),
                 mode: stage.mode().to_string(),
+                worker_model: stage.model().map(workflow_model_assignment),
+                verifier_model: stage
+                    .verify()
+                    .and_then(|verify| verify.model())
+                    .map(workflow_model_assignment),
             })
             .collect(),
         path: entry.display_path().to_string(),
     }
 }
 
-/// Capture declaration-ordered display/provenance data for run start.
-fn workflow_stage_plan(workflow: &CompiledWorkflow) -> Vec<WorkflowStagePlan> {
+/// Capture declaration-ordered display/provenance data and admitted selections.
+fn workflow_stage_plan(
+    workflow: &CompiledWorkflow,
+    prepared: &hya_core::PreparedWorkflowRun,
+) -> Vec<WorkflowStagePlan> {
     workflow
         .plan()
         .stages()
         .iter()
-        .map(|stage| WorkflowStagePlan {
+        .enumerate()
+        .map(|(index, stage)| WorkflowStagePlan {
             id: stage.id().to_string(),
             title: stage.title().map(str::to_string),
             agent: hya_proto::AgentName::new(stage.agent()),
             mode: stage.mode().to_string(),
             level: stage.level(),
+            worker_model: stage.model().map(workflow_model_assignment),
+            selected_worker_model: prepared
+                .worker_route(index)
+                .and_then(workflow_selected_candidate),
+            verifier_model: stage
+                .verify()
+                .and_then(|verify| verify.model())
+                .map(workflow_model_assignment),
+            selected_verifier_model: prepared
+                .verifier_route(index)
+                .and_then(workflow_selected_candidate),
         })
         .collect()
+}
+
+fn workflow_selected_candidate(
+    route: &hya_core::WorkflowModelRoute,
+) -> Option<hya_proto::WorkflowModelResolvedCandidate> {
+    let selected = route.selected()?;
+    Some(hya_proto::WorkflowModelResolvedCandidate {
+        index: u32::try_from(route.selected_index).unwrap_or(u32::MAX),
+        id: selected.model.to_string(),
+        reasoning: selected.reasoning.as_str().to_string(),
+    })
+}
+
+/// Convert one compiler-owned assignment into the string-based wire mirror.
+fn workflow_model_assignment(
+    assignment: &hya_workflow::WorkflowModelAssignment,
+) -> hya_proto::WorkflowModelAssignment {
+    hya_proto::WorkflowModelAssignment {
+        id: assignment.id().to_string(),
+        reasoning: assignment.reasoning().map(str::to_string),
+        fallback: assignment
+            .fallback()
+            .iter()
+            .map(|candidate| hya_proto::WorkflowModelCandidate {
+                id: candidate.id().to_string(),
+                reasoning: candidate.reasoning().map(str::to_string),
+            })
+            .collect(),
+    }
 }
 
 /// Set only runtime availability from one immutable Workflow catalog snapshot.
@@ -1235,7 +1292,7 @@ fn source_stem(path: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{WorkflowControlError, map_workflow_preflight_error};
+    use super::{WorkflowControlError, map_workflow_preflight_error, workflow_event_run};
     use hya_core::WorkflowError;
 
     /// Invalid runtime topology is rejected as source validation before admission.
@@ -1250,5 +1307,26 @@ mod tests {
             WorkflowControlError::InvalidSource(detail)
                 if detail.contains("resident Agent requires a resident lifecycle")
         ));
+    }
+
+    /// Idempotent historical run reconstruction must retain route outcomes.
+    #[test]
+    fn historical_run_classifier_includes_route_outcomes() {
+        let run = hya_proto::WorkflowRunId::new();
+        let event = hya_proto::Event::WorkflowStageRouteOutcome {
+            session: hya_proto::SessionId::new(),
+            run,
+            stage: "execute".to_string(),
+            member: hya_proto::MemberId::new(),
+            role: hya_proto::WorkflowMemberRole::Worker,
+            iteration: 0,
+            step: 0,
+            candidate_index: 0,
+            model: hya_proto::ModelRef::new("fake/model"),
+            reasoning: "none".to_string(),
+            failure_class: hya_proto::WorkflowRouteFailureClass::None,
+        };
+
+        assert_eq!(workflow_event_run(&event), Some(run));
     }
 }

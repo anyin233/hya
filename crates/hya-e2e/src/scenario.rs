@@ -49,6 +49,7 @@ pub struct E2eEnvBuilder {
     skill_files: Vec<(String, String)>,
     project_files: Vec<(String, Vec<u8>)>,
     preinstall_bundles: Vec<PathBuf>,
+    additional_models: Vec<String>,
 }
 
 impl Default for E2eEnvBuilder {
@@ -64,6 +65,7 @@ impl Default for E2eEnvBuilder {
             skill_files: Vec::new(),
             project_files: Vec::new(),
             preinstall_bundles: Vec::new(),
+            additional_models: Vec::new(),
         }
     }
 }
@@ -149,6 +151,18 @@ impl E2eEnvBuilder {
         self
     }
 
+    /// Advertise more model ids on the same local FakeLlm provider.
+    #[must_use]
+    pub fn additional_models<I, S>(mut self, models: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.additional_models
+            .extend(models.into_iter().map(Into::into));
+        self
+    }
+
     /// Install a hyabundle package into the isolated data home before serve.
     #[must_use]
     pub fn preinstall_bundle(mut self, package: PathBuf) -> Self {
@@ -168,6 +182,7 @@ impl E2eEnvBuilder {
         );
         spec.yolo = self.yolo;
         spec.permission_model = self.permission_model;
+        spec.additional_models = self.additional_models;
         spec.mcp = self.mcp;
         spec.skill_files = self.skill_files;
         spec.project_files = self.project_files;
@@ -234,6 +249,13 @@ impl E2eEnv {
             .client
             .prompt(session, &PromptRequest { text: text.into() })
             .await?)
+    }
+
+    /// Reopen the production backend on the same durable store and project.
+    pub fn reopen(&mut self) -> Result<(), E2eError> {
+        self.backend.reopen()?;
+        self.client = Client::new(self.backend.url.clone());
+        Ok(())
     }
 
     /// Fetch session event envelopes, optionally after `since_seq`.

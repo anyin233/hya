@@ -61,7 +61,8 @@ pub use agent_catalog::{AgentCatalog, AgentDefinition, AgentOrigin};
 pub use builtin_agents::{BUILTIN_AGENTS, BuiltinAgent, SpawnScope, builtin_agent, is_builtin_id};
 pub use bus::EventBus;
 pub use category::{
-    CategoryEntry, CategoryRegistry, ResolvedCategory, build_member_agent, inject_skills,
+    CategoryEntry, CategoryRegistry, ResolvedCategory, apply_spawn_model_policy,
+    build_member_agent, inject_skills,
 };
 pub use compaction::{
     CompactionConfig, CompactionPlan, MIN_RESOLVED_THRESHOLD, ModelSummarizer, SummarizeOptions,
@@ -110,8 +111,10 @@ pub use subagent::{
 pub use workflow::{
     CompiledWorkflow, DurableWorkflowAdmission, DurableWorkflowSelection, FailurePolicy,
     PreparedWorkflowRun, StageMode, StageReport, StageStatus, VerifySpec, WorkflowDefinition,
-    WorkflowError, WorkflowPlan, WorkflowRevision, WorkflowRunContext, WorkflowRunReport,
-    WorkflowStage, WorkflowStatus, discover_workflow_files_in_root, load_workflow_file,
-    prepare_workflow_run, prepare_workflow_run_for_actor, run_workflow, workflow_dirs_for_workdir,
+    WorkflowError, WorkflowModelAssignment, WorkflowModelCandidate, WorkflowModelRoute,
+    WorkflowModelRouteCandidate, WorkflowPlan, WorkflowRevision, WorkflowRoutingContext,
+    WorkflowRunContext, WorkflowRunReport, WorkflowStage, WorkflowStatus,
+    discover_workflow_files_in_root, load_workflow_file, prepare_workflow_run,
+    prepare_workflow_run_for_actor, run_workflow, workflow_dirs_for_workdir,
 };
 pub use workspace::{TmuxPaneManager, WorktreeManager};

@@ -171,6 +171,59 @@ test("failed Workflow identifies its failed Stage and ignores unrelated run-tree
   })
 })
 
+test("optional Workflow route fields do not change compact presentation", () => {
+  const base = {
+    selection: identity,
+    availability: "available",
+    run: {
+      id: "run-routed",
+      workflow: identity,
+      request_hash: "hash",
+      owner: "owner",
+      status: "running",
+      stages: [stage("execute", "running", 0, [member("member-routed")])],
+    },
+  }
+  const routed = {
+    ...base,
+    run: {
+      ...base.run,
+      stages: [
+        {
+          ...base.run.stages[0],
+          worker_model: {
+            id: "fake/primary",
+            reasoning: "high",
+            fallback: [{ id: "fake/fallback", reasoning: "medium" }],
+          },
+          selected_worker_model: { index: 0, id: "fake/primary", reasoning: "high" },
+          verifier_model: { id: "fake/primary", reasoning: "low", fallback: [] },
+          selected_verifier_model: { index: 0, id: "fake/primary", reasoning: "low" },
+          route_outcomes: [
+            {
+              session: "hysec_routed",
+              run: "workflow-run-routed",
+              stage: "execute",
+              member: "member-routed",
+              role: "worker",
+              iteration: 0,
+              step: 0,
+              candidate_index: 0,
+              model: "fake/primary",
+              reasoning: "high",
+              failure_class: "none",
+            },
+          ],
+        },
+      ],
+    },
+  }
+  const activity = [sessionMember("member-routed", "running", "Execute routed stage")]
+
+  expect(parseWorkflowProjection(routed)).toEqual(parseWorkflowProjection(base))
+  expect(presentWorkflow(routed, activity)).toEqual(presentWorkflow(base, activity))
+})
+
 test("Workflow boundary rejects malformed synchronized state", () => {
   expect(() => parseWorkflowProjection({ selection: { ...identity, revision: 42 } })).toThrow(
     "workflow.selection.revision",

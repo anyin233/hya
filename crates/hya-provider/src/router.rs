@@ -65,6 +65,36 @@ impl ProviderRouter {
     pub fn capabilities(&self, model: &ModelRef) -> Option<crate::Capabilities> {
         self.providers.iter().find_map(|p| p.capabilities(model))
     }
+    /// Return the reasoning default from the first provider that claims `model`.
+    ///
+    /// A claiming provider with no metadata deliberately stops lookup; later
+    /// routes must not override first-match routing semantics.
+    #[must_use]
+    pub fn reasoning_default(&self, model: &ModelRef) -> Option<crate::ReasoningEffort> {
+        for provider in &self.providers {
+            if provider.capabilities(model).is_some() {
+                return provider.reasoning_default(model);
+            }
+        }
+        None
+    }
+    /// Return support for an effort from the first provider claiming `model`.
+    ///
+    /// `Some(false)` is a claimed route that rejects the effort; later routes
+    /// are never consulted because provider order is semantic.
+    #[must_use]
+    pub fn supports_reasoning_effort(
+        &self,
+        model: &ModelRef,
+        effort: crate::ReasoningEffort,
+    ) -> Option<bool> {
+        for provider in &self.providers {
+            if provider.capabilities(model).is_some() {
+                return provider.supports_reasoning_effort(model, effort);
+            }
+        }
+        None
+    }
 
     /// Merged catalog rows from all routes, sorted and deduped by provider+model id.
     #[must_use]

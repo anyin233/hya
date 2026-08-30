@@ -79,6 +79,62 @@ flowchart TD
     }
     BundleSource::new("workflow-source", files)
 }
+/// Build a WorkflowBundle whose worker and verifier declare model routes.
+fn workflow_source_with_model_routes() -> BundleSource {
+    let manifest = br#"kind: WorkflowBundle
+identity:
+  id: hya/workflow-model-routes
+  version: 1.0.0
+  publisher: hya
+workflow:
+  id: routed
+  path: workflows/routed.hya.md
+agents:
+  - id: worker
+    role: subagent
+    prompt: prompts/worker.md
+    spawn_lifecycle: transient
+  - id: verifier
+    role: subagent
+    prompt: prompts/verifier.md
+    spawn_lifecycle: transient
+"#;
+    let workflow = br#"---
+kind: Workflow
+name: routed
+description: Model-routed packaged Workflow.
+nodes:
+  execute:
+    agent: worker
+    directive: Execute the request.
+    mode: loop
+    model:
+      id: fake/worker-primary
+      reasoning: high
+      fallback:
+        - id: fake/worker-fallback
+          reasoning: medium
+    verify:
+      agent: verifier
+      until: the result is valid
+      max_iterations: 2
+      model:
+        id: fake/worker-primary
+        reasoning: low
+---
+flowchart TD
+  execute
+"#;
+    BundleSource::new(
+        "workflow-model-routes",
+        vec![
+            SourceFile::new("bundle.yaml", manifest.as_slice()),
+            SourceFile::new("workflows/routed.hya.md", workflow.as_slice()),
+            SourceFile::new("prompts/worker.md", b"Execute carefully.\n".as_slice()),
+            SourceFile::new("prompts/verifier.md", b"Verify carefully.\n".as_slice()),
+        ],
+    )
+}
 
 /// Build a WorkflowBundle whose compiled stage points at the requested Agent.
 fn workflow_source_with_stage_agent(stage_agent: &str) -> BundleSource {
@@ -263,6 +319,36 @@ fn workflow_bundle_prepares_compiled_agent_closure_as_v2() {
     assert_eq!(document["bundles"][0]["kind"], "WorkflowBundle");
     assert_eq!(document["bundles"][0]["workflow"]["id"], "demo");
     assert_eq!(document["bundles"][0]["agents"][0]["id"], "worker");
+    assert_eq!(
+        document["bundles"][0]["workflow"]["compiler_revision"],
+        "2ce247d3aaf2ecf6de48121779abf0056c467b0c1a01775cfdf1011108a76797"
+    );
+}
+
+/// Model-routed WorkflowBundles retain their source contract in prepared v2.
+#[test]
+fn workflow_bundle_prepares_model_routes_without_format_bump() {
+    let prepared = prepare_package(workflow_source_with_model_routes());
+    let Ok(prepared) = prepared else {
+        panic!("model-routed WorkflowBundle preparation failed: {prepared:?}");
+    };
+    let document = serde_json::from_slice::<serde_json::Value>(prepared.bytes());
+    let Ok(document) = document else {
+        panic!("prepared model-routed WorkflowBundle was not JSON: {document:?}");
+    };
+
+    assert_eq!(document["format_version"], 2);
+    assert_eq!(document["bundles"][0]["format_version"], 2);
+    let source = document["bundles"][0]["workflow"]["source"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(source.contains("id: fake/worker-primary"));
+    assert!(source.contains("id: fake/worker-fallback"));
+    assert!(source.contains("reasoning: low"));
+    assert_ne!(
+        document["bundles"][0]["workflow"]["compiler_revision"], "",
+        "route-bearing source must retain the common compiler revision"
+    );
 }
 
 /// WorkflowBundle preparation rejects Agents outside the compiled reachable closure.

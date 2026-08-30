@@ -48,6 +48,61 @@ undeclared nodes or inputs, and the removed YAML `stages:` / `needs:` format.
 First graph occurrence defines stable Stage order. Incoming edge declaration
 order defines join order.
 
+### Stage-local model routes
+
+A Stage can replace its Agent model/category/reasoning policy with an ordered
+route. A loop verifier declares a separate route, so worker and verifier can use
+the same base model with different efforts:
+
+```yaml
+model:
+  id: 12th-oai/gpt-5.6-sol
+  reasoning: high
+  fallback:
+    - id: 12th-anth/claude-sonnet-4-6
+      reasoning: medium
+mode: loop
+verify:
+  agent: reviewer
+  until: The result satisfies the request.
+  model:
+    id: 12th-oai/gpt-5.6-sol
+    reasoning: low
+    fallback:
+      - id: 12th-anth/claude-sonnet-4-6
+```
+
+Workflow assignment ids are suffix-free base model references. `reasoning:` is
+the only effort encoding in this block; every embedded `#variant` suffix is
+rejected. An omitted effort resolves from that candidate model's own configured
+default, or canonical `none`, and never inherits from another entry or the
+Agent.
+
+Route preflight runs before child, resident, mail, or provider effects. It
+validates typed efforts and provider capability, rejects effective duplicates,
+and records the first routable candidate index. Execution carries the immutable
+route as request-local turn data rather than inserting it into the global
+model-fallback map. Stream groups start at the admitted index, move only forward
+for safe pre-stream failures, and never replay an established stream. Reused
+resident actor keys require identical effective worker routes.
+
+The admitted plan stores both requested routes and selected candidates. The
+outer Workflow owner persists one route outcome per explicit-route provider
+stream group as `WorkflowStageRouteOutcome` on the root Session. Each bounded
+payload contains only role, iteration, assistant step, candidate index, base
+model, canonical effort, and stable class. Acknowledgement-backed capacity-one
+handoffs keep pending activation state bounded and keep child resident claims
+out of the root Event path. Replay deduplicates the outcome key and never
+resolves a provider or repeats work. No assignment preserves the old route and
+Event shape exactly.
+
+Prepared WorkflowBundle container format remains v2; the retained source and
+compiler revision carry the new syntax. A route-bearing v2 bundle requires the
+new compiler, while unchanged no-assignment sources retain their prior revision.
+The compact Session sidebar does not render model routes. CLI, API, SDK, and
+state DTOs expose them through the existing synchronized projection without a
+second client, poller, or read model.
+
 Discovery precedence is:
 
 1. `<workdir>/.hya/workflows/*.hya.md`;

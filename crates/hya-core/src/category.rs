@@ -2,7 +2,79 @@ use std::collections::HashMap;
 
 use hya_proto::ModelRef;
 
+use crate::agent_catalog::AgentDefinition;
 use crate::engine::AgentSpec;
+use hya_tool::SpawnMember;
+
+/// Apply the normal spawn model/category precedence to an already-resolved Agent.
+///
+/// The seven layers, from lowest to highest precedence, are the current base
+/// model, Bundle category, inline category, Bundle model, inline model, spawn
+/// category, and spawn model. Category resolution preserves first-match
+/// servability behavior.
+#[must_use]
+pub fn apply_spawn_model_policy(
+    mut agent: AgentSpec,
+    definition: &AgentDefinition<'_>,
+    member: &SpawnMember,
+    categories: &CategoryRegistry,
+    is_servable: &dyn Fn(&ModelRef) -> bool,
+) -> AgentSpec {
+    let resolve_category = |name: &str| {
+        categories
+            .resolve_servable(name, is_servable)
+            .map(|resolved| resolved.model)
+    };
+
+    if let Some(model) = definition
+        .model_policy
+        .category
+        .as_deref()
+        .and_then(&resolve_category)
+    {
+        agent.model = model;
+    }
+    if let Some(model) = member
+        .inline_agent
+        .as_ref()
+        .and_then(|inline| inline.category.as_deref())
+        .map(str::trim)
+        .filter(|category| !category.is_empty())
+        .and_then(&resolve_category)
+    {
+        agent.model = model;
+    }
+    if let Some(model) = definition.model_policy.model.as_deref() {
+        agent.model = ModelRef::new(model);
+    }
+    if let Some(model) = member
+        .inline_agent
+        .as_ref()
+        .and_then(|inline| inline.model.as_deref())
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+    {
+        agent.model = ModelRef::new(model);
+    }
+    if let Some(model) = member
+        .category
+        .as_deref()
+        .map(str::trim)
+        .filter(|category| !category.is_empty())
+        .and_then(&resolve_category)
+    {
+        agent.model = model;
+    }
+    if let Some(model) = member
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+    {
+        agent.model = ModelRef::new(model);
+    }
+    agent
+}
 
 /// One logical model category: an ordered list of concrete `provider/model`
 /// candidates (`model` = first preference, `fallback` = the rest, tried in

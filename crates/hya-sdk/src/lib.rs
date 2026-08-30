@@ -35,9 +35,11 @@ pub mod workflow;
 pub use workflow::{
     MemberId, OwnerRunId, WorkflowAvailability, WorkflowCommand, WorkflowCommandResult,
     WorkflowDelivery, WorkflowIdentity, WorkflowInfo, WorkflowMemberProjection, WorkflowMemberRole,
-    WorkflowProjection, WorkflowRevision, WorkflowRunId, WorkflowRunProjection, WorkflowRunResult,
-    WorkflowRunStatus, WorkflowSourceId, WorkflowStageInfo, WorkflowStagePlan,
-    WorkflowStageProjection, WorkflowStageStatus, WorkflowSummary,
+    WorkflowModelAssignment, WorkflowModelCandidate, WorkflowModelResolvedCandidate,
+    WorkflowProjection, WorkflowRevision, WorkflowRouteFailureClass, WorkflowRunId,
+    WorkflowRunProjection, WorkflowRunResult, WorkflowRunStatus, WorkflowSourceId,
+    WorkflowStageInfo, WorkflowStagePlan, WorkflowStageProjection, WorkflowStageRouteOutcome,
+    WorkflowStageStatus, WorkflowSummary,
 };
 
 mod client;

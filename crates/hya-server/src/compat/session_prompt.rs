@@ -263,6 +263,7 @@ fn admission_info(envs: &[Envelope], message: MessageId) -> Result<(u64, u64), A
             | Event::WorkflowRunStarted { .. }
             | Event::WorkflowStageStarted { .. }
             | Event::WorkflowStageMemberLinked { .. }
+            | Event::WorkflowStageRouteOutcome { .. }
             | Event::WorkflowStageFinished { .. }
             | Event::WorkflowRunFinished { .. }
             | Event::UserPromptContextRecorded { .. }

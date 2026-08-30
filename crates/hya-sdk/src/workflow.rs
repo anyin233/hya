@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 
 /// Stable catalog origin for a compiled Workflow source.
 ///
@@ -28,6 +28,125 @@ pub type OwnerRunId = String;
 
 /// Canonical member identity in a parent Session's member projection.
 pub type MemberId = String;
+/// Base model candidate in an authored ordered fallback chain.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct WorkflowModelCandidate {
+    /// Stable provider/model identity without a Workflow variant suffix.
+    pub id: String,
+    /// Optional authored reasoning effort label.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<String>,
+}
+
+/// One authored model assignment with declaration-order fallback candidates.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct WorkflowModelAssignment {
+    /// Preferred base model identity.
+    pub id: String,
+    /// Optional preferred reasoning effort label.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<String>,
+    /// Ordered fallback candidates tried after the preferred model.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fallback: Vec<WorkflowModelCandidate>,
+}
+
+/// One admission-resolved candidate in a Stage route.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct WorkflowModelResolvedCandidate {
+    /// Declaration-order index in the complete route.
+    pub index: u32,
+    /// Base model identity without a variant suffix.
+    pub id: String,
+    /// Required canonical effort label (`none` means Off).
+    pub reasoning: String,
+}
+
+/// Stable, bounded classification for one Workflow route outcome.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowRouteFailureClass {
+    /// The selected candidate succeeded without a fallback advance.
+    None,
+    /// Retryable transport failure before a stream was established.
+    Transport,
+    /// Upstream rate limiting before a stream was established.
+    RateLimited,
+    /// Retryable upstream server failure before a stream was established.
+    Server,
+    /// No provider route claimed the candidate model.
+    UnknownModel,
+    /// Authentication or authorization failure.
+    Auth,
+    /// Provider capability or request incompatibility.
+    Incompatible,
+    /// Non-retryable HTTP/provider response failure.
+    Http,
+    /// Malformed or truncated provider stream.
+    Decode,
+    /// Internal invariant, store, or claim failure after an attempt started.
+    Internal,
+    /// Sidecar loss or task abort after an attempt started.
+    Aborted,
+    /// Explicit Workflow-owned activation cancellation.
+    Cancelled,
+}
+
+/// Durable fields for one finalized explicit Workflow route stream group.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct WorkflowStageRouteOutcome {
+    /// Owning root Session log.
+    #[serde(serialize_with = "serialize_session_id")]
+    pub session: String,
+    /// Workflow run containing the Stage.
+    pub run: WorkflowRunId,
+    /// Compiled Stage id.
+    pub stage: String,
+    /// Canonical Session member reference.
+    pub member: MemberId,
+    /// Worker or independent verifier route.
+    pub role: WorkflowMemberRole,
+    /// Zero-based loop activation iteration.
+    pub iteration: u32,
+    /// Assistant/provider stream-group index.
+    pub step: u32,
+    /// Declaration-order candidate index selected or finally attempted.
+    pub candidate_index: u32,
+    /// Base model identity without a Workflow variant suffix.
+    pub model: String,
+    /// Required canonical effort label (`none` means Off).
+    pub reasoning: String,
+    /// Stable provider/activation failure class.
+    pub failure_class: WorkflowRouteFailureClass,
+}
+fn serialize_session_id<S>(value: &str, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    serializer.serialize_str(&canonical_session_id(value))
+}
+
+fn canonical_session_id(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let hyphens = [8, 13, 18, 23];
+    if bytes.len() != 36
+        || hyphens.iter().any(|&index| bytes[index] != b'-')
+        || bytes
+            .iter()
+            .enumerate()
+            .any(|(index, &byte)| !hyphens.contains(&index) && !byte.is_ascii_hexdigit())
+    {
+        return value.to_string();
+    }
+    let mut canonical = String::with_capacity(36);
+    canonical.push_str("ses_");
+    for &byte in bytes {
+        if byte != b'-' {
+            canonical.push(char::from(byte.to_ascii_lowercase()));
+        }
+    }
+    canonical
+}
 
 /// One Stage in a compiled Workflow info response.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -48,8 +167,13 @@ pub struct WorkflowStageInfo {
     pub actor: Option<String>,
     /// `once` or `loop`.
     pub mode: String,
+    /// Optional authored worker model assignment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker_model: Option<WorkflowModelAssignment>,
+    /// Optional authored verifier model assignment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verifier_model: Option<WorkflowModelAssignment>,
 }
-
 /// Valid compiled Workflow metadata returned by an `info` command.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct WorkflowInfo {
@@ -265,6 +389,18 @@ pub struct WorkflowStagePlan {
     pub mode: String,
     /// Zero-based topological level.
     pub level: usize,
+    /// Optional authored worker model assignment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker_model: Option<WorkflowModelAssignment>,
+    /// Admission-selected worker candidate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_worker_model: Option<WorkflowModelResolvedCandidate>,
+    /// Optional authored verifier model assignment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verifier_model: Option<WorkflowModelAssignment>,
+    /// Admission-selected verifier candidate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_verifier_model: Option<WorkflowModelResolvedCandidate>,
 }
 
 /// Role of one canonical member reference within a Workflow Stage.
@@ -299,6 +435,9 @@ pub struct WorkflowStageProjection {
     /// Canonical member references in event order.
     #[serde(default)]
     pub members: Vec<WorkflowMemberProjection>,
+    /// Canonical finalized route outcomes in append order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub route_outcomes: Vec<WorkflowStageRouteOutcome>,
 }
 
 /// Folded state of the newest Workflow run in one Session.

@@ -9,19 +9,20 @@
 //! [`IterationDriver`](crate::completion::IterationDriver) with an independent
 //! verifier member — never a second loop implementation.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use hya_bundle::SpawnLifecycle;
 use hya_proto::{
-    ActorClaim, Event, MailEndpoint, MailKind, MemberId, RosterStatus, SessionId,
+    ActorClaim, Event, MailEndpoint, MailKind, MemberId, ModelRef, RosterStatus, SessionId,
     WorkflowMemberRole, WorkflowRunId, WorkflowStageStatus,
 };
+use hya_provider::ReasoningEffort;
 use hya_tool::AgentDef;
 use hya_workflow::{
     CompiledWorkflow, FailurePolicy, MAX_PREDECESSOR_OUTPUT_BYTES, StageEvidence,
-    StageEvidenceStatus, StageMode, VerifySpec, WorkflowStage,
+    StageEvidenceStatus, StageMode, VerifySpec, WorkflowModelAssignment, WorkflowStage,
 };
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
@@ -35,14 +36,14 @@ use crate::error::CoreError;
 use crate::resident::ResidentSupervisor;
 use crate::sidecar::BoundSidecarFactory;
 use crate::subagent::{
-    MemberEvidence, MemberSpec, MemberStatus, run_pre_admitted_team,
-    run_pre_admitted_team_for_actor,
+    MemberEvidence, MemberSpec, MemberStatus, run_pre_admitted_team_with_workflow,
 };
 
-use super::WorkflowError;
-
+use super::{
+    WorkflowError, WorkflowModelRoute, WorkflowRouteRecord, WorkflowRouteRecorder,
+    WorkflowRoutingContext, WorkflowTurnRoute, WorkflowTurnRouteSpec,
+};
 /// Per-run inputs for executing a workflow.
-///
 /// One value per run; everything here comes from the calling surface (CLI,
 /// tool plane) which owns the session binding and caller authorization. Each
 /// member's own execution context (spawnable roster, resource policy, sidecar
@@ -62,6 +63,9 @@ pub struct WorkflowRunContext {
     pub inputs: BTreeMap<String, String>,
     /// Resident scheduling owner required only when the compiled plan has actors.
     pub resident_supervisor: Option<Arc<ResidentSupervisor>>,
+    /// Configured category/provider context for explicit Stage route admission.
+    /// `None` preserves direct core callers and the old no-assignment path.
+    pub routing: Option<WorkflowRoutingContext>,
 }
 /// Terminal status of one workflow stage.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -149,6 +153,7 @@ struct ResolvedAgent {
     resources: AgentResourcePolicy,
     sidecar_factory: Option<Arc<dyn BoundSidecarFactory>>,
     lifecycle: SpawnLifecycle,
+    route: Option<WorkflowModelRoute>,
 }
 
 #[derive(Clone)]
@@ -163,12 +168,12 @@ struct PreparedActivation {
     directive: String,
     system_context: Arc<str>,
 }
-
 struct ResidentActivation {
     actor: ResidentActor,
     prepared: PreparedActivation,
     cancel: CancellationToken,
     actor_claim: Option<ActorClaim>,
+    route: Option<WorkflowTurnRoute>,
 }
 
 struct WorkflowBudgetReservation {
@@ -203,6 +208,9 @@ fn resolve_agent(
     engine: &SessionEngine,
     ctx: &WorkflowRunContext,
     agent_id: &str,
+    workflow: &str,
+    role: &str,
+    assignment: Option<&WorkflowModelAssignment>,
 ) -> Result<ResolvedAgent, WorkflowError> {
     let definition = ctx
         .binding
@@ -212,8 +220,37 @@ fn resolve_agent(
             agent_id: agent_id.to_string(),
             detail: error.to_string(),
         })?;
-    let spec =
+    let mut spec =
         engine.agent_spec_for_binding(&ctx.binding, &ctx.base_agent, definition.stable_id)?;
+    let router = ctx
+        .routing
+        .as_ref()
+        .map(|routing| Arc::clone(&routing.router))
+        .unwrap_or_else(|| engine.provider_router());
+    if let Some(routing) = ctx.routing.as_ref() {
+        let member = hya_tool::SpawnMember::default();
+        let is_servable = |model: &ModelRef| routing.router.resolve(model).is_some();
+        spec = crate::category::apply_spawn_model_policy(
+            spec,
+            &definition,
+            &member,
+            &routing.categories,
+            &is_servable,
+        );
+    }
+    let route = assignment
+        .map(|assignment| resolve_model_route(workflow, agent_id, role, assignment, &router))
+        .transpose()?;
+    if let Some(route) = &route {
+        let selected = route.selected().ok_or_else(|| WorkflowError::Invalid {
+            workflow: workflow.to_string(),
+            detail: format!("Stage `{agent_id}` {role} route selected no candidate"),
+        })?;
+        // An explicit assignment replaces inherited Agent effort. Keep the
+        // effective value on the child spec as well as the request-local route.
+        spec.model = selected.model.clone();
+        spec.reasoning = Some(selected.reasoning);
+    }
     // The member's OWN reachable roster comes from the TARGET agent's
     // `can_spawn`, not the caller's; this bounds what the stage can itself
     // delegate during its turn to exactly what the task path would grant.
@@ -240,6 +277,92 @@ fn resolve_agent(
         resources,
         sidecar_factory,
         lifecycle: definition.spawn_lifecycle,
+        route,
+    })
+}
+
+/// Resolve one authored assignment to typed efforts and an immutable start index.
+fn resolve_model_route(
+    workflow: &str,
+    stage: &str,
+    role: &str,
+    assignment: &WorkflowModelAssignment,
+    router: &hya_provider::ProviderRouter,
+) -> Result<WorkflowModelRoute, WorkflowError> {
+    let mut candidates = Vec::with_capacity(1 + assignment.fallback().len());
+    let mut seen = BTreeSet::new();
+    let entries = std::iter::once((assignment.id(), assignment.reasoning())).chain(
+        assignment
+            .fallback()
+            .iter()
+            .map(|candidate| (candidate.id(), candidate.reasoning())),
+    );
+    for (entry_index, (model_id, authored_reasoning)) in entries.enumerate() {
+        if model_id.contains('#') || model_id.trim().is_empty() {
+            return Err(WorkflowError::Invalid {
+                workflow: workflow.to_string(),
+                detail: format!(
+                    "Stage `{stage}` {role} route has invalid model id at index {entry_index}"
+                ),
+            });
+        }
+        let model = ModelRef::new(model_id);
+        let reasoning = match authored_reasoning {
+            Some(label) => ReasoningEffort::parse(label).ok_or_else(|| WorkflowError::Invalid {
+                workflow: workflow.to_string(),
+                detail: format!(
+                    "Stage `{stage}` {role} route has unknown reasoning effort `{label}` at index {entry_index}"
+                ),
+            })?,
+            None => router
+                .reasoning_default(&model)
+                .unwrap_or(ReasoningEffort::Off),
+        };
+        if !seen.insert((model.to_string(), reasoning)) {
+            return Err(WorkflowError::Invalid {
+                workflow: workflow.to_string(),
+                detail: format!(
+                    "Stage `{stage}` {role} route contains duplicate effective candidate `{model_id}` / `{}`",
+                    reasoning.as_str()
+                ),
+            });
+        }
+        if let Some(supported) = router.supports_reasoning_effort(&model, reasoning) {
+            if !supported {
+                return Err(WorkflowError::Invalid {
+                    workflow: workflow.to_string(),
+                    detail: format!(
+                        "Stage `{stage}` {role} candidate `{model_id}` does not support reasoning `{}`",
+                        reasoning.as_str()
+                    ),
+                });
+            }
+        } else if reasoning != ReasoningEffort::Off
+            && router
+                .capabilities(&model)
+                .is_some_and(|caps| !caps.reasoning_request)
+        {
+            return Err(WorkflowError::Invalid {
+                workflow: workflow.to_string(),
+                detail: format!(
+                    "Stage `{stage}` {role} candidate `{model_id}` does not support reasoning requests"
+                ),
+            });
+        }
+        candidates.push(crate::workflow::WorkflowModelRouteCandidate { model, reasoning });
+    }
+    let Some(selected_index) = candidates
+        .iter()
+        .position(|candidate| router.resolve(&candidate.model).is_some())
+    else {
+        return Err(WorkflowError::Invalid {
+            workflow: workflow.to_string(),
+            detail: format!("Stage `{stage}` {role} route has no routable candidate"),
+        });
+    };
+    Ok(WorkflowModelRoute {
+        candidates: candidates.into(),
+        selected_index,
     })
 }
 
@@ -279,11 +402,27 @@ pub async fn prepare_workflow_run_for_actor(
     let mut resolved = Vec::with_capacity(plan.stages().len());
     let mut verifiers = Vec::with_capacity(plan.stages().len());
     for stage in plan.stages() {
-        resolved.push(resolve_agent(&engine, &context, stage.agent())?);
+        resolved.push(resolve_agent(
+            &engine,
+            &context,
+            stage.agent(),
+            name,
+            "worker",
+            stage.model(),
+        )?);
         verifiers.push(
             stage
                 .verify()
-                .map(|verify| resolve_agent(&engine, &context, verify.agent()))
+                .map(|verify| {
+                    resolve_agent(
+                        &engine,
+                        &context,
+                        verify.agent(),
+                        name,
+                        "verifier",
+                        verify.model(),
+                    )
+                })
                 .transpose()?,
         );
     }
@@ -319,11 +458,99 @@ pub async fn run_workflow(
         .await
 }
 
+struct RoutePersistence {
+    recorder: Option<WorkflowRouteRecorder>,
+    task: Option<tokio::task::JoinHandle<Result<(), CoreError>>>,
+}
+
+impl RoutePersistence {
+    fn start(engine: Arc<SessionEngine>, lead: SessionId, actor_claim: Option<ActorClaim>) -> Self {
+        let (sender, receiver) = tokio::sync::mpsc::channel(1);
+        let recorder = WorkflowRouteRecorder::new(sender);
+        let task = tokio::spawn(async move {
+            persist_route_records(engine, lead, actor_claim, receiver).await
+        });
+        Self {
+            recorder: Some(recorder),
+            task: Some(task),
+        }
+    }
+
+    fn recorder(&self) -> Option<WorkflowRouteRecorder> {
+        self.recorder.clone()
+    }
+
+    async fn finish(mut self) -> Result<(), WorkflowError> {
+        self.recorder.take();
+        let Some(task) = self.task.take() else {
+            return Ok(());
+        };
+        task.await
+            .map_err(|error| WorkflowError::Invalid {
+                workflow: "route persistence".to_string(),
+                detail: format!("route outcome persistence task failed: {error}"),
+            })?
+            .map_err(WorkflowError::Engine)
+    }
+}
+
+impl Drop for RoutePersistence {
+    fn drop(&mut self) {
+        if let Some(task) = self.task.take() {
+            task.abort();
+        }
+    }
+}
+
+async fn persist_route_records(
+    engine: Arc<SessionEngine>,
+    lead: SessionId,
+    actor_claim: Option<ActorClaim>,
+    mut receiver: tokio::sync::mpsc::Receiver<WorkflowRouteRecord>,
+) -> Result<(), CoreError> {
+    while let Some(record) = receiver.recv().await {
+        let result = engine
+            .record_workflow_event_for_actor(actor_claim.as_ref(), lead, record.event)
+            .await;
+        let acknowledgement = result.as_ref().map(|_| ()).map_err(ToString::to_string);
+        let _ = record.ack.send(acknowledgement);
+        result?;
+    }
+    Ok(())
+}
+
 /// Execute the already-validated graph and consume its budget reservation.
 ///
 /// # Errors
 /// Returns rendering or governed Stage execution failures.
 impl PreparedWorkflowRun {
+    /// Return the prepared worker route for a Stage, when explicitly assigned.
+    #[must_use]
+    pub fn worker_route(&self, stage_index: usize) -> Option<&WorkflowModelRoute> {
+        self.resolved.get(stage_index)?.route.as_ref()
+    }
+
+    /// Return the prepared verifier route for a Stage, when explicitly assigned.
+    #[must_use]
+    pub fn verifier_route(&self, stage_index: usize) -> Option<&WorkflowModelRoute> {
+        self.verifiers
+            .get(stage_index)?
+            .as_ref()
+            .and_then(|resolved| resolved.route.as_ref())
+    }
+
+    /// Whether any Stage has an explicit worker or verifier route.
+    #[must_use]
+    pub fn has_explicit_routes(&self) -> bool {
+        self.resolved
+            .iter()
+            .any(|resolved| resolved.route.is_some())
+            || self
+                .verifiers
+                .iter()
+                .flatten()
+                .any(|resolved| resolved.route.is_some())
+    }
     /// Execute the already-validated graph and consume its budget reservation.
     ///
     /// # Errors
@@ -347,6 +574,16 @@ impl PreparedWorkflowRun {
         let name = workflow.definition().name();
         let mut reports: Vec<StageReport> = plan.stages().iter().map(pending_report).collect();
         let mut actors: BTreeMap<String, ResidentActor> = BTreeMap::new();
+        let has_explicit_routes = resolved.iter().any(|agent| agent.route.is_some())
+            || verifiers
+                .iter()
+                .flatten()
+                .any(|agent| agent.route.is_some());
+        let route_persistence = (durable_run.is_some() && has_explicit_routes)
+            .then(|| RoutePersistence::start(engine.clone(), lead, actor_claim));
+        let route_recorder = route_persistence
+            .as_ref()
+            .and_then(RoutePersistence::recorder);
         for level in plan.levels() {
             if cancel.is_cancelled() {
                 mark_pending(&mut reports, StageStatus::Cancelled);
@@ -385,7 +622,8 @@ impl PreparedWorkflowRun {
 
             let mut transient_members = Vec::new();
             let mut transient_specs = Vec::new();
-            let mut resident_activations = Vec::new();
+            let mut transient_routes: BTreeMap<MemberId, WorkflowTurnRoute> = BTreeMap::new();
+            let mut resident_activations: Vec<ResidentActivation> = Vec::new();
             for activation in activations {
                 let stage = &plan.stages()[activation.index];
                 let resolved_stage = resolved[activation.index].clone();
@@ -399,7 +637,7 @@ impl PreparedWorkflowRun {
                     let actor = if let Some(existing) = actors.get(actor_key).cloned() {
                         existing
                     } else {
-                        let (session, handle, member) = supervisor
+                        let spawn_result = supervisor
                             .spawn_resident_parked(
                                 lead,
                                 resolved_stage.spec.clone(),
@@ -413,7 +651,8 @@ impl PreparedWorkflowRun {
                                 actor_claim.as_ref(),
                                 Some(activation.system_context.clone()),
                             )
-                            .await?;
+                            .await;
+                        let (session, handle, member) = spawn_result?;
                         let actor = ResidentActor {
                             session,
                             handle,
@@ -438,7 +677,25 @@ impl PreparedWorkflowRun {
                             )
                             .await?;
                     }
-                    resident_activations.push((activation, actor));
+                    let route = resolved_stage.route.map(|route| {
+                        WorkflowTurnRoute::new(WorkflowTurnRouteSpec {
+                            route,
+                            session: lead,
+                            run: durable_run,
+                            stage: stage.id().to_string(),
+                            member: actor.member,
+                            role: WorkflowMemberRole::Worker,
+                            iteration: 0,
+                            recorder: route_recorder.clone(),
+                        })
+                    });
+                    resident_activations.push(ResidentActivation {
+                        actor,
+                        prepared: activation,
+                        cancel: cancel.child_token(),
+                        actor_claim,
+                        route,
+                    });
                 } else {
                     let member = MemberId::new();
                     transient_members.push((activation.index, member));
@@ -455,6 +712,21 @@ impl PreparedWorkflowRun {
                         session: None,
                         sidecar_factory: resolved_stage.sidecar_factory,
                     });
+                    if let Some(route) = resolved_stage.route {
+                        transient_routes.insert(
+                            member,
+                            WorkflowTurnRoute::new(WorkflowTurnRouteSpec {
+                                route,
+                                session: lead,
+                                run: durable_run,
+                                stage: stage.id().to_string(),
+                                member,
+                                role: WorkflowMemberRole::Worker,
+                                iteration: 0,
+                                recorder: route_recorder.clone(),
+                            }),
+                        );
+                    }
                 }
             }
             if let Some(run) = durable_run {
@@ -476,34 +748,34 @@ impl PreparedWorkflowRun {
                 }
             }
 
-            let transient_run = async {
+            let transient_engine = engine.clone();
+            let transient_cancel = cancel.clone();
+            let transient_run = async move {
                 if transient_specs.is_empty() {
                     Vec::new()
-                } else if let Some(claim) = actor_claim {
-                    run_pre_admitted_team_for_actor(
-                        engine.clone(),
-                        lead,
-                        transient_specs,
-                        cancel.child_token(),
-                        claim,
-                    )
-                    .await
                 } else {
-                    run_pre_admitted_team(
-                        engine.clone(),
+                    let routed_specs = transient_specs
+                        .into_iter()
+                        .map(|spec| {
+                            let route = transient_routes.remove(&spec.id);
+                            (spec, route)
+                        })
+                        .collect();
+                    run_pre_admitted_team_with_workflow(
+                        transient_engine,
                         lead,
-                        transient_specs,
-                        cancel.child_token(),
+                        routed_specs,
+                        transient_cancel.child_token(),
+                        actor_claim,
                     )
                     .await
                 }
             };
-            let resident_run = futures::future::join_all(resident_activations.into_iter().map(
-                |(activation, actor)| {
+            let resident_run =
+                futures::future::join_all(resident_activations.into_iter().map(|activation| {
                     let engine = engine.clone();
                     let supervisor = context.resident_supervisor.as_ref().cloned();
-                    let stage = plan.stages()[activation.index].clone();
-                    let activation_cancel = cancel.child_token();
+                    let stage = plan.stages()[activation.prepared.index].clone();
                     async move {
                         let Some(supervisor) = supervisor else {
                             return Err(WorkflowError::Invalid {
@@ -511,24 +783,13 @@ impl PreparedWorkflowRun {
                                 detail: "resident supervisor disappeared after spawn".to_string(),
                             });
                         };
-                        let index = activation.index;
-                        let report = activate_resident_stage(
-                            engine,
-                            lead,
-                            supervisor,
-                            &stage,
-                            ResidentActivation {
-                                actor,
-                                prepared: activation,
-                                cancel: activation_cancel,
-                                actor_claim,
-                            },
-                        )
-                        .await?;
+                        let index = activation.prepared.index;
+                        let report =
+                            activate_resident_stage(engine, lead, supervisor, &stage, activation)
+                                .await?;
                         Ok::<_, WorkflowError>((index, report))
                     }
-                },
-            ));
+                }));
             let (evidence, resident_results) = tokio::join!(transient_run, resident_run);
             let cancelled = cancel.is_cancelled();
             for (&(index, _), evidence) in transient_members.iter().zip(evidence.iter()) {
@@ -569,11 +830,12 @@ impl PreparedWorkflowRun {
                     rendered.system_context(),
                     verification_condition,
                     &resolved[index],
-                    verifier,
+                    verifier.clone(),
                     report.clone(),
                     cancel.clone(),
                     actor_claim,
                     durable_run,
+                    route_recorder.clone(),
                 )
                 .await
                 {
@@ -633,6 +895,10 @@ impl PreparedWorkflowRun {
         } else {
             WorkflowStatus::Completed
         };
+        drop(route_recorder);
+        if let Some(persistence) = route_persistence {
+            persistence.finish().await?;
+        }
         Ok(WorkflowRunReport {
             status,
             stages: reports,
@@ -706,7 +972,22 @@ fn validate_resolved_semantics(
     verifiers: &[Option<ResolvedAgent>],
     ctx: &WorkflowRunContext,
 ) -> Result<(), WorkflowError> {
+    let mut actor_routes: BTreeMap<&str, Option<&WorkflowModelRoute>> = BTreeMap::new();
     for ((stage, worker), verifier) in stages.iter().zip(resolved).zip(verifiers) {
+        if let Some(actor) = stage.actor() {
+            if let Some(existing) = actor_routes.get(actor) {
+                if *existing != worker.route.as_ref() {
+                    return Err(WorkflowError::Invalid {
+                        workflow: workflow.to_string(),
+                        detail: format!(
+                            "Stages sharing actor `{actor}` must use an identical effective worker route"
+                        ),
+                    });
+                }
+            } else {
+                actor_routes.insert(actor, worker.route.as_ref());
+            }
+        }
         match (stage.actor(), worker.lifecycle) {
             (Some(_), SpawnLifecycle::Resident) => {
                 if ctx.resident_supervisor.is_none() {
@@ -862,6 +1143,7 @@ async fn activate_resident_stage(
         prepared,
         cancel,
         actor_claim,
+        route,
     } = activation;
     let PreparedActivation {
         directive,
@@ -869,7 +1151,7 @@ async fn activate_resident_stage(
         ..
     } = prepared;
     supervisor
-        .set_resident_guidance(actor.session, system_context)
+        .set_resident_workflow_activation(actor.session, system_context, route)
         .await?;
     let mut events = engine.bus().subscribe();
     engine
@@ -992,6 +1274,7 @@ async fn drive_loop_stage(
     cancel: CancellationToken,
     actor_claim: Option<ActorClaim>,
     durable_run: Option<WorkflowRunId>,
+    route_recorder: Option<WorkflowRouteRecorder>,
 ) -> Result<StageReport, WorkflowError> {
     let worker_session = first_report
         .session
@@ -1010,6 +1293,7 @@ async fn drive_loop_stage(
         guidance: Arc::from(system_context.to_string()),
         actor_claim,
         durable_run,
+        route_recorder: route_recorder.clone(),
         stage_id: stage.id().to_string(),
         next_iteration: tokio::sync::Mutex::new(1),
     };
@@ -1026,6 +1310,7 @@ async fn drive_loop_stage(
         actor_claim,
         durable_run,
         stage_id: stage.id().to_string(),
+        route_recorder,
         next_iteration: tokio::sync::Mutex::new(0),
     };
     let caps = SafetyCaps {
@@ -1073,6 +1358,7 @@ struct LoopWorkerExecutor {
     guidance: Arc<str>,
     actor_claim: Option<ActorClaim>,
     durable_run: Option<WorkflowRunId>,
+    route_recorder: Option<WorkflowRouteRecorder>,
     stage_id: String,
     next_iteration: tokio::sync::Mutex<u32>,
 }
@@ -1108,10 +1394,11 @@ impl IterationExecutor for LoopWorkerExecutor {
             session: resumed,
             sidecar_factory: self.worker.sidecar_factory.clone(),
         };
+        let mut next = self.next_iteration.lock().await;
+        let iteration = *next;
+        *next = next.saturating_add(1);
+        drop(next);
         if let Some(run) = self.durable_run {
-            let mut next = self.next_iteration.lock().await;
-            let iteration = *next;
-            *next = next.saturating_add(1);
             self.engine
                 .record_workflow_event_for_actor(
                     self.actor_claim.as_ref(),
@@ -1128,24 +1415,26 @@ impl IterationExecutor for LoopWorkerExecutor {
                 .await
                 .map_err(|error| CoreError::Invalid(error.to_string()))?;
         }
-        let evidence = if let Some(claim) = self.actor_claim {
-            run_pre_admitted_team_for_actor(
-                self.engine.clone(),
-                self.lead,
-                vec![spec],
-                cancel.child_token(),
-                claim,
-            )
-            .await
-        } else {
-            run_pre_admitted_team(
-                self.engine.clone(),
-                self.lead,
-                vec![spec],
-                cancel.child_token(),
-            )
-            .await
-        };
+        let route = self.worker.route.clone().map(|route| {
+            WorkflowTurnRoute::new(WorkflowTurnRouteSpec {
+                route,
+                session: self.lead,
+                run: self.durable_run,
+                stage: self.stage_id.clone(),
+                member,
+                role: WorkflowMemberRole::Worker,
+                iteration,
+                recorder: self.route_recorder.clone(),
+            })
+        });
+        let evidence = run_pre_admitted_team_with_workflow(
+            self.engine.clone(),
+            self.lead,
+            vec![(spec, route)],
+            cancel.child_token(),
+            self.actor_claim,
+        )
+        .await;
         let Some(entry) = evidence.first() else {
             return Err(CoreError::Invalid(
                 "workflow worker produced no evidence".to_string(),
@@ -1185,6 +1474,7 @@ struct VerifierGate {
     guidance: Arc<str>,
     actor_claim: Option<ActorClaim>,
     durable_run: Option<WorkflowRunId>,
+    route_recorder: Option<WorkflowRouteRecorder>,
     stage_id: String,
     next_iteration: tokio::sync::Mutex<u32>,
 }
@@ -1215,10 +1505,11 @@ impl IterationGate for VerifierGate {
             session: None,
             sidecar_factory: self.verifier.sidecar_factory.clone(),
         };
+        let mut next = self.next_iteration.lock().await;
+        let iteration = *next;
+        *next = next.saturating_add(1);
+        drop(next);
         if let Some(run) = self.durable_run {
-            let mut next = self.next_iteration.lock().await;
-            let iteration = *next;
-            *next = next.saturating_add(1);
             self.engine
                 .record_workflow_event_for_actor(
                     self.actor_claim.as_ref(),
@@ -1234,24 +1525,26 @@ impl IterationGate for VerifierGate {
                 )
                 .await?;
         }
-        let evidence = if let Some(claim) = self.actor_claim {
-            run_pre_admitted_team_for_actor(
-                self.engine.clone(),
-                self.lead,
-                vec![spec],
-                self.cancel.child_token(),
-                claim,
-            )
-            .await
-        } else {
-            run_pre_admitted_team(
-                self.engine.clone(),
-                self.lead,
-                vec![spec],
-                self.cancel.child_token(),
-            )
-            .await
-        };
+        let route = self.verifier.route.clone().map(|route| {
+            WorkflowTurnRoute::new(WorkflowTurnRouteSpec {
+                route,
+                session: self.lead,
+                run: self.durable_run,
+                stage: self.stage_id.clone(),
+                member,
+                role: WorkflowMemberRole::Verifier,
+                iteration,
+                recorder: self.route_recorder.clone(),
+            })
+        });
+        let evidence = run_pre_admitted_team_with_workflow(
+            self.engine.clone(),
+            self.lead,
+            vec![(spec, route)],
+            self.cancel.child_token(),
+            self.actor_claim,
+        )
+        .await;
         let Some(entry) = evidence.first() else {
             return Err(CoreError::Invalid(
                 "verifier produced no evidence".to_string(),

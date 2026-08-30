@@ -42,11 +42,12 @@ use hya_tool::{AgentDef, ResolvedTool};
 use tokio::sync::{Notify, oneshot};
 use tokio_util::sync::CancellationToken;
 
-use crate::engine::{AgentSpec, CreateSession, SessionEngine};
+use crate::engine::{AgentSpec, CreateSession, SessionEngine, TurnRequestContext};
 use crate::error::CoreError;
 use crate::hooks::{HookDispatcher, scope_activation_hooks};
 use crate::orchestrator::TeamBudget;
 use crate::sidecar::{BoundSidecarFactory, SidecarHandle, SidecarStart};
+use crate::workflow::WorkflowTurnRoute;
 use crate::{AgentResourcePolicy, TurnBinding};
 
 /// Runtime pieces needed to resume a resident after process restart.
@@ -167,6 +168,8 @@ struct SlotState {
     /// In-process activation guidance. Workflow actors replace this only while
     /// idle, before durable mail wakes the next Stage. Recovery invents none.
     guidance: Option<Arc<str>>,
+    /// Fixed request-local route for Workflow resident activations.
+    route: Option<WorkflowTurnRoute>,
     /// Opaque request-scoped sidecar factory, retained only in memory.
     sidecar_factory: Option<Arc<dyn BoundSidecarFactory>>,
     is_main: bool,
@@ -286,6 +289,7 @@ struct RunPlan {
     agents: Option<Arc<[AgentDef]>>,
     resources: Option<AgentResourcePolicy>,
     guidance: Option<Arc<str>>,
+    route: Option<WorkflowTurnRoute>,
     sidecar_factory: Option<Arc<dyn BoundSidecarFactory>>,
     handle: String,
     is_main: bool,
@@ -306,11 +310,32 @@ enum ResidentRuntimeContext {
         resources: AgentResourcePolicy,
     },
 }
-
 struct ResidentActivation {
     initial: Option<String>,
     guidance: Option<Arc<str>>,
+    route: Option<WorkflowTurnRoute>,
     sidecar_factory: Option<Arc<dyn BoundSidecarFactory>>,
+}
+
+/// Owned registration context for one resident creation operation.
+struct ResidentSpawnContext {
+    registration: ResidentRegistration,
+    parent_claim: Option<ActorClaim>,
+    guidance: Option<Arc<str>>,
+}
+
+impl ResidentSpawnContext {
+    fn new(
+        registration: ResidentRegistration,
+        parent_claim: Option<&ActorClaim>,
+        guidance: Option<Arc<str>>,
+    ) -> Self {
+        Self {
+            registration,
+            parent_claim: parent_claim.copied(),
+            guidance,
+        }
+    }
 }
 
 /// What a resident task should do next, decided atomically under the team lock.
@@ -411,6 +436,7 @@ impl TeamActor {
             let agents = slot.agents.clone();
             let resources = slot.resources.clone();
             let guidance = slot.guidance.clone();
+            let route = slot.route.clone();
             let sidecar_factory = slot.sidecar_factory.clone();
             let handle = slot.handle.clone();
             let is_main = slot.is_main;
@@ -434,6 +460,7 @@ impl TeamActor {
                 binding,
                 agents,
                 resources,
+                route,
                 guidance,
                 sidecar_factory,
                 handle,
@@ -689,6 +716,7 @@ impl TeamActor {
             agents,
             resources,
             guidance,
+            route,
             sidecar_factory: _,
             handle,
             is_main,
@@ -806,42 +834,42 @@ impl TeamActor {
         match (claim.as_ref(), agents, resources) {
             (Some(claim), Some(agents), Some(resources)) => {
                 self.engine
-                    .run_resolved_turn_with_sidecar_tools_for_actor(
+                    .run_resolved_turn_with_sidecar_tools_for_actor_and_workflow_route(
                         session,
                         &agent,
                         (binding, agents, resources, Arc::clone(&sidecar_tools)),
-                        claim,
-                        cancel.clone(),
-                        guidance,
+                        TurnRequestContext::new(cancel.clone(), &[], guidance, Some(claim), route),
                     )
                     .await?;
             }
             (None, Some(agents), Some(resources)) => {
                 self.engine
-                    .run_resolved_turn_with_sidecar_tools(
+                    .run_resolved_turn_with_sidecar_tools_and_workflow_route(
                         session,
                         &agent,
                         (binding, agents, resources, Arc::clone(&sidecar_tools)),
-                        cancel.clone(),
-                        guidance,
+                        TurnRequestContext::new(cancel.clone(), &[], guidance, None, route),
                     )
                     .await?;
             }
             (Some(claim), _, _) => {
                 self.engine
-                    .run_bound_turn_for_actor(
+                    .run_bound_turn_for_actor_with_workflow_route(
                         session,
                         &agent,
                         binding,
-                        claim,
-                        cancel.clone(),
-                        guidance,
+                        TurnRequestContext::new(cancel.clone(), &[], guidance, Some(claim), route),
                     )
                     .await?;
             }
             (None, _, _) => {
                 self.engine
-                    .run_bound_turn(session, &agent, binding, cancel, guidance)
+                    .run_bound_turn_with_workflow_route(
+                        session,
+                        &agent,
+                        binding,
+                        TurnRequestContext::new(cancel, &[], guidance, None, route),
+                    )
                     .await?;
             }
         }
@@ -1636,6 +1664,7 @@ impl ResidentSupervisor {
                         agents: Some(agents),
                         resources: Some(resources),
                         guidance,
+                        route: None,
                         sidecar_factory: None,
                         is_main: true,
                         status: SlotStatus::Idle,
@@ -1683,9 +1712,11 @@ impl ResidentSupervisor {
                 parent,
                 agent,
                 resolved,
-                ResidentRegistration::Armed(directive),
-                parent_claim,
-                guidance,
+                ResidentSpawnContext::new(
+                    ResidentRegistration::Armed(directive),
+                    parent_claim,
+                    guidance,
+                ),
             )
             .await?;
         Ok((session, handle))
@@ -1709,30 +1740,34 @@ impl ResidentSupervisor {
             parent,
             agent,
             resolved,
-            ResidentRegistration::Parked(registration_directive),
-            parent_claim,
-            guidance,
+            ResidentSpawnContext::new(
+                ResidentRegistration::Parked(registration_directive),
+                parent_claim,
+                guidance,
+            ),
         )
         .await
     }
 
-    /// Shared resident creation path for armed and parked registrations.
     async fn spawn_resident_inner(
         &self,
         parent: SessionId,
         agent: AgentSpec,
         resolved: ResolvedResidentRuntime,
-        registration: ResidentRegistration,
-        parent_claim: Option<&ActorClaim>,
-        guidance: Option<Arc<str>>,
+        context: ResidentSpawnContext,
     ) -> Result<(SessionId, String, MemberId), CoreError> {
+        let ResidentSpawnContext {
+            registration,
+            parent_claim,
+            guidance,
+        } = context;
         let (registration_directive, initial) = match registration {
             ResidentRegistration::Armed(directive) => (directive.clone(), Some(directive)),
             ResidentRegistration::Parked(directive) => (directive, None),
         };
         let (binding, agents, resources, sidecar_factory) = resolved;
         let (root, parent_depth) = self.engine.session_lineage(parent).await?;
-        let session = match parent_claim {
+        let session = match parent_claim.as_ref() {
             Some(claim) => {
                 self.engine
                     .create_for_actor(
@@ -1768,7 +1803,7 @@ impl ResidentSupervisor {
         let handle = scope::join_path(&parent_path, &leaf);
         let member = MemberId::new();
         let description: String = registration_directive.chars().take(80).collect();
-        match parent_claim {
+        match parent_claim.as_ref() {
             Some(claim) => {
                 self.engine
                     .commit_resident_mutation(
@@ -1816,6 +1851,7 @@ impl ResidentSupervisor {
             ResidentActivation {
                 initial,
                 guidance,
+                route: None,
                 sidecar_factory,
             },
         )
@@ -1823,15 +1859,16 @@ impl ResidentSupervisor {
         Ok((session, handle, member))
     }
 
-    /// Replace one idle resident's in-process guidance before its next durable
-    /// mail activation.
+    /// Replace one idle resident's in-process guidance and request-local route
+    /// before its next durable mail activation.
     ///
     /// # Errors
     /// Returns [`CoreError::Invalid`] when the resident is unregistered or busy.
-    pub async fn set_resident_guidance(
+    pub(crate) async fn set_resident_workflow_activation(
         &self,
         session: SessionId,
         guidance: Arc<str>,
+        route: Option<WorkflowTurnRoute>,
     ) -> Result<(), CoreError> {
         let (root, _) = self.engine.session_lineage(session).await?;
         let team = self
@@ -1846,10 +1883,11 @@ impl ResidentSupervisor {
             .ok_or_else(|| CoreError::Invalid("resident session is not registered".to_string()))?;
         if slot.status != SlotStatus::Idle || slot.has_work() || slot.initial_directive.is_some() {
             return Err(CoreError::Invalid(
-                "resident guidance cannot change during active work".to_string(),
+                "resident Workflow activation cannot change during active work".to_string(),
             ));
         }
         slot.guidance = Some(guidance);
+        slot.route = route;
         Ok(())
     }
 
@@ -1874,6 +1912,7 @@ impl ResidentSupervisor {
             ResidentActivation {
                 initial,
                 guidance: None,
+                route: None,
                 sidecar_factory: None,
             },
         )
@@ -1902,6 +1941,7 @@ impl ResidentSupervisor {
             ResidentActivation {
                 initial,
                 guidance: None,
+                route: None,
                 sidecar_factory: Some(sidecar_factory),
             },
         )
@@ -1928,6 +1968,7 @@ impl ResidentSupervisor {
         let ResidentActivation {
             initial,
             guidance,
+            route,
             sidecar_factory,
         } = activation;
         // `handle` arrives either as a canonical path (from `spawn_resident`) or
@@ -1991,6 +2032,7 @@ impl ResidentSupervisor {
                     agents,
                     resources,
                     guidance,
+                    route,
                     sidecar_factory,
                     is_main: false,
                     status: SlotStatus::Idle,
@@ -2057,6 +2099,7 @@ impl ResidentSupervisor {
                     resources: Some(resources),
                     // Ephemeral guidance is not durable; recovery invents nothing.
                     guidance: None,
+                    route: None,
                     sidecar_factory,
                     is_main: false,
                     status: SlotStatus::Idle,

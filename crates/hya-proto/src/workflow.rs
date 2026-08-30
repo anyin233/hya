@@ -123,6 +123,40 @@ const fn hex_value(byte: u8) -> Option<u8> {
         _ => None,
     }
 }
+/// One authored Workflow model candidate in an ordered fallback chain.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct WorkflowModelCandidate {
+    /// Base model identity without a Workflow variant suffix.
+    pub id: String,
+    /// Optional author-provided effort label.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<String>,
+}
+
+/// Preferred authored model plus its ordered fallback candidates.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct WorkflowModelAssignment {
+    /// Preferred base model identity.
+    pub id: String,
+    /// Optional preferred effort label.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<String>,
+    /// Ordered fallback tail.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fallback: Vec<WorkflowModelCandidate>,
+}
+
+/// Candidate selected during Workflow admission, with canonical effort.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct WorkflowModelResolvedCandidate {
+    /// Declaration-order index in the complete route.
+    pub index: u32,
+    /// Base model identity without a variant suffix.
+    pub id: String,
+    /// Required canonical effort label (`none` means Off).
+    pub reasoning: String,
+}
+
 /// One Stage in a compiled Workflow info response.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct WorkflowStageInfo {
@@ -140,6 +174,12 @@ pub struct WorkflowStageInfo {
     pub actor: Option<String>,
     /// `once` or `loop`.
     pub mode: String,
+    /// Optional authored worker model assignment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker_model: Option<WorkflowModelAssignment>,
+    /// Optional authored verifier model assignment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verifier_model: Option<WorkflowModelAssignment>,
 }
 
 /// Valid compiled Workflow metadata returned by an `info` command.
@@ -354,6 +394,18 @@ pub struct WorkflowStagePlan {
     pub mode: String,
     /// Zero-based topological level.
     pub level: usize,
+    /// Optional authored worker model assignment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker_model: Option<WorkflowModelAssignment>,
+    /// Admission-selected worker candidate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_worker_model: Option<WorkflowModelResolvedCandidate>,
+    /// Optional authored verifier model assignment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verifier_model: Option<WorkflowModelAssignment>,
+    /// Admission-selected verifier candidate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_verifier_model: Option<WorkflowModelResolvedCandidate>,
 }
 
 /// Role of one canonical Member reference within a Workflow Stage.
@@ -386,7 +438,11 @@ pub struct WorkflowStageProjection {
     /// Latest monotonic Stage state.
     pub status: WorkflowStageStatus,
     /// Canonical Member references in event order.
+    #[serde(default)]
     pub members: Vec<WorkflowMemberProjection>,
+    /// Canonical finalized route outcomes in append order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub route_outcomes: Vec<crate::WorkflowStageRouteOutcome>,
 }
 
 /// Folded state of the newest Workflow run in one Session.

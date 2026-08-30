@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 
 use self::helpers::{find_part, push_part, tool_input, upsert_tool};
-use crate::event::{Envelope, Event};
+use crate::event::{Envelope, Event, WorkflowStageRouteOutcome};
 use crate::ids::{
     ActorEpoch, ConfigGeneration, MemberId, MessageId, PartId, SessionId, ToolCallId, WorkflowRunId,
 };
@@ -652,11 +652,11 @@ impl Projection {
                         status: WorkflowRunStatus::Running,
                         stages: stages
                             .iter()
-                            .cloned()
                             .map(|plan| WorkflowStageProjection {
-                                plan,
+                                plan: plan.clone(),
                                 status: WorkflowStageStatus::Pending,
                                 members: Vec::new(),
+                                route_outcomes: Vec::new(),
                             })
                             .collect(),
                         error: None,
@@ -697,6 +697,49 @@ impl Projection {
                         member: *member,
                         role: *role,
                         iteration: *iteration,
+                    });
+                }
+            }
+            Event::WorkflowStageRouteOutcome {
+                session,
+                run,
+                stage: stage_id,
+                member,
+                role,
+                iteration,
+                step,
+                candidate_index,
+                model,
+                reasoning,
+                failure_class,
+            } => {
+                if let Some(current) = self.workflow_run_mut(*run)
+                    && current.status == WorkflowRunStatus::Running
+                    && let Some(stage) = current
+                        .stages
+                        .iter_mut()
+                        .find(|row| row.plan.id == *stage_id)
+                    && stage.status == WorkflowStageStatus::Running
+                    && !stage.route_outcomes.iter().any(|outcome| {
+                        outcome.stage == *stage_id
+                            && outcome.member == *member
+                            && outcome.role == *role
+                            && outcome.iteration == *iteration
+                            && outcome.step == *step
+                    })
+                {
+                    stage.route_outcomes.push(WorkflowStageRouteOutcome {
+                        session: *session,
+                        run: *run,
+                        stage: stage_id.clone(),
+                        member: *member,
+                        role: *role,
+                        iteration: *iteration,
+                        step: *step,
+                        candidate_index: *candidate_index,
+                        model: model.clone(),
+                        reasoning: reasoning.clone(),
+                        failure_class: *failure_class,
                     });
                 }
             }

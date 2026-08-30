@@ -11,8 +11,9 @@ mod render;
 
 pub use error::{SourceLocation, WorkflowCompileError, WorkflowCompileErrorKind};
 pub use model::{
-    CompiledWorkflow, FailurePolicy, StageMode, VerifySpec, WorkflowDefinition, WorkflowLevel,
-    WorkflowPlan, WorkflowRevision, WorkflowStage,
+    CompiledWorkflow, FailurePolicy, MAX_WORKFLOW_MODEL_ID_CHARS, MAX_WORKFLOW_REASONING_CHARS,
+    StageMode, VerifySpec, WorkflowDefinition, WorkflowLevel, WorkflowModelAssignment,
+    WorkflowModelCandidate, WorkflowPlan, WorkflowRevision, WorkflowStage,
 };
 pub use render::{
     MAX_PREDECESSOR_OUTPUT_BYTES, RenderedStage, StageEvidence, StageEvidenceStatus,

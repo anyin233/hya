@@ -21,6 +21,7 @@ use tokio_util::sync::CancellationToken;
 struct CaptureSink {
     commands: Mutex<Vec<WorkflowCommand>>,
     operations: Mutex<Vec<ToolOperation>>,
+    state: WorkflowProjection,
 }
 
 impl WorkflowRequestSink for CaptureSink {
@@ -34,7 +35,7 @@ impl WorkflowRequestSink for CaptureSink {
             .expect("operations lock")
             .push(request.operation);
         let _ = request.reply.send(Ok(WorkflowCommandResult::State {
-            state: WorkflowProjection::default(),
+            state: self.state.clone(),
         }));
         Ok(())
     }
@@ -78,6 +79,58 @@ fn context(sink: Arc<CaptureSink>, session: hya_proto::SessionId) -> ToolCtx {
         workdir: std::env::temp_dir(),
         cancel: CancellationToken::new(),
     }
+}
+
+fn routed_projection() -> WorkflowProjection {
+    let session = hya_proto::SessionId::new();
+    let run = hya_proto::WorkflowRunId::new();
+    let member = hya_proto::MemberId::new();
+    let revision = WorkflowRevision::from_bytes([9; 32]);
+    serde_json::from_value(json!({
+        "run": {
+            "id": run,
+            "workflow": {
+                "source": "test:routed",
+                "name": "routed",
+                "revision": revision.to_string()
+            },
+            "request_hash": "hash",
+            "owner": hya_proto::OwnerRunId::new(),
+            "status": "running",
+            "stages": [{
+                "id": "execute",
+                "agent": "general",
+                "mode": "once",
+                "level": 0,
+                "worker_model": {
+                    "id": "fake/primary",
+                    "reasoning": "high",
+                    "fallback": [{"id": "fake/fallback", "reasoning": "medium"}]
+                },
+                "selected_worker_model": {
+                    "index": 0,
+                    "id": "fake/primary",
+                    "reasoning": "high"
+                },
+                "status": "running",
+                "members": [{"member": member, "role": "worker", "iteration": 0}],
+                "route_outcomes": [{
+                    "session": session,
+                    "run": run,
+                    "stage": "execute",
+                    "member": member,
+                    "role": "worker",
+                    "iteration": 0,
+                    "step": 0,
+                    "candidate_index": 0,
+                    "model": "fake/primary",
+                    "reasoning": "high",
+                    "failure_class": "none"
+                }]
+            }]
+        }
+    }))
+    .expect("routed Workflow projection fixture")
 }
 
 /// Every model-tool action is translated into the shared proto command and
@@ -138,6 +191,38 @@ async fn frames_all_workflow_commands_and_preserves_operation_identity() {
     assert_eq!(
         sink.operations.lock().expect("operations lock").as_slice(),
         &[operation; 5]
+    );
+}
+
+#[tokio::test]
+async fn preserves_route_fields_in_shared_workflow_results() {
+    let sink = Arc::new(CaptureSink {
+        state: routed_projection(),
+        ..CaptureSink::default()
+    });
+    let session = hya_proto::SessionId::new();
+    let ctx = context(Arc::clone(&sink), session);
+
+    let result = WorkflowTool
+        .execute(&ctx, json!({"action": "state"}))
+        .await
+        .expect("routed Workflow state result");
+
+    assert_eq!(
+        result["state"]["run"]["stages"][0]["worker_model"]["fallback"][0]["id"],
+        "fake/fallback"
+    );
+    assert_eq!(
+        result["state"]["run"]["stages"][0]["selected_worker_model"]["reasoning"],
+        "high"
+    );
+    assert_eq!(
+        result["state"]["run"]["stages"][0]["route_outcomes"][0]["failure_class"],
+        "none"
+    );
+    assert_eq!(
+        sink.operations.lock().expect("operations lock").as_slice(),
+        &[ctx.operation]
     );
 }
 

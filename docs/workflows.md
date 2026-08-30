@@ -161,6 +161,68 @@ Loop repetition uses the shared `IterationDriver`. A fresh verifier Session is
 the stop authority for each judgment. The worker cannot finish its own loop by
 claiming success.
 
+## Stage model routing
+
+Each Stage can override its Agent model, category, and reasoning policy with an
+ordered model route. A loop verifier has an independent route:
+
+```yaml
+model:
+  id: 12th-oai/gpt-5.6-sol
+  reasoning: high
+  fallback:
+    - id: 12th-anth/claude-sonnet-4-6
+      reasoning: medium
+mode: loop
+verify:
+  agent: workflow-reviewer
+  until: The implementation satisfies the request.
+  max_iterations: 3
+  model:
+    id: 12th-oai/gpt-5.6-sol
+    reasoning: low
+    fallback:
+      - id: 12th-anth/claude-sonnet-4-6
+```
+
+Every `id` is a suffix-free base model reference. The separate `reasoning:`
+field is the only effort encoding in a Workflow assignment; an embedded
+`#variant` suffix is invalid even when `reasoning:` is omitted. Existing
+non-Workflow model APIs can still use their documented `provider/model#variant`
+form.
+
+The preferred entry and every fallback entry resolve effort independently. An
+omitted `reasoning:` uses only that model's configured default, or canonical
+`none` when the model has no default. It never inherits another route entry's
+effort or the Agent policy. The same base model can therefore appear more than
+once with different efforts.
+
+Admission validates the complete route before creating a child Session,
+registering a resident actor, sending mail, or starting a provider request. It
+records the first routable candidate index and every provider stream group
+starts there without wrapping to an earlier entry. Only `UnknownModel`,
+transport failure, HTTP 429, and HTTP 5xx can advance before a stream exists.
+Once a stream exists, hya never replays it on another candidate. Stage routes
+remain request-local and are not inserted into the engine's global category
+fallback map. Stages that share one resident actor key must have the same
+effective worker route.
+
+The durable run plan retains the requested routes and the candidates selected
+during admission. The root Session records one route outcome per explicit-route
+provider stream group as `WorkflowStageRouteOutcome`. Each outcome contains the
+Stage/member role, iteration, assistant step, candidate index, base model,
+canonical effort, and stable failure class. It contains no prompt, input,
+provider response, credential, header, or raw error text. A Workflow without an
+explicit assignment keeps the existing Agent/category/global route path and
+does not add route fields or route-outcome Events.
+
+Prepared WorkflowBundles remain prepared format v2 because they already retain
+the complete source and compiler revision. A route-bearing v2 source still
+requires a runtime with the model-routing compiler; unchanged no-assignment v2
+sources retain their existing revision. The Session sidebar does not render
+model routes; typed CLI, API, SDK, and state results expose the durable route
+data while the compact TUI presentation remains unchanged.
+
 ## Resident actors
 
 ```yaml

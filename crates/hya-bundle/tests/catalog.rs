@@ -414,6 +414,60 @@ flowchart TD
     )
 }
 
+fn workflow_source_with_model_route(
+    bundle_id: &str,
+    workflow_id: &str,
+    agent_id: &str,
+) -> BundleSource {
+    let manifest = format!(
+        r#"kind: WorkflowBundle
+identity:
+  id: {bundle_id}
+  version: 1.0.0
+  publisher: hya
+workflow:
+  id: {workflow_id}
+  path: workflows/{workflow_id}.hya.md
+agents:
+  - id: {agent_id}
+    role: subagent
+    prompt: prompts/{agent_id}.md
+    spawn_lifecycle: transient
+"#
+    );
+    let workflow = format!(
+        r#"---
+kind: Workflow
+name: {workflow_id}
+description: Catalog Workflow with a runtime-resolved model.
+nodes:
+  run:
+    agent: {agent_id}
+    directive: Run the stage.
+    model:
+      id: unavailable-during-package/model
+      reasoning: medium
+---
+flowchart TD
+  run
+"#
+    );
+    BundleSource::new(
+        bundle_id,
+        vec![
+            SourceFile::new("bundle.yaml", manifest.into_bytes()),
+            SourceFile::new(
+                format!("workflows/{workflow_id}.hya.md"),
+                workflow.into_bytes(),
+            ),
+            SourceFile::new(
+                format!("prompts/{agent_id}.md"),
+                b"Run the stage.\n".as_slice(),
+            ),
+        ],
+    )
+}
+
 #[test]
 fn workflow_catalog_indexes_agents_and_qualified_workflow() {
     let prepared = prepare_package(workflow_source("hya/workflow-catalog", "demo", "worker"));
@@ -436,7 +490,33 @@ fn workflow_catalog_indexes_agents_and_qualified_workflow() {
     };
     assert_eq!(owner, "hya/workflow-catalog");
     assert_eq!(workflow.id, "demo");
+
     assert_eq!(catalog.resolve_workflow("demo"), Some(workflow));
+}
+
+#[test]
+fn workflow_catalog_defers_model_availability_to_runtime() {
+    let prepared = prepare_package(workflow_source_with_model_route(
+        "hya/workflow-routed-catalog",
+        "routed",
+        "worker",
+    ));
+    let Ok(prepared) = prepared else {
+        panic!("model-routed WorkflowBundle preparation failed: {prepared:?}");
+    };
+    let catalog = BundleCatalog::from_verified_catalogs(&[&prepared]);
+    let Ok(catalog) = catalog else {
+        panic!("model-routed WorkflowBundle catalog construction failed: {catalog:?}");
+    };
+
+    let Some((owner, workflow)) =
+        catalog.resolve_workflow_entry("bundle:hya/workflow-routed-catalog/workflow/routed")
+    else {
+        panic!("model-routed Workflow was not indexed");
+    };
+    assert_eq!(owner, "hya/workflow-routed-catalog");
+    assert_eq!(workflow.id, "routed");
+    assert!(workflow.source.contains("unavailable-during-package/model"));
 }
 
 #[test]

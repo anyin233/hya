@@ -321,6 +321,60 @@ fn workflow_docs_cover_control_replay_and_tui_state() {
     }
 }
 
+/// Ensure Workflow and provider docs describe the suffix-free model-routing contract.
+#[test]
+fn workflow_docs_cover_stage_model_routing_and_route_outcomes() {
+    for path in [
+        repository_root().join("docs/workflows.md"),
+        repository_root().join(".autors/hya/wiki/pages/architecture/workflow-composition.md"),
+    ] {
+        let source = std::fs::read_to_string(&path).unwrap_or_else(|error| {
+            panic!(
+                "Workflow routing documentation must exist at {}: {error}",
+                path.display()
+            )
+        });
+        let normalized = source.split_whitespace().collect::<Vec<_>>().join(" ");
+        for marker in [
+            "model:",
+            "reasoning:",
+            "fallback:",
+            "#variant",
+            "WorkflowStageRouteOutcome",
+            "one route outcome per explicit-route provider stream group",
+            "does not render model routes",
+        ] {
+            assert!(
+                normalized.contains(marker),
+                "{} must contain Workflow routing marker `{marker}`",
+                path.display()
+            );
+        }
+    }
+
+    let providers = repository_root().join("docs/architecture/providers.md");
+    let source = std::fs::read_to_string(&providers).unwrap_or_else(|error| {
+        panic!(
+            "provider routing documentation must exist at {}: {error}",
+            providers.display()
+        )
+    });
+    for marker in [
+        "reasoning_default",
+        "supports_reasoning_effort",
+        "with_model_reasoning_defaults",
+        "first match",
+        "#variant",
+        "Workflow",
+    ] {
+        assert!(
+            source.contains(marker),
+            "{} must contain provider routing marker `{marker}`",
+            providers.display()
+        );
+    }
+}
+
 struct ExpectedAgent {
     stable_id: &'static str,
     role: AgentRole,

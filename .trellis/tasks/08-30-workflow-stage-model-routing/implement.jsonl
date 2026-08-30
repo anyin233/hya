@@ -1,0 +1,14 @@
+{"file":".trellis/spec/backend/workflow-control.md","reason":"Authoritative Workflow event-sourcing, admission, actor-fencing, recovery, surface, and replay contract."}
+{"file":".trellis/spec/backend/task-tool.md","reason":"Existing governed spawn admission, typed member resolution, and budget/failure boundaries that Workflow routing must reuse."}
+{"file":".trellis/spec/frontend/workflow-presentation.md","reason":"Read-only synchronized Workflow projection, declaration-order, and no-local-router TUI contract."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Requires reuse of existing ModelRef, ReasoningEffort, category, provider, and Workflow execution seams instead of parallel abstractions."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Tracks parse-to-compiler-to-runtime-to-event-to-DTO data flow and cross-layer acceptance coverage."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Release/version/changelog contract: newest-only root notes, historical archive, locked release build, and release checks."}
+{"file":"docs/testing/process-e2e.md","reason":"Production backend plus local FakeLlm process harness, request capture, public state oracles, no-live default, and serial test commands."}
+{"file":"crates/hya-e2e/matrix.toml","reason":"Track P matrix registration and bidirectional path validation for the retained P17 scenario and new routing scenario."}
+{"file":"docs/architecture/providers.md","reason":"Provider configured identity, per-model reasoning defaults, stable ordering, secret exclusion, and Fake/Dev provider boundaries."}
+{"file":"crates/hya-e2e/README.md","reason":"Exact backend binary build and serial process-E2E invocation conventions."}
+{"file":"Cargo.toml","reason":"Current workspace version 0.36.6 and workspace package/release metadata source for the next 0.36.7 delivery."}
+{"file":"README.md","reason":"Release metadata version and public live-provider configuration/model-listing guidance."}
+{"file":"packages/hya-tui-ts/package.json","reason":"TUI package version and consistent --cwd typecheck/test delivery commands."}
+{"file":".github/workflows/release.yml","reason":"Exact release tag/version validation, pinned actions, release environment, locked build, package/checksum, runtime legality, and binary smoke contract for non-publishing rehearsal."}
