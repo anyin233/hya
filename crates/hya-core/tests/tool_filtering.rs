@@ -13,6 +13,7 @@ use hya_core::{AgentSpec, CreateSession, EventBus, SessionEngine};
 use hya_proto::{AgentName, Event, FinishReason, ModelRef, Role};
 use hya_provider::{
     Capabilities, CompletionRequest, EventStream, Provider, ProviderError, ProviderRouter,
+    ReasoningEffort,
 };
 use hya_store::SessionStore;
 use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
@@ -48,6 +49,7 @@ impl Provider for RecordingProvider {
     fn capabilities(&self, _model: &ModelRef) -> Option<Capabilities> {
         Some(Capabilities {
             streaming_tool_calls: true,
+            reasoning_request: true,
             ..Capabilities::default()
         })
     }
@@ -71,7 +73,12 @@ impl Provider for RecordingProvider {
     }
 }
 
-async fn tool_ids(provider_id: &'static str, model: &str) -> Vec<String> {
+/// Capture the completion request emitted for one model and Agent reasoning default.
+async fn completion_request(
+    provider_id: &'static str,
+    model: &str,
+    reasoning: Option<ReasoningEffort>,
+) -> CompletionRequest {
     let dir = tempdir();
     let requests = Arc::new(Mutex::new(Vec::new()));
     let router = Arc::new(ProviderRouter::new().with(Arc::new(RecordingProvider {
@@ -99,7 +106,7 @@ async fn tool_ids(provider_id: &'static str, model: &str) -> Vec<String> {
         .await
         .unwrap();
     engine
-        .admit_user_prompt(session, "record tools".to_string())
+        .admit_user_prompt(session, "record request".to_string())
         .await
         .unwrap();
     engine
@@ -110,14 +117,20 @@ async fn tool_ids(provider_id: &'static str, model: &str) -> Vec<String> {
                 model: ModelRef::new(model),
                 system_prompt: "x".to_string(),
                 workdir: dir,
-                reasoning: None,
+                reasoning,
             },
             CancellationToken::new(),
         )
         .await
         .unwrap();
 
-    requests.lock().unwrap()[0]
+    requests.lock().unwrap()[0].clone()
+}
+
+/// Return the model-facing Tool ids emitted for one model.
+async fn tool_ids(provider_id: &'static str, model: &str) -> Vec<String> {
+    completion_request(provider_id, model, None)
+        .await
         .tools
         .iter()
         .map(|tool| tool.name.to_string())
@@ -135,6 +148,13 @@ async fn runtime_tool_request_filters_patch_tools_by_model() {
     assert!(!gpt4_ids.contains(&"apply_patch".to_string()));
     assert!(gpt4_ids.contains(&"edit".to_string()));
     assert!(gpt4_ids.contains(&"write".to_string()));
+}
+
+#[tokio::test]
+async fn runtime_model_variant_overrides_agent_reasoning_default() {
+    let request = completion_request("recording", "gpt-5#low", Some(ReasoningEffort::High)).await;
+
+    assert_eq!(request.reasoning, Some(ReasoningEffort::Low));
 }
 
 #[tokio::test]

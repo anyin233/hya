@@ -200,6 +200,7 @@ impl SessionEngine {
         for (index, candidate) in candidates.iter().enumerate() {
             let mut attempt = request.clone();
             attempt.model = candidate.clone();
+            attempt.reasoning = messages::reasoning_for_model(&attempt.model, request.reasoning);
             match self.providers.stream(attempt, session, message).await {
                 Ok(stream) => return Ok(stream),
                 Err(error) => {

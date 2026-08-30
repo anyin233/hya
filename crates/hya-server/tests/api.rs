@@ -12,7 +12,7 @@ use http_body_util::BodyExt;
 use hya_core::{AgentSpec, EventBus, SessionEngine};
 use hya_proto::api::{CreateSessionResponse, PromptResponse};
 use hya_proto::{
-    AgentName, Envelope, Event, FinishReason, ModelRef, PartProjection, Projection, Role,
+    AgentName, Envelope, Event, FinishReason, ModelRef, PartProjection, Projection, Role, SessionId,
 };
 use hya_provider::{FakeProvider, FakeStep, ProviderRouter};
 use hya_server::{AppState, router};
@@ -185,6 +185,47 @@ async fn command_endpoint_admits_command_prompt_and_emits_event() {
                 if command == "review" && arguments == "diff" && *message == response.message
         )
     }));
+}
+
+#[tokio::test]
+async fn native_session_routes_reject_missing_session() {
+    let app = router(state().await);
+    let session = SessionId::new();
+    let cases = [
+        (
+            "POST",
+            format!("/sessions/{session}/prompt"),
+            Some(json!({"text": "missing"})),
+        ),
+        (
+            "POST",
+            format!("/sessions/{session}/command"),
+            Some(json!({"command": "review", "arguments": ""})),
+        ),
+        (
+            "POST",
+            format!("/sessions/{session}/shell"),
+            Some(json!({"command": "printf must-not-run"})),
+        ),
+        ("GET", format!("/sessions/{session}/events"), None),
+        ("GET", format!("/sessions/{session}/stream"), None),
+    ];
+
+    for (method, path, payload) in cases {
+        let mut request = Request::builder().method(method).uri(&path);
+        let body = if let Some(payload) = payload {
+            request = request.header("content-type", "application/json");
+            Body::from(payload.to_string())
+        } else {
+            Body::empty()
+        };
+        let response = app
+            .clone()
+            .oneshot(request.body(body).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "{method} {path}");
+    }
 }
 
 #[tokio::test]

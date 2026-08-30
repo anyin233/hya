@@ -528,8 +528,13 @@ pub trait Provider: Send + Sync {
 pub trait Protocol: Send + Sync {
     /// Encode a normalized request into the upstream JSON body.
     fn encode(&self, req: &CompletionRequest) -> Result<serde_json::Value, ProviderError>;
-    /// Construct a decoder bound to this turn's session and assistant message ids.
-    fn decoder(&self, session: SessionId, message: MessageId) -> Box<dyn Decoder>;
+    /// Construct a decoder bound to this turn's ids and requested effort.
+    fn decoder(
+        &self,
+        session: SessionId,
+        message: MessageId,
+        reasoning: Option<ReasoningEffort>,
+    ) -> Box<dyn Decoder>;
 }
 
 /// Incremental converter from upstream stream fragments into canonical `Event`s.

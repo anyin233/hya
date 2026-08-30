@@ -668,12 +668,19 @@ async fn compat_session_command_and_shell_routes_return_created_messages() {
         format!("/session/{shell_session}/shell"),
         json!({
             "agent": "build",
+            "model": {
+                "providerID": "test-provider",
+                "modelID": "shell-selected"
+            },
             "command": "printf compat-shell-ok"
         }),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(shell["info"]["role"], "assistant");
+    assert_eq!(shell["info"]["agent"], "build");
+    assert_eq!(shell["info"]["providerID"], "test-provider");
+    assert_eq!(shell["info"]["modelID"], "shell-selected");
     assert_eq!(shell["parts"][0]["type"], "tool");
     assert_eq!(shell["parts"][0]["tool"], "shell");
     assert_eq!(shell["parts"][0]["state"]["status"], "completed");
@@ -1733,7 +1740,8 @@ async fn compat_session_share_missing_session_returns_not_found() {
 #[tokio::test]
 async fn compat_session_fork_copies_metadata_and_messages() {
     let app = router(state().await);
-    let session = create_session(app.clone(), None).await;
+    let source_workdir = isolated_workdir("fork-source");
+    let session = create_session_with_workdir(app.clone(), &source_workdir).await;
     let (status, _updated) = patch_json(
         app.clone(),
         format!("/session/{session}"),
@@ -1763,6 +1771,7 @@ async fn compat_session_fork_copies_metadata_and_messages() {
     assert_ne!(fork_id, session);
     assert_eq!(fork_body["title"], "Root session (fork #1)");
     assert_eq!(fork_body["metadata"]["source"], "fork-test");
+    assert_eq!(fork_body["directory"], source_workdir);
     assert!(
         !fork_body
             .as_object()

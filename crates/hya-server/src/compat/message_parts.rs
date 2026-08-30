@@ -118,14 +118,22 @@ pub(super) fn compat_part(
             }
             value
         }
-        PartProjection::Reasoning { id, text, .. } => json!({
-            "id": id.to_string(),
-            "sessionID": session.to_string(),
-            "messageID": message.to_string(),
-            "type": "reasoning",
-            "text": text,
-            "time": context.required_time(*id),
-        }),
+        PartProjection::Reasoning {
+            id, text, reason, ..
+        } => {
+            let mut value = json!({
+                "id": id.to_string(),
+                "sessionID": session.to_string(),
+                "messageID": message.to_string(),
+                "type": "reasoning",
+                "text": text,
+                "time": context.required_time(*id),
+            });
+            if let Some(reason) = reason {
+                value["reason"] = json!(reason);
+            }
+            value
+        }
         PartProjection::Tool {
             id,
             call,

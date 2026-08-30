@@ -417,7 +417,7 @@ async fn envelope_payload(st: &ServerState, envelope: Envelope) -> Value {
             session,
             message,
             part,
-        } => textual_part_updated_payload(&envelope, *session, *message, *part, "text", ""),
+        } => textual_part_updated_payload(&envelope, *session, *message, *part, "text", "", None),
         Event::TextDelta {
             session,
             message,
@@ -429,7 +429,7 @@ async fn envelope_payload(st: &ServerState, envelope: Envelope) -> Value {
             message,
             part,
             text,
-        } => textual_part_updated_payload(&envelope, *session, *message, *part, "text", text),
+        } => textual_part_updated_payload(&envelope, *session, *message, *part, "text", text, None),
         Event::TextEnd {
             session,
             message,
@@ -441,7 +441,16 @@ async fn envelope_payload(st: &ServerState, envelope: Envelope) -> Value {
             session,
             message,
             part,
-        } => textual_part_updated_payload(&envelope, *session, *message, *part, "reasoning", ""),
+            reason,
+        } => textual_part_updated_payload(
+            &envelope,
+            *session,
+            *message,
+            *part,
+            "reasoning",
+            "",
+            reason.as_deref(),
+        ),
         Event::ReasoningDelta {
             session,
             message,
@@ -452,8 +461,10 @@ async fn envelope_payload(st: &ServerState, envelope: Envelope) -> Value {
             session,
             message,
             part,
-            text,
-        } => textual_part_updated_payload(&envelope, *session, *message, *part, "reasoning", text),
+            ..
+        } => part_snapshot_payload(st, &envelope, *session, *message, *part, "reasoning")
+            .await
+            .unwrap_or_else(|| fallback_payload(&envelope)),
         Event::ReasoningEnd {
             session,
             message,
@@ -783,11 +794,12 @@ fn textual_part_updated_payload(
     part: PartId,
     kind: &'static str,
     text: &str,
+    reason: Option<&str>,
 ) -> Value {
     let session_id = session.to_string();
     let message_id = message.to_string();
     let part_id = part.to_string();
-    json!({
+    let mut value = json!({
         "id": format!("evt_hya_{}", envelope.seq.0),
         "type": "message.part.updated",
         "properties": {
@@ -802,7 +814,11 @@ fn textual_part_updated_payload(
             },
             "time": envelope.ts_millis,
         },
-    })
+    });
+    if let Some(reason) = reason {
+        value["properties"]["part"]["reason"] = json!(reason);
+    }
+    value
 }
 
 fn textual_part_delta_payload(

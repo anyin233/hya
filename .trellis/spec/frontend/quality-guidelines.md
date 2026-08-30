@@ -220,12 +220,16 @@ summary: optionalString(input.summary, `${path}.summary`) ?? "",
 ### 1. Scope / Trigger
 
 - Trigger: changes to read-only subagent panes, Main-pane focus ownership,
-  descendant Permission or Question presentation, or global event recovery.
+  descendant Permission or Question presentation, Session bootstrap/cache
+  lookups, or global event recovery.
 
 ### 2. Signatures
 
 - `focusMainPromptOwnership(...)` synchronously focuses the Main workspace and
   prompt.
+- `compareSessionIDs(left, right)` applies JavaScript code-unit ordering.
+- `sortSessionsByID(sessions)` and `sync.session.get(sessionID)` use that exact
+  comparator for array ordering and binary search.
 - `sdk.client.permission.list()` and `sdk.client.question.list()` return the
   current pending interactions across Sessions.
 - `sync.set("permission" | "question", sessionID, rows)` updates the existing
@@ -235,9 +239,15 @@ summary: optionalString(input.summary, `${path}.summary`) ?? "",
 
 - A subagent observation is read-only. Pending descendant interactions render
   only after focus returns to Main.
-- Escape transfers focus first, then performs one hydration through the existing
-  SDK and sync context. SSE remains the primary live path; this hydration is not
-  a timer, poller, or second client.
+- The Session cache is a binary-search array ordered by `compareSessionIDs`.
+  Every whole-cache ingestion path, including `/tui/bootstrap` bundles and
+  multi-call Session lists, must normalize with `sortSessionsByID` before
+  `reconcile`. Search and sort must use the same code-unit comparator;
+  `localeCompare` has different mixed-case collation and is prohibited here.
+  Server response order is not a cache-order contract.
+- Escape transfers focus synchronously, then performs one hydration through the
+  existing SDK and sync context. SSE remains the primary live path; this
+  hydration is not a timer, poller, retry, or second client.
 - Filter hydrated rows to Session ids in the current run tree. Unrelated Session
   interactions must not enter the owning Session prompt.
 - If the run tree is unavailable, focus still returns to Main without an
@@ -251,49 +261,83 @@ summary: optionalString(input.summary, `${path}.summary`) ?? "",
 - Descendant Question pending after observation -> Main renders the Question
   prompt after Escape.
 - Interaction belongs to another tree -> exclude it.
+- Descending or otherwise unsorted bootstrap Sessions -> sort by the shared
+  comparator before cache insertion; `sync.session.get(route.sessionID)` must
+  remain defined.
+- Mixed-case Session ids -> cache remains ordered and unique; sync/event updates
+  replace the matching row instead of inserting a duplicate.
 - Missing run tree -> focus Main; make no hydration request.
 - Permission or Question list failure -> preserve current state and show an
   error; never leave the observation focused.
 
 ### 5. Good / Base / Bad Cases
 
-- Good: a long-lived SSE connection reconnects or misses an event; Escape from a
-  grandchild observation hydrates the still-pending Permission and renders it in
+- Good: `/tui/bootstrap` returns Sessions in descending code-unit order; the
+  client normalizes them, and mixed-case updates keep one reachable row per id.
+  Escape from a grandchild observation then renders its pending Permission in
   Main.
-- Base: SSE already populated the stores; hydration replaces them with the same
-  server state.
-- Bad: type a marker immediately after Escape before Main focus is observable,
-  or render a descendant prompt while its observation pane still owns focus.
+- Base: SSE already populated the interaction stores; hydration replaces them
+  with the same server state.
+- Bad: sort with `localeCompare` while binary-searching with `<`, install raw
+  bootstrap order, infer focus from stale transcript footer text, or render a
+  descendant prompt while its observation pane owns focus.
 
 ### 6. Tests Required
 
 - Unit: Main focus dispatch precedes prompt focus and does not steal focus from
   a modal.
-- PTY at 80 and 120 columns: observation input stays inert; Escape restores the
-  Main draft; a descendant Permission remains pending, renders in Main, and can
-  be answered exactly once.
-- The PTY must wait for Main-focus evidence before sending the next semantic
-  input; time sleeps alone do not prove terminal focus ownership.
+- PTY at 80 and 140 columns: the proxy returns bootstrap Sessions in descending
+  code-unit order; mixed-case Session updates do not create unreachable cache
+  rows; the root Session remains renderable; observation input stays inert;
+  Escape restores the Main draft; a descendant Permission remains pending,
+  renders in Main, and can be answered exactly once.
+- The PTY must wait for fresh Main-focus evidence before sending the next
+  semantic input. Post-Escape increments of both GET `/permission` and GET
+  `/question` acknowledge the focus handler. Generic `ctrl+p commands`
+  transcript text can be a stale incremental repaint and is not focus evidence.
+  Time sleeps alone do not prove terminal focus ownership.
 
 ### 7. Wrong vs Correct
 
 #### Wrong
 
 ```typescript
+setStore("session", reconcile(bundle.sessions))
+
 await writeInput(escapeKey)
 await writeInput(marker)
 ```
 
-This races terminal focus transfer and can send the marker to the read-only
-observation.
+Raw server order violates binary-search lookup. The Main workspace can be
+focused while `sync.session.get(route.sessionID)` is undefined, which removes
+the complete Main content subtree. Back-to-back input also lacks fresh evidence
+that the Escape handler ran.
 
 #### Correct
 
 ```typescript
+const compareSessionIDs = (left: string, right: string) =>
+  left === right ? 0 : left < right ? -1 : 1
+const sortSessionsByID = (sessions: Session[]) =>
+  sessions.toSorted((a, b) => compareSessionIDs(a.id, b.id))
+
+setStore("session", reconcile(sortSessionsByID(bundle.sessions)))
+
+focusMainPromptOwnership({ dispatch, prompt, modalActive })
+void refreshTreeInteractions()
+
+const permissionBefore = getRequestCount("/permission")
+const questionBefore = getRequestCount("/question")
 await writeInput(escapeKey)
-await waitForMain(start, "Main focus")
+await waitFor(
+  () =>
+    getRequestCount("/permission") > permissionBefore &&
+    getRequestCount("/question") > questionBefore,
+  "Main focus hydration",
+)
 await writeInput(marker)
 ```
 
-The Session route follows the same order: transfer focus synchronously, then
-hydrate pending descendant interactions through the existing SDK/sync state.
+One code-unit comparator protects sorting, lookup, and insertion from mixed-case
+collation drift. Fresh request counts prove the actual Escape handler ran before
+the PTY sends semantic input.

@@ -15,6 +15,23 @@ type FileSinkLike = {
   flush(): number | Promise<number>
 }
 
+type KillableProcess = {
+  exited: Promise<number>
+  kill(signal?: number): void
+}
+
+/** Stop one owned child and wait until the operating system reports its exit. */
+async function stopOwnedProcess(process: KillableProcess) {
+  process.kill()
+  const exited = await Promise.race([
+    process.exited.then(() => true),
+    Bun.sleep(2_000).then(() => false),
+  ])
+  if (exited) return
+  process.kill(9)
+  await process.exited
+}
+
 async function writeSemanticInput(stdin: FileSinkLike, value: string) {
   await stdin.write(value)
   await stdin.flush()
@@ -143,6 +160,582 @@ test("Linux PTY renders home, opens a session, and restores the terminal", async
     await rm(temp, { recursive: true, force: true })
   }
 }, 45_000)
+
+test("Linux PTY exact /model and /think open local pickers without a provider round", async () => {
+  const temp = await realpath(await mkdtemp(path.join(os.tmpdir(), "hya-pty-picker-")))
+  const project = path.join(temp, "project")
+  const transcript = path.join(temp, "typescript")
+  const home = path.join(temp, "home")
+  const config = path.join(temp, "config")
+  await mkdir(project)
+  await mkdir(home)
+  await mkdir(path.join(config, "hya"), { recursive: true })
+  await mkdir(path.join(project, ".opencode", "commands"), { recursive: true })
+  await Bun.write(
+    path.join(project, ".opencode", "commands", "broken.md"),
+    "---\ndescription: Trigger a planned command failure\n---\nBROKEN_COMMAND $ARGUMENTS\n",
+  )
+  await Bun.write(
+    path.join(project, ".opencode", "commands", "known.md"),
+    "---\ndescription: Known command sentinel\n---\nKNOWN_V1 $ARGUMENTS\n",
+  )
+  await Bun.write(
+    path.join(project, ".opencode", "commands", "user-other.md"),
+    "---\ndescription: User command sentinel\n---\nUSER_OTHER $ARGUMENTS\n",
+  )
+  await Bun.write(
+    path.join(project, ".opencode", "commands", "remove.md"),
+    "---\ndescription: Removed command sentinel\n---\nREMOVE_V1 $ARGUMENTS\n",
+  )
+  const userPlaybookSkill = path.join(project, ".hya", "skills", "user-playbook", "SKILL.md")
+  const addedPlaybookSkill = path.join(project, ".hya", "skills", "added-playbook", "SKILL.md")
+  await mkdir(path.dirname(userPlaybookSkill), { recursive: true })
+  await Bun.write(
+    userPlaybookSkill,
+    "---\nname: user-playbook\ndescription: Project skill sentinel\n---\nUSER_PLAYBOOK_BODY $ARGUMENTS\n",
+  )
+
+  let providerRequests = 0
+  const providerBodies: string[] = []
+  const provider = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(request) {
+      providerBodies.push(await request.text())
+      providerRequests++
+      if (providerRequests === 1) {
+        return new Response("planned command failure", { status: 400 })
+      }
+      return new Response(
+        [
+          'data: {"type":"response.output_text.delta","output_index":0,"delta":"picker recovery reply"}',
+          'data: {"type":"response.output_text.done","output_index":0}',
+          'data: {"type":"response.completed","response":{"status":"completed"}}',
+        ].join("\n\n") + "\n\n",
+        { headers: { "content-type": "text/event-stream" } },
+      )
+    },
+  })
+  await Bun.write(
+    path.join(config, "hya", "config.yaml"),
+    [
+      "default_model: test/gpt-picker",
+      "providers:",
+      "  test:",
+      "    kind: openai-response",
+      `    base_url: http://127.0.0.1:${provider.port}/v1`,
+      "    api_key: test-token",
+      "    models:",
+      "      - id: gpt-picker",
+      "        reasoning:",
+      "          default: high",
+      "          variants: [low, medium, high]",
+      "permission:",
+      "  model: default",
+      "  rules: []",
+      "",
+    ].join("\n"),
+  )
+
+  const env = {
+    PATH: Bun.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
+    LANG: Bun.env.LANG ?? "C.UTF-8",
+    HOME: home,
+    XDG_CACHE_HOME: path.join(temp, "cache"),
+    XDG_CONFIG_HOME: config,
+    XDG_DATA_HOME: path.join(temp, "data"),
+    XDG_STATE_HOME: path.join(temp, "state"),
+  }
+  const server = Bun.spawn([backend, "--db", path.join(temp, "sessions.db"), "serve", "--bind", "127.0.0.1:0"], {
+    cwd: project,
+    env,
+    stdout: "pipe",
+    stderr: "pipe",
+  })
+  let ownedProcess: Bun.WritableSubprocess | undefined
+
+  try {
+    const reader = server.stdout.getReader()
+    const decoder = new TextDecoder()
+    let readiness = ""
+    // Backend readiness is external process I/O; this deadline only bounds a hung child.
+    const url = await Promise.race([
+      (async () => {
+        while (true) {
+          const chunk = await reader.read()
+          if (chunk.done) throw new Error(`hya-backend exited before readiness: ${readiness}`)
+          readiness += decoder.decode(chunk.value, { stream: true })
+          const match = readiness.match(/hya server listening on (http:\/\/127\.0\.0\.1:\d+)/)
+          if (match) return match[1]
+        }
+      })(),
+      Bun.sleep(10_000).then(() => {
+        throw new Error(`timed out waiting for hya-backend: ${readiness}`)
+      }),
+    ])
+    const client = createOpencodeClient({ baseUrl: url, directory: project })
+    const session = (await client.session.create({ title: "Picker regression" }, { throwOnError: true })).data!
+    const process = Bun.spawn(
+      [
+        "/usr/bin/script",
+        "-q",
+        "-e",
+        "-f",
+        "-c",
+        'stty rows 30 cols 100; before=$(stty -g); before_fg=$(ps -o tpgid= -p $$ | tr -d " "); "$HYA_TS" "$HYA_PTY_PROJECT" --server "$HYA_PTY_URL" --session "$HYA_PTY_SESSION"; code=$?; after=$(stty -g); after_fg=$(ps -o tpgid= -p $$ | tr -d " "); [ "$before" = "$after" ] || exit 97; [ "$before_fg" = "$after_fg" ] || exit 98; exit "$code"',
+        transcript,
+      ],
+      {
+        cwd: path.join(root, "packages/hya-tui-ts"),
+        env: {
+          ...env,
+          HYA_PTY_PROJECT: project,
+          HYA_PTY_SESSION: session.id,
+          HYA_PTY_URL: url,
+          HYA_TS: launcher,
+          HYA_TUI_TS_DIR: path.join(root, "packages/hya-tui-ts"),
+          TERM: "xterm-256color",
+        },
+        stdin: "pipe",
+        stdout: "ignore",
+        stderr: "pipe",
+      },
+    )
+    ownedProcess = process
+
+    const output = async () => stripAnsi(await readFile(transcript, "utf8").catch(() => ""))
+    /** Poll real PTY/process I/O; fake timers cannot advance OS output or process exit. */
+    const waitFor = async (check: () => boolean | Promise<boolean>, label: string) => {
+      const deadline = Date.now() + 10_000
+      while (!(await check())) {
+        const exited = await Promise.race([
+          process.exited.then((status) => ({ status })),
+          Bun.sleep(50).then(() => undefined),
+        ])
+        if (exited) throw new Error(`PTY exited before ${label} with status ${exited.status}`)
+        if (Date.now() >= deadline) throw new Error(`timed out waiting for ${label}: ${(await output()).slice(-3000)}`)
+      }
+    }
+    await waitFor(async () => {
+      const frame = await output()
+      return frame.includes("ctrl+p commands") && frame.includes("gpt-picker")
+    }, "picker Session")
+    type SessionEvent = {
+      event?: {
+        type?: string
+        command?: string
+        name?: string
+      }
+    }
+    /** Read fresh canonical Session event envelopes for each assertion. */
+    const sessionEvents = async (): Promise<SessionEvent[]> => {
+      return (await (await fetch(`${url}/sessions/${session.id}/events`)).json()) as SessionEvent[]
+    }
+    /** Count canonical CommandExecuted Events for one command name. */
+    const commandEventCount = async (command: string) => {
+      const events = await sessionEvents()
+      return events.filter((item) => item.event?.type === "command_executed" && item.event.command === command).length
+    }
+    /** Count canonical ToolCallRequested Events for one tool name. */
+    const toolCallCount = async (name: string) => {
+      const events = await sessionEvents()
+      return events.filter((item) => item.event?.type === "tool_call_requested" && item.event.name === name).length
+    }
+
+    /** Report whether the backend owns no active turn for the test Session. */
+    const sessionIsIdle = async () => {
+      const statuses = await client.session.status({}, { throwOnError: true })
+      return statuses.data?.[session.id]?.type !== "busy"
+    }
+    const modelCommandsBefore = await commandEventCount("model")
+    const thinkCommandsBefore = await commandEventCount("think")
+    const workflowCommandsBefore = await commandEventCount("workflow")
+    const userPlaybookCommandsBefore = await commandEventCount("user-playbook")
+    const skillToolCallsBefore = await toolCallCount("skill")
+    expect(providerRequests).toBe(0)
+
+    const paletteStart = (await output()).length
+    await writeSemanticInput(process.stdin, "\x10")
+    await waitFor(async () => (await output()).slice(paletteStart).includes("Commands"), "command palette")
+    await writeSemanticInput(process.stdin, "user-other")
+    await waitFor(async () => (await output()).slice(paletteStart).includes("No results found"), "resource-free command palette")
+    const paletteFrame = (await output()).slice(paletteStart)
+    expect(paletteFrame).not.toContain("User command sentinel")
+    expect(paletteFrame).not.toContain("Project skill sentinel")
+    const paletteCloseStart = (await output()).length
+    await writeSemanticInput(process.stdin, "\x1b[27;1;27~")
+    await waitFor(async () => (await output()).slice(paletteCloseStart).includes("ctrl+p commands"), "closed command palette")
+
+    const resourceSlashStart = (await output()).length
+    await writeSemanticInput(process.stdin, "/user")
+    await waitFor(async () => (await output()).slice(resourceSlashStart).includes("/user-other"), "custom command autocomplete")
+    const resourceSlashFrame = (await output()).slice(resourceSlashStart)
+    expect(resourceSlashFrame).not.toContain("/user-playbook")
+    expect(resourceSlashFrame).toContain("User command sentinel")
+    expect(resourceSlashFrame).not.toContain("Project skill sentinel")
+    const resourceSlashCloseStart = (await readFile(transcript, "utf8")).length
+    await writeSemanticInput(process.stdin, "\x1b")
+    await waitFor(
+      async () => (await readFile(transcript, "utf8")).length > resourceSlashCloseStart,
+      "closed custom command autocomplete",
+    )
+
+    const skillsStart = (await output()).length
+    await writeSemanticInput(process.stdin, "/skills")
+    await waitFor(async () => (await output()).slice(skillsStart).includes("/skills"), "Skills command autocomplete")
+    await writeSemanticInput(process.stdin, "\r")
+    await waitFor(async () => {
+      const frame = (await output()).slice(skillsStart)
+      return frame.includes("Skills") && frame.includes("user-playbook") && frame.includes("Project skill sentinel")
+    }, "Skills dialog")
+    expect(providerRequests).toBe(0)
+    expect(await commandEventCount("user-playbook")).toBe(userPlaybookCommandsBefore)
+    expect(await toolCallCount("skill")).toBe(skillToolCallsBefore)
+    const skillsCloseStart = (await output()).length
+    await writeSemanticInput(process.stdin, "\x1b[27;1;27~")
+    await waitFor(async () => (await output()).slice(skillsCloseStart).includes("ctrl+p commands"), "closed Skills dialog")
+
+    const modelStart = (await output()).length
+    await writeSemanticInput(process.stdin, "/model")
+    await waitFor(async () => (await output()).slice(modelStart).includes("/models"), "model autocomplete")
+    expect((await output()).slice(modelStart)).not.toContain("switch the active model")
+    await writeSemanticInput(process.stdin, "\r")
+    await waitFor(async () => (await output()).slice(modelStart).includes("Select model"), "model picker")
+    expect(providerRequests).toBe(0)
+    expect(await commandEventCount("model")).toBe(modelCommandsBefore)
+
+    const modelCloseStart = (await output()).length
+    await writeSemanticInput(process.stdin, "\x1b[27;1;27~")
+    await waitFor(async () => (await output()).slice(modelCloseStart).includes("ctrl+p commands"), "closed model picker")
+    const variantStart = (await output()).length
+    await writeSemanticInput(process.stdin, "/think")
+    await waitFor(async () => (await output()).slice(variantStart).includes("/variants"), "variant autocomplete")
+    expect((await output()).slice(variantStart)).not.toContain("set reasoning effort")
+    await writeSemanticInput(process.stdin, "\r")
+    await waitFor(async () => (await output()).slice(variantStart).includes("Select variant"), "variant picker")
+    expect(providerRequests).toBe(0)
+    expect(await commandEventCount("think")).toBe(thinkCommandsBefore)
+
+    const variantSelectStart = (await output()).length
+    await writeSemanticInput(process.stdin, "\x1b[B\r")
+    await waitFor(async () => (await output()).slice(variantSelectStart).includes("·low"), "selected low variant")
+    expect(providerRequests).toBe(0)
+
+    const workflowStart = (await output()).length
+    await writeSemanticInput(process.stdin, "/workflow state")
+    await waitFor(async () => (await output()).slice(workflowStart).includes("/workflow state"), "Workflow command input")
+    await writeSemanticInput(process.stdin, "\r")
+    await waitFor(
+      async () => (await commandEventCount("workflow")) === workflowCommandsBefore + 1,
+      "Workflow CommandExecuted Event",
+    )
+    await waitFor(sessionIsIdle, "Workflow command completion")
+    expect(providerRequests).toBe(0)
+
+    const commandStart = (await output()).length
+    await writeSemanticInput(process.stdin, "/broken fail")
+    await waitFor(async () => (await output()).slice(commandStart).includes("/broken fail"), "broken command input")
+    await writeSemanticInput(process.stdin, "\r")
+    await waitFor(() => providerRequests === 1, "broken command provider request")
+    await waitFor(async () => (await output()).slice(commandStart).includes("Failed to run command"), "command error toast")
+    await waitFor(sessionIsIdle, "failed command recovery")
+
+    const historyStart = (await output()).length
+    await writeSemanticInput(process.stdin, "\x1b[A")
+    await waitFor(async () => (await output()).slice(historyStart).includes("/broken fail"), "submitted command history")
+    await writeSemanticInput(process.stdin, "\x01")
+    await writeSemanticInput(process.stdin, "\x0b")
+
+    const recoveryStart = (await output()).length
+    await writeSemanticInput(process.stdin, "recover after command failure")
+    // script logs terminal diffs; the provider payload proves the complete submitted editor value.
+    await writeSemanticInput(process.stdin, "\r")
+    await waitFor(async () => (await output()).slice(recoveryStart).includes("picker recovery reply"), "recovery reply")
+    await waitFor(sessionIsIdle, "recovery prompt completion")
+    expect(providerRequests).toBe(2)
+    expect(providerBodies[1]).toContain("recover after command failure")
+    const initialSkillIndex = providerBodies.length
+    const initialSkillStart = (await output()).length
+    await writeSemanticInput(process.stdin, "/user-playbook initial")
+    await waitFor(
+      async () => (await output()).slice(initialSkillStart).includes("/user-playbook initial"),
+      "initial Skill command input",
+    )
+    await writeSemanticInput(process.stdin, "\r")
+    await waitFor(() => providerBodies.length > initialSkillIndex, "initial Skill command request")
+    expect(providerBodies[initialSkillIndex]).toContain("USER_PLAYBOOK_BODY initial")
+    await waitFor(sessionIsIdle, "initial Skill command completion")
+    expect(await commandEventCount("user-playbook")).toBe(userPlaybookCommandsBefore + 1)
+    expect(await toolCallCount("skill")).toBe(skillToolCallsBefore)
+    expect(providerRequests).toBe(3)
+
+    await Bun.write(
+      userPlaybookSkill,
+      "---\nname: user-playbook\ndescription: Project skill sentinel\n---\nUSER_PLAYBOOK_BODY_V2 $ARGUMENTS\n",
+    )
+    const editedSkillIndex = providerBodies.length
+    const editedSkillStart = (await output()).length
+    await writeSemanticInput(process.stdin, "/user-playbook edited")
+    await waitFor(
+      async () => (await output()).slice(editedSkillStart).includes("/user-playbook edited"),
+      "edited Skill command input",
+    )
+    await writeSemanticInput(process.stdin, "\r")
+    await waitFor(() => providerBodies.length > editedSkillIndex, "edited Skill command request")
+    expect(providerBodies[editedSkillIndex]).toContain("USER_PLAYBOOK_BODY_V2 edited")
+    await waitFor(sessionIsIdle, "edited Skill command completion")
+    expect(await commandEventCount("user-playbook")).toBe(userPlaybookCommandsBefore + 2)
+    expect(await toolCallCount("skill")).toBe(skillToolCallsBefore)
+    expect(providerRequests).toBe(4)
+
+    const multilineStart = (await output()).length
+    await writeSemanticInput(process.stdin, "\x1b[200~/known quoted\nsecond line\x1b[201~")
+    await waitFor(async () => {
+      const frame = (await output()).slice(multilineStart)
+      return frame.includes("/known quoted") && frame.includes("second line")
+    }, "multiline command input")
+    await writeSemanticInput(process.stdin, "\r")
+    await waitFor(
+      () => providerBodies.some((body) => body.includes("KNOWN_V1 quoted\\nsecond line")),
+      "multiline command expansion",
+    )
+    await waitFor(sessionIsIdle, "multiline command completion")
+    expect(providerRequests).toBe(5)
+
+    await Bun.write(
+      path.join(project, ".opencode", "commands", "known.md"),
+      "---\ndescription: Known command sentinel\n---\nKNOWN_V2 $ARGUMENTS\n",
+    )
+    const changedStart = (await output()).length
+    await writeSemanticInput(process.stdin, "/known changed")
+    await waitFor(async () => (await output()).slice(changedStart).includes("/known changed"), "changed command input")
+    await writeSemanticInput(process.stdin, "\r")
+    await waitFor(() => providerBodies.some((body) => body.includes("KNOWN_V2 changed")), "changed command expansion")
+    await waitFor(sessionIsIdle, "changed command completion")
+    expect(providerRequests).toBe(6)
+
+    await Bun.write(
+      path.join(project, ".opencode", "commands", "added.md"),
+      "---\ndescription: Added command sentinel\n---\nADDED_BODY $ARGUMENTS\n",
+    )
+    await rm(path.join(project, ".opencode", "commands", "remove.md"))
+
+    const addedBeforeRestartIndex = providerBodies.length
+    const addedBeforeRestartStart = (await output()).length
+    await writeSemanticInput(process.stdin, "/added pre-restart")
+    await waitFor(
+      async () => (await output()).slice(addedBeforeRestartStart).includes("/added pre-restart"),
+      "new command before restart input",
+    )
+    await writeSemanticInput(process.stdin, "\r")
+    await waitFor(() => providerBodies.length > addedBeforeRestartIndex, "new command before restart request")
+    expect(providerBodies[addedBeforeRestartIndex]).toContain("/added pre-restart")
+    expect(providerBodies[addedBeforeRestartIndex]).not.toContain("ADDED_BODY")
+    await waitFor(sessionIsIdle, "new command fallback completion")
+
+    const removedBeforeRestartIndex = providerBodies.length
+    const removedBeforeRestartStart = (await output()).length
+    await writeSemanticInput(process.stdin, "/remove stale")
+    await waitFor(
+      async () => (await output()).slice(removedBeforeRestartStart).includes("/remove stale"),
+      "removed command before restart input",
+    )
+    await writeSemanticInput(process.stdin, "\r")
+    await waitFor(() => providerBodies.length > removedBeforeRestartIndex, "removed command fallback request")
+    expect(providerBodies[removedBeforeRestartIndex]).toContain("/remove stale")
+    expect(providerBodies[removedBeforeRestartIndex]).not.toContain("REMOVE_V1")
+    await waitFor(sessionIsIdle, "removed command fallback completion")
+
+    expect(await commandEventCount("remove")).toBe(1)
+    expect(await commandEventCount("added")).toBe(0)
+    await mkdir(path.dirname(addedPlaybookSkill), { recursive: true })
+    await Bun.write(
+      addedPlaybookSkill,
+      "---\nname: added-playbook\ndescription: Added Skill sentinel\n---\nADDED_SKILL_BODY $ARGUMENTS\n",
+    )
+    await rm(userPlaybookSkill)
+
+    const addedSkillCommandsBefore = await commandEventCount("added-playbook")
+    const addedSkillBeforeRestartIndex = providerBodies.length
+    const addedSkillBeforeRestartStart = (await output()).length
+    await writeSemanticInput(process.stdin, "/added-playbook pre-restart")
+    await waitFor(
+      async () => (await output()).slice(addedSkillBeforeRestartStart).includes("/added-playbook pre-restart"),
+      "new Skill before restart input",
+    )
+    await writeSemanticInput(process.stdin, "\r")
+    await waitFor(() => providerBodies.length > addedSkillBeforeRestartIndex, "new Skill before restart request")
+    expect(providerBodies[addedSkillBeforeRestartIndex]).toContain("/added-playbook pre-restart")
+    expect(providerBodies[addedSkillBeforeRestartIndex]).not.toContain("ADDED_SKILL_BODY pre-restart")
+    expect(await commandEventCount("added-playbook")).toBe(addedSkillCommandsBefore)
+    expect(await toolCallCount("skill")).toBe(skillToolCallsBefore)
+    await waitFor(sessionIsIdle, "new Skill before restart fallback completion")
+    expect(providerRequests).toBe(9)
+
+    const removedSkillCommandsBefore = await commandEventCount("user-playbook")
+    const removedSkillBeforeRestartIndex = providerBodies.length
+    const removedSkillBeforeRestartStart = (await output()).length
+    await writeSemanticInput(process.stdin, "/user-playbook stale")
+    await waitFor(
+      async () => (await output()).slice(removedSkillBeforeRestartStart).includes("/user-playbook stale"),
+      "removed Skill before restart input",
+    )
+    await writeSemanticInput(process.stdin, "\r")
+    await waitFor(() => providerBodies.length > removedSkillBeforeRestartIndex, "removed Skill before restart request")
+    expect(providerBodies[removedSkillBeforeRestartIndex]).toContain("/user-playbook stale")
+    expect(providerBodies[removedSkillBeforeRestartIndex]).not.toContain("USER_PLAYBOOK_BODY_V2 stale")
+    expect(await commandEventCount("user-playbook")).toBe(removedSkillCommandsBefore + 1)
+    expect(await toolCallCount("skill")).toBe(skillToolCallsBefore)
+    await waitFor(sessionIsIdle, "removed Skill before restart fallback completion")
+    expect(providerRequests).toBe(10)
+
+    await writeSemanticInput(process.stdin, "\x03")
+    process.stdin.end()
+    // Process exit is external OS state; this deadline only bounds failed terminal restoration.
+    const status = await Promise.race([
+      process.exited,
+      Bun.sleep(15_000).then(() => {
+        process.kill(9)
+        throw new Error("picker PTY smoke timed out")
+      }),
+    ])
+    expect(status).toBe(0)
+    ownedProcess = undefined
+
+    const restartTranscript = path.join(temp, "typescript-restart")
+    const restarted = Bun.spawn(
+      [
+        "/usr/bin/script",
+        "-q",
+        "-e",
+        "-f",
+        "-c",
+        'stty rows 30 cols 100; before=$(stty -g); before_fg=$(ps -o tpgid= -p $$ | tr -d " "); "$HYA_TS" "$HYA_PTY_PROJECT" --server "$HYA_PTY_URL" --session "$HYA_PTY_SESSION"; code=$?; after=$(stty -g); after_fg=$(ps -o tpgid= -p $$ | tr -d " "); [ "$before" = "$after" ] || exit 97; [ "$before_fg" = "$after_fg" ] || exit 98; exit "$code"',
+        restartTranscript,
+      ],
+      {
+        cwd: path.join(root, "packages/hya-tui-ts"),
+        env: {
+          ...env,
+          HYA_PTY_PROJECT: project,
+          HYA_PTY_SESSION: session.id,
+          HYA_PTY_URL: url,
+          HYA_TS: launcher,
+          HYA_TUI_TS_DIR: path.join(root, "packages/hya-tui-ts"),
+          TERM: "xterm-256color",
+        },
+        stdin: "pipe",
+        stdout: "ignore",
+        stderr: "pipe",
+      },
+    )
+    ownedProcess = restarted
+    const restartedOutput = async () => stripAnsi(await readFile(restartTranscript, "utf8").catch(() => ""))
+    /** Poll real restarted PTY/process I/O; fake timers cannot advance OS state. */
+    const waitForRestart = async (check: () => boolean | Promise<boolean>, label: string) => {
+      const deadline = Date.now() + 10_000
+      while (!(await check())) {
+        const exited = await Promise.race([
+          restarted.exited.then((exitStatus) => ({ status: exitStatus })),
+          Bun.sleep(50).then(() => undefined),
+        ])
+        if (exited) throw new Error(`restarted PTY exited before ${label} with status ${exited.status}`)
+        if (Date.now() >= deadline) {
+          throw new Error(`timed out waiting for restarted ${label}: ${(await restartedOutput()).slice(-3000)}`)
+        }
+      }
+    }
+    await waitForRestart(async () => {
+      const frame = await restartedOutput()
+      return frame.includes("ctrl+p commands") && frame.includes("gpt-picker") && frame.includes("·low")
+    }, "Session")
+
+    const addedAfterRestartIndex = providerBodies.length
+    const addedAfterRestartStart = (await restartedOutput()).length
+    await writeSemanticInput(restarted.stdin, "/added post-restart")
+    await waitForRestart(
+      async () => (await restartedOutput()).slice(addedAfterRestartStart).includes("/added post-restart"),
+      "added command input",
+    )
+    await writeSemanticInput(restarted.stdin, "\r")
+    await waitForRestart(() => providerBodies.length > addedAfterRestartIndex, "added command request")
+    expect(providerBodies[addedAfterRestartIndex]).toContain("ADDED_BODY post-restart")
+    const addedAfterRestartBody = JSON.parse(providerBodies[addedAfterRestartIndex]) as {
+      reasoning?: { effort?: string }
+    }
+    expect(addedAfterRestartBody.reasoning?.effort).toBe("low")
+    await waitForRestart(sessionIsIdle, "added command completion")
+
+    const removedAfterRestartIndex = providerBodies.length
+    const removedAfterRestartStart = (await restartedOutput()).length
+    await writeSemanticInput(restarted.stdin, "/remove post-restart")
+    await waitForRestart(
+      async () => (await restartedOutput()).slice(removedAfterRestartStart).includes("/remove post-restart"),
+      "removed command input",
+    )
+    await writeSemanticInput(restarted.stdin, "\r")
+    await waitForRestart(() => providerBodies.length > removedAfterRestartIndex, "removed command ordinary prompt")
+    expect(providerBodies[removedAfterRestartIndex]).toContain("/remove post-restart")
+    await waitForRestart(sessionIsIdle, "removed command completion")
+
+    expect(await commandEventCount("remove")).toBe(1)
+    expect(await commandEventCount("added")).toBe(1)
+    const addedSkillAfterRestartCommandsBefore = await commandEventCount("added-playbook")
+    const addedSkillAfterRestartIndex = providerBodies.length
+    const addedSkillAfterRestartStart = (await restartedOutput()).length
+    await writeSemanticInput(restarted.stdin, "/added-playbook post-restart")
+    await waitForRestart(
+      async () => (await restartedOutput()).slice(addedSkillAfterRestartStart).includes("/added-playbook post-restart"),
+      "new Skill after restart input",
+    )
+    await writeSemanticInput(restarted.stdin, "\r")
+    await waitForRestart(() => providerBodies.length > addedSkillAfterRestartIndex, "new Skill after restart request")
+    expect(providerBodies[addedSkillAfterRestartIndex]).toContain("ADDED_SKILL_BODY post-restart")
+    expect(await commandEventCount("added-playbook")).toBe(addedSkillAfterRestartCommandsBefore + 1)
+    expect(await toolCallCount("skill")).toBe(skillToolCallsBefore)
+    await waitForRestart(sessionIsIdle, "new Skill after restart completion")
+
+    const removedSkillAfterRestartCommandsBefore = await commandEventCount("user-playbook")
+    const removedSkillAfterRestartIndex = providerBodies.length
+    const removedSkillAfterRestartStart = (await restartedOutput()).length
+    await writeSemanticInput(restarted.stdin, "/user-playbook post-restart")
+    await waitForRestart(
+      async () =>
+        (await restartedOutput()).slice(removedSkillAfterRestartStart).includes("/user-playbook post-restart"),
+      "removed Skill after restart input",
+    )
+    await writeSemanticInput(restarted.stdin, "\r")
+    await waitForRestart(
+      () => providerBodies.length > removedSkillAfterRestartIndex,
+      "removed Skill after restart request",
+    )
+    expect(providerBodies[removedSkillAfterRestartIndex]).toContain("/user-playbook post-restart")
+    expect(providerBodies[removedSkillAfterRestartIndex]).not.toContain("USER_PLAYBOOK_BODY_V2 post-restart")
+    expect(await commandEventCount("user-playbook")).toBe(removedSkillAfterRestartCommandsBefore)
+    expect(await toolCallCount("skill")).toBe(skillToolCallsBefore)
+    await waitForRestart(sessionIsIdle, "removed Skill after restart fallback completion")
+
+    expect(providerRequests).toBe(14)
+
+    await writeSemanticInput(restarted.stdin, "\x03")
+    restarted.stdin.end()
+    // Restarted process exit is external OS state; this deadline bounds failed restoration.
+    const restartedStatus = await Promise.race([
+      restarted.exited,
+      Bun.sleep(15_000).then(() => {
+        restarted.kill(9)
+        throw new Error("restarted picker PTY smoke timed out")
+      }),
+    ])
+    expect(restartedStatus).toBe(0)
+    ownedProcess = undefined
+  } finally {
+    if (ownedProcess) await stopOwnedProcess(ownedProcess)
+    await stopOwnedProcess(server)
+    provider.stop(true)
+    await rm(temp, { recursive: true, force: true })
+  }
+}, 90_000)
 
 async function runChildObservation(columns: number) {
   const temp = await realpath(await mkdtemp(path.join(os.tmpdir(), "hya-pty-child-")))
@@ -438,6 +1031,14 @@ async function runChildObservation(columns: number) {
           body,
           redirect: "manual",
         })
+        if (request.method === "GET" && incoming.pathname === "/tui/bootstrap" && response.ok) {
+          const bundle = (await response.json()) as { sessions?: Array<{ id: string }> }
+          // The client cache must normalize server order.
+          if (bundle.sessions) {
+            bundle.sessions = bundle.sessions.toSorted((a, b) => (a.id === b.id ? 0 : a.id < b.id ? 1 : -1))
+          }
+          return Response.json(bundle)
+        }
         if (request.method === "GET" && incoming.pathname === `/session/${rootSession.id}/message` && response.ok) {
           const messages = (await response.json()) as Array<{ info: { id: string; role: string }; parts: unknown[] }>
           const assistant = messages.findLast((message) => message.info.role === "assistant")
@@ -580,27 +1181,33 @@ async function runChildObservation(columns: number) {
         expect(requests.filter((request) => request.method === "GET" && request.path === `/session/${rootSession.id}/tree`)).toHaveLength(1)
 
         const rootDraft = "ROOT_DRAFT_c281"
-        const beforeDraft = (await output()).length
-        await waitFor(async () => {
-          const frame = (await output()).slice(beforeDraft)
-          if (frame.includes(rootDraft)) return true
-          await writeInput(rootDraft)
-          return false
-        }, "root draft").catch(async (error) => {
-          const frame = (await output()).slice(-5000)
-          throw new Error(`${error instanceof Error ? error.message : error}\n${frame}`)
-        })
-        const waitForMain = async (start: number, message: string) => {
-          await waitFor(async () => (await output()).slice(start).includes(rootDraft), message)
+        // The first confirmMainInput after real observation focus proves the complete draft is preserved/rendered; final root Events prove it was not submitted.
+        await writeInput(rootDraft)
+        const waitForMain = async (start: number, message: string, marker: string) => {
+          // Fresh footer is only the render barrier; marker plus draft proves ownership.
+          await waitFor(
+            async () => (await output()).slice(start).includes("ctrl+p commands"),
+            `${message} render`,
+          )
+          await writeInput(marker)
+          await waitFor(async () => {
+            const frame = (await output()).slice(start)
+            return frame.includes(marker) && frame.includes(rootDraft)
+          }, message)
         }
-        const focusMain = async (start: number, label: string) => {
-          await writeInput(escapeKey)
-          await waitForMain(start, `${label} Main focus`)
-        }
+        const getRequestCount = (path: string) =>
+          requests.filter((request) => request.method === "GET" && request.path === path).length
         const confirmMainInput = async (start: number, marker: string) => {
           try {
+            const permissionRequestsBefore = getRequestCount("/permission")
+            const questionRequestsBefore = getRequestCount("/question")
             await writeInput(escapeKey)
-            await waitForMain(start, `${marker} Main focus`)
+            await waitFor(
+              () =>
+                getRequestCount("/permission") > permissionRequestsBefore &&
+                getRequestCount("/question") > questionRequestsBefore,
+              "Main focus hydration",
+            )
             await writeInput(marker)
             await waitFor(async () => {
               const frame = (await output()).slice(start)
@@ -699,7 +1306,11 @@ async function runChildObservation(columns: number) {
         await Bun.sleep(100)
         const closeFilteredManagerStart = (await output()).length
         await writeInput(escapeKey)
-        await waitForMain(closeFilteredManagerStart, "Main after filtered manager")
+        await waitForMain(
+          closeFilteredManagerStart,
+          "Main after filtered manager",
+          "MAIN_AFTER_FILTER_4f3a",
+        )
 
         for (const [command, placement] of [
           ["Open subagent in tab", "Tab"],
@@ -721,7 +1332,11 @@ async function runChildObservation(columns: number) {
           })
           const closePlacementManagerStart = (await output()).length
           await writeInput(escapeKey)
-          await waitForMain(closePlacementManagerStart, `Main after ${placement} manager`)
+          await waitForMain(
+            closePlacementManagerStart,
+            `Main after ${placement} manager`,
+            `MAIN_AFTER_${placement}_9c21`,
+          )
         }
 
         const hydrationPaths = [
@@ -920,7 +1535,7 @@ async function runChildObservation(columns: number) {
                     [
                       "PERMISSION_RENDERED_WITHOUT_PENDING_REQUEST",
                       `permission_id=${JSON.stringify(pendingPermissionID)}`,
-                      `matching_requests=${JSON.stringify(matchingReplyRequests)}`,
+                      `matching_requests=${JSON.stringify(matchingReplyRequests.slice(-64))}`,
                       `callsite=${permissionCallsite}`,
                       `phase=${JSON.stringify(phaseTrace.at(-1))}`,
                       `last_frame=${JSON.stringify(frame.slice(-5000))}`,
@@ -940,7 +1555,7 @@ async function runChildObservation(columns: number) {
                   [
                     "ESCAPE_PROPAGATED_TO_NEW_PERMISSION_PROMPT",
                     `permission_id=${JSON.stringify(pendingPermissionID)}`,
-                    `matching_requests=${JSON.stringify(matchingReplyRequests)}`,
+                    `matching_requests=${JSON.stringify(matchingReplyRequests.slice(-64))}`,
                     `permission_still_pending=${permissionStillPending}`,
                     `callsite=${permissionCallsite}`,
                     `phase=${JSON.stringify(phaseTrace.at(-1))}`,
@@ -966,12 +1581,16 @@ async function runChildObservation(columns: number) {
           const pendingAfterFailure = (await client.permission.list({}, { throwOnError: true })).data ?? []
           const permissionStillPending = pendingAfterFailure.some((permission) => permission.id === pendingPermissionID)
           if (matchingReplyRequests.length === 0 && permissionStillPending) {
-            tracePhase(permissionCallsite, "event_propagation_hypothesis_disproven", pendingPermissionID)
+            tracePhase(permissionCallsite, "pending_interaction_not_rendered", pendingPermissionID)
             throw new Error(
               [
-                "EVENT_PROPAGATION_HYPOTHESIS_DISPROVEN",
+                "PENDING_INTERACTION_NOT_RENDERED",
                 `permission_id=${JSON.stringify(pendingPermissionID)}`,
-                `matching_requests=${JSON.stringify(matchingReplyRequests)}`,
+                `matching_requests=${JSON.stringify(matchingReplyRequests.slice(-64))}`,
+                `requests_since_cursor_tail=${JSON.stringify(
+                  requests.slice(Math.max(permissionRequestCursor, requests.length - 64)),
+                )}`,
+                `phase_trace=${JSON.stringify(phaseTrace)}`,
                 `permission_still_pending=${permissionStillPending}`,
                 `callsite=${permissionCallsite}`,
                 `phase=${JSON.stringify(phaseTrace.at(-1))}`,
@@ -1119,14 +1738,18 @@ async function runChildObservation(columns: number) {
         const closeTabStart = (await output()).length
         await confirmMainInput(closeTabStart, "m763f")
 
-        await writeInput("\x18")
-        await Bun.sleep(100)
-        await writeInput("l")
-        await Bun.sleep(200)
-        await writeInput("PTY reset root")
-        await Bun.sleep(200)
+        const sessionListStart = (await output()).length
+        await writeInput("\x18l")
+        await waitFor(async () => (await output()).slice(sessionListStart).includes("Sessions"), "session list")
+        // With two roots, current is second; Up + Enter selects newest reset root first without search debounce.
         const resetStart = (await output()).length
-        await writeInput("\r")
+        const resetSessionPath = `/session/${resetRootSession.id}`
+        const resetTreePath = `${resetSessionPath}/tree`
+        const resetSessionRequestsBefore = getRequestCount(resetSessionPath)
+        const resetTreeRequestsBefore = getRequestCount(resetTreePath)
+        await writeInput("\x1b[A\r")
+        await waitFor(() => getRequestCount(resetTreePath) > resetTreeRequestsBefore, "fresh reset tree request")
+        await waitFor(() => getRequestCount(resetSessionPath) > resetSessionRequestsBefore, "fresh reset session request")
         await waitFor(async () => (await output()).slice(resetStart).includes(resetRootTranscript), "fresh root workspace")
         const resetFrame = (await output()).slice(resetStart)
         expect(resetFrame).not.toContain("worker-1")
@@ -1154,7 +1777,8 @@ async function runChildObservation(columns: number) {
 
         expect(status).toBe(0)
         expect(rootEvents).not.toContain(rootDraft)
-        expect(rootFrame).toContain(rootTranscript)
+        expect(rootEvents).toContain(rootTranscript)
+        expect(rootSessionFrameReady(rootFrame)).toBe(true)
       } finally {
         process.kill()
         await Promise.race([process.exited, Bun.sleep(2_000).then(() => process.kill(9))])

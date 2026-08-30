@@ -4,7 +4,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use hya_proto::api::{CommandRequest, ShellRequest};
-use hya_proto::{Event, MessageId, ModelRef, Projection, SessionId};
+use hya_proto::{AgentName, Event, MessageId, ModelRef, Projection, SessionId};
 use serde::Deserialize;
 
 use crate::{ApiError, ServerState, parse_session};
@@ -110,11 +110,15 @@ async fn command(
     let Some(run) = st.start_run(session) else {
         return Ok(super::errors::legacy_bad_request("Bad request"));
     };
+    if let Some(model) = req.model_ref() {
+        st.engine.switch_model(session, model).await?;
+    }
     let workdir = super::reference::session_workdir(&st, session).await;
     let CommandRequest {
         command,
         arguments,
         text,
+        ..
     } = req;
     let text = text.unwrap_or_else(|| command_prompt_text(&workdir, &command, &arguments));
     let message = st
@@ -152,11 +156,36 @@ async fn shell(
     let Some(run) = st.start_run(session) else {
         return Ok(super::errors::session_busy(session));
     };
+    let agent = shell_agent(&st, session, &req).await?;
     let (message, _finish) = st
         .engine
-        .run_shell(session, &st.agent, req.command, run.token())
+        .run_shell(session, &agent, req.command, run.token())
         .await?;
     Ok(Json(load_message(&st, session, message).await?).into_response())
+}
+
+/// Resolve the Agent metadata for a synthetic shell turn and persist any client model override.
+///
+/// `st` supplies Session state, `session` identifies the target, and `req` carries optional
+/// interactive-client selections. The returned Agent drives shell message attribution.
+pub(crate) async fn shell_agent(
+    st: &ServerState,
+    session: SessionId,
+    req: &ShellRequest,
+) -> Result<hya_core::AgentSpec, ApiError> {
+    if let Some(model) = req.model_ref() {
+        st.engine.switch_model(session, model).await?;
+    }
+    let mut turn = super::reference::session_agent_with_guidance(st, session).await;
+    if let Some(agent) = req
+        .agent
+        .as_deref()
+        .map(str::trim)
+        .filter(|agent| !agent.is_empty())
+    {
+        turn.agent.name = AgentName::new(agent);
+    }
+    Ok(turn.agent)
 }
 
 pub(in crate::compat) async fn load_message(

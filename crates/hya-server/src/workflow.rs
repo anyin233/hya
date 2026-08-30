@@ -36,7 +36,7 @@ pub(crate) fn compat_router() -> Router<ServerState> {
 //
 /// `None` means the command belongs to the existing parent-model path. A
 /// recognized Workflow command is admitted as a normal command transcript row,
-/// dispatched through the control port, and completed with a system result row;
+/// dispatched through the control port, and completed with a visible assistant result row;
 /// no parent-model run is started.
 //
 /// # Errors
@@ -71,14 +71,14 @@ pub(crate) async fn intercept_slash(
                 || error.message.clone(),
                 |code| format!("{code}: {}", error.message),
             );
-            st.engine.inject_system_message(session, message).await?;
+            st.engine.inject_assistant_message(session, message).await?;
             return Err(error);
         }
     };
     let result_text = serde_json::to_string(&result)
         .map_err(|error| ApiError::internal(format!("encode Workflow result: {error}")))?;
     st.engine
-        .inject_system_message(session, result_text)
+        .inject_assistant_message(session, result_text)
         .await?;
     Ok(Some(result))
 }

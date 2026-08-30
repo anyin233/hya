@@ -75,6 +75,13 @@ pub(in crate::compat) fn list(workdir: &Path) -> Vec<CommandInfo> {
             vec!["$ARGUMENTS"],
             None,
         ),
+        command_info(
+            "workflow",
+            "inspect or run workflows",
+            "/workflow $ARGUMENTS".to_string(),
+            vec!["$ARGUMENTS"],
+            None,
+        ),
     ];
     upsert_commands(
         &mut commands,

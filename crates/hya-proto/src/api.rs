@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::ids::{MessageId, SessionId};
 use crate::message::FinishReason;
+use crate::model::ModelRef;
 
 /// Body for `POST` create-session: who runs, where, and optional parent link.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -46,6 +47,45 @@ pub struct CommandRequest {
     /// Optional full text to store if the client already composed the message body.
     #[serde(default)]
     pub text: Option<String>,
+    /// Optional model selected by the client for this command turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Optional reasoning variant selected for `model`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub variant: Option<String>,
+}
+
+impl CommandRequest {
+    /// Combine the optional model and top-level variant into the runtime model reference.
+    #[must_use]
+    pub fn model_ref(&self) -> Option<ModelRef> {
+        let model = self
+            .model
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())?;
+        let Some(variant) = self
+            .variant
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            return Some(ModelRef::new(model));
+        };
+        let base = model.rsplit_once('#').map_or(model, |(base, _)| base);
+        Some(ModelRef::new(format!("{base}#{variant}")))
+    }
+}
+
+/// Client-selected model identity for a synthetic shell turn.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ShellModelRequest {
+    /// Provider identifier from the client's active model selection.
+    #[serde(rename = "providerID")]
+    pub provider_id: String,
+    /// Provider-local model identifier from the client's active selection.
+    #[serde(rename = "modelID")]
+    pub model_id: String,
 }
 
 /// Body for a direct shell turn (no model round; synthetic tool call).
@@ -53,6 +93,26 @@ pub struct CommandRequest {
 pub struct ShellRequest {
     /// Shell command line to run via the builtin `shell` tool.
     pub command: String,
+    /// Optional Agent selected by the interactive client for message attribution.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+    /// Optional model selected by the interactive client for Session continuity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<ShellModelRequest>,
+}
+
+impl ShellRequest {
+    /// Convert a complete, non-empty client model selection into a runtime model reference.
+    #[must_use]
+    pub fn model_ref(&self) -> Option<ModelRef> {
+        let model = self.model.as_ref()?;
+        let provider = model.provider_id.trim();
+        let model_id = model.model_id.trim();
+        if provider.is_empty() || model_id.is_empty() {
+            return None;
+        }
+        Some(ModelRef::new(format!("{provider}/{model_id}")))
+    }
 }
 
 /// Result of a completed prompt or command turn (native API).

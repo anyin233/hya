@@ -1,7 +1,7 @@
 use hya_proto::{
     Message, MessageProjection, ModelRef, Part, PartId, PartProjection, Projection, Role,
 };
-use hya_provider::CompletionRequest;
+use hya_provider::{CompletionRequest, ReasoningEffort};
 use serde_json::Value;
 
 use crate::engine::AgentSpec;
@@ -42,6 +42,7 @@ pub(super) fn request_from_messages(
     resources: &CompiledResourceView,
 ) -> CompletionRequest {
     let model = active_model(agent, projection);
+    let reasoning = reasoning_for_model(&model, agent.reasoning);
     CompletionRequest {
         tools: filtered_tool_schemas(resources, &model),
         model,
@@ -49,9 +50,21 @@ pub(super) fn request_from_messages(
         messages,
         temperature: None,
         max_output_tokens: None,
-        reasoning: agent.reasoning,
+        reasoning,
         headers: Default::default(),
     }
+}
+
+/// Resolve an explicit model-ref variant before the Agent's configured default.
+pub(super) fn reasoning_for_model(
+    model: &ModelRef,
+    fallback: Option<ReasoningEffort>,
+) -> Option<ReasoningEffort> {
+    model
+        .as_str()
+        .rsplit_once('#')
+        .and_then(|(_, variant)| ReasoningEffort::parse(variant))
+        .or(fallback)
 }
 
 fn filtered_tool_schemas(
@@ -66,10 +79,12 @@ fn filtered_tool_schemas(
 }
 
 fn include_tool(id: &str, model: &str) -> bool {
-    let use_patch = model.contains("gpt-") && !model.contains("oss") && !model.contains("gpt-4");
+    let gpt_model = model.contains("gpt-");
+    let legacy_gpt = gpt_model && (model.contains("oss") || model.contains("gpt-4"));
+    let patch_only = gpt_model && !legacy_gpt;
     match id {
-        "apply_patch" => use_patch,
-        "edit" | "write" => !use_patch,
+        "apply_patch" => !legacy_gpt,
+        "edit" | "write" => !patch_only,
         _ => true,
     }
 }
@@ -134,6 +149,7 @@ fn map_parts(parts: &[PartProjection]) -> Vec<Part> {
                 id,
                 text,
                 provider_data,
+                ..
             } => Part::Reasoning {
                 id: *id,
                 text: text.clone(),
@@ -152,4 +168,58 @@ fn map_parts(parts: &[PartProjection]) -> Vec<Part> {
             },
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeSet;
+
+    use hya_tool::ToolRegistry;
+
+    /// Pin explicit overrides and unchanged request effort for missing or invalid variants.
+    #[test]
+    fn model_variant_overrides_or_preserves_request_reasoning() {
+        let original = Some(ReasoningEffort::Low);
+
+        assert_eq!(
+            reasoning_for_model(&ModelRef::new("fallback#high"), original),
+            Some(ReasoningEffort::High),
+        );
+        assert_eq!(
+            reasoning_for_model(&ModelRef::new("fallback"), original),
+            original,
+        );
+        assert_eq!(
+            reasoning_for_model(&ModelRef::new("fallback#unknown"), original),
+            original,
+        );
+    }
+
+    #[test]
+    fn gpt_and_glm_advertise_exact_builtin_schema_sets() {
+        let builtins = ToolRegistry::builtins()
+            .schemas()
+            .into_iter()
+            .map(|schema| schema.name.as_str().to_string())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(builtins.len(), 28);
+
+        let gpt = builtins
+            .iter()
+            .filter(|name| include_tool(name, "12th-oai/gpt-5.6-sol"))
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        assert_eq!(gpt.len(), 26);
+        assert!(gpt.contains("apply_patch"));
+        assert!(!gpt.contains("write"));
+        assert!(!gpt.contains("edit"));
+
+        let glm = builtins
+            .iter()
+            .filter(|name| include_tool(name, "12th-oai/glm-5.3"))
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        assert_eq!(glm, builtins);
+    }
 }

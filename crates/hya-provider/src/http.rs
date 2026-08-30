@@ -744,7 +744,7 @@ impl Provider for HttpProvider {
             req.model = ModelRef::new(model_id);
         }
         let body = self.protocol.encode(&req)?;
-        let decoder = self.protocol.decoder(session, message);
+        let decoder = self.protocol.decoder(session, message, req.reasoning);
         let url = match &self.google_base {
             Some(base) => format!(
                 "{base}/v1beta/models/{}:streamGenerateContent?alt=sse",

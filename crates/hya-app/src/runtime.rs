@@ -2920,29 +2920,39 @@ impl ForegroundTransientAdmissionOwner {
                 return;
             }
         }
-        self.debit_acquired = match self.engine.governor() {
-            Some(governor) => match governor.try_reserve_operation(
+        self.debit_acquired = match self
+            .engine
+            .try_reserve_spawn_operation(
                 self.root,
                 self.operation_id(),
                 u64::from(self.cardinality),
                 self.cancel.clone(),
-            ) {
-                OperationReservation::Acquired => true,
-                OperationReservation::Overloaded => {
-                    self.fail_after_claim("spawn admission overloaded", SpawnError::Overloaded)
-                        .await;
-                    return;
-                }
-                OperationReservation::Existing | OperationReservation::Conflict => {
-                    self.fail_after_claim(
-                        "spawn admission operation already handled",
-                        SpawnError::OperationAlreadyHandled,
-                    )
+            )
+            .await
+        {
+            Ok(Some(OperationReservation::Acquired)) => true,
+            Ok(Some(OperationReservation::Overloaded)) => {
+                self.fail_after_claim("spawn admission overloaded", SpawnError::Overloaded)
                     .await;
-                    return;
-                }
-            },
-            None => false,
+                return;
+            }
+            Ok(Some(OperationReservation::Existing | OperationReservation::Conflict)) => {
+                self.fail_after_claim(
+                    "spawn admission operation already handled",
+                    SpawnError::OperationAlreadyHandled,
+                )
+                .await;
+                return;
+            }
+            Ok(None) => false,
+            Err(_) => {
+                self.fail_after_claim(
+                    "spawn admission release reconciliation failed",
+                    SpawnError::Unavailable,
+                )
+                .await;
+                return;
+            }
         };
 
         let context = AdmissionLaunchResolutionCtx {

@@ -14,7 +14,7 @@ use http_body_util::BodyExt;
 use hya_core::{AgentSpec, EventBus, SessionEngine};
 use hya_proto::api::{CreateSessionResponse, PromptResponse};
 use hya_proto::{
-    AgentName, FinishReason, ModelRef, PartProjection, Projection, Role, ToolPartState,
+    AgentName, Event, FinishReason, ModelRef, PartProjection, Projection, Role, ToolPartState,
 };
 use hya_provider::{FakeProvider, ProviderRouter};
 use hya_server::{AppState, router};
@@ -145,6 +145,104 @@ async fn shell_endpoint_runs_command_and_records_tool_result() {
                 state: ToolPartState::Completed { output, .. },
                 ..
             } if name.as_str() == "shell" && output["output"].as_str().unwrap().contains("server-shell-ok")
+        )
+    }));
+}
+
+/// Native shell requests must apply the client's selected Agent and model.
+#[tokio::test]
+async fn native_shell_honors_selected_agent_and_model() {
+    let dir = tempdir();
+    let app = router(state(dir.clone()).await);
+
+    let create = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/sessions")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "agent": "plan",
+                        "model": "fake",
+                        "workdir": dir.to_string_lossy(),
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let created: CreateSessionResponse = serde_json::from_value(body_json(create).await).unwrap();
+    let session = created.session.to_string();
+
+    let shell = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/sessions/{session}/shell"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({
+                        "agent": "plan",
+                        "model": {
+                            "providerID": "test-provider",
+                            "modelID": "shell-selected",
+                        },
+                        "command": "printf native-shell-selection",
+                    })
+                    .to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(shell.status(), StatusCode::OK);
+    let response: PromptResponse = serde_json::from_value(body_json(shell).await).unwrap();
+    assert_eq!(response.finish, FinishReason::Stop);
+
+    let events = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!("/sessions/{session}/events"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let envs: Vec<hya_proto::Envelope> = serde_json::from_value(body_json(events).await).unwrap();
+    let projection = Projection::from_events(&envs);
+
+    assert_eq!(projection.session.agent, Some(AgentName::new("plan")));
+    assert_eq!(
+        projection.session.model,
+        Some(ModelRef::new("test-provider/shell-selected"))
+    );
+    assert!(envs.iter().any(|envelope| {
+        matches!(
+            &envelope.event,
+            Event::ModelSwitched { model, .. }
+                if *model == ModelRef::new("test-provider/shell-selected")
+        )
+    }));
+
+    let assistant = projection
+        .session
+        .messages
+        .iter()
+        .find(|message| message.id == response.message)
+        .expect("assistant shell message");
+    assert!(assistant.parts.iter().any(|part| {
+        matches!(
+            part,
+            PartProjection::Tool {
+                name,
+                state: ToolPartState::Completed { output, .. },
+                ..
+            } if name.as_str() == "shell" && output["output"].as_str().unwrap().contains("native-shell-selection")
         )
     }));
 }

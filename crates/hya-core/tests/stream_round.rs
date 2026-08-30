@@ -258,6 +258,7 @@ async fn forked_reasoning_provider_data_reaches_next_request() {
                 parts: vec![PartProjection::Reasoning {
                     id: PartId::new(),
                     text: "visible summary".to_string(),
+                    reason: Some("high".to_string()),
                     provider_data: Some(provider_data.clone()),
                 }],
             }],
@@ -274,6 +275,7 @@ async fn forked_reasoning_provider_data_reaches_next_request() {
     let forked = Projection::from_events(&replay);
     let PartProjection::Reasoning {
         text,
+        reason,
         provider_data: forked_data,
         ..
     } = &forked.session.messages[0].parts[0]
@@ -281,6 +283,7 @@ async fn forked_reasoning_provider_data_reaches_next_request() {
         panic!("forked reasoning part");
     };
     assert_eq!(text, "visible summary");
+    assert_eq!(reason.as_deref(), Some("high"));
     assert_eq!(forked_data.as_ref(), Some(&provider_data));
 
     engine

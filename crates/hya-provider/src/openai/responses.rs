@@ -3,7 +3,7 @@ use serde_json::{Value, json};
 
 use super::OpenAiResponsesDecoder;
 use crate::wire::{tool_input, tool_result};
-use crate::{CompletionRequest, Decoder, Protocol, ProviderError};
+use crate::{CompletionRequest, Decoder, Protocol, ProviderError, ReasoningEffort};
 
 /// System-message prefix written by the engine after a successful
 /// `POST /responses/compact`. The JSON array that follows is the canonical
@@ -25,10 +25,13 @@ impl Protocol for GrokBuildProtocol {
         Ok(body)
     }
 
-    fn decoder(&self, session: SessionId, message: MessageId) -> Box<dyn Decoder> {
-        Box::new(OpenAiResponsesDecoder::new_requiring_typed_terminal(
-            session, message,
-        ))
+    fn decoder(
+        &self,
+        session: SessionId,
+        message: MessageId,
+        reasoning: Option<ReasoningEffort>,
+    ) -> Box<dyn Decoder> {
+        Box::new(OpenAiResponsesDecoder::new(session, message, reasoning))
     }
 }
 
@@ -72,8 +75,13 @@ impl Protocol for OpenAiResponsesProtocol {
         Ok(body)
     }
 
-    fn decoder(&self, session: SessionId, message: MessageId) -> Box<dyn Decoder> {
-        Box::new(OpenAiResponsesDecoder::new(session, message))
+    fn decoder(
+        &self,
+        session: SessionId,
+        message: MessageId,
+        reasoning: Option<ReasoningEffort>,
+    ) -> Box<dyn Decoder> {
+        Box::new(OpenAiResponsesDecoder::new(session, message, reasoning))
     }
 }
 

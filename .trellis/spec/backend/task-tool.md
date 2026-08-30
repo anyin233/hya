@@ -343,33 +343,38 @@ coverage: `operation_debit_and_release_are_exactly_once`
 `admitted_background_transient_releases_its_exact_debit_on_completion`
 (`crates/hya-app/tests/spawn_admission.rs`).
 
-### 3. Known defect: the journal-finalize / governor-release window
-
-**Classification: real defect, user-visible, deliberately unfixed.**
+### 3. Reconciled journal-finalize / governor-release window
 
 A member task finalizes its admission row to `Completed + logical_released` via
-`store().finalize_admission_members(...)`, which bypasses hya-core's
-governor-releasing `finalize_spawn_admission`. The owning
-`ForegroundTransientAdmissionPreparation` returns the in-memory debit only later,
-in `release_transient_operation`, after draining completions, quiescing handles,
-and projecting the evidence envelope.
+`store().finalize_admission_members(...)`. The owning foreground transient task
+can return the process-local governor debit later, after it drains completions,
+quiesces handles, and projects the evidence envelope. Durable state can
+therefore become visible before the in-memory refund.
 
-Inside that window the durable journal reports capacity as logically released
-while the governor still holds the debit, so a concurrent spawn on the same root
-is rejected `Overloaded` against capacity that is logically free. Measured at
-**191/200 iterations** at `per_run_budget = 1` (four runs of 50: 49, 48, 47, 47);
-in every run the `Overloaded` count equalled the count of samples where the
-governor still held the debit at the instant the journal read terminal.
+`SessionEngine::try_reserve_spawn_operation` closes this user-visible race at
+the admission boundary. Its first reservation attempt remains allocation-free.
+Only when that attempt reports `Overloaded` does it load
+`SessionStore::terminal_released_operations_for_root`, idempotently release
+those operation debits, and retry the exact reservation once. The store query
+returns an operation only when every declared batch member exists and is
+terminal and at least one started row carries `logical_released`.
 
-Reproduction: the `#[ignore]`d
-`released_capacity_is_visible_to_a_concurrent_spawn_on_the_same_root`
-(`crates/hya-app/tests/spawn_admission.rs`). It asserts the intended invariant,
-so it fails today; un-ignore it in the task that fixes this.
+Do not release unconditionally at member-finalize time. The governor records
+the batch `cardinality` as one operation debit, so releasing after one member
+would hand back capacity while sibling members still run. Whole-operation
+reconciliation keeps that invariant and makes already-released durable
+capacity available to a concurrent same-root spawn without a false
+`Overloaded` result.
 
-**Do not fix it by releasing at member-finalize time.** The debit is
-`cardinality` units released as one unit by the owner, so a per-member early
-release hands back capacity for members still running in a multi-member batch.
-The remedy is a design question and belongs to its own task.
+Regression coverage:
+
+- `terminal_release_reconciliation_waits_for_the_whole_batch`
+  (`crates/hya-store/tests/admission.rs`) proves one terminal member cannot
+  expose a two-member operation for reconciliation.
+- `released_capacity_is_visible_to_a_concurrent_spawn_on_the_same_root`
+  (`crates/hya-app/tests/spawn_admission.rs`) runs unignored and proves a
+  capacity-one concurrent spawn succeeds once the journal reports the prior
+  operation terminal and logically released.
 
 ### 4. Invariant: spawn-intake liveness
 

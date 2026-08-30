@@ -1311,6 +1311,42 @@ impl SessionStore {
         Ok(records)
     }
 
+    /// Load whole operations whose terminal journal rows prove a prior governor debit release.
+    ///
+    /// `root_session` selects one run budget. The returned operation IDs are safe
+    /// to pass to the process-local governor's idempotent release path because
+    /// every declared batch member is terminal and at least one started member
+    /// set the durable logical-release marker.
+    pub async fn terminal_released_operations_for_root(
+        &self,
+        root_session: SessionId,
+    ) -> Result<Vec<OperationId>, StoreError> {
+        let rows = sqlx::query(
+            "SELECT operation_id \
+             FROM admission_journal \
+             WHERE root_session_id = ? \
+             GROUP BY operation_id \
+             HAVING COUNT(*) = MAX(batch_size) \
+                AND SUM(CASE WHEN state IN ('completed', 'cancelled', 'aborted') \
+                             THEN 0 ELSE 1 END) = 0 \
+                AND MAX(logical_released) = 1 \
+             ORDER BY MIN(created_at), operation_id",
+        )
+        .bind(root_session.storage_key())
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                let operation_id: Vec<u8> = row.try_get("operation_id")?;
+                uuid::Uuid::from_slice(&operation_id)
+                    .map(OperationId::from_storage_uuid)
+                    .map_err(|error| {
+                        StoreError::AdmissionData(format!("invalid operation id: {error}"))
+                    })
+            })
+            .collect()
+    }
+
     /// Non-actor rows still `accepted` or `started` for a root session (root-turn cleanup).
     pub async fn nonterminal_admissions_for_root(
         &self,

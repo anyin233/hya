@@ -678,6 +678,14 @@ impl SessionEngine {
         Ok(self.store.replay(session).await?)
     }
 
+    /// Return whether a Session has a durable event log.
+    ///
+    /// # Errors
+    /// Returns store failures as [`CoreError::Store`].
+    pub async fn session_exists(&self, session: SessionId) -> Result<bool, CoreError> {
+        Ok(self.store.session_exists(session).await?)
+    }
+
     /// Fold the session log into a projection.
     ///
     /// # Errors

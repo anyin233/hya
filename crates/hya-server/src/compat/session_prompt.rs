@@ -114,8 +114,9 @@ async fn prompt(
             super::reference::external_directories_at(&st, &turn.agent.workdir).await;
         let cancel = run.token();
         std::mem::drop(tokio::spawn(async move {
-            let _guard = run;
-            let _ = engine
+            let guard = run;
+            super::session_prompt_async::publish_session_status(&engine, session, "busy").await;
+            let result = engine
                 .run_turn_with_external_dirs_and_guidance(
                     session,
                     &turn.agent,
@@ -124,6 +125,17 @@ async fn prompt(
                     turn.guidance,
                 )
                 .await;
+            if let Err(error) = result {
+                super::session_prompt_async::publish_prompt_error(
+                    &engine,
+                    session,
+                    "prompt_async",
+                    error.to_string(),
+                )
+                .await;
+            }
+            drop(guard);
+            super::session_prompt_async::publish_session_status(&engine, session, "idle").await;
         }));
     }
     Ok(Json(PromptAdmittedResponse {
@@ -153,11 +165,15 @@ async fn command(
     let run = st
         .start_run(session)
         .ok_or_else(|| ApiError::conflict("session busy"))?;
+    if let Some(model) = req.model_ref() {
+        st.engine.switch_model(session, model).await?;
+    }
     let workdir = super::reference::session_workdir(&st, session).await;
     let CommandRequest {
         command,
         arguments,
         text,
+        ..
     } = req;
     let text = text.unwrap_or_else(|| {
         super::session_legacy::command_prompt_text(&workdir, &command, &arguments)
@@ -192,9 +208,10 @@ async fn shell(
     let run = st
         .start_run(session)
         .ok_or_else(|| ApiError::conflict("session busy"))?;
+    let agent = super::session_legacy::shell_agent(&st, session, &req).await?;
     let (message, _finish) = st
         .engine
-        .run_shell(session, &st.agent, req.command, run.token())
+        .run_shell(session, &agent, req.command, run.token())
         .await?;
     let data = super::session_legacy::load_message(&st, session, message).await?;
     Ok(Json(MessageResponse { data }))

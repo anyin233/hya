@@ -436,9 +436,14 @@ export function Autocomplete(props: {
 
   const commands = createMemo((): AutocompleteOption[] => {
     const results: AutocompleteOption[] = [...slashes()]
+    const localNames = new Set<string>()
+    for (const localCommand of results) {
+      localNames.add(localCommand.display.trim().slice(1))
+      for (const alias of localCommand.aliases ?? []) localNames.add(alias.trim().slice(1))
+    }
 
     for (const serverCommand of sync.data.command) {
-      if (serverCommand.source === "skill") continue
+      if (serverCommand.source === "skill" || localNames.has(serverCommand.name)) continue
       const label = serverCommand.source === "mcp" ? ":mcp" : ""
       results.push({
         display: "/" + serverCommand.name + label,
@@ -489,6 +494,10 @@ export function Autocomplete(props: {
       return prev
     }
 
+    const exactValue = `${store.visible}${removeLineRange(searchValue)}`
+    /** Return whether a displayed command or alias exactly owns the current query. */
+    const isExactCommand = (option: AutocompleteOption) =>
+      (option.value ?? option.display).trimEnd() === exactValue || option.aliases?.includes(exactValue) === true
     const fuzziedNonFiles = fuzzysort
       .go(removeLineRange(searchValue), nonFileOptions, {
         keys: [
@@ -500,6 +509,7 @@ export function Autocomplete(props: {
         threshold: store.visible === "@" ? 0.5 : 0,
         limit: 10,
         scoreFn: (objResults) => {
+          if (isExactCommand(objResults.obj)) return Number.MAX_SAFE_INTEGER
           const displayResult = objResults[0]
           let score = objResults.score
           if (displayResult && displayResult.target.startsWith(store.visible + searchValue)) {
@@ -510,6 +520,9 @@ export function Autocomplete(props: {
         },
       })
       .map((arr) => arr.obj)
+
+    // Exact command identities must survive fuzzysort's limit and stay ahead of fuzzy prefixes.
+    fuzziedNonFiles.sort((a, b) => Number(isExactCommand(b)) - Number(isExactCommand(a)))
 
     return [...fuzziedNonFiles, ...fileOptions].slice(0, 10)
   })

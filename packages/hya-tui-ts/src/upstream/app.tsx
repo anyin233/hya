@@ -565,7 +565,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         category: "Agent",
         slashName: "models",
         // Bias /mo toward /models over /move without changing global fuzzy scoring.
-        slashAliases: ["mo"],
+        slashAliases: ["mo", "model"],
         run: () => {
           dialog.replace(() => <DialogModel />)
         },
@@ -647,6 +647,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         category: "Agent",
         hidden: local.model.variant.list().length === 0,
         slashName: "variants",
+        slashAliases: ["think"],
         run: () => {
           if (local.model.variant.list().length === 0) {
             return toast.show({

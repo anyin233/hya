@@ -82,6 +82,15 @@ async fn prompt(
                 turn.guidance,
             )
             .await;
+        if let Err(error) = &result {
+            super::session_prompt_async::publish_prompt_error(
+                &st.engine,
+                session,
+                "prompt",
+                error.to_string(),
+            )
+            .await;
+        }
         drop(run);
         super::session_prompt_async::publish_session_status(&st.engine, session, "idle").await;
         result?;

@@ -41,7 +41,11 @@ pub(super) async fn fork(
                 .model
                 .clone()
                 .unwrap_or_else(|| st.agent.model.clone()),
-            workdir: st.agent.workdir.to_string_lossy().into_owned(),
+            workdir: projection
+                .session
+                .workdir
+                .clone()
+                .unwrap_or_else(|| st.agent.workdir.to_string_lossy().into_owned()),
         })
         .await?;
     // Record provenance before any message is copied. Without this a fork is an

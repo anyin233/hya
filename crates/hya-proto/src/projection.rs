@@ -123,12 +123,15 @@ pub enum PartProjection {
         /// Full text so far.
         text: String,
     },
-    /// Accumulated reasoning plus optional provider blob.
+    /// Accumulated reasoning plus optional provider blob and requested effort.
     Reasoning {
         /// Part id.
         id: PartId,
         /// Full reasoning text so far.
         text: String,
+        /// Requested reasoning effort, when the originating request supplied one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
         /// Opaque provider state to round-trip on the next request.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         provider_data: Option<serde_json::Value>,
@@ -823,12 +826,18 @@ impl Projection {
                     *text = replacement.clone();
                 }
             }
-            Event::ReasoningStart { message, part, .. } => push_part(
+            Event::ReasoningStart {
+                message,
+                part,
+                reason,
+                ..
+            } => push_part(
                 self,
                 *message,
                 PartProjection::Reasoning {
                     id: *part,
                     text: String::new(),
+                    reason: reason.clone(),
                     provider_data: None,
                 },
             ),

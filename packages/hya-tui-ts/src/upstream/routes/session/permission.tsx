@@ -371,12 +371,17 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
               }
             }
 
+            const tool =
+              permission === "tool"
+                ? props.request.patterns?.find((pattern) => pattern.trim().length > 0) ?? permission
+                : permission
+
             return {
               icon: "⚙",
-              title: `Call tool ${permission}`,
+              title: `Call tool ${tool}`,
               body: (
                 <box paddingLeft={1}>
-                  <text fg={theme.textMuted}>{"Tool: " + permission}</text>
+                  <text fg={theme.textMuted}>{"Tool: " + tool}</text>
                 </box>
               ),
             }
