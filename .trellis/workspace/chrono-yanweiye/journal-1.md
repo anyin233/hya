@@ -675,3 +675,25 @@ Recovered Argus work and shipped the 0.36.0 Workflow compiler, governed runtime,
 ### Status
 
 [OK] **Completed**
+
+
+## Session 19: Complete agent live validation
+
+**Date**: 2026-08-30
+**Task**: Complete agent live validation
+**Branch**: `main`
+
+### Summary
+
+Validated Hya end to end at release 0.36.6, repaired provider, Session, workflow, admission, fallback, and TUI cache defects, preserved GPT live and SWE-Bench diagnostic evidence, and finalized the user-approved GLM waiver.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b2509499` | (see git log) |
+| `b0c6317f` | (see git log) |
+
+### Status
+
+[OK] **Completed**
