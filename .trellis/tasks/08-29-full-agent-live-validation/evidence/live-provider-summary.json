@@ -1,0 +1,48 @@
+{
+  "captured_at": "2026-08-29T16:33:41Z",
+  "source": "/home/yanweiye/.local/state/hya-full-agent-live-validation-rk04x418/relay/live.jsonl",
+  "forward_cap": 2000,
+  "last_ordinal": 706,
+  "records": 1412,
+  "forward_attempts": 706,
+  "terminal_status_counts": {
+    "200": 686,
+    "400": 5,
+    "429": 1,
+    "503": 14
+  },
+  "reasoning_effort_forward_counts": {
+    "unset": 4,
+    "low": 35,
+    "high": 667
+  },
+  "security": {
+    "headers_stored": false,
+    "request_bodies_stored": false,
+    "response_bodies_stored": false,
+    "query_strings_stored": false,
+    "metadata_mode": "0600",
+    "credential_in_process_argv": false,
+    "credential_in_process_environment": false
+  },
+  "recent_live_routes": [
+    {"ordinal": 700, "reasoning_effort": "high", "status": 200, "scenario": "GPT high reasoning"},
+    {"ordinal": 701, "reasoning_effort": "high", "status": 200, "scenario": "GPT recovery after rejected permission"},
+    {"ordinal": 702, "reasoning_effort": "high", "status": 200, "scenario": "GPT response to accidental history-appended prompt; retained as evidence, not counted as a planned scenario"},
+    {"ordinal": 703, "reasoning_effort": "high", "status": 503, "scenario": "GLM health retry attempt 1"},
+    {"ordinal": 704, "reasoning_effort": "high", "status": 503, "scenario": "provider-layer retry 2 for the same GLM Turn"},
+    {"ordinal": 705, "reasoning_effort": "high", "status": 503, "scenario": "provider-layer retry 3 for the same GLM Turn"},
+    {"ordinal": 706, "reasoning_effort": "high", "status": 200, "scenario": "same-Session GPT recovery after GLM upstream outage"}
+  ],
+  "schema_observation": {
+    "required_custom_mcp_tool": "mcp__echo__ping",
+    "observed_union_only": [
+      "announce", "apply_patch", "ask_user", "bash", "channels", "edit", "find", "glob", "grep", "invalid", "join", "leave", "list_agents", "ls", "lsp", "plan_exit", "question", "read", "remember", "roster", "send", "shell", "skill", "task", "todowrite", "webfetch", "websearch", "workflow", "write"
+    ],
+    "limitation": "This union is not a per-model schema snapshot and does not by itself prove GPT=26 or GLM=28. Exact canonical and hidden-alias behavior is covered by the deterministic runtime/tool-filtering tests; route-specific live schema proof must use correlated local-only relay records."
+  },
+  "classification": {
+    "glm_latest_failure": "upstream returned HTTP 503 on all three provider-layer forwards; Hya published assistant finish:error, returned Session to idle, and recovered on ordinal 706",
+    "relay_cap_exhausted": false
+  }
+}

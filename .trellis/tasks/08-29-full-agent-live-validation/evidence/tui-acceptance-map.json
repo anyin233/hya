@@ -1,0 +1,427 @@
+{
+  "commands": {
+    "/agents": {
+      "proof": [
+        "tui-live-matrix.json automated_local_command_matrix"
+      ],
+      "status": "passed"
+    },
+    "/clear": {
+      "proof": [
+        "tui-live-matrix.json manual_local_controls"
+      ],
+      "status": "passed"
+    },
+    "/compact": {
+      "proof": [
+        "tui-live-matrix.json manual_local_controls"
+      ],
+      "status": "passed"
+    },
+    "/continue": {
+      "proof": [
+        "tui-live-matrix.json automated_local_command_matrix"
+      ],
+      "status": "passed"
+    },
+    "/copy": {
+      "proof": [
+        "tui-live-matrix.json manual_local_controls"
+      ],
+      "status": "passed"
+    },
+    "/diff": {
+      "proof": [
+        "tui-live-matrix.json automated_local_command_matrix"
+      ],
+      "status": "passed"
+    },
+    "/editor": {
+      "proof": [
+        "tui-live-matrix.json manual_local_controls"
+      ],
+      "status": "passed"
+    },
+    "/exit": {
+      "proof": [
+        "tui-completion.json real Herdr completion pane"
+      ],
+      "status": "passed"
+    },
+    "/export": {
+      "proof": [
+        "tui-live-matrix.json automated_local_command_matrix"
+      ],
+      "status": "passed"
+    },
+    "/fork": {
+      "proof": [
+        "tui-live-matrix.json automated_local_command_matrix"
+      ],
+      "status": "passed"
+    },
+    "/help": {
+      "proof": [
+        "tui-live-matrix.json automated_local_command_matrix"
+      ],
+      "status": "passed"
+    },
+    "/init": {
+      "proof": [
+        "tui-completion.json real Herdr completion pane"
+      ],
+      "status": "passed"
+    },
+    "/mcps": {
+      "proof": [
+        "tui-live-matrix.json automated_local_command_matrix"
+      ],
+      "status": "passed"
+    },
+    "/mo": {
+      "proof": [
+        "tui-live-matrix.json automated_local_command_matrix"
+      ],
+      "status": "passed"
+    },
+    "/model": {
+      "proof": [
+        "tui-live-matrix.json automated_local_command_matrix"
+      ],
+      "status": "passed"
+    },
+    "/models": {
+      "proof": [
+        "tui-live-matrix.json automated_local_command_matrix"
+      ],
+      "status": "passed"
+    },
+    "/new": {
+      "proof": [
+        "tui-live-matrix.json manual_local_controls"
+      ],
+      "status": "passed"
+    },
+    "/q": {
+      "proof": [
+        "tui-completion.json real Herdr completion pane"
+      ],
+      "status": "passed"
+    },
+    "/quit": {
+      "proof": [
+        "tui-completion.json real Herdr completion pane"
+      ],
+      "status": "passed"
+    },
+    "/redo": {
+      "proof": [
+        "tui-completion.json real Herdr completion pane"
+      ],
+      "status": "passed"
+    },
+    "/rename": {
+      "proof": [
+        "tui-live-matrix.json automated_local_command_matrix"
+      ],
+      "status": "passed"
+    },
+    "/resume": {
+      "proof": [
+        "tui-live-matrix.json automated_local_command_matrix"
+      ],
+      "status": "passed"
+    },
+    "/review": {
+      "proof": [
+        "tui-completion.json real Herdr completion pane"
+      ],
+      "status": "passed"
+    },
+    "/sessions": {
+      "proof": [
+        "tui-live-matrix.json automated_local_command_matrix"
+      ],
+      "status": "passed"
+    },
+    "/skills": {
+      "proof": [
+        "tui-live-matrix.json automated_local_command_matrix"
+      ],
+      "status": "passed"
+    },
+    "/status": {
+      "proof": [
+        "tui-live-matrix.json automated_local_command_matrix"
+      ],
+      "status": "passed"
+    },
+    "/summarize": {
+      "proof": [
+        "tui-live-matrix.json manual_local_controls"
+      ],
+      "status": "passed"
+    },
+    "/themes": {
+      "proof": [
+        "tui-live-matrix.json automated_local_command_matrix"
+      ],
+      "status": "passed"
+    },
+    "/think": {
+      "proof": [
+        "tui-live-matrix.json automated_local_command_matrix"
+      ],
+      "status": "passed"
+    },
+    "/thinking": {
+      "proof": [
+        "tui-live-matrix.json automated_local_command_matrix"
+      ],
+      "status": "passed"
+    },
+    "/timeline": {
+      "proof": [
+        "tui-live-matrix.json automated_local_command_matrix",
+        "tui-live-matrix.json manual_local_controls"
+      ],
+      "status": "passed"
+    },
+    "/timestamps": {
+      "proof": [
+        "tui-live-matrix.json automated_local_command_matrix"
+      ],
+      "status": "passed"
+    },
+    "/toggle-thinking": {
+      "proof": [
+        "tui-live-matrix.json automated_local_command_matrix"
+      ],
+      "status": "passed"
+    },
+    "/toggle-timestamps": {
+      "proof": [
+        "tui-live-matrix.json automated_local_command_matrix"
+      ],
+      "status": "passed"
+    },
+    "/undo": {
+      "proof": [
+        "tui-live-matrix.json manual_local_controls"
+      ],
+      "status": "passed"
+    },
+    "/variants": {
+      "proof": [
+        "tui-live-matrix.json automated_local_command_matrix"
+      ],
+      "status": "passed"
+    },
+    "/workflow": {
+      "proof": [
+        "tui-live-matrix.json workflow_and_subagent command Events"
+      ],
+      "status": "passed"
+    }
+  },
+  "current_source_version": "0.36.4",
+  "missing_commands": [],
+  "real_herdr_panes": {
+    "completion": "wA:pHD (closed)",
+    "exit_aliases": "wA:pHE (closed)",
+    "offline": "wA:pHF (closed)",
+    "original": "wA:pH3 (closed)",
+    "question": "wA:pHG (closed)"
+  },
+  "required_backend_commands": [
+    "/init",
+    "/model",
+    "/review",
+    "/think",
+    "/workflow"
+  ],
+  "required_local_commands": [
+    "/agents",
+    "/clear",
+    "/compact",
+    "/continue",
+    "/copy",
+    "/diff",
+    "/editor",
+    "/exit",
+    "/export",
+    "/fork",
+    "/help",
+    "/mcps",
+    "/mo",
+    "/models",
+    "/new",
+    "/q",
+    "/quit",
+    "/redo",
+    "/rename",
+    "/resume",
+    "/sessions",
+    "/skills",
+    "/status",
+    "/summarize",
+    "/themes",
+    "/thinking",
+    "/timeline",
+    "/timestamps",
+    "/toggle-thinking",
+    "/toggle-timestamps",
+    "/undo",
+    "/variants"
+  ],
+  "states": {
+    "abort": {
+      "proof": [
+        "packages/hya-tui-ts/test/real-backend.test.ts running shell abort",
+        "packages/hya-tui-ts/src/upstream/component/prompt/index.tsx double-interrupt contract"
+      ],
+      "status": "passed"
+    },
+    "busy_idle_streaming_text": {
+      "proof": [
+        "ledger.jsonl P3.canonical-event-status-evidence",
+        "tui-live-matrix.json reasoning_and_streaming"
+      ],
+      "status": "passed"
+    },
+    "child_observation_input_isolation": {
+      "proof": [
+        "tui-live-matrix.json workflow_and_subagent"
+      ],
+      "status": "passed"
+    },
+    "composer_focus_and_multiline": {
+      "proof": [
+        "tui-live-matrix.json custom_resources multiline MCP arguments",
+        "pty-smoke.test.ts T3.4 multiline transport",
+        "tui-live-matrix.json owner_composer_restored_with_escape"
+      ],
+      "status": "passed"
+    },
+    "error_and_recovery": {
+      "proof": [
+        "tui-live-matrix.json live_models.glm and recovery",
+        "tui-live-matrix.json permission_and_recovery",
+        "pty-smoke command failure toast recovery"
+      ],
+      "status": "passed"
+    },
+    "exit_and_terminal_restoration": {
+      "proof": [
+        "tui-completion.json /exit /quit /q process-info results",
+        "pty-smoke.test.ts terminal restoration deadline"
+      ],
+      "status": "passed"
+    },
+    "keymap_only_palette": {
+      "proof": [
+        "tui-herdr-baseline.json Ctrl+P",
+        "tui-live-matrix.json manual_local_controls",
+        "pty-smoke.test.ts T3.4 resource exclusion"
+      ],
+      "status": "passed"
+    },
+    "loading": {
+      "proof": [
+        "packages/hya-tui-ts/src/upstream/component/startup-loading.tsx 500ms delayed Loading plugins/Finishing startup contract",
+        "packages/hya-tui-ts/test/startup-trace.test.ts",
+        "real Herdr startup-to-composer transitions in tui-herdr-baseline.json and tui-completion.json"
+      ],
+      "status": "passed"
+    },
+    "offline": {
+      "observed": "Build \u00b7 offline hya; deterministic dev-provider reply; zero live requests",
+      "proof": [
+        "tui-offline.json",
+        "tui-offline-visible.txt"
+      ],
+      "status": "passed"
+    },
+    "question": {
+      "observed": "Question Tool permission, Red/Blue choices, Blue answer, QUESTION_A29=Blue",
+      "proof": [
+        "tui-question.json",
+        "tui-question-visible.txt"
+      ],
+      "status": "passed"
+    },
+    "reasoning_stream_and_fold": {
+      "proof": [
+        "tui-live-matrix.json reasoning_and_streaming",
+        "/thinking and /toggle-thinking real-pane cases"
+      ],
+      "status": "passed"
+    },
+    "reconnect": {
+      "observed": "A real Herdr TUI retained its Session while the attached backend was absent. The global SSE stream failed on attempts 4-6, reconnected with HTTP 200 on attempt 7 after backend restart, and the same Session accepted and rendered a post-reconnect Turn.",
+      "proof": [
+        "tui-reconnect-summary.json",
+        "tui-reconnect-proxy.log",
+        "tui-reconnect-disconnected-visible.txt",
+        "tui-reconnect-recovered-visible.txt"
+      ],
+      "status": "passed"
+    },
+    "restart_persistence": {
+      "proof": [
+        "tui-live-matrix.json session.restart_and_resume_verified",
+        "tui-herdr-baseline.json model.json variant persistence"
+      ],
+      "status": "passed"
+    },
+    "scroll_and_transcript_stability": {
+      "proof": [
+        "tui-live-matrix.json /timeline and child observation",
+        "pty-smoke.test.ts multi-pane transcript contracts"
+      ],
+      "status": "passed"
+    },
+    "startup": {
+      "proof": [
+        "tui-herdr-baseline.json initial_surface",
+        "tui-completion-visible.txt current-source 0.36.4"
+      ],
+      "status": "passed"
+    },
+    "status_counters_and_usage": {
+      "proof": [
+        "tui-live-matrix.json visible Context/token/cost/status fields",
+        "tui-question-visible.txt and tui-offline-visible.txt"
+      ],
+      "status": "passed"
+    },
+    "toasts": {
+      "proof": [
+        "tui-live-matrix.json copy/editor failure toasts",
+        "pty-smoke.test.ts command error toast and recovery"
+      ],
+      "status": "passed"
+    },
+    "tool_cards_and_permissions": {
+      "proof": [
+        "tui-live-matrix.json custom_resources",
+        "tui-live-matrix.json permission_and_recovery"
+      ],
+      "status": "passed"
+    },
+    "unknown_slash_and_shell_mode": {
+      "proof": [
+        "tui-live-matrix.json manual_local_controls unknown slash",
+        "tui-live-matrix.json approved/rejected shell"
+      ],
+      "status": "passed"
+    },
+    "wide_narrow_resize": {
+      "proof": [
+        "tui-herdr-baseline.json 133x36 and 265x72 geometry",
+        "pty-smoke.test.ts 80/140-column observation paths"
+      ],
+      "status": "passed"
+    }
+  }
+}

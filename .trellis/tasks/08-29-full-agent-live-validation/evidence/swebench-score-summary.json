@@ -1,0 +1,54 @@
+{
+  "benchmark": "SWE-Bench Pro",
+  "diagnostic_only": true,
+  "dataset_commit": "7ab5114912baf22bb098818e604c02fe7ad2c11f",
+  "evaluator_commit": "ca10a60a5fcae51e6948ffe1485d4153d421e6c5",
+  "seed": "hya-swebench-pro-live-8x2-v1",
+  "attempts": 16,
+  "expected_attempts": 16,
+  "independent_surfaces": {
+    "backend": {"attempts": 8, "counted_passes": 5, "pass_at_1": 0.625},
+    "tui": {"attempts": 8, "counted_passes": 6, "pass_at_1": 0.75}
+  },
+  "languages": {
+    "Go": {"attempts": 4, "counted_passes": 0, "pass_at_1": 0.0},
+    "JavaScript": {"attempts": 4, "counted_passes": 3, "pass_at_1": 0.75},
+    "Python": {"attempts": 4, "counted_passes": 4, "pass_at_1": 1.0},
+    "TypeScript": {"attempts": 4, "counted_passes": 4, "pass_at_1": 1.0}
+  },
+  "counted_score": {
+    "passed": 11,
+    "attempts": 16,
+    "pass_at_1": 0.6875
+  },
+  "official_evaluator": {
+    "passed": 16,
+    "attempts": 16,
+    "pass_at_1": 1.0
+  },
+  "setup_valid_subset": {
+    "passed": 11,
+    "attempts": 11,
+    "pass_at_1": 1.0
+  },
+  "setup_failures": [
+    {"attempt": 1, "repo": "flipt-io/flipt", "language": "Go", "surface": "backend", "reason": "runtime_path_identity_leak"},
+    {"attempt": 2, "repo": "flipt-io/flipt", "language": "Go", "surface": "tui", "reason": "runtime_path_identity_leak"},
+    {"attempt": 3, "repo": "navidrome/navidrome", "language": "Go", "surface": "backend", "reason": "runtime_path_identity_leak"},
+    {"attempt": 4, "repo": "navidrome/navidrome", "language": "Go", "surface": "tui", "reason": "runtime_path_identity_leak"},
+    {"attempt": 5, "repo": "element-hq/element-web", "language": "JavaScript", "surface": "backend", "reason": "runtime_path_identity_leak"}
+  ],
+  "setup_failure_policy": "The five affected attempts remain false even though the official evaluator passed them. No row was substituted or rerun after model execution began.",
+  "usage": {
+    "provider_rounds": 642,
+    "permission_approvals": 286,
+    "tokens": {
+      "input": 19192175,
+      "output": 152004,
+      "reasoning": 54014,
+      "cache_read": 5706240,
+      "cache_write": 0
+    }
+  },
+  "full_attempt_evidence": "swebench-results.json"
+}

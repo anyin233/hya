@@ -1,0 +1,39 @@
+{
+  "process_name": "hya-provider-relay",
+  "pid_at_start": 3069233,
+  "listen": "http://127.0.0.1:32873",
+  "configured_provider_base_url": "http://127.0.0.1:32873/v1",
+  "upstream_origin": "https://api.12th.day",
+  "hard_forward_cap": 2000,
+  "metadata_fields": [
+    "ordinal",
+    "time",
+    "path",
+    "status",
+    "tool_schema_names",
+    "reasoning_effort"
+  ],
+  "stores_headers": false,
+  "stores_request_bodies": false,
+  "stores_response_bodies": false,
+  "increments_before_forwarding": true,
+  "metadata_mode": "0600",
+  "script_sha256": "2641adf3f91f99ba4ab85abf4b7a25b2d8cdb47d0b770ec9e32584697b8915c1",
+  "cap_self_test": {
+    "cap": 1,
+    "first_forwarded_transport_status": 502,
+    "second_rejected_status": 429,
+    "attempts": 2,
+    "forwarded": 1,
+    "query_removed_from_recorded_path": true,
+    "recorded_tool_schema_names": ["read", "apply_patch"],
+    "recorded_reasoning_effort": "high"
+  },
+  "live_start_state": {
+    "ready": true,
+    "attempts": 0,
+    "forwarded": 0
+  },
+  "credential_in_process_argv": false,
+  "credential_in_process_environment": false
+}

@@ -1,0 +1,30 @@
+default_model: 12th-oai/gpt-5.6-sol
+providers:
+  12th-oai:
+    kind: openai-response
+    base_url: https://api.12th.day/v1
+    api_key: <redacted-inline-literal>
+    models:
+      - id: gpt-5.6-sol
+        reasoning:
+          default: high
+          variants: [low, medium, high, xhigh, max]
+      - id: glm-5.3
+        reasoning:
+          default: high
+          variants: [low, medium, high, xhigh, max]
+      - id: hya-nonexistent-<nonce>
+mcp:
+  echo:
+    command: ["python3", ".hya/mcp/echo.py"]
+    enabled: true
+plugins: {}
+permission:
+  model: default
+  rules: []
+subagents:
+  max_depth: 2
+  max_concurrency: 4
+  per_run_budget: 16
+  per_team_turn_budget: 32
+  per_team_message_budget: 32

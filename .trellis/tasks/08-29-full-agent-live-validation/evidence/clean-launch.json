@@ -1,0 +1,19 @@
+{
+  "launch_wrapper": "/usr/bin/env -i",
+  "working_directory": "/home/yanweiye/Projects/hya-playground",
+  "environment_names": [
+    "HOME",
+    "XDG_CONFIG_HOME",
+    "XDG_CACHE_HOME",
+    "XDG_DATA_HOME",
+    "XDG_STATE_HOME",
+    "PATH",
+    "NO_COLOR"
+  ],
+  "excluded_runtime_inputs": [
+    "OMP config path",
+    "provider key environment variable",
+    "external Hya auth token"
+  ],
+  "provider_key_source": "inline literal in private mode-0600 Hya config; value not retained here"
+}

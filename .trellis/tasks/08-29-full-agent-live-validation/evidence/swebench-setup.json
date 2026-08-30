@@ -1,0 +1,59 @@
+{
+  "frozen_at": "2026-08-29T15:37:59+01:00",
+  "diagnostic_only": true,
+  "pass_at_k": 1,
+  "attempts": 16,
+  "model": "12th-oai/gpt-5.6-sol",
+  "provider_base_url": "http://127.0.0.1:32873/v1",
+  "provider_upstream": "https://api.12th.day/v1",
+  "relay_hard_forward_cap": 2000,
+  "relay_script_sha256": "2641adf3f91f99ba4ab85abf4b7a25b2d8cdb47d0b770ec9e32584697b8915c1",
+  "provider_config_sha256": "bdddd36518a6044d2d3b8ef8e0809927733fa9188dae3d03d3cc172bca8b13c0",
+  "provider_config_retained": false,
+  "provider_secret_retained": false,
+  "hya_source_commit": "687160e8e5536549ef582eb3f9f9ec48cd7bdf6b",
+  "hya_source_diff_sha256": "9f112c8ef2c5d28aadeac3f09441e1fe4ddb954caa3ed7745606173e8edd1ce6",
+  "binaries": {
+    "target/debug/hya": "09b20457e69bb6cabe92dbc9b1d55286bc6bc502f3a3912f27cb218ee63deeb6",
+    "target/debug/hya-ts": "2cbc3b63b04d9ec736b01c3ab82642149a9e2be47e4a081726b14761ad36b7b7",
+    "target/debug/hya-backend": "4cb56340ea03d9849079cd1c9555865454f76dc590a6ccd2eb5633115bae44cf"
+  },
+  "dataset": {
+    "repository": "ScaleAI/SWE-bench_Pro",
+    "commit": "7ab5114912baf22bb098818e604c02fe7ad2c11f",
+    "parquet_sha256": "c8cd7115496ad4e9a8b21d088cef576a65bf821bb542b24336f13f714cef13f8",
+    "row_count": 731,
+    "license_declared": false
+  },
+  "evaluator": {
+    "repository": "scaleapi/SWE-bench_Pro-os",
+    "commit": "ca10a60a5fcae51e6948ffe1485d4153d421e6c5",
+    "entry_script_sha256": "bb5d4c5486be296e464e695df3747064aaa3bb197394bc6d39980634afec2034",
+    "license": "MIT",
+    "mode": "official local Docker",
+    "platform": "linux/amd64"
+  },
+  "sample_manifest_sha256": "8fb873d6cdc3616bfcc21d6622d08d408664f65e374fd27e51de57f9d8c12651",
+  "docker_manifest_sha256": "4959a70ceb730c88b08a2d93539586b08da8ae718a56425a179aa468989b9142",
+  "prompt_fields": [
+    "problem_statement",
+    "Requirements:",
+    "requirements",
+    "New interfaces introduced:",
+    "interface"
+  ],
+  "local_gold_or_test_patch_exposed_to_hya": false,
+  "fresh_detached_worktree_per_attempt": true,
+  "fresh_session_database_per_attempt": true,
+  "runtime_identity_correction": {
+    "detected_during_attempt": 4,
+    "affected_attempts": [1, 2, 3, 4, 5],
+    "failure_reason": "runtime_path_identity_leak",
+    "observed_effect": "attempt 4 derived the public target commit from the instance-bearing worktree path",
+    "score_policy": "false without retry or substitution",
+    "corrected_from_attempt": 6,
+    "corrected_runtime_shape": "private-runtime/aNN/worktree"
+  },
+  "tui_driver": "Herdr pane",
+  "backend_driver": "hya-backend exec --json --yolo"
+}

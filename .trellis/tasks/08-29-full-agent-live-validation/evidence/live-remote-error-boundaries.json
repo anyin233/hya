@@ -1,0 +1,171 @@
+{
+  "configured_ghost": {
+    "message": "Model is not supported by composite groups",
+    "model": "12th-oai/hya-nonexistent-a29-c7f41b2d",
+    "relay": [
+      {
+        "ordinal": 752,
+        "path": "/v1/responses",
+        "reasoning_effort": "max",
+        "status": "forwarding",
+        "tool_schema_names": [
+          "announce",
+          "apply_patch",
+          "ask_user",
+          "bash",
+          "channels",
+          "edit",
+          "find",
+          "glob",
+          "grep",
+          "invalid",
+          "join",
+          "leave",
+          "list_agents",
+          "ls",
+          "lsp",
+          "plan_exit",
+          "question",
+          "read",
+          "roster",
+          "send",
+          "shell",
+          "skill",
+          "task",
+          "todowrite",
+          "webfetch",
+          "websearch",
+          "workflow",
+          "write"
+        ]
+      },
+      {
+        "ordinal": 752,
+        "path": "/v1/responses",
+        "reasoning_effort": "max",
+        "status": 400,
+        "tool_schema_names": [
+          "announce",
+          "apply_patch",
+          "ask_user",
+          "bash",
+          "channels",
+          "edit",
+          "find",
+          "glob",
+          "grep",
+          "invalid",
+          "join",
+          "leave",
+          "list_agents",
+          "ls",
+          "lsp",
+          "plan_exit",
+          "question",
+          "read",
+          "roster",
+          "send",
+          "shell",
+          "skill",
+          "task",
+          "todowrite",
+          "webfetch",
+          "websearch",
+          "workflow",
+          "write"
+        ]
+      }
+    ],
+    "result": "http status 400",
+    "session": {
+      "assistant_finishes": [
+        "error"
+      ],
+      "event_count": 9,
+      "tool_calls": 0
+    }
+  },
+  "invalid_credential": {
+    "credential": "intentionally invalid literal; no real credential retained",
+    "message": "Invalid API key",
+    "model": "12th-oai/gpt-5.6-sol",
+    "relay": [
+      {
+        "ordinal": 753,
+        "path": "/v1/responses",
+        "reasoning_effort": "max",
+        "status": "forwarding",
+        "tool_schema_names": [
+          "announce",
+          "apply_patch",
+          "ask_user",
+          "bash",
+          "channels",
+          "find",
+          "glob",
+          "grep",
+          "invalid",
+          "join",
+          "leave",
+          "list_agents",
+          "ls",
+          "lsp",
+          "plan_exit",
+          "question",
+          "read",
+          "roster",
+          "send",
+          "shell",
+          "skill",
+          "task",
+          "todowrite",
+          "webfetch",
+          "websearch",
+          "workflow"
+        ]
+      },
+      {
+        "ordinal": 753,
+        "path": "/v1/responses",
+        "reasoning_effort": "max",
+        "status": 401,
+        "tool_schema_names": [
+          "announce",
+          "apply_patch",
+          "ask_user",
+          "bash",
+          "channels",
+          "find",
+          "glob",
+          "grep",
+          "invalid",
+          "join",
+          "leave",
+          "list_agents",
+          "ls",
+          "lsp",
+          "plan_exit",
+          "question",
+          "read",
+          "roster",
+          "send",
+          "shell",
+          "skill",
+          "task",
+          "todowrite",
+          "webfetch",
+          "websearch",
+          "workflow"
+        ]
+      }
+    ],
+    "result": "http status 401",
+    "session": {
+      "assistant_finishes": [
+        "error"
+      ],
+      "event_count": 9,
+      "tool_calls": 0
+    }
+  }
+}

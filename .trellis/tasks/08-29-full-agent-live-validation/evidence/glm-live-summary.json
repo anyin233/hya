@@ -1,0 +1,101 @@
+{
+  "blocker": "Upstream returned HTTP 503 on every allowed GLM completion attempt after the earlier successful custom-MCP Turn. Retry caps are exhausted; no Hya workaround is valid.",
+  "coding_attempts": {
+    "evidence": "coding-fixture-summary.json",
+    "rust": {
+      "attempts": 2,
+      "fixture_unchanged": true,
+      "statuses": [
+        503,
+        503
+      ]
+    },
+    "typescript": {
+      "attempts": 2,
+      "fixture_unchanged": true,
+      "statuses": [
+        503,
+        503
+      ]
+    }
+  },
+  "later_health": {
+    "evidence": "tui-live-matrix.json live_models.glm",
+    "hya_behavior": "assistant finish:error then Session idle",
+    "statuses": [
+      503,
+      503,
+      503
+    ]
+  },
+  "schema": {
+    "evidence": "tool-schema-by-model.json and completion relay GLM attempts",
+    "expected": 28,
+    "observed": 28
+  },
+  "successful_turn": {
+    "classification": "Provider/model emitted no reasoning for this successful high-effort Turn; Hya received no reasoning Event to lose.",
+    "command": "/use-mcp GLM_MCP_A29",
+    "events": [
+      {
+        "finish": null,
+        "input": null,
+        "name": "mcp__echo__ping",
+        "seq": 218,
+        "tokens": null,
+        "type": "tool_input_start"
+      },
+      {
+        "finish": null,
+        "input": {
+          "msg": "GLM_MCP_A29"
+        },
+        "name": "mcp__echo__ping",
+        "seq": 229,
+        "tokens": null,
+        "type": "tool_call_requested"
+      },
+      {
+        "finish": null,
+        "input": null,
+        "name": null,
+        "seq": 231,
+        "tokens": null,
+        "type": "tool_result"
+      },
+      {
+        "finish": null,
+        "input": null,
+        "name": null,
+        "seq": 234,
+        "tokens": null,
+        "type": "text_replace"
+      },
+      {
+        "finish": "stop",
+        "input": null,
+        "name": null,
+        "seq": 237,
+        "tokens": {
+          "cache_read": 0,
+          "cache_write": 0,
+          "input": 7731,
+          "output": 41,
+          "reasoning": 0
+        },
+        "type": "message_finished"
+      }
+    ],
+    "reasoning_events": 0,
+    "reasoning_tokens": 0,
+    "result": "MCP_OK:GLM_MCP_A29",
+    "route": "12th-oai/glm-5.3#high",
+    "session": "hysec_FOid0Q6hjzDE8YyZTb3C"
+  },
+  "unreachable_live_requirements": [
+    "GLM Rust/TypeScript coding edits",
+    "GLM-driven subagent slice",
+    "GLM-driven Workflow slice",
+    "additional GLM full reasoning-text sample"
+  ]
+}

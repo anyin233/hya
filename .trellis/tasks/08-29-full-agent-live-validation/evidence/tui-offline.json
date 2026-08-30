@@ -1,0 +1,11 @@
+{
+  "assistant_finish": "stop",
+  "capture": "tui-offline-visible.txt",
+  "event_count": 17,
+  "model_status": "Build \u00b7 offline hya",
+  "outbound_live_requests": 0,
+  "pane_id": "wA:pHF",
+  "prompt": "Reply exactly OFFLINE_SURFACE_A29",
+  "response": "(hya dev provider) You said: \"Reply exactly OFFLINE_SURFACE_A29\". No live model is configured yet \u2014 wire a real provider in config for actual answers.",
+  "surface": "current-source hya in task-owned real Herdr pane"
+}

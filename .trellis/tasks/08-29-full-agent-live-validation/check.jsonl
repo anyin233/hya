@@ -1,0 +1,11 @@
+{"file":".trellis/tasks/08-29-full-agent-live-validation/research/approved-plan-part-1.md","reason":"Review scope, decisions, routes, evidence, and resource contracts from source lines 1-218 without truncation."}
+{"file":".trellis/tasks/08-29-full-agent-live-validation/research/approved-plan-part-2.md","reason":"Review execution order, repair gates, verification, contingencies, and completion criteria from source lines 219-436."}
+{"file":".trellis/tasks/08-29-full-agent-live-validation/research/swe-bench-pro-sources.md","reason":"Verify benchmark pins, licensing boundary, Boolean scoring, isolation, and artifact retention."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Check one owner for Events, projections, API normalization, SDK state, and TUI presentation."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Check that repairs reuse established planes, reducers, fixtures, and dispatch seams without duplication."}
+{"file":".trellis/spec/backend/task-tool.md","reason":"Check subagent admission, operation identity, typed errors, budgets, recovery, and durable semantics."}
+{"file":".trellis/spec/backend/workflow-control.md","reason":"Check Workflow event sourcing, atomic admission, revision fencing, recovery, surface parity, and errors."}
+{"file":".trellis/spec/frontend/directory-structure.md","reason":"Check that all shipped interactive behavior stays in the TypeScript TUI and correct process boundary."}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Check command, dialog, SDK, sync, focus, accessibility, and responsive component integration."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Check failing-test-first frontend changes, focused coverage, type safety, and required Bun gates."}
+{"file":".trellis/spec/frontend/workflow-presentation.md","reason":"Check canonical Workflow projection rendering, order, activity scope, responsive states, and PTY coverage."}

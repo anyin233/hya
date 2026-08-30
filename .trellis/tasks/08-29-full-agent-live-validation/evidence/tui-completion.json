@@ -1,0 +1,46 @@
+{
+  "binary_sha256": "9673a9156b88422b064c4633c49dea6475f82be63ba0126f1d89fb2361efaa5d",
+  "captures": [
+    "tui-completion-visible.txt",
+    "tui-completion-recent.txt"
+  ],
+  "commands": [
+    {
+      "arguments": "",
+      "name": "init",
+      "seq": 8
+    },
+    {
+      "arguments": "",
+      "name": "review",
+      "seq": 48
+    }
+  ],
+  "event_count": 61,
+  "event_seq_range": [
+    1,
+    61
+  ],
+  "exit_aliases": {
+    "/exit": "wA:pHD returned to bash foreground before the task-owned pane was closed",
+    "/q": "wA:pHE returned to bash foreground (pid 717571) after a fresh relaunch",
+    "/quit": "wA:pHE returned to bash foreground (pid 717571)"
+  },
+  "init_observed": "Workspace initialized at the empty non-Git fixture and returned to the composer.",
+  "pane": {
+    "cwd": "/home/yanweiye/.local/state/hya-full-agent-live-completion-a29/projects/tui-playground",
+    "owner": "08-29-full-agent-live-validation",
+    "pane_id": "wA:pHD"
+  },
+  "provider_turns": 2,
+  "redo_observed": "Exact /redo restored the Review result without a new provider Turn.",
+  "review_observed": "Review result reported no code available and returned to the composer.",
+  "session_id": "hysec_gbQEvOJKJHjXvQiNKpwC",
+  "surface": "current-source hya 0.36.4 in task-owned real Herdr pane",
+  "tool_request_counts": {
+    "bash": 1,
+    "find": 3,
+    "ls": 1
+  },
+  "undo_observed": "Visible 1 message reverted banner and /review restored into the composer."
+}

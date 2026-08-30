@@ -1,0 +1,69 @@
+{
+  "frozen_before_provider_attempts": true,
+  "images": [
+    {
+      "instance_id": "instance_flipt-io__flipt-5c7037ececb0bead0a8eb56054e224bcd7ac5922",
+      "tag": "jefzda/sweap-images:flipt-io.flipt-flipt-io__flipt-5c7037ececb0bead0a8eb56054e224bcd7ac5922",
+      "repo_digest": "jefzda/sweap-images@sha256:e0a51366f364e4c030a19626b4b69aafb8ada49544bf87d4ca556981ebdcac03",
+      "image_id": "sha256:8c2bbbb0eb66281806bae75eb849e43f73ee240ff9c77340bbb0816a83fac639",
+      "platform": "linux/amd64",
+      "size_bytes": 1401639294
+    },
+    {
+      "instance_id": "instance_navidrome__navidrome-8383527aaba1ae8fa9765e995a71a86c129ef626",
+      "tag": "jefzda/sweap-images:navidrome.navidrome-navidrome__navidrome-8383527aaba1ae8fa9765e995a71a86c129ef626",
+      "repo_digest": "jefzda/sweap-images@sha256:6c127e72b2ea6400def069ae2cdedd6a989fb2fb68ca9a15321b05b9ab55ed90",
+      "image_id": "sha256:bf7dfbece3eba8458b6b0de98d587bfaddd9c310e2945c2c2f4e209397ec214c",
+      "platform": "linux/amd64",
+      "size_bytes": 2957861178
+    },
+    {
+      "instance_id": "instance_element-hq__element-web-494d9de6f0a94ffb491e74744d2735bce02dc0ab-vnan",
+      "tag": "jefzda/sweap-images:element-hq.element-element-hq__element-web-494d9de6f0a94ffb491e74744d2735bce02dc0ab",
+      "repo_digest": "jefzda/sweap-images@sha256:6853cbccb02abac8b89d159a552a2d2f4cc621193091389dd6252181960f3926",
+      "image_id": "sha256:7ef7a47a4b613922c1a76cee6e7e0a47278c733258eb34ca25c71a41975bfb6e",
+      "platform": "linux/amd64",
+      "size_bytes": 2500667919
+    },
+    {
+      "instance_id": "instance_protonmail__webclients-01b519cd49e6a24d9a05d2eb97f54e420740072e",
+      "tag": "jefzda/sweap-images:protonmail.webclients-protonmail__webclients-01b519cd49e6a24d9a05d2eb97f54e420740072e",
+      "repo_digest": "jefzda/sweap-images@sha256:813ef73559b628a1b1a46137f7a4d9f82715f20d7e31e22270017c1be6ce4b1a",
+      "image_id": "sha256:7705754f4238678b1f58c011828563268dd2a517f62d47779ada2bccd14f3699",
+      "platform": "linux/amd64",
+      "size_bytes": 14178334051
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-0833b5f6f140d04200ec91605f88704dd18e2970-v059c6fdc75567943479b23ebca7c07b5e9a7f34c",
+      "tag": "jefzda/sweap-images:qutebrowser.qutebrowser-qutebrowser__qutebrowser-0833b5f6f140d04200ec91605f88704dd18e2970-v059c6fdc75567943479b23ebca7c07b5e9a7f",
+      "repo_digest": "jefzda/sweap-images@sha256:1607129d3ab3b54033dd9d6fdc9c05c6fad3d36dbdd89f36082f331acfcca35a",
+      "image_id": "sha256:683080e5f4c5bb2b5260291dcecbac18a4a474283779ca033966d89bd530807c",
+      "platform": "linux/amd64",
+      "size_bytes": 1486046254
+    },
+    {
+      "instance_id": "instance_ansible__ansible-c616e54a6e23fa5616a1d56d243f69576164ef9b-v1055803c3a812189a1133297f7f5468579283f86",
+      "tag": "jefzda/sweap-images:ansible.ansible-ansible__ansible-c616e54a6e23fa5616a1d56d243f69576164ef9b-v1055803c3a812189a1133297f7f5468579283f86",
+      "repo_digest": "jefzda/sweap-images@sha256:87c772f389f9c3d139b3f19da16dbb870b9a2a11942ba16c589a9291ca4e672a",
+      "image_id": "sha256:22f8cbd4ed4d602caa1f84d5aee41ff8c14af1e3955aa474370bb6a1d03bac99",
+      "platform": "linux/amd64",
+      "size_bytes": 922696963
+    },
+    {
+      "instance_id": "instance_tutao__tutanota-1e516e989b3c0221f4af6b297d9c0e4c43e4adc3-vbc0d9ba8f0071fbe982809910959a6ff8884dbbf",
+      "tag": "jefzda/sweap-images:tutao.tutanota-tutao__tutanota-1e516e989b3c0221f4af6b297d9c0e4c43e4adc3-vbc0d9ba8f0071fbe982809910959a6ff8884dbbf",
+      "repo_digest": "jefzda/sweap-images@sha256:f5cd1b8199757cabfc23b2a8470f3bc68ab82fd587c25b24b5a37a476276b110",
+      "image_id": "sha256:ac5901f03c4469fd2b9a83c4639aed0fe8c30caaefd80d311ef713058c6199eb",
+      "platform": "linux/amd64",
+      "size_bytes": 2699562889
+    },
+    {
+      "instance_id": "instance_tutao__tutanota-12a6cbaa4f8b43c2f85caca0787ab55501539955-vc4e41fd0029957297843cb9dec4a25c7c756f029",
+      "tag": "jefzda/sweap-images:tutao.tutanota-tutao__tutanota-12a6cbaa4f8b43c2f85caca0787ab55501539955-vc4e41fd0029957297843cb9dec4a25c7c756f029",
+      "repo_digest": "jefzda/sweap-images@sha256:3e132f530ddf10e83a494ded2150fa1bc41cfbe67805aa695d4f92210d4cbd01",
+      "image_id": "sha256:cd57a1867842cc093f8a2b1a17e2cb6295ee3ca79ea2ec72b429bba391a0abb4",
+      "platform": "linux/amd64",
+      "size_bytes": 2544877238
+    }
+  ]
+}

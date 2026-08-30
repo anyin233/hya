@@ -1,0 +1,28 @@
+{
+  "id": "full-agent-live-validation",
+  "name": "full-agent-live-validation",
+  "title": "Full agent live validation",
+  "description": "Verify and repair Hya as a complete coding agent with real dual-model API traffic, backend and Herdr-driven TUI interaction, every built-in tool and error class, Workflow and subagent behavior, persistent self-contained configuration, and a fixed SWE-Bench Pro diagnostic sample.",
+  "status": "in_progress",
+  "dev_type": null,
+  "scope": null,
+  "package": null,
+  "priority": "P0",
+  "creator": "cydia2001",
+  "assignee": "cydia2001",
+  "createdAt": "2026-08-29",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [],
+  "notes": "",
+  "meta": {
+    "planning_source": "user"
+  }
+}

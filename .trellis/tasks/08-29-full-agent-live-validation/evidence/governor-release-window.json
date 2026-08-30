@@ -1,0 +1,40 @@
+{
+  "after": {
+    "admitted": 200,
+    "false_overloaded": 0,
+    "invocations": 10,
+    "iterations": 200,
+    "rate_percent": 0.0,
+    "returncodes": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  "before": {
+    "admitted": 9,
+    "false_overloaded": 191,
+    "iterations": 200,
+    "rate_percent": 95.5,
+    "source": ".trellis/tasks/08-06-close-governor-release-window/prd.md"
+  },
+  "implementation": [
+    "crates/hya-store/src/admission.rs::terminal_released_operations_for_root",
+    "crates/hya-core/src/engine/admission.rs::try_reserve_spawn_operation"
+  ],
+  "red_reproduction": {
+    "command": "cargo test -p hya-app --test spawn_admission released_capacity_is_visible_to_a_concurrent_spawn_on_the_same_root -- --nocapture",
+    "result": "failed on run 0 with Err(Overloaded)"
+  },
+  "whole_batch_guard": {
+    "result": "passed",
+    "test": "hya-store::admission::terminal_release_reconciliation_waits_for_the_whole_batch"
+  }
+}

@@ -1,0 +1,71 @@
+{
+  "captured_at": "2026-08-29T12:36:12Z",
+  "pane": {
+    "pane_id": "wA:pH3",
+    "workspace_id": "wA",
+    "tab_id": "wA:tGM",
+    "task_owned": true,
+    "cwd": "/home/yanweiye/Projects/hya-playground",
+    "narrow_geometry": { "columns": 133, "rows": 36 },
+    "wide_zoom_geometry": { "columns": 265, "rows": 72 }
+  },
+  "initial_surface": {
+    "title": "Hya Live Validation",
+    "session_id": "hysec_FOid0Q6hjzDE8YyZTb3C",
+    "visible_markers": [
+      "USER_PLAYBOOK_BODY_V1",
+      "Build · gpt-5.6-sol",
+      "Workflow none",
+      "echo Connected",
+      "LSPs are disabled",
+      "ctrl+p commands"
+    ]
+  },
+  "interactions": [
+    {
+      "action": "Ctrl+P; filter model; Down; Enter",
+      "observed": "Keymap-only Commands palette filtered to Switch model and Switch model variant, then opened Select variant"
+    },
+    {
+      "action": "Select low",
+      "observed": "Status line changed to Build · gpt-5.6-sol 12th-oai · low",
+      "persistent_state": "xdg-state/hya/model.json maps 12th-oai/gpt-5.6-sol to low"
+    },
+    {
+      "action": "/think",
+      "observed": "Select variant opened with low selected"
+    },
+    {
+      "action": "/model",
+      "observed": "Select model showed gpt-5.6-sol, glm-5.3, and the configured ghost model"
+    },
+    {
+      "action": "/agents",
+      "observed": "Select agent showed build, hya-main, and plan"
+    },
+    {
+      "action": "/mcps",
+      "observed": "MCP dialog showed echo connected and enabled"
+    },
+    {
+      "action": "Ctrl+C",
+      "observed": "TUI and supervisor exited and the task-owned pane returned to its interactive shell prompt"
+    }
+  ],
+  "automated_tui_contracts": [
+    {
+      "command": "bun test test/pty-smoke.test.ts",
+      "result": "5 passed, 0 failed, 87 assertions"
+    },
+    {
+      "command": "bun test test/workflow-pty.test.ts test/workflow-presentation.test.ts",
+      "result": "7 passed, 0 failed, 33 assertions"
+    }
+  ],
+  "open_at_baseline_capture": [
+    "Submit the no-argument /workflow catalog row after autocomplete selection",
+    "Capture streaming, reasoning, permission, question, error, reconnect, and recovery surfaces",
+    "Verify model, effort, Agent, prompt history, Workflow, and Session persistence boundaries"
+  ],
+  "later_evidence": "See tui-live-matrix.json for work completed after this baseline capture. Items not represented there remain evidence gaps; this baseline is not a completion claim."
+}

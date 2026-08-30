@@ -1,0 +1,17 @@
+{
+  "run_root": "/home/yanweiye/.local/state/hya-full-agent-live-validation-rk04x418",
+  "playground": "/home/yanweiye/Projects/hya-playground",
+  "private_home": "/home/yanweiye/.local/state/hya-full-agent-live-validation-rk04x418/home",
+  "xdg_config_home": "/home/yanweiye/.local/state/hya-full-agent-live-validation-rk04x418/xdg-config",
+  "xdg_cache_home": "/home/yanweiye/.local/state/hya-full-agent-live-validation-rk04x418/xdg-cache",
+  "xdg_data_home": "/home/yanweiye/.local/state/hya-full-agent-live-validation-rk04x418/xdg-data",
+  "xdg_state_home": "/home/yanweiye/.local/state/hya-full-agent-live-validation-rk04x418/xdg-state",
+  "database_root": "/home/yanweiye/.local/state/hya-full-agent-live-validation-rk04x418/db",
+  "runtime_log_root": "/home/yanweiye/.local/state/hya-full-agent-live-validation-rk04x418/logs",
+  "private_evidence_root": "/home/yanweiye/.local/state/hya-full-agent-live-validation-rk04x418/evidence",
+  "relay_root": "/home/yanweiye/.local/state/hya-full-agent-live-validation-rk04x418/relay",
+  "fixture_root": "/home/yanweiye/.local/state/hya-full-agent-live-validation-rk04x418/fixtures",
+  "directory_mode": "0700",
+  "private_file_mode": "0600",
+  "provider_requests_at_creation": 0
+}

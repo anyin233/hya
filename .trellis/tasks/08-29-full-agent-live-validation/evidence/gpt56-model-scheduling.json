@@ -1,0 +1,493 @@
+{
+  "cleanup": {
+    "exact_secret_hits_after_cleanup": 0,
+    "fallback_relay_process": "stopped with intentional SIGTERM exit 143",
+    "primary_fault_process": "stopped with intentional SIGTERM exit 143",
+    "private_key_deleted": true,
+    "retained_runtime": "/home/yanweiye/.local/state/hya-gpt56-scheduling-a30",
+    "retention": "local-only outside Git for SQLite, stdout/stderr, and bounded route metadata"
+  },
+  "contract": {
+    "expected": "fallback request uses its own #high reasoning variant and completes one durable Session Turn",
+    "fallback": "gpt56-fallback/gpt-5.6-sol#high",
+    "preferred": "gpt56-primary/gpt-5.6-sol#low",
+    "trigger": "preferred local route returns deterministic pre-stream HTTP 503"
+  },
+  "green": {
+    "classification": "Three preferred-route HTTP 503 attempts completed before stream creation; the ordered fallback used #high, returned one HTTP 200 stream, emitted one assistant delivery, and persisted the exact terminal Event sequence.",
+    "durable_sqlite_event_count": 14,
+    "event_sequence": [
+      {
+        "finish": null,
+        "model": "gpt56-primary/gpt-5.6-sol#low",
+        "seq": 1,
+        "text": null,
+        "tokens": null,
+        "type": "session_created"
+      },
+      {
+        "finish": null,
+        "model": null,
+        "seq": 2,
+        "text": null,
+        "tokens": null,
+        "type": "message_started"
+      },
+      {
+        "finish": null,
+        "model": null,
+        "seq": 3,
+        "text": null,
+        "tokens": null,
+        "type": "text_start"
+      },
+      {
+        "finish": null,
+        "model": null,
+        "seq": 4,
+        "text": "Reply exactly GPT56_SCHEDULED_GREEN_A30. Do not call any tools.",
+        "tokens": null,
+        "type": "text_delta"
+      },
+      {
+        "finish": null,
+        "model": null,
+        "seq": 5,
+        "text": null,
+        "tokens": null,
+        "type": "text_end"
+      },
+      {
+        "finish": "stop",
+        "model": null,
+        "seq": 6,
+        "text": null,
+        "tokens": null,
+        "type": "message_finished"
+      },
+      {
+        "finish": null,
+        "model": null,
+        "seq": 7,
+        "text": null,
+        "tokens": null,
+        "type": "message_started"
+      },
+      {
+        "finish": null,
+        "model": null,
+        "seq": 8,
+        "text": null,
+        "tokens": null,
+        "type": "turn_binding_recorded"
+      },
+      {
+        "finish": null,
+        "model": null,
+        "seq": 9,
+        "text": null,
+        "tokens": null,
+        "type": "step_started"
+      },
+      {
+        "finish": null,
+        "model": null,
+        "seq": 10,
+        "text": null,
+        "tokens": null,
+        "type": "text_start"
+      },
+      {
+        "finish": null,
+        "model": null,
+        "seq": 11,
+        "text": "GPT56_SCHEDULED_GREEN_A30",
+        "tokens": null,
+        "type": "text_replace"
+      },
+      {
+        "finish": null,
+        "model": null,
+        "seq": 12,
+        "text": null,
+        "tokens": null,
+        "type": "text_end"
+      },
+      {
+        "finish": "stop",
+        "model": null,
+        "seq": 13,
+        "text": null,
+        "tokens": null,
+        "type": "step_finished"
+      },
+      {
+        "finish": "stop",
+        "model": null,
+        "seq": 14,
+        "text": null,
+        "tokens": {
+          "cache_read": 0,
+          "cache_write": 0,
+          "input": 2802,
+          "output": 12,
+          "reasoning": 0
+        },
+        "type": "message_finished"
+      }
+    ],
+    "exact_assistant_text": "GPT56_SCHEDULED_GREEN_A30",
+    "expected_fallback_reasoning_effort": "high",
+    "fallback_relay": [
+      {
+        "ordinal": 2,
+        "path": "/v1/responses",
+        "reasoning_effort": "high",
+        "status": "forwarding",
+        "time": "2026-08-30T02:24:31.418581+00:00",
+        "tool_schema_names": [
+          "announce",
+          "apply_patch",
+          "ask_user",
+          "bash",
+          "channels",
+          "find",
+          "glob",
+          "grep",
+          "invalid",
+          "join",
+          "leave",
+          "list_agents",
+          "ls",
+          "lsp",
+          "plan_exit",
+          "question",
+          "read",
+          "roster",
+          "send",
+          "shell",
+          "skill",
+          "task",
+          "todowrite",
+          "webfetch",
+          "websearch",
+          "workflow"
+        ]
+      },
+      {
+        "ordinal": 2,
+        "path": "/v1/responses",
+        "reasoning_effort": "high",
+        "status": 200,
+        "time": "2026-08-30T02:24:32.939197+00:00",
+        "tool_schema_names": [
+          "announce",
+          "apply_patch",
+          "ask_user",
+          "bash",
+          "channels",
+          "find",
+          "glob",
+          "grep",
+          "invalid",
+          "join",
+          "leave",
+          "list_agents",
+          "ls",
+          "lsp",
+          "plan_exit",
+          "question",
+          "read",
+          "roster",
+          "send",
+          "shell",
+          "skill",
+          "task",
+          "todowrite",
+          "webfetch",
+          "websearch",
+          "workflow"
+        ]
+      }
+    ],
+    "finished_at": "2026-08-30T02:24:33.335227+00:00",
+    "focused_regression": {
+      "green": "1 passed, 0 failed",
+      "red": "failed Low vs High at fallback assertion (artifact://1810)",
+      "whole_file": "7 passed, 0 failed"
+    },
+    "no_mid_stream_replay": true,
+    "observed_fallback_reasoning_effort": "high",
+    "one_assistant_delivery": true,
+    "primary_attempts": [
+      {
+        "authorization_present": true,
+        "model": "gpt-5.6-sol",
+        "path": "/v1/responses",
+        "status": 503
+      },
+      {
+        "authorization_present": true,
+        "model": "gpt-5.6-sol",
+        "path": "/v1/responses",
+        "status": 503
+      },
+      {
+        "authorization_present": true,
+        "model": "gpt-5.6-sol",
+        "path": "/v1/responses",
+        "status": 503
+      }
+    ],
+    "release": "0.36.5",
+    "returncode": 0,
+    "session": "hysec_3xMXopbQV0NsMGHScP0J",
+    "sqlite_stdout_sequences_match": true,
+    "started_at": "2026-08-30T02:24:31.372811+00:00",
+    "status": "passed",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stdout_event_count": 14,
+    "stdout_sha256": "a5931b5f16a7287367e80d2fdc8238b593fb9f3f5979a28beee4bf7a1bb32cc5"
+  },
+  "red": {
+    "classification": "Turn scheduling and completion succeeded, but the fallback candidate inherited the preferred #low reasoning instead of applying its own #high variant.",
+    "event_sequence": [
+      {
+        "finish": null,
+        "model": "gpt56-primary/gpt-5.6-sol#low",
+        "seq": 1,
+        "text": null,
+        "tokens": null,
+        "type": "session_created"
+      },
+      {
+        "finish": null,
+        "model": null,
+        "seq": 2,
+        "text": null,
+        "tokens": null,
+        "type": "message_started"
+      },
+      {
+        "finish": null,
+        "model": null,
+        "seq": 3,
+        "text": null,
+        "tokens": null,
+        "type": "text_start"
+      },
+      {
+        "finish": null,
+        "model": null,
+        "seq": 4,
+        "text": "Reply exactly GPT56_SCHEDULED_A30. Do not call any tools.",
+        "tokens": null,
+        "type": "text_delta"
+      },
+      {
+        "finish": null,
+        "model": null,
+        "seq": 5,
+        "text": null,
+        "tokens": null,
+        "type": "text_end"
+      },
+      {
+        "finish": "stop",
+        "model": null,
+        "seq": 6,
+        "text": null,
+        "tokens": null,
+        "type": "message_finished"
+      },
+      {
+        "finish": null,
+        "model": null,
+        "seq": 7,
+        "text": null,
+        "tokens": null,
+        "type": "message_started"
+      },
+      {
+        "finish": null,
+        "model": null,
+        "seq": 8,
+        "text": null,
+        "tokens": null,
+        "type": "turn_binding_recorded"
+      },
+      {
+        "finish": null,
+        "model": null,
+        "seq": 9,
+        "text": null,
+        "tokens": null,
+        "type": "step_started"
+      },
+      {
+        "finish": null,
+        "model": null,
+        "seq": 10,
+        "text": null,
+        "tokens": null,
+        "type": "text_start"
+      },
+      {
+        "finish": null,
+        "model": null,
+        "seq": 11,
+        "text": "GPT56_SCHEDULED_A30",
+        "tokens": null,
+        "type": "text_replace"
+      },
+      {
+        "finish": null,
+        "model": null,
+        "seq": 12,
+        "text": null,
+        "tokens": null,
+        "type": "text_end"
+      },
+      {
+        "finish": "stop",
+        "model": null,
+        "seq": 13,
+        "text": null,
+        "tokens": null,
+        "type": "step_finished"
+      },
+      {
+        "finish": "stop",
+        "model": null,
+        "seq": 14,
+        "text": null,
+        "tokens": {
+          "cache_read": 0,
+          "cache_write": 0,
+          "input": 2801,
+          "output": 11,
+          "reasoning": 0
+        },
+        "type": "message_finished"
+      }
+    ],
+    "exact_assistant_text": "GPT56_SCHEDULED_A30",
+    "expected_fallback_reasoning_effort": "high",
+    "fallback_relay": [
+      {
+        "ordinal": 1,
+        "path": "/v1/responses",
+        "reasoning_effort": "low",
+        "status": "forwarding",
+        "time": "2026-08-30T02:13:07.915106+00:00",
+        "tool_schema_names": [
+          "announce",
+          "apply_patch",
+          "ask_user",
+          "bash",
+          "channels",
+          "find",
+          "glob",
+          "grep",
+          "invalid",
+          "join",
+          "leave",
+          "list_agents",
+          "ls",
+          "lsp",
+          "plan_exit",
+          "question",
+          "read",
+          "roster",
+          "send",
+          "shell",
+          "skill",
+          "task",
+          "todowrite",
+          "webfetch",
+          "websearch",
+          "workflow"
+        ]
+      },
+      {
+        "ordinal": 1,
+        "path": "/v1/responses",
+        "reasoning_effort": "low",
+        "status": 200,
+        "time": "2026-08-30T02:13:10.549479+00:00",
+        "tool_schema_names": [
+          "announce",
+          "apply_patch",
+          "ask_user",
+          "bash",
+          "channels",
+          "find",
+          "glob",
+          "grep",
+          "invalid",
+          "join",
+          "leave",
+          "list_agents",
+          "ls",
+          "lsp",
+          "plan_exit",
+          "question",
+          "read",
+          "roster",
+          "send",
+          "shell",
+          "skill",
+          "task",
+          "todowrite",
+          "webfetch",
+          "websearch",
+          "workflow"
+        ]
+      }
+    ],
+    "finished_at": "2026-08-30T02:13:11.018430+00:00",
+    "observed_fallback_reasoning_effort": "low",
+    "primary_attempts": [
+      {
+        "authorization_present": true,
+        "model": "gpt-5.6-sol",
+        "path": "/v1/responses",
+        "status": 503
+      },
+      {
+        "authorization_present": true,
+        "model": "gpt-5.6-sol",
+        "path": "/v1/responses",
+        "status": 503
+      },
+      {
+        "authorization_present": true,
+        "model": "gpt-5.6-sol",
+        "path": "/v1/responses",
+        "status": 503
+      }
+    ],
+    "returncode": 0,
+    "session": "hysec_yEDB1bM2oE38aom3Zvhd",
+    "started_at": "2026-08-30T02:13:07.869411+00:00",
+    "status": "red-confirmed",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stdout_sha256": "ad488fb8cfc71e1229ee18bd0ba69ca5b136374d698ec704e6aa708d4e555866"
+  },
+  "result": "passed",
+  "runtime": {
+    "binary": "target/debug/hya-backend",
+    "config_mode": "0600",
+    "credential_transport": "mode-0600 file reference; no secret in config, argv, prompt, route logs, or evidence",
+    "database": "/home/yanweiye/.local/state/hya-gpt56-scheduling-a30/sessions.db",
+    "key_mode": "0600",
+    "retention": "local-only outside Git"
+  },
+  "secret_scan_before_cleanup": {
+    "exact_secret_hit_count": 1,
+    "expected_only_private_key_file": true,
+    "relative_paths": [
+      "provider.key"
+    ]
+  }
+}
