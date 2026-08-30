@@ -84,7 +84,18 @@ fn reasoning_provider_data_survives_serde_and_projection_replay() {
         "id": "rs_123",
         "encrypted_content": "opaque",
     });
-    let legacy: Event = serde_json::from_value(serde_json::json!({
+    let legacy_start: Event = serde_json::from_value(serde_json::json!({
+        "type": "reasoning_start",
+        "session": session,
+        "message": message,
+        "part": part,
+    }))
+    .expect("legacy reasoning start event");
+    assert!(matches!(
+        legacy_start,
+        Event::ReasoningStart { reason: None, .. }
+    ));
+    let legacy_end: Event = serde_json::from_value(serde_json::json!({
         "type": "reasoning_end",
         "session": session,
         "message": message,
@@ -92,8 +103,22 @@ fn reasoning_provider_data_survives_serde_and_projection_replay() {
     }))
     .expect("legacy reasoning event");
     assert!(matches!(
-        legacy,
+        legacy_end,
         Event::ReasoningEnd {
+            provider_data: None,
+            ..
+        }
+    ));
+    let legacy_projection: PartProjection = serde_json::from_value(serde_json::json!({
+        "kind": "reasoning",
+        "id": part,
+        "text": "legacy reasoning",
+    }))
+    .expect("legacy reasoning projection");
+    assert!(matches!(
+        legacy_projection,
+        PartProjection::Reasoning {
+            reason: None,
             provider_data: None,
             ..
         }
@@ -114,6 +139,7 @@ fn reasoning_provider_data_survives_serde_and_projection_replay() {
                 session,
                 message,
                 part,
+                reason: Some("low".to_string()),
             },
         ),
         env(
@@ -145,6 +171,7 @@ fn reasoning_provider_data_survives_serde_and_projection_replay() {
         PartProjection::Reasoning {
             id: part,
             text: "visible summary".to_string(),
+            reason: Some("low".to_string()),
             provider_data: Some(provider_data),
         }
     );

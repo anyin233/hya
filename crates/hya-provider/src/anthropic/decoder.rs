@@ -5,7 +5,7 @@ use hya_proto::{
 };
 use serde_json::Value;
 
-use crate::{Decoder, ProviderError};
+use crate::{Decoder, ProviderError, ReasoningEffort};
 
 enum BlockKind {
     Text,
@@ -25,6 +25,7 @@ struct Block {
 pub struct AnthropicDecoder {
     session: SessionId,
     message: MessageId,
+    reasoning_effort: Option<ReasoningEffort>,
     blocks: BTreeMap<u64, Block>,
     stop_reason: Option<String>,
     usage: TokenUsage,
@@ -32,12 +33,17 @@ pub struct AnthropicDecoder {
 }
 
 impl AnthropicDecoder {
-    /// Bind a new decoder to the turn's session and assistant message ids.
+    /// Bind a new decoder to the turn's ids and requested effort.
     #[must_use]
-    pub fn new(session: SessionId, message: MessageId) -> Self {
+    pub fn new(
+        session: SessionId,
+        message: MessageId,
+        reasoning_effort: Option<ReasoningEffort>,
+    ) -> Self {
         Self {
             session,
             message,
+            reasoning_effort,
             blocks: BTreeMap::new(),
             stop_reason: None,
             usage: TokenUsage::default(),
@@ -139,6 +145,9 @@ impl Decoder for AnthropicDecoder {
                             session,
                             message,
                             part,
+                            reason: self
+                                .reasoning_effort
+                                .map(|effort| effort.as_str().to_string()),
                         });
                     }
                     Some("tool_use") => {

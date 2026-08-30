@@ -1235,6 +1235,21 @@ impl TurnBinding {
             }
         }
 
+        let model_tool_names = model_schema_public_names(
+            bundle_id,
+            "tool",
+            &partitions.tool,
+            &tool_public,
+            &tool_view_aliases,
+        )?;
+        let model_mcp_names = model_schema_public_names(
+            bundle_id,
+            "mcp",
+            &partitions.mcp,
+            &mcp_public,
+            &mcp_view_aliases,
+        )?;
+
         let skill_facade_selected = selected.tool.contains("harness:tool/skill");
         let has_harness_skill = selected.skill.iter().any(|id| {
             matches!(
@@ -1330,14 +1345,22 @@ impl TurnBinding {
             skills.push(entry);
         }
 
-        let schemas = tools
+        let schemas = model_tool_names
             .iter()
-            .map(|(public_name, resolved)| {
+            .chain(model_mcp_names.iter())
+            .map(|public_name| {
+                let resolved = tools.get(public_name).ok_or_else(|| {
+                    BundleError::UnknownResourceReference {
+                        bundle_id: bundle_id.to_string(),
+                        kind: "tool".to_string(),
+                        reference: public_name.clone(),
+                    }
+                })?;
                 let mut schema = resolved.tool.schema();
                 schema.name = ToolName::new(public_name.clone());
-                schema
+                Ok(schema)
             })
-            .collect();
+            .collect::<Result<Vec<_>, BundleError>>()?;
 
         let compiled = Arc::new(CompiledResourceView {
             tools,
@@ -2382,6 +2405,67 @@ fn reserve_stable_names(
         }
     }
     reserved
+}
+
+/// Select provider-safe canonical short names and explicit view aliases for schemas.
+/// Qualified identities and candidate aliases remain dispatch-only spellings.
+fn model_schema_public_names(
+    bundle_id: &str,
+    kind: &str,
+    candidates: &BTreeMap<String, ResourceCandidate>,
+    public: &BTreeMap<String, String>,
+    view_aliases: &BTreeMap<String, String>,
+) -> Result<BTreeSet<String>, BundleError> {
+    let mut names = BTreeSet::new();
+    let mut covered = BTreeSet::new();
+    for (public_name, canonical_id) in public {
+        let candidate =
+            candidates
+                .get(canonical_id)
+                .ok_or_else(|| BundleError::UnknownResourceReference {
+                    bundle_id: bundle_id.to_string(),
+                    kind: kind.to_string(),
+                    reference: canonical_id.clone(),
+                })?;
+        let explicit_alias = view_aliases.get(public_name) == Some(canonical_id);
+        if public_name != candidate.short_name() && !explicit_alias {
+            continue;
+        }
+        if !is_model_tool_name(public_name) {
+            if explicit_alias {
+                return Err(BundleError::InvalidManifest {
+                    source_name: bundle_id.to_string(),
+                    detail: format!(
+                        "model-facing {kind} name `{public_name}` must be 1-64 ASCII letters, digits, `_`, or `-`"
+                    ),
+                });
+            }
+            continue;
+        }
+        names.insert(public_name.clone());
+        covered.insert(canonical_id.clone());
+    }
+    for canonical_id in public.values() {
+        if covered.contains(canonical_id) {
+            continue;
+        }
+        return Err(BundleError::InvalidManifest {
+            source_name: bundle_id.to_string(),
+            detail: format!(
+                "selected {kind} `{canonical_id}` has no provider-safe schema name; add an explicit alias using 1-64 ASCII letters, digits, `_`, or `-`"
+            ),
+        });
+    }
+    Ok(names)
+}
+
+/// Return whether a name satisfies the common provider Tool-name contract.
+fn is_model_tool_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
 }
 
 fn assign_public_names(
@@ -3758,7 +3842,7 @@ agent:
     }
 
     #[test]
-    fn schema_and_dispatch_name_sets_are_identical() {
+    fn model_schemas_use_explicit_aliases_and_canonical_short_names() {
         let catalog = Arc::new(
             TestCatalog::from_prepared(&[bundle_with_agent(
                 "hya/schema-dispatch",
@@ -3794,7 +3878,10 @@ agent:
             .into_iter()
             .map(|schema| schema.name.as_str().to_string())
             .collect::<BTreeSet<_>>();
-        assert_eq!(schema_names, compiled.public_tool_names());
+        assert_eq!(
+            schema_names,
+            BTreeSet::from(["reader".to_string(), "write".to_string()])
+        );
         assert!(compiled.resolve_tool("reader").is_some());
         assert!(compiled.resolve_tool("read").is_none());
         assert!(compiled.resolve_tool("write").is_some());
@@ -3942,7 +4029,14 @@ agent:
             .into_iter()
             .map(|schema| schema.name.as_str().to_string())
             .collect::<BTreeSet<_>>();
-        assert_eq!(schema_names, compiled.public_tool_names());
+        assert_eq!(
+            schema_names,
+            BTreeSet::from([
+                "book".to_string(),
+                "reader".to_string(),
+                "write".to_string()
+            ])
+        );
         assert!(compiled.resolve_tool("reader").is_some());
         assert!(compiled.resolve_tool("book").is_some());
         assert!(
@@ -4387,7 +4481,13 @@ agent:
     }
 
     #[test]
-    fn both_planes_preserve_builtin_alias_in_public_names() {
+    fn both_planes_keep_builtin_aliases_out_of_model_schemas() {
+        let expected = ToolRegistry::builtins()
+            .schemas()
+            .into_iter()
+            .map(|schema| schema.name.as_str().to_string())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(expected.len(), 28);
         for (agent_id, plane, workdir) in [
             (
                 "full-alias",
@@ -4418,22 +4518,33 @@ agent:
                 compiled.resolve_tool("apply_patch").is_some(),
                 "{agent_id}: canonical apply_patch must remain public"
             );
-            assert!(
-                compiled.resolve_tool("patch").is_some(),
-                "{agent_id}: builtin alias `patch` must enter compiled public names"
-            );
+            for alias in ["fetch", "search", "todo", "patch", "plan"] {
+                assert!(
+                    compiled.resolve_tool(alias).is_some(),
+                    "{agent_id}: hidden alias `{alias}` must remain dispatchable"
+                );
+            }
             let schema_names = compiled
                 .tool_schemas()
                 .into_iter()
                 .map(|schema| schema.name.as_str().to_string())
                 .collect::<BTreeSet<_>>();
             assert_eq!(
-                schema_names,
-                compiled.public_tool_names(),
-                "{agent_id}: schema and dispatch sets must stay identical with aliases"
+                schema_names, expected,
+                "{agent_id}: canonical schema set drifted"
             );
-            assert!(schema_names.contains("patch"));
-            assert!(schema_names.contains("apply_patch"));
+            assert!(
+                schema_names.contains("apply_patch"),
+                "{agent_id}: canonical schema must remain model-facing"
+            );
+            assert!(
+                !schema_names.contains("patch"),
+                "{agent_id}: hidden dispatch alias must not be advertised"
+            );
+            assert!(
+                schema_names.iter().all(|name| !name.contains([':', '/'])),
+                "{agent_id}: qualified dispatch identities must not reach providers: {schema_names:?}"
+            );
         }
     }
 
@@ -4496,15 +4607,53 @@ agent:
             .into_iter()
             .map(|schema| schema.name.as_str().to_string())
             .collect::<BTreeSet<_>>();
-        assert_eq!(
-            schema_names,
-            compiled.public_tool_names(),
-            "schema and dispatch sets must remain identical"
-        );
+        assert!(schema_names.is_subset(&compiled.public_tool_names()));
         assert!(schema_names.contains("applier"));
-        assert!(schema_names.contains("harness:tool/apply_patch"));
+        assert!(!schema_names.contains("harness:tool/apply_patch"));
         assert!(!schema_names.contains("apply_patch"));
         assert!(!schema_names.contains("patch"));
+        assert!(
+            schema_names
+                .iter()
+                .all(|name| !name.contains(':') && !name.contains('/'))
+        );
+    }
+
+    #[test]
+    fn invalid_provider_tool_alias_fails_during_resource_compile() {
+        let catalog = Arc::new(
+            TestCatalog::from_prepared(&[bundle_with_agent(
+                "hya/invalid-provider-alias",
+                agent(
+                    "invalid-alias-agent",
+                    ResourceView {
+                        allow: vec!["harness:tool/read".to_string()],
+                        deny: Vec::new(),
+                        aliases: BTreeMap::from([(
+                            "bad:name".to_string(),
+                            "harness:tool/read".to_string(),
+                        )]),
+                        namespace: None,
+                    },
+                ),
+                Vec::new(),
+            )])
+            .unwrap(),
+        );
+        let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
+        let binding = registry
+            .bind_turn(Path::new("/tmp/hya-invalid-provider-alias"))
+            .unwrap();
+        let policy = binding
+            .agent_resource_policy_on_plane("invalid-alias-agent", AgentToolPlane::Full)
+            .unwrap();
+        match binding.compile_agent_resources(&policy) {
+            Err(BundleError::InvalidManifest { detail, .. }) => {
+                assert!(detail.contains("model-facing tool name `bad:name`"));
+            }
+            Ok(_) => panic!("invalid provider Tool alias must fail before a request"),
+            Err(other) => panic!("expected invalid manifest, got {other:?}"),
+        }
     }
 
     #[test]
@@ -4670,8 +4819,10 @@ agent:
             .into_iter()
             .map(|schema| schema.name.as_str().to_string())
             .collect::<BTreeSet<_>>();
-        assert_eq!(schema_names, compiled.public_tool_names());
-        assert!(schema_names.contains("pingy"));
+        assert!(schema_names.is_subset(&compiled.public_tool_names()));
+        assert!(schema_names.contains("mcp__fixture__ping"));
+        assert!(!schema_names.contains("pingy"));
+        assert!(!schema_names.contains("harness:mcp/mcp__fixture__ping"));
     }
 
     #[test]
@@ -5004,7 +5155,7 @@ agent:
     }
 
     #[test]
-    fn bundle_sidecar_tool_binding_owns_short_name_and_shares_schema_dispatch_map() {
+    fn bundle_sidecar_collision_requires_provider_safe_names_for_both_targets() {
         let bundle_id = "hya/sidecar-map";
         let mut bundle = bundle_with_agent(
             bundle_id,
@@ -5029,22 +5180,42 @@ agent:
         let binding = registry
             .bind_turn(Path::new("/tmp/hya-sidecar-tool-map"))
             .unwrap();
-        let policy = binding
+        let mut policy = binding
             .agent_resource_policy_on_plane("sidecar-agent", AgentToolPlane::Full)
             .unwrap();
         let sidecar_tool = ResolvedTool {
             tool: Arc::new(NoopTool::new(format!("bundle:{bundle_id}/tool/echo"))),
             permission: ToolPermission::Tool,
         };
+
+        match binding.compile_agent_resources_with_sidecar_tools(
+            &policy,
+            std::slice::from_ref(&sidecar_tool),
+        ) {
+            Err(BundleError::InvalidManifest { detail, .. }) => {
+                assert!(detail.contains("harness:tool/echo"));
+                assert!(detail.contains("no provider-safe schema name"));
+            }
+            Ok(_) => panic!("selected harness Tool must not silently vanish from schemas"),
+            Err(other) => panic!("expected provider-safe schema rejection, got {other:?}"),
+        }
+
+        policy
+            .resource_view
+            .aliases
+            .insert("harness_echo".to_string(), "harness:tool/echo".to_string());
         let compiled = binding
             .compile_agent_resources_with_sidecar_tools(&policy, &[sidecar_tool])
-            .unwrap();
+            .expect("an explicit provider-safe alias must preserve both selected Tools");
         let schema_names = compiled
             .tool_schemas()
             .into_iter()
             .map(|schema| schema.name.as_str().to_string())
             .collect::<BTreeSet<_>>();
-        assert_eq!(schema_names, compiled.public_tool_names());
+        assert!(schema_names.contains("echo"));
+        assert!(schema_names.contains("harness_echo"));
+        assert!(!schema_names.contains(&format!("bundle:{bundle_id}/tool/echo")));
+        assert!(!schema_names.contains("harness:tool/echo"));
 
         let bundle_short = compiled.resolve_tool("echo").unwrap();
         assert_eq!(
@@ -5058,6 +5229,8 @@ agent:
             bundle_qualified.tool.name(),
             format!("bundle:{bundle_id}/tool/echo")
         );
+        let harness_alias = compiled.resolve_tool("harness_echo").unwrap();
+        assert_eq!(harness_alias.tool.name(), "echo");
         let harness_qualified = compiled.resolve_tool("harness:tool/echo").unwrap();
         assert_eq!(harness_qualified.tool.name(), "echo");
     }

@@ -89,6 +89,7 @@ impl FakeProvider {
                         session,
                         message,
                         part,
+                        reason: None,
                     });
                     out.push(Event::ReasoningDelta {
                         session,

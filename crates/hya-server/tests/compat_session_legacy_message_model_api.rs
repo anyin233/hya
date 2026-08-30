@@ -183,3 +183,25 @@ async fn legacy_message_route_preserves_variant_compatibility() {
     assert_eq!(model["id"], "claude-opus-4-8");
     assert!(model.get("variant").is_none());
 }
+
+#[tokio::test]
+async fn legacy_command_route_applies_selected_model_variant() {
+    let app = router(state().await);
+    let session = create_session(app.clone()).await;
+
+    let (status, _) = post_json(
+        app.clone(),
+        format!("/session/{session}/command"),
+        json!({
+            "command": "custom",
+            "arguments": "selection",
+            "text": "record selected model",
+            "model": "fake",
+            "variant": "low",
+        }),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(session_model(app, &session).await["variant"], "low");
+}

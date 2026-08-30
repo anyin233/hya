@@ -113,6 +113,70 @@ tags = ["pr", "tools"]
 timeout_secs = 90
 
 [[scenario]]
+id = "T1.16"
+title = "custom slash catalog and route expansion"
+track = "P"
+path = "crates/hya-e2e/tests/p18_custom_slash_resources.rs"
+tags = ["pr", "resources", "commands"]
+timeout_secs = 240
+
+[[scenario]]
+id = "T1.17"
+title = "Skill-backed slash expansion and discovery order"
+track = "P"
+path = "crates/hya-e2e/tests/p18_custom_slash_resources.rs"
+tags = ["pr", "resources", "skills", "commands"]
+timeout_secs = 240
+
+[[scenario]]
+id = "T1.18"
+title = "custom command invokes builtin Skill Tool"
+track = "P"
+path = "crates/hya-e2e/tests/p18_custom_slash_resources.rs"
+tags = ["pr", "resources", "skills", "recovery"]
+timeout_secs = 240
+
+[[scenario]]
+id = "T1.19"
+title = "custom command invokes plugin Tool"
+track = "P"
+path = "crates/hya-e2e/tests/p18_custom_slash_resources.rs"
+tags = ["pr", "resources", "plugins", "recovery"]
+timeout_secs = 300
+
+[[scenario]]
+id = "T1.20"
+title = "custom command invokes MCP Tool"
+track = "P"
+path = "crates/hya-e2e/tests/p18_custom_slash_resources.rs"
+tags = ["pr", "resources", "mcp", "recovery"]
+timeout_secs = 360
+
+[[scenario]]
+id = "T1.21"
+title = "custom resource name conflicts fail closed"
+track = "P"
+path = "crates/hya-e2e/tests/p18_custom_slash_resources.rs"
+tags = ["pr", "resources", "conflicts"]
+timeout_secs = 300
+
+[[scenario]]
+id = "T1.22"
+title = "dynamic resource snapshots and reload"
+track = "P"
+path = "crates/hya-e2e/tests/p18_custom_slash_resources.rs"
+tags = ["pr", "resources", "reload", "recovery"]
+timeout_secs = 300
+
+[[scenario]]
+id = "T1.23"
+title = "structured custom Tool errors and session recovery"
+track = "P"
+path = "crates/hya-e2e/tests/p18_custom_slash_resources.rs"
+tags = ["pr", "resources", "errors", "recovery"]
+timeout_secs = 240
+
+[[scenario]]
 id = "T2.1"
 title = "subagent task spawn"
 track = "P"
@@ -201,6 +265,22 @@ tags = ["pr", "swarm", "mailbox"]
 timeout_secs = 120
 
 [[scenario]]
+id = "T2.12"
+title = "cross-unit send is refused and never crosses"
+track = "P"
+path = "crates/hya-e2e/tests/p16_swarm_mailbox.rs"
+tags = ["pr", "swarm", "mailbox", "isolation"]
+timeout_secs = 180
+
+[[scenario]]
+id = "T2.13"
+title = "user-authored Workflow runs fan-out and fan-in"
+track = "P"
+path = "crates/hya-e2e/tests/p17_workflow_composition.rs"
+tags = ["pr", "workflow", "subagent"]
+timeout_secs = 180
+
+[[scenario]]
 id = "T3.1"
 title = "TUI real-backend permission reply"
 track = "T"
@@ -223,6 +303,14 @@ track = "T"
 path = "packages/hya-tui-ts/test/real-backend-agents.test.ts"
 tags = ["pr", "tui", "roster"]
 timeout_secs = 60
+
+[[scenario]]
+id = "T3.4"
+title = "TUI custom resource slash command transport"
+track = "T"
+path = "packages/hya-tui-ts/test/pty-smoke.test.ts"
+tags = ["pr", "tui", "resources", "commands"]
+timeout_secs = 180
 
 # Index-only deep engine coverage (not duplicated in Track P).
 [[scenario]]

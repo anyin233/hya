@@ -438,6 +438,44 @@ async fn workflow_slash_command_bypasses_parent_model_on_all_command_routes() {
 }
 
 #[tokio::test]
+async fn workflow_slash_result_is_visible_as_assistant_without_provider_round() {
+    let (app, session, _control, provider_calls) = fixture().await;
+    let response = router(app.clone())
+        .oneshot(
+            Request::post(format!("/session/{session}/command"))
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    json!({"command": "workflow", "arguments": "list"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let messages = body_json(
+        router(app)
+            .oneshot(
+                Request::get(format!("/session/{session}/message"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap(),
+    )
+    .await;
+    let messages = messages.as_array().expect("messages");
+    let result = messages.last().expect("Workflow result message");
+    assert_eq!(result["info"]["role"], "assistant");
+    assert!(
+        result["parts"][0]["text"]
+            .as_str()
+            .is_some_and(|text| text.contains("\"kind\":\"state\""))
+    );
+    assert_eq!(provider_calls.load(Ordering::Relaxed), 0);
+}
+
+#[tokio::test]
 async fn typed_workflow_commands_use_all_route_families() {
     let (app, session, control, provider_calls) = fixture().await;
     for path in [

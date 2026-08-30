@@ -48,7 +48,14 @@ import { useKV } from "../../context/kv"
 import { createFadeIn } from "../../util/signal"
 import { DialogSkill } from "../dialog-skill"
 import { useArgs } from "../../context/args"
-import { OPENCODE_BASE_MODE, useBindings, useCommandShortcut, useLeaderActive, useOpencodeKeymap } from "../../keymap"
+import {
+  OPENCODE_BASE_MODE,
+  useBindings,
+  useCommandShortcut,
+  useCommandSlashes,
+  useLeaderActive,
+  useOpencodeKeymap,
+} from "../../keymap"
 import { useTuiConfig } from "../../config"
 import { readLocalAttachment } from "./local-attachment"
 
@@ -155,6 +162,7 @@ export function Prompt(props: PromptProps) {
   const history = usePromptHistory()
   const stash = usePromptStash()
   const keymap = useOpencodeKeymap()
+  const slashes = useCommandSlashes()
   const agentShortcut = useCommandShortcut("agent.cycle")
   const paletteShortcut = useCommandShortcut("command.palette.show")
   const renderer = useRenderer()
@@ -311,7 +319,8 @@ export function Prompt(props: PromptProps) {
         if (!args.agent) local.agent.set(msg.agent)
         if (msg.model) {
           local.model.set(msg.model)
-          local.model.variant.set(msg.model.variant)
+          // Legacy/default Session messages omit variant; they must not erase the persisted per-model choice.
+          if (msg.model.variant !== undefined) local.model.variant.set(msg.model.variant)
         }
       }
     }
@@ -396,7 +405,7 @@ export function Prompt(props: PromptProps) {
             setStore("interrupt", 0)
           }, 5000)
 
-          if (store.interrupt >= 2) {
+          if (store.interrupt >= 1) {
             void sdk.client.session.abort({
               sessionID: props.sessionID,
             })
@@ -896,6 +905,22 @@ export function Prompt(props: PromptProps) {
     }
   })
 
+  /** Record one accepted composer submission and clear all composer-owned state. */
+  function commitPromptSubmission(mode: NonNullable<PromptInfo["mode"]>) {
+    history.append({
+      ...store.prompt,
+      mode,
+    })
+    input.extmarks.clear()
+    setStore("prompt", {
+      input: "",
+      parts: [],
+    })
+    setStore("extmarkToPartIndex", new Map())
+    props.onSubmit?.()
+    input.clear()
+  }
+
   let submitting = false
   async function submit() {
     // Prevent overlapping invocations (e.g. a double-pressed Enter, or the
@@ -924,6 +949,26 @@ export function Prompt(props: PromptProps) {
     if (props.disabled) return false
     if (auto()?.visible) return false
     if (!store.prompt.input) return false
+    const inputText = expandTrackedPastedText(
+      store.prompt.input,
+      input.extmarks.getAllForTypeId(promptPartTypeId).flatMap((extmark) => {
+        const partIndex = store.extmarkToPartIndex.get(extmark.id)
+        const part = partIndex === undefined ? undefined : store.prompt.parts[partIndex]
+        if (part?.type !== "text") return []
+        return [{ start: extmark.start, end: extmark.end, text: part.text }]
+      }),
+    )
+    const exactSlash = inputText.trimEnd()
+    const localSlash =
+      store.mode === "normal" && exactSlash.startsWith("/") && !exactSlash.includes("\n")
+        ? slashes().find((entry) => entry.display === exactSlash || entry.aliases?.includes(exactSlash))
+        : undefined
+    if (localSlash) {
+      commitPromptSubmission(store.mode)
+      localSlash.onSelect?.()
+      return true
+    }
+
     const agent = local.agent.current()
     if (!agent) return false
     const trimmed = store.prompt.input.trim()
@@ -962,16 +1007,6 @@ export function Prompt(props: PromptProps) {
 
       sessionID = res.data.id
     }
-
-    const inputText = expandTrackedPastedText(
-      store.prompt.input,
-      input.extmarks.getAllForTypeId(promptPartTypeId).flatMap((extmark) => {
-        const partIndex = store.extmarkToPartIndex.get(extmark.id)
-        const part = partIndex === undefined ? undefined : store.prompt.parts[partIndex]
-        if (part?.type !== "text") return []
-        return [{ start: extmark.start, end: extmark.end, text: part.text }]
-      }),
-    )
 
     // Filter out text parts (pasted content) since they're now expanded inline
     const nonTextParts = store.prompt.parts.filter((part) => part.type !== "text")
@@ -1018,15 +1053,26 @@ export function Prompt(props: PromptProps) {
       const restOfInput = firstLineEnd === -1 ? "" : inputText.slice(firstLineEnd + 1)
       const args = firstLineArgs.join(" ") + (restOfInput ? "\n" + restOfInput : "")
 
-      void sdk.client.session.command({
-        sessionID,
-        command: command.slice(1),
-        arguments: args,
-        agent: agent.name,
-        model: `${selectedModel.providerID}/${selectedModel.modelID}`,
-        variant,
-        parts: nonTextParts.filter((x) => x.type === "file"),
-      })
+      void sdk.client.session
+        .command(
+          {
+            sessionID,
+            command: command.slice(1),
+            arguments: args,
+            agent: agent.name,
+            model: `${selectedModel.providerID}/${selectedModel.modelID}`,
+            variant,
+            parts: nonTextParts.filter((x) => x.type === "file"),
+          },
+          { throwOnError: true },
+        )
+        .catch((error) => {
+          toast.show({
+            title: "Failed to run command",
+            message: errorMessage(error),
+            variant: "error",
+          })
+        })
     } else {
       sdk.client.session
         .prompt(
@@ -1056,17 +1102,6 @@ export function Prompt(props: PromptProps) {
         })
       if (editorParts.length > 0) editor.markSelectionSent()
     }
-    history.append({
-      ...store.prompt,
-      mode: currentMode,
-    })
-    input.extmarks.clear()
-    setStore("prompt", {
-      input: "",
-      parts: [],
-    })
-    setStore("extmarkToPartIndex", new Map())
-    props.onSubmit?.()
 
     // temporary hack to make sure the message is sent
     if (!props.sessionID) {
@@ -1078,7 +1113,7 @@ export function Prompt(props: PromptProps) {
         })
       }, 50)
     }
-    input.clear()
+    commitPromptSubmission(currentMode)
     return true
   }
 

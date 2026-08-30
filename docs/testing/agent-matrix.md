@@ -41,29 +41,38 @@ bun test test/real-backend.test.ts test/task-presentation.test.ts test/real-back
 | T1.13 | Project AGENTS.md guidance | `tests/p13_project_agents_context.rs` | Compat-guided FakeLlm request contains AGENTS body marker |
 | T1.14 | Compact / summarize | `tests/p14_compact_summarize.rs` | Compact injects summary into context; follow-up turn works |
 | T1.15 | todowrite + edit | `tests/p15_todo_and_edit.rs` | Todo route lists item; edit rewrites file on disk |
+| T1.16 | Custom slash catalog and route expansion | `tests/p18_custom_slash_resources.rs` | Supported command sources, precedence, exact single-pass expansion, route parity, and literal fallback |
+| T1.17 | Skill-backed slash expansion | `tests/p18_custom_slash_resources.rs` | Direct Skill body admission, discovery order, no redundant `skill` call, and bootstrap cache boundaries |
+| T1.18 | Custom command invokes builtin Skill Tool | `tests/p18_custom_slash_resources.rs` | Real `skill` result reaches the next model request; typed failures recover in the same Session |
+| T1.19 | Custom command invokes plugin Tool | `tests/p18_custom_slash_resources.rs` | `remember` RPC result, permission, process death, respawn, drift rejection, and restart boundary |
+| T1.20 | Custom command invokes MCP Tool | `tests/p18_custom_slash_resources.rs` | Namespaced result, structured faults, explicit reconnect, and old-binding pinning |
+| T1.21 | Custom resource conflicts fail closed | `tests/p18_custom_slash_resources.rs` | Plugin/builtin/MCP collisions publish no partial runtime generation |
+| T1.22 | Dynamic resource snapshots and reload | `tests/p18_custom_slash_resources.rs` | Skill and MCP next-Turn refresh, plugin restart boundary, and immutable old bindings |
+| T1.23 | Structured custom Tool errors recover | `tests/p18_custom_slash_resources.rs` | One terminal Tool Event, structured replay, no replay execution, and later same-Session success |
 | T2.1 | Subagent task | `tests/p08_subagent_task.rs` | Tree children ≥ 1, `general`, distinct child session |
 | T2.2 | Nested tree depth≥2 | `tests/p09_nested_subagent.rs` | Depth ≥ 2, explore+plan, ≥ 3 session ids |
 | T2.3 | Agent roster / roles | `tests/p10_agent_roster.rs` | `/api/agent` lists build + spawnable roles |
 | T2.4 | Swarm `roster` + `list_agents` | `tests/p16_swarm_mailbox.rs` | Caller's follow-up carries the teammate's handle, type, status and **real session id** |
 | T2.5 | Swarm `send` (direct) | `tests/p16_swarm_mailbox.rs` | **Recipient's** next request contains `[mail from main/general-2] …` |
 | T2.6 | Swarm `send` (`#channel`) | `tests/p16_swarm_mailbox.rs` | Subscriber's next request contains the post; receipt reads `to #squad (1 recipient)` — the channel-branch count, not the direct-send constant |
-| T2.12 | Cross-unit `send` refused | `tests/p16_swarm_mailbox.rs` | Two units, two levels deep: sender's follow-up carries the scope refusal AND the payload never reaches the other unit ([ADR-0011](../adr/0011-hierarchy-scoped-mailbox.md)) |
 | T2.7 | Hyabundle CLI lifecycle | `tests/p11_hyabundle.rs` | install/list/info/uninstall stdout |
 | T2.8 | Hyabundle spawn agent | `tests/p11_hyabundle.rs` | Roster has package agent; events have scripted text |
 | T2.9 | Swarm `channels` | `tests/p16_swarm_mailbox.rs` | Result reports `members:["general-1"]` and `messages:1` the caller never supplied |
 | T2.10 | Swarm `join` | `tests/p16_swarm_mailbox.rs` | Post-join message reaches the joiner; pre-join post never does |
 | T2.11 | Swarm `leave` | `tests/p16_swarm_mailbox.rs` | Negative: departed member never sees the post, bounded by a still-subscribed member **and** a later direct ping it did see |
+| T2.12 | Cross-unit `send` refused | `tests/p16_swarm_mailbox.rs` | Two units, two levels deep: sender's follow-up carries the scope refusal AND the payload never reaches the other unit ([ADR-0011](../adr/0011-hierarchy-scoped-mailbox.md)) |
+| T2.13 | User-authored Workflow fan-out/fan-in | `tests/p17_workflow_composition.rs` | One discovered Workflow spawns four distinct stage Sessions, joins both parallel implementations into review, and returns the final report to the lead |
 
 ### Built-in tool coverage
 
-`ToolRegistry::builtins()` registers **26** primary tool names (19 tools in the
-builtin loop, plus `shell`, the separately named `bash` entry that shares the
-shell implementation, and five aliased canonicals: `apply_patch`, `webfetch`,
-`websearch`, `todowrite`, `plan_exit`). Track P now exercises **14**:
+`ToolRegistry::builtins()` advertises exactly **28** canonical Tool names. The
+dispatch-only aliases `fetch`, `search`, `todo`, `patch`, and `plan` are hidden
+from provider schemas and are not counted as canonical Tools. Track P directly
+exercises **15** canonical Tools:
 
-| Covered (14) | Not covered (12) |
+| Covered (15) | Not directly covered by Track P (13) |
 | --- | --- |
-| `read`, `write`, `edit`, `shell`, `question`, `skill`, `task`, `todowrite`, `send`, `roster`, `channels`, `join`, `leave`, `list_agents` | `bash`, `ls`, `glob`, `find`, `grep`, `lsp`, `ask_user`, `apply_patch`, `webfetch`, `websearch`, `plan_exit`, `invalid` |
+| `read`, `write`, `edit`, `shell`, `question`, `skill`, `task`, `todowrite`, `send`, `roster`, `channels`, `join`, `leave`, `list_agents`, `workflow` | `bash`, `ls`, `glob`, `find`, `grep`, `lsp`, `ask_user`, `apply_patch`, `webfetch`, `websearch`, `plan_exit`, `invalid`, `announce` |
 
 ### Multi-agent scenarios need per-agent FakeLlm routing
 
@@ -88,13 +97,15 @@ ordering rules that keep those scenarios deterministic.
 | T3.1 | Real-backend permission reply | `packages/hya-tui-ts/test/real-backend.test.ts` |
 | T3.2 | Multi-agent task presentation | `packages/hya-tui-ts/test/task-presentation.test.ts` |
 | T3.3 | Real-backend agent roster | `packages/hya-tui-ts/test/real-backend-agents.test.ts` |
+| T3.4 | Custom resource slash command transport | `packages/hya-tui-ts/test/pty-smoke.test.ts` |
 
-These three scenarios are the **enforced** Track T gate in
+The first three scenarios are the **enforced** Track T gate in
 `.github/workflows/ci.yml`; the workflow names them explicitly rather than
-running a blanket `bun test`.
+running a blanket `bun test`. T3.4 is matrix-registered PTY coverage in the
+non-gating TUI smoke step.
 
 Full PTY matrix for every feature ID is **not** required for the PR gate; PTY
-remains presentation smoke (`pty-smoke.test.ts`). The rest of the bun suite,
+remains presentation smoke (`pty-smoke.test.ts`). The rest of the Bun suite,
 PTY included, runs in a **non-gating** step (`continue-on-error: true`) so it
 still reports without being able to block the Rust gate. That is not a
 hypothetical concern: on 2026-08-05, run `31053432077` failed on a

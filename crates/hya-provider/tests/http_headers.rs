@@ -302,7 +302,11 @@ async fn http_provider_posts_responses_body_with_every_reasoning_effort() {
         ReasoningEffort::XHigh,
         ReasoningEffort::Max,
     ] {
-        let (base_url, request_rx) = start_sse_server("data: [DONE]\n\n".to_string()).await;
+        let (base_url, request_rx) = start_sse_server(
+            "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\ndata: [DONE]\n\n"
+                .to_string(),
+        )
+        .await;
         let provider = HttpProvider::new(
             "openai",
             ProviderKind::OpenAiResponse,
@@ -587,25 +591,41 @@ async fn http_provider_decodes_grok_reasoning_text_delta_and_typed_terminal() {
     ));
 }
 
+/// Responses routes require typed terminal events; Chat Completions keeps its permissive close.
 #[tokio::test]
-async fn grok_requires_typed_terminal_while_openai_responses_remains_permissive() {
+async fn responses_routes_require_typed_terminal_while_chat_completions_remains_permissive() {
     for response in ["data: [DONE]\n\n", ""] {
-        let grok = response_events(ProviderKind::GrokBuild, response).await;
-        let openai = response_events(ProviderKind::OpenAiResponse, response).await;
+        for kind in [ProviderKind::OpenAiResponse, ProviderKind::GrokBuild] {
+            let events = response_events(kind, response).await;
+            assert!(matches!(
+                events.as_slice(),
+                [Err(ProviderError::Decode(message))]
+                    if message == "Responses stream ended without response.completed or response.incomplete"
+            ));
+        }
 
+        let chat = response_events(ProviderKind::OpenAiCompatible, response).await;
+        assert!(chat.iter().all(Result::is_ok));
         assert!(matches!(
-            grok.as_slice(),
-            [Err(ProviderError::Decode(message))]
-                if message == "Responses stream ended without response.completed or response.incomplete"
-        ));
-        assert!(openai.iter().all(Result::is_ok));
-        assert!(matches!(
-            openai.last(),
+            chat.last(),
             Some(Ok(Event::MessageFinished {
                 finish: FinishReason::Stop,
                 ..
             }))
         ));
+    }
+}
+
+/// Every OpenAI-family streaming route reports malformed JSON as `ProviderError::Json`.
+#[tokio::test]
+async fn openai_family_routes_report_malformed_json_frames() {
+    for kind in [
+        ProviderKind::OpenAiCompatible,
+        ProviderKind::OpenAiResponse,
+        ProviderKind::GrokBuild,
+    ] {
+        let events = response_events(kind, "data: {not-json}\n\n").await;
+        assert!(matches!(events.as_slice(), [Err(ProviderError::Json(_))]));
     }
 }
 
@@ -649,7 +669,7 @@ async fn http_provider_decodes_responses_reasoning_text_tool_and_usage() {
         tools: Vec::new(),
         temperature: None,
         max_output_tokens: None,
-        reasoning: Some(ReasoningEffort::Medium),
+        reasoning: Some(ReasoningEffort::Low),
         headers: Default::default(),
     };
 
@@ -668,6 +688,11 @@ async fn http_provider_decodes_responses_reasoning_text_tool_and_usage() {
         Event::ReasoningStart { part, .. } => *part,
         event => panic!("expected reasoning start, got {event:?}"),
     };
+    let reasoning_start = serde_json::to_value(&events[0]).unwrap();
+    assert_eq!(
+        reasoning_start["reason"], "low",
+        "reasoning start must retain the requested effort"
+    );
     assert!(matches!(
         &events[1],
         Event::ReasoningDelta { part, delta, .. }
@@ -790,7 +815,11 @@ async fn http_provider_reports_nested_responses_failure() {
 
 #[tokio::test]
 async fn http_provider_replays_completed_responses_reasoning_and_tool_round() {
-    let (base_url, request_rx) = start_sse_server("data: [DONE]\n\n".to_string()).await;
+    let (base_url, request_rx) = start_sse_server(
+        "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\ndata: [DONE]\n\n"
+            .to_string(),
+    )
+    .await;
     let provider = HttpProvider::new(
         "openai",
         ProviderKind::OpenAiResponse,

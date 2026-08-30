@@ -22,7 +22,7 @@ use hya_core::{AgentSpec, CoreError, CreateSession, EventBus, SessionEngine};
 use hya_proto::{AgentName, Event, FinishReason, MessageId, ModelRef, PartProjection, SessionId};
 use hya_provider::{
     Capabilities, CompletionRequest, EventStream, FakeProvider, FakeStep, Provider, ProviderError,
-    ProviderRouter,
+    ProviderRouter, ReasoningEffort,
 };
 use hya_store::SessionStore;
 use hya_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule, ToolRegistry};
@@ -44,6 +44,7 @@ struct ScriptedModelProvider {
     claimed_model: &'static str,
     outcomes: Mutex<VecDeque<Outcome>>,
     attempts: Arc<Mutex<Vec<String>>>,
+    request_reasoning: Arc<Mutex<Vec<Option<ReasoningEffort>>>>,
 }
 
 impl ScriptedModelProvider {
@@ -56,6 +57,7 @@ impl ScriptedModelProvider {
             claimed_model,
             outcomes: Mutex::new(outcomes.into()),
             attempts,
+            request_reasoning: Arc::new(Mutex::new(Vec::new())),
         }
     }
 }
@@ -72,6 +74,7 @@ impl Provider for ScriptedModelProvider {
             parallel_tool_calls: true,
             usage_reporting: true,
             max_context: 200_000,
+            reasoning_request: true,
             ..Capabilities::default()
         })
     }
@@ -88,6 +91,7 @@ impl Provider for ScriptedModelProvider {
             "engine must only route this provider its own model"
         );
         self.attempts.lock().unwrap().push(req.model.to_string());
+        self.request_reasoning.lock().unwrap().push(req.reasoning);
         let outcome = self
             .outcomes
             .lock()
@@ -464,4 +468,61 @@ async fn unknown_model_advances_to_next_chain_candidate() {
     assert_eq!(finish, FinishReason::Stop);
     assert!(assistant_text(&fixt).await.contains("RESCUED_TEXT"));
     assert_eq!(rescued_attempts.lock().unwrap().len(), 1);
+}
+
+/// Ensure each model candidate receives the reasoning variant encoded in its model ref.
+#[tokio::test]
+async fn fallback_uses_each_candidate_reasoning_variant() {
+    let preferred_attempts = attempts_counter();
+    let fallback_attempts = attempts_counter();
+    let preferred = ScriptedModelProvider::new(
+        "preferred#low",
+        vec![Outcome::PreStreamFailure(ProviderError::HttpStatus {
+            status: 503,
+            message: "preferred unavailable".to_string(),
+            retry_after: None,
+        })],
+        preferred_attempts.clone(),
+    );
+    let fallback = ScriptedModelProvider::new(
+        "fallback#high",
+        vec![Outcome::Complete("FALLBACK_TEXT")],
+        fallback_attempts.clone(),
+    );
+    let preferred_reasoning = preferred.request_reasoning.clone();
+    let fallback_reasoning = fallback.request_reasoning.clone();
+    let fixt = fixture(
+        vec![preferred, fallback],
+        Some(chain("preferred#low", &["fallback#high"])),
+        "preferred#low",
+    )
+    .await;
+
+    let finish = fixt
+        .engine
+        .run_turn(fixt.session, &fixt.agent, CancellationToken::new())
+        .await
+        .unwrap();
+    assert_eq!(finish, FinishReason::Stop);
+    assert!(assistant_text(&fixt).await.contains("FALLBACK_TEXT"));
+    assert_eq!(
+        *preferred_attempts.lock().unwrap(),
+        vec!["preferred#low".to_string()],
+        "preferred candidate must be attempted first",
+    );
+    assert_eq!(
+        *fallback_attempts.lock().unwrap(),
+        vec!["fallback#high".to_string()],
+        "fallback candidate must be attempted after the preferred failure",
+    );
+    assert_eq!(
+        *preferred_reasoning.lock().unwrap(),
+        vec![Some(ReasoningEffort::Low)],
+        "preferred #low request must carry low reasoning",
+    );
+    assert_eq!(
+        *fallback_reasoning.lock().unwrap(),
+        vec![Some(ReasoningEffort::High)],
+        "fallback #high request must carry high reasoning",
+    );
 }

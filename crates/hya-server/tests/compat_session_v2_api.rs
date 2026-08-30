@@ -385,12 +385,19 @@ async fn compat_v2_session_command_and_shell_routes_return_wrapped_messages() {
         &format!("/api/session/{shell_session}/shell"),
         json!({
             "agent": "build",
+            "model": {
+                "providerID": "test-provider",
+                "modelID": "shell-selected"
+            },
             "command": "printf compat-v2-shell-ok"
         }),
     )
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(shell["data"]["info"]["role"], "assistant");
+    assert_eq!(shell["data"]["info"]["agent"], "build");
+    assert_eq!(shell["data"]["info"]["providerID"], "test-provider");
+    assert_eq!(shell["data"]["info"]["modelID"], "shell-selected");
     assert_eq!(shell["data"]["parts"][0]["type"], "tool");
     assert_eq!(shell["data"]["parts"][0]["tool"], "shell");
     assert_eq!(shell["data"]["parts"][0]["state"]["status"], "completed");
@@ -484,7 +491,7 @@ async fn compat_v2_session_delete_removes_session() {
     let (status, _) = get_json(app.clone(), format!("/api/session/{requested}")).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 
-    let (status, listed) = get_json(app, "/api/session?limit=10".to_string()).await;
+    let (status, listed) = get_json(app.clone(), "/api/session?limit=10".to_string()).await;
     assert_eq!(status, StatusCode::OK);
     assert!(
         listed["data"]
@@ -493,6 +500,17 @@ async fn compat_v2_session_delete_removes_session() {
             .iter()
             .all(|item| item["id"] != requested)
     );
+
+    let prompt = app
+        .oneshot(
+            Request::post(format!("/sessions/{requested}/prompt"))
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"text": "must stay deleted"}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(prompt.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]

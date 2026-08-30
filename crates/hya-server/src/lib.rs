@@ -172,6 +172,15 @@ fn parse_session(id: &str) -> Result<SessionId, ApiError> {
         .map_err(|_| ApiError::bad_request("invalid session id"))
 }
 
+/// Reject native Session routes after deletion or for unknown identifiers.
+async fn ensure_session_exists(st: &ServerState, session: SessionId) -> Result<(), ApiError> {
+    if st.engine.session_exists(session).await? {
+        Ok(())
+    } else {
+        Err(ApiError::not_found(format!("session not found: {session}")))
+    }
+}
+
 async fn create_session(
     State(st): State<ServerState>,
     Json(req): Json<CreateSessionRequest>,
@@ -200,6 +209,7 @@ async fn prompt(
     Json(req): Json<PromptRequest>,
 ) -> Result<Json<PromptResponse>, ApiError> {
     let session = parse_session(&id)?;
+    ensure_session_exists(&st, session).await?;
     let run = st
         .start_run(session)
         .ok_or_else(|| ApiError::conflict("session busy"))?;
@@ -214,16 +224,21 @@ async fn command(
     Json(req): Json<CommandRequest>,
 ) -> Result<Response, ApiError> {
     let session = parse_session(&id)?;
+    ensure_session_exists(&st, session).await?;
     if let Some(result) = workflow::intercept_slash(&st, session, &req).await? {
         return Ok(Json(result).into_response());
     }
     let run = st
         .start_run(session)
         .ok_or_else(|| ApiError::conflict("session busy"))?;
+    if let Some(model) = req.model_ref() {
+        st.engine.switch_model(session, model).await?;
+    }
     let CommandRequest {
         command,
         arguments,
         text,
+        ..
     } = req;
     let text = text.unwrap_or_else(|| command_prompt_text(&command, &arguments));
     let message = st
@@ -240,12 +255,14 @@ async fn shell(
     Json(req): Json<ShellRequest>,
 ) -> Result<Json<PromptResponse>, ApiError> {
     let session = parse_session(&id)?;
+    ensure_session_exists(&st, session).await?;
     let run = st
         .start_run(session)
         .ok_or_else(|| ApiError::conflict("session busy"))?;
+    let agent = compat::shell_agent(&st, session, &req).await?;
     let (message, finish) = st
         .engine
-        .run_shell(session, &st.agent, req.command, run.token())
+        .run_shell(session, &agent, req.command, run.token())
         .await?;
     Ok(Json(PromptResponse { message, finish }))
 }
@@ -265,13 +282,11 @@ async fn events(
 ) -> Result<Json<Vec<Envelope>>, ApiError> {
     let session = parse_session(&id)?;
     let since = q.since_seq.unwrap_or(0);
-    let envelopes = st
-        .engine
-        .replay(session)
-        .await?
-        .into_iter()
-        .filter(|e| e.seq.0 > since)
-        .collect();
+    let envelopes = st.engine.replay(session).await?;
+    if envelopes.is_empty() {
+        return Err(ApiError::not_found(format!("session not found: {session}")));
+    }
+    let envelopes = envelopes.into_iter().filter(|e| e.seq.0 > since).collect();
     Ok(Json(envelopes))
 }
 
@@ -280,6 +295,7 @@ async fn stream(
     Path(id): Path<String>,
 ) -> Result<Sse<impl Stream<Item = Result<SseEvent, Infallible>>>, ApiError> {
     let session = parse_session(&id)?;
+    ensure_session_exists(&st, session).await?;
     let rx = st.engine.bus().subscribe();
     let events = BroadcastStream::new(rx).filter_map(move |result| async move {
         match result {

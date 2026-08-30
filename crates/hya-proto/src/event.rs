@@ -330,6 +330,9 @@ pub enum Event {
         message: MessageId,
         /// New reasoning part id.
         part: PartId,
+        /// Requested reasoning effort, when the provider request supplied one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
     },
     /// Append reasoning text chunk.
     ReasoningDelta {

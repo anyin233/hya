@@ -2,7 +2,7 @@ use hya_proto::{Message, MessageId, Part, SessionId};
 use serde_json::{Value, json};
 
 use crate::wire::{tool_input, tool_result};
-use crate::{CompletionRequest, Decoder, Protocol, ProviderError};
+use crate::{CompletionRequest, Decoder, Protocol, ProviderError, ReasoningEffort};
 
 mod decoder;
 
@@ -56,8 +56,13 @@ impl Protocol for AnthropicMessagesProtocol {
         Ok(body)
     }
 
-    fn decoder(&self, session: SessionId, message: MessageId) -> Box<dyn Decoder> {
-        Box::new(AnthropicDecoder::new(session, message))
+    fn decoder(
+        &self,
+        session: SessionId,
+        message: MessageId,
+        reasoning: Option<ReasoningEffort>,
+    ) -> Box<dyn Decoder> {
+        Box::new(AnthropicDecoder::new(session, message, reasoning))
     }
 }
 

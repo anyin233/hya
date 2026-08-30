@@ -6,7 +6,7 @@ use hya_proto::{
 use serde_json::{Map, Value, json};
 
 use crate::wire::{tool_input, tool_result};
-use crate::{CompletionRequest, Decoder, Protocol, ProviderError};
+use crate::{CompletionRequest, Decoder, Protocol, ProviderError, ReasoningEffort};
 
 /// Gemini generateContent request encoder + stream decoder factory.
 pub struct GoogleProtocol;
@@ -193,7 +193,12 @@ impl Protocol for GoogleProtocol {
         Ok(body)
     }
 
-    fn decoder(&self, session: SessionId, message: MessageId) -> Box<dyn Decoder> {
+    fn decoder(
+        &self,
+        session: SessionId,
+        message: MessageId,
+        _reasoning: Option<ReasoningEffort>,
+    ) -> Box<dyn Decoder> {
         Box::new(GoogleDecoder::new(session, message))
     }
 }

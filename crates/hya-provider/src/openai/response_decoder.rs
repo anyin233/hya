@@ -5,7 +5,7 @@ use hya_proto::{
 };
 use serde_json::Value;
 
-use crate::{Decoder, ProviderError};
+use crate::{Decoder, ProviderError, ReasoningEffort};
 
 const MISSING_TYPED_TERMINAL: &str =
     "Responses stream ended without response.completed or response.incomplete";
@@ -52,36 +52,33 @@ impl ToolAsm {
 pub struct OpenAiResponsesDecoder {
     session: SessionId,
     message: MessageId,
+    reasoning_effort: Option<ReasoningEffort>,
     reasoning: BTreeMap<usize, PartAsm>,
     text: BTreeMap<usize, PartAsm>,
     tools: BTreeMap<usize, ToolAsm>,
     usage: TokenUsage,
     saw_tool_call: bool,
     finished: bool,
-    typed_terminal_required: bool,
 }
 
 impl OpenAiResponsesDecoder {
-    /// Bind a new decoder; stream may end without a typed terminal event.
+    /// Bind a decoder that requires a typed terminal event before stream end.
     #[must_use]
-    pub fn new(session: SessionId, message: MessageId) -> Self {
+    pub fn new(
+        session: SessionId,
+        message: MessageId,
+        reasoning_effort: Option<ReasoningEffort>,
+    ) -> Self {
         Self {
             session,
             message,
+            reasoning_effort,
             reasoning: BTreeMap::new(),
             text: BTreeMap::new(),
             tools: BTreeMap::new(),
             usage: TokenUsage::default(),
             saw_tool_call: false,
             finished: false,
-            typed_terminal_required: false,
-        }
-    }
-
-    pub(crate) fn new_requiring_typed_terminal(session: SessionId, message: MessageId) -> Self {
-        Self {
-            typed_terminal_required: true,
-            ..Self::new(session, message)
         }
     }
 
@@ -138,6 +135,9 @@ impl OpenAiResponsesDecoder {
 
     fn reasoning_delta(&mut self, index: usize, delta: &str) -> Vec<Event> {
         let (session, message) = (self.session, self.message);
+        let reason = self
+            .reasoning_effort
+            .map(|effort| effort.as_str().to_string());
         let entry = self.reasoning.entry(index).or_insert_with(PartAsm::new);
         let mut out = Vec::new();
         if !entry.started {
@@ -146,6 +146,7 @@ impl OpenAiResponsesDecoder {
                 session,
                 message,
                 part: entry.part,
+                reason,
             });
         }
         if !delta.is_empty() {
@@ -161,6 +162,9 @@ impl OpenAiResponsesDecoder {
 
     fn reasoning_done(&mut self, index: usize, item: &Value) -> Vec<Event> {
         let (session, message) = (self.session, self.message);
+        let reason = self
+            .reasoning_effort
+            .map(|effort| effort.as_str().to_string());
         let entry = self.reasoning.entry(index).or_insert_with(PartAsm::new);
         let mut out = Vec::new();
         if !entry.started {
@@ -169,6 +173,7 @@ impl OpenAiResponsesDecoder {
                 session,
                 message,
                 part: entry.part,
+                reason,
             });
         }
         if !entry.ended {
@@ -330,15 +335,7 @@ impl Decoder for OpenAiResponsesDecoder {
             return Ok(Vec::new());
         }
         if data == "[DONE]" {
-            if self.typed_terminal_required {
-                return Err(ProviderError::Decode(MISSING_TYPED_TERMINAL.to_string()));
-            }
-            let finish = if self.saw_tool_call {
-                FinishReason::ToolCalls
-            } else {
-                FinishReason::Stop
-            };
-            return Ok(self.close(finish));
+            return Err(ProviderError::Decode(MISSING_TYPED_TERMINAL.to_string()));
         }
         let event: Value = serde_json::from_str(data)?;
         let index = event
@@ -410,7 +407,7 @@ impl Decoder for OpenAiResponsesDecoder {
     }
 
     fn finish(&mut self) -> Result<Vec<Event>, ProviderError> {
-        if self.typed_terminal_required && !self.finished {
+        if !self.finished {
             return Err(ProviderError::Decode(MISSING_TYPED_TERMINAL.to_string()));
         }
         let finish = if self.saw_tool_call {

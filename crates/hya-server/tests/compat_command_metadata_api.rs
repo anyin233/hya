@@ -175,7 +175,7 @@ async fn compat_command_route_keeps_project_hya_before_home_duplicate() {
 }
 
 #[tokio::test]
-async fn compat_command_route_includes_native_init_and_review_commands() {
+async fn compat_command_route_includes_native_init_review_and_workflow_commands() {
     // Given: a server exposing the Compat-compatible instance routes.
     let app = router(state(tempdir()).await);
 
@@ -207,6 +207,12 @@ async fn compat_command_route_includes_native_init_and_review_commands() {
             .unwrap()
             .contains("You are a code reviewer.")
     );
+
+    let workflow = find_command(&commands, "workflow");
+    assert_eq!(workflow["description"], "inspect or run workflows");
+    assert_eq!(workflow["source"], "command");
+    assert_eq!(workflow["hints"], json!(["$ARGUMENTS"]));
+    assert_eq!(workflow["template"], "/workflow $ARGUMENTS");
 
     assert!(!has_command(&commands, "yolo"));
 }

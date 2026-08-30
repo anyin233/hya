@@ -125,7 +125,7 @@ impl Provider for RecordingProvider {
 fn decode_all(protocol: &OpenAiChatProtocol, lines: &[&str]) -> Vec<Event> {
     let s = SessionId::new();
     let m = MessageId::new();
-    let mut decoder = protocol.decoder(s, m);
+    let mut decoder = protocol.decoder(s, m, None);
     let mut out = Vec::new();
     for line in lines {
         out.extend(decoder.push(line).unwrap());
@@ -175,6 +175,30 @@ async fn fake_provider_round_trips_canonical_events() {
             "finish:Stop",
         ]
     );
+}
+
+/// An empty router rejects an unconfigured model before any provider traffic.
+#[tokio::test]
+async fn empty_router_returns_unknown_model() {
+    let request = CompletionRequest {
+        model: ModelRef::new("locally-unconfigured"),
+        system: None,
+        messages: Vec::new(),
+        tools: Vec::new(),
+        temperature: None,
+        max_output_tokens: None,
+        reasoning: None,
+        headers: Default::default(),
+    };
+
+    let error = match ProviderRouter::new()
+        .stream(request, SessionId::new(), MessageId::new())
+        .await
+    {
+        Ok(_) => panic!("an empty router unexpectedly accepted a model"),
+        Err(error) => error,
+    };
+    assert!(matches!(error, ProviderError::UnknownModel(model) if model == "locally-unconfigured"));
 }
 
 #[tokio::test]
@@ -515,7 +539,7 @@ fn openai_encodes_tool_call_and_result() {
 fn decode_all_google(protocol: &GoogleProtocol, lines: &[&str]) -> Vec<Event> {
     let s = SessionId::new();
     let m = MessageId::new();
-    let mut decoder = protocol.decoder(s, m);
+    let mut decoder = protocol.decoder(s, m, None);
     let mut out = Vec::new();
     for line in lines {
         out.extend(decoder.push(line).unwrap());
@@ -527,7 +551,7 @@ fn decode_all_google(protocol: &GoogleProtocol, lines: &[&str]) -> Vec<Event> {
 fn decode_all_anthropic(protocol: &AnthropicMessagesProtocol, lines: &[&str]) -> Vec<Event> {
     let s = SessionId::new();
     let m = MessageId::new();
-    let mut decoder = protocol.decoder(s, m);
+    let mut decoder = protocol.decoder(s, m, None);
     let mut out = Vec::new();
     for line in lines {
         out.extend(decoder.push(line).unwrap());

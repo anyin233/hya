@@ -11,7 +11,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use futures::StreamExt;
 use hya_core::{AgentSpec, EventBus, SessionEngine};
-use hya_proto::{AgentName, FinishReason, ModelRef, TokenUsage};
+use hya_proto::{AgentName, Event, FinishReason, MessageId, ModelRef, PartId, Role, TokenUsage};
 use hya_provider::{FakeProvider, FakeStep, ProviderRouter};
 use hya_server::{AppState, router};
 use hya_store::SessionStore;
@@ -782,6 +782,81 @@ async fn compat_legacy_event_route_streams_reasoning_part_events() {
     let final_reasoning = read_next_part_updated(&mut stream, "reasoning").await;
     assert_eq!(final_reasoning["properties"]["part"]["id"], part);
     assert_eq!(final_reasoning["properties"]["part"]["text"], "thinking");
+}
+
+#[tokio::test]
+async fn compat_legacy_event_reasoning_replace_preserves_reason_metadata() {
+    let state = state().await;
+    let engine = Arc::clone(&state.engine);
+    let app = router(state);
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/event")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let mut stream = resp.into_body().into_data_stream();
+    assert_eq!(read_sse_json(&mut stream).await["type"], "server.connected");
+
+    let created = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/session")
+                .header("content-type", "application/json")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(created.status(), StatusCode::OK);
+    let created_event = read_sse_json(&mut stream).await;
+    let session = created_event["properties"]["sessionID"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let message = MessageId::new();
+    let part = PartId::new();
+    engine
+        .store()
+        .append_event(
+            session,
+            &Event::MessageStarted {
+                session,
+                message,
+                role: Role::Assistant,
+            },
+        )
+        .await
+        .unwrap();
+    engine
+        .store()
+        .append_event(
+            session,
+            &Event::ReasoningStart {
+                session,
+                message,
+                part,
+                reason: Some("high".to_string()),
+            },
+        )
+        .await
+        .unwrap();
+
+    engine
+        .replace_reasoning_part(session, message, part, "replacement".to_string())
+        .await
+        .unwrap();
+    let replaced = read_next_part_updated(&mut stream, "reasoning").await;
+    assert_eq!(replaced["properties"]["part"]["text"], "replacement");
+    assert_eq!(replaced["properties"]["part"]["reason"], "high");
 }
 
 #[tokio::test]

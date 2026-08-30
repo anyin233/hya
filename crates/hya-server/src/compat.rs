@@ -58,6 +58,7 @@ mod session_delete;
 mod session_diff;
 mod session_fork;
 mod session_legacy;
+pub(crate) use session_legacy::shell_agent;
 mod session_legacy_basic;
 mod session_list;
 mod session_message;

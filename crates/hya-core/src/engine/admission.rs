@@ -29,6 +29,36 @@ pub enum SpawnAdmissionOutcome {
 }
 
 impl SessionEngine {
+    /// Reserve one durable operation, reconciling terminal journal releases on overload.
+    ///
+    /// `root` selects the run budget, `operation` identifies the exact debit,
+    /// `units` is the all-or-nothing member count, and `cancel` controls the
+    /// operation. `None` means this engine has no governor.
+    pub async fn try_reserve_spawn_operation(
+        &self,
+        root: SessionId,
+        operation: OperationId,
+        units: u64,
+        cancel: CancellationToken,
+    ) -> Result<Option<OperationReservation>, CoreError> {
+        let Some(governor) = self.governor.clone() else {
+            return Ok(None);
+        };
+        let reservation = governor.try_reserve_operation(root, operation, units, cancel.clone());
+        if reservation != OperationReservation::Overloaded {
+            return Ok(Some(reservation));
+        }
+        for released in self
+            .store
+            .terminal_released_operations_for_root(root)
+            .await?
+        {
+            governor.release_operation(released);
+        }
+        Ok(Some(
+            governor.try_reserve_operation(root, operation, units, cancel),
+        ))
+    }
     /// Start admission for a spawn request; reserves budget and validates roster.
     pub async fn begin_spawn_admission(
         &self,
@@ -67,38 +97,36 @@ impl SessionEngine {
             .await?;
             return Ok(SpawnAdmissionOutcome::Cancelled);
         }
-        if let Some(governor) = &self.governor {
-            if depth.saturating_add(1) > governor.max_depth() {
+        if let Some(governor) = &self.governor
+            && depth.saturating_add(1) > governor.max_depth()
+        {
+            self.finalize_spawn_admission(
+                operation_id,
+                AdmissionTerminal::Aborted,
+                "maximum subagent depth exceeded",
+                actor_claim.as_ref(),
+            )
+            .await?;
+            return Ok(SpawnAdmissionOutcome::MaxDepth);
+        }
+        match self
+            .try_reserve_spawn_operation(root, operation_id, u64::from(admission_units), cancel)
+            .await?
+        {
+            Some(OperationReservation::Overloaded) => {
                 self.finalize_spawn_admission(
                     operation_id,
                     AdmissionTerminal::Aborted,
-                    "maximum subagent depth exceeded",
+                    "spawn admission overloaded",
                     actor_claim.as_ref(),
                 )
                 .await?;
-                return Ok(SpawnAdmissionOutcome::MaxDepth);
+                return Ok(SpawnAdmissionOutcome::Overloaded);
             }
-            match governor.try_reserve_operation(
-                root,
-                operation_id,
-                u64::from(admission_units),
-                cancel,
-            ) {
-                OperationReservation::Overloaded => {
-                    self.finalize_spawn_admission(
-                        operation_id,
-                        AdmissionTerminal::Aborted,
-                        "spawn admission overloaded",
-                        actor_claim.as_ref(),
-                    )
-                    .await?;
-                    return Ok(SpawnAdmissionOutcome::Overloaded);
-                }
-                OperationReservation::Existing | OperationReservation::Conflict => {
-                    return Ok(SpawnAdmissionOutcome::Existing(AdmissionState::Accepted));
-                }
-                OperationReservation::Acquired => {}
+            Some(OperationReservation::Existing | OperationReservation::Conflict) => {
+                return Ok(SpawnAdmissionOutcome::Existing(AdmissionState::Accepted));
             }
+            Some(OperationReservation::Acquired) | None => {}
         }
 
         match self
@@ -269,6 +297,30 @@ impl SessionEngine {
         session: SessionId,
         content: String,
     ) -> Result<MessageId, CoreError> {
+        self.inject_completed_text_message(session, content, Role::System)
+            .await
+    }
+
+    /// Append a completed assistant message for a user-visible control-plane result.
+    pub async fn inject_assistant_message(
+        &self,
+        session: SessionId,
+        content: String,
+    ) -> Result<MessageId, CoreError> {
+        self.inject_completed_text_message(session, content, Role::Assistant)
+            .await
+    }
+
+    /// Append one completed text message with `role` and return its generated message id.
+    ///
+    /// `session` selects the event log and `content` supplies the only text part. The returned id
+    /// identifies the fully emitted message.
+    async fn inject_completed_text_message(
+        &self,
+        session: SessionId,
+        content: String,
+        role: Role,
+    ) -> Result<MessageId, CoreError> {
         let message = MessageId::new();
         let part = PartId::new();
         self.emit(
@@ -276,7 +328,7 @@ impl SessionEngine {
             Event::MessageStarted {
                 session,
                 message,
-                role: Role::System,
+                role,
             },
         )
         .await?;
@@ -313,7 +365,7 @@ impl SessionEngine {
             Event::MessageFinished {
                 session,
                 message,
-                role: Role::System,
+                role,
                 finish: FinishReason::Stop,
                 tokens: None,
             },

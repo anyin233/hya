@@ -307,6 +307,20 @@ impl SessionStore {
         Ok(out)
     }
 
+    /// Return whether the event log contains a Session without replaying it.
+    ///
+    /// # Errors
+    /// Returns SQLite failures.
+    pub async fn session_exists(&self, session: SessionId) -> Result<bool, StoreError> {
+        let exists = sqlx::query_scalar::<_, i64>(
+            "SELECT EXISTS(SELECT 1 FROM event_log WHERE session_id = ? LIMIT 1)",
+        )
+        .bind(session.storage_key())
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(exists != 0)
+    }
+
     /// Delete ledger and event rows for a session; returns whether any event rows were removed.
     pub async fn delete_session(&self, session: SessionId) -> Result<bool, StoreError> {
         let key = session.storage_key();

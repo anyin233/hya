@@ -615,31 +615,18 @@ async fn admitted_background_transient_releases_its_exact_debit_on_completion() 
     assert_eq!(retry.len(), 1);
 }
 
-/// Reproduction for the release window between member-journal finalize and the
+/// Regression for the release window between member-journal finalize and the
 /// owner's governor release.
 ///
-/// A member task finalizes its admission row to `Completed + logical_released`
-/// through `finalize_admission_members`, which bypasses hya-core's
-/// governor-releasing `finalize_spawn_admission`. The owning
-/// `ForegroundTransientAdmissionPreparation` returns the in-memory debit only much
-/// later, in `release_transient_operation`, after quiescing handles and projecting
-/// the evidence envelope. Inside that window the durable journal already reports
-/// the capacity as logically released while the governor still holds the debit, so
-/// a concurrent spawn on the same root is rejected `Overloaded` against capacity
-/// that is logically free.
+/// A member task can publish `Completed + logical_released` before the owner
+/// reaches its idempotent in-memory governor refund. A same-root spawn that
+/// enters during that window must reconcile whole terminal operations and
+/// retry its exact reservation instead of returning a false `Overloaded`.
 ///
-/// Measured on this branch at 191/200 iterations (four runs of 50: 49, 48, 47,
-/// 47). The rejection correlated exactly with the governor still holding the debit
-/// at the instant the journal read terminal -- in every run the `Overloaded` count
-/// equalled the open-window count.
-///
-/// Ignored because it asserts the *intended* invariant, which does not hold yet.
-/// The remedy is a design question rather than a local repair: the debit is
-/// `cardinality` units released as a single unit by the owner, so releasing per
-/// member at finalize time would hand back capacity for members that are still
-/// running in a multi-member batch. Un-ignore this test in the task that fixes it.
+/// The query deliberately requires every declared batch member to be terminal;
+/// releasing after one member would return the operation's full cardinality
+/// while siblings still run.
 #[tokio::test]
-#[ignore = "documents a known defect: released capacity is not visible until the owner releases; fix needs its own design"]
 async fn released_capacity_is_visible_to_a_concurrent_spawn_on_the_same_root() {
     const RUNS: usize = 20;
     for run in 0..RUNS {

@@ -29,7 +29,7 @@ fn summarize(events: &[Event]) -> Vec<String> {
 }
 
 fn decode_all<P: Protocol>(protocol: &P, lines: &[&str]) -> Vec<Event> {
-    let mut decoder = protocol.decoder(SessionId::new(), MessageId::new());
+    let mut decoder = protocol.decoder(SessionId::new(), MessageId::new(), None);
     let mut out = Vec::new();
     for line in lines {
         out.extend(decoder.push(line).unwrap());

@@ -156,6 +156,71 @@ async fn terminal_transition_is_immutable_idempotent_and_releases_only_started()
     assert!(completed_again.record.logical_released);
 }
 
+/// Reconciliation exposes a batch only after every declared member is terminal.
+#[tokio::test]
+async fn terminal_release_reconciliation_waits_for_the_whole_batch() {
+    let store = SessionStore::connect_memory().await.unwrap();
+    let batch = claim(ToolCallId::new(), 14);
+    let intent = AdmissionIntent {
+        runtime_fingerprint_version: 1,
+        runtime_fingerprint: [14; 32],
+        admission_binding_fingerprint_version: 1,
+        admission_binding_fingerprint: [15; 32],
+        spawn_intent: vec![0x14],
+    };
+    assert!(matches!(
+        store
+            .claim_admission_batch(&batch, vec![intent.clone(), intent])
+            .await
+            .unwrap(),
+        AdmissionBatchClaimOutcome::Claimed(_)
+    ));
+    for ordinal in 0..2 {
+        assert!(matches!(
+            store
+                .start_admission_member(batch.operation_id, ordinal, None)
+                .await
+                .unwrap(),
+            AdmissionStartOutcome::Started(_)
+        ));
+    }
+
+    store
+        .finalize_admission_members(
+            &[(batch.operation_id, 0)],
+            AdmissionTerminal::Completed,
+            "first member completed",
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(
+        store
+            .terminal_released_operations_for_root(batch.root_session)
+            .await
+            .unwrap()
+            .is_empty(),
+        "one terminal member must not release a two-member operation"
+    );
+
+    store
+        .finalize_admission_members(
+            &[(batch.operation_id, 1)],
+            AdmissionTerminal::Completed,
+            "second member completed",
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .terminal_released_operations_for_root(batch.root_session)
+            .await
+            .unwrap(),
+        vec![batch.operation_id]
+    );
+}
+
 #[tokio::test]
 async fn startup_recovery_requeues_accepted_aborts_started_and_is_idempotent() {
     let store = SessionStore::connect_memory().await.unwrap();

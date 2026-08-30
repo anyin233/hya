@@ -31,14 +31,25 @@ import path from "path"
 import { startupMark } from "../../hya/startup-trace"
 import { useKV } from "./kv"
 
+/**
+ * Compare Session cache keys using JavaScript code-unit ordering.
+ * @param left The first Session cache key.
+ * @param right The second Session cache key.
+ * @returns -1 when left precedes right, 0 when equal, or 1 when left follows right.
+ */
+function compareSessionIDs(left: string, right: string): number {
+  if (left === right) return 0
+  return left < right ? -1 : 1
+}
 function search<T>(items: T[], target: string, key: (item: T) => string) {
   let left = 0
   let right = items.length - 1
   while (left <= right) {
     const middle = Math.floor((left + right) / 2)
     const value = key(items[middle])
-    if (value === target) return { found: true, index: middle }
-    if (value < target) left = middle + 1
+    const comparison = compareSessionIDs(value, target)
+    if (comparison === 0) return { found: true, index: middle }
+    if (comparison < 0) left = middle + 1
     else right = middle - 1
   }
   return { found: false, index: left }
@@ -149,10 +160,18 @@ export const {
       }
     }
 
+    /**
+     * Normalize Session rows for binary-search cache lookups.
+     * @param sessions Session rows in any order.
+     * @returns A new Session array sorted ascending by id.
+     */
+    function sortSessionsByID(sessions: Session[]): Session[] {
+      return sessions.toSorted((a, b) => compareSessionIDs(a.id, b.id))
+    }
     function listSessions() {
       return sdk.client.session
         .list({ start: Date.now() - 30 * 24 * 60 * 60 * 1000, ...sessionListQuery() })
-        .then((x) => (x.data ?? []).toSorted((a, b) => a.id.localeCompare(b.id)))
+        .then((x) => sortSessionsByID(x.data ?? []))
     }
 
     event.subscribe((event, { workspace }) => {
@@ -451,7 +470,7 @@ export const {
       provider_list?: unknown
       capabilities?: { backgroundSubagents?: boolean }
       agents?: unknown[]
-      sessions?: unknown[]
+      sessions?: Session[]
       commands?: unknown[]
       lsp?: unknown[]
       mcp?: Record<string, unknown>
@@ -501,7 +520,7 @@ export const {
         )
         if (bundle.agents) setStore("agent", reconcile(bundle.agents as never))
         if (bundle.config !== undefined) setStore("config", reconcile(bundle.config as never))
-        if (bundle.sessions) setStore("session", reconcile(bundle.sessions as never))
+        if (bundle.sessions) setStore("session", reconcile(sortSessionsByID(bundle.sessions)))
         if (bundle.commands) setStore("command", reconcile(bundle.commands as never))
         if (bundle.lsp) setStore("lsp", reconcile(bundle.lsp as never))
         if (bundle.mcp) setStore("mcp", reconcile(bundle.mcp as never))
