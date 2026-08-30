@@ -697,3 +697,24 @@ Validated Hya end to end at release 0.36.6, repaired provider, Session, workflow
 ### Status
 
 [OK] **Completed**
+
+
+## Session 20: Ship Workflow stage model routing
+
+**Date**: 2026-08-31
+**Task**: Ship Workflow stage model routing
+**Branch**: `main`
+
+### Summary
+
+Added per-Stage and loop-verifier model routes with effort-aware pre-stream fallback, durable route outcomes, replay-safe surfaces, deterministic and live proof, and the 0.36.7 non-publishing release rehearsal.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `2130ae27` | (see git log) |
+
+### Status
+
+[OK] **Completed**
