@@ -1171,9 +1171,14 @@ mod tests {
                     agent: "build".to_owned(),
                     mode: "once".to_owned(),
                     level,
+                    worker_model: None,
+                    selected_worker_model: None,
+                    verifier_model: None,
+                    selected_verifier_model: None,
                 },
                 status,
                 members,
+                route_outcomes: Vec::new(),
             };
         let reference = |member: &str, iteration: u32| WorkflowMemberProjection {
             member: member.to_owned(),

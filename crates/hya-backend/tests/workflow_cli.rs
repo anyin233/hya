@@ -51,6 +51,21 @@ flowchart TD
   capture
 "#;
 
+const ROUTED_WORKFLOW: &str = r#"---
+kind: Workflow
+name: routed
+description: One Stage with an explicit offline model route.
+nodes:
+  execute:
+    agent: general
+    directive: Execute through the routed model.
+    model:
+      id: offline
+---
+flowchart TD
+  execute
+"#;
+
 struct IsolatedEnv {
     root: PathBuf,
     home: PathBuf,
@@ -165,6 +180,49 @@ fn cli_run_reports_durable_fan_out_and_join_projection() -> Result<(), Box<dyn s
         stdout.contains("\n  merge [completed] agent=general members=1"),
         "merge Stage row missing:\n{stdout}"
     );
+    Ok(())
+}
+
+#[test]
+fn cli_info_and_run_print_requested_selected_and_outcome_routes()
+-> Result<(), Box<dyn std::error::Error>> {
+    let env = IsolatedEnv::new("routed-model")?;
+    env.write_workflow("routed.hya.md", ROUTED_WORKFLOW)?;
+
+    let info = workflow_command(&env)
+        .args(["workflow", "info", "routed"])
+        .output()?;
+    assert!(
+        info.status.success(),
+        "workflow info must exit 0: {}",
+        combined_text(&info)
+    );
+    let info_stdout = String::from_utf8(info.stdout)?;
+    assert!(
+        info_stdout.contains("worker model: offline reasoning=default"),
+        "requested route missing from workflow info:\n{info_stdout}"
+    );
+
+    let run = workflow_command(&env)
+        .args(["workflow", "run", "routed"])
+        .output()?;
+    assert!(
+        run.status.success(),
+        "model-routed workflow run must exit 0: {}",
+        combined_text(&run)
+    );
+    let run_stdout = String::from_utf8(run.stdout)?;
+    for expected in [
+        "worker model: offline reasoning=default",
+        "selected worker model: #0 offline reasoning=none",
+        "route outcome: role=worker iteration=0 step=0 candidate=#0 model=offline reasoning=none class=none",
+    ] {
+        assert!(
+            run_stdout.contains(expected),
+            "model-routed workflow output missing `{expected}`:\n{run_stdout}"
+        );
+    }
+    assert!(!run_stdout.contains("provider response"));
     Ok(())
 }
 

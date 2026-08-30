@@ -47,6 +47,10 @@ fn workflow_stage() -> WorkflowStagePlan {
         agent: AgentName::new("general"),
         mode: "once".to_string(),
         level: 0,
+        worker_model: None,
+        selected_worker_model: None,
+        verifier_model: None,
+        selected_verifier_model: None,
     }
 }
 

@@ -9,7 +9,7 @@ use crate::WorkflowSource;
 use crate::error::WorkflowCompileError;
 use crate::model::{
     CompiledWorkflow, FailurePolicy, StageMode, VerifySpec, WorkflowDefinition, WorkflowLevel,
-    WorkflowPlan, WorkflowRevision, WorkflowStage,
+    WorkflowModelAssignment, WorkflowModelCandidate, WorkflowPlan, WorkflowRevision, WorkflowStage,
 };
 
 #[derive(Deserialize)]
@@ -36,6 +36,8 @@ struct AuthorNode {
     mode: StageMode,
     #[serde(default)]
     verify: Option<VerifySpec>,
+    #[serde(default)]
+    model: Option<WorkflowModelAssignment>,
     #[serde(default)]
     actor: Option<String>,
 }
@@ -233,6 +235,16 @@ fn validate_author(
             ));
         }
         validate_input_template(source, id, &node.directive, &author.inputs, location)?;
+        if let Some(model) = node.model.as_ref() {
+            validate_model_assignment(source, id, "worker", model, location)?;
+        }
+        if let Some(verify_model) = node
+            .verify
+            .as_ref()
+            .and_then(|verify| verify.model.as_ref())
+        {
+            validate_model_assignment(source, id, "verifier", verify_model, location)?;
+        }
         match (node.mode, node.verify.as_ref()) {
             (StageMode::Loop, None) => {
                 return Err(WorkflowCompileError::new(
@@ -304,6 +316,177 @@ fn validate_author(
         }
     }
     Ok(())
+}
+/// Validate one worker or verifier assignment after normalized duplicate checks.
+fn validate_model_assignment(
+    source: &str,
+    stage: &str,
+    role: &str,
+    assignment: &WorkflowModelAssignment,
+    location: SourcePoint,
+) -> Result<(), WorkflowCompileError> {
+    let _ = normalize_model_assignment(source, stage, role, assignment, location)?;
+    Ok(())
+}
+
+/// Trim and validate one assignment, preserving unknown non-empty effort labels.
+fn normalize_model_assignment(
+    source: &str,
+    stage: &str,
+    role: &str,
+    assignment: &WorkflowModelAssignment,
+    location: SourcePoint,
+) -> Result<WorkflowModelAssignment, WorkflowCompileError> {
+    let preferred_id =
+        normalize_model_id(source, stage, role, "preferred", &assignment.id, location)?;
+    let preferred_reasoning = normalize_reasoning(
+        source,
+        stage,
+        role,
+        "preferred",
+        assignment.reasoning.as_deref(),
+        location,
+    )?;
+    let mut seen = BTreeSet::new();
+    if !seen.insert((preferred_id.clone(), preferred_reasoning.clone())) {
+        return Err(duplicate_model_route_error(
+            source,
+            stage,
+            role,
+            &preferred_id,
+            preferred_reasoning.as_deref(),
+            location,
+        ));
+    }
+
+    let mut fallback = Vec::with_capacity(assignment.fallback.len());
+    for (index, candidate) in assignment.fallback.iter().enumerate() {
+        let entry = format!("fallback[{index}]");
+        let id = normalize_model_id(source, stage, role, &entry, &candidate.id, location)?;
+        let reasoning = normalize_reasoning(
+            source,
+            stage,
+            role,
+            &entry,
+            candidate.reasoning.as_deref(),
+            location,
+        )?;
+        if !seen.insert((id.clone(), reasoning.clone())) {
+            return Err(duplicate_model_route_error(
+                source,
+                stage,
+                role,
+                &id,
+                reasoning.as_deref(),
+                location,
+            ));
+        }
+        fallback.push(WorkflowModelCandidate { id, reasoning });
+    }
+
+    Ok(WorkflowModelAssignment {
+        id: preferred_id,
+        reasoning: preferred_reasoning,
+        fallback,
+    })
+}
+
+/// Normalize one base model id and reject any variant suffix.
+fn normalize_model_id(
+    source: &str,
+    stage: &str,
+    role: &str,
+    entry: &str,
+    value: &str,
+    location: SourcePoint,
+) -> Result<String, WorkflowCompileError> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(WorkflowCompileError::new(
+            source,
+            location.line,
+            location.column,
+            format!("node `{stage}` {role} {entry} model id must not be empty"),
+        ));
+    }
+    if trimmed.chars().count() > crate::model::MAX_WORKFLOW_MODEL_ID_CHARS {
+        return Err(WorkflowCompileError::new(
+            source,
+            location.line,
+            location.column,
+            format!(
+                "node `{stage}` {role} {entry} model id exceeds {} characters",
+                crate::model::MAX_WORKFLOW_MODEL_ID_CHARS
+            ),
+        ));
+    }
+    if trimmed.contains('#') {
+        return Err(WorkflowCompileError::new(
+            source,
+            location.line,
+            location.column,
+            format!(
+                "node `{stage}` {role} {entry} model id `{trimmed}` must not include a variant suffix"
+            ),
+        ));
+    }
+    Ok(trimmed.to_string())
+}
+
+/// Normalize one optional effort label and reject an explicitly empty value.
+fn normalize_reasoning(
+    source: &str,
+    stage: &str,
+    role: &str,
+    entry: &str,
+    value: Option<&str>,
+    location: SourcePoint,
+) -> Result<Option<String>, WorkflowCompileError> {
+    value
+        .map(str::trim)
+        .map(|trimmed| {
+            if trimmed.is_empty() {
+                Err(WorkflowCompileError::new(
+                    source,
+                    location.line,
+                    location.column,
+                    format!("node `{stage}` {role} {entry} reasoning must not be empty"),
+                ))
+            } else if trimmed.chars().count() > crate::model::MAX_WORKFLOW_REASONING_CHARS {
+                Err(WorkflowCompileError::new(
+                    source,
+                    location.line,
+                    location.column,
+                    format!(
+                        "node `{stage}` {role} {entry} reasoning exceeds {} characters",
+                        crate::model::MAX_WORKFLOW_REASONING_CHARS
+                    ),
+                ))
+            } else {
+                Ok(trimmed.to_string())
+            }
+        })
+        .transpose()
+}
+
+/// Build the source-located diagnostic for an exact ordered route-pair duplicate.
+fn duplicate_model_route_error(
+    source: &str,
+    stage: &str,
+    role: &str,
+    id: &str,
+    reasoning: Option<&str>,
+    location: SourcePoint,
+) -> WorkflowCompileError {
+    WorkflowCompileError::new(
+        source,
+        location.line,
+        location.column,
+        format!(
+            "node `{stage}` {role} model route contains duplicate pair (`{id}`, `{}`)",
+            reasoning.unwrap_or("<omitted>")
+        ),
+    )
 }
 
 fn validate_input_template(
@@ -651,13 +834,40 @@ fn normalize(
                 format!("graph node `{id}` has no frontmatter definition"),
             ));
         };
+        let location = frontmatter_locations
+            .get(id)
+            .copied()
+            .unwrap_or(SourcePoint { line: 1, column: 1 });
+        let model = node
+            .model
+            .as_ref()
+            .map(|assignment| {
+                normalize_model_assignment(source, id, "worker", assignment, location)
+            })
+            .transpose()?;
+        let verify = match node.verify.as_ref() {
+            Some(verify) => Some(VerifySpec {
+                agent: verify.agent.clone(),
+                until: verify.until.clone(),
+                max_iterations: verify.max_iterations,
+                model: verify
+                    .model
+                    .as_ref()
+                    .map(|assignment| {
+                        normalize_model_assignment(source, id, "verifier", assignment, location)
+                    })
+                    .transpose()?,
+            }),
+            None => None,
+        };
         stages.push(WorkflowStage {
             id: id.clone(),
             title: node.title.clone(),
             agent: node.agent.clone(),
             directive: node.directive.clone(),
             mode: node.mode,
-            verify: node.verify.clone(),
+            verify,
+            model,
             actor: node.actor.clone(),
             level: stage_levels[index],
             predecessor_indices: predecessors[index].clone(),
@@ -719,7 +929,43 @@ fn canonical_revision(definition: &WorkflowDefinition, plan: &WorkflowPlan) -> W
             hash_usize(&mut hash, predecessor);
         }
     }
+    if plan.stages.iter().any(|stage| {
+        stage.model.is_some()
+            || stage
+                .verify
+                .as_ref()
+                .is_some_and(|verify| verify.model.is_some())
+    }) {
+        hash.update(b"hya.workflow.model-routing.v1\0");
+        for stage in &plan.stages {
+            hash_optional_assignment(&mut hash, stage.model.as_ref());
+            hash_optional_assignment(
+                &mut hash,
+                stage
+                    .verify
+                    .as_ref()
+                    .and_then(|verify| verify.model.as_ref()),
+            );
+        }
+    }
     WorkflowRevision(hash.finalize().into())
+}
+
+/// Hash one optional assignment, retaining effort presence and fallback order.
+fn hash_optional_assignment(hash: &mut Sha256, assignment: Option<&WorkflowModelAssignment>) {
+    match assignment {
+        Some(assignment) => {
+            hash.update([1]);
+            hash_string(hash, &assignment.id);
+            hash_optional_string(hash, assignment.reasoning.as_deref());
+            hash_usize(hash, assignment.fallback.len());
+            for candidate in &assignment.fallback {
+                hash_string(hash, &candidate.id);
+                hash_optional_string(hash, candidate.reasoning.as_deref());
+            }
+        }
+        None => hash.update([0]),
+    }
 }
 
 fn hash_optional_string(hash: &mut Sha256, value: Option<&str>) {

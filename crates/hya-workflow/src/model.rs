@@ -3,6 +3,10 @@
 use std::collections::BTreeMap;
 
 use serde::Deserialize;
+/// Maximum Unicode scalar values in a Workflow route model id.
+pub const MAX_WORKFLOW_MODEL_ID_CHARS: usize = 256;
+/// Maximum Unicode scalar values in an authored Workflow reasoning label.
+pub const MAX_WORKFLOW_REASONING_CHARS: usize = 64;
 
 /// What a Workflow does after any Stage fails.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
@@ -79,6 +83,60 @@ impl std::fmt::Display for StageMode {
     }
 }
 
+/// One model candidate in a Workflow assignment's ordered fallback chain.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowModelCandidate {
+    pub(crate) id: String,
+    #[serde(default)]
+    pub(crate) reasoning: Option<String>,
+}
+
+impl WorkflowModelCandidate {
+    /// Base model reference without a Workflow variant suffix.
+    #[must_use]
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// Author-provided reasoning effort label, before runtime capability parsing.
+    #[must_use]
+    pub fn reasoning(&self) -> Option<&str> {
+        self.reasoning.as_deref()
+    }
+}
+
+/// Preferred model and ordered fallback candidates for one Workflow role.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowModelAssignment {
+    pub(crate) id: String,
+    #[serde(default)]
+    pub(crate) reasoning: Option<String>,
+    #[serde(default)]
+    pub(crate) fallback: Vec<WorkflowModelCandidate>,
+}
+
+impl WorkflowModelAssignment {
+    /// Preferred base model reference without a Workflow variant suffix.
+    #[must_use]
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// Preferred author-provided reasoning effort label.
+    #[must_use]
+    pub fn reasoning(&self) -> Option<&str> {
+        self.reasoning.as_deref()
+    }
+
+    /// Ordered fallback tail after the preferred model.
+    #[must_use]
+    pub fn fallback(&self) -> &[WorkflowModelCandidate] {
+        &self.fallback
+    }
+}
+
 /// Independent verifier contract for one loop Stage.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -87,6 +145,8 @@ pub struct VerifySpec {
     pub(crate) until: String,
     #[serde(default = "default_max_iterations")]
     pub(crate) max_iterations: u32,
+    #[serde(default)]
+    pub(crate) model: Option<WorkflowModelAssignment>,
 }
 
 impl VerifySpec {
@@ -107,6 +167,12 @@ impl VerifySpec {
     pub const fn max_iterations(&self) -> u32 {
         self.max_iterations
     }
+
+    /// Optional model route used by the independent verifier.
+    #[must_use]
+    pub const fn model(&self) -> Option<&WorkflowModelAssignment> {
+        self.model.as_ref()
+    }
 }
 
 fn default_max_iterations() -> u32 {
@@ -123,6 +189,7 @@ pub struct WorkflowStage {
     pub(crate) level: usize,
     pub(crate) mode: StageMode,
     pub(crate) verify: Option<VerifySpec>,
+    pub(crate) model: Option<WorkflowModelAssignment>,
     pub(crate) actor: Option<String>,
     pub(crate) predecessor_indices: Vec<usize>,
 }
@@ -176,6 +243,11 @@ impl WorkflowStage {
         self.verify.as_ref()
     }
 
+    /// Optional request-local model route used by the worker activation.
+    #[must_use]
+    pub const fn model(&self) -> Option<&WorkflowModelAssignment> {
+        self.model.as_ref()
+    }
     /// Workflow-local resident identity, when explicitly declared.
     #[must_use]
     pub fn actor(&self) -> Option<&str> {

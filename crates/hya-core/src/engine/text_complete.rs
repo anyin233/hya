@@ -40,6 +40,7 @@ impl TextPartAccumulator {
             | Event::WorkflowRunStarted { .. }
             | Event::WorkflowStageStarted { .. }
             | Event::WorkflowStageMemberLinked { .. }
+            | Event::WorkflowStageRouteOutcome { .. }
             | Event::WorkflowStageFinished { .. }
             | Event::WorkflowRunFinished { .. }
             | Event::MessageStarted { .. }

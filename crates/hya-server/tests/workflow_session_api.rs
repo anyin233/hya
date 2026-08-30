@@ -123,6 +123,7 @@ impl WorkflowControl for BlockingControl {
 #[derive(Clone, Default)]
 struct RecordingControl {
     calls: Arc<Mutex<Vec<(SessionId, WorkflowCommand, WorkflowDelivery)>>>,
+    state: hya_proto::WorkflowProjection,
 }
 
 impl WorkflowControl for RecordingControl {
@@ -136,7 +137,7 @@ impl WorkflowControl for RecordingControl {
         Box::pin(async move {
             calls.lock().await.push((session, command, delivery));
             Ok(WorkflowCommandResult::State {
-                state: Default::default(),
+                state: self.state.clone(),
             })
         })
     }
@@ -271,6 +272,56 @@ async fn body_json(response: axum::response::Response) -> Value {
     serde_json::from_slice(&bytes).unwrap()
 }
 
+fn routed_projection(session: SessionId) -> hya_proto::WorkflowProjection {
+    let run = WorkflowRunId::new();
+    let member = MemberId::new();
+    serde_json::from_value(json!({
+        "run": {
+            "id": run,
+            "workflow": {
+                "source": "test:routed",
+                "name": "routed",
+                "revision": WorkflowRevision::from_bytes([9; 32]).to_string()
+            },
+            "request_hash": "hash",
+            "owner": OwnerRunId::new(),
+            "status": "running",
+            "stages": [{
+                "id": "execute",
+                "agent": "general",
+                "mode": "once",
+                "level": 0,
+                "worker_model": {
+                    "id": "fake/primary",
+                    "reasoning": "high",
+                    "fallback": [{"id": "fake/fallback", "reasoning": "medium"}]
+                },
+                "selected_worker_model": {
+                    "index": 0,
+                    "id": "fake/primary",
+                    "reasoning": "high"
+                },
+                "status": "running",
+                "members": [{"member": member, "role": "worker", "iteration": 0}],
+                "route_outcomes": [{
+                    "session": session,
+                    "run": run,
+                    "stage": "execute",
+                    "member": member,
+                    "role": "worker",
+                    "iteration": 0,
+                    "step": 0,
+                    "candidate_index": 0,
+                    "model": "fake/primary",
+                    "reasoning": "high",
+                    "failure_class": "none"
+                }]
+            }]
+        }
+    }))
+    .expect("routed Workflow projection fixture")
+}
+
 #[tokio::test]
 async fn compat_session_hydration_carries_runtime_workflow_availability() {
     let (app, session, _control, _provider_calls) = fixture().await;
@@ -320,6 +371,24 @@ async fn compat_session_hydration_carries_only_bounded_workflow_activity() {
                 agent: AgentName::new("general"),
                 mode: "once".to_string(),
                 level: 0,
+                worker_model: Some(
+                    serde_json::from_value(json!({
+                        "id": "fake/primary",
+                        "reasoning": "high",
+                        "fallback": [{"id": "fake/fallback", "reasoning": "medium"}]
+                    }))
+                    .expect("authored route fixture"),
+                ),
+                selected_worker_model: Some(
+                    serde_json::from_value(json!({
+                        "index": 0,
+                        "id": "fake/primary",
+                        "reasoning": "high"
+                    }))
+                    .expect("selected route fixture"),
+                ),
+                verifier_model: None,
+                selected_verifier_model: None,
             }],
         },
         Event::WorkflowStageStarted {
@@ -334,6 +403,19 @@ async fn compat_session_hydration_carries_only_bounded_workflow_activity() {
             member,
             role: WorkflowMemberRole::Worker,
             iteration: 0,
+        },
+        Event::WorkflowStageRouteOutcome {
+            session,
+            run,
+            stage: "work".to_string(),
+            member,
+            role: WorkflowMemberRole::Worker,
+            iteration: 0,
+            step: 0,
+            candidate_index: 0,
+            model: ModelRef::new("fake/primary"),
+            reasoning: "high".to_string(),
+            failure_class: hya_proto::WorkflowRouteFailureClass::None,
         },
     ] {
         app.engine
@@ -358,6 +440,18 @@ async fn compat_session_hydration_carries_only_bounded_workflow_activity() {
         body["workflowActivity"][0]["member"],
         body["workflow"]["run"]["stages"][0]["members"][0]["member"]
     );
+    assert_eq!(
+        body["workflow"]["run"]["stages"][0]["worker_model"]["fallback"][0]["id"],
+        "fake/fallback"
+    );
+    assert_eq!(
+        body["workflow"]["run"]["stages"][0]["selected_worker_model"]["reasoning"],
+        "high"
+    );
+    assert_eq!(
+        body["workflow"]["run"]["stages"][0]["route_outcomes"][0]["failure_class"],
+        "none"
+    );
     assert_eq!(body["workflowActivity"][0]["status"], "running");
     assert_eq!(body["workflowActivity"][0]["work"], "Hydrated member work");
     assert!(body["workflowActivity"][0].get("directive").is_none());
@@ -365,7 +459,14 @@ async fn compat_session_hydration_carries_only_bounded_workflow_activity() {
 
 #[tokio::test]
 async fn typed_workflow_state_is_available_on_all_route_families() {
-    let (app, session, control, provider_calls) = fixture().await;
+    let (app, session, _control, provider_calls) = fixture().await;
+    let state = routed_projection(session);
+    let expected = serde_json::to_value(&state).expect("routed state JSON");
+    let control = Arc::new(RecordingControl {
+        state,
+        ..RecordingControl::default()
+    });
+    let app = app.with_workflow_control(control.clone());
     for path in [
         format!("/sessions/{session}/workflow"),
         format!("/session/{session}/workflow"),
@@ -378,7 +479,7 @@ async fn typed_workflow_state_is_available_on_all_route_families() {
         assert_eq!(response.status(), StatusCode::OK);
         let body = body_json(response).await;
         assert_eq!(body["kind"], "state");
-        assert!(body["state"].is_object());
+        assert_eq!(&body["state"], &expected);
     }
     let calls = control.calls.lock().await;
     assert_eq!(calls.len(), 3);
@@ -477,7 +578,14 @@ async fn workflow_slash_result_is_visible_as_assistant_without_provider_round() 
 
 #[tokio::test]
 async fn typed_workflow_commands_use_all_route_families() {
-    let (app, session, control, provider_calls) = fixture().await;
+    let (app, session, _control, provider_calls) = fixture().await;
+    let state = routed_projection(session);
+    let expected = serde_json::to_value(&state).expect("routed state JSON");
+    let control = Arc::new(RecordingControl {
+        state,
+        ..RecordingControl::default()
+    });
+    let app = app.with_workflow_control(control.clone());
     for path in [
         format!("/sessions/{session}/workflow"),
         format!("/session/{session}/workflow"),
@@ -493,6 +601,8 @@ async fn typed_workflow_commands_use_all_route_families() {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
+        let body = body_json(response).await;
+        assert_eq!(&body["state"], &expected);
     }
     let calls = control.calls.lock().await;
     assert_eq!(calls.len(), 3);

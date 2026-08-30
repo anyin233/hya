@@ -46,6 +46,7 @@ api.slots.register({ order: 50, slots: { sidebar_content } })
 - `parseWorkflowProjection` validates unknown wire values before rendering.
   Invalid values become an explicit error presentation with a bounded path,
   not a component crash or silently coerced state.
+- Additive worker/verifier route declarations, admitted candidates, and route outcomes remain available to typed API/SDK consumers but do not add a sidebar block. The parser safely ignores these optional fields and preserves the existing compact presentation.
 - No selection renders a muted `Workflow` section with one `none` value.
   Available selection without a run renders `ready`.
 - Semantic tones are fixed: ready/running use `info`, completed uses `success`,
@@ -104,7 +105,8 @@ api.slots.register({ order: 50, slots: { sidebar_content } })
 - Pure presentation tests: none, ready, running fan-out, completed, failed,
   cancelled, interrupted, stale, unavailable, malformed state, bounded canonical
   Member work, declaration order, deduplicated/scoped member refs, inactive
-  terminal members, and failed Stage context.
+  terminal members, failed Stage context, and unchanged output for projections
+  carrying optional model-route fields.
 - Plugin test: Workflow built-in is first, slot order is 50, and static host
   disposal unregisters every slot and clears the runtime.
 - Sync test: bootstrap Session Workflow state is observed before one

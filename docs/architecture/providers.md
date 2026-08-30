@@ -25,6 +25,8 @@ streaming tool calls.
 | --- | --- | --- |
 | `fn id(&self) -> &str` | required | Configured provider id. Also the auth filename stem and the `providerID` half of model refs. |
 | `fn capabilities(&self, model: &ModelRef) -> Option<Capabilities>` | required | Returning `Some` **claims** the model. The router resolves by first match. |
+| `fn reasoning_default(&self, model: &ModelRef) -> Option<ReasoningEffort>` | `None` | Configured default for a claimed model. `None` means no metadata; explicit `Off` is the canonical `none` value. |
+| `fn supports_reasoning_effort(&self, model: &ModelRef, effort: ReasoningEffort) -> Option<bool>` | `None` | `None` means unclaimed, `Some(false)` means the claiming route rejects that effort, and `Some(true)` accepts it. |
 | `fn configured_identity_v1(&self) -> Option<Vec<u8>>` | `None` | Secret-free routing fingerprint. Default fails closed (see [Configured Identity](#configured-identity)). |
 | `fn catalog(&self) -> Vec<ProviderModel>` | empty `Vec` | Models this route publishes into the aggregated catalog. |
 | `async fn stream(req, session, message) -> Result<EventStream, ProviderError>` | required | Live or scripted completion stream. |
@@ -122,6 +124,44 @@ side effects. If no route supports the model, `stream` returns `UnknownModel`.
 `CompletionRequest.reasoning`. A configured `reasoning.default` is therefore
 **silently dropped** (not an error) on routes that cannot accept a reasoning
 parameter, so no unsupported field is sent upstream.
+
+### Per-model reasoning metadata and Workflow routes
+
+`HttpProvider::with_model_reasoning_defaults` installs typed defaults keyed by
+the provider's bare upstream model ids. `Provider::reasoning_default` and
+`ProviderRouter::reasoning_default` return metadata from the first match only;
+a claiming route with no default stops lookup rather than inheriting metadata
+from a later provider. `Provider::supports_reasoning_effort` applies the same
+first-match rule. `ReasoningEffort::Off` is always supported and serializes as
+`none`; other efforts require `reasoning_request` and, when configured, must
+occur in that model's advertised variant list.
+
+HTTP configured identity includes one canonical effective-default row for every
+served model, including `none`. The per-model rows use stable model-id order, so
+changing only map insertion order does not change identity. Changing a default
+does change identity. The router still aggregates provider identities in
+registration order because provider order controls first-match routing and is
+therefore semantic. These fingerprints contain no credentials, headers, or
+live provider data.
+
+Workflow Stage assignments keep model and effort separate:
+
+```yaml
+model:
+  id: 12th-oai/gpt-5.6-sol
+  reasoning: high
+  fallback:
+    - id: 12th-anth/claude-sonnet-4-6
+      reasoning: medium
+```
+
+Every Workflow `id` is a suffix-free base model reference. An embedded
+`#variant` is rejected; `reasoning:` is the only effort field in this block.
+An omitted effort uses that candidate model's own configured default or
+canonical `none`. This is intentionally different from existing non-Workflow
+model/category APIs, where `provider/model#variant` remains a valid request
+form. Workflow chains are request-local and do not modify the global
+cross-model fallback map described below.
 
 **Catalog.** `ProviderRouter::catalog` flattens every provider's `catalog()`,
 sorts by `(provider_id, model_id)`, and dedups identical provider/model pairs.

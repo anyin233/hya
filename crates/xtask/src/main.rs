@@ -11,11 +11,14 @@
 //! - `package-bundle` — validate a source tree and emit deterministic public
 //!   `.hyabundle` bytes through the shared package writer.
 //!
+//! - `release-rehearsal` — validate and smoke the non-publishing release asset.
+//!
 //! An unknown or missing task prints usage and exits successfully, so the binary
 //! is safe to invoke from a wrapper that does not know the task list.
 
 mod matrix_check;
 mod package_bundle;
+mod release_rehearsal;
 mod startup_bench;
 mod sync_compat;
 
@@ -28,11 +31,12 @@ fn main() {
         Some("sync-compat") => sync_compat::run(args.collect()),
         Some("migrate") => sync_compat::run(args.collect()),
         Some("package-bundle") => package_bundle::run(args.collect()),
+        Some("release-rehearsal") => release_rehearsal::run(args.collect()),
         Some("startup-bench") => startup_bench::run(args.collect()),
         Some("matrix-check") => matrix_check::run(args.collect()),
         _ => {
             eprintln!(
-                "usage: cargo xtask <sync-compat|migrate|startup-bench|matrix-check|package-bundle>"
+                "usage: cargo xtask <sync-compat|migrate|startup-bench|matrix-check|package-bundle|release-rehearsal>"
             );
             Ok(())
         }

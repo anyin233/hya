@@ -1,0 +1,316 @@
+{
+  "cleanup": {
+    "private_config_deleted": true,
+    "private_key_deleted": true,
+    "relay_metadata_deleted_after_bounded_copy": true,
+    "relay_script_deleted": true,
+    "relays_stopped": true,
+    "sqlite_deleted": true
+  },
+  "event_audit": [
+    {
+      "candidate_index": null,
+      "failure_class": null,
+      "model": null,
+      "reasoning": null,
+      "role": null,
+      "run": "01a054f0-d61d-7c33-854d-d760b9b20ba6",
+      "seq": 2,
+      "session": "hysec_uVH4W1mGugMjxSyzOW7P",
+      "stage": null,
+      "status": null,
+      "ts_millis": 1788131464734,
+      "type": "workflow_run_started"
+    },
+    {
+      "candidate_index": 1,
+      "failure_class": "server",
+      "model": "live/gpt-5.6-sol",
+      "reasoning": "medium",
+      "role": "worker",
+      "run": "01a054f0-d61d-7c33-854d-d760b9b20ba6",
+      "seq": 22,
+      "session": "hysec_uVH4W1mGugMjxSyzOW7P",
+      "stage": "prepare",
+      "status": null,
+      "ts_millis": 1788131466985,
+      "type": "workflow_stage_route_outcome"
+    },
+    {
+      "candidate_index": 0,
+      "failure_class": "none",
+      "model": "live/gpt-5.6-sol",
+      "reasoning": "low",
+      "role": "worker",
+      "run": "01a054f0-d61d-7c33-854d-d760b9b20ba6",
+      "seq": 45,
+      "session": "hysec_uVH4W1mGugMjxSyzOW7P",
+      "stage": "loop",
+      "status": null,
+      "ts_millis": 1788131470716,
+      "type": "workflow_stage_route_outcome"
+    },
+    {
+      "candidate_index": 0,
+      "failure_class": "none",
+      "model": "live/gpt-5.6-sol",
+      "reasoning": "high",
+      "role": "verifier",
+      "run": "01a054f0-d61d-7c33-854d-d760b9b20ba6",
+      "seq": 66,
+      "session": "hysec_uVH4W1mGugMjxSyzOW7P",
+      "stage": "loop",
+      "status": null,
+      "ts_millis": 1788131472796,
+      "type": "workflow_stage_route_outcome"
+    },
+    {
+      "candidate_index": 0,
+      "failure_class": "none",
+      "model": "live/gpt-5.6-luna",
+      "reasoning": "medium",
+      "role": "worker",
+      "run": "01a054f0-d61d-7c33-854d-d760b9b20ba6",
+      "seq": 91,
+      "session": "hysec_uVH4W1mGugMjxSyzOW7P",
+      "stage": "finish",
+      "status": null,
+      "ts_millis": 1788131475631,
+      "type": "workflow_stage_route_outcome"
+    },
+    {
+      "candidate_index": null,
+      "failure_class": null,
+      "model": null,
+      "reasoning": null,
+      "role": null,
+      "run": "01a054f0-d61d-7c33-854d-d760b9b20ba6",
+      "seq": 96,
+      "session": "hysec_uVH4W1mGugMjxSyzOW7P",
+      "stage": null,
+      "status": "completed",
+      "ts_millis": 1788131475632,
+      "type": "workflow_run_finished"
+    }
+  ],
+  "provider": {
+    "api": "openai-response",
+    "configured_identity_fingerprint_sha256": "334ef3c4166732991863716438d4eea064d71669787b2b0c7caca86b9864bc7f",
+    "configured_model_names": [
+      "fault/gpt-5.6-sol",
+      "live/glm-5.3",
+      "live/gpt-5.6-luna",
+      "live/gpt-5.6-sol"
+    ],
+    "credential_retained": false,
+    "selected_healthy_models": [
+      "live/gpt-5.6-sol",
+      "live/gpt-5.6-luna"
+    ]
+  },
+  "release": {
+    "binary": "target/x86_64-unknown-linux-gnu/release/hya-backend",
+    "post_review_refresh": true,
+    "sha256": "c05e0578d64cd52cb9127077c492c971d8c18821448b36d42d07d8df8cb94d24",
+    "version": "0.36.7"
+  },
+  "replay": {
+    "independent_release_binary_reads_equal": true,
+    "provider_request_counts_unchanged": {
+      "local_fault": 3,
+      "real_api": 4
+    },
+    "state_sha256": "7087b8dcf589b0244ed986f76e12b025e689bd696a0d5a609bf1d8f8238885f2"
+  },
+  "schema": "hya.workflow-model-routing.live-proof.v1",
+  "transport_observations": {
+    "headers_retained": false,
+    "local_pre_stream_fault": [
+      {
+        "model": "gpt-5.6-sol",
+        "ordinal": 1,
+        "path": "/v1/responses",
+        "reasoning_effort": "low",
+        "status": 503,
+        "time": "2026-08-30T23:11:04.738248+00:00"
+      },
+      {
+        "model": "gpt-5.6-sol",
+        "ordinal": 2,
+        "path": "/v1/responses",
+        "reasoning_effort": "low",
+        "status": 503,
+        "time": "2026-08-30T23:11:04.851122+00:00"
+      },
+      {
+        "model": "gpt-5.6-sol",
+        "ordinal": 3,
+        "path": "/v1/responses",
+        "reasoning_effort": "low",
+        "status": 503,
+        "time": "2026-08-30T23:11:05.074377+00:00"
+      }
+    ],
+    "real_api_requests": [
+      {
+        "model": "gpt-5.6-sol",
+        "ordinal": 1,
+        "path": "/v1/responses",
+        "reasoning_effort": "medium",
+        "status": 200,
+        "time": "2026-08-30T23:11:06.652678+00:00"
+      },
+      {
+        "model": "gpt-5.6-sol",
+        "ordinal": 2,
+        "path": "/v1/responses",
+        "reasoning_effort": "low",
+        "status": 200,
+        "time": "2026-08-30T23:11:10.325161+00:00"
+      },
+      {
+        "model": "gpt-5.6-sol",
+        "ordinal": 3,
+        "path": "/v1/responses",
+        "reasoning_effort": "high",
+        "status": 200,
+        "time": "2026-08-30T23:11:12.170391+00:00"
+      },
+      {
+        "model": "gpt-5.6-luna",
+        "ordinal": 4,
+        "path": "/v1/responses",
+        "reasoning_effort": "medium",
+        "status": 200,
+        "time": "2026-08-30T23:11:14.873947+00:00"
+      }
+    ],
+    "request_bodies_retained": false,
+    "request_count": 7,
+    "response_bodies_retained": false
+  },
+  "workflow": {
+    "finished_ts_millis": 1788131475632,
+    "name": "live-model-routing",
+    "revision": "49d5f4e2b2718281c1a0c01e19fe91ecf3d063fcf0bf2a049e4d2afcc1c1f1d2",
+    "run": "01a054f0-d61d-7c33-854d-d760b9b20ba6",
+    "session": "hysec_uVH4W1mGugMjxSyzOW7P",
+    "stages": [
+      {
+        "admission_selected_verifier": null,
+        "admission_selected_worker": {
+          "id": "fault/gpt-5.6-sol",
+          "index": 0,
+          "reasoning": "low"
+        },
+        "requested_verifier_route": null,
+        "requested_worker_route": {
+          "fallback": [
+            {
+              "id": "live/gpt-5.6-sol",
+              "reasoning": "medium"
+            }
+          ],
+          "id": "fault/gpt-5.6-sol",
+          "reasoning": "low"
+        },
+        "route_outcomes": [
+          {
+            "candidate_index": 1,
+            "failure_class": "server",
+            "iteration": 0,
+            "member": "01a054f0-d61e-74f3-a7d3-ba54717940db",
+            "model": "live/gpt-5.6-sol",
+            "reasoning": "medium",
+            "role": "worker",
+            "run": "01a054f0-d61d-7c33-854d-d760b9b20ba6",
+            "session": "hysec_uVH4W1mGugMjxSyzOW7P",
+            "stage": "prepare",
+            "step": 0
+          }
+        ],
+        "stage": "prepare"
+      },
+      {
+        "admission_selected_verifier": {
+          "id": "live/gpt-5.6-sol",
+          "index": 0,
+          "reasoning": "high"
+        },
+        "admission_selected_worker": {
+          "id": "live/gpt-5.6-sol",
+          "index": 0,
+          "reasoning": "low"
+        },
+        "requested_verifier_route": {
+          "id": "live/gpt-5.6-sol",
+          "reasoning": "high"
+        },
+        "requested_worker_route": {
+          "id": "live/gpt-5.6-sol",
+          "reasoning": "low"
+        },
+        "route_outcomes": [
+          {
+            "candidate_index": 0,
+            "failure_class": "none",
+            "iteration": 0,
+            "member": "01a054f0-deea-7cc1-8be1-4234aacbe6ea",
+            "model": "live/gpt-5.6-sol",
+            "reasoning": "low",
+            "role": "worker",
+            "run": "01a054f0-d61d-7c33-854d-d760b9b20ba6",
+            "session": "hysec_uVH4W1mGugMjxSyzOW7P",
+            "stage": "loop",
+            "step": 0
+          },
+          {
+            "candidate_index": 0,
+            "failure_class": "none",
+            "iteration": 0,
+            "member": "01a054f0-ed7e-7fa0-a30d-4088be1fbbe1",
+            "model": "live/gpt-5.6-sol",
+            "reasoning": "high",
+            "role": "verifier",
+            "run": "01a054f0-d61d-7c33-854d-d760b9b20ba6",
+            "session": "hysec_uVH4W1mGugMjxSyzOW7P",
+            "stage": "loop",
+            "step": 0
+          }
+        ],
+        "stage": "loop"
+      },
+      {
+        "admission_selected_verifier": null,
+        "admission_selected_worker": {
+          "id": "live/gpt-5.6-luna",
+          "index": 0,
+          "reasoning": "medium"
+        },
+        "requested_verifier_route": null,
+        "requested_worker_route": {
+          "id": "live/gpt-5.6-luna",
+          "reasoning": "medium"
+        },
+        "route_outcomes": [
+          {
+            "candidate_index": 0,
+            "failure_class": "none",
+            "iteration": 0,
+            "member": "01a054f0-f59f-76c2-88da-01840ce48214",
+            "model": "live/gpt-5.6-luna",
+            "reasoning": "medium",
+            "role": "worker",
+            "run": "01a054f0-d61d-7c33-854d-d760b9b20ba6",
+            "session": "hysec_uVH4W1mGugMjxSyzOW7P",
+            "stage": "finish",
+            "step": 0
+          }
+        ],
+        "stage": "finish"
+      }
+    ],
+    "started_ts_millis": 1788131464734,
+    "status": "completed"
+  }
+}

@@ -19,8 +19,8 @@ use hya_core::{
     MemberSpec, MemberStatus, ModelSummarizer, OperationReservation, PromptEnv, ResidentSupervisor,
     RuntimeRegistry, RuntimeSourceKind, SessionEngine, SidecarEnvironment, SidecarHandle,
     SidecarLifecycle, SidecarStart, SpawnAdmissionOutcome, SubagentGovernor, Summarizer,
-    TeamEvidenceEnvelope, TurnBinding, build_system_prompt, project_envelope,
-    project_envelope_for_actor, run_mailbox_service, run_pre_admitted_member,
+    TeamEvidenceEnvelope, TurnBinding, apply_spawn_model_policy, build_system_prompt,
+    project_envelope, project_envelope_for_actor, run_mailbox_service, run_pre_admitted_member,
     run_pre_admitted_team, run_pre_admitted_team_for_actor,
 };
 
@@ -2124,7 +2124,7 @@ fn resolve_authorized_spawn_member(
         .sidecar_environment
         .factory_for(ctx.binding, authorized_target.as_str())
         .map_err(|_| SpawnError::Unavailable)?;
-    let mut agent = ctx
+    let agent = ctx
         .engine
         .agent_spec_for_binding(ctx.binding, ctx.base, definition.stable_id)
         .map_err(|_| SpawnError::Unavailable)?;
@@ -2137,59 +2137,8 @@ fn resolve_authorized_spawn_member(
         .agent_resource_policy_for_binding(ctx.binding, definition.stable_id)
         .map_err(|_| SpawnError::Unavailable)?;
 
-    let resolve_category = |name: &str| {
-        ctx.categories
-            .resolve_servable(name, ctx.is_servable)
-            .map(|resolved| resolved.model)
-    };
-    if let Some(model) = definition
-        .model_policy
-        .category
-        .as_deref()
-        .and_then(&resolve_category)
-    {
-        agent.model = model;
-    }
-    if let Some(model) = member
-        .inline_agent
-        .as_ref()
-        .and_then(|inline| inline.category.as_deref())
-        .map(str::trim)
-        .filter(|category| !category.is_empty())
-        .and_then(&resolve_category)
-    {
-        agent.model = model;
-    }
-    if let Some(model) = definition.model_policy.model.as_deref() {
-        agent.model = ModelRef::new(model);
-    }
-    if let Some(model) = member
-        .inline_agent
-        .as_ref()
-        .and_then(|inline| inline.model.as_deref())
-        .map(str::trim)
-        .filter(|model| !model.is_empty())
-    {
-        agent.model = ModelRef::new(model);
-    }
-    if let Some(model) = member
-        .category
-        .as_deref()
-        .map(str::trim)
-        .filter(|category| !category.is_empty())
-        .and_then(&resolve_category)
-    {
-        agent.model = model;
-    }
-    if let Some(model) = member
-        .model
-        .as_deref()
-        .map(str::trim)
-        .filter(|model| !model.is_empty())
-    {
-        agent.model = ModelRef::new(model);
-    }
-
+    let mut agent =
+        apply_spawn_model_policy(agent, definition, &member, ctx.categories, ctx.is_servable);
     let mut resident = definition.spawn_lifecycle == SpawnLifecycle::Resident || member.resident;
     if let Some(inline) = member.inline_agent.as_ref() {
         resident |= inline.resident.unwrap_or(false);
@@ -4431,11 +4380,13 @@ async fn build_session_engine_with_mcp_defer(
             .await
             .context("recreate recovered resident runtime owner")?;
     }
-    let workflow_control = crate::WorkflowControl::new(
+    let workflow_control = crate::WorkflowControl::new_with_routing(
         engine.clone(),
         agent.clone(),
         resident_supervisor.clone(),
         owner_run_id,
+        categories.clone(),
+        spawn_router.clone(),
     );
     let mut lifecycle = spawn_team_supervisor_with_environment(
         spawn_rx,
@@ -9986,6 +9937,10 @@ agent:
                         agent: hya_proto::AgentName::new("general"),
                         mode: "once".to_string(),
                         level: 0,
+                        worker_model: None,
+                        selected_worker_model: None,
+                        verifier_model: None,
+                        selected_verifier_model: None,
                     }],
                 },
             )
@@ -10067,7 +10022,7 @@ flowchart TD
         let engine = Arc::new(
             SessionEngine::new(
                 SessionStore::connect_memory().await.unwrap(),
-                router,
+                Arc::clone(&router),
                 runtime,
                 permission.clone(),
                 EventBus::default(),
@@ -10100,8 +10055,14 @@ flowchart TD
         let stop = CancellationToken::new();
         let owner = process_owner_run_id();
         let resident_supervisor = ResidentSupervisor::start_with_owner(Arc::clone(&engine), owner);
-        let control =
-            crate::WorkflowControl::new(Arc::clone(&engine), base, resident_supervisor, owner);
+        let control = crate::WorkflowControl::new_with_routing(
+            Arc::clone(&engine),
+            base,
+            resident_supervisor,
+            owner,
+            Arc::new(CategoryRegistry::default()),
+            router,
+        );
         let supervisor = spawn_workflow_supervisor(workflow_rx, control, stop.clone());
         let (interaction, _interaction_rx) = InteractionPlane::new();
         let (spawner, _spawner_rx) = SpawnerPlane::new();
@@ -15444,6 +15405,7 @@ flowchart TD
                 base_agent: caller_base,
                 inputs: std::collections::BTreeMap::new(),
                 resident_supervisor: None,
+                routing: None,
             };
             hya_core::run_workflow(
                 engine.clone(),

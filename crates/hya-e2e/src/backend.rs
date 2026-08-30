@@ -36,6 +36,8 @@ pub struct BackendSpec {
     pub fake_base_url: String,
     /// Model id served by the fake provider (default `model`).
     pub model_id: String,
+    /// Additional model ids advertised by the fake provider.
+    pub additional_models: Vec<String>,
     /// Provider id in config (default `fake`).
     pub provider_id: String,
     /// `permission.model` in config.yaml (`allow` | `default` | `strict`).
@@ -58,6 +60,7 @@ impl BackendSpec {
             yolo: true,
             fake_base_url: fake_base_url.into(),
             model_id: "model".into(),
+            additional_models: Vec::new(),
             provider_id: "fake".into(),
             permission_model: "allow".into(),
             mcp: Vec::new(),
@@ -84,6 +87,12 @@ pub struct BackendProcess {
     pub binary: PathBuf,
     child: Child,
     root: PathBuf,
+    /// Model reference passed to the backend process on startup/reopen.
+    model_ref: String,
+    /// Whether the backend process receives `--yolo`.
+    yolo: bool,
+    /// Whether startup must eagerly connect configured sideplanes.
+    has_mcp: bool,
     /// Set once the child has been signalled and reaped, so `Drop` does not signal a pid
     /// that the OS may already have handed to an unrelated process.
     stopped: bool,
@@ -133,8 +142,11 @@ impl BackendProcess {
         // Resolve relative MCP command paths against the project cwd so deferred
         // or absolute-spawned children still find fixture scripts.
         let mcp = resolve_mcp_commands(&spec.mcp, &project);
-
         let model_ref = format!("{}/{}", spec.provider_id, spec.model_id);
+        let mut models = format!("    - id: {}\n", spec.model_id);
+        for model in &spec.additional_models {
+            models.push_str(&format!("    - id: {model}\n"));
+        }
         let mcp_yaml = render_mcp(&mcp);
         let config = format!(
             r#"default_model: {model_ref}
@@ -144,8 +156,7 @@ providers:
     base_url: {base}
     api_key: e2e-test-key
     models:
-    - id: {model}
-{mcp}
+{models}{mcp}
 plugins: {{}}
 permission:
   model: {perm}
@@ -154,7 +165,7 @@ permission:
             model_ref = model_ref,
             provider = spec.provider_id,
             base = spec.fake_base_url,
-            model = spec.model_id,
+            models = models,
             mcp = mcp_yaml,
             perm = spec.permission_model,
         );
@@ -248,8 +259,80 @@ permission:
             binary: spec.binary.clone(),
             child,
             root,
+            model_ref,
+            yolo: spec.yolo,
+            has_mcp: !mcp.is_empty(),
             stopped: false,
         })
+    }
+
+    /// Stop and start the backend against the same project, config, and SQLite store.
+    ///
+    /// The FakeLlm remains owned by the surrounding [`E2eEnv`], so callers can
+    /// compare replayed state without introducing another provider process.
+    pub fn reopen(&mut self) -> Result<(), E2eError> {
+        let _ = self.shutdown();
+
+        let home = self.root.join("home");
+        let state = self.root.join("state");
+        let cache = self.root.join("cache");
+        let mut cmd = Command::new(&self.binary);
+        if self.yolo {
+            cmd.arg("--yolo");
+        }
+        cmd.arg("--model")
+            .arg(&self.model_ref)
+            .arg("--db")
+            .arg(&self.db)
+            .arg("serve")
+            .arg("--bind")
+            .arg("127.0.0.1:0")
+            .current_dir(&self.project)
+            .env("HOME", &home)
+            .env("XDG_CONFIG_HOME", &self.xdg_config_home)
+            .env("XDG_DATA_HOME", &self.xdg_data_home)
+            .env("XDG_STATE_HOME", &state)
+            .env("XDG_CACHE_HOME", &cache)
+            .env_remove("HYA_MODEL")
+            .process_group(0)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        if self.has_mcp {
+            cmd.env("HYA_DEFER_SIDEPLANES", "0");
+        }
+
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| E2eError::Backend(format!("reopen hya-backend: {e}")))?;
+        let stdout = match child.stdout.take() {
+            Some(stdout) => stdout,
+            None => {
+                terminate_process_group(&mut child);
+                return Err(E2eError::Backend("reopen backend missing stdout".into()));
+            }
+        };
+        let url = match wait_for_listen(stdout, Duration::from_secs(30)) {
+            Ok(url) => url,
+            Err(error) => {
+                let stderr = child
+                    .stderr
+                    .as_mut()
+                    .map(|stream| {
+                        let mut buf = String::new();
+                        let _ = std::io::Read::read_to_string(stream, &mut buf);
+                        buf
+                    })
+                    .unwrap_or_default();
+                terminate_process_group(&mut child);
+                return Err(E2eError::Backend(format!(
+                    "{error}; reopen stderr={stderr}"
+                )));
+            }
+        };
+        self.child = child;
+        self.url = url;
+        self.stopped = false;
+        Ok(())
     }
 
     /// Stop the backend gracefully and return its exit status.

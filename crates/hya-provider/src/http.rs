@@ -26,8 +26,8 @@ use crate::openai::{
 };
 use crate::{
     Capabilities, CompactedWindow, CompletionRequest, EventStream, Protocol, Provider,
-    ProviderError, ProviderModel, append_capabilities_identity, append_identity_bytes,
-    append_identity_count, append_identity_optional_bytes,
+    ProviderError, ProviderModel, ReasoningEffort, append_capabilities_identity,
+    append_identity_bytes, append_identity_count, append_identity_optional_bytes,
 };
 
 const MAX_REQUEST_ATTEMPTS: usize = 3;
@@ -77,10 +77,9 @@ pub enum ProviderKind {
 }
 
 impl ProviderKind {
-    /// Default reasoning-variant menu when a model has no per-model override.
-    #[must_use]
-    pub fn reasoning_variants(self) -> Vec<String> {
-        let levels: &[&str] = match self {
+    /// Static default reasoning labels used without allocating during capability checks.
+    fn reasoning_variant_labels(self) -> &'static [&'static str] {
+        match self {
             ProviderKind::Anthropic => &["low", "medium", "high", "max"],
             ProviderKind::OpenAiCompatible => &["minimal", "low", "medium", "high", "xhigh"],
             ProviderKind::OpenAiResponse | ProviderKind::OpenAiCodex => {
@@ -88,8 +87,16 @@ impl ProviderKind {
             }
             ProviderKind::GrokBuild => &["low", "medium", "high"],
             ProviderKind::Google => &["high", "max"],
-        };
-        levels.iter().map(|level| (*level).to_string()).collect()
+        }
+    }
+
+    /// Default reasoning-variant menu when a model has no per-model override.
+    #[must_use]
+    pub fn reasoning_variants(self) -> Vec<String> {
+        self.reasoning_variant_labels()
+            .iter()
+            .map(|level| (*level).to_string())
+            .collect()
     }
 }
 
@@ -142,6 +149,7 @@ pub struct HttpProvider {
     auth_refresher: Option<AuthRefresher>,
     models: HashSet<String>,
     model_reasoning_variants: BTreeMap<String, Vec<String>>,
+    model_reasoning_defaults: BTreeMap<String, ReasoningEffort>,
     caps: Capabilities,
     kind: ProviderKind,
     response_header_timeout: Duration,
@@ -231,6 +239,7 @@ impl HttpProvider {
             auth_refresher: None,
             models: models.into_iter().collect(),
             model_reasoning_variants: BTreeMap::new(),
+            model_reasoning_defaults: BTreeMap::new(),
             kind,
             caps: Capabilities {
                 streaming_tool_calls: true,
@@ -313,6 +322,22 @@ impl HttpProvider {
         variants: impl IntoIterator<Item = (String, Vec<String>)>,
     ) -> Self {
         self.model_reasoning_variants = variants.into_iter().collect();
+        self
+    }
+    /// Attach configured per-model reasoning defaults.
+    ///
+    /// Keys are the bare upstream model ids used by this provider. A missing
+    /// value means this route has no default metadata for that model; an
+    /// explicit [`ReasoningEffort::Off`] is retained as a real `none` value.
+    #[must_use]
+    pub fn with_model_reasoning_defaults(
+        mut self,
+        defaults: impl IntoIterator<Item = (String, Option<ReasoningEffort>)>,
+    ) -> Self {
+        self.model_reasoning_defaults = defaults
+            .into_iter()
+            .filter_map(|(model, effort)| effort.map(|effort| (model, effort)))
+            .collect();
         self
     }
 
@@ -540,23 +565,27 @@ impl HttpProvider {
         })
     }
 
-    // Compat addresses models as `providerID/modelID` (+ optional `#variant`);
-    // the upstream route wants the bare `modelID`. Maps a served ref to that id.
-    fn served_model_id(&self, model: &ModelRef) -> Option<String> {
+    /// Return the claimed bare model id without allocating.
+    fn served_model_name<'a>(&'a self, model: &'a ModelRef) -> Option<&'a str> {
         let base = match model.as_str().rsplit_once('#') {
             Some((head, variant)) if !variant.is_empty() => head,
             _ => model.as_str(),
         };
         if self.models.contains(base) {
-            return Some(base.to_string());
+            return Some(base);
         }
         if let Some((provider_id, model_id)) = base.split_once('/')
             && provider_id == self.id
             && self.models.contains(model_id)
         {
-            return Some(model_id.to_string());
+            return Some(model_id);
         }
         None
+    }
+
+    /// Resolve a claimed model to the bare upstream id for request encoding.
+    fn served_model_id(&self, model: &ModelRef) -> Option<String> {
+        self.served_model_name(model).map(str::to_owned)
     }
 
     fn configured_identity_bytes_v1(&self) -> Option<Vec<u8>> {
@@ -574,7 +603,7 @@ impl HttpProvider {
         let mut models = self.models.iter().collect::<Vec<_>>();
         models.sort_unstable();
         append_identity_count(&mut identity, models.len())?;
-        for model in models {
+        for model in &models {
             append_identity_bytes(&mut identity, model.as_bytes())?;
         }
 
@@ -585,6 +614,18 @@ impl HttpProvider {
             for variant in variants {
                 append_identity_bytes(&mut identity, variant.as_bytes())?;
             }
+        }
+
+        append_identity_bytes(&mut identity, b"model-reasoning-defaults")?;
+        append_identity_count(&mut identity, models.len())?;
+        for model in &models {
+            append_identity_bytes(&mut identity, model.as_bytes())?;
+            let default = self
+                .model_reasoning_defaults
+                .get(*model)
+                .copied()
+                .unwrap_or(ReasoningEffort::Off);
+            append_identity_bytes(&mut identity, default.as_str().as_bytes())?;
         }
 
         append_capabilities_identity(&mut identity, &self.caps)?;
@@ -706,7 +747,35 @@ impl Provider for HttpProvider {
     }
 
     fn capabilities(&self, model: &ModelRef) -> Option<Capabilities> {
-        self.served_model_id(model).map(|_| self.caps.clone())
+        self.served_model_name(model).map(|_| self.caps.clone())
+    }
+
+    fn reasoning_default(&self, model: &ModelRef) -> Option<ReasoningEffort> {
+        let served_model = self.served_model_name(model)?;
+        self.model_reasoning_defaults.get(served_model).copied()
+    }
+
+    fn supports_reasoning_effort(&self, model: &ModelRef, effort: ReasoningEffort) -> Option<bool> {
+        let served_model = self.served_model_name(model)?;
+        if effort == ReasoningEffort::Off {
+            return Some(true);
+        }
+        if !self.caps.reasoning_request {
+            return Some(false);
+        }
+        if let Some(variants) = self.model_reasoning_variants.get(served_model) {
+            return Some(
+                variants
+                    .iter()
+                    .any(|variant| ReasoningEffort::parse(variant) == Some(effort)),
+            );
+        }
+        Some(
+            self.kind
+                .reasoning_variant_labels()
+                .iter()
+                .any(|variant| ReasoningEffort::parse(variant) == Some(effort)),
+        )
     }
 
     fn configured_identity_v1(&self) -> Option<Vec<u8>> {
@@ -1197,6 +1266,146 @@ mod tests {
             equivalent_a
                 .resolve(&ModelRef::new("foreign/model-a"))
                 .is_none()
+        );
+    }
+    #[test]
+    fn per_model_reasoning_defaults_resolve_bare_and_prefixed_refs() -> Result<(), ProviderError> {
+        let provider = provider()?.with_model_reasoning_defaults([
+            ("claude-opus-4-8".to_string(), Some(ReasoningEffort::High)),
+            ("gpt-5.5".to_string(), Some(ReasoningEffort::Off)),
+        ]);
+        assert_eq!(
+            provider.reasoning_default(&ModelRef::new("claude-opus-4-8")),
+            Some(ReasoningEffort::High)
+        );
+        assert_eq!(
+            provider.reasoning_default(&ModelRef::new("12th/claude-opus-4-8#high")),
+            Some(ReasoningEffort::High)
+        );
+        assert_eq!(
+            provider.reasoning_default(&ModelRef::new("12th/gpt-5.5")),
+            Some(ReasoningEffort::Off)
+        );
+        assert_eq!(
+            provider.reasoning_default(&ModelRef::new("12th/missing")),
+            None
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn provider_identity_covers_defaults_stably_and_without_secrets() -> Result<(), ProviderError> {
+        let make = |defaults: Vec<(&str, Option<ReasoningEffort>)>| {
+            provider()?
+                .with_model_reasoning_defaults(
+                    defaults
+                        .into_iter()
+                        .map(|(id, effort)| (id.to_string(), effort)),
+                )
+                .configured_identity_v1()
+                .ok_or_else(|| ProviderError::Http("missing configured identity".to_string()))
+        };
+        let low = make(vec![("gpt-5.5", Some(ReasoningEffort::Low))])?;
+        let high = make(vec![("gpt-5.5", Some(ReasoningEffort::High))])?;
+        assert_ne!(low, high, "changing only a model default changes identity");
+        let ordered = make(vec![
+            ("gpt-5.5", Some(ReasoningEffort::Low)),
+            ("claude-opus-4-8", Some(ReasoningEffort::Off)),
+        ])?;
+        let reversed = make(vec![
+            ("claude-opus-4-8", Some(ReasoningEffort::Off)),
+            ("gpt-5.5", Some(ReasoningEffort::Low)),
+        ])?;
+        assert_eq!(
+            ordered, reversed,
+            "default row insertion order is not semantic"
+        );
+        Ok(())
+    }
+    #[test]
+    fn router_default_uses_first_claiming_provider() -> Result<(), ProviderError> {
+        let first = provider()?;
+        let second = provider()?.with_model_reasoning_defaults([(
+            "claude-opus-4-8".to_string(),
+            Some(ReasoningEffort::High),
+        )]);
+        let router = ProviderRouter::new()
+            .with(Arc::new(first))
+            .with(Arc::new(second));
+        assert_eq!(
+            router.reasoning_default(&ModelRef::new("12th/claude-opus-4-8")),
+            None,
+            "a later provider must not override the first claiming route"
+        );
+        assert_eq!(
+            router.reasoning_default(&ModelRef::new("12th/unknown")),
+            None
+        );
+        Ok(())
+    }
+    #[test]
+    fn provider_effort_capability_is_route_specific_and_allocation_free()
+    -> Result<(), ProviderError> {
+        let provider = provider()?
+            .with_model_reasoning_variants([("gpt-5.5".to_string(), vec!["low".to_string()])]);
+        assert_eq!(
+            provider
+                .supports_reasoning_effort(&ModelRef::new("12th/gpt-5.5"), ReasoningEffort::Low,),
+            Some(true)
+        );
+        assert_eq!(
+            provider
+                .supports_reasoning_effort(&ModelRef::new("12th/gpt-5.5"), ReasoningEffort::High,),
+            Some(false)
+        );
+        assert_eq!(
+            provider
+                .supports_reasoning_effort(&ModelRef::new("12th/gpt-5.5"), ReasoningEffort::Off,),
+            Some(true)
+        );
+        assert_eq!(
+            provider
+                .supports_reasoning_effort(&ModelRef::new("12th/missing"), ReasoningEffort::Low,),
+            None
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn router_effort_capability_uses_first_claiming_provider() -> Result<(), ProviderError> {
+        let first = provider()?;
+        let second = provider()?.with_model_reasoning_variants([(
+            "claude-opus-4-8".to_string(),
+            vec!["high".to_string()],
+        )]);
+        let router = ProviderRouter::new()
+            .with(Arc::new(first))
+            .with(Arc::new(second));
+        assert_eq!(
+            router.supports_reasoning_effort(
+                &ModelRef::new("12th/claude-opus-4-8"),
+                ReasoningEffort::Low,
+            ),
+            Some(true),
+            "later claiming routes must not override first-match capability"
+        );
+        Ok(())
+    }
+    /// Providers without optional metadata still derive effort support from capabilities.
+    #[test]
+    fn provider_without_metadata_uses_general_reasoning_capability() {
+        let provider = DevProvider::new();
+        assert_eq!(
+            Provider::reasoning_default(&provider, &ModelRef::new("offline")),
+            None
+        );
+        assert_eq!(
+            Provider::supports_reasoning_effort(
+                &provider,
+                &ModelRef::new("offline"),
+                ReasoningEffort::Low,
+            ),
+            Some(false)
         );
     }
 }

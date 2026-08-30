@@ -361,6 +361,7 @@ fn message_content_events(envs: &[Envelope]) -> BTreeMap<MessageId, Vec<ContentC
             | Event::WorkflowRunStarted { .. }
             | Event::WorkflowStageStarted { .. }
             | Event::WorkflowStageMemberLinked { .. }
+            | Event::WorkflowStageRouteOutcome { .. }
             | Event::WorkflowStageFinished { .. }
             | Event::WorkflowRunFinished { .. }
             | Event::MessageStarted { .. }
@@ -426,6 +427,7 @@ fn message_times(envs: &[Envelope]) -> BTreeMap<MessageId, MessageTime> {
             | Event::WorkflowRunStarted { .. }
             | Event::WorkflowStageStarted { .. }
             | Event::WorkflowStageMemberLinked { .. }
+            | Event::WorkflowStageRouteOutcome { .. }
             | Event::WorkflowStageFinished { .. }
             | Event::WorkflowRunFinished { .. }
             | Event::StepStarted { .. }

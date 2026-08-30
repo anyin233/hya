@@ -28,7 +28,9 @@ pub mod workflow;
 /// Compat workspace-adapter list entry.
 pub mod workspace;
 
-pub use event::{CompactionStrategy, Envelope, Event};
+pub use event::{
+    CompactionStrategy, Envelope, Event, WorkflowRouteFailureClass, WorkflowStageRouteOutcome,
+};
 pub use ids::{
     ActorClaim, ActorEpoch, ConfigGeneration, EventSeq, GoalId, LoopRunId, MemberId, MessageId,
     OperationId, OwnerRunId, PartId, PermissionRequestId, QuestionRequestId, SessionId, TeamRunId,
@@ -50,6 +52,7 @@ pub use scope::{ANNOUNCE_CHANNEL, ROOT_HANDLE, Relation, in_scope, relation};
 pub use workflow::{
     WorkflowAvailability, WorkflowCommand, WorkflowCommandResult, WorkflowDelivery,
     WorkflowIdentity, WorkflowInfo, WorkflowMemberProjection, WorkflowMemberRole,
+    WorkflowModelAssignment, WorkflowModelCandidate, WorkflowModelResolvedCandidate,
     WorkflowProjection, WorkflowRevision, WorkflowRevisionParseError, WorkflowRunProjection,
     WorkflowRunResult, WorkflowRunStatus, WorkflowSourceId, WorkflowStageInfo, WorkflowStagePlan,
     WorkflowStageProjection, WorkflowStageStatus, WorkflowSummary,

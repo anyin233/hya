@@ -1,7 +1,10 @@
-# 0.36.6
+# 0.36.7
 
-## Session cache ordering
+## Workflow stage model routing
 
-- Normalize bootstrap Session rows with the same code-unit comparator used by
-  binary search, preventing mixed-case IDs from becoming duplicate or
-  unreachable.
+- Route each Workflow Stage and loop verifier through an ordered model fallback
+  chain with per-candidate reasoning effort.
+- Keep Stage routes request-local so existing Agent, category, and provider
+  fallback behavior remains unchanged when no assignment is present.
+- Record bounded route selection and outcome metadata for replay-safe Workflow
+  state.

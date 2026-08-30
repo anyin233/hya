@@ -23,6 +23,8 @@ pub enum ScriptStep {
     Text(String),
     /// Stream one or more tool calls then finish tool_calls.
     ToolCalls(Vec<ToolCallStep>),
+    /// Return a non-success HTTP status before opening a stream.
+    HttpError(u16),
 }
 
 /// One tool call emitted in a scripted model turn.
@@ -233,6 +235,10 @@ async fn chat_completions(
         ]);
     };
     let frames = match step {
+        ScriptStep::HttpError(status) => {
+            let status = StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+            return (status, "scripted pre-stream failure").into_response();
+        }
         ScriptStep::Text(text) => vec![
             json!({"choices":[{"delta":{"role":"assistant","content":""},"finish_reason":null}]}),
             json!({"choices":[{"delta":{"content": text},"finish_reason":null}]}),
@@ -324,6 +330,11 @@ fn sse_response(frames: Vec<Value>) -> Response {
 /// Build a text-only script step for FakeLlm.
 pub fn text_step(s: impl Into<String>) -> ScriptStep {
     ScriptStep::Text(s.into())
+}
+
+/// Build a scripted non-success response before any stream is established.
+pub fn http_error_step(status: u16) -> ScriptStep {
+    ScriptStep::HttpError(status)
 }
 
 /// Build a single-tool-call script step (name + JSON arguments).

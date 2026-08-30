@@ -68,6 +68,7 @@ mod text_complete;
 mod todos;
 mod tool_error;
 mod turn;
+pub(crate) use turn::TurnRequestContext;
 
 async fn authorize_tool_call(
     resolved: &ResolvedTool,
@@ -580,6 +581,12 @@ impl SessionEngine {
     #[must_use]
     pub fn provider_catalog(&self) -> Vec<ProviderModel> {
         self.providers.catalog()
+    }
+
+    /// Shared provider router retained by this engine for request-local Workflow routes.
+    #[must_use]
+    pub fn provider_router(&self) -> Arc<ProviderRouter> {
+        Arc::clone(&self.providers)
     }
 
     /// Tool schemas from the current effective runtime snapshot.

@@ -175,6 +175,34 @@ pub enum Event {
         /// Zero-based activation iteration.
         iteration: u32,
     },
+    /// Record one finalized candidate selection for an explicit Stage route.
+    ///
+    /// This is one bounded observation per provider stream group; it carries
+    /// no provider text, credentials, prompts, or response content.
+    WorkflowStageRouteOutcome {
+        /// Owning root Session log.
+        session: SessionId,
+        /// Workflow run containing the Stage.
+        run: WorkflowRunId,
+        /// Compiled Stage id.
+        stage: String,
+        /// Canonical Session member reference.
+        member: MemberId,
+        /// Worker or independent verifier route.
+        role: WorkflowMemberRole,
+        /// Zero-based loop activation iteration.
+        iteration: u32,
+        /// Assistant/provider stream-group index.
+        step: u32,
+        /// Declaration-order candidate index selected or finally attempted.
+        candidate_index: u32,
+        /// Base model identity without a Workflow variant suffix.
+        model: ModelRef,
+        /// Required canonical effort label (`none` means Off).
+        reasoning: String,
+        /// Stable provider/activation failure class.
+        failure_class: WorkflowRouteFailureClass,
+    },
     /// Finish one Workflow Stage with a terminal status.
     WorkflowStageFinished {
         /// Session that owns the Workflow run.
@@ -702,7 +730,62 @@ pub enum Event {
     #[serde(other)]
     Unknown,
 }
+/// Stable, bounded classification for one Workflow route outcome.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkflowRouteFailureClass {
+    /// The selected candidate succeeded without a fallback advance.
+    None,
+    /// Retryable transport failure before a stream was established.
+    Transport,
+    /// Upstream rate limiting before a stream was established.
+    RateLimited,
+    /// Retryable upstream server failure before a stream was established.
+    Server,
+    /// No provider route claimed the candidate model.
+    UnknownModel,
+    /// Authentication or authorization failure.
+    Auth,
+    /// Provider capability or request incompatibility.
+    Incompatible,
+    /// Non-retryable HTTP/provider response failure.
+    Http,
+    /// Malformed or truncated provider stream.
+    Decode,
+    /// Internal invariant, store, or claim failure after an attempt started.
+    Internal,
+    /// Sidecar loss or task abort after an attempt started.
+    Aborted,
+    /// Explicit Workflow-owned activation cancellation.
+    Cancelled,
+}
 
+/// Durable fields for one finalized explicit Workflow route stream group.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct WorkflowStageRouteOutcome {
+    /// Owning root Session log.
+    pub session: SessionId,
+    /// Workflow run containing the Stage.
+    pub run: WorkflowRunId,
+    /// Compiled Stage id.
+    pub stage: String,
+    /// Canonical Session member reference.
+    pub member: MemberId,
+    /// Worker or independent verifier route.
+    pub role: WorkflowMemberRole,
+    /// Zero-based loop activation iteration.
+    pub iteration: u32,
+    /// Assistant/provider stream-group index.
+    pub step: u32,
+    /// Declaration-order candidate index selected or finally attempted.
+    pub candidate_index: u32,
+    /// Base model identity without a Workflow variant suffix.
+    pub model: ModelRef,
+    /// Required canonical effort label (`none` means Off).
+    pub reasoning: String,
+    /// Stable provider/activation failure class.
+    pub failure_class: WorkflowRouteFailureClass,
+}
 fn default_step_finish_reason() -> FinishReason {
     FinishReason::Stop
 }
@@ -739,6 +822,7 @@ impl Event {
             | Event::WorkflowRunStarted { session, .. }
             | Event::WorkflowStageStarted { session, .. }
             | Event::WorkflowStageMemberLinked { session, .. }
+            | Event::WorkflowStageRouteOutcome { session, .. }
             | Event::WorkflowStageFinished { session, .. }
             | Event::WorkflowRunFinished { session, .. }
             | Event::MessageStarted { session, .. }

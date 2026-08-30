@@ -402,6 +402,7 @@ async fn two_stage_workflow_runs_in_order_and_hands_off_evidence() {
             base_agent: base,
             inputs: BTreeMap::from([("target".to_string(), "the retry paths".to_string())]),
             resident_supervisor: None,
+            routing: None,
         },
         CancellationToken::new(),
     )
@@ -480,6 +481,7 @@ flowchart TD
             base_agent: base,
             inputs: BTreeMap::new(),
             resident_supervisor: None,
+            routing: None,
         },
         CancellationToken::new(),
     )
@@ -551,6 +553,7 @@ flowchart TD
                 base_agent: base,
                 inputs: BTreeMap::new(),
                 resident_supervisor: None,
+                routing: None,
             },
             CancellationToken::new(),
         ),
@@ -613,6 +616,7 @@ flowchart TD
             base_agent: base,
             inputs: BTreeMap::new(),
             resident_supervisor: None,
+            routing: None,
         },
         CancellationToken::new(),
     )
@@ -685,6 +689,7 @@ flowchart TD
             base_agent: base,
             inputs: BTreeMap::new(),
             resident_supervisor: None,
+            routing: None,
         },
         CancellationToken::new(),
     )
@@ -763,6 +768,7 @@ async fn run_def(
             base_agent: base,
             inputs,
             resident_supervisor: None,
+            routing: None,
         },
         CancellationToken::new(),
     )
@@ -889,6 +895,7 @@ flowchart TD
             base_agent: base,
             inputs: BTreeMap::new(),
             resident_supervisor: None,
+            routing: None,
         },
         CancellationToken::new(),
     )
@@ -987,6 +994,7 @@ flowchart TD
             base_agent: base,
             inputs: BTreeMap::new(),
             resident_supervisor: None,
+            routing: None,
         },
         CancellationToken::new(),
     )
@@ -1079,6 +1087,7 @@ flowchart TD
                 base_agent: base,
                 inputs: BTreeMap::new(),
                 resident_supervisor: None,
+                routing: None,
             },
             run_cancel,
         )
@@ -1109,10 +1118,14 @@ nodes:
     agent: resident-planner
     actor: planner
     directive: Draft the plan.
+    model:
+      id: fake/resident
   refine:
     agent: resident-planner
     actor: planner
     directive: Refine the plan.
+    model:
+      id: fake/resident
 ---
 flowchart TD
   draft --> refine
@@ -1132,6 +1145,44 @@ flowchart TD
     let base = engine
         .agent_spec_for_binding(&binding, &base_spec(), "build")
         .unwrap();
+    let routing = hya_core::WorkflowRoutingContext::new(
+        Arc::new(hya_core::CategoryRegistry::default()),
+        engine.provider_router(),
+    );
+    let mismatched = compile_workflow(
+        "resident-mismatch.hya.md",
+        &source.replacen(
+            "    directive: Refine the plan.\n    model:\n      id: fake/resident",
+            "    directive: Refine the plan.\n    model:\n      id: fake/other",
+            1,
+        ),
+    );
+    let mismatch = run_workflow(
+        engine.clone(),
+        lead,
+        &mismatched,
+        hya_core::WorkflowRunContext {
+            binding: binding.clone(),
+            caller: "build".to_string(),
+            base_agent: base.clone(),
+            inputs: BTreeMap::new(),
+            resident_supervisor: Some(supervisor.clone()),
+            routing: Some(routing.clone()),
+        },
+        CancellationToken::new(),
+    )
+    .await
+    .expect_err("shared resident actor must reject a different effective route");
+    assert!(
+        mismatch
+            .to_string()
+            .contains("identical effective worker route"),
+        "unexpected route mismatch error: {mismatch}"
+    );
+    assert!(
+        provider.prompts().is_empty(),
+        "route mismatch must fail before resident or provider effects"
+    );
 
     let report = tokio::time::timeout(
         std::time::Duration::from_secs(2),
@@ -1145,6 +1196,7 @@ flowchart TD
                 base_agent: base,
                 inputs: BTreeMap::new(),
                 resident_supervisor: Some(supervisor),
+                routing: Some(routing),
             },
             CancellationToken::new(),
         ),
@@ -1255,6 +1307,7 @@ flowchart TD
                     base_agent: base,
                     inputs: BTreeMap::new(),
                     resident_supervisor: Some(supervisor),
+                    routing: None,
                 },
                 run_cancel,
             )
@@ -1342,6 +1395,7 @@ flowchart TD
             base_agent: base,
             inputs: BTreeMap::new(),
             resident_supervisor: Some(supervisor),
+            routing: None,
         },
         CancellationToken::new(),
     )
@@ -1407,6 +1461,7 @@ flowchart TD
             base_agent: base,
             inputs: BTreeMap::new(),
             resident_supervisor: Some(supervisor),
+            routing: None,
         },
         CancellationToken::new(),
     )
@@ -1644,6 +1699,7 @@ flowchart TD
         base_agent: base.clone(),
         inputs: BTreeMap::new(),
         resident_supervisor: None,
+        routing: None,
     };
 
     // Parent authority control: the caller's OWN roster spans every target, so
@@ -1920,6 +1976,7 @@ flowchart TD
             base_agent: base,
             inputs: BTreeMap::new(),
             resident_supervisor: None,
+            routing: None,
         },
         CancellationToken::new(),
     )
