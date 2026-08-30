@@ -1,0 +1,33 @@
+
+  ┃                                                                                       Untitled Session_2026-08-29-23-28
+  ┃  RECONNECT_BEFORE_A29                                                                 hysec_114jCY28pz9Hes4vPSYt
+  ┃
+                                                                                          Workflow
+     (hya dev provider) You said: "RECONNECT_BEFORE_A29". No live model is configured     none
+     yet — wire a real provider in config for actual answers.
+                                                                                          Context
+     ▣  Build · offline · 12ms                                                            0 tokens
+                                                                                          0% used
+  ┃                                                                                       $0.00 spent
+  ┃  RECONNECT_AFTER_A29
+  ┃                                                                                       LSP
+                                                                                          LSPs are disabled
+     (hya dev provider) You said: "RECONNECT_AFTER_A29". No live model is configured
+     yet — wire a real provider in config for actual answers.
+
+     ▣  Build · offline · 13ms
+
+
+
+
+
+
+
+
+
+  ┃
+  ┃
+  ┃                                                                                       /home/yanweiye/.local/state/hya-
+  ┃  Build · offline hya                                                                  reconnect-a29/project
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                                                           tab agents  ctrl+p commands    • hya local

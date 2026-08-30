@@ -1,0 +1,1080 @@
+{
+  "advertised_builtin_count": 28,
+  "advertised_builtins": [
+    "read",
+    "ls",
+    "glob",
+    "find",
+    "grep",
+    "lsp",
+    "skill",
+    "webfetch",
+    "websearch",
+    "todowrite",
+    "write",
+    "edit",
+    "apply_patch",
+    "shell",
+    "bash",
+    "question",
+    "task",
+    "list_agents",
+    "plan_exit",
+    "invalid",
+    "ask_user",
+    "roster",
+    "send",
+    "announce",
+    "channels",
+    "join",
+    "leave",
+    "workflow"
+  ],
+  "builtin_coverage": {
+    "announce": {
+      "evidence": [
+        {
+          "path": "crates/hya-tool/src/mailbox.rs",
+          "tests": [
+            "render_roster_surfaces_live_status_mode_and_task",
+            "render_roster_groups_by_relation_and_omits_empty_groups",
+            "render_roster_reports_an_agent_that_can_reach_nobody"
+          ]
+        },
+        {
+          "path": "crates/hya-core/src/engine/mailbox.rs",
+          "tests": [
+            "channel_send_routes_to_root_log_and_survives_store_replay",
+            "channel_mail_after_stop_excludes_resident_and_replays_for_active_subscriber",
+            "unregistered_non_root_sender_is_rejected",
+            "direct_mail_to_transient_member_is_rejected_before_append",
+            "direct_mail_to_unknown_handle_is_rejected_before_append",
+            "resident_stop_commits_before_stale_direct_send_rechecks_and_rejects",
+            "sibling_is_reachable_and_cousin_is_refused_without_appending",
+            "grandparent_and_grandchild_are_both_refused",
+            "relative_leaf_and_full_path_deliver_identically",
+            "duplicate_leaf_across_units_resolves_to_the_senders_own",
+            "announce_reaches_direct_reports_only",
+            "announce_from_a_leaf_agent_is_refused",
+            "cross_unit_relay_through_the_common_ancestor_arrives",
+            "caret_channel_is_leader_only",
+            "same_channel_name_in_two_units_stays_separate",
+            "scoped_roster_and_channels_stop_at_the_unit_boundary"
+          ]
+        }
+      ]
+    },
+    "apply_patch": {
+      "evidence": [
+        {
+          "path": "crates/hya-tool/tests/apply_patch.rs",
+          "tests": [
+            "apply_patch_adds_updates_moves_and_deletes_files",
+            "apply_patch_requires_edit_permission_before_writing",
+            "apply_patch_rejects_missing_context_without_modifying_file"
+          ]
+        },
+        {
+          "path": "crates/hya-tool/tests/apply_patch_formatter.rs",
+          "tests": [
+            "apply_patch_runs_formatter_after_file_changes"
+          ]
+        },
+        {
+          "path": "crates/hya-tool/tests/apply_patch_lsp.rs",
+          "tests": [
+            "apply_patch_touches_lsp_after_formatter_and_returns_diagnostics"
+          ]
+        }
+      ]
+    },
+    "ask_user": {
+      "evidence": [
+        {
+          "path": "crates/hya-tool/tests/tool.rs",
+          "tests": [
+            "registry_rejects_duplicate_tool_name",
+            "builtins_expose_compat_names_and_keep_short_aliases_hidden",
+            "removing_a_builtin_also_removes_its_alias",
+            "candidate_builder_mutation_does_not_change_a_frozen_snapshot",
+            "dispatch_identity_is_stable_for_builtins_and_unavailable_for_unidentified_tools",
+            "explicit_dispatch_identity_is_canonical_snapshot_metadata",
+            "registry_resolves_canonical_names_with_explicit_permission_metadata",
+            "last_rule_wins_and_default_is_ask",
+            "child_deny_cannot_be_bypassed_by_parent_allow",
+            "assert_denies",
+            "ask_then_allow_once_then_reject",
+            "read_happy_and_denied",
+            "write_then_glob_then_grep",
+            "shell_happy_and_cancelled",
+            "task_tool_is_lead_only",
+            "ask_user_select_returns_index_and_answer",
+            "ls_lists_entries_with_type_and_size",
+            "find_matches_glob_with_metadata",
+            "find_resolves_relative_path_under_workdir",
+            "find_accepts_absolute_path_inside_workdir",
+            "find_rejects_absolute_path_outside_workdir",
+            "find_rejects_parent_traversal_out_of_workdir",
+            "edit_guards_ambiguous_unless_replace_all",
+            "edit_accepts_open_code_parameters_and_creates_new_file_from_empty_old_string",
+            "dropped_reply_yields_unavailable"
+          ]
+        },
+        {
+          "path": "crates/hya-tool/tests/question.rs",
+          "tests": [
+            "question_asks_multiple_prompts_and_returns_open_code_answer_metadata",
+            "question_supports_multiple_selected_options",
+            "question_rejects_options_without_description"
+          ]
+        }
+      ]
+    },
+    "bash": {
+      "evidence": [
+        {
+          "path": "crates/hya-tool/tests/shell.rs",
+          "tests": [
+            "bash_alias_is_visible_and_runs_shell_commands",
+            "shell_runs_in_open_code_workdir_and_uses_command_metadata",
+            "shell_merges_input_env_into_child_process",
+            "shell_times_out_and_reports_shell_metadata",
+            "shell_rejects_non_positive_timeout",
+            "shell_checks_bash_permission_before_running",
+            "shell_saves_full_output_when_truncated",
+            "shell_requires_external_directory_permission_for_outside_workdir"
+          ]
+        },
+        {
+          "path": "crates/hya-tool/tests/tool.rs",
+          "tests": [
+            "registry_rejects_duplicate_tool_name",
+            "builtins_expose_compat_names_and_keep_short_aliases_hidden",
+            "removing_a_builtin_also_removes_its_alias",
+            "candidate_builder_mutation_does_not_change_a_frozen_snapshot",
+            "dispatch_identity_is_stable_for_builtins_and_unavailable_for_unidentified_tools",
+            "explicit_dispatch_identity_is_canonical_snapshot_metadata",
+            "registry_resolves_canonical_names_with_explicit_permission_metadata",
+            "last_rule_wins_and_default_is_ask",
+            "child_deny_cannot_be_bypassed_by_parent_allow",
+            "assert_denies",
+            "ask_then_allow_once_then_reject",
+            "read_happy_and_denied",
+            "write_then_glob_then_grep",
+            "shell_happy_and_cancelled",
+            "task_tool_is_lead_only",
+            "ask_user_select_returns_index_and_answer",
+            "ls_lists_entries_with_type_and_size",
+            "find_matches_glob_with_metadata",
+            "find_resolves_relative_path_under_workdir",
+            "find_accepts_absolute_path_inside_workdir",
+            "find_rejects_absolute_path_outside_workdir",
+            "find_rejects_parent_traversal_out_of_workdir",
+            "edit_guards_ambiguous_unless_replace_all",
+            "edit_accepts_open_code_parameters_and_creates_new_file_from_empty_old_string",
+            "dropped_reply_yields_unavailable"
+          ]
+        }
+      ]
+    },
+    "channels": {
+      "evidence": [
+        {
+          "path": "crates/hya-tool/src/mailbox.rs",
+          "tests": [
+            "render_roster_surfaces_live_status_mode_and_task",
+            "render_roster_groups_by_relation_and_omits_empty_groups",
+            "render_roster_reports_an_agent_that_can_reach_nobody"
+          ]
+        },
+        {
+          "path": "crates/hya-core/src/engine/mailbox.rs",
+          "tests": [
+            "channel_send_routes_to_root_log_and_survives_store_replay",
+            "channel_mail_after_stop_excludes_resident_and_replays_for_active_subscriber",
+            "unregistered_non_root_sender_is_rejected",
+            "direct_mail_to_transient_member_is_rejected_before_append",
+            "direct_mail_to_unknown_handle_is_rejected_before_append",
+            "resident_stop_commits_before_stale_direct_send_rechecks_and_rejects",
+            "sibling_is_reachable_and_cousin_is_refused_without_appending",
+            "grandparent_and_grandchild_are_both_refused",
+            "relative_leaf_and_full_path_deliver_identically",
+            "duplicate_leaf_across_units_resolves_to_the_senders_own",
+            "announce_reaches_direct_reports_only",
+            "announce_from_a_leaf_agent_is_refused",
+            "cross_unit_relay_through_the_common_ancestor_arrives",
+            "caret_channel_is_leader_only",
+            "same_channel_name_in_two_units_stays_separate",
+            "scoped_roster_and_channels_stop_at_the_unit_boundary"
+          ]
+        }
+      ]
+    },
+    "edit": {
+      "evidence": [
+        {
+          "path": "crates/hya-tool/tests/edit.rs",
+          "tests": [
+            "edit_requires_external_directory_permission_for_outside_file_path",
+            "edit_preserves_existing_utf8_bom_without_duplicating_incoming_bom",
+            "edit_runs_formatter_after_successful_edit",
+            "edit_matches_lf_parameters_against_crlf_files_and_preserves_crlf",
+            "edit_returns_open_code_success_metadata_with_diff"
+          ]
+        },
+        {
+          "path": "crates/hya-tool/tests/edit_fuzzy.rs",
+          "tests": [
+            "edit_matches_line_trimmed_block_like_compat",
+            "edit_matches_whitespace_normalized_substring_like_compat",
+            "edit_matches_similar_block_anchor_like_compat",
+            "edit_matches_escape_normalized_string_like_compat",
+            "edit_matches_trimmed_boundary_block_like_compat",
+            "edit_matches_context_aware_block_like_compat"
+          ]
+        },
+        {
+          "path": "crates/hya-tool/tests/formatter.rs",
+          "tests": [
+            "disabled_formatter_config_returns_empty_status",
+            "builtin_formatter_config_returns_compat_catalog_status",
+            "disabling_ruff_or_uv_disables_both_python_formatters",
+            "custom_formatter_command_is_reported_enabled",
+            "custom_formatter_command_formats_matching_extension",
+            "custom_formatter_command_failure_returns_error",
+            "builtin_formatter_command_formats_matching_extension"
+          ]
+        },
+        {
+          "path": "crates/hya-tool/tests/formatter_bom.rs",
+          "tests": [
+            "write_restores_utf8_bom_after_formatter_rewrites_file",
+            "edit_restores_utf8_bom_after_formatter_rewrites_file",
+            "apply_patch_restores_utf8_bom_after_formatter_rewrites_file"
+          ]
+        },
+        {
+          "path": "crates/hya-tool/tests/lsp_write_edit.rs",
+          "tests": [
+            "write_touches_lsp_after_formatter_and_returns_diagnostics",
+            "edit_touches_lsp_after_formatter_and_returns_diagnostics"
+          ]
+        }
+      ]
+    },
+    "find": {
+      "evidence": [
+        {
+          "path": "crates/hya-tool/tests/tool.rs",
+          "tests": [
+            "registry_rejects_duplicate_tool_name",
+            "builtins_expose_compat_names_and_keep_short_aliases_hidden",
+            "removing_a_builtin_also_removes_its_alias",
+            "candidate_builder_mutation_does_not_change_a_frozen_snapshot",
+            "dispatch_identity_is_stable_for_builtins_and_unavailable_for_unidentified_tools",
+            "explicit_dispatch_identity_is_canonical_snapshot_metadata",
+            "registry_resolves_canonical_names_with_explicit_permission_metadata",
+            "last_rule_wins_and_default_is_ask",
+            "child_deny_cannot_be_bypassed_by_parent_allow",
+            "assert_denies",
+            "ask_then_allow_once_then_reject",
+            "read_happy_and_denied",
+            "write_then_glob_then_grep",
+            "shell_happy_and_cancelled",
+            "task_tool_is_lead_only",
+            "ask_user_select_returns_index_and_answer",
+            "ls_lists_entries_with_type_and_size",
+            "find_matches_glob_with_metadata",
+            "find_resolves_relative_path_under_workdir",
+            "find_accepts_absolute_path_inside_workdir",
+            "find_rejects_absolute_path_outside_workdir",
+            "find_rejects_parent_traversal_out_of_workdir",
+            "edit_guards_ambiguous_unless_replace_all",
+            "edit_accepts_open_code_parameters_and_creates_new_file_from_empty_old_string",
+            "dropped_reply_yields_unavailable"
+          ]
+        }
+      ]
+    },
+    "glob": {
+      "evidence": [
+        {
+          "path": "crates/hya-tool/tests/glob_grep.rs",
+          "tests": [
+            "glob_supports_path_and_open_code_output_shape",
+            "glob_rejects_file_path_like_compat",
+            "grep_supports_regex_include_and_open_code_output_shape",
+            "grep_uses_parent_directory_when_path_is_a_file",
+            "glob_requires_external_directory_permission_for_outside_path"
+          ]
+        },
+        {
+          "path": "crates/hya-tool/tests/tool.rs",
+          "tests": [
+            "registry_rejects_duplicate_tool_name",
+            "builtins_expose_compat_names_and_keep_short_aliases_hidden",
+            "removing_a_builtin_also_removes_its_alias",
+            "candidate_builder_mutation_does_not_change_a_frozen_snapshot",
+            "dispatch_identity_is_stable_for_builtins_and_unavailable_for_unidentified_tools",
+            "explicit_dispatch_identity_is_canonical_snapshot_metadata",
+            "registry_resolves_canonical_names_with_explicit_permission_metadata",
+            "last_rule_wins_and_default_is_ask",
+            "child_deny_cannot_be_bypassed_by_parent_allow",
+            "assert_denies",
+            "ask_then_allow_once_then_reject",
+            "read_happy_and_denied",
+            "write_then_glob_then_grep",
+            "shell_happy_and_cancelled",
+            "task_tool_is_lead_only",
+            "ask_user_select_returns_index_and_answer",
+            "ls_lists_entries_with_type_and_size",
+            "find_matches_glob_with_metadata",
+            "find_resolves_relative_path_under_workdir",
+            "find_accepts_absolute_path_inside_workdir",
+            "find_rejects_absolute_path_outside_workdir",
+            "find_rejects_parent_traversal_out_of_workdir",
+            "edit_guards_ambiguous_unless_replace_all",
+            "edit_accepts_open_code_parameters_and_creates_new_file_from_empty_old_string",
+            "dropped_reply_yields_unavailable"
+          ]
+        }
+      ]
+    },
+    "grep": {
+      "evidence": [
+        {
+          "path": "crates/hya-tool/tests/glob_grep.rs",
+          "tests": [
+            "glob_supports_path_and_open_code_output_shape",
+            "glob_rejects_file_path_like_compat",
+            "grep_supports_regex_include_and_open_code_output_shape",
+            "grep_uses_parent_directory_when_path_is_a_file",
+            "glob_requires_external_directory_permission_for_outside_path"
+          ]
+        },
+        {
+          "path": "crates/hya-tool/tests/tool.rs",
+          "tests": [
+            "registry_rejects_duplicate_tool_name",
+            "builtins_expose_compat_names_and_keep_short_aliases_hidden",
+            "removing_a_builtin_also_removes_its_alias",
+            "candidate_builder_mutation_does_not_change_a_frozen_snapshot",
+            "dispatch_identity_is_stable_for_builtins_and_unavailable_for_unidentified_tools",
+            "explicit_dispatch_identity_is_canonical_snapshot_metadata",
+            "registry_resolves_canonical_names_with_explicit_permission_metadata",
+            "last_rule_wins_and_default_is_ask",
+            "child_deny_cannot_be_bypassed_by_parent_allow",
+            "assert_denies",
+            "ask_then_allow_once_then_reject",
+            "read_happy_and_denied",
+            "write_then_glob_then_grep",
+            "shell_happy_and_cancelled",
+            "task_tool_is_lead_only",
+            "ask_user_select_returns_index_and_answer",
+            "ls_lists_entries_with_type_and_size",
+            "find_matches_glob_with_metadata",
+            "find_resolves_relative_path_under_workdir",
+            "find_accepts_absolute_path_inside_workdir",
+            "find_rejects_absolute_path_outside_workdir",
+            "find_rejects_parent_traversal_out_of_workdir",
+            "edit_guards_ambiguous_unless_replace_all",
+            "edit_accepts_open_code_parameters_and_creates_new_file_from_empty_old_string",
+            "dropped_reply_yields_unavailable"
+          ]
+        }
+      ]
+    },
+    "invalid": {
+      "evidence": [
+        {
+          "path": "crates/hya-tool/tests/invalid.rs",
+          "tests": [
+            "invalid_tool_reports_argument_error_in_open_code_shape"
+          ]
+        }
+      ]
+    },
+    "join": {
+      "evidence": [
+        {
+          "path": "crates/hya-tool/src/mailbox.rs",
+          "tests": [
+            "render_roster_surfaces_live_status_mode_and_task",
+            "render_roster_groups_by_relation_and_omits_empty_groups",
+            "render_roster_reports_an_agent_that_can_reach_nobody"
+          ]
+        },
+        {
+          "path": "crates/hya-core/src/engine/mailbox.rs",
+          "tests": [
+            "channel_send_routes_to_root_log_and_survives_store_replay",
+            "channel_mail_after_stop_excludes_resident_and_replays_for_active_subscriber",
+            "unregistered_non_root_sender_is_rejected",
+            "direct_mail_to_transient_member_is_rejected_before_append",
+            "direct_mail_to_unknown_handle_is_rejected_before_append",
+            "resident_stop_commits_before_stale_direct_send_rechecks_and_rejects",
+            "sibling_is_reachable_and_cousin_is_refused_without_appending",
+            "grandparent_and_grandchild_are_both_refused",
+            "relative_leaf_and_full_path_deliver_identically",
+            "duplicate_leaf_across_units_resolves_to_the_senders_own",
+            "announce_reaches_direct_reports_only",
+            "announce_from_a_leaf_agent_is_refused",
+            "cross_unit_relay_through_the_common_ancestor_arrives",
+            "caret_channel_is_leader_only",
+            "same_channel_name_in_two_units_stays_separate",
+            "scoped_roster_and_channels_stop_at_the_unit_boundary"
+          ]
+        }
+      ]
+    },
+    "leave": {
+      "evidence": [
+        {
+          "path": "crates/hya-tool/src/mailbox.rs",
+          "tests": [
+            "render_roster_surfaces_live_status_mode_and_task",
+            "render_roster_groups_by_relation_and_omits_empty_groups",
+            "render_roster_reports_an_agent_that_can_reach_nobody"
+          ]
+        },
+        {
+          "path": "crates/hya-core/src/engine/mailbox.rs",
+          "tests": [
+            "channel_send_routes_to_root_log_and_survives_store_replay",
+            "channel_mail_after_stop_excludes_resident_and_replays_for_active_subscriber",
+            "unregistered_non_root_sender_is_rejected",
+            "direct_mail_to_transient_member_is_rejected_before_append",
+            "direct_mail_to_unknown_handle_is_rejected_before_append",
+            "resident_stop_commits_before_stale_direct_send_rechecks_and_rejects",
+            "sibling_is_reachable_and_cousin_is_refused_without_appending",
+            "grandparent_and_grandchild_are_both_refused",
+            "relative_leaf_and_full_path_deliver_identically",
+            "duplicate_leaf_across_units_resolves_to_the_senders_own",
+            "announce_reaches_direct_reports_only",
+            "announce_from_a_leaf_agent_is_refused",
+            "cross_unit_relay_through_the_common_ancestor_arrives",
+            "caret_channel_is_leader_only",
+            "same_channel_name_in_two_units_stays_separate",
+            "scoped_roster_and_channels_stop_at_the_unit_boundary"
+          ]
+        }
+      ]
+    },
+    "list_agents": {
+      "evidence": [
+        {
+          "path": "crates/hya-tool/tests/task.rs",
+          "tests": [
+            "subagent_can_spawn_nested_task",
+            "omitted_subagent_type_selects_general",
+            "task_preserves_the_persisted_tool_call_operation_identity",
+            "task_schema_exposes_open_code_fields",
+            "task_schema_describes_inline_agent_as_request_scoped",
+            "task_foreground_result_uses_open_code_output_shape",
+            "task_empty_or_sentinel_task_id_creates_fresh_spawn",
+            "task_invalid_task_id_errors_with_create_hint",
+            "task_forwards_task_id_to_spawner_for_resume",
+            "task_batch_ignores_invalid_top_level_task_id",
+            "task_rejects_invalid_task_id",
+            "task_preserves_typed_spawn_overload",
+            "task_background_returns_running_task_result"
+          ]
+        },
+        {
+          "path": "crates/hya-tool/tests/tool.rs",
+          "tests": [
+            "registry_rejects_duplicate_tool_name",
+            "builtins_expose_compat_names_and_keep_short_aliases_hidden",
+            "removing_a_builtin_also_removes_its_alias",
+            "candidate_builder_mutation_does_not_change_a_frozen_snapshot",
+            "dispatch_identity_is_stable_for_builtins_and_unavailable_for_unidentified_tools",
+            "explicit_dispatch_identity_is_canonical_snapshot_metadata",
+            "registry_resolves_canonical_names_with_explicit_permission_metadata",
+            "last_rule_wins_and_default_is_ask",
+            "child_deny_cannot_be_bypassed_by_parent_allow",
+            "assert_denies",
+            "ask_then_allow_once_then_reject",
+            "read_happy_and_denied",
+            "write_then_glob_then_grep",
+            "shell_happy_and_cancelled",
+            "task_tool_is_lead_only",
+            "ask_user_select_returns_index_and_answer",
+            "ls_lists_entries_with_type_and_size",
+            "find_matches_glob_with_metadata",
+            "find_resolves_relative_path_under_workdir",
+            "find_accepts_absolute_path_inside_workdir",
+            "find_rejects_absolute_path_outside_workdir",
+            "find_rejects_parent_traversal_out_of_workdir",
+            "edit_guards_ambiguous_unless_replace_all",
+            "edit_accepts_open_code_parameters_and_creates_new_file_from_empty_old_string",
+            "dropped_reply_yields_unavailable"
+          ]
+        }
+      ]
+    },
+    "ls": {
+      "evidence": [
+        {
+          "path": "crates/hya-tool/tests/tool.rs",
+          "tests": [
+            "registry_rejects_duplicate_tool_name",
+            "builtins_expose_compat_names_and_keep_short_aliases_hidden",
+            "removing_a_builtin_also_removes_its_alias",
+            "candidate_builder_mutation_does_not_change_a_frozen_snapshot",
+            "dispatch_identity_is_stable_for_builtins_and_unavailable_for_unidentified_tools",
+            "explicit_dispatch_identity_is_canonical_snapshot_metadata",
+            "registry_resolves_canonical_names_with_explicit_permission_metadata",
+            "last_rule_wins_and_default_is_ask",
+            "child_deny_cannot_be_bypassed_by_parent_allow",
+            "assert_denies",
+            "ask_then_allow_once_then_reject",
+            "read_happy_and_denied",
+            "write_then_glob_then_grep",
+            "shell_happy_and_cancelled",
+            "task_tool_is_lead_only",
+            "ask_user_select_returns_index_and_answer",
+            "ls_lists_entries_with_type_and_size",
+            "find_matches_glob_with_metadata",
+            "find_resolves_relative_path_under_workdir",
+            "find_accepts_absolute_path_inside_workdir",
+            "find_rejects_absolute_path_outside_workdir",
+            "find_rejects_parent_traversal_out_of_workdir",
+            "edit_guards_ambiguous_unless_replace_all",
+            "edit_accepts_open_code_parameters_and_creates_new_file_from_empty_old_string",
+            "dropped_reply_yields_unavailable"
+          ]
+        },
+        {
+          "path": "crates/hya-tool/tests/read.rs",
+          "tests": [
+            "read_supports_file_path_offset_limit_and_open_code_display_metadata",
+            "read_lists_directories_with_sorted_entries_and_open_code_metadata",
+            "read_rejects_offset_beyond_file_line_count",
+            "read_requires_external_directory_permission_for_outside_file_path",
+            "read_strips_utf8_bom_from_file_output",
+            "read_returns_open_code_attachment_for_png_files",
+            "read_rejects_binary_files_before_text_decoding"
+          ]
+        }
+      ]
+    },
+    "lsp": {
+      "evidence": [
+        {
+          "path": "crates/hya-tool/tests/lsp.rs",
+          "tests": [
+            "lsp_schema_includes_open_code_descriptions",
+            "lsp_calls_provider_and_returns_open_code_result_shape",
+            "lsp_reports_no_server_when_no_provider_is_available",
+            "lsp_requires_permission_before_calling_provider"
+          ]
+        },
+        {
+          "path": "crates/hya-tool/tests/lsp_write_edit.rs",
+          "tests": [
+            "write_touches_lsp_after_formatter_and_returns_diagnostics",
+            "edit_touches_lsp_after_formatter_and_returns_diagnostics"
+          ]
+        }
+      ]
+    },
+    "plan_exit": {
+      "evidence": [
+        {
+          "path": "crates/hya-tool/tests/plan_exit.rs",
+          "tests": [
+            "plan_exit_asks_for_approval_and_reports_open_code_success_shape",
+            "plan_exit_rejects_when_user_declines_switching_to_build_agent"
+          ]
+        }
+      ]
+    },
+    "question": {
+      "evidence": [
+        {
+          "path": "crates/hya-tool/tests/question.rs",
+          "tests": [
+            "question_asks_multiple_prompts_and_returns_open_code_answer_metadata",
+            "question_supports_multiple_selected_options",
+            "question_rejects_options_without_description"
+          ]
+        }
+      ]
+    },
+    "read": {
+      "evidence": [
+        {
+          "path": "crates/hya-tool/tests/read.rs",
+          "tests": [
+            "read_supports_file_path_offset_limit_and_open_code_display_metadata",
+            "read_lists_directories_with_sorted_entries_and_open_code_metadata",
+            "read_rejects_offset_beyond_file_line_count",
+            "read_requires_external_directory_permission_for_outside_file_path",
+            "read_strips_utf8_bom_from_file_output",
+            "read_returns_open_code_attachment_for_png_files",
+            "read_rejects_binary_files_before_text_decoding"
+          ]
+        },
+        {
+          "path": "crates/hya-tool/tests/read_limits.rs",
+          "tests": [
+            "read_truncates_individual_lines_to_open_code_limit",
+            "read_caps_file_output_at_fifty_kilobytes"
+          ]
+        },
+        {
+          "path": "crates/hya-tool/tests/read_missing.rs",
+          "tests": [
+            "read_suggests_similar_files_when_path_is_missing"
+          ]
+        }
+      ]
+    },
+    "roster": {
+      "evidence": [
+        {
+          "path": "crates/hya-tool/src/mailbox.rs",
+          "tests": [
+            "render_roster_surfaces_live_status_mode_and_task",
+            "render_roster_groups_by_relation_and_omits_empty_groups",
+            "render_roster_reports_an_agent_that_can_reach_nobody"
+          ]
+        },
+        {
+          "path": "crates/hya-core/src/engine/mailbox.rs",
+          "tests": [
+            "channel_send_routes_to_root_log_and_survives_store_replay",
+            "channel_mail_after_stop_excludes_resident_and_replays_for_active_subscriber",
+            "unregistered_non_root_sender_is_rejected",
+            "direct_mail_to_transient_member_is_rejected_before_append",
+            "direct_mail_to_unknown_handle_is_rejected_before_append",
+            "resident_stop_commits_before_stale_direct_send_rechecks_and_rejects",
+            "sibling_is_reachable_and_cousin_is_refused_without_appending",
+            "grandparent_and_grandchild_are_both_refused",
+            "relative_leaf_and_full_path_deliver_identically",
+            "duplicate_leaf_across_units_resolves_to_the_senders_own",
+            "announce_reaches_direct_reports_only",
+            "announce_from_a_leaf_agent_is_refused",
+            "cross_unit_relay_through_the_common_ancestor_arrives",
+            "caret_channel_is_leader_only",
+            "same_channel_name_in_two_units_stays_separate",
+            "scoped_roster_and_channels_stop_at_the_unit_boundary"
+          ]
+        }
+      ]
+    },
+    "send": {
+      "evidence": [
+        {
+          "path": "crates/hya-tool/src/mailbox.rs",
+          "tests": [
+            "render_roster_surfaces_live_status_mode_and_task",
+            "render_roster_groups_by_relation_and_omits_empty_groups",
+            "render_roster_reports_an_agent_that_can_reach_nobody"
+          ]
+        },
+        {
+          "path": "crates/hya-core/src/engine/mailbox.rs",
+          "tests": [
+            "channel_send_routes_to_root_log_and_survives_store_replay",
+            "channel_mail_after_stop_excludes_resident_and_replays_for_active_subscriber",
+            "unregistered_non_root_sender_is_rejected",
+            "direct_mail_to_transient_member_is_rejected_before_append",
+            "direct_mail_to_unknown_handle_is_rejected_before_append",
+            "resident_stop_commits_before_stale_direct_send_rechecks_and_rejects",
+            "sibling_is_reachable_and_cousin_is_refused_without_appending",
+            "grandparent_and_grandchild_are_both_refused",
+            "relative_leaf_and_full_path_deliver_identically",
+            "duplicate_leaf_across_units_resolves_to_the_senders_own",
+            "announce_reaches_direct_reports_only",
+            "announce_from_a_leaf_agent_is_refused",
+            "cross_unit_relay_through_the_common_ancestor_arrives",
+            "caret_channel_is_leader_only",
+            "same_channel_name_in_two_units_stays_separate",
+            "scoped_roster_and_channels_stop_at_the_unit_boundary"
+          ]
+        }
+      ]
+    },
+    "shell": {
+      "evidence": [
+        {
+          "path": "crates/hya-tool/tests/shell.rs",
+          "tests": [
+            "bash_alias_is_visible_and_runs_shell_commands",
+            "shell_runs_in_open_code_workdir_and_uses_command_metadata",
+            "shell_merges_input_env_into_child_process",
+            "shell_times_out_and_reports_shell_metadata",
+            "shell_rejects_non_positive_timeout",
+            "shell_checks_bash_permission_before_running",
+            "shell_saves_full_output_when_truncated",
+            "shell_requires_external_directory_permission_for_outside_workdir"
+          ]
+        },
+        {
+          "path": "crates/hya-tool/tests/tool.rs",
+          "tests": [
+            "registry_rejects_duplicate_tool_name",
+            "builtins_expose_compat_names_and_keep_short_aliases_hidden",
+            "removing_a_builtin_also_removes_its_alias",
+            "candidate_builder_mutation_does_not_change_a_frozen_snapshot",
+            "dispatch_identity_is_stable_for_builtins_and_unavailable_for_unidentified_tools",
+            "explicit_dispatch_identity_is_canonical_snapshot_metadata",
+            "registry_resolves_canonical_names_with_explicit_permission_metadata",
+            "last_rule_wins_and_default_is_ask",
+            "child_deny_cannot_be_bypassed_by_parent_allow",
+            "assert_denies",
+            "ask_then_allow_once_then_reject",
+            "read_happy_and_denied",
+            "write_then_glob_then_grep",
+            "shell_happy_and_cancelled",
+            "task_tool_is_lead_only",
+            "ask_user_select_returns_index_and_answer",
+            "ls_lists_entries_with_type_and_size",
+            "find_matches_glob_with_metadata",
+            "find_resolves_relative_path_under_workdir",
+            "find_accepts_absolute_path_inside_workdir",
+            "find_rejects_absolute_path_outside_workdir",
+            "find_rejects_parent_traversal_out_of_workdir",
+            "edit_guards_ambiguous_unless_replace_all",
+            "edit_accepts_open_code_parameters_and_creates_new_file_from_empty_old_string",
+            "dropped_reply_yields_unavailable"
+          ]
+        }
+      ]
+    },
+    "skill": {
+      "evidence": [
+        {
+          "path": "crates/hya-tool/tests/skill.rs",
+          "tests": [
+            "skill_loads_named_skill_content_and_file_sample",
+            "skill_requires_skill_permission_before_loading_content",
+            "skill_returns_not_found_error_for_unknown_name",
+            "skill_falls_back_to_later_root_when_first_root_has_no_match",
+            "skill_prefers_first_matching_root_when_multiple_roots_define_same_name",
+            "default_skill_plane_loads_from_toolctx_workdir"
+          ]
+        },
+        {
+          "path": "crates/hya-tool/tests/skill_catalog.rs",
+          "tests": [
+            "skill_dirs_start_with_hya_project_then_hya_config_then_external_fallbacks",
+            "discover_skills_preserves_root_order_and_first_name_wins"
+          ]
+        }
+      ]
+    },
+    "task": {
+      "evidence": [
+        {
+          "path": "crates/hya-tool/tests/task.rs",
+          "tests": [
+            "subagent_can_spawn_nested_task",
+            "omitted_subagent_type_selects_general",
+            "task_preserves_the_persisted_tool_call_operation_identity",
+            "task_schema_exposes_open_code_fields",
+            "task_schema_describes_inline_agent_as_request_scoped",
+            "task_foreground_result_uses_open_code_output_shape",
+            "task_empty_or_sentinel_task_id_creates_fresh_spawn",
+            "task_invalid_task_id_errors_with_create_hint",
+            "task_forwards_task_id_to_spawner_for_resume",
+            "task_batch_ignores_invalid_top_level_task_id",
+            "task_rejects_invalid_task_id",
+            "task_preserves_typed_spawn_overload",
+            "task_background_returns_running_task_result"
+          ]
+        }
+      ]
+    },
+    "todowrite": {
+      "evidence": [
+        {
+          "path": "crates/hya-tool/tests/todowrite.rs",
+          "tests": [
+            "todowrite_updates_session_todos_and_reports_open_count",
+            "todowrite_denied_does_not_update_session_todos",
+            "todowrite_rejects_missing_status_without_updating_session_todos",
+            "todowrite_accepts_compat_string_status_and_priority"
+          ]
+        }
+      ]
+    },
+    "webfetch": {
+      "evidence": [
+        {
+          "path": "crates/hya-tool/tests/webfetch.rs",
+          "tests": [
+            "webfetch_fetches_text_from_http_url",
+            "webfetch_accepts_fractional_timeout_seconds",
+            "webfetch_converts_html_to_readable_text_for_markdown",
+            "webfetch_returns_open_code_attachment_for_images",
+            "webfetch_requires_webfetch_permission",
+            "url_resource_patterns_match_permission_rules"
+          ]
+        }
+      ]
+    },
+    "websearch": {
+      "evidence": [
+        {
+          "path": "crates/hya-tool/tests/websearch.rs",
+          "tests": [
+            "websearch_schema_includes_open_code_guidance",
+            "websearch_config_defaults_to_unauthenticated_exa",
+            "websearch_calls_mcp_provider_and_returns_open_code_shape",
+            "websearch_parallel_includes_session_metadata",
+            "websearch_exa_sends_configured_key_as_query_parameter",
+            "websearch_parallel_sends_configured_key_as_bearer_token",
+            "websearch_requires_permission_before_calling_provider"
+          ]
+        }
+      ]
+    },
+    "workflow": {
+      "evidence": [
+        {
+          "path": "crates/hya-tool/tests/workflow.rs",
+          "tests": [
+            "frames_all_workflow_commands_and_preserves_operation_identity",
+            "defaults_to_list_and_rejects_unknown_action",
+            "preserves_structured_workflow_host_error"
+          ]
+        },
+        {
+          "path": "crates/hya-core/tests/workflow.rs",
+          "tests": [
+            "two_stage_workflow_runs_in_order_and_hands_off_evidence",
+            "fan_out_then_fan_in_joins_all_upstream_outputs",
+            "same_level_transient_stages_overlap_provider_execution",
+            "collect_all_policy_reports_failures_into_the_join",
+            "collect_all_applies_to_resumed_loop_worker_failures",
+            "old_stage_list_sources_are_rejected",
+            "missing_declared_input_fails_before_any_spawn",
+            "unknown_stage_agent_is_rejected_before_spawn",
+            "per_run_budget_overflow_is_rejected_up_front",
+            "fail_fast_aborts_downstream_levels",
+            "loop_stage_verifier_owns_the_stop_decision",
+            "workflow_cancellation_stops_an_inflight_loop_verifier",
+            "sequential_actor_stages_reuse_one_resident_session",
+            "workflow_cancellation_settles_inflight_resident_stage",
+            "actor_keys_not_agent_ids_control_session_reuse",
+            "resident_stage_failure_is_terminal_evidence",
+            "stage_members_resolve_their_own_can_spawn_roster",
+            "loop_worker_and_verifier_reuse_target_execution_contexts"
+          ]
+        },
+        {
+          "path": "crates/hya-server/tests/workflow_session_api.rs",
+          "tests": [
+            "compat_session_hydration_carries_runtime_workflow_availability",
+            "compat_session_hydration_carries_only_bounded_workflow_activity",
+            "typed_workflow_state_is_available_on_all_route_families",
+            "workflow_slash_command_bypasses_parent_model_on_all_command_routes",
+            "workflow_slash_result_is_visible_as_assistant_without_provider_round",
+            "typed_workflow_commands_use_all_route_families",
+            "typed_workflow_error_preserves_status_code_and_message",
+            "malformed_workflow_slash_returns_structured_syntax_error",
+            "workflow_mutation_reservation_blocks_parent_model_admission",
+            "workflow_mutation_rejects_active_parent_but_state_remains_readable"
+          ]
+        }
+      ]
+    },
+    "write": {
+      "evidence": [
+        {
+          "path": "crates/hya-tool/tests/write.rs",
+          "tests": [
+            "write_accepts_open_code_file_path_and_returns_metadata",
+            "write_runs_formatter_after_successful_write",
+            "write_reports_existing_file_when_overwriting",
+            "write_preserves_existing_utf8_bom",
+            "write_uses_incoming_utf8_bom_without_duplicating_it",
+            "write_checks_edit_permission_before_writing_file_path",
+            "write_requires_external_directory_permission_for_outside_file_path"
+          ]
+        },
+        {
+          "path": "crates/hya-tool/tests/formatter.rs",
+          "tests": [
+            "disabled_formatter_config_returns_empty_status",
+            "builtin_formatter_config_returns_compat_catalog_status",
+            "disabling_ruff_or_uv_disables_both_python_formatters",
+            "custom_formatter_command_is_reported_enabled",
+            "custom_formatter_command_formats_matching_extension",
+            "custom_formatter_command_failure_returns_error",
+            "builtin_formatter_command_formats_matching_extension"
+          ]
+        },
+        {
+          "path": "crates/hya-tool/tests/formatter_bom.rs",
+          "tests": [
+            "write_restores_utf8_bom_after_formatter_rewrites_file",
+            "edit_restores_utf8_bom_after_formatter_rewrites_file",
+            "apply_patch_restores_utf8_bom_after_formatter_rewrites_file"
+          ]
+        },
+        {
+          "path": "crates/hya-tool/tests/lsp_write_edit.rs",
+          "tests": [
+            "write_touches_lsp_after_formatter_and_returns_diagnostics",
+            "edit_touches_lsp_after_formatter_and_returns_diagnostics"
+          ]
+        }
+      ]
+    }
+  },
+  "event_contract": {
+    "live_recovery": [
+      "tui-live-matrix.json permission_and_recovery",
+      "coding-fixture-summary.json GPT Tool input errors followed by successful patches/tests"
+    ],
+    "required_order": [
+      "tool_input_start",
+      "tool_input_delta*",
+      "tool_call_requested",
+      "exactly one of tool_result/tool_error"
+    ],
+    "tests": [
+      "hya-core full suite",
+      "hya-tool full suite",
+      "P18 structured_custom_tool_errors_replay_and_session_recovers"
+    ]
+  },
+  "hidden_aliases": {
+    "fetch": "webfetch",
+    "patch": "apply_patch",
+    "plan": "plan_exit",
+    "search": "websearch",
+    "todo": "todowrite"
+  },
+  "live_schema_contract": {
+    "glm": {
+      "evidence": "tool-schema-by-model.json",
+      "expected": 28
+    },
+    "gpt": {
+      "evidence": "tool-schema-by-model.json",
+      "excluded": [
+        "write",
+        "edit"
+      ],
+      "expected": 26
+    }
+  },
+  "provider_errors": {
+    "AuthExpired": {
+      "live": [
+        "live-remote-error-boundaries.json invalid credential is the distinct static-key HTTP 401 seam"
+      ],
+      "tests": [
+        "hya-core::model_fallback::auth_failure_does_not_consume_chain"
+      ]
+    },
+    "Decode": {
+      "tests": [
+        "hya-provider::http_headers::responses_routes_require_typed_terminal_while_chat_completions_remains_permissive",
+        "hya-core::model_fallback::post_stream_error_is_delivered_once_and_never_failed_over"
+      ]
+    },
+    "Http": {
+      "tests": [
+        "hya-provider::http_headers::http_provider_reports_nested_responses_failure",
+        "hya-provider::http_headers::http_provider_idle_stall_yields_one_error_without_second_request"
+      ]
+    },
+    "HttpStatus": {
+      "live": [
+        "live-remote-error-boundaries.json configured ghost 400",
+        "live-remote-error-boundaries.json invalid credential 401",
+        "coding-fixture-summary.json GLM 503"
+      ],
+      "tests": [
+        "hya-provider::http_headers::http_provider_retries_retryable_status_before_returning_a_stream"
+      ]
+    },
+    "Incompatible": {
+      "tests": [
+        "hya-provider::multiprovider::preflight_rejects_tools_on_incapable_route"
+      ]
+    },
+    "Json": {
+      "tests": [
+        "hya-provider::http_headers::openai_family_routes_report_malformed_json_frames"
+      ]
+    },
+    "Transport": {
+      "tests": [
+        "hya-provider::conformance::router_fails_over_after_retryable_pre_stream_failure",
+        "hya-core::model_fallback::fallback_succeeds_after_retryable_pre_stream_failure"
+      ]
+    },
+    "UnknownModel": {
+      "live": [
+        "ledger.jsonl P1.local-unknown-model zero relay traffic"
+      ],
+      "tests": [
+        "hya-provider::conformance::empty_router_returns_unknown_model",
+        "hya-core::model_fallback::unknown_model_advances_to_next_chain_candidate"
+      ]
+    }
+  },
+  "registry_contract": "hya-tool::tool::builtins_expose_compat_names_and_keep_short_aliases_hidden",
+  "tool_errors": {
+    "AgentSpawnNotAllowed": [
+      "hya-core::engine::tool_error::every_tool_error_variant_has_a_stable_structured_type",
+      "hya-core::agent_catalog::a_bundle_agent_spawns_only_what_it_lists"
+    ],
+    "Cancelled": [
+      "hya-core::engine::tool_error::every_tool_error_variant_has_a_stable_structured_type",
+      "hya-tool::tool::shell_happy_and_cancelled"
+    ],
+    "Input": [
+      "hya-core::engine::tool_error::every_tool_error_variant_has_a_stable_structured_type",
+      "hya-tool::task::task_invalid_task_id_errors_with_create_hint"
+    ],
+    "Io": [
+      "hya-core::engine::tool_error::every_tool_error_variant_has_a_stable_structured_type"
+    ],
+    "Json": [
+      "hya-core::engine::tool_error::every_tool_error_variant_has_a_stable_structured_type"
+    ],
+    "OperationAlreadyHandled": [
+      "hya-core::engine::tool_error::every_tool_error_variant_has_a_stable_structured_type",
+      "hya-app::spawn_admission::duplicate_operation_never_dispatches_or_creates_a_second_child"
+    ],
+    "OperationIdConflict": [
+      "hya-core::engine::tool_error::every_tool_error_variant_has_a_stable_structured_type",
+      "hya-app::spawn_admission::reused_operation_with_different_request_fails_closed"
+    ],
+    "Other": [
+      "hya-core::engine::tool_error::every_tool_error_variant_has_a_stable_structured_type",
+      "hya-tool::lsp::lsp_reports_no_server_when_no_provider_is_available"
+    ],
+    "Overloaded": [
+      "hya-core::engine::tool_error::every_tool_error_variant_has_a_stable_structured_type",
+      "hya-tool::task::task_preserves_typed_spawn_overload"
+    ],
+    "Permission::Denied": [
+      "hya-core::engine::tool_error::every_tool_error_variant_has_a_stable_structured_type",
+      "hya-tool::edit::edit_requires_external_directory_permission_for_outside_file_path"
+    ],
+    "Permission::Unavailable": [
+      "hya-core::engine::tool_error::every_tool_error_variant_has_a_stable_structured_type",
+      "hya-tool::tool::dropped_reply_yields_unavailable"
+    ],
+    "UnknownAgentId": [
+      "hya-core::engine::tool_error::every_tool_error_variant_has_a_stable_structured_type",
+      "hya-app::spawn_admission::explicit_unknown_inline_target_creates_no_child"
+    ],
+    "UnsupportedInlineAgentField": [
+      "hya-core::engine::tool_error::every_tool_error_variant_has_a_stable_structured_type",
+      "hya-app::spawn_admission::inline_description_is_unsupported_before_admission_without_side_effects"
+    ],
+    "WorkflowControl": [
+      "hya-core::engine::tool_error::every_tool_error_variant_has_a_stable_structured_type",
+      "hya-tool::workflow::preserves_structured_workflow_host_error"
+    ]
+  }
+}

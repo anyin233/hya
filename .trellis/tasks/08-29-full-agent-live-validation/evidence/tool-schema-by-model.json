@@ -1,0 +1,24 @@
+{
+  "source_session": "hysec_FOid0Q6hjzDE8YyZTb3C",
+  "correlation_method": "A single model Turn ran at a time. ModelSwitched Event UTC timestamps precede the relay forwarding reservation by 83-99 ms; no other Turn began between each pair.",
+  "custom_tool_names_excluded_from_builtin_count": ["remember", "mcp__echo__ping"],
+  "glm": {
+    "model_event": {"seq": 1370, "model": "12th-oai/glm-5.3#high", "time": "2026-08-29T16:28:21.578Z"},
+    "relay": {"ordinal": 703, "time": "2026-08-29T16:28:21.677Z", "terminal_status": 503},
+    "builtin_count": 28,
+    "builtins": [
+      "announce", "apply_patch", "ask_user", "bash", "channels", "edit", "find", "glob", "grep", "invalid", "join", "leave", "list_agents", "ls", "lsp", "plan_exit", "question", "read", "roster", "send", "shell", "skill", "task", "todowrite", "webfetch", "websearch", "workflow", "write"
+    ]
+  },
+  "gpt": {
+    "model_event": {"seq": 1381, "model": "12th-oai/gpt-5.6-sol#high", "time": "2026-08-29T16:29:37.669Z"},
+    "relay": {"ordinal": 706, "time": "2026-08-29T16:29:37.752Z", "terminal_status": 200},
+    "builtin_count": 26,
+    "builtins": [
+      "announce", "apply_patch", "ask_user", "bash", "channels", "find", "glob", "grep", "invalid", "join", "leave", "list_agents", "ls", "lsp", "plan_exit", "question", "read", "roster", "send", "shell", "skill", "task", "todowrite", "webfetch", "websearch", "workflow"
+    ],
+    "filtered_out": ["edit", "write"],
+    "retained_patch_tool": "apply_patch"
+  },
+  "assertion": "The live GLM request advertised all 28 canonical builtins. The live GPT request advertised exactly 26 canonical builtins, omitting only edit and write while retaining apply_patch. Hidden aliases were not advertised."
+}

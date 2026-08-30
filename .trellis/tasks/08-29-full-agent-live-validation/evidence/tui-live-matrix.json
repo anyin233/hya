@@ -1,0 +1,165 @@
+{
+  "captured_at": "2026-08-29T16:33:41Z",
+  "surface": "current-source TypeScript TUI driven through a real Herdr pane",
+  "pane": {
+    "pane_id": "wA:pH3",
+    "workspace_id": "wA",
+    "tab_id": "wA:tGM",
+    "cwd": "/home/yanweiye/Projects/hya-playground",
+    "task_owned": true,
+    "narrow_geometry": {"columns": 133, "rows": 36},
+    "wide_zoom_geometry": {"columns": 265, "rows": 72},
+    "png_capture": "unsupported by Herdr 0.8.1; retained deterministic text and ANSI captures instead"
+  },
+  "session": {
+    "id": "hysec_FOid0Q6hjzDE8YyZTb3C",
+    "title": "Hya Live Validation",
+    "database": "/home/yanweiye/.local/state/hya-full-agent-live-validation-rk04x418/xdg-state/hya/sessions.db",
+    "event_log_rows": 1391,
+    "distinct_event_seq": 1391,
+    "session_event_rows": 1329,
+    "duplicate_event_seq": 0,
+    "restart_and_resume_verified": true
+  },
+  "binaries": {
+    "target/debug/hya": "09b20457e69bb6cabe92dbc9b1d55286bc6bc502f3a3912f27cb218ee63deeb6",
+    "target/debug/hya-backend": "4cb56340ea03d9849079cd1c9555865454f76dc590a6ccd2eb5633115bae44cf",
+    "target/debug/hya-ts": "2cbc3b63b04d9ec736b01c3ab82642149a9e2be47e4a081726b14761ad36b7b7"
+  },
+  "automated_local_command_matrix": {
+    "results_source": "/home/yanweiye/.local/state/hya-full-agent-live-validation-rk04x418/tui-local-matrix/results.json",
+    "dialog_cases": 19,
+    "dialog_matches": 19,
+    "toggle_cases": 4,
+    "ordinary_model_rounds": 0,
+    "commands": [
+      "/sessions", "/resume", "/continue", "/models", "/mo", "/model", "/agents", "/mcps", "/variants", "/think", "/status", "/themes", "/help", "/skills", "/diff", "/rename", "/timeline", "/fork", "/export", "/timestamps", "/toggle-timestamps", "/thinking", "/toggle-thinking"
+    ],
+    "failures": []
+  },
+  "manual_local_controls": [
+    {"action": "/compact", "observed": "local summary message plus session_metadata_set; no provider Turn"},
+    {"action": "/summarize", "observed": "same local compaction contract; no provider Turn"},
+    {"action": "/undo then ctrl+x r redo", "observed": "reverted-message banner, restored prior shell and model rows, then restored latest message"},
+    {"action": "/new and /clear", "observed": "home composer displayed; /sessions restored the same durable Session"},
+    {"action": "/copy", "observed": "clipboard copy failure surfaced as a visible toast in this headless terminal"},
+    {"action": "/editor", "observed": "external-editor selection failure surfaced as a visible toast; Session stayed interactive"},
+    {"action": "/unknown-a29 ARG_UNKNOWN_A29", "observed": "unknown slash stayed ordinary prompt text; Event seq 1211-1221 ended assistant error then idle"},
+    {"action": "prompt history Up", "observed": "restored the prior user prompt in the composer"},
+    {"action": "Ctrl+P", "observed": "command palette showed Switch session, New session, Switch model, Open editor, Rename, Jump, Fork, and Compact actions"},
+    {"action": "/timeline", "observed": "timeline listed user, shell, provider-error, and recovery rows with timestamps"}
+  ],
+  "custom_resources": [
+    {
+      "resource": "project Skill command",
+      "command_event": {"seq": 132, "command": "use-skill", "arguments": "SKILL_A29"},
+      "tool_call": {"seq": 144, "name": "skill", "input": {"name": "user-playbook"}},
+      "terminal_text_event": 149
+    },
+    {
+      "resource": "plugin Tool command",
+      "command_event": {"seq": 158, "command": "use-plugin", "arguments": "\"PLUGIN A29\""},
+      "tool_call": {"seq": 170, "name": "remember", "input": {"value": "PLUGIN A29"}},
+      "permission_interaction_observed": true
+    },
+    {
+      "resource": "MCP Tool command with multiline arguments",
+      "command_event": {"seq": 184, "command": "use-mcp", "arguments": "MCP_A29\nsecond-line"},
+      "tool_call": {"seq": 200, "name": "mcp__echo__ping", "input": {"msg": "MCP_A29\nsecond-line"}},
+      "tool_result_event": 202
+    },
+    {
+      "resource": "MCP Tool command on GLM",
+      "command_event": {"seq": 214, "command": "use-mcp", "arguments": "GLM_MCP_A29"},
+      "tool_call": {"seq": 229, "name": "mcp__echo__ping", "input": {"msg": "GLM_MCP_A29"}},
+      "tool_result_event": 231,
+      "terminal_text_event": 234
+    }
+  ],
+  "workflow_and_subagent": {
+    "command_events": [
+      {"seq": 1034, "command": "workflow", "arguments": "list"},
+      {"seq": 1045, "command": "workflow", "arguments": "info live-check"},
+      {"seq": 1056, "command": "workflow", "arguments": "use live-check"},
+      {"seq": 1068, "command": "workflow", "arguments": "state"},
+      {"seq": 1079, "command": "workflow", "arguments": "run"}
+    ],
+    "visible_terminal_state": "live-check completed; revision 471dbb90; 0/1 agents; 1/1 stages",
+    "child": "general-1",
+    "child_marker": "WORKFLOW_STAGE_A29",
+    "child_header": "Finished; focused; read-only",
+    "input_isolation": {
+      "attempted_marker": "CHILD_INPUT_BLOCK_A29",
+      "max_seq_before": 1281,
+      "max_seq_after": 1281,
+      "marker_event_count": 0
+    },
+    "owner_composer_restored_with_escape": true
+  },
+  "reasoning_and_streaming": {
+    "model": "12th-oai/gpt-5.6-sol#high",
+    "prompt": "Compute the sum of primes less than 20, then reply exactly REASON_A29=<number>. Do not use tools.",
+    "event_sequence": [
+      {"seq": 1312, "type": "reasoning_start"},
+      {"seq": 1313, "type": "reasoning_delta"},
+      {"seq": 1314, "type": "reasoning_end"},
+      {"seq": 1315, "type": "text_start"},
+      {"seq": 1316, "type": "text_replace", "text": "REASON_A29=77"},
+      {"seq": 1320, "type": "session_status", "status": "idle"}
+    ],
+    "visible_summary": "Thought: Calculating prime number sum · 2ms",
+    "thinking_toggle_observed": true
+  },
+  "permission_and_recovery": {
+    "approved_shell": {
+      "command": "printf SHELL_A29 > shell-a29.txt",
+      "events": [1230, 1231, 1232, 1233],
+      "file_content": "SHELL_A29"
+    },
+    "rejected_shell": {
+      "command": "printf DENIED_A29 > denied-a29.txt",
+      "events": [1329, 1330, 1331, 1332],
+      "terminal": "tool_error then assistant message_finished:error",
+      "file_absent": true
+    },
+    "same_session_recovery": {
+      "prompt_event_start": 1333,
+      "terminal_text_event": {"seq": 1344, "text": "RECOVER_PERMISSION_A29"},
+      "idle_event": 1348
+    }
+  },
+  "live_models": {
+    "gpt": {
+      "route": "12th-oai/gpt-5.6-sol",
+      "low_health_text": {"seq": 1293, "text": "GPT_HEALTH_B29"},
+      "high_reasoning_text": {"seq": 1316, "text": "REASON_A29=77"},
+      "post_outage_recovery_text": {"seq": 1387, "text": "AFTER_GLM_RECOVERY_A29"},
+      "result": "healthy"
+    },
+    "glm": {
+      "route": "12th-oai/glm-5.3#high",
+      "prompt_event_start": 1365,
+      "assistant_finish_event": {"seq": 1374, "finish": "error"},
+      "idle_event": 1375,
+      "relay_attempts": [
+        {"ordinal": 703, "status": 503},
+        {"ordinal": 704, "status": 503},
+        {"ordinal": 705, "status": 503}
+      ],
+      "classification": "external upstream 503 after Hya forwarded the configured route; no Hya source change made"
+    },
+    "recovery": {
+      "selected_route": "12th-oai/gpt-5.6-sol#high",
+      "relay": {"ordinal": 706, "status": 200},
+      "same_session_terminal_text": "AFTER_GLM_RECOVERY_A29"
+    }
+  },
+  "visible_catalogs": {
+    "models": ["gpt-5.6-sol", "glm-5.3", "hya-nonexistent-fadf3511670cd90e"],
+    "model_variants": ["low", "medium", "high", "xhigh", "max"],
+    "agents": ["build", "hya-main", "plan"],
+    "skills": ["user-playbook", "customize-compat", "agent-bundle-authoring", "secure-self-update"],
+    "mcp": "echo connected and enabled",
+    "status": "1 MCP server, no formatters, no plugin catalog rows"
+  }
+}

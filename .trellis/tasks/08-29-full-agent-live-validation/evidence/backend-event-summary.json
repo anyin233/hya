@@ -1,0 +1,41 @@
+{
+  "database": "/home/yanweiye/.local/state/hya-full-agent-live-validation-rk04x418/db/backend-http.sqlite",
+  "event_rows_observed": 75,
+  "event_type_counts": {
+    "message_finished": 11,
+    "message_started": 11,
+    "session_created": 2,
+    "session_status": 2,
+    "session_titled": 1,
+    "step_finished": 5,
+    "step_started": 5,
+    "text_delta": 6,
+    "text_end": 11,
+    "text_replace": 5,
+    "text_start": 11,
+    "turn_binding_recorded": 5
+  },
+  "compat_async_session": "hysec_hQO2fzrnmWAV9GeixetG",
+  "durable_status_sequence": [
+    {"seq": 34, "status": "busy"},
+    {"seq": 44, "status": "idle"}
+  ],
+  "native_session_sse": {
+    "live_provider_events_use_seq_zero": true,
+    "durable_projection_events_follow_with_positive_seq": true,
+    "terminal_finish": "stop"
+  },
+  "global_compat_sse": {
+    "first_event": "server.connected",
+    "observed": [
+      "message.updated",
+      "message.part.updated",
+      "message.part.delta",
+      "session.status:busy",
+      "session.next.step.started",
+      "session.next.step.ended",
+      "session.status:idle"
+    ]
+  },
+  "persistence_restart_verified": true
+}

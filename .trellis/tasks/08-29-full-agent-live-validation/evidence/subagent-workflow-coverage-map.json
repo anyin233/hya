@@ -1,0 +1,270 @@
+{
+  "focused_gate": {
+    "artifact": "artifact://1604 plus post-repair spawn_admission 27/27",
+    "command": "cargo test -p hya-core --test subagent && cargo test -p hya-core --test workflow && cargo test -p hya-app --test spawn_admission && cargo test -p hya-app --test nested_spawn_tree && cargo test -p hya-server --test workflow_session_api",
+    "result": {
+      "failed": 0,
+      "ignored": 0,
+      "passed": 106
+    }
+  },
+  "known_external_block": {
+    "evidence": [
+      "coding-fixture-summary.json",
+      "tui-live-matrix.json live_models.glm",
+      "tool-schema-by-model.json"
+    ],
+    "glm_complete_live_suite": "Upstream returned HTTP 503 on all allowed completion attempts. Deterministic and prior real GLM custom-MCP proofs remain valid; no Hya source workaround was made."
+  },
+  "subagents": {
+    "lifecycle_and_ancestry": {
+      "files": [
+        "crates/hya-core/tests/subagent.rs",
+        "crates/hya-app/tests/nested_spawn_tree.rs"
+      ],
+      "requirements": [
+        "discovery",
+        "foreground result",
+        "same-child resume",
+        "nested depth two",
+        "parallel batch",
+        "category/model override",
+        "inline identity"
+      ],
+      "tests": [
+        "recorded_observability_never_enters_the_parent_model_input",
+        "member_spawn_records_directive_verbatim_and_originating_tool_call",
+        "pre_admitted_member_nested_spawn_carries_parent_admission_identity",
+        "provider_streams_partition_100_general_28_reserved_and_root_progresses",
+        "sidecar_ack_precedes_running_state_provider_poll_and_task_admission",
+        "bundle_sidecar_tool_permission_denial_prevents_dispatch",
+        "activation_bound_sidecar_hooks_mutate_tool_and_observe_only_child_events",
+        "resident_sidecar_tool_binding_reaches_captured_turn_view",
+        "explicit_idle_resident_stop_is_final_idempotent_and_releases_claim",
+        "duplicate_stop_shares_cleanup_failure_and_later_retries_cleanup_without_reterminalizing",
+        "failed_running_stop_cleanup_cannot_become_ok_after_team_kill",
+        "resident_stop_durable_failure_defers_cleanup_and_allows_retry",
+        "resident_registration_failure_releases_claim_and_leaves_no_slot",
+        "explicit_stop_fails_closed_instead_of_taking_over_a_newer_resident_claim",
+        "resident_direct_send_committed_before_stop_is_durably_cancelled",
+        "message_budget_kill_terminates_sidecar_and_removes_resident_slot",
+        "message_budget_kill_terminate_failure_allows_explicit_cleanup_retry",
+        "message_budget_kill_store_failure_preserves_claim_and_slot_for_retry",
+        "explicit_running_resident_stop_is_idempotent_fences_and_drops_queued_mail",
+        "resident_replacement_declaration_drift_disables_once_and_releases_claim",
+        "resident_activation_hook_transport_loss_enters_epoch_recovery",
+        "resident_after_hook_transport_loss_fences_result_before_commit",
+        "resident_event_transport_loss_stops_before_model_poll",
+        "resident_mailbox_message_waits_for_sidecar_ack_before_running",
+        "transient_sidecar_loss_interrupts_running_member_before_provider_release",
+        "resident_sidecar_ready_failure_terminates_handle_once_and_removes_slot",
+        "resident_sidecar_ready_failure_finalize_rollback_keeps_slot_for_retry",
+        "resident_stop_concurrent_with_ready_failure_cleanup_completes_idempotently",
+        "idle_resident_sidecar_loss_is_reaped_before_next_mail",
+        "resident_prework_sidecar_loss_rearms_queued_mail_under_recovered_claim",
+        "running_resident_sidecar_loss_aborts_before_provider_release",
+        "resident_running_loss_recover_claim_failure_finalizes_old_claim",
+        "resident_running_loss_recovery_transaction_failure_finalizes_recovered_claim",
+        "resident_running_loss_terminate_failure_disables_and_releases_claim",
+        "governor_caps_streaming_concurrency",
+        "governor_rejects_members_beyond_budget",
+        "governor_rejects_spawn_beyond_max_depth",
+        "run_team_records_member_lifecycle_on_lead",
+        "transient_sidecar_shutdown_follows_member_finished",
+        "transient_sidecar_failure_terminates_opaque_handle_once",
+        "transient_sidecar_parent_cancellation_marks_member_cancelled_and_terminates_once",
+        "transient_sidecar_ack_failure_terminates_opaque_handle_once",
+        "team_evidence_envelope_has_no_transcript_leak",
+        "run_team_can_resume_existing_member_session",
+        "run_team_resume_reuses_member_and_roster_handle",
+        "panic_in_one_member_is_isolated",
+        "run_team_marks_failed_member_without_session_on_engine_error",
+        "run_team_preserves_input_member_order_with_mixed_outcomes",
+        "nested_spawn_reaches_root_tree",
+        "nested_spawn_registers_two_generations_in_root_roster",
+        "tree_endpoint_attaches_roster_to_child_and_grandchild"
+      ]
+    },
+    "limits_and_models": {
+      "live": {
+        "glm": "tui-live-matrix.json custom MCP success; later route 503",
+        "gpt": "tui-live-matrix.json reasoning/permission/Workflow paths",
+        "schema_routes": "tool-schema-by-model.json"
+      },
+      "requirements": [
+        "depth",
+        "concurrency",
+        "run budget",
+        "turn budget",
+        "message budget",
+        "mixed model route"
+      ],
+      "tests": [
+        "recorded_observability_never_enters_the_parent_model_input",
+        "message_budget_kill_terminates_sidecar_and_removes_resident_slot",
+        "message_budget_kill_terminate_failure_allows_explicit_cleanup_retry",
+        "message_budget_kill_store_failure_preserves_claim_and_slot_for_retry",
+        "resident_event_transport_loss_stops_before_model_poll",
+        "governor_caps_streaming_concurrency",
+        "governor_rejects_members_beyond_budget",
+        "governor_rejects_spawn_beyond_max_depth",
+        "background_transient_overload_prevents_child_creation",
+        "background_resident_overload_prevents_child_creation",
+        "released_capacity_is_visible_to_a_concurrent_spawn_on_the_same_root"
+      ]
+    },
+    "mailbox_and_channels": {
+      "file": "crates/hya-core/src/engine/mailbox.rs",
+      "process_contract": "P17/T2.12 registered in crates/hya-e2e/matrix.toml",
+      "requirements": [
+        "roster",
+        "direct mail",
+        "announce",
+        "join/send/list/leave",
+        "pre-join exclusion",
+        "post-leave exclusion",
+        "cross-unit refusal"
+      ],
+      "tests": [
+        "channel_send_routes_to_root_log_and_survives_store_replay",
+        "channel_mail_after_stop_excludes_resident_and_replays_for_active_subscriber",
+        "unregistered_non_root_sender_is_rejected",
+        "direct_mail_to_transient_member_is_rejected_before_append",
+        "direct_mail_to_unknown_handle_is_rejected_before_append",
+        "resident_stop_commits_before_stale_direct_send_rechecks_and_rejects",
+        "sibling_is_reachable_and_cousin_is_refused_without_appending",
+        "grandparent_and_grandchild_are_both_refused",
+        "relative_leaf_and_full_path_deliver_identically",
+        "duplicate_leaf_across_units_resolves_to_the_senders_own",
+        "announce_reaches_direct_reports_only",
+        "announce_from_a_leaf_agent_is_refused",
+        "cross_unit_relay_through_the_common_ancestor_arrives",
+        "caret_channel_is_leader_only",
+        "same_channel_name_in_two_units_stays_separate",
+        "scoped_roster_and_channels_stop_at_the_unit_boundary"
+      ]
+    },
+    "real_tui_children": {
+      "evidence": "tui-live-matrix.json workflow_and_subagent",
+      "observed": [
+        "general-1 child card",
+        "WORKFLOW_STAGE_A29",
+        "read-only header",
+        "input marker absent from root and child",
+        "Escape restored owner composer"
+      ]
+    },
+    "resident_and_background": {
+      "file": "crates/hya-core/tests/subagent.rs",
+      "requirements": [
+        "nonblocking background ordering",
+        "resident registration",
+        "stable handle",
+        "idle/wake/idle",
+        "recovery",
+        "stop",
+        "quiescence"
+      ],
+      "tests": [
+        "sidecar_ack_precedes_running_state_provider_poll_and_task_admission",
+        "bundle_sidecar_tool_permission_denial_prevents_dispatch",
+        "activation_bound_sidecar_hooks_mutate_tool_and_observe_only_child_events",
+        "resident_sidecar_tool_binding_reaches_captured_turn_view",
+        "explicit_idle_resident_stop_is_final_idempotent_and_releases_claim",
+        "resident_stop_durable_failure_defers_cleanup_and_allows_retry",
+        "resident_registration_failure_releases_claim_and_leaves_no_slot",
+        "explicit_stop_fails_closed_instead_of_taking_over_a_newer_resident_claim",
+        "resident_direct_send_committed_before_stop_is_durably_cancelled",
+        "message_budget_kill_terminates_sidecar_and_removes_resident_slot",
+        "explicit_running_resident_stop_is_idempotent_fences_and_drops_queued_mail",
+        "resident_replacement_declaration_drift_disables_once_and_releases_claim",
+        "resident_activation_hook_transport_loss_enters_epoch_recovery",
+        "resident_after_hook_transport_loss_fences_result_before_commit",
+        "resident_event_transport_loss_stops_before_model_poll",
+        "resident_mailbox_message_waits_for_sidecar_ack_before_running",
+        "transient_sidecar_loss_interrupts_running_member_before_provider_release",
+        "resident_sidecar_ready_failure_terminates_handle_once_and_removes_slot",
+        "resident_sidecar_ready_failure_finalize_rollback_keeps_slot_for_retry",
+        "resident_stop_concurrent_with_ready_failure_cleanup_completes_idempotently",
+        "idle_resident_sidecar_loss_is_reaped_before_next_mail",
+        "resident_prework_sidecar_loss_rearms_queued_mail_under_recovered_claim",
+        "running_resident_sidecar_loss_aborts_before_provider_release",
+        "resident_running_loss_recover_claim_failure_finalizes_old_claim",
+        "resident_running_loss_recovery_transaction_failure_finalizes_recovered_claim",
+        "resident_running_loss_terminate_failure_disables_and_releases_claim",
+        "transient_sidecar_shutdown_follows_member_finished",
+        "transient_sidecar_failure_terminates_opaque_handle_once",
+        "transient_sidecar_parent_cancellation_marks_member_cancelled_and_terminates_once",
+        "transient_sidecar_ack_failure_terminates_opaque_handle_once",
+        "run_team_can_resume_existing_member_session",
+        "run_team_resume_reuses_member_and_roster_handle"
+      ]
+    }
+  },
+  "workflow": {
+    "catalog_and_binding": {
+      "file": "crates/hya-server/tests/workflow_session_api.rs",
+      "tests": [
+        "compat_session_hydration_carries_runtime_workflow_availability",
+        "compat_session_hydration_carries_only_bounded_workflow_activity",
+        "typed_workflow_state_is_available_on_all_route_families",
+        "workflow_slash_command_bypasses_parent_model_on_all_command_routes",
+        "workflow_slash_result_is_visible_as_assistant_without_provider_round",
+        "typed_workflow_commands_use_all_route_families",
+        "typed_workflow_error_preserves_status_code_and_message",
+        "malformed_workflow_slash_returns_structured_syntax_error",
+        "workflow_mutation_reservation_blocks_parent_model_admission",
+        "workflow_mutation_rejects_active_parent_but_state_remains_readable"
+      ]
+    },
+    "coverage_registry": {
+      "docs": [
+        "docs/testing/agent-matrix.md",
+        "docs/testing/process-e2e.md"
+      ],
+      "gate": "matrix-check passed with 38 scenarios and 2 retired IDs (ledger.jsonl P2.coverage-registry-green)",
+      "matrix": "crates/hya-e2e/matrix.toml P17 and T2.12"
+    },
+    "execution_and_presentation": {
+      "files": [
+        "crates/hya-core/tests/workflow.rs",
+        "crates/hya-e2e/tests/p17_workflow_composition.rs",
+        "packages/hya-tui-ts/test/workflow-pty.test.ts"
+      ],
+      "live": "tui-live-matrix.json workflow_and_subagent",
+      "tests": [
+        "two_stage_workflow_runs_in_order_and_hands_off_evidence",
+        "fan_out_then_fan_in_joins_all_upstream_outputs",
+        "same_level_transient_stages_overlap_provider_execution",
+        "collect_all_policy_reports_failures_into_the_join",
+        "collect_all_applies_to_resumed_loop_worker_failures",
+        "old_stage_list_sources_are_rejected",
+        "missing_declared_input_fails_before_any_spawn",
+        "unknown_stage_agent_is_rejected_before_spawn",
+        "per_run_budget_overflow_is_rejected_up_front",
+        "fail_fast_aborts_downstream_levels",
+        "loop_stage_verifier_owns_the_stop_decision",
+        "workflow_cancellation_stops_an_inflight_loop_verifier",
+        "sequential_actor_stages_reuse_one_resident_session",
+        "workflow_cancellation_settles_inflight_resident_stage",
+        "actor_keys_not_agent_ids_control_session_reuse",
+        "resident_stage_failure_is_terminal_evidence",
+        "stage_members_resolve_their_own_can_spawn_roster",
+        "loop_worker_and_verifier_reuse_target_execution_contexts"
+      ]
+    },
+    "outcomes_and_recovery": {
+      "tests": [
+        "collect_all_policy_reports_failures_into_the_join",
+        "collect_all_applies_to_resumed_loop_worker_failures",
+        "missing_declared_input_fails_before_any_spawn",
+        "unknown_stage_agent_is_rejected_before_spawn",
+        "per_run_budget_overflow_is_rejected_up_front",
+        "fail_fast_aborts_downstream_levels",
+        "workflow_cancellation_stops_an_inflight_loop_verifier",
+        "workflow_cancellation_settles_inflight_resident_stage",
+        "resident_stage_failure_is_terminal_evidence"
+      ]
+    }
+  }
+}

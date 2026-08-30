@@ -1,0 +1,33 @@
+
+     /home/yanweiye/.local/state/hya-full-agent-live-completion-a29/projects/tui-         Untitled Session_2026-08-29-22-27
+     playground                                                                           hysec_gbQEvOJKJHjXvQiNKpwC
+
+     The directory is currently empty and is not a Git repository. Ready for project      Workflow
+     requirements or setup instructions.                                                  none
+
+     ▣  Build · gpt-5.6-sol · 20.3s                                                       Context
+                                                                                          3,361 tokens
+  ┃                                                                                       2% used
+  ┃  /review                                                                              $0.00 spent
+  ┃
+                                                                                          LSP
+     + Thought: Confirming empty repository with no findings · 1ms                        LSPs are disabled
+
+     Review result
+
+     No code is available to review.
+
+     - The workspace is empty.
+     - It is not a Git repository.
+     - No source files, tests, configuration, or pending changes were found.
+
+     Add or clone the project, then run /review again.
+
+     ▣  Build · gpt-5.6-sol · 4.9s
+
+  ┃
+  ┃                                                                                       /home/yanweiye/.local/state/hya-full-
+  ┃                                                                                       agent-live-completion-a29/projects/
+  ┃  Build · gpt-5.6-sol 12th-oai                                                         tui-playground
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                                                            3.4K (2%)  ctrl+p commands    • hya local

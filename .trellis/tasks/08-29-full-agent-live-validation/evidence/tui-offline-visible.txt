@@ -1,0 +1,33 @@
+
+  ┃                                                                                       Untitled Session_2026-08-29-22-33
+  ┃  Reply exactly OFFLINE_SURFACE_A29                                                    hysec_MRBQVCmaNraFzXX8dGVu
+  ┃
+                                                                                          Workflow
+     (hya dev provider) You said: "Reply exactly OFFLINE_SURFACE_A29". No live model      none
+     is configured yet — wire a real provider in config for actual answers.
+                                                                                          Context
+     ▣  Build · offline · 9ms                                                             0 tokens
+                                                                                          0% used
+                                                                                          $0.00 spent
+
+                                                                                          LSP
+                                                                                          LSPs are disabled
+
+
+
+
+
+
+
+
+
+
+
+
+
+  ┃
+  ┃                                                                                       /home/yanweiye/.local/state/hya-full-
+  ┃                                                                                       agent-live-completion-a29/projects/
+  ┃  Build · offline hya                                                                  tui-playground
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+                                                           tab agents  ctrl+p commands    • hya local

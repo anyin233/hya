@@ -1,0 +1,337 @@
+{
+  "fixtures": {
+    "rust_glm": {
+      "attempts": 2,
+      "fixture_unchanged": true,
+      "http_status": 503,
+      "status": "external_blocked"
+    },
+    "rust_gpt": {
+      "changed_files": [
+        "src/lib.rs"
+      ],
+      "independent_test": {
+        "command": "cargo +1.91.1 test",
+        "failed": 0,
+        "passed": 2
+      },
+      "result_sha256": "25fa9694b3fad751b3c6881c08f7c93c8409a09d61159608f9a13450beeefdf5",
+      "template_sha256": "6cb99320a0838f88130a2143c785009cc3d1409c8ea3a776d6b11128c56d3a6c"
+    },
+    "ts_glm": {
+      "attempts": 2,
+      "fixture_unchanged": true,
+      "http_status": 503,
+      "retry_remaining": 0,
+      "status": "external_blocked"
+    },
+    "ts_gpt": {
+      "changed_files": [
+        "src/range.ts"
+      ],
+      "independent_test": {
+        "command": "bun test",
+        "failed": 0,
+        "passed": 3
+      },
+      "result_sha256": "c62c73a76b6c540a34946a6c2824b86b320c9fa2522f98e773a8f84f15019818",
+      "template_sha256": "3f6b98580b5290ea69ae17c813b12c2ecc5559c3841997901f030a4cf54cdd00"
+    }
+  },
+  "rust_glm_first": {
+    "assistant_finishes": [
+      {
+        "finish": "error",
+        "tokens": null
+      }
+    ],
+    "event_count": 9,
+    "event_type_counts": {
+      "message_finished": 2,
+      "message_started": 2,
+      "session_created": 1,
+      "text_delta": 1,
+      "text_end": 1,
+      "text_start": 1,
+      "turn_binding_recorded": 1
+    },
+    "final_text": null,
+    "final_text_markers": [],
+    "provider_errors": [],
+    "seq_range": [
+      1,
+      9
+    ],
+    "sessions": [],
+    "tokens": [],
+    "tool_errors": [],
+    "tool_request_counts": {},
+    "tool_terminal_events": 0,
+    "ts_range_millis": [
+      1788041263898,
+      1788041264973
+    ]
+  },
+  "rust_glm_retry": {
+    "assistant_finishes": [
+      {
+        "finish": "error",
+        "tokens": null
+      }
+    ],
+    "event_count": 9,
+    "event_type_counts": {
+      "message_finished": 2,
+      "message_started": 2,
+      "session_created": 1,
+      "text_delta": 1,
+      "text_end": 1,
+      "text_start": 1,
+      "turn_binding_recorded": 1
+    },
+    "final_text": null,
+    "final_text_markers": [],
+    "provider_errors": [],
+    "seq_range": [
+      1,
+      9
+    ],
+    "sessions": [],
+    "tokens": [],
+    "tool_errors": [],
+    "tool_request_counts": {},
+    "tool_terminal_events": 0,
+    "ts_range_millis": [
+      1788041292412,
+      1788041292989
+    ]
+  },
+  "rust_gpt": {
+    "assistant_finishes": [
+      {
+        "finish": "stop",
+        "tokens": {
+          "cache_read": 22528,
+          "cache_write": 0,
+          "input": 150031,
+          "output": 2372,
+          "reasoning": 640
+        }
+      }
+    ],
+    "event_count": 1227,
+    "event_type_counts": {
+      "message_finished": 2,
+      "message_started": 2,
+      "reasoning_delta": 11,
+      "reasoning_end": 12,
+      "reasoning_start": 12,
+      "session_created": 1,
+      "step_finished": 18,
+      "step_started": 18,
+      "text_delta": 1,
+      "text_end": 2,
+      "text_replace": 1,
+      "text_start": 2,
+      "tool_call_requested": 22,
+      "tool_error": 2,
+      "tool_input_delta": 1078,
+      "tool_input_start": 22,
+      "tool_result": 20,
+      "turn_binding_recorded": 1
+    },
+    "final_text": "Implemented the smallest implementation-only fix in `src/lib.rs`.\n\n- **Root cause:** `trim_end()` removed only trailing whitespace, leaving leading whitespace, while `replace(' ', \"-\")` converted every individual space into a hyphen instead of collapsing repeated ASCII whitespace.\n- **Fix:** Split on ASCII whitespace, join words with one hyphen, then lowercase.\n- **Files unchanged:** Tests, `Cargo.toml`, and `Cargo.lock`.\n\nTests:\n- `cargo test slug` \u2014 **2 passed**\n- `cargo test` \u2014 **all tests passed**\n\nRUST_GPT_DONE",
+    "final_text_markers": [
+      "RUST_GPT_DONE"
+    ],
+    "provider_errors": [],
+    "seq_range": [
+      1,
+      1227
+    ],
+    "sessions": [],
+    "tokens": [],
+    "tool_errors": [
+      {
+        "message": "input: duplicate field `path`",
+        "name": "read",
+        "type": "input"
+      },
+      {
+        "message": "input: duplicate field `path`",
+        "name": "read",
+        "type": "input"
+      }
+    ],
+    "tool_request_counts": {
+      "apply_patch": 1,
+      "find": 1,
+      "ls": 1,
+      "read": 2,
+      "shell": 12,
+      "todowrite": 5
+    },
+    "tool_terminal_events": 22,
+    "ts_range_millis": [
+      1788041046269,
+      1788041141828
+    ]
+  },
+  "ts_glm_first": {
+    "assistant_finishes": [
+      {
+        "finish": "error",
+        "tokens": null
+      }
+    ],
+    "event_count": 9,
+    "event_type_counts": {
+      "message_finished": 2,
+      "message_started": 2,
+      "session_created": 1,
+      "text_delta": 1,
+      "text_end": 1,
+      "text_start": 1,
+      "turn_binding_recorded": 1
+    },
+    "final_text": null,
+    "final_text_markers": [],
+    "provider_errors": [],
+    "seq_range": [
+      1,
+      9
+    ],
+    "sessions": [],
+    "tokens": [],
+    "tool_errors": [],
+    "tool_request_counts": {},
+    "tool_terminal_events": 0,
+    "ts_range_millis": [
+      1788041307520,
+      1788041308230
+    ]
+  },
+  "ts_glm_retry": {
+    "assistant_finishes": [
+      {
+        "finish": "error",
+        "tokens": null
+      }
+    ],
+    "event_count": 9,
+    "event_type_counts": {
+      "message_finished": 2,
+      "message_started": 2,
+      "session_created": 1,
+      "text_delta": 1,
+      "text_end": 1,
+      "text_start": 1,
+      "turn_binding_recorded": 1
+    },
+    "final_text": null,
+    "final_text_markers": [],
+    "provider_errors": [],
+    "seq_range": [
+      1,
+      9
+    ],
+    "sessions": [],
+    "tokens": [],
+    "tool_errors": [],
+    "tool_request_counts": {},
+    "tool_terminal_events": 0,
+    "ts_range_millis": [
+      1788043065084,
+      1788043065744
+    ]
+  },
+  "ts_gpt": {
+    "assistant_finishes": [
+      {
+        "finish": "stop",
+        "tokens": {
+          "cache_read": 10240,
+          "cache_write": 0,
+          "input": 103836,
+          "output": 2324,
+          "reasoning": 540
+        }
+      }
+    ],
+    "event_count": 1273,
+    "event_type_counts": {
+      "message_finished": 2,
+      "message_started": 2,
+      "reasoning_delta": 10,
+      "reasoning_end": 9,
+      "reasoning_start": 9,
+      "session_created": 1,
+      "step_finished": 15,
+      "step_started": 15,
+      "text_delta": 1,
+      "text_end": 2,
+      "text_replace": 1,
+      "text_start": 2,
+      "tool_call_requested": 19,
+      "tool_error": 6,
+      "tool_input_delta": 1146,
+      "tool_input_start": 19,
+      "tool_result": 13,
+      "turn_binding_recorded": 1
+    },
+    "final_text": "TS_GPT_DONE\n\n- **Root cause:** `chunkRange` treated the exclusive `end` as inclusive by clamping chunk ends to `end - 1`. This produced `[4, 4]` instead of `[4, 5]`.\n- **Fix:** Changed the clamp in `src/range.ts` to `Math.min(current + size, end)`.\n- **Scope:** Implementation only; tests and `package.json` were unchanged.\n- **Verification:**\n  - `bun test test/range.test.ts` \u2014 **3 passed, 0 failed**\n  - `bun test` \u2014 **3 passed, 0 failed**",
+    "final_text_markers": [
+      "TS_GPT_DONE"
+    ],
+    "provider_errors": [],
+    "seq_range": [
+      1,
+      1273
+    ],
+    "sessions": [],
+    "tokens": [],
+    "tool_errors": [
+      {
+        "message": "input: duplicate field `path`",
+        "name": "read",
+        "type": "input"
+      },
+      {
+        "message": "input: duplicate field `path`",
+        "name": "read",
+        "type": "input"
+      },
+      {
+        "message": "input: duplicate field `path`",
+        "name": "read",
+        "type": "input"
+      },
+      {
+        "message": "input: duplicate field `path`",
+        "name": "read",
+        "type": "input"
+      },
+      {
+        "message": "input: duplicate field `path`",
+        "name": "read",
+        "type": "input"
+      },
+      {
+        "message": "input: duplicate field `path`",
+        "name": "read",
+        "type": "input"
+      }
+    ],
+    "tool_request_counts": {
+      "apply_patch": 1,
+      "bash": 7,
+      "read": 6,
+      "todowrite": 5
+    },
+    "tool_terminal_events": 19,
+    "ts_range_millis": [
+      1788041169096,
+      1788041250788
+    ]
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "capture": "tui-question-visible.txt",
+  "options": [
+    "Red",
+    "Blue"
+  ],
+  "pane_id": "wA:pHG",
+  "permission_decision": "allow once",
+  "question": "Select validation color",
+  "selected": "Blue",
+  "session_id": "hysec_Y45INH7WXwNwsM3b8jAz",
+  "surface": "current-source hya in task-owned real Herdr pane",
+  "terminal_text": "QUESTION_A29=Blue",
+  "tool_sequence": [
+    [
+      119,
+      "tool_call_requested",
+      "question"
+    ],
+    [
+      121,
+      "tool_result",
+      null
+    ]
+  ]
+}

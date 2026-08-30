@@ -1,0 +1,80 @@
+{
+  "backend": {
+    "binary": "target/debug/hya-backend",
+    "bind": "127.0.0.1:18347",
+    "database": "/home/yanweiye/.local/state/hya-reconnect-a29/sessions.db",
+    "intentional_stop_exit": 137,
+    "version": "0.36.4"
+  },
+  "classification": "The global SSE stream failed while the backend was absent, retried with bounded exponential backoff, reconnected with HTTP 200 after restart, and the same visible Session accepted and rendered a later Turn.",
+  "durable_events": [
+    {
+      "finish": null,
+      "seq": 4,
+      "text": "RECONNECT_BEFORE_A29",
+      "type": "text_delta"
+    },
+    {
+      "finish": null,
+      "seq": 13,
+      "text": "(hya dev provider) You said: \"RECONNECT_BEFORE_A29\". No live model is configured yet \u2014 wire a real provider in config for actual answers.",
+      "type": "text_replace"
+    },
+    {
+      "finish": null,
+      "seq": 20,
+      "text": "RECONNECT_AFTER_A29",
+      "type": "text_delta"
+    },
+    {
+      "finish": null,
+      "seq": 29,
+      "text": "(hya dev provider) You said: \"RECONNECT_AFTER_A29\". No live model is configured yet \u2014 wire a real provider in config for actual answers.",
+      "type": "text_replace"
+    }
+  ],
+  "pane_id": "wA:pHH",
+  "product_change_required": false,
+  "proxy": {
+    "bind": "127.0.0.1:18348",
+    "failed_while_backend_absent": [
+      4,
+      5,
+      6
+    ],
+    "first_disconnected_attempt": 4,
+    "first_success_after_restart": {
+      "attempt": 7,
+      "status": 200,
+      "success_ordinal": 4
+    },
+    "observations": [
+      "2026-08-29T23:27:54.483Z SSE_ATTEMPT 1",
+      "2026-08-29T23:27:54.489Z SSE_SUCCESS 1 ATTEMPT 1 STATUS 200",
+      "2026-08-29T23:28:15.487Z SSE_ATTEMPT 2",
+      "2026-08-29T23:28:15.488Z SSE_SUCCESS 2 ATTEMPT 2 STATUS 200",
+      "2026-08-29T23:28:37.490Z SSE_ATTEMPT 3",
+      "2026-08-29T23:28:37.490Z SSE_SUCCESS 3 ATTEMPT 3 STATUS 200",
+      "2026-08-29T23:28:52.249Z SSE_ATTEMPT 4",
+      "2026-08-29T23:28:52.250Z SSE_FAILURE ATTEMPT 4 Unable to connect. Is the computer able to access the url?",
+      "2026-08-29T23:29:00.252Z SSE_ATTEMPT 5",
+      "2026-08-29T23:29:00.252Z SSE_FAILURE ATTEMPT 5 Unable to connect. Is the computer able to access the url?",
+      "2026-08-29T23:29:16.254Z SSE_ATTEMPT 6",
+      "2026-08-29T23:29:16.254Z SSE_FAILURE ATTEMPT 6 Unable to connect. Is the computer able to access the url?",
+      "2026-08-29T23:29:46.256Z SSE_ATTEMPT 7",
+      "2026-08-29T23:29:46.259Z SSE_SUCCESS 4 ATTEMPT 7 STATUS 200"
+    ],
+    "script_sha256": "66630e26bdaaa8ac1dc97f44f99a8a5d8dd58a805b92f52a2a244e7862a950d1"
+  },
+  "result": "passed",
+  "session_id": "hysec_114jCY28pz9Hes4vPSYt",
+  "surface": "current-source target/debug/hya-ts in a real Herdr pane attached through a credential-free streaming proxy",
+  "tui": {
+    "disconnected_capture": "tui-reconnect-disconnected-visible.txt",
+    "disconnected_frame_retained_pre_disconnect_transcript": true,
+    "post_reconnect_prompt": "RECONNECT_AFTER_A29",
+    "pre_disconnect_prompt": "RECONNECT_BEFORE_A29",
+    "recovered_capture": "tui-reconnect-recovered-visible.txt",
+    "recovered_frame_contains_both_turns": true
+  }
+}

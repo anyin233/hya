@@ -1,0 +1,110 @@
+{
+  "dataset_commit": "7ab5114912baf22bb098818e604c02fe7ad2c11f",
+  "evaluator_commit": "ca10a60a5fcae51e6948ffe1485d4153d421e6c5",
+  "seed": "hya-swebench-pro-live-8x2-v1",
+  "dataset_rows": 731,
+  "eligible_counts": {
+    "Go": 280,
+    "JavaScript": 165,
+    "Python": 266,
+    "TypeScript": 20
+  },
+  "sample": [
+    {
+      "instance_id": "instance_flipt-io__flipt-5c7037ececb0bead0a8eb56054e224bcd7ac5922",
+      "language": "Go",
+      "repo": "flipt-io/flipt",
+      "base_commit": "4914fdf32b09e3a9ffffab9a7f4f007561cc13d0",
+      "dockerhub_tag": "flipt-io.flipt-flipt-io__flipt-5c7037ececb0bead0a8eb56054e224bcd7ac5922",
+      "selection_hash": "006000cc8a234c2c01b7932c959b582c29262bd7b9743fc3e10ae6946acd914a",
+      "row_sha256": "dceaec24e3e7420b61d8b087a973ed2fb28b2ac1d7d0bb5852a95e49548c0ebe",
+      "prompt_sha256": "d0ff4aa467c5f8c9b42f6690ccf5dba77082a38ca9530f8304f7189fdf07ba29",
+      "prompt_bytes": 2968,
+      "evaluator_asset": "run_scripts/instance_flipt-io__flipt-5c7037ececb0bead0a8eb56054e224bcd7ac5922"
+    },
+    {
+      "instance_id": "instance_navidrome__navidrome-8383527aaba1ae8fa9765e995a71a86c129ef626",
+      "language": "Go",
+      "repo": "navidrome/navidrome",
+      "base_commit": "8a56584aedcb810f586a8917e98517cde0834628",
+      "dockerhub_tag": "navidrome.navidrome-navidrome__navidrome-8383527aaba1ae8fa9765e995a71a86c129ef626",
+      "selection_hash": "008af242e9adc8db7d16ed2aa5847c0bc19eaf807ea8f0307d1ee1f1a6471b1a",
+      "row_sha256": "47cec3c8086394eb0594b2b9d7d453a0a69e1ab33fcdbaf247e3578a52133bd2",
+      "prompt_sha256": "a6ca57d2582222bfb2e072f1698d334b0e841449293989c929ba28372029cd50",
+      "prompt_bytes": 5015,
+      "evaluator_asset": "run_scripts/instance_navidrome__navidrome-8383527aaba1ae8fa9765e995a71a86c129ef626"
+    },
+    {
+      "instance_id": "instance_element-hq__element-web-494d9de6f0a94ffb491e74744d2735bce02dc0ab-vnan",
+      "language": "JavaScript",
+      "repo": "element-hq/element-web",
+      "base_commit": "28f7aac9a5970d27ff3757875b464a5a58a1eb1a",
+      "dockerhub_tag": "element-hq.element-element-hq__element-web-494d9de6f0a94ffb491e74744d2735bce02dc0ab",
+      "selection_hash": "023107b9459d01aa0c035666c7af2e35034bbff1c8b70f697f4dd90e45ed8849",
+      "row_sha256": "290e74609df2e777315336d47b9d7ea481c3db6cd4a6f7edae485bf8edfa787a",
+      "prompt_sha256": "17d715f0520b9365aab8571f4097eaa421c38f36cd7fca235da3b8c4337a06e4",
+      "prompt_bytes": 2081,
+      "evaluator_asset": "run_scripts/instance_element-hq__element-web-494d9de6f0a94ffb491e74744d2735bce02dc0ab-vnan"
+    },
+    {
+      "instance_id": "instance_protonmail__webclients-01b519cd49e6a24d9a05d2eb97f54e420740072e",
+      "language": "JavaScript",
+      "repo": "protonmail/webclients",
+      "base_commit": "a118161e912592cc084945157b713050ca7ea4ba",
+      "dockerhub_tag": "protonmail.webclients-protonmail__webclients-01b519cd49e6a24d9a05d2eb97f54e420740072e",
+      "selection_hash": "02f00a1c276f48573b15f0dd9d99f883b49157971e415acd0eaadefd42b582cb",
+      "row_sha256": "725820030248104aed88b73a0ebfffd50d11bc5f229b7f9ec7090227968824c6",
+      "prompt_sha256": "ff4b74b5adb475f4db45c54cb1b8fec9f9722ea739ab7dc43ff7bd4d34b9b0b2",
+      "prompt_bytes": 2172,
+      "evaluator_asset": "run_scripts/instance_protonmail__webclients-01b519cd49e6a24d9a05d2eb97f54e420740072e"
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-0833b5f6f140d04200ec91605f88704dd18e2970-v059c6fdc75567943479b23ebca7c07b5e9a7f34c",
+      "language": "Python",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "def864adc8b19bdbc506919270d8ff1408b4faac",
+      "dockerhub_tag": "qutebrowser.qutebrowser-qutebrowser__qutebrowser-0833b5f6f140d04200ec91605f88704dd18e2970-v059c6fdc75567943479b23ebca7c07b5e9a7f",
+      "selection_hash": "0391ac8fb63f2d8132f4496e171dc571a6aff2fe036e04b263fa6ebf5963b77d",
+      "row_sha256": "14056a5f3667275d62670560f406ed1c097ad5a7a513aa8fbea9133f86b56d8a",
+      "prompt_sha256": "209a594f513485c51c8ab7fd5c9324fbc59a4ef3186a2e4429aed3aa3675631e",
+      "prompt_bytes": 884,
+      "evaluator_asset": "run_scripts/instance_qutebrowser__qutebrowser-0833b5f6f140d04200ec91605f88704dd18e2970-v059c6fdc75567943479b23ebca7c07b5e9a7f34c"
+    },
+    {
+      "instance_id": "instance_ansible__ansible-c616e54a6e23fa5616a1d56d243f69576164ef9b-v1055803c3a812189a1133297f7f5468579283f86",
+      "language": "Python",
+      "repo": "ansible/ansible",
+      "base_commit": "b479adddce8fe46a2df5469f130cf7b6ad70fdc4",
+      "dockerhub_tag": "ansible.ansible-ansible__ansible-c616e54a6e23fa5616a1d56d243f69576164ef9b-v1055803c3a812189a1133297f7f5468579283f86",
+      "selection_hash": "043ecd71eaed381f1063ef8f0f773dc29b68311b9e590eccd586a939d287d476",
+      "row_sha256": "caef73639c2f4308f34f275b3444ea73902799e031a5ba322e560492c0210149",
+      "prompt_sha256": "1cb78ef96300c724a1f8bcabe29d7cbe3b7c0b89649287ee31610ce211ef4f81",
+      "prompt_bytes": 7125,
+      "evaluator_asset": "run_scripts/instance_ansible__ansible-c616e54a6e23fa5616a1d56d243f69576164ef9b-v1055803c3a812189a1133297f7f5468579283f86"
+    },
+    {
+      "instance_id": "instance_tutao__tutanota-1e516e989b3c0221f4af6b297d9c0e4c43e4adc3-vbc0d9ba8f0071fbe982809910959a6ff8884dbbf",
+      "language": "TypeScript",
+      "repo": "tutao/tutanota",
+      "base_commit": "7ebf14a3432c8f0d8b31d48968a08d055bec2002",
+      "dockerhub_tag": "tutao.tutanota-tutao__tutanota-1e516e989b3c0221f4af6b297d9c0e4c43e4adc3-vbc0d9ba8f0071fbe982809910959a6ff8884dbbf",
+      "selection_hash": "09826a9728e901b3e3c7886ffd08654ac2b32ebf3f172777d7743abeb7c00c70",
+      "row_sha256": "7493ebe2c122e4a6ec988f5da089ddd4c98b43482e1d4ee5855b94e2ac6c5d1b",
+      "prompt_sha256": "430cc74d763dc5782ad9a9c731d8ac7fa9305a4bf07aaaacd8f2674bdb3cc4e9",
+      "prompt_bytes": 2660,
+      "evaluator_asset": "run_scripts/instance_tutao__tutanota-1e516e989b3c0221f4af6b297d9c0e4c43e4adc3-vbc0d9ba8f0071fbe982809910959a6ff8884dbbf"
+    },
+    {
+      "instance_id": "instance_tutao__tutanota-12a6cbaa4f8b43c2f85caca0787ab55501539955-vc4e41fd0029957297843cb9dec4a25c7c756f029",
+      "language": "TypeScript",
+      "repo": "tutao/tutanota",
+      "base_commit": "170958a2bb463b25c691640b522780d3b602ce99",
+      "dockerhub_tag": "tutao.tutanota-tutao__tutanota-12a6cbaa4f8b43c2f85caca0787ab55501539955-vc4e41fd0029957297843cb9dec4a25c7c756f029",
+      "selection_hash": "0bd1c8e1245740c8d983f6267ea276c10764a6e7c931bd5a936011f009a20ac7",
+      "row_sha256": "081e11e53a2d2ef0d0242d6019d2d26823d08355fef15e41563b666971d56820",
+      "prompt_sha256": "222a0d920ee8200e60d89991ff73e6f4451115d96fb33f0b85c551f682e4be75",
+      "prompt_bytes": 3182,
+      "evaluator_asset": "run_scripts/instance_tutao__tutanota-12a6cbaa4f8b43c2f85caca0787ab55501539955-vc4e41fd0029957297843cb9dec4a25c7c756f029"
+    }
+  ]
+}

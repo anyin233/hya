@@ -1,0 +1,11 @@
+{"file":".trellis/tasks/08-29-full-agent-live-validation/research/approved-plan-part-1.md","reason":"Authoritative approved scope and decisions, preserved from source lines 1-218 without context truncation."}
+{"file":".trellis/tasks/08-29-full-agent-live-validation/research/approved-plan-part-2.md","reason":"Authoritative execution, verification, contingencies, and completion criteria from source lines 219-436."}
+{"file":".trellis/tasks/08-29-full-agent-live-validation/research/swe-bench-pro-sources.md","reason":"Pinned evaluator and dataset revisions, license facts, result contract, and benchmark safety boundaries."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Required event, API, SDK, persistence, and TUI data-flow ownership across validation and repairs."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Requires reuse of existing planes, reducers, command paths, fixtures, and constants before adding code."}
+{"file":".trellis/spec/backend/task-tool.md","reason":"Canonical task, durable spawn admission, overload, operation identity, and subagent fixture contracts."}
+{"file":".trellis/spec/backend/workflow-control.md","reason":"Canonical event-sourced Workflow control, admission, recovery, surface parity, and test contracts."}
+{"file":".trellis/spec/frontend/directory-structure.md","reason":"Defines the TypeScript TUI, launcher, backend, and retained compatibility ownership boundaries."}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Defines SolidJS/OpenTUI component, command registry, SDK synchronization, and responsive UI patterns."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Defines frontend TDD, focused Bun checks, narrow-terminal behavior, and forbidden architecture patterns."}
+{"file":".trellis/spec/frontend/workflow-presentation.md","reason":"Defines event-driven Workflow projection, presentation, ordering, responsive layout, and PTY proof."}

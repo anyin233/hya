@@ -1,0 +1,191 @@
+{
+  "reviewed_at": "2026-08-30",
+  "overall_status": "passed-with-user-approved-GLM-waiver",
+  "release": {
+    "version": "0.36.6",
+    "aligned_files": [
+      "Cargo.toml",
+      "Cargo.lock",
+      "README.md",
+      "packages/hya-tui-ts/package.json",
+      "crates/hya/tests/version_metadata.rs",
+      "CHANGELOG.md"
+    ],
+    "repairs": [
+      "Native shell requests honor their optional Agent and model selections.",
+      "Concurrent same-root spawns reconcile durable logical releases before a final overload decision.",
+      "Durable Compat background prompt errors are capped at 2048 Unicode scalar values.",
+      "Model fallback rebinds each category candidate's own reasoning variant after a retryable pre-stream failure.",
+      "The TypeScript Session cache uses one code-unit comparator for sorting, binary search, and insertion, so mixed-case IDs remain unique and reachable."
+    ]
+  },
+  "final_gates": [
+    {
+      "gate": "cargo fmt --all --check",
+      "result": "passed",
+      "classification": "current-0.36.6",
+      "source": "artifact://1908"
+    },
+    {
+      "gate": "cargo clippy --workspace --all-targets -- -D warnings",
+      "result": "passed",
+      "classification": "current-0.36.6",
+      "source": "artifact://1908"
+    },
+    {
+      "gate": "cargo test --workspace --exclude hya-e2e",
+      "result": "1546 passed across 254 suites; 4 ignored",
+      "classification": "current-0.36.6",
+      "source": "artifact://1910"
+    },
+    {
+      "gate": "cargo test -p hya-e2e -- --test-threads=1",
+      "result": "40 passed across 20 suites",
+      "classification": "current-0.36.6 Rust/process source",
+      "source": "artifact://1864"
+    },
+    {
+      "gate": "final executable build",
+      "result": "hya, hya-ts, and hya-backend built successfully",
+      "classification": "current-0.36.6",
+      "sha256": {
+        "hya": "379ddc6f825bf50ce172d4f590b8e85f957a44afdfa4bb9eda8726c9adf63e75",
+        "hya-ts": "21fe3e91f9e5b67c01722f414760bb84371867509b89b683f33afe0af7f91128",
+        "hya-backend": "a599cce0f96b440333e56c370439a39aefb1920ce12510d85ad6e93a68964e63"
+      }
+    },
+    {
+      "gate": "focused real-backend TUI",
+      "result": "10 passed; 54 assertions",
+      "classification": "current-0.36.6"
+    },
+    {
+      "gate": "TypeScript typecheck and full Bun suite",
+      "result": "post-review typecheck passed; post-review full suite passed with 60 tests and 2414 assertions; the pre-review full suite also passed twice with the same counts",
+      "classification": "current-0.36.6"
+    },
+    {
+      "gate": "PTY Session-cache stability",
+      "result": "five consecutive 80/140-column subagent-workspace runs passed before review; after the final oracle edit, three consecutive complete PTY files passed with 5 tests and 120 assertions per run",
+      "classification": "current-0.36.6"
+    },
+    {
+      "gate": "Compat adapter typecheck and tests",
+      "result": "typecheck passed; 66 tests and 158 assertions passed",
+      "classification": "current-0.36.6"
+    }
+  ],
+  "current_final_gates": {
+    "status": "passed",
+    "reason": "All required current-release Rust, process, TypeScript, PTY, real-backend, Compat, build, and cleanup gates passed. The final TypeScript comparator change does not alter the already-passed Rust serial process surface.",
+    "required_before_ready_to_commit": []
+  },
+  "retained_local_only_archives": [
+    {
+      "path": "/home/yanweiye/.local/state/hya-full-agent-live-validation-evidence/runtime-evidence.tar.zst",
+      "sha256": "ccfc7c6a78b1fe3be721bc8715f27def3b2e5696211a122b8ba25b4449451376",
+      "git_policy": "Do not commit; commit hashes and manifests only."
+    },
+    {
+      "path": "/home/yanweiye/.local/state/hya-full-agent-live-validation-evidence/herdr-playground.tar.zst",
+      "sha256": "3153207a90a380c5523121536a87fbe82a642c40f5010ed0c7d1c15e46adca84",
+      "git_policy": "Do not commit; commit hashes and manifests only."
+    }
+  ],
+  "cleanup": {
+    "task_panes": "original, completion, and reconnect panes closed; reconnect pane wA:pHH returned close ok",
+    "private_runtime_root": "absent",
+    "completion_runtime": "retained local-only outside Git for Session proof; provider config deleted and exact-secret rescan returned zero hits",
+    "reconnect_runtime": "retained local-only outside Git at /home/yanweiye/.local/state/hya-reconnect-a29; contains credential-free proxy log/script and Session database",
+    "playground": "absent",
+    "task_processes": "0; completion relay stopped with intentional status 143, reconnect proxy stopped with 143, reconnect backend stopped cleanly with 0, and GPT56 scheduling fault/relay stopped cleanly",
+    "containers": "Only four unrelated 4-8 week old containers remained; none was modified."
+  },
+  "scope_decision": {
+    "decided_at": "2026-08-30",
+    "classification": "user-approved-scope-waiver",
+    "gpt_live_coverage": {
+      "status": "passed-and-accepted",
+      "evidence": [
+        "live-provider-summary.json",
+        "tui-live-matrix.json",
+        "coding-fixture-summary.json",
+        "tool-schema-by-model.json"
+      ]
+    },
+    "gpt_scheduling": {
+      "status": "passed",
+      "evidence": "gpt56-model-scheduling.json",
+      "release": "0.36.5",
+      "preferred": "gpt56-primary/gpt-5.6-sol#low",
+      "fallback": "gpt56-fallback/gpt-5.6-sol#high",
+      "preferred_attempts": 3,
+      "preferred_status": 503,
+      "fallback_relay_ordinal": 2,
+      "fallback_status": 200,
+      "fallback_reasoning_effort": "high",
+      "exact_assistant_text": "GPT56_SCHEDULED_GREEN_A30",
+      "session": "hysec_3xMXopbQV0NsMGHScP0J",
+      "durable_event_count": 14,
+      "sqlite_stdout_sequences_match": true,
+      "one_assistant_delivery": true,
+      "no_mid_stream_replay": true,
+      "focused_regression": "RED Low-vs-High before fix (artifact://1810), then GREEN 1/1; complete model_fallback suite 7/7",
+      "credential_safety": "Only mode-0600 private provider.key matched the credential scan; Git evidence had zero secret hits",
+      "current_source_relevance": "The live scheduling run used release 0.36.5. Release 0.36.6 changes only TypeScript Session-cache lookup/test code and release metadata; provider fallback, reasoning-variant, relay, Event, and SQLite scheduling paths are byte-for-byte unchanged from the passed run."
+    },
+    "glm_remaining_scope": {
+      "status": "waived-not-passed",
+      "waived": [
+        "remaining functional validation",
+        "coding validation",
+        "subagent validation",
+        "Workflow validation",
+        "reasoning validation"
+      ],
+      "historical_evidence": {
+        "successful_custom_mcp_turn": {
+          "command": "/use-mcp GLM_MCP_A29",
+          "route": "12th-oai/glm-5.3#high",
+          "result": "MCP_OK:GLM_MCP_A29",
+          "session": "hysec_FOid0Q6hjzDE8YyZTb3C"
+        },
+        "later_upstream_503": {
+          "attempts": [703, 704, 705],
+          "status": 503,
+          "classification": "upstream outage after the successful custom-MCP Turn; Hya published assistant finish:error and Session idle, then the same Session recovered on GPT ordinal 706"
+        }
+      },
+      "evidence": [
+        "glm-live-summary.json",
+        "live-provider-summary.json",
+        "tui-live-matrix.json"
+      ]
+    }
+  },
+  "honest_benchmark_accounting": {
+    "classification": "completed-diagnostic",
+    "attempts": 16,
+    "official_evaluator_true": 16,
+    "counted_true": 11,
+    "counted_false": 5,
+    "counted_pass_at_1": 0.6875,
+    "reason": "Five runtime_path_identity_leak setup violations remain false despite true official evaluator Booleans; no row was substituted or rerun."
+  },
+  "outcomes": {
+    "code_and_final_gates": "current-0.36.6-passed",
+    "gpt_live_coverage": "passed-and-accepted",
+    "glm_live_scope": "waived-not-passed",
+    "swe_bench_pro": "completed-diagnostic-with-5-counted-false",
+    "dual_model_live_matrix": "gpt-passed-glm-waived",
+    "final_scheduling": "passed-on-0.36.5-with-unchanged-scheduling-source-in-0.36.6",
+    "overall_prd": "passed-with-user-approved-GLM-waiver",
+    "tui_reconnect": "passed-real-herdr",
+    "final_project_gates_and_cleanup": "passed"
+  },
+  "remaining_code_review_findings": [],
+  "remaining_acceptance_evidence_gaps": [],
+  "remaining_finalization_gates": [],
+  "ready_to_commit": true,
+  "ready_reason": "All current-release 0.36.6 project gates, cleanup, and the Trellis quality review passed. The GPT-5.6-family scheduling proof remains valid because 0.36.6 changes only TypeScript Session-cache lookup/test code and metadata; scheduling-sensitive source is unchanged from the passed 0.36.5 live run. GPT coverage is passed and accepted, remaining GLM scope is waived without being called passed, and SWE-Bench remains diagnostic at 11/16 counted Pass@1 with five setup-invalid attempts counted false. The worktree is ready to commit; this review did not commit, push, archive, or change task status."
+}
