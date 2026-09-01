@@ -123,7 +123,7 @@ Map of every accepted config key to the command (or role) it drives:
 | `session_compact` | `session.compact` | `<leader>c` |
 | `session_toggle_timestamps` | `session.toggle.timestamps` | `unbound` |
 | `session_toggle_generic_tool_output` | `session.toggle.generic_tool_output` | `unbound` |
-| `session_queued_prompts` | `session.queued_prompts` | `<leader>q` |
+| `session_queued_prompts` | `session.queued_prompts` | `<leader>q` | Accepted key definition, but no current command handler is registered; submitted or in-flight prompts are not a local queue. |
 | `pane_roster` | `pane.roster` | `<leader>o` |
 | `pane_open_tab` | `pane.open.tab` | `<leader>T` |
 | `pane_open_vertical` | `pane.open.vertical` | `<leader>V` |
@@ -260,7 +260,7 @@ collisions. Examples (not exhaustive):
 
 | Chord | Example commands that share it |
 | --- | --- |
-| `<leader>q` | `session.queued_prompts`; `<leader>q` alternative of `app.exit` |
+| `<leader>q` | `session.queued_prompts` (accepted but currently unwired); `<leader>q` alternative of `app.exit` |
 | `<leader>h` | `session.toggle.conceal`; `tips.toggle` |
 | `ctrl+d` | `app.exit`; `session.delete`; `stash.delete`; `input.delete`; `dialog.move_session.delete` |
 | `ctrl+f` | `session.pin.toggle`; `model.dialog.favorite`; `permission.prompt.fullscreen`; `input.move.right` |
@@ -313,7 +313,7 @@ collisions. Examples (not exhaustive):
 | `session.compact` | `<leader>c` | `/compact` (`/summarize`) | Summarize / compact the session. |
 | `session.toggle.timestamps` | unbound | `/timestamps` (`/toggle-timestamps`) | Show or hide message timestamps. |
 | `session.toggle.generic_tool_output` | unbound | — | Expand or collapse generic tool output. |
-| `session.queued_prompts` | `<leader>q` | — | Manage queued prompts. |
+| `session.queued_prompts` | `<leader>q` | — | Accepted key definition, but no current command handler is registered; submitted or in-flight prompts are not a local queue. |
 | `session.pin.toggle` | `ctrl+f` | — | Pin or unpin a session in the Sessions dialog. |
 | `session.quick_switch.1` … `session.quick_switch.9` | `<leader>1` … `<leader>9` | — | Switch to the session in quick slot 1–9 (global layer). |
 | `session.undo` | `<leader>u` | `/undo` | Abort an in-flight turn if not idle; revert at the last user message before the current revert point (repeatable walks backwards); **overwrites the prompt buffer** with that message’s text and re-attaches its file parts (draft text is lost). |
@@ -344,7 +344,7 @@ unmodified Escape returns to Main. See [TUI Reference](tui-reference.md#pane-nav
 
 | Command | Default binding | Slash name | Meaning |
 | --- | --- | --- | --- |
-| `model.list` | `<leader>m` | `/models` (`/mo`) | Open the model picker. |
+| `model.list` | `<leader>m` | `/models` (`/mo`, `/model`) | Open the model picker. |
 | `model.dialog.favorite` | `ctrl+f` | — | Toggle favorite on the selected model (in the model dialog). |
 | `model.cycle_recent` | `f2` | — | Next recently used model. |
 | `model.cycle_recent_reverse` | `shift+f2` | — | Previous recently used model. |
@@ -355,7 +355,7 @@ unmodified Escape returns to Main. See [TUI Reference](tui-reference.md#pane-nav
 | `agent.cycle` | `tab` | — | Next primary agent. |
 | `agent.cycle.reverse` | `shift+tab` | — | Previous primary agent. |
 | `variant.cycle` | `ctrl+t` | — | Cycle model variants. |
-| `variant.list` | unbound | `/variants` | Open the variant picker (hidden when the model has no variants). |
+| `variant.list` | unbound | `/variants` (`/think`) | Open the variant picker (hidden when the model has no variants). |
 
 ## Prompt
 
@@ -533,14 +533,20 @@ command in the `palette` namespace that declares a `slashName` (or `slash.name`)
 Typing `/` at **column 0** of the prompt opens slash autocomplete. Matching runs
 over both the command title/display and its description.
 
+On submit, an exact single-line local slash name or alias is dispatched first when
+the prompt is in normal mode. If no local match exists, a slash whose command
+name is present in the synchronized backend catalog uses the backend command
+route (and preserves following arguments, including later lines). Other input is
+submitted as a normal prompt.
+
 | Slash | Aliases | Effect |
 | --- | --- | --- |
 | `/sessions` | `/resume`, `/continue` | Open the Sessions dialog. |
 | `/new` | `/clear` | New session (navigate to Home). |
-| `/models` | `/mo` | Open the model picker. |
+| `/models` | `/mo`, `/model` | Open the model picker. |
 | `/agents` | — | Open the agent picker. |
 | `/mcps` | — | Open the MCP dialog. |
-| `/variants` | — | Open the variant picker. |
+| `/variants` | `/think` | Open the variant picker. |
 | `/status` | — | Open the status dialog. |
 | `/themes` | — | Open the theme picker. |
 | `/help` | — | Open help. |

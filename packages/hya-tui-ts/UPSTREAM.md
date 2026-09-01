@@ -32,6 +32,14 @@ Rebranding of the imported frontend is complete. Upstream product branding and
 artwork have been replaced with hya project branding; the upstream copyright
 and permission notices are retained in `LICENSE`. See `NOTICE` for details.
 
+## Current package payload note
+
+The source package includes `NOTICE`. The supported `install.sh` copies and
+verifies it in the installed TUI runtime. The checked-out `0.36.7` release
+workflow and release rehearsal currently copy `LICENSE` and this `UPSTREAM.md`
+but do **not** copy `NOTICE` into the release archive. This records an observed
+packaging difference; it does not change either packaging path.
+
 The logo artwork shown on the home screen and in the session epilogue is
 generated from the 8-bit Hya wordmark (`docs/assets/hya-icon-8bit.png`) by
 `scripts/generate-logo-art.py` into `src/upstream/component/logo-art.data.ts`

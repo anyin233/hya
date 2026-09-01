@@ -33,8 +33,9 @@ cd packages/hya-tui-ts
 bun install --frozen-lockfile
 ```
 
-Workspace installs from the monorepo root also work when you already use the
-repo’s Bun workflow.
+The package is installed from this directory; the repository has no Bun workspace
+manifest at its root. Keep this package's `bun.lock` and `package.json` together
+when installing or preparing the runtime.
 
 ## Commands
 
@@ -46,12 +47,18 @@ repo’s Bun workflow.
 
 ## Run
 
-**Preferred:** use the product launcher so a backend is always provided:
+**Preferred:** use the product launcher so a backend is always provided. For an
+uninstalled checkout, invoke the built shim by path:
 
 ```sh
-# from repo root, after building Rust bins
-cargo build -p hya-backend --bin hya-backend
-cargo build -p hya-ts --bin hya-ts   # or hya shim
+# from repo root
+cargo build -p hya -p hya-backend -p hya-ts --bins
+./target/debug/hya .
+```
+
+For an installed layout, use the colocated launcher:
+
+```sh
 hya .
 # or attach:
 hya --server http://127.0.0.1:8080
@@ -168,17 +175,26 @@ re-sync does not silently drop comments:
 
 ## Release-time scripts
 
-Ship-time packaging copies this package into
-`lib/hya/hya-tui-ts` and runs:
+Release and installer assembly prepare a **runtime subset**, not a copy of this
+whole package. The payload contains the package metadata/config files and
+`src/`, installs production dependencies from the pinned lockfile, and then
+runs:
 
 ```sh
 bun packages/hya-tui-ts/scripts/prune-sdk-server.ts <runtime-dir>
 ```
 
+The supported layouts also place the Compat adapter at
+`lib/hya/compat-adapter`, with its own pinned production install. The release
+archive does not include this README, the package tests/scripts, or
+`packages/hya-tui-ts/NOTICE`; `install.sh` does copy and verify that `NOTICE`
+file. The standard release archive does not include `hya-updater`.
+
 Callers:
 
-- `install.sh` (prepared runtime install)
-- `.github/workflows/release.yml` (release package assembly)
+- `install.sh` (prepared runtime install and Compat adapter)
+- `.github/workflows/release.yml` (prepared runtime, Compat adapter, and
+  Argus WorkflowBundle assembly)
 
 The prune script rewrites the pinned SDK export map so only the v2 client remains
 importable. Details: [scripts/README.md](./scripts/README.md). Guarded by

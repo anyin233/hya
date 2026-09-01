@@ -80,6 +80,7 @@ and usage live in the prompt footer meta line.
 - **Title:** session title; when `HYA_CHANNEL != "latest"`, also shows the raw session id.
 - **Visibility:** auto-shown when terminal width is greater than 120; otherwise a right-aligned overlay with a dark scrim (`RGBA` alpha 70). Hidden entirely for **child** sessions (`parentID` set). Toggle auto/hidden with `session.sidebar.toggle` (`<leader>b`).
 - **Sections** (builtin plugins, top to bottom by order):
+  - **Workflow** — selected Workflow/revision availability, run status, graph level, declaration-ordered active Stages, Agent and Stage progress, and bounded current work.
   - **Context** — total tokens of the last output-producing assistant message, percent of the model context limit, USD spend.
   - **MCP** — collapsible when more than two servers (header click); status dots labelled Connected / failed error / Disabled / Needs auth / Needs client ID.
   - **LSP** — collapsible; connected/error dots; empty states `LSPs are disabled` or `LSPs will activate as files are read`.

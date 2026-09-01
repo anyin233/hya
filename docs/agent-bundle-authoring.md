@@ -57,19 +57,27 @@ are rejected.
 
 A public archive contains the root manifest plus exactly the normalized source closure represented by its AgentBundle or WorkflowBundle payload, and nothing else. Undeclared directory files are ignored; unreferenced archive files are rejected. Missing declared files, wrapper directories, duplicate normalized paths, traversal, absolute paths, and non-regular files fail closed. Directory and archive forms of the same declared closure prepare to the same canonical format-v2 identity and digest.
 
-The retained static package can be created with:
+The canonical package writer accepts a source directory and emits deterministic
+public `.hyabundle` bytes:
+
+```sh
+cargo run -p xtask -- package-bundle path/to/source static.hyabundle
+```
+
+For example, from the repository root:
+
+```sh
+cargo run -p xtask -- package-bundle docs/examples/bun-disjoint bun-disjoint.hyabundle
+```
+
+The following raw `7z` commands are a **noncanonical manual alternative** for
+educational inspection only; runtime loading uses the strict in-process reader
+and never shells to system `7z`:
 
 ```sh
 7z a -t7z -mx=0 -ms=off static.hyabundle bundle.hya.md
-```
-
-A multi-file executable package references its closure explicitly:
-
-```sh
 7z a -t7z -mx=0 -ms=off bun.hyabundle bundle.hya.md extensions/runtime.js
 ```
-
-The runtime uses a strict in-process reader and never shells to system `7z`.
 
 ### Package limits
 
@@ -379,10 +387,11 @@ docs/examples/bun-disjoint/
     └── beta.js
 ```
 
-From `docs/examples/bun-disjoint/`:
+From the repository root, the canonical writer packages the complete source
+directory deterministically:
 
 ```sh
-7z a -t7z -mx=0 -ms=off bun-disjoint.hyabundle bundle.hya.md prompts/alpha.md prompts/beta.md prompts/static.md extensions/alpha.js extensions/beta.js
+cargo run -p xtask -- package-bundle docs/examples/bun-disjoint bun-disjoint.hyabundle
 ```
 
 `hook_refs` select Bundle-local Hook resources only; all `harness:hook/*` spellings reject; supported hook IDs are exactly `event`, `tool.execute.before`, and `tool.execute.after`; aliases do not rename hooks. Harness host hooks stay outside AgentBundle metadata.
