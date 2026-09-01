@@ -52,32 +52,38 @@ Failures are easiest to diagnose if you know the order of operations
 2. **Bun preflight.** `bun --version` must succeed or the install aborts.
 3. **Cargo build.** Builds locked binaries for `hya`, `hya-backend`, and
    `hya-ts` for the selected profile.
-4. **Stage runtime.** Copies the TUI package into a temporary tree, runs
-   `bun install --frozen-lockfile --production`, then
-   `bun packages/hya-tui-ts/scripts/prune-sdk-server.ts` on that tree.
+4. **Stage runtimes.** Copies the TUI package into a temporary tree, runs
+   `bun install --frozen-lockfile --production`, and prunes the SDK; stages the
+   Compat adapter separately at `lib/hya/compat-adapter` with its pinned lockfile.
 5. **Atomic swap.** Stages into `.tmp.$$` paths, moves any existing install to
    `.bak.$$`, then renames into place. An `ERR`/`INT`/`TERM` trap calls
    `restore_install` so an interrupted install puts previous binaries and
-   runtime back and cleans leftovers — it should never leave a half-installed
+   runtimes back and cleans leftovers — it should never leave a half-installed
    `hya`.
 6. **Post-install verification** (skipped under `--dry-run`, which only
    prints the checks):
    - Runs the `hya` shim against a dead server with `--bun /bin/true`.
    - Runs `hya --version`, `hya-backend --help`, `hya-ts --help`.
-   - Asserts runtime files (`src/main.tsx`, `bunfig.toml`, license files) and
-     `node_modules` exist under the installed `lib/hya/hya-tui-ts`.
+   - Asserts TUI runtime files (`src/main.tsx`, `bunfig.toml`, license files)
+     and `node_modules` exist under `lib/hya/hya-tui-ts`.
+   - Asserts the Compat adapter payload and its production dependencies exist
+     under `lib/hya/compat-adapter`.
    - **Fails** if `command -v hya` does not resolve to the install path (usual
      cause: an older `hya` earlier on `PATH`).
 
-The installer colocates `hya`, `hya-ts`, and `hya-backend` and prepares the Bun
-runtime under `lib/hya/hya-tui-ts`. Installing only the `hya` Cargo package is
-unsupported because that executable delegates to the adjacent launcher and
-runtime.
+The installer colocates `hya`, `hya-ts`, and `hya-backend`, prepares the TUI
+runtime under `lib/hya/hya-tui-ts`, and prepares the Compat adapter under
+`lib/hya/compat-adapter`. Installing only the `hya` Cargo package is unsupported
+because that executable delegates to the adjacent launcher and runtime.
 
 ## Run the TUI
 
 ```sh
-hya
+# Installed layout
+hya .
+
+# Uninstalled checkout (after `cargo build --workspace`)
+./target/debug/hya .
 ```
 
 `hya` delegates to the TypeScript/OpenTUI frontend. The launcher starts an owned

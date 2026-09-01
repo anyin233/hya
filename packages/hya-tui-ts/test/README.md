@@ -1,6 +1,6 @@
 # hya-tui-ts tests
 
-Eleven Bun test files under this directory. Run from the package root:
+Fourteen Bun test files under this directory. Run from the package root:
 
 ```sh
 cd packages/hya-tui-ts
@@ -33,6 +33,18 @@ Focused Track T files (also listed in root `AGENTS.md`):
 bun test test/real-backend.test.ts test/task-presentation.test.ts test/real-backend-agents.test.ts
 ```
 
+Workflow-focused suites:
+
+```sh
+bun test test/workflow-presentation.test.ts test/workflow-sidebar.test.ts
+```
+
+`workflow-presentation.test.ts` checks projection parsing and deterministic
+status/progress text. `workflow-sidebar.test.ts` checks first registration,
+session-state synchronization, and sidebar rendering. These are package-level
+smoke/unit tests and do not start a backend.
+
+
 ## Which suites need `hya-backend`
 
 | Suite | Needs `target/debug/hya-backend` |
@@ -40,6 +52,9 @@ bun test test/real-backend.test.ts test/task-presentation.test.ts test/real-back
 | `real-backend.test.ts` | **Yes** — spawns `serve` on an ephemeral port |
 | `real-backend-agents.test.ts` | **Yes** — multi-agent roster via live API |
 | `pty-smoke.test.ts` | **Yes** (plus `hya-ts`) — PTY cases drive a real backend and launcher |
+| `workflow-presentation.test.ts` | No — deterministic projection unit coverage |
+| `workflow-sidebar.test.ts` | No — static host/sidebar integration seam |
+| `workflow-pty.test.ts` | **Yes** (plus `hya-ts`) — Workflow state over a real PTY-backed TUI |
 | `sdk-spine.test.ts` | No — local `Bun.serve` mock for HTTP/SSE |
 | `startup-trace.test.ts` | No |
 | `agent-visibility.test.ts` | No |
@@ -57,6 +72,7 @@ filesystem or process error — not a soft skip.
 | Suite | PTY |
 | --- | --- |
 | `pty-smoke.test.ts` | **Yes** — Linux PTY sessions via `hya-ts`, terminal restore, observation panes |
+| `workflow-pty.test.ts` | **Yes** — Linux PTY Workflow presentation and backend lifecycle |
 | All others | No |
 
 PTY cases are Linux-oriented (stty / process-group checks). Expect failures or

@@ -315,21 +315,22 @@ builtin plugins in parallel after
 cleanups, reports statuses in stable declaration order. There is no external
 plugin manager and no dynamic loading.
 
-Builtin ids in declaration order (eleven declared; **ten start by default** —
+Builtin ids in declaration order (twelve declared; **eleven start by default** —
 `which-key` ships `enabled: false` and is filtered out of the static host; see
 [TUI Keybindings](../tui-keybindings.md)):
 
-1. `internal:home-footer`
-2. `internal:home-tips`
-3. `internal:sidebar-context`
-4. `internal:sidebar-mcp`
-5. `internal:sidebar-lsp`
-6. `internal:sidebar-todo`
-7. `internal:sidebar-files`
-8. `internal:sidebar-footer`
-9. `internal:notifications`
-10. `which-key` (**default off** — does not start unless re-enabled)
-11. `diff-viewer`
+1. `internal:sidebar-workflow`
+2. `internal:home-footer`
+3. `internal:home-tips`
+4. `internal:sidebar-context`
+5. `internal:sidebar-mcp`
+6. `internal:sidebar-lsp`
+7. `internal:sidebar-todo`
+8. `internal:sidebar-files`
+9. `internal:sidebar-footer`
+10. `internal:notifications`
+11. `which-key` (**default off** — does not start unless re-enabled)
+12. `diff-viewer`
 
 Render-extension slots used by the shell and builtins:
 
@@ -455,6 +456,7 @@ bin/hya
 bin/hya-ts
 bin/hya-backend
 lib/hya/hya-tui-ts/
+lib/hya/compat-adapter/
 ```
 
 Bun must be available when installing and running hya. The installer prepares

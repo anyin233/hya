@@ -5,5 +5,7 @@ We will delete the legacy terminal UI surface instead of keeping `--mini` as an 
 ## Consequences
 
 - The legacy TUI crate and its backend controller/render path are removed together; leaving the crate on disk would keep it in the workspace.
-- Resume is implemented through the current frontend by validating the requested Session against the connected runtime before navigating. If the Session is unavailable in that runtime, the frontend stays on its current route and reports the failure visibly.
+- Resume is implemented through the current frontend by navigating to the requested
+  Session route immediately. If the Session is unavailable in the connected
+  runtime, the route returns to Home and reports the failure with a visible toast.
 - No other `--mini`-only behavior is ported. Current frontend behavior is the source of truth after this cutover.

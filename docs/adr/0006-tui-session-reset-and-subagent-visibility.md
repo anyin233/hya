@@ -32,8 +32,10 @@ transcript Messages.
   current tool title, summary, or duration when completed.
 - Members present only in the run tree (not yet attached to a finished task tool row) are
   **synthesized as extra rows on the latest assistant message** so mid-spawn status stays visible.
-- The **sidebar has no roster section**. Its feature plugins are Context, MCP, LSP, Todo, Modified
-  Files, and a footer. Busy or attention-needed roster entries are **not** listed there; the
+- The **sidebar has no roster section**. Its feature plugins are Workflow, Context, MCP, LSP, Todo, Modified
+  Files, and a footer. The Workflow plugin shows synchronized selection/revision
+  availability, run status, Stage and Agent progress, and bounded current work.
+  Busy or attention-needed roster entries are **not** listed there; the
   Subagent manager / pane roster remains the full team inspection surface.
 - Copy/export continue to use the stored Message transcript only.
 

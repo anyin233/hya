@@ -3,9 +3,12 @@
 `crates/hya-plugin-compat` provides hya's bundled compatibility layer for
 Compat plugins.
 
-The Rust crate pins the supported Compat package versions. The adapter under
-[`adapter`](adapter) is a Bun/TypeScript JSON-RPC process that hya launches for
-`plugins:` entries with `kind: compat` and no explicit command.
+The Rust crate exports the shared `COMPAT_PLUGIN_VERSION` and
+`COMPAT_SDK_VERSION` constants, but it does not resolve npm dependencies. The
+Bun adapter's [`package.json`](adapter/package.json) and [`bun.lock`](adapter/bun.lock)
+resolve and pin the supported Compat package versions. The adapter is a
+TypeScript JSON-RPC process that hya launches for `plugins:` entries with
+`kind: compat` and no explicit command.
 
 Targeted Compat packages:
 
@@ -37,8 +40,9 @@ bun run typecheck
 bun test
 ```
 
-Set `BUN` to choose a Bun executable or `HYA_COMPAT_ADAPTER_DIR` to point
-`hya-backend` at an alternate adapter directory.
+Set `BUN` to choose a Bun executable. Adapter resolution checks
+`HYA_COMPAT_ADAPTER_DIR`, then executable-adjacent
+`../lib/hya/compat-adapter`, then this workspace's `adapter` directory.
 
 Known limits are tracked in
 [`../../docs/compat-parity.md`](../../docs/compat-parity.md), especially the

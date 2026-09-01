@@ -1,13 +1,17 @@
 # Self-update example (local dry-run)
 
-This example shows the **product path** for 0.34.13 without claiming production
-activation:
+This example shows the **product path** introduced in `0.34.13`, exercised
+against the checked-out updater at workspace version `0.36.7` without claiming a
+production release or archive payload:
 
 1. Build `hya-updater`.
 2. Create a temporary updater root and package directory.
 3. Sign fixture metadata with a throwaway key (demo only).
-4. `apply` without `--owner-authorized-activation` (stage only).
-5. Optionally re-apply with the owner flag under the same temp root.
+4. Run `apply` without `--owner-authorized-activation`; this verifies and stages
+   the candidate but does not switch `current` or advance `accepted_floor`.
+5. Run `status`, then **discard** the staged sequence.
+6. Re-run `apply` with `--owner-authorized-activation` under the same temp root;
+   this commits the selector and advances the floor.
 
 Do **not** reuse the demo key material for real releases.
 
@@ -16,5 +20,6 @@ Do **not** reuse the demo key material for real releases.
 ./docs/examples/self-update/run-demo.sh
 ```
 
-Expected outcome: stage succeeds, floor stays `0` until the owner flag is used;
-with the flag, `current` and `accepted_floor` advance to `1`.
+Expected outcome: stage succeeds, `status` reports `current_sequence=0` and
+`accepted_floor=0`, discard removes the unselected sequence, and the
+owner-authorized apply reports `current=1` with `accepted_floor=1`.
