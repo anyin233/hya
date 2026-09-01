@@ -21,6 +21,6 @@
   "children": [],
   "parent": null,
   "relatedFiles": [],
-  "notes": "A1-A9 verified; current-task documentation/test changes remain uncommitted, so status stays in_progress.",
+  "notes": "A1-A9 verified; documentation and installer-test work committed before archive.",
   "meta": {}
 }
