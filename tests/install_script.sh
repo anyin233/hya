@@ -19,6 +19,37 @@ not_contains() {
   local needle=$2
   [[ "$haystack" != *"$needle"* ]] || fail "expected output not to contain: $needle"
 }
+assert_release_sdk_guards() {
+  local workflow=$1
+  local sdk_fixture=$2
+  local guards
+
+  # Execute only SDK manifest guard blocks so shell spelling can evolve safely.
+  guards=$(awk '
+    /^[[:space:]]*if / && /\$sdk/ && /package\.json/ {
+      in_guard=1
+    }
+    in_guard {
+      print
+      if ($0 ~ /^[[:space:]]*fi[[:space:]]*$/) {
+        in_guard=0
+      }
+    }
+  ' <<<"$workflow")
+  [[ -n "$guards" ]] || fail "release workflow SDK guards are missing"
+
+  for export_key in . ./server ./v2/server; do
+    printf '{"exports":{"%s":"./server.js"}}\n' "$export_key" >"$sdk_fixture/package.json"
+    if sdk="$sdk_fixture" bash -c "$guards" >/dev/null 2>&1; then
+      fail "release workflow accepted forbidden SDK export: $export_key"
+    fi
+  done
+
+  printf '{"exports":{"./v2/client":"./client.js"}}\n' >"$sdk_fixture/package.json"
+  if ! sdk="$sdk_fixture" bash -c "$guards" >/dev/null 2>&1; then
+    fail "release workflow rejected a client-only SDK export map"
+  fi
+}
 
 help=$(bash ./install.sh --help)
 [[ -x ./install.sh ]] || fail "install.sh must be executable"
@@ -45,7 +76,6 @@ contains "$script" "packages/hya-tui-ts/tsconfig.json"
 contains "$release_workflow" "packages/hya-tui-ts/bunfig.toml"
 contains "$release_workflow" "packages/hya-tui-ts/tsconfig.json"
 contains "$release_workflow" "for path in dist/index.js dist/index.d.ts dist/server.js dist/server.d.ts dist/v2/index.js dist/v2/index.d.ts dist/v2/server.js dist/v2/server.d.ts dist/process.js dist/process.d.ts"
-contains "$release_workflow" "! grep -F '\".\"'"
 contains "$release_workflow" "HYA_RELEASE_BUN_INVOCATION"
 contains "$release_workflow" '"$packaged_binary" "$project" --server http://127.0.0.1:54321 --bun "$mock_bun"'
 contains "$ci_workflow" "cargo build --locked -p hya -p hya-backend -p hya-ts --bins"
@@ -105,6 +135,9 @@ contains "$dry_run" "hya"
 
 fixture=$(mktemp -d)
 trap 'rm -rf "$fixture"' EXIT
+release_guard_fixture="$fixture/release-sdk"
+mkdir -p "$release_guard_fixture"
+assert_release_sdk_guards "$release_workflow" "$release_guard_fixture"
 real_bun=$(command -v bun)
 fake_bin="$fixture/fake-bin"
 target="$fixture/target"
