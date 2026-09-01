@@ -718,3 +718,29 @@ Added per-Stage and loop-verifier model routes with effort-aware pre-stream fall
 ### Status
 
 [OK] **Completed**
+
+
+## Session 21: Synchronize project documentation
+
+**Date**: 2026-09-01
+**Task**: Synchronize project documentation
+**Branch**: `main`
+
+### Summary
+
+Synchronized current project documentation, corrected the release SDK guard regression test, and verified all release, TUI, installer, link, and workspace gates.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `7b6c7733e8db0054c3fa2bc7201f1bd480f6663d` | (see git log) |
+| `e3590689c1269657692b04a89efd22f87d0ed8cc` | (see git log) |
+| `0624accb30facacae1bffe350a769ab6bc497f82` | (see git log) |
+| `2f09eef85faec6e7b184ee2870559df5f8ea165b` | (see git log) |
+| `837575cf5d147530de1630b7f63aeee6f2510156` | (see git log) |
+| `e657e5ff2a9744367772bbdb1ec13d19c5cdc294` | (see git log) |
+
+### Status
+
+[OK] **Completed**
