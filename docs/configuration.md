@@ -703,7 +703,7 @@ hya honors `HOME` and `XDG_CONFIG_HOME` / `XDG_DATA_HOME` / `XDG_STATE_HOME` /
 | `HYA_SUBAGENT_MESSAGE_BUDGET` | Overrides `subagents.per_team_message_budget`. Env wins. | `1024` | same |
 | `HYA_EVENT_BUS_CAPACITY` | Live EventBus broadcast ring capacity. Must parse as `usize` **> 0** or ignored. **Env-only** (no config.yaml key). Raising it trades memory for tolerance of slow SSE consumers. | `8192` (`DEFAULT_BUS_CAPACITY`) | `crates/hya-app/src/config.rs`, `crates/hya-core/src/bus.rs` |
 | `HYA_DEFER_SIDEPLANES` | When deferred (default), MCP connect runs after the engine is built so the HTTP listener comes up without waiting on MCP handshakes — MCP tools may not be registered for the very first prompt. Set to `0`, `false`, `off`, or `no` (case-insensitive, trimmed) for await-MCP-before-listen. Any other value, empty, or unset means deferred. | deferred (on) | `crates/hya-app/src/runtime.rs` |
-| `HYA_COMPAT_ADAPTER_DIR` | Path to an alternate Compat plugin adapter checkout (`kind: compat` plugins). | Bundled adapter in `crates/hya-plugin-compat/adapter` | `crates/hya-app/src/plugins.rs` |
+| `HYA_COMPAT_ADAPTER_DIR` | Path to an alternate Compat plugin adapter checkout (`kind: compat` plugins). | Resolution order: this env override, executable-adjacent `../lib/hya/compat-adapter`, then workspace `crates/hya-plugin-compat/adapter`. | `crates/hya-app/src/plugins.rs` |
 | `HYA_FRONTEND_BIN` | Path to the `hya` binary spawned by `hya-backend` frontend integrations. | Newest sibling build, else `hya` on `PATH` | `crates/hya-backend/src/serve.rs` |
 | `HYA_BACKEND_BIN` | Path to the `hya-backend` binary the `hya` / `hya-ts` launcher spawns. After CLI `--backend-bin`, before sibling and `target/{release,debug}` fallbacks. | sibling / workspace target | `crates/hya-ts/src/lib.rs` |
 | `HYA_TUI_TS_DIR` | Highest-priority override for the TypeScript TUI runtime directory. Order: (1) this env, (2) `<exe_dir>/../lib/hya/hya-tui-ts`, (3) `<workspace>/packages/hya-tui-ts`. | installed or workspace path | `crates/hya-ts/src/lib.rs` |
@@ -1070,10 +1070,11 @@ Consequences: config always beats a same-id manifest; config `plugins` is a
 (not YAML source order); setting `enabled: false` in config does **not** re-open
 the id for a manifest to claim — the plugin is simply absent.
 
-For `kind: compat` entries without `command`, hya uses the bundled Bun
-adapter from `crates/hya-plugin-compat/adapter`. Set `BUN` to choose a Bun
-binary or `HYA_COMPAT_ADAPTER_DIR` to point at an alternate adapter checkout.
-If Bun is not available, that plugin is skipped.
+For `kind: compat` entries without `command`, hya resolves the adapter in this
+order: (1) `HYA_COMPAT_ADAPTER_DIR` when set, (2) the installed adapter adjacent
+to the executable at `../lib/hya/compat-adapter`, and (3) the workspace adapter
+at `crates/hya-plugin-compat/adapter`. Set `BUN` to choose the Bun binary. If
+Bun is not available, that plugin is skipped.
 
 ### Hook name vocabulary
 
