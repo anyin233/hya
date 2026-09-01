@@ -47,7 +47,10 @@ assets.
 
 ### Rules
 
-- Use only semantic theme fields from `Theme`; no raw color literals in render code.
+- Prefer semantic `Theme` fields in hya-owned render code; raw literals are
+  reserved for retained upstream fallback/data assets (for example error
+  fallback values, generated logo art, or which-key bootstrap data). Do not add
+  new UI-state colors outside semantic theme roles.
 - Accent colors carry meaning and must not be decorative filler.
 - Overlays keep `backgroundPanel`; input keeps `backgroundElement`.
 
@@ -127,7 +130,10 @@ Terminal spacing derives from a single cell.
 - **Structure**: agent/model context plus grapheme-aware editor that soft-wraps by terminal width.
 - **Spacing**: height follows `prompt.max_height` (config), with a practical
   minimum of 6 rows; content scrolls inside the textarea when it exceeds the cap.
-- **States**: editable, disabled while running, hidden cursor when overlays are active, absent when a Subagent observation view is focused.
+- **States**: editable while idle; submitted prompts may remain queued while a
+  turn runs; disabled only while a permission/question overlay owns admission;
+  hidden cursor when overlays are active; absent when a Subagent observation
+  view is focused.
 - **Accessibility**: cursor remains visible inside the viewport for long or wide Unicode text when the composer is present.
 
 ### Overlay Prompt
@@ -164,5 +170,6 @@ Terminal spacing derives from a single cell.
 Tonal-shift.
 
 Surfaces use progressively lighter (or theme-appropriate) values. Borders are
-allowed only for modal overlays where focus and containment must be explicit.
-Shadows are not used.
+allowed for modal focus/containment and for semantic accents or separators such
+as user-message splits, the prompt boundary, and compaction dividers. Decorative
+framed cards are not used. Shadows are not used.

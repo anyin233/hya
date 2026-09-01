@@ -5,12 +5,14 @@
 
 ---
 
-hya is an event-sourced, terminal-first multi-agent coding agent written in
-Rust. It runs an event-sourced session engine, normalizes model providers
-(OpenAI-compatible, Anthropic, and Google) into one canonical event stream,
-executes tools behind a permission plane, and exposes the same core through an
-interactive TUI, headless CLI commands, and an HTTP/SSE server with an
-Compat-compatible surface.
+hya is an event-sourced, terminal-first multi-agent coding agent. Rust owns the
+runtime and launcher binaries; `hya` delegates to `hya-ts`, which supervises
+`hya-backend` and the TypeScript/OpenTUI frontend in `packages/hya-tui-ts`. The
+runtime normalizes OpenAI Chat/Responses/Codex, Grok Build, Anthropic, and Google
+provider routes into one canonical event stream, executes tools behind a
+permission plane, and exposes interactive, headless, HTTP/SSE, and
+Compat-compatible surfaces.
+
 
 If no provider is configured, hya still runs: it falls back to an offline
 "dev" provider that echoes prompts, so the whole stack is usable without API
@@ -19,9 +21,11 @@ keys while you set things up.
 ## Status
 
 hya is under active development (workspace version `0.36.7`,
-`MIT OR Apache-2.0`). It is not yet published as a prebuilt binary or to
-crates.io — build it from source as described below. APIs, config, and command
-surface may still change between versions.
+`MIT OR Apache-2.0`). The latest public binary release is `v0.35.1`; the
+checked-out `0.36.7` workspace is newer and is not published to crates.io. Build
+this checkout from source as described below. APIs, config, and command surfaces
+may still change between versions.
+
 
 ## Build From Source
 
@@ -38,8 +42,10 @@ hya
 ```
 
 The installer places adjacent `hya`, `hya-ts`, and `hya-backend` binaries plus
-the prepared TypeScript TUI runtime. Installing `crates/hya` alone is
-unsupported because `hya` delegates to those adjacent files.
+the prepared TypeScript TUI runtime and `lib/hya/compat-adapter/` with its
+production dependencies. Installing `crates/hya` alone is unsupported because
+`hya` delegates to those adjacent files.
+
 
 ## Configure a Provider and Log In
 
@@ -88,7 +94,7 @@ sample config.
   mode (`hya-backend -p "<goal>"`).
 - HTTP/SSE server (`hya-backend serve`) exposing native `/sessions/*` routes plus
   Compat-compatible route groups.
-- MCP servers, plugins (including an Compat plugin adapter), and a formatter
+- MCP servers, plugins (including a Compat plugin adapter), and a formatter
   plane, all driven from the same config.
 
 Public AgentBundles may remain static/process-free or supply selected
@@ -123,6 +129,8 @@ inspected and installed with `hya bundle info -f example.hyabundle` and
 | [docs/hya-pi-compat-comparison.md](docs/hya-pi-compat-comparison.md) | Feature comparison across hya, upstream stock Pi, and current Compat. |
 | [packages/hya-tui-ts/README.md](packages/hya-tui-ts/README.md) | TypeScript TUI package (requires a running backend + `--url`). |
 
-## License
-
-Licensed under either of MIT or Apache-2.0 at your option.
+The Rust workspace is licensed under either MIT or Apache-2.0 at your option.
+The TypeScript TUI carries its own MIT/upstream license, and the checked-out
+Compat adapter has no separate license file. Release payloads currently copy the
+TUI `LICENSE`; consult the repository license files for the complete applicable
+terms.

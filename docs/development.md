@@ -67,6 +67,12 @@ fails to render or tests fail to compile.
 
 **Test suites** under `packages/hya-tui-ts/test/`:
 
+The package currently contains 14 Bun test files. The Workflow suites are
+`workflow-presentation`, `workflow-sidebar`, and `workflow-pty`; the first two
+are focused presentation tests and the PTY suite requires built backend and TUI
+binaries. The full package suite remains the source of truth for the complete
+file list.
+
 | Suite | Role |
 | --- | --- |
 | `boundary` | Forbidden imports/paths and pinned dependency versions |
@@ -77,6 +83,9 @@ fails to render or tests fail to compile.
 | `agent-visibility` | Agent picker / `@` autocomplete rules |
 | `task-presentation` | Multi-member task row presentation |
 | `subagent-workspace` | Pane reducer / run tree |
+| `workflow-presentation` | Typed Workflow projection and presentation |
+| `workflow-sidebar` | Workflow sidebar plugin registration and rendering |
+| `workflow-pty` | Workflow presentation over a real backend PTY |
 | `pty-smoke` | End-to-end PTY smoke against a real backend |
 | `real-backend` | Real-backend permission/question flows |
 | `real-backend-agents` | Real-backend multi-agent roster |
@@ -104,22 +113,25 @@ bun test test/real-backend.test.ts test/task-presentation.test.ts test/real-back
 There is **no** Cargo alias named `xtask` in this workspace: invoke it as
 `cargo run -p xtask -- <task> …`. The binary uses a hand-rolled positional
 dispatcher (not clap): the first positional argument selects the task and every
-remaining argument is forwarded verbatim. An unrecognized task prints
-`usage: cargo xtask <sync-compat|migrate|startup-bench|matrix-check>` (usage
-text only — the working invocation is still `cargo run -p xtask -- …`) and
-exits 0.
+remaining argument is forwarded verbatim. The currently supported tasks are
+`sync-compat`, `migrate`, `startup-bench`, `matrix-check`, `package-bundle`, and
+`release-rehearsal`.
 
 | Task | Role |
 | --- | --- |
-| `sync-compat` | Import **supported MCP servers and skills** from an OpenCode/Compat config into hya config / skill roots (symlinks + MCP merge). Does **not** import providers or models — use `hya --import compat` for those (see [Configuration](configuration.md)). |
+| `sync-compat` | Import supported MCP servers and skills from an OpenCode/Compat config into hya config / skill roots. Does not import providers or models — use `hya --import compat` for those. |
 | `migrate` | Alias that dispatches to the same implementation as `sync-compat`. |
 | `startup-bench` | Startup latency benchmark. Honours `HYA_BACKEND_BIN` to select the binary under test. |
 | `matrix-check` | Validates `crates/hya-e2e/matrix.toml`. See [agent-matrix.md](testing/agent-matrix.md). |
+| `package-bundle` | Validates a source directory and atomically writes the canonical deterministic public `.hyabundle` package. |
+| `release-rehearsal` | Runs the pinned, non-publishing release build/package/smoke rehearsal, including archive, adapter, Argus, and runtime-prune checks. |
 
 ```sh
 cargo run -p xtask -- sync-compat --help   # args after the task name are forwarded
 cargo run -p xtask -- matrix-check
 cargo run -p xtask -- startup-bench
+cargo run -p xtask -- package-bundle <source-dir> <output.hyabundle>
+cargo run -p xtask -- release-rehearsal --workflow .github/workflows/release.yml --version 0.36.7 --target x86_64-unknown-linux-gnu --no-publish
 ```
 
 ### Example-only environment

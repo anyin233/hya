@@ -235,9 +235,11 @@ _Avoid_: preset pipeline, macro, script
 **Stage**:
 One graph node: a target Agent, a directive, optional display title, and direct
 predecessors. A Stage can be transient, iterative with an independent verifier,
-or bound to a resident actor key. Graph order defines deterministic Stage and
-join order; declared `{{input.<name>}}` values and predecessor evidence are its
-inputs.
+or bound to a resident actor key. It may carry an explicit request-local model
+assignment with a preferred base model, reasoning effort, and ordered fallback
+candidates; a loop verifier may carry its own independent assignment. Graph order
+defines deterministic Stage and join order; declared `{{input.<name>}}` values and
+predecessor evidence are its inputs.
 _Avoid_: step chain (Stages form a DAG), task (the work item), `needs` entry
 
 **WorkflowBundle**:
@@ -323,13 +325,29 @@ _Avoid_: TUI (too broad), all terminal UI
 ### Models
 
 **Category**:
-A logical model tier named in an agent file (e.g. `deep`, `quick`). Resolves to a concrete
-`provider/model` at spawn time via an ordered candidate list with failover to the first
-configured/healthy provider. Distinct from a **reasoning variant** (the `#variant` suffix on a
-concrete model ref).
+A logical model tier declared in the config `categories:` block. `CategoryRegistry`
+loads those entries and resolves a category to a concrete `provider/model` at
+spawn time via an ordered candidate list with failover to the first
+configured/healthy provider. Agent and Bundle model policies can reference a
+category but do not author the registry. Distinct from a **reasoning variant**
+(the `#variant` suffix on a concrete model ref).
 _Avoid_: tier (the old `tier-*` placeholders are removed), profile, model alias
 
 **Candidate**:
 One concrete `provider/model` ref in a category's ordered preference list. Candidates express
 **failover** (try the first that is servable), not a load-balancing pool.
 _Avoid_: fallback (that's the tail of the list, not the whole set), option
+
+**Workflow model assignment**:
+An optional Stage or loop-verifier route containing a suffix-free preferred model
+id, optional reasoning effort, and declaration-ordered fallback candidates. It
+is request-local and does not replace normal Agent, category, or provider
+selection when absent.
+_Avoid_: global fallback map, model variant (a `#variant` is not accepted here)
+
+**Workflow route outcome**:
+A bounded durable observation of the candidate selected or finally attempted for
+one provider stream group. It records Stage/member/role/iteration/step,
+candidate index, base model, reasoning label, and stable failure class, but no
+prompt, response content, credentials, or provider text.
+_Avoid_: provider transcript, model response, global route state
