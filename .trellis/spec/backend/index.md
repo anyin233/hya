@@ -6,7 +6,9 @@
 
 ## Overview
 
-This directory contains guidelines for backend development. Fill in each file with your project's specific conventions.
+This directory combines current backend contracts with a small number of
+explicit placeholders. Guides that still need project-specific content remain
+marked `To fill`; populated guides describe checked-in behavior.
 
 ---
 
@@ -15,9 +17,9 @@ This directory contains guidelines for backend development. Fill in each file wi
 | Guide | Description | Status |
 |-------|-------------|--------|
 | [Directory Structure](./directory-structure.md) | Module organization and file layout | To fill |
-| [Database Guidelines](./database-guidelines.md) | ORM patterns, queries, migrations | To fill |
-| [Error Handling](./error-handling.md) | Error types, handling strategies | To fill |
-| [Quality Guidelines](./quality-guidelines.md) | Code standards, forbidden patterns | To fill |
+| [Database Guidelines](./database-guidelines.md) | SQLite, event-log, admission, and migration contracts | Current |
+| [Error Handling](./error-handling.md) | Typed store/core/tool errors and fail-closed patterns | Current |
+| [Quality Guidelines](./quality-guidelines.md) | Executable backend quality and release contracts | Current |
 | [Task Tool](./task-tool.md) | Single/batch validation plus bounded background spawn admission and typed overload | Documented |
 | [Workflow Control](./workflow-control.md) | Event-sourced Workflow state, atomic admission, recovery ownership, surfaces, and SDK contracts | Documented |
 | [Logging Guidelines](./logging-guidelines.md) | Structured logging, log levels | To fill |

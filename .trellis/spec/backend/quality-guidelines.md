@@ -6,49 +6,10 @@
 
 ## Overview
 
-<!--
-Document your project's quality standards here.
-
-Questions to answer:
-- What patterns are forbidden?
-- What linting rules do you enforce?
-- What are your testing requirements?
-- What code review standards apply?
--->
-
-(To be filled by the team)
-
----
-
-## Forbidden Patterns
-
-<!-- Patterns that should never be used and why -->
-
-(To be filled by the team)
-
----
-
-## Required Patterns
-
-<!-- Patterns that must always be used -->
-
-(To be filled by the team)
-
----
-
-## Testing Requirements
-
-<!-- What level of testing is expected -->
-
-(To be filled by the team)
-
----
-
-## Code Review Checklist
-
-<!-- What reviewers should check -->
-
-(To be filled by the team)
+This guide records source-backed backend quality contracts. Each scenario names
+its trigger, executable signatures, invariants, failure cases, required tests,
+and unsafe alternatives. Apply the narrow scenarios that own the changed
+boundary; do not replace them with generic checklist prose.
 
 ---
 
@@ -448,6 +409,16 @@ engine.refresh_runtime(|candidate| {
 - Cargo command: `cargo build --release --locked -p hya -p hya-backend -p hya-ts --bins --target x86_64-unknown-linux-gnu`.
 - Release archive: `hya-<version>-x86_64-unknown-linux-gnu.tar.gz`.
 - Checksum file: `SHA256SUMS` generated beside the release archive.
+- Non-publishing rehearsal (requires Bun `1.3.14` and `actionlint` `1.7.12` on
+  `PATH`):
+
+```sh
+cargo run -p xtask -- release-rehearsal \
+  --workflow .github/workflows/release.yml \
+  --version 0.36.7 \
+  --target x86_64-unknown-linux-gnu \
+  --no-publish
+```
 
 ### 3. Contracts
 
@@ -458,6 +429,16 @@ engine.refresh_runtime(|candidate| {
 - Build provenance attestations are generated for the archive and checksum.
 - Third-party release actions are pinned to immutable commit SHAs.
 - The publishing job uses the `release` environment so repository settings can require manual approval.
+- Within the release archive, the payload includes the three shipped Rust
+  binaries, the prepared `lib/hya/hya-tui-ts` runtime, the production
+  `lib/hya/compat-adapter`, and the generated member
+  `examples/hya-argus-example.hyabundle`; it does not add `hya-updater`.
+- `scripts/package-argus-example.sh` generates that member from tracked source
+  `bundles/examples/argus-example`; no root `examples/` artifact is an input.
+- The rehearsal requires the explicit `--no-publish` guard, builds and packages
+  in a temporary directory, and never creates a tag or GitHub Release.
+- `release-rehearsal` owns the pinned `actionlint` and embedded-shell checks.
+  The current CI workflow does not run `actionlint` as a separate gate.
 
 ### 4. Validation & Error Matrix
 
@@ -468,22 +449,41 @@ engine.refresh_runtime(|candidate| {
 - `CHANGELOG.md` first heading differs from the tag version -> fail before build.
 - Build, archive, checksum, or packaged-binary smoke failure -> skip release publishing.
 - Missing release assets -> fail `softprops/action-gh-release` with `fail_on_unmatched_files: true`.
+- Missing `--no-publish` -> rehearsal rejects before validation or build.
+- `actionlint` missing or not version `1.7.12`, or Bun not version `1.3.14` ->
+  rehearsal fails its pinned prerequisite check.
+- Missing Compat adapter runtime, Argus package, locked production dependency,
+  or archive member -> package/rehearsal smoke fails before publication.
 
 ### 5. Good/Base/Bad Cases
 
 - Good: `v0.1.0`, `[workspace.package].version = "0.1.0"`, root `CHANGELOG.md` contains only `0.1.0` notes, archive and checksum pass smoke checks.
 - Base: first release has no historical changelog; keep `docs/changes/.gitkeep` and root `CHANGELOG.md` for the current version.
 - Bad: appending old release notes to root `CHANGELOG.md`; this publishes stale history as the GitHub Release body.
+- Good: the no-publish rehearsal validates the real workflow, exact payload,
+  launcher handoff, Compat adapter handshake, Argus package closure, and
+  checksum without publishing.
+- Base: a rehearsal uses temporary package/extract roots and leaves the source
+  checkout and release provider untouched.
+- Bad: validating only the three binaries and TUI runtime while omitting the
+  adapter or Argus archive from assertions.
 
 ### 6. Tests Required
 
-- Parse workflow YAML, run `actionlint`, and syntax-check every embedded shell `run` block.
-- Run the tag/version/changelog validation logic with a representative tag.
+- Parse workflow YAML, require `actionlint` `1.7.12`, and syntax-check every
+  embedded shell `run` block.
+- Run the tag/version/changelog validation logic with a representative tag and
+  require the explicit `--no-publish` rehearsal guard.
 - Run the release build command for the configured target.
-- Package all three binaries plus the prepared `hya-tui-ts` runtime, verify
-  `SHA256SUMS`, extract the archive, run each binary smoke, and assert the legal,
-  client-present, and server-absent runtime files.
-- Confirm third-party actions are pinned to commit SHAs and release publication uses the `release` environment.
+- Package all three binaries plus the prepared `hya-tui-ts` runtime and
+  production Compat adapter; verify `SHA256SUMS`, extract the archive, and run
+  each binary smoke.
+- Assert the TUI legal/client-present/server-absent runtime files and the Compat
+  adapter's locked files and initialize/shutdown handshake.
+- Generate `examples/hya-argus-example.hyabundle` inside the temporary package
+  from `bundles/examples/argus-example`, then assert its canonical root closure.
+- Confirm third-party actions are pinned to commit SHAs and release publication
+  uses the `release` environment.
 
 ### 7. Wrong vs Correct
 

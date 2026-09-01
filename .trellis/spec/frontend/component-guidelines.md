@@ -50,7 +50,8 @@ dialog, and transcript layouts on narrow terminals.
 
 ## Common Mistakes
 
-- Do not add new behavior to the retained Rust TUI for a shipped frontend change.
+- Do not reintroduce a Rust TUI or place shipped interactive behavior outside
+  `packages/hya-tui-ts`.
 - Do not bypass `@opencode-ai/sdk/v2` with a second HTTP client.
 - Do not duplicate synchronized server state in component-local stores.
 - Do not import excluded OpenCode server, worker, updater, web, or desktop code.

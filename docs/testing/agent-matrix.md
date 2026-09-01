@@ -62,6 +62,7 @@ bun test test/real-backend.test.ts test/task-presentation.test.ts test/real-back
 | T2.11 | Swarm `leave` | `tests/p16_swarm_mailbox.rs` | Negative: departed member never sees the post, bounded by a still-subscribed member **and** a later direct ping it did see |
 | T2.12 | Cross-unit `send` refused | `tests/p16_swarm_mailbox.rs` | Two units, two levels deep: sender's follow-up carries the scope refusal AND the payload never reaches the other unit ([ADR-0011](../adr/0011-hierarchy-scoped-mailbox.md)) |
 | T2.13 | User-authored Workflow fan-out/fan-in | `tests/p17_workflow_composition.rs` | One discovered Workflow spawns four distinct stage Sessions, joins both parallel implementations into review, and returns the final report to the lead |
+| T2.14 | Workflow Stage model routing and replay | `tests/p19_workflow_model_routing.rs` | Preferred 503 responses advance to the declared fallback with per-candidate effort; worker, verifier, and final route outcomes survive backend close/reopen without another provider request |
 
 ### Built-in tool coverage
 
@@ -104,57 +105,52 @@ The first three scenarios are the **enforced** Track T gate in
 running a blanket `bun test`. T3.4 is matrix-registered PTY coverage in the
 non-gating TUI smoke step.
 
-Full PTY matrix for every feature ID is **not** required for the PR gate; PTY
-remains presentation smoke (`pty-smoke.test.ts`). The rest of the Bun suite,
-PTY included, runs in a **non-gating** step (`continue-on-error: true`) so it
-still reports without being able to block the Rust gate. That is not a
-hypothetical concern: on 2026-08-05, run `31053432077` failed on a
-`pty-smoke.test.ts` timeout and skipped `fmt`, `clippy`, `build`, the entire
-workspace test suite, and `verify-no-http`. The identical commit passed the
-same step in two other runs.
+The package also has focused Workflow presentation, sidebar-registration, and
+PTY suites: `workflow-presentation.test.ts`, `workflow-sidebar.test.ts`, and
+`workflow-pty.test.ts`. They are package-level smoke/contract coverage rather
+than additional matrix IDs. `workflow-pty.test.ts` runs only with the non-gating
+full Bun suite; this does not expand the enforced Track T gate.
 
-### `pty-smoke.test.ts` is a known flake, and stays non-gating
+### PTY smoke policy and recorded timeout
 
-Status as of `fee38938`: `continue-on-error: true`. Observed once as
-`timed out waiting for root draft` (`test/pty-smoke.test.ts:589`, ~65s) on run
-`31053432077`; byte-identical code passed the same step in two other CI runs,
-and it passes 3/3 locally. No root cause established.
+Current policy is defined by `.github/workflows/ci.yml`: the three-file Track T
+set above is gating, while the full Bun suite is `continue-on-error: true`.
+Matrix-registered `pty-smoke.test.ts` (T3.4) and package-only
+`workflow-pty.test.ts` therefore report presentation coverage without blocking
+the Rust gate.
 
-It is deliberately not chased further: it can no longer block the Rust gate, and
-the cost of diagnosing a single-observation PTY timing flake is out of proportion
-to that. A red pty-smoke step is therefore **reported, not ignored** — check
-whether the failure is this timeout before reading it as a PTY regression.
+The retained historical observation is run `31053432077` on commit `fee38938`:
+the stable test `Linux PTY renders home, opens a session, and restores the
+terminal` timed out at its root-draft presentation oracle. Byte-identical code
+passed the same step in two other CI runs and passed 3/3 locally. No root cause
+was established. Read a new red PTY-smoke result as a regression only after
+checking whether it is the same presentation timeout.
 
-### Open flakes recorded but not fixed (2026-08-06)
+### Historical intermittent-failure observations (2026-08-06)
 
-Three tests are known to fail intermittently and are deliberately **not** fixed.
-Each is recorded with its observation count so a red run is recognised rather
-than re-investigated from scratch. None is a regression from the
-2026-08-06 hardening round.
+The following table records the observations known on 2026-08-06. It is not a
+claim that these tests still fail at the same rate on current HEAD. Stable test
+symbols replace volatile source-line anchors.
 
-| Test | Symptom | Evidence |
+| Test | Recorded symptom | Historical evidence |
 | --- | --- | --- |
-| `transient_sidecar_loss_interrupts_running_member_before_provider_release` (`crates/hya-core/tests/subagent.rs:3904`) | assertion failure | **1 CI observation** (run `31061204771`, on `573924f4`); 3 later CI runs on `main` green |
+| `transient_sidecar_loss_interrupts_running_member_before_provider_release` (`crates/hya-core/tests/subagent.rs`) | assertion failure | **1 CI observation** (run `31061204771`, on `573924f4`); 3 later CI runs on `main` green |
 | `foreign_promotion_is_wake_only` (`crates/hya-app/src/runtime.rs`) | `Elapsed(())` on a store-state poll | 4/30 runs, **only under artificial 24× CPU saturation**; never observed on CI |
-| `oauth::callback::tests::captures_code_and_state_from_callback` (`crates/hya-app/src/oauth/callback.rs:160`) | `ConnectionRefused` | 3/60 runs under the same artificial load; never observed on CI |
+| `captures_code_and_state_from_callback` (`crates/hya-app/src/oauth/callback.rs`) | `ConnectionRefused` | 3/60 runs under the same artificial load; never observed on CI |
 
-Notes that matter for whoever picks these up:
+At the time of the record:
 
-- The **first** is the only one with real CI evidence. It fired on the commit
-  *preceding* the hardening round and has not recurred in 3 subsequent runs, so
-  its rate on CI is at most ~1 in 4. Root cause **not established** — do not
-  assume the hardening round fixed it; nothing in that round touched
-  `hya-core`'s subagent tests.
-- The **second** busy-spins on `tokio::task::yield_now()` while polling the
-  store, which starves the very promotion task it waits for. Under 24×
-  oversubscription that is largely self-inflicted by the probe, not evidence of a
-  CI-relevant defect.
-- The **third** is a genuine race by inspection, independent of load: the test
-  binds a port, drops the listener, spawns a thread to re-bind, and then sleeps
-  50 ms before connecting. The correct fix is to remove the rebind window by
-  having `wait_for_callback` accept an already-bound `TcpListener` — **not** a
-  longer sleep and **not** a connect retry, either of which would convert an
-  intermittent failure into a slow one.
+- The first was the only failure with CI evidence. It fired on the commit
+  preceding the hardening round and did not recur in three subsequent runs.
+  Nothing in that round touched `hya-core`'s subagent tests, so the later green
+  runs did not prove a fix.
+- The second busy-spun on `tokio::task::yield_now()` while polling the store,
+  starving the promotion task under 24× oversubscription. That probe behavior
+  was not evidence of a CI-relevant defect.
+- The third had a rebind race by inspection: the test bound a port, dropped the
+  listener, spawned a thread to re-bind, and slept before connecting. The
+  durable fix would pass an already-bound `TcpListener` into
+  `wait_for_callback`, not add a longer sleep or retry.
 
 ## Track I (index-only)
 
