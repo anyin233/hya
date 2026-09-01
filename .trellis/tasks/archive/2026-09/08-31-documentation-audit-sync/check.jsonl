@@ -1,0 +1,12 @@
+{"file":".trellis/tasks/08-31-documentation-audit-sync/findings.md","reason":"Verification source for every objective drift, evidence anchor, deferred owner decision, immutable exclusion, and required final scan."}
+{"file":".trellis/tasks/08-31-documentation-audit-sync/research/independent-inventory.md","reason":"Independent cross-check of document inventory, stale claims, broken anchors/paths, no-edit references, and verification commands."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Review checklist for end-to-end source-to-document consistency across runtime, API, Workflow, providers, TUI, packaging, and tests."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Review for duplicate or conflicting route/tool/provider/TUI prose and for correct upstream-template labeling."}
+{"file":".trellis/spec/backend/index.md","reason":"Check populated-guide status and active backend documentation index correctness."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Check release verification, test matrix, provider, and backend contract wording against executable gates."}
+{"file":".trellis/spec/backend/workflow-control.md","reason":"Check Workflow event ownership, atomic admission, replay, surface, and focused-gate path references."}
+{"file":".trellis/spec/backend/task-tool.md","reason":"Check task-tool evidence and explicit shared test support path."}
+{"file":".trellis/spec/frontend/index.md","reason":"Check frontend guide index and TypeScript TUI ownership references."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Check TypeScript-only frontend boundary, SDK/sync ownership, test requirements, and release-runtime claims."}
+{"file":".trellis/spec/frontend/workflow-presentation.md","reason":"Check Workflow sidebar/projection wording, typed fields, and no-parallel-client presentation contract."}
+{"file":".trellis/workflow.md","reason":"Check active planning guidance, stale path references, and preservation of workflow-state breadcrumb contracts."}

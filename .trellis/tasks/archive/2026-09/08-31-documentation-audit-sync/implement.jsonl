@@ -1,0 +1,13 @@
+{"file":".trellis/tasks/08-31-documentation-audit-sync/findings.md","reason":"Merged repository-grounded stale-claim ledger, immutable boundaries, deferred decisions, and verification inventory for the documentation synchronization."}
+{"file":".trellis/tasks/08-31-documentation-audit-sync/research/independent-inventory.md","reason":"Independent read-only inventory of 681 Markdown files, 92 high-priority documents, concrete drift, broken paths, no-edit evidence, and targeted verification commands."}
+{"file":".trellis/spec/guides/index.md","reason":"Shared Trellis thinking-guide index required for cross-layer and reuse decisions before editing documentation contracts."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Defines the source-to-document data-flow and cross-layer boundary review required for API, Workflow, provider, packaging, and TUI claims."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Requires reuse of canonical route, source, test, and template authorities and identifies the upstream-template path boundary."}
+{"file":".trellis/spec/backend/index.md","reason":"Backend spec index and status contract are part of the active documentation drift identified by the audit."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Contains current release, testing, provider, and backend documentation contracts that must be synchronized without changing code behavior."}
+{"file":".trellis/spec/backend/workflow-control.md","reason":"Canonical durable Workflow admission, route, replay, and SDK contract; only its stale focused-gate path is planned for repair."}
+{"file":".trellis/spec/backend/task-tool.md","reason":"Current task-tool and shared-test-helper guidance, including the ambiguous support path requiring an explicit crate prefix."}
+{"file":".trellis/spec/frontend/index.md","reason":"Frontend spec index identifies the ownership and quality guides governing the TypeScript-only TUI documentation boundary."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Current TypeScript TUI ownership, testing, packaging, and forbidden retained-Rust patterns used to correct active spec wording."}
+{"file":".trellis/spec/frontend/workflow-presentation.md","reason":"Current typed Workflow projection and presentation contract; use as the authoritative no-duplication pattern for TUI docs."}
+{"file":".trellis/workflow.md","reason":"Active Trellis planning and path-reference guidance; stale workflow-state contract/parser links must be corrected without changing runtime behavior."}
