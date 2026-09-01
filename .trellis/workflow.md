@@ -137,8 +137,8 @@ python3 ./.trellis/scripts/get_context.py --mode phase --step <X.Y>  # detailed 
       matching phase's `[required · once]` walkthrough steps for sync
     - Run `trellis update` after editing to push the new bodies to
       downstream user projects (block-level managed replacement)
-    - Full runtime contract:
-      .trellis/spec/cli/backend/workflow-state-contract.md
+    - Full Workflow execution contract:
+      .trellis/spec/backend/workflow-control.md
 -->
 
 ## Phase Index
@@ -701,9 +701,13 @@ Add a `hooks` field to your `task.json`:
 
 Supported events: `after_create / after_start / after_finish / after_archive`. Note that `after_finish` ≠ a status change (it only clears the active-task pointer); use `after_archive` for "task is done" notifications.
 
-### Full contract
+### Per-turn `workflow-state` injection contract
 
-For the workflow state machine's runtime contract, the locations of all status writers, pseudo-statuses (`no_task` / `stale_<source_type>`), the hook reachability matrix, and other deep details, see:
+This file owns the canonical `[workflow-state:STATUS]` blocks used for Trellis
+per-turn breadcrumbs. The blocks describe Trellis task status and phase routing,
+not the product Workflow execution contract.
 
-- `.trellis/spec/cli/backend/workflow-state-contract.md` — runtime contract + writer table + test invariants
-- `.trellis/scripts/inject-workflow-state.py` — actual parser (reads workflow.md only, no embedded text)
+The actual platform implementations parse these blocks:
+
+- `.codex/hooks/inject-workflow-state.py` — Python hook implementation.
+- `.omp/extensions/trellis/index.ts` — Oh My Pi implementation.

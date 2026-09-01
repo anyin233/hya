@@ -29,7 +29,8 @@ cargo test --workspace
 
 ## Forbidden Patterns
 
-- Reconnecting a shipped binary to the retained Rust TUI renderer.
+- Reintroducing a Rust TUI renderer or routing shipped interactive behavior
+  outside `packages/hya-tui-ts`.
 - Direct backend process discovery or spawning inside the TypeScript package.
 - A second HTTP/SSE client or projection beside the existing SDK/sync contexts.
 - Imports from excluded OpenCode backend, worker, updater, web, or desktop code.
@@ -58,7 +59,8 @@ archive smoke tests described below.
 
 ## Code Review Checklist
 
-- Does the change live in `packages/hya-tui-ts`, not the retained Rust UI?
+- Does the change remain in `packages/hya-tui-ts`, the sole interactive
+  frontend implementation?
 - Does the TUI remain readable at 80 columns?
 - Are status labels understandable without color?
 - Do new tests fail on the old behavior and pass on the new behavior?

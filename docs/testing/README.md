@@ -16,7 +16,7 @@ Machine registry of PR-matrix IDs: [`../../crates/hya-e2e/matrix.toml`](../../cr
 
 | Page | Purpose |
 | --- | --- |
-| [Agent feature matrix](agent-matrix.md) | Tier 0–2 scenario inventory (Track P/T implemented + Track I index-only) |
+| [Agent feature matrix](agent-matrix.md) | T0–T3 scenario inventory (Track P/T implemented + Track I index-only) |
 | [Process E2E harness](process-e2e.md) | How `hya-e2e` builds environments, scripts FakeLlm, and asserts outcomes |
 | [CI wiring](ci-agent-e2e-snippet.yml) | Historical note — Track P and Track T are now enforced directly in `.github/workflows/ci.yml` |
 
@@ -27,16 +27,20 @@ From the workspace root (see also [Development](../development.md)):
 ```sh
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace --exclude hya-e2e
+cargo test --workspace --jobs 1 --exclude hya-e2e
 ```
 
 `--exclude hya-e2e` matches CI: Track P spawns real backend processes and is run
-separately below with `--test-threads=1`.
+separately below with `--test-threads=1`. CI also uses `--jobs 1` to cap
+concurrent workspace-test resource use; local runs may omit that job cap.
 
-All three tracks are **enforced** in `.github/workflows/ci.yml`. Each gate step
-carries `if: ${{ !cancelled() }}`, so a failure in one step no longer skips the
-rest — a red `fmt` used to abort the job before the test step ever ran, which
-hid six failing tests for weeks.
+CI exercises all three tracks in different modes, but they are not all separate
+gates: Track P and the three-file Track T set are enforced; Track I remains an
+index-only classification within the Rust suite; and the remaining Track T
+coverage, including PTY smoke, runs in a non-gating step. Each gate step carries
+`if: ${{ !cancelled() }}`, so a failure in one step no longer skips the rest — a
+red `fmt` used to abort the job before the test step ever ran, which hid six
+failing tests for weeks.
 
 Process agent E2E needs a built backend binary (not always present after a bare
 `cargo test` matrix without prior build):
@@ -57,8 +61,9 @@ bun test test/real-backend.test.ts test/task-presentation.test.ts test/real-back
 ## Coverage
 
 Line-coverage baseline and how to regenerate it:
-[coverage-baseline.md](coverage-baseline.md). Current workspace figure is
-**85.56% lines** (`hya-e2e` excluded).
+[coverage-baseline.md](coverage-baseline.md). The recorded workspace baseline is
+**85.56% lines** (`hya-e2e` excluded), measured on 2026-08-05 at commit
+`1a7db256`; it is not a current-HEAD coverage claim.
 
 ```sh
 cargo llvm-cov --no-report --workspace --exclude hya-e2e --no-fail-fast

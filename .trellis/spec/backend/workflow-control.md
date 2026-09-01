@@ -104,7 +104,9 @@ A governed Stage failure is a successful transport response with a terminal fail
 - `hya-server`: native/legacy/v2 typed and slash parity; zero parent-provider calls; shared admission race tests; hydration availability; structured error mapping; dual Event delivery.
 - `hya-sdk` and `hya-native`: mirror conformance, canonical activity join, and structured non-2xx status/code/message/body preservation.
 
-Run the focused gate listed in `.trellis/tasks/08-28-durable-workflow-control/implement.md` after a contract change.
+Run the focused gate listed in
+`.trellis/tasks/archive/2026-08/08-28-durable-workflow-control/implement.md`
+after a contract change.
 
 ### 7. Wrong vs Correct
 

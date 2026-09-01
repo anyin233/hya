@@ -300,8 +300,8 @@ Outside `hya-app`, mirror the same shape rather than reaching for
   is also what a never-debited or wholly-dropped root reads. Use the debit entry
   instead — see "Proving an exact governor release" below.
 - Copying a verified-runtime helper into one test file instead of the shared
-  `tests/support/`. That exact drift is what left `nested_spawn_tree.rs` broken
-  while `spawn_admission.rs` passed.
+  `crates/hya-app/tests/support/`. That exact drift is what left
+  `nested_spawn_tree.rs` broken while `spawn_admission.rs` passed.
 
 ---
 

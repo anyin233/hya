@@ -69,18 +69,20 @@ even when a test fails.
   real binary — again, mostly Track P territory.
 - One test target (`-p hya-app --lib`) failed during collection. It is the
   known load-dependent flake `recovered_promotions_reconstruct_each_parent_binding`
-  (see `.trellis/tasks/08-05-land-swarm-branch-to-main/findings.md`). Its effect
-  on the totals is negligible, but the numbers above come from a run with one
-  red target, not a fully green one.
+  (see
+  `.trellis/tasks/archive/2026-08/08-05-land-swarm-branch-to-main/findings.md`).
+  Its effect on the totals is negligible, but the numbers above come from a
+  run with one red target, not a fully green one.
 - These are **not** a quality target. This is a baseline. Nothing in this task
   adds tests to move it.
 
 ## Track P's contribution — measured
 
-Track P (`crates/hya-e2e`: 18 binaries, 27 scenarios) is excluded from the
-workspace run above, so it is measured separately here. It is the only suite
-that drives the **real** `hya-backend` binary over HTTP, so it is the only one
-that can cover the process/serving path end to end.
+At the 2026-08-06 measurement, Track P (`crates/hya-e2e`: 18 binaries,
+27 scenarios) was excluded from the workspace run above and measured
+separately. It was the measured suite that drove the **real** `hya-backend`
+binary over HTTP and covered that process/serving path end to end. These counts
+describe commit `3f18e6e5` plus the noted change, not the current matrix.
 
 | | |
 | --- | --- |
@@ -167,7 +169,9 @@ Totals: lines 38.86%, regions 36.71%, functions 35.18%.
   built and instrumented. Do not read 38.9% as "Track P covers 38.9% of the
   workspace" — the two percentages have different denominators and are not
   additive. Use the per-crate rows, not the total.
-- **`hya-plugin` at 2.8%** is genuine: no Track P scenario loads a plugin.
+- **`hya-plugin` at 2.8%** was genuine for this measured commit: no recorded
+  Track P scenario loaded a plugin. Current P18 coverage was added later; it
+  does not change this historical row.
 
 ### Cost
 

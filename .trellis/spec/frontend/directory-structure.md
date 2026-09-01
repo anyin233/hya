@@ -15,8 +15,8 @@ packages around it are process boundaries, not presentation layers:
 - `packages/hya-tui-ts` owns terminal rendering and interaction.
 - `hya-backend` owns runtime composition and the HTTP/SSE surface.
 
-`crates/hya-tui` and `crates/hya-tui-lib` are retained compatibility crates. No
-shipped binary launches them, so new interactive behavior does not belong there.
+No Rust interactive TUI crates are retained. New terminal rendering and
+interaction behavior belongs only in `packages/hya-tui-ts`.
 
 ---
 
