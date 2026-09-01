@@ -65,7 +65,7 @@ The envelope is the unit stored in SQLite replay results and streamed over SSE
 for the native event bus. Compat permission frames use a separate payload shape
 (see [Permission SSE payloads](#permission-sse-payloads-server-side)).
 
-### Full `Event` catalog (45 variants)
+### Full `Event` catalog (54 variants)
 
 Reducer effects:
 
@@ -90,6 +90,24 @@ Reducer effects:
 | `model_switched` | `session`, `message: Option<MessageId>`, `model: ModelRef` | Fold: session model only. Same `message` semantics as `agent_switched` (fresh synthetic id on emit). |
 | `session_status` | `session`, `status: Value` | **no-op** — free-form status ping; bridged to compat `session.status` |
 | `command_executed` | `session`, `command: String`, `arguments: String`, `message: MessageId` | **no-op** — records that a `/slash` command produced that user message; bridged to compat `command.executed` |
+
+#### Workflow lifecycle and routing
+
+| Wire `type` | Payload fields | Reducer |
+| --- | --- | --- |
+| `workflow_selected` | `session`, `workflow: WorkflowIdentity` | Fold: replace the selected Workflow identity; transcript messages are preserved. |
+| `workflow_run_started` | `session`, `run`, `workflow`, `request_hash`, `owner`, `stages: Vec<WorkflowStagePlan>` | Fold: create the durable run and declaration-ordered plan. The plan carries display/provenance metadata, not directives or outputs. |
+| `workflow_stage_started` | `session`, `run`, `stage` | Fold: mark one compiled Stage active. |
+| `workflow_stage_member_linked` | `session`, `run`, `stage`, `member`, `role`, `iteration` | Fold: link the canonical worker or verifier Member to a Stage activation. |
+| `workflow_stage_route_outcome` | `session`, `run`, `stage`, `member`, `role`, `iteration`, `step`, `candidate_index`, `model`, `reasoning`, `failure_class` | Fold: append one bounded candidate selection/failure observation for a provider stream group. It contains no prompt, response, credential, or provider text. |
+| `workflow_stage_finished` | `session`, `run`, `stage`, `status` | Fold: terminalize one Stage. |
+| `workflow_run_finished` | `session`, `run`, `status`, optional `error` | Fold: terminalize the run with bounded error detail when present. |
+
+Workflow events are appended to the owning root Session log. Stage/member
+transcripts remain in child Sessions; the route outcome is replay metadata, not
+model output. Explicit Stage or loop-verifier assignments use a suffix-free
+preferred model plus ordered fallback candidates and per-candidate reasoning.
+
 
 #### Message lifecycle
 
@@ -178,6 +196,20 @@ the root.
 `SubagentMode`: `transient` \| `resident`.  
 `RosterStatus`: `idle` \| `busy` \| `done` \| `failed`.
 
+#### Context, fork, and reduction observability
+
+| Wire `type` | Payload fields | Reducer |
+| --- | --- | --- |
+| `context_compacted` | `session`, summary `message`, `strategy`, `from_message`, `to_message`, `folded_count`, `input_tokens_est`, `threshold` | **no-op** for projection; durable checkpoint marker. The system message carries summary output and the range points to the folded log entries. |
+| `session_forked` | `session`, `source`, optional `before_message` | **no-op** for projection; records a fork edge separate from subagent `SessionCreated.parent`. Copied messages receive fresh ids. |
+| `context_evicted` | `session`, `evicted_parts`, `tokens_before`, `tokens_after`, `threshold` | **no-op**; request-local tool-output reduction. The event log retains full outputs. |
+
+`ContextCompacted` is durable replay evidence and a baseline/checkpoint marker,
+not a deletion of the source transcript. A projection reader uses the summary
+message and the pointer range; an offline reader can reconstruct the exact
+folded input from the event log. `ContextEvicted` records only what was omitted
+from one request.
+
 #### Errors and forward compatibility
 
 | Wire `type` | Payload fields | Reducer |
@@ -196,6 +228,9 @@ but `Projection::apply_event` ignores them:
 - `step_finished`
 - `text_end`
 - `tool_input_delta`
+- `context_compacted`
+- `session_forked`
+- `context_evicted`
 - `error`
 - `unknown`
 
@@ -390,6 +425,14 @@ another store of attachments).
 - `resident_work_started` records epoch and inbox boundary before a resident
   turn may dispatch; a later idle/terminal activity clears it and advances the
   roster's durable resident cursor.
+- Workflow lifecycle events fold the selected identity, run plan, Stage/member
+  links, bounded route outcomes, and terminal statuses into the Workflow
+  projection. `WorkflowStageRouteOutcome` is one observation per provider
+  stream group and never carries transcript content.
+- `context_compacted`, `session_forked`, and `context_evicted` remain durable
+  observability records rather than projection state transitions; the
+  `context_compacted` system message and pointer range provide the replay
+  checkpoint.
 
 ### `Projection::apply`
 

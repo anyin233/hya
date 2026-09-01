@@ -58,7 +58,7 @@ When `--prompt` is present, it takes precedence over subcommand dispatch.
 ## `hya` frontend
 
 ```sh
-hya [PROJECT] [OPTIONS]
+hya [OPTIONS] [PROJECT] [COMMAND]
 ```
 
 `hya` is the canonical Unix entrypoint. It delegates to the adjacent `hya-ts`
@@ -125,10 +125,10 @@ Common slash commands (aliases in parentheses):
 | --- | --- | --- |
 | `/sessions` | `/resume`, `/continue` | Open the session-list dialog |
 | `/new` | `/clear` | Start a new session (home route) |
-| `/models` | `/mo` | Open the model picker (`/mo` biases fuzzy match away from `/move`) |
+| `/models` | `/mo`, `/model` | Open the model picker (`/mo` biases fuzzy match away from `/move`) |
 | `/agents` | | Open the agent picker |
 | `/mcps` | | MCP enable/disable dialog |
-| `/variants` | | Model variant picker (hidden when the model has none) |
+| `/variants` | `/think` | Model variant picker (hidden when the model has none) |
 | `/status` | | Status dialog |
 | `/themes` | | Theme list |
 | `/help` | | Help dialog |
@@ -161,12 +161,12 @@ a built-in command catalog from
 
 **Expandability.** Every built-in is constructed with `expandable: false`.
 Server-side `expand_prompt` only expands entries with `expandable: true`
-(user-defined commands and skills). For the seven built-ins below, admitting a
-slash command therefore uses the literal admitted text
-`/<name>` or `/<name> <arguments>` — **not** the stored AGENTS.md / review
-template body. Catalog construction still substitutes the current workdir for
-`${path}` inside the *stored* init/review template strings, but that body is not
-applied by `expand_prompt` while `expandable` remains false.
+(user-defined commands and skills). For the eight built-ins below, admitting a
+slash command therefore uses the literal admitted text `/<name>` or
+`/<name> <arguments>` — **not** the stored AGENTS.md / review template body.
+Catalog construction still substitutes the current workdir for `${path}` inside
+the *stored* init/review template strings, but that body is not applied by
+`expand_prompt` while `expandable` remains false.
 
 | Command | Description | Catalog notes |
 | --- | --- | --- |
@@ -177,6 +177,7 @@ applied by `expand_prompt` while `expandable` remains false.
 | `/clear` | Start a fresh session | Built-in, not expandable; template is `/clear`. |
 | `/sessions` | Switch session | Built-in, not expandable; template is `/sessions`. |
 | `/think $ARGUMENTS` | Set reasoning effort | Built-in, not expandable; template is `/think $ARGUMENTS`. |
+| `/workflow $ARGUMENTS` | Inspect or run workflows | Built-in, not expandable; template is `/workflow $ARGUMENTS`. |
 
 User-defined commands from config and on-disk command sources are merged with
 this list via upsert: a user-defined command with the same name **overrides** the
@@ -333,7 +334,7 @@ loopback port (`127.0.0.1:0`) and hands the terminal to the `hya` frontend.
 Frontend resolution order: `HYA_FRONTEND_BIN`, else the newest of
 `target/release/hya` and `target/debug/hya` under the workspace, else `hya` on
 `PATH`. For this path the empty default `--db` is remapped to
-`$XDG_STATE_HOME/hya/sessions.db` (see [Global Options](#db-empty-string-semantics)).
+`$XDG_STATE_HOME/hya/sessions.db` (see [Global Options](#--db-empty-string-semantics)).
 
 **On a non-TTY stdout:** does **not** start a backend or frontend. It prints
 

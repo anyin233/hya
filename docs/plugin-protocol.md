@@ -4,6 +4,13 @@ Wire contract for native stdio plugins hosted by `hya-plugin`. This is the same
 JSON-RPC 2.0 ABI used by AgentBundle sidecars; the framing here is the contract a
 plugin author implements.
 
+This document defines the process-plugin wire surface only. The package-level
+contribution inventory is broader: `AgentBundle` and `WorkflowBundle` carry
+agents, Workflow source, tools, Skills, MCP declarations, hooks, and extension
+resources through prepared payloads. See [AgentBundle authoring](agent-bundle-authoring.md)
+and [Workflows](workflows.md); those package resources are not additional JSON-RPC
+methods.
+
 Sources:
 [`crates/hya-plugin/src/protocol.rs`](../crates/hya-plugin/src/protocol.rs),
 [`crates/hya-plugin/src/messages.rs`](../crates/hya-plugin/src/messages.rs),

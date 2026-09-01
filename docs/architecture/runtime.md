@@ -159,9 +159,11 @@ side effects:
 
 Workflow state remains inside the Session event log and shared Projection. The
 durable sequence is `WorkflowSelected`, `WorkflowRunStarted`, Stage start/member
-link/finish events, then `WorkflowRunFinished`. Selection changes only the
-Workflow projection and preserves every transcript message. Stage output and
-directives remain in child Sessions rather than the owning root event payloads.
+link events, one bounded `WorkflowStageRouteOutcome` per explicit provider stream
+group, Stage finish events, then `WorkflowRunFinished`. Selection changes only
+the Workflow projection and preserves every transcript message. Stage output and
+directives remain in child Sessions rather than the owning root event payloads;
+route outcomes carry model/effort/failure metadata, not prompts or responses.
 
 `hya-app::WorkflowControl` is the one orchestration adapter for the CLI, Agent
 tool, native `/workflow` command, HTTP routes, SDK, and in-process transport. It

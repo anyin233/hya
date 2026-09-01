@@ -10,12 +10,12 @@ after permission checks pass.
 
 - `Tool`: name, schema, async execute.
 - `ToolCtx`: permission plane, interaction/spawner/todo/skill/websearch/LSP/
-  formatter planes, session ids, workdir, cancellation token.
+  formatter/`WorkflowPlane` planes, session ids, workdir, cancellation token.
 - `ToolRegistry`: name-to-tool map, aliases, and model-facing schemas.
 
-`ToolRegistry::builtins()` installs **26** canonical schema names before model
+`ToolRegistry::builtins()` installs **28** canonical schema names before model
 filtering
-([`tool.rs:311-347`](../../crates/hya-tool/src/tool.rs#L311-L347)). The table
+([`tool.rs:329-361`](../../crates/hya-tool/src/tool.rs#L329-L361)). The table
 below is the complete inventory. Advertised field names are the model-facing
 JSON schema `required`/`properties` keys. Short spellings such as `path` for
 `filePath` (and `old`/`new`/`replace_all` for edit) are listed under schema
@@ -42,6 +42,8 @@ still names the camelCase fields.
 | `skill` | `{ "name": string }` (name only; a path is not accepted) | `<skill_content>` envelope with body, `file://` base dir, and sampled files (cap 10). See also [`docs/skills.md`](../skills.md). |
 | `list_agents` | (none) | Agent definitions usable by `task`. |
 | `task` | `{ "description", "prompt", "subagent_type"?, "category"?, "model"?, "task_id"?, "command"?, "background"?, "resident"?, "inline_agent"?, "members"?: [...] }` | Foreground/background subagent outcomes. |
+| `workflow` | `{ "action"?: "list"|"info"|"select"|"run"|"state", "name"?: string, "expected_revision"?: string, "inputs"?: object, "run"?: string }` | Shared app-owned Workflow control for list/info/select/run/state; execution uses the durable Session path. |
+| `announce` | `{ "body": string }` | One-way announcement to the caller's direct reports; recipients reply with ordinary mail. |
 | `todowrite` (`todo`) | `{ "todos": [{ "content", "status", "priority" }] }` | Latest todo snapshot for the session (replace, not append). |
 | `plan_exit` (`plan`) | plan status input | Plan-mode completion signal. |
 | `send` | `{ "to": string, "body": string, "kind"?: "message"\|"announcement" }` | Mail delivery receipt. |

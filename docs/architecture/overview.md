@@ -30,11 +30,13 @@ TUI / API clients / transcript renderers
 | Layer | Crates | Responsibility |
 | --- | --- | --- |
 | Protocol | [`hya-proto`](../../crates/hya-proto) | Shared ids, events, messages, DTOs, and projection reducer. |
-| Model I/O | [`hya-provider`](../../crates/hya-provider) | Normalize OpenAI-compatible, Anthropic, Google, fake, and dev providers into event streams. |
+| Model I/O | [`hya-provider`](../../crates/hya-provider) | Normalize OpenAI Chat/Responses/Codex, Grok Build, Anthropic, Google, fake, and dev providers into event streams. |
+| Workflow | [`hya-workflow`](../../crates/hya-workflow) | Compile and validate Workflow sources into immutable normalized plans and revisions. |
 | Tools | [`hya-tool`](../../crates/hya-tool), [`hya-mcp`](../../crates/hya-mcp), [`hya-plugin`](../../crates/hya-plugin) | Define tool schemas, execute builtin/MCP/plugin tools, and enforce permissions. |
 | Persistence | [`hya-store`](../../crates/hya-store) | Append and replay events from SQLite; fold projections on read. |
-| Runtime | [`hya-core`](../../crates/hya-core) | Own sessions, turn execution, event publication, hooks, compaction, goal/loop/team primitives. |
-| Surfaces | [`hya`](../../crates/hya), [`hya-ts`](../../crates/hya-ts), [`hya-tui-ts`](../../packages/hya-tui-ts), [`hya-backend`](../../crates/hya-backend), [`hya-server`](../../crates/hya-server), [`hya-client`](../../crates/hya-client), [`hya-plugin-compat`](../../crates/hya-plugin-compat) | Expose the runtime through the TypeScript TUI, CLI, native/Compat HTTP/SSE, typed client APIs, and the Compat plugin adapter. |
+| Runtime | [`hya-core`](../../crates/hya-core) | Own sessions, turn execution, durable Workflow execution/replay, event publication, hooks, compaction, goal/loop/team primitives. |
+| Composition/control | [`hya-app`](../../crates/hya-app), [`hya-bundle`](../../crates/hya-bundle) | Build runtime bindings, admit Workflow commands, and model AgentBundle/WorkflowBundle packages. |
+| Surfaces/transports | [`hya`](../../crates/hya), [`hya-ts`](../../crates/hya-ts), [`hya-backend`](../../crates/hya-backend), [`hya-server`](../../crates/hya-server), [`hya-client`](../../crates/hya-client), [`hya-sdk`](../../crates/hya-sdk), [`hya-native`](../../crates/hya-native), [`hya-plugin-compat`](../../crates/hya-plugin-compat), [`hya-tui-ts`](../../packages/hya-tui-ts) | Expose launcher, CLI, native/Compat HTTP/SSE, typed/native clients, Compat adapter, and the TypeScript/OpenTUI frontend. |
 
 ## Turn Flow
 
@@ -75,6 +77,9 @@ The event log is the source of truth. This gives hya a few useful properties:
 - `hya-backend -p` runs goal mode with an independent model-backed evaluator.
 - `hya-backend serve` exposes HTTP and SSE over the same engine.
 - `hya-backend tail-session` replays JSON envelopes from a persisted SQLite event log.
-- `hya-backend models`, `login`, `auth`/`providers`, `agent`, `sessions`, and `rpc`
-  expose local catalogs, auth tokens, session listing, and JSONL integration
-  modes.
+- `hya-backend models`, `login`, `auth`/`providers`, `agent`, `sessions`, and
+  `rpc` expose local catalogs, auth tokens, session listing, and JSONL
+  integration modes.
+- `hya-backend workflow` and native `/sessions/:id/workflow` use the same
+  app-owned `WorkflowControl` path; route assignment and bounded outcomes remain
+  in the canonical event stream.

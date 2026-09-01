@@ -21,9 +21,9 @@ canonical tools contribute schemas.
 
 ## Builtin inventory
 
-`ToolRegistry::builtins()` installs 26 canonical schema names before model
+`ToolRegistry::builtins()` installs 28 canonical schema names before model
 filtering. The inventory below is complete for that constructor.
-([crates/hya-tool/src/tool.rs:313-347](../../crates/hya-tool/src/tool.rs#L313-L347))
+([crates/hya-tool/src/tool.rs:329-361](../../crates/hya-tool/src/tool.rs#L329-L361))
 
 | Area | Canonical schema names | Role |
 | --- | --- | --- |
@@ -31,7 +31,7 @@ filtering. The inventory below is complete for that constructor.
 | Local discovery | `ls`, `glob`, `find`, `grep`, `lsp` | List directories, match paths, search text, or query language servers. |
 | Commands | `shell`, `bash` | Two advertised names backed by the same shell implementation. |
 | Human/session interaction | `question`, `ask_user`, `todowrite`, `plan_exit`, `invalid` | Ask structured or simple questions, update session todos, request a plan-mode transition, or represent invalid tool arguments. |
-| Agents and teams | `skill`, `list_agents`, `task`, `send`, `announce`, `roster`, `channels`, `join`, `leave` | Load skills, discover/spawn agents, and use unit mail/channels ([ADR-0011](../adr/0011-hierarchy-scoped-mailbox.md)). |
+| Agents and teams | `skill`, `list_agents`, `task`, `workflow`, `send`, `announce`, `roster`, `channels`, `join`, `leave` | Load skills, discover/spawn agents, execute governed Workflow commands, and use unit mail/channels ([ADR-0011](../adr/0011-hierarchy-scoped-mailbox.md)). |
 | Network | `webfetch`, `websearch` | Fetch a URL or run provider-backed web search. |
 
 ### Question and ask_user
@@ -174,10 +174,9 @@ implementation uses `sh -c`, defaults to 120 seconds (`DEFAULT_TIMEOUT_MS =
 120_000`), and caps returned command output at 16 KiB while saving the full
 output under `.hya/tool-output/`. An optional `workdir` outside the session
 workdir raises `Action::ExternalDirectory` on `<cwd>/*`.
-([crates/hya-tool/src/tool.rs:313-347](../../crates/hya-tool/src/tool.rs#L313-L347),
-[crates/hya-tool/src/shell.rs:17-65](../../crates/hya-tool/src/shell.rs#L17-L65),
-[crates/hya-tool/src/shell.rs:38-181](../../crates/hya-tool/src/shell.rs#L38-L181),
-[crates/hya-tool/src/shell.rs:250-261](../../crates/hya-tool/src/shell.rs#L250-L261))
+([crates/hya-tool/src/tool.rs:329-361](../../crates/hya-tool/src/tool.rs#L329-L361),
+[`crates/hya-tool/src/shell.rs`](../../crates/hya-tool/src/shell.rs),
+[`crates/hya-tool/src/tool.rs`](../../crates/hya-tool/src/tool.rs))
 
 ### Webfetch
 
@@ -224,15 +223,13 @@ Five legacy aliases resolve during execution but do not appear in
 
 This behavior is explicit in registration and covered by a test that requires
 the canonical names to be visible and the aliases to remain hidden.
-([crates/hya-tool/src/tool.rs:313-347](../../crates/hya-tool/src/tool.rs#L313-L347),
-[crates/hya-tool/src/tool.rs:484-490](../../crates/hya-tool/src/tool.rs#L484-L490),
-[crates/hya-tool/tests/tool.rs:111-146](../../crates/hya-tool/tests/tool.rs#L111-L146))
-
+([`crates/hya-tool/src/tool.rs:329-361`](../../crates/hya-tool/src/tool.rs#L329-L361),
+[`crates/hya-tool/tests/tool.rs:111-146`](../../crates/hya-tool/tests/tool.rs#L111-L146))
 There is therefore no advertised local-file tool named `search`. The hidden
 name `search` resolves to **web search**, not GREP. Local discovery is exposed
 as `glob`, `find`, and `grep`; provider-backed internet search is advertised as
 `websearch` when enabled.
-([crates/hya-tool/src/tool.rs:313-347](../../crates/hya-tool/src/tool.rs#L313-L347))
+([`crates/hya-tool/src/tool.rs:329-361`](../../crates/hya-tool/src/tool.rs#L329-L361))
 
 ## Advertisement and naming
 
