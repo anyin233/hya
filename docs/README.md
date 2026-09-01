@@ -1,9 +1,10 @@
 # hya Documentation
 
-hya is a Rust workspace for a terminal-first coding agent. It runs an
-event-sourced session engine, normalizes model providers into one event stream,
-executes tools behind a permission plane, and exposes the same core through an
-interactive TUI, headless CLI commands, and an HTTP/SSE server.
+hya is an event-sourced, terminal-first coding agent. Rust owns the runtime,
+launcher, server, and persistence boundaries; `packages/hya-tui-ts` owns the
+interactive TypeScript/OpenTUI frontend. Workflow compilation, durable
+execution, package models, and the HTTP/SSE/Compat surfaces are documented
+separately below.
 
 This documentation is split into user-facing guides and maintainer-facing
 architecture notes.
@@ -104,8 +105,13 @@ If you want to understand the codebase:
 ## Source Entrypoints
 
 - Workspace manifest: [`../Cargo.toml`](../Cargo.toml)
-- CLI binary: [`../crates/hya-backend/src/main.rs`](../crates/hya-backend/src/main.rs)
-- Core engine: [`../crates/hya-core/src/engine.rs`](../crates/hya-core/src/engine.rs)
+- Exec shim: [`../crates/hya/src/main.rs`](../crates/hya/src/main.rs)
+- Frontend supervisor: [`../crates/hya-ts/src/main.rs`](../crates/hya-ts/src/main.rs)
+- Backend CLI/runtime: [`../crates/hya-backend/src/main.rs`](../crates/hya-backend/src/main.rs)
+- Workflow compiler and normalized plans: [`../crates/hya-workflow/src/lib.rs`](../crates/hya-workflow/src/lib.rs)
+- Core Workflow execution: [`../crates/hya-core/src/workflow/mod.rs`](../crates/hya-core/src/workflow/mod.rs)
+- Workflow control/admission: [`../crates/hya-app/src/workflow_control.rs`](../crates/hya-app/src/workflow_control.rs)
+- Bundle models/catalog: [`../crates/hya-bundle/src/lib.rs`](../crates/hya-bundle/src/lib.rs)
 - Protocol types: [`../crates/hya-proto/src/lib.rs`](../crates/hya-proto/src/lib.rs)
 - Providers: [`../crates/hya-provider/src/lib.rs`](../crates/hya-provider/src/lib.rs)
 - Tools: [`../crates/hya-tool/src/lib.rs`](../crates/hya-tool/src/lib.rs)
@@ -113,11 +119,9 @@ If you want to understand the codebase:
 - Plugin host: [`../crates/hya-plugin/src/lib.rs`](../crates/hya-plugin/src/lib.rs)
 - Compat adapter: [`../crates/hya-plugin-compat/README.md`](../crates/hya-plugin-compat/README.md)
 - Store: [`../crates/hya-store/src/lib.rs`](../crates/hya-store/src/lib.rs)
-- Server: [`../crates/hya-server/src/lib.rs`](../crates/hya-server/src/lib.rs)
-- SDK: [`../crates/hya-sdk/src/lib.rs`](../crates/hya-sdk/src/lib.rs)
+- Server/routes: [`../crates/hya-server/src/lib.rs`](../crates/hya-server/src/lib.rs)
 - Native in-process transport: [`../crates/hya-native/src/transport.rs`](../crates/hya-native/src/transport.rs)
+- SDK/client bridge: [`../crates/hya-sdk/src/lib.rs`](../crates/hya-sdk/src/lib.rs)
 - Self-update TCB: [`../crates/hya-updater`](../crates/hya-updater)
-- Canonical frontend entrypoint: [`../crates/hya/src/main.rs`](../crates/hya/src/main.rs)
-- Frontend supervisor: [`../crates/hya-ts/src/main.rs`](../crates/hya-ts/src/main.rs)
 - TUI application: [`../packages/hya-tui-ts/src/main.tsx`](../packages/hya-tui-ts/src/main.tsx)
 - TUI package docs: [`../packages/hya-tui-ts/README.md`](../packages/hya-tui-ts/README.md)

@@ -7,12 +7,18 @@ every runtime surface shares one canonical event model:
 CLI / TUI / HTTP
       |
       v
-hya-core::SessionEngine
+hya-backend / hya-server
       |
-      +--> hya-provider routes model streams into hya-proto::Event
-      +--> hya-tool executes builtin, MCP, and plugin tools behind PermissionPlane
-      +--> hya-store appends and replays events
-      +--> hya-proto folds events into projections
+      +--> hya-app::WorkflowControl
+      |      +--> hya-workflow compiles/normalizes Workflow plans
+      |      `--> hya-core::SessionEngine executes durable Workflow runs
+      |
+      `--> hya-core::SessionEngine (ordinary turns)
+             |
+             +--> hya-provider routes model streams into hya-proto::Event
+             +--> hya-tool executes builtin, MCP, and plugin tools behind PermissionPlane
+             +--> hya-store appends and replays events
+             +--> hya-proto folds events into projections
 ```
 
 ## Repository Map
@@ -25,7 +31,7 @@ hya-core::SessionEngine
 | [`../rustfmt.toml`](../rustfmt.toml) | Workspace formatting configuration. |
 | [`../README.md`](../README.md) | Short public overview and quick command examples. |
 | [`../crates`](../crates) | Production crates. |
-| [`../crates/xtask`](../crates/xtask) | Developer tooling: `sync-compat`, `migrate`, `startup-bench`, `matrix-check`. |
+| [`../crates/xtask`](../crates/xtask) | Developer tooling: `sync-compat`, `migrate`, `startup-bench`, `matrix-check`, deterministic `package-bundle`, and non-publishing `release-rehearsal`. |
 | [`../docs`](../docs) | Project documentation. |
 
 ## Crate Responsibilities
@@ -40,8 +46,9 @@ hya-core::SessionEngine
 | `hya-plugin-compat` | [`../crates/hya-plugin-compat`](../crates/hya-plugin-compat) | Bundled Bun adapter for Compat plugin SDK compatibility. |
 | `hya-plugin-example` | [`../crates/hya-plugin-example/src/main.rs`](../crates/hya-plugin-example/src/main.rs) | Placeholder stub (`fn main() {}`); does **not** speak the plugin protocol. Future native-plugin QA fixture. Real ABI: [plugin-protocol.md](plugin-protocol.md). |
 | `hya-store` | [`../crates/hya-store/src/lib.rs`](../crates/hya-store/src/lib.rs) | SQLite event log, replay, projection reads, token ledger, admission journal, mailbox, resident claims, saved permissions, and installed-bundle registry. |
-| `hya-core` | [`../crates/hya-core/src/lib.rs`](../crates/hya-core/src/lib.rs) | Session engine, event bus, turn loop, compaction, hooks, goal/loop drivers, resident teams, orchestrator budgets, worktrees. |
-| `hya-server` | [`../crates/hya-server/src/lib.rs`](../crates/hya-server/src/lib.rs) | Native HTTP/SSE API and Compat-compatible routes over `SessionEngine`. |
+| `hya-core` | [`../crates/hya-core/src/lib.rs`](../crates/hya-core/src/lib.rs) | Session engine, event bus, turn loop, compaction, durable Workflow execution/replay, hooks, goal/loop drivers, resident teams, orchestrator budgets, worktrees. |
+| `hya-workflow` | [`../crates/hya-workflow/src/lib.rs`](../crates/hya-workflow/src/lib.rs) | Workflow source compilation, validation, immutable normalized plans, revisions, model assignments, and rendering inputs. |
+| `hya-server` | [`../crates/hya-server/src/lib.rs`](../crates/hya-server/src/lib.rs) | Native HTTP/SSE API, `/sessions/:id/workflow`, and Compat-compatible routes over `SessionEngine`. |
 | `hya-client` | [`../crates/hya-client/src/lib.rs`](../crates/hya-client/src/lib.rs) | Typed reqwest client for the server API. |
 | `hya-sdk` | [`../crates/hya-sdk/src/lib.rs`](../crates/hya-sdk/src/lib.rs) | Integration SDK: `Client` + HTTP/native transport, `DIRECTORY_HEADER`, `ServerHandle`, live `MessageStore`, team projection, V2Event reducer. |
 | `hya-native` | [`../crates/hya-native/src/transport.rs`](../crates/hya-native/src/transport.rs) | In-process axum `Router` transport via tower `oneshot` (no TCP) and `spawn_event_bridge` for `/global/event`. |
@@ -49,8 +56,8 @@ hya-core::SessionEngine
 | `hya` | [`../crates/hya/src/main.rs`](../crates/hya/src/main.rs) | Canonical Unix entrypoint. Replaces itself with the adjacent `hya-ts` launcher. |
 | `hya-ts` | [`../crates/hya-ts/src/main.rs`](../crates/hya-ts/src/main.rs) | TypeScript TUI supervisor: CLI parsing, backend/runtime discovery, process-group handoff, and cleanup. |
 | `hya-backend` | [`../crates/hya-backend/src/main.rs`](../crates/hya-backend/src/main.rs) | Backend umbrella binary: `run`/`exec`, goal mode, server, tail-session, config/auth, MCP/plugin setup, session listing, JSONL RPC, and interactive startup that launches the current `hya` frontend. |
-| `hya-app` | [`../crates/hya-app/src/lib.rs`](../crates/hya-app/src/lib.rs) | Runtime composition: config load, provider/MCP/plugin wiring, session engine build, installed-bundle refresh. |
-| `hya-bundle` | [`../crates/hya-bundle/src/lib.rs`](../crates/hya-bundle/src/lib.rs) | AgentBundle prepare/validate/catalog types and package fixtures used by install CLI and process E2E. Catalog builders: `from_prepared` / `from_verified_catalogs` / `with_verified_catalogs` index agents by stable id and `bundle:<id>/agent/<local_id>`, resources by `(ExportKind, stable id)` plus bundle-local names/aliases; reads include `resolve_agent`, `resolve_resource`, `bundle_resources`, `resolve_spawn`, `spawnable_agents`. |
+| `hya-app` | [`../crates/hya-app/src/lib.rs`](../crates/hya-app/src/lib.rs) | Runtime composition: config load, provider/MCP/plugin wiring, session engine build, installed-bundle refresh, and `WorkflowControl` admission/orchestration. |
+| `hya-bundle` | [`../crates/hya-bundle/src/lib.rs`](../crates/hya-bundle/src/lib.rs) | AgentBundle and WorkflowBundle prepare/validate/catalog types and package fixtures used by install CLI and process E2E. Catalog builders: `from_prepared` / `from_verified_catalogs` / `with_verified_catalogs` index agents by stable id and `bundle:<id>/agent/<local_id>`, resources by `(ExportKind, stable id)` plus bundle-local names/aliases; reads include `resolve_agent`, `resolve_resource`, `bundle_resources`, `resolve_spawn`, `spawnable_agents`. |
 | `hya-e2e` | [`../crates/hya-e2e`](../crates/hya-e2e) | Process-level agent E2E: real `hya-backend` + FakeLlm (Track P). See [docs/testing](testing/README.md). |
 
 ## `hya-proto`
@@ -110,8 +117,10 @@ Important modules:
 | [`webfetch`](../crates/hya-tool/src/webfetch), [`websearch.rs`](../crates/hya-tool/src/websearch.rs) | Web fetch/search tools. |
 | [`lsp.rs`](../crates/hya-tool/src/lsp.rs), [`formatter.rs`](../crates/hya-tool/src/formatter.rs) | LSP and formatter planes. |
 | [`skill.rs`](../crates/hya-tool/src/skill.rs), [`task.rs`](../crates/hya-tool/src/task.rs), [`todo.rs`](../crates/hya-tool/src/todo.rs), [`question.rs`](../crates/hya-tool/src/question.rs) | Skill, subtask, todo, and human-question tools. |
+| [`workflow_plane.rs`](../crates/hya-tool/src/workflow_plane.rs) | Workflow list/info/use/run/state tool integration through `WorkflowControl`. |
 
-Builtins currently include:
+Builtins currently include **28 canonical schema names** (aliases are listed
+separately below):
 
 | Tool | Permission action | Behavior |
 | --- | --- | --- |
@@ -129,6 +138,7 @@ Builtins currently include:
 | `skill` | `Skill` | Load and expose local `SKILL.md` content. |
 | `list_agents` | `ReadOnly` | List spawnable agents for the model; allows without prompting under `default`. |
 | `task` | `Task` | Start foreground/background subagent member work (spawner plane). |
+| `workflow` | `Tool` | List, inspect, select, run, or inspect state for a governed Workflow through the shared control plane. |
 | `todowrite` (`todo`) | `TodoWrite` | Store the latest session todo snapshot. |
 | `plan_exit` (`plan`) | `Tool` | Signal plan-mode completion semantics to the model. |
 | `roster`, `channels` | `ReadOnly` | Team roster and channel list; allow without prompting under `default`. |
@@ -239,8 +249,13 @@ event folds and `last_seq` advances.
 | `POST /sessions/:id/prompt` | Admit a user prompt and run one turn. |
 | `POST /sessions/:id/command` | Run a command/template turn. |
 | `POST /sessions/:id/shell` | Run a shell tool turn. |
+| `POST /sessions/:id/workflow` | Select, run, or query governed Workflow state through `WorkflowControl`. |
 | `GET /sessions/:id/events` | Replay envelopes, optionally after `since_seq`. |
 | `GET /sessions/:id/stream` | Stream live envelopes as SSE. |
+
+Keep the detailed native and Compat route inventory in
+[`architecture/server-client.md`](architecture/server-client.md); this page
+only records the ownership boundary and the native Workflow route.
 
 It also mounts Compat-compatible route groups for legacy/v2 sessions, event
 SSE, files/search/symbols, providers/models, permission/question queues, MCP,
@@ -249,7 +264,11 @@ catalogs. Those routes translate between hya's event log/projection and
 Compat-shaped HTTP bodies; exact parity is tracked in
 [`compat-parity.md`](compat-parity.md).
 
-`hya-client` is a small typed wrapper around create session, prompt, and events.
+`hya-client` is the small native typed wrapper for create-session, prompt, and
+events calls. The frozen Compat `hya-sdk::Client` is a separate integration
+surface; `hya-sdk::native` is its JSONL/native bridge, and `hya-native` is the
+in-process Axum transport. See [`architecture/server-client.md`](architecture/server-client.md)
+for route details.
 
 ## `hya-sdk`, `hya-native`, and `hya-updater`
 
