@@ -13,27 +13,23 @@ after permission checks pass.
   formatter/`WorkflowPlane` planes, session ids, workdir, cancellation token.
 - `ToolRegistry`: name-to-tool map, aliases, and model-facing schemas.
 
-`ToolRegistry::builtins()` installs **28** canonical schema names before model
-filtering
-([`tool.rs:329-361`](../../crates/hya-tool/src/tool.rs#L329-L361)). The table
-below is the complete inventory. Advertised field names are the model-facing
-JSON schema `required`/`properties` keys. Short spellings such as `path` for
-`filePath` (and `old`/`new`/`replace_all` for edit) are listed under schema
-`properties` for compatibility; they are usually absent from `required`, which
-still names the camelCase fields.
+`ToolRegistry::builtins()` installs **27** canonical schema names before model
+filtering ([`tool.rs`](../../crates/hya-tool/src/tool.rs)). The table below is
+the complete inventory. Advertised fields are the model-facing JSON schema
+`required`/`properties` keys; a schema marked **closed** rejects unknown keys.
 
 | Tool | Input (advertised) | Output |
 | --- | --- | --- |
 | `invalid` | unknown call payload | Structured invalid-tool response. |
-| `read` | `{ "filePath": string, "offset"?: number, "limit"?: number }` (also lists `path` under `properties`) | File text/media or directory listing. |
-| `write` | `{ "filePath": string, "content": string }` (also lists `path` under `properties`) | Write result plus formatter/LSP diagnostics when available. |
-| `edit` | `{ "filePath": string, "oldString": string, "newString": string, "replaceAll"?: bool }` (also lists `path`/`old`/`new`/`replace_all` under `properties`) | Replacement result plus diff/formatter/LSP data. |
+| `read` | `{ "path": string, "offset"?: integer >= 1, "limit"?: integer >= 1, "raw"?: boolean }` (closed) | Hashline or raw file text, media attachment, or directory listing. |
+| `write` | `{ "path": string, "content": string }` (closed) | Final write result plus bounded display metadata and formatter/LSP diagnostics when available. |
+| `edit` | `{ "path": string, "edits": [...] }` (closed; operations are `replace`, `append`, `prepend`, or `replace_text`) | Fresh hashline preview, bounded diff, warnings, and diagnostics. |
 | `apply_patch` (`patch`) | `{ "patchText": string }` (alias `patch`) | Aggregate diff and per-file metadata. |
 | `ls` | `{ "path"?: string }` | Immediate directory entries. |
 | `glob` | `{ "pattern": string, "path"?: string }` | Path matches and counts (cap 100). |
 | `find` | `{ "pattern": string, "path"?: string }` | `{path, size}` matches (no row cap). |
-| `grep` | `{ "pattern": string, "path"?: string, "include"?: string }` | Regex matches and counts (cap 100). |
-| `shell`, `bash` | `{ "command": string, "timeout"?: number, "workdir"?: string, "env"?: object }` | Command title, stdout/stderr, exit status. |
+| `grep` | `{ "pattern": string, "path"?: string, "glob"?: string, "ignoreCase"?: boolean, "literal"?: boolean, "context"?: integer 0..5, "limit"?: integer 1..200 }` (closed) | Hashline match/context rows, summary, and bounded per-file display metadata. |
+| `bash` | `{ "command": string, "env"?: object<string,string>, "timeout"?: number, "cwd"?: string, "pty"?: boolean }` (closed) | Structured command/output result with exit, timeout, truncation, and artifact metadata. |
 | `webfetch` (`fetch`) | `{ "url": string, "format"?: "text"\|"markdown"\|"html", "timeout"?: number }` | Fetched web content or image attachment. |
 | `websearch` (`search`) | `{ "query": string, "numResults"?: number, "livecrawl"?: string, "type"?: string, "contextMaxCharacters"?: number }` | Search results from the configured `WebSearchPlane`. |
 | `question` | `{ "questions": [{ "question", "header", "options", "multiple"?, "custom"? }] }` | Chosen option labels (unanswered → `Unanswered`). |
@@ -42,7 +38,7 @@ still names the camelCase fields.
 | `skill` | `{ "name": string }` (name only; a path is not accepted) | `<skill_content>` envelope with body, `file://` base dir, and sampled files (cap 10). See also [`docs/skills.md`](../skills.md). |
 | `list_agents` | (none) | Agent definitions usable by `task`. |
 | `task` | `{ "description", "prompt", "subagent_type"?, "category"?, "model"?, "task_id"?, "command"?, "background"?, "resident"?, "inline_agent"?, "members"?: [...] }` | Foreground/background subagent outcomes. |
-| `workflow` | `{ "action"?: "list"|"info"|"select"|"run"|"state", "name"?: string, "expected_revision"?: string, "inputs"?: object, "run"?: string }` | Shared app-owned Workflow control for list/info/select/run/state; execution uses the durable Session path. |
+| `workflow` | `{ "action"?: "list"\|"info"\|"select"\|"run"\|"state", "name"?: string, "expected_revision"?: string, "inputs"?: object, "run"?: string }` | Shared app-owned Workflow control. |
 | `announce` | `{ "body": string }` | One-way announcement to the caller's direct reports; recipients reply with ordinary mail. |
 | `todowrite` (`todo`) | `{ "todos": [{ "content", "status", "priority" }] }` | Latest todo snapshot for the session (replace, not append). |
 | `plan_exit` (`plan`) | plan status input | Plan-mode completion signal. |
@@ -52,39 +48,145 @@ still names the camelCase fields.
 | `join` | `{ "channel": string }` | Subscribe (creates channel if missing). |
 | `leave` | `{ "channel": string }` | Unsubscribe from a channel. |
 
-Hidden aliases resolve at execution but are not advertised: `fetch`→`webfetch`,
-`search`→`websearch`, `todo`→`todowrite`, `patch`→`apply_patch`, `plan`→`plan_exit`.
+`lsp` is a separate language-server contract and intentionally retains its
+`filePath` field. This does not advertise or restore a legacy Read, Write, or
+Edit schema; the coding-tool compatibility boundary is documented below.
+
+`read.filePath` is a hidden, runtime-only compatibility spelling for captured
+pre-0.36.9 calls. It is parsed separately from canonical `path`: one non-empty
+value is accepted, equal non-empty values are accepted, conflicting non-empty
+values fail as an input error, and both missing/empty values fail. Paths are not
+trimmed. A legacy `offset: 0` is normalized to line 1, but zero is never
+advertised. `shell` is the hidden runtime alias for canonical `bash`; it is not
+advertised and uses the same command implementation. The nested
+`task.inline_agent.description` field is absent from both published schemas:
+an empty/whitespace-only stale value is normalized to absence, while a
+non-empty direct or stale value retains the typed
+`unsupported_inline_agent_field` rejection before admission. Other existing
+aliases (`fetch`, `search`, `todo`, `patch`, and `plan`) remain non-advertised
+lookup conveniences and do not change the coding-tool schemas.
+
+### Coding-tool examples
+
+Model-facing calls use the canonical fields below:
+
+```json
+{"path":"src/main.rs","offset":1,"limit":120,"raw":false}
+```
+
+```json
+{"path":"src/main.rs","edits":[{"op":"replace","pos":"12#KT","lines":["new line"]}]}
+```
+
+```json
+{"path":"notes.txt","content":"hello\n"}
+```
+
+```json
+{"pattern":"TODO","path":"src","glob":"*.rs","ignoreCase":false,"literal":true,"context":1,"limit":20}
+```
+
+```json
+{"command":"cargo check","cwd":".","timeout":300,"env":{"RUST_BACKTRACE":"1"},"pty":false}
+```
+
+The Bash example demonstrates the input shape only; environment values are
+never shown in titles, summaries, diagnostics, or rendered output.
 
 ## Output Limits
 
-Two stacked caps apply. Per-tool caps run inside the tool; a global cap runs
-afterward on every successful result.
+Two stacked caps apply. Per-tool caps run inside the tool; a global shape-aware
+cap runs after every successful result and again after post-tool hooks at the
+last point before `Event::ToolResult` publication. Coding-tool adapters keep the
+result envelope structured so presentation metadata is not discarded by a
+generic string cap.
 
 ### Per-tool caps
 
-- **`shell` / `bash`**: combined stdout+stderr is capped at **16 KiB**
-  (`MAX_OUTPUT_BYTES = 16 * 1024`). Oversized output is truncated for the model
-  and the full text is spilled under `.hya/tool-output/` in the session workdir
-  ([`shell.rs`](../../crates/hya-tool/src/shell.rs)).
-- **`glob` / `grep`**: returned rows are capped at **`SEARCH_LIMIT = 100`**
-  ([`tool.rs`](../../crates/hya-tool/src/tool.rs)). Counts and truncation
-  metadata remain on the result. `find` has no row cap.
+- **`read` / `grep`**: model-facing text and match output is bounded at **50 KiB**;
+  line/row limits and explicit truncation/continuation metadata remain in the
+  result. Grep caller globs stop at 4,096 bytes, retained logical lines stop at
+  1 MiB, and ignore inputs/rule counts are bounded. An overlong line or ignore
+  source produces one bounded warning and later searchable content remains
+  available. Traversal, ignore parsing, line discard, and matching all observe
+  cancellation.
+- **`edit`**: fresh hashline output and the unified diff each have independent
+  bounded budgets; metadata carries explicit truncation rather than growing
+  without limit. Hashline error messages stop at 8 KiB, keep at most 16 hints,
+  and bound each hint to 512 bytes while preserving the stable `[E_*]` code.
+- **`bash`**: stdout and stderr are consumed in arrival order into a bounded
+  sink with **50 KiB** inline output. Timeout/clamp notices are added before the
+  inline/spill decision. When that result crosses the limit, capture keeps the
+  complete raw output in a private mode-0600 hya artifact and retains only the
+  bounded inline view. An armed owner removes every unpublished artifact on
+  error or cancellation. `env` values are never copied into titles,
+  diagnostics, results, or the TUI.
+- **`glob`**: caller patterns stop at 4,096 bytes; returned rows remain capped
+  at `SEARCH_LIMIT = 100`. `find` keeps its existing compatibility behavior.
 
 ### Global cap (`cap_tool_output`)
 
 After a successful builtin, MCP, or plugin call, the engine passes the result
-through `hya_tool::cap_tool_output` before emitting `Event::ToolResult`
-([`turn.rs`](../../crates/hya-core/src/engine/turn.rs)). The constant is
-`MAX_TOOL_OUTPUT_CHARS = 5000` characters
-([`output_cap.rs`](../../crates/hya-tool/src/output_cap.rs)):
+through `hya_tool::cap_tool_output_with_policy`. Post-tool hooks may replace the
+result, so the direct execution path reapplies the same cap immediately before
+emitting `Event::ToolResult`. The default for unrelated results remains
+`MAX_TOOL_OUTPUT_CHARS = 5000` characters.
+Coding-tool results use a structurally idempotent policy: each nested row/group
+is serialized once for byte accounting, bounded Read/Write/Grep/Bash envelopes
+and Edit diff metadata remain objects, and independent hard limits set explicit
+truncation flags. No metadata or hook can bypass the final cap. Provider replay
+uses an object's string `output` field when present and falls back to JSON only
+when no such field exists.
 
-- Under the limit, the original JSON `Value` shape is preserved.
-- Over the limit, the value becomes a **plain string** prefixed with
-  `[tool output truncated: original N chars; showing last 5000 chars]`, followed
-  by only the **last** 5000 characters of the display text.
+## Coding-tool runtime
 
-Downstream consumers (projection, TUI, next model round) must tolerate that a
-structured JSON tool result can collapse to a string after the global cap.
+`ReadTool`, `EditTool`, `WriteTool`, and `GrepTool` share one private,
+registry-owned `HashlineRuntime`; it is not a second result store or projection.
+The runtime owns only bounded process-local snapshots, duplicate/no-op guards,
+and fixed mutation-lock shards. Its state key is
+`(SessionId | no-session, normalized workdir, resolved target path)`, so one
+session cannot recover content observed by another. It retains at most eight
+target entries, four newest versions per target, and 32 MiB total snapshot
+bytes. A fixed lock-shard array serializes same-target mutations without an
+attacker-sized lock map; Unix hard-linked aliases share device/inode identity.
+Prepared device/inode identity is checked again immediately before ordinary
+rename or hard-link truncate/open, so a pathname/alias swap fails before
+mutation.
+
+Text Read/Grep normalization removes one UTF-8 BOM and normalizes CRLF/lone CR
+to LF. Both accept `[!x]` and `[^x]` negated character classes consistently in
+caller and ignore patterns. Each visible line gets a contextual XXH32 seed-0
+anchor from its previous/current/next lines, with a two-character nibble hash
+by default; the terminal empty newline sentinel is not rendered. `raw` Read
+returns normalized text without anchors. Anchors are stale-reference aids,
+never integrity or authorization data.
+
+Edit validates every `LINE#HASH` anchor against one pre-edit snapshot, checks
+text hints and collisions, resolves all spans before applying them bottom-up,
+and rejects duplicates, conflicts, invalid payloads, and edits that would make a
+non-empty file empty. On an `E_STALE_ANCHOR` failure only, it tries newest-first
+stored snapshots and an exact context-three, fuzz-zero merge; it never fuzzy
+relocates an anchor. Fresh anchors, diffs, display metadata, and stored
+snapshots describe the final post-formatter bytes. The target lock covers live
+read, validation/recovery, mutation, formatter, LSP, final read, diff, and state
+update. If cancellation arrives after commit, reconciliation records the actual
+bytes and duplicate guard before returning typed `cancelled`. Two identical
+no-op payloads are soft successes; the third returns `[E_NOOP_LOOP]`; a non-raw
+Read clears the no-op/duplicate marker.
+
+All coding tools honor `ToolCtx` cancellation. Read and Grep authorize one
+kind-blind lexical external parent resource before metadata, existence, or
+target-kind probing. Cancellation while waiting for a lock or during I/O
+returns the typed `cancelled` error. Bash cancellation/timeout terminates and
+reaps the complete process group, including a PTY descendant that retains the
+slave after leader exit. File contents never enter logs or error payloads.
+Durable `Event::ToolResult`/`Event::ToolError` and the shared projection remain
+the only result path. Hashline snapshots are process-local and are lost on
+restart; current-file anchor validation still works after restart.
+
+An already-running **0.36.8** backend must restart before future calls use these
+0.36.9 contracts. Existing 0.36.8 error Events are historical append-only data;
+they are not rewritten or retried.
 
 ## Permission Models
 
@@ -119,7 +221,7 @@ persistence writes that serde string into the DB `action` column
 | `edit` | `Edit` | `write`, `edit`, `apply_patch`. |
 | `glob` | `Glob` | `glob`, `find`. |
 | `grep` | `Grep` | `grep`. |
-| `bash` | `Bash` | `shell`, `bash` (and invocation command subjects). |
+| `bash` | `Bash` | `bash`, hidden runtime alias `shell`, and invocation command subjects. |
 | `task` | `Task` | `task` (per member / subagent type). |
 | `mcp` | `Mcp` | MCP bridge tools (`mcp__…`). |
 | `webfetch` | `WebFetch` | `webfetch`. |
@@ -127,7 +229,7 @@ persistence writes that serde string into the DB `action` column
 | `todowrite` | `TodoWrite` | `todowrite`. |
 | `skill` | `Skill` | `skill`. |
 | `lsp` | `Lsp` | `lsp`. |
-| `externaldirectory` | `ExternalDirectory` | Any tool whose resolved path (or shell `workdir`) lies outside the session workdir. |
+| `externaldirectory` | `ExternalDirectory` | Any tool whose resolved path (or Bash `cwd`) lies outside the session workdir. |
 
 ### Resource (nine shapes)
 
@@ -155,9 +257,9 @@ and `any`
 
 Invocation rules are Rust regular expressions over explicitly registered
 metadata. Normal built-ins and plugins expose their canonical `tool` name, MCP
-tools expose only their namespaced `mcp` name, and shell tools expose both their
-canonical tool name and the full command after before-hooks. Registry metadata,
-not a name-prefix check, determines which domain applies.
+tools expose only their namespaced `mcp` name, and Bash exposes its canonical
+tool name and the full command after before-hooks. Registry metadata, not a
+name-prefix check, determines which domain applies.
 
 The invocation evaluator runs once before execution. `default` uses its last
 matching rule and classification fallback; `allow` permits unless a deny
@@ -252,7 +354,7 @@ prompts separately even inside an already-approved tool call.
 | `lsp` | Resolved file path (`<parent>/*` when outside). |
 | `glob` | Search root directory when outside the workdir. |
 | `grep` | Search root (file or directory) when outside the workdir. |
-| `shell` / `bash` | Optional `workdir` argument when it resolves outside the session workdir (`cwd/*`). |
+| `bash` (including hidden `shell`) | Optional `cwd` when it resolves outside the session workdir (`<cwd>/*`). |
 | `find` | **Does not** perform the external-directory check (deliberate compatibility gap). Asserts `Action::Glob` only; builds the root with `PathBuf::from(path)` (not workdir-resolved). |
 | `ls` | **Does not** perform the external-directory check either. Asserts only `Action::Read` on the raw path string; builds the directory with `PathBuf::from(path)` (not workdir-resolved). So `ls /etc` outside the workdir never raises `ExternalDirectory`. |
 
@@ -272,8 +374,6 @@ attached therefore never prompt for that turn. The overlay is **not** persisted
 as a `SessionPermissionSet` and does not survive the turn. The HTTP/Compat
 prompt path derives the list from the session's reference directories
 ([`session_prompt.rs`](../../crates/hya-server/src/compat/session_prompt.rs)).
-
-## Tool errors
 
 Failed tools become `Event::ToolError` with a structured value:
 
@@ -313,7 +413,7 @@ first-class. `permission` errors are protected from rewriting by
 ## CLI Defaults
 
 Under the default invocation model, local read-only tools and `task` allow;
-standard built-ins, plugins, network reads, MCP calls, and shell commands ask.
+standard built-ins, plugins, network reads, MCP calls, and Bash commands ask.
 The existing resource rules still auto-allow `Read`, `Glob`, and `Grep`, while
 mutating, external-directory, subagent, and process-spawning actions remain
 covered by their existing checks. `--yolo` changes the invocation model to
@@ -330,7 +430,7 @@ after-hooks, applies `cap_tool_output` on success, and appends either:
 - `Event::ToolError`
 
 The next provider round then sees the tool result in the projected transcript.
-Unknown tools and malformed shell input fail before permission asks. Native asks
+Unknown tools and malformed Bash input fail before permission asks. Native asks
 carry session, message, and tool-call correlation.
 
 ## External Tool Sources

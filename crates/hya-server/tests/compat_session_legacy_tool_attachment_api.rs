@@ -31,7 +31,7 @@ async fn state() -> AppState {
         vec![
             FakeStep::ToolCall {
                 name: "read".to_string(),
-                input: json!({ "filePath": "image.png" }),
+                input: json!({ "path": "image.png" }),
             },
             FakeStep::Finish(FinishReason::ToolCalls),
         ],

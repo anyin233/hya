@@ -170,13 +170,13 @@ async fn t2_4_roster_and_list_agents_report_live_team_from_a_resident() {
     // status, and its real session id. The session id is the load-bearing one:
     // A never supplied it, so it can only come from projected team state.
     for needle in [
-        P1,
-        "\\\"type\\\":\\\"general\\\"",
-        "\\\"status\\\"",
-        b_session,
+        P1.to_string(),
+        format!("{H1} (general)"),
+        "status ".to_string(),
+        b_session.to_string(),
     ] {
         assert!(
-            a.contains(needle),
+            a.contains(needle.as_str()),
             "A's follow-up request must carry the roster result containing {needle}; \
              b_session={b_session}; dump={a}; {}",
             env.diagnostics()
@@ -190,8 +190,8 @@ async fn t2_4_roster_and_list_agents_report_live_team_from_a_resident() {
     // `list_agents` is agent *definitions*, not the live roster: a resident must
     // still see the spawnable catalog.
     assert!(
-        a.contains("agents available"),
-        "A's follow-up must carry the list_agents result; dump={a}; {}",
+        a.contains("- general (subagent):"),
+        "A's follow-up must carry the list_agents catalog; dump={a}; {}",
         env.diagnostics()
     );
 
@@ -349,10 +349,7 @@ async fn t2_9_channels_lists_membership_and_message_counts() {
     expect_route_sees(&env, &[SYS_A, SYS_B], SYS_A, "#squad").await;
     let a = env.route_dump(SYS_A).expect("A dump");
     // A never named B, so B's handle here can only come from channel membership.
-    for needle in [
-        format!("\\\"members\\\":[\\\"{P1}\\\"]"),
-        "\\\"messages\\\":1".to_string(),
-    ] {
+    for needle in [format!("members: {P1}"), "messages: 1".to_string()] {
         assert!(
             a.contains(needle.as_str()),
             "channels result must report real membership/counts containing {needle}; \

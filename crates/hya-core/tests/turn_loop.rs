@@ -13,6 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use hya_core::{
     AgentSpec, CompactionConfig, CoreError, CreateSession, EventBus, SessionEngine, Summarizer,
 };
+use hya_proto::Event;
 use hya_proto::{
     AgentName, FinishReason, Message, ModelRef, PartProjection, Role, TokenUsage, ToolPartState,
 };
@@ -38,13 +39,19 @@ async fn text_tool_result_text_round_trip() {
     let file = dir.join("foo.txt");
     tokio::fs::write(&file, "42 lines").await.unwrap();
     let path = file.to_string_lossy().into_owned();
+    let captured_read_input = json!({
+        "filePath": path.clone(),
+        "path": path.clone(),
+        "offset": 0,
+        "limit": 2000
+    });
 
     let provider = FakeProvider::scripted_turns(vec![
         vec![
             FakeStep::Text("I'll read it".to_string()),
             FakeStep::ToolCall {
                 name: "read".to_string(),
-                input: json!({ "path": path }),
+                input: captured_read_input.clone(),
             },
             FakeStep::Finish(FinishReason::ToolCalls),
         ],
@@ -97,6 +104,32 @@ async fn text_tool_result_text_round_trip() {
         .await
         .unwrap();
     assert_eq!(finish, FinishReason::Stop);
+    let events = engine.store().replay(session).await.unwrap();
+    let correlated_read_result = events.iter().any(|result| {
+        let Event::ToolResult {
+            call: result_call, ..
+        } = &result.event
+        else {
+            return false;
+        };
+        events.iter().any(|requested| {
+            matches!(
+                &requested.event,
+                Event::ToolCallRequested {
+                    call: requested_call,
+                    name,
+                    input,
+                    ..
+                } if requested_call == result_call
+                    && name.as_str() == "read"
+                    && input == &captured_read_input
+            )
+        })
+    });
+    assert!(
+        correlated_read_result,
+        "expected the captured Read call to complete with a correlated ToolResult; events={events:?}"
+    );
 
     let projection = engine.store().read_projection(session).await.unwrap();
     let assistant = projection
@@ -689,7 +722,7 @@ async fn provider_error_still_finishes_the_assistant_message() {
 async fn tool_output_eviction_avoids_summarizing_and_preserves_the_log() {
     let dir = tempdir();
     let big_file = dir.join("big.txt");
-    let big = "R".repeat(20_000);
+    let big = format!("{}\n", "R".repeat(100)).repeat(200);
     tokio::fs::write(&big_file, &big).await.unwrap();
     let path = big_file.to_string_lossy().into_owned();
 
@@ -731,9 +764,10 @@ async fn tool_output_eviction_avoids_summarizing_and_preserves_the_log() {
         CompactionConfig {
             token_threshold: 1_000_000,
             keep_recent: 1,
-            // 200k window * 0.02 = 4000 tokens. Turn 1 (~1400) stays under, so the
-            // tool output survives into turn 2 — where it is finally stale.
-            context_fraction: 0.02,
+            // 200k window * 0.10 = 20,000 tokens. The bounded structured Read
+            // result stays under alone; turn 2 pushes it over while remaining
+            // below the threshold after stale tool-output eviction.
+            context_fraction: 0.10,
         },
     );
     let session = engine
@@ -764,7 +798,7 @@ async fn tool_output_eviction_avoids_summarizing_and_preserves_the_log() {
         .unwrap();
     // Turn 2 sees turn 1's tool output as stale and should evict it.
     engine
-        .admit_user_prompt(session, "now summarize ".repeat(900))
+        .admit_user_prompt(session, "now summarize ".repeat(1_500))
         .await
         .unwrap();
     engine

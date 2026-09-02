@@ -20,7 +20,7 @@ afterEach(async () => {
   }
 })
 
-test("tool.execute.before mutates hya tool input", async () => {
+test("tool.execute.before mutates canonical bash tool input", async () => {
   const root = await makeTempDir()
   const pluginFile = path.join(root, "before.ts")
   await writeFile(
@@ -29,7 +29,8 @@ test("tool.execute.before mutates hya tool input", async () => {
       "export default {",
       '  id: "before",',
       "  server: async () => ({",
-      '    "tool.execute.before": async (_input, output) => {',
+      '    "tool.execute.before": async (input, output) => {',
+      '      if (input.tool !== "bash") throw new Error("wrong tool")',
       '      output.args.command = `${output.args.command} --safe`',
       "    },",
       "  }),",
@@ -47,7 +48,7 @@ test("tool.execute.before mutates hya tool input", async () => {
         session: "session-1",
         message: "message-1",
         call: "call-1",
-        tool: "shell",
+        tool: "bash",
         input: { command: "ls" },
       },
     },
@@ -85,7 +86,7 @@ test("tool.execute.before throw becomes hya veto", async () => {
         session: "session-1",
         message: "message-1",
         call: "call-1",
-        tool: "shell",
+        tool: "bash",
         input: { command: "rm -rf /tmp/nope" },
       },
     },

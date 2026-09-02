@@ -137,7 +137,7 @@ async function inputWithShellEnv(
   context: ToolExecuteBeforeContext,
   input: unknown,
 ): Promise<unknown> {
-  if (params.tool !== "shell") {
+  if (params.tool !== "bash" && params.tool !== "shell") {
     return input
   }
   const output: { env: Record<string, string> } = { env: {} }

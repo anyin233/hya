@@ -200,7 +200,7 @@ export async function handleToolExecuteBefore(
     }
   }
   const outcome = await runToolExecuteBeforeHooks(context.hooks, params.data, {
-    cwd: toolExecutionCwd(params.data, context),
+    cwd: resolveToolCwd(params.data, context),
   })
   return {
     response: okResponse(request.id, outcome),
@@ -230,16 +230,24 @@ export async function handleToolExecuteAfter(
   }
 }
 
-function toolExecutionCwd(
+function resolveToolCwd(
   params: z.infer<typeof ToolExecuteBeforeParamsSchema>,
   context: RequestContext,
 ): string {
   const base = context.env.HYA_WORKTREE ?? context.env.HYA_DIRECTORY ?? process.cwd()
-  if (!isRecord(params.input) || typeof params.input["workdir"] !== "string") {
+  if (!isRecord(params.input)) {
     return base
   }
-  const workdir = params.input["workdir"]
-  return path.isAbsolute(workdir) ? workdir : path.join(base, workdir)
+  const cwd =
+    typeof params.input["cwd"] === "string"
+      ? params.input["cwd"]
+      : params.tool === "shell" && typeof params.input["workdir"] === "string"
+        ? params.input["workdir"]
+        : undefined
+  if (cwd === undefined) {
+    return base
+  }
+  return path.isAbsolute(cwd) ? cwd : path.join(base, cwd)
 }
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {

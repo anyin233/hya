@@ -10,6 +10,7 @@ use hya_store::ActorClaim;
 use hya_tool::{Action, AgentDef, Mode, PermissionPlane, ResolvedTool, Rule, ToolCtx, ToolError};
 use tokio_util::sync::CancellationToken;
 
+use super::shell::BashArtifactGuard;
 use super::tool_error::{tool_error_message_value, tool_error_value};
 use super::{
     AgentSpec, FixedSystemAgent, SessionEngine, agent_roster, agent_with_bound_skills,
@@ -1087,58 +1088,70 @@ impl SessionEngine {
                 let input_for_after =
                     (self.hooks.is_some() || activation_hooks.is_some()).then(|| tc.input.clone());
                 let started = std::time::Instant::now();
-                let result = match resources.resolve_tool(&tc.name) {
-                    Some(resolved) => match authorize_tool_call(
-                        &resolved,
-                        &tc.input,
-                        permission_for_session(&self.permission, session, external_dirs),
-                        message,
-                        tc.call,
-                    )
-                    .await
-                    {
-                        Ok(permission) => {
-                            let ctx = ToolCtx {
-                                workflows: self
-                                    .workflows
-                                    .for_binding(binding)
-                                    .for_session_with_agents(session, agents.clone()),
-                                permission,
-                                interaction: self.interaction.for_session(session),
-                                spawner: self
-                                    .spawner
-                                    .for_binding(binding)
-                                    .for_session_with_agents_and_guidance(
-                                        session,
-                                        agents.clone(),
-                                        guidance.clone(),
-                                    ),
-                                operation: hya_tool::ToolOperation::from_tool_call(tc.call)
-                                    .with_actor_claim(actor_claim.copied()),
-                                mailbox: self
-                                    .mailbox
-                                    .for_session_with_actor(session, actor_claim.copied()),
-                                session: Some(session),
-                                parent_session: projection.session.parent,
-                                todo: self.todo.clone(),
-                                skills: resources.skill_plane(),
-                                agents: agents.clone(),
-                                websearch: self.websearch.clone(),
-                                lsp: self.lsp.clone(),
-                                formatter: self.formatter.clone(),
-                                workdir: binding.workdir().to_path_buf(),
-                                cancel: cancel.clone(),
-                            };
-                            // Permission and plugin hooks can await. Recheck at the
-                            // actual dispatch boundary so takeover cannot turn a
-                            // previously valid resident into an unfenced launch.
-                            self.validate_actor_claim(actor_claim).await?;
-                            resolved.tool.execute(&ctx, tc.input).await
-                        }
-                        Err(error) => Err(error),
-                    },
-                    None => Err(ToolError::Other(format!("unknown tool: {}", tc.name))),
+                let (result, result_policy) = match resources.resolve_tool(&tc.name) {
+                    Some(resolved) => {
+                        let result_policy = resolved.tool.result_policy();
+                        let result = match authorize_tool_call(
+                            &resolved,
+                            &tc.input,
+                            permission_for_session(&self.permission, session, external_dirs),
+                            message,
+                            tc.call,
+                        )
+                        .await
+                        {
+                            Ok(permission) => {
+                                let ctx = ToolCtx {
+                                    workflows: self
+                                        .workflows
+                                        .for_binding(binding)
+                                        .for_session_with_agents(session, agents.clone()),
+                                    permission,
+                                    interaction: self.interaction.for_session(session),
+                                    spawner: self
+                                        .spawner
+                                        .for_binding(binding)
+                                        .for_session_with_agents_and_guidance(
+                                            session,
+                                            agents.clone(),
+                                            guidance.clone(),
+                                        ),
+                                    operation: hya_tool::ToolOperation::from_tool_call(tc.call)
+                                        .with_actor_claim(actor_claim.copied()),
+                                    mailbox: self
+                                        .mailbox
+                                        .for_session_with_actor(session, actor_claim.copied()),
+                                    session: Some(session),
+                                    parent_session: projection.session.parent,
+                                    todo: self.todo.clone(),
+                                    skills: resources.skill_plane(),
+                                    agents: agents.clone(),
+                                    websearch: self.websearch.clone(),
+                                    lsp: self.lsp.clone(),
+                                    formatter: self.formatter.clone(),
+                                    workdir: binding.workdir().to_path_buf(),
+                                    cancel: cancel.clone(),
+                                };
+                                // Permission and plugin hooks can await. Recheck at the
+                                // actual dispatch boundary so takeover cannot turn a
+                                // previously valid resident into an unfenced launch.
+                                self.validate_actor_claim(actor_claim).await?;
+                                resolved.tool.execute(&ctx, tc.input).await
+                            }
+                            Err(error) => Err(error),
+                        };
+                        (result, result_policy)
+                    }
+                    None => (
+                        Err(ToolError::Other(format!("unknown tool: {}", tc.name))),
+                        hya_tool::ToolResultPolicy::Default,
+                    ),
                 };
+                let mut artifact_guard = BashArtifactGuard::capture(
+                    tc.name.as_str(),
+                    result.as_ref().ok(),
+                    binding.workdir(),
+                );
                 let time_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
                 if actor_claim.is_some()
                     && matches!(&result, Err(ToolError::Cancelled))
@@ -1183,27 +1196,49 @@ impl SessionEngine {
                 } else {
                     result
                 };
-                let event = match result {
-                    Ok(output) => Event::ToolResult {
-                        session,
-                        message,
-                        part: tc.part,
-                        call: tc.call,
-                        // Cap every tool (builtin/MCP/plugin) so a single oversized
-                        // result cannot blow the next model context window.
-                        output: hya_tool::cap_tool_output(output),
-                        time_ms,
-                    },
-                    Err(e) => Event::ToolError {
-                        session,
-                        message,
-                        part: tc.part,
-                        call: tc.call,
-                        value: Some(tool_error_value(&e)),
-                        message_text: e.to_string(),
-                    },
+                let (event, retains_artifact) = match result {
+                    Ok(mut output) => {
+                        artifact_guard.remove_unowned_path(&mut output);
+                        if !artifact_guard.retained_by(&output) {
+                            artifact_guard.discard()?;
+                        }
+                        // Cap every tool (builtin/MCP/plugin) after hooks and
+                        // immediately before durable Event publication.
+                        let output = hya_tool::cap_tool_output_with_policy(output, result_policy);
+                        let retains_artifact = artifact_guard.retained_by(&output);
+                        (
+                            Event::ToolResult {
+                                session,
+                                message,
+                                part: tc.part,
+                                call: tc.call,
+                                output,
+                                time_ms,
+                            },
+                            retains_artifact,
+                        )
+                    }
+                    Err(e) => {
+                        artifact_guard.discard()?;
+                        (
+                            Event::ToolError {
+                                session,
+                                message,
+                                part: tc.part,
+                                call: tc.call,
+                                value: Some(tool_error_value(&e)),
+                                message_text: e.to_string(),
+                            },
+                            false,
+                        )
+                    }
                 };
                 self.emit_for_actor(actor_claim, session, event).await?;
+                if retains_artifact {
+                    artifact_guard.disarm();
+                } else {
+                    artifact_guard.discard()?;
+                }
             }
 
             rounds += 1;

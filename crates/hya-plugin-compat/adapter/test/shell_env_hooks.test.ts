@@ -20,8 +20,8 @@ afterEach(async () => {
   }
 })
 
-test("shell.env adds Compat plugin env to shell tool input", async () => {
-  // Given: an Compat plugin that adds a shell environment variable.
+test("shell.env adds Compat plugin env to canonical bash tool input", async () => {
+  // Given: a Compat plugin that adds a shell environment variable.
   const root = await makeTempDir()
   const expectedCwd = path.join(root, "subdir")
   const pluginFile = path.join(root, "shell-env.ts")
@@ -42,12 +42,28 @@ test("shell.env adds Compat plugin env to shell tool input", async () => {
     ].join("\n"),
   )
 
-  // When: hya asks the adapter to prepare a shell tool execution.
+  // When: hya asks the adapter to prepare canonical Bash and stale shell calls.
   const responses = await runAdapter(root, pluginFile, [
     initializeRequest(51),
     {
       jsonrpc: "2.0",
       id: 52,
+      method: "hook/tool.execute.before",
+      params: {
+        session: "session-shell",
+        message: "message-shell",
+        call: "call-shell",
+        tool: "bash",
+        input: {
+          command: "printf %s \"$HYA_SHELL_ENV\"",
+          cwd: "subdir",
+          env: { EXISTING: "kept" },
+        },
+      },
+    },
+    {
+      jsonrpc: "2.0",
+      id: 53,
       method: "hook/tool.execute.before",
       params: {
         session: "session-shell",
@@ -61,7 +77,7 @@ test("shell.env adds Compat plugin env to shell tool input", async () => {
         },
       },
     },
-    shutdownRequest(53),
+    shutdownRequest(54),
   ])
 
   // Then: shell.env is exposed through tool.execute.before and merged into args.
@@ -69,6 +85,17 @@ test("shell.env adds Compat plugin env to shell tool input", async () => {
     hooks: [{ name: "tool.execute.before" }],
   })
   expect(responses[1]?.result).toEqual({
+    outcome: "continue",
+    input: {
+      command: "printf %s \"$HYA_SHELL_ENV\"",
+      cwd: "subdir",
+      env: {
+        EXISTING: "kept",
+        HYA_SHELL_ENV: "from-plugin",
+      },
+    },
+  })
+  expect(responses[2]?.result).toEqual({
     outcome: "continue",
     input: {
       command: "printf %s \"$HYA_SHELL_ENV\"",

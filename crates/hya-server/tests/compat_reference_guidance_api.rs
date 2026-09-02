@@ -163,7 +163,7 @@ async fn read_reference_state(workdir: &str, reference_dir: &str) -> AppState {
         vec![
             FakeStep::ToolCall {
                 name: "read".to_string(),
-                input: json!({ "filePath": format!("{reference_dir}/guide.txt") }),
+                input: json!({ "path": format!("{reference_dir}/guide.txt") }),
             },
             FakeStep::Finish(FinishReason::ToolCalls),
         ],
@@ -991,7 +991,7 @@ impl Provider for MultiRoundRecordingProvider {
                     part,
                     call,
                     name,
-                    input: json!({ "filePath": self.tool_path }),
+                    input: json!({ "path": self.tool_path }),
                 }),
                 Ok(Event::MessageFinished {
                     session,

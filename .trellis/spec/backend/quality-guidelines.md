@@ -433,6 +433,19 @@ cargo run -p xtask -- release-rehearsal \
   binaries, the prepared `lib/hya/hya-tui-ts` runtime, the production
   `lib/hya/compat-adapter`, and the generated member
   `examples/hya-argus-example.hyabundle`; it does not add `hya-updater`.
+- The TUI payload is a recursive copy of `packages/hya-tui-ts/src`, not a
+  maintained source allowlist. Package-layout smoke and archive inspection must
+  require at least one nested hya-owned source path in addition to
+  `src/main.tsx`.
+- Copy `packages/hya-tui-ts/NOTICE` and root `THIRD_PARTY_NOTICES` to distinct
+  runtime destinations. The workflow and rehearsal must independently require
+  each copy, packaged presence, byte comparison with its source, and archive
+  member. A check for one notice cannot satisfy the other.
+- The packaged TUI `node_modules` tree is release content. Workflow smoke and
+  archive inspection require it. The source installer validates the staged
+  directory plus required OpenTUI and SDK client entries before moving any
+  installed path; a staging failure leaves the previous install untouched, and
+  a post-placement failure uses the existing backup rollback.
 - `scripts/package-argus-example.sh` generates that member from tracked source
   `bundles/examples/argus-example`; no root `examples/` artifact is an input.
 - The rehearsal requires the explicit `--no-publish` guard, builds and packages
@@ -454,6 +467,13 @@ cargo run -p xtask -- release-rehearsal \
   rehearsal fails its pinned prerequisite check.
 - Missing Compat adapter runtime, Argus package, locked production dependency,
   or archive member -> package/rehearsal smoke fails before publication.
+- Missing recursive source copy, nested source smoke/archive marker, either
+  notice copy/presence/byte comparison/archive marker, or TUI `node_modules`
+  smoke/archive marker -> workflow validation fails closed and names the exact
+  missing command before prerequisites or build.
+- Installer staging lacks `node_modules` or a required runtime dependency ->
+  fail before backups/swaps with the missing relative path; clean temporary
+  staging and retain the previous install.
 
 ### 5. Good/Base/Bad Cases
 
@@ -467,6 +487,9 @@ cargo run -p xtask -- release-rehearsal \
   checkout and release provider untouched.
 - Bad: validating only the three binaries and TUI runtime while omitting the
   adapter or Argus archive from assertions.
+- Bad: repairing an incomplete checked-in workflow inside a test fixture,
+  checking only `src/main.tsx`, treating one notice as proof for both sources,
+  or accepting an empty `node_modules` directory.
 
 ### 6. Tests Required
 
@@ -480,6 +503,15 @@ cargo run -p xtask -- release-rehearsal \
   each binary smoke.
 - Assert the TUI legal/client-present/server-absent runtime files and the Compat
   adapter's locked files and initialize/shutdown handshake.
+- Assert recursive TUI copying with a nested source fixture. Require exact,
+  independently removable workflow markers for nested source smoke/archive,
+  both notice copy/presence/byte-compare/archive paths, and TUI `node_modules`
+  smoke/archive; every single omission must fail with the removed marker in the
+  bounded diagnostic.
+- Installer tests must prove the installed nested source, byte-identical
+  notices, and required dependency files; a missing or incomplete staged
+  dependency tree must fail before swap, while a later smoke failure restores
+  every previous binary/runtime and removes temporary/backup paths.
 - Generate `examples/hya-argus-example.hyabundle` inside the temporary package
   from `bundles/examples/argus-example`, then assert its canonical root closure.
 - Confirm third-party actions are pinned to commit SHAs and release publication
@@ -954,8 +986,9 @@ pump(response, decoder, tx, stream_idle_deadline);
 ### 2. Signatures
 
 - File tools resolve user paths with `resolve_file(&ToolCtx.workdir, path)`.
-- Directory traversal then calls `assert_external_directory(ctx, &root, true)`
-  before reading, walking, or mutating the target.
+- Read and Grep derive a kind-blind wildcard from the lexical parent and call
+  their external-directory assertion before metadata or target-kind probing;
+  directory traversal starts only after that admission succeeds.
 - An omitted `find.path` means the bound workdir; it does not mean process cwd.
 
 ### 3. Contracts
@@ -967,13 +1000,15 @@ pump(response, decoder, tx, stream_idle_deadline);
   plane as every other file tool. A tool must not normalize away the escape and
   then operate directly.
 - Containment is an authorization rule, not a search-result filter: reject the
-  root before any partial result is returned.
+  root before metadata/existence probing or any partial result. A denied file
+  and denied directory sibling use the same lexical permission resource.
 
 ### 4. Validation & Error Matrix
 
 - Relative in-workdir path -> resolve and execute.
 - Absolute in-workdir path -> execute.
-- Absolute out-of-workdir path without grant -> `ToolError::Permission`.
+- Absolute out-of-workdir path without grant -> `ToolError::Permission` before
+  metadata, existence, or target-kind observation.
 - Parent traversal out of workdir without grant -> `ToolError::Permission`.
 - Omitted path -> search exactly the Session workdir.
 
@@ -988,6 +1023,8 @@ pump(response, decoder, tx, stream_idle_deadline);
 
 - Every path-taking file tool needs relative, absolute in-workdir, absolute
   outside, and parent-traversal behavior tests where applicable.
+- Read/Grep permission regressions compare the first requested resource for an
+  external file and directory sibling and prove denial precedes metadata.
 - A containment regression must assert the typed permission failure, not only an
   empty result or OS error.
 - Mutation proof for `find` replaces the shared resolution with `PathBuf::from`;
@@ -1005,7 +1042,8 @@ let root = PathBuf::from(input.path.unwrap_or_else(|| ".".to_string()));
 
 ```rust
 let root = resolve_file(&ctx.workdir, input.path.as_deref().unwrap_or("."))?;
-assert_external_directory(ctx, &root, true).await?;
+assert_external_directory(ctx, &root, false).await?; // lexical parent scope
+let metadata = tokio::fs::metadata(&root).await?;
 ```
 
 ---
@@ -1065,3 +1103,290 @@ let models = configured.or_else(|| Some(vec![agent.model.clone()]));
 let snapshot = ProviderCatalogSnapshot::build(rows, states, configured_default);
 let models = snapshot.models();
 ```
+---
+
+## Scenario: Native Coding Tools And Synchronized Presentation Contract
+
+### 1. Scope / Trigger
+
+- Trigger: changing a built-in Read, Edit, Grep, Write, Bash, or Task schema or
+  executor; the tool-result cap; provider tool replay; durable tool events; or
+  the OpenTUI completed-tool presentation.
+- Applies across `crates/hya-tool` (schema, permission, execution, and native
+  hashline runtime), `hya-core` (dispatch and event commit), `hya-proto`
+  (projection), `hya-provider` (tool-result text reconstruction), Compat SDK
+  DTOs, and `packages/hya-tui-ts` (the sole interactive renderer).
+- Hashline behavior is pinned to `pi-hashline-edit` 0.8.3, npm `gitHead`
+  `ba7db9943d0f58499b24c1f6bd64722580f772a5` and tarball SHA-1
+  `8985f24c3493be375cc225a5522ed54de8daabc9`. Host Write/Bash behavior is
+  derived from `@oh-my-pi/pi-coding-agent` 18.1.3 at
+  `can1357/oh-my-pi@0b769cc4dd9771373335430385d1d2f696dc3498`.
+- The source-derived port remains MIT-licensed with attribution to
+  `Copyright (c) 2026 RimuruW` for `pi-hashline-edit`, whose hashline source is
+  adapted from Oh My Pi (`Copyright (c) 2025 Mario Zechner; Copyright (c)
+  2025-2026 Can Bölük; Copyright (c) 2026 Stencil Labs, Inc.`). Ship the full
+  applicable permission text in the tool notice; do not replace it with credits
+  only.
+
+### 2. Signatures
+
+- `Tool::schema() -> ToolSchema` publishes only canonical model-facing names;
+  `Tool::execute(&ToolCtx, Value) -> Result<Value, ToolError>` returns one
+  bounded result envelope.
+- Read publishes this closed schema (the legacy `filePath` key is not listed):
+
+  ```json
+  {"type":"object","additionalProperties":false,"required":["path"],"properties":{"path":{"type":"string"},"offset":{"type":"integer","minimum":1},"limit":{"type":"integer","minimum":1},"raw":{"type":"boolean"}}}
+  ```
+
+- Edit publishes a closed `{ "path": string, "edits": Edit[] }` object.
+  Each closed `Edit` variant is `replace { op, pos, end?, lines }`,
+  `append { op, pos?, lines }`, `prepend { op, pos?, lines }`, or
+  `replace_text { op, oldText, newText }`; `op` is required and every variant
+  rejects unknown properties.
+- Grep publishes `{ "pattern": string, "path"?: string, "glob"?: string,
+  "ignoreCase"?: boolean, "literal"?: boolean, "context"?: integer,
+  "limit"?: integer }`, with `pattern` required, `context` in `0..=5`, and
+  `limit` in `1..=200`.
+- Write publishes the closed `{ "path": string, "content": string }` object.
+  Bash publishes the closed `{ "command": string, "env"?: {string: string},
+  "timeout"?: number, "cwd"?: string, "pty"?: boolean }` object. `bash` is
+  canonical; `shell` resolves only through a hidden runtime alias.
+- Task publishes top-level and member `inline_agent` objects with only
+  `name`, `prompt`, `category`, `model`, and `resident`. The hidden parser may
+  retain `description` solely to normalize stale calls: blank/whitespace is
+  `None`, while non-empty input remains available for typed rejection.
+- `ToolRegistry::builtins()` creates one `Arc<HashlineRuntime>` shared by
+  Read/Edit/Write/Grep and a separate Bash executor. `ToolCallRequested` is
+  admitted through the existing permission plane, then produces `ToolResult`
+  or `ToolError`; projection yields an SDK `ToolPart`, which is consumed by
+  `presentCodingTool(part) -> CodingToolView | undefined` and
+  `CodingToolPresentation(props) -> JSX.Element`.
+
+### 3. Contracts
+
+- The schema is a publication contract, not a parser dump. Hidden model-facing
+  compatibility is limited to Read `filePath` and `offset: 0`, Task empty nested
+  `inline_agent.description`, and Bash `shell`. Edit may accept only the pinned
+  package `prepareArguments` boundary (`file_path`, JSON-string `edits`, inferred
+  `replace_text`, and complete camel/snake old/new pairs); it must not expose or
+  accept hya's fuzzy `filePath + oldString + newString` surface. Grep's removed
+  `include` key is not a compatibility path.
+- Read resolves `path` and `filePath` as distinct untrimmed strings: one
+  non-empty value succeeds, equal non-empty values succeed, conflicting
+  non-empty values fail, and both absent/empty values fail. `offset: 0` means
+  line 1 only at the hidden compatibility boundary. A lexically external path
+  uses one kind-blind parent wildcard permission before metadata, existence, or
+  file-kind probing. Text uses BOM removal, CRLF/lone-CR normalization,
+  contextual XXH32 hashline anchors, raw mode, positive offset/limit slicing,
+  truncation notices, and invalid UTF-8 warnings; directory listings and
+  image/PDF attachments remain explicit hya extensions.
+- Edit validates every anchor against one pre-edit document, resolves all
+  spans before mutation, rejects duplicates/conflicts/no-empty-file results,
+  applies spans bottom-up, and uses exact context-3/fuzz-0 stale recovery from
+  bounded snapshots only after a direct stale-anchor failure. Grep uses native
+  regex/literal matching and gitignore-aware traversal, merges context ranges,
+  observes one extra match for truncation, and records snapshots only for
+  successfully rendered files. Caller globs stop at 4,096 bytes; both `[!x]`
+  and `[^x]` are negated classes in caller and ignore patterns. Ignore inputs
+  and rule counts are bounded. Grep streams logical lines, discards a line over
+  1 MiB through its newline with one bounded warning, continues with later
+  lines, and checks cancellation inside traversal, ignore, and scan loops.
+- Hashline state is private, process-local, and bounded by
+  `(SessionId | no-session, normalized workdir, resolved target path)`: lexical
+  permission uses the requested path first, then symlink resolution establishes
+  the target identity for locking and snapshots. At most 8 target entries, 4
+  versions per target, and 32 MiB total are retained. Fixed lock shards
+  serialize one target without an attacker-growing lock map. Contents never
+  enter logs or error payloads. A non-raw Read clears the repeated-edit marker;
+  two identical no-op payloads are soft success and the third is hard failure.
+- A target lock spans live load, validation/recovery, atomic write, formatter,
+  BOM/line-ending restoration, LSP, final reload, diff/display generation, and
+  snapshot update. The prepared target identity is revalidated immediately
+  before regular rename or hard-link truncate/open; a changed pathname/alias is
+  rejected before mutation. Fresh anchors, diffs, diagnostics, and UI metadata
+  describe final post-formatter bytes. If an atomic write committed but
+  synchronization, formatter, LSP, reload, preview, or a later cancellation
+  occurs, the adapter reconciles at the commit boundary, records the actual
+  final snapshot and payload guard, and never reports a pre-write fiction.
+- Write uses the shared atomic writer: follow relative/absolute symlink chains
+  for at most 40 hops and reject cycles; write an existing hard-linked inode in
+  place; otherwise use a same-directory mode-0600 temp, fsync, rename, and
+  cleanup on every failure. Preserve mode/BOM/line endings, strip a complete
+  unambiguous copied hashline prefix only, and warn (not silently fail) when a
+  leading-shebang execute-bit update cannot be applied. Bash defaults to 300
+  seconds; zero disables the deadline; finite nonzero values clamp to
+  `1..=3600`. Cancellation and timeout terminate and reap the complete process
+  group, including PTY descendants that retain the slave after leader exit.
+  PTY execution is real when requested; PTY unavailability is explicit, not a
+  silent fallback. Output is captured incrementally, bounded to 50 KiB inline
+  with a complete artifact when truncated. Spill ownership is armed before the
+  first write, uses mode `0600` on Unix, removes partial/unpublished files on
+  every failure or cancellation, and disarms only when a successful result
+  publishes `outputPath`. Timeout/clamp notices are applied before the spill
+  decision. Nonzero exit and timeout are completed structured results, while
+  explicit cancellation is typed cancellation. Environment values never appear
+  in titles, output summaries, diagnostics, or the TUI.
+- Results preserve `{ "title": string, "output": value, "metadata": object }`.
+  Unrelated built-in/MCP/plugin results retain the 5,000-character default;
+  coding tools use their declared bounded output policy and independently
+  bounded metadata/display rows, with explicit truncation flags. Nested rows
+  and groups are serialized exactly once for budget accounting, and capping is
+  structurally idempotent. The engine reapplies the coding cap after post-tool
+  hooks, immediately before durable publication, so a hook cannot bypass the
+  final envelope bound. Provider replay uses an object's string `output` field
+  first and JSON-stringifies only an object without that field.
+- Task's empty nested description normalizes to absence before admission, so
+  the captured call can create a child and resume its parent. A non-empty direct
+  or stale nested description returns the existing typed
+  `UnsupportedInlineAgentField { field: "description" }` before child/session
+  side effects. Authorization, model/category precedence, resident behavior,
+  admission ownership, and run-tree projection do not change.
+- The TUI consumes only projected SDK `ToolPart` state through SyncProvider. It
+  does not fetch, poll, replay Events, hydrate a second message store, schedule
+  a presentation timer, or create another result owner. Completed Read/Write
+  render titled, file-grammar-aware numbered text; Edit uses the semantic diff
+  primitive and keeps removed/added rows distinct at 80 columns; Grep renders
+  per-file titled rows from bounded `metadata.display.groups[]`; Bash and hidden
+  Shell share one command/output block, accept nullable exit for timeout/signal,
+  highlight only the command, strip ANSI from plain output, and never display
+  `env`. Top-level truncation is combined with adapter-specific display/row/
+  group/diff flags. Diagnostics retain only the first three severity-one items
+  with a positioned range and render one-based `Error [line:column]` labels.
+  Malformed or unsupported metadata returns `undefined` and uses the existing
+  readable fallback. Collapse is reversible UI state, distinct from backend
+  truncation.
+- Historical `Event` rows are immutable. Replay must expose old errors exactly
+  as stored while a restarted 0.36.9 backend handles new calls; an already
+  running 0.36.8 backend must restart before it can use these schemas.
+
+### 4. Validation & Error Matrix
+
+| Boundary or condition | Required result |
+| --- | --- |
+| Read path values equal/sole non-empty | Execute after external-path and Read permission checks |
+| Read paths conflict, both absent, or both empty | `ToolError::Input`; no path I/O or permission ask |
+| Read `offset`/`limit` is zero or invalid type (except hidden offset zero) | Input failure; schema advertises positive values only |
+| Edit malformed/unknown variant or mixed compatibility fields | Hashline `E_BAD_REQUEST`/`E_BAD_OP`, mapped to typed `ToolError::Input` |
+| Edit malformed anchor, out-of-range span, stale anchor, duplicate/conflict, or would-empty result | `E_BAD_REF`/`E_RANGE_OOB`/`E_STALE_ANCHOR`/`E_DUPLICATE_EDIT`/`E_EDIT_CONFLICT`/`E_WOULD_EMPTY`; bounded hints contain no file text |
+| Edit/Write formatter, LSP, final reload, or preview fails after commit | Commit-boundary reconciliation; contextual `ToolError::Other` beginning with `File changed at <path>` plus final snapshot |
+| Hashline output/config/result capacity is exceeded | `E_BAD_CONFIG`/`E_OUTPUT_LIMIT`/`E_CAPACITY`, or explicit bounded truncation where the contract permits it |
+| External path or tool permission is denied | Existing `ToolError::Permission`, in existing lexical-path order; no hashline state mutation |
+| External Read/Grep target is missing, a file, or a directory | One kind-blind lexical parent resource is authorized before metadata; denial reveals no target kind |
+| Prepared regular/hard-link pathname changes before commit | Non-committed contextual I/O error; swapped inode is not replaced or truncated |
+| Grep line exceeds 1 MiB or ignore input exceeds its rule budget | Skip the bounded source with one warning, continue later work, and remain cancellable |
+| Task description is blank vs non-empty | Blank becomes absent and proceeds; non-empty is typed unsupported-field rejection before admission |
+| Bash timeout is zero, finite out of range, non-finite, nonzero exit, timeout, or cancellation | Zero disables; finite value clamps with notice; nonzero/timeout complete structurally; cancellation is `ToolError::Cancelled` |
+| PTY requested but unavailable | Explicit input/runtime error; never run non-PTY as an implicit fallback |
+| PTY leader exits while a descendant retains the slave | Continue deadline/cancellation observation; kill and reap the process group on either signal |
+| A post-tool hook expands a coding result | Reapply the shape-aware cap before Event publication; keep a structured envelope within the hard bound |
+| TUI unknown keys, malformed metadata, syntax parser failure, or pending/error state | Omit specialized view and use existing fallback; syntax failure becomes readable plain text; no secret/unknown field is rendered |
+| Replayed historical Event or old backend process | Do not rewrite the Event; restart the old process before issuing new 0.36.9 calls |
+
+Hashline failures use the private `{ code, message, hints }` envelope and retain
+the stable bracketed code in `ToolError::Input` (for example `[E_STALE_ANCHOR]`).
+They must not collapse into generic I/O, permission, or success results.
+
+### 5. Good / Base / Bad Cases
+
+- Good: the captured four-key Read request `{filePath, path, offset: 0,
+  limit}` resolves one path, returns a correlated `ToolResult`, and produces a
+  titled numbered SDK part; a later formatter changes an Edit, and its preview,
+  diff, anchors, and snapshot all describe the formatted bytes.
+- Good: a completed Grep result has bounded per-file groups, the TUI displays
+  matches at both 80 and 140 columns, and reopening the Session renders the same
+  projected blocks without a presentation request.
+- Base: a raw Read, directory, attachment, hidden `shell` call, two no-op edits,
+  or Task empty description keeps its documented compatibility path; ordinary
+  tools still use the 5,000-character result default.
+- Bad: aliasing `filePath` onto the canonical Read field, restoring fuzzy Edit,
+  storing snapshots by process-global path, retaining unbounded output, or
+  treating a post-commit formatter failure as if no write occurred.
+- Bad: making the TUI fetch tool results, render arbitrary metadata keys, expose
+  `env`, sort Grep groups differently from backend order, or replace historical
+  errors during replay.
+
+### 6. Tests Required
+
+- `hya-tool` Read tests assert published schema and canonical/legacy/equal,
+  one-empty/conflict/missing/offset-zero/raw/directory/media/UTF-8/truncation/
+  permission behavior; the exact four-key request must produce a completed
+  part, not a duplicate-field error.
+- Hashline tests assert golden anchors (`alpha/beta/gamma/delta -> KT/JB/KJ/PX`),
+  widths 2..=4, parser and hint collisions, every stable failure code,
+  bounded LRU/lock isolation, duplicate/no-op guards, exact stale recovery, and
+  filesystem mode/BOM/line-ending/symlink/hard-link/cleanup behavior.
+- Edit/Grep/Write/Bash tests assert every operation, native traversal and
+  context/limit boundary, final formatter/LSP reconciliation, closed schemas,
+  prefix/shebang behavior, timeout/cancel/exit/PTY-descendant/artifact behavior,
+  inner-loop cancellation, logical-line/ignore/glob bounds, target-identity
+  swaps, and one-pass metadata/result caps. Include the provider
+  `wire::tool_result` object-output preference and JSON fallback, plus a direct
+  post-hook expansion regression at the final Event boundary.
+- Task and app admission tests assert both nested schemas omit `description`,
+  the captured empty call creates/resumes with no unsupported-field error, and a
+  non-empty direct value has no child/session/event side effect.
+- Core/server tests assert permission ordering, `ToolCallRequested` correlation,
+  unchanged historical Events, projection replay, and no second result store.
+- Frontend tests at `test/coding-tool-presentation.test.ts`,
+  `test/coding-tool-render.test.tsx`, and `test/coding-tool-sync.test.tsx`
+  assert allowlisted semantic views, malformed fallback, titles, syntax spans,
+  offset/line numbers, diff mode, per-file Grep, bash/shell normalization,
+  ANSI-safe output, secret exclusion, live part replacement, and no network or
+  timer from presentation. OpenTUI rendering is tested at 80 and 140 columns;
+  a real backend PTY scenario reopens the Session and compares completed blocks.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```rust
+#[derive(Deserialize)]
+struct ReadInput {
+    #[serde(alias = "filePath")]
+    path: String,
+}
+
+// This aliases two wire keys onto one Serde field, so the captured request can
+// fail before path resolution, permission admission, or I/O.
+let output = cap_tool_output(tool.execute(&ctx, input).await?);
+```
+
+```typescript
+createEffect(async () => {
+  const result = await fetch(`/session/${sessionID}/tool/${part.id}`)
+  setLocalTool(result)
+})
+```
+
+#### Correct
+
+```rust
+#[derive(Deserialize)]
+struct ReadInput {
+    path: Option<String>,
+    #[serde(rename = "filePath")]
+    file_path: Option<String>,
+    offset: Option<usize>,
+    limit: Option<usize>,
+    raw: bool,
+}
+
+let result = tool.execute(&ctx, input).await?;
+// The engine applies the declared shape-aware cap without discarding:
+// {"title": string, "output": value, "metadata": object}.
+Ok(result)
+```
+
+```typescript
+const view = presentCodingTool(part)
+return view ? (
+  <CodingToolPresentation part={part} width={width} diffStyle={diffStyle} diffWrapMode={diffWrapMode} />
+) : (
+  <GenericTool {...toolprops} />
+)
+```
+
+The first path creates a schema/execution contradiction and destroys semantic
+metadata. The second validates compatibility at the adapter boundary and lets
+one projected SDK part drive live rendering and replay.

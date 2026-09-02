@@ -144,7 +144,7 @@ async fn shell_endpoint_runs_command_and_records_tool_result() {
                 name,
                 state: ToolPartState::Completed { output, .. },
                 ..
-            } if name.as_str() == "shell" && output["output"].as_str().unwrap().contains("server-shell-ok")
+            } if name.as_str() == "bash" && output["output"].as_str().unwrap().contains("server-shell-ok")
         )
     }));
 }
@@ -242,7 +242,7 @@ async fn native_shell_honors_selected_agent_and_model() {
                 name,
                 state: ToolPartState::Completed { output, .. },
                 ..
-            } if name.as_str() == "shell" && output["output"].as_str().unwrap().contains("native-shell-selection")
+            } if name.as_str() == "bash" && output["output"].as_str().unwrap().contains("native-shell-selection")
         )
     }));
 }

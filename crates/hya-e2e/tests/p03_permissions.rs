@@ -13,7 +13,7 @@ async fn t1_7_permission_once_allows_shell_side_effect() {
         .permission_model("default")
         .scripts(vec![
             tool_step(
-                "shell",
+                "bash",
                 json!({ "command": "printf once-ok > e2e-perm-once.txt" }),
             ),
             text_step("PERM_ONCE_DONE"),
@@ -49,7 +49,7 @@ async fn t1_7_permission_reject_blocks_shell_side_effect() {
         .permission_model("default")
         .scripts(vec![
             tool_step(
-                "shell",
+                "bash",
                 json!({ "command": "printf reject-leak > e2e-perm-reject.txt" }),
             ),
             text_step("PERM_REJECT_DONE"),

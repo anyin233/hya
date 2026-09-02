@@ -89,7 +89,7 @@ async fn legacy_tool_parts_include_compat_state_shape() {
     assert_eq!(state["output"], "hello");
     assert_eq!(state["title"], "printf hello");
     assert_eq!(state["metadata"]["exit"], 0);
-    assert_eq!(state["metadata"]["output"], "hello");
+    assert!(state["metadata"].get("output").is_none());
     assert!(state["time"]["start"].as_u64().is_some());
     assert!(state["time"]["end"].as_u64() >= state["time"]["start"].as_u64());
 }

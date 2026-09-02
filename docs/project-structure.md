@@ -113,25 +113,25 @@ Important modules:
 | [`permission.rs`](../crates/hya-tool/src/permission.rs) | Action/resource rules, `Allow`/`Ask`/`Deny`, ask requests, persistent allow-always decisions. |
 | [`tool.rs`](../crates/hya-tool/src/tool.rs) | Tool trait, registry, aliases, shared context, path/search helpers. |
 | [`read.rs`](../crates/hya-tool/src/read.rs), [`write.rs`](../crates/hya-tool/src/write.rs), [`edit.rs`](../crates/hya-tool/src/edit.rs), [`apply_patch`](../crates/hya-tool/src/apply_patch) | File read/write/edit/patch tools. |
-| [`shell.rs`](../crates/hya-tool/src/shell.rs) | Shell execution tool; registry also advertises a second canonical name `bash` (same implementation, not a hidden alias). |
+| [`shell.rs`](../crates/hya-tool/src/shell.rs) | Canonical `bash` execution tool with real PTY support; legacy `shell` remains a hidden dispatch alias. |
 | [`webfetch`](../crates/hya-tool/src/webfetch), [`websearch.rs`](../crates/hya-tool/src/websearch.rs) | Web fetch/search tools. |
 | [`lsp.rs`](../crates/hya-tool/src/lsp.rs), [`formatter.rs`](../crates/hya-tool/src/formatter.rs) | LSP and formatter planes. |
 | [`skill.rs`](../crates/hya-tool/src/skill.rs), [`task.rs`](../crates/hya-tool/src/task.rs), [`todo.rs`](../crates/hya-tool/src/todo.rs), [`question.rs`](../crates/hya-tool/src/question.rs) | Skill, subtask, todo, and human-question tools. |
 | [`workflow_plane.rs`](../crates/hya-tool/src/workflow_plane.rs) | Workflow list/info/use/run/state tool integration through `WorkflowControl`. |
 
-Builtins currently include **28 canonical schema names** (aliases are listed
+Builtins currently include **27 canonical schema names** (aliases are listed
 separately below):
 
 | Tool | Permission action | Behavior |
 | --- | --- | --- |
-| `read` | `Read` | Read text/media files and directory listings with truncation. |
-| `write` | `Edit` | Create parent directories, write content, run formatter/LSP post-edit hooks. |
-| `edit` | `Edit` | Replace text with ambiguity checks, formatter/LSP post-edit hooks. |
+| `read` | `Read` | Read normalized hashline/raw text, media files, or directory listings with bounded truncation. |
+| `write` | `Edit` | Write through the shared atomic/hashline runtime, then run formatter/LSP post-edit hooks. |
+| `edit` | `Edit` | Apply strict anchored hashline operations with exact stale recovery and post-commit reconciliation. |
 | `apply_patch` (`patch`) | `Edit` | Apply unified-style patches and return aggregate/per-file diff metadata. |
 | `ls` | `Read` | List immediate directory entries. |
 | `glob`, `find` | `Glob` | Search path names under a directory. |
-| `grep` | `Grep` | Regex-search file contents under a path. |
-| `shell`, `bash` | `Bash` | Two **advertised** canonical tool names (`insert_named_builtin` for `bash`) sharing one shell implementation. Not among the five **hidden** aliases (`patch`, `fetch`, `search`, `todo`, `plan`). |
+| `grep` | `Grep` | Run bounded native text search and emit hashline match/context rows. |
+| `bash` (`shell`) | `Bash` | Canonical Bash tool with hidden legacy `shell` dispatch; supports bounded pipe or real-PTY execution. |
 | `webfetch` (`fetch`), `websearch` (`search`) | `WebFetch` / `WebSearch` | Fetch URLs or query a configured web-search provider. |
 | `question`, `ask_user` | `Tool` | Ask the human a select or free-text question (interaction plane). |
 | `lsp` | `Lsp` | Dispatch workspace-symbol/diagnostic-style LSP operations. |
@@ -145,11 +145,15 @@ separately below):
 | `send`, `announce`, `join`, `leave` | `Tool` | Unit-scoped mailbox send, one-way announce to direct reports, and channel join/leave; ask under `default`. |
 | `invalid` | `Tool` | Structured response for unknown tool calls. |
 
-Successful tool output is capped at **5000 characters** for model consumption
-([`output_cap.rs`](../crates/hya-tool/src/output_cap.rs)); oversized results keep
-a trailing window plus a truncation notice. Shell has its own larger buffer
-limits. Search-style tools such as `glob` and `grep` also cap returned rows
-(for example 100) while preserving count and truncation metadata.
+Successful tool output passes through a global shape-aware cap
+([`output_cap.rs`](../crates/hya-tool/src/output_cap.rs)) and is capped again
+after post-tool hooks before Event publication. Unrelated tools keep the legacy
+5000-character tail policy. Coding tools preserve bounded structured results,
+including display metadata, diagnostics, and Edit diffs; nested rows/groups are
+budgeted once. `bash` keeps up to 50 KiB inline and spills complete larger raw
+output to a private cleanup-owned artifact. Search traversal and retained lines,
+patterns, ignore rules, returned rows, counts, and warnings are bounded and
+cancellation-aware.
 
 ## `hya-store`
 
@@ -333,6 +337,14 @@ The shipped frontend spans four colocated components:
 `packages/hya-tui-ts` is the sole interactive frontend implementation. New
 interactive behavior belongs there; shared backend behavior belongs below the
 SDK boundary.
+
+Source installs and release archives ship this frontend as a prepared runtime:
+the complete `packages/hya-tui-ts/src` tree is copied recursively, its package
+`NOTICE` and root `THIRD_PARTY_NOTICES` are kept as distinct byte-verified
+members, and production `node_modules` is retained. Installer staging validates
+a nested source and required dependency entries before it swaps any installed
+path; the existing backup transaction restores all components after a later
+failure.
 
 ## Tests
 
