@@ -765,3 +765,28 @@ Added bounded optional-auth provider discovery, one immutable startup catalog ac
 ### Status
 
 [OK] **Completed**
+
+
+## Session 23: Fix session coding tool reliability
+
+**Date**: 2026-09-02
+**Task**: Fix session coding tool reliability
+**Branch**: `main`
+
+### Summary
+
+Fixed dual-path Read and inline Task schema contradictions, ported native hashline Read/Edit/Grep plus Write/Bash contracts, added bounded result transport and OpenTUI presentation, verified and installed 0.36.9.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `ef90eeb1` | (see git log) |
+| `ec417bb4` | (see git log) |
+| `4aee6de4` | (see git log) |
+| `1f0145ca` | (see git log) |
+| `daf88210` | (see git log) |
+
+### Status
+
+[OK] **Completed**
