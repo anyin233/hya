@@ -1,0 +1,12 @@
+{"file":".trellis/spec/backend/index.md","reason":"Backend package map and owning contracts for the changed runtime and API layers."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Audit typed discovery errors, fail-closed behavior, and secret-safe diagnostics."}
+{"file":".trellis/spec/backend/workflow-control.md","reason":"Audit that catalog changes do not alter Workflow/category route ownership or failover."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Audit logs for credential, response-body, and unsafe endpoint leakage."}
+{"file":".trellis/spec/frontend/index.md","reason":"Check the correct TUI ownership and guideline coverage."}
+{"file":".trellis/spec/frontend/directory-structure.md","reason":"Reject new frontend catalog clients or presentation outside the current contexts."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Check frontend TDD, type safety, Bun tests, and actual TUI behavior."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Verify one DTO/data flow and no per-consumer catalog reconstruction."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Audit duplicate normalizers, constants, status decoders, and membership logic."}
+{"file":".trellis/tasks/09-01-model-catalog-endpoint-discovery/research/provider-catalog-discovery.md","reason":"Validate endpoint/auth/filter behavior against the researched provider matrix."}
+{"file":".trellis/tasks/09-01-model-catalog-endpoint-discovery/research/provider-design-proposal.md","reason":"Compare implementation to the reviewed immutable snapshot and D5 status design."}
+{"file":".trellis/tasks/09-01-model-catalog-endpoint-discovery/research/cross-layer-implementation-proposal.md","reason":"Check all planned TDD slices, contract tests, docs, release, and rollback gates."}

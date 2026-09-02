@@ -1,0 +1,12 @@
+{"file":".trellis/spec/backend/index.md","reason":"Backend package map and pre-development contracts for runtime composition and HTTP surfaces."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Typed failure, fail-closed startup, and secret-safe error propagation rules."}
+{"file":".trellis/spec/backend/workflow-control.md","reason":"Preserve category and Workflow model routing, ordered fallback, reasoning, and event ownership."}
+{"file":".trellis/spec/backend/logging-guidelines.md","reason":"Apply non-secret structured logging rules to startup discovery outcomes."}
+{"file":".trellis/spec/frontend/index.md","reason":"Frontend package guide and authoritative TUI guideline index."}
+{"file":".trellis/spec/frontend/directory-structure.md","reason":"Keeps catalog presentation in the TypeScript TUI and reuses existing SDK contexts."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"TDD, type-check, Bun test, and semantic TUI verification requirements."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"One catalog contract must survive config, provider, engine, HTTP, SDK, and TUI projection."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Prevents duplicate catalog normalization, status decoding, and model membership logic."}
+{"file":".trellis/tasks/09-01-model-catalog-endpoint-discovery/research/provider-catalog-discovery.md","reason":"Provider endpoint/auth matrix, normalization policy, privacy boundary, and async composition options."}
+{"file":".trellis/tasks/09-01-model-catalog-endpoint-discovery/research/provider-design-proposal.md","reason":"Reviewed deep-module proposal including credentialless discovery and provider status outcomes."}
+{"file":".trellis/tasks/09-01-model-catalog-endpoint-discovery/research/cross-layer-implementation-proposal.md","reason":"Ordered cross-layer TDD slices, affected symbols, validation gates, and rollback points."}
