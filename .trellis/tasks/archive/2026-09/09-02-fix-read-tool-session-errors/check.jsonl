@@ -1,0 +1,8 @@
+{"file":".trellis/tasks/09-02-fix-read-tool-session-errors/prd.md","reason":"Check every requested tool, compatibility decision, and observable acceptance criterion."}
+{"file":".trellis/tasks/09-02-fix-read-tool-session-errors/design.md","reason":"Check native-only boundaries, exact source contracts, security scoping, bounded state/output, and rollback coherence."}
+{"file":".trellis/tasks/09-02-fix-read-tool-session-errors/implement.md","reason":"Check red/green evidence, caller migration, full gates, commit split, push, and restart note."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Verify stable typed failures, no suppression, and contextual post-mutation errors."}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Verify the hya-owned presentation seam consumes projected SDK state only."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Verify semantic renderer coverage and real 80/wide terminal behavior."}
+{"file":"DESIGN.md","reason":"Verify semantic colors, width safety, transcript hierarchy, and tool-state presentation."}
+{"file":"AGENTS.md","reason":"Verify TDD, CI-equivalent gates, version/changelog, atomic commits, push, and finish requirements."}
