@@ -1,10 +1,9 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use hya_proto::{ActorClaim, OperationId, SessionId, ToolCallId, ToolName, ToolSchema};
-use regex::Regex;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -15,6 +14,8 @@ use crate::agents::{AgentDef, ListAgentsTool};
 use crate::apply_patch::ApplyPatchTool;
 use crate::edit::EditTool;
 use crate::formatter::FormatterPlane;
+pub use crate::grep::GrepTool;
+use crate::hashline::HashlineRuntime;
 use crate::interaction::{InteractionPlane, QuestionAnswer, QuestionKind};
 use crate::invalid::InvalidTool;
 use crate::lsp::{LspPlane, LspTool};
@@ -192,7 +193,24 @@ impl ToolOperation {
 }
 
 const SEARCH_LIMIT: usize = 100;
+const MAX_GLOB_BYTES: usize = 4096;
 const BUILTIN_DISPATCH_IDENTITY_DOMAIN_V1: &[u8] = b"hya.tool.builtin-dispatch/v1";
+
+/// Policy used when bounding a successful tool result before persistence.
+///
+/// The default keeps the historical 5,000-character tail behavior. Coding
+/// tools opt into shape-aware bounds so their presentation envelope remains
+/// structured while large fields are capped independently.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ToolResultPolicy {
+    /// Apply the legacy display-text cap to arbitrary JSON values.
+    #[default]
+    Default,
+    /// Preserve a bounded coding-tool presentation envelope.
+    Coding,
+    /// Preserve a coding envelope and an independently bounded edit diff.
+    CodingWithDiff,
+}
 
 /// Model-callable capability: stable name, advertised schema, and async execution.
 ///
@@ -205,6 +223,14 @@ pub trait Tool: Send + Sync {
     fn name(&self) -> &str;
     /// JSON Schema describing required and optional arguments.
     fn schema(&self) -> ToolSchema;
+    /// Result bounding policy used after successful execution.
+    ///
+    /// The default keeps external tools source-compatible and preserves the
+    /// historical arbitrary-value cap. Built-in coding adapters override this
+    /// method explicitly rather than relying on their name.
+    fn result_policy(&self) -> ToolResultPolicy {
+        ToolResultPolicy::Default
+    }
     /// Run the tool body with validated (or raw) `input` and the call context.
     async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError>;
 }
@@ -226,8 +252,80 @@ impl Tool for NamedTool {
         schema
     }
 
+    fn result_policy(&self) -> ToolResultPolicy {
+        self.inner.result_policy()
+    }
+
     async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError> {
         self.inner.execute(ctx, input).await
+    }
+}
+
+#[cfg(test)]
+mod result_policy_tests {
+    use super::*;
+
+    struct ExplicitPolicyTool;
+
+    #[async_trait]
+    impl Tool for ExplicitPolicyTool {
+        fn name(&self) -> &str {
+            "wrapped"
+        }
+
+        fn schema(&self) -> ToolSchema {
+            ToolSchema {
+                name: ToolName::new("wrapped"),
+                description: String::new(),
+                input_schema: serde_json::json!({"type": "object"}),
+                output_schema: None,
+            }
+        }
+
+        fn result_policy(&self) -> ToolResultPolicy {
+            ToolResultPolicy::CodingWithDiff
+        }
+
+        async fn execute(&self, _ctx: &ToolCtx, _input: Value) -> Result<Value, ToolError> {
+            Ok(Value::Null)
+        }
+    }
+
+    struct DefaultPolicyTool;
+
+    #[async_trait]
+    impl Tool for DefaultPolicyTool {
+        fn name(&self) -> &str {
+            "read"
+        }
+
+        fn schema(&self) -> ToolSchema {
+            ToolSchema {
+                name: ToolName::new("read"),
+                description: String::new(),
+                input_schema: serde_json::json!({"type": "object"}),
+                output_schema: None,
+            }
+        }
+
+        async fn execute(&self, _ctx: &ToolCtx, _input: Value) -> Result<Value, ToolError> {
+            Ok(Value::Null)
+        }
+    }
+
+    #[test]
+    fn external_tool_gets_legacy_policy_by_default() {
+        assert_eq!(DefaultPolicyTool.result_policy(), ToolResultPolicy::Default);
+    }
+
+    #[test]
+    fn named_tool_forwards_inner_policy() {
+        let named = NamedTool {
+            name: "alias".to_string(),
+            inner: Arc::new(ExplicitPolicyTool),
+        };
+        assert_eq!(named.name(), "alias");
+        assert_eq!(named.result_policy(), ToolResultPolicy::CodingWithDiff);
     }
 }
 
@@ -326,15 +424,16 @@ impl ToolRegistry {
     #[must_use]
     pub fn builtins() -> Self {
         let registry = Self::empty();
+        let hashline_runtime = Arc::new(HashlineRuntime::new());
         for tool in [
             Arc::new(InvalidTool) as Arc<dyn Tool>,
-            Arc::new(ReadTool),
-            Arc::new(WriteTool),
-            Arc::new(EditTool),
+            Arc::new(ReadTool::new(Arc::clone(&hashline_runtime))),
+            Arc::new(WriteTool::new(Arc::clone(&hashline_runtime))),
+            Arc::new(EditTool::new(Arc::clone(&hashline_runtime))),
             Arc::new(LsTool),
             Arc::new(GlobTool),
             Arc::new(FindTool),
-            Arc::new(GrepTool),
+            Arc::new(GrepTool::with_runtime(Arc::clone(&hashline_runtime))),
             Arc::new(QuestionTool),
             Arc::new(LspTool),
             Arc::new(SkillTool),
@@ -351,9 +450,7 @@ impl ToolRegistry {
         ] {
             registry.insert_builtin(tool);
         }
-        let shell = Arc::new(ShellTool);
-        registry.insert_builtin(shell.clone());
-        registry.insert_named_builtin("bash", shell);
+        registry.insert_aliased_builtin("bash", "shell", Arc::new(ShellTool));
         registry.insert_aliased_builtin("apply_patch", "patch", Arc::new(ApplyPatchTool));
         registry.insert_aliased_builtin("webfetch", "fetch", Arc::new(WebFetchTool));
         registry.insert_aliased_builtin("websearch", "search", Arc::new(WebSearchTool));
@@ -520,23 +617,6 @@ impl ToolRegistry {
         }
     }
 
-    fn insert_named_builtin(&self, name: &str, tool: Arc<dyn Tool>) {
-        let mut inner = self.write();
-        inner.tools.insert(
-            name.to_string(),
-            ResolvedTool {
-                tool: Arc::new(NamedTool {
-                    name: name.to_string(),
-                    inner: tool,
-                }),
-                permission: builtin_permission(name),
-            },
-        );
-        if let Some(identity) = builtin_dispatch_identity(name) {
-            inner.dispatch_identities.insert(name.to_string(), identity);
-        }
-    }
-
     fn insert_aliased_builtin(&self, canonical: &str, legacy: &str, tool: Arc<dyn Tool>) {
         let permission = builtin_permission(canonical);
         let mut inner = self.write();
@@ -663,17 +743,29 @@ pub(crate) fn obj_schema(
     }
 }
 
-fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
-    if let Ok(entries) = std::fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                walk(&path, out);
-            } else {
-                out.push(path);
-            }
+/// Collect files recursively while checking the call cancellation token.
+fn walk(dir: &Path, out: &mut Vec<PathBuf>, cancel: &CancellationToken) -> Result<(), ToolError> {
+    if cancel.is_cancelled() {
+        return Err(ToolError::Cancelled);
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Ok(());
+    };
+    for entry in entries {
+        if cancel.is_cancelled() {
+            return Err(ToolError::Cancelled);
+        }
+        let Ok(entry) = entry else {
+            continue;
+        };
+        let path = entry.path();
+        if path.is_dir() {
+            walk(&path, out, cancel)?;
+        } else {
+            out.push(path);
         }
     }
+    Ok(())
 }
 
 fn relative_title(path: &Path, workdir: &Path) -> String {
@@ -686,20 +778,7 @@ fn relative_title(path: &Path, workdir: &Path) -> String {
     }
 }
 
-fn matches_include(include: &str, path: &Path, root: &Path) -> bool {
-    let relative = path
-        .strip_prefix(root)
-        .unwrap_or(path)
-        .to_string_lossy()
-        .replace('\\', "/");
-    let name = path
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    glob_match(include, &relative) || glob_match(include, &name)
-}
-
-async fn assert_external_directory(
+pub(crate) async fn assert_external_directory(
     ctx: &ToolCtx,
     target: &Path,
     is_directory: bool,
@@ -723,7 +802,100 @@ async fn assert_external_directory(
     Ok(())
 }
 
+/// Authorize an external Grep or Glob target with one lexical, kind-blind resource.
+pub(crate) async fn assert_external_directory_lexical(
+    ctx: &ToolCtx,
+    target: &Path,
+) -> Result<(), ToolError> {
+    let target = normalize(&absolutize(target));
+    let workdir = normalize(&absolutize(&ctx.workdir));
+    if target.starts_with(&workdir) {
+        return Ok(());
+    }
+    let parent = target
+        .parent()
+        .map_or_else(|| PathBuf::from("/"), Path::to_path_buf);
+    let pattern = display_path(&parent.join("*"));
+    ctx.permission
+        .assert(Action::ExternalDirectory, Resource::Path(pattern))
+        .await?;
+    Ok(())
+}
+
+/// Reject a caller-provided Glob pattern that exceeds the native matcher bound.
+fn validate_glob_pattern(pattern: &str) -> Result<(), ToolError> {
+    if pattern.len() > MAX_GLOB_BYTES {
+        return Err(ToolError::Input(format!(
+            "glob pattern exceeds {MAX_GLOB_BYTES} bytes"
+        )));
+    }
+    Ok(())
+}
+
+/// Traverse files while retaining only the lexically first bounded Glob results.
+///
+/// # Parameters
+/// - `directory`: Directory currently being visited.
+/// - `root`: Search root used to build relative match candidates.
+/// - `pattern`: Validated caller glob pattern.
+/// - `matches`: Bounded ordered set of the first matching paths.
+/// - `total`: Saturating count of all matching files observed.
+/// - `cancel`: Call token checked before each directory entry and recursion.
+///
+/// # Returns
+/// Success after the branch is exhausted, or typed cancellation.
+fn collect_glob_matches(
+    directory: &Path,
+    root: &Path,
+    pattern: &str,
+    matches: &mut BTreeSet<PathBuf>,
+    total: &mut usize,
+    cancel: &CancellationToken,
+) -> Result<(), ToolError> {
+    if cancel.is_cancelled() {
+        return Err(ToolError::Cancelled);
+    }
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return Ok(());
+    };
+    for entry in entries {
+        if cancel.is_cancelled() {
+            return Err(ToolError::Cancelled);
+        }
+        let Ok(entry) = entry else {
+            continue;
+        };
+        let path = entry.path();
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_dir() {
+            collect_glob_matches(&path, root, pattern, matches, total, cancel)?;
+            continue;
+        }
+        let relative = path.strip_prefix(root).unwrap_or(path.as_path());
+        let relative = relative.to_string_lossy().replace('\\', "/");
+        let name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        if crate::grep::wildcard_match(pattern, &relative)
+            || crate::grep::wildcard_match(pattern, &name)
+        {
+            *total = total.saturating_add(1);
+            matches.insert(path);
+            if matches.len() > SEARCH_LIMIT
+                && let Some(last) = matches.iter().next_back().cloned()
+            {
+                matches.remove(&last);
+            }
+        }
+    }
+    Ok(())
+}
+
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct GlobInput {
     pattern: String,
     path: Option<String>,
@@ -740,50 +912,63 @@ impl Tool for GlobTool {
             "glob",
             "List files under a directory matching a glob pattern.",
             json!({
-                "pattern": {"type": "string", "description": "The glob pattern to match files against"},
+                "pattern": {"type": "string", "maxLength": MAX_GLOB_BYTES, "description": "The glob pattern to match files against"},
                 "path": {"type": "string", "description": "The directory to search in. If omitted, uses the working directory."}
             }),
             &["pattern"],
         )
     }
     async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError> {
+        if input.get("path").is_some_and(Value::is_null) {
+            return Err(ToolError::Input("path must not be null".to_string()));
+        }
         let input: GlobInput =
             serde_json::from_value(input).map_err(|e| ToolError::Input(e.to_string()))?;
+        validate_glob_pattern(&input.pattern)?;
+        if ctx.cancel.is_cancelled() {
+            return Err(ToolError::Cancelled);
+        }
         ctx.permission
             .assert(Action::Glob, Resource::Glob(input.pattern.clone()))
             .await?;
+        if ctx.cancel.is_cancelled() {
+            return Err(ToolError::Cancelled);
+        }
         let search = input.path.as_deref().map_or_else(
             || ctx.workdir.clone(),
             |path| resolve_file(&ctx.workdir, path),
         );
+        assert_external_directory_lexical(ctx, &search).await?;
+        if ctx.cancel.is_cancelled() {
+            return Err(ToolError::Cancelled);
+        }
         let is_file = tokio::fs::metadata(&search)
             .await
             .is_ok_and(|meta| meta.is_file());
+        if ctx.cancel.is_cancelled() {
+            return Err(ToolError::Cancelled);
+        }
         if is_file {
             return Err(ToolError::Input(format!(
                 "glob path must be a directory: {}",
                 display_path(&search)
             )));
         }
-        assert_external_directory(ctx, &search, true).await?;
-        let mut files = Vec::new();
-        walk(&search, &mut files);
-        let mut rows = Vec::new();
-        for f in files {
-            let rel = f.strip_prefix(&search).unwrap_or(f.as_path());
-            let rel_str = rel.to_string_lossy();
-            let name = f
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            if glob_match(&input.pattern, &rel_str) || glob_match(&input.pattern, &name) {
-                rows.push(f);
-            }
+        let mut bounded = BTreeSet::new();
+        let mut total = 0usize;
+        collect_glob_matches(
+            &search,
+            &search,
+            &input.pattern,
+            &mut bounded,
+            &mut total,
+            &ctx.cancel,
+        )?;
+        if ctx.cancel.is_cancelled() {
+            return Err(ToolError::Cancelled);
         }
-        rows.sort();
-        let total = rows.len();
-        let truncated = total >= SEARCH_LIMIT;
-        rows.truncate(SEARCH_LIMIT);
+        let rows = bounded.into_iter().collect::<Vec<_>>();
+        let truncated = total > SEARCH_LIMIT;
         let output_rows = rows
             .iter()
             .map(|path| display_path(path))
@@ -816,145 +1001,6 @@ impl Tool for GlobTool {
             "output": output,
             "paths": legacy_paths,
             "total": total,
-        }))
-    }
-}
-
-#[derive(Deserialize)]
-struct GrepInput {
-    pattern: String,
-    path: Option<String>,
-    include: Option<String>,
-}
-/// In-process regex line search with a 100-match cap (does not shell out to ripgrep).
-pub struct GrepTool;
-#[async_trait]
-impl Tool for GrepTool {
-    fn name(&self) -> &str {
-        "grep"
-    }
-    fn schema(&self) -> ToolSchema {
-        obj_schema(
-            "grep",
-            "Search file contents with a regex pattern under a path.",
-            json!({
-                "pattern": {"type": "string", "description": "The regex pattern to search for in file contents"},
-                "path": {"type": "string", "description": "The directory or file to search in. Defaults to the working directory."},
-                "include": {"type": "string", "description": "File glob pattern to include in the search"}
-            }),
-            &["pattern"],
-        )
-    }
-    async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError> {
-        let input: GrepInput =
-            serde_json::from_value(input).map_err(|e| ToolError::Input(e.to_string()))?;
-        if input.pattern.is_empty() {
-            return Err(ToolError::Input("pattern is required".to_string()));
-        }
-        let regex = Regex::new(&input.pattern).map_err(|e| ToolError::Input(e.to_string()))?;
-        let root = input.path.as_deref().map_or_else(
-            || ctx.workdir.clone(),
-            |path| resolve_file(&ctx.workdir, path),
-        );
-        ctx.permission
-            .assert(Action::Grep, Resource::Glob(input.pattern.clone()))
-            .await?;
-        let meta = tokio::fs::metadata(&root).await.ok();
-        assert_external_directory(
-            ctx,
-            &root,
-            meta.as_ref().is_some_and(std::fs::Metadata::is_dir),
-        )
-        .await?;
-        let search_root = if meta.as_ref().is_some_and(std::fs::Metadata::is_file) {
-            root.parent()
-                .map_or_else(|| root.clone(), Path::to_path_buf)
-        } else {
-            root.clone()
-        };
-        let mut files = {
-            let mut files = Vec::new();
-            walk(&search_root, &mut files);
-            files
-        };
-        files.sort();
-        let mut rows = Vec::new();
-        for f in files {
-            if let Some(include) = &input.include
-                && !matches_include(include, &f, &search_root)
-            {
-                continue;
-            }
-            let Ok(content) = tokio::fs::read_to_string(&f).await else {
-                continue;
-            };
-            for (i, line) in content.lines().enumerate() {
-                if regex.is_match(line) {
-                    rows.push((f.clone(), i + 1, line.to_string()));
-                    if rows.len() >= SEARCH_LIMIT {
-                        break;
-                    }
-                }
-            }
-            if rows.len() >= SEARCH_LIMIT {
-                break;
-            }
-        }
-        let truncated = rows.len() >= SEARCH_LIMIT;
-        if rows.is_empty() {
-            return Ok(json!({
-                "title": input.pattern,
-                "metadata": { "matches": 0, "truncated": false },
-                "output": "No files found",
-                "matches": [],
-                "total": 0,
-            }));
-        }
-        let mut output = vec![format!(
-            "Found {} matches{}",
-            rows.len(),
-            if truncated {
-                " (more matches available)"
-            } else {
-                ""
-            }
-        )];
-        let mut current = PathBuf::new();
-        for (path, line, text) in &rows {
-            if current != *path {
-                if !current.as_os_str().is_empty() {
-                    output.push(String::new());
-                }
-                current = path.clone();
-                output.push(format!("{}:", display_path(path)));
-            }
-            output.push(format!("  Line {line}: {text}"));
-        }
-        if truncated {
-            output.push(String::new());
-            output.push(
-                "(Results truncated. Consider using a more specific path or pattern.)".to_string(),
-            );
-        }
-        let matches = rows
-            .iter()
-            .map(|(path, line, text)| {
-                json!({
-                    "file": display_path(path),
-                    "line": line,
-                    "text": text,
-                })
-            })
-            .collect::<Vec<_>>();
-        Ok(json!({
-            "title": input.pattern,
-            "metadata": {
-                "matches": rows.len(),
-                "truncated": truncated,
-            },
-            "output": output.join("\n"),
-            "matches": matches,
-            "total": rows.len(),
         }))
     }
 }
@@ -1049,9 +1095,12 @@ impl Tool for FindTool {
             .await?;
         assert_external_directory(ctx, &root, true).await?;
         let mut files = Vec::new();
-        walk(&root, &mut files);
+        walk(&root, &mut files, &ctx.cancel)?;
         let mut rows: Vec<(String, u64)> = Vec::new();
         for f in &files {
+            if ctx.cancel.is_cancelled() {
+                return Err(ToolError::Cancelled);
+            }
             let rel = f.strip_prefix(&root).unwrap_or(f.as_path());
             let rel_str = rel.to_string_lossy();
             let name = f
@@ -1063,7 +1112,9 @@ impl Tool for FindTool {
                 rows.push((f.to_string_lossy().into_owned(), size));
             }
         }
-        rows.sort_by(|a, b| a.0.cmp(&b.0));
+        if ctx.cancel.is_cancelled() {
+            return Err(ToolError::Cancelled);
+        }
         let results: Vec<Value> = rows
             .into_iter()
             .map(|(path, size)| json!({ "path": path, "size": size }))

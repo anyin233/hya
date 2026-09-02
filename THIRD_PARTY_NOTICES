@@ -1,0 +1,60 @@
+THIRD-PARTY NOTICES
+
+Source-derived Rust hashline port
+=================================
+
+This distribution includes a Rust implementation of hashline coding tools. The
+source-derived hashline implementation is attributed to the following
+components. This notice covers that implementation only; it does not claim
+source copying from unrelated Rust dependencies.
+
+pi-hashline-edit 0.8.3
+----------------------
+Copyright (c) 2026 RimuruW
+
+Source package:
+https://www.npmjs.com/package/pi-hashline-edit/v/0.8.3
+Source tarball:
+https://registry.npmjs.org/pi-hashline-edit/-/pi-hashline-edit-0.8.3.tgz
+npm gitHead: ba7db9943d0f58499b24c1f6bd64722580f772a5
+Tarball SHA-1: 8985f24c3493be375cc225a5522ed54de8daabc9
+
+The hashline source in pi-hashline-edit is adapted from the Oh My Pi source
+listed below.
+
+Oh My Pi
+--------
+Copyright (c) 2025 Mario Zechner
+Copyright (c) 2025-2026 Can Bölük
+Copyright (c) 2026 Stencil Labs, Inc.
+
+Pinned source:
+https://github.com/can1357/oh-my-pi/tree/0b769cc4dd9771373335430385d1d2f696dc3498
+Source pin: can1357/oh-my-pi@0b769cc4dd9771373335430385d1d2f696dc3498
+
+Applicable license for both components above:
+
+MIT License
+
+Copyright (c) 2026 RimuruW
+Copyright (c) 2025 Mario Zechner
+Copyright (c) 2025-2026 Can Bölük
+Copyright (c) 2026 Stencil Labs, Inc.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

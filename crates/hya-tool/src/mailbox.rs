@@ -452,11 +452,12 @@ fn roster_row(entry: &RosterEntry, relation: &str) -> Value {
 /// with the full path kept for disambiguation.
 fn roster_line(entry: &RosterEntry) -> String {
     let mut line = format!(
-        "  {} ({}) · {} · {}",
+        "  {} ({}) · status {} · {} · session {}",
         hya_proto::scope::leaf(&entry.handle),
         entry.agent_type.as_str(),
         status_label(&entry.status),
         entry.handle,
+        entry.session,
     );
     if let Some(task) = entry.current_task.as_deref().filter(|t| !t.is_empty()) {
         line.push_str(" — ");
@@ -539,11 +540,14 @@ impl Tool for ChannelsTool {
             channels
                 .iter()
                 .map(|ch| {
+                    let members = if ch.members.is_empty() {
+                        "none".to_string()
+                    } else {
+                        ch.members.join(", ")
+                    };
                     format!(
-                        "#{} ({} member(s)) · unit {}",
-                        ch.name,
-                        ch.members.len(),
-                        ch.unit
+                        "#{} · unit {} · members: {} · messages: {}",
+                        ch.name, ch.unit, members, ch.messages
                     )
                 })
                 .collect::<Vec<_>>()
@@ -678,8 +682,11 @@ mod tests {
             "the short name is what the model addresses"
         );
         let output = value["output"].as_str().unwrap_or_default();
+        let session = member["session"].as_str().unwrap();
         assert!(
-            output.contains("reviewer-1 (reviewer) · busy"),
+            output.contains(&format!(
+                "reviewer-1 (reviewer) · status busy · main/lead-1/reviewer-1 · session {session}"
+            )),
             "output was: {output}"
         );
         assert!(output.contains("reviewing auth.rs"), "output was: {output}");

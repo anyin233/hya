@@ -30,9 +30,9 @@ async fn allow_model_authorize_then_assert_does_not_ask() {
         .expect("call grant should cover edit assert");
 
     let authorized = plane
-        .authorize(&Invocation::command("shell", "echo hi"))
+        .authorize(&Invocation::command("bash", "echo hi"))
         .await
-        .expect("allow model authorizes shell");
+        .expect("allow model authorizes bash");
     authorized
         .assert(Action::Bash, Resource::Command("echo hi".into()))
         .await
@@ -61,7 +61,7 @@ async fn allow_model_does_not_ask_for_external_directory() {
     let policy = InvocationPolicy::compile(PermissionModel::Allow, Vec::new()).unwrap();
     let (plane, mut rx) = PermissionPlane::new_with_policy(PermissionRules::default(), policy);
     let authorized = plane
-        .authorize(&Invocation::command("shell", "ls"))
+        .authorize(&Invocation::command("bash", "ls"))
         .await
         .expect("authorize");
     let authorized2 = authorized.clone();

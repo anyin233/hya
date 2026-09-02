@@ -121,13 +121,16 @@ fn builtins_expose_compat_names_and_keep_short_aliases_hidden() {
         .map(|schema| schema.name.as_str().to_string())
         .collect();
 
-    for canonical in ["bash", "shell"] {
-        assert!(registry.get(canonical).is_some(), "{canonical} missing");
-        assert!(
-            visible.iter().any(|name| name == canonical),
-            "{canonical} schema hidden"
-        );
-    }
+    assert!(registry.get("bash").is_some(), "bash missing");
+    assert!(
+        visible.iter().any(|name| name == "bash"),
+        "bash schema hidden"
+    );
+    assert!(registry.get("shell").is_some(), "shell alias missing");
+    assert!(
+        visible.iter().all(|name| name != "shell"),
+        "shell alias schema should be hidden"
+    );
 
     for (canonical, alias) in [
         ("webfetch", "fetch"),
@@ -462,18 +465,26 @@ async fn write_then_glob_then_grep() {
 }
 
 #[tokio::test]
-async fn shell_happy_and_cancelled() {
+async fn bash_happy_and_cancelled() {
     let dir = tempdir();
     let reg = ToolRegistry::builtins();
+    let bash = reg.get("bash").unwrap();
     let shell = reg.get("shell").unwrap();
 
     let ctx = ctx_with(vec![allow(Action::Bash, "*")], dir.clone());
-    let out = shell
+    let out = bash
         .execute(&ctx, json!({ "command": "echo hi" }))
         .await
         .unwrap();
-    assert_eq!(out["stdout"], "hi\n");
-    assert_eq!(out["exit_code"], 0);
+    assert_eq!(out["output"], "hi\n");
+    assert_eq!(out["metadata"]["exit"], 0);
+
+    let alias_out = shell
+        .execute(&ctx, json!({ "command": "echo shell-alias" }))
+        .await
+        .unwrap();
+    assert_eq!(alias_out["output"], "shell-alias\n");
+    assert_eq!(alias_out["metadata"]["exit"], 0);
 
     let cancelled = ToolCtx {
         workflows: hya_tool::WorkflowPlane::disconnected(),
@@ -497,7 +508,7 @@ async fn shell_happy_and_cancelled() {
             t
         },
     };
-    let err = shell
+    let err = bash
         .execute(&cancelled, json!({ "command": "echo hi" }))
         .await;
     assert!(matches!(err, Err(hya_tool::ToolError::Cancelled)));
@@ -758,82 +769,6 @@ async fn find_rejects_parent_traversal_out_of_workdir() {
         .unwrap_err();
 
     assert!(matches!(err, ToolError::Permission(_)));
-}
-
-#[tokio::test]
-async fn edit_guards_ambiguous_unless_replace_all() {
-    let dir = tempdir();
-    let f = dir.join("x.txt");
-    tokio::fs::write(&f, "a\na\n").await.unwrap();
-    let reg = ToolRegistry::builtins();
-    let edit = reg.get("edit").unwrap();
-    let ctx = ctx_with(vec![allow(Action::Edit, "/**")], dir.clone());
-
-    let amb = edit
-        .execute(
-            &ctx,
-            json!({ "path": f.to_string_lossy(), "old": "a", "new": "b" }),
-        )
-        .await;
-    assert!(amb.is_err());
-    assert_eq!(tokio::fs::read_to_string(&f).await.unwrap(), "a\na\n");
-
-    let ok = edit
-        .execute(
-            &ctx,
-            json!({ "path": f.to_string_lossy(), "old": "a", "new": "b", "replace_all": true }),
-        )
-        .await
-        .unwrap();
-    assert_eq!(ok["replaced"], 2);
-    assert_eq!(tokio::fs::read_to_string(&f).await.unwrap(), "b\nb\n");
-
-    tokio::fs::write(&f, "one two\n").await.unwrap();
-    let uniq = edit
-        .execute(
-            &ctx,
-            json!({ "path": f.to_string_lossy(), "old": "two", "new": "three" }),
-        )
-        .await
-        .unwrap();
-    assert_eq!(uniq["replaced"], 1);
-    assert_eq!(tokio::fs::read_to_string(&f).await.unwrap(), "one three\n");
-}
-
-#[tokio::test]
-async fn edit_accepts_open_code_parameters_and_creates_new_file_from_empty_old_string() {
-    let dir = tempdir();
-    let file = dir.join("created.txt");
-    let ctx = ctx_with(vec![allow(Action::Edit, "/**")], dir.clone());
-    let edit = ToolRegistry::builtins().get("edit").unwrap();
-
-    let out = edit
-        .execute(
-            &ctx,
-            json!({
-                "filePath": "created.txt",
-                "oldString": "",
-                "newString": "hello\n"
-            }),
-        )
-        .await
-        .unwrap();
-    assert_eq!(out["created"], true);
-    assert_eq!(tokio::fs::read_to_string(&file).await.unwrap(), "hello\n");
-
-    let same = edit
-        .execute(
-            &ctx,
-            json!({
-                "filePath": "created.txt",
-                "oldString": "hello\n",
-                "newString": "hello\n"
-            }),
-        )
-        .await;
-    assert!(
-        matches!(same, Err(hya_tool::ToolError::Other(message)) if message == "No changes to apply: oldString and newString are identical.")
-    );
 }
 
 #[tokio::test]

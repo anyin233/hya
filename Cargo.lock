@@ -859,7 +859,7 @@ checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
 
 [[package]]
 name = "hya"
-version = "0.36.8"
+version = "0.36.9"
 dependencies = [
  "hya-app",
  "hya-native",
@@ -870,7 +870,7 @@ dependencies = [
 
 [[package]]
 name = "hya-app"
-version = "0.36.8"
+version = "0.36.9"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -904,7 +904,7 @@ dependencies = [
 
 [[package]]
 name = "hya-backend"
-version = "0.36.8"
+version = "0.36.9"
 dependencies = [
  "anyhow",
  "axum",
@@ -924,7 +924,7 @@ dependencies = [
 
 [[package]]
 name = "hya-bundle"
-version = "0.36.8"
+version = "0.36.9"
 dependencies = [
  "hya-proto",
  "hya-workflow",
@@ -938,7 +938,7 @@ dependencies = [
 
 [[package]]
 name = "hya-client"
-version = "0.36.8"
+version = "0.36.9"
 dependencies = [
  "hya-proto",
  "reqwest",
@@ -947,7 +947,7 @@ dependencies = [
 
 [[package]]
 name = "hya-core"
-version = "0.36.8"
+version = "0.36.9"
 dependencies = [
  "async-trait",
  "futures",
@@ -971,7 +971,7 @@ dependencies = [
 
 [[package]]
 name = "hya-e2e"
-version = "0.36.8"
+version = "0.36.9"
 dependencies = [
  "axum",
  "hya-client",
@@ -987,7 +987,7 @@ dependencies = [
 
 [[package]]
 name = "hya-mcp"
-version = "0.36.8"
+version = "0.36.9"
 dependencies = [
  "async-trait",
  "hya-proto",
@@ -1002,7 +1002,7 @@ dependencies = [
 
 [[package]]
 name = "hya-native"
-version = "0.36.8"
+version = "0.36.9"
 dependencies = [
  "async-trait",
  "axum",
@@ -1018,7 +1018,7 @@ dependencies = [
 
 [[package]]
 name = "hya-plugin"
-version = "0.36.8"
+version = "0.36.9"
 dependencies = [
  "async-trait",
  "hya-core",
@@ -1038,15 +1038,15 @@ dependencies = [
 
 [[package]]
 name = "hya-plugin-compat"
-version = "0.36.8"
+version = "0.36.9"
 
 [[package]]
 name = "hya-plugin-example"
-version = "0.36.8"
+version = "0.36.9"
 
 [[package]]
 name = "hya-proto"
-version = "0.36.8"
+version = "0.36.9"
 dependencies = [
  "rand_core 0.9.5",
  "serde",
@@ -1056,7 +1056,7 @@ dependencies = [
 
 [[package]]
 name = "hya-provider"
-version = "0.36.8"
+version = "0.36.9"
 dependencies = [
  "async-trait",
  "base64",
@@ -1074,7 +1074,7 @@ dependencies = [
 
 [[package]]
 name = "hya-sdk"
-version = "0.36.8"
+version = "0.36.9"
 dependencies = [
  "async-trait",
  "eventsource-stream",
@@ -1090,7 +1090,7 @@ dependencies = [
 
 [[package]]
 name = "hya-server"
-version = "0.36.8"
+version = "0.36.9"
 dependencies = [
  "async-trait",
  "axum",
@@ -1121,7 +1121,7 @@ dependencies = [
 
 [[package]]
 name = "hya-store"
-version = "0.36.8"
+version = "0.36.9"
 dependencies = [
  "hya-bundle",
  "hya-proto",
@@ -1135,12 +1135,13 @@ dependencies = [
 
 [[package]]
 name = "hya-tool"
-version = "0.36.8"
+version = "0.36.9"
 dependencies = [
  "async-trait",
  "base64",
  "hya-proto",
  "libc",
+ "pty-process",
  "regex",
  "reqwest",
  "serde",
@@ -1152,11 +1153,12 @@ dependencies = [
  "time",
  "tokio",
  "tokio-util",
+ "xxhash-rust",
 ]
 
 [[package]]
 name = "hya-ts"
-version = "0.36.8"
+version = "0.36.9"
 dependencies = [
  "clap",
  "hya-app",
@@ -1168,7 +1170,7 @@ dependencies = [
 
 [[package]]
 name = "hya-updater"
-version = "0.36.8"
+version = "0.36.9"
 dependencies = [
  "clap",
  "ed25519-dalek",
@@ -1180,7 +1182,7 @@ dependencies = [
 
 [[package]]
 name = "hya-workflow"
-version = "0.36.8"
+version = "0.36.9"
 dependencies = [
  "serde",
  "serde_norway",
@@ -1434,6 +1436,12 @@ dependencies = [
  "pkg-config",
  "vcpkg",
 ]
+
+[[package]]
+name = "linux-raw-sys"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53"
 
 [[package]]
 name = "litemap"
@@ -1714,6 +1722,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "pty-process"
+version = "0.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "71cec9e2670207c5ebb9e477763c74436af3b9091dd550b9fb3c1bec7f3ea266"
+dependencies = [
+ "rustix",
+]
+
+[[package]]
 name = "quinn"
 version = "0.11.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1986,6 +2003,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cfcb3a22ef46e85b45de6ee7e79d063319ebb6594faafcf1c225ea92ab6e9b92"
 dependencies = [
  "semver",
+]
+
+[[package]]
+name = "rustix"
+version = "1.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b6fe4565b9518b83ef4f91bb47ce29620ca828bd32cb7e408f0062e9930ba190"
+dependencies = [
+ "bitflags",
+ "errno",
+ "libc",
+ "linux-raw-sys",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3324,7 +3354,7 @@ checksum = "1ffae5123b2d3fc086436f8834ae3ab053a283cfac8fe0a0b8eaae044768a4c4"
 
 [[package]]
 name = "xtask"
-version = "0.36.8"
+version = "0.36.9"
 dependencies = [
  "anyhow",
  "hya-bundle",
@@ -3333,6 +3363,12 @@ dependencies = [
  "serde_norway",
  "toml",
 ]
+
+[[package]]
+name = "xxhash-rust"
+version = "0.8.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aee1b19627c7c60102ab80d3a9cbe18de90bfe03bfa6c3715447681f0e8c8af6"
 
 [[package]]
 name = "yoke"
