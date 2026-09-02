@@ -39,7 +39,7 @@ impl InlineAgentInput {
         InlineAgent {
             name,
             prompt: self.prompt,
-            description: self.description,
+            description: self.description.filter(|value| !value.trim().is_empty()),
             category: self.category,
             model: self.model,
             resident: self.resident,
@@ -154,7 +154,6 @@ impl Tool for TaskTool {
                     "properties": {
                         "name": { "type": "string", "description": "Agent name (defaults to subagent_type when omitted)" },
                         "prompt": { "type": "string", "description": "The system prompt / persona for the request-scoped overlay" },
-                        "description": { "type": "string" },
                         "category": { "type": "string", "description": "Logical model category (request overlay; folds into spawn model precedence)" },
                         "model": { "type": "string", "description": "Concrete provider/model (request overlay; folds into spawn model precedence)" },
                         "resident": { "type": "boolean", "description": "Make this request-scoped overlay a resident actor" }
@@ -178,7 +177,6 @@ impl Tool for TaskTool {
                                 "properties": {
                                     "name": { "type": "string" },
                                     "prompt": { "type": "string" },
-                                    "description": { "type": "string" },
                                     "category": { "type": "string" },
                                     "model": { "type": "string" },
                                     "resident": { "type": "boolean" }

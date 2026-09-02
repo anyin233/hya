@@ -17,7 +17,15 @@ async fn t2_1_task_tool_spawns_general_subagent() {
                 json!({
                     "description": "e2e child",
                     "prompt": "report CHILD_TASK_OK",
-                    "subagent_type": "general"
+                    "subagent_type": "general",
+                    "inline_agent": {
+                        "description": "",
+                        "category": "",
+                        "model": "",
+                        "name": "",
+                        "prompt": "",
+                        "resident": false
+                    }
                 }),
             ),
             text_step("CHILD_TASK_OK"),
