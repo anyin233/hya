@@ -1,0 +1,8 @@
+{"file":".trellis/tasks/09-02-fix-read-tool-session-errors/prd.md","reason":"Approved outcome, source pins, native-tool scope, compatibility boundaries, and observable acceptance criteria."}
+{"file":".trellis/tasks/09-02-fix-read-tool-session-errors/design.md","reason":"Merged Rust hashline architecture, schemas, state/atomicity contracts, result envelope, TUI seam, and rollback design."}
+{"file":".trellis/tasks/09-02-fix-read-tool-session-errors/implement.md","reason":"Ordered red-green slices, focused commands, full gates, atomic commits, and operational rollout."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Preserve typed input, permission, I/O, cancellation, and post-mutation error boundaries."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Keep tool schema/execution, Event projection, Compat transport, and TUI presentation ownership coherent."}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Place product-specific OpenTUI rendering under src/hya and keep one synchronized state owner."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Use focused red-first renderer tests and real 80/wide terminal verification."}
+{"file":"DESIGN.md","reason":"Reuse semantic tokens, borderless tonal layout, compact tool states, and narrow-terminal rules."}
