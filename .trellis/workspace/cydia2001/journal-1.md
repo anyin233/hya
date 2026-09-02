@@ -744,3 +744,24 @@ Synchronized current project documentation, corrected the release SDK guard regr
 ### Status
 
 [OK] **Completed**
+
+
+## Session 22: Implement startup model catalog discovery
+
+**Date**: 2026-09-02
+**Task**: Implement startup model catalog discovery
+**Branch**: `main`
+
+### Summary
+
+Added bounded optional-auth provider discovery, one immutable startup catalog across runtime and public surfaces, fail-closed TUI selection, canonical offline fallback, release 0.36.8 documentation, and deterministic process proof.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `bbc63769` | (see git log) |
+
+### Status
+
+[OK] **Completed**
