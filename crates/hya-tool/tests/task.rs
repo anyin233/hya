@@ -216,6 +216,75 @@ fn task_schema_describes_inline_agent_as_request_scoped() {
         );
     }
 }
+#[test]
+fn task_schema_hides_unsupported_inline_description() {
+    let tool = ToolRegistry::builtins().get("task").unwrap();
+    let schema = tool.schema().input_schema;
+    let props = &schema["properties"];
+
+    let single_properties = props["inline_agent"]["properties"]
+        .as_object()
+        .expect("single-task inline_agent schema properties");
+    let member_properties = props["members"]["items"]["properties"]["inline_agent"]["properties"]
+        .as_object()
+        .expect("batch members inline_agent schema properties");
+
+    assert!(
+        !single_properties.contains_key("description"),
+        "single-task inline_agent must not advertise description"
+    );
+    assert!(
+        !member_properties.contains_key("description"),
+        "batch members inline_agent must not advertise description"
+    );
+}
+
+#[tokio::test]
+async fn task_normalizes_empty_inline_description() {
+    let parent = SessionId::new();
+    let (spawner, mut rx) = SpawnerPlane::new();
+    let ctx = ctx_with_session(vec![allow(Action::Task, "general")], spawner, parent);
+    let tool = ToolRegistry::builtins().get("task").unwrap();
+
+    let handle = tokio::spawn(async move {
+        tool.execute(
+            &ctx,
+            json!({
+                "description": "Captured inline task",
+                "prompt": "Run the captured task",
+                "subagent_type": "general",
+                "inline_agent": {
+                    "description": "",
+                    "category": "",
+                    "model": "",
+                    "name": "",
+                    "prompt": "",
+                    "resident": false
+                }
+            }),
+        )
+        .await
+    });
+
+    let req = rx.recv().await.expect("spawn request");
+    let inline = req.members[0]
+        .inline_agent
+        .as_ref()
+        .expect("captured inline agent");
+    assert!(
+        inline.description.is_none(),
+        "empty inline description must be absent from SpawnRequest"
+    );
+    req.reply
+        .send(Ok(vec![MemberOutcome {
+            member: "mbr_1".to_string(),
+            session: "ses_child".to_string(),
+            status: "done".to_string(),
+            summary: "done".to_string(),
+        }]))
+        .unwrap();
+    handle.await.unwrap().unwrap();
+}
 
 #[tokio::test]
 async fn task_foreground_result_uses_open_code_output_shape() {
