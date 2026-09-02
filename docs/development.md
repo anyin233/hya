@@ -131,7 +131,7 @@ cargo run -p xtask -- sync-compat --help   # args after the task name are forwar
 cargo run -p xtask -- matrix-check
 cargo run -p xtask -- startup-bench
 cargo run -p xtask -- package-bundle <source-dir> <output.hyabundle>
-cargo run -p xtask -- release-rehearsal --workflow .github/workflows/release.yml --version 0.36.8 --target x86_64-unknown-linux-gnu --no-publish
+cargo run -p xtask -- release-rehearsal --workflow .github/workflows/release.yml --version 0.36.9 --target x86_64-unknown-linux-gnu --no-publish
 ```
 
 ### Example-only environment

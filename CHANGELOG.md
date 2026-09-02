@@ -1,11 +1,10 @@
-# 0.36.8
+# 0.36.9
 
-## Model catalog endpoint discovery
+## Session tool reliability and native coding tools
 
-- Resolve one immutable model catalog at each backend startup. Explicit Hya model lists remain authoritative and network-free; empty lists use bounded provider-kind discovery with optional Hya authentication.
-- Publish non-secret configured, discovered, authentication-required, authentication-rejected, unavailable, empty, unsupported, and offline provider states across the server bootstrap and catalog APIs.
-- Use exactly `hya/offline` when no live row resolves. The local provider echoes the request and explains that a live provider must be configured; the row is absent when any live model exists.
-- Keep normal startup Hya-owned: foreign agent configuration is read only by the explicit Compat import command.
-- Make the CLI, server, Rust SDK, and TypeScript TUI consume the same snapshot. Stale Session, Recent, and Favorite values cannot create catalog rows.
-- Keep OAuth model fetches as non-persistent login previews, preserve user-authored model lists, and leave empty lists eligible for startup discovery.
-- Remove the redundant `models --refresh` option.
+- Fix Read duplicate-key failures from captured `filePath` plus `path` requests; canonicalize `path` while retaining hidden legacy compatibility, and normalize empty Task inline descriptions so schema and execution agree.
+- Replace fuzzy filesystem coding tools with native hashline Read/Edit/Grep, with bounded process-local recovery state, typed errors, and filesystem-safe locking and atomicity.
+- Align Write, Bash, and tool-result envelopes with host contracts, including hidden `shell` compatibility, shape-aware result caps, bounded output/artifacts, and semantic metadata.
+- Add hya-owned coding-tool TUI blocks for Read/Edit/Write/Grep/Bash with syntax-aware rendering, 80-column and wide-terminal layouts, and Session replay.
+- Harden external-path privacy, atomic inode revalidation, cancellation and PTY descendant cleanup, bounded Grep/hashline/result processing, post-hook caps, private Bash artifacts, single-owner TUI synchronization, and recursive notice-complete release packaging.
+- Update tests, specifications, user documentation, and source/license notices. Historical Events remain unchanged; an already-running backend must restart before future calls use this release.
