@@ -23,12 +23,13 @@
 mod agents;
 mod apply_patch;
 mod edit;
-mod edit_replace;
 mod file_diff;
 mod formatter;
 mod formatter_catalog;
 mod formatter_command;
 mod formatter_definition;
+mod grep;
+mod hashline;
 /// Human interaction channel for structured questions and free-text asks.
 pub mod interaction;
 mod invalid;
@@ -45,7 +46,6 @@ mod plan;
 mod question;
 mod read;
 mod read_media;
-mod read_text;
 mod shell;
 mod skill;
 mod skill_catalog;
@@ -79,7 +79,7 @@ pub use interaction::{
 };
 pub use lsp_plane::{LspError, LspOperation, LspPlane, LspProvider, LspRequest};
 pub use mailbox::{ChannelInfo, MailReceipt, MailboxError, MailboxPlane, MailboxRequest};
-pub use output_cap::{MAX_TOOL_OUTPUT_CHARS, cap_tool_output};
+pub use output_cap::{MAX_TOOL_OUTPUT_CHARS, cap_tool_output, cap_tool_output_with_policy};
 pub use permission::{
     Action, AskRequest, Decision, ExactSubject, Invocation, InvocationDecision, InvocationPolicy,
     InvocationRule, Mode, PermissionError, PermissionInterceptor, PermissionModel, PermissionPlane,
@@ -97,6 +97,6 @@ pub use spawn::{
 pub use todo::{TodoItem, TodoPlane, TodoPriority, TodoStatus};
 pub use tool::{
     DuplicateName, ResolvedTool, Tool, ToolCtx, ToolError, ToolOperation, ToolPermission,
-    ToolRegistry, ToolRegistrySnapshot,
+    ToolRegistry, ToolRegistrySnapshot, ToolResultPolicy,
 };
 pub use websearch::{WebSearchConfig, WebSearchPlane, WebSearchProvider};

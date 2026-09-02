@@ -148,7 +148,7 @@ async fn write_touches_lsp_after_formatter_and_returns_diagnostics() {
 
     // When: write succeeds and formatter runs before LSP touch.
     let out = tool
-        .execute(&ctx, json!({ "filePath": "main.rs", "content": "raw\n" }))
+        .execute(&ctx, json!({ "path": "main.rs", "content": "raw\n" }))
         .await
         .unwrap();
 
@@ -194,9 +194,8 @@ async fn edit_touches_lsp_after_formatter_and_returns_diagnostics() {
         .execute(
             &ctx,
             json!({
-                "filePath": "main.rs",
-                "oldString": "old\n",
-                "newString": "new\n"
+                "path": "main.rs",
+                "edits": [{ "op": "replace_text", "oldText": "old\n", "newText": "new\n" }]
             }),
         )
         .await

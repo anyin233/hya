@@ -22,10 +22,6 @@ pub(crate) fn encode(text: &str, bom: bool) -> Vec<u8> {
     out
 }
 
-pub(crate) async fn file_has_bom(path: &Path) -> Result<bool, ToolError> {
-    Ok(tokio::fs::read(path).await?.starts_with(UTF8_BOM_BYTES))
-}
-
 pub(crate) async fn read_text(path: &Path) -> Result<(bool, String), ToolError> {
     let bytes = tokio::fs::read(path).await?;
     let source_has_bom = bytes.starts_with(UTF8_BOM_BYTES);

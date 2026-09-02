@@ -1,7 +1,7 @@
 //! Allow/ask/deny authorization for tool invocations and resource access.
 //!
 //! Two layers cooperate:
-//! 1. **Invocation policy** — regex rules over tool / MCP / shell command subjects
+//! 1. **Invocation policy** — regex rules over tool / MCP / Bash command subjects
 //!    evaluated once before execution ([`InvocationPolicy`]).
 //! 2. **Resource rules** — action + wildcard pattern last-match-wins rules used
 //!    by tools mid-execution ([`PermissionRules`] / [`PermissionPlane::assert`]).
@@ -36,7 +36,7 @@ pub enum Action {
     Glob,
     /// Content regex search (`grep`).
     Grep,
-    /// Shell command execution (`shell`, `bash`).
+    /// Bash command execution (`bash`).
     Bash,
     /// Subagent spawn (`task`).
     Task,
@@ -133,7 +133,7 @@ pub enum PermissionTarget {
     Tool,
     /// Namespaced MCP tool name.
     Mcp,
-    /// Full shell command string after before-hooks.
+    /// Full Bash command string after before-hooks.
     Command,
 }
 
@@ -219,7 +219,7 @@ impl Invocation {
         }
     }
 
-    /// Shell invocation: matches both tool name and full command string.
+    /// Bash invocation: matches both tool name and full command string.
     #[must_use]
     pub fn command(tool: impl Into<String>, command: impl Into<String>) -> Self {
         let primary = ExactSubject::new(PermissionTarget::Command, command);
@@ -961,7 +961,7 @@ mod tests {
         let command = plane.clone();
         let task = tokio::spawn(async move {
             command
-                .authorize(&Invocation::command("shell", "git status"))
+                .authorize(&Invocation::command("bash", "git status"))
                 .await
         });
         let req = rx.recv().await.expect("command asks");
@@ -1038,18 +1038,18 @@ mod tests {
     #[test]
     fn invocation_policy_evaluates_models_rules_and_fallbacks() {
         let rules = vec![
-            InvocationRule::new(PermissionTarget::Tool, "^shell$", Mode::Ask),
+            InvocationRule::new(PermissionTarget::Tool, "^bash$", Mode::Ask),
             InvocationRule::new(PermissionTarget::Command, "^git ", Mode::Allow),
             InvocationRule::new(PermissionTarget::Command, "^git push$", Mode::Deny),
         ];
-        let shell = Invocation::command("shell", "git status");
-        let push = Invocation::command("shell", "git push");
+        let bash = Invocation::command("bash", "git status");
+        let push = Invocation::command("bash", "git push");
 
         let default = InvocationPolicy::compile(PermissionModel::Default, rules.clone())
             .expect("compile default policy");
-        assert_eq!(default.evaluate(&shell).mode, Mode::Allow);
+        assert_eq!(default.evaluate(&bash).mode, Mode::Allow);
         assert_eq!(
-            default.evaluate(&shell).subject,
+            default.evaluate(&bash).subject,
             ExactSubject::new(PermissionTarget::Command, "git status")
         );
         assert_eq!(default.evaluate(&push).mode, Mode::Deny);
@@ -1074,7 +1074,7 @@ mod tests {
 
         let allow = InvocationPolicy::compile(PermissionModel::Allow, rules.clone())
             .expect("compile allow policy");
-        assert_eq!(allow.evaluate(&shell).mode, Mode::Allow);
+        assert_eq!(allow.evaluate(&bash).mode, Mode::Allow);
         assert_eq!(allow.evaluate(&push).mode, Mode::Deny);
         assert_eq!(
             allow.evaluate(&Invocation::mcp("mcp__github__issue")).mode,
@@ -1083,7 +1083,7 @@ mod tests {
 
         let strict = InvocationPolicy::compile(PermissionModel::Strict, rules.clone())
             .expect("compile strict policy");
-        assert_eq!(strict.evaluate(&shell).mode, Mode::Ask);
+        assert_eq!(strict.evaluate(&bash).mode, Mode::Ask);
         assert_eq!(strict.evaluate(&push).mode, Mode::Deny);
 
         let danger = InvocationPolicy::compile(PermissionModel::Danger, rules)

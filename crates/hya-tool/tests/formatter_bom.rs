@@ -36,8 +36,10 @@ fn tempdir() -> PathBuf {
 }
 
 fn ctx_with_formatter(workdir: PathBuf, formatter: FormatterPlane) -> ToolCtx {
-    let (permission, _rx) =
-        PermissionPlane::new(PermissionRules::new(vec![allow(Action::Edit, "*")]));
+    let (permission, _rx) = PermissionPlane::new(PermissionRules::new(vec![
+        allow(Action::Read, "*"),
+        allow(Action::Edit, "*"),
+    ]));
     let (interaction, _irx) = InteractionPlane::new();
     let (spawner, _srx) = SpawnerPlane::new();
     ToolCtx {
@@ -90,7 +92,7 @@ async fn write_restores_utf8_bom_after_formatter_rewrites_file() {
     let tool = ToolRegistry::builtins().get("write").unwrap();
 
     // When: write runs and the formatter rewrites the file.
-    tool.execute(&ctx, json!({ "filePath": "bom.txt", "content": "new\n" }))
+    tool.execute(&ctx, json!({ "path": "bom.txt", "content": "new\n" }))
         .await
         .unwrap();
 
@@ -111,15 +113,29 @@ async fn edit_restores_utf8_bom_after_formatter_rewrites_file() {
         .unwrap();
     let formatter = FormatterPlane::new(Arc::new(BomDroppingFormatter));
     let ctx = ctx_with_formatter(dir.clone(), formatter);
-    let tool = ToolRegistry::builtins().get("edit").unwrap();
+    let registry = ToolRegistry::builtins();
+    let read = registry.get("read").unwrap();
+    let tool = registry.get("edit").unwrap();
 
-    // When: edit runs and the formatter rewrites the file.
+    // When: Read supplies the current anchor, then Edit runs and the formatter rewrites the file.
+    let read_output = read
+        .execute(&ctx, json!({ "path": "bom.txt" }))
+        .await
+        .unwrap();
+    let anchor = read_output["output"]
+        .as_str()
+        .unwrap()
+        .lines()
+        .find(|line| line.starts_with("1#"))
+        .unwrap()
+        .split(':')
+        .next()
+        .unwrap();
     tool.execute(
         &ctx,
         json!({
-            "filePath": "bom.txt",
-            "oldString": "old\n",
-            "newString": "new\n"
+            "path": "bom.txt",
+            "edits": [{"op": "replace", "pos": anchor, "lines": ["new"]}]
         }),
     )
     .await
