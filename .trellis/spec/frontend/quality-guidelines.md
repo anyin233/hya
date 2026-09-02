@@ -400,3 +400,198 @@ const selected = recent[0]
 const providers = decodeCatalogProviders(sync.data.provider)
 const selected = filterCatalogSelections(providers, recent)[0]
 ```
+---
+
+## Scenario: Coding-Tool SDK-to-OpenTUI Quality Gate
+
+### 1. Scope / Trigger
+
+- Trigger: changing the hya-owned coding-tool normalizer/renderer, the retained
+  Session route dispatch, SyncProvider part replacement, or OpenTUI width,
+  syntax, diff, fallback, and replay behavior.
+- Applies to the one-way boundary `Tool execution -> committed ToolResult or
+  ToolError -> Projection/Compat SDK ToolPart -> hya presentation`. Backend
+  schemas, permission ordering, typed hashline errors, bounded state, and
+  commit-boundary reconciliation are owned by the backend; this scenario proves
+  that the frontend does not reinterpret or bypass them.
+- The canonical model names are `read`, `edit`, `grep`, `write`, and `bash`.
+  `shell` is a hidden runtime alias only. Task's empty nested description is
+  normalized by the backend and is not a frontend compatibility field.
+
+### 2. Signatures
+
+- `presentCodingTool(part: ToolPart): CodingToolView | undefined` is the single
+  `unknown`/metadata validation seam. It accepts projected SDK parts and emits
+  an allowlisted view union or `undefined` for the existing fallback.
+- `CodingToolPresentation(props)` renders the normalized `CodingToolView` passed
+  by the Session route. Isolated callers may pass one projected `ToolPart`.
+  It may own collapse state, but no synchronized server state.
+- The projected input is `ToolPart { type: "tool", tool, callID, state }`;
+  completed `state` carries the backend result envelope `{ title, output,
+  metadata }`. The normalizer reads only documented fields:
+  `metadata.display` file facts `{type,path,text,lineStart,lineEnd,totalLines,
+  truncated}` or Grep `groups[]` with `{path,rows[]}`, where each row has
+  `{line,text,isMatch}`. It combines top-level `truncated` with every backend
+  result-cap truncation flag rather than trusting one adapter-specific field.
+- The backend schema owner publishes Read `{path,offset?,limit?,raw?}`, Edit
+  `{path,edits}`, Grep `{pattern,path?,glob?,ignoreCase?,literal?,context?,limit?}`,
+  Write `{path,content}`, and Bash `{command,env?,timeout?,cwd?,pty?}`. The
+  frontend uses the canonical tool name and result metadata; it must not create
+  a second schema or accept hidden keys as display inputs.
+- SyncProvider's initial hydration and `message.part.updated` replacement are
+  the only source updates. The retained Session route invokes the normalizer
+  once, passes its view to the renderer, and otherwise uses its existing
+  inline/generic/error path. No presentation provider owns a second message
+  store, request, or timer.
+
+### 3. Contracts
+
+- Only a committed projected SDK part is eligible for the completed coding-tool
+  block. A backend post-commit diagnostic such as `File changed at <path>` and
+  a stable hashline `[E_*]` failure remain visible as error text; the frontend
+  never turns either into a local success or mutates the Event history.
+- Read/Write render a title, file-derived grammar, stable line numbers, and the
+  backend `lineStart` offset. Edit uses the existing semantic diff primitive,
+  keeps removed/added unified rows distinct at 80 columns, and treats the
+  backend's final post-formatter diff/preview as authoritative. Completed
+  Edit/Write diagnostics strictly validate every bounded entry, retain only the
+  first three severity-one entries with `range.start`, and display them as
+  one-based `Error [line:column]` labels. Grep uses
+  bounded per-file groups in backend order, derives grammar per path, and marks
+  match rows separately from context. Bash and hidden `shell` share one block:
+  nullable exit remains valid for timeout/signal results, command highlighting
+  never styles the output plane, ANSI is stripped from output, and `env` never
+  renders.
+- Backend truncation/artifact metadata is distinct from local collapse. The
+  renderer retains top-level `truncated` and each `output`, `title`, `display`,
+  `diff`, `attachments`, `diagnostics`, `warnings`, `rows`, `groups`,
+  `metadata`, and `envelope` truncation flag plus `unknownFieldsDropped`. It
+  may expand or collapse only the bounded payload it received and must retain
+  explicit truncation or artifact status. It cannot request more bytes, read
+  the target file, or treat collapsed output as a new result.
+- The normalizer allowlists all fields and bounds display rows/text. Unknown
+  tool names, unknown keys, malformed metadata, unsupported directory or
+  attachment shapes, pending/streaming/permission/denied states, and malformed
+  Task error payloads return `undefined` or use the existing readable fallback.
+  Syntax parser failure keeps the title/content and uses plain text.
+- Semantic status is textual as well as tonal: completed, truncated, warning,
+  denied, error, timeout, and cancellation remain understandable without color.
+  Use existing theme roles and width/path/code/diff primitives; no raw color,
+  decorative card, Rust renderer, second SDK client, polling, timer, or Event
+  replay is allowed.
+- 80-column output keeps the prompt and transcript readable and uses a unified
+  Edit diff. At 140 columns and wider, titles and metadata remain visible and
+  Edit may split only under the existing wide-layout rule. Every file/group
+  wraps or clips within the available width without ANSI or line-number drift.
+- Reopening a Session must render the same completed semantic view from the
+  projected SDK part. Initial hydration and one live `message.part.updated`
+  replacement mutate the SyncProvider-owned part exactly once; the renderer
+  does not preserve a parallel result cache, make a presentation request, or
+  schedule a presentation timer. This is the frontend side of commit-boundary
+  reconciliation.
+
+### 4. Validation & Error Matrix
+
+| Input/state | Required frontend result |
+| --- | --- |
+| Valid completed Read/Write metadata | File title, grammar spans, stable numbers, correct `lineStart`, bounded local collapse |
+| Valid completed Edit metadata | Existing semantic diff; unified at 80 columns, wide split only when allowed |
+| Valid completed Grep groups | One titled block per file, backend order, per-file grammar, visible match/context distinction |
+| Valid completed Bash or hidden `shell` | One command/output block, command-only highlighting, ANSI-free plain output, no `env` |
+| Valid Bash with nullable exit and timeout/signal metadata | Preserve output and show the textual termination state; do not drop the specialized view |
+| Completed Edit/Write diagnostics | First three severity-one positioned entries, labeled `Error [line:column]` with one-based coordinates |
+| Adapter-specific truncation without top-level truncation | View remains explicitly truncated; local collapse cannot erase the backend fact |
+| Stable hashline error (`[E_BAD_REF]`, `[E_STALE_ANCHOR]`, `[E_EDIT_CONFLICT]`, etc.) or post-commit `File changed at` error | Preserve bounded error text and fallback status; do not classify as success or rewrite it |
+| Pending/running/permission/denied/cancelled/timeout | Existing lifecycle/error presentation with text status; do not synthesize a completed block |
+| Directory, image/PDF attachment, or unsupported result shape | Existing specialized attachment/directory or generic fallback; no forced file renderer |
+| Unknown key/tool, malformed `metadata.display`, wrong row/path/line type | `presentCodingTool` returns `undefined`; generic/error fallback only |
+| Syntax grammar/parser unavailable | Keep readable plain text and title; no component throw or network retry |
+| Backend truncation/artifact flag | Show explicit bounded/truncated/artifact status; collapse cannot hide that fact |
+| `env` or unknown input fields | Never render their values, even when output is otherwise valid |
+| 80 columns | Prompt remains usable, blocks wrap/clip safely, Edit is unified |
+| 140+ columns | Wide metadata/title remains visible, Edit follows wide diff rule, no independent reflow semantics |
+| Session reopen or one SDK part replacement | Same completed semantic output; no presentation HTTP call, timer, or Event replay |
+
+### 5. Good / Base / Bad Cases
+
+- Good: SDK hydration supplies a completed Read with `lineStart: 41`; the block
+  displays line 41, Rust syntax spans, and a bounded title. A later part update
+  replaces its output, and reopening the Session produces the same final block.
+- Good: an Edit's formatter changes the final bytes; the projected diff and
+  metadata render those final bytes at 80 and 140 columns instead of replaying
+  the pre-formatter request input.
+- Base: a hidden `shell` part renders as Bash, a stable `[E_STALE_ANCHOR]`
+  remains a readable error, malformed display metadata uses generic fallback,
+  and syntax failure uses plain text.
+- Bad: reading `part.state.input.path` to fetch or reconstruct content, sorting
+  Grep groups locally, exposing `env`, treating backend truncation as collapse,
+  or using a full-screen snapshot that passes only at one terminal width.
+- Bad: a second component decoder accepts arbitrary metadata, a completed
+  frontend result is rendered before the SDK projection commit, or a malformed
+  Task description is silently presented as a successful spawn.
+
+### 6. Tests Required
+
+- `test/coding-tool-presentation.test.ts` starts with failing cases against the
+  old inline/generic path and asserts canonical/hidden tool-name normalization,
+  allowlisted fields, stable hashline error preservation, final-state/error
+  fallback, every independent backend truncation fact, strict malformed
+  diagnostics, directory/attachment handling, ANSI stripping, and
+  `env`/unknown-key exclusion.
+- `test/coding-tool-render.test.tsx` uses OpenTUI `testRender` at 80 and 140
+  columns. Assert titles, syntax-colored `captureSpans()`, Read offsets and
+  line numbers, Edit unified/split mode, Grep per-file order and match labels,
+  Bash command-only highlighting, text status labels, and no horizontal
+  corruption. Avoid brittle full-screen snapshots.
+- `test/coding-tool-sync.test.tsx` hydrates one completed SDK part, applies one
+  `message.part.updated` replacement, and asserts one rendered replacement with
+  no presentation-specific network call, timer, polling, Event replay, or
+  second store. Reopened-Session equivalence belongs to the real PTY scenario.
+- Focused backend/SDK fixture tests consumed by the frontend must assert the
+  exact canonical schemas, typed hashline failures, Task empty/non-empty
+  description behavior, result caps, and final post-formatter metadata; the
+  frontend tests must not recreate those backend rules with ad hoc casts.
+- A real backend plus hya-ts PTY test produces Read, Edit, Write, Grep, and Bash
+  results at 140 and 80 columns, reopens the Session, and compares semantic
+  completed blocks. Assert prompt/footer readability, unified narrow diff,
+  syntax spans, replay equality, and absence of secrets.
+- Mutation proof should fail if the renderer fetches, polls, replays Events,
+  accepts an unallowlisted key, drops `lineStart`, changes Grep order, renders
+  ANSI/output as highlighted code, or removes the malformed-data fallback.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```tsx
+createEffect(async () => {
+  const response = await fetch(`/tool/${props.part.id}`)
+  setLocalResult(await response.json())
+})
+
+return <text>{String(props.part.state.output)}</text>
+```
+
+This bypasses the SDK projection/commit boundary, creates a second state owner,
+loses replay determinism, and renders unvalidated data and possible secrets.
+
+#### Correct
+
+```tsx
+const view = createMemo(() => presentCodingTool(props.part))
+
+return view() ? (
+  <CodingToolPresentation
+    view={view()!}
+    width={ctx.width}
+    diffStyle={ctx.tui.diff_style}
+    diffWrapMode={ctx.diffWrapMode()}
+  />
+) : (
+  <GenericTool {...toolprops} />
+)
+```
+
+The route consumes one projected part, normalizes it once, and passes that view
+to the renderer. SyncProvider supplies live and replayed state, while malformed
+or unsupported data stays in the existing fallback.

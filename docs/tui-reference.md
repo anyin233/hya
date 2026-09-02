@@ -193,12 +193,12 @@ Inline three-way prompt titled **Permission required** with **Allow once** /
 | Escape | Reject |
 | `permission.prompt.fullscreen` (`ctrl+f`) | Toggle fullscreen |
 
-Tool-specific titles cover **bash** (icon `#`, title falls back to
-`Shell command` when the permission payload has no `description` string — hya's
-own `shell`/`bash` tool schema has no `description` field, so native shell asks
-always use that fallback; body `$ <command>`), Edit, Read, Glob, Grep, List,
-WebFetch, WebSearch, Task, external-directory access, repeated failure, and a
-generic tool call.
+Tool-specific titles cover **bash** (icon `#`, title falls back to `Shell` when
+the permission payload has no description — the closed Bash schema does not
+accept a model-authored description; body `$ <command>`), Edit, Read, Glob,
+Grep, List, WebFetch, WebSearch, Task, external-directory access, repeated
+failure, and a generic tool call. A stale runtime `shell` request uses the same
+Bash permission presentation and is not a second UI surface.
 
 **Allow always** opens a Confirm/Cancel stage warning that the patterns will be
 allowed until hya is restarted. **Reject** on a **child** session (session has
@@ -280,62 +280,82 @@ an OpenAI-style `**Title**` header from the body.
 
 ### Tool rendering
 
-Dedicated renderers (via `toolDisplay()`): `bash`, `glob`, `read`, `grep`,
+The hya-owned coding-tool renderer consumes projected SDK `ToolPart` state.
+SyncProvider is the only Session message/part owner: presentation does not
+fetch/poll the backend, replay raw Events, hydrate a second message store, or
+schedule a timer. Completed coding results cross one semantic boundary:
+
+- model-facing `output` is bounded text for the next provider round;
+- host-facing `metadata` is a bounded, allowlisted payload for titles, line
+  ranges, syntax facts, diffs, diagnostics, truncation, and command status.
+
+Unknown input keys and `env` values never enter the view. Malformed, compacted,
+or cap-collapsed data uses the existing readable inline/error fallback instead
+of rendering arbitrary JSON. Pending, streaming, permission, denied,
+attachment, directory, diagnostic, and generic states keep their existing
+fallback behavior. Initial hydration, one live `message.part.updated`
+replacement, and a replayed completed `ToolPart` use this normalizer once.
+Top-level `truncated` and the backend `outputTruncated`, `titleTruncated`,
+`displayTruncated`, `diffTruncated`, `attachmentsTruncated`,
+`diagnosticsTruncated`, `warningsTruncated`, `rowsTruncated`,
+`groupsTruncated`, `metadataTruncated`, `unknownFieldsDropped`, and
+`envelopeTruncated` facts are combined; local collapse cannot erase any
+backend truncation fact.
+
+Dedicated renderers (via `toolDisplay()`) cover `bash`, `glob`, `read`, `grep`,
 `webfetch`, `websearch`, `write`, `edit`, `task`, `apply_patch`, `todowrite`,
-`question`, `skill`. Everything else is **GenericTool**.
+`question`, and `skill`. Everything else is **GenericTool**.
 
-Layout is either **BlockTool** (`# …` title + body) or **InlineTool** (icon +
-pending/complete text). Not every tool is an inline row.
+| Tool | Pending form | Completed form and metadata |
+| --- | --- | --- |
+| `read` | Inline `→` + path, `Reading file...` | **Structured block** titled by path; file-derived syntax highlighting, stable source line numbers and requested offset, bounded expand/collapse. Directory and media attachment results keep their existing readable/attachment views. |
+| `write` | Inline `←`, `Preparing write...` | **Structured block** titled by path with final post-formatter text, file-derived syntax highlighting, stable line numbers, diagnostics, and bounded expand/collapse. |
+| `edit` | Inline until a valid diff is available | **Structured block** using the semantic diff primitive and final-state metadata; unified or split according to width and `diff_style`. |
+| `grep` | Inline `✱` + pattern/path, `Searching content...` | **Structured per-file blocks** with file titles, numbered match/context rows, explicit match identity, file-derived highlighting, and bounded groups. |
+| `bash` / hidden `shell` | Inline `$`, `Writing command...` | **Structured command/output block** with a highlighted `$ <command>` line, plain ANSI-stripped output, textual exit/timeout/truncation status, and bounded collapse. The hidden alias has no separate renderer. |
+| `glob` | Inline `✱` + pattern/path/count, `Finding files...` | Inline summary with count/truncation metadata. |
+| `task` | `│` / `Delegating...` | Per-member `TaskMemberRow` with `✓` / `✗` / `│`; clicking opens observation. |
+| `apply_patch` | Inline or diff-style pending | Existing per-file semantic diff blocks. |
+| `todowrite` | Inline `⚙`, `Updating todos...` | Block `# Todos` when todos are present. |
+| `question` | Inline `→`, `Asking questions...` | Block `# Questions` when answers are present. |
+| `webfetch` / `websearch` / `skill` | Existing inline status | Existing inline result summary. |
+| generic | Tool name | Inline or optional block controlled by generic-output preference. |
 
-| Tool | Form | Icon / title cues | Pending label (when running) |
-| --- | --- | --- | --- |
-| `bash` | Block when completed output exists; else inline `$` | Block: `# <title>` / `$ <command>` | `Writing command...` |
-| `glob` | Inline | `✱` + pattern / path / match count | `Finding files...` |
-| `read` | Inline (+ optional `↳ Loaded <path>` sublines) | `→` + path | `Reading file...` |
-| `grep` | Inline | `✱` + pattern / path / matches | `Searching content...` |
-| `webfetch` | Inline | `%` + URL | `Fetching from the web...` |
-| `websearch` | Inline | `◈` + query / result count | `Searching web...` |
-| `write` | **Block** after diagnostics metadata; else inline | Block: `# Wrote <path>`; inline `←` | `Preparing write...` |
-| `edit` | **Block** when diff metadata present; else inline | Block: `← Edit <path>` + syntax diff | (inline pending until diff) |
-| `apply_patch` | Block/inline like edit (file titles `# Deleted` / `# Created` / …) | Diff-style | (same family as edit) |
-| `task` | Per-member **TaskMemberRow** (or inline `│` while delegating) | `✓` / `✗` / `│`; click opens observation | `Delegating...` / `Working...` |
-| `todowrite` | **Block** `# Todos` when todos present; else inline `⚙` | Shared `TodoItem` list | `Updating todos...` |
-| `question` | **Block** `# Questions` when answers present; else inline `→` | Q&A pairs | `Asking questions...` |
-| `skill` | Inline | `→` + skill name | `Loading skill...` |
-| generic | Inline or block | `⚙` / `# <tool> [k=v,…]` | tool name |
-
-**Shell block** (completed `bash` with output):
+**Command block** (completed `bash` or stale hidden `shell` request):
 
 ```text
-# <title>[ in <workdir>]
+<title>
 $ <command>
+[cwd <cwd>]
+<plain output>
+<exit / timeout / truncation status>
 ```
 
-Title is `input.description` when present, otherwise `Shell`. Native
-`shell`/`bash` schema is `{command, timeout, workdir, env}` only — no
-model-authored `description` — so rows are usually `# Shell` (plus
-` in <workdir>` when set and not `.`). ANSI stripped; output collapsed to 10
-lines with click-to-expand and a spinner while running.
+The title comes from the bounded result envelope; `cwd` is a separate
+allowlisted row when present. Neither is derived from `env`. A nullable exit is
+valid for timeout/signal termination and does not hide captured output. Only
+the command line is syntax-highlighted. ANSI control sequences are stripped
+from plain output before display, output is collapsed to a bounded preview, and
+click-to-expand is local reversible state. A truncated result displays its
+status/artifact metadata, not an unbounded capture.
 
-**Generic tool:** with `session.toggle.generic_tool_output` on: `# <tool> [k=v,…]`
-and output collapsed to 3 lines; otherwise a single `⚙ <tool> [k=v,…]` inline
-row.
-
-**InlineTool states** (tools that use InlineTool): pending summary, icon +
-summary after completion, strike-through when denied/rejected, error coloring
-on failure, click to expand raw error text. BlockTool tools do not use that
-row chrome for their completed bodies.
-
-**Diagnostics:** up to three severity-1 diagnostics as
-`Error [line:col] message` under written/edited paths.
+**Diagnostics:** validate every bounded entry, then keep only the first three
+severity-1 entries that have a `range.start`; display each as one-based
+`Error [line:col] message` under final written/edited paths. Malformed entries
+select the existing safe fallback rather than being skipped. The displayed text
+and line ranges come from final post-formatter bytes, so formatter changes
+cannot make a Read, Write, or Edit preview lie.
 
 ### Inline diff rendering
 
-Syntax-highlighted with line numbers. Split view when width is greater than 120
-columns, forced unified when `diff_style: stacked`. Wrapping is controlled by the
+Syntax-highlighted with line numbers and final-state metadata. At 80 columns
+the coding-tool diff uses unified layout so the prompt and footer remain usable.
+At widths above 120 columns it may use split layout; `diff_style: stacked`
+forces unified layout at every width. Wrapping is controlled by the
 `diff_wrap_mode` KV flag (`word` | `none`, toggled by `app.toggle.diffwrap`).
 Per-file titles include `# Deleted`, `# Created`, `# Moved a → b`, and
-`← Patched`.
+`← Patched`. Read/Write text blocks use the same width-aware clipping and
+bounded expand/collapse rules.
 
 ### Diff viewer
 
