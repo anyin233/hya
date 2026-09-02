@@ -52,20 +52,26 @@ Failures are easiest to diagnose if you know the order of operations
 2. **Bun preflight.** `bun --version` must succeed or the install aborts.
 3. **Cargo build.** Builds locked binaries for `hya`, `hya-backend`, and
    `hya-ts` for the selected profile.
-4. **Stage runtimes.** Copies the TUI package into a temporary tree, runs
-   `bun install --frozen-lockfile --production`, and prunes the SDK; stages the
-   Compat adapter separately at `lib/hya/compat-adapter` with its pinned lockfile.
-5. **Atomic swap.** Stages into `.tmp.$$` paths, moves any existing install to
-   `.bak.$$`, then renames into place. An `ERR`/`INT`/`TERM` trap calls
-   `restore_install` so an interrupted install puts previous binaries and
-   runtimes back and cleans leftovers — it should never leave a half-installed
-   `hya`.
+4. **Stage runtimes.** Recursively copies the complete TUI package source into a
+   temporary tree, copies its `NOTICE` plus the root `THIRD_PARTY_NOTICES`, runs
+   `bun install --frozen-lockfile --production`, and prunes the SDK. Before any
+   installed path moves, the script requires a nested TUI source file,
+   `node_modules`, the OpenTUI runtime manifest, and the SDK v2 client entry.
+   The Compat adapter is staged separately at `lib/hya/compat-adapter` with its
+   pinned lockfile.
+5. **Atomic swap.** Only a complete staged runtime reaches the swap. The script
+   uses `.tmp.$$` paths, moves any existing install to `.bak.$$`, then renames
+   into place. An `ERR`/`INT`/`TERM` trap calls `restore_install` so an
+   interrupted install restores previous binaries/runtimes and cleans
+   leftovers; it does not leave a half-installed `hya`.
 6. **Post-install verification** (skipped under `--dry-run`, which only
    prints the checks):
    - Runs the `hya` shim against a dead server with `--bun /bin/true`.
    - Runs `hya --version`, `hya-backend --help`, `hya-ts --help`.
-   - Asserts TUI runtime files (`src/main.tsx`, `bunfig.toml`, license files)
-     and `node_modules` exist under `lib/hya/hya-tui-ts`.
+   - Asserts the recursive TUI source tree (including a nested hya-owned source),
+     `bunfig.toml`, package `NOTICE`, root `THIRD_PARTY_NOTICES`, and required
+     production dependency entries exist under `lib/hya/hya-tui-ts`; both
+     installed notices must be byte-identical to their sources.
    - Asserts the Compat adapter payload and its production dependencies exist
      under `lib/hya/compat-adapter`.
    - **Fails** if `command -v hya` does not resolve to the install path (usual

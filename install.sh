@@ -208,7 +208,7 @@ run install -m 0755 "$target_dir/hya-ts" "$tmp_ts"
 run cp packages/hya-tui-ts/package.json packages/hya-tui-ts/bun.lock \
   packages/hya-tui-ts/bunfig.toml packages/hya-tui-ts/tsconfig.json \
   packages/hya-tui-ts/LICENSE packages/hya-tui-ts/UPSTREAM.md \
-  packages/hya-tui-ts/NOTICE "$tmp_runtime/"
+  packages/hya-tui-ts/NOTICE THIRD_PARTY_NOTICES "$tmp_runtime/"
 run cp -R packages/hya-tui-ts/src/. "$tmp_runtime/src/"
 run cp "$compat_source/package.json" "$compat_source/bun.lock" "$tmp_compat/"
 run cp -R "$compat_source/src/." "$tmp_compat/src/"
@@ -221,6 +221,29 @@ if [[ "$dry_run" -eq 0 ]]; then
   (cd "$tmp_runtime" && bun install --frozen-lockfile --production)
 fi
 run bun packages/hya-tui-ts/scripts/prune-sdk-server.ts "$tmp_runtime"
+if [[ "$dry_run" -eq 0 ]]; then
+  if [[ ! -f "$tmp_runtime/src/hya/coding-tool-presentation.tsx" ]]; then
+    echo "TUI source staging is incomplete: missing src/hya/coding-tool-presentation.tsx." >&2
+    false
+  fi
+  if [[ ! -d "$tmp_runtime/node_modules" ]]; then
+    echo "TUI runtime dependency preparation is incomplete: missing node_modules directory." >&2
+    false
+  fi
+  for dependency in \
+    node_modules/@opentui/solid/package.json \
+    node_modules/@opencode-ai/sdk/dist/v2/client.js; do
+    if [[ ! -f "$tmp_runtime/$dependency" ]]; then
+      echo "TUI runtime dependency preparation is incomplete: missing $dependency." >&2
+      false
+    fi
+  done
+else
+  say "+ test -f $tmp_runtime/src/hya/coding-tool-presentation.tsx"
+  say "+ test -d $tmp_runtime/node_modules"
+  say "+ test -f $tmp_runtime/node_modules/@opentui/solid/package.json"
+  say "+ test -f $tmp_runtime/node_modules/@opencode-ai/sdk/dist/v2/client.js"
+fi
 [[ "$dry_run" -ne 0 ]] || rollback_enabled=1
 if [[ -e "$bin_dir/hya" ]]; then
   had_hya=1
@@ -259,12 +282,19 @@ if [[ "$dry_run" -eq 0 ]]; then
   "$bin_dir/hya-backend" --help >/dev/null
   "$bin_dir/hya-ts" --help >/dev/null
   test -f "$lib_dir/hya-tui-ts/src/main.tsx"
+  test -f "$lib_dir/hya-tui-ts/src/hya/coding-tool-presentation.tsx"
   test -f "$lib_dir/hya-tui-ts/bunfig.toml"
   test -f "$lib_dir/hya-tui-ts/tsconfig.json"
   test -f "$lib_dir/hya-tui-ts/LICENSE"
   test -f "$lib_dir/hya-tui-ts/UPSTREAM.md"
   test -f "$lib_dir/hya-tui-ts/NOTICE"
+  test -f "$lib_dir/hya-tui-ts/THIRD_PARTY_NOTICES"
   test -d "$lib_dir/hya-tui-ts/node_modules"
+  test -f "$lib_dir/hya-tui-ts/node_modules/@opentui/solid/package.json"
+  test -f "$lib_dir/hya-tui-ts/node_modules/@opencode-ai/sdk/dist/v2/client.js"
+  say "Verifying packaged TUI notice bytes"
+  cmp packages/hya-tui-ts/NOTICE "$lib_dir/hya-tui-ts/NOTICE"
+  cmp THIRD_PARTY_NOTICES "$lib_dir/hya-tui-ts/THIRD_PARTY_NOTICES"
   test -f "$lib_dir/compat-adapter/package.json"
   test -f "$lib_dir/compat-adapter/bun.lock"
   test -f "$lib_dir/compat-adapter/src/main.ts"
@@ -284,12 +314,18 @@ else
   say "+ $bin_dir/hya-backend --help"
   say "+ $bin_dir/hya-ts --help"
   say "+ test -f $lib_dir/hya-tui-ts/src/main.tsx"
+  say "+ test -f $lib_dir/hya-tui-ts/src/hya/coding-tool-presentation.tsx"
   say "+ test -f $lib_dir/hya-tui-ts/bunfig.toml"
   say "+ test -f $lib_dir/hya-tui-ts/tsconfig.json"
   say "+ test -f $lib_dir/hya-tui-ts/LICENSE"
   say "+ test -f $lib_dir/hya-tui-ts/UPSTREAM.md"
   say "+ test -f $lib_dir/hya-tui-ts/NOTICE"
+  say "+ test -f $lib_dir/hya-tui-ts/THIRD_PARTY_NOTICES"
   say "+ test -d $lib_dir/hya-tui-ts/node_modules"
+  say "+ test -f $lib_dir/hya-tui-ts/node_modules/@opentui/solid/package.json"
+  say "+ test -f $lib_dir/hya-tui-ts/node_modules/@opencode-ai/sdk/dist/v2/client.js"
+  say "+ cmp packages/hya-tui-ts/NOTICE $lib_dir/hya-tui-ts/NOTICE"
+  say "+ cmp THIRD_PARTY_NOTICES $lib_dir/hya-tui-ts/THIRD_PARTY_NOTICES"
   say "+ test -f $lib_dir/compat-adapter/package.json"
   say "+ test -f $lib_dir/compat-adapter/bun.lock"
   say "+ test -f $lib_dir/compat-adapter/src/main.ts"

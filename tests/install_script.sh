@@ -71,10 +71,17 @@ contains "$script" "lib/hya/compat-adapter"
 contains "$release_workflow" "crates/hya-plugin-compat/adapter"
 contains "$release_workflow" "lib/hya/compat-adapter"
 contains "$release_workflow" "scripts/prune-sdk-server.ts"
+contains "$release_workflow" "THIRD_PARTY_NOTICES"
+contains "$release_workflow" "lib/hya/hya-tui-ts/THIRD_PARTY_NOTICES"
 contains "$script" "packages/hya-tui-ts/bunfig.toml"
 contains "$script" "packages/hya-tui-ts/tsconfig.json"
 contains "$release_workflow" "packages/hya-tui-ts/bunfig.toml"
 contains "$release_workflow" "packages/hya-tui-ts/tsconfig.json"
+contains "$release_workflow" 'test -f "$runtime/src/hya/coding-tool-presentation.tsx"'
+contains "$release_workflow" 'grep -Fx "$package_dir/lib/hya/hya-tui-ts/src/hya/coding-tool-presentation.tsx" "$scratch/archive.txt"'
+contains "$release_workflow" 'cmp packages/hya-tui-ts/NOTICE "$runtime/NOTICE"'
+contains "$release_workflow" 'cmp THIRD_PARTY_NOTICES "$runtime/THIRD_PARTY_NOTICES"'
+contains "$release_workflow" 'test -d "$runtime/node_modules"'
 contains "$release_workflow" "for path in dist/index.js dist/index.d.ts dist/server.js dist/server.d.ts dist/v2/index.js dist/v2/index.d.ts dist/v2/server.js dist/v2/server.d.ts dist/process.js dist/process.d.ts"
 contains "$release_workflow" "HYA_RELEASE_BUN_INVOCATION"
 contains "$release_workflow" '"$packaged_binary" "$project" --server http://127.0.0.1:54321 --bun "$mock_bun"'
@@ -103,6 +110,10 @@ contains "$dry_run" "Permission preflight: /tmp/hya-install-test/bin"
 
 contains "$dry_run" "cargo build --locked -p hya -p hya-backend -p hya-ts --bins"
 contains "$dry_run" "bun install --frozen-lockfile --production"
+contains "$dry_run" "THIRD_PARTY_NOTICES"
+contains "$dry_run" "src/hya/coding-tool-presentation.tsx"
+contains "$dry_run" "node_modules/@opentui/solid/package.json"
+contains "$dry_run" "node_modules/@opencode-ai/sdk/dist/v2/client.js"
 not_contains "$dry_run" "--profile debug"
 contains "$dry_run" "/tmp/hya-install-test/bin/.hya.tmp"
 contains "$dry_run" "/tmp/hya-install-test/bin/.hya-backend.tmp"
@@ -199,7 +210,10 @@ if [[ "${1:-}" == "--version" ]]; then
   printf '%s\n' 1.3.14
   exit 0
 fi
-if [[ "${1:-}" == *"scripts/prune-sdk-server.ts" ]]; then
+if [[ "${1:-}" == *"scripts/prune-sdk-server.ts"* ]]; then
+  if [[ "${HYA_SKIP_TUI_NODE_MODULES:-0}" == 1 || "${HYA_SKIP_TUI_SDK_CLIENT:-0}" == 1 ]]; then
+    exit 0
+  fi
   exec "${HYA_REAL_BUN:?}" "$@"
 fi
 [[ "$*" == "install --frozen-lockfile --production" ]]
@@ -210,6 +224,9 @@ if grep -Fq '"name": "@hya/compat-adapter"' package.json; then
   cp -R "${HYA_TEST_COMPAT_NODE_MODULES:?}/." node_modules/
   exit 0
 fi
+if [[ "${HYA_SKIP_TUI_NODE_MODULES:-0}" == 1 ]]; then
+  exit 0
+fi
 mkdir -p node_modules/runtime-dependency
 printf '%s\n' '{"name":"runtime-dependency"}' >node_modules/runtime-dependency/package.json
 mkdir -p node_modules/@opentui/solid
@@ -217,6 +234,9 @@ printf '%s\n' '{"name":"@opentui/solid","exports":{"./preload":"./preload.js"}}'
 : >node_modules/@opentui/solid/preload.js
 mkdir -p node_modules/@opencode-ai/plugin
 printf '%s\n' '{"name":"@opencode-ai/plugin"}' >node_modules/@opencode-ai/plugin/package.json
+if [[ "${HYA_SKIP_TUI_SDK_CLIENT:-0}" == 1 ]]; then
+  exit 0
+fi
 sdk=node_modules/@opencode-ai/sdk
 mkdir -p "$sdk/dist/v2"
 cat >"$sdk/package.json" <<'SDK_PACKAGE'
@@ -250,9 +270,11 @@ for name in hya hya-backend hya-ts; do
   [[ -x "$install_root/bin/$name" ]] || fail "missing installed binary: $name"
 done
 runtime="$install_root/lib/hya/hya-tui-ts"
-for path in package.json bun.lock bunfig.toml tsconfig.json src/main.tsx LICENSE UPSTREAM.md NOTICE node_modules/runtime-dependency/package.json; do
+for path in package.json bun.lock bunfig.toml tsconfig.json src/main.tsx src/hya/coding-tool-presentation.tsx LICENSE UPSTREAM.md NOTICE THIRD_PARTY_NOTICES node_modules/runtime-dependency/package.json node_modules/@opentui/solid/package.json node_modules/@opencode-ai/sdk/dist/v2/client.js; do
   [[ -e "$runtime/$path" ]] || fail "missing installed runtime path: $path"
 done
+cmp packages/hya-tui-ts/NOTICE "$runtime/NOTICE"
+cmp THIRD_PARTY_NOTICES "$runtime/THIRD_PARTY_NOTICES"
 sdk="$runtime/node_modules/@opencode-ai/sdk"
 [[ -f "$sdk/dist/v2/client.js" ]] || fail "runtime pruning removed SDK client code"
 for path in dist/index.js dist/index.d.ts dist/server.js dist/server.d.ts dist/v2/index.js dist/v2/index.d.ts dist/v2/server.js dist/v2/server.d.ts dist/process.js dist/process.d.ts; do
@@ -270,6 +292,40 @@ for path in package.json bun.lock src/main.ts node_modules/@opencode-ai/plugin/p
   [[ -e "$compat_adapter/$path" ]] || fail "missing installed Compat adapter path: $path"
 done
 
+
+# A successful Bun install must still be rejected when it leaves the packaged
+# TUI without its production dependency tree.
+missing_runtime_install="$fixture/install-missing-tui-node-modules"
+missing_runtime_target="$fixture/target-missing-tui-node-modules"
+missing_runtime_output="$fixture/missing-tui-node-modules-output"
+mkdir -p "$missing_runtime_install/lib/hya/hya-tui-ts"
+printf 'old-runtime\n' >"$missing_runtime_install/lib/hya/hya-tui-ts/marker"
+if PATH="$fake_bin:$missing_runtime_install/bin:$PATH" CARGO_TARGET_DIR="$missing_runtime_target" HYA_BUN_PREFLIGHT_MARKER="$fixture/bun-ready" HYA_REAL_BUN="$real_bun" \
+  HYA_TEST_COMPAT_NODE_MODULES="$compat_node_modules" HYA_SKIP_TUI_NODE_MODULES=1 \
+  bash ./install.sh --prefix "$missing_runtime_install" --profile debug >"$missing_runtime_output" 2>&1; then
+  fail "installer accepted a TUI runtime without node_modules"
+fi
+missing_runtime_result=$(<"$missing_runtime_output")
+contains "$missing_runtime_result" "TUI runtime dependency preparation is incomplete: missing node_modules directory."
+[[ $(<"$missing_runtime_install/lib/hya/hya-tui-ts/marker") == old-runtime ]] ||
+  fail "missing-dependency staging failure replaced the previous runtime"
+[[ ! -d "$missing_runtime_install/lib/hya/hya-tui-ts/node_modules" ]] ||
+  fail "missing-dependency fixture unexpectedly retained TUI node_modules"
+
+# An existing node_modules directory is insufficient when a required client
+# dependency is missing from the prepared tree.
+incomplete_runtime_install="$fixture/install-incomplete-tui-node-modules"
+incomplete_runtime_target="$fixture/target-incomplete-tui-node-modules"
+incomplete_runtime_output="$fixture/incomplete-tui-node-modules-output"
+if PATH="$fake_bin:$incomplete_runtime_install/bin:$PATH" CARGO_TARGET_DIR="$incomplete_runtime_target" HYA_BUN_PREFLIGHT_MARKER="$fixture/bun-ready" HYA_REAL_BUN="$real_bun" \
+  HYA_TEST_COMPAT_NODE_MODULES="$compat_node_modules" HYA_SKIP_TUI_SDK_CLIENT=1 \
+  bash ./install.sh --prefix "$incomplete_runtime_install" --profile debug >"$incomplete_runtime_output" 2>&1; then
+  fail "installer accepted an incomplete TUI dependency tree"
+fi
+incomplete_runtime_result=$(<"$incomplete_runtime_output")
+contains "$incomplete_runtime_result" "missing node_modules/@opencode-ai/sdk/dist/v2/client.js"
+[[ ! -d "$incomplete_runtime_install/lib/hya/hya-tui-ts" ]] ||
+  fail "incomplete-dependency fixture swapped the staged TUI runtime"
 # Run the packaged adapter from outside the checkout. This verifies the release
 # artifact is self-contained and does not depend on HYA_COMPAT_ADAPTER_DIR.
 compat_probe="$fixture/compat-probe"

@@ -117,6 +117,8 @@ jobs:
           cp packages/hya-tui-ts/package.json packages/hya-tui-ts/bun.lock \
             packages/hya-tui-ts/bunfig.toml packages/hya-tui-ts/tsconfig.json \
             packages/hya-tui-ts/LICENSE packages/hya-tui-ts/UPSTREAM.md "$runtime/"
+          cp packages/hya-tui-ts/NOTICE "$runtime/NOTICE"
+          cp THIRD_PARTY_NOTICES "$runtime/THIRD_PARTY_NOTICES"
           cp -R packages/hya-tui-ts/src/. "$runtime/src/"
           cp crates/hya-plugin-compat/adapter/package.json \
             crates/hya-plugin-compat/adapter/bun.lock "$compat_adapter/"
@@ -158,6 +160,9 @@ jobs:
           test -f "$runtime/bunfig.toml"
           test -f "$runtime/tsconfig.json"
           test -f "$runtime/src/main.tsx"
+          test -f "$runtime/src/hya/coding-tool-presentation.tsx"
+          test -f "$runtime/NOTICE"
+          test -f "$runtime/THIRD_PARTY_NOTICES"
           compat_adapter="$scratch/$package_dir/lib/hya/compat-adapter"
           for path in package.json bun.lock src/main.ts node_modules/@opencode-ai/plugin/package.json node_modules/@opencode-ai/sdk/package.json; do
             test -e "$compat_adapter/$path"
@@ -210,8 +215,9 @@ jobs:
           grep -Fx "arg=http://127.0.0.1:54321" "$bun_invocation"
           grep -Fx "arg=--project" "$bun_invocation"
           grep -Fx "arg=$project" "$bun_invocation"
-          cmp packages/hya-tui-ts/LICENSE "$runtime/LICENSE"
           cmp packages/hya-tui-ts/UPSTREAM.md "$runtime/UPSTREAM.md"
+          cmp packages/hya-tui-ts/NOTICE "$runtime/NOTICE"
+          cmp THIRD_PARTY_NOTICES "$runtime/THIRD_PARTY_NOTICES"
           test -d "$runtime/node_modules"
           sdk="$runtime/node_modules/@opencode-ai/sdk"
           (cd "$runtime" && "$HOME/.bun/bin/bun" -e 'import { createOpencodeClient } from "@opencode-ai/sdk/v2"; if (typeof createOpencodeClient !== "function") process.exit(1)')
@@ -237,7 +243,10 @@ jobs:
           grep -Fx "$package_dir/bin/hya-ts" "$scratch/archive.txt"
           grep -Fx "$package_dir/lib/hya/hya-tui-ts/LICENSE" "$scratch/archive.txt"
           grep -Fx "$package_dir/lib/hya/hya-tui-ts/UPSTREAM.md" "$scratch/archive.txt"
+          grep -Fx "$package_dir/lib/hya/hya-tui-ts/NOTICE" "$scratch/archive.txt"
+          grep -Fx "$package_dir/lib/hya/hya-tui-ts/THIRD_PARTY_NOTICES" "$scratch/archive.txt"
           grep -Fx "$package_dir/lib/hya/hya-tui-ts/src/main.tsx" "$scratch/archive.txt"
+          grep -Fx "$package_dir/lib/hya/hya-tui-ts/src/hya/coding-tool-presentation.tsx" "$scratch/archive.txt"
           grep -Fx "$package_dir/lib/hya/hya-tui-ts/bunfig.toml" "$scratch/archive.txt"
           grep -Fx "$package_dir/lib/hya/hya-tui-ts/tsconfig.json" "$scratch/archive.txt"
           grep -F "$package_dir/lib/hya/hya-tui-ts/node_modules/" "$scratch/archive.txt" >/dev/null
