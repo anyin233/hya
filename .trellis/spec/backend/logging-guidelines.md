@@ -38,14 +38,17 @@ Questions to answer:
 
 ## What to Log
 
-<!-- Important events to log -->
-
-(To be filled by the team)
+For provider catalog discovery, diagnostics may include the Hya provider id,
+safe error class, HTTP status code, and an endpoint origin/path only after its
+query and userinfo have been removed. Keep messages bounded. Provider failure is
+non-fatal when another provider resolves.
 
 ---
 
 ## What NOT to Log
 
-<!-- Sensitive data, PII, secrets -->
-
-(To be filled by the team)
+Never log credentials, Authorization/API-key/account/session headers, credential
+values or fingerprints, URL userinfo/query secrets, provider response bodies,
+model payload dumps, or foreign config contents. Catalog API status fields are
+the closed non-secret enums `source`, `auth`, and `result`; do not serialize an
+internal error string in their place.

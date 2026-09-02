@@ -27,6 +27,15 @@
 - `TaskTool` maps these into matching `ToolError` variants; engine tool-error
   payloads retain distinct machine-readable types.
 
+- `ProviderDiscoveryOutcome` is provider-local and typed: discovered, empty,
+  auth-required, auth-rejected, unsupported, or `CatalogFailure`. It contains no
+  fallback model or raw response body.
+- Credentialless 401/403 maps to `AuthRequired`; credentialed 401/403 maps to
+  `AuthRejected`. Decode/schema/body/pagination failures are `invalid` status;
+  URL/redirect/transport/timeout/other HTTP failures are `unavailable`.
+- One provider failure must not abort mixed-provider startup or publish partial
+  rows. The global all-zero-live result is the canonical offline snapshot.
+
 ---
 
 ## Error Handling Patterns

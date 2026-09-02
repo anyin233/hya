@@ -262,9 +262,10 @@ to be a full Compat superset. Known limits are tracked in
 ### TUI bootstrap (`GET /tui/bootstrap`)
 
 Single-RTT startup aggregate used by the shipped TypeScript TUI
-([`compat/tui.rs`](../../crates/hya-server/src/compat/tui.rs);
-frontend: prefer this path, fall back to multi-call on older backends). One
-`GET` returns a JSON object with these top-level keys:
+([`compat/tui.rs`](../../crates/hya-server/src/compat/tui.rs)). One `GET`
+returns a JSON object with these top-level keys. The provider fields are direct
+projections of the process catalog snapshot; there is no older multi-call
+catalog authority or frontend-generated fallback.
 
 | Key | Contents (summary) |
 | --- | --- |
@@ -303,32 +304,30 @@ durably rewrite `config.yaml`).
 
 ### Provider and model catalog
 
-All of the following are derived from the live router catalog, exposed by the
-engine as `Engine::provider_catalog()`
-([`engine.rs`](../../crates/hya-core/src/engine.rs)), which is
-`ProviderRouter::catalog()` flattened/sorted/deduped.
+All catalog endpoints project the immutable snapshot stored by
+`SessionEngine::provider_catalog_snapshot()`. This is the same object used by
+runtime routing and `hya-backend models`.
 
 | Method | Path | Response |
 | --- | --- | --- |
-| `GET` | `/api/provider` | Location-wrapped list of `ProviderInfo` for every provider id in the catalog. |
-| `GET` | `/api/provider/:provider_id` | One `ProviderInfo`, or **404** with body `{ "_tag": "ProviderNotFoundError", "providerID", "message" }` when the id is absent. |
-| `GET` | `/api/model` | Location-wrapped list of every catalog model as `ModelInfo`. |
-| `GET` | `/config/providers` | Legacy shape: `{ providers, default }`. |
-| `GET` | `/provider` | Legacy shape: `{ all, default, connected }`. |
-| `GET` | `/provider/auth` | Map of provider id → auth methods. **Always** a single `{ "type": "api", "label": "API key" }` entry per provider, regardless of whether the live route uses OAuth. |
+| `GET` | `/api/provider` | Location-wrapped list for every declared provider status, including declarations with no rows. |
+| `GET` | `/api/provider/:provider_id` | One provider status and its rows, or typed `ProviderNotFoundError`. |
+| `GET` | `/api/model` | Location-wrapped list of exactly the snapshot rows. |
+| `GET` | `/config/providers` | Legacy shape: `{ providers, default, defaultModel }`. |
+| `GET` | `/provider` | Legacy shape: `{ all, default, defaultModel, connected }`. |
+| `GET` | `/provider/auth` | Declared non-offline provider ids mapped to the existing API-key method shape. |
 
-Each catalog model is projected with:
+Each provider carries `source`, `auth`, and `result`. `connected` contains only
+providers whose startup discovery returned rows; it is not a claim that an
+explicit route is active or that credentials are valid.
 
-- **tools** — from `capabilities.streaming_tool_calls`
-- **context** — from `capabilities.max_context` (surfaced on the wire as
-  `limit.context` on `ModelInfo`)
-- **variants** — the reasoning-variant list, serialized as a keyed JSON object
-  (insertion order preserved)
+Each catalog model is projected with its snapshot `source`, tools capability,
+context limit, and ordered reasoning variants. The process default is present
+only when it is one of these rows.
 
-**Empty-catalog fallback.** When `provider_catalog()` is empty, the server
-synthesizes one entry from the process agent model (`st.agent.model`), with
-`tools: false`, `context: 0`, and **no** variants — so catalog endpoints still
-return something offline.
+**Empty-catalog fallback.** The snapshot, not the server, supplies exactly
+`hya/offline` when no live row resolved. The server never derives a row from an
+agent, Session, category, Workflow route, stale default, or failed provider.
 
 ### Permissions
 

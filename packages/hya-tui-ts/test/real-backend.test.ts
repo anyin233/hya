@@ -484,10 +484,10 @@ test("pinned SDK drives the retained TUI workflow against a real hya backend", a
     { sessionID, parts: [{ type: "text", text: "deterministic SDK prompt" }] },
     { throwOnError: true },
   )
-  await waitFor(
-    () => JSON.stringify(events).includes("(hya dev provider) You said") && JSON.stringify(events).includes("deterministic SDK prompt"),
-    "streamed assistant text",
-  )
+  await waitFor(() => {
+    const streamed = JSON.stringify(events)
+    return streamed.includes("deterministic SDK prompt") && streamed.includes("No live provider is available")
+  }, "streamed assistant text")
   await waitFor(
     async () => (await client.session.status({}, { throwOnError: true })).data![sessionID]?.type !== "busy",
     "completed prompt",

@@ -37,7 +37,7 @@ use hya_proto::{
     AgentName, MemberId, ModelRef, OwnerRunId, SessionId, SubagentMode, ToolName, ToolSchema,
     WorkflowDelivery,
 };
-use hya_provider::{DevProvider, ProviderRouter, ReasoningEffort};
+use hya_provider::{DevProvider, ProviderCatalogSnapshot, ProviderRouter, ReasoningEffort};
 use hya_store::{
     AdmissionBatchClaimOutcome, AdmissionClaim, AdmissionIntent, AdmissionLaunch,
     AdmissionTerminal, SessionStore, StoreError,
@@ -87,13 +87,13 @@ pub fn host_info() -> HostInfo {
 
 /// Dev/offline provider router and model id when no live config is usable.
 ///
-/// Returns a router containing only `DevProvider` and either `model_override`
-/// or the literal model id `offline`.
+/// The router claims only `hya/offline`; an explicit unknown override remains
+/// unknown and therefore fails through the normal typed routing error.
 pub fn offline_router(model_override: Option<String>) -> (ProviderRouter, String) {
     let router = ProviderRouter::new().with(Arc::new(DevProvider::new()));
     (
         router,
-        model_override.unwrap_or_else(|| "offline".to_string()),
+        model_override.unwrap_or_else(|| "hya/offline".to_string()),
     )
 }
 
@@ -1256,14 +1256,14 @@ impl OfflineNotice {
 
 /// Resolved provider/MCP/plugin/permission inputs ready to build a session engine.
 pub struct RuntimeConfig {
-    /// Live model routes (or offline dev provider).
+    /// Live model routes (or the canonical offline provider).
     pub router: ProviderRouter,
-    /// Active default model id for new sessions.
+    /// Shared immutable startup model/provider catalog.
+    pub catalog: Arc<ProviderCatalogSnapshot>,
+    /// Active request model id for new sessions.
     pub model: String,
     /// Default reasoning effort for the active model, when configured.
     pub reasoning: Option<ReasoningEffort>,
-    /// Catalog models from config (empty when offline).
-    pub models: Vec<config::ModelEntry>,
     /// MCP server configs to connect at engine build.
     pub mcp: BTreeMap<String, McpServerConfig>,
     /// Plugin specs already merged from config + manifests.
@@ -1272,7 +1272,7 @@ pub struct RuntimeConfig {
     pub default_agent: Option<String>,
     /// Logical model categories the runtime resolves at subagent spawn time.
     pub categories: CategoryRegistry,
-    /// Set when no usable config was found and the offline provider was chosen.
+    /// Set when no usable config or live provider was found.
     /// Interactive startup emits it; headless/machine-readable modes ignore it.
     pub offline_notice: Option<OfflineNotice>,
     /// Tool permission policy for the engine.
@@ -1291,79 +1291,79 @@ impl RuntimeConfig {
         self
     }
 }
+fn offline_runtime(model_override: Option<String>, strict: bool) -> RuntimeConfig {
+    let (router, model) = offline_router(model_override);
+    let catalog = Arc::new(ProviderCatalogSnapshot::build(
+        Vec::new(),
+        Vec::new(),
+        Some(ModelRef::new("hya/offline")),
+    ));
+    let router = router.with_catalog_snapshot(Arc::clone(&catalog));
+    RuntimeConfig {
+        router,
+        catalog,
+        model,
+        reasoning: None,
+        mcp: BTreeMap::new(),
+        plugins: Vec::new(),
+        default_agent: None,
+        categories: CategoryRegistry::default(),
+        offline_notice: Some(OfflineNotice {
+            config_path: config::expected_config_path(),
+        }),
+        permission: if strict {
+            InvocationPolicy::default().with_model(PermissionModel::Strict)
+        } else {
+            InvocationPolicy::default()
+        },
+        websearch: WebSearchConfig::default(),
+    }
+}
 
-/// Resolve a provider router + active model from hya's config, falling back
-/// to the offline echo provider when no usable config is present.
-pub fn resolve_runtime(model_override: Option<String>) -> RuntimeConfig {
-    match config::load() {
+/// Resolve providers and the immutable catalog before returning runtime state.
+pub async fn resolve_runtime(model_override: Option<String>) -> RuntimeConfig {
+    match config::load().await {
         Ok(Some(cfg)) => {
-            let (fallback_router, fallback_model) = offline_router(model_override.clone());
-            let default_model = if cfg.default_model.is_empty() {
-                fallback_model
-            } else {
-                cfg.default_model
-            };
-
             let model = model_override
                 .or_else(|| std::env::var("HYA_MODEL").ok())
-                .unwrap_or(default_model);
+                .unwrap_or_else(|| cfg.default_model.clone());
             let reasoning = cfg
-                .models
+                .catalog
+                .models()
                 .iter()
-                .find(|entry| entry.matches_model_ref(&model))
+                .find(|entry| {
+                    entry.model_ref().as_str() == model
+                        || (entry.model_id == model
+                            && cfg
+                                .catalog
+                                .models()
+                                .iter()
+                                .filter(|candidate| candidate.model_id == model)
+                                .count()
+                                == 1)
+                })
                 .and_then(|entry| entry.reasoning_default);
+            let offline_notice = cfg.catalog.notice().map(|_| OfflineNotice {
+                config_path: config::expected_config_path(),
+            });
             RuntimeConfig {
-                router: if cfg.has_providers {
-                    cfg.router
-                } else {
-                    fallback_router
-                },
+                router: cfg.router,
+                catalog: cfg.catalog,
                 model,
                 reasoning,
-                models: cfg.models,
                 mcp: cfg.mcp,
                 plugins: plugins::resolve(cfg.plugins, plugins::plugins_dir().as_deref()),
                 default_agent: cfg.default_agent,
                 categories: cfg.categories,
-                offline_notice: None,
+                offline_notice,
                 permission: cfg.permission,
                 websearch: cfg.websearch,
             }
         }
-        Ok(None) => {
-            let (router, model) = offline_router(model_override);
-            RuntimeConfig {
-                router,
-                model,
-                reasoning: None,
-                models: Vec::new(),
-                mcp: BTreeMap::new(),
-                plugins: Vec::new(),
-                default_agent: None,
-                categories: CategoryRegistry::default(),
-                offline_notice: Some(OfflineNotice {
-                    config_path: config::expected_config_path(),
-                }),
-                permission: InvocationPolicy::default(),
-                websearch: WebSearchConfig::default(),
-            }
-        }
-        Err(e) => {
-            eprintln!("hya: config error ({e:#}); using the offline provider");
-            let (router, model) = offline_router(model_override);
-            RuntimeConfig {
-                router,
-                model,
-                reasoning: None,
-                models: Vec::new(),
-                mcp: BTreeMap::new(),
-                plugins: Vec::new(),
-                default_agent: None,
-                categories: CategoryRegistry::default(),
-                offline_notice: None,
-                permission: InvocationPolicy::default().with_model(PermissionModel::Strict),
-                websearch: WebSearchConfig::default(),
-            }
+        Ok(None) => offline_runtime(model_override, false),
+        Err(error) => {
+            eprintln!("hya: config error ({error:#}); using the offline provider");
+            offline_runtime(model_override, true)
         }
     }
 }
@@ -4537,22 +4537,11 @@ impl HyaRuntime {
     pub async fn start(opts: RuntimeOptions) -> anyhow::Result<Self> {
         let store = open_store(&opts.db).await?;
         let runtime = if opts.force_offline {
-            let (router, model) = offline_router(opts.model);
-            RuntimeConfig {
-                router,
-                model,
-                reasoning: None,
-                models: Vec::new(),
-                mcp: BTreeMap::new(),
-                plugins: Vec::new(),
-                default_agent: opts.default_agent,
-                categories: CategoryRegistry::default(),
-                offline_notice: None,
-                permission: InvocationPolicy::default(),
-                websearch: WebSearchConfig::default(),
-            }
+            let mut runtime = offline_runtime(opts.model, false);
+            runtime.default_agent = opts.default_agent;
+            runtime
         } else {
-            let mut runtime = resolve_runtime(opts.model);
+            let mut runtime = resolve_runtime(opts.model).await;
             if opts.default_agent.is_some() {
                 runtime.default_agent = opts.default_agent;
             }
@@ -4563,7 +4552,7 @@ impl HyaRuntime {
             eprintln!("hya: --yolo auto-approves ALL tool actions for the hya frontend (RCE risk)");
         }
         // Server/TUI AppState: agent base only. Per-turn guidance layers
-        // Environment + current workdir AGENTS + references once.
+        // Environment + AGENTS + references once.
         let agent = Arc::new(agent_base_with_model(&runtime.model, runtime.reasoning));
         let mut built = build_session_engine(
             store,
@@ -4736,6 +4725,9 @@ mod tests {
         }
 
         fn capabilities(&self, model: &ModelRef) -> Option<Capabilities> {
+            if model.as_str() == "dev" {
+                return self.inner.capabilities(&ModelRef::new("hya/offline"));
+            }
             self.inner.capabilities(model)
         }
 
@@ -5169,7 +5161,7 @@ mod tests {
             "route",
             ProviderKind::OpenAiCompatible,
             "https://route.example/v1/",
-            "credential-a".to_string(),
+            Some("credential-a".to_string()),
             ["primary".to_string(), "fallback".to_string()],
         )
         .expect("first HTTP route must construct")
@@ -5194,7 +5186,7 @@ mod tests {
             "route",
             ProviderKind::OpenAiCompatible,
             "https://route.example/v1",
-            "credential-b".to_string(),
+            Some("credential-b".to_string()),
             ["primary".to_string(), "fallback".to_string()],
         )
         .expect("second HTTP route must construct")
@@ -5230,7 +5222,7 @@ mod tests {
             "route",
             ProviderKind::OpenAiCompatible,
             "https://route.example/v2",
-            "credential-a".to_string(),
+            Some("credential-a".to_string()),
             ["primary".to_string(), "fallback".to_string()],
         )
         .expect("changed-endpoint HTTP route must construct");
@@ -5249,7 +5241,7 @@ mod tests {
             "route",
             ProviderKind::OpenAiCompatible,
             "https://route.example/v1",
-            "credential-a".to_string(),
+            Some("credential-a".to_string()),
             ["fallback".to_string()],
         )
         .expect("fallback-only HTTP route must construct");
@@ -5273,7 +5265,7 @@ mod tests {
                 "route-a",
                 ProviderKind::OpenAiCompatible,
                 "https://route.example/shared",
-                "credential".to_string(),
+                Some("credential".to_string()),
                 ["primary".to_string()],
             )
             .expect("route-a HTTP provider must construct")
@@ -5283,7 +5275,7 @@ mod tests {
                 "route-b",
                 ProviderKind::OpenAiCompatible,
                 "https://route.example/shared",
-                "credential".to_string(),
+                Some("credential".to_string()),
                 ["primary".to_string()],
             )
             .expect("route-b HTTP provider must construct")
@@ -5352,7 +5344,7 @@ mod tests {
             "configured-provider-id-sentinel",
             ProviderKind::OpenAiCompatible,
             provider_endpoint,
-            provider_config.to_string(),
+            Some(provider_config.to_string()),
             ["configured-provider-model-sentinel".to_string()],
         )
         .expect("configured provider must construct")
@@ -7377,7 +7369,7 @@ agent:
             );
             let base = AgentSpec {
                 name: AgentName::new("build"),
-                model: ModelRef::new("dev"),
+                model: ModelRef::new("hya/offline"),
                 system_prompt: "uniform pre-admission base".to_string(),
                 workdir: workdir.clone(),
                 reasoning: None,
@@ -7619,7 +7611,7 @@ agent:
         );
         let base = AgentSpec {
             name: AgentName::new("build"),
-            model: ModelRef::new("dev"),
+            model: ModelRef::new("hya/offline"),
             system_prompt: "foreground handler cap base".to_string(),
             workdir: workdir.clone(),
             reasoning: None,
@@ -7994,7 +7986,7 @@ agent:
         );
         let base = AgentSpec {
             name: AgentName::new("build"),
-            model: ModelRef::new("dev"),
+            model: ModelRef::new("hya/offline"),
             system_prompt: "foreign wake base prompt".to_string(),
             workdir: workdir.clone(),
             reasoning: None,
@@ -8371,7 +8363,7 @@ agent:
         );
         let base = AgentSpec {
             name: AgentName::new("build"),
-            model: ModelRef::new("dev"),
+            model: ModelRef::new("hya/offline"),
             system_prompt: "owner rehydrate base prompt".to_string(),
             workdir: workdir.clone(),
             reasoning: None,
@@ -8724,7 +8716,7 @@ agent:
         );
         let base = AgentSpec {
             name: AgentName::new("build"),
-            model: ModelRef::new("dev"),
+            model: ModelRef::new("hya/offline"),
             system_prompt: "identical ordered reply base".to_string(),
             workdir: workdir.clone(),
             reasoning: None,
@@ -8854,7 +8846,7 @@ agent:
         );
         let base = AgentSpec {
             name: AgentName::new("build"),
-            model: ModelRef::new("dev"),
+            model: ModelRef::new("hya/offline"),
             system_prompt: "background delayed reply base".to_string(),
             workdir: workdir.clone(),
             reasoning: None,
@@ -9041,7 +9033,7 @@ agent:
         );
         let base = AgentSpec {
             name: AgentName::new("build"),
-            model: ModelRef::new("dev"),
+            model: ModelRef::new("hya/offline"),
             system_prompt: "mixed cancel base".to_string(),
             workdir: workdir.clone(),
             reasoning: None,
@@ -9206,7 +9198,7 @@ agent:
         );
         let base = AgentSpec {
             name: AgentName::new("build"),
-            model: ModelRef::new("dev"),
+            model: ModelRef::new("hya/offline"),
             system_prompt: "drop-receiver base".to_string(),
             workdir: workdir.clone(),
             reasoning: None,
@@ -9395,7 +9387,7 @@ agent:
         );
         let base = AgentSpec {
             name: AgentName::new("build"),
-            model: ModelRef::new("dev"),
+            model: ModelRef::new("hya/offline"),
             system_prompt: "promotion-first base".to_string(),
             workdir: workdir.clone(),
             reasoning: None,
@@ -9576,7 +9568,7 @@ agent:
         );
         let base = AgentSpec {
             name: AgentName::new("build"),
-            model: ModelRef::new("dev"),
+            model: ModelRef::new("hya/offline"),
             system_prompt: "cancel-first base".to_string(),
             workdir: workdir.clone(),
             reasoning: None,
@@ -9746,7 +9738,7 @@ agent:
         );
         let base = AgentSpec {
             name: AgentName::new("build"),
-            model: ModelRef::new("dev"),
+            model: ModelRef::new("hya/offline"),
             system_prompt: "queued batch reply base".to_string(),
             workdir: workdir.clone(),
             reasoning: None,
@@ -10031,7 +10023,7 @@ flowchart TD
         );
         let base = AgentSpec {
             name: AgentName::new("build"),
-            model: ModelRef::new("dev"),
+            model: ModelRef::new("hya/offline"),
             system_prompt: "build".to_string(),
             workdir: workdir.clone(),
             reasoning: None,
@@ -10144,7 +10136,7 @@ flowchart TD
         );
         let base = AgentSpec {
             name: AgentName::new("build"),
-            model: ModelRef::new("dev"),
+            model: ModelRef::new("hya/offline"),
             system_prompt: "shutdown abort base".to_string(),
             workdir: workdir.clone(),
             reasoning: None,
@@ -10527,17 +10519,17 @@ for line in sys.stdin:
         assert!(text.contains("docs/configuration.md"));
     }
 
-    #[test]
-    fn resolve_runtime_without_config_carries_but_does_not_print_the_notice() {
+    #[tokio::test]
+    async fn resolve_runtime_without_config_carries_but_does_not_print_the_notice() {
         let dir = tempdir();
         let _env = EnvGuard::set(&dir, &dir);
         let config_path = dir.join("hya/config.yaml");
         let _ = std::fs::remove_file(&config_path);
 
-        let runtime = resolve_runtime(None);
+        let runtime = resolve_runtime(None).await;
 
-        // Offline fallback selected: the built-in echo provider + "offline" model.
-        assert_eq!(runtime.model, "offline");
+        // Offline fallback selected: the canonical built-in hya/offline model.
+        assert_eq!(runtime.model, "hya/offline");
         // The guidance is returned as DATA — resolve_runtime itself prints
         // nothing, so headless/RPC/serve callers (which never call `emit`) keep
         // a clean machine-readable stdout. Only interactive startup emits it.
@@ -10548,18 +10540,18 @@ for line in sys.stdin:
         assert!(notice.render().contains("OFFLINE"));
     }
 
-    #[test]
-    fn permission_only_config_is_kept_and_config_errors_fall_back_to_strict() {
+    #[tokio::test]
+    async fn permission_only_config_is_kept_and_config_errors_fall_back_to_strict() {
         let dir = tempdir();
         let _env = EnvGuard::set(&dir, &dir);
         let config_path = dir.join("hya/config.yaml");
         std::fs::create_dir_all(config_path.parent().unwrap()).unwrap();
         std::fs::write(&config_path, "permission:\n  model: allow\n").unwrap();
 
-        let runtime = resolve_runtime(None);
-        assert_eq!(runtime.model, "offline");
+        let runtime = resolve_runtime(None).await;
+        assert_eq!(runtime.model, "hya/offline");
         assert_eq!(runtime.permission.model(), PermissionModel::Allow);
-        assert!(runtime.offline_notice.is_none());
+        assert!(runtime.offline_notice.is_some());
         assert_eq!(
             runtime.with_yolo(true).permission.model(),
             PermissionModel::Danger
@@ -10570,12 +10562,12 @@ for line in sys.stdin:
             "permission:\n  rules:\n    - target: tool\n      selector: '('\n      permission: Allow\n",
         )
         .unwrap();
-        let fallback = resolve_runtime(None);
+        let fallback = resolve_runtime(None).await;
         assert_eq!(fallback.permission.model(), PermissionModel::Strict);
     }
 
-    #[test]
-    fn websearch_only_config_reaches_runtime() {
+    #[tokio::test]
+    async fn websearch_only_config_reaches_runtime() {
         let dir = tempdir();
         let _env = EnvGuard::set(&dir, &dir);
         let config_path = dir.join("hya/config.yaml");
@@ -10586,7 +10578,7 @@ for line in sys.stdin:
         )
         .unwrap();
 
-        let runtime = resolve_runtime(None);
+        let runtime = resolve_runtime(None).await;
 
         assert_eq!(
             runtime.websearch.provider,
@@ -10598,7 +10590,7 @@ for line in sys.stdin:
         );
         assert_eq!(runtime.websearch.key.as_deref(), Some("secret"));
         assert!(!runtime.websearch.enabled);
-        assert!(runtime.offline_notice.is_none());
+        assert!(runtime.offline_notice.is_some());
     }
 
     #[tokio::test]
@@ -11336,8 +11328,8 @@ You are the installed resident agent.
         );
     }
 
-    #[test]
-    fn selected_model_reasoning_default_reaches_first_agent() {
+    #[tokio::test]
+    async fn selected_model_reasoning_default_reaches_first_agent() {
         let dir = tempdir();
         let _env = EnvGuard::set(&dir, &dir);
         let config_path = dir.join("hya/config.yaml");
@@ -11348,7 +11340,7 @@ You are the installed resident agent.
         )
         .unwrap();
 
-        let runtime = resolve_runtime(None);
+        let runtime = resolve_runtime(None).await;
 
         assert_eq!(
             runtime.reasoning,

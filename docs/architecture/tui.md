@@ -208,6 +208,25 @@ Inside the TUI (`app.tsx` onMount / effects):
    **`complete`** before forking, so session-list reconcile cannot clobber the
    newly created session.
 
+### Model catalog behavior
+
+Bootstrap decodes provider rows, typed `source` / `auth` / `result` status, and
+the row-backed `defaultModel` from the server snapshot. The same payload drives
+model selection, the footer status, `/connect`, recent/favorite visibility, and
+prompt admission. Unknown metadata fails closed. Persisted recents, favorites,
+agent defaults, Session replay values, and command-line seeds are selectable
+only when their exact provider/model pair is still in the snapshot; they never
+create a row. `hya/offline` remains visible and selectable when the backend
+supplied it. Anonymous configured/discovered live rows enable normal selection
+without claiming that their endpoint is healthy.
+
+Provider presentation uses non-health labels such as `Configured`,
+`Discovered`, `Authentication required`, `Authentication rejected`,
+`Unavailable`, `Unsupported`, `No models`, and `Offline`. When no selectable
+model exists, prompt submission is stopped with `Connect a provider to send
+prompts`; offline mode has a real `hya/offline` row and therefore uses the local
+echo provider.
+
 Internal entry (`bun src/main.tsx`) requires `--url` and accepts the argv set
 above; it realpaths the project and chdirs into it before rendering — that is
 what the Rust launcher execs.

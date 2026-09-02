@@ -437,7 +437,7 @@ hya-backend auth list
 hya-backend auth logout <provider>
 hya-backend providers list
 hya-backend providers logout <provider>
-hya-backend models [provider] [--verbose] [--refresh]
+hya-backend models [provider] [--verbose]
 hya-backend agent list [--all]
 ```
 
@@ -477,8 +477,8 @@ approval in that window, the command fails and must be rerun. Flags map to
 test-only overrides).
 
 Saved credentials take precedence over inline `api_key` values. `providers` is
-an alias for `auth`. `models --refresh` is accepted for Compat compatibility
-but does not fetch a remote catalog.
+an alias for `auth`. Catalog discovery already runs once during each process
+startup, so there is no `models --refresh` command or second refresh path.
 
 **`oauth status [provider]`.** Prints non-secret per-provider status only —
 credential kind (`api` vs oauth), OAuth type when present, `expires` /
@@ -486,14 +486,12 @@ credential kind (`api` vs oauth), OAuth type when present, `expires` /
 OAuth credentials it also prints a ready-to-copy re-login line
 (`hya-backend oauth login --provider … --type …`). No token material is printed.
 
-**`models [provider]`.** Prints sorted `provider/model` ids from the configured
-catalog. With `--verbose`, each id is followed by a JSON line
-`{"id":…,"provider":…}`. If the configured model list is empty (offline):
-
-- no filter, or filter `hya` → synthesizes and prints `hya/<fallback_model>`
-  (exit success)
-- any other filter (for example `models openai` with no openai models) → exits
-  with `Provider not found: <id>`
+**`models [provider]`.** Prints the sorted `provider/model` rows from the same
+immutable startup snapshot used by the server, SDK, and TUI. With `--verbose`,
+each id is followed by a JSON line containing `id`, `provider`, and
+`source= configured|discovered|offline`. Unfiltered offline output is exactly
+`hya/offline`; a filter with no rows exits with `Provider not found: <id>`.
+Provider declarations that resolved no rows do not fabricate output.
 
 **`agent list`.** Default output is Compat-parity: only the built-in primary
 agent, printed as `build (primary)` followed by its permission rules as

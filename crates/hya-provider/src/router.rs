@@ -5,13 +5,15 @@ use std::sync::Arc;
 use hya_proto::{Message, MessageId, ModelRef, SessionId};
 
 use crate::{
-    CompactedWindow, CompletionRequest, EventStream, Provider, ProviderError, ProviderModel,
+    CompactedWindow, CompletionRequest, EventStream, Provider, ProviderCatalogSnapshot,
+    ProviderError, ProviderModel,
 };
 
 /// Multiplexes providers; matching routes are attempted in registration order.
 #[derive(Default, Clone)]
 pub struct ProviderRouter {
     providers: Vec<Arc<dyn Provider>>,
+    catalog_snapshot: Option<Arc<ProviderCatalogSnapshot>>,
 }
 
 impl ProviderRouter {
@@ -46,6 +48,24 @@ impl ProviderRouter {
     pub fn with(mut self, provider: Arc<dyn Provider>) -> Self {
         self.providers.push(provider);
         self
+    }
+
+    /// Attach the finalized startup snapshot used by engine and API consumers.
+    #[must_use]
+    pub fn with_catalog_snapshot(mut self, snapshot: Arc<ProviderCatalogSnapshot>) -> Self {
+        self.catalog_snapshot = Some(snapshot);
+        self
+    }
+
+    /// Borrow the finalized snapshot when one has been attached.
+    #[must_use]
+    pub fn catalog_snapshot(&self) -> Option<&ProviderCatalogSnapshot> {
+        self.catalog_snapshot.as_deref()
+    }
+    /// Clone the shared snapshot handle without cloning its rows.
+    #[must_use]
+    pub fn catalog_snapshot_arc(&self) -> Option<Arc<ProviderCatalogSnapshot>> {
+        self.catalog_snapshot.clone()
     }
 
     /// First provider whose `capabilities(model)` is `Some`.

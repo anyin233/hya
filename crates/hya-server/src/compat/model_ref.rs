@@ -77,8 +77,13 @@ pub(super) fn model_ref_from_value(value: &Value) -> Option<ModelRef> {
             };
             let model_id = field("modelID").or_else(|| field("id"))?;
             let base = match field("providerID") {
-                Some(provider) if provider != BARE_PROVIDER => format!("{provider}/{model_id}"),
-                _ => model_id.to_string(),
+                // `hya` historically encoded a bare remote id. The reserved
+                // local model is a real qualified route and must not collapse.
+                Some(provider) if provider == BARE_PROVIDER && model_id != "offline" => {
+                    model_id.to_string()
+                }
+                Some(provider) => format!("{provider}/{model_id}"),
+                None => model_id.to_string(),
             };
             Some(match field("variant") {
                 Some(variant) => ModelRef::new(format!("{base}#{variant}")),
@@ -125,6 +130,15 @@ mod tests {
         assert_eq!(
             model_ref_from_value(&json!({ "providerID": "hya", "modelID": "claude-sonnet-4-6" })),
             Some(ModelRef::new("claude-sonnet-4-6"))
+        );
+    }
+
+    /// Preserve the real local provider instead of applying the legacy bare-id sentinel.
+    #[test]
+    fn canonical_offline_provider_is_qualified() {
+        assert_eq!(
+            model_ref_from_value(&json!({ "providerID": "hya", "modelID": "offline" })),
+            Some(ModelRef::new("hya/offline"))
         );
     }
 

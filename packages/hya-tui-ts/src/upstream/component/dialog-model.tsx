@@ -7,6 +7,7 @@ import { DialogVariant } from "./dialog-variant"
 import * as fuzzysort from "fuzzysort"
 import { useConnected } from "./use-connected"
 import { useSync } from "../context/sync"
+import { catalogProviderStatus, decodeCatalogProviders } from "../../hya/model-catalog"
 
 export function DialogModel(props: { providerID?: string }) {
   const local = useLocal()
@@ -16,6 +17,20 @@ export function DialogModel(props: { providerID?: string }) {
 
   const connected = useConnected()
   const showExtra = createMemo(() => connected() && !props.providerID)
+  const catalogProviders = createMemo(() => decodeCatalogProviders(sync.data.provider))
+  const catalogMembership = createMemo(
+    () =>
+      new Map(
+        catalogProviders().map((provider) => [
+          provider.id,
+          new Set(provider.models.map((model) => model.modelID)),
+        ]),
+      ),
+  )
+  const providerStatus = (providerID: string) => {
+    const provider = catalogProviders().find((item) => item.id === providerID)
+    return provider ? catalogProviderStatus(provider) : "Unavailable"
+  }
 
   const options = createMemo(() => {
     const needle = query().trim()
@@ -60,6 +75,7 @@ export function DialogModel(props: { providerID?: string }) {
         pipe(
           provider.models,
           entries(),
+          filter(([model]) => catalogMembership().get(provider.id)?.has(model) === true),
           filter(([_, info]) => info.status !== "deprecated"),
           filter(([_, info]) => (props.providerID ? info.providerID === props.providerID : true)),
           map(([model, info]) => ({
@@ -67,8 +83,8 @@ export function DialogModel(props: { providerID?: string }) {
             title: info.name ?? model,
             releaseDate: info.release_date,
             description: favorites.some((item) => item.providerID === provider.id && item.modelID === model)
-              ? "(Favorite)"
-              : undefined,
+              ? `(Favorite) · ${providerStatus(provider.id)}`
+              : `${provider.name} · ${providerStatus(provider.id)}`,
             category: connected() ? provider.name : undefined,
             onSelect() {
               onSelect(provider.id, model)

@@ -1007,3 +1007,61 @@ let root = PathBuf::from(input.path.unwrap_or_else(|| ".".to_string()));
 let root = resolve_file(&ctx.workdir, input.path.as_deref().unwrap_or("."))?;
 assert_external_directory(ctx, &root, true).await?;
 ```
+
+---
+
+## Scenario: Immutable Startup Model Catalog
+
+### 1. Scope / Trigger
+
+- Trigger: changing provider configuration, model discovery, routing, catalog
+  APIs, OAuth provider upsert, or the models CLI.
+
+### 2. Signatures
+
+- Composition: `pub async fn hya_app::config::load() -> anyhow::Result<Option<ResolvedConfig>>`.
+- Snapshot: `ProviderCatalogSnapshot::{models,providers,default_model,notice}`.
+- Discovery: `discover_models(CatalogDiscoveryRequest) -> ProviderDiscoveryOutcome`.
+
+### 3. Contracts
+
+- A normalized non-empty Hya model list is network-free and authoritative.
+- An empty list makes one bounded optional-auth discovery sequence each startup.
+- Router, engine, CLI, HTTP/bootstrap, SDK, and TUI consume one immutable
+  snapshot. Only an all-zero-live snapshot contains `hya/offline`.
+- Discovery never writes config/cache or reads foreign product configuration.
+
+### 4. Validation & Error Matrix
+
+- Credentialless 401/403 -> `auth_required`; credentialed -> `auth_rejected`.
+- Empty -> zero provider rows plus `empty`; malformed/oversized -> `invalid`;
+  timeout, redirect, and non-auth HTTP failure -> `unavailable`.
+- Any provider-local failure keeps other valid rows and cannot invent a model.
+
+### 5. Good/Base/Bad Cases
+
+- Good: empty anonymous endpoint discovers rows and builds an anonymous route.
+- Base: no live rows publishes exactly local `hya/offline` with a notice.
+- Bad: deriving a row from an agent, Session, category, default, or OAuth guess.
+
+### 6. Tests Required
+
+- Provider tests assert headers, URL/parser rules, limits, typed outcomes,
+  normalization, and offline suppression.
+- Process tests assert request counts per startup, no config write, cross-surface
+  row equality, auth-state split, foreign-config isolation, and offline echo.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```rust
+let models = configured.or_else(|| Some(vec![agent.model.clone()]));
+```
+
+#### Correct
+
+```rust
+let snapshot = ProviderCatalogSnapshot::build(rows, states, configured_default);
+let models = snapshot.models();
+```

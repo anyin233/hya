@@ -125,7 +125,7 @@ test("Linux PTY renders home, opens a session, and restores the terminal", async
       },
     )
 
-    const marker = "(hya dev provider) You said"
+    const marker = "No live provider is available. Configure a provider to continue."
     const deadline = Date.now() + 10_000
     while (!stripAnsi(await readFile(transcript, "utf8").catch(() => "")).includes(marker)) {
       const exited = await Promise.race([
@@ -135,7 +135,7 @@ test("Linux PTY renders home, opens a session, and restores the terminal", async
       if (exited) throw new Error(`PTY exited before rendering the response with status ${exited.status}`)
       if (Date.now() >= deadline) {
         process.kill(9)
-        throw new Error("PTY did not render the response before timeout")
+        throw new Error(`PTY did not render the response before timeout:\n${stripAnsi(await readFile(transcript, "utf8").catch(() => "")).slice(-4_000)}`)
       }
     }
     await writeSemanticInput(process.stdin, "\x03")
@@ -160,6 +160,247 @@ test("Linux PTY renders home, opens a session, and restores the terminal", async
     await rm(temp, { recursive: true, force: true })
   }
 }, 45_000)
+
+test("Linux PTY shows backend-discovered rows and auth-required offline status", async () => {
+  const temp = await realpath(await mkdtemp(path.join(os.tmpdir(), "hya-pty-catalog-")))
+  const project = path.join(temp, "project")
+  const transcript = path.join(temp, "typescript-catalog")
+  const offlineTranscript = path.join(temp, "typescript-offline")
+  const home = path.join(temp, "home")
+  const config = path.join(temp, "config")
+  await mkdir(project)
+  await mkdir(home)
+  await mkdir(path.join(config, "hya"), { recursive: true })
+
+  let catalogRequests = 0
+  let catalogMode: "models" | "auth_required" = "models"
+  const provider = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch(request) {
+      if (new URL(request.url).pathname !== "/v1/models") {
+        return new Response("not found", { status: 404 })
+      }
+      catalogRequests++
+      if (catalogMode === "auth_required") return new Response("auth required", { status: 401 })
+      return new Response(JSON.stringify({ object: "list", data: [{ id: "discovered-pty" }] }), {
+        headers: { "content-type": "application/json" },
+      })
+    },
+  })
+
+  await Bun.write(
+    path.join(config, "hya", "config.yaml"),
+    [
+      "default_model: fixture/discovered-pty",
+      "providers:",
+      "  fixture:",
+      "    kind: openai",
+      `    base_url: http://127.0.0.1:${provider.port}/v1`,
+      "    models: []",
+      "permission:",
+      "  model: allow",
+      "  rules: []",
+      "",
+    ].join("\n"),
+  )
+
+  const env = {
+    PATH: Bun.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
+    LANG: Bun.env.LANG ?? "C.UTF-8",
+    HOME: home,
+    XDG_CACHE_HOME: path.join(temp, "cache"),
+    XDG_CONFIG_HOME: config,
+    XDG_DATA_HOME: path.join(temp, "data"),
+    XDG_STATE_HOME: path.join(temp, "state"),
+  }
+  let backendProcess: Bun.Subprocess | undefined
+  let tuiProcess: Bun.WritableSubprocess | undefined
+
+  /** Start a backend process and wait for its actual listening URL. */
+  const startBackend = async () => {
+    const process = Bun.spawn(
+      [backend, "--yolo", "--db", path.join(temp, "sessions.db"), "serve", "--bind", "127.0.0.1:0"],
+      {
+        cwd: project,
+        env,
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    )
+    backendProcess = process
+    const reader = process.stdout.getReader()
+    const decoder = new TextDecoder()
+    let readiness = ""
+    const url = await Promise.race([
+      (async () => {
+        while (true) {
+          const chunk = await reader.read()
+          if (chunk.done) throw new Error(`hya-backend exited before readiness: ${readiness}`)
+          readiness += decoder.decode(chunk.value, { stream: true })
+          const match = readiness.match(/hya server listening on (http:\/\/127\.0\.0\.1:\d+)/)
+          if (match) return match[1]
+        }
+      })(),
+      // Backend readiness is external process I/O; fake timers cannot advance child output.
+      Bun.sleep(10_000).then(() => {
+        throw new Error(`timed out waiting for hya-backend: ${readiness}`)
+      }),
+    ])
+    return { process, url }
+  }
+
+  /** Start the real launcher under `/usr/bin/script` so PTY bytes are recorded. */
+  const startTui = (url: string, sessionID: string, outputPath: string) => {
+    const process = Bun.spawn(
+      [
+        "/usr/bin/script",
+        "-q",
+        "-e",
+        "-f",
+        "-c",
+        'stty rows 30 cols 100; before=$(stty -g); before_fg=$(ps -o tpgid= -p $$ | tr -d " "); "$HYA_TS" "$HYA_PTY_PROJECT" --server "$HYA_PTY_URL" --session "$HYA_PTY_SESSION"; code=$?; after=$(stty -g); after_fg=$(ps -o tpgid= -p $$ | tr -d " "); [ "$before" = "$after" ] || exit 97; [ "$before_fg" = "$after_fg" ] || exit 98; exit "$code"',
+        outputPath,
+      ],
+      {
+        cwd: path.join(root, "packages/hya-tui-ts"),
+        env: {
+          ...env,
+          HYA_PTY_PROJECT: project,
+          HYA_PTY_SESSION: sessionID,
+          HYA_PTY_URL: url,
+          HYA_TS: launcher,
+          HYA_TUI_TS_DIR: path.join(root, "packages/hya-tui-ts"),
+          TERM: "xterm-256color",
+        },
+        stdin: "pipe",
+        stdout: "ignore",
+        stderr: "pipe",
+      },
+    )
+    tuiProcess = process
+    return process
+  }
+
+  try {
+    const first = await startBackend()
+    const firstBootstrap = (await (await fetch(`${first.url}/tui/bootstrap`)).json()) as {
+      providers: { providers: Array<{ id: string; models: Record<string, unknown> }> }
+    }
+    const firstProvider = firstBootstrap.providers.providers.find((item) => item.id === "fixture")
+    expect(firstProvider?.models).toHaveProperty("discovered-pty")
+    expect(catalogRequests).toBe(1)
+
+    const firstSession = (await (
+      await fetch(`${first.url}/session`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ title: "Discovered catalog PTY" }),
+      })
+    ).json()) as { id: string }
+    const firstTui = startTui(first.url, firstSession.id, transcript)
+    const firstOutput = async () => stripAnsi(await readFile(transcript, "utf8").catch(() => ""))
+    const waitForFirst = async (check: () => boolean | Promise<boolean>, label: string) => {
+      const deadline = Date.now() + 10_000
+      while (!(await check())) {
+        const exited = await Promise.race([
+          firstTui.exited.then((status) => ({ status })),
+          // PTY output is external OS I/O; fake timers cannot advance the child transcript.
+          Bun.sleep(50).then(() => undefined),
+        ])
+        if (exited) throw new Error(`discovered PTY exited before ${label} with status ${exited.status}`)
+        if (Date.now() >= deadline) {
+          throw new Error(`timed out waiting for discovered ${label}:\n${(await firstOutput()).slice(-4_000)}`)
+        }
+      }
+    }
+    await waitForFirst(() => firstOutput().then((frame) => frame.includes("ctrl+p commands")), "startup")
+    const firstPickerStart = (await firstOutput()).length
+    await writeSemanticInput(firstTui.stdin, "/model")
+    await waitForFirst(
+      () => firstOutput().then((frame) => frame.slice(firstPickerStart).includes("/models")),
+      "discovered model autocomplete",
+    )
+    await writeSemanticInput(firstTui.stdin, "\r")
+    await waitForFirst(
+      () => firstOutput().then((frame) => frame.slice(firstPickerStart).includes("Select model")),
+      "discovered model picker",
+    )
+    const firstPicker = (await firstOutput()).slice(firstPickerStart)
+    expect(firstPicker).toContain("discovered-pty")
+    await writeSemanticInput(firstTui.stdin, "\x03")
+    firstTui.stdin.end()
+    expect(await firstTui.exited).toBe(0)
+    tuiProcess = undefined
+    await stopOwnedProcess(first.process)
+    backendProcess = undefined
+
+    catalogMode = "auth_required"
+    const second = await startBackend()
+    const secondBootstrap = (await (await fetch(`${second.url}/tui/bootstrap`)).json()) as {
+      providers: { providers: Array<{ id: string; models: Record<string, unknown>; auth: string }> }
+    }
+    const authProvider = secondBootstrap.providers.providers.find((item) => item.id === "fixture")
+    const offlineProvider = secondBootstrap.providers.providers.find((item) => item.id === "hya")
+    expect(authProvider?.models).toEqual({})
+    expect(authProvider?.auth).toBe("auth_required")
+    expect(offlineProvider?.models).toHaveProperty("offline")
+    expect(catalogRequests).toBe(2)
+
+    const secondSession = (await (
+      await fetch(`${second.url}/session`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ title: "Auth required catalog PTY" }),
+      })
+    ).json()) as { id: string }
+    const secondTui = startTui(second.url, secondSession.id, offlineTranscript)
+    const secondOutput = async () => stripAnsi(await readFile(offlineTranscript, "utf8").catch(() => ""))
+    const waitForSecond = async (check: () => boolean | Promise<boolean>, label: string) => {
+      const deadline = Date.now() + 10_000
+      while (!(await check())) {
+        const exited = await Promise.race([
+          secondTui.exited.then((status) => ({ status })),
+          // PTY output is external OS I/O; fake timers cannot advance the child transcript.
+          Bun.sleep(50).then(() => undefined),
+        ])
+        if (exited) throw new Error(`offline PTY exited before ${label} with status ${exited.status}`)
+        if (Date.now() >= deadline) {
+          throw new Error(`timed out waiting for offline ${label}:\n${(await secondOutput()).slice(-4_000)}`)
+        }
+      }
+    }
+    await waitForSecond(
+      () => secondOutput().then((frame) => frame.includes("Authentication required") && frame.includes("ctrl+p commands")),
+      "auth-required status",
+    )
+    const secondPickerStart = (await secondOutput()).length
+    await writeSemanticInput(secondTui.stdin, "/model")
+    await waitForSecond(
+      () => secondOutput().then((frame) => frame.slice(secondPickerStart).includes("/models")),
+      "offline model autocomplete",
+    )
+    await writeSemanticInput(secondTui.stdin, "\r")
+    await waitForSecond(
+      () => secondOutput().then((frame) => frame.slice(secondPickerStart).includes("Select model")),
+      "offline model picker",
+    )
+    const secondPicker = (await secondOutput()).slice(secondPickerStart)
+    expect(secondPicker).toContain("offline")
+    expect(await secondOutput()).toContain("Authentication required")
+    await writeSemanticInput(secondTui.stdin, "\x03")
+    secondTui.stdin.end()
+    expect(await secondTui.exited).toBe(0)
+    tuiProcess = undefined
+    await stopOwnedProcess(second.process)
+    backendProcess = undefined
+  } finally {
+    if (tuiProcess) await stopOwnedProcess(tuiProcess)
+    if (backendProcess) await stopOwnedProcess(backendProcess)
+    provider.stop(true)
+    await rm(temp, { recursive: true, force: true })
+  }
+}, 90_000)
 
 test("Linux PTY exact /model and /think open local pickers without a provider round", async () => {
   const temp = await realpath(await mkdtemp(path.join(os.tmpdir(), "hya-pty-picker-")))
@@ -811,6 +1052,7 @@ async function runChildObservation(columns: number) {
     const scrollChildTranscript = "SCROLL_CHILD_TRANSCRIPT_51bf"
     const scrollChildTail = "SCROLL_CHILD_TAIL_b419"
     const resetRootTranscript = "RESET_ROOT_TRANSCRIPT_4ae1"
+    const offlineNotice = "No live provider is available. Configure a provider to continue."
     await client.session.promptAsync(
       { sessionID: rootSession.id, parts: [{ type: "text", text: rootTranscript }] },
       { throwOnError: true },
@@ -858,11 +1100,11 @@ async function runChildObservation(columns: number) {
         (frame.includes("subagent roster") || frame.includes("commands")))
     await waitFor(async () => {
       const messages = (await client.session.messages({ sessionID: rootSession.id })).data
-      return JSON.stringify(messages).includes(`(hya dev provider) You said: \\"${rootTranscript}\\"`)
+      return JSON.stringify(messages).includes(`${rootTranscript}\\n\\n${offlineNotice}`)
     }, "root transcript fixture")
     await waitFor(async () => {
       const messages = (await client.session.messages({ sessionID: childSession.id })).data
-      return JSON.stringify(messages).includes(`(hya dev provider) You said: \\"${childTranscript}\\"`)
+      return JSON.stringify(messages).includes(`${childTranscript}\\n\\n${offlineNotice}`)
     }, "child transcript fixture")
     for (const [sessionID, marker] of [
       [secondChildSession.id, secondChildTranscript],
@@ -871,13 +1113,13 @@ async function runChildObservation(columns: number) {
     ]) {
       await waitFor(async () => {
         const messages = (await client.session.messages({ sessionID })).data
-        return JSON.stringify(messages).includes(`(hya dev provider) You said: \\"${marker}\\"`)
+        return JSON.stringify(messages).includes(`${marker}\\n\\n${offlineNotice}`)
       }, `${marker} fixture`)
     }
     await waitFor(async () => {
       const messages = (await client.session.messages({ sessionID: scrollChildSession.id })).data
       const value = JSON.stringify(messages)
-      return value.includes("(hya dev provider) You said") && value.includes(scrollChildTranscript) && value.includes(scrollChildTail)
+      return value.includes(scrollChildTranscript) && value.includes(`${scrollChildTail}\\n\\n${offlineNotice}`)
     }, "observation scroll fixture")
 
     const caseID = `child-observation-${columns}`

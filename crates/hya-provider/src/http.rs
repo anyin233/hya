@@ -25,8 +25,8 @@ use crate::openai::{
     GrokBuildProtocol, OpenAiChatProtocol, OpenAiResponsesProtocol, encode_input_items,
 };
 use crate::{
-    Capabilities, CompactedWindow, CompletionRequest, EventStream, Protocol, Provider,
-    ProviderError, ProviderModel, ReasoningEffort, append_capabilities_identity,
+    Capabilities, CompactedWindow, CompletionRequest, EventStream, ModelCatalogSource, Protocol,
+    Provider, ProviderError, ProviderModel, ReasoningEffort, append_capabilities_identity,
     append_identity_bytes, append_identity_count, append_identity_optional_bytes,
 };
 
@@ -115,23 +115,23 @@ pub type BearerResolver = Arc<dyn Fn() -> Result<String, ProviderError> + Send +
 pub type AuthRefresher = Arc<dyn Fn(&str) -> Result<(), ProviderError> + Send + Sync>;
 
 enum AuthStyle {
-    Bearer(SecretString),
-    /// ChatGPT Codex OAuth: Bearer JWT plus optional account id header.
+    Bearer(Option<SecretString>),
+    /// ChatGPT Codex OAuth: optional Bearer JWT plus optional account id header.
     CodexSession {
-        token: SecretString,
+        token: Option<SecretString>,
         account_id: Option<String>,
     },
-    /// Grok Build OAuth session: Bearer JWT plus CLI chat-proxy session headers.
+    /// Grok Build session with optional auth and non-secret client headers.
     GrokSession {
-        token: SecretString,
+        token: Option<SecretString>,
         client_version: String,
         client_identifier: String,
     },
     Anthropic {
-        key: SecretString,
+        key: Option<SecretString>,
         version: String,
     },
-    Google(SecretString),
+    Google(Option<SecretString>),
 }
 
 /// One configured HTTP route: reqwest client + [`Protocol`] + SSE → [`EventStream`].
@@ -152,6 +152,7 @@ pub struct HttpProvider {
     model_reasoning_defaults: BTreeMap<String, ReasoningEffort>,
     caps: Capabilities,
     kind: ProviderKind,
+    catalog_source: ModelCatalogSource,
     response_header_timeout: Duration,
     stream_idle_timeout: Duration,
 }
@@ -169,14 +170,14 @@ fn request_header_value(value: &str) -> Result<HeaderValue, ProviderError> {
     header.set_sensitive(true);
     Ok(header)
 }
-
 impl HttpProvider {
-    /// Build a route for `kind` at `base_url` with static `api_key` and served model ids.
+    /// Build a route for `kind` at `base_url` with optional Hya credential
+    /// material and the models claimed by this route.
     pub fn new(
         id: impl Into<String>,
         kind: ProviderKind,
         base_url: &str,
-        api_key: String,
+        api_key: Option<String>,
         models: impl IntoIterator<Item = String>,
     ) -> Result<Self, ProviderError> {
         // Security: never follow redirects (reqwest keeps `x-api-key` across a
@@ -192,7 +193,9 @@ impl HttpProvider {
             .build()
             .map_err(|e| ProviderError::Http(e.to_string()))?;
         let base = base_url.trim_end_matches('/');
-        let key = SecretString::new(api_key);
+        let key = api_key
+            .filter(|value| !value.is_empty())
+            .map(SecretString::new);
         let (protocol, endpoint, auth): (Box<dyn Protocol>, String, AuthStyle) = match kind {
             ProviderKind::OpenAiCompatible => (
                 Box::new(OpenAiChatProtocol),
@@ -241,6 +244,7 @@ impl HttpProvider {
             model_reasoning_variants: BTreeMap::new(),
             model_reasoning_defaults: BTreeMap::new(),
             kind,
+            catalog_source: ModelCatalogSource::Configured,
             caps: Capabilities {
                 streaming_tool_calls: true,
                 parallel_tool_calls: true,
@@ -340,6 +344,12 @@ impl HttpProvider {
             .collect();
         self
     }
+    /// Set the provenance emitted by this route's catalog rows.
+    #[must_use]
+    pub fn with_catalog_source(mut self, source: ModelCatalogSource) -> Self {
+        self.catalog_source = source;
+        self
+    }
 
     /// Override the bounded response-header wait ([`RESPONSE_HEADER_TIMEOUT`])
     /// for this route — for gateways slower than the default anticipates, and
@@ -359,24 +369,30 @@ impl HttpProvider {
         self
     }
 
-    fn resolve_bearer(&self, fallback: &SecretString) -> Result<String, ProviderError> {
+    fn resolve_bearer(
+        &self,
+        fallback: Option<&SecretString>,
+    ) -> Result<Option<String>, ProviderError> {
         if let Some(resolver) = &self.bearer_resolver {
-            return resolver();
+            return resolver().map(|token| (!token.is_empty()).then_some(token));
         }
-        Ok(fallback.expose_secret().clone())
+        Ok(fallback
+            .map(|value| value.expose_secret().clone())
+            .filter(|token| !token.is_empty()))
     }
 
     /// Credential material this route authenticates with right now, honoring
     /// the bearer resolver when present. Feeds the forced-refresh hook so the
     /// caller can detect rotations that happened underneath a failing request.
-    fn active_credential(&self) -> Result<String, ProviderError> {
+    fn active_credential(&self) -> Result<Option<String>, ProviderError> {
         match &self.auth {
             AuthStyle::Bearer(key)
             | AuthStyle::CodexSession { token: key, .. }
-            | AuthStyle::GrokSession { token: key, .. } => self.resolve_bearer(key),
-            AuthStyle::Anthropic { key, .. } | AuthStyle::Google(key) => {
-                Ok(key.expose_secret().clone())
-            }
+            | AuthStyle::GrokSession { token: key, .. } => self.resolve_bearer(key.as_ref()),
+            AuthStyle::Anthropic { key, .. } | AuthStyle::Google(key) => Ok(key
+                .as_ref()
+                .map(|value| value.expose_secret().clone())
+                .filter(|token| !token.is_empty())),
         }
     }
 
@@ -387,32 +403,38 @@ impl HttpProvider {
         let mut headers = HeaderMap::new();
         let refresh_credential = match &self.auth {
             AuthStyle::Bearer(key) => {
-                let token = self.resolve_bearer(key)?;
-                headers.insert(AUTHORIZATION, sensitive(&format!("Bearer {token}"))?);
-                Some(token)
+                let token = self.resolve_bearer(key.as_ref())?;
+                if let Some(token) = token.as_deref() {
+                    headers.insert(AUTHORIZATION, sensitive(&format!("Bearer {token}"))?);
+                }
+                token
             }
             AuthStyle::CodexSession { token, account_id } => {
-                let token = self.resolve_bearer(token)?;
-                headers.insert(AUTHORIZATION, sensitive(&format!("Bearer {token}"))?);
-                if let Some(account_id) = account_id.as_deref().filter(|s| !s.is_empty()) {
-                    headers.insert(
-                        HeaderName::from_static("chatgpt-account-id"),
-                        sensitive(account_id)?,
-                    );
+                let token = self.resolve_bearer(token.as_ref())?;
+                if let Some(token) = token.as_deref() {
+                    headers.insert(AUTHORIZATION, sensitive(&format!("Bearer {token}"))?);
+                    if let Some(account_id) = account_id.as_deref().filter(|s| !s.is_empty()) {
+                        headers.insert(
+                            HeaderName::from_static("chatgpt-account-id"),
+                            sensitive(account_id)?,
+                        );
+                    }
                 }
-                Some(token)
+                token
             }
             AuthStyle::GrokSession {
                 token,
                 client_version,
                 client_identifier,
             } => {
-                let token = self.resolve_bearer(token)?;
-                headers.insert(AUTHORIZATION, sensitive(&format!("Bearer {token}"))?);
-                headers.insert(
-                    HeaderName::from_static("x-xai-token-auth"),
-                    sensitive("xai-grok-cli")?,
-                );
+                let token = self.resolve_bearer(token.as_ref())?;
+                if let Some(token) = token.as_deref() {
+                    headers.insert(AUTHORIZATION, sensitive(&format!("Bearer {token}"))?);
+                    headers.insert(
+                        HeaderName::from_static("x-xai-token-auth"),
+                        sensitive("xai-grok-cli")?,
+                    );
+                }
                 headers.insert(
                     HeaderName::from_static("x-grok-client-version"),
                     request_header_value(client_version)?,
@@ -427,13 +449,15 @@ impl HttpProvider {
                         request_header_value(model)?,
                     );
                 }
-                Some(token)
+                token
             }
             AuthStyle::Anthropic { key, version } => {
-                headers.insert(
-                    HeaderName::from_static("x-api-key"),
-                    sensitive(key.expose_secret())?,
-                );
+                if let Some(key) = key.as_ref() {
+                    headers.insert(
+                        HeaderName::from_static("x-api-key"),
+                        sensitive(key.expose_secret())?,
+                    );
+                }
                 headers.insert(
                     HeaderName::from_static("anthropic-version"),
                     HeaderValue::from_str(version)
@@ -442,10 +466,12 @@ impl HttpProvider {
                 None
             }
             AuthStyle::Google(key) => {
-                headers.insert(
-                    HeaderName::from_static("x-goog-api-key"),
-                    sensitive(key.expose_secret())?,
-                );
+                if let Some(key) = key.as_ref() {
+                    headers.insert(
+                        HeaderName::from_static("x-goog-api-key"),
+                        sensitive(key.expose_secret())?,
+                    );
+                }
                 None
             }
         };
@@ -513,8 +539,9 @@ impl HttpProvider {
                             .is_some_and(|token| refresher(token).is_ok());
                         let rotated = hooked
                             && stale.is_some_and(|before| {
-                                self.active_credential()
-                                    .is_ok_and(|current| current != before)
+                                self.active_credential().is_ok_and(|current| {
+                                    current.as_deref() != Some(before.as_str())
+                                })
                             });
                         if rotated {
                             auth_recovered = true;
@@ -665,11 +692,18 @@ fn append_auth_identity(output: &mut Vec<u8>, auth: &AuthStyle) -> Option<()> {
     match auth {
         AuthStyle::Bearer(key) => {
             append_identity_bytes(output, b"bearer")?;
-            output.push(u8::from(!key.expose_secret().is_empty()));
+            output.push(u8::from(
+                key.as_ref()
+                    .is_some_and(|value| !value.expose_secret().is_empty()),
+            ));
         }
         AuthStyle::CodexSession { token, account_id } => {
             append_identity_bytes(output, b"codex-session")?;
-            output.push(u8::from(!token.expose_secret().is_empty()));
+            output.push(u8::from(
+                token
+                    .as_ref()
+                    .is_some_and(|value| !value.expose_secret().is_empty()),
+            ));
             append_identity_optional_bytes(output, account_id.as_deref())?;
         }
         AuthStyle::GrokSession {
@@ -678,18 +712,28 @@ fn append_auth_identity(output: &mut Vec<u8>, auth: &AuthStyle) -> Option<()> {
             client_identifier,
         } => {
             append_identity_bytes(output, b"grok-session")?;
-            output.push(u8::from(!token.expose_secret().is_empty()));
+            output.push(u8::from(
+                token
+                    .as_ref()
+                    .is_some_and(|value| !value.expose_secret().is_empty()),
+            ));
             append_identity_bytes(output, client_version.as_bytes())?;
             append_identity_bytes(output, client_identifier.as_bytes())?;
         }
         AuthStyle::Anthropic { key, version } => {
             append_identity_bytes(output, b"anthropic")?;
-            output.push(u8::from(!key.expose_secret().is_empty()));
+            output.push(u8::from(
+                key.as_ref()
+                    .is_some_and(|value| !value.expose_secret().is_empty()),
+            ));
             append_identity_bytes(output, version.as_bytes())?;
         }
         AuthStyle::Google(key) => {
             append_identity_bytes(output, b"google")?;
-            output.push(u8::from(!key.expose_secret().is_empty()));
+            output.push(u8::from(
+                key.as_ref()
+                    .is_some_and(|value| !value.expose_secret().is_empty()),
+            ));
         }
     }
     Some(())
@@ -799,6 +843,8 @@ impl Provider for HttpProvider {
                     .get(model)
                     .cloned()
                     .unwrap_or_else(|| variants.clone()),
+                reasoning_default: self.model_reasoning_defaults.get(model).copied(),
+                source: self.catalog_source,
             })
             .collect()
     }
@@ -888,7 +934,75 @@ impl Provider for HttpProvider {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
+    #[test]
+    fn credentialless_openai_route_omits_authorization() {
+        let provider = HttpProvider::new(
+            "openai",
+            ProviderKind::OpenAiCompatible,
+            "https://example/v1",
+            None,
+            ["gpt-5".to_string()],
+        )
+        .unwrap();
+        let (headers, _) = provider.request_headers(&BTreeMap::new(), None).unwrap();
+        assert!(!headers.contains_key(AUTHORIZATION));
+    }
+    #[test]
+    fn credentialless_auth_styles_never_emit_empty_secret_headers() {
+        let cases = [
+            (
+                ProviderKind::OpenAiCompatible,
+                "https://example/v1",
+                None,
+                None,
+            ),
+            (
+                ProviderKind::OpenAiResponse,
+                "https://example/v1",
+                None,
+                None,
+            ),
+            (ProviderKind::Anthropic, "https://example/v1", None, None),
+            (ProviderKind::Google, "https://example", None, None),
+            (
+                ProviderKind::OpenAiCodex,
+                "https://example/v1",
+                None,
+                Some("account"),
+            ),
+        ];
+        for (kind, base, key, account) in cases {
+            let provider = HttpProvider::new("provider", kind, base, key, ["model".to_string()])
+                .unwrap()
+                .with_codex_session_auth(account.map(str::to_string));
+            let (headers, _) = provider.request_headers(&BTreeMap::new(), None).unwrap();
+            assert!(!headers.contains_key(AUTHORIZATION));
+            assert!(!headers.contains_key(HeaderName::from_static("x-api-key")));
+            assert!(!headers.contains_key(HeaderName::from_static("x-goog-api-key")));
+            assert!(!headers.contains_key(HeaderName::from_static("chatgpt-account-id")));
+        }
+
+        let grok = HttpProvider::new(
+            "grok",
+            ProviderKind::GrokBuild,
+            "https://example/v1",
+            None,
+            ["model".to_string()],
+        )
+        .unwrap()
+        .with_grok_session_auth("client-v1", "grok-cli");
+        let (headers, _) = grok.request_headers(&BTreeMap::new(), None).unwrap();
+        assert!(!headers.contains_key(AUTHORIZATION));
+        assert!(!headers.contains_key(HeaderName::from_static("x-xai-token-auth")));
+        assert_eq!(
+            headers
+                .get(HeaderName::from_static("x-grok-client-version"))
+                .and_then(|value| value.to_str().ok()),
+            Some("client-v1")
+        );
+    }
     use crate::{DevProvider, FakeProvider, ProviderRouter};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -904,7 +1018,7 @@ mod tests {
             "12th",
             ProviderKind::OpenAiCompatible,
             "https://example/v1",
-            "key".to_string(),
+            Some("key".to_string()),
             ["claude-opus-4-8".to_string(), "gpt-5.5".to_string()],
         )
     }
@@ -973,7 +1087,7 @@ mod tests {
                 id,
                 kind,
                 base,
-                key.to_string(),
+                Some(key.to_string()),
                 models.iter().map(|model| (*model).to_string()),
             ) {
                 Ok(provider) => provider,
@@ -1396,13 +1510,13 @@ mod tests {
     fn provider_without_metadata_uses_general_reasoning_capability() {
         let provider = DevProvider::new();
         assert_eq!(
-            Provider::reasoning_default(&provider, &ModelRef::new("offline")),
+            Provider::reasoning_default(&provider, &ModelRef::new("hya/offline")),
             None
         );
         assert_eq!(
             Provider::supports_reasoning_effort(
                 &provider,
-                &ModelRef::new("offline"),
+                &ModelRef::new("hya/offline"),
                 ReasoningEffort::Low,
             ),
             Some(false)

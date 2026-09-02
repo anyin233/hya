@@ -115,6 +115,17 @@ async fn tui_bootstrap_returns_required_startup_fields() {
             assert!(command.get("name").is_some());
         }
     }
+    assert_eq!(body["providers"]["providers"].as_array().unwrap().len(), 1);
+    assert_eq!(body["providers"]["providers"][0]["id"], "hya");
+    assert_eq!(body["providers"]["providers"][0]["source"], "offline");
+    assert_eq!(body["providers"]["defaultModel"]["providerID"], "hya");
+    assert_eq!(body["providers"]["defaultModel"]["modelID"], "offline");
+    assert_eq!(body["provider_list"]["connected"], serde_json::json!([]));
+    assert!(
+        body["providers"]["providers"][0]["models"]
+            .get("gpt-5")
+            .is_none()
+    );
 }
 
 /// `/tui/bootstrap` agents come from the bound BundleCatalog; legacy project

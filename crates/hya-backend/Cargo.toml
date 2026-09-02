@@ -15,6 +15,7 @@ workspace = true
 [dependencies]
 hya-bundle = { workspace = true }
 hya-core = { workspace = true }
+hya-provider = { workspace = true }
 hya-store = { workspace = true }
 hya-server = { workspace = true }
 hya-proto = { workspace = true }

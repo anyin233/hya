@@ -15,14 +15,14 @@ use std::time::Duration;
 use thiserror::Error;
 
 use crate::auth::{AuthCredential, OAuthType};
-use crate::config::{self, OAuthConfigModel};
+use crate::config;
 
 pub use ensure::{
     ensure_access_token, ensure_access_token_in, force_refresh_access_token,
     force_refresh_access_token_in, oauth_status_in,
 };
 pub use grok_build::login_grok_build;
-pub use models_catalog::{CatalogModel, fetch_oauth_models};
+pub use models_catalog::fetch_oauth_models;
 pub use openai_codex::{login_openai_codex, login_openai_codex_device};
 
 /// Errors from OAuth login, refresh, or credential loading.
@@ -141,11 +141,11 @@ pub struct OAuthLoginResult {
     pub config_path: PathBuf,
     /// Inference base URL registered for the provider.
     pub base_url: String,
-    /// Primary model id registered (first or default).
+    /// Preferred model for display after login; never persisted by login.
     pub model: String,
-    /// Models written into `config.yaml` (catalog fetch or single default).
+    /// Live catalog rows shown to the caller; never written into `config.yaml`.
     pub models: Vec<String>,
-    /// True when models came from a live catalog fetch.
+    /// True when `models` came from a live catalog fetch.
     pub models_from_catalog: bool,
 }
 
@@ -190,7 +190,7 @@ pub async fn login(options: OAuthLoginOptions) -> Result<OAuthLoginResult, OAuth
         .base_url
         .clone()
         .unwrap_or_else(|| options.oauth_type.default_base_url().to_string());
-    let fallback_model = options
+    let preferred_model = options
         .model
         .clone()
         .unwrap_or_else(|| options.oauth_type.default_model().to_string());
@@ -199,8 +199,9 @@ pub async fn login(options: OAuthLoginOptions) -> Result<OAuthLoginResult, OAuth
         .clone()
         .unwrap_or_else(config::expected_config_path);
 
-    // Prefer a live catalog so config.yaml lists every entitled model.
-    let (catalog_models, models_from_catalog) = match fetch_oauth_models(
+    // A login-time fetch may improve the confirmation output, but it is never
+    // persisted. An empty provider list remains eligible for startup discovery.
+    let (model_ids, models_from_catalog) = match fetch_oauth_models(
         options.oauth_type,
         &credential.access_token,
         credential.account_id.as_deref(),
@@ -208,46 +209,26 @@ pub async fn login(options: OAuthLoginOptions) -> Result<OAuthLoginResult, OAuth
     )
     .await
     {
-        Ok(models) if !models.is_empty() => (models, true),
+        Ok(models) if !models.is_empty() => (
+            models.into_iter().map(|model| model.id).collect::<Vec<_>>(),
+            true,
+        ),
         Ok(_) => {
-            eprintln!("hya: model catalog was empty; writing default model only");
+            eprintln!("hya: model catalog was empty; startup will discover it again");
             (Vec::new(), false)
         }
         Err(err) => {
-            eprintln!("hya: could not fetch model catalog ({err}); writing default model only");
+            eprintln!("hya: could not fetch model catalog ({err}); startup will retry discovery");
             (Vec::new(), false)
         }
     };
-
-    let config_models: Vec<OAuthConfigModel> = if catalog_models.is_empty() {
-        vec![OAuthConfigModel {
-            id: fallback_model.clone(),
-            reasoning_default: None,
-            reasoning_variants: Vec::new(),
-        }]
-    } else {
-        catalog_models
-            .iter()
-            .map(|m| OAuthConfigModel {
-                id: m.id.clone(),
-                reasoning_default: m.reasoning_default.clone(),
-                reasoning_variants: m.reasoning_variants.clone(),
-            })
-            .collect()
-    };
-    let model = config_models
-        .first()
-        .map(|m| m.id.clone())
-        .unwrap_or(fallback_model);
-    let model_ids: Vec<String> = config_models.iter().map(|m| m.id.clone()).collect();
+    let model = model_ids.first().cloned().unwrap_or(preferred_model);
 
     config::upsert_oauth_provider(
         &config_path,
         provider,
         options.oauth_type.provider_kind(),
         &base_url,
-        &config_models,
-        &model,
     )
     .map_err(|e| OAuthError::Config(e.to_string()))?;
 

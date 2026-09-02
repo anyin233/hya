@@ -81,7 +81,7 @@ async fn command_execute_before_mutates_text_before_user_message_is_admitted() {
         .create(CreateSession {
             parent: None,
             agent: AgentName::new("build"),
-            model: ModelRef::new("offline"),
+            model: ModelRef::new("hya/offline"),
             workdir: ".".to_string(),
         })
         .await

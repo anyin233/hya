@@ -17,6 +17,10 @@ use std::{collections::BTreeMap, time::Duration};
 
 /// Anthropic Messages protocol and stream decoder.
 pub mod anthropic;
+/// Immutable startup model catalog and provider resolution metadata.
+pub mod catalog;
+/// Bounded model-list endpoint discovery and typed provider outcomes.
+pub mod catalog_discovery;
 /// Offline echo provider for local/dev runs without API keys.
 pub mod dev;
 /// Scripted provider for tests and deterministic agent-loop fixtures.
@@ -37,6 +41,14 @@ use hya_proto::{Event, Message, MessageId, ModelRef, SessionId, ToolSchema};
 use thiserror::Error;
 
 pub use anthropic::{AnthropicDecoder, AnthropicMessagesProtocol};
+pub use catalog::{
+    CatalogNotice, ModelCatalogSource, ProviderAuthState, ProviderCatalogResult,
+    ProviderCatalogSnapshot, ProviderCatalogSource, ProviderCatalogState,
+};
+pub use catalog_discovery::{
+    AuthPresence, CatalogAuth, CatalogDiscoveryRequest, CatalogFailure, DiscoveredModel,
+    ProviderDiscoveryOutcome, discover_models, is_grok_executable_model_id, parse_catalog_payload,
+};
 pub use dev::DevProvider;
 pub use fake::{FakeProvider, FakeStep};
 pub use google::{GoogleDecoder, GoogleProtocol};
@@ -202,6 +214,19 @@ pub struct ProviderModel {
     pub capabilities: Capabilities,
     /// Effort labels this model supports (empty when reasoning is off).
     pub reasoning_variants: Vec<String>,
+    /// Configured per-model reasoning default, when one was authored.
+    pub reasoning_default: Option<ReasoningEffort>,
+    /// Whether this row came from Hya configuration, startup discovery, or the
+    /// built-in local offline provider.
+    pub source: ModelCatalogSource,
+}
+
+impl ProviderModel {
+    /// Return this row's canonical `provider/model` reference.
+    #[must_use]
+    pub fn model_ref(&self) -> ModelRef {
+        ModelRef::new(format!("{}/{}", self.provider_id, self.model_id))
+    }
 }
 
 /// Reasoning / thinking effort requested on a completion (ordered for max-pick defaults).

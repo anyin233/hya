@@ -2,9 +2,9 @@
 //! subcommands cover headless `exec`, `-p` goal mode, HTTP/SSE
 //! `serve`, and `tail-session`.
 //!
-//! Models come from hya's config (`~/.config/hya/config.yaml`): its providers +
-//! keys build real OpenAI/Anthropic/Google routes. With no usable config, an
-//! offline echo provider keeps the whole stack runnable.
+//! Models come from Hya's provider declarations. Explicit model lists or bounded
+//! startup discovery build authenticated or anonymous routes. With no resolved
+//! live model rows, the offline echo provider keeps the whole stack runnable.
 
 // allow: SIZE_OK — Phase 1 only extracts bootstrap glue; CLI command bodies stay here unchanged.
 
@@ -76,7 +76,7 @@ async fn cmd_exec(
 ) -> anyhow::Result<()> {
     first_run_config_bootstrap(false)?;
     let store = open_store(db).await?;
-    let runtime = resolve_runtime(model_override).with_yolo(yolo);
+    let runtime = resolve_runtime(model_override).await.with_yolo(yolo);
     let agent = agent_with_model(&runtime.model, runtime.reasoning);
     let mut built = build_session_engine(
         store,
@@ -139,7 +139,7 @@ async fn cmd_rpc(model_override: Option<String>, yolo: bool) -> anyhow::Result<(
     let store = SessionStore::connect_memory()
         .await
         .context("open in-memory store")?;
-    let runtime = resolve_runtime(model_override).with_yolo(yolo);
+    let runtime = resolve_runtime(model_override).await.with_yolo(yolo);
     let agent = agent_with_model(&runtime.model, runtime.reasoning);
     let mut built = build_session_engine(
         store,
@@ -212,7 +212,7 @@ async fn cmd_goal(
     let store = SessionStore::connect_memory()
         .await
         .context("open in-memory store")?;
-    let runtime = resolve_runtime(model_override).with_yolo(yolo);
+    let runtime = resolve_runtime(model_override).await.with_yolo(yolo);
     let evaluator_router = runtime.router.clone();
     let agent = agent_with_model(&runtime.model, runtime.reasoning);
     let mut built = build_session_engine(
@@ -361,14 +361,10 @@ async fn main() -> anyhow::Result<()> {
         Some(Command::Agent { command }) => agent_cmd::run(command),
         Some(Command::Bundle { command }) => bundle_cmd::run(command).await,
         Some(Command::Workflow { command }) => workflow_cmd::run(command, model, &db, yolo).await,
-        Some(Command::Models {
-            provider,
-            verbose,
-            refresh,
-        }) => {
+        Some(Command::Models { provider, verbose }) => {
             first_run_config_bootstrap(false)?;
-            let runtime = resolve_runtime(model);
-            models_cmd::cmd_models(runtime.models, &runtime.model, provider, verbose, refresh)
+            let runtime = resolve_runtime(model).await;
+            models_cmd::cmd_models(&runtime.catalog, provider, verbose)
         }
         Some(Command::Sessions { db: command_db }) => {
             let path = command_db.unwrap_or_else(|| db.clone());

@@ -1,11 +1,11 @@
-# 0.36.7
+# 0.36.8
 
-## Workflow stage model routing
+## Model catalog endpoint discovery
 
-- When a Workflow Stage or loop verifier declares an explicit model assignment,
-  route that activation through its ordered model fallback chain with
-  per-candidate reasoning effort.
-- Keep explicit Stage routes request-local so existing Agent, category, and
-  provider fallback behavior remains unchanged when no assignment is present.
-- Record bounded route selection and outcome metadata for replay-safe Workflow
-  state. The route outcome contains no prompts, provider text, or credentials.
+- Resolve one immutable model catalog at each backend startup. Explicit Hya model lists remain authoritative and network-free; empty lists use bounded provider-kind discovery with optional Hya authentication.
+- Publish non-secret configured, discovered, authentication-required, authentication-rejected, unavailable, empty, unsupported, and offline provider states across the server bootstrap and catalog APIs.
+- Use exactly `hya/offline` when no live row resolves. The local provider echoes the request and explains that a live provider must be configured; the row is absent when any live model exists.
+- Keep normal startup Hya-owned: foreign agent configuration is read only by the explicit Compat import command.
+- Make the CLI, server, Rust SDK, and TypeScript TUI consume the same snapshot. Stale Session, Recent, and Favorite values cannot create catalog rows.
+- Keep OAuth model fetches as non-persistent login previews, preserve user-authored model lists, and leave empty lists eligible for startup discovery.
+- Remove the redundant `models --refresh` option.

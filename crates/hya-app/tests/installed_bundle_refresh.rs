@@ -223,7 +223,7 @@ async fn installed_workflow_refresh_publishes_workflow_and_agent_atomically_and_
         .create(CreateSession {
             parent: None,
             agent: AgentName::new("general"),
-            model: ModelRef::new("offline"),
+            model: ModelRef::new("hya/offline"),
             workdir: workdir.to_string_lossy().into_owned(),
         })
         .await

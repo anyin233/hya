@@ -343,3 +343,60 @@ await writeInput(marker)
 One code-unit comparator protects sorting, lookup, and insertion from mixed-case
 collation drift. Fresh request counts prove the actual Escape handler ran before
 the PTY sends semantic input.
+
+---
+
+## Scenario: Fail-Closed Model Catalog Presentation
+
+### 1. Scope / Trigger
+
+- Trigger: changing TUI bootstrap/sync, model selection, Recent/Favorite state,
+  provider status, or prompt admission.
+
+### 2. Signatures
+
+- Decode through `decodeCatalogProviders` and `decodeCatalogSelection` in
+  `src/hya/model-catalog.ts`; use existing SDK sync contexts for transport.
+
+### 3. Contracts
+
+- Components consume only exact backend snapshot rows and typed
+  `source`/`auth`/`result` metadata. No frontend catalog cache or HTTP client.
+- Persisted recents, favorites, variants, agent defaults, and Session models stay
+  stored but remain hidden when their exact provider/model row is absent.
+- Offline is selectable only when the backend supplies `hya/offline`.
+
+### 4. Validation & Error Matrix
+
+- Unknown metadata -> fail closed (`none`, `unavailable`, or no row).
+- Missing selected row -> use the row-backed backend default, then another real
+  row; if none exists, stop prompt submission with a clear warning.
+
+### 5. Good/Base/Bad Cases
+
+- Good: anonymous configured rows are selectable without a health claim.
+- Base: backend offline row permits local echo prompts.
+- Bad: provider-array length, a stale Recent row, or Session metadata creates a
+  selection.
+
+### 6. Tests Required
+
+- Bun tests cover all typed statuses, malformed input, exact stale-state
+  filtering, backend default membership, offline-only, and live-no-offline.
+- Actual TUI smoke covers selector labels and offline prompt output.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```typescript
+const connected = providers.length > 0
+const selected = recent[0]
+```
+
+#### Correct
+
+```typescript
+const providers = decodeCatalogProviders(sync.data.provider)
+const selected = filterCatalogSelections(providers, recent)[0]
+```

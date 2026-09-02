@@ -849,4 +849,96 @@ mod tests {
         );
         assert!(model_variant_names(&json!({})).is_empty());
     }
+
+    #[tokio::test]
+    async fn models_preserve_shared_catalog_rows_variants_and_offline_membership() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let client = ApiClient::with_transport(RecordingTransport {
+            calls: Arc::clone(&calls),
+            response: json!({
+                "providers": [
+                    {
+                        "id": "configured",
+                        "name": "Configured",
+                        "source": "configured",
+                        "auth": "unauthenticated",
+                        "result": "models",
+                        "models": {
+                            "alpha": {
+                                "name": "Alpha",
+                                "status": "configured",
+                                "source": "configured",
+                                "limit": { "context": 128000 },
+                                "variants": { "low": {}, "high": {} }
+                            }
+                        }
+                    },
+                    {
+                        "id": "needs-auth",
+                        "source": "none",
+                        "auth": "auth_required",
+                        "result": "unavailable",
+                        "models": {}
+                    }
+                ],
+                "defaultModel": { "providerID": "configured", "modelID": "alpha" }
+            }),
+        });
+
+        assert_eq!(
+            client.models().await.expect("catalog rows"),
+            vec![(
+                "configured/alpha".to_string(),
+                "Alpha".to_string(),
+                "Configured".to_string(),
+                128_000,
+                vec!["low".to_string(), "high".to_string()],
+            )]
+        );
+        assert_eq!(calls.lock().await[0].1, "/config/providers");
+
+        let offline = ApiClient::with_transport(RecordingTransport {
+            calls: Arc::new(Mutex::new(Vec::new())),
+            response: json!({
+                "providers": [{
+                    "id": "hya",
+                    "name": "hya",
+                    "source": "offline",
+                    "auth": "not_applicable",
+                    "result": "offline",
+                    "models": {
+                        "offline": {
+                            "status": "offline",
+                            "source": "offline",
+                            "limit": { "context": 0 },
+                            "variants": {}
+                        }
+                    }
+                }],
+                "defaultModel": { "providerID": "hya", "modelID": "offline" }
+            }),
+        });
+        let rows = offline.models().await.expect("offline row");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].0, "hya/offline");
+    }
+
+    #[tokio::test]
+    async fn models_never_synthesize_active_session_metadata() {
+        let client = ApiClient::with_transport(RecordingTransport {
+            calls: Arc::new(Mutex::new(Vec::new())),
+            response: json!({
+                "providers": [{
+                    "id": "failed",
+                    "source": "none",
+                    "auth": "auth_rejected",
+                    "result": "unavailable",
+                    "models": {}
+                }],
+                "activeModel": { "providerID": "openai", "modelID": "guessed" }
+            }),
+        });
+
+        assert!(client.models().await.expect("empty catalog").is_empty());
+    }
 }

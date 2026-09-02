@@ -5,12 +5,14 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use hya_provider::{
+    ModelCatalogSource, ProviderCatalogResult, ProviderCatalogSource, ProviderCatalogState,
+};
 use serde_json::{Value, json};
 
 use crate::{ApiError, ServerState};
 
 use super::location::{LocationRef, LocationResponse};
-use super::model_ref::model_ref_parts;
 
 mod types;
 
@@ -49,6 +51,7 @@ struct CatalogModel {
     tools: bool,
     context: u32,
     variants: Vec<String>,
+    source: &'static str,
 }
 
 async fn legacy_config_get(State(st): State<ServerState>) -> Json<Value> {
@@ -73,18 +76,22 @@ async fn legacy_config_update(
 
 async fn legacy_config_providers(State(st): State<ServerState>) -> Json<LegacyConfigProviders> {
     let models = catalog_models(&st);
+    let states = catalog_states(&st);
     Json(LegacyConfigProviders {
-        providers: provider_infos(&models),
+        providers: provider_infos(&models, states),
         default: default_models(&models),
+        default_model: catalog_default(&st),
     })
 }
 
 async fn legacy_provider_list(State(st): State<ServerState>) -> Json<LegacyProviderList> {
     let models = catalog_models(&st);
+    let states = catalog_states(&st);
     Json(LegacyProviderList {
-        all: provider_infos(&models),
+        all: provider_infos(&models, states),
         default: default_models(&models),
-        connected: provider_ids(&models),
+        default_model: catalog_default(&st),
+        connected: connected_provider_ids(states),
     })
 }
 
@@ -92,11 +99,12 @@ async fn legacy_provider_auth(
     State(st): State<ServerState>,
 ) -> Json<BTreeMap<String, Vec<ProviderAuthMethod>>> {
     Json(
-        provider_ids(&catalog_models(&st))
-            .into_iter()
-            .map(|provider_id| {
+        catalog_states(&st)
+            .iter()
+            .filter(|state| state.source != ProviderCatalogSource::Offline)
+            .map(|state| {
                 (
-                    provider_id,
+                    state.provider_id.clone(),
                     vec![ProviderAuthMethod {
                         kind: "api",
                         label: "API key",
@@ -126,7 +134,8 @@ async fn provider_list(
     Query(query): LocationQuery,
     headers: HeaderMap,
 ) -> Json<LocationResponse<Vec<ProviderInfo>>> {
-    let data = provider_infos(&catalog_models(&st));
+    let models = catalog_models(&st);
+    let data = provider_infos(&models, catalog_states(&st));
     Json(location_response(&st, &query, &headers, data))
 }
 
@@ -137,7 +146,8 @@ async fn provider_get(
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     let models = catalog_models(&st);
-    if !provider_ids(&models).contains(&provider_id) {
+    let states = catalog_states(&st);
+    if !provider_ids(states).iter().any(|id| id == &provider_id) {
         let message = format!("Provider not found: {provider_id}");
         return Ok((
             StatusCode::NOT_FOUND,
@@ -153,7 +163,11 @@ async fn provider_get(
         &st,
         &query,
         &headers,
-        provider_info(&provider_id, &models),
+        provider_info(
+            &provider_id,
+            &models,
+            states.iter().find(|state| state.provider_id == provider_id),
+        ),
     ))
     .into_response())
 }
@@ -172,6 +186,7 @@ async fn model_list(
                 model.tools,
                 model.context,
                 &model.variants,
+                model.source,
             )
         })
         .collect();
@@ -179,44 +194,41 @@ async fn model_list(
 }
 
 fn catalog_models(st: &ServerState) -> Vec<CatalogModel> {
-    let models: Vec<_> = st
-        .engine
+    st.engine
         .provider_catalog()
-        .into_iter()
+        .iter()
         .map(|model| CatalogModel {
-            provider_id: model.provider_id,
-            model_id: model.model_id,
+            provider_id: model.provider_id.clone(),
+            model_id: model.model_id.clone(),
             tools: model.capabilities.streaming_tool_calls,
             context: model.capabilities.max_context,
-            variants: model.reasoning_variants,
+            variants: model.reasoning_variants.clone(),
+            source: model_source(model.source),
         })
-        .collect();
-    if !models.is_empty() {
-        return models;
-    }
-    let active = model_ref_parts(&st.agent.model);
-    vec![CatalogModel {
-        provider_id: active.provider_id,
-        model_id: active.model_id,
-        tools: false,
-        context: 0,
-        variants: Vec::new(),
-    }]
-}
-
-fn provider_ids(models: &[CatalogModel]) -> Vec<String> {
-    models
-        .iter()
-        .map(|model| model.provider_id.clone())
-        .collect::<std::collections::BTreeSet<_>>()
-        .into_iter()
         .collect()
 }
 
-fn provider_infos(models: &[CatalogModel]) -> Vec<ProviderInfo> {
-    provider_ids(models)
+fn catalog_states(st: &ServerState) -> &[ProviderCatalogState] {
+    st.engine.provider_catalog_snapshot().providers()
+}
+
+fn provider_ids(states: &[ProviderCatalogState]) -> Vec<String> {
+    states
+        .iter()
+        .map(|state| state.provider_id.clone())
+        .collect()
+}
+
+fn provider_infos(models: &[CatalogModel], states: &[ProviderCatalogState]) -> Vec<ProviderInfo> {
+    provider_ids(states)
         .into_iter()
-        .map(|provider_id| provider_info(&provider_id, models))
+        .map(|provider_id| {
+            provider_info(
+                &provider_id,
+                models,
+                states.iter().find(|state| state.provider_id == provider_id),
+            )
+        })
         .collect()
 }
 
@@ -228,6 +240,45 @@ fn default_models(models: &[CatalogModel]) -> BTreeMap<String, String> {
             .or_insert_with(|| model.model_id.clone());
     }
     defaults
+}
+
+fn catalog_default(st: &ServerState) -> Value {
+    let snapshot = st.engine.provider_catalog_snapshot();
+    let default = snapshot.default_model().as_str();
+    snapshot
+        .models()
+        .iter()
+        .find(|model| {
+            default
+                .strip_prefix(model.provider_id.as_str())
+                .and_then(|suffix| suffix.strip_prefix('/'))
+                == Some(model.model_id.as_str())
+        })
+        .map_or(Value::Null, |model| {
+            json!({
+                "providerID": model.provider_id,
+                "modelID": model.model_id,
+            })
+        })
+}
+
+fn connected_provider_ids(states: &[ProviderCatalogState]) -> Vec<String> {
+    states
+        .iter()
+        .filter(|state| {
+            state.source == ProviderCatalogSource::Discovered
+                && state.result == ProviderCatalogResult::Models
+        })
+        .map(|state| state.provider_id.clone())
+        .collect()
+}
+
+fn model_source(source: ModelCatalogSource) -> &'static str {
+    match source {
+        ModelCatalogSource::Configured => "configured",
+        ModelCatalogSource::Discovered => "discovered",
+        ModelCatalogSource::Offline => "offline",
+    }
 }
 
 fn location_response<T>(
@@ -243,18 +294,54 @@ fn location_response<T>(
 /// Provider catalog slices for the TUI single-RTT bootstrap payload.
 pub(super) fn bootstrap_provider_payload(st: &ServerState) -> (Value, Value) {
     let models = catalog_models(st);
-    let providers = provider_infos(&models);
+    let states = catalog_states(st);
+    let providers = provider_infos(&models, states);
     let default = default_models(&models);
-    let connected = provider_ids(&models);
+    let connected = connected_provider_ids(states);
     (
         json!({
             "providers": providers,
             "default": default,
+            "defaultModel": catalog_default(st),
         }),
         json!({
             "all": providers,
             "default": default,
+            "defaultModel": catalog_default(st),
             "connected": connected,
         }),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn connected_excludes_explicit_and_failed_provider_states() {
+        let states = vec![
+            ProviderCatalogState {
+                provider_id: "configured".into(),
+                kind: hya_provider::ProviderKind::OpenAiCompatible,
+                source: ProviderCatalogSource::Configured,
+                auth: hya_provider::ProviderAuthState::Unauthenticated,
+                result: ProviderCatalogResult::Models,
+            },
+            ProviderCatalogState {
+                provider_id: "failed".into(),
+                kind: hya_provider::ProviderKind::OpenAiCompatible,
+                source: ProviderCatalogSource::None,
+                auth: hya_provider::ProviderAuthState::AuthRequired,
+                result: ProviderCatalogResult::Unavailable,
+            },
+            ProviderCatalogState {
+                provider_id: "discovered".into(),
+                kind: hya_provider::ProviderKind::OpenAiCompatible,
+                source: ProviderCatalogSource::Discovered,
+                auth: hya_provider::ProviderAuthState::Credentialed,
+                result: ProviderCatalogResult::Models,
+            },
+        ];
+        assert_eq!(connected_provider_ids(&states), ["discovered"]);
+    }
 }
