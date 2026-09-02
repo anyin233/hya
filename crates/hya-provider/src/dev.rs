@@ -16,7 +16,7 @@ use crate::{
 pub struct DevProvider;
 
 impl DevProvider {
-    /// Construct the default offline route (id `dev` / claims any model).
+    /// Construct the canonical `hya/offline` echo route.
     #[must_use]
     pub fn new() -> Self {
         Self
@@ -39,14 +39,10 @@ fn last_user_text(messages: &[Message]) -> Option<String> {
 }
 
 fn reply_for(messages: &[Message]) -> String {
+    let notice = "No live provider is available. Configure a provider to continue.";
     match last_user_text(messages) {
-        Some(user) if !user.trim().is_empty() => format!(
-            "(hya dev provider) You said: \"{user}\". No live model is configured yet — \
-             wire a real provider in config for actual answers."
-        ),
-        _ => "(hya dev provider) No live model is configured. Configure a provider to get \
-              real responses."
-            .to_string(),
+        Some(user) if !user.trim().is_empty() => format!("{user}\n\n{notice}"),
+        _ => notice.to_string(),
     }
 }
 
@@ -54,8 +50,6 @@ fn dev_capabilities() -> Capabilities {
     Capabilities {
         streaming_tool_calls: true,
         parallel_tool_calls: true,
-        usage_reporting: true,
-        max_context: 200_000,
         ..Capabilities::default()
     }
 }
@@ -63,21 +57,31 @@ fn dev_capabilities() -> Capabilities {
 #[async_trait]
 impl Provider for DevProvider {
     fn id(&self) -> &str {
-        "dev"
+        "hya"
     }
 
-    fn capabilities(&self, _model: &ModelRef) -> Option<Capabilities> {
-        Some(dev_capabilities())
+    fn capabilities(&self, model: &ModelRef) -> Option<Capabilities> {
+        (model.as_str() == "hya/offline").then(dev_capabilities)
     }
 
     fn configured_identity_v1(&self) -> Option<Vec<u8>> {
         let mut identity = Vec::new();
-        append_identity_bytes(&mut identity, b"hya.provider.dev.configured.v1")?;
+        append_identity_bytes(&mut identity, b"hya.provider.offline.configured.v1")?;
         append_identity_bytes(&mut identity, env!("CARGO_PKG_VERSION").as_bytes())?;
-        append_identity_bytes(&mut identity, b"dev")?;
-        append_identity_bytes(&mut identity, b"any-model")?;
+        append_identity_bytes(&mut identity, b"hya/offline")?;
         append_capabilities_identity(&mut identity, &dev_capabilities())?;
         Some(identity)
+    }
+
+    fn catalog(&self) -> Vec<crate::ProviderModel> {
+        vec![crate::ProviderModel {
+            provider_id: "hya".to_string(),
+            model_id: "offline".to_string(),
+            capabilities: dev_capabilities(),
+            reasoning_variants: Vec::new(),
+            reasoning_default: None,
+            source: crate::ModelCatalogSource::Offline,
+        }]
     }
 
     async fn stream(

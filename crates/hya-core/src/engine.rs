@@ -8,7 +8,7 @@ use hya_proto::{
     AgentName, Envelope, Event, EventSeq, MessageId, ModelRef, OperationId, Projection, SessionId,
     ToolCallId, ToolSchema, now_millis,
 };
-use hya_provider::{ProviderModel, ProviderRouter, ReasoningEffort};
+use hya_provider::{ProviderCatalogSnapshot, ProviderModel, ProviderRouter, ReasoningEffort};
 use hya_store::{ActorClaim, SessionStore};
 use hya_tool::{
     AgentDef, FormatterPlane, InteractionPlane, LspPlane, MailboxPlane, PermissionPlane,
@@ -334,6 +334,7 @@ impl hya_tool::WorkflowRequestSink for BoundWorkflowSink {
 pub struct SessionEngine {
     store: SessionStore,
     providers: Arc<ProviderRouter>,
+    catalog: Arc<ProviderCatalogSnapshot>,
     /// Cross-model failover plane: preferred [`ModelRef`] → its ordered
     /// candidate chain (the preferred model itself first). Empty by default,
     /// which keeps turn streaming byte-identical to a direct router call.
@@ -379,9 +380,17 @@ impl SessionEngine {
         let websearch = WebSearchPlane::default();
         let formatter = FormatterPlane::default();
         let lsp = LspPlane::default();
+        let catalog = providers.catalog_snapshot_arc().unwrap_or_else(|| {
+            Arc::new(ProviderCatalogSnapshot::build(
+                providers.catalog(),
+                Vec::new(),
+                None,
+            ))
+        });
         Self {
             store,
             providers,
+            catalog,
             model_fallbacks: HashMap::new(),
             runtime,
             catalog_refresh: None,
@@ -577,10 +586,16 @@ impl SessionEngine {
         &self.formatter
     }
 
-    /// Provider catalog models exposed to the UI/API.
+    /// Provider catalog models exposed to the UI/API without per-read allocation.
     #[must_use]
-    pub fn provider_catalog(&self) -> Vec<ProviderModel> {
-        self.providers.catalog()
+    pub fn provider_catalog(&self) -> &[ProviderModel] {
+        self.catalog.models()
+    }
+
+    /// Shared provider catalog snapshot including declared provider statuses.
+    #[must_use]
+    pub fn provider_catalog_snapshot(&self) -> &ProviderCatalogSnapshot {
+        &self.catalog
     }
 
     /// Shared provider router retained by this engine for request-local Workflow routes.

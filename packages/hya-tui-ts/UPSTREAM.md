@@ -35,7 +35,7 @@ and permission notices are retained in `LICENSE`. See `NOTICE` for details.
 ## Current package payload note
 
 The source package includes `NOTICE`. The supported `install.sh` copies and
-verifies it in the installed TUI runtime. The checked-out `0.36.7` release
+verifies it in the installed TUI runtime. The checked-out `0.36.8` release
 workflow and release rehearsal currently copy `LICENSE` and this `UPSTREAM.md`
 but do **not** copy `NOTICE` into the release archive. This records an observed
 packaging difference; it does not change either packaging path.

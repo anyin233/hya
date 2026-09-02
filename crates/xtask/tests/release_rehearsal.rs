@@ -19,7 +19,7 @@ fn release_rehearsal_requires_no_publish() {
             "--workflow",
             ".github/workflows/release.yml",
             "--version",
-            "0.36.7",
+            "0.36.8",
             "--target",
             TARGET,
         ])
@@ -49,7 +49,7 @@ fn release_rehearsal_rejects_mutable_action_pin() {
     let workflow = directory.join("release.yml");
     fs::write(&workflow, modified).expect("write mutable action fixture");
 
-    let output = run_rehearsal(&workflow, "0.36.7");
+    let output = run_rehearsal(&workflow, "0.36.8");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         !output.status.success(),
@@ -73,7 +73,7 @@ fn release_rehearsal_rejects_wrong_release_environment() {
     let workflow = directory.join("release.yml");
     fs::write(&workflow, modified).expect("write environment fixture");
 
-    let output = run_rehearsal(&workflow, "0.36.7");
+    let output = run_rehearsal(&workflow, "0.36.8");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         !output.status.success(),
@@ -97,7 +97,7 @@ fn release_rehearsal_rejects_nonmatching_tag_trigger() {
     let workflow = directory.join("release.yml");
     fs::write(&workflow, modified).expect("write tag trigger fixture");
 
-    let output = run_rehearsal(&workflow, "0.36.7");
+    let output = run_rehearsal(&workflow, "0.36.8");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         !output.status.success(),

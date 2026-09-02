@@ -13,10 +13,10 @@ instead of `providers:` is silently dropped. After editing, verify with
 `hya-backend models`. A file that is empty or whitespace-only is treated exactly
 like a missing file and hya runs offline.
 
-If no usable provider route is configured, hya falls back to `DevProvider`, the
-offline echo provider from [`../crates/hya-provider/src/dev.rs`](../crates/hya-provider/src/dev.rs).
-The same config file also drives tools, MCP servers, plugins, permissions,
-subagent limits, model categories, and formatter status.
+If no configured or discovered live model row resolves, hya publishes exactly
+`hya/offline`, served by `DevProvider` as a local echo model. It is removed when
+any live row exists. The same config file also drives tools, MCP servers,
+plugins, permissions, subagent limits, model categories, and formatter status.
 
 ## First-Run / Offline Behavior
 
@@ -28,7 +28,7 @@ and no file exists, hya creates the config directory and writes a starter
 `config.yaml` before resolving runtime config:
 
 ```yaml
-default_model: offline
+default_model: hya/offline
 providers: {}
 mcp: {}
 plugins: {}
@@ -37,17 +37,14 @@ permission:
   rules: []
 ```
 
-A missing or unusable config is **not an error** — hya falls back to the offline
-`DevProvider` so the whole stack stays runnable without API keys.
+A missing or unusable config is **not an error**. Hya publishes the canonical
+`hya/offline` row so the stack remains usable without credentials.
 
-`load()` returns “no usable config” (offline) when any of these hold
-([`config.rs`](../crates/hya-app/src/config.rs) around the empty-config gate):
-
-- No config file, or the file is empty / whitespace-only.
-- After resolution there are **no** providers, **no** MCP servers, **no**
-  plugins, **no meaningful** `permission` block, and **no** `tools:` block.
-- A provider has models but no resolvable key (no inline `api_key` and no saved
-  `hya-backend login` token), so it is dropped — and nothing else above remains.
+`load()` returns “no usable config” when there is no config file, the file is
+empty, or it contains no provider, MCP, plugin, meaningful permission, or
+`tools:` declaration. Provider declarations are not credential-gated: explicit
+models build anonymous routes, and empty model lists make one optional-auth
+catalog request during each startup.
 
 **Meaningful permission:** a `permission:` block counts only if its `model`
 differs from `default` **or** it has at least one rule
@@ -64,26 +61,24 @@ even when hya is running on the offline provider because `load()` returned
 is printed — so a malformed `categories:` / `subagents:` block looks like the
 keys being ignored.
 
-Canonical `hya` imports Compat configuration only when requested explicitly:
+Normal startup never searches, opens, or imports Compat/OpenCode, Claude, Codex
+CLI, Grok CLI, or another product's configuration. Compat migration is available
+only through the explicit command:
 
 ```sh
 hya --import compat
 ```
 
-The command imports provider base URLs, model IDs, API key values or templates,
-and supported **local** MCP servers from the first discovered Compat config
-(`$COMPAT_CONFIG`, `$XDG_CONFIG_HOME/compat/{opencode.json,config.json,opencode.jsonc}`,
-`$HOME/.config/opencode/{...}`, then `$HOME/.opencode/{...}`). The import is
-local and does not print secret values. Skills import is not implemented yet.
-Bare interactive `hya-backend` retains its first-run import prompt when it
-creates the starter config.
+That command imports provider base URLs, model IDs, API-key templates, and
+supported local MCP servers into Hya's own `config.yaml`. Later startup reads
+only that Hya-owned result. First run creates the starter Hya config without an
+import offer.
 
 How to tell you are offline:
 
-- The active model id shows as `offline` instead of a real model id.
-- `hya-backend models` prints an empty catalog (no provider routes resolved).
-- Assistant replies are prefixed `(hya dev provider)` and just echo your
-  prompt back, e.g. `(hya dev provider) You said: "..."`.
+- Every catalog surface shows exactly `hya/offline` with offline metadata.
+- Assistant replies echo the input and say that no live provider is available
+  and a provider must be configured.
 
 Non-interactive commands create the starter file without prompting and keep
 machine-readable stdout clean. The only runtime config message they print is
@@ -94,8 +89,8 @@ still continues offline:
 hya: config error (...); using the offline provider
 ```
 
-To leave offline mode, configure at least one provider with a resolvable key
-(see [Providers](#providers) and [Auth Tokens](#auth-tokens)).
+To leave offline mode, declare a provider with explicit models or an endpoint
+that can return models. Credentials are optional (see [Providers](#providers)).
 
 ## Sample `config.yaml`
 
@@ -106,10 +101,9 @@ is optional.
 ```yaml
 # ~/.config/hya/config.yaml  (or $XDG_CONFIG_HOME/hya/config.yaml)
 
-# Model used when neither `--model` nor `HYA_MODEL` is set. Must be served by
-# one of the providers below. If omitted, hya prefers a model whose id
-# contains "sonnet", otherwise the first configured model.
-default_model: claude-sonnet-4-6
+# Row-backed process default. A stale value is ignored and the deterministic
+# first resolved row is selected instead.
+default_model: anthropic/claude-sonnet-4-6
 
 # Optional: agent profile selected when a workdir does not specify one.
 # Falls back to the built-in `build` agent when omitted.
@@ -161,7 +155,7 @@ providers:
     # Inline key is optional. Forms: literal, {env:VAR}, or {file:/path}.
     # A token saved via `hya-backend login anthropic <token>` takes precedence.
     api_key: "{env:ANTHROPIC_API_KEY}"
-    models: [claude-sonnet-4-6]          # providers with no models are skipped
+    models: [claude-sonnet-4-6]          # explicit list: normalized, no catalog request
 
 # MCP servers. Tools are registered as mcp__<server>__<tool>.
 # Stdio/local only — there is no url/remote transport key.
@@ -232,8 +226,29 @@ Supported `kind` values:
 | `anthropic` | Anthropic Messages route. |
 | `google` | Gemini route. |
 
-Providers without models are skipped. Providers without an inline `api_key` are
-still valid if a saved token exists for that provider id.
+`models` has two authoritative modes:
+
+- A non-empty list is trimmed and exactly deduplicated. It is trusted without a
+  model-list request and remains routable when no credential exists.
+- An absent, empty, or blank-only list makes one bounded request during every
+  process startup. Results stay in memory and are never written to config or a
+  cache. Authentication headers are sent only when Hya has a credential.
+
+Discovery uses the declared provider kind and base URL: OpenAI-compatible and
+Responses use `/models`; Anthropic uses `/models` with bounded cursor pages;
+Google uses `/models`, keeps `generateContent` rows, and strips `models/`;
+Codex and Grok Build use their existing Hya catalog adapters and protocol
+headers. Redirects are rejected; connect/page/batch deadlines are 3/8/10
+seconds; each page is limited to 1 MiB, each provider to 8 pages and 2,000
+models, and at most 4 providers run concurrently. There is no retry loop.
+
+Provider startup status is non-secret and orthogonal: source is
+`configured|discovered|none|offline`, auth is
+`credentialed|unauthenticated|auth_required|auth_rejected|not_applicable`, and
+result is `models|empty|unavailable|invalid|unsupported|offline`. These are
+composition facts, not health or entitlement claims. A credentialless 401/403
+is `auth_required`; a credentialed 401/403 is `auth_rejected`. Either produces
+no remote row.
 
 `grok-build` uses the Responses request shape and adds encrypted reasoning
 content. Its fallback reasoning efforts are `low`, `medium`, and `high`,
@@ -329,26 +344,19 @@ hya oauth status
 
 On success hya:
 
-1. Writes an OAuth credential bundle to the auth directory (see
+1. Writes an OAuth credential bundle to the Hya auth directory (see
    [Auth Tokens](#auth-tokens)).
-2. Fetches the live model catalog with the new token:
-   - `openai-codex` → `GET https://chatgpt.com/backend-api/codex/models?client_version=0.144.0`
-     with `OpenAI-Beta: responses=experimental` and `User-Agent: codex_cli_rs`
-   - `grok-build` → `GET <base_url>/models` (CLI chat proxy)
-3. Upserts a non-secret provider route into `config.yaml` (`kind`, `base_url`,
-   full `models` list, including reasoning metadata when the catalog provides
-   it). Secrets are **not** written into `config.yaml`. If the catalog fetch
-   fails, hya still saves credentials and writes a single default model.
+2. Optionally fetches a catalog only to improve login confirmation output.
+3. Upserts the non-secret Hya provider declaration (`kind`, `base_url`) and
+   preserves any existing `models` and inline `api_key` fields.
 
-**Catalog filter (Grok / OpenAI-compatible list only):** when the catalog comes
-from `GET {base}/models` (the `grok-build` path), any model id containing
-`imagine`, `image`, or `video` is dropped before write. The **Codex** catalog
-path (`models[].slug`) does **not** apply this filter — those ids are written as
-returned. Add media models by hand under `providers.<id>.models` if you need
-them on a filtered catalog.
-
-**`default_model` side-effect:** overwritten only when it is missing, empty, or
-literally `offline` — an existing real default is preserved.
+Login never writes fetched or guessed model IDs and never changes
+`default_model`. A new provider gets `models: []`, so the next startup performs
+the authoritative discovery request with the saved credential. Failed or empty
+login-time preview does not create a fallback row; credentials and the empty
+provider declaration are still saved. Model filtering and normalization happen
+at startup through the same provider discovery adapters used by all other
+catalog consumers.
 
 **Provider id validation:** `--provider` ids containing `/`, `\`, `..`, or
 whitespace are rejected, because the id becomes the `auth/<id>.yaml` filename.
@@ -539,14 +547,13 @@ not forwarded to another host.
 
 ## Model Selection
 
-The active model is selected in this order:
-
-1. `--model <id>` CLI flag.
-2. `HYA_MODEL` environment variable.
-3. `default_model` from `config.yaml`.
-4. A configured model whose id contains `sonnet`.
-5. The first configured model id.
-6. `offline` when using the development provider.
+For a new session, an explicit `--model` or `HYA_MODEL` request is applied by
+runtime resolution. Without that override, startup asks the immutable catalog
+snapshot to use `default_model` from `config.yaml` only when it names a resolved
+row (a bare model id is accepted only when unique). A stale, missing, or
+ambiguous value is ignored and the first catalog row in deterministic
+provider/model order becomes the default. With no live rows, that row is
+`hya/offline`.
 
 Examples:
 
@@ -693,7 +700,7 @@ hya honors `HOME` and `XDG_CONFIG_HOME` / `XDG_DATA_HOME` / `XDG_STATE_HOME` /
 
 | Variable | Effect | Default | Source |
 | --- | --- | --- | --- |
-| `HYA_MODEL` | Active model id when `--model` is not passed. **Wins over** `config.yaml` `default_model` (`model_override.or_else(HYA_MODEL).unwrap_or(default_model)` in `resolve_runtime`). | After CLI/`HYA_MODEL`: `default_model`, else a `sonnet` model, else the first model, else `offline`. | `crates/hya-app/src/runtime.rs`, `crates/hya-app/src/config.rs` |
+| `HYA_MODEL` | Active request model when `--model` is not passed. **Wins over** the row-backed startup default. Unknown overrides stay outside the catalog and fail through normal routing when used. | Configured `default_model` when it names a resolved row, otherwise the deterministic first live row, otherwise `hya/offline`. | `crates/hya-app/src/runtime.rs`, `crates/hya-app/src/config.rs` |
 | `HYA_COMPACTION_THRESHOLD` | Estimated tokens that trigger context compaction. Env-only (no config.yaml key). Unparseable values ignored. | `100000` | `crates/hya-core/src/compaction.rs`, `crates/hya-app/src/runtime.rs` |
 | `HYA_COMPACTION_KEEP_RECENT` | Most-recent messages kept verbatim during compaction. Env-only. Unparseable values ignored. | `6` | same |
 | `HYA_SUBAGENT_MAX_DEPTH` | Overrides `subagents.max_depth`. **Env wins** over config.yaml; unparseable falls back to file/default. | `5` | `crates/hya-app/src/config.rs` |
@@ -895,9 +902,8 @@ general MCP config-delete route, and dynamic changes are not written back to
 
 ### Compat migration into hya
 
-Interactive first-run startup can import Compat provider/model and local MCP
-config into `config.yaml`. You can also run the import explicitly without
-starting a TUI:
+Compat provider/model and local MCP configuration enters Hya only through the
+explicit import command:
 
 ```sh
 hya --import compat
@@ -908,14 +914,13 @@ The discovered Compat config is parsed as **strict JSON first**; if that fails,
 JSONC. This applies to any candidate filename, so a commented `opencode.json`
 also imports.
 
-The explicit import currently supports Compat provider/model config and local
-stdio MCP entries. It replaces `default_model` and `providers` in `config.yaml`,
-merges imported MCP servers by name, and preserves existing hya-only MCP entries
-plus non-model sections such as `plugins` and `default_agent`. Compat
-`type: "local"`, `command`, `environment`, `enabled`, and `timeout` map to hya
-`command`, `env`, `enabled`, and `timeout_ms`. Remote/OAuth MCP entries are
-skipped and counted in the command summary. Skills remain a TODO; future import
-sources such as Codex and Claude are reserved but not implemented yet.
+The explicit import supports Compat provider/model config and local stdio MCP
+entries. It replaces `default_model` and `providers` in `config.yaml`, merges
+imported MCP servers by name, and preserves Hya-only MCP entries plus non-model
+sections such as `plugins` and `default_agent`. Compat `type: "local"`,
+`command`, `environment`, `enabled`, and `timeout` map to Hya `command`, `env`,
+`enabled`, and `timeout_ms`. Remote/OAuth MCP entries are skipped and counted;
+skills are not imported. Automatic startup never reads these foreign paths.
 
 **Provider `kind` inference:** hya lowercases the Compat provider id plus its npm
 package and display name and guesses `kind` — containing `anthropic` →

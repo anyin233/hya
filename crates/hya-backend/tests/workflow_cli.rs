@@ -60,7 +60,7 @@ nodes:
     agent: general
     directive: Execute through the routed model.
     model:
-      id: offline
+      id: hya/offline
 ---
 flowchart TD
   execute
@@ -199,7 +199,7 @@ fn cli_info_and_run_print_requested_selected_and_outcome_routes()
     );
     let info_stdout = String::from_utf8(info.stdout)?;
     assert!(
-        info_stdout.contains("worker model: offline reasoning=default"),
+        info_stdout.contains("worker model: hya/offline reasoning=default"),
         "requested route missing from workflow info:\n{info_stdout}"
     );
 
@@ -213,9 +213,9 @@ fn cli_info_and_run_print_requested_selected_and_outcome_routes()
     );
     let run_stdout = String::from_utf8(run.stdout)?;
     for expected in [
-        "worker model: offline reasoning=default",
-        "selected worker model: #0 offline reasoning=none",
-        "route outcome: role=worker iteration=0 step=0 candidate=#0 model=offline reasoning=none class=none",
+        "worker model: hya/offline reasoning=default",
+        "selected worker model: #0 hya/offline reasoning=none",
+        "route outcome: role=worker iteration=0 step=0 candidate=#0 model=hya/offline reasoning=none class=none",
     ] {
         assert!(
             run_stdout.contains(expected),

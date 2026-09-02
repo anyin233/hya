@@ -58,6 +58,7 @@ import {
 } from "../../keymap"
 import { useTuiConfig } from "../../config"
 import { readLocalAttachment } from "./local-attachment"
+import { catalogStatusSummary, hasLiveCatalogModels } from "../../../hya/model-catalog"
 
 export type PromptProps = {
   sessionID?: string
@@ -209,6 +210,8 @@ export function Prompt(props: PromptProps) {
   const [cursorVersion, setCursorVersion] = createSignal(0)
   const currentProviderLabel = createMemo(() => local.model.parsed().provider)
   const hasRightContent = createMemo(() => Boolean(props.right))
+  const catalogStatus = createMemo(() => catalogStatusSummary(sync.data.provider))
+  const catalogNeedsConnection = createMemo(() => !hasLiveCatalogModels(sync.data.provider))
 
   function promptModelWarning() {
     toast.show({
@@ -1558,7 +1561,15 @@ export function Prompt(props: PromptProps) {
                 </text>
               </box>
             </Match>
-            <Match when={true}>{props.hint ?? <text />}</Match>
+            <Match when={true}>
+              {props.hint ?? (
+                <Show when={catalogNeedsConnection()} fallback={<text />}>
+                  <text fg={theme.text}>
+                    {catalogStatus()} <span style={{ fg: theme.textMuted }}>/connect</span>
+                  </text>
+                </Show>
+              )}
+            </Match>
           </Switch>
           <Show when={status().type !== "retry"}>
             <box gap={2} flexDirection="row">

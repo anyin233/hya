@@ -4,6 +4,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use super::CatalogModel;
+use hya_provider::ProviderCatalogState;
 
 #[derive(Clone, Serialize)]
 pub(super) struct ProviderInfo {
@@ -12,6 +13,12 @@ pub(super) struct ProviderInfo {
     api: NativeProviderApi,
     request: RequestInfo,
     models: BTreeMap<String, ModelInfo>,
+    /// How this provider's model membership was resolved at startup.
+    source: &'static str,
+    /// Non-secret startup authentication state.
+    auth: &'static str,
+    /// Non-secret startup catalog result.
+    result: &'static str,
 }
 
 #[derive(Clone, Serialize)]
@@ -31,6 +38,8 @@ struct RequestInfo {
 pub(super) struct LegacyProviderList {
     pub(super) all: Vec<ProviderInfo>,
     pub(super) default: BTreeMap<String, String>,
+    #[serde(rename = "defaultModel")]
+    pub(super) default_model: Value,
     pub(super) connected: Vec<String>,
 }
 
@@ -38,6 +47,8 @@ pub(super) struct LegacyProviderList {
 pub(super) struct LegacyConfigProviders {
     pub(super) providers: Vec<ProviderInfo>,
     pub(super) default: BTreeMap<String, String>,
+    #[serde(rename = "defaultModel")]
+    pub(super) default_model: Value,
 }
 
 #[derive(Serialize)]
@@ -56,14 +67,15 @@ pub(super) struct ModelInfo {
     api: ModelApi,
     capabilities: ModelCapabilities,
     request: ModelRequest,
-    /// Insertion-ordered so config/catalog variant order is preserved on the wire
-    /// (TUI cycle and picker use object key order).
+    /// Insertion-ordered so config/catalog variant order is preserved on the wire.
     variants: serde_json::Map<String, Value>,
     time: ModelTime,
     cost: Vec<ModelCost>,
     status: &'static str,
     enabled: bool,
     limit: ModelLimit,
+    /// Catalog provenance (`configured`, `discovered`, or `offline`).
+    source: &'static str,
 }
 
 #[derive(Clone, Serialize)]
@@ -113,7 +125,11 @@ struct ModelLimit {
     output: u32,
 }
 
-pub(super) fn provider_info(provider_id: &str, catalog: &[CatalogModel]) -> ProviderInfo {
+pub(super) fn provider_info(
+    provider_id: &str,
+    catalog: &[CatalogModel],
+    state: Option<&ProviderCatalogState>,
+) -> ProviderInfo {
     let models = catalog
         .iter()
         .filter(|model| model.provider_id == provider_id)
@@ -126,6 +142,7 @@ pub(super) fn provider_info(provider_id: &str, catalog: &[CatalogModel]) -> Prov
                     model.tools,
                     model.context,
                     &model.variants,
+                    model.source,
                 ),
             )
         })
@@ -142,6 +159,9 @@ pub(super) fn provider_info(provider_id: &str, catalog: &[CatalogModel]) -> Prov
             body: json!({}),
         },
         models,
+        source: state.map_or("none", |state| provider_source(state.source)),
+        auth: state.map_or("unauthenticated", |state| provider_auth(state.auth)),
+        result: state.map_or("unavailable", |state| provider_result(state.result)),
     }
 }
 
@@ -151,6 +171,7 @@ pub(super) fn model_info(
     tools: bool,
     context: u32,
     variants: &[String],
+    source: &'static str,
 ) -> ModelInfo {
     ModelInfo {
         id: model_id.to_string(),
@@ -178,9 +199,40 @@ pub(super) fn model_info(
             .collect(),
         time: ModelTime { released: 0 },
         cost: Vec::new(),
-        status: "active",
+        status: source,
         enabled: true,
         limit: ModelLimit { context, output: 0 },
+        source,
+    }
+}
+
+fn provider_source(source: hya_provider::ProviderCatalogSource) -> &'static str {
+    match source {
+        hya_provider::ProviderCatalogSource::Configured => "configured",
+        hya_provider::ProviderCatalogSource::Discovered => "discovered",
+        hya_provider::ProviderCatalogSource::None => "none",
+        hya_provider::ProviderCatalogSource::Offline => "offline",
+    }
+}
+
+fn provider_auth(auth: hya_provider::ProviderAuthState) -> &'static str {
+    match auth {
+        hya_provider::ProviderAuthState::Credentialed => "credentialed",
+        hya_provider::ProviderAuthState::Unauthenticated => "unauthenticated",
+        hya_provider::ProviderAuthState::AuthRequired => "auth_required",
+        hya_provider::ProviderAuthState::AuthRejected => "auth_rejected",
+        hya_provider::ProviderAuthState::NotApplicable => "not_applicable",
+    }
+}
+
+fn provider_result(result: hya_provider::ProviderCatalogResult) -> &'static str {
+    match result {
+        hya_provider::ProviderCatalogResult::Models => "models",
+        hya_provider::ProviderCatalogResult::Empty => "empty",
+        hya_provider::ProviderCatalogResult::Unavailable => "unavailable",
+        hya_provider::ProviderCatalogResult::Invalid => "invalid",
+        hya_provider::ProviderCatalogResult::Unsupported => "unsupported",
+        hya_provider::ProviderCatalogResult::Offline => "offline",
     }
 }
 
@@ -198,6 +250,7 @@ mod tests {
             true,
             200_000,
             &["low".to_string(), "high".to_string()],
+            "configured",
         );
         let value = serde_json::to_value(&info).expect("serialize model info");
         let variants = value
@@ -211,7 +264,6 @@ mod tests {
 
     #[test]
     fn model_info_preserves_configured_variant_order() {
-        // Config order, not effort rank and not alphabetical (high < low < medium).
         let info = model_info(
             "gateway",
             "gpt-5.6-sol",
@@ -223,6 +275,7 @@ mod tests {
                 "low".to_string(),
                 "medium".to_string(),
             ],
+            "discovered",
         );
         let value = serde_json::to_value(&info).expect("serialize model info");
         let keys: Vec<&String> = value["variants"]
@@ -231,5 +284,6 @@ mod tests {
             .keys()
             .collect();
         assert_eq!(keys, ["max", "high", "low", "medium"]);
+        assert_eq!(value["status"], "discovered");
     }
 }

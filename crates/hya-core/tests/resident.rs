@@ -38,7 +38,7 @@ async fn engine_with(limits: SubagentLimits) -> (Arc<SessionEngine>, AgentSpec) 
     // is a roster handle only and is not a Bundle definition.
     let agent = AgentSpec {
         name: AgentName::new("general"),
-        model: ModelRef::new("dev"),
+        model: ModelRef::new("hya/offline"),
         system_prompt: "x".to_string(),
         workdir: PathBuf::from("/tmp"),
         reasoning: None,
@@ -51,7 +51,7 @@ async fn make_root(engine: &SessionEngine) -> SessionId {
         .create(CreateSession {
             parent: None,
             agent: AgentName::new("build"),
-            model: ModelRef::new("dev"),
+            model: ModelRef::new("hya/offline"),
             workdir: "/tmp".to_string(),
         })
         .await
@@ -63,7 +63,7 @@ async fn make_child(engine: &SessionEngine, root: SessionId) -> SessionId {
         .create(CreateSession {
             parent: Some(root),
             agent: AgentName::new("general"),
-            model: ModelRef::new("dev"),
+            model: ModelRef::new("hya/offline"),
             workdir: "/tmp".to_string(),
         })
         .await

@@ -92,7 +92,7 @@ impl WorkflowRuntime {
         let workdir = std::env::current_dir().context("resolve current directory")?;
         crate::first_run_config_bootstrap(false)?;
         let store = open_store(db).await?;
-        let runtime = resolve_runtime(model_override).with_yolo(yolo);
+        let runtime = resolve_runtime(model_override).await.with_yolo(yolo);
         let agent = agent_with_model(&runtime.model, runtime.reasoning);
         let mut built = build_session_engine(
             store,

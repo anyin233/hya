@@ -39,7 +39,7 @@ async fn http_provider_retries_retryable_status_before_returning_a_stream() {
         "openai",
         ProviderKind::OpenAiCompatible,
         &base_url,
-        "test-token".to_string(),
+        Some("test-token".to_string()),
         ["gpt-5".to_string()],
     )
     .unwrap();
@@ -72,7 +72,7 @@ async fn http_provider_retries_a_route_that_never_sends_response_headers() {
         "openai",
         ProviderKind::OpenAiCompatible,
         &base_url,
-        "test-token".to_string(),
+        Some("test-token".to_string()),
         ["gpt-5".to_string()],
     )
     .unwrap()
@@ -114,7 +114,7 @@ async fn http_provider_idle_stall_yields_one_error_without_second_request() {
         "openai",
         ProviderKind::OpenAiCompatible,
         &base_url,
-        "test-token".to_string(),
+        Some("test-token".to_string()),
         ["gpt-5".to_string()],
     )
     .unwrap()
@@ -165,7 +165,7 @@ async fn http_provider_forwards_completion_request_headers() {
         "openai",
         ProviderKind::OpenAiCompatible,
         &base_url,
-        "test-token".to_string(),
+        Some("test-token".to_string()),
         ["gpt-5".to_string()],
     )
     .unwrap();
@@ -207,7 +207,7 @@ async fn http_provider_posts_openai_compatible_body_to_mock_endpoint() {
         "openai",
         ProviderKind::OpenAiCompatible,
         &base_url,
-        "test-token".to_string(),
+        Some("test-token".to_string()),
         ["gpt-5".to_string()],
     )
     .unwrap();
@@ -311,7 +311,7 @@ async fn http_provider_posts_responses_body_with_every_reasoning_effort() {
             "openai",
             ProviderKind::OpenAiResponse,
             &base_url,
-            "test-token".to_string(),
+            Some("test-token".to_string()),
             ["gpt-5.6-sol".to_string()],
         )
         .unwrap();
@@ -393,7 +393,7 @@ async fn http_provider_codex_session_sends_account_id_header() {
         "codex",
         ProviderKind::OpenAiCodex,
         &base_url,
-        "codex-jwt".to_string(),
+        Some("codex-jwt".to_string()),
         ["gpt-5.3-codex".to_string()],
     )
     .unwrap()
@@ -436,7 +436,7 @@ async fn http_provider_grok_session_sends_oauth_proxy_headers() {
         "grok",
         ProviderKind::GrokBuild,
         &base_url,
-        "oauth-jwt-token".to_string(),
+        Some("oauth-jwt-token".to_string()),
         ["grok-4.5".to_string()],
     )
     .unwrap()
@@ -487,7 +487,7 @@ async fn http_provider_posts_grok_build_responses_body() {
             "grok",
             ProviderKind::GrokBuild,
             &base_url,
-            "test-token".to_string(),
+            Some("test-token".to_string()),
             ["grok-4.5".to_string()],
         )
         .unwrap();
@@ -543,7 +543,7 @@ async fn http_provider_decodes_grok_reasoning_text_delta_and_typed_terminal() {
         "grok",
         ProviderKind::GrokBuild,
         &base_url,
-        "test-token".to_string(),
+        Some("test-token".to_string()),
         ["grok-4.5".to_string()],
     )
     .unwrap();
@@ -652,7 +652,7 @@ async fn http_provider_decodes_responses_reasoning_text_tool_and_usage() {
         "openai",
         ProviderKind::OpenAiResponse,
         &base_url,
-        "test-token".to_string(),
+        Some("test-token".to_string()),
         ["gpt-5.6-sol".to_string()],
     )
     .unwrap();
@@ -785,7 +785,7 @@ async fn http_provider_reports_nested_responses_failure() {
         "openai",
         ProviderKind::OpenAiResponse,
         &base_url,
-        "test-token".to_string(),
+        Some("test-token".to_string()),
         ["gpt-5.6-sol".to_string()],
     )
     .unwrap();
@@ -824,7 +824,7 @@ async fn http_provider_replays_completed_responses_reasoning_and_tool_round() {
         "openai",
         ProviderKind::OpenAiResponse,
         &base_url,
-        "test-token".to_string(),
+        Some("test-token".to_string()),
         ["gpt-5.6-sol".to_string()],
     )
     .unwrap();
@@ -928,7 +928,7 @@ async fn http_provider_posts_anthropic_compatible_body_to_mock_endpoint() {
         "anthropic",
         ProviderKind::Anthropic,
         &base_url,
-        "test-token".to_string(),
+        Some("test-token".to_string()),
         ["claude-sonnet-4-20250514".to_string()],
     )
     .unwrap();
@@ -1022,7 +1022,7 @@ async fn http_provider_forces_single_auth_refresh_on_401_and_retries_once() {
         "openai",
         ProviderKind::OpenAiCompatible,
         &base_url,
-        "static-unused".to_string(),
+        Some("static-unused".to_string()),
         ["gpt-5".to_string()],
     )
     .unwrap()
@@ -1088,7 +1088,7 @@ async fn concurrent_401s_refresh_the_credential_used_by_each_request_once() {
             "openai",
             ProviderKind::OpenAiCompatible,
             &base_url,
-            "static-unused".to_string(),
+            Some("static-unused".to_string()),
             ["gpt-5".to_string()],
         )
         .unwrap()
@@ -1171,7 +1171,7 @@ async fn http_provider_surfaces_401_after_a_single_forced_refresh_attempt() {
         "openai",
         ProviderKind::OpenAiCompatible,
         &base_url,
-        "static-unused".to_string(),
+        Some("static-unused".to_string()),
         ["gpt-5".to_string()],
     )
     .unwrap()
@@ -1221,7 +1221,7 @@ async fn http_provider_without_refresher_makes_one_connection_on_401() {
         "openai",
         ProviderKind::OpenAiCompatible,
         &base_url,
-        "test-token".to_string(),
+        Some("test-token".to_string()),
         ["gpt-5".to_string()],
     )
     .unwrap();
@@ -1271,7 +1271,7 @@ async fn response_events(kind: ProviderKind, response: &str) -> Vec<Result<Event
         "test",
         kind,
         &base_url,
-        "test-token".to_string(),
+        Some("test-token".to_string()),
         ["model".to_string()],
     )
     .unwrap();

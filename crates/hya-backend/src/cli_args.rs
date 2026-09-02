@@ -139,16 +139,13 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: crate::workflow_cmd::WorkflowCliCommand,
     },
-    /// List configured models.
+    /// List rows from the fresh startup catalog.
     Models {
         /// Provider id to filter models by.
         provider: Option<String>,
-        /// Accepted for Compat CLI compatibility.
+        /// Include safe source/status metadata.
         #[arg(long)]
         verbose: bool,
-        /// Accepted for Compat CLI compatibility.
-        #[arg(long)]
-        refresh: bool,
     },
     /// List sessions stored in a database.
     Sessions {
@@ -198,6 +195,14 @@ mod tests {
 
         assert_eq!(err.kind(), clap::error::ErrorKind::UnknownArgument);
         assert!(err.to_string().contains("--mini"));
+    }
+    #[test]
+    fn models_refresh_is_rejected_as_unknown_argument() {
+        let error = match Cli::try_parse_from(["hya-backend", "models", "--refresh"]) {
+            Ok(_) => panic!("models --refresh must be removed"),
+            Err(error) => error,
+        };
+        assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
     }
 
     #[test]
@@ -336,17 +341,12 @@ mod tests {
     }
 
     #[test]
-    fn parses_compat_models_command() {
-        let cli = parse(["hya-backend", "models", "openai", "--verbose", "--refresh"]);
+    fn parses_models_command_without_refresh() {
+        let cli = parse(["hya-backend", "models", "openai", "--verbose"]);
         match cli.command {
-            Some(super::Command::Models {
-                provider,
-                verbose,
-                refresh,
-            }) => {
+            Some(super::Command::Models { provider, verbose }) => {
                 assert_eq!(provider.as_deref(), Some("openai"));
                 assert!(verbose);
-                assert!(refresh);
             }
             _ => panic!("expected models command"),
         }

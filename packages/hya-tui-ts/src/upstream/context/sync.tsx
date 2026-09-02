@@ -30,6 +30,7 @@ import { batch, onMount } from "solid-js"
 import path from "path"
 import { startupMark } from "../../hya/startup-trace"
 import { useKV } from "./kv"
+import { decodeCatalogSelection, type CatalogSelection } from "../../hya/model-catalog"
 
 /**
  * Compare Session cache keys using JavaScript code-unit ordering.
@@ -68,6 +69,7 @@ export const {
       status: "loading" | "partial" | "complete"
       provider: Provider[]
       provider_default: Record<string, string>
+      provider_catalog_default: CatalogSelection | undefined
       provider_next: ProviderListResponse
       capabilities: {
         experimentalBackgroundSubagents: boolean
@@ -123,6 +125,7 @@ export const {
       command: [],
       provider: [],
       provider_default: {},
+      provider_catalog_default: undefined,
       session: [],
       session_status: {},
       session_diff: {},
@@ -466,7 +469,7 @@ export const {
 
     type BootstrapBundle = {
       config?: unknown
-      providers?: { providers?: unknown; default?: unknown }
+      providers?: { providers?: unknown; default?: unknown; defaultModel?: unknown }
       provider_list?: unknown
       capabilities?: { backgroundSubagents?: boolean }
       agents?: unknown[]
@@ -505,10 +508,13 @@ export const {
     }
 
     function applyBootstrapBundle(bundle: BootstrapBundle) {
+      const providers = bundle.providers?.providers ?? []
+      const catalogDefault = decodeCatalogSelection(bundle.providers?.defaultModel, providers)
       batch(() => {
         if (bundle.providers) {
-          setStore("provider", reconcile((bundle.providers.providers as never) ?? []))
+          setStore("provider", reconcile(providers as never))
           setStore("provider_default", reconcile((bundle.providers.default as never) ?? {}))
+          setStore("provider_catalog_default", catalogDefault)
         }
         if (bundle.provider_list !== undefined) {
           setStore("provider_next", reconcile(bundle.provider_list as never))
@@ -562,10 +568,15 @@ export const {
       const agents = (await agentsPromise).data ?? []
       const config = (await configPromise).data!
       const sessions = args.continue ? await sessionListPromise : undefined
+      const catalogDefault = decodeCatalogSelection(
+        (providers as typeof providers & { defaultModel?: unknown }).defaultModel,
+        providers.providers,
+      )
 
       batch(() => {
         setStore("provider", reconcile(providers.providers))
         setStore("provider_default", reconcile(providers.default))
+        setStore("provider_catalog_default", catalogDefault)
         setStore("provider_next", reconcile(providerList))
         setStore("capabilities", "experimentalBackgroundSubagents", capabilities?.backgroundSubagents === true)
         setStore("agent", reconcile(agents))

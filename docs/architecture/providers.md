@@ -163,15 +163,18 @@ model/category APIs, where `provider/model#variant` remains a valid request
 form. Workflow chains are request-local and do not modify the global
 cross-model fallback map described below.
 
-**Catalog.** `ProviderRouter::catalog` flattens every provider's `catalog()`,
-sorts by `(provider_id, model_id)`, and dedups identical provider/model pairs.
-`GET /api/model` (and related Compat catalog views) expose that router catalog
-via `provider_catalog()`. **`hya-backend models` does not** call
-`ProviderRouter::catalog`: it lists `RuntimeConfig.models` built from the parsed
-`providers:` block (`config::model_entries`), formats each as
-`{provider}/{id}`, then `sort()`s the joined strings with **no** dedup
-([`models_cmd.rs`](../../crates/hya-backend/src/models_cmd.rs)). Content often
-overlaps in practice; the mechanism and sort key differ.
+**Catalog.** App composition resolves every declared provider before it builds
+routes. Explicit non-empty model lists are normalized without network access;
+empty lists use the provider-kind discovery adapter once per startup, with
+optional Hya auth. The app then publishes one immutable
+`ProviderCatalogSnapshot`. It contains model rows, provider source/auth/result
+states, the row-backed default, and the canonical offline notice when needed.
+
+`ProviderRouter`, `SessionEngine`, `hya-backend models`, server catalog and TUI
+bootstrap routes, the Rust SDK, and the TypeScript TUI all consume that snapshot
+or a direct wire projection of it. They do not re-fetch, re-flatten config, or
+synthesize active/default/session rows. When there are no live rows the snapshot
+adds exactly `hya/offline` with `DevProvider`; it never appears beside live rows.
 
 **Identities.** `configured_identities_v1` aggregates per-provider fingerprints
 in insertion order, or returns `None` if **any** provider returns `None` or an

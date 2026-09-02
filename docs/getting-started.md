@@ -183,9 +183,9 @@ shows the same canonical events that the server streams over SSE.
 
 ## From Offline to a Live Provider
 
-Out of the box hya runs **offline**: with no config it uses a development
-provider that echoes your prompt. You can tell you are offline because the model
-id shows as `offline` and replies are prefixed `(hya dev provider)`. This is
+Out of the box Hya runs **offline**: with no live catalog rows it uses the local
+echo provider. The model is `hya/offline`; each reply echoes the prompt and says
+that no live provider is available and one must be configured. This is
 intentional, not an error — see
 [Configuration → First-Run / Offline Behavior](configuration.md#first-run--offline-behavior).
 

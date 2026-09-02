@@ -13,7 +13,7 @@ pub(crate) async fn cmd_serve(
 ) -> anyhow::Result<()> {
     super::first_run_config_bootstrap(false)?;
     let store = open_store(&db).await?;
-    let runtime = resolve_runtime(model_override).with_yolo(yolo);
+    let runtime = resolve_runtime(model_override).await.with_yolo(yolo);
     // Server AppState: base-only agent slot. Environment + AGENTS + references
     // are discovered per turn so Bundle Some does not drop project AGENTS and
     // Bundle None does not duplicate startup-baked AGENTS.
@@ -152,7 +152,7 @@ pub(crate) async fn cmd_tui_hya(
 
     super::first_run_config_bootstrap(true)?;
     let store = open_store(&db).await?;
-    let runtime = resolve_runtime(model_override).with_yolo(yolo);
+    let runtime = resolve_runtime(model_override).await.with_yolo(yolo);
     // Interactive startup (stdout is a terminal, checked above): explain the
     // missing config and the offline fallback. Goes to stderr only.
     if let Some(notice) = &runtime.offline_notice {

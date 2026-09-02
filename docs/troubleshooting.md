@@ -98,14 +98,15 @@ responses.
 
 ## hya Uses the Offline Provider
 
-If the response starts with `(hya dev provider)`, hya did not find a usable
-live provider route. Check:
+If the selected model is `hya/offline` and the response says no live provider is
+available, Hya did not resolve a live catalog row. Check:
 
 - `$XDG_CONFIG_HOME/hya/config.yaml`
 - `$HOME/.config/hya/config.yaml`
-- each provider has `kind`, `base_url`, and at least one model under `models`
-- each provider has either an inline `api_key` or a saved token from
-  `hya-backend login <provider> <token>`
+- each provider has a supported `kind` and its own `base_url`
+- an absent or empty `models` list can reach that provider's model-list endpoint
+- `Authentication required` or `Authentication rejected` means the endpoint
+  needs a valid inline `api_key` or Hya-saved credential
 - `kind` is a supported provider kind (see the full table in
   [Configuration](configuration.md) — including `openai`,
   `openai-compatible` / `openai-completion`, `openai-response`, `openai-codex`,

@@ -149,7 +149,7 @@ pub(crate) async fn run_oauth(command: OauthCommand) -> anyhow::Result<()> {
             );
             if result.models_from_catalog {
                 println!(
-                    "  models: {} from live catalog (default {}/{})",
+                    "  catalog preview: {} models (preferred {}/{})",
                     result.models.len(),
                     result.provider,
                     result.model
@@ -158,10 +158,7 @@ pub(crate) async fn run_oauth(command: OauthCommand) -> anyhow::Result<()> {
                     println!("    - {id}");
                 }
             } else {
-                println!(
-                    "  model:  {}/{} (catalog unavailable; only default written)",
-                    result.provider, result.model
-                );
+                println!("  models: discovered on next startup; no guessed model was written");
             }
             Ok(())
         }

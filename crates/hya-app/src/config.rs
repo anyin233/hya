@@ -7,10 +7,9 @@
 //! CLI chat-proxy session headers with that configured bearer token (self-contained
 //! config — it does not read `~/.grok/auth.json`). `kind: openai-codex` targets the
 //! ChatGPT Codex backend. OAuth credentials live under `~/.config/hya/auth/` and
-//! are auto-refreshed when near expiry. Absent config or key → offline.
+//! are auto-refreshed when near expiry. No resolved live model rows → offline.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -19,7 +18,10 @@ use hya_core::{CategoryEntry, CategoryRegistry, SubagentLimits};
 use hya_mcp::McpServerConfig;
 use hya_plugin::config::PluginEntry;
 use hya_provider::{
-    AuthRefresher, BearerResolver, HttpProvider, ProviderKind, ProviderRouter, ReasoningEffort,
+    AuthPresence, AuthRefresher, BearerResolver, CatalogAuth, CatalogDiscoveryRequest,
+    CatalogFailure, HttpProvider, ModelCatalogSource, ProviderAuthState, ProviderCatalogResult,
+    ProviderCatalogSnapshot, ProviderCatalogSource, ProviderCatalogState, ProviderDiscoveryOutcome,
+    ProviderKind, ProviderModel, ProviderRouter, ReasoningEffort, discover_models,
     resolve_default_reasoning,
 };
 use hya_tool::{
@@ -28,16 +30,15 @@ use hya_tool::{
 use serde::Deserialize;
 use serde_norway::{Mapping, Value};
 
-/// Fully loaded hya config: live provider router plus derived runtime knobs.
+/// Fully loaded Hya config: provider routes, one immutable catalog snapshot,
+/// and derived runtime knobs.
 pub struct ResolvedConfig {
-    /// Ordered HTTP (and offline) provider routes built from `providers:`.
+    /// Ordered HTTP provider routes built from final catalog rows.
     pub router: ProviderRouter,
-    /// Default model id (`provider/model` or bare id) when CLI/env omit one.
+    /// Shared immutable model/provider startup snapshot.
+    pub catalog: Arc<ProviderCatalogSnapshot>,
+    /// Row-backed default model id for new sessions.
     pub default_model: String,
-    /// Flat catalog of configured models across all providers.
-    pub models: Vec<ModelEntry>,
-    /// True when at least one provider block was present in config.
-    pub has_providers: bool,
     /// Named MCP server configs from `mcp:`.
     pub mcp: BTreeMap<String, McpServerConfig>,
     /// Named plugin entries from `plugins:` (before manifest merge).
@@ -52,43 +53,6 @@ pub struct ResolvedConfig {
     pub permission: InvocationPolicy,
     /// Web-search plane configuration.
     pub websearch: WebSearchConfig,
-}
-
-/// One model from config, used for catalog listing and runtime resolution.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ModelEntry {
-    /// Model id as configured under the provider (not always provider-prefixed).
-    pub id: String,
-    /// Provider id that owns this model.
-    pub provider: String,
-    /// Allowed reasoning-effort labels for this model, if any.
-    pub reasoning_variants: Vec<String>,
-    /// Default reasoning effort when the user does not pick a variant.
-    pub reasoning_default: Option<ReasoningEffort>,
-}
-
-impl ModelEntry {
-    /// Format as `provider/id`, or bare `id` when `provider` is empty.
-    #[must_use]
-    pub fn model_ref(&self) -> String {
-        if self.provider.is_empty() {
-            self.id.clone()
-        } else {
-            format!("{}/{}", self.provider, self.id)
-        }
-    }
-
-    /// True when `model` is this entry's bare id or full `provider/id` ref.
-    #[must_use]
-    pub fn matches_model_ref(&self, model: &str) -> bool {
-        if self.id == model {
-            return true;
-        }
-        let Some((provider, model_id)) = model.split_once('/') else {
-            return false;
-        };
-        self.provider == provider && self.id == model_id
-    }
 }
 
 /// Top-level shape of `~/.config/hya/config.yaml`.
@@ -266,10 +230,11 @@ struct ParsedProvider {
     models: Vec<ParsedModel>,
 }
 
-/// Resolved bearer material for one configured provider.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Resolved optional authentication material for one configured provider.
+#[derive(Clone, PartialEq, Eq)]
 struct ProviderCredential {
-    token: String,
+    /// Hya-owned bearer or API-key material, when configured.
+    token: Option<String>,
     /// When true, attach Grok Build CLI chat-proxy session headers.
     use_grok_session: bool,
     /// When true, attach ChatGPT Codex session headers.
@@ -280,37 +245,45 @@ struct ProviderCredential {
     use_oauth_refresh: bool,
 }
 
-/// Resolve auth for a provider from hya login token or inline `api_key` only.
-///
-/// `kind: grok-build` always enables CLI chat-proxy session headers.
-/// `kind: openai-codex` enables Codex account headers. OAuth bundles under
-/// `~/.config/hya/auth/` are preferred over inline `api_key` and support refresh.
-fn resolve_provider_credential(provider: &ParsedProvider) -> Option<ProviderCredential> {
+impl ProviderCredential {
+    /// Return the non-secret auth presence used by catalog status projection.
+    #[must_use]
+    fn auth_presence(&self) -> AuthPresence {
+        self.token
+            .as_deref()
+            .filter(|token| !token.is_empty())
+            .map_or(AuthPresence::Unauthenticated, |_| {
+                AuthPresence::Credentialed
+            })
+    }
+}
+
+/// Resolve optional auth for a provider from Hya login token or inline key.
+fn resolve_provider_credential(provider: &ParsedProvider) -> ProviderCredential {
     if let Some(cred) = crate::auth::load_credential(&provider.id) {
-        let token = cred.access_token().trim().to_string();
-        if token.is_empty() {
-            return None;
-        }
+        let token = cred.access_token().trim();
         let oauth = cred.oauth();
-        return Some(ProviderCredential {
-            token,
+        return ProviderCredential {
+            token: (!token.is_empty()).then(|| token.to_string()),
             use_grok_session: provider.kind == ProviderKind::GrokBuild,
             use_codex_session: provider.kind == ProviderKind::OpenAiCodex,
             account_id: oauth.and_then(|o| o.account_id.clone()),
-            use_oauth_refresh: oauth.is_some(),
-        });
+            use_oauth_refresh: oauth.is_some() && !token.is_empty(),
+        };
     }
-    let token = provider.api_key.as_deref()?.trim().to_string();
-    if token.is_empty() {
-        return None;
-    }
-    Some(ProviderCredential {
+    let token = provider
+        .api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+        .map(str::to_string);
+    ProviderCredential {
         token,
         use_grok_session: provider.kind == ProviderKind::GrokBuild,
         use_codex_session: provider.kind == ProviderKind::OpenAiCodex,
         account_id: None,
         use_oauth_refresh: false,
-    })
+    }
 }
 
 #[cfg(test)]
@@ -324,7 +297,7 @@ fn resolve_provider_credential_with(
         .map(str::trim)
         .filter(|t| !t.is_empty())?;
     Some(ProviderCredential {
-        token: token.to_string(),
+        token: Some(token.to_string()),
         use_grok_session: kind == ProviderKind::GrokBuild,
         use_codex_session: kind == ProviderKind::OpenAiCodex,
         account_id: None,
@@ -332,7 +305,7 @@ fn resolve_provider_credential_with(
     })
 }
 
-const DEFAULT_CONFIG_YAML: &str = "default_model: offline\nproviders: {}\nmcp: {}\nplugins: {}\npermission:\n  model: default\n  rules: []\n";
+const DEFAULT_CONFIG_YAML: &str = "default_model: hya/offline\nproviders: {}\nmcp: {}\nplugins: {}\npermission:\n  model: default\n  rules: []\n";
 
 /// Result of creating a brand-new default `config.yaml` on first run.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -388,32 +361,19 @@ pub fn expected_config_path() -> PathBuf {
     PathBuf::from("~/.config/hya/config.yaml")
 }
 
-/// Model entry written under `providers.<id>.models` after OAuth login.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OAuthConfigModel {
-    /// Model id string written under the provider's `models` list.
-    pub id: String,
-    /// Optional default reasoning effort label for this model.
-    pub reasoning_default: Option<String>,
-    /// Allowed reasoning variant labels for this model.
-    pub reasoning_variants: Vec<String>,
-}
-
 /// Upsert a non-secret OAuth provider route into `config.yaml`.
 ///
 /// Creates the file (and parents) when missing. Preserves unrelated top-level
 /// keys. Does **not** write secrets — tokens live under `auth/<provider>.yaml`.
 ///
-/// When `models` is non-empty, replaces the provider's model list (typical after
-/// a live catalog fetch). When empty, keeps any existing models and falls back
-/// to a single default model derived from `default_model_id`.
+/// Existing user-authored model lists remain untouched. OAuth login creates an
+/// empty model field for a new provider so the next startup can discover it;
+/// fetched or guessed ids are never persisted here.
 pub fn upsert_oauth_provider(
     config_path: &Path,
     provider_id: &str,
     kind: &str,
     base_url: &str,
-    models: &[OAuthConfigModel],
-    default_model_id: &str,
 ) -> anyhow::Result<()> {
     if let Some(parent) = config_path.parent() {
         std::fs::create_dir_all(parent)
@@ -457,26 +417,12 @@ pub fn upsert_oauth_provider(
         Value::String(base_url.to_string()),
     );
 
-    let models_value = if models.is_empty() {
-        // Preserve existing models on re-login when catalog fetch failed.
-        if let Some(existing_models) = providers
-            .get(Value::String(provider_id.into()))
-            .and_then(Value::as_mapping)
-            .and_then(|p| p.get(Value::String("models".into())))
-            .filter(|m| !m.is_null())
-        {
-            existing_models.clone()
-        } else {
-            Value::Sequence(vec![Value::String(default_model_id.to_string())])
-        }
-    } else {
-        Value::Sequence(
-            models
-                .iter()
-                .map(oauth_config_model_to_yaml)
-                .collect::<Vec<_>>(),
-        )
-    };
+    let models_value = providers
+        .get(Value::String(provider_id.into()))
+        .and_then(Value::as_mapping)
+        .and_then(|provider| provider.get(Value::String("models".into())))
+        .cloned()
+        .unwrap_or_else(|| Value::Sequence(Vec::new()));
     provider_map.insert(Value::String("models".into()), models_value);
 
     // Preserve existing inline api_key when re-logging the same provider.
@@ -493,60 +439,14 @@ pub fn upsert_oauth_provider(
         Value::Mapping(provider_map),
     );
 
-    // Prefer the first catalog model (or explicit default) when still offline.
-    let preferred = models
-        .first()
-        .map(|m| m.id.as_str())
-        .filter(|s| !s.is_empty())
-        .unwrap_or(default_model_id);
-    let default_model_key = Value::String("default_model".into());
-    let should_set_default = match map.get(&default_model_key).and_then(Value::as_str) {
-        None => true,
-        Some("offline") | Some("") => true,
-        Some(_) => false,
-    };
-    if should_set_default {
-        map.insert(
-            default_model_key,
-            Value::String(format!("{provider_id}/{preferred}")),
-        );
-    }
+    // Do not change `default_model` during OAuth login. In particular, a
+    // fetched catalog or provider-specific default must not become startup
+    // catalog authority.
 
     let rendered = serde_norway::to_string(&root).context("render updated hya config.yaml")?;
     std::fs::write(config_path, rendered)
         .with_context(|| format!("write {}", config_path.display()))?;
     Ok(())
-}
-
-fn oauth_config_model_to_yaml(model: &OAuthConfigModel) -> Value {
-    if model.reasoning_variants.is_empty() && model.reasoning_default.is_none() {
-        return Value::String(model.id.clone());
-    }
-    let mut detailed = Mapping::new();
-    detailed.insert(Value::String("id".into()), Value::String(model.id.clone()));
-    let mut reasoning = Mapping::new();
-    if let Some(default) = model.reasoning_default.as_ref() {
-        reasoning.insert(
-            Value::String("default".into()),
-            Value::String(default.clone()),
-        );
-    }
-    if !model.reasoning_variants.is_empty() {
-        reasoning.insert(
-            Value::String("variants".into()),
-            Value::Sequence(
-                model
-                    .reasoning_variants
-                    .iter()
-                    .map(|v| Value::String(v.clone()))
-                    .collect(),
-            ),
-        );
-    }
-    if !reasoning.is_empty() {
-        detailed.insert(Value::String("reasoning".into()), Value::Mapping(reasoning));
-    }
-    Value::Mapping(detailed)
 }
 
 /// Create the default hya config file if neither supported config path exists.
@@ -579,59 +479,19 @@ pub fn ensure_config_file_at(path: &Path) -> anyhow::Result<bool> {
     Ok(true)
 }
 
-/// Ensure a default config exists; when `interactive`, print first-run notices.
-///
-/// Non-interactive callers only create the file silently. Interactive startup
-/// may also offer Compat config import when a candidate path is found.
+/// Ensure a default Hya config exists; when `interactive`, print a starter
+/// notice. Runtime startup never probes or opens foreign product configs.
 pub fn first_run_config_bootstrap(interactive: bool) -> anyhow::Result<()> {
     let Some(created) = ensure_config_file().context("create default hya config")? else {
         return Ok(());
     };
-    if !interactive {
-        return Ok(());
-    }
-
-    eprintln!("hya: created default config at {}", created.path.display());
-    let Some(compat_path) = default_compat_config_path() else {
-        eprintln!("hya: no Compat config found to import; keeping the starter config");
-        return Ok(());
-    };
-    eprintln!("hya: found Compat config at {}", compat_path.display());
-    eprintln!(
-        "hya: import copies provider base URLs, model IDs, API key values/templates, and local MCP entries into hya config"
-    );
-    if !prompt_yes_no("hya: import Compat model and local MCP config now?")? {
-        eprintln!("hya: keeping the starter config; edit it later to add live providers");
-        return Ok(());
-    }
-
-    match import_compat_models_into_config(&compat_path, &created.path) {
-        Ok(summary) => eprintln!(
-            "hya: imported {} providers, {} models, and {} local MCP servers into {} (skipped {} unsupported MCP entries)",
-            summary.providers,
-            summary.models,
-            summary.mcp_servers,
-            summary.config_path.display(),
-            summary.mcp_skipped,
-        ),
-        Err(error) => eprintln!("hya: Compat import skipped ({error:#})"),
+    if interactive {
+        eprintln!("hya: created default config at {}", created.path.display());
+        eprintln!(
+            "hya: edit the starter config to add a provider; automatic Compat/OpenCode import is disabled"
+        );
     }
     Ok(())
-}
-
-fn prompt_yes_no(prompt: &str) -> anyhow::Result<bool> {
-    let mut stderr = std::io::stderr().lock();
-    write!(stderr, "{prompt} [y/N] ").context("write first-run prompt")?;
-    stderr.flush().context("flush first-run prompt")?;
-
-    let mut input = String::new();
-    std::io::stdin()
-        .read_line(&mut input)
-        .context("read first-run prompt response")?;
-    Ok(matches!(
-        input.trim().to_ascii_lowercase().as_str(),
-        "y" | "yes"
-    ))
 }
 
 /// First existing Compat/OpenCode config path among the usual candidates, if any.
@@ -1066,7 +926,7 @@ fn render_imported_hya_config(
             lines.push(format!("    models: [{models}]"));
         }
     } else {
-        lines.push("default_model: offline".to_string());
+        lines.push("default_model: hya/offline".to_string());
         lines.push("providers: {}".to_string());
     }
     render_imported_mcp_config(&mut lines, mcp);
@@ -1230,71 +1090,72 @@ fn remove_trailing_json_commas(raw: &str) -> String {
     out
 }
 
-/// Flatten the file's providers into addressable routes, skipping any provider
-/// that declares no models and resolving each `api_key` template.
+/// Parse every provider declaration, preserving empty model lists for startup
+/// discovery and normalizing explicit ids before route construction.
 fn resolve_providers(file: &FileConfig) -> anyhow::Result<Vec<ParsedProvider>> {
     let mut out = Vec::new();
     for (id, provider) in &file.providers {
-        if provider.models.is_empty() {
-            continue;
-        }
         let kind: ProviderKind = provider.kind.into();
-        let models = provider
-            .models
-            .iter()
-            .map(|model| {
-                let (model_id, reasoning) = match model {
-                    ModelConfig::Id(id) => (id, None),
-                    ModelConfig::Detailed(model) => (&model.id, model.reasoning.as_ref()),
-                };
-                let fallback_variants = kind.reasoning_variants();
-                let configured_variants = reasoning
-                    .and_then(|config| config.variants.as_ref())
-                    .unwrap_or(&fallback_variants);
-                let efforts = configured_variants
-                    .iter()
-                    .map(|variant| {
-                        ReasoningEffort::parse(variant).with_context(|| {
-                            format!(
-                                "provider {id} model {model_id} has unknown reasoning variant {variant}"
-                            )
-                        })
+        let mut seen = BTreeSet::new();
+        let mut models = Vec::new();
+        for model in &provider.models {
+            let (raw_id, reasoning) = match model {
+                ModelConfig::Id(id) => (id.as_str(), None),
+                ModelConfig::Detailed(model) => (model.id.as_str(), model.reasoning.as_ref()),
+            };
+            let model_id = raw_id.trim();
+            if model_id.is_empty() || model_id.chars().any(char::is_control) {
+                continue;
+            }
+            if id == "hya" && model_id == "offline" {
+                anyhow::bail!("provider hya cannot claim reserved model hya/offline");
+            }
+            if !seen.insert(model_id.to_string()) {
+                continue;
+            }
+            let fallback_variants = kind.reasoning_variants();
+            let configured_variants = reasoning
+                .and_then(|config| config.variants.as_ref())
+                .unwrap_or(&fallback_variants);
+            let efforts = configured_variants
+                .iter()
+                .map(|variant| {
+                    ReasoningEffort::parse(variant).with_context(|| {
+                        format!(
+                            "provider {id} model {model_id} has unknown reasoning variant {variant}"
+                        )
                     })
-                    .collect::<anyhow::Result<Vec<_>>>()?;
-                let variants = efforts
-                    .iter()
-                    .map(|effort| effort.as_str().to_string())
-                    .collect::<Vec<_>>();
-                let explicit_default = reasoning
-                    .and_then(|config| config.default.as_deref())
-                    .map(|value| {
-                        ReasoningEffort::parse(value).with_context(|| {
-                            format!(
-                                "provider {id} model {model_id} has unknown reasoning default {value}"
-                            )
-                        })
-                    })
-                    .transpose()?;
-                if let Some(default) = explicit_default
-                    && default != ReasoningEffort::Off
-                    && !efforts.contains(&default)
-                {
-                    anyhow::bail!(
-                        "provider {id} model {model_id} reasoning default {} is not advertised",
-                        default.as_str()
-                    );
-                }
-                Ok(ParsedModel {
-                    id: model_id.clone(),
-                    reasoning_default: resolve_default_reasoning(
-                        explicit_default,
-                        None,
-                        &variants,
-                    ),
-                    reasoning_variants: variants,
                 })
-            })
-            .collect::<anyhow::Result<Vec<_>>>()?;
+                .collect::<anyhow::Result<Vec<_>>>()?;
+            let variants = efforts
+                .iter()
+                .map(|effort| effort.as_str().to_string())
+                .collect::<Vec<_>>();
+            let explicit_default = reasoning
+                .and_then(|config| config.default.as_deref())
+                .map(|value| {
+                    ReasoningEffort::parse(value).with_context(|| {
+                        format!(
+                            "provider {id} model {model_id} has unknown reasoning default {value}"
+                        )
+                    })
+                })
+                .transpose()?;
+            if let Some(default) = explicit_default
+                && default != ReasoningEffort::Off
+                && !efforts.contains(&default)
+            {
+                anyhow::bail!(
+                    "provider {id} model {model_id} reasoning default {} is not advertised",
+                    default.as_str()
+                );
+            }
+            models.push(ParsedModel {
+                id: model_id.to_string(),
+                reasoning_default: resolve_default_reasoning(explicit_default, None, &variants),
+                reasoning_variants: variants,
+            });
+        }
         let api_key = provider
             .api_key
             .as_deref()
@@ -1339,20 +1200,6 @@ fn resolve_mcp(file: &FileConfig) -> anyhow::Result<BTreeMap<String, McpServerCo
         );
     }
     Ok(out)
-}
-
-fn model_entries(providers: &[ParsedProvider]) -> Vec<ModelEntry> {
-    providers
-        .iter()
-        .flat_map(|provider| {
-            provider.models.iter().map(move |model| ModelEntry {
-                id: model.id.clone(),
-                provider: provider.id.clone(),
-                reasoning_variants: model.reasoning_variants.clone(),
-                reasoning_default: model.reasoning_default,
-            })
-        })
-        .collect()
 }
 
 /// Resolve subagent caps from an optional file block, then apply per-field
@@ -1455,21 +1302,6 @@ pub fn load_subagent_limits() -> SubagentLimits {
     resolve_subagent_limits(file_block.as_ref())
 }
 
-fn choose_default(file_default: Option<String>, models: &[ModelEntry]) -> String {
-    if let Some(model) = file_default {
-        return model;
-    }
-    if let Ok(model) = std::env::var("HYA_MODEL") {
-        return model;
-    }
-    models
-        .iter()
-        .find(|m| m.id.contains("sonnet"))
-        .or_else(|| models.first())
-        .map(|m| m.id.clone())
-        .unwrap_or_default()
-}
-
 /// Map OAuth failures onto provider errors exactly as the bearer-resolver
 /// route already does: re-login/entitlement issues are human actions and stay
 /// non-retryable `ProviderError::AuthExpired` for router/engine failover.
@@ -1497,9 +1329,231 @@ fn map_oauth_error(err: crate::oauth::OAuthError) -> hya_provider::ProviderError
     }
 }
 
-/// Load hya's config into a ready router. `Ok(None)` means no usable config
-/// (no file, empty, or no providers) — the caller should use the offline provider.
-pub fn load() -> anyhow::Result<Option<ResolvedConfig>> {
+fn discovery_auth(kind: ProviderKind, credential: &ProviderCredential) -> CatalogAuth {
+    match kind {
+        ProviderKind::Anthropic | ProviderKind::Google => credential
+            .token
+            .clone()
+            .map_or_else(CatalogAuth::unauthenticated, CatalogAuth::api_key),
+        ProviderKind::OpenAiCodex => credential
+            .token
+            .clone()
+            .map_or_else(CatalogAuth::unauthenticated, |token| {
+                CatalogAuth::bearer(token, credential.account_id.clone())
+            }),
+        ProviderKind::GrokBuild => CatalogAuth::grok(
+            credential.token.clone(),
+            env!("CARGO_PKG_VERSION"),
+            "grok-cli",
+        ),
+        ProviderKind::OpenAiCompatible | ProviderKind::OpenAiResponse => credential
+            .token
+            .clone()
+            .map_or_else(CatalogAuth::unauthenticated, |token| {
+                CatalogAuth::bearer(token, None)
+            }),
+    }
+}
+
+fn status_auth(credential: &ProviderCredential) -> ProviderAuthState {
+    match credential.auth_presence() {
+        AuthPresence::Credentialed => ProviderAuthState::Credentialed,
+        AuthPresence::Unauthenticated => ProviderAuthState::Unauthenticated,
+    }
+}
+
+fn failed_result(error: &CatalogFailure) -> ProviderCatalogResult {
+    match error {
+        CatalogFailure::Decode
+        | CatalogFailure::Schema
+        | CatalogFailure::BodyTooLarge
+        | CatalogFailure::PaginationLimit => ProviderCatalogResult::Invalid,
+        CatalogFailure::InvalidUrl
+        | CatalogFailure::UnsafeUrl
+        | CatalogFailure::Redirect
+        | CatalogFailure::Transport
+        | CatalogFailure::Timeout
+        | CatalogFailure::HttpStatus { .. } => ProviderCatalogResult::Unavailable,
+    }
+}
+
+fn route_for_plan(
+    provider: &ParsedProvider,
+    credential: &ProviderCredential,
+    models: &[String],
+    source: ModelCatalogSource,
+) -> anyhow::Result<HttpProvider> {
+    let mut route = HttpProvider::new(
+        provider.id.clone(),
+        provider.kind,
+        &provider.base_url,
+        credential.token.clone(),
+        models.iter().cloned(),
+    )?
+    .with_catalog_source(source)
+    .with_model_reasoning_variants(
+        provider
+            .models
+            .iter()
+            .map(|model| (model.id.clone(), model.reasoning_variants.clone())),
+    )
+    .with_model_reasoning_defaults(
+        provider
+            .models
+            .iter()
+            .map(|model| (model.id.clone(), model.reasoning_default)),
+    );
+    if credential.use_codex_session {
+        route = route.with_codex_session_auth(credential.account_id.clone());
+    }
+    if credential.use_grok_session {
+        route = route.with_grok_session_auth(env!("CARGO_PKG_VERSION"), "grok-cli");
+    }
+    if credential.use_oauth_refresh && credential.token.is_some() {
+        let resolver_id = provider.id.clone();
+        let refresher_id = provider.id.clone();
+        let resolver: BearerResolver = Arc::new(move || {
+            crate::oauth::ensure_access_token(&resolver_id).map_err(map_oauth_error)
+        });
+        route = route.with_bearer_resolver(resolver);
+        let refresher: AuthRefresher = Arc::new(move |stale_token: &str| {
+            crate::oauth::force_refresh_access_token(&refresher_id, stale_token)
+                .map(|_fresh| ())
+                .map_err(map_oauth_error)
+        });
+        route = route.with_auth_refresher(refresher);
+    }
+    Ok(route)
+}
+
+struct ProviderPlanResult {
+    route: Option<HttpProvider>,
+    models: Vec<ProviderModel>,
+    state: ProviderCatalogState,
+}
+
+async fn resolve_provider_plan(
+    provider: ParsedProvider,
+    credential: ProviderCredential,
+) -> anyhow::Result<ProviderPlanResult> {
+    let auth_state = status_auth(&credential);
+    if !provider.models.is_empty() {
+        let ids = provider
+            .models
+            .iter()
+            .map(|model| model.id.clone())
+            .collect::<Vec<_>>();
+        let route = route_for_plan(&provider, &credential, &ids, ModelCatalogSource::Configured)?;
+        let models = hya_provider::Provider::catalog(&route);
+        return Ok(ProviderPlanResult {
+            route: Some(route),
+            models,
+            state: ProviderCatalogState {
+                provider_id: provider.id,
+                kind: provider.kind,
+                source: ProviderCatalogSource::Configured,
+                auth: auth_state,
+                result: ProviderCatalogResult::Models,
+            },
+        });
+    }
+
+    let outcome = discover_models(CatalogDiscoveryRequest::new(
+        provider.id.clone(),
+        provider.kind,
+        provider.base_url.clone(),
+        discovery_auth(provider.kind, &credential),
+    ))
+    .await;
+    let (ids, source, auth, result) = match outcome {
+        ProviderDiscoveryOutcome::Discovered { models, auth } => {
+            let ids = models
+                .into_iter()
+                .map(|model| model.id)
+                .filter(|model_id| provider.id != "hya" || model_id != "offline")
+                .collect::<Vec<_>>();
+            let (source, result) = if ids.is_empty() {
+                (ProviderCatalogSource::None, ProviderCatalogResult::Empty)
+            } else {
+                (
+                    ProviderCatalogSource::Discovered,
+                    ProviderCatalogResult::Models,
+                )
+            };
+            (
+                ids,
+                source,
+                match auth {
+                    AuthPresence::Credentialed => ProviderAuthState::Credentialed,
+                    AuthPresence::Unauthenticated => ProviderAuthState::Unauthenticated,
+                },
+                result,
+            )
+        }
+        ProviderDiscoveryOutcome::Empty { auth } => (
+            Vec::new(),
+            ProviderCatalogSource::None,
+            match auth {
+                AuthPresence::Credentialed => ProviderAuthState::Credentialed,
+                AuthPresence::Unauthenticated => ProviderAuthState::Unauthenticated,
+            },
+            ProviderCatalogResult::Empty,
+        ),
+        ProviderDiscoveryOutcome::AuthRequired => (
+            Vec::new(),
+            ProviderCatalogSource::None,
+            ProviderAuthState::AuthRequired,
+            ProviderCatalogResult::Unavailable,
+        ),
+        ProviderDiscoveryOutcome::AuthRejected => (
+            Vec::new(),
+            ProviderCatalogSource::None,
+            ProviderAuthState::AuthRejected,
+            ProviderCatalogResult::Unavailable,
+        ),
+        ProviderDiscoveryOutcome::Unsupported { .. } => (
+            Vec::new(),
+            ProviderCatalogSource::None,
+            auth_state,
+            ProviderCatalogResult::Unsupported,
+        ),
+        ProviderDiscoveryOutcome::Failed { error } => (
+            Vec::new(),
+            ProviderCatalogSource::None,
+            auth_state,
+            failed_result(&error),
+        ),
+    };
+    if ids.is_empty() {
+        return Ok(ProviderPlanResult {
+            route: None,
+            models: Vec::new(),
+            state: ProviderCatalogState {
+                provider_id: provider.id,
+                kind: provider.kind,
+                source,
+                auth,
+                result,
+            },
+        });
+    }
+    let route = route_for_plan(&provider, &credential, &ids, ModelCatalogSource::Discovered)?;
+    let models = hya_provider::Provider::catalog(&route);
+    Ok(ProviderPlanResult {
+        route: Some(route),
+        models,
+        state: ProviderCatalogState {
+            provider_id: provider.id,
+            kind: provider.kind,
+            source,
+            auth,
+            result,
+        },
+    })
+}
+
+/// Load Hya config and resolve every empty provider catalog before publishing.
+pub async fn load() -> anyhow::Result<Option<ResolvedConfig>> {
     let Some(path) = config_path() else {
         return Ok(None);
     };
@@ -1522,77 +1576,79 @@ pub fn load() -> anyhow::Result<Option<ResolvedConfig>> {
     {
         return Ok(None);
     }
-    let mut router = ProviderRouter::new();
-    let mut authorized = Vec::new();
-    for p in parsed {
-        let Some(credential) = resolve_provider_credential(&p) else {
+
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(4));
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    let mut tasks = tokio::task::JoinSet::new();
+    let mut plans = Vec::new();
+    for provider in parsed {
+        let credential = resolve_provider_credential(&provider);
+        if !provider.models.is_empty() {
+            plans.push(resolve_provider_plan(provider, credential).await?);
             continue;
-        };
-        let mut provider = HttpProvider::new(
-            p.id.clone(),
-            p.kind,
-            &p.base_url,
-            credential.token,
-            p.models.iter().map(|model| model.id.clone()),
-        )?
-        .with_model_reasoning_variants(
-            p.models
-                .iter()
-                .map(|model| (model.id.clone(), model.reasoning_variants.clone())),
-        )
-        .with_model_reasoning_defaults(
-            p.models
-                .iter()
-                .map(|model| (model.id.clone(), model.reasoning_default)),
-        );
-        if credential.use_codex_session {
-            provider = provider.with_codex_session_auth(credential.account_id.clone());
         }
-        if credential.use_grok_session {
-            // Match Grok Build CLI identity so cli-chat-proxy accepts the session.
-            provider = provider.with_grok_session_auth(env!("CARGO_PKG_VERSION"), "grok-cli");
-        }
-        if credential.use_oauth_refresh {
-            let resolver_id = p.id.clone();
-            let refresher_id = p.id.clone();
-            let resolver: BearerResolver = Arc::new(move || {
-                crate::oauth::ensure_access_token(&resolver_id).map_err(map_oauth_error)
-            });
-            provider = provider.with_bearer_resolver(resolver);
-            // Auth-recovery level: when a streamed request is rejected with a
-            // pre-stream 401/403, force one credential refresh (single-flight,
-            // rotated-refresh-token safe) and retry inside the route's existing
-            // attempt budget. `AuthExpired` stays non-retryable here too.
-            let refresher: AuthRefresher = Arc::new(move |stale_token: &str| {
-                crate::oauth::force_refresh_access_token(&refresher_id, stale_token)
-                    .map(|_fresh| ())
-                    .map_err(map_oauth_error)
-            });
-            provider = provider.with_auth_refresher(refresher);
-        }
-        router = router.with(Arc::new(provider));
-        authorized.push(p);
+        let timeout_provider_id = provider.id.clone();
+        let timeout_kind = provider.kind;
+        let timeout_auth = status_auth(&credential);
+        let semaphore = Arc::clone(&semaphore);
+        tasks.spawn(async move {
+            match tokio::time::timeout_at(deadline, async {
+                let _permit = semaphore
+                    .acquire_owned()
+                    .await
+                    .map_err(|_| anyhow::anyhow!("catalog discovery semaphore closed"))?;
+                resolve_provider_plan(provider, credential).await
+            })
+            .await
+            {
+                Ok(result) => result,
+                Err(_) => Ok(ProviderPlanResult {
+                    route: None,
+                    models: Vec::new(),
+                    state: ProviderCatalogState {
+                        provider_id: timeout_provider_id,
+                        kind: timeout_kind,
+                        source: ProviderCatalogSource::None,
+                        auth: timeout_auth,
+                        result: ProviderCatalogResult::Unavailable,
+                    },
+                }),
+            }
+        });
     }
-    let models = model_entries(&authorized);
-    if models.is_empty()
-        && mcp.is_empty()
-        && file.plugins.is_empty()
-        && !has_permission
-        && !has_tools
-    {
-        return Ok(None);
+    while let Some(result) = tasks.join_next().await {
+        plans.push(result.map_err(|error| anyhow::anyhow!("catalog discovery task: {error}"))??);
     }
+    plans.sort_by(|left, right| left.state.provider_id.cmp(&right.state.provider_id));
+    let mut router = ProviderRouter::new();
+    let mut live_models = Vec::new();
+    let mut states = Vec::new();
+    for plan in plans {
+        if let Some(route) = plan.route {
+            router = router.with(Arc::new(route));
+        }
+        live_models.extend(plan.models);
+        states.push(plan.state);
+    }
+    if live_models.is_empty() {
+        router = router.with(Arc::new(hya_provider::DevProvider::new()));
+    }
+    let requested_default = file.default_model.clone().map(hya_proto::ModelRef::new);
+    let catalog = Arc::new(ProviderCatalogSnapshot::build(
+        live_models,
+        states,
+        requested_default,
+    ));
+    router = router.with_catalog_snapshot(Arc::clone(&catalog));
     let categories = resolve_categories(&file);
-    let default_model = choose_default(file.default_model, &models);
     let subagents = resolve_subagent_limits(file.subagents.as_ref());
     let websearch = file
         .tools
         .map_or_else(WebSearchConfig::default, |tools| tools.websearch);
     Ok(Some(ResolvedConfig {
         router,
-        default_model,
-        has_providers: !models.is_empty(),
-        models,
+        default_model: catalog.default_model().to_string(),
+        catalog,
         mcp,
         default_agent: file.default_agent,
         plugins: file.plugins,
@@ -1789,7 +1845,11 @@ providers:
     #[test]
     fn parses_providers_kinds_and_models() {
         let parsed = parse_providers(FIXTURE).unwrap();
-        assert_eq!(parsed.len(), 3, "providers without models are skipped");
+        assert_eq!(
+            parsed.len(),
+            4,
+            "empty providers remain eligible for discovery"
+        );
         let oai = parsed.iter().find(|p| p.id == "gw-oai").unwrap();
         assert_eq!(oai.kind, ProviderKind::OpenAiCompatible);
         assert_eq!(oai.base_url, "https://gw.example/v1");
@@ -1807,32 +1867,21 @@ providers:
     }
 
     #[test]
-    fn model_entries_include_provider_reasoning_variants() {
+    fn parsed_models_keep_provider_reasoning_variants() {
         let parsed = parse_providers(FIXTURE).unwrap();
 
-        let entries = model_entries(&parsed);
-
-        let openai = entries
-            .iter()
-            .find(|entry| entry.provider == "gw-oai")
-            .unwrap();
+        let openai = parsed.iter().find(|entry| entry.id == "gw-oai").unwrap();
         assert_eq!(
-            openai.reasoning_variants,
+            openai.models[0].reasoning_variants,
             vec!["minimal", "low", "medium", "high", "xhigh"]
         );
-        let anthropic = entries
-            .iter()
-            .find(|entry| entry.provider == "gw-anth")
-            .unwrap();
+        let anthropic = parsed.iter().find(|entry| entry.id == "gw-anth").unwrap();
         assert_eq!(
-            anthropic.reasoning_variants,
+            anthropic.models[0].reasoning_variants,
             vec!["low", "medium", "high", "max"]
         );
-        let google = entries
-            .iter()
-            .find(|entry| entry.provider == "gw-google")
-            .unwrap();
-        assert_eq!(google.reasoning_variants, vec!["high", "max"]);
+        let google = parsed.iter().find(|entry| entry.id == "gw-google").unwrap();
+        assert_eq!(google.models[0].reasoning_variants, vec!["high", "max"]);
     }
 
     #[test]
@@ -1853,13 +1902,12 @@ providers:
         .unwrap();
 
         assert_eq!(parsed[0].kind, ProviderKind::OpenAiResponse);
-        let entries = model_entries(&parsed);
         assert_eq!(
-            entries[0].reasoning_variants,
+            parsed[0].models[0].reasoning_variants,
             vec!["none", "minimal", "low", "medium", "high", "xhigh", "max"]
         );
         assert_eq!(
-            entries[0].reasoning_default,
+            parsed[0].models[0].reasoning_default,
             Some(hya_provider::ReasoningEffort::Medium)
         );
     }
@@ -1880,9 +1928,8 @@ providers:
         )
         .unwrap();
 
-        let entries = model_entries(&parsed);
         assert_eq!(
-            entries[0].reasoning_variants,
+            parsed[0].models[0].reasoning_variants,
             vec!["max", "high", "low", "medium"]
         );
     }
@@ -1900,9 +1947,14 @@ providers:
         )
         .unwrap();
 
-        let entries = model_entries(&parsed);
-        assert_eq!(entries[0].reasoning_variants, vec!["low", "medium", "high"]);
-        assert_eq!(entries[0].reasoning_default, Some(ReasoningEffort::High));
+        assert_eq!(
+            parsed[0].models[0].reasoning_variants,
+            vec!["low", "medium", "high"]
+        );
+        assert_eq!(
+            parsed[0].models[0].reasoning_default,
+            Some(ReasoningEffort::High)
+        );
     }
 
     #[test]
@@ -1913,7 +1965,7 @@ providers:
             Some("inline-sk"),
         )
         .unwrap();
-        assert_eq!(cred.token, "oauth-jwt");
+        assert_eq!(cred.token.as_deref(), Some("oauth-jwt"));
         assert!(cred.use_grok_session);
         assert!(!cred.use_codex_session);
     }
@@ -1923,7 +1975,7 @@ providers:
         let cred =
             resolve_provider_credential_with(ProviderKind::GrokBuild, None, Some("inline-oauth"))
                 .unwrap();
-        assert_eq!(cred.token, "inline-oauth");
+        assert_eq!(cred.token.as_deref(), Some("inline-oauth"));
         assert!(cred.use_grok_session);
     }
 
@@ -1935,7 +1987,7 @@ providers:
             Some("inline-sk"),
         )
         .unwrap();
-        assert_eq!(cred.token, "login-sk");
+        assert_eq!(cred.token.as_deref(), Some("login-sk"));
         assert!(!cred.use_grok_session);
         assert!(!cred.use_codex_session);
     }
@@ -1961,7 +2013,7 @@ providers:
     }
 
     #[test]
-    fn upsert_oauth_provider_creates_route_and_default_model() {
+    fn upsert_oauth_provider_keeps_empty_or_explicit_models_untouched() {
         let dir = {
             use std::sync::atomic::{AtomicU64, Ordering};
             use std::time::{SystemTime, UNIX_EPOCH};
@@ -1985,47 +2037,33 @@ providers:
             "codex",
             "openai-codex",
             "https://chatgpt.com/backend-api/codex",
-            &[OAuthConfigModel {
-                id: "gpt-5.3-codex".into(),
-                reasoning_default: None,
-                reasoning_variants: Vec::new(),
-            }],
-            "gpt-5.3-codex",
         )
         .unwrap();
-        let raw = std::fs::read_to_string(&path).unwrap();
-        assert!(raw.contains("openai-codex"));
-        assert!(raw.contains("chatgpt.com/backend-api/codex"));
-        assert!(raw.contains("gpt-5.3-codex"));
-        assert!(raw.contains("default_model:"));
-        // Live catalog replaces models (including reasoning metadata).
+        let parsed = parse_config(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let provider = parsed.providers.get("codex").unwrap();
+        assert_eq!(ProviderKind::from(provider.kind), ProviderKind::OpenAiCodex);
+        assert_eq!(provider.base_url, "https://chatgpt.com/backend-api/codex");
+        assert!(provider.models.is_empty());
+        assert_eq!(parsed.default_model.as_deref(), Some("hya/offline"));
+        std::fs::write(
+            &path,
+            "default_model: codex/user-model\nproviders:\n  codex:\n    kind: openai-codex\n    base_url: https://old.example/codex\n    models: [user-model]\n",
+        )
+        .unwrap();
         upsert_oauth_provider(
             &path,
             "codex",
             "openai-codex",
             "https://chatgpt.com/backend-api/codex",
-            &[
-                OAuthConfigModel {
-                    id: "gpt-5.6-sol".into(),
-                    reasoning_default: Some("low".into()),
-                    reasoning_variants: vec!["low".into(), "high".into()],
-                },
-                OAuthConfigModel {
-                    id: "gpt-5.5".into(),
-                    reasoning_default: None,
-                    reasoning_variants: Vec::new(),
-                },
-            ],
-            "gpt-5.6-sol",
         )
         .unwrap();
-        let raw2 = std::fs::read_to_string(&path).unwrap();
-        assert!(raw2.contains("gpt-5.6-sol"));
-        assert!(raw2.contains("gpt-5.5"));
-        assert!(raw2.contains("variants:"));
-        // default_model stays put once set (still may mention the old model id).
-        assert!(raw2.contains("models:"));
-        assert!(raw2.contains("id: gpt-5.6-sol") || raw2.contains("gpt-5.6-sol"));
+        let parsed = parse_config(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let provider = parsed.providers.get("codex").unwrap();
+        assert!(matches!(
+            provider.models.as_slice(),
+            [ModelConfig::Id(id)] if id == "user-model"
+        ));
+        assert_eq!(parsed.default_model.as_deref(), Some("codex/user-model"));
     }
 
     #[test]
@@ -2127,15 +2165,6 @@ mcp:
             "literal-token"
         );
         assert_eq!(echo.timeout_ms, Some(250));
-    }
-
-    #[test]
-    fn explicit_default_model_wins() {
-        let models: Vec<ModelEntry> = Vec::new();
-        assert_eq!(
-            choose_default(Some("gpt-5.5".to_string()), &models),
-            "gpt-5.5"
-        );
     }
 
     #[test]
@@ -2370,7 +2399,7 @@ plugins:
         assert_eq!(summary.mcp_skipped, 1);
         let text = std::fs::read_to_string(&hya_config).unwrap();
         let file = parse_config(&text).unwrap();
-        assert_eq!(file.default_model.as_deref(), Some("offline"));
+        assert_eq!(file.default_model.as_deref(), Some("hya/offline"));
         assert!(file.providers.is_empty());
         let local = file.mcp.get("true").unwrap();
         assert_eq!(local.command, vec!["node", "server.js"]);

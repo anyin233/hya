@@ -94,7 +94,7 @@ async fn compat_catalog_routes_honor_location_query_and_headers() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(providers["location"]["directory"], scoped_text.as_ref());
     assert_eq!(providers["location"]["workspaceID"], "wrk_catalog");
-    assert_eq!(providers["data"][0]["id"], "openai");
+    assert_eq!(providers["data"][0]["id"], "hya");
 
     let (status, models) = get_json(
         app,
@@ -108,5 +108,6 @@ async fn compat_catalog_routes_honor_location_query_and_headers() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(models["location"]["directory"], scoped_text.as_ref());
     assert_eq!(models["location"]["workspaceID"], "wrk_model");
-    assert_eq!(models["data"][0]["id"], "gpt-5");
+    assert_eq!(models["data"][0]["id"], "offline");
+    assert_eq!(models["data"][0]["providerID"], "hya");
 }

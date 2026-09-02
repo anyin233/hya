@@ -52,7 +52,7 @@ fn models_command_creates_default_config_when_missing() -> Result<(), Box<dyn st
     assert_success("models", &output);
     let config = std::fs::read_to_string(&path)?;
     assert!(
-        config.contains("default_model: offline"),
+        config.contains("default_model: hya/offline"),
         "created config should contain the offline starter model:\n{config}"
     );
     assert!(

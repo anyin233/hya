@@ -1,26 +1,30 @@
 use anyhow::Context as _;
-
-use crate::config::ModelEntry;
+use hya_provider::{ModelCatalogSource, ProviderCatalogSnapshot, ProviderModel};
 
 pub(crate) fn cmd_models(
-    models: Vec<ModelEntry>,
-    fallback_model: &str,
+    catalog: &ProviderCatalogSnapshot,
     provider: Option<String>,
     verbose: bool,
-    _refresh: bool,
 ) -> anyhow::Result<()> {
-    let lines = model_lines(&models, provider.as_deref(), fallback_model)
+    let lines = model_lines(catalog.models(), provider.as_deref())
         .map_err(anyhow::Error::msg)
         .context("list models")?;
     for line in lines {
         println!("{line}");
         if verbose {
             let (provider, id) = line.split_once('/').unwrap_or(("hya", line.as_str()));
+            let source = catalog
+                .models()
+                .iter()
+                .find(|model| model.provider_id == provider && model.model_id == id)
+                .map(|model| source_name(model.source))
+                .unwrap_or("unknown");
             println!(
                 "{}",
                 serde_json::json!({
                     "id": id,
                     "provider": provider,
+                    "source": source,
                 })
             );
         }
@@ -28,24 +32,12 @@ pub(crate) fn cmd_models(
     Ok(())
 }
 
-fn model_lines(
-    models: &[ModelEntry],
-    provider: Option<&str>,
-    fallback_model: &str,
-) -> Result<Vec<String>, String> {
-    let mut lines = if models.is_empty() {
-        if provider.is_none_or(|provider| provider == "hya") {
-            vec![format!("hya/{fallback_model}")]
-        } else {
-            Vec::new()
-        }
-    } else {
-        models
-            .iter()
-            .filter(|model| provider.is_none_or(|provider| model.provider == provider))
-            .map(|model| format!("{}/{}", model.provider, model.id))
-            .collect::<Vec<_>>()
-    };
+fn model_lines(models: &[ProviderModel], provider: Option<&str>) -> Result<Vec<String>, String> {
+    let mut lines = models
+        .iter()
+        .filter(|model| provider.is_none_or(|provider| model.provider_id == provider))
+        .map(|model| format!("{}/{}", model.provider_id, model.model_id))
+        .collect::<Vec<_>>();
     lines.sort();
     if lines.is_empty() {
         return Err(format!(
@@ -56,37 +48,59 @@ fn model_lines(
     Ok(lines)
 }
 
+fn source_name(source: ModelCatalogSource) -> &'static str {
+    match source {
+        ModelCatalogSource::Configured => "configured",
+        ModelCatalogSource::Discovered => "discovered",
+        ModelCatalogSource::Offline => "offline",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn model(provider: &str, id: &str, source: ModelCatalogSource) -> ProviderModel {
+        ProviderModel {
+            provider_id: provider.to_string(),
+            model_id: id.to_string(),
+            capabilities: Default::default(),
+            reasoning_variants: Vec::new(),
+            reasoning_default: None,
+            source,
+        }
+    }
+
     #[test]
     fn model_lines_list_provider_model_ids() {
         let models = vec![
-            ModelEntry {
-                provider: "openai".to_string(),
-                id: "gpt-5.5".to_string(),
-                reasoning_variants: Vec::new(),
-                reasoning_default: None,
-            },
-            ModelEntry {
-                provider: "anthropic".to_string(),
-                id: "claude-sonnet-4-6".to_string(),
-                reasoning_variants: Vec::new(),
-                reasoning_default: None,
-            },
+            model("openai", "gpt-5.5", ModelCatalogSource::Configured),
+            model(
+                "anthropic",
+                "claude-sonnet-4-6",
+                ModelCatalogSource::Discovered,
+            ),
         ];
 
         assert_eq!(
-            super::model_lines(&models, None, "fake"),
+            super::model_lines(&models, None),
             Ok(vec![
                 "anthropic/claude-sonnet-4-6".to_string(),
                 "openai/gpt-5.5".to_string(),
             ])
         );
         assert_eq!(
-            super::model_lines(&models, Some("openai"), "fake"),
+            super::model_lines(&models, Some("openai")),
             Ok(vec!["openai/gpt-5.5".to_string()])
+        );
+    }
+
+    #[test]
+    fn model_lines_rejects_missing_provider_without_fallback_row() {
+        let models = vec![model("openai", "gpt-5.5", ModelCatalogSource::Configured)];
+        assert_eq!(
+            super::model_lines(&models, Some("missing")),
+            Err("Provider not found: missing".to_string())
         );
     }
 }

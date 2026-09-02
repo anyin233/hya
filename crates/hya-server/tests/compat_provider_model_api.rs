@@ -152,41 +152,41 @@ async fn request_json(
 }
 
 #[tokio::test]
-async fn compat_v2_provider_and_model_routes_return_active_catalog() {
+async fn compat_v2_catalog_uses_canonical_offline_not_active_agent_model() {
     let app = router(state(workdir()).await);
 
     let (status, providers) = get_json(app.clone(), "/api/provider").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(providers["location"]["directory"], workdir());
-    assert_eq!(providers["location"]["project"]["directory"], workdir());
-    assert_eq!(providers["data"][0]["id"], "openai");
-    assert_eq!(providers["data"][0]["name"], "openai");
-    assert_eq!(providers["data"][0]["api"]["type"], "native");
-    assert_eq!(providers["data"][0]["api"]["settings"], json!({}));
-    assert_eq!(providers["data"][0]["request"]["headers"], json!({}));
-    assert_eq!(providers["data"][0]["request"]["body"], json!({}));
+    assert_eq!(providers["data"].as_array().unwrap().len(), 1);
+    assert_eq!(providers["data"][0]["id"], "hya");
+    assert_eq!(providers["data"][0]["source"], "offline");
+    assert_eq!(providers["data"][0]["auth"], "not_applicable");
+    assert_eq!(providers["data"][0]["result"], "offline");
 
-    let (status, provider) = get_json(app.clone(), "/api/provider/openai").await;
+    let (status, provider) = get_json(app.clone(), "/api/provider/hya").await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(provider["data"]["id"], "openai");
+    assert_eq!(provider["data"]["models"]["offline"]["status"], "offline");
 
-    let (status, missing) = get_json(app.clone(), "/api/provider/anthropic").await;
+    let (status, missing) = get_json(app.clone(), "/api/provider/openai").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(missing["_tag"], "ProviderNotFoundError");
-    assert_eq!(missing["providerID"], "anthropic");
 
     let (status, models) = get_json(app, "/api/model").await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(models["data"][0]["id"], "gpt-5");
-    assert_eq!(models["data"][0]["providerID"], "openai");
-    assert_eq!(models["data"][0]["name"], "gpt-5");
-    assert_eq!(models["data"][0]["api"]["id"], "gpt-5");
-    assert_eq!(models["data"][0]["api"]["type"], "native");
-    assert_eq!(models["data"][0]["status"], "active");
+    assert_eq!(models["data"].as_array().unwrap().len(), 1);
+    assert_eq!(models["data"][0]["id"], "offline");
+    assert_eq!(models["data"][0]["providerID"], "hya");
+    assert_eq!(models["data"][0]["status"], "offline");
+    assert_eq!(models["data"][0]["source"], "offline");
     assert_eq!(models["data"][0]["enabled"], true);
-    assert_eq!(models["data"][0]["capabilities"]["tools"], false);
-    assert_eq!(models["data"][0]["limit"]["context"], 0);
-    assert_eq!(models["data"][0]["limit"]["output"], 0);
+    assert!(
+        models["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row["id"] != "gpt-5")
+    );
 }
 
 #[tokio::test]
@@ -225,25 +225,26 @@ async fn compat_v2_metadata_routes_return_location_wrapped_data() {
 }
 
 #[tokio::test]
-async fn compat_legacy_provider_routes_return_active_catalog_and_reject_bad_oauth() {
+async fn compat_legacy_provider_routes_report_offline_without_connection_claim() {
     let app = router(state(workdir()).await);
 
     let (status, providers) = get_json(app.clone(), "/provider").await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(providers["all"][0]["id"], "openai");
-    assert_eq!(providers["default"]["openai"], "gpt-5");
-    assert_eq!(providers["connected"], json!(["openai"]));
+    assert_eq!(providers["all"].as_array().unwrap().len(), 1);
+    assert_eq!(providers["all"][0]["id"], "hya");
+    assert_eq!(providers["default"]["hya"], "offline");
+    assert_eq!(providers["defaultModel"]["providerID"], "hya");
+    assert_eq!(providers["defaultModel"]["modelID"], "offline");
+    assert_eq!(providers["connected"], json!([]));
 
     let (status, auth) = get_json(app.clone(), "/provider/auth").await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(auth.as_object().unwrap().len(), 1);
-    assert_eq!(auth["openai"][0]["type"], "api");
-    assert_eq!(auth["openai"][0]["label"], "API key");
+    assert_eq!(auth, json!({}));
 
     let status = request_status(
         app.clone(),
         Method::POST,
-        "/provider/openai/oauth/authorize",
+        "/provider/hya/oauth/authorize",
         json!({"method": "bad"}),
     )
     .await;
@@ -252,7 +253,7 @@ async fn compat_legacy_provider_routes_return_active_catalog_and_reject_bad_oaut
     let status = request_status(
         app,
         Method::POST,
-        "/provider/openai/oauth/callback",
+        "/provider/hya/oauth/callback",
         json!({"method": "bad"}),
     )
     .await;
@@ -260,7 +261,7 @@ async fn compat_legacy_provider_routes_return_active_catalog_and_reject_bad_oaut
 }
 
 #[tokio::test]
-async fn compat_legacy_config_routes_return_active_provider_data() {
+async fn compat_legacy_config_keeps_patch_state_separate_from_offline_catalog() {
     let app = router(state(workdir()).await);
 
     let (status, config) = get_json(app.clone(), "/config").await;
@@ -296,6 +297,7 @@ async fn compat_legacy_config_routes_return_active_provider_data() {
 
     let (status, providers) = get_json(app, "/config/providers").await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(providers["providers"][0]["id"], "openai");
-    assert_eq!(providers["default"]["openai"], "gpt-5");
+    assert_eq!(providers["providers"][0]["id"], "hya");
+    assert_eq!(providers["default"]["hya"], "offline");
+    assert_eq!(providers["defaultModel"]["providerID"], "hya");
 }

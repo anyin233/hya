@@ -13,6 +13,7 @@ import { useTheme } from "./theme"
 import { useToast } from "../ui/toast"
 import { useRoute } from "./route"
 import { isTuiSelectableAgent } from "../util/agent-visibility"
+import { filterCatalogSelections, isCatalogModelValid } from "../../hya/model-catalog"
 
 export type LocalTheme = {
   secondary: RGBA
@@ -59,8 +60,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
     const paths = useTuiPaths()
 
     function isModelValid(model: { providerID: string; modelID: string }) {
-      const provider = sync.data.provider.find((item) => item.id === model.providerID)
-      return !!provider?.models[model.modelID]
+      return isCatalogModelValid(sync.data.provider, model)
     }
 
     function getFirstValidModel(...modelFns: (() => { providerID: string; modelID: string } | undefined)[]) {
@@ -214,6 +214,10 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           }
         }
 
+        if (sync.data.provider_catalog_default) {
+          return { ...sync.data.provider_catalog_default }
+        }
+
         for (const item of modelStore.recent) {
           if (isModelValid(item)) {
             return item
@@ -249,10 +253,10 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           return modelStore.ready
         },
         recent() {
-          return modelStore.recent
+          return filterCatalogSelections(sync.data.provider, modelStore.recent)
         },
         favorite() {
-          return modelStore.favorite
+          return filterCatalogSelections(sync.data.provider, modelStore.favorite)
         },
         parsed: createMemo(() => {
           const value = currentModel()
@@ -274,7 +278,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         cycle(direction: 1 | -1) {
           const current = currentModel()
           if (!current) return
-          const recent = modelStore.recent
+          const recent = filterCatalogSelections(sync.data.provider, modelStore.recent)
           const index = recent.findIndex((x) => x.providerID === current.providerID && x.modelID === current.modelID)
           if (index === -1) return
           let next = index + direction
@@ -287,7 +291,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           setModelStore("model", a.name, { ...val })
         },
         cycleFavorite(direction: 1 | -1) {
-          const favorites = modelStore.favorite.filter((item) => isModelValid(item))
+          const favorites = filterCatalogSelections(sync.data.provider, modelStore.favorite)
           if (!favorites.length) {
             toast.show({
               variant: "info",
