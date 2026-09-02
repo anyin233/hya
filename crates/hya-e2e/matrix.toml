@@ -34,7 +34,7 @@ timeout_secs = 90
 
 [[scenario]]
 id = "T1.5"
-title = "shell tool"
+title = "bash tool"
 track = "P"
 path = "crates/hya-e2e/tests/p02_tool_loop_fs.rs"
 tags = ["pr", "tools"]

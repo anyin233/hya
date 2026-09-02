@@ -112,7 +112,7 @@ impl HookDispatcher for CountingHost {
     async fn tool_execute_before(&self, input: ToolExecuteBeforeInput) -> ToolExecuteBeforeOutcome {
         self.counts.tool_before.fetch_add(1, Ordering::SeqCst);
         let mut value = input.input;
-        if input.tool == "shell" {
+        if input.tool == "bash" {
             value["command"] = json!("printf post-hook");
         }
         ToolExecuteBeforeOutcome::Continue { input: value }
@@ -136,7 +136,7 @@ async fn model_tool_authorizes_after_lookup_and_before_hook_with_call_correlatio
                 input: json!({}),
             },
             FakeStep::ToolCall {
-                name: "shell".to_string(),
+                name: "bash".to_string(),
                 input: json!({ "command": "printf pre-hook" }),
             },
             FakeStep::Finish(FinishReason::ToolCalls),
@@ -395,4 +395,77 @@ async fn tool_after_cannot_mask_permission_denial() {
         )
     });
     assert!(errored, "the denied read must remain a tool error");
+}
+
+#[tokio::test]
+async fn normal_turn_after_hook_rewrite_removes_unpublished_bash_artifact() {
+    let dir = tempdir();
+    let artifact_root = dir.join(".hya/tool-output");
+    let provider = FakeProvider::scripted_turns(vec![
+        vec![
+            FakeStep::ToolCall {
+                name: "bash".to_string(),
+                input: json!({
+                    "command": "python3 -c 'import sys; sys.stdout.write(\"A\" * 51201)'"
+                }),
+            },
+            FakeStep::Finish(FinishReason::ToolCalls),
+        ],
+        vec![FakeStep::Finish(FinishReason::Stop)],
+    ]);
+    let router = Arc::new(ProviderRouter::new().with(Arc::new(provider)));
+    let (permission, _asks) = PermissionPlane::new(PermissionRules::new(vec![Rule::new(
+        Action::Bash,
+        "*",
+        Mode::Allow,
+    )]));
+    let engine = SessionEngine::new(
+        SessionStore::connect_memory().await.unwrap(),
+        router,
+        support::test_runtime(Arc::new(ToolRegistry::builtins())),
+        permission,
+        EventBus::default(),
+    )
+    .with_hooks(Arc::new(MaskingAfterHost));
+    let session = engine
+        .create(CreateSession {
+            parent: None,
+            agent: AgentName::new("build"),
+            model: ModelRef::new("fake"),
+            workdir: dir.to_string_lossy().into_owned(),
+        })
+        .await
+        .unwrap();
+    engine
+        .admit_user_prompt(session, "run Bash".to_string())
+        .await
+        .unwrap();
+
+    let finish = engine
+        .run_turn(session, &agent(&dir), CancellationToken::new())
+        .await
+        .unwrap();
+
+    assert_eq!(finish, FinishReason::Stop);
+    let projection = engine.store().read_projection(session).await.unwrap();
+    let bash_output = projection
+        .session
+        .messages
+        .iter()
+        .flat_map(|message| &message.parts)
+        .find_map(|part| match part {
+            PartProjection::Tool {
+                name,
+                state: ToolPartState::Completed { output, .. },
+                ..
+            } if name.as_str() == "bash" => Some(output),
+            _ => None,
+        })
+        .expect("completed Bash part");
+    assert!(bash_output["metadata"].get("outputPath").is_none());
+    let mut artifacts = tokio::fs::read_dir(&artifact_root).await.unwrap();
+    assert!(
+        artifacts.next_entry().await.unwrap().is_none(),
+        "an after-hook rewrite must remove the pre-hook Bash artifact"
+    );
 }

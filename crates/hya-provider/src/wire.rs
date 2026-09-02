@@ -28,9 +28,14 @@ pub(crate) fn tool_result(state: &ToolPartState) -> (String, bool) {
 }
 
 fn value_to_text(value: &Value) -> String {
-    match value.as_str() {
-        Some(s) => s.to_string(),
-        None => value.to_string(),
+    match value {
+        Value::Object(fields) => fields
+            .get("output")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| value.to_string()),
+        Value::String(text) => text.clone(),
+        _ => value.to_string(),
     }
 }
 
@@ -42,5 +47,53 @@ fn error_value_to_text(message: &str, value: Option<&Value>) -> String {
         Some(Value::String(s)) => s.clone(),
         Some(value) => value.to_string(),
         None => message.to_string(),
+    }
+}
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn completed_object_prefers_string_output() {
+        let output = json!({
+            "title": "src/main.rs",
+            "output": "plain replay text",
+            "metadata": {"diff": "presentation-only"},
+        });
+        let state = ToolPartState::Completed {
+            input: json!({"path": "src/main.rs"}),
+            output,
+            time_ms: 1,
+        };
+        assert_eq!(
+            tool_result(&state),
+            ("plain replay text".to_string(), false)
+        );
+    }
+
+    #[test]
+    fn completed_object_without_output_falls_back_to_json() {
+        let output = json!({"title": "src/main.rs", "metadata": {"ok": true}});
+        let expected = serde_json::to_string(&output).unwrap();
+        let state = ToolPartState::Completed {
+            input: Value::Null,
+            output,
+            time_ms: 1,
+        };
+        assert_eq!(tool_result(&state), (expected, false));
+    }
+
+    #[test]
+    fn errors_keep_structured_json_behavior() {
+        let value = json!({"output": "do not prefer errors", "type": "input"});
+        let expected = serde_json::to_string(&value).unwrap();
+        let state = ToolPartState::Error {
+            input: Value::Null,
+            message: "input: bad value".to_string(),
+            value: Some(value),
+        };
+        assert_eq!(tool_result(&state), (expected, true));
     }
 }

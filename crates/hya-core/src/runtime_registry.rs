@@ -4487,7 +4487,7 @@ agent:
             .into_iter()
             .map(|schema| schema.name.as_str().to_string())
             .collect::<BTreeSet<_>>();
-        assert_eq!(expected.len(), 28);
+        assert_eq!(expected.len(), 27);
         for (agent_id, plane, workdir) in [
             (
                 "full-alias",
@@ -4518,7 +4518,7 @@ agent:
                 compiled.resolve_tool("apply_patch").is_some(),
                 "{agent_id}: canonical apply_patch must remain public"
             );
-            for alias in ["fetch", "search", "todo", "patch", "plan"] {
+            for alias in ["fetch", "search", "todo", "patch", "plan", "shell"] {
                 assert!(
                     compiled.resolve_tool(alias).is_some(),
                     "{agent_id}: hidden alias `{alias}` must remain dispatchable"
@@ -4538,8 +4538,8 @@ agent:
                 "{agent_id}: canonical schema must remain model-facing"
             );
             assert!(
-                !schema_names.contains("patch"),
-                "{agent_id}: hidden dispatch alias must not be advertised"
+                !schema_names.contains("patch") && !schema_names.contains("shell"),
+                "{agent_id}: hidden dispatch aliases must not be advertised"
             );
             assert!(
                 schema_names.iter().all(|name| !name.contains([':', '/'])),

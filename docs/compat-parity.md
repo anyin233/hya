@@ -1,6 +1,6 @@
 # Compat Parity Matrix
 
-Last refreshed: 2026-06-23.
+Last refreshed: 2026-09-02.
 
 Latest upstream check: `compat-ai/compat` `main`
 `73ee493265acf15fcd8caab2bc8cd3bd375b63cb`
@@ -51,7 +51,7 @@ legacy read/delete/command/init/prompt_async/summarize/diff/permission/shell/mes
 HTTP route increments, basic provider auth list/logout CLI support, plus
 empty-backend v2 credential/integration mutation route compatibility, and
 basic
-Compat-compatible `run [message..]` plus `--format json` CLI aliasing for hya's headless prompt execution, basic `models [provider]` listing over hya's configured catalog, `providers` as an alias for hya's auth token list/logout commands, accepted Compat global `--print-logs`/`--log-level`/`--pure` flags, current Compat shell tool behavior without model-authored `description`, Compat plugin SDK `project.list()`, `config.get()`, `app.agents()`/`app.skills()`, `tool.ids()`, `auth.set()`/`auth.remove()` bad-request shims, basic `lsp.status()`, provider-backed `formatter.status()`, and Compat-compatible `serve --hostname`/`--port` binding aliases plus accepted `--cors`/`--mdns` flags. Session-selected
+Compat-compatible `run [message..]` plus `--format json` CLI aliasing for hya's headless prompt execution, basic `models [provider]` listing over hya's configured catalog, `providers` as an alias for hya's auth token list/logout commands, accepted Compat global `--print-logs`/`--log-level`/`--pure` flags, canonical Bash tool behavior with hidden runtime `shell` alias and no model-authored `description`, Compat plugin SDK `project.list()`, `config.get()`, `app.agents()`/`app.skills()`, `tool.ids()`, `auth.set()`/`auth.remove()` bad-request shims, basic `lsp.status()`, provider-backed `formatter.status()`, and Compat-compatible `serve --hostname`/`--port` binding aliases plus accepted `--cors`/`--mdns` flags. Session-selected
 models are recorded without catalog validation and used when constructing the
 next provider request. V2 prompt admission preserves Compat `files` and
 `agents` prompt attachment metadata through v2 context/message reads, and file
@@ -64,6 +64,63 @@ VCS branch-mode diffs now use the merge-base ref for both patches and
 additions/deletions, matching Compat's committed branch-change behavior, and
 branch-mode file discovery preserves Compat's NUL-parsed special filenames.
 VCS default-branch discovery follows Compat's remote/config/local fallback.
+
+## 0.36.9 native coding-tool contract
+
+The following is the shipped hya native equivalent for the coding-agent tools.
+It is not a claim that every Compat implementation detail or harness-only
+feature is present. Tool schemas are the model-facing contract and are closed
+unless stated otherwise.
+
+| Tool | Canonical advertised input | Shipped behavior |
+| --- | --- | --- |
+| `read` | `{ "path": string, "offset"?: integer >= 1, "limit"?: integer >= 1, "raw"?: boolean }` | Hashline or raw normalized text, directory listings, and supported media attachments. |
+| `edit` | `{ "path": string, "edits": [...] }` | Strict `replace`, `append`, `prepend`, and `replace_text` operations with contextual anchors and exact stale recovery. |
+| `write` | `{ "path": string, "content": string }` | Closed whole-file write with atomic filesystem semantics, formatter/LSP integration, and final-state metadata. |
+| `grep` | `{ "pattern": string, "path"?: string, "glob"?: string, "ignoreCase"?: boolean, "literal"?: boolean, "context"?: integer 0..5, "limit"?: integer 1..200 }` | Native cancellable regex/literal search with gitignore-aware traversal, merged context, hashline rows, and bounded per-file display groups. |
+| `bash` | `{ "command": string, "env"?: object<string,string>, "timeout"?: number, "cwd"?: string, "pty"?: boolean }` | Closed command tool with 300-second default, zero deadline, 1..=3600 clamp, process-group cancellation, bounded capture, artifact metadata, and real PTY mode. |
+
+`read.filePath` is a hidden runtime-only compatibility spelling for captured
+pre-0.36.9 requests. Equal or sole non-empty path values succeed, conflicting
+values fail as typed input, both empty values fail, and paths are not trimmed.
+Legacy `offset: 0` maps to line 1 but is not advertised. The nested
+`task.inline_agent.description` field is absent from published schemas; an
+empty legacy value normalizes to absence, while a non-empty direct/stale value
+keeps the typed `unsupported_inline_agent_field` rejection before admission.
+The old `shell` tool name is a hidden runtime alias for canonical `bash`; it is
+not a second advertised command schema.
+
+Read/Edit/Write/Grep share one private hashline runtime. Snapshot and guard keys
+are `(Session, normalized workdir, resolved target)`, process-local and bounded
+to eight targets, four versions per target, and 32 MiB total. Fixed lock shards
+serialize same-target mutation; filesystem identity keeps hard-link aliases
+together. Anchors use contextual XXH32 seed 0 and are stale-reference aids, not
+authorization. Recovery runs only after stale-anchor failure, uses newest-first
+snapshots and exact context-three/fuzz-zero merges, and never fuzzy-relocates an
+anchor. Formatter, LSP, diff, fresh anchors, display metadata, and snapshots
+describe final post-formatter bytes. Cancellation preserves typed errors and
+does not put file contents in logs or diagnostics.
+
+Each successful result keeps `{title, output, metadata}`. Coding-tool output and
+metadata have independent hard byte/row limits and explicit truncation; the
+unrelated default for other tools remains 5,000 characters. Provider replay
+prefers an object's string `output` and falls back to JSON only when absent.
+The TypeScript/OpenTUI surface consumes projected SDK state only and renders
+completed Read/Write titled syntax blocks, Edit semantic diffs, per-file Grep
+match/context blocks, and one Bash/Shell command block with highlighted command
+and plain ANSI-stripped output. It excludes `env` and unknown keys, falls back
+for malformed metadata, supports bounded local collapse at 80 and wide widths,
+and renders the same completed state after Session replay.
+
+Durable `tool_call_requested`, `tool_result`, and `tool_error` Events remain the
+shared event path; historical Events are immutable and are not rewritten. A
+0.36.8 backend already running must restart before new calls use this contract,
+and captured 0.36.8 Read/Task errors remain visible in replay. Hashline recovery
+state is lost on restart. The source baselines are `pi-hashline-edit` 0.8.3 at
+git head `ba7db9943d0f58499b24c1f6bd64722580f772a5` (tarball SHA-1
+`8985f24c3493be375cc225a5522ed54de8daabc9`) and Oh My Pi
+`can1357/oh-my-pi@0b769cc4dd9771373335430385d1d2f696dc3498` for host Write/Bash
+behavior.
 
 ## Status Summary
 
@@ -79,9 +136,9 @@ PTY/workspace/sync behavior, and ACP.
 | Area | hya status | Evidence |
 | --- | --- | --- |
 | Core turn loop | Implemented | `SessionEngine::run_turn` supports multi-round tool calls, cancellation, compaction, provider streaming, and event projection. |
-| Direct shell execution | Implemented | `SessionEngine::run_shell`, native `POST /sessions/:id/shell`, and Compat legacy/v2 session shell routes execute the real shell tool and record a synthetic user message plus assistant tool result. |
+| Direct command execution | Implemented | `SessionEngine::run_shell`, native `POST /sessions/:id/shell`, and Compat legacy/v2 session shell routes execute the host command path and record a synthetic user message plus assistant tool result. These route names are Compat API paths; the model-facing tool is canonical `bash`, with runtime-only `shell` aliasing. |
 | Run status and abort | Partial | Server routes now maintain per-session run tokens, expose Compat-shaped `GET /session/status`, and support `POST /session/:sessionID/abort`; shell cancellation kills the spawned Unix process group. |
-| Core tools | Mostly implemented | `ToolRegistry::builtins()` installs **28** canonical schema names: `invalid`, `read`, `write`, `edit`, `ls`, `glob`, `find`, `grep`, `question`, `lsp`, `skill`, `list_agents`, `ask_user`, `task`, `workflow`, `send`, `announce`, `roster`, `channels`, `join`, `leave`, `shell`, `bash`, `apply_patch`, `webfetch`, `websearch`, `todowrite`, and `plan_exit`. The five hidden aliases are `patch`, `fetch`, `search`, `todo`, and `plan`; aliases are not advertised schemas. |
+| Core tools | Mostly implemented | `ToolRegistry::builtins()` installs **27** canonical schema names: `invalid`, `read`, `write`, `edit`, `ls`, `glob`, `find`, `grep`, `question`, `lsp`, `skill`, `list_agents`, `ask_user`, `task`, `workflow`, `send`, `announce`, `roster`, `channels`, `join`, `leave`, `bash`, `apply_patch`, `webfetch`, `websearch`, `todowrite`, and `plan_exit`. Hidden runtime aliases are `shell` → `bash`, `patch`, `fetch`, `search`, `todo`, and `plan`; aliases are not advertised schemas. Read/Edit/Grep are native hashline tools and Write/Bash use closed host contracts.`
 | Permission system | Native superset | hya has explicit `PermissionPlane`, rules, child-session derivation, TUI approval, headless scoped/read-only/yolo policies, and Compat plugin permission hook mapping. |
 | Project context | Implemented | CLI discovers `AGENTS.md`, builds an environment/context system prompt, and includes available skills. |
 | Skills | Implemented substrate | Skill discovery scans multiple first-name-wins directories (project/global `.hya`, OpenCode, Claude, agents, Codex paths — full list in [skills.md](skills.md)); `skill` tool loading is present; v2 `/api/skill` returns Compat-shaped location-wrapped skill metadata for local skills. |
@@ -114,7 +171,7 @@ PTY/workspace/sync behavior, and ACP.
 | Provider/auth breadth | Compat `/auth/:providerID` accepts `api`, `oauth`, and `wellknown` payloads and persists the effective token to Hya's local auth file. Catalog routes expose every declared provider status and exact snapshot rows; they never fall back to active Session or agent metadata. Legacy `/provider/auth` exposes the existing API-key method shape; unsupported provider OAuth authorize/callback payloads return 400. CLI supports `login`, OAuth login/status, auth list/logout, and startup catalog discovery. |
 | PTY | `/pty` and `/api/pty` expose Compat-shaped in-process PTY metadata lifecycle routes: shell discovery, list/create/get/update/remove, typed not-found and connect-token forbidden responses, v2 location wrapping, CSRF-style connect-token rejection/random issuance with origin validation, connect missing-session not-found precedence, one-time ticket consumption, websocket attach I/O over spawned shell processes, hidden exited sessions, and bounded exited-session retention. Missing real pseudo-terminal process creation, terminal resize propagation, and retained output buffers. |
 | TUI control API | `/tui/publish`, direct `/tui/append-prompt`, `/tui/open-help`, `/tui/open-sessions`, `/tui/open-themes`, `/tui/open-models`, `/tui/submit-prompt`, `/tui/clear-prompt`, `/tui/execute-command`, `/tui/show-toast`, `/tui/select-session`, and `/tui/control/next`/`response` queue routes exist. The TypeScript TUI main loop consumes at least `tui.command.execute`, `tui.toast.show`, and `tui.session.select` when the event workspace matches. Remaining gaps are broader event-bus delivery parity, not a complete absence of main-loop integration. |
-| TUI full feature parity | Partial | Ships in `packages/hya-tui-ts`: command palette (`ctrl+p`), theme picker over bundled themes + `system`, model variant picker, skill picker, syntax-highlighted split/unified diffs, sidebar context usage/cost wiring, prompt stash, and a large leader-chord keybind registry (`ctrl+x`). Remaining gaps are finer Compat UX parity (share infrastructure, some polish), not absence of the listed surfaces. |
+| TUI full feature parity | Partial | Ships in `packages/hya-tui-ts`: hya-owned completed Read/Write titled syntax blocks, Edit semantic diffs, per-file Grep match/context blocks, and one Bash/Shell command/output block with ANSI-safe plain output; also command palette, theme/model/skill pickers, syntax-highlighted split/unified diffs, sidebar context usage/cost wiring, prompt stash, and leader-chord keybinds. Remaining gaps are finer Compat UX parity (share infrastructure, some polish), not absence of the listed surfaces. |
 | MCP HTTP/auth routes | `GET /mcp` composes Compat-shaped connected/disabled/failed status from app-owned desired/observed state and the effective runtime manifest. `POST /mcp` accepts dynamic local configs; connect/disconnect atomically adds or removes the source for subsequent turns while retained turns keep their old binding. Missing-server routes return Compat-shaped 404 JSON, known non-OAuth servers return deterministic unsupported-OAuth errors, and auth removal returns `{ success: true }`. Dynamic state is process-local: durable config mutation, remote MCP transport, real OAuth start/callback/authenticate flows, and full static/remote lifecycle transitions remain missing. |
 | Permission/question HTTP queues | Root `/permission` and `/question` list/reply/reject routes plus v2 pending permission/question list/reply/reject APIs are backed by hya's native ask channels and return Compat-shaped typed missing errors on root and v2 session-scoped request/session routes. Legacy session permission replies return Compat-shaped `PermissionNotFoundError` bodies for missing requests. `always` permission replies feed a SQLite-backed Compat-shaped saved-permission list/removal API that survives server restart. Remaining gaps are Compat's full source/tool metadata and typed TUI deny feedback. |
 | Sync/workspace/control-plane | Basic project list/current/directories routes expose the server workdir, `/project/git/init` initializes the active workdir with git, `PATCH /project/:projectID` persists name/icon/commands for the server lifetime, project copy create/remove/refresh works for `git_worktree`, generate-name returns Compat-shaped slug responses, experimental worktree list/create/remove/reset is backed by `git worktree`, experimental tool list/ids expose hya tool schemas, `/experimental/workspace/adapter` returns registered plugin workspace adapter metadata, experimental session list reuses hya's directory/roots/start/search/limit/cursor/archived filtering, experimental console/workspace/resource capability routes return safe empty/default values, missing workspace removal returns Compat's empty result, `/experimental/workspace/warp` accepts Compat's local detach payload (`id: null`) for existing sessions and returns Compat-shaped not-found errors for missing workspace ids, `/sync/replay` accepts non-empty event histories, persists their raw Compat history shape in SQLite, projects hya-compatible `session.created`/`session.updated` info into hya session state, and returns the source session id, `/sync/history` merges persisted raw sync events with hya event-log events ordered by sequence and filters events at or below the caller's known aggregate sequence, `/sync/steal` accepts a workspace-routed existing session and returns the Compat session payload, `/sync/start` returns true for the no-workspace case, and `/experimental/control-plane/move-session` returns Compat-shaped `MoveSessionError` for missing sessions, `204` for existing sessions, and updates the session directory in hya's event log. Missing full raw sync projection for Compat's non-UUID session ids and message/part/delete/workspace-owner events, steal claim semantics, real remote sync ownership, real workspace adapter runtime/list/status/remote warp, Compat's worktree start-command/default-branch/submodule/durable sandbox behavior, durable project directory registry/copy listing, model-backed name generation, durable project metadata database, and actual control-plane move-session patch transfer/project-mismatch checks. |

@@ -30,9 +30,12 @@ async fn state(target_file: &str) -> AppState {
             FakeStep::ToolCall {
                 name: "edit".to_string(),
                 input: json!({
-                    "filePath": target_file,
-                    "oldString": "old\n",
-                    "newString": "new\n",
+                    "path": target_file,
+                    "edits": [{
+                        "op": "replace_text",
+                        "oldText": "old\n",
+                        "newText": "new\n",
+                    }],
                 }),
             },
             FakeStep::Finish(FinishReason::ToolCalls),
@@ -81,17 +84,23 @@ async fn two_edit_state() -> AppState {
             FakeStep::ToolCall {
                 name: "edit".to_string(),
                 input: json!({
-                    "filePath": "first-revert-target.txt",
-                    "oldString": "first old\n",
-                    "newString": "first new\n",
+                    "path": "first-revert-target.txt",
+                    "edits": [{
+                        "op": "replace_text",
+                        "oldText": "first old\n",
+                        "newText": "first new\n",
+                    }],
                 }),
             },
             FakeStep::ToolCall {
                 name: "edit".to_string(),
                 input: json!({
-                    "filePath": "second-revert-target.txt",
-                    "oldString": "second old\n",
-                    "newString": "second new\n",
+                    "path": "second-revert-target.txt",
+                    "edits": [{
+                        "op": "replace_text",
+                        "oldText": "second old\n",
+                        "newText": "second new\n",
+                    }],
                 }),
             },
             FakeStep::Finish(FinishReason::ToolCalls),

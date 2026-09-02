@@ -1479,7 +1479,7 @@ async fn custom_command_invokes_plugin_tool() {
     let write_env = plugin_builder(vec![
         tool_step(
             "write",
-            json!({"filePath": "denied.txt", "content": "must-not-write"}),
+            json!({"path": "denied.txt", "content": "must-not-write"}),
         ),
         text_step("WRITE_REJECTED"),
     ])

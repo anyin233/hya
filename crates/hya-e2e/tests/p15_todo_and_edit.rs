@@ -49,9 +49,12 @@ async fn t1_15_edit_tool_mutates_existing_file() {
             tool_step(
                 "edit",
                 json!({
-                    "filePath": "edit-me.txt",
-                    "oldString": "OLD_TOKEN",
-                    "newString": "NEW_TOKEN"
+                    "path": "edit-me.txt",
+                    "edits": [{
+                        "op": "replace_text",
+                        "oldText": "OLD_TOKEN",
+                        "newText": "NEW_TOKEN"
+                    }]
                 }),
             ),
             text_step("EDIT_DONE"),

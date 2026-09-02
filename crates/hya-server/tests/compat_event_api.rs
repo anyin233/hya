@@ -911,7 +911,7 @@ async fn compat_legacy_event_route_streams_tool_part_events() {
 
     let running = read_next_tool_state(&mut stream, "running").await;
     assert_eq!(running["properties"]["part"]["sessionID"], session);
-    assert_eq!(running["properties"]["part"]["tool"], "shell");
+    assert_eq!(running["properties"]["part"]["tool"], "bash");
     assert_eq!(
         running["properties"]["part"]["state"]["input"]["command"],
         "printf compat-tool-event"
@@ -941,7 +941,7 @@ async fn compat_legacy_event_route_streams_tool_part_events() {
                         "messageID": message,
                         "type": "tool",
                         "callID": call,
-                        "tool": "shell",
+                        "tool": "bash",
                         "state": {
                             "status": "error",
                             "input": {"command": "printf compat-tool-event"},

@@ -152,7 +152,7 @@ async fn compat_v2_context_error_tool_state_includes_result() {
             "messageID": message,
             "type": "tool",
             "callID": call,
-            "tool": "shell",
+            "tool": "bash",
             "state": {
                 "status": "error",
                 "input": {"command": "printf original"},
@@ -204,7 +204,7 @@ async fn compat_v2_context_pending_tool_state_keeps_string_input() {
             "messageID": message,
             "type": "tool",
             "callID": call,
-            "tool": "shell",
+            "tool": "bash",
             "state": {"status": "pending", "input": ""}
         }),
     )

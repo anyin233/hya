@@ -399,7 +399,7 @@ async fn compat_v2_session_command_and_shell_routes_return_wrapped_messages() {
     assert_eq!(shell["data"]["info"]["providerID"], "test-provider");
     assert_eq!(shell["data"]["info"]["modelID"], "shell-selected");
     assert_eq!(shell["data"]["parts"][0]["type"], "tool");
-    assert_eq!(shell["data"]["parts"][0]["tool"], "shell");
+    assert_eq!(shell["data"]["parts"][0]["tool"], "bash");
     assert_eq!(shell["data"]["parts"][0]["state"]["status"], "completed");
     assert!(
         shell["data"]["parts"][0]["state"]["output"]

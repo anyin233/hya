@@ -1696,7 +1696,7 @@ permission:
         );
         assert_eq!(
             policy
-                .evaluate(&Invocation::command("shell", "git status"))
+                .evaluate(&Invocation::command("bash", "git status"))
                 .mode,
             Mode::Deny
         );

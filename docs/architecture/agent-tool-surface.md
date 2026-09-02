@@ -21,15 +21,17 @@ canonical tools contribute schemas.
 
 ## Builtin inventory
 
-`ToolRegistry::builtins()` installs 28 canonical schema names before model
-filtering. The inventory below is complete for that constructor.
-([crates/hya-tool/src/tool.rs:329-361](../../crates/hya-tool/src/tool.rs#L329-L361))
+`ToolRegistry::builtins()` installs **27** canonical schema names before model
+filtering. The inventory below is complete for that constructor. A schema marked
+**closed** rejects unknown keys; aliases resolve only at runtime and are never
+advertised.
+([crates/hya-tool/src/tool.rs](../../crates/hya-tool/src/tool.rs))
 
 | Area | Canonical schema names | Role |
 | --- | --- | --- |
-| File access | `read`, `write`, `edit`, `apply_patch` | Read, replace/write, or patch workspace files. `apply_patch` and `edit`/`write` are advertised mutually exclusively for selected models. |
+| File access | `read`, `write`, `edit`, `apply_patch` | Read or mutate workspace files. `read`, `write`, and `edit` are native coding tools; `apply_patch` remains the separate patch envelope. |
 | Local discovery | `ls`, `glob`, `find`, `grep`, `lsp` | List directories, match paths, search text, or query language servers. |
-| Commands | `shell`, `bash` | Two advertised names backed by the same shell implementation. |
+| Commands | `bash` | Run a command with bounded capture; hidden runtime name `shell` is not advertised. |
 | Human/session interaction | `question`, `ask_user`, `todowrite`, `plan_exit`, `invalid` | Ask structured or simple questions, update session todos, request a plan-mode transition, or represent invalid tool arguments. |
 | Agents and teams | `skill`, `list_agents`, `task`, `workflow`, `send`, `announce`, `roster`, `channels`, `join`, `leave` | Load skills, discover/spawn agents, execute governed Workflow commands, and use unit mail/channels ([ADR-0011](../adr/0011-hierarchy-scoped-mailbox.md)). |
 | Network | `webfetch`, `websearch` | Fetch a URL or run provider-backed web search. |
@@ -83,10 +85,18 @@ not fall back to `general`.
 | `command` | Optional command that triggered the task. |
 | `background` | Bool; non-blocking single-member spawn. Multi-member background is rejected. |
 | `resident` | Long-lived actor (non-blocking spawn) rather than a one-shot turn. |
-| `inline_agent` | Request-scoped agent overlay. Supported fields: `name`, `prompt`, `category`, `model`, `resident`. The schema may list `description`, but any non-null `inline_agent.description` is **rejected** with wire type `unsupported_inline_agent_field` (`validate_unsupported_inline_agent_fields` in `hya-app`). |
+| `inline_agent` | Request-scoped overlay. Published fields are `name`, `prompt`, `category`, `model`, and `resident`; nested `description` is not advertised. |
 | `members[]` | hya extension: fan one call out to several subagents (each needs `prompt`; optional per-member overrides). |
 
-([crates/hya-tool/src/task.rs:10-28](../../crates/hya-tool/src/task.rs#L10-L28))
+The nested `inline_agent.description` parser field is retained only to handle
+stale/direct callers. Empty or whitespace-only values normalize to absence, so
+the captured empty-description request can spawn. A non-empty value is rejected
+before admission with typed wire error `unsupported_inline_agent_field`, with no
+child or session side effect. This hidden compatibility does not change
+authorization, model/category precedence, resident behavior, or run-tree
+projection.
+
+([crates/hya-tool/src/task.rs](../../crates/hya-tool/src/task.rs))
 
 ### Skill
 
@@ -166,17 +176,40 @@ handle mail still does. Registered `ToolPermission::Tool`.
 `list_agents` enumerates definitions usable by `task`.
 ([crates/hya-tool/src/agents.rs:22-84](../../crates/hya-tool/src/agents.rs#L22-L84))
 
-### Shell
+### Bash
 
-`shell` and `bash` have distinct advertised names but wrap the same `ShellTool`.
-The schema accepts a command, timeout, working directory, and environment; the
-implementation uses `sh -c`, defaults to 120 seconds (`DEFAULT_TIMEOUT_MS =
-120_000`), and caps returned command output at 16 KiB while saving the full
-output under `.hya/tool-output/`. An optional `workdir` outside the session
-workdir raises `Action::ExternalDirectory` on `<cwd>/*`.
-([crates/hya-tool/src/tool.rs:329-361](../../crates/hya-tool/src/tool.rs#L329-L361),
-[`crates/hya-tool/src/shell.rs`](../../crates/hya-tool/src/shell.rs),
-[`crates/hya-tool/src/tool.rs`](../../crates/hya-tool/src/tool.rs))
+`bash` is the sole model-facing command tool. Its closed base schema is:
+
+```json
+{
+  "command": "string",
+  "env": { "string": "string" },
+  "timeout": "number (seconds)",
+  "cwd": "string",
+  "pty": "boolean"
+}
+```
+
+Only `command` is required. The default timeout is 300 seconds; `timeout: 0`
+disables the deadline, and other finite values clamp to 1..=3600 seconds with a
+clamp notice. `cwd` is checked against the existing lexical workdir policy.
+Command permission is checked before process creation. Timeout and cancellation
+terminate and reap the complete process group. Non-PTY stdout/stderr are
+captured concurrently in arrival order; PTY mode uses a real PTY and keeps
+observing the deadline/cancellation after leader exit while descendants retain
+the slave. Inline output is capped at 50 KiB after timeout/clamp notices are
+added. A truncated result points to the complete raw stream in a private
+mode-0600 hya artifact; an armed owner removes partial/unpublished artifacts on
+every other exit. Nonzero exits and timeouts are completed structured results
+with status metadata, while explicit cancellation is typed `cancelled`.
+Environment values are never echoed in titles, output, diagnostics, metadata,
+or the TUI.
+
+The old `shell` name remains only as a hidden runtime alias for stale callers;
+it is not an advertised schema and uses the same implementation. This is
+intentional compatibility, not a second command surface.
+([crates/hya-tool/src/shell.rs](../../crates/hya-tool/src/shell.rs),
+[crates/hya-tool/src/tool.rs](../../crates/hya-tool/src/tool.rs))
 
 ### Webfetch
 
@@ -210,26 +243,23 @@ the key appended as an `?exaApiKey` query parameter; Parallel at
 
 ### Hidden aliases
 
-Five legacy aliases resolve during execution but do not appear in
+Six legacy aliases resolve during execution but do not appear in
 `ToolRegistry::schemas()`:
 
 | Canonical advertised name | Hidden lookup alias |
 | --- | --- |
+| `bash` | `shell` |
 | `webfetch` | `fetch` |
 | `websearch` | `search` |
 | `todowrite` | `todo` |
 | `apply_patch` | `patch` |
 | `plan_exit` | `plan` |
 
-This behavior is explicit in registration and covered by a test that requires
-the canonical names to be visible and the aliases to remain hidden.
-([`crates/hya-tool/src/tool.rs:329-361`](../../crates/hya-tool/src/tool.rs#L329-L361),
-[`crates/hya-tool/tests/tool.rs:111-146`](../../crates/hya-tool/tests/tool.rs#L111-L146))
-There is therefore no advertised local-file tool named `search`. The hidden
-name `search` resolves to **web search**, not GREP. Local discovery is exposed
-as `glob`, `find`, and `grep`; provider-backed internet search is advertised as
-`websearch` when enabled.
-([`crates/hya-tool/src/tool.rs:329-361`](../../crates/hya-tool/src/tool.rs#L329-L361))
+The `shell` entry is the only compatibility spelling for the command tool; it
+uses the canonical Bash schema and permission path. The other aliases are
+existing registry conveniences. All aliases remain non-advertised and never
+change a canonical schema's input fields.
+([`crates/hya-tool/src/tool.rs`](../../crates/hya-tool/src/tool.rs))
 
 ## Advertisement and naming
 
@@ -303,214 +333,172 @@ websearch model/provider filter.
 
 ## READ
 
-### Input schema and path resolution
+### Canonical schema and path compatibility
 
-The advertised schema requires `filePath` and optionally accepts `offset` and
-`limit`; it also lists `path` for compatibility. Runtime deserialization stores
-the path in one optional field and accepts `filePath` as an alias, so direct
-execution accepts either spelling even though provider-side schema validation
-can require `filePath`. Both numeric fields advertise a minimum of zero.
-([crates/hya-tool/src/read.rs:14](../../crates/hya-tool/src/read.rs#L14),
-[crates/hya-tool/src/read.rs:26-98](../../crates/hya-tool/src/read.rs#L26-L98))
+The advertised schema is closed and requires only `path`:
 
-The workdir is absolutized and lexically normalized. Relative paths are joined
-to that workdir; absolute paths remain absolute. Normalization removes `.` and
-lexically pops one component for `..`; it does not canonicalize symlinks.
-([crates/hya-tool/src/read.rs:26-98](../../crates/hya-tool/src/read.rs#L26-L98),
-[crates/hya-tool/src/lsp_path.rs:4-11](../../crates/hya-tool/src/lsp_path.rs#L4-L11))
+```json
+{
+  "path": "string",
+  "offset": "integer >= 1",
+  "limit": "integer >= 1",
+  "raw": "boolean"
+}
+```
 
-The external-directory boundary is therefore lexical. As an implementation
-consequence, this check does not classify a symlink located inside the workdir
-as external based on the symlink target.
-([crates/hya-tool/src/read.rs:26-98](../../crates/hya-tool/src/read.rs#L26-L98),
-[crates/hya-tool/src/lsp_path.rs:4-11](../../crates/hya-tool/src/lsp_path.rs#L4-L11))
+`filePath` is parsed only as a hidden compatibility field for pre-0.36.9
+requests. Runtime resolution keeps `path` and `filePath` distinct: one non-empty
+spelling succeeds, equal non-empty values succeed, conflicting non-empty values
+return a typed input error, and both missing/empty values fail. Paths are not
+trimmed. A legacy `offset: 0` maps to line 1; zero is not advertised.
 
-READ performs two permission checks. A path outside the normalized workdir
-requires `Action::ExternalDirectory` on the containing directory wildcard (or
-the directory itself plus `*`), then every read requires `Action::Read` on the
-resolved path. External-directory permission is checked before a missing-path
-error is returned.
-([crates/hya-tool/src/read.rs:26-98](../../crates/hya-tool/src/read.rs#L26-L98),
-[crates/hya-tool/src/read.rs:26-98](../../crates/hya-tool/src/read.rs#L26-L98))
+The workdir is absolutized and lexically normalized. Relative paths join the
+workdir; absolute paths remain absolute. `.` is removed and `..` pops one text
+component. Symlinks are not canonicalized for the external-directory check, so
+a symlink inside the workdir is not external solely because its target is
+outside. A lexically external Read authorizes one kind-blind parent wildcard
+before metadata, existence, target-kind, normal Read permission, or missing-path
+details are observed.
 
-### File-kind dispatch
+### File kinds and text output
 
-READ samples the first 4,096 bytes. PNG, JPEG, GIF, WebP, and PDF content is
-returned as a base64 data-URL attachment. Detection prefers magic bytes and
-falls back to the extension. Other binary files are rejected; the binary
-heuristic checks a fixed extension list, NUL bytes, and a greater-than-30%
-ratio of selected control bytes in the sample.
-([crates/hya-tool/src/read_media.rs:9](../../crates/hya-tool/src/read_media.rs#L9),
-[crates/hya-tool/src/read_media.rs:29-54](../../crates/hya-tool/src/read_media.rs#L29-L54),
-[crates/hya-tool/src/read_media.rs:64-85](../../crates/hya-tool/src/read_media.rs#L64-L85),
-[crates/hya-tool/src/read_media.rs:115-165](../../crates/hya-tool/src/read_media.rs#L115-L165))
+Read dispatches directories, supported media, and text. PNG, JPEG, GIF, WebP,
+and PDF files return bounded base64 data-URL attachments. Unsupported binary
+files return a typed error. Directory reads list immediate children, put
+directories first, sort each group lexically, and use one-based offset paging.
 
-The attachment result contains `title`, a short `output`, non-truncated
-metadata, and one `attachments` entry with `type`, MIME type, and data URL.
-Unsupported binary files fail with `Cannot read binary file: <path>` before
-UTF-8 decoding.
-([crates/hya-tool/src/read.rs:26-98](../../crates/hya-tool/src/read.rs#L26-L98),
-[crates/hya-tool/tests/read.rs:215-267](../../crates/hya-tool/tests/read.rs#L215-L267))
+Text removes one leading UTF-8 BOM and normalizes CRLF/lone CR to LF. Non-raw
+output uses contextual hashline rows (`LINE#HASH:content`) with stable line
+numbers; `raw` returns normalized unanchored text. The terminal empty newline
+sentinel is excluded from rendered rows. The default line limit is 2,000 and
+the aggregate text budget is 50 KiB; long lines and aggregate truncation carry
+bounded notices and a continuation `nextOffset`. Every output also carries
+bounded display metadata (`type`, `path`, `text`, `lineStart`, `lineEnd`,
+`totalLines`, and `truncated`) for the TUI. Invalid UTF-8 is replaced with
+U+FFFD and reported as a warning rather than silently omitted.
 
-### Text limits and output
-
-Text reads are one-based. Omitted or zero `offset` becomes 1, and the default
-line limit is 2,000. `limit` is not clamped, so zero collects no lines. An
-offset beyond the counted lines is an error. UTF-8 BOM is stripped; remaining
-invalid UTF-8 is returned as an I/O invalid-data error.
-([crates/hya-tool/src/read.rs:14](../../crates/hya-tool/src/read.rs#L14),
-[crates/hya-tool/src/read.rs:26-98](../../crates/hya-tool/src/read.rs#L26-L98),
-[crates/hya-tool/src/read.rs:26-98](../../crates/hya-tool/src/read.rs#L26-L98),
-[crates/hya-tool/src/read_text.rs:14-20](../../crates/hya-tool/src/read_text.rs#L14-L20),
-[crates/hya-tool/src/read_text.rs:14-20](../../crates/hya-tool/src/read_text.rs#L14-L20))
-
-Three independent bounds shape text output:
-
-| Bound | Behavior |
-| --- | --- |
-| Requested/default lines | Stops collecting after `limit`; the default is 2,000. |
-| Individual line length | Keeps 2,000 Unicode scalar values and appends `... (line truncated to 2000 chars)`. |
-| Aggregate content | Stops before exceeding 50 KiB and tells the caller which `offset` to use next. |
-
-The line and byte implementations are in
-[crates/hya-tool/src/read_text.rs:9](../../crates/hya-tool/src/read_text.rs#L9)
-and
-[crates/hya-tool/src/read_text.rs:14-20](../../crates/hya-tool/src/read_text.rs#L14-L20);
-tests pin both limits in
-[crates/hya-tool/tests/read_limits.rs:56-117](../../crates/hya-tool/tests/read_limits.rs#L56-L117).
-
-The result contains `title`, XML-like `output` with numbered lines, unnumbered
-`content`, a 20-line `metadata.preview`, and display metadata for line start,
-line end, counted total, and truncation. `metadata.loaded` is currently always
-an empty array.
-([crates/hya-tool/src/read_text.rs:14-20](../../crates/hya-tool/src/read_text.rs#L14-L20),
-[crates/hya-tool/tests/read.rs:60-101](../../crates/hya-tool/tests/read.rs#L60-L101))
-
-Two limit labels need careful interpretation:
-
-- Truncating one overlong line does **not** set `metadata.truncated`; the suffix
-  is the only indication.
-- Once the 50 KiB loop breaks, `totalLines` is the number scanned through the
-  first rejected line, not the actual total number of lines in the file.
-
-Both follow directly from the collector and are pinned by tests that expect an
-untruncated flag for a 2,001-character line and `totalLines == 52` for a
-60-line file stopped at the byte cap.
-([crates/hya-tool/src/read_text.rs:14-20](../../crates/hya-tool/src/read_text.rs#L14-L20),
-[crates/hya-tool/tests/read_limits.rs:56-84](../../crates/hya-tool/tests/read_limits.rs#L56-L84),
-[crates/hya-tool/tests/read_limits.rs:86-117](../../crates/hya-tool/tests/read_limits.rs#L86-L117))
-
-### Directory reads and missing paths
-
-For a directory, READ lists immediate children only, puts directories first,
-sorts each group lexically, applies the same one-based offset and 2,000-entry
-default limit, and returns directory-specific display metadata. The 50 KiB text
-cap is not applied to this directory result.
-([crates/hya-tool/src/read.rs:26-98](../../crates/hya-tool/src/read.rs#L26-L98),
-[crates/hya-tool/tests/read.rs:103-140](../../crates/hya-tool/tests/read.rs#L103-L140))
-
-A missing path produces up to three lexically sorted suggestions from its
-parent when either lowercase filename contains the other; otherwise it returns
-only `File not found`. The behavior is covered by a focused suggestion test.
-([crates/hya-tool/src/read.rs:26-98](../../crates/hya-tool/src/read.rs#L26-L98),
-[crates/hya-tool/tests/read_missing.rs:56-77](../../crates/hya-tool/tests/read_missing.rs#L56-L77))
+([crates/hya-tool/src/read.rs](../../crates/hya-tool/src/read.rs),
+[crates/hya-tool/src/hashline/mod.rs](../../crates/hya-tool/src/hashline/mod.rs))
 
 ## WRITE
 
-### Schema and validation
+### Canonical schema and result
 
-The advertised WRITE schema requires `filePath` and `content`; it also lists
-`path` under `properties` for compatibility (not runtime-only). Runtime
-deserialization stores a single optional path field named `path` with
-`#[serde(alias = "filePath")]` — so **`filePath` is the serde alias of `path`**,
-while the model-facing `required` array still names `filePath` and `content`.
-([crates/hya-tool/src/write.rs:15-41](../../crates/hya-tool/src/write.rs#L15-L41),
-[crates/hya-tool/src/write.rs:21-96](../../crates/hya-tool/src/write.rs#L21-L96))
+Write exposes only the closed `{ "path": string, "content": string }` schema.
+It keeps hya's existing lexical permission, formatter, LSP, BOM, and whole-file
+semantics. Parent directories are created as needed; writes use the shared
+same-directory atomic writer, preserve mode/BOM/line-ending behavior, and mark
+a leading shebang executable when possible. A chmod failure is a bounded warning,
+not a silent failure. Accidental hashline display prefixes are stripped only
+when the complete input is unambiguously a rendered hashline block; ambiguous
+content remains unchanged.
 
-Paths use the same lexical workdir resolution as READ. An outside path requires
-`Action::ExternalDirectory` on its parent wildcard (`<parent>/*`) before
-`Action::Edit` on the resolved file
-([crates/hya-tool/src/write.rs:21-96](../../crates/hya-tool/src/write.rs#L21-L96),
-[crates/hya-tool/src/write.rs:21-96](../../crates/hya-tool/src/write.rs#L21-L96)).
+Formatter and LSP processing run before the final result is built. The returned
+`output`, preview, diagnostics, and bounded display metadata therefore describe
+the final post-formatter bytes, not the pre-format input. Write also updates the
+shared hashline snapshot state so a later Edit can use the same recovery chain.
 
-### Create, BOM, and post-write processing
-
-Parent directories are created as needed. An existing file's UTF-8 BOM is
-preserved; a BOM present in the incoming content is also propagated (desired BOM
-is source-or-incoming). After the write, the configured formatter runs; if the
-formatter rewrites the file, the BOM is re-synced. The LSP plane is touched and
-diagnostics are appended to the human-readable output and returned under
-`metadata.diagnostics`.
-([crates/hya-tool/src/write.rs:21-96](../../crates/hya-tool/src/write.rs#L21-L96))
+([crates/hya-tool/src/write.rs](../../crates/hya-tool/src/write.rs),
+[crates/hya-tool/src/hashline/fs.rs](../../crates/hya-tool/src/hashline/fs.rs))
 
 ## EDIT
 
-### Schema and validation
+### Canonical schema
 
-The advertised EDIT schema requires `filePath`, `oldString`, and `newString`,
-with optional `replaceAll`. Runtime deserialization also accepts the short
-spellings `path`, `old`, `new`, and `replace_all`.
-([crates/hya-tool/src/edit.rs:28-124](../../crates/hya-tool/src/edit.rs#L28-L124),
-[crates/hya-tool/src/edit.rs:28-124](../../crates/hya-tool/src/edit.rs#L28-L124))
+Edit is a strict hashline operation and exposes only the closed `path + edits`
+schema. Every operation object is closed too:
 
-EDIT rejects identical old/new strings. An empty `oldString` is rejected for
-an existing path, but for a missing path it creates parent directories and the
-file from `newString`. This creation path is part of EDIT's implementation even
-though WRITE is the explicit full-file/create tool.
-([crates/hya-tool/src/edit.rs:28-124](../../crates/hya-tool/src/edit.rs#L28-L124))
+```json
+{
+  "path": "src/main.rs",
+  "edits": [
+    { "op": "replace", "pos": "12#KT", "lines": ["new line"] },
+    { "op": "append", "lines": ["last line"] },
+    { "op": "prepend", "pos": "1#JB", "lines": ["first line"] },
+    { "op": "replace_text", "oldText": "old", "newText": "new" }
+  ]
+}
+```
 
-Paths use the same lexical workdir resolution as READ. An outside path requires
-`Action::ExternalDirectory` on its parent wildcard, and every call requires
-`Action::Edit` on the resolved file before any content is changed.
-([crates/hya-tool/src/edit.rs:28-124](../../crates/hya-tool/src/edit.rs#L28-L124),
-[crates/hya-tool/src/edit.rs:28-124](../../crates/hya-tool/src/edit.rs#L28-L124))
+`replace` accepts an optional inclusive `end` anchor and empty `lines` to
+delete; `append` defaults to EOF and `prepend` defaults to BOF. `replace_text`
+requires exactly one exact occurrence. Literal lines must be file content, not
+copied hashline or diff prefixes. The parser rejects unknown fields, malformed
+anchors, mixed operation fields, duplicate/conflicting spans, and wrong types
+with stable input codes.
 
-### Matching and replacement
+### Anchor validation and recovery
 
-For an existing file, EDIT preserves its UTF-8 BOM and line-ending convention.
-LF parameters are converted to CRLF before matching a CRLF file, and a BOM in
-either the source or incoming replacement is retained exactly once.
-([crates/hya-tool/src/edit.rs:28-124](../../crates/hya-tool/src/edit.rs#L28-L124),
-[crates/hya-tool/src/edit_replace.rs:10-72](../../crates/hya-tool/src/edit_replace.rs#L10-L72),
-[crates/hya-tool/tests/edit.rs:113-141](../../crates/hya-tool/tests/edit.rs#L113-L141),
-[crates/hya-tool/tests/edit.rs:172-200](../../crates/hya-tool/tests/edit.rs#L172-L200))
+Each anchor is validated against the same pre-edit normalized snapshot. Text
+hints can disambiguate a hash collision; hashes are stale-reference aids, never
+integrity or authorization data. All spans are resolved before any mutation,
+then applied bottom-up. The runtime rejects edits that would make a non-empty
+file byte-empty and guards repeated successful payloads and no-op loops.
 
-Matching is deliberately broader than exact substring replacement. Candidates
-are tried in this order: exact, line-trimmed, anchored block similarity,
-whitespace-normalized, indentation-flexible, escape-normalized, trimmed
-boundary, context-aware, and multi-occurrence. The first candidate family that
-produces an acceptable match wins.
-([crates/hya-tool/src/edit_replace/replacers.rs:1-12](../../crates/hya-tool/src/edit_replace/replacers.rs#L1-L12))
+Only a direct `E_STALE_ANCHOR` failure enters recovery. Stored snapshots are
+tried newest-first, and each candidate is merged onto live content with exact
+context-three, fuzz-zero hunks. The first exact merge wins; conflicts retain
+the stale error plus a recovery note. No fuzzy relocation is attempted. Fresh
+anchors, diff metadata, diagnostics, and snapshots are generated from final
+post-formatter bytes. The prepared target identity is revalidated immediately
+before ordinary rename or hard-link truncate/open, so pathname/alias swaps fail
+before mutation. Formatter/LSP failure after mutation reports that the file
+changed while retaining the authoritative final snapshot.
 
-Without `replaceAll`, the selected candidate must occur exactly once. With
-`replaceAll`, all occurrences of that selected candidate are replaced. EDIT
-rejects missing matches, ambiguous matches, and fuzzy candidates whose matched
-span is disproportionately larger than `oldString`.
-([crates/hya-tool/src/edit_replace.rs:10-72](../../crates/hya-tool/src/edit_replace.rs#L10-L72),
-[crates/hya-tool/src/edit_replace.rs:97-105](../../crates/hya-tool/src/edit_replace.rs#L97-L105))
+The runtime is process-local and bounded by Session, workdir, and resolved
+target. It retains at most eight targets, four versions per target, and 32 MiB
+of snapshot text. A fixed lock-shard array serializes same-target mutations;
+hard-linked aliases share filesystem identity. Cancellation while waiting for
+the lock or during execution returns typed `cancelled` without exposing file
+contents. After a commit, cancellation first reconciles the actual bytes,
+snapshot, and duplicate guard, then returns the typed cancellation.
 
-Focused tests demonstrate line-trimmed, whitespace-normalized, anchored,
-escape-normalized, trimmed-boundary, and context-aware matches. These are
-contract behavior, not fallback behavior supplied by a provider.
-([crates/hya-tool/tests/edit_fuzzy.rs:56-118](../../crates/hya-tool/tests/edit_fuzzy.rs#L56-L118),
-[crates/hya-tool/tests/edit_fuzzy.rs:120-206](../../crates/hya-tool/tests/edit_fuzzy.rs#L120-L206),
-[crates/hya-tool/tests/edit_fuzzy.rs:208-275](../../crates/hya-tool/tests/edit_fuzzy.rs#L208-L275))
+([crates/hya-tool/src/edit.rs](../../crates/hya-tool/src/edit.rs),
+[crates/hya-tool/src/hashline/apply.rs](../../crates/hya-tool/src/hashline/apply.rs),
+[crates/hya-tool/src/hashline/merge.rs](../../crates/hya-tool/src/hashline/merge.rs),
+[crates/hya-tool/src/hashline/state.rs](../../crates/hya-tool/src/hashline/state.rs))
 
-### Post-edit processing and result
+## GREP
 
-After writing, EDIT runs the configured formatter, restores the desired BOM if
-the formatter changed it, touches the LSP plane, and collects diagnostics. A
-formatter can therefore change the final file beyond the literal replacement;
-a test explicitly installs a formatter that rewrites the whole file.
-([crates/hya-tool/src/edit.rs:28-124](../../crates/hya-tool/src/edit.rs#L28-L124),
-[crates/hya-tool/tests/edit.rs:143-170](../../crates/hya-tool/tests/edit.rs#L143-L170))
+### Canonical schema and search behavior
 
-Success returns `created`, replacement count, relative `title`, human-readable
-`output`, diagnostics, a unified diff, and addition/deletion metadata. The
-shape and diff contents are covered by the EDIT result test. This result path
-does not apply a local size cap to the diff or output.
-([crates/hya-tool/src/edit.rs:28-124](../../crates/hya-tool/src/edit.rs#L28-L124),
-[crates/hya-tool/tests/edit.rs:202-238](../../crates/hya-tool/tests/edit.rs#L202-L238))
+Grep is native Rust and does not invoke `rg`. Its closed schema requires
+`pattern` and accepts only `path`, `glob`, `ignoreCase`, `literal`, `context`
+(0..=5), and `limit` (1..=200) as optional fields:
+
+```json
+{
+  "pattern": "TODO|FIXME",
+  "path": "src",
+  "glob": "*.rs",
+  "ignoreCase": true,
+  "literal": false,
+  "context": 2,
+  "limit": 50
+}
+```
+
+Traversal is cancellable inside directory walking, ignore parsing, line discard,
+and matching. It is gitignore-aware, deterministic, and permission-checked for
+the search root before metadata probing. Caller globs stop at 4,096 bytes and
+both `[!x]` and `[^x]` mean class negation in caller and ignore patterns. Ignore
+sources/rule counts are bounded. A logical line over 1 MiB is discarded through
+its newline with one bounded warning, then later normal lines remain searchable.
+Regex and literal modes honor `ignoreCase`; context ranges are merged and
+separated in the result. The worker reads one extra match before setting
+`truncated`, so `limit` and `limit + 1` are distinguishable. Matched files are
+loaded through the shared text/hashline path, which records snapshots only for
+successfully rendered text.
+
+The result keeps the bounded model summary and adds
+`metadata.display.groups[]`, where each group is `{path, rows[]}` and each row
+contains `{line, text, isMatch}`. Per-file rows are numbered and carry enough
+metadata for syntax-aware TUI rendering without changing the durable Event
+model. Grep snapshots enable the same exact stale-anchor recovery path as Read
+and Edit.
+
+([crates/hya-tool/src/hashline/mod.rs](../../crates/hya-tool/src/hashline/mod.rs),
+[crates/hya-tool/src/grep.rs](../../crates/hya-tool/src/grep.rs))
 
 ## APPLY_PATCH
 
@@ -596,94 +584,109 @@ file type, the tool returns a tool error whose message is
 
 ### Shared implementation
 
-GLOB and GREP are in-process Rust implementations; they do not invoke
-`ripgrep`. Their recursive walker uses `std::fs::read_dir`, descends into
-directories, returns files only, and silently skips directories it cannot
-read. Both cap returned rows at `SEARCH_LIMIT == 100`.
-([crates/hya-tool/src/tool.rs:180](../../crates/hya-tool/src/tool.rs#L180),
-[crates/hya-tool/src/tool.rs:951-1002](../../crates/hya-tool/src/tool.rs#L951-L1002))
+GLOB, FIND, and GREP use native Rust traversal. GREP does not invoke `rg` or
+another external process. Search workers are deterministic and retain only
+bounded rows/metadata. GLOB and GREP check cancellation inside traversal work,
+not only between completed files. Relative roots resolve against the session
+workdir where the tool contract requires it; one kind-blind lexical external
+resource is authorized before metadata or target-kind probing.
 
-Path/include matching uses the same custom matcher as permission patterns. Its
-only metacharacter is `*`; `?`, character classes, and path-aware `**`
-semantics are not implemented. A pattern is tested against both the relative
-path and basename.
-([crates/hya-tool/src/permission.rs:432-460](../../crates/hya-tool/src/permission.rs#L432-L460),
-[crates/hya-tool/src/tool.rs:716-805](../../crates/hya-tool/src/tool.rs#L716-L805))
+### GLOB and FIND
 
-Both tools resolve a relative `path` against the workdir, require an
-action-specific permission on the pattern, and separately require
-`ExternalDirectory` permission when the search root is outside the workdir.
-([crates/hya-tool/src/tool.rs:716-805](../../crates/hya-tool/src/tool.rs#L716-L805),
-[crates/hya-tool/src/tool.rs:814-944](../../crates/hya-tool/src/tool.rs#L814-L944),
-[crates/hya-tool/src/tool.rs:814-944](../../crates/hya-tool/src/tool.rs#L814-L944))
-
-### GLOB
-
-GLOB requires `pattern` and optionally accepts a directory `path`, defaulting
-to the workdir. Passing an existing file as `path` is an input error. It walks
-recursively, matches files, sorts full paths lexically, and returns at most 100.
-([crates/hya-tool/src/tool.rs:1010-1056](../../crates/hya-tool/src/tool.rs#L1010-L1056))
-
-The result contains a relative `title`, count/truncation metadata,
-human-readable absolute-path `output`, workdir-relative legacy `paths`, and the
-pre-truncation `total`. No matches returns `No files found`.
-([crates/hya-tool/src/tool.rs:1010-1056](../../crates/hya-tool/src/tool.rs#L1010-L1056),
-[crates/hya-tool/tests/glob_grep.rs:83-129](../../crates/hya-tool/tests/glob_grep.rs#L83-L129))
-
-`metadata.truncated` is computed as `total >= 100`, so it is true when there are
-exactly 100 matches as well as when additional matches exist. It means the cap
-was reached, not necessarily that a 101st result was found.
-([crates/hya-tool/src/tool.rs:1010-1056](../../crates/hya-tool/src/tool.rs#L1010-L1056))
-
-### FIND
-
-FIND is a separate compatibility-oriented path matcher. It requires `pattern`,
-optionally accepts `path`, uses the same recursive walker and `*` matcher, and
-returns sorted `{path, size}` records. Unlike GLOB, this implementation has no
-100-result cap and does not perform the shared external-directory check. A
-supplied relative `path` is converted directly to `PathBuf`; it is not resolved
-against `ToolCtx.workdir` as GLOB/GREP paths are.
-([crates/hya-tool/src/tool.rs:814-944](../../crates/hya-tool/src/tool.rs#L814-L944))
+GLOB requires `pattern` and optionally accepts a directory `path` (defaulting to
+the workdir). Caller patterns stop at 4,096 bytes; `[!x]` and `[^x]` both express
+class negation. It returns lexically sorted file paths, capped at 100 rows, with
+count and truncation metadata. FIND retains its compatibility-oriented
+`{path,size}` result shape and existing unbounded positive result behavior.
 
 ### GREP
 
-GREP requires a non-empty Rust regular expression `pattern`, optionally accepts
-`path`, and optionally filters files with the custom `*`-only `include`
-matcher. Invalid regex syntax is an input error.
-([crates/hya-tool/src/tool.rs:814-944](../../crates/hya-tool/src/tool.rs#L814-L944))
+Grep requires a non-empty `pattern` and accepts only these optional fields:
+`path`, `glob`, `ignoreCase`, `literal`, `context` (0..=5), and `limit` (1..=200).
+The input object is closed and rejects unspecified keys.
+Regex and literal matching honor `ignoreCase`. Caller and ignore patterns share
+negated-class semantics. Traversal bounds ignore sources/rules, skips an
+over-budget ignore file with one bounded warning, and continues without
+retaining its rules. A file is streamed by logical line; after 1 MiB the worker
+discards bytes through the newline without growing the retained line, warns
+once, and continues so later matches remain visible. Unsupported/unreadable
+files are skipped without exposing their contents, and deterministic file/match
+order is preserved.
 
-If `path` identifies a file, GREP intentionally searches that file's **parent
-directory**, not only the named file. The Compat behavior is explicit in code
-and covered by a test where passing `src/main.rs` also returns a match from
-`src/lib.rs`.
-([crates/hya-tool/src/tool.rs:814-944](../../crates/hya-tool/src/tool.rs#L814-L944),
-[crates/hya-tool/tests/glob_grep.rs:164-187](../../crates/hya-tool/tests/glob_grep.rs#L164-L187))
+Context ranges merge when adjacent or overlapping and use separators between
+disjoint ranges. Collection observes one additional match before setting
+`truncated`, so an exact limit is distinct from `limit + 1`. Matched files are
+loaded through the shared text normalizer and hashline formatter; successful
+loads update the same Session/workdir/target snapshot history used by Read and
+Edit, enabling exact stale-anchor recovery.
 
-Files are sorted lexically, decoded with `tokio::fs::read_to_string`, and
-searched line by line. Files that cannot be decoded/read are silently skipped.
-Collection stops immediately at 100 matches, so GREP does not calculate the
-actual total beyond the cap.
-([crates/hya-tool/src/tool.rs:814-944](../../crates/hya-tool/src/tool.rs#L814-L944))
+The result contains a bounded summary plus
+`metadata.display.groups[]`. Each group has a file `path` and bounded `rows`
+with `{line, text, isMatch}`. This metadata is a presentation hint, not a new
+event or read-model store. It lets the TUI render a titled block per file with
+file-derived syntax highlighting while keeping match identity visible.
 
-The result contains the regex as `title`, match-count/truncation metadata,
-grouped human-readable output, structured `{file, line, text}` matches, and a
-`total` equal to the number returned. No matches returns `No files found`.
-As with GLOB, `truncated` becomes true at exactly 100 rows, which signals only
-that collection reached the cap.
-([crates/hya-tool/src/tool.rs:814-944](../../crates/hya-tool/src/tool.rs#L814-L944),
-[crates/hya-tool/tests/glob_grep.rs:131-162](../../crates/hya-tool/tests/glob_grep.rs#L131-L162))
+([crates/hya-tool/src/grep.rs](../../crates/hya-tool/src/grep.rs),
+[crates/hya-tool/src/hashline/mod.rs](../../crates/hya-tool/src/hashline/mod.rs))
+
+## Result envelope and presentation boundary
+
+Every completed builtin coding-tool result keeps the shared `{title, output,
+metadata}` envelope. `output` is bounded model-facing text; `metadata` is a
+bounded host-facing semantic payload. Read, Write, and Grep expose only bounded
+line/file facts, Edit may carry a separately bounded diff and diagnostics, and
+Bash exposes bounded command/output status plus truncation and artifact metadata.
+The structural cap serializes each nested row/group exactly once and is
+idempotent. The engine reapplies it after post-tool hooks, immediately before
+durable publication, so neither metadata nor a hook bypasses the final bound.
+Provider replay prefers the string `output` member; an object without that
+member falls back to serialized JSON.
+
+The hya TypeScript UI consumes projected SDK `ToolPart` state only. SyncProvider
+owns initial hydration and live replacement; presentation does not fetch, poll,
+replay Events, hydrate a second message store, or schedule a timer. Completed
+parts use one allowlisted presentation boundary:
+
+| Tool | Completed presentation |
+| --- | --- |
+| Read | Titled file/directory block with file-derived syntax highlighting, stable line numbers/offsets, authoritative truncation flags, and bounded collapse. Attachments and directories keep their existing readable fallback. |
+| Write | Titled file block with final post-formatter text, syntax highlighting, stable line numbers, first three positioned severity-one diagnostics, and bounded collapse. |
+| Edit | Existing semantic diff primitive, with final-state metadata, first three positioned severity-one diagnostics, and distinct narrow unified rows. |
+| Grep | One titled block per matched file, numbered context/match rows, explicit match identity, authoritative group/row truncation, and file-derived highlighting. |
+| Bash / hidden Shell | One command/output block: nullable exit remains valid for timeout/signal, only the command is syntax-highlighted, output is plain ANSI-stripped text, and textual exit/timeout/truncation status remains. `env` and unknown input keys are excluded. |
+
+Pending, streaming, permission, denied, malformed-data, attachment, directory,
+diagnostic, error, and generic fallback states remain on their existing paths.
+Malformed or compacted metadata returns to the readable inline/error fallback;
+it never renders arbitrary input keys. Local expand/collapse is reversible UI
+state and is not persisted as a new Event. At 80 columns Edit uses unified
+layout and keeps removed/added rows separate; wide terminals may use split
+layout above 120 columns. Replaying a Session through the same SDK projection
+produces the same completed blocks.
+
+([packages/hya-tui-ts/src/hya/coding-tool-presentation.tsx](../../packages/hya-tui-ts/src/hya/coding-tool-presentation.tsx))
 
 ## Permissions and execution
 
+
 The registry attaches invocation-level permission metadata to every canonical
 name. READ, LS, GLOB, FIND, GREP, LSP, SKILL, LIST_AGENTS, ROSTER, and CHANNELS
-are `ReadOnly`; TASK is `Task`; SHELL and BASH are `Command`; other builtins are
-general `Tool` calls. Read-only/task invocations default to allow, general tool
-invocations default to ask, command invocations extract the command string,
-and MCP invocations use an MCP subject.
-([crates/hya-tool/src/tool.rs:189-196](../../crates/hya-tool/src/tool.rs#L189-L196),
-[crates/hya-tool/src/tool.rs:626-634](../../crates/hya-tool/src/tool.rs#L626-L634),
-[crates/hya-tool/tests/tool.rs:148-188](../../crates/hya-tool/tests/tool.rs#L148-L188))
+are `ReadOnly`; TASK is `Task`; BASH is `Command`; other builtins are general
+`Tool` calls. The hidden `shell` alias resolves to the same Bash tool and uses
+the same command permission subject. Read-only/task invocations default to
+allow, general tool invocations default to ask, and command invocations include
+the full command string.
+([crates/hya-tool/src/tool.rs](../../crates/hya-tool/src/tool.rs))
+
+Coding-tool permission order is stable: invocation admission runs first. Read
+and Grep derive the containing lexical `<dir>/*` scope and authorize it before
+metadata/existence/target-kind probing; denied file and directory siblings use
+the same resource. Tool-specific permission follows, then filesystem work.
+Bash checks command permission before process creation and checks
+`ExternalDirectory` for an outside `cwd`. Paths are absolutized and lexically
+normalized without symlink canonicalization, preserving the existing symlink
+policy. A call-scoped invocation grant never satisfies the separate
+external-directory check.
 
 At normal app startup, the action-level snapshot explicitly allows READ, GLOB,
 and GREP. Tools still make their own typed action/resource assertions. An
@@ -692,21 +695,18 @@ which remains independently enforceable under `default`/`strict`. Under
 `permission.model: allow`, resource checks (including `ExternalDirectory`)
 auto-approve unless a snapshot rule explicitly denies them; `danger` bypasses
 checks entirely (including Deny).
-([crates/hya-app/src/runtime.rs:3917-3940](../../crates/hya-app/src/runtime.rs#L3917-L3940),
-[crates/hya-tool/src/permission.rs:539-608](../../crates/hya-tool/src/permission.rs#L539-L608))
 
 The engine processes each model tool call by running plugin before-hooks,
-resolving canonical names or aliases, authorizing the invocation, constructing
-`ToolCtx`, executing the tool, and running after-hooks. Permission errors cannot
-be rewritten by an after-hook. Success becomes `Event::ToolResult` (after
-`cap_tool_output`); failure becomes `Event::ToolError` with a structured error
-value and display message.
-([crates/hya-core/src/engine/turn.rs:157-200](../../crates/hya-core/src/engine/turn.rs#L157-L200))
+resolving canonical names or hidden aliases, authorizing the invocation,
+constructing `ToolCtx`, executing the tool, and running after-hooks. Permission
+errors cannot be rewritten by an after-hook. Success is capped before hooks and
+again after the final hook replacement, then becomes `Event::ToolResult`;
+failure becomes `Event::ToolError` with a structured error value and display
+message. Unknown tools and malformed input fail before permission asks. All
+coding-tool cancellation paths preserve the typed `cancelled` error.
 
-Tool errors are serialized as `{"error":{"type":...,"message":...}}` with these
-wire `type` strings
-([crates/hya-tool/src/tool.rs:40-88](../../crates/hya-tool/src/tool.rs#L40-L88),
-[crates/hya-core/src/engine/tool_error.rs:4-32](../../crates/hya-core/src/engine/tool_error.rs#L4-L32)):
+Tool errors are serialized as `{"error":{"type":...,"message":...}}` with
+these wire `type` strings:
 
 | Variant | Wire `type` |
 | --- | --- |
@@ -796,28 +796,31 @@ can collide directly with a builtin or another plugin.
 ([crates/hya-tool/src/tool.rs:313-347](../../crates/hya-tool/src/tool.rs#L313-L347),
 [crates/hya-app/src/runtime.rs:3917-3940](../../crates/hya-app/src/runtime.rs#L3917-L3940))
 
+## Provenance
+
+Read, Edit, and Grep behavior follows `pi-hashline-edit` 0.8.3, pinned by npm
+git head `ba7db9943d0f58499b24c1f6bd64722580f772a5` and tarball SHA-1
+`8985f24c3493be375cc225a5522ed54de8daabc9`. Write and Bash are host contracts
+aligned with `@oh-my-pi/pi-coding-agent` 18.1.3 at
+`can1357/oh-my-pi@0b769cc4dd9771373335430385d1d2f696dc3498`. The Rust
+implementation is native and does not add a JavaScript runtime dependency;
+license notices are shipped with the source-derived implementation.
+
 ## Verified boundaries
 
-The strongest executable contracts for the focused tools are:
+The focused contracts are owned by these seams:
 
-- READ file/directory/media/path/permission behavior:
-  [crates/hya-tool/tests/read.rs:60-267](../../crates/hya-tool/tests/read.rs#L60-L267)
-- READ text limits:
-  [crates/hya-tool/tests/read_limits.rs:56-117](../../crates/hya-tool/tests/read_limits.rs#L56-L117)
-- READ missing-path suggestions:
-  [crates/hya-tool/tests/read_missing.rs:56-77](../../crates/hya-tool/tests/read_missing.rs#L56-L77)
-- EDIT permissions, BOM/line endings, formatter, and result metadata:
-  [crates/hya-tool/tests/edit.rs:80-238](../../crates/hya-tool/tests/edit.rs#L80-L238)
-- EDIT fuzzy matching:
-  [crates/hya-tool/tests/edit_fuzzy.rs:56-275](../../crates/hya-tool/tests/edit_fuzzy.rs#L56-L275)
-- GLOB/GREP path, output, include, permission, and file-path widening:
-  [crates/hya-tool/tests/glob_grep.rs:83-214](../../crates/hya-tool/tests/glob_grep.rs#L83-L214)
-- Canonical names, hidden aliases, and registry permission metadata:
-  [crates/hya-tool/tests/tool.rs:111-188](../../crates/hya-tool/tests/tool.rs#L111-L188)
+- Native schemas and adapters: [`crates/hya-tool/src/read.rs`](../../crates/hya-tool/src/read.rs), [`write.rs`](../../crates/hya-tool/src/write.rs), [`edit.rs`](../../crates/hya-tool/src/edit.rs), [`grep.rs`](../../crates/hya-tool/src/grep.rs), and [`shell.rs`](../../crates/hya-tool/src/shell.rs).
+- Shared hashline formatting, strict operations, exact recovery, atomic writes,
+  snapshots, and lock bounds: [`crates/hya-tool/src/hashline/`](../../crates/hya-tool/src/hashline/).
+- Invocation/resource permission and typed error mapping:
+  [`crates/hya-tool/src/permission.rs`](../../crates/hya-tool/src/permission.rs)
+  and [`crates/hya-core/src/engine/tool_error.rs`](../../crates/hya-core/src/engine/tool_error.rs).
+- Durable result projection and provider replay: [`docs/architecture/event-model.md`](event-model.md).
+- Hya-owned completed coding-tool views:
+  [`packages/hya-tui-ts/src/hya/coding-tool-presentation.tsx`](../../packages/hya-tui-ts/src/hya/coding-tool-presentation.tsx).
 
-The source-derived edge cases called out above are intentional descriptions of
-current behavior, not broader compatibility guarantees. In particular, tests
-do not currently pin GLOB/GREP behavior at exactly 100 rows, FIND's lack of an
-external-directory check, or READ's partial `totalLines` value after the byte
-cap. Those observations should be rechecked if the corresponding collectors or
-permission paths change.
+These boundaries describe shipped behavior, not a promise of full Compat
+superset behavior. Historical 0.36.8 `ToolError` Events remain immutable and
+visible on replay. An already-running 0.36.8 backend must restart before new
+calls use the 0.36.9 schemas and runtime.

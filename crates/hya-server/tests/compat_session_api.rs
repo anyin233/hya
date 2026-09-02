@@ -175,9 +175,12 @@ async fn edit_state() -> AppState {
             FakeStep::ToolCall {
                 name: "edit".to_string(),
                 input: json!({
-                    "filePath": "diff-target.txt",
-                    "oldString": "old\n",
-                    "newString": "new\n",
+                    "path": "diff-target.txt",
+                    "edits": [{
+                        "op": "replace_text",
+                        "oldText": "old\n",
+                        "newText": "new\n",
+                    }],
                 }),
             },
             FakeStep::Finish(FinishReason::ToolCalls),
@@ -223,17 +226,23 @@ async fn two_edit_state() -> AppState {
             FakeStep::ToolCall {
                 name: "edit".to_string(),
                 input: json!({
-                    "filePath": "first-target.txt",
-                    "oldString": "first old\n",
-                    "newString": "first new\n",
+                    "path": "first-target.txt",
+                    "edits": [{
+                        "op": "replace_text",
+                        "oldText": "first old\n",
+                        "newText": "first new\n",
+                    }],
                 }),
             },
             FakeStep::ToolCall {
                 name: "edit".to_string(),
                 input: json!({
-                    "filePath": "second-target.txt",
-                    "oldString": "second old\n",
-                    "newString": "second new\n",
+                    "path": "second-target.txt",
+                    "edits": [{
+                        "op": "replace_text",
+                        "oldText": "second old\n",
+                        "newText": "second new\n",
+                    }],
                 }),
             },
             FakeStep::Finish(FinishReason::ToolCalls),
@@ -682,7 +691,7 @@ async fn compat_session_command_and_shell_routes_return_created_messages() {
     assert_eq!(shell["info"]["providerID"], "test-provider");
     assert_eq!(shell["info"]["modelID"], "shell-selected");
     assert_eq!(shell["parts"][0]["type"], "tool");
-    assert_eq!(shell["parts"][0]["tool"], "shell");
+    assert_eq!(shell["parts"][0]["tool"], "bash");
     assert_eq!(shell["parts"][0]["state"]["status"], "completed");
     assert!(
         shell["parts"][0]["state"]["output"]

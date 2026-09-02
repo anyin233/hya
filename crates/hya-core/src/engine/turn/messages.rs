@@ -203,14 +203,14 @@ mod tests {
             .into_iter()
             .map(|schema| schema.name.as_str().to_string())
             .collect::<BTreeSet<_>>();
-        assert_eq!(builtins.len(), 28);
+        assert_eq!(builtins.len(), 27);
 
         let gpt = builtins
             .iter()
             .filter(|name| include_tool(name, "12th-oai/gpt-5.6-sol"))
             .cloned()
             .collect::<BTreeSet<_>>();
-        assert_eq!(gpt.len(), 26);
+        assert_eq!(gpt.len(), 25);
         assert!(gpt.contains("apply_patch"));
         assert!(!gpt.contains("write"));
         assert!(!gpt.contains("edit"));

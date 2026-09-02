@@ -65,6 +65,14 @@ The envelope is the unit stored in SQLite replay results and streamed over SSE
 for the native event bus. Compat permission frames use a separate payload shape
 (see [Permission SSE payloads](#permission-sse-payloads-server-side)).
 
+Durable Events are append-only and immutable after persistence. A projection may
+replace its current derived value while folding a later event, but it never
+rewrites, retries, or deletes an earlier envelope. Historical tool errors and
+their original typed values therefore remain visible in replay. Live-only
+`seq: 0` envelopes are not persisted and are outside durable idempotence; a
+fresh replay uses the persisted final state rather than reconstructing live
+stream deltas.
+
 ### Full `Event` catalog (54 variants)
 
 Reducer effects:
@@ -162,6 +170,35 @@ take the normal durable `emit_for_actor` path inside `collect_stream_round`.
 | `tool_result` | `session`, `message`, `part`, `call`, `output: Value`, `time_ms: u64` | → `Completed { input, output, time_ms }` | Fold |
 | `tool_error` | `session`, `message`, `part`, `call`, `message_text: String`, `value: Option<Value>` | → `Error { input, message, value }` | Fold. Engine commonly sets `value` to `{ "error": { "type": "...", "message": "..." } }`. |
 | `tool_part_updated` | `session`, `message`, `part`, `state: ToolPartState` | → given state | Fold: direct overwrite (fork/copy and out-of-band progress) |
+
+##### Coding-tool result payloads
+
+`tool_call_requested` stores the canonical model input; `tool_result` stores the
+successful `{title, output, metadata}` value; and `tool_error` stores the typed
+`{error:{type,message}}` value when available. These are ordinary durable tool
+events, not a coding-tool-specific event family or a second result store. The
+shape-aware cap keeps bounded Read/Grep/Bash output and host presentation
+metadata structured, while Edit may retain a separately bounded diff. Every
+metadata collection has independent byte/row limits and explicit truncation;
+metadata cannot bypass the result cap. Provider replay consumes an object's
+string `output` field and falls back to serialized JSON only when that field is
+absent.
+
+The projected `ToolPartState::Completed` value is therefore sufficient for a
+TUI to render a completed coding block after live delivery or Session replay.
+The hya-owned presentation layer reads projected SDK state only; it does not
+read or fold raw Events. A malformed or compacted result remains a typed
+completed/error value for the projection and uses the presentation fallback,
+not arbitrary input-key rendering. `env` values and ANSI terminal control data
+are not presentation metadata.
+
+When a tool-level cancellation reaches the terminal tool-event boundary, it is a
+durable `tool_error` with wire type `cancelled`; an actor-level turn cancellation
+may instead terminate the turn and finish the surrounding message/step with
+`cancelled` without emitting a per-call result. A nonzero Bash exit or timeout
+remains a completed structured result with status metadata; it is not converted
+to a durable `ToolError` unless execution itself is cancelled or fails before a
+terminal result is built.
 
 #### Member lifecycle (parent log)
 
@@ -507,3 +544,14 @@ The engine is responsible for executing tool calls and appending
 The store serializes `Event` JSON into `event_log.payload`. It does not maintain
 a separate projection table for the current read path. `read_projection` replays
 the session and folds through the shared reducer.
+
+## Version and restart boundary
+
+The 0.36.9 coding-tool schemas and runtime are selected when a backend starts.
+An already-running 0.36.8 backend must restart before future calls use the
+canonical hashline Read/Edit/Grep, closed Write, or canonical Bash contracts.
+Replaying a Session does not rewrite its history: captured 0.36.8 Read or Task
+errors remain the original durable `tool_error` Events. Hashline snapshots and
+duplicate/recovery guards are process-local, so restart discards that transient
+state while current-file anchor validation and durable Event replay remain
+available.

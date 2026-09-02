@@ -104,8 +104,8 @@ test("tool.definition mutates hya tool definitions during chat params", async ()
       '  id: "tool-definition",',
       "  server: async () => ({",
       '    "tool.definition": async (input, output) => {',
-      '      if (input.toolID !== "shell") return',
-      '      output.description = "Run a reviewed shell command"',
+      '      if (input.toolID !== "bash") return',
+      '      output.description = "Run a reviewed bash command"',
       '      output.parameters = { type: "object", properties: { command: { type: "string", minLength: 1 } }, required: ["command"] }',
       "    },",
       "  }),",
@@ -127,8 +127,8 @@ test("tool.definition mutates hya tool definitions during chat params", async ()
           messages: [],
           tools: [
             {
-              name: "shell",
-              description: "old shell",
+              name: "bash",
+              description: "old bash",
               input_schema: { type: "object" },
               output_schema: { type: "object", properties: { output: { type: "string" } } },
             },
@@ -154,8 +154,8 @@ test("tool.definition mutates hya tool definitions during chat params", async ()
       messages: [],
       tools: [
         {
-          name: "shell",
-          description: "Run a reviewed shell command",
+          name: "bash",
+          description: "Run a reviewed bash command",
           input_schema: {
             type: "object",
             properties: { command: { type: "string", minLength: 1 } },

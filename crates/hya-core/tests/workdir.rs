@@ -158,7 +158,7 @@ fn completed_shell_output(projection: &hya_proto::Projection) -> String {
                 name,
                 state: ToolPartState::Completed { input, output, .. },
                 ..
-            } if name.as_str() == "shell" && input["command"].as_str() == Some("pwd") => {
+            } if name.as_str() == "bash" && input["command"].as_str() == Some("pwd") => {
                 output["output"].as_str().map(str::to_string)
             }
             _ => None,
@@ -239,7 +239,7 @@ async fn run_turn_shell_tool_uses_session_workdir_not_agent_workdir() {
     let provider = FakeProvider::scripted_turns(vec![
         vec![
             FakeStep::ToolCall {
-                name: "shell".to_string(),
+                name: "bash".to_string(),
                 input: json!({ "command": "pwd" }),
             },
             FakeStep::Finish(FinishReason::ToolCalls),
