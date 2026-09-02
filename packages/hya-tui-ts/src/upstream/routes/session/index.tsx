@@ -108,6 +108,7 @@ import {
   resolveTaskSessionId,
   type TaskMemberView,
 } from "./task-presentation"
+import { CodingToolPresentation, presentCodingTool } from "../../../hya/coding-tool-presentation"
 
 addDefaultParsers(parsers.parsers)
 
@@ -369,8 +370,11 @@ export function Session() {
   createEffect(() => {
     const sessionID = route.sessionID
     void (async () => {
-      const result = await sdk.client.session.get({ sessionID }, { throwOnError: true })
-      if (!result.data) {
+      await sync.session.sync(sessionID)
+      if (route.sessionID !== sessionID) return
+
+      const session = sync.session.get(sessionID)
+      if (!session) {
         toast.show({
           message: `Session not found: ${sessionID}`,
           variant: "error",
@@ -380,9 +384,8 @@ export function Session() {
         return
       }
 
-      editor.reconnect(result.data.directory)
-      await sync.session.sync(sessionID)
-      if (route.sessionID === sessionID && scroll) scroll.scrollBy(100_000)
+      editor.reconnect(session.directory)
+      if (scroll) scroll.scrollBy(100_000)
     })().catch((error) => {
       if (route.sessionID !== sessionID) return
       toast.show({
@@ -1351,15 +1354,15 @@ export function Session() {
       label: [
         rosterLabel(node?.roster?.handle) ?? node?.member?.subagent_type ?? "subagent",
         node?.roster?.agent_type ?? node?.member?.subagent_type ?? node?.agent,
-        lifecycle.label,
-        node?.roster?.current_task ?? node?.member?.description,
-        placement,
-        focused ? "focused" : "open",
         "read-only",
+        focused ? "focused" : "open",
+        lifecycle.label,
+        placement,
         focused ? "ctrl+x ←/→ panes · 1-9 · esc main · ctrl+x w close" : undefined,
       ]
         .filter(Boolean)
         .join(" - "),
+      task: node?.roster?.current_task ?? node?.member?.description,
       working: lifecycle.working,
     }
   }
@@ -1386,6 +1389,7 @@ export function Session() {
             {presentation().label}
           </text>
         </box>
+        <Show when={presentation().task}>{(task) => <text fg={theme.textMuted}>↳ {task()}</text>}</Show>
         <scrollbox
           ref={(value) => observationScrolls.set(props.paneID, value)}
           stickyScroll
@@ -2168,6 +2172,10 @@ function TextPart(props: { last: boolean; part: TextPart; message: AssistantMess
 function ToolPart(props: { last: boolean; part: ToolPart; message: AssistantMessage }) {
   const ctx = use()
   const display = createMemo(() => toolDisplay(props.part.tool))
+  const normalizedCodingTool = createMemo(() => {
+    if (props.part.state.status !== "completed") return undefined
+    return presentCodingTool(props.part)
+  })
 
   // Hide tool if showDetails is false and tool completed successfully.
   // Always keep `task` rows: users need subagent status in the main message
@@ -2200,7 +2208,20 @@ function ToolPart(props: { last: boolean; part: ToolPart; message: AssistantMess
   return (
     <Show when={!shouldHide()}>
       <Switch>
+        <Match when={normalizedCodingTool()}>
+          {(view) => (
+            <CodingToolPresentation
+              view={view()}
+              width={ctx.width}
+              diffStyle={ctx.tui.diff_style}
+              diffWrapMode={ctx.diffWrapMode()}
+            />
+          )}
+        </Match>
         <Match when={display() === "bash"}>
+          <Shell {...toolprops} />
+        </Match>
+        <Match when={display() === "shell"}>
           <Shell {...toolprops} />
         </Match>
         <Match when={display() === "glob"}>
@@ -2513,18 +2534,18 @@ function Shell(props: ToolProps) {
     return collapsed().output
   })
 
-  const workdirDisplay = createMemo(() => {
-    const workdir = stringValue(props.input.workdir)
-    if (!workdir || workdir === ".") return undefined
-    return pathFormatter.format(workdir)
+  const cwdDisplay = createMemo(() => {
+    const cwd = stringValue(props.input.cwd)
+    if (!cwd || cwd === ".") return undefined
+    return pathFormatter.format(cwd)
   })
 
   const title = createMemo(() => {
-    const desc = stringValue(props.input.description) ?? "Shell"
-    const wd = workdirDisplay()
-    if (!wd) return `# ${desc}`
-    if (desc.includes(wd)) return `# ${desc}`
-    return `# ${desc} in ${wd}`
+    const resultTitle = props.part.state.status === "completed" ? stringValue(props.part.state.title) : undefined
+    const label = resultTitle ?? "Shell"
+    const cwd = cwdDisplay()
+    if (!cwd || label.includes(cwd)) return `# ${label}`
+    return `# ${label} in ${cwd}`
   })
 
   return (
@@ -2566,27 +2587,27 @@ function Write(props: ToolProps) {
   return (
     <Switch>
       <Match when={props.metadata.diagnostics !== undefined}>
-        <BlockTool title={"# Wrote " + pathFormatter.format(stringValue(props.input.filePath))} part={props.part}>
+        <BlockTool title={"# Wrote " + pathFormatter.format(toolPath(props.input))} part={props.part}>
           <line_number fg={theme.textMuted} minWidth={3} paddingRight={1}>
             <code
               conceal={false}
               fg={theme.text}
-              filetype={filetype(stringValue(props.input.filePath))}
+              filetype={filetype(toolPath(props.input))}
               syntaxStyle={syntax()}
               content={code()}
             />
           </line_number>
-          <Diagnostics diagnostics={props.metadata.diagnostics} filePath={stringValue(props.input.filePath) ?? ""} />
+          <Diagnostics diagnostics={props.metadata.diagnostics} filePath={toolPath(props.input) ?? ""} />
         </BlockTool>
       </Match>
       <Match when={true}>
         <InlineTool
           icon="←"
           pending="Preparing write..."
-          complete={stringValue(props.input.filePath)}
+          complete={toolPath(props.input)}
           part={props.part}
         >
-          Write {pathFormatter.format(stringValue(props.input.filePath))}
+          Write {pathFormatter.format(toolPath(props.input))}
         </InlineTool>
       </Match>
     </Switch>
@@ -2622,11 +2643,11 @@ function Read(props: ToolProps) {
       <InlineTool
         icon="→"
         pending="Reading file..."
-        complete={stringValue(props.input.filePath)}
+        complete={toolPath(props.input)}
         spinner={isRunning()}
         part={props.part}
       >
-        Read {pathFormatter.format(stringValue(props.input.filePath))} {input(props.input, ["filePath"])}
+        Read {pathFormatter.format(toolPath(props.input))}
       </InlineTool>
       <For each={loaded()}>
         {(filepath) => (
@@ -2879,14 +2900,14 @@ function Edit(props: ToolProps) {
     return ctx.width > 120 ? "split" : "unified"
   })
 
-  const ft = createMemo(() => filetype(stringValue(props.input.filePath)))
+  const ft = createMemo(() => filetype(toolPath(props.input)))
 
   const diffContent = createMemo(() => stringValue(props.metadata.diff) ?? "")
 
   return (
     <Switch>
       <Match when={stringValue(props.metadata.diff) !== undefined}>
-        <BlockTool title={"← Edit " + pathFormatter.format(stringValue(props.input.filePath))} part={props.part}>
+        <BlockTool title={"← Edit " + pathFormatter.format(toolPath(props.input))} part={props.part}>
           <box paddingLeft={1}>
             <diff
               diff={diffContent()}
@@ -2908,12 +2929,12 @@ function Edit(props: ToolProps) {
               removedLineNumberBg={theme.diffRemovedLineNumberBg}
             />
           </box>
-          <Diagnostics diagnostics={props.metadata.diagnostics} filePath={stringValue(props.input.filePath) ?? ""} />
+          <Diagnostics diagnostics={props.metadata.diagnostics} filePath={toolPath(props.input) ?? ""} />
         </BlockTool>
       </Match>
       <Match when={true}>
-        <InlineTool icon="←" pending="Preparing edit..." complete={stringValue(props.input.filePath)} part={props.part}>
-          Edit {pathFormatter.format(stringValue(props.input.filePath))} {input({ replaceAll: props.input.replaceAll })}
+        <InlineTool icon="←" pending="Preparing edit..." complete={toolPath(props.input)} part={props.part}>
+          Edit {pathFormatter.format(toolPath(props.input))} {input({ replaceAll: props.input.replaceAll })}
         </InlineTool>
       </Match>
     </Switch>
@@ -3101,6 +3122,10 @@ function input(input: Record<string, unknown>, omit?: string[]): string {
   return `[${primitives.map(([key, value]) => `${key}=${value}`).join(", ")}]`
 }
 
+/** Resolve the canonical path or retained legacy spelling for fallback rows. */
+function toolPath(input: Record<string, unknown>): string | undefined {
+  return stringValue(input.path) ?? stringValue(input.filePath)
+}
 function stringValue(value: unknown) {
   return typeof value === "string" ? value : undefined
 }
@@ -3111,6 +3136,7 @@ function numberValue(value: unknown) {
 
 const toolDisplays = new Set([
   "bash",
+  "shell",
   "glob",
   "read",
   "grep",

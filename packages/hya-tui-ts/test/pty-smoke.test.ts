@@ -58,6 +58,427 @@ test("semantic_input_flushes_before_next_action", async () => {
 
   expect(batches).toEqual(["chord-a", "chord-b"])
 })
+/**
+ * Exercise all completed coding-tool views through a real backend and hya-ts
+ * PTY, then prove the same Session replays the persisted presentation.
+ */
+test("Linux PTY coding tool blocks render live, replay, and narrow unified diff", async () => {
+  const temp = await realpath(await mkdtemp(path.join(os.tmpdir(), "hya-pty-coding-tools-")))
+  const project = path.join(temp, "project")
+  const home = path.join(temp, "home")
+  const configHome = path.join(temp, "config")
+  const liveTranscript = path.join(temp, "live")
+  const replayTranscript = path.join(temp, "replay")
+  const narrowTranscript = path.join(temp, "narrow")
+  await mkdir(path.join(project, "src"), { recursive: true })
+  await mkdir(home)
+  await mkdir(path.join(configHome, "hya"), { recursive: true })
+  await Bun.write(
+    path.join(project, "src", "main.ts"),
+    [
+      'export const header = "CODING_HEADER"',
+      'export const answer = "EDIT_OLD_VALUE"',
+      'export const needle = "GREP_MATCH_VALUE"',
+      'export const tail = "GREP_CONTEXT_VALUE"',
+      "",
+    ].join("\n"),
+  )
+  await Bun.write(
+    path.join(project, "src", "read-only.ts"),
+    ['export const header = "READ_HEADER"', 'export const value = "READ_ONLY_VALUE"', ""].join("\n"),
+  )
+  await mkdir(path.join(project, "src", "read-directory"))
+
+  const codingSteps = [
+    {
+      kind: "tool" as const,
+      name: "read",
+      input: { path: "src/read-only.ts", offset: 2, limit: 10 },
+    },
+    {
+      kind: "tool" as const,
+      name: "read",
+      input: { path: "src/read-directory" },
+    },
+    {
+      kind: "tool" as const,
+      name: "edit",
+      input: {
+        path: "src/main.ts",
+        edits: [
+          {
+            op: "replace_text",
+            oldText: 'export const answer = "EDIT_OLD_VALUE"',
+            newText: 'export const answer = "EDIT_NEW_VALUE"',
+          },
+        ],
+      },
+    },
+    {
+      kind: "tool" as const,
+      name: "write",
+      input: {
+        path: "src/generated.ts",
+        content: 'export const generated = "WRITE_LIVE_VALUE"\n',
+      },
+    },
+    {
+      kind: "tool" as const,
+      name: "grep",
+      input: { pattern: "GREP_MATCH_VALUE", path: "src", literal: true, context: 1, limit: 20 },
+    },
+    {
+      kind: "tool" as const,
+      name: "bash",
+      input: {
+        command: 'printf "$BASH_OUTPUT_VALUE"',
+        env: { BASH_OUTPUT_VALUE: "BASH_OUTPUT_ONLY", SECRET_ENV_VALUE: "must-not-render" },
+      },
+    },
+    { kind: "text" as const, text: "CODING_TOOLS_DONE" },
+  ]
+
+  /** Encode one deterministic OpenAI-compatible streaming completion. */
+  const completion = (round: number) => {
+    const step = codingSteps[round] ?? codingSteps.at(-1)!
+    if (step.kind === "text") {
+      return [
+        {
+          id: `coding-tools-${round}`,
+          object: "chat.completion.chunk",
+          created: 0,
+          model: "coding-tools",
+          choices: [{ index: 0, delta: { role: "assistant", content: "" }, finish_reason: null }],
+        },
+        {
+          id: `coding-tools-${round}`,
+          object: "chat.completion.chunk",
+          created: 0,
+          model: "coding-tools",
+          choices: [{ index: 0, delta: { content: step.text }, finish_reason: null }],
+        },
+        { choices: [{ index: 0, delta: {}, finish_reason: "stop" }] },
+        "[DONE]",
+      ]
+    }
+    const argumentsText = JSON.stringify(step.input)
+    return [
+      {
+        id: `coding-tools-${round}`,
+        object: "chat.completion.chunk",
+        created: 0,
+        model: "coding-tools",
+        choices: [
+          {
+            index: 0,
+            delta: {
+              role: "assistant",
+              content: "",
+              tool_calls: [
+                {
+                  index: 0,
+                  id: `coding-call-${round}`,
+                  type: "function",
+                  function: { name: step.name, arguments: "" },
+                },
+              ],
+            },
+            finish_reason: null,
+          },
+        ],
+      },
+      {
+        id: `coding-tools-${round}`,
+        object: "chat.completion.chunk",
+        created: 0,
+        model: "coding-tools",
+        choices: [
+          {
+            index: 0,
+            delta: { tool_calls: [{ index: 0, function: { arguments: argumentsText } }] },
+            finish_reason: null,
+          },
+        ],
+      },
+      { choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] },
+      "[DONE]",
+    ]
+  }
+
+  /** Return a complete SSE response without timing-dependent fixture delays. */
+  const sse = (frames: readonly unknown[]) =>
+    new Response(
+      frames
+        .map((frame) => `data: ${typeof frame === "string" ? frame : JSON.stringify(frame)}\n\n`)
+        .join(""),
+      { headers: { "content-type": "text/event-stream", "cache-control": "no-cache" } },
+    )
+
+  let providerRequests = 0
+  const provider = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch(request) {
+      if (!new URL(request.url).pathname.endsWith("/chat/completions")) {
+        return new Response("not found", { status: 404 })
+      }
+      return sse(completion(providerRequests++))
+    },
+  })
+  await Bun.write(
+    path.join(configHome, "hya", "config.yaml"),
+    [
+      "default_model: fixture/coding-tools",
+      "providers:",
+      "  fixture:",
+      "    kind: openai-completion",
+      `    base_url: ${provider.url.toString()}v1`,
+      "    api_key: coding-tools-test",
+      "    models: [coding-tools]",
+      "permission:",
+      "  model: allow",
+      "  rules: []",
+      "",
+    ].join("\n"),
+  )
+
+  const env = {
+    ...Bun.env,
+    HOME: home,
+    XDG_CACHE_HOME: path.join(temp, "cache"),
+    XDG_CONFIG_HOME: configHome,
+    XDG_DATA_HOME: path.join(temp, "data"),
+    XDG_STATE_HOME: path.join(temp, "state"),
+  }
+  let server: Bun.Subprocess | undefined
+  let live: Bun.WritableSubprocess | undefined
+  let replay: Bun.WritableSubprocess | undefined
+  let narrow: Bun.WritableSubprocess | undefined
+
+  /** Start hya-backend and wait for its actual ephemeral listen address. */
+  const startBackend = async () => {
+    const process = Bun.spawn(
+      [backend, "--yolo", "--db", path.join(temp, "sessions.db"), "serve", "--bind", "127.0.0.1:0"],
+      { cwd: project, env, stdout: "pipe", stderr: "pipe" },
+    )
+    server = process
+    const reader = process.stdout.getReader()
+    const decoder = new TextDecoder()
+    let readiness = ""
+    return Promise.race([
+      (async () => {
+        while (true) {
+          const chunk = await reader.read()
+          if (chunk.done) throw new Error(`hya-backend exited before readiness: ${readiness}`)
+          readiness += decoder.decode(chunk.value, { stream: true })
+          const match = readiness.match(/hya server listening on (http:\/\/127\.0\.0\.1:\d+)/)
+          if (match) {
+            reader.releaseLock()
+            return match[1]
+          }
+        }
+      })(),
+      Bun.sleep(10_000).then(() => {
+        throw new Error(`timed out waiting for hya-backend: ${readiness}`)
+      }),
+    ])
+  }
+
+  /** Start hya-ts under `/usr/bin/script` so the PTY transcript records frames. */
+  const startTui = (columns: number, transcript: string, sessionID: string, url: string) =>
+    Bun.spawn(
+      [
+        "/usr/bin/script",
+        "-q",
+        "-e",
+        "-f",
+        "-c",
+        `stty rows 60 cols ${columns}; before=$(stty -g); before_fg=$(ps -o tpgid= -p $$ | tr -d " "); "$HYA_TS" "$HYA_PTY_PROJECT" --server "$HYA_PTY_URL" --session "$HYA_PTY_SESSION"; code=$?; after=$(stty -g); after_fg=$(ps -o tpgid= -p $$ | tr -d " "); [ "$before" = "$after" ] || exit 97; [ "$before_fg" = "$after_fg" ] || exit 98; exit "$code"`,
+        transcript,
+      ],
+      {
+        cwd: path.join(root, "packages/hya-tui-ts"),
+        env: {
+          ...env,
+          HYA_PTY_PROJECT: project,
+          HYA_PTY_URL: url,
+          HYA_PTY_SESSION: sessionID,
+          HYA_TS: launcher,
+          HYA_TUI_TS_DIR: path.join(root, "packages/hya-tui-ts"),
+          TERM: "xterm-256color",
+        },
+        stdin: "pipe",
+        stdout: "ignore",
+        stderr: "pipe",
+      },
+    )
+
+  /** Read one PTY transcript after stripping terminal color controls. */
+  const output = (transcript: string) => readFile(transcript, "utf8").then(stripAnsi).catch(() => "")
+
+  /** Wait on a real PTY/API observation, with process exit diagnostics. */
+  const waitForCoding = async (
+    check: () => boolean | Promise<boolean>,
+    label: string,
+    process?: Bun.WritableSubprocess,
+    transcript = liveTranscript,
+  ) => {
+    const deadline = Date.now() + 30_000
+    while (!(await check())) {
+      if (Date.now() >= deadline) {
+        throw new Error(`timed out waiting for ${label}: ${(await output(transcript)).slice(-4_000)}`)
+      }
+      // The child PTY and backend are external I/O; fake timers cannot advance either observable.
+      if (process) {
+        const exited = await Promise.race([
+          process.exited.then((status) => ({ status })),
+          Bun.sleep(50).then(() => undefined),
+        ])
+        if (exited) throw new Error(`PTY exited before ${label} with status ${exited.status}`)
+      } else {
+        await Bun.sleep(50)
+      }
+    }
+  }
+
+  /** Assert semantic titles and rows that distinguish each coding-tool block. */
+  const assertCodingFrame = (frame: string, label: string) => {
+    const lines = frame.split(/\r?\n/)
+    expect(frame, `${label}: Read title/path`).toContain("src/read-only.ts")
+    expect(frame, `${label}: Read fallback canonical path`).toContain("Read src/read-directory")
+    expect(frame, `${label}: Read source`).toContain("READ_ONLY_VALUE")
+    expect(
+      lines.some((line) => line.includes("READ_ONLY_VALUE") && /(?:^|\D)2(?:\D|$)/.test(line)),
+      `${label}: Read line offset`,
+    ).toBe(true)
+
+    expect(frame, `${label}: Edit diff path`).toContain("src/main.ts")
+    expect(frame, `${label}: Edit old row`).toContain("EDIT_OLD_VALUE")
+    expect(frame, `${label}: Edit new row`).toContain("EDIT_NEW_VALUE")
+
+    expect(frame, `${label}: Write title/path`).toContain("src/generated.ts")
+    expect(frame, `${label}: Write source`).toContain("WRITE_LIVE_VALUE")
+
+    expect(frame, `${label}: Grep title/pattern`).toContain("GREP_MATCH_VALUE")
+    expect(frame, `${label}: Grep context`).toContain("GREP_CONTEXT_VALUE")
+    const grepMatchLine = lines.find((line) => line.includes("GREP_MATCH_VALUE") && line.includes(">"))
+    const grepContextLine = lines.find((line) => line.includes("GREP_CONTEXT_VALUE") && line.includes("·"))
+    expect(grepMatchLine, `${label}: Grep match row`).toContain(">")
+    expect(grepMatchLine, `${label}: Grep match line number`).toMatch(/(?:^|\D)3(?:\D|$)/)
+    expect(grepContextLine, `${label}: Grep context row`).toContain("·")
+
+    expect(frame, `${label}: Bash title/command`).toContain('$ printf "$BASH_OUTPUT_VALUE"')
+    expect(frame, `${label}: Bash output`).toContain("BASH_OUTPUT_ONLY")
+    expect(frame, `${label}: Bash status`).toContain("Completed · exit 0")
+    expect(frame, `${label}: Bash secret value`).not.toContain("must-not-render")
+    expect(frame, `${label}: Bash output must differ from command`).not.toContain('$ printf "BASH_OUTPUT_ONLY"')
+  }
+
+
+  try {
+    const url = await startBackend()
+    const client = createOpencodeClient({ baseUrl: url, directory: project })
+    const session = (await client.session.create({ title: "Coding tool PTY proof" }, { throwOnError: true })).data!
+
+    live = startTui(140, liveTranscript, session.id, url)
+    await waitForCoding(
+      async () => (await output(liveTranscript)).includes("ctrl+p commands"),
+      "live Session prompt",
+      live,
+    )
+    await client.session.promptAsync(
+      { sessionID: session.id, parts: [{ type: "text", text: "exercise every coding tool" }] },
+      { throwOnError: true },
+    )
+    await waitForCoding(() => providerRequests >= 7, "all deterministic model rounds", live)
+    await waitForCoding(
+      async () => {
+        const frame = await output(liveTranscript)
+        const lines = frame.split(/\r?\n/)
+        return (
+          ["READ_ONLY_VALUE", "src/read-directory", "EDIT_OLD_VALUE", "EDIT_NEW_VALUE", "WRITE_LIVE_VALUE", "GREP_CONTEXT_VALUE", "BASH_OUTPUT_ONLY"].every((marker) =>
+            frame.includes(marker),
+          ) &&
+          lines.some((line) => line.includes("GREP_MATCH_VALUE") && line.includes(">")) &&
+          lines.some((line) => line.includes("GREP_CONTEXT_VALUE") && line.includes("·"))
+        )
+      },
+      "live coding tool blocks",
+      live,
+    )
+
+    const liveFrame = await output(liveTranscript)
+    assertCodingFrame(liveFrame, "live 140-column frame")
+    expect(providerRequests).toBe(7)
+
+    await stopOwnedProcess(live)
+    live = undefined
+    const requestsAfterLive = providerRequests
+    replay = startTui(140, replayTranscript, session.id, url)
+    await waitForCoding(
+      async () => {
+        const frame = await output(replayTranscript)
+        const lines = frame.split(/\r?\n/)
+        return (
+          ["READ_ONLY_VALUE", "src/read-directory", "EDIT_NEW_VALUE", "WRITE_LIVE_VALUE", "GREP_CONTEXT_VALUE", "BASH_OUTPUT_ONLY"].every((marker) =>
+            frame.includes(marker),
+          ) &&
+          lines.some((line) => line.includes("GREP_MATCH_VALUE") && line.includes(">")) &&
+          lines.some((line) => line.includes("GREP_CONTEXT_VALUE") && line.includes("·"))
+        )
+      },
+      "replayed coding tool blocks",
+      replay,
+      replayTranscript,
+    )
+    const replayedFrame = await output(replayTranscript)
+    assertCodingFrame(replayedFrame, "replayed 140-column frame")
+    expect(providerRequests).toBe(requestsAfterLive)
+
+    await stopOwnedProcess(replay)
+    replay = undefined
+    narrow = startTui(80, narrowTranscript, session.id, url)
+    await waitForCoding(
+      async () => (await output(narrowTranscript)).includes("commands"),
+      "narrow Session prompt",
+      narrow,
+      narrowTranscript,
+    )
+    await waitForCoding(
+      async () => {
+        const frame = await output(narrowTranscript)
+        const lines = frame.split(/\r?\n/)
+        return (
+          ["READ_ONLY_VALUE", "src/read-directory", "EDIT_OLD_VALUE", "EDIT_NEW_VALUE", "WRITE_LIVE_VALUE", "GREP_CONTEXT_VALUE", "BASH_OUTPUT_ONLY"].every((marker) =>
+            frame.includes(marker),
+          ) &&
+          lines.some((line) => line.includes("GREP_MATCH_VALUE") && line.includes(">")) &&
+          lines.some((line) => line.includes("GREP_CONTEXT_VALUE") && line.includes("·"))
+        )
+      },
+      "narrow coding tool blocks",
+      narrow,
+      narrowTranscript,
+    )
+    const narrowFrame = await output(narrowTranscript)
+    assertCodingFrame(narrowFrame, "replayed 80-column frame")
+    expect(narrowFrame).toContain("commands")
+    const narrowLines = narrowFrame.split(/\r?\n/)
+    const removedIndex = narrowLines.findIndex((line) => line.includes("EDIT_OLD_VALUE") && line.includes("-"))
+    const addedIndex = narrowLines.findIndex((line) => line.includes("EDIT_NEW_VALUE") && line.includes("+"))
+    expect(removedIndex, "80-column unified removed row").toBeGreaterThanOrEqual(0)
+    expect(addedIndex, "80-column unified added row").toBeGreaterThanOrEqual(0)
+    // `script` flattens cursor-positioned rows; coding-tool-render.test.tsx verifies physical row separation.
+    expect(providerRequests).toBe(requestsAfterLive)
+  } finally {
+    if (narrow) await stopOwnedProcess(narrow)
+    if (replay) await stopOwnedProcess(replay)
+    if (live) await stopOwnedProcess(live)
+    if (server) await stopOwnedProcess(server)
+    provider.stop(true)
+    await rm(temp, { recursive: true, force: true })
+  }
+}, 90_000)
 
 test("Linux PTY renders home, opens a session, and restores the terminal", async () => {
   const temp = await realpath(await mkdtemp(path.join(os.tmpdir(), "hya-pty-smoke-")))
@@ -1955,7 +2376,8 @@ async function runChildObservation(columns: number) {
           async () => {
             const frame = (await output()).slice(researcherFocusStart)
             return (
-              ["researcher-1", "research", "Working", "Trace nested path", "focused"].every((value) =>
+              // `script` keeps cursor-diff fragments between stable words, so match the task words independently.
+              ["researcher-1", "research", "Working", "Trace", "nested", "path", "focused"].every((value) =>
                 frame.includes(value),
               ) &&
               /read-\s*only/.test(frame) &&
