@@ -790,3 +790,25 @@ Fixed dual-path Read and inline Task schema contradictions, ported native hashli
 ### Status
 
 [OK] **Completed**
+
+
+## Session 24: Remember per-agent model selections
+<!-- trellis-session: v=2 fp=aeb4ca57b4220432 -->
+
+**Date**: 2026-09-03
+**Task**: Remember per-agent model selections
+**Branch**: `feat/remember-agent-model-selections`
+
+### Summary
+
+Added backend-owned durable per-Agent model preferences, immutable runtime routing, an all-Agent TUI configuration flow, complete tests, documentation, and version 0.36.10.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `1b37ddb2` | feat: remember per-agent model selections |
+
+### Status
+
+[OK] **Completed**
