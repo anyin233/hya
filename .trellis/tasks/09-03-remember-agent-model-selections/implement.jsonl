@@ -1,0 +1,8 @@
+{"file":".trellis/spec/backend/index.md","reason":"Apply the backend pre-development checklist, documented current practices, and quality gate."}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Add the Agent model preference auxiliary table without creating a second Session projection."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Use typed errors, deterministic focused tests, and the repository verification contract."}
+{"file":".trellis/spec/frontend/index.md","reason":"Apply the frontend pre-development checklist and package conventions before TUI changes."}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Reuse existing dialog, context, command, toast, and OpenTUI composition patterns."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Preserve strict TypeScript boundaries and verify observable TUI behavior through focused tests."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Trace preference data and precedence across store, core, app, server, SDK boundary, and TUI."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Reuse model catalog, Agent binding, runtime control ports, and the existing model picker instead of duplicating policy."}

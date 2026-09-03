@@ -125,6 +125,8 @@ async fn doc() -> Json<Value> {
         ("/sync/steal", &["post"]),
         ("/sync/start", &["post"]),
         ("/tui/publish", &["post"]),
+        ("/tui/agent-models", &["get"]),
+        ("/tui/agent-models/{agent_id}", &["put"]),
         ("/tui/append-prompt", &["post"]),
         ("/tui/open-help", &["post"]),
         ("/tui/open-sessions", &["post"]),

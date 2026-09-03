@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use hya_bundle::{BundleCatalog, BundleError, ExportKind, ResourceView};
 
 use crate::agent_catalog::{AgentCatalog, AgentDefinition, AgentOrigin};
-use hya_proto::{ConfigGeneration, ToolName, ToolSchema};
+use hya_proto::{ConfigGeneration, ModelRef, ToolName, ToolSchema};
 use hya_tool::{
     DuplicateName, PermissionPlane, ResolvedTool, SkillCatalogEntry, SkillPlane, Tool,
     ToolPermission, ToolRegistry, ToolRegistrySnapshot, discover_skills,
@@ -13,9 +13,13 @@ use hya_tool::{
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
+use tokio::sync::watch;
 
 const RUNTIME_SOURCE_DISPATCH_IDENTITY_DOMAIN_V1: &[u8] = b"hya.core.runtime-source-dispatch/v1";
 const RUNTIME_SEMANTIC_FINGERPRINT_DOMAIN_V2: &[u8] = b"hya.core.runtime-semantic-fingerprint/v2";
+
+type AgentModelPreferenceSnapshot = Arc<BTreeMap<String, ModelRef>>;
+type AgentModelPreferences = watch::Sender<AgentModelPreferenceSnapshot>;
 
 /// A complete immutable configuration view. Turns retain its `Arc` for their
 /// whole lifetime, so publication cannot alter an in-flight lookup.
@@ -36,6 +40,7 @@ struct RuntimeSnapshot {
 pub struct RuntimeRegistry {
     publication: Mutex<()>,
     active: RwLock<Arc<RuntimeSnapshot>>,
+    agent_model_preferences: AgentModelPreferences,
 }
 
 /// Offline mutable candidate. Its contents cannot become effective except
@@ -139,6 +144,7 @@ pub struct RuntimeEffectiveManifest {
 #[derive(Clone)]
 pub struct TurnBinding {
     snapshot: Arc<RuntimeSnapshot>,
+    agent_model_preferences: AgentModelPreferenceSnapshot,
     workdir: PathBuf,
 }
 
@@ -284,6 +290,7 @@ impl RuntimeRegistry {
                 skills: BTreeMap::new(),
                 sources: BTreeMap::new(),
             })),
+            agent_model_preferences: watch::Sender::new(Arc::new(BTreeMap::new())),
         }
     }
 
@@ -295,6 +302,7 @@ impl RuntimeRegistry {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let current = self.active();
+        let agent_model_preferences = self.agent_model_preferences.borrow().clone();
         let discovered = discover_skills(workdir);
         let existing = current
             .skills
@@ -303,6 +311,7 @@ impl RuntimeRegistry {
         if existing == discovered {
             return Ok(TurnBinding {
                 snapshot: current,
+                agent_model_preferences,
                 workdir: workdir.to_path_buf(),
             });
         }
@@ -312,8 +321,29 @@ impl RuntimeRegistry {
         let published = self.publish_candidate(current, candidate)?;
         Ok(TurnBinding {
             snapshot: published,
+            agent_model_preferences,
             workdir: workdir.to_path_buf(),
         })
+    }
+
+    /// Publish a replacement map of remembered Agent model preferences.
+    ///
+    /// The replacement is held independently from runtime candidates and does
+    /// not allocate or consume a runtime configuration generation. Existing
+    /// turn bindings retain their captured map; only later bindings observe the
+    /// replacement.
+    ///
+    /// # Arguments
+    ///
+    /// * `preferences` - Complete stable-Agent-id to exact-model map to retain.
+    ///
+    /// # Returns
+    ///
+    /// This method returns `()` because Tokio watch replacement is infallible;
+    /// the supplied map is always retained as the next process-local snapshot.
+    pub fn publish_agent_model_preferences(&self, preferences: BTreeMap<String, ModelRef>) {
+        self.agent_model_preferences
+            .send_replace(Arc::new(preferences));
     }
 
     /// Build and validate a complete candidate, then publish it with one pointer
@@ -894,6 +924,25 @@ impl TurnBinding {
     /// Config generation of the retained snapshot.
     pub fn generation(&self) -> ConfigGeneration {
         self.snapshot.generation
+    }
+
+    /// Look up a remembered model by exact stable Agent id in this binding.
+    ///
+    /// The lookup reads the immutable preference map captured when this binding
+    /// was created. Later registry publications do not affect the returned
+    /// reference or any other lookup through this binding.
+    ///
+    /// # Arguments
+    ///
+    /// * `stable_id` - Exact catalog stable id of the Agent to look up.
+    ///
+    /// # Returns
+    ///
+    /// The remembered model for `stable_id`, or `None` when no preference was
+    /// captured for that Agent.
+    #[must_use]
+    pub fn agent_model_preference(&self, stable_id: &str) -> Option<&ModelRef> {
+        self.agent_model_preferences.get(stable_id)
     }
 
     #[must_use]
@@ -3051,6 +3100,7 @@ agent:
             (
                 TurnBinding {
                     snapshot: Arc::new(snapshot),
+                    agent_model_preferences: Arc::new(BTreeMap::new()),
                     workdir: PathBuf::from("/tmp/runtime-fingerprint"),
                 },
                 permission,
@@ -3230,6 +3280,7 @@ agent:
             (
                 TurnBinding {
                     snapshot: Arc::new(snapshot),
+                    agent_model_preferences: Arc::new(BTreeMap::new()),
                     workdir,
                 },
                 permission,
@@ -3441,6 +3492,7 @@ agent:
             (
                 TurnBinding {
                     snapshot: tools,
+                    agent_model_preferences: Arc::new(BTreeMap::new()),
                     workdir: PathBuf::from("/tmp/runtime-fingerprint-sources"),
                 },
                 permission,

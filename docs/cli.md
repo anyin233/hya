@@ -51,6 +51,11 @@ paths, and other replay data. The file is plain SQLite; encryption and
 permissions are the caller’s responsibility and file mode follows the process
 umask, so place it in a private directory.
 
+The same database also stores backend-owned per-Agent model preferences. The
+default interactive database therefore remembers TUI selections across
+restarts; separate explicit `--db` paths have independent preferences, and an
+in-memory store is intentionally non-durable.
+
 `--resume` is interactive-only and cannot be combined with `--prompt` or a
 subcommand. Bare `hya-backend --resume <ID>` launches `hya --session <ID>`.
 When `--prompt` is present, it takes precedence over subcommand dispatch.
@@ -127,6 +132,7 @@ Common slash commands (aliases in parentheses):
 | `/new` | `/clear` | Start a new session (home route) |
 | `/models` | `/mo`, `/model` | Open the model picker (`/mo` biases fuzzy match away from `/move`) |
 | `/agents` | | Open the agent picker |
+| `/agent-models` | | Choose any catalog Agent and persist its default model in the active backend database |
 | `/mcps` | | MCP enable/disable dialog |
 | `/variants` | `/think` | Model variant picker (hidden when the model has none) |
 | `/status` | | Status dialog |
@@ -358,6 +364,11 @@ global `--db <PATH>` SQLite store when supplied; otherwise it uses an in-memory
 store. With `--db`, the database stores the full canonical event log for replay,
 which can contain more sensitive data than the rendered transcript. `--json`
 prints the canonical event stream as JSONL.
+
+When no command-line model override is present, a new headless root Session
+uses the selected Agent's effective default from that database. Direct/category
+Agent configuration remains higher precedence. A command-line model override
+applies only to that invocation and is not written as an Agent preference.
 
 ## `hya-backend run`
 

@@ -11,7 +11,7 @@ use hya_core::{
     workflow_dirs_for_workdir,
 };
 use hya_proto::{
-    Envelope, Event, OwnerRunId, SessionId, WorkflowAvailability, WorkflowCommand,
+    Envelope, Event, ModelRef, OwnerRunId, SessionId, WorkflowAvailability, WorkflowCommand,
     WorkflowCommandResult, WorkflowDelivery, WorkflowIdentity, WorkflowInfo, WorkflowProjection,
     WorkflowRevision, WorkflowRunId, WorkflowRunProjection, WorkflowRunResult, WorkflowRunStatus,
     WorkflowSourceId, WorkflowStageInfo, WorkflowStagePlan, WorkflowSummary,
@@ -806,8 +806,18 @@ impl WorkflowControl {
             .runtime_semantic_fingerprint_v1(&binding)
             .ok_or(WorkflowControlError::RuntimeUnavailable)?;
         let caller_name = invocation.caller.as_deref().unwrap_or(caller.as_str());
-        let request_hash =
-            workflow_request_hash(entry.identity(), caller_name, &inputs, runtime_fingerprint);
+        let relevant_preferences = workflow_agent_model_preferences(
+            entry.workflow(),
+            &binding,
+            self.routing.router.as_ref(),
+        );
+        let request_hash = workflow_request_hash(
+            entry.identity(),
+            caller_name,
+            &inputs,
+            runtime_fingerprint,
+            &relevant_preferences,
+        );
         let operation = invocation.operation;
         let run = match (operation, requested_run) {
             (Some(operation), _) => WorkflowRunId::from_operation(operation.operation_id()),
@@ -1083,15 +1093,68 @@ impl WorkflowControl {
     }
 }
 
+/// Collect only remembered models that can change an unassigned Workflow role.
+fn workflow_agent_model_preferences(
+    workflow: &CompiledWorkflow,
+    binding: &TurnBinding,
+    router: &hya_provider::ProviderRouter,
+) -> BTreeMap<String, ModelRef> {
+    let mut preferences = BTreeMap::new();
+    for stage in workflow.plan().stages() {
+        if stage.model().is_none() {
+            insert_workflow_agent_model_preference(
+                &mut preferences,
+                binding,
+                router,
+                stage.agent(),
+            );
+        }
+        if let Some(verifier) = stage.verify()
+            && verifier.model().is_none()
+        {
+            insert_workflow_agent_model_preference(
+                &mut preferences,
+                binding,
+                router,
+                verifier.agent(),
+            );
+        }
+    }
+    preferences
+}
+
+/// Insert one semantically eligible, currently servable Agent preference.
+fn insert_workflow_agent_model_preference(
+    preferences: &mut BTreeMap<String, ModelRef>,
+    binding: &TurnBinding,
+    router: &hya_provider::ProviderRouter,
+    agent_id: &str,
+) {
+    let Some(definition) = binding.resolve_agent(agent_id) else {
+        return;
+    };
+    if definition.model_policy.model.is_some() || definition.model_policy.category.is_some() {
+        return;
+    }
+    let Some(model) = binding
+        .agent_model_preference(definition.stable_id)
+        .filter(|model| router.resolve(model).is_some())
+    else {
+        return;
+    };
+    preferences.insert(definition.stable_id.to_string(), model.clone());
+}
+
 /// Hash immutable Workflow request data without persisting input values.
 fn workflow_request_hash(
     workflow: &WorkflowIdentity,
     caller: &str,
     inputs: &BTreeMap<String, String>,
     runtime_fingerprint: [u8; 32],
+    agent_model_preferences: &BTreeMap<String, ModelRef>,
 ) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(b"hya.workflow.request/v1\0");
+    hasher.update(b"hya.workflow.request/v2\0");
     hash_field(&mut hasher, workflow.source.as_str());
     hash_field(&mut hasher, &workflow.name);
     hasher.update(workflow.revision.as_bytes());
@@ -1105,6 +1168,15 @@ fn workflow_request_hash(
     for (key, value) in inputs {
         hash_field(&mut hasher, key);
         hash_field(&mut hasher, value);
+    }
+    hasher.update(
+        u64::try_from(agent_model_preferences.len())
+            .unwrap_or(u64::MAX)
+            .to_be_bytes(),
+    );
+    for (agent_id, model) in agent_model_preferences {
+        hash_field(&mut hasher, agent_id);
+        hash_field(&mut hasher, model.as_str());
     }
     let digest = hasher.finalize();
     let mut output = String::with_capacity(digest.len() * 2);
@@ -1292,8 +1364,13 @@ fn source_stem(path: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{WorkflowControlError, map_workflow_preflight_error, workflow_event_run};
+    use super::{
+        WorkflowControlError, map_workflow_preflight_error, workflow_event_run,
+        workflow_request_hash,
+    };
     use hya_core::WorkflowError;
+    use hya_proto::{ModelRef, WorkflowIdentity, WorkflowRevision, WorkflowSourceId};
+    use std::collections::BTreeMap;
 
     /// Invalid runtime topology is rejected as source validation before admission.
     #[test]
@@ -1328,5 +1405,32 @@ mod tests {
         };
 
         assert_eq!(workflow_event_run(&event), Some(run));
+    }
+
+    /// A relevant remembered model is part of durable Workflow admission identity.
+    #[test]
+    fn request_hash_changes_with_relevant_agent_model_preference() {
+        let workflow = WorkflowIdentity {
+            source: WorkflowSourceId::new("project/demo"),
+            name: "demo".to_string(),
+            revision: WorkflowRevision::from_bytes([7; 32]),
+        };
+        let inputs = BTreeMap::new();
+        let first = workflow_request_hash(
+            &workflow,
+            "build",
+            &inputs,
+            [3; 32],
+            &BTreeMap::from([("worker".to_string(), ModelRef::new("provider/first"))]),
+        );
+        let second = workflow_request_hash(
+            &workflow,
+            "build",
+            &inputs,
+            [3; 32],
+            &BTreeMap::from([("worker".to_string(), ModelRef::new("provider/second"))]),
+        );
+
+        assert_ne!(first, second);
     }
 }

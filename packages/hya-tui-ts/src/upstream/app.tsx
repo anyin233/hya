@@ -39,6 +39,7 @@ import { DialogStatus } from "./component/dialog-status"
 import { DialogThemeList } from "./component/dialog-theme-list"
 import { DialogHelp } from "./ui/dialog-help"
 import { DialogAgent } from "./component/dialog-agent"
+import { DialogAgentModels } from "./component/dialog-agent-models"
 import { DialogSessionList } from "./component/dialog-session-list"
 import { ThemeProvider, useTheme } from "./context/theme"
 import { Home } from "./routes/home"
@@ -96,6 +97,7 @@ const appBindingCommands = [
   "model.cycle_recent_reverse",
   "model.cycle_favorite",
   "model.cycle_favorite_reverse",
+  "agent.model.list",
   "agent.list",
   "mcp.list",
   "agent.cycle",
@@ -604,6 +606,26 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         hidden: true,
         run: () => {
           local.model.cycleFavorite(-1)
+        },
+      },
+      {
+        name: "agent.model.list",
+        title: "Configure agent models",
+        category: "Agent",
+        hidden: !sync.data.capabilities.agentModelPreferences,
+        slashName: "agent-models",
+        run: async () => {
+          if (!sync.data.capabilities.agentModelPreferences) return
+          try {
+            await sync.refreshAgentModels()
+            dialog.replace(() => <DialogAgentModels />)
+          } catch (error) {
+            toast.show({
+              variant: "error",
+              message: error instanceof Error ? error.message : String(error),
+              duration: 5000,
+            })
+          }
         },
       },
       {

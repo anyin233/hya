@@ -1,0 +1,6 @@
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Verify migration, atomic persistence, and event-sourced boundary compliance."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Verify typed failures, test quality, docs, formatting, clippy, and workspace checks."}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Verify target-dialog/model-picker composition and preservation of existing TUI behavior."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Verify decoder safety, state boundaries, error UX, typecheck, and behavioral coverage."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Verify every producer, transport, consumer, restart path, and failure path for Agent model preferences."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Reject duplicate model catalogs, pickers, resolution paths, and control-plane conventions."}

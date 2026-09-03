@@ -75,6 +75,7 @@ async fn cmd_exec(
     json: bool,
 ) -> anyhow::Result<()> {
     first_run_config_bootstrap(false)?;
+    let has_explicit_model = model_override.is_some();
     let store = open_store(db).await?;
     let runtime = resolve_runtime(model_override).await.with_yolo(yolo);
     let agent = agent_with_model(&runtime.model, runtime.reasoning);
@@ -87,6 +88,14 @@ async fn cmd_exec(
         (runtime.websearch, runtime.permission),
     )
     .await?;
+    let session_model = if has_explicit_model {
+        agent.model.clone()
+    } else {
+        built
+            .effective_root_model(&agent, &agent.workdir)
+            .await
+            .context("resolve headless root Agent model")?
+    };
     let engine = built.engine();
     let asks = built
         .take_asks()
@@ -99,7 +108,7 @@ async fn cmd_exec(
         .create(CreateSession {
             parent: None,
             agent: agent.name.clone(),
-            model: agent.model.clone(),
+            model: session_model,
             workdir: agent.workdir.to_string_lossy().into_owned(),
         })
         .await
@@ -136,6 +145,7 @@ async fn cmd_exec(
 async fn cmd_rpc(model_override: Option<String>, yolo: bool) -> anyhow::Result<()> {
     use std::io::BufRead as _;
     first_run_config_bootstrap(false)?;
+    let has_explicit_model = model_override.is_some();
     let store = SessionStore::connect_memory()
         .await
         .context("open in-memory store")?;
@@ -150,6 +160,14 @@ async fn cmd_rpc(model_override: Option<String>, yolo: bool) -> anyhow::Result<(
         (runtime.websearch, runtime.permission),
     )
     .await?;
+    let session_model = if has_explicit_model {
+        agent.model.clone()
+    } else {
+        built
+            .effective_root_model(&agent, &agent.workdir)
+            .await
+            .context("resolve RPC root Agent model")?
+    };
     let engine = built.engine();
     let asks = built
         .take_asks()
@@ -162,7 +180,7 @@ async fn cmd_rpc(model_override: Option<String>, yolo: bool) -> anyhow::Result<(
         .create(CreateSession {
             parent: None,
             agent: agent.name.clone(),
-            model: agent.model.clone(),
+            model: session_model,
             workdir: agent.workdir.to_string_lossy().into_owned(),
         })
         .await
@@ -209,6 +227,7 @@ async fn cmd_goal(
     yolo: bool,
 ) -> anyhow::Result<()> {
     first_run_config_bootstrap(false)?;
+    let has_explicit_model = model_override.is_some();
     let store = SessionStore::connect_memory()
         .await
         .context("open in-memory store")?;
@@ -224,6 +243,14 @@ async fn cmd_goal(
         (runtime.websearch, runtime.permission),
     )
     .await?;
+    let session_model = if has_explicit_model {
+        agent.model.clone()
+    } else {
+        built
+            .effective_root_model(&agent, &agent.workdir)
+            .await
+            .context("resolve goal root Agent model")?
+    };
     let engine = built.engine();
     let asks = built
         .take_asks()
@@ -236,7 +263,7 @@ async fn cmd_goal(
         .create(CreateSession {
             parent: None,
             agent: agent.name.clone(),
-            model: agent.model.clone(),
+            model: session_model,
             workdir: agent.workdir.to_string_lossy().into_owned(),
         })
         .await

@@ -227,6 +227,13 @@ fn resolve_agent(
         .as_ref()
         .map(|routing| Arc::clone(&routing.router))
         .unwrap_or_else(|| engine.provider_router());
+    let is_servable = |model: &ModelRef| router.resolve(model).is_some();
+    spec = crate::category::apply_agent_model_preference(
+        spec,
+        &definition,
+        ctx.binding.agent_model_preference(definition.stable_id),
+        &is_servable,
+    );
     if let Some(routing) = ctx.routing.as_ref() {
         let member = hya_tool::SpawnMember::default();
         let is_servable = |model: &ModelRef| routing.router.resolve(model).is_some();

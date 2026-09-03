@@ -7,6 +7,7 @@ use hya_proto::WorkspaceAdapterInfo;
 use hya_tool::{AskRequest, FormatterStatus, QuestionRequest};
 use tokio::sync::mpsc;
 
+use crate::agent_model_control::{AgentModelControl, EmptyAgentModelControl};
 use crate::mcp_control::{EmptyMcpControl, McpControl};
 use crate::workflow_control::{EmptyWorkflowControl, WorkflowControl};
 use crate::{compat, pending, runs};
@@ -24,6 +25,7 @@ pub struct AppState {
     permission_requests: pending::PermissionRequests,
     question_requests: pending::QuestionRequests,
     mcp_control: Arc<dyn McpControl>,
+    agent_model_control: Arc<dyn AgentModelControl>,
     workflow_control: Arc<dyn WorkflowControl>,
     workspace_adapters: Vec<WorkspaceAdapterInfo>,
     formatter_status: Vec<FormatterStatus>,
@@ -31,7 +33,7 @@ pub struct AppState {
 }
 
 impl AppState {
-    /// Create state with empty pending queues and no-op MCP and Workflow control handles.
+    /// Create state with empty pending queues and no-op MCP, Workflow, and Agent-model controls.
     #[must_use]
     pub fn new(engine: Arc<SessionEngine>, agent: Arc<AgentSpec>) -> Self {
         let permission_requests = pending::PermissionRequests::new(engine.store().clone());
@@ -41,6 +43,7 @@ impl AppState {
             permission_requests,
             question_requests: pending::QuestionRequests::default(),
             mcp_control: Arc::new(EmptyMcpControl),
+            agent_model_control: Arc::new(EmptyAgentModelControl),
             workflow_control: Arc::new(EmptyWorkflowControl),
             workspace_adapters: Vec::new(),
             formatter_status: Vec::new(),
@@ -77,6 +80,13 @@ impl AppState {
         self
     }
 
+    /// Install the app-owned Agent model preference control for TUI routes.
+    #[must_use]
+    pub fn with_agent_model_control(mut self, control: Arc<dyn AgentModelControl>) -> Self {
+        self.agent_model_control = control;
+        self
+    }
+
     /// Install the app-owned Workflow control handle for native and Compat routes.
     #[must_use]
     pub fn with_workflow_control(mut self, control: Arc<dyn WorkflowControl>) -> Self {
@@ -108,6 +118,7 @@ pub(crate) struct ServerState {
     pub(crate) question_requests: pending::QuestionRequests,
     pub(crate) global: compat::GlobalState,
     pub(crate) mcp_control: Arc<dyn McpControl>,
+    pub(crate) agent_model_control: Arc<dyn AgentModelControl>,
     pub(crate) workflow_control: Arc<dyn WorkflowControl>,
     pub(crate) project: compat::ProjectState,
     pub(crate) pty: compat::PtyState,
@@ -127,6 +138,7 @@ impl ServerState {
             question_requests: app.question_requests,
             global: compat::GlobalState::new(),
             mcp_control: app.mcp_control,
+            agent_model_control: app.agent_model_control,
             workflow_control: app.workflow_control,
             project: compat::ProjectState::new(),
             pty: compat::PtyState::new(),

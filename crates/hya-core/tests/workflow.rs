@@ -42,6 +42,7 @@ use tokio_util::sync::CancellationToken;
 struct RecordingProvider {
     systems: Mutex<Vec<(SessionId, Option<String>)>>,
     requests: Mutex<Vec<(SessionId, String)>>,
+    models: Mutex<Vec<ModelRef>>,
     verdicts: Mutex<Vec<bool>>,
     hang_verifier: AtomicBool,
     verifier_started: tokio::sync::Notify,
@@ -51,6 +52,7 @@ impl RecordingProvider {
     fn new() -> Arc<Self> {
         Arc::new(Self {
             requests: Mutex::new(Vec::new()),
+            models: Mutex::new(Vec::new()),
             verdicts: Mutex::new(Vec::new()),
             hang_verifier: AtomicBool::new(false),
             systems: Mutex::new(Vec::new()),
@@ -91,6 +93,13 @@ impl RecordingProvider {
 
     fn prompts(&self) -> Vec<(SessionId, String)> {
         self.requests.lock().unwrap().clone()
+    }
+
+    fn models(&self) -> Vec<ModelRef> {
+        self.models
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     /// Effective system prompt observed for each completed provider request.
@@ -174,6 +183,10 @@ impl RecordingProvider {
         user_text: String,
         reply: String,
     ) -> Result<EventStream, ProviderError> {
+        self.models
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(req.model.clone());
         self.systems
             .lock()
             .unwrap()
@@ -773,6 +786,67 @@ async fn run_def(
         CancellationToken::new(),
     )
     .await
+}
+
+#[tokio::test]
+async fn unassigned_workflow_stage_uses_remembered_model_but_explicit_route_wins() {
+    let source = r#"---
+kind: Workflow
+name: remembered-stage-models
+description: Apply Agent defaults without changing explicit Stage routes.
+nodes:
+  explore:
+    agent: explorer
+    directive: EXPLORE remembered model.
+  build:
+    agent: builder
+    directive: BUILD explicit model.
+    model:
+      id: fake/explicit
+---
+flowchart TD
+  explore --> build
+"#;
+    let workflow = compile_workflow("remembered-stage-models.hya.md", source);
+    let run = setup("remembered-stage-models").await;
+    run.engine
+        .runtime_registry()
+        .publish_agent_model_preferences(BTreeMap::from([
+            (
+                "explorer".to_string(),
+                ModelRef::new("fake/remembered-explorer"),
+            ),
+            ("builder".to_string(), ModelRef::new("fake/ignored-builder")),
+        ]));
+    let binding = run
+        .engine
+        .bind_runtime(std::path::Path::new("/tmp"))
+        .expect("bind remembered Workflow defaults");
+    let report = run_workflow(
+        run.engine.clone(),
+        run.lead,
+        &workflow,
+        hya_core::WorkflowRunContext {
+            binding,
+            caller: "build".to_string(),
+            base_agent: base_spec(),
+            inputs: BTreeMap::new(),
+            resident_supervisor: None,
+            routing: None,
+        },
+        CancellationToken::new(),
+    )
+    .await
+    .expect("Workflow should complete");
+
+    assert_eq!(report.status, WorkflowStatus::Completed);
+    assert_eq!(
+        run.provider.models(),
+        vec![
+            ModelRef::new("fake/remembered-explorer"),
+            ModelRef::new("fake/explicit")
+        ]
+    );
 }
 
 #[test]

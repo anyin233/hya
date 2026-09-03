@@ -1,20 +1,28 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
 
-use axum::extract::{Query, State};
+use axum::extract::rejection::JsonRejection;
+use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;
-use axum::routing::{get, post};
+use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use hya_proto::SessionId;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::{Mutex, Notify};
 
+use crate::agent_model_control::{
+    AGENT_MODEL_CONFIGURED, AGENT_MODEL_CONTROL_FAILURE, AGENT_MODEL_CONTROL_UNAVAILABLE,
+    AGENT_MODEL_INVALID_REQUEST, AGENT_MODEL_UNAVAILABLE, AGENT_MODEL_UNKNOWN_AGENT,
+    AgentModelControlError, AgentModelIdentity, AgentModelState,
+};
 use crate::{ApiError, ServerState, parse_session};
 
 pub(super) fn router() -> Router<ServerState> {
     Router::new()
         .route("/tui/bootstrap", get(bootstrap))
+        .route("/tui/agent-models", get(agent_models))
+        .route("/tui/agent-models/:agent_id", put(set_agent_model))
         .route("/tui/append-prompt", post(append_prompt))
         .route("/tui/open-help", post(open_help))
         .route("/tui/open-sessions", post(open_sessions))
@@ -42,6 +50,11 @@ async fn bootstrap(
     let location = super::location::LocationRef::from_request(&query, &headers);
     let workdir = super::location::workdir_at(&st, &location);
 
+    let agent_models = if st.agent_model_control.available() {
+        load_agent_models(&st, workdir.clone()).await?
+    } else {
+        Vec::new()
+    };
     let (providers, provider_list) = super::catalog::bootstrap_provider_payload(&st);
 
     let home = home_dir();
@@ -141,7 +154,11 @@ async fn bootstrap(
         "config": st.global.config().await,
         "providers": providers,
         "provider_list": provider_list,
-        "capabilities": { "backgroundSubagents": false },
+        "capabilities": {
+            "backgroundSubagents": false,
+            "agentModelPreferences": st.agent_model_control.available(),
+        },
+        "agentModels": agent_models,
         "agents": agents,
         "sessions": sessions,
         "commands": commands,
@@ -154,6 +171,128 @@ async fn bootstrap(
         "path": path,
         "project": project,
     })))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SetAgentModelPayload {
+    preference: Value,
+}
+
+async fn agent_models(
+    State(st): State<ServerState>,
+    Query(query): Query<BTreeMap<String, String>>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<AgentModelState>>, ApiError> {
+    if !st.agent_model_control.available() {
+        return Err(ApiError::structured(
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            AGENT_MODEL_CONTROL_UNAVAILABLE,
+            "Agent model control is unavailable",
+        ));
+    }
+    let location = super::location::LocationRef::from_request(&query, &headers);
+    let workdir = super::location::workdir_at(&st, &location);
+    Ok(Json(load_agent_models(&st, workdir).await?))
+}
+
+async fn set_agent_model(
+    State(st): State<ServerState>,
+    Path(agent_id): Path<String>,
+    Query(query): Query<BTreeMap<String, String>>,
+    headers: HeaderMap,
+    payload: Result<Json<SetAgentModelPayload>, JsonRejection>,
+) -> Result<Json<AgentModelState>, ApiError> {
+    if !st.agent_model_control.available() {
+        return Err(ApiError::structured(
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            AGENT_MODEL_CONTROL_UNAVAILABLE,
+            "Agent model control is unavailable",
+        ));
+    }
+    let Json(payload) = payload.map_err(|error| {
+        invalid_agent_model_request(format!("invalid Agent model preference body: {error}"))
+    })?;
+    let preference = if payload.preference.is_null() {
+        None
+    } else {
+        Some(
+            serde_json::from_value::<AgentModelIdentity>(payload.preference).map_err(|error| {
+                invalid_agent_model_request(format!(
+                    "invalid Agent model preference identity: {error}"
+                ))
+            })?,
+        )
+    };
+    if let Some(identity) = preference.as_ref() {
+        validate_identity(identity)?;
+    }
+    if agent_id.is_empty() {
+        return Err(invalid_agent_model_request("Agent id must not be empty"));
+    }
+    let location = super::location::LocationRef::from_request(&query, &headers);
+    let workdir = super::location::workdir_at(&st, &location);
+    let binding = st.engine.bind_root_runtime(&workdir).await?;
+    let base_model = st.agent.model.clone();
+    st.agent_model_control
+        .set(binding, agent_id, preference, base_model)
+        .await
+        .map(Json)
+        .map_err(map_agent_model_error)
+}
+
+async fn load_agent_models(
+    st: &ServerState,
+    workdir: std::path::PathBuf,
+) -> Result<Vec<AgentModelState>, ApiError> {
+    let binding = st.engine.bind_root_runtime(&workdir).await?;
+    st.agent_model_control
+        .list(binding, st.agent.model.clone())
+        .await
+        .map_err(map_agent_model_error)
+}
+
+fn validate_identity(identity: &AgentModelIdentity) -> Result<(), ApiError> {
+    if identity.provider_id.trim().is_empty() || identity.model_id.trim().is_empty() {
+        return Err(invalid_agent_model_request(
+            "Agent model providerID and modelID must not be empty",
+        ));
+    }
+    if identity.provider_id.chars().count() > 1_024 {
+        return Err(invalid_agent_model_request(
+            "Agent model providerID is too long",
+        ));
+    }
+    if identity.model_id.chars().count() > 4_096 {
+        return Err(invalid_agent_model_request(
+            "Agent model modelID is too long",
+        ));
+    }
+    Ok(())
+}
+
+fn invalid_agent_model_request(message: impl Into<String>) -> ApiError {
+    let error = AgentModelControlError::new(AGENT_MODEL_INVALID_REQUEST, message);
+    ApiError::structured(
+        axum::http::StatusCode::BAD_REQUEST,
+        error.code,
+        error.message,
+    )
+}
+
+fn map_agent_model_error(error: AgentModelControlError) -> ApiError {
+    let status = match error.code.as_str() {
+        AGENT_MODEL_UNKNOWN_AGENT => axum::http::StatusCode::NOT_FOUND,
+        AGENT_MODEL_CONFIGURED => axum::http::StatusCode::CONFLICT,
+        AGENT_MODEL_UNAVAILABLE | AGENT_MODEL_INVALID_REQUEST => {
+            axum::http::StatusCode::BAD_REQUEST
+        }
+        AGENT_MODEL_CONTROL_UNAVAILABLE | AGENT_MODEL_CONTROL_FAILURE => {
+            axum::http::StatusCode::SERVICE_UNAVAILABLE
+        }
+        _ => axum::http::StatusCode::SERVICE_UNAVAILABLE,
+    };
+    ApiError::structured(status, error.code, error.message)
 }
 
 fn home_dir() -> std::path::PathBuf {

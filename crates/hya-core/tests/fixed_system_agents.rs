@@ -354,6 +354,11 @@ async fn auto_title_absent_bundle_model_preserves_session_fallback_model() {
         false,
     )
     .await;
+    engine.runtime_registry().publish_agent_model_preferences(
+        [("title".to_string(), ModelRef::new("remembered/title"))]
+            .into_iter()
+            .collect(),
+    );
     let session = engine
         .create(CreateSession {
             parent: None,
@@ -377,8 +382,8 @@ async fn auto_title_absent_bundle_model_preserves_session_fallback_model() {
     assert_eq!(requests.len(), 1);
     assert_eq!(
         requests[0].model.as_str(),
-        "session-fallback-model",
-        "absent Bundle model must preserve caller/session fallback"
+        "remembered/title",
+        "eligible title preference must replace the caller/session fallback"
     );
     assert_eq!(requests[0].system.as_deref(), Some(builtin_prompt("title")));
     assert_eq!(requests[0].reasoning, None);
@@ -399,6 +404,14 @@ async fn compaction_in_root_turn_uses_compaction_from_captured_binding_not_root_
         true,
     )
     .await;
+    engine.runtime_registry().publish_agent_model_preferences(
+        [(
+            "compaction".to_string(),
+            ModelRef::new("remembered/compaction"),
+        )]
+        .into_iter()
+        .collect(),
+    );
     let session = engine
         .create(CreateSession {
             parent: None,
@@ -444,7 +457,7 @@ async fn compaction_in_root_turn_uses_compaction_from_captured_binding_not_root_
         Some(ROOT_PROMPT),
         "compaction must not reuse the root agent system prompt"
     );
-    assert_eq!(compaction.model.as_str(), "summarizer-fallback-model");
+    assert_eq!(compaction.model.as_str(), "remembered/compaction");
     assert_eq!(
         compaction.reasoning, None,
         "a builtin system agent declares no reasoning effort"
@@ -464,6 +477,11 @@ async fn summarize_session_exact_resolves_summary_from_one_captured_binding() {
         true,
     )
     .await;
+    engine.runtime_registry().publish_agent_model_preferences(
+        [("summary".to_string(), ModelRef::new("remembered/summary"))]
+            .into_iter()
+            .collect(),
+    );
     let session = engine
         .create(CreateSession {
             parent: None,
@@ -487,7 +505,7 @@ async fn summarize_session_exact_resolves_summary_from_one_captured_binding() {
     assert_eq!(requests.len(), 1, "exactly one summary completion");
     let req = &requests[0];
     assert_eq!(req.system.as_deref(), Some(builtin_prompt("summary")));
-    assert_eq!(req.model.as_str(), "summarizer-fallback-model");
+    assert_eq!(req.model.as_str(), "remembered/summary");
     assert_eq!(
         req.reasoning, None,
         "a builtin system agent declares no reasoning effort"
@@ -553,6 +571,14 @@ async fn provider_native_compact_uses_compaction_prompt_not_root_and_session_mod
         true,
     )
     .await;
+    engine.runtime_registry().publish_agent_model_preferences(
+        [(
+            "compaction".to_string(),
+            ModelRef::new("remembered/native-compaction"),
+        )]
+        .into_iter()
+        .collect(),
+    );
     let session = engine
         .create(CreateSession {
             parent: None,
@@ -598,8 +624,8 @@ async fn provider_native_compact_uses_compaction_prompt_not_root_and_session_mod
     );
     assert_eq!(
         call.model.as_str(),
-        "session-model",
-        "provider-native compact keeps the active session model (route resolution)"
+        "remembered/native-compaction",
+        "provider-native compact uses the resolved Compaction Agent model"
     );
     // Local summarizer fallback must not run when native compact succeeds.
     let stream_requests = provider.requests.lock().unwrap();

@@ -85,3 +85,110 @@
 - Never credit a new process governor for a recovered old-process debit, retry
   work that crossed `ResidentWorkStarted`, or conflate actor epoch with runtime
   configuration generation.
+
+---
+
+## Scenario: Owner-Fenced Per-Agent Model Preferences
+
+### 1. Scope / Trigger
+
+- Trigger: changing Agent model persistence, runtime binding, root/subagent/
+  Workflow/fixed-Agent model resolution, or `/tui/agent-models`.
+- The preference table is backend control state. It is not a Session projection
+  and must not emit a public `Event`.
+
+### 2. Signatures
+
+- Migration: `agent_model_preference(agent_id TEXT PRIMARY KEY, provider_id
+  TEXT, model_id TEXT)` with length checks `1..=1024`, `1..=1024`, and
+  `1..=4096`.
+- Store: `list_agent_model_preferences()`,
+  `upsert_agent_model_preference(owner, row)`, and
+  `remove_agent_model_preference(owner, agent)`.
+- App: `PersistentAgentModelControl::set(binding, agent_id, identity)` and
+  `effective_model(binding, agent_id, base_model)`.
+- Server: `GET /tui/agent-models`; `PUT /tui/agent-models/:agent_id` with
+  `{ "preference": { "providerID", "modelID" } }` or
+  `{ "preference": null }`.
+
+### 3. Contracts
+
+- Store provider and provider-local model in separate columns. Never split a
+  model-local slash during load, validation, API conversion, or execution.
+- A mutation validates one exact Agent and exact provider-catalog row against
+  one `TurnBinding`. Direct model or category policy rejects a set but still
+  permits clear.
+- Under one async mutation lock: commit with the matching runtime owner, update
+  the complete in-memory map, then publish with infallible replacement. Never
+  do a fallible database re-read after commit and before publication.
+- `TurnBinding` captures one immutable `Arc` map. Existing admissions and
+  residents retain it; only later bindings observe a successful mutation.
+- Effective order is base < valid remembered < configured category/direct <
+  inline/request/spawn/Workflow Stage category/direct. Direct/category
+  presence suppresses memory even when the configured route does not resolve.
+- Root Sessions, ordinary spawns, unassigned Workflow roles, Title, Summary,
+  and both Compaction paths use the same captured preference rules. Request,
+  CLI, Session hydration, variant, and Stage overrides are never persisted.
+- Admission fingerprints include only preferences that can affect that exact
+  request. Unrelated Agents and roles with explicit request/Stage routes are
+  excluded.
+
+### 4. Validation & Error Matrix
+
+| Condition | Result |
+| --- | --- |
+| Missing/unknown Agent | `404 AGENT_MODEL_UNKNOWN_AGENT` |
+| Set on direct/category-configured Agent | `409 AGENT_MODEL_CONFIGURED` |
+| Empty, oversized, malformed, or non-catalog identity | `400 AGENT_MODEL_INVALID_REQUEST` or `AGENT_MODEL_UNAVAILABLE` |
+| Missing `preference` key or unknown PUT field | `400 AGENT_MODEL_INVALID_REQUEST` |
+| No installed control | `503 AGENT_MODEL_CONTROL_UNAVAILABLE`; bootstrap capability is `false` |
+| Owner/store/runtime failure | `503 AGENT_MODEL_CONTROL_FAILURE`; published map stays unchanged |
+| Stored identity becomes stale | Retain it for display, mark unavailable, and use the existing base path |
+| Explicit JSON `null` | Idempotent clear; return the post-commit default/configured row |
+
+### 5. Good / Base / Bad Cases
+
+- Good: Agents A and B commit different rows in one file-backed Session DB;
+  restart restores both, and old bindings still use their prior map.
+- Base: no row leaves the prior default model path unchanged; a memory DB loses
+  rows on restart; another DB path has an independent map.
+- Bad: store `provider/model` in one column, publish before commit, rebind after
+  commit to build the response, or hash every Agent preference into every
+  admission.
+
+### 6. Tests Required
+
+- Store tests cover deterministic list order, upsert, clear, A/B isolation,
+  owner fencing, concurrent disjoint mutations, bounds, and file reopen.
+- Core/app tests cover immutable old/new bindings, exact stale fallback, all
+  precedence layers, failed-write publication safety, relevant fingerprints,
+  Workflow routes, and configured categories.
+- Fixed-Agent tests capture provider requests for Title, Summary, native
+  Compaction, and local Compaction.
+- Server tests assert bootstrap/list/set/clear, model-local slashes, one-binding
+  root creation, exact 400/404/409/503 bodies, and empty-control behavior.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```rust
+runtime.publish_agent_model_preferences(next);
+store.upsert_agent_model_preference(owner, row).await?;
+let rebound = runtime.bind_turn(workdir)?;
+```
+
+This can publish a failed write and return state from a different catalog or
+preference generation.
+
+#### Correct
+
+```rust
+let _guard = mutation.lock().await;
+store.upsert_agent_model_preference(owner, row).await?;
+map.insert(agent_id, model);
+runtime.publish_agent_model_preferences(map.clone());
+```
+
+Commit precedes one infallible publication, while the request keeps its original
+binding for validation and response projection.

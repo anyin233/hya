@@ -90,6 +90,7 @@ impl WorkflowRuntime {
         session: Option<SessionId>,
     ) -> anyhow::Result<Self> {
         let workdir = std::env::current_dir().context("resolve current directory")?;
+        let has_explicit_model = model_override.is_some();
         crate::first_run_config_bootstrap(false)?;
         let store = open_store(db).await?;
         let runtime = resolve_runtime(model_override).await.with_yolo(yolo);
@@ -120,11 +121,19 @@ impl WorkflowRuntime {
             );
             session
         } else {
+            let model = if has_explicit_model {
+                agent.model.clone()
+            } else {
+                built
+                    .effective_root_model(&agent, &workdir)
+                    .await
+                    .context("resolve Workflow root Agent model")?
+            };
             engine
                 .create(CreateSession {
                     parent: None,
                     agent: agent.name.clone(),
-                    model: agent.model.clone(),
+                    model,
                     workdir: workdir.to_string_lossy().into_owned(),
                 })
                 .await

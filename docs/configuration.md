@@ -80,6 +80,33 @@ How to tell you are offline:
 - Assistant replies echo the input and say that no live provider is available
   and a provider must be configured.
 
+## Remembered Agent Models
+
+The `Agent models` TUI flow stores one base `provider/model` identity per stable
+Agent id in the active backend Session database. It covers primary Agents,
+ordinary subagents, and hidden `title`, `summary`, and `compaction` Agents. The
+state is backend-owned, so attached and remote TUIs change the backend instance
+and a clean client exit is not required.
+
+Model precedence is:
+
+1. request-scoped model/category or explicit Workflow Stage route;
+2. the Agent's configured direct model or model category;
+3. an exact remembered model that still exists in the current provider catalog;
+4. the existing process/default model path.
+
+Remembered state never rewrites configuration. A configured Agent is shown but
+disabled in `/agent-models`; an unavailable retained identity remains visible as
+stale state and falls through to the existing default. Reasoning variants, CLI
+overrides, Session hydration, provider credentials, prompts, and responses are
+not stored in this table.
+
+The default interactive database is
+`$XDG_STATE_HOME/hya/sessions.db` (with the documented HOME fallback). An
+explicit `--db <PATH>` has an independent preference set. In-memory execution
+does not survive restart. TUI recents, favorites, and variants remain separate
+client presentation state in `<state>/model.json`.
+
 Non-interactive commands create the starter file without prompting and keep
 machine-readable stdout clean. The only runtime config message they print is
 when a config file is present but fails to parse — then hya logs to stderr and

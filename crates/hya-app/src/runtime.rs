@@ -19,9 +19,9 @@ use hya_core::{
     MemberSpec, MemberStatus, ModelSummarizer, OperationReservation, PromptEnv, ResidentSupervisor,
     RuntimeRegistry, RuntimeSourceKind, SessionEngine, SidecarEnvironment, SidecarHandle,
     SidecarLifecycle, SidecarStart, SpawnAdmissionOutcome, SubagentGovernor, Summarizer,
-    TeamEvidenceEnvelope, TurnBinding, apply_spawn_model_policy, build_system_prompt,
-    project_envelope, project_envelope_for_actor, run_mailbox_service, run_pre_admitted_member,
-    run_pre_admitted_team, run_pre_admitted_team_for_actor,
+    TeamEvidenceEnvelope, TurnBinding, apply_agent_model_preference, apply_spawn_model_policy,
+    build_system_prompt, project_envelope, project_envelope_for_actor, run_mailbox_service,
+    run_pre_admitted_member, run_pre_admitted_team, run_pre_admitted_team_for_actor,
 };
 
 // Single discovery/date implementation lives in hya-core; re-export for callers.
@@ -54,6 +54,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::OpenOptions;
 use std::io::Write;
 
+use crate::agent_model_control::PersistentAgentModelControl;
 use crate::config;
 use crate::runtime_reconcile::{
     DesiredSource, PreparedFailure, PreparedResult, RuntimeMcpControl, RuntimeReconciler, SourceId,
@@ -1411,6 +1412,8 @@ const EMPTY_PROVIDER_IDENTITY_V1: &[u8] = b"ProviderRouterEmptyV1";
 const PROVIDER_RESOLUTION_IDENTITY_V1: &[u8] = b"ProviderResolutionV1";
 #[allow(dead_code)]
 const CATEGORY_RESOLUTION_IDENTITY_V1: &[u8] = b"CategoryResolutionV1";
+#[allow(dead_code)]
+const AGENT_MODEL_PREFERENCE_IDENTITY_V1: &[u8] = b"AgentModelPreferenceResolutionV1";
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1433,6 +1436,7 @@ struct AdmissionResolutionContext {
     base_reasoning_len: u64,
     category_resolution: Vec<u8>,
     provider_resolution: Vec<u8>,
+    agent_model_preferences: Vec<u8>,
 }
 
 #[allow(dead_code)]
@@ -1447,6 +1451,7 @@ impl AdmissionResolutionContext {
         let base_reasoning_len = canonical_length(base_reasoning(&base).as_bytes())?;
         let category_resolution = canonical_category_resolution(&categories)?;
         let provider_resolution = canonical_provider_resolution(&router)?;
+        let agent_model_preferences = canonical_agent_model_preferences(&BTreeMap::new())?;
 
         Ok(Self {
             base,
@@ -1457,7 +1462,16 @@ impl AdmissionResolutionContext {
             base_reasoning_len,
             category_resolution,
             provider_resolution,
+            agent_model_preferences,
         })
+    }
+
+    fn with_agent_model_preferences(
+        mut self,
+        preferences: BTreeMap<String, ModelRef>,
+    ) -> Result<Self, AdmissionResolutionContextError> {
+        self.agent_model_preferences = canonical_agent_model_preferences(&preferences)?;
+        Ok(self)
     }
 
     fn admission_binding_fingerprint_v1(&self, runtime_fingerprint: [u8; 32]) -> [u8; 32] {
@@ -1482,6 +1496,7 @@ impl AdmissionResolutionContext {
         );
         canonical.extend_from_slice(&self.category_resolution);
         canonical.extend_from_slice(&self.provider_resolution);
+        canonical.extend_from_slice(&self.agent_model_preferences);
         Sha256::digest(canonical).into()
     }
 
@@ -1552,6 +1567,28 @@ fn canonical_category_resolution(
                 canonical_length(candidate_bytes)?,
             );
         }
+    }
+    Ok(canonical)
+}
+
+#[allow(dead_code)]
+fn canonical_agent_model_preferences(
+    preferences: &BTreeMap<String, ModelRef>,
+) -> Result<Vec<u8>, AdmissionResolutionContextError> {
+    let mut canonical = Vec::new();
+    canonical.extend_from_slice(AGENT_MODEL_PREFERENCE_IDENTITY_V1);
+    canonical.extend_from_slice(&canonical_count(preferences.len())?.to_be_bytes());
+    for (agent_id, model) in preferences {
+        append_len_prefixed(
+            &mut canonical,
+            agent_id.as_bytes(),
+            canonical_length(agent_id.as_bytes())?,
+        );
+        append_len_prefixed(
+            &mut canonical,
+            model.as_str().as_bytes(),
+            canonical_length(model.as_str().as_bytes())?,
+        );
     }
     Ok(canonical)
 }
@@ -2047,6 +2084,16 @@ enum DurableOwnerReplyMode {
     BackgroundRunningOnRegister,
 }
 
+/// Return whether request-local routing fully suppresses an Agent default.
+fn spawn_member_overrides_agent_default(member: &SpawnMember) -> bool {
+    let present = |value: Option<&str>| value.is_some_and(|value| !value.trim().is_empty());
+    present(member.model.as_deref())
+        || present(member.category.as_deref())
+        || member.inline_agent.as_ref().is_some_and(|inline| {
+            present(inline.model.as_deref()) || present(inline.category.as_deref())
+        })
+}
+
 #[allow(dead_code)]
 fn prepare_spawn_admission(
     engine: &SessionEngine,
@@ -2065,7 +2112,25 @@ fn prepare_spawn_admission(
     let runtime_fingerprint = engine
         .runtime_semantic_fingerprint_v1(binding)
         .ok_or(SpawnError::Unavailable)?;
+    let mut relevant_preferences = BTreeMap::new();
+    for member in &req.members {
+        let definition = authorize_spawn_target(binding, req.agents.as_ref(), caller, member)?;
+        if definition.model_policy.model.is_some()
+            || definition.model_policy.category.is_some()
+            || spawn_member_overrides_agent_default(member)
+        {
+            continue;
+        }
+        if let Some(model) = binding
+            .agent_model_preference(definition.stable_id)
+            .filter(|model| router.resolve(model).is_some())
+        {
+            relevant_preferences.insert(definition.stable_id.to_string(), model.clone());
+        }
+    }
     let resolution = AdmissionResolutionContext::capture(base, categories, router)
+        .map_err(|_| SpawnError::Unavailable)?
+        .with_agent_model_preferences(relevant_preferences)
         .map_err(|_| SpawnError::Unavailable)?;
     let admission_binding_fingerprint =
         resolution.admission_binding_fingerprint_v1(runtime_fingerprint);
@@ -2137,6 +2202,12 @@ fn resolve_authorized_spawn_member(
         .agent_resource_policy_for_binding(ctx.binding, definition.stable_id)
         .map_err(|_| SpawnError::Unavailable)?;
 
+    let agent = apply_agent_model_preference(
+        agent,
+        definition,
+        ctx.binding.agent_model_preference(definition.stable_id),
+        ctx.is_servable,
+    );
     let mut agent =
         apply_spawn_model_policy(agent, definition, &member, ctx.categories, ctx.is_servable);
     let mut resident = definition.spawn_lifecycle == SpawnLifecycle::Resident || member.resident;
@@ -3283,6 +3354,7 @@ pub struct BuiltSessionEngine {
     engine: Arc<SessionEngine>,
     resident_supervisor: Arc<ResidentSupervisor>,
     workflow_control: crate::WorkflowControl,
+    agent_model_control: PersistentAgentModelControl,
     asks: Option<tokio::sync::mpsc::UnboundedReceiver<AskRequest>>,
     questions: Option<tokio::sync::mpsc::UnboundedReceiver<QuestionRequest>>,
     mcp_control: Arc<dyn hya_server::McpControl>,
@@ -3307,6 +3379,35 @@ impl BuiltSessionEngine {
     #[must_use]
     pub fn workflow_control(&self) -> crate::WorkflowControl {
         self.workflow_control.clone()
+    }
+
+    /// Shared durable Agent model preference control for backend and server surfaces.
+    #[must_use]
+    pub fn agent_model_control(&self) -> PersistentAgentModelControl {
+        self.agent_model_control.clone()
+    }
+
+    /// Resolve the effective model for a new root Session without an explicit override.
+    ///
+    /// The supplied workdir binds one current Agent catalog/preference snapshot.
+    /// Configured direct/category policy and an eligible remembered model are
+    /// applied before the process base model.
+    ///
+    /// # Errors
+    /// Returns runtime binding, unknown-Agent, or model-control failures.
+    pub async fn effective_root_model(
+        &self,
+        agent: &AgentSpec,
+        workdir: &Path,
+    ) -> anyhow::Result<ModelRef> {
+        let binding = self
+            .engine
+            .bind_root_runtime(workdir)
+            .await
+            .context("bind root runtime for Agent model resolution")?;
+        self.agent_model_control
+            .effective_model(&binding, agent.name.as_str(), &agent.model)
+            .context("resolve effective root Agent model")
     }
 
     /// Take the permission-ask receiver exactly once.
@@ -4168,6 +4269,16 @@ async fn build_session_engine_with_mcp_defer(
             candidate.replace_sources_of_kind(RuntimeSourceKind::Bundle, static_sources)
         })?;
     }
+    let categories = Arc::new(crate::config::load_categories());
+    let agent_model_control = PersistentAgentModelControl::load(
+        store.clone(),
+        owner_run_id,
+        runtime.clone(),
+        router.clone(),
+    )
+    .await
+    .context("load Agent model preferences before engine readiness")?
+    .with_categories(categories.clone());
     let catalog_refresh = Arc::new(InstalledBundleRefresh::new(bundle_registry_path()));
 
     let rules = PermissionRules::new(vec![
@@ -4198,11 +4309,11 @@ async fn build_session_engine_with_mcp_defer(
     // Clone the router before it is moved into the engine so the team supervisor
     // can test category-candidate servability against the same live providers.
     let spawn_router = router.clone();
-    let categories = Arc::new(crate::config::load_categories());
     let sidecar_environment = Arc::new(BundleSidecarEnvironment::production());
     let mut engine_builder = SessionEngine::new(store, router, runtime, permission, bus)
         .with_catalog_refresh(catalog_refresh)
         .with_sidecar_environment(sidecar_environment.clone())
+        .with_model_categories(categories.clone())
         // Route `categories:` failover chains into the engine's cross-model
         // plane so turn-time pre-stream failures advance through the ordered
         // candidates instead of failing the whole turn.
@@ -4416,6 +4527,7 @@ async fn build_session_engine_with_mcp_defer(
         mcp_control,
         plugin_host,
         lifecycle,
+        agent_model_control,
     })
 }
 
@@ -4572,11 +4684,13 @@ impl HyaRuntime {
             .ok_or_else(|| anyhow::anyhow!("BuiltSessionEngine asks receiver already taken"))?;
         let mcp_control = built.mcp_control();
         let workflow_control = Arc::new(built.workflow_control());
+        let agent_model_control = Arc::new(built.agent_model_control());
         let plugin_host = built.plugin_host();
         let mut state = hya_server::AppState::new(engine.clone(), agent)
             .with_question_requests(questions)
             .with_mcp_control(mcp_control)
             .with_workflow_control(workflow_control)
+            .with_agent_model_control(agent_model_control)
             .with_workspace_adapters(plugin_host.workspace_adapters())
             .with_default_agent(runtime.default_agent.clone());
         state = state.with_permission_requests(asks);
@@ -4899,6 +5013,49 @@ mod tests {
 
         assert_eq!(first, reconstructed);
         assert_ne!(first, [0; 32]);
+    }
+
+    #[test]
+    fn admission_binding_fingerprint_includes_canonical_relevant_preferences() {
+        let make_context = || {
+            AdmissionResolutionContext::capture(
+                AgentSpec {
+                    name: AgentName::new("build"),
+                    model: ModelRef::new("fixture/model"),
+                    system_prompt: "captured harness base".to_string(),
+                    workdir: PathBuf::from("fixture-workdir"),
+                    reasoning: None,
+                },
+                Arc::new(CategoryRegistry::default()),
+                Arc::new(ProviderRouter::new()),
+            )
+            .expect("empty provider context must capture")
+        };
+        let runtime_fingerprint = [0x5a; 32];
+        let first = make_context()
+            .with_agent_model_preferences(BTreeMap::from([
+                ("reviewer".to_string(), ModelRef::new("provider/reviewer")),
+                ("worker".to_string(), ModelRef::new("provider/first")),
+            ]))
+            .expect("preferences must canonicalize")
+            .admission_binding_fingerprint_v1(runtime_fingerprint);
+        let reordered = make_context()
+            .with_agent_model_preferences(BTreeMap::from([
+                ("worker".to_string(), ModelRef::new("provider/first")),
+                ("reviewer".to_string(), ModelRef::new("provider/reviewer")),
+            ]))
+            .expect("preference order must not matter")
+            .admission_binding_fingerprint_v1(runtime_fingerprint);
+        let changed = make_context()
+            .with_agent_model_preferences(BTreeMap::from([
+                ("reviewer".to_string(), ModelRef::new("provider/reviewer")),
+                ("worker".to_string(), ModelRef::new("provider/second")),
+            ]))
+            .expect("changed preference must canonicalize")
+            .admission_binding_fingerprint_v1(runtime_fingerprint);
+
+        assert_eq!(first, reordered);
+        assert_ne!(first, changed);
     }
 
     #[tokio::test]
@@ -11652,6 +11809,70 @@ You are the installed resident agent.
             CategoryEntry::from_candidates(&["cat/spawn-model".to_string()]).unwrap(),
         );
         CategoryRegistry::from_entries(entries)
+    }
+
+    #[tokio::test]
+    async fn unconfigured_spawn_uses_remembered_model_below_explicit_override() {
+        let workdir = tempdir();
+        let engine = engine_with_catalog(catalog_with_worker_policy(ModelPolicy::default())).await;
+        engine.runtime_registry().publish_agent_model_preferences(
+            [("worker".to_string(), ModelRef::new("remembered/model"))]
+                .into_iter()
+                .collect(),
+        );
+        let binding = engine
+            .bind_runtime(&workdir)
+            .expect("bind preference snapshot");
+        let base = AgentSpec {
+            name: AgentName::new("build"),
+            model: ModelRef::new("base/model"),
+            system_prompt: "lead base".to_string(),
+            workdir: workdir.clone(),
+            reasoning: None,
+        };
+        let allowed = [AgentDef {
+            name: "worker".to_string(),
+            description: None,
+            category: None,
+            mode: "subagent".to_string(),
+        }];
+        let categories = CategoryRegistry::default();
+        let is_servable = |_: &ModelRef| true;
+        let sidecar_environment = BundleSidecarEnvironment::from_command(
+            vec!["bun".to_string(), "sidecar.js".to_string()],
+            tempdir(),
+        );
+        let resolve = |model: Option<&str>| {
+            resolve_spawn_member(
+                &ResolveSpawnMemberCtx {
+                    engine: &engine,
+                    binding: &binding,
+                    base: &base,
+                    caller: "build",
+                    allowed_agents: &allowed,
+                    categories: &categories,
+                    is_servable: &is_servable,
+                    guidance: None,
+                    sidecar_environment: &sidecar_environment,
+                },
+                SpawnMember {
+                    description: "remembered preference".to_string(),
+                    prompt: "resolve model only".to_string(),
+                    subagent_type: "worker".to_string(),
+                    model: model.map(str::to_string),
+                    ..SpawnMember::default()
+                },
+            )
+            .expect("authorized worker must resolve")
+            .agent
+            .model
+        };
+
+        assert_eq!(resolve(None), ModelRef::new("remembered/model"));
+        assert_eq!(
+            resolve(Some("explicit/model")),
+            ModelRef::new("explicit/model")
+        );
     }
 
     /// Highest-to-lowest spawn model chain, each row selecting the first set layer

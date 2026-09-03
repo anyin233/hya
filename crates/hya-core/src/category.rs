@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use hya_bundle::ModelPolicy;
 use hya_proto::ModelRef;
 
 use crate::agent_catalog::AgentDefinition;
@@ -72,6 +73,93 @@ pub fn apply_spawn_model_policy(
         .filter(|model| !model.is_empty())
     {
         agent.model = ModelRef::new(model);
+    }
+    agent
+}
+/// Resolve explicit direct/category Agent policy against the current providers.
+///
+/// A direct model wins without a servability check. A category uses the
+/// registry's ordered servability selection, including its existing
+/// first-candidate fallback when no provider is currently available.
+///
+/// # Arguments
+///
+/// * `policy` - Agent model policy to resolve.
+/// * `categories` - Configured category registry.
+/// * `is_servable` - Predicate for current exact-model availability.
+///
+/// # Returns
+///
+/// The configured model, or `None` when the policy has no resolvable direct or
+/// category route.
+#[must_use]
+pub fn resolve_configured_agent_model(
+    policy: &ModelPolicy,
+    categories: &CategoryRegistry,
+    is_servable: &dyn Fn(&ModelRef) -> bool,
+) -> Option<ModelRef> {
+    policy.model.as_deref().map(ModelRef::new).or_else(|| {
+        policy
+            .category
+            .as_deref()
+            .and_then(|category| categories.resolve_servable(category, is_servable))
+            .map(|resolved| resolved.model)
+    })
+}
+
+/// Return the eligible remembered model for one Agent without allocating.
+///
+/// Direct model or category configuration suppresses remembered state. A
+/// reasoning-only policy does not. The exact remembered model must still be
+/// accepted by `is_servable`.
+///
+/// # Arguments
+///
+/// * `definition` - Catalog definition that owns explicit routing policy.
+/// * `preference` - Optional model captured for the Agent's stable id.
+/// * `is_servable` - Predicate for current exact-model availability.
+///
+/// # Returns
+///
+/// The borrowed remembered model only when it is eligible and servable.
+#[must_use]
+pub fn eligible_agent_model_preference<'a>(
+    definition: &AgentDefinition<'_>,
+    preference: Option<&'a ModelRef>,
+    is_servable: &dyn Fn(&ModelRef) -> bool,
+) -> Option<&'a ModelRef> {
+    if definition.model_policy.model.is_some() || definition.model_policy.category.is_some() {
+        return None;
+    }
+    preference.filter(|model| is_servable(model))
+}
+
+/// Apply a remembered model as the lowest-precedence default for one Agent.
+///
+/// A remembered model is eligible only when the Agent definition has neither a
+/// direct model nor a category policy, and when `is_servable` accepts the exact
+/// model reference. A reasoning-only policy does not suppress the preference.
+///
+/// # Arguments
+///
+/// * `agent` - Base specification whose model may receive the remembered value.
+/// * `definition` - Catalog definition that supplies explicit model policy.
+/// * `preference` - Optional remembered model captured for this Agent.
+/// * `is_servable` - Predicate for whether the exact model is currently usable.
+///
+/// # Returns
+///
+/// The supplied `agent`, with its model replaced only when the remembered value
+/// is eligible and servable.
+#[must_use]
+pub fn apply_agent_model_preference(
+    mut agent: AgentSpec,
+    definition: &AgentDefinition<'_>,
+    preference: Option<&ModelRef>,
+    is_servable: &dyn Fn(&ModelRef) -> bool,
+) -> AgentSpec {
+    if let Some(model) = eligible_agent_model_preference(definition, preference, is_servable) {
+        agent.model = model.clone();
     }
     agent
 }

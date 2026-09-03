@@ -1,7 +1,7 @@
 # Storage
 
 The storage layer lives in [`../../crates/hya-store`](../../crates/hya-store)
-and persists canonical events in SQLite.
+and persists canonical Events plus narrow auxiliary control state in SQLite.
 
 ## Connections
 
@@ -112,6 +112,28 @@ Summary of migration roles:
 | `0006_admission_queue_states.sql` | Rebuilds to composite PK `(operation_id, member_ordinal)`, adds `queued` / `waiting`, `batch_size` |
 | `0007_admission_bindings.sql` | All-or-nothing binding columns + `spawn_intent` (1..=1 MiB) |
 | `0008_admission_fairness.sql` | `admission_sequence` / `promotion_sequence` + FIFO partial indexes |
+
+### `0009_agent_model_preference.sql`
+
+Adds the backend-owned per-Agent model preference table:
+
+| Column | Constraint |
+| --- | --- |
+| `agent_id` | `TEXT PRIMARY KEY`, length 1..=1024 |
+| `provider_id` | `TEXT NOT NULL`, length 1..=1024 |
+| `model_id` | `TEXT NOT NULL`, length 1..=4096; provider-local slashes are preserved |
+
+This is an auxiliary control table, not a Session projection. It emits no
+public Event. Runtime startup claims the database owner, loads the complete map,
+and publishes one immutable snapshot before admission. A mutation validates the
+bound Agent and exact provider-catalog row, commits under the matching runtime
+owner, then publishes the complete replacement map. Old `TurnBinding`s retain
+their captured snapshot; failed or stale-owner writes publish nothing.
+
+Only stable Agent/provider/model identities are stored. Credentials, reasoning
+variants, prompts, Session content, and provider responses never enter this
+table. File-backed databases retain the rows across restart; memory databases
+do not, and separate database paths remain isolated.
 
 ### `0005_resident_actor_claim.sql` (claim table)
 

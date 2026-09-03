@@ -8,9 +8,10 @@
 
 use std::path::{Path, PathBuf};
 
+use axum::http::StatusCode;
 use hya_bundle::BundleError;
-use hya_core::CoreError;
-use hya_proto::AgentName;
+use hya_core::{CoreError, TurnBinding};
+use hya_proto::{AgentName, ModelRef};
 use serde::Deserialize;
 
 use crate::{ApiError, ServerState};
@@ -46,6 +47,29 @@ pub(crate) async fn resolve_session_agent(
     requested: Option<&str>,
 ) -> Result<AgentName, ApiError> {
     let binding = st.engine.bind_root_runtime(workdir).await?;
+    resolve_agent_from_binding(st, workdir, &binding, requested)
+}
+
+/// Resolve a new root Session's Agent and model from one immutable binding.
+pub(crate) async fn resolve_new_session_agent_model(
+    st: &ServerState,
+    workdir: &Path,
+    requested_agent: Option<&str>,
+    explicit_model: Option<ModelRef>,
+) -> Result<(AgentName, ModelRef), ApiError> {
+    let binding = st.engine.bind_root_runtime(workdir).await?;
+    let agent = resolve_agent_from_binding(st, workdir, &binding, requested_agent)?;
+    let model = resolve_session_model(st, binding, &agent, explicit_model).await?;
+    Ok((agent, model))
+}
+
+/// Exact-resolve one root Agent against a previously captured binding.
+fn resolve_agent_from_binding(
+    st: &ServerState,
+    workdir: &Path,
+    binding: &TurnBinding,
+    requested: Option<&str>,
+) -> Result<AgentName, ApiError> {
     let candidate = match requested {
         Some(id) => id.to_string(),
         None => configured_default_agent(workdir)
@@ -58,6 +82,56 @@ pub(crate) async fn resolve_session_agent(
         }))
     })?;
     Ok(AgentName::new(agent.stable_id))
+}
+
+/// Resolve the model for a root Session from the same binding as its Agent.
+///
+/// An explicit request model remains authoritative and bypasses the Agent model
+/// control. For an installed control, an omitted model must match the exact
+/// resolved Agent row; a failed or incomplete list is an error rather than a
+/// fallback, because using the process model could disagree with advertised
+/// Agent state. The empty control keeps the prior process-base behavior.
+async fn resolve_session_model(
+    st: &ServerState,
+    binding: TurnBinding,
+    agent: &AgentName,
+    explicit: Option<ModelRef>,
+) -> Result<ModelRef, ApiError> {
+    let Some(explicit) = explicit else {
+        if !st.agent_model_control.available() {
+            return Ok(st.agent.model.clone());
+        }
+
+        let states = st
+            .agent_model_control
+            .list(binding, st.agent.model.clone())
+            .await
+            .map_err(|error| {
+                let error = crate::AgentModelControlError::new(error.code, error.message);
+                ApiError::structured(StatusCode::SERVICE_UNAVAILABLE, error.code, error.message)
+            })?;
+        let state = states
+            .into_iter()
+            .find(|state| state.agent_id == agent.as_str())
+            .ok_or_else(|| {
+                ApiError::structured(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    crate::agent_model_control::AGENT_MODEL_CONTROL_FAILURE,
+                    "Agent model control returned no state for the resolved Agent",
+                )
+            })?;
+        let identity = state.effective.model;
+        let model = if identity.provider_id == super::model_ref::BARE_PROVIDER
+            && identity.model_id != "offline"
+        {
+            identity.model_id
+        } else {
+            format!("{}/{}", identity.provider_id, identity.model_id)
+        };
+        return Ok(ModelRef::new(model));
+    };
+
+    Ok(explicit)
 }
 
 /// Bind once for `workdir` and list catalog agents from that TurnBinding.
