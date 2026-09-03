@@ -61,8 +61,9 @@ pub use agent_catalog::{AgentCatalog, AgentDefinition, AgentOrigin};
 pub use builtin_agents::{BUILTIN_AGENTS, BuiltinAgent, SpawnScope, builtin_agent, is_builtin_id};
 pub use bus::EventBus;
 pub use category::{
-    CategoryEntry, CategoryRegistry, ResolvedCategory, apply_spawn_model_policy,
-    build_member_agent, inject_skills,
+    CategoryEntry, CategoryRegistry, ResolvedCategory, apply_agent_model_preference,
+    apply_spawn_model_policy, build_member_agent, eligible_agent_model_preference, inject_skills,
+    resolve_configured_agent_model,
 };
 pub use compaction::{
     CompactionConfig, CompactionPlan, MIN_RESOLVED_THRESHOLD, ModelSummarizer, SummarizeOptions,

@@ -352,6 +352,7 @@ unmodified Escape returns to Main. See [TUI Reference](tui-reference.md#pane-nav
 | `model.cycle_favorite_reverse` | unbound | — | Previous favorite model. |
 | `mcp.list` | unbound | `/mcps` | Open the MCP servers dialog. |
 | `agent.list` | `<leader>a` | `/agents` | Open the agent picker. |
+| `agent.model.list` | unbound | `/agent-models` | Choose any catalog Agent, then persist its default through the model picker. Configured rows are visible but disabled. |
 | `agent.cycle` | `tab` | — | Next primary agent. |
 | `agent.cycle.reverse` | `shift+tab` | — | Previous primary agent. |
 | `variant.cycle` | `ctrl+t` | — | Cycle model variants. |
@@ -545,6 +546,7 @@ submitted as a normal prompt.
 | `/new` | `/clear` | New session (navigate to Home). |
 | `/models` | `/mo`, `/model` | Open the model picker. |
 | `/agents` | — | Open the agent picker. |
+| `/agent-models` | — | Choose and remember a model for any catalog Agent. |
 | `/mcps` | — | Open the MCP dialog. |
 | `/variants` | `/think` | Open the variant picker. |
 | `/status` | — | Open the status dialog. |

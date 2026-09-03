@@ -30,6 +30,7 @@ import { batch, onMount } from "solid-js"
 import path from "path"
 import { startupMark } from "../../hya/startup-trace"
 import { useKV } from "./kv"
+import { decodeAgentModels, supportsAgentModelPreferences, type AgentModelIdentity, type AgentModelState } from "../../hya/agent-models"
 import { decodeCatalogSelection, type CatalogSelection } from "../../hya/model-catalog"
 
 /**
@@ -73,8 +74,10 @@ export const {
       provider_next: ProviderListResponse
       capabilities: {
         experimentalBackgroundSubagents: boolean
+        agentModelPreferences: boolean
       }
       agent: Agent[]
+      agentModels: AgentModelState[]
       command: Command[]
       permission: {
         [sessionID: string]: PermissionRequest[]
@@ -116,10 +119,12 @@ export const {
       },
       capabilities: {
         experimentalBackgroundSubagents: false,
+        agentModelPreferences: false,
       },
       config: {},
       status: "loading",
       agent: [],
+      agentModels: [],
       permission: {},
       question: {},
       command: [],
@@ -138,10 +143,141 @@ export const {
       formatter: [],
       vcs: undefined,
     })
-
     const event = useEvent()
     const project = useProject()
     const sdk = useSDK()
+    /**
+     * Build a dedicated Agent model URL with the current workspace query.
+     * @param pathname Dedicated control route path.
+     * @param workspace Current synchronized workspace, when known.
+     * @returns An absolute URL for the existing SDK transport.
+     */
+    function agentModelURL(pathname: string, workspace: string | undefined): string {
+      const url = new URL(pathname, sdk.url)
+      if (workspace) url.searchParams.set("directory", workspace)
+      return url.toString()
+    }
+
+    /**
+     * Read a JSON response and add operation context when decoding fails.
+     * @param response SDK transport response.
+     * @param operation Human-readable operation name.
+     * @returns The unknown decoded JSON payload.
+     */
+    async function readAgentModelJSON(response: Response, operation: string): Promise<unknown> {
+      try {
+        return (await response.json()) as unknown
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error)
+        throw new Error(`${operation} returned invalid JSON: ${reason}`)
+      }
+    }
+
+    /**
+     * Convert a failed Agent model response to one bounded contextual error.
+     * @param response Failed SDK transport response.
+     * @param operation Human-readable operation name.
+     * @returns A bounded error for toast and caller handling.
+     */
+    async function agentModelResponseError(response: Response, operation: string): Promise<Error> {
+      let detail = ""
+      try {
+        const text = (await response.text()).trim().slice(0, 512)
+        if (text) {
+          try {
+            const payload = JSON.parse(text) as unknown
+            const record = payload && typeof payload === "object" && !Array.isArray(payload)
+              ? (payload as Record<string, unknown>)
+              : undefined
+            const error = record?.error && typeof record.error === "object" && !Array.isArray(record.error)
+              ? (record.error as Record<string, unknown>)
+              : undefined
+            const message = error?.message ?? record?.message
+            detail = typeof message === "string" ? message.slice(0, 512) : text
+          } catch {
+            detail = text
+          }
+        }
+      } catch (error) {
+        detail = `unable to read error response: ${error instanceof Error ? error.message : String(error)}`
+      }
+      return new Error(`${operation} failed (${response.status})${detail ? `: ${detail}` : ""}`)
+    }
+
+    /**
+     * Fetch and decode the complete Agent model preference list.
+     * @param workspace Current synchronized workspace, when known.
+     * @param providers Provider catalog paired with the response.
+     * @returns Allowlisted normalized Agent model rows.
+     */
+    async function fetchAgentModelRows(
+      workspace: string | undefined,
+      providers: unknown = store.provider,
+    ): Promise<AgentModelState[]> {
+      const response = await sdk.fetch(agentModelURL("/tui/agent-models", workspace), {
+        headers: {
+          "x-opencode-directory": sdk.directory ?? "",
+          accept: "application/json",
+        },
+      })
+      if (!response.ok) throw await agentModelResponseError(response, "Agent model refresh")
+      return decodeAgentModels(await readAgentModelJSON(response, "Agent model refresh"), providers)
+    }
+
+    /**
+     * Refresh synchronized Agent model rows when the backend advertises support.
+     * @returns The refreshed rows, or current rows when unsupported.
+     */
+    async function refreshAgentModels(): Promise<AgentModelState[]> {
+      if (!store.capabilities.agentModelPreferences) return store.agentModels
+      const rows = await fetchAgentModelRows(project.workspace.current())
+      setStore("agentModels", reconcile(rows))
+      return rows
+    }
+
+    /**
+     * Persist one Agent model preference and replace only its synchronized row.
+     * @param agentID Exact stable Agent id.
+     * @param preference New base-model identity, or null to clear it.
+     * @returns The normalized post-commit row.
+     */
+    async function setAgentModelPreference(
+      agentID: string,
+      preference: AgentModelIdentity | null,
+    ): Promise<AgentModelState> {
+      if (!store.capabilities.agentModelPreferences) {
+        throw new Error("Agent model preferences are unavailable on this backend")
+      }
+      const response = await sdk.fetch(
+        agentModelURL(`/tui/agent-models/${encodeURIComponent(agentID)}`, project.workspace.current()),
+        {
+          method: "PUT",
+          headers: {
+            "x-opencode-directory": sdk.directory ?? "",
+            accept: "application/json",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            preference:
+              preference === null
+                ? null
+                : { providerID: preference.providerID, modelID: preference.modelID },
+          }),
+        },
+      )
+      if (!response.ok) throw await agentModelResponseError(response, "Agent model update")
+      const payload = await readAgentModelJSON(response, "Agent model update")
+      const decoded = decodeAgentModels([payload], store.provider)
+      const row = decoded.length === 1 ? decoded[0] : undefined
+      if (!row || row.agentID !== agentID) {
+        throw new Error(`Agent model update returned no normalized row for ${agentID}`)
+      }
+      const index = store.agentModels.findIndex((item) => item.agentID === agentID)
+      if (index < 0) throw new Error(`Agent model update returned an unknown row for ${agentID}`)
+      setStore("agentModels", index, reconcile(row))
+      return row
+    }
+
 
     const fullSyncedSessions = new Set<string>()
     const syncingSessions = new Map<string, Promise<void>>()
@@ -471,7 +607,8 @@ export const {
       config?: unknown
       providers?: { providers?: unknown; default?: unknown; defaultModel?: unknown }
       provider_list?: unknown
-      capabilities?: { backgroundSubagents?: boolean }
+      capabilities?: { backgroundSubagents?: unknown; agentModelPreferences?: unknown }
+      agentModels?: unknown[]
       agents?: unknown[]
       sessions?: Session[]
       commands?: unknown[]
@@ -509,7 +646,13 @@ export const {
 
     function applyBootstrapBundle(bundle: BootstrapBundle) {
       const providers = bundle.providers?.providers ?? []
+      const providerPayloadKnown = bundle.providers?.providers !== undefined
       const catalogDefault = decodeCatalogSelection(bundle.providers?.defaultModel, providers)
+      const agentModelCapability = supportsAgentModelPreferences(bundle.capabilities)
+      const agentModels =
+        providerPayloadKnown && agentModelCapability
+          ? decodeAgentModels(bundle.agentModels ?? [], providers)
+          : []
       batch(() => {
         if (bundle.providers) {
           setStore("provider", reconcile(providers as never))
@@ -519,11 +662,9 @@ export const {
         if (bundle.provider_list !== undefined) {
           setStore("provider_next", reconcile(bundle.provider_list as never))
         }
-        setStore(
-          "capabilities",
-          "experimentalBackgroundSubagents",
-          bundle.capabilities?.backgroundSubagents === true,
-        )
+        setStore("capabilities", "experimentalBackgroundSubagents", bundle.capabilities?.backgroundSubagents === true)
+        setStore("capabilities", "agentModelPreferences", agentModelCapability)
+        if (providerPayloadKnown) setStore("agentModels", reconcile(agentModels))
         if (bundle.agents) setStore("agent", reconcile(bundle.agents as never))
         if (bundle.config !== undefined) setStore("config", reconcile(bundle.config as never))
         if (bundle.sessions) setStore("session", reconcile(sortSessionsByID(bundle.sessions)))
@@ -572,6 +713,8 @@ export const {
         (providers as typeof providers & { defaultModel?: unknown }).defaultModel,
         providers.providers,
       )
+      const agentModelCapability = supportsAgentModelPreferences(capabilities)
+      const agentModels = agentModelCapability ? await fetchAgentModelRows(workspace, providers.providers) : []
 
       batch(() => {
         setStore("provider", reconcile(providers.providers))
@@ -579,6 +722,8 @@ export const {
         setStore("provider_catalog_default", catalogDefault)
         setStore("provider_next", reconcile(providerList))
         setStore("capabilities", "experimentalBackgroundSubagents", capabilities?.backgroundSubagents === true)
+        setStore("capabilities", "agentModelPreferences", agentModelCapability)
+        setStore("agentModels", reconcile(agentModels))
         setStore("agent", reconcile(agents))
         setStore("config", reconcile(config))
         if (sessions !== undefined) setStore("session", reconcile(sessions))
@@ -621,6 +766,18 @@ export const {
       get path() {
         return project.instance.path()
       },
+      /**
+       * Return one synchronized Agent model row by stable Agent id.
+       * @param agentID Exact stable Agent id.
+       * @returns The normalized row, or undefined when absent.
+       */
+      getAgentModel(agentID: string) {
+        return store.agentModels.find((item) => item.agentID === agentID)
+      },
+      /** Refresh synchronized Agent model rows through the dedicated backend route. */
+      refreshAgentModels,
+      /** Persist one Agent model preference and update its synchronized row on success. */
+      setAgentModelPreference,
       session: {
         get(sessionID: string) {
           const match = search(store.session, sessionID, (s) => s.id)

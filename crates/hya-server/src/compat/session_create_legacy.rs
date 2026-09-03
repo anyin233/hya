@@ -51,11 +51,12 @@ async fn create(
     let workdir = super::location::canonical_workdir(workdir)
         .to_string_lossy()
         .into_owned();
-    // Validate against one bound catalog before any create/event side effects.
-    let agent = super::bound_agent_metadata::resolve_session_agent(
+    // Bind Agent and default model once before any create/event side effects.
+    let (agent, model) = super::bound_agent_metadata::resolve_new_session_agent_model(
         &st,
         std::path::Path::new(&workdir),
         req.agent.as_deref(),
+        req.model.map(CompatModelRefRequest::into_model_ref),
     )
     .await?;
     let session = st
@@ -65,10 +66,7 @@ async fn create(
             CreateSession {
                 parent,
                 agent,
-                model: req
-                    .model
-                    .map(CompatModelRefRequest::into_model_ref)
-                    .unwrap_or_else(|| st.agent.model.clone()),
+                model,
                 workdir,
             },
         )

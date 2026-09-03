@@ -7,13 +7,25 @@ import { DialogVariant } from "./dialog-variant"
 import * as fuzzysort from "fuzzysort"
 import { useConnected } from "./use-connected"
 import { useSync } from "../context/sync"
+import { useToast } from "../ui/toast"
+import { agentModelPickerTitle } from "../../hya/agent-models"
 import { catalogProviderStatus, decodeCatalogProviders } from "../../hya/model-catalog"
 
-export function DialogModel(props: { providerID?: string }) {
+/**
+ * Select a model for the active root Agent or an explicit Agent target.
+ * @param props Optional provider filter and stable target Agent id.
+ * @returns The shared model-selection dialog.
+ */
+export function DialogModel(props: { providerID?: string; agentID?: string }) {
   const local = useLocal()
   const sync = useSync()
   const dialog = useDialog()
   const [query, setQuery] = createSignal("")
+  const toast = useToast()
+  const target = createMemo(() =>
+    props.agentID ? sync.data.agentModels.find((item) => item.agentID === props.agentID) : undefined,
+  )
+  const [saving, setSaving] = createSignal(false)
 
   const connected = useConnected()
   const showExtra = createMemo(() => connected() && !props.providerID)
@@ -122,25 +134,62 @@ export function DialogModel(props: { providerID?: string }) {
     props.providerID ? sync.data.provider.find((item) => item.id === props.providerID) : null,
   )
 
+  const current = createMemo(() => {
+    const effective = target()?.effective
+    if (effective) return { providerID: effective.providerID, modelID: effective.modelID }
+    return local.model.current()
+  })
+
   const title = createMemo(() => {
+    if (props.agentID) return agentModelPickerTitle(props.agentID)
     const value = provider()
     if (!value) return "Select model"
     return value.name
   })
 
-  function onSelect(providerID: string, modelID: string) {
-    local.model.set({ providerID, modelID }, { recent: true })
-    const list = local.model.variant.list()
-    const cur = local.model.variant.selected()
-    if (cur === "default" || (cur && list.includes(cur))) {
+  /**
+   * Apply one model selection to the explicit target or active root Agent.
+   * @param providerID Exact provider id from the shared catalog.
+   * @param modelID Exact provider-local base-model id.
+   * @returns Nothing; asynchronous persistence keeps the dialog locked in place.
+   */
+  function onSelect(providerID: string, modelID: string): void {
+    const model = { providerID, modelID }
+    if (saving()) return
+    setSaving(true)
+    if (props.agentID) {
+      void sync.setAgentModelPreference(props.agentID, model).then(
+        () => {
+          setSaving(false)
+          dialog.clear()
+        },
+        (error) => {
+          setSaving(false)
+          toast.show({
+            variant: "error",
+            message: error instanceof Error ? error.message : String(error),
+            duration: 5000,
+          })
+        },
+      )
+      return
+    }
+
+    void local.model.select(model, { recent: true }).then((selected) => {
+      setSaving(false)
+      if (!selected) return
+      const list = local.model.variant.list()
+      const cur = local.model.variant.selected()
+      if (cur === "default" || (cur && list.includes(cur))) {
+        dialog.clear()
+        return
+      }
+      if (list.length > 0) {
+        dialog.replace(() => <DialogVariant />)
+        return
+      }
       dialog.clear()
-      return
-    }
-    if (list.length > 0) {
-      dialog.replace(() => <DialogVariant />)
-      return
-    }
-    dialog.clear()
+    })
   }
 
   return (
@@ -159,8 +208,9 @@ export function DialogModel(props: { providerID?: string }) {
       onFilter={setQuery}
       flat={true}
       skipFilter={true}
+      locked={saving()}
       title={title()}
-      current={local.model.current()}
+      current={current()}
     />
   )
 }

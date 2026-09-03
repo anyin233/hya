@@ -829,10 +829,17 @@ impl SessionEngine {
                 // call (native or local). Missing definition fails closed here.
                 // Reuse the turn's captured binding; never re-bind or open a second catalog.
                 let definition = fixed_system_agent(binding, FixedSystemAgent::Compaction)?;
+                let options = summarize_options_from_definition(
+                    &definition,
+                    &self.model_categories,
+                    binding.agent_model_preference(definition.stable_id),
+                    &|candidate| self.providers.resolve(candidate).is_some(),
+                );
+                let compaction_model = options.model.clone().unwrap_or_else(|| model.clone());
                 let compaction_prompt = definition.prompt;
                 match self
                     .providers
-                    .compact_if_supported(&model, &messages, compaction_prompt)
+                    .compact_if_supported(&compaction_model, &messages, compaction_prompt)
                     .await
                 {
                     Ok(Some(window)) => {
@@ -873,10 +880,8 @@ impl SessionEngine {
                     Ok(None) | Err(_) => {
                         if let Some(summarizer) = &self.summarizer {
                             // Local fallback reuses the same exact-resolved definition
-                            // (Bundle model/reasoning overrides apply here only).
-                            let options = summarize_options_from_definition(&definition);
-                            // Provider failures stay soft (prior behavior); missing
-                            // definition already failed closed above.
+                            // and model decision as the native path. Provider failures
+                            // stay soft; missing definition already failed closed above.
                             if let Ok(Some(plan)) = crate::compaction::fold_prefix(
                                 &messages,
                                 &self.compaction,

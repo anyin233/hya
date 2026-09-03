@@ -28,7 +28,8 @@ use crate::hooks::{HookDispatcher, dispatch_activation_event};
 use crate::runtime_registry::CompiledResourceView;
 use crate::sidecar::SidecarEnvironment;
 use crate::{
-    AgentResourcePolicy, RuntimeCandidate, RuntimeRefreshError, RuntimeRegistry, TurnBinding,
+    AgentResourcePolicy, CategoryRegistry, RuntimeCandidate, RuntimeRefreshError, RuntimeRegistry,
+    TurnBinding,
 };
 
 /// Closed set of fixed Harness system-operation agents.
@@ -339,6 +340,8 @@ pub struct SessionEngine {
     /// candidate chain (the preferred model itself first). Empty by default,
     /// which keeps turn streaming byte-identical to a direct router call.
     model_fallbacks: HashMap<ModelRef, Vec<ModelRef>>,
+    /// Configured Agent model categories used by fixed system-Agent calls.
+    model_categories: Arc<CategoryRegistry>,
     runtime: Arc<RuntimeRegistry>,
     catalog_refresh: Option<Arc<dyn RuntimeCatalogRefresh>>,
     permission: PermissionPlane,
@@ -392,6 +395,7 @@ impl SessionEngine {
             providers,
             catalog,
             model_fallbacks: HashMap::new(),
+            model_categories: Arc::new(CategoryRegistry::default()),
             runtime,
             catalog_refresh: None,
             permission,
@@ -437,6 +441,13 @@ impl SessionEngine {
             .into_iter()
             .filter(|(preferred, chain)| chain.first() == Some(preferred))
             .collect();
+        self
+    }
+
+    /// Install the configured Agent model-category registry.
+    #[must_use]
+    pub fn with_model_categories(mut self, categories: Arc<CategoryRegistry>) -> Self {
+        self.model_categories = categories;
         self
     }
 
@@ -971,16 +982,28 @@ fn fixed_system_agent(
         })
 }
 
-/// Build summarize options from a fixed system definition.
+/// Build summarize options from a fixed system definition and bound preference.
 ///
-/// Prepared prompt and explicit reasoning apply when present. Absent Bundle
-/// model leaves `model` unset so the caller/summarizer fallback is preserved.
+/// Prepared prompt, configured direct/category policy, and explicit reasoning
+/// apply when present. An eligible remembered model replaces the caller or
+/// summarizer fallback only when the definition has no configured route.
 pub(crate) fn summarize_options_from_definition(
     definition: &AgentDefinition<'_>,
+    categories: &CategoryRegistry,
+    preference: Option<&ModelRef>,
+    is_servable: &dyn Fn(&ModelRef) -> bool,
 ) -> SummarizeOptions {
     SummarizeOptions {
         system: definition.prompt.map(str::to_string),
-        model: definition.model_policy.model.as_deref().map(ModelRef::new),
+        model: crate::category::resolve_configured_agent_model(
+            &definition.model_policy,
+            categories,
+            is_servable,
+        )
+        .or_else(|| {
+            crate::category::eligible_agent_model_preference(definition, preference, is_servable)
+                .cloned()
+        }),
         reasoning: definition
             .model_policy
             .reasoning

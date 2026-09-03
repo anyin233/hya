@@ -399,6 +399,7 @@ mirrors the static defaults.
 | --- | --- | --- |
 | **Sessions** | `session.list`, `<leader>l`, `/sessions` | Debounced server search, limit 30 results, date/recency grouping, pin/unpin (`ctrl+f`), delete (`ctrl+d`, press again to confirm), rename; footer hint for quick slots when filled |
 | **Model** | `model.list`, `<leader>m`, `/models` | Grouped by provider, favorites section, release-date-aware sort; Favorite on `ctrl+f` |
+| **Agent models** | `agent.model.list`, `/agent-models` | Lists every catalog Agent, including subagents and hidden system Agents. Configured direct/category rows remain visible but disabled; selecting another row reuses the existing model picker and persists immediately through the backend. |
 | **Agent** | `agent.list`, `<leader>a`, `/agents` | Selectable primary agents; subtitle is `native` or the agent description |
 | **Variant** | `variant.list`, `/variants` | Includes a Default entry; palette entry hidden when the model has no variants; otherwise toasts that the model has no variants |
 | **MCP** | `mcp.list`, `/mcps` | Per-server status subtitles; toggle with `dialog.mcp.toggle` (`space`) |
@@ -422,6 +423,28 @@ slots via `session.quick_switch.1`…`9` (`<leader>1`…`<leader>9`), registered
 the always-available `app.global` layer so they work from any pane. Pin or unpin
 from the Sessions dialog with `session.pin.toggle` (`ctrl+f`). Stale pins are
 filtered on read.
+
+### Agent model preferences
+
+`/agent-models` first selects a target Agent, grouped as **Main**, **Subagent**,
+and **System**, then opens the existing model picker with a title such as
+**Select model for compaction**. The target list is separate from `/agents`:
+`/agents` and Tab cycling remain limited to root-selectable primary Agents,
+while Agent model configuration includes primary, subagent, and hidden internal
+rows.
+
+Each row shows its effective `provider/model` and source: `configured`,
+`remembered`, or `default`. A retained model that is no longer in the current
+provider catalog is labeled **stale preference** and is not used. An Agent with
+a direct model or category policy is visible but disabled because configuration
+has higher precedence.
+
+A successful selection writes the base provider/model identity immediately to
+the backend's active Session database; clean TUI shutdown is not required.
+Attached and remote TUIs update that backend, not a local preference file.
+Reasoning variants, Session hydration, CLI overrides, and Workflow Stage routes
+remain request state and are not stored as Agent preferences. Normal `/models`
+selection also remembers the current primary Agent when that Agent is settable.
 
 ### Model recents and favorites
 

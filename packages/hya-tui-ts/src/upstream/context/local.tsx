@@ -194,6 +194,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
 
       const args = useArgs()
       const fallbackModel = createMemo(() => {
+        const a = agent.current()
         if (args.model) {
           const { providerID, modelID } = parseModel(args.model)
           if (isModelValid({ providerID, modelID })) {
@@ -201,6 +202,16 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
               providerID,
               modelID,
             }
+          }
+        }
+
+        const currentAgentModel = a
+          ? sync.data.agentModels.find((item) => item.agentID === a.name)?.effective
+          : undefined
+        if (currentAgentModel) {
+          return {
+            providerID: currentAgentModel.providerID,
+            modelID: currentAgentModel.modelID,
           }
         }
 
@@ -217,7 +228,6 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         if (sync.data.provider_catalog_default) {
           return { ...sync.data.provider_catalog_default }
         }
-
         for (const item of modelStore.recent) {
           if (isModelValid(item)) {
             return item
@@ -246,6 +256,73 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           ) ?? undefined
         )
       })
+      /**
+       * Persist a deliberate current-root model choice when the Agent is eligible.
+       * @param agentID Stable current root Agent id.
+       * @param model Selected base-model identity.
+       * @returns True after persistence succeeds or when the backend does not support it.
+       */
+      async function persistCurrentAgentModel(
+        agentID: string,
+        model: { providerID: string; modelID: string },
+      ): Promise<boolean> {
+        const row = sync.data.agentModels.find((item) => item.agentID === agentID)
+        if (!sync.data.capabilities.agentModelPreferences || !row || row.configured || !row.settable) return true
+        try {
+          await sync.setAgentModelPreference(agentID, { providerID: model.providerID, modelID: model.modelID })
+          return true
+        } catch (error) {
+          toast.show({
+            variant: "error",
+            message: error instanceof Error ? error.message : String(error),
+            duration: 5000,
+          })
+          return false
+        }
+      }
+
+      /**
+       * Apply one validated model identity to current-run state.
+       * @param agentID Stable current root Agent id.
+       * @param model Selected base-model identity.
+       * @param recent Whether to add the model to recent presentation state.
+       * @returns Nothing.
+       */
+      function applyModelSelection(
+        agentID: string,
+        model: { providerID: string; modelID: string },
+        recent: boolean,
+      ): void {
+        setModelStore("model", agentID, model)
+        if (!recent) return
+        setModelStore("recent", recentModels(model, modelStore.recent))
+        save()
+      }
+
+      /**
+       * Persist a deliberate selection before changing current-run state.
+       * @param model Selected base-model identity.
+       * @param options Optional recent-list update.
+       * @returns True only when the selection was valid and any required PUT succeeded.
+       */
+      async function selectModel(
+        model: { providerID: string; modelID: string },
+        options?: { recent?: boolean },
+      ): Promise<boolean> {
+        if (!isModelValid(model)) {
+          toast.show({
+            message: `Model ${model.providerID}/${model.modelID} is not valid`,
+            variant: "warning",
+            duration: 3000,
+          })
+          return false
+        }
+        const currentAgent = agent.current()
+        if (!currentAgent) return false
+        if (!(await persistCurrentAgentModel(currentAgent.name, model))) return false
+        batch(() => applyModelSelection(currentAgent.name, model, options?.recent === true))
+        return true
+      }
 
       return {
         current: currentModel,
@@ -286,9 +363,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           if (next >= recent.length) next = 0
           const val = recent[next]
           if (!val) return
-          const a = agent.current()
-          if (!a) return
-          setModelStore("model", a.name, { ...val })
+          void selectModel(val)
         },
         cycleFavorite(direction: 1 | -1) {
           const favorites = filterCatalogSelections(sync.data.provider, modelStore.favorite)
@@ -314,12 +389,9 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           }
           const next = favorites[index]
           if (!next) return
-          const a = agent.current()
-          if (!a) return
-          setModelStore("model", a.name, { ...next })
-          setModelStore("recent", recentModels(next, modelStore.recent))
-          save()
+          void selectModel(next, { recent: true })
         },
+        select: selectModel,
         set(model: { providerID: string; modelID: string }, options?: { recent?: boolean }) {
           batch(() => {
             if (!isModelValid(model)) {
@@ -330,13 +402,9 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
               })
               return
             }
-            const a = agent.current()
-            if (!a) return
-            setModelStore("model", a.name, model)
-            if (options?.recent) {
-              setModelStore("recent", recentModels(model, modelStore.recent))
-              save()
-            }
+            const currentAgent = agent.current()
+            if (!currentAgent) return
+            applyModelSelection(currentAgent.name, model, options?.recent === true)
           })
         },
         toggleFavorite(model: { providerID: string; modelID: string }) {

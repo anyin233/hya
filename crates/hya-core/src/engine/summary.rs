@@ -34,7 +34,12 @@ impl SessionEngine {
         // Bind once from the persisted session workdir; exact-lookup only.
         let binding = self.runtime.bind_turn(&workdir)?;
         let definition = fixed_system_agent(&binding, FixedSystemAgent::Summary)?;
-        let options = summarize_options_from_definition(&definition);
+        let options = summarize_options_from_definition(
+            &definition,
+            &self.model_categories,
+            binding.agent_model_preference(definition.stable_id),
+            &|model| self.providers.resolve(model).is_some(),
+        );
         let messages = summary_messages(&projection)?;
         let summarizer = self
             .summarizer

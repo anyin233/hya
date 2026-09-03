@@ -1,7 +1,7 @@
 # Self-update example (local dry-run)
 
 This example shows the **product path** introduced in `0.34.13`, exercised
-against the checked-out updater at workspace version `0.36.9` without claiming a
+against the checked-out updater at workspace version `0.36.10` without claiming a
 production release or archive payload:
 
 1. Build `hya-updater`.

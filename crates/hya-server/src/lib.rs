@@ -29,6 +29,7 @@ use std::convert::Infallible;
 use tokio_stream::wrappers::BroadcastStream;
 use tower_http::cors::{AllowHeaders, AllowOrigin, Any, CorsLayer};
 
+mod agent_model_control;
 mod compat;
 mod mcp_control;
 mod pending;
@@ -37,6 +38,12 @@ mod state;
 mod workflow;
 mod workflow_control;
 
+pub use agent_model_control::{
+    AGENT_MODEL_CONFIGURED, AGENT_MODEL_CONTROL_FAILURE, AGENT_MODEL_CONTROL_UNAVAILABLE,
+    AGENT_MODEL_INVALID_REQUEST, AGENT_MODEL_UNAVAILABLE, AGENT_MODEL_UNKNOWN_AGENT,
+    AgentModelControl, AgentModelControlError, AgentModelControlFuture, AgentModelEffective,
+    AgentModelIdentity, AgentModelSource, AgentModelState,
+};
 pub use hya_proto::WorkspaceAdapterInfo;
 pub use hya_tool::FormatterStatus;
 pub use mcp_control::McpControl;

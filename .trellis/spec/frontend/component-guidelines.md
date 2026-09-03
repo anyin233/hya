@@ -251,3 +251,102 @@ return view() ? (
 The route normalizes one projected part and passes the resulting allowlisted
 view to the renderer. SyncProvider supplies live replacement and replay;
 malformed or unsupported data remains safe through the existing fallback.
+
+---
+
+## Scenario: Synchronized Agent Model Configuration
+
+### 1. Scope / Trigger
+
+- Trigger: changing bootstrap Agent-model rows, the model picker, Agent target
+  selection, model recents/favorites, or backend preference mutation.
+- This flow configures every catalog Agent without widening the root-selectable
+  `/agents` list.
+
+### 2. Signatures
+
+- `decodeAgentModels(value, providers): AgentModelState[]` owns the unknown-JSON
+  boundary in `src/hya/agent-models.ts`.
+- `SyncProvider` owns `capabilities.agentModelPreferences`, `agentModels`,
+  `getAgentModel`, `refreshAgentModels`, and `setAgentModelPreference`.
+- Command: `agent.model.list`, title `Configure agent models`, slash
+  `/agent-models`.
+- `DialogAgentModels` selects a target; `DialogModel({ agentID })` reuses the
+  existing provider/model picker.
+
+### 3. Contracts
+
+- Accept rows only when bounded identities, booleans, mode, source,
+  configured/settable consistency, and exact provider-catalog membership are
+  valid. Allowlist output fields; never retain unknown or secret-like fields.
+- A `remembered` effective row must match its present, available preference.
+  A stale preference remains visible but cannot become effective.
+- Sync uses the existing SDK `fetch` transport and directory context. No
+  component creates another client, poller, preference file, or catalog.
+- Replace one synchronized row only after a successful PUT and normalized
+  response. On error, keep the old current/recent/synchronized state, show the
+  existing toast, and leave the model dialog open.
+- Normal `/models`, recent cycling, and favorite cycling persist first for a
+  settable current Agent, then update request-local state. CLI/Session hydration
+  and variants remain local and do not call the preference route.
+- Target options are ordered `Main`, `Subagent`, `System`. Hidden fixed Agents
+  are System rows. Configured rows stay visible, show `Configured by Agent
+  policy`, and are disabled. Stale state has a text label.
+- A targeted selection for another Agent must not mutate the active root Agent.
+  `/agents` and Tab/Shift-Tab remain primary-only.
+
+### 4. Validation & Error Matrix
+
+| Input/result | TUI behavior |
+| --- | --- |
+| Capability absent or not exact `true` | Hide/disable the dedicated flow; preserve old local model behavior |
+| Malformed row or inconsistent flags/source | Drop the row at the decoder boundary |
+| Unknown response fields | Ignore them; do not copy them into synchronized state |
+| Preference absent from provider catalog | Show `stale preference`; use backend effective fallback |
+| Configured direct/category row | Show under its group, disabled, with configured text |
+| PUT succeeds with one matching normalized row | Replace that row, then close/update local model state |
+| PUT fails or returns wrong/malformed Agent row | Preserve prior state, toast the bounded error, keep dialog open |
+
+### 5. Good / Base / Bad Cases
+
+- Good: select a hidden Compaction target, open `Select model for compaction`,
+  commit once, and leave the active primary Agent unchanged.
+- Base: an old backend has no capability; `/models` keeps its previous
+  request-local behavior and `/agents` stays primary-only.
+- Bad: write `model.json` for backend defaults, optimistically change local
+  model before PUT success, use `agent.list()` as the all-Agent source, or open
+  a second model picker implementation.
+
+### 6. Tests Required
+
+- Decoder tests cover malformed/oversized fields, unknown-field exclusion,
+  stale preferences, source/flag consistency, and model-local slashes.
+- Target-option tests assert deterministic Main/Subagent/System grouping,
+  hidden/configured/stale labels, disabled rows, and targeted title.
+- Sync/dialog tests assert one PUT, update-after-success, rollback/toast on
+  failure, no active-root mutation for another target, and no persistence from
+  hydration/CLI/variant state.
+- Full Bun type-check/tests and an actual OpenTUI smoke must show the target
+  dialog, reused model picker, immediate backend row, and restart restoration.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```typescript
+local.model.set(next)
+await fetch(`/tui/agent-models/${agentID}`, { method: "PUT", body })
+```
+
+The UI claims success before the backend owns the value and cannot roll back
+recent/current state reliably.
+
+#### Correct
+
+```typescript
+const selected = await local.model.select(next, { recent: true })
+if (selected) dialog.clear()
+```
+
+`local.model.select` persists through `SyncProvider` first. It updates local
+presentation only after the backend returns one valid normalized row.

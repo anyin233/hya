@@ -6,6 +6,8 @@
 //! and the HTTP server both call into this crate so they share one composition
 //! path without duplicating bootstrap glue in each binary.
 
+/// Durable per-Agent model preference control owned by the application layer.
+pub mod agent_model_control;
 /// Provider credential files under `~/.config/hya/auth/`.
 pub mod auth;
 /// `config.yaml` load, first-run bootstrap, and Compat import.
@@ -26,6 +28,9 @@ mod spawn_intent;
 /// Shared Workflow discovery, selection, state, and execution control.
 pub mod workflow_control;
 
+pub use agent_model_control::{
+    AgentModelControlError, AgentModelIdentity, PersistentAgentModelControl,
+};
 pub use hya_proto::{
     WorkflowCommand, WorkflowCommandResult, WorkflowDelivery, WorkflowInfo, WorkflowRunResult,
     WorkflowStageInfo, WorkflowSummary,
