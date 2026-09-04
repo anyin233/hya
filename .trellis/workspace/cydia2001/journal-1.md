@@ -812,3 +812,25 @@ Added backend-owned durable per-Agent model preferences, immutable runtime routi
 ### Status
 
 [OK] **Completed**
+
+
+## Session 25: Fix Agent model selection execution
+<!-- trellis-session: v=2 fp=8d28011dd96ea86a -->
+
+**Date**: 2026-09-04
+**Task**: Fix Agent model selection execution
+**Branch**: `feat/remember-agent-model-selections`
+
+### Summary
+
+Applied backend-committed Agent model identities to active TUI request state, added real fake-provider execution and persistence coverage, and installed verified 0.36.11.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `c47bbdb1` | fix(tui): apply committed Agent model selections |
+
+### Status
+
+[OK] **Completed**

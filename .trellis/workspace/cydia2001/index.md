@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 24
-- **Last Active**: 2026-09-03
+- **Total Sessions**: 25
+- **Last Active**: 2026-09-04
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~814 | Active |
+| `journal-1.md` | ~836 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 25 | 2026-09-04 | Fix Agent model selection execution | `c47bbdb1` | `feat/remember-agent-model-selections` |
 | 24 | 2026-09-03 | Remember per-agent model selections | `1b37ddb2` | `feat/remember-agent-model-selections` |
 | 23 | 2026-09-02 | Fix session coding tool reliability | `ef90eeb1`, `ec417bb4`, `4aee6de4`, `1f0145ca`, `daf88210` | `main` |
 | 22 | 2026-09-02 | Implement startup model catalog discovery | `bbc63769` | `main` |
