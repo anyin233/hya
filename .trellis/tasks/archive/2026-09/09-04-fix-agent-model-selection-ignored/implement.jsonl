@@ -1,0 +1,6 @@
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Owner-fenced Agent preference and immutable binding contracts"}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Backend test and release quality gates"}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Synchronized Agent model selection contracts"}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Frontend validation and test conventions"}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Provider identity flow across TUI, server, app, core, and provider"}
+{"file":".trellis/tasks/archive/2026-09/09-03-remember-agent-model-selections/design.md","reason":"Prior implementation boundaries and missing provider-request proof"}

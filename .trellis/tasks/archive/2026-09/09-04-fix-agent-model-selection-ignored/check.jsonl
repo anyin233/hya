@@ -1,0 +1,6 @@
+{"file":".trellis/tasks/09-04-fix-agent-model-selection-ignored/prd.md","reason":"Regression requirements and observable acceptance criteria"}
+{"file":".trellis/tasks/09-04-fix-agent-model-selection-ignored/design.md","reason":"Provider-request oracle and precedence contracts"}
+{"file":".trellis/tasks/09-04-fix-agent-model-selection-ignored/implement.md","reason":"RED/GREEN execution and verification plan"}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Durable preference correctness review"}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"TUI synchronization and target-isolation review"}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Cross-layer model identity review"}
