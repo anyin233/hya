@@ -123,6 +123,11 @@
   do a fallible database re-read after commit and before publication.
 - `TurnBinding` captures one immutable `Arc` map. Existing admissions and
   residents retain it; only later bindings observe a successful mutation.
+- Publishing a preference never rewrites the model recorded by an existing
+  Session or mutates its replay. A deliberate TUI change affects an open
+  Session's next turn by sending the backend-committed effective identity as
+  request-local prompt state; the preference PUT alone is not a Session
+  mutation.
 - Effective order is base < valid remembered < configured category/direct <
   inline/request/spawn/Workflow Stage category/direct. Direct/category
   presence suppresses memory even when the configured route does not resolve.
@@ -167,6 +172,11 @@
   Compaction, and local Compaction.
 - Server tests assert bootstrap/list/set/clear, model-local slashes, one-binding
   root creation, exact 400/404/409/503 bodies, and empty-control behavior.
+- Real process tests compare normalized API state with fake-provider request
+  model identity for targeted Agent B, untouched Agent A, restart, clear, and
+  stale-catalog fallback. A normal-picker process test covers the separate
+  open-Session request-local switch; never encode it as a global PUT rewriting
+  Session replay.
 
 ### 7. Wrong vs Correct
 

@@ -159,7 +159,14 @@ export function DialogModel(props: { providerID?: string; agentID?: string }) {
     setSaving(true)
     if (props.agentID) {
       void sync.setAgentModelPreference(props.agentID, model).then(
-        () => {
+        (row) => {
+          if (local.agent.current()?.name === props.agentID) {
+            local.model.set({
+              providerID: row.effective.providerID,
+              modelID: row.effective.modelID,
+            })
+            local.model.variant.set(undefined)
+          }
           setSaving(false)
           dialog.clear()
         },
@@ -178,6 +185,10 @@ export function DialogModel(props: { providerID?: string; agentID?: string }) {
     void local.model.select(model, { recent: true }).then((selected) => {
       setSaving(false)
       if (!selected) return
+      const committed = local.model.current()
+      if (committed?.providerID !== model.providerID || committed.modelID !== model.modelID) {
+        local.model.variant.set(undefined)
+      }
       const list = local.model.variant.list()
       const cur = local.model.variant.selected()
       if (cur === "default" || (cur && list.includes(cur))) {
