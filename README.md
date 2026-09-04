@@ -20,9 +20,9 @@ keys while you set things up.
 
 ## Status
 
-hya is under active development (workspace version `0.36.10`,
+hya is under active development (workspace version `0.36.11`,
 `MIT OR Apache-2.0`). The latest public binary release is `v0.35.1`; the
-checked-out `0.36.10` workspace is newer and is not published to crates.io. Build
+checked-out `0.36.11` workspace is newer and is not published to crates.io. Build
 this checkout from source as described below. APIs, config, and command surfaces
 may still change between versions.
 

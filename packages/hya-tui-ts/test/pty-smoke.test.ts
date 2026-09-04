@@ -823,7 +823,7 @@ test("Linux PTY shows backend-discovered rows and auth-required offline status",
   }
 }, 90_000)
 
-test("Linux PTY exact /model and /think open local pickers without a provider round", async () => {
+test("Linux PTY model and reasoning pickers stay local before the selected model reaches the provider", async () => {
   const temp = await realpath(await mkdtemp(path.join(os.tmpdir(), "hya-pty-picker-")))
   const project = path.join(temp, "project")
   const transcript = path.join(temp, "typescript")
@@ -892,6 +892,7 @@ test("Linux PTY exact /model and /think open local pickers without a provider ro
       "        reasoning:",
       "          default: high",
       "          variants: [low, medium, high]",
+      "      - id: gpt-selected",
       "permission:",
       "  model: default",
       "  rules: []",
@@ -1378,6 +1379,63 @@ test("Linux PTY exact /model and /think open local pickers without a provider ro
     await waitForRestart(sessionIsIdle, "removed Skill after restart fallback completion")
 
     expect(providerRequests).toBe(14)
+    const selectedModelStart = (await restartedOutput()).length
+    await writeSemanticInput(restarted.stdin, "/model")
+    await waitForRestart(
+      async () => (await restartedOutput()).slice(selectedModelStart).includes("/models"),
+      "selected model autocomplete",
+    )
+    await writeSemanticInput(restarted.stdin, "\r")
+    await waitForRestart(
+      async () => (await restartedOutput()).slice(selectedModelStart).includes("Select model"),
+      "selected model picker",
+    )
+    expect(providerRequests).toBe(14)
+
+    await writeSemanticInput(restarted.stdin, "gpt-selected")
+    await waitForRestart(
+      async () => (await restartedOutput()).slice(selectedModelStart).includes("gpt-selected"),
+      "selected model option",
+    )
+    const selectedModelCommitStart = (await restartedOutput()).length
+    await writeSemanticInput(restarted.stdin, "\r")
+    let selectedVariantShown = false
+    await waitForRestart(
+      async () => {
+        const frame = (await restartedOutput()).slice(selectedModelCommitStart)
+        selectedVariantShown = frame.includes("Select variant")
+        return selectedVariantShown || frame.includes("ctrl+p commands")
+      },
+      "selected model commit",
+    )
+    if (selectedVariantShown) {
+      const selectedVariantCommitStart = (await restartedOutput()).length
+      await writeSemanticInput(restarted.stdin, "\r")
+      await waitForRestart(
+        async () => (await restartedOutput()).slice(selectedVariantCommitStart).includes("ctrl+p commands"),
+        "selected model variant commit",
+      )
+    }
+    expect(providerRequests).toBe(14)
+
+    const selectedPrompt = "provider model selection proof"
+    const selectedRequestIndex = providerBodies.length
+    const selectedPromptStart = (await restartedOutput()).length
+    await writeSemanticInput(restarted.stdin, selectedPrompt)
+    await waitForRestart(
+      async () => (await restartedOutput()).slice(selectedPromptStart).includes(selectedPrompt),
+      "selected model prompt input",
+    )
+    await writeSemanticInput(restarted.stdin, "\r")
+    await waitForRestart(() => providerBodies.length > selectedRequestIndex, "selected model provider request")
+    await waitForRestart(
+      async () => (await restartedOutput()).slice(selectedPromptStart).includes("picker recovery reply"),
+      "selected model response",
+    )
+    await waitForRestart(sessionIsIdle, "selected model prompt completion")
+    const selectedRequestBody = JSON.parse(providerBodies[selectedRequestIndex]) as { model?: unknown }
+    expect(selectedRequestBody.model).toBe("gpt-selected")
+    expect(providerRequests).toBe(15)
 
     await writeSemanticInput(restarted.stdin, "\x03")
     restarted.stdin.end()

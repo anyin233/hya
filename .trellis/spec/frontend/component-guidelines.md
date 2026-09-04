@@ -286,14 +286,22 @@ malformed or unsupported data remains safe through the existing fallback.
 - Replace one synchronized row only after a successful PUT and normalized
   response. On error, keep the old current/recent/synchronized state, show the
   existing toast, and leave the model dialog open.
+- After success, the returned `effective.providerID` and `effective.modelID`
+  are authoritative. Never apply the optimistic picker input when the backend
+  can return a different normalized effective identity.
 - Normal `/models`, recent cycling, and favorite cycling persist first for a
-  settable current Agent, then update request-local state. CLI/Session hydration
-  and variants remain local and do not call the preference route.
+  settable current Agent, then apply the returned effective base model to
+  request-local state. CLI/Session hydration and variants remain local and do
+  not call the preference route.
 - Target options are ordered `Main`, `Subagent`, `System`. Hidden fixed Agents
   are System rows. Configured rows stay visible, show `Configured by Agent
   policy`, and are disabled. Stale state has a text label.
-- A targeted selection for another Agent must not mutate the active root Agent.
-  `/agents` and Tab/Shift-Tab remain primary-only.
+- If a targeted Agent is still active after PUT success, apply the returned
+  effective base to request-local state and clear its variant. A targeted
+  selection for another Agent updates only its synchronized row; it must not
+  mutate the active root Agent, including when the active Agent changes while
+  the PUT is in flight.
+- `/agents` and Tab/Shift-Tab remain primary-only.
 
 ### 4. Validation & Error Matrix
 
@@ -304,18 +312,24 @@ malformed or unsupported data remains safe through the existing fallback.
 | Unknown response fields | Ignore them; do not copy them into synchronized state |
 | Preference absent from provider catalog | Show `stale preference`; use backend effective fallback |
 | Configured direct/category row | Show under its group, disabled, with configured text |
-| PUT succeeds with one matching normalized row | Replace that row, then close/update local model state |
-| PUT fails or returns wrong/malformed Agent row | Preserve prior state, toast the bounded error, keep dialog open |
+| PUT succeeds for the still-active target | Replace its row, apply returned effective base locally, clear its targeted variant, then close |
+| PUT succeeds for another target | Replace only that synchronized row, then close; active request state is unchanged |
+| PUT fails or returns wrong/malformed Agent row | Preserve current, recent, variant, and synchronized state; toast the bounded error and keep dialog open |
 
 ### 5. Good / Base / Bad Cases
 
 - Good: select a hidden Compaction target, open `Select model for compaction`,
   commit once, and leave the active primary Agent unchanged.
+- Good: target the active Agent in an open Session, commit the backend-returned
+  effective base, make no provider call from the picker, and send that base on
+  the next prompt.
 - Base: an old backend has no capability; `/models` keeps its previous
   request-local behavior and `/agents` stays primary-only.
 - Bad: write `model.json` for backend defaults, optimistically change local
-  model before PUT success, use `agent.list()` as the all-Agent source, or open
-  a second model picker implementation.
+  model before PUT success, apply Agent B's returned model to a newly active
+  Agent A, ignore a normalized effective response, rewrite existing Session
+  replay from a global preference PUT, use `agent.list()` as the all-Agent
+  source, or open a second model picker implementation.
 
 ### 6. Tests Required
 
@@ -323,11 +337,20 @@ malformed or unsupported data remains safe through the existing fallback.
   stale preferences, source/flag consistency, and model-local slashes.
 - Target-option tests assert deterministic Main/Subagent/System grouping,
   hidden/configured/stale labels, disabled rows, and targeted title.
-- Sync/dialog tests assert one PUT, update-after-success, rollback/toast on
-  failure, no active-root mutation for another target, and no persistence from
-  hydration/CLI/variant state.
-- Full Bun type-check/tests and an actual OpenTUI smoke must show the target
-  dialog, reused model picker, immediate backend row, and restart restoration.
+- Sync/dialog tests assert one PUT, returned-effective rather than optimistic
+  identity, update-after-success, current/recent/synchronized rollback on
+  failed or wrong-Agent responses, targeted-active variant clearing, no active
+  root mutation for another target, and no persistence from hydration/CLI/
+  variant state.
+- A real hya-ts/backend fake-provider test opens the normal picker in an
+  existing Session, proves the picker causes zero provider rounds, submits the
+  next prompt, and asserts the exact selected model in the provider body.
+- A real backend fake-provider test asserts targeted Agent B, untouched Agent
+  A, restart, clear, and stale-catalog fallback agree between normalized API
+  state and provider request identity.
+- Full Bun type-check/tests and an actual installed OpenTUI smoke must show the
+  reused picker, committed effective model, exact next provider model, and
+  restart restoration.
 
 ### 7. Wrong vs Correct
 
@@ -344,9 +367,17 @@ recent/current state reliably.
 #### Correct
 
 ```typescript
-const selected = await local.model.select(next, { recent: true })
-if (selected) dialog.clear()
+const row = await sync.setAgentModelPreference(agentID, next)
+if (local.agent.current()?.name === agentID) {
+  local.model.set({
+    providerID: row.effective.providerID,
+    modelID: row.effective.modelID,
+  })
+  local.model.variant.set(undefined)
+}
+dialog.clear()
 ```
 
-`local.model.select` persists through `SyncProvider` first. It updates local
-presentation only after the backend returns one valid normalized row.
+The backend commit and normalized response precede local mutation. The
+returned effective identity reaches the next active prompt only when the
+target is still active; another target changes synchronized state only.

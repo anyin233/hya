@@ -13,6 +13,7 @@ import { useTheme } from "./theme"
 import { useToast } from "../ui/toast"
 import { useRoute } from "./route"
 import { isTuiSelectableAgent } from "../util/agent-visibility"
+import type { AgentModelIdentity } from "../../hya/agent-models"
 import { filterCatalogSelections, isCatalogModelValid } from "../../hya/model-catalog"
 
 export type LocalTheme = {
@@ -260,24 +261,30 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
        * Persist a deliberate current-root model choice when the Agent is eligible.
        * @param agentID Stable current root Agent id.
        * @param model Selected base-model identity.
-       * @returns True after persistence succeeds or when the backend does not support it.
+       * @returns The committed effective base-model identity, or undefined after failure.
        */
       async function persistCurrentAgentModel(
         agentID: string,
-        model: { providerID: string; modelID: string },
-      ): Promise<boolean> {
+        model: AgentModelIdentity,
+      ): Promise<AgentModelIdentity | undefined> {
         const row = sync.data.agentModels.find((item) => item.agentID === agentID)
-        if (!sync.data.capabilities.agentModelPreferences || !row || row.configured || !row.settable) return true
+        if (!sync.data.capabilities.agentModelPreferences || !row || row.configured || !row.settable) return model
         try {
-          await sync.setAgentModelPreference(agentID, { providerID: model.providerID, modelID: model.modelID })
-          return true
+          const committed = await sync.setAgentModelPreference(agentID, {
+            providerID: model.providerID,
+            modelID: model.modelID,
+          })
+          return {
+            providerID: committed.effective.providerID,
+            modelID: committed.effective.modelID,
+          }
         } catch (error) {
           toast.show({
             variant: "error",
             message: error instanceof Error ? error.message : String(error),
             duration: 5000,
           })
-          return false
+          return undefined
         }
       }
 
@@ -319,8 +326,9 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         }
         const currentAgent = agent.current()
         if (!currentAgent) return false
-        if (!(await persistCurrentAgentModel(currentAgent.name, model))) return false
-        batch(() => applyModelSelection(currentAgent.name, model, options?.recent === true))
+        const committed = await persistCurrentAgentModel(currentAgent.name, model)
+        if (!committed) return false
+        batch(() => applyModelSelection(currentAgent.name, committed, options?.recent === true))
         return true
       }
 
