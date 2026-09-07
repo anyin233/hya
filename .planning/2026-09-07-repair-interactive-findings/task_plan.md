@@ -1,7 +1,7 @@
 Project: /mnt/nvme0n1/yanweiye/Projects/hya
-Phase: executing
-Step: commit
-Outcome: active
+Phase: finalizing
+Step: none
+Outcome: complete
 
 | ID | Task | Depends on | Status | Owner | Acceptance |
 |---|---|---|---|---|---|
@@ -9,6 +9,6 @@ Outcome: active
 | 2 | Escape and heap UI repairs | — | done | TuiRepair | PTY abort and real heap output |
 | 3 | Builtin skill catalog repair | — | done | SkillRepair | Advertised builtin loads through tool |
 | 4 | Runtime LSP implementation | — | done | Main | Real server symbol/definition/diagnostics lifecycle |
-| 5 | Release metadata and docs | 1,2,3,4 | in_progress | Main | Version bump, current-only changelog, accurate docs |
+| 5 | Release metadata and docs | 1,2,3,4 | done | Main | Version bump, current-only changelog, accurate docs |
 | 6 | Full gates and live acceptance | 1,2,3,4,5 | done | Main | All gates and original scenarios pass |
-| 7 | Atomic commits and final records | 6 | in_progress | Main | Scoped commits and clean tree |
+| 7 | Atomic commits and final records | 6 | done | Main | Scoped commits and clean tree |

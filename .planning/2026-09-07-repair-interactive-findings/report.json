@@ -1,0 +1,154 @@
+{
+  "version": "0.36.18",
+  "scope": "Repair F1–F5 from the full Luna interactive TUI audit; correct canonical tool inventory.",
+  "overall": "All five repair acceptance criteria passed; full unrestricted live coverage is not claimed.",
+  "baseline_report": "../2026-09-07-full-interactive-tui-luna/report.json",
+  "commits": [
+    {
+      "id": "cbb8b45",
+      "version": "0.36.14",
+      "fix": "F1 image transport and replay",
+      "evidence": [
+        "live/final-01-image-answer.txt",
+        "live/final-image-messages.json"
+      ]
+    },
+    {
+      "id": "9e2c227d",
+      "version": "0.36.15",
+      "fix": "F2 single Escape interruption",
+      "evidence": [
+        "live/final-15-uninstrumented-stream-before-escape.txt",
+        "live/final-16-uninstrumented-stream-cancelled.txt",
+        "live/final-uninstrumented-escape-messages.json"
+      ]
+    },
+    {
+      "id": "7430a192",
+      "version": "0.36.16",
+      "fix": "F3 shared builtin skill catalog and captured execution",
+      "evidence": [
+        "live/final-02-builtin-skills.txt",
+        "live/final-skill-messages.json"
+      ]
+    },
+    {
+      "id": "eda39892",
+      "version": "0.36.17",
+      "fix": "F4 real private heap snapshots",
+      "evidence": [
+        "live/final-03-heap-command-result.txt",
+        "live/final-heap-proof.json"
+      ]
+    },
+    {
+      "id": "1f955af2",
+      "version": "0.36.18",
+      "fix": "F5 runtime stdio LSP, lifecycle and scoped diagnostics",
+      "evidence": [
+        "live/final-14-nine-lsp-operations-success.txt",
+        "live/final-negotiated-lsp-messages.json",
+        "live/final-05-real-type-error.txt",
+        "live/final-06-type-error-cleared.txt",
+        "live/final-diagnostic-error-messages.json",
+        "live/final-diagnostic-cleared-messages.json"
+      ]
+    }
+  ],
+  "model_restriction": {
+    "endpoint": "https://api.12th.day/v1",
+    "allowed_model": "gpt-5.6-luna",
+    "repair_requests": 29,
+    "repair_responses": 29,
+    "observed_request_models": [
+      "gpt-5.6-luna"
+    ],
+    "blocked_gateway_requests": 0,
+    "evidence": "live/provider-audit.jsonl"
+  },
+  "verification": {
+    "rust_toolchain": "1.91.1",
+    "passed_commands": [
+      "cargo +1.91.1 fmt --all --check",
+      "cargo +1.91.1 clippy --workspace --all-targets -- -D warnings",
+      "cargo +1.91.1 test --workspace --jobs 1 --exclude hya-e2e",
+      "cargo +1.91.1 test -p hya-e2e -- --test-threads=1",
+      "bun run typecheck (packages/hya-tui-ts)",
+      "bun test (packages/hya-tui-ts)"
+    ],
+    "process_matrix_tests": 44,
+    "tui_tests": 104,
+    "tui_assertions": 2829,
+    "local_executables": {
+      "hya": "0.36.18",
+      "hya-backend": "0.36.18",
+      "hya-ts": "Built and exercised through the actual tmux TUI"
+    },
+    "evidence": [
+      "checks/workspace-fmt-clippy-tests.txt",
+      "checks/process-matrix.txt",
+      "checks/tui-typecheck-tests.txt"
+    ],
+    "nonfatal_tui_warnings": [
+      "Missing optional KV state file",
+      "DataPathsManager listener-count warning"
+    ],
+    "method": "Reuse final successful gates for unchanged production source; index-only intermediate release staging did not change tested working-tree source."
+  },
+  "live_results": {
+    "image": "Actual TUI PNG identified as Red; provider received input_image.",
+    "escape": "Uninstrumented visible streaming interrupted with one physical Escape; finish=cancelled and backend idle.",
+    "skills": "Both advertised tested builtin skills loaded successfully; long-body Generic output cap intentionally unchanged.",
+    "heap": {
+      "path": "/tmp/hya-repair-live-02mwcv2n/cache/hya/heap-1788801081958-24dcd0bb-fdf6-4bfc-8134-c640c59a7b26.heapsnapshot",
+      "bytes": 19761055,
+      "mode": "0o600",
+      "v8_meta": true,
+      "nodes": 2152080,
+      "edges": 3194817,
+      "strings": 41883
+    },
+    "lsp": {
+      "server": "typescript-language-server 5.3.0",
+      "operations": [
+        "documentSymbol",
+        "workspaceSymbol",
+        "goToDefinition",
+        "findReferences",
+        "hover",
+        "goToImplementation",
+        "prepareCallHierarchy",
+        "incomingCalls",
+        "outgoingCalls"
+      ],
+      "passed": 9,
+      "diagnostics": "Real apply_patch introduced a TypeScript string-to-number error, then removed it after correction.",
+      "status": "Connected displayed in actual TUI."
+    }
+  },
+  "builtin_coverage": {
+    "canonical": 27,
+    "cumulative_live_success": 25,
+    "basis": "24 successful canonical tools in baseline audit plus real LSP acceptance here; this is cumulative coverage, not a fresh run of every tool on 0.36.18.",
+    "blocked_tools": [
+      "write",
+      "edit"
+    ],
+    "reason": "Existing modern-GPT policy does not expose them to the only authorized live model; policy intentionally preserved.",
+    "supplement": "Workspace and process tests cover these tools with deterministic providers; not counted as live Luna acceptance."
+  },
+  "limits": [
+    "Canonical write/edit cannot be exposed for Luna without changing the product or model restriction.",
+    "Real desktop clipboard/IDE notifications and production OAuth/update activation were not validated.",
+    "Existing automated fixtures supplement, not replace, interactive live verification; not all UI modifiers/media formats/mouse branches were independently exercised.",
+    "Live language-server acceptance used TypeScript; other discovered/configured language servers were not individually exercised.",
+    "Unversioned push diagnostics are bounded two-second best-effort collection, not a completion guarantee."
+  ],
+  "api_changes": [
+    "SkillCatalogEntry constructors require an explicit origin.",
+    "LspProvider::diagnostics receives workdir and authorized targets; external implementations must migrate."
+  ],
+  "evidence_archive": "evidence.zip",
+  "evidence_notes": "Earlier final-* investigation captures are retained for context; use the per-fix evidence references for final acceptance. Private heap contents and credentials are excluded.",
+  "publication": "Atomic local commits only; no push, release tag, production credential modification or update activation."
+}

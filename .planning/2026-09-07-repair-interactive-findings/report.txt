@@ -1,0 +1,14 @@
+hya 0.36.18 — 交互问题修复验收
+
+F1 图片：真实 TUI 识别红色 PNG；请求与 replay 保留图像。
+F2 Escape：无探针的真实流式输出中，单次 Escape 后 finish=cancelled，后端 idle。
+F3 Skill：广告目录与捕获执行共用目录；两项内置 Skill 成功加载。
+F4 堆快照：真实 V8 文件 19,761,055 字节，权限0600；未归档敏感堆内容。
+F5 LSP：真实 TypeScript 服务全部9项操作通过；类型错误出现、修正后诊断清除；TUI 显示连接状态。
+
+检查：Rust fmt/Clippy/workspace 全通过；串行进程矩阵44项；TUI typecheck及104项测试、2829断言通过。TUI 测试有 KV 文件缺失和监听器数量两类非致命警告。已构建并运行本地0.36.18可执行文件。
+实网：本轮29请求/29响应，仅 gpt-5.6-luna，无越界模型请求。
+覆盖：累计25/27个 canonical tools 有实网成功证据（此前24项+本轮LSP）；不是在最终版本上重新逐项运行全部工具。write/edit 受既有 Luna 工具策略限制，保留策略，不冒充实网通过。桌面集成、生产 OAuth/更新激活以及所有修饰键、媒体格式、鼠标分支未完整实测。
+
+提交：cbb8b45 图片；9e2c227d Escape；7430a192 Skill；eda39892 堆快照；1f955af2 LSP。仅本地提交，未推送或发布。
+完整范围、API变化、证据索引及限制见 report.json；证据在 evidence.zip。
