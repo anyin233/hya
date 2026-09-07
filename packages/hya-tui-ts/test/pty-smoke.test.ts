@@ -2518,3 +2518,208 @@ async function runChildObservation(columns: number) {
 for (const columns of [80, 140]) {
   test(`Linux PTY ${columns}-column subagent workspace`, () => runChildObservation(columns), Bun.env.CI ? 120_000 : 60_000)
 }
+test("Linux PTY Escape aborts exactly once for single and double input while streaming", async () => {
+  const temp = await realpath(await mkdtemp(path.join(os.tmpdir(), "hya-pty-escape-abort-")))
+  const project = path.join(temp, "project")
+  const transcript = path.join(temp, "typescript")
+  const home = path.join(temp, "home")
+  const config = path.join(temp, "config")
+  await mkdir(project)
+  await mkdir(home)
+  await mkdir(path.join(config, "hya"), { recursive: true })
+
+  let providerRequests = 0
+  const encoder = new TextEncoder()
+  const provider = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    idleTimeout: 120,
+    fetch(request) {
+      providerRequests++
+      let closed = false
+      let timer: ReturnType<typeof setInterval> | undefined
+      let controller: ReadableStreamDefaultController<Uint8Array> | undefined
+      const close = () => {
+        if (closed) return
+        closed = true
+        clearInterval(timer)
+        controller?.close()
+      }
+      request.signal.addEventListener("abort", close, { once: true })
+      const stream = new ReadableStream<Uint8Array>({
+        start(next) {
+          controller = next
+          next.enqueue(encoder.encode('data: {"type":"response.output_text.delta","output_index":0,"delta":"streaming"}\n\n'))
+          timer = setInterval(() => {
+            if (!closed) next.enqueue(encoder.encode('data: {"type":"response.output_text.delta","output_index":0,"delta":"."}\n\n'))
+          }, 100)
+        },
+        cancel: close,
+      })
+      return new Response(stream, { headers: { "content-type": "text/event-stream" } })
+    },
+  })
+  await Bun.write(
+    path.join(config, "hya", "config.yaml"),
+    [
+      "default_model: test/gpt-escape",
+      "providers:",
+      "  test:",
+      "    kind: openai-response",
+      `    base_url: http://127.0.0.1:${provider.port}/v1`,
+      "    api_key: test-token",
+      "    models:",
+      "      - id: gpt-escape",
+      "permission:",
+      "  model: default",
+      "  rules: []",
+      "",
+    ].join("\n"),
+  )
+
+  const env = {
+    PATH: Bun.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
+    LANG: Bun.env.LANG ?? "C.UTF-8",
+    HOME: home,
+    XDG_CACHE_HOME: path.join(temp, "cache"),
+    XDG_CONFIG_HOME: config,
+    XDG_DATA_HOME: path.join(temp, "data"),
+    XDG_STATE_HOME: path.join(temp, "state"),
+  }
+  const server = Bun.spawn([backend, "--db", path.join(temp, "sessions.db"), "serve", "--bind", "127.0.0.1:0"], {
+    cwd: project,
+    env,
+    stdout: "pipe",
+    stderr: "pipe",
+  })
+  let ownedProcess: Bun.WritableSubprocess | undefined
+  let proxy: Bun.Server<undefined> | undefined
+
+  try {
+    const reader = server.stdout.getReader()
+    const decoder = new TextDecoder()
+    let readiness = ""
+    const url = await Promise.race([
+      (async () => {
+        while (true) {
+          const chunk = await reader.read()
+          if (chunk.done) throw new Error(`hya-backend exited before readiness: ${readiness}`)
+          readiness += decoder.decode(chunk.value, { stream: true })
+          const match = readiness.match(/hya server listening on (http:\/\/127\.0\.0\.1:\d+)/)
+          if (match) return match[1]
+        }
+      })(),
+      Bun.sleep(10_000).then(() => {
+        throw new Error(`timed out waiting for hya-backend: ${readiness}`)
+      }),
+    ])
+    const client = createOpencodeClient({ baseUrl: url, directory: project })
+    const session = (await client.session.create({ title: "Escape cancellation regression" }, { throwOnError: true })).data!
+    const requests: Array<{ method: string; path: string }> = []
+    const forwarding = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      idleTimeout: 120,
+      async fetch(request) {
+        const incoming = new URL(request.url)
+        requests.push({ method: request.method, path: incoming.pathname })
+        const headers = new Headers(request.headers)
+        headers.delete("host")
+        const body = request.method === "GET" || request.method === "HEAD" ? undefined : await request.arrayBuffer()
+        return fetch(new URL(incoming.pathname + incoming.search, url), {
+          method: request.method,
+          headers,
+          body,
+          redirect: "manual",
+        })
+      },
+    })
+    proxy = forwarding
+    const process = Bun.spawn(
+      [
+        "/usr/bin/script",
+        "-q",
+        "-e",
+        "-f",
+        "-c",
+        'stty rows 30 cols 100; "$HYA_TS" "$HYA_PTY_PROJECT" --server "$HYA_PTY_URL" --session "$HYA_PTY_SESSION"',
+        transcript,
+      ],
+      {
+        cwd: path.join(root, "packages/hya-tui-ts"),
+        env: {
+          ...env,
+          HYA_PTY_PROJECT: project,
+          HYA_PTY_SESSION: session.id,
+          HYA_PTY_URL: forwarding.url.toString(),
+          HYA_TS: launcher,
+          HYA_TUI_TS_DIR: path.join(root, "packages/hya-tui-ts"),
+          TERM: "xterm-256color",
+        },
+        stdin: "pipe",
+        stdout: "ignore",
+        stderr: "pipe",
+      },
+    )
+    ownedProcess = process
+    const output = async () => stripAnsi(await readFile(transcript, "utf8").catch(() => ""))
+    const waitFor = async (check: () => boolean | Promise<boolean>, label: string) => {
+      const deadline = Date.now() + 10_000
+      while (!(await check())) {
+        const exited = await Promise.race([
+          process.exited.then((status) => ({ status })),
+          Bun.sleep(50).then(() => undefined),
+        ])
+        if (exited) throw new Error(`PTY exited before ${label} with status ${exited.status}`)
+        if (Date.now() >= deadline) throw new Error(`timed out waiting for ${label}: ${(await output()).slice(-3000)}`)
+      }
+    }
+    const writeInput = (value: string) => writeSemanticInput(process.stdin, value)
+    await waitFor(async () => {
+      const frame = await output()
+      return frame.includes("ctrl+p commands") && frame.includes("gpt-escape")
+    }, "streaming Session")
+
+    const abortPath = `/session/${session.id}/abort`
+    const abortCount = () => requests.filter((request) => request.method === "POST" && request.path === abortPath).length
+    await writeInput("cancel single escape")
+    await writeInput("\r")
+    await waitFor(() => providerRequests >= 1, "first streaming provider request")
+    await waitFor(async () => (await client.session.status({}, { throwOnError: true })).data?.[session.id]?.type === "busy", "first busy status")
+    await writeInput("\x1b")
+    await waitFor(() => abortCount() === 1, "single Escape abort request")
+    await waitFor(async () => (await client.session.status({}, { throwOnError: true })).data?.[session.id]?.type !== "busy", "single Escape cancellation")
+
+    await writeInput("cancel double escape")
+    await writeInput("\r")
+    await waitFor(() => providerRequests >= 2, "second streaming provider request")
+    await waitFor(async () => (await client.session.status({}, { throwOnError: true })).data?.[session.id]?.type === "busy", "second busy status")
+    // A packed ESC ESC byte sequence is Alt+Escape to the terminal parser; two writes model two physical presses.
+    await writeInput("\x1b")
+    await Bun.sleep(100)
+    await writeInput("\x1b")
+    await waitFor(() => abortCount() === 2, "double Escape single abort request")
+    await waitFor(async () => (await client.session.status({}, { throwOnError: true })).data?.[session.id]?.type !== "busy", "double Escape cancellation")
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(abortCount()).toBe(2)
+    await writeInput("cancel kitty escape")
+    await writeInput("\r")
+    await waitFor(() => providerRequests >= 3, "kitty streaming provider request")
+    await waitFor(async () => (await client.session.status({}, { throwOnError: true })).data?.[session.id]?.type === "busy", "kitty busy status")
+    await writeInput("\x1b[27u")
+    await waitFor(() => abortCount() === 3, "kitty Escape abort request")
+    await waitFor(async () => (await client.session.status({}, { throwOnError: true })).data?.[session.id]?.type !== "busy", "kitty Escape cancellation")
+
+    await writeInput("\x03")
+    process.stdin.end()
+    expect(await process.exited).toBe(0)
+    ownedProcess = undefined
+  } finally {
+    if (ownedProcess) await stopOwnedProcess(ownedProcess)
+    proxy?.stop(true)
+    await stopOwnedProcess(server)
+    provider.stop(true)
+    await rm(temp, { recursive: true, force: true })
+  }
+}, 90_000)

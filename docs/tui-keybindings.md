@@ -309,7 +309,7 @@ collisions. Examples (not exhaustive):
 | `session.fork` | unbound | `/fork` | Fork the session from a chosen message (or full session). |
 | `session.rename` | `ctrl+r` | `/rename` | Rename the current session. |
 | `session.delete` | `ctrl+d` | — | Delete a session (in the Sessions dialog: press again to confirm). |
-| `session.interrupt` | `escape` | — | Interrupt a non-idle turn (double Escape; see [TUI Reference](tui-reference.md#prompt-input)). |
+| `session.interrupt` | `escape` | — | Interrupt a non-idle turn with one Escape; see [TUI Reference](tui-reference.md#prompt-input) for focus and modal ownership. |
 | `session.background` | `ctrl+b` | — | Background synchronous subagents (when the backend advertises the capability). |
 | `session.compact` | `<leader>c` | `/compact` (`/summarize`) | Summarize / compact the session. |
 | `session.toggle.timestamps` | unbound | `/timestamps` (`/toggle-timestamps`) | Show or hide message timestamps. |

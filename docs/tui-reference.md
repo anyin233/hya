@@ -484,12 +484,12 @@ bold variant badge, with fade-in animations.
 **Status line (while non-idle):** agent-colored block spinner (or a static
 `[⋯]` when animations are off), a retry message with a live
 `[retrying in Xs attempt #N]` countdown that opens a Retry Error alert when
-truncated and clicked, and `esc interrupt` / `esc again to interrupt`.
+truncated and clicked, and `esc interrupt`.
 
-**Double-Escape interrupt:** `session.interrupt` increments a counter that
-resets after 5 seconds and aborts when the counter reaches 2 (second Escape).
-In shell mode the first Escape only exits shell mode and does not count toward
-interrupt. Inert while autocomplete is open or the prompt is unfocused.
+**Escape interrupt:** one `session.interrupt` press aborts a non-idle turn;
+repeated presses do not duplicate an in-flight abort. In shell mode the first
+Escape exits shell mode instead. Autocomplete, modal dialogs, unfocused prompts,
+and read-only observation panes retain their own Escape handling.
 
 ### Shell mode
 

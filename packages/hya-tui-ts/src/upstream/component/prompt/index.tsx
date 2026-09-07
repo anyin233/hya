@@ -281,7 +281,6 @@ export function Prompt(props: PromptProps) {
     prompt: PromptInfo
     mode: "normal" | "shell"
     extmarkToPartIndex: Map<number, number>
-    interrupt: number
     placeholder: number
   }>({
     placeholder: randomIndex(list().length),
@@ -291,8 +290,8 @@ export function Prompt(props: PromptProps) {
     },
     mode: "normal",
     extmarkToPartIndex: new Map(),
-    interrupt: 0,
   })
+  let interruptInFlight = false
 
   createEffect(
     on(
@@ -394,26 +393,20 @@ export function Prompt(props: PromptProps) {
         enabled: status().type !== "idle",
         run: () => {
           if (auto()?.visible) return
-          if (!input.focused) return
-          // TODO: this should be its own command
+          // Escape exits shell mode instead of aborting the session.
           if (store.mode === "shell") {
             setStore("mode", "normal")
             return
           }
-          if (!props.sessionID) return
+          if (!props.sessionID || dialog.stack.length > 0 || interruptInFlight) return
 
-          setStore("interrupt", store.interrupt + 1)
-
-          setTimeout(() => {
-            setStore("interrupt", 0)
-          }, 5000)
-
-          if (store.interrupt >= 1) {
-            void sdk.client.session.abort({
-              sessionID: props.sessionID,
+          interruptInFlight = true
+          void sdk.client.session
+            .abort({ sessionID: props.sessionID })
+            .catch(() => {})
+            .finally(() => {
+              interruptInFlight = false
             })
-            setStore("interrupt", 0)
-          }
           dialog.clear()
         },
       },
@@ -557,7 +550,7 @@ export function Prompt(props: PromptProps) {
   useBindings(() => ({
     mode: OPENCODE_BASE_MODE,
     enabled: () => props.visible !== false && status().type !== "idle",
-    bindings: tuiConfig.keybinds.gather("prompt.palette", ["session.interrupt"]),
+    bindings: tuiConfig.keybinds.gather("prompt.interrupt", ["session.interrupt"]),
   }))
 
   const ref: PromptRef = {
@@ -1562,11 +1555,8 @@ export function Prompt(props: PromptProps) {
                     })()}
                   </box>
                 </box>
-                <text fg={store.interrupt > 0 ? theme.primary : theme.text}>
-                  esc{" "}
-                  <span style={{ fg: store.interrupt > 0 ? theme.primary : theme.textMuted }}>
-                    {store.interrupt > 0 ? "again to interrupt" : "interrupt"}
-                  </span>
+                <text fg={theme.text}>
+                  esc <span style={{ fg: theme.textMuted }}>interrupt</span>
                 </text>
               </box>
             </Match>
