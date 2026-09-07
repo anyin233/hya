@@ -1,24 +1,22 @@
-<!-- TRELLIS:START -->
-# Trellis Instructions
+# Task Management
 
-These instructions are for AI assistants working in this project.
+Use `planning-with-files` for repository task management. For multi-step work or
+cross-session recovery, keep `task_plan.md`, `findings.md`, and `progress.md` in
+`.planning/<YYYY-MM-DD-slug>/`. Small tasks may use a lightweight plan.
 
-This project is managed by Trellis. The working knowledge you need lives under `.trellis/`:
-
-- `.trellis/workflow.md` — development phases, when to create tasks, skill routing
-- `.trellis/spec/` — package- and layer-scoped coding guidelines (read before writing code in a given layer)
-- `.trellis/workspace/` — per-developer journals and session traces
-- `.trellis/tasks/` — active and archived tasks (PRDs, research, jsonl context)
-
-If a Trellis command is available on your platform (e.g. `/trellis:finish-work`, `/trellis:continue`), prefer it over manual steps. Not every platform exposes every command.
-
-If you're using Codex or another agent-capable tool, additional project-scoped helpers may live in:
-- `.agents/skills/` — reusable Trellis skills
-- `.codex/agents/` — optional custom subagents
-
-Managed by Trellis. Edits outside this block are preserved; edits inside may be overwritten by a future `trellis update`.
-
-<!-- TRELLIS:END -->
+- Resume the relevant existing plan; keep unrelated task directories intact.
+- `.planning/.active_plan` contains the current plan directory name. Prefer an
+  explicit task or `PLAN_ID` when several sessions are active.
+- Record phase status, decisions, blockers, and verification results as work
+  progresses. Recover context from these files when resuming.
+- Use the installed skill when available; the Markdown files remain usable
+  directly without a plugin or CLI. No content-hash approval gate is required.
+- Before editing a layer, read its guideline index under `docs/spec/backend/`
+  or `docs/spec/frontend/`; consult `docs/spec/guides/index.md` for cross-layer
+  changes and code-reuse decisions.
+- `docs/development-history/` preserves prior tasks and journals as historical
+  evidence, not active workflow instructions. Bring relevant unfinished work
+  into a planning directory when explicitly resumed.
 
 ## Commit Rule
 
@@ -96,7 +94,9 @@ or verifiers; workers do not decide that their own objective is done.
 | `crates/hya-plugin-example` | Placeholder stub binary (`fn main() {}`); does **not** speak the plugin protocol. Reserved for a future deterministic native-plugin QA fixture. For a real ABI reference, see `docs/plugin-protocol.md`. |
 | `crates/xtask` | Dev-tooling entry point with working tasks: `sync-compat`, `migrate`, `startup-bench`, `matrix-check`, `package-bundle`, and `release-rehearsal`. |
 | `crates/hya-e2e` | Process-level agent E2E harness (Track P): real `hya-backend` + FakeLlm. Matrix in `matrix.toml`; docs under `docs/testing/`. |
-| `.trellis` | Project workflow knowledge: task lifecycle, package/layer specs, session journals, and task artifacts. Read the relevant `.trellis/spec/**/index.md` before changing code in that layer. |
+| `.planning` | Local task plans, findings, and progress using `planning-with-files`; existing tasks remain separate. |
+| `docs/spec` | Project coding guidelines. Read the relevant layer's `index.md` before changing code. |
+| `docs/development-history` | Preserved task artifacts and developer journals for historical reference. |
 | `docs` | Project documentation: user guides, architecture, Compat parity, and testing/agent matrix under `docs/testing/`. |
 | `DESIGN.md` | TUI design system: terminal-first visual rules, theme tokens, layout, transcript/input/overlay behavior. Read before touching TUI rendering. |
 

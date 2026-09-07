@@ -16,6 +16,22 @@ The workspace root is [`../Cargo.toml`](../Cargo.toml). It uses:
 Library code should return typed errors instead of panicking. Binaries and tests
 may use local allowances when appropriate.
 
+## Task Management
+
+For multi-step work, use planning-with-files under
+`.planning/<YYYY-MM-DD-slug>/`:
+
+- `task_plan.md` records phases and decisions; `findings.md` records discoveries;
+  `progress.md` records updates and handoffs.
+- `.planning/.active_plan` is an optional pointer to the current plan when several
+  plan directories coexist.
+- Update the plan after each phase and when resuming work after a pause or context
+  reset. Small tasks may use a lightweight plan, or no plan when no durable
+  context is needed.
+- This workflow has no Trellis runtime dependency. `docs/development-history/tasks/`
+  and `docs/development-history/workspace/` retain historical task artifacts and
+  journals as evidence; they are not live workflow instructions.
+
 ## Build and Quality Gate
 
 Run the standard gate before publishing code changes:

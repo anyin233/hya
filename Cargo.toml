@@ -1,5 +1,5 @@
 # hya — Rust multi-agent coding agent. Workspace root.
-# See .trellis/tasks/06-20-agent-spec/{design.md,implement.md} for the full spec.
+# See CONTEXT.md for the full architecture and agent-spec contract.
 [workspace]
 resolver = "3"
 members = ["crates/*"]
