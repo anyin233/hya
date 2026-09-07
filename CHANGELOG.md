@@ -1,6 +1,6 @@
-# 0.36.15
+# 0.36.16
 
-## Escape cancellation
+## Builtin skill execution
 
-- Restore one-press Escape cancellation by separating interrupt bindings from the prompt palette cache.
-- Avoid duplicate in-flight aborts and preserve shell, autocomplete, modal, and observation-pane Escape ownership.
+- Share the builtin/native skill catalog across advertised commands and captured tool execution, with user-authored skills retaining precedence.
+- Track embedded and virtual skill origins without claiming filesystem directories or sampled files; keep existing output limits.

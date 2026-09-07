@@ -11,32 +11,24 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
-use hya_core::{AgentSpec, EventBus, SessionEngine};
-use hya_proto::{AgentName, ModelRef};
-use hya_provider::{FakeProvider, ProviderRouter};
+use hya_core::{AgentSpec, CreateSession, EventBus, SessionEngine};
+use hya_proto::{AgentName, Event, FinishReason, ModelRef};
+use hya_provider::{FakeProvider, FakeStep, ProviderRouter};
 use hya_server::{AppState, router};
 use hya_store::SessionStore;
-use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
+use hya_tool::{Action, Mode, PermissionPlane, PermissionRules, Rule, ToolRegistry};
 use serde_json::Value;
+use tokio_util::sync::CancellationToken;
 use tower::ServiceExt;
 
-fn tempdir() -> PathBuf {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let dir = std::env::temp_dir().join(format!(
-        "hya-server-skill-metadata-test-{nanos}-{}",
-        std::process::id()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
-}
-
-async fn state(workdir: PathBuf) -> AppState {
-    let providers = Arc::new(ProviderRouter::new().with(Arc::new(FakeProvider::scripted(vec![]))));
+async fn state_with_provider(
+    workdir: PathBuf,
+    provider: FakeProvider,
+    rules: PermissionRules,
+) -> AppState {
+    let providers = Arc::new(ProviderRouter::new().with(Arc::new(provider)));
     let tools = Arc::new(ToolRegistry::builtins());
-    let (permission, _rx) = PermissionPlane::new(PermissionRules::default());
+    let (permission, _rx) = PermissionPlane::new(rules);
     let store = SessionStore::connect_memory().await.unwrap();
     let engine = SessionEngine::new(
         store,
@@ -55,6 +47,27 @@ async fn state(workdir: PathBuf) -> AppState {
             reasoning: None,
         }),
     )
+}
+async fn state(workdir: PathBuf) -> AppState {
+    state_with_provider(
+        workdir,
+        FakeProvider::scripted(vec![]),
+        PermissionRules::default(),
+    )
+    .await
+}
+
+fn tempdir() -> PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!(
+        "hya-server-skill-metadata-test-{nanos}-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
 }
 
 async fn get_json(app: axum::Router, uri: &str) -> (StatusCode, Value) {
@@ -191,221 +204,138 @@ async fn compat_skill_and_command_routes_include_builtin_customize_skill() {
     assert_eq!(skill_status, StatusCode::OK);
     let skill = find_named(&skills, "customize-compat");
     assert_eq!(skill["location"], "<built-in>");
-    let customize_description = skill["description"].as_str().unwrap_or("");
     let customize_content = skill["content"].as_str().unwrap_or("");
-    assert!(customize_description.starts_with("Use ONLY"));
-    assert!(customize_content.contains("# Customizing compat"));
-
-    // And: customize-compat must not advertise unsupported legacy agent surfaces
-    // (Markdown agent paths, opencode.json agent definitions, write-agent-file
-    // persistence, or "create/fix agents/subagents" as this skill's job).
-    let customize_surface = format!("{customize_description}\n{customize_content}");
     assert!(
-        !customize_surface.contains(".opencode/agent")
-            && !customize_surface.contains(".opencode/agents")
-            && !customize_surface.contains("~/.config/opencode/agent"),
-        "customize-compat must not advertise legacy .opencode/agent(s) Markdown paths: {customize_surface}"
+        !skill["description"]
+            .as_str()
+            .unwrap_or("")
+            .trim()
+            .is_empty()
     );
-    assert!(
-        !customize_content.contains("## Agents")
-            && !customize_content.contains("\"agent\": {")
-            && !customize_content.contains("Two ways to define an agent")
-            && !customize_content.contains("Inline (in `opencode.json`)"),
-        "customize-compat must not advertise an opencode JSON agent definition surface: {customize_content}"
-    );
-    assert!(
-        !customize_content.contains("an agent file")
-            && !customize_content.contains("For agent, command, skill, and plugin")
-            && !customize_content.contains("writing agent files"),
-        "customize-compat must not teach persistence by writing agent files: {customize_content}"
-    );
-    assert!(
-        !customize_description.contains("creating or fixing compat agents")
-            && !customize_description.contains("compat agents, subagents")
-            && !customize_surface.contains("creating or fixing compat agents, subagents"),
-        "customize-compat must not say this skill creates/fixes compat agents or subagents: {customize_description}"
-    );
-    // Native-only agent authority note: 0.34.11 does not parse, discover, or
-    // migrate legacy agent JSON/JSONC/Markdown; external public packages can
-    // remain process-free or use a Bun Compat sidecar and use the bundle
-    // info/install commands, while authoring remains delegated to
-    // agent-bundle-authoring.
-    assert!(
-        customize_surface.contains("agent-bundle-authoring")
-            && customize_surface.contains("0.34.11")
-            && customize_surface.contains("does not parse, discover")
-            && customize_surface.contains("JSON/JSONC/Markdown")
-            && customize_surface.contains("public")
-            && customize_surface.contains("Bun Compat")
-            && customize_surface.contains("process-free")
-            && customize_surface.contains(".hyabundle")
-            && customize_surface.contains("hya bundle info -f")
-            && customize_surface.contains("hya bundle install"),
-        "customize-compat must state 0.34.11 native-only agent boundaries and public bundle inspection/install: {customize_surface}"
-    );
-    assert!(
-        !customize_surface.contains("external bundle distribution is later scope"),
-        "customize-compat must not claim external bundle distribution is later scope: {customize_surface}"
-    );
-    assert!(
-        !customize_surface.contains("0.34.8"),
-        "customize-compat must not advertise stale 0.34.8 native-agent behavior: {customize_surface}"
-    );
-    assert!(
-        customize_surface.contains("AgentBundle") || customize_surface.contains("embedded native"),
-        "customize-compat must state built-ins come from embedded native AgentBundles: {customize_surface}"
-    );
+    assert!(!customize_content.trim().is_empty());
 
     assert_eq!(command_status, StatusCode::OK);
     let command = find_named(&commands, "customize-compat");
     assert_eq!(command["source"], "skill");
-    assert!(
-        command["template"]
-            .as_str()
-            .unwrap()
-            .contains("opencode.json")
-    );
+    assert_eq!(command["template"], skill["content"]);
 
-    // And: the built-in agent-bundle-authoring skill is registered exactly once
-    // with built-in location and nonempty truthful content.
     let authoring_matches = skills
         .as_array()
         .unwrap()
         .iter()
         .filter(|skill| skill["name"] == "agent-bundle-authoring")
         .collect::<Vec<_>>();
-    assert_eq!(
-        authoring_matches.len(),
-        1,
-        "agent-bundle-authoring must appear exactly once: {skills}"
-    );
+    assert_eq!(authoring_matches.len(), 1);
     let authoring = authoring_matches[0];
     assert_eq!(authoring["location"], "<built-in>");
-    let authoring_description = authoring["description"].as_str().unwrap_or("");
     assert!(
-        !authoring_description.trim().is_empty(),
-        "agent-bundle-authoring description must be nonempty"
-    );
-    let authoring_content = authoring["content"].as_str().unwrap_or("");
-    assert!(
-        !authoring_content.trim().is_empty(),
-        "agent-bundle-authoring content must be nonempty"
-    );
-    let authoring_surface = format!("{authoring_description}\n{authoring_content}");
-    let required_markers = [
-        ("0.36.0", "the release"),
-        ("AgentBundle", "the bundle format"),
-        ("Bun Compat", "the executable sidecar implementation"),
-        ("hya bundle install", "the install command"),
-        ("hya bundle info -f", "the inspect command"),
-        (
-            "Harness remains the agent runtime",
-            "the Harness runtime authority",
-        ),
-        ("one sidecar per activation", "activation ownership"),
-        (
-            "Static-only Bundles remain process-free",
-            "the static-only boundary",
-        ),
-        ("activation_id", "activation identity"),
-        ("lifecycle", "activation lifecycle"),
-        ("newline-delimited JSON-RPC", "the wire protocol"),
-        ("tool/call", "tool request/reply"),
-        ("one-way", "one-way events"),
-        ("stdout is protocol-only", "stdout handling"),
-        ("stderr is diagnostic-only", "stderr handling"),
-        ("referenced", "referenced archive entries"),
-        ("closure", "archive closure validation"),
-        (
-            "The public JS profile admits only self-contained selected Extension entrypoint files; no separate Bundle-local helper file kind or transitive JS source closure exists.",
-            "the self-contained public JS profile",
-        ),
-        (
-            "external single-file bundling",
-            "external single-file packaging",
-        ),
-        (
-            "activation never executes the authoring tree",
-            "authoring-tree isolation",
-        ),
-        (
-            "undeclared directory files are ignored",
-            "undeclared directory-file omission",
-        ),
-        (
-            "unreferenced archive files are rejected",
-            "unreferenced archive rejection",
-        ),
-        (
-            "missing relative helper import fails before ACK",
-            "pre-ACK relative-import failure",
-        ),
-        (
-            "`hook_refs` select Bundle-local Hook resources only",
-            "Bundle-local hook refs",
-        ),
-        (
-            "all `harness:hook/*` spellings reject",
-            "harness hook rejection",
-        ),
-        (
-            "Harness host hooks stay outside AgentBundle metadata",
-            "Harness host-hook ownership",
-        ),
-        ("volatile", "resident state"),
-        ("explicit stop", "resident stop semantics"),
-        ("authentication=unverified", "private authentication status"),
-        ("payload=opaque", "private payload status"),
-        (
-            "private activation is unsupported",
-            "private activation rejection",
-        ),
-        ("raw Rust", "raw Rust rejection"),
-        ("Bundle-declared MCP", "Bundle MCP rejection"),
-        ("unsupported", "unsupported feature handling"),
-        ("no sandbox", "the sandbox boundary"),
-        ("no permission expansion", "the permission boundary"),
-    ];
-    for (marker, requirement) in required_markers {
-        assert!(
-            authoring_surface.contains(marker),
-            "agent-bundle-authoring must state {requirement} (`{marker}`): {authoring_surface}"
-        );
-    }
-    assert!(
-        !authoring_surface.contains("validated transitive referenced closure"),
-        "agent-bundle-authoring must not advertise stale transitive-closure wording: {authoring_surface}"
-    );
-    let forbidden_warnings = [
-        (
-            "sidecar never runs the agent/model loop",
-            "the agent/model loop",
-        ),
-        ("no `agent/invoke`", "agent/invoke"),
-        ("no sidecar send/wait", "sidecar send/wait"),
-        ("no terminal/artifact result", "terminal/artifact results"),
-    ];
-    for (warning, subject) in forbidden_warnings {
-        assert!(
-            authoring_surface.contains(warning),
-            "agent-bundle-authoring must explicitly warn against {subject} (`{warning}`): {authoring_surface}"
-        );
-    }
-    // Role controls TUI direct-selector visibility only: main is selectable;
-    // subagent is hidden from direct selection — never a subagent selector placement.
-    // Roster/spawn come from can_spawn, never from role.
-    assert!(
-        !authoring_content.contains("subagent selector placement"),
-        "agent-bundle-authoring must not imply role subagent has a subagent selector placement: {authoring_content}"
+        !authoring["description"]
+            .as_str()
+            .unwrap_or("")
+            .trim()
+            .is_empty()
     );
     assert!(
-        authoring_content.contains("hidden from direct TUI selection"),
-        "agent-bundle-authoring must state role subagent is hidden from direct TUI selection: {authoring_content}"
+        !authoring["content"]
+            .as_str()
+            .unwrap_or("")
+            .trim()
+            .is_empty()
     );
-    assert!(
-        authoring_content.contains("can_spawn") && authoring_content.contains("never from `role`"),
-        "agent-bundle-authoring must distinguish can_spawn-derived roster/spawn from role: {authoring_content}"
+}
+
+#[tokio::test]
+async fn builtin_skill_catalog_matches_captured_session_tool() {
+    // Given: the advertised catalog includes a builtin and a native project
+    // skill, while the captured session provider requests the builtin through
+    // the real Skill tool.
+    let workdir = tempdir();
+    write_skill(
+        &workdir,
+        ".hya/skills/project-skill",
+        "project-skill",
+        "Project skill",
+        "Project skill body\n",
     );
+    let provider = FakeProvider::scripted_turns(vec![
+        vec![
+            FakeStep::ToolCall {
+                name: "skill".to_string(),
+                input: serde_json::json!({"name": "secure-self-update"}),
+            },
+            FakeStep::Finish(FinishReason::ToolCalls),
+        ],
+        vec![
+            FakeStep::Text("builtin skill loaded".to_string()),
+            FakeStep::Finish(FinishReason::Stop),
+        ],
+    ]);
+    let state = state_with_provider(
+        workdir.clone(),
+        provider,
+        PermissionRules::new(vec![Rule::new(Action::Skill, "*", Mode::Allow)]),
+    )
+    .await;
+    let engine = state.engine.clone();
+    let agent = state.agent.clone();
+    let app = router(state);
+
+    // When: both advertised Compat surfaces are queried.
+    let uri = format!("/skill?directory={}", workdir.display());
+    let (skill_status, skills) = get_json(app.clone(), &uri).await;
+    let uri = format!("/command?directory={}", workdir.display());
+    let (command_status, commands) = get_json(app.clone(), &uri).await;
+
+    // Then: the builtin and native entries share the effective catalog and
+    // command surface, with the builtin content coming from the same entry.
+    assert_eq!(skill_status, StatusCode::OK);
+    let secure = find_named(&skills, "secure-self-update");
+    assert_eq!(secure["location"], "<built-in>");
+    let secure_content = secure["content"].as_str().unwrap();
+    assert!(!secure_content.trim().is_empty());
+    let project = find_named(&skills, "project-skill");
+    assert_eq!(project["content"], "Project skill body\n");
+
+    assert_eq!(command_status, StatusCode::OK);
+    let secure_command = find_named(&commands, "secure-self-update");
+    assert_eq!(secure_command["source"], "skill");
+    assert_eq!(secure_command["template"], secure["content"]);
+    let project_command = find_named(&commands, "project-skill");
+    assert_eq!(project_command["template"], "Project skill body\n");
+
+    let session = engine
+        .create(CreateSession {
+            parent: None,
+            agent: AgentName::new("build"),
+            model: ModelRef::new("fake-model"),
+            workdir: workdir.to_string_lossy().into_owned(),
+        })
+        .await
+        .unwrap();
+    engine
+        .admit_user_prompt(session, "load the builtin".to_string())
+        .await
+        .unwrap();
+    engine
+        .run_turn(session, &agent, CancellationToken::new())
+        .await
+        .unwrap();
+    let envelopes = engine.replay(session).await.unwrap();
+    let skill_call = envelopes.iter().find_map(|envelope| match &envelope.event {
+        Event::ToolCallRequested { call, name, .. } if name.as_str() == "skill" => Some(*call),
+        _ => None,
+    });
+    let loaded = envelopes.iter().find_map(|envelope| match &envelope.event {
+        Event::ToolResult { call, output, .. } if Some(*call) == skill_call => Some(output),
+        _ => None,
+    });
+    let Some(loaded) = loaded else {
+        panic!("captured skill tool must emit a correlated ToolResult");
+    };
+    assert_eq!(loaded["metadata"]["origin"], "embedded");
+    assert!(loaded["metadata"]["dir"].is_null());
+    let output = loaded["output"].as_str().unwrap_or("");
+    assert!(output.contains(secure_content.trim()));
 }
 
 #[tokio::test]

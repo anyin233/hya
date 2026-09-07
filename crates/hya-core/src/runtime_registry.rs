@@ -8,7 +8,7 @@ use crate::agent_catalog::{AgentCatalog, AgentDefinition, AgentOrigin};
 use hya_proto::{ConfigGeneration, ModelRef, ToolName, ToolSchema};
 use hya_tool::{
     DuplicateName, PermissionPlane, ResolvedTool, SkillCatalogEntry, SkillPlane, Tool,
-    ToolPermission, ToolRegistry, ToolRegistrySnapshot, discover_skills,
+    ToolPermission, ToolRegistry, ToolRegistrySnapshot, discover_skills_with_builtins,
 };
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -325,7 +325,7 @@ impl RuntimeRegistry {
         let current = self.active();
         let agent_model_preferences = self.agent_model_preferences.borrow().clone();
         let agent_model_configuration = self.agent_model_configuration.borrow().clone();
-        let discovered = discover_skills(workdir);
+        let discovered = discover_skills_with_builtins(workdir);
         let existing = current
             .skills
             .get(workdir)
@@ -556,7 +556,7 @@ impl RuntimeCandidate {
 
     /// Rediscover skills for `workdir` into this candidate.
     pub fn refresh_skills(&mut self, workdir: &Path) {
-        self.replace_skills(workdir, discover_skills(workdir));
+        self.replace_skills(workdir, discover_skills_with_builtins(workdir));
     }
 
     /// Insert or replace MCP/plugin sources on this candidate.
@@ -2926,6 +2926,7 @@ mod tests {
                                 model: parsed.model,
                                 path,
                                 dir,
+                                origin: hya_tool::SkillCatalogOrigin::Virtual,
                             },
                         )
                     })
@@ -3366,6 +3367,7 @@ agent:
                 dir: PathBuf::from(path)
                     .parent()
                     .map_or_else(PathBuf::new, Path::to_path_buf),
+                origin: hya_tool::SkillCatalogOrigin::Filesystem,
             }
         };
         let selected_skills = || {

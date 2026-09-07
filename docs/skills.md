@@ -2,7 +2,7 @@
 
 Author, discover, and use `SKILL.md` skills in hya. Skills are on-demand
 markdown bodies the model can load through the `skill` tool. The catalog is
-built from directory discovery plus three server-side built-in fallbacks.
+built from directory discovery plus three compiled-in fallback skills.
 
 Sources:
 [`crates/hya-tool/src/skill_catalog.rs`](../crates/hya-tool/src/skill_catalog.rs),
@@ -108,8 +108,8 @@ OpenCode-style roots.
 
 ## Built-in fallback skills
 
-The server’s skill listing (`hya-server` Compat skill catalog) starts from
-directory discovery, then **appends** three embedded templates with location
+The shared `hya-tool` catalog used by discovery, captured skill execution, and
+the server's Compat listing **appends** three embedded templates with location
 `"<built-in>"` **only when** no discovered skill of the same name exists:
 
 | Name | Purpose (summary) |
@@ -119,6 +119,12 @@ directory discovery, then **appends** three embedded templates with location
 | `secure-self-update` | Verifying, staging, and owner-activating independent hya releases via `hya-updater`. |
 
 A user-authored skill with a matching `name` **shadows the built-in entirely**.
+
+Both `/skill` and skill-backed `/command` entries use this effective catalog,
+as do captured Session calls to the `skill` tool. Embedded skills have no
+filesystem base directory or sampled file list: load them with `skill`, not by
+opening their synthetic catalog path. Existing tool output limits still apply,
+so a long embedded body can be truncated like any other skill output.
 
 ---
 
