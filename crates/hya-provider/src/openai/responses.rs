@@ -2,6 +2,7 @@ use hya_proto::{Message, MessageId, Part, SessionId};
 use serde_json::{Value, json};
 
 use super::OpenAiResponsesDecoder;
+use crate::media::image_url;
 use crate::wire::{tool_input, tool_result};
 use crate::{CompletionRequest, Decoder, Protocol, ProviderError, ReasoningEffort};
 
@@ -106,8 +107,7 @@ pub fn encode_input_items(messages: &[Message]) -> Result<Vec<Value>, ProviderEr
                 continue;
             }
         };
-        let content = text(parts)?;
-        if !content.is_empty() {
+        if let Some(content) = user_content(parts)? {
             input.push(json!({"role": role, "content": content}));
         }
     }
@@ -216,20 +216,37 @@ fn flush_text(out: &mut Vec<Value>, text: &mut String) {
     }
 }
 
-fn text(parts: &[Part]) -> Result<String, ProviderError> {
+fn user_content(parts: &[Part]) -> Result<Option<Value>, ProviderError> {
     let mut text = String::new();
+    let mut content = Vec::new();
+    let mut has_media = false;
     for part in parts {
         match part {
-            Part::Text { text: part, .. } => text.push_str(part),
-            Part::Media { media_type, .. } => {
-                return Err(ProviderError::Incompatible(format!(
-                    "OpenAI Responses does not support media type {media_type}"
-                )));
+            Part::Text { text: part, .. } => {
+                text.push_str(part);
+                if !part.is_empty() {
+                    content.push(json!({"type": "input_text", "text": part}));
+                }
+            }
+            Part::Media {
+                media_type, data, ..
+            } => {
+                has_media = true;
+                content.push(json!({
+                    "type": "input_image",
+                    "image_url": image_url(media_type, data)?,
+                }));
             }
             Part::Reasoning { .. } | Part::Tool { .. } => {}
         }
     }
-    Ok(text)
+    if has_media {
+        Ok(Some(Value::Array(content)))
+    } else if text.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(Value::String(text)))
+    }
 }
 
 #[cfg(test)]

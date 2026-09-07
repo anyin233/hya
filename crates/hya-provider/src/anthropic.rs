@@ -1,6 +1,7 @@
 use hya_proto::{Message, MessageId, Part, SessionId};
 use serde_json::{Value, json};
 
+use crate::media::anthropic_image_source;
 use crate::wire::{tool_input, tool_result};
 use crate::{CompletionRequest, Decoder, Protocol, ProviderError, ReasoningEffort};
 
@@ -17,9 +18,9 @@ impl Protocol for AnthropicMessagesProtocol {
         for m in &req.messages {
             match m {
                 Message::User { parts, .. } => {
-                    messages.push(json!({"role": "user", "content": parts_text(parts)?}));
+                    messages.push(json!({"role": "user", "content": user_content(parts)?}));
                 }
-                Message::Assistant { parts, .. } => emit_assistant(&mut messages, parts),
+                Message::Assistant { parts, .. } => emit_assistant(&mut messages, parts)?,
                 Message::System { .. } => {}
             }
         }
@@ -66,26 +67,41 @@ impl Protocol for AnthropicMessagesProtocol {
     }
 }
 
-fn parts_text(parts: &[Part]) -> Result<String, ProviderError> {
-    let mut s = String::new();
-    for p in parts {
-        match p {
-            Part::Text { text, .. } => s.push_str(text),
-            Part::Media { media_type, .. } => {
-                return Err(ProviderError::Incompatible(format!(
-                    "Anthropic messages does not support media type {media_type}"
-                )));
+fn user_content(parts: &[Part]) -> Result<Value, ProviderError> {
+    let mut text = String::new();
+    let mut content = Vec::new();
+    let mut has_media = false;
+    for part in parts {
+        match part {
+            Part::Text { text: part, .. } => {
+                text.push_str(part);
+                if !part.is_empty() {
+                    content.push(json!({"type": "text", "text": part}));
+                }
+            }
+            Part::Media {
+                media_type, data, ..
+            } => {
+                has_media = true;
+                content.push(json!({
+                    "type": "image",
+                    "source": anthropic_image_source(media_type, data)?,
+                }));
             }
             Part::Reasoning { .. } | Part::Tool { .. } => {}
         }
     }
-    Ok(s)
+    if has_media {
+        Ok(Value::Array(content))
+    } else {
+        Ok(Value::String(text))
+    }
 }
 
 // Anthropic puts tool_use blocks in the assistant message and the matching
 // tool_result blocks in the FOLLOWING user message. Segment each `[text?, tool+]`
 // cluster into that pair; trailing text becomes a final assistant text message.
-fn emit_assistant(out: &mut Vec<Value>, parts: &[Part]) {
+fn emit_assistant(out: &mut Vec<Value>, parts: &[Part]) -> Result<(), ProviderError> {
     let mut text = String::new();
     let mut tools: Vec<&Part> = Vec::new();
     for part in parts {
@@ -100,7 +116,11 @@ fn emit_assistant(out: &mut Vec<Value>, parts: &[Part]) {
             }
             Part::Tool { .. } => tools.push(part),
             Part::Reasoning { .. } => {}
-            Part::Media { .. } => {}
+            Part::Media { media_type, .. } => {
+                return Err(ProviderError::Incompatible(format!(
+                    "Anthropic messages does not support assistant media type {media_type}"
+                )));
+            }
         }
     }
     if tools.is_empty() {
@@ -110,6 +130,7 @@ fn emit_assistant(out: &mut Vec<Value>, parts: &[Part]) {
     } else {
         flush_cluster(out, &text, &tools);
     }
+    Ok(())
 }
 
 fn flush_cluster(out: &mut Vec<Value>, text: &str, tools: &[&Part]) {

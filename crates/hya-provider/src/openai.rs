@@ -1,6 +1,7 @@
 use hya_proto::{Message, MessageId, Part, SessionId};
 use serde_json::{Value, json};
 
+use crate::media::image_url;
 use crate::wire::{tool_input, tool_result};
 use crate::{CompletionRequest, Decoder, Protocol, ProviderError, ReasoningEffort};
 
@@ -31,9 +32,12 @@ impl Protocol for OpenAiChatProtocol {
                     messages.push(json!({"role": "system", "content": content}));
                 }
                 Message::User { parts, .. } => {
-                    messages.push(json!({"role": "user", "content": parts_text(parts)?}));
+                    messages.push(json!({
+                        "role": "user",
+                        "content": user_content(parts)?,
+                    }));
                 }
-                Message::Assistant { parts, .. } => emit_assistant(&mut messages, parts),
+                Message::Assistant { parts, .. } => emit_assistant(&mut messages, parts)?,
             }
         }
         let tools: Vec<Value> = req
@@ -84,27 +88,42 @@ impl Protocol for OpenAiChatProtocol {
     }
 }
 
-fn parts_text(parts: &[Part]) -> Result<String, ProviderError> {
-    let mut s = String::new();
-    for p in parts {
-        match p {
-            Part::Text { text, .. } => s.push_str(text),
-            Part::Media { media_type, .. } => {
-                return Err(ProviderError::Incompatible(format!(
-                    "OpenAI chat does not support media type {media_type}"
-                )));
+fn user_content(parts: &[Part]) -> Result<Value, ProviderError> {
+    let mut text = String::new();
+    let mut content = Vec::new();
+    let mut has_media = false;
+    for part in parts {
+        match part {
+            Part::Text { text: part, .. } => {
+                text.push_str(part);
+                if !part.is_empty() {
+                    content.push(json!({"type": "text", "text": part}));
+                }
+            }
+            Part::Media {
+                media_type, data, ..
+            } => {
+                has_media = true;
+                content.push(json!({
+                    "type": "image_url",
+                    "image_url": {"url": image_url(media_type, data)?},
+                }));
             }
             Part::Reasoning { .. } | Part::Tool { .. } => {}
         }
     }
-    Ok(s)
+    if has_media {
+        Ok(Value::Array(content))
+    } else {
+        Ok(Value::String(text))
+    }
 }
 
 // Split an assistant message into wire messages: each `[text?, tool_call+]` cluster
 // becomes `assistant(content, tool_calls)` followed by its `role:tool` results, and
 // any trailing text becomes a final tool-free assistant message. This keeps tool
 // results paired with their calls (OpenAI requires it) without scrambling order.
-fn emit_assistant(out: &mut Vec<Value>, parts: &[Part]) {
+fn emit_assistant(out: &mut Vec<Value>, parts: &[Part]) -> Result<(), ProviderError> {
     let mut text = String::new();
     let mut tools: Vec<&Part> = Vec::new();
     for part in parts {
@@ -119,7 +138,11 @@ fn emit_assistant(out: &mut Vec<Value>, parts: &[Part]) {
             }
             Part::Tool { .. } => tools.push(part),
             Part::Reasoning { .. } => {}
-            Part::Media { .. } => {}
+            Part::Media { media_type, .. } => {
+                return Err(ProviderError::Incompatible(format!(
+                    "OpenAI chat does not support assistant media type {media_type}"
+                )));
+            }
         }
     }
     if tools.is_empty() {
@@ -129,6 +152,7 @@ fn emit_assistant(out: &mut Vec<Value>, parts: &[Part]) {
     } else {
         flush_cluster(out, &text, &tools);
     }
+    Ok(())
 }
 
 fn flush_cluster(out: &mut Vec<Value>, text: &str, tools: &[&Part]) {

@@ -1,0 +1,1 @@
+Existing LspPlane provides nine operations, diagnostics/status/touch_file and injected providers but no runtime transport. Only Bash/YAML LSP tools available to harness; no Rust/TS language server configured here. Prior image and Escape HTTP audit, skill errors and heap undefined are retained in prior QA archive.

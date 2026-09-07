@@ -122,13 +122,29 @@ fn user_parts(message: &MessageProjection) -> Vec<Part> {
 
 fn media_part(file: &Value) -> Option<Part> {
     let media_type = file.get("mime").and_then(Value::as_str)?;
-    let data = file.get("uri").and_then(Value::as_str)?;
+    let data = file
+        .get("uri")
+        .and_then(Value::as_str)
+        .or_else(|| file.get("url").and_then(Value::as_str))?;
+    if is_context_reference(file, media_type) {
+        return None;
+    }
     Some(Part::Media {
         id: PartId::new(),
         media_type: media_type.to_string(),
         data: data.to_string(),
-        filename: file.get("name").and_then(Value::as_str).map(str::to_string),
+        filename: file
+            .get("name")
+            .and_then(Value::as_str)
+            .or_else(|| file.get("filename").and_then(Value::as_str))
+            .map(str::to_string),
     })
+}
+
+fn is_context_reference(file: &Value, media_type: &str) -> bool {
+    media_type.starts_with("text/")
+        || media_type == "application/x-directory"
+        || file.pointer("/source/type").and_then(Value::as_str) == Some("resource")
 }
 
 fn map_parts(parts: &[PartProjection]) -> Vec<Part> {
