@@ -107,6 +107,11 @@ explicit `--db <PATH>` has an independent preference set. In-memory execution
 does not survive restart. TUI recents, favorites, and variants remain separate
 client presentation state in `<state>/model.json`.
 
+On a fresh TUI launch, the backend's effective Agent model is authoritative;
+legacy Agent metadata is used only when no effective model row is available.
+This keeps the displayed model and the next request aligned after restarting
+both the client and the backend against the same database.
+
 Non-interactive commands create the starter file without prompting and keep
 machine-readable stdout clean. The only runtime config message they print is
 when a config file is present but fails to parse — then hya logs to stderr and

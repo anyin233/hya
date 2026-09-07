@@ -1,7 +1,7 @@
-# 0.36.11
+# 0.36.12
 
-## Fix Agent model execution
+## Restore remembered models on TUI startup
 
-- Apply the backend-committed effective model to normal and targeted current-Agent selections before the next prompt.
-- Keep failed mutations and selections for another Agent out of active request state while preserving explicit routing precedence.
-- Add real hya-ts/backend fake-provider regressions for open-Session selection, per-Agent isolation, restart, and exact provider model identity.
+- Use the backend's effective Agent model before legacy Agent metadata when a new TUI starts, so remembered choices control both the footer and the next provider request after restart.
+- Preserve request-local selections, explicit launch overrides, configured Agent policy, and legacy-backend fallback.
+- Cover cold-start precedence in the existing interactive model-selection regression.
