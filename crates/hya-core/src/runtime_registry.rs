@@ -18,8 +18,23 @@ use tokio::sync::watch;
 const RUNTIME_SOURCE_DISPATCH_IDENTITY_DOMAIN_V1: &[u8] = b"hya.core.runtime-source-dispatch/v1";
 const RUNTIME_SEMANTIC_FINGERPRINT_DOMAIN_V2: &[u8] = b"hya.core.runtime-semantic-fingerprint/v2";
 
+/// Complete user-file model configuration captured by a runtime binding.
+///
+/// Built-in Agents share the global Hya configuration file, while bundle
+/// Agents are partitioned by their owning stable bundle identity. `BTreeMap`
+/// keeps the representation and every derived identity deterministic.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct AgentModelConfiguration {
+    /// Stable built-in Agent id to configured model.
+    pub builtin: BTreeMap<String, ModelRef>,
+    /// Stable bundle id to Agent id to configured model.
+    pub bundles: BTreeMap<String, BTreeMap<String, ModelRef>>,
+}
+
 type AgentModelPreferenceSnapshot = Arc<BTreeMap<String, ModelRef>>;
+type AgentModelConfigurationSnapshot = Arc<AgentModelConfiguration>;
 type AgentModelPreferences = watch::Sender<AgentModelPreferenceSnapshot>;
+type AgentModelConfigurations = watch::Sender<AgentModelConfigurationSnapshot>;
 
 /// A complete immutable configuration view. Turns retain its `Arc` for their
 /// whole lifetime, so publication cannot alter an in-flight lookup.
@@ -41,6 +56,7 @@ pub struct RuntimeRegistry {
     publication: Mutex<()>,
     active: RwLock<Arc<RuntimeSnapshot>>,
     agent_model_preferences: AgentModelPreferences,
+    agent_model_configuration: AgentModelConfigurations,
 }
 
 /// Offline mutable candidate. Its contents cannot become effective except
@@ -145,6 +161,8 @@ pub struct RuntimeEffectiveManifest {
 pub struct TurnBinding {
     snapshot: Arc<RuntimeSnapshot>,
     agent_model_preferences: AgentModelPreferenceSnapshot,
+    agent_model_configuration: AgentModelConfigurationSnapshot,
+    session_agent_models: AgentModelPreferenceSnapshot,
     workdir: PathBuf,
 }
 
@@ -291,6 +309,9 @@ impl RuntimeRegistry {
                 sources: BTreeMap::new(),
             })),
             agent_model_preferences: watch::Sender::new(Arc::new(BTreeMap::new())),
+            agent_model_configuration: watch::Sender::new(Arc::new(
+                AgentModelConfiguration::default(),
+            )),
         }
     }
 
@@ -303,6 +324,7 @@ impl RuntimeRegistry {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let current = self.active();
         let agent_model_preferences = self.agent_model_preferences.borrow().clone();
+        let agent_model_configuration = self.agent_model_configuration.borrow().clone();
         let discovered = discover_skills(workdir);
         let existing = current
             .skills
@@ -312,6 +334,8 @@ impl RuntimeRegistry {
             return Ok(TurnBinding {
                 snapshot: current,
                 agent_model_preferences,
+                agent_model_configuration,
+                session_agent_models: Arc::new(BTreeMap::new()),
                 workdir: workdir.to_path_buf(),
             });
         }
@@ -322,6 +346,8 @@ impl RuntimeRegistry {
         Ok(TurnBinding {
             snapshot: published,
             agent_model_preferences,
+            agent_model_configuration,
+            session_agent_models: Arc::new(BTreeMap::new()),
             workdir: workdir.to_path_buf(),
         })
     }
@@ -344,6 +370,16 @@ impl RuntimeRegistry {
     pub fn publish_agent_model_preferences(&self, preferences: BTreeMap<String, ModelRef>) {
         self.agent_model_preferences
             .send_replace(Arc::new(preferences));
+    }
+
+    /// Publish a complete immutable user-file Agent model configuration.
+    ///
+    /// The configuration snapshot is independent from remembered preferences
+    /// and runtime generations. Existing bindings retain their captured
+    /// configuration; only bindings created afterwards observe this map.
+    pub fn publish_agent_model_configuration(&self, configuration: AgentModelConfiguration) {
+        self.agent_model_configuration
+            .send_replace(Arc::new(configuration));
     }
 
     /// Build and validate a complete candidate, then publish it with one pointer
@@ -917,6 +953,22 @@ impl TurnBinding {
         append_identity_tag(&mut bytes, 7);
         append_identity_bytes(&mut bytes, &permission_identity).ok()?;
 
+        if !self.agent_model_configuration.builtin.is_empty()
+            || self
+                .agent_model_configuration
+                .bundles
+                .values()
+                .any(|models| !models.is_empty())
+        {
+            append_identity_tag(&mut bytes, 8);
+            append_model_configuration_identity(&mut bytes, &self.agent_model_configuration)
+                .ok()?;
+        }
+        if !self.session_agent_models.is_empty() {
+            append_identity_tag(&mut bytes, 9);
+            append_model_map_identity(&mut bytes, &self.session_agent_models).ok()?;
+        }
+
         Some(Sha256::digest(bytes).into())
     }
 
@@ -945,6 +997,58 @@ impl TurnBinding {
         self.agent_model_preferences.get(stable_id)
     }
 
+    /// Replace the temporary Agent model map captured by this binding.
+    ///
+    /// The returned binding owns an immutable copy; later calls on the
+    /// registry or other bindings cannot change this map. An empty map keeps
+    /// the historical no-override behavior.
+    #[must_use]
+    pub fn with_session_agent_models(mut self, models: BTreeMap<String, ModelRef>) -> Self {
+        self.session_agent_models = Arc::new(models);
+        self
+    }
+
+    /// Replace the captured user-file model configuration on this binding.
+    ///
+    /// This is useful after a successful configuration-file write when the
+    /// caller already has a fresh binding and must not trigger another runtime
+    /// bind or skill discovery. The captured Session override map is retained.
+    #[must_use]
+    pub fn with_agent_model_configuration(
+        mut self,
+        configuration: AgentModelConfiguration,
+    ) -> Self {
+        self.agent_model_configuration = Arc::new(configuration);
+        self
+    }
+
+    /// Look up the user-file model for an Agent's original catalog origin.
+    ///
+    /// Authored direct/category policy is intentionally not considered here;
+    /// this reports only the matching global built-in or owning-bundle file
+    /// entry captured when the binding was made.
+    #[must_use]
+    pub fn configured_agent_model(&self, stable_id: &str) -> Option<&ModelRef> {
+        let definition = self.snapshot.catalog.resolve(stable_id)?;
+        match definition.origin {
+            AgentOrigin::Builtin => self
+                .agent_model_configuration
+                .builtin
+                .get(definition.stable_id),
+            AgentOrigin::Bundle { bundle_id } => self
+                .agent_model_configuration
+                .bundles
+                .get(bundle_id)
+                .and_then(|models| models.get(definition.stable_id)),
+        }
+    }
+
+    /// Look up a temporary Session-tree model override for an Agent.
+    #[must_use]
+    pub fn session_agent_model(&self, stable_id: &str) -> Option<&ModelRef> {
+        self.session_agent_models.get(stable_id)
+    }
+
     #[must_use]
     /// Working directory this turn was bound to.
     pub fn workdir(&self) -> &Path {
@@ -966,7 +1070,10 @@ impl TurnBinding {
     #[must_use]
     /// Look up an agent by stable id, whatever its origin.
     pub fn resolve_agent(&self, stable_id: &str) -> Option<AgentDefinition<'_>> {
-        self.snapshot.catalog.resolve(stable_id)
+        self.snapshot
+            .catalog
+            .resolve(stable_id)
+            .map(|definition| self.overlay_agent_model(definition))
     }
 
     /// Resolve a user/model agent request against the catalog.
@@ -974,9 +1081,11 @@ impl TurnBinding {
         &self,
         requested: Option<&str>,
     ) -> Result<AgentDefinition<'_>, BundleError> {
-        self.snapshot
+        let definition = self
+            .snapshot
             .catalog
-            .require(requested.unwrap_or("general"))
+            .require(requested.unwrap_or("general"))?;
+        Ok(self.overlay_agent_model(definition))
     }
 
     /// Resolve whether `caller` may spawn `target`.
@@ -985,20 +1094,37 @@ impl TurnBinding {
         caller: &str,
         requested: &str,
     ) -> Result<AgentDefinition<'_>, BundleError> {
-        self.snapshot.catalog.resolve_spawn(caller, requested)
+        let definition = self.snapshot.catalog.resolve_spawn(caller, requested)?;
+        Ok(self.overlay_agent_model(definition))
     }
 
     /// Agents the caller may spawn per can_spawn rules.
     pub fn spawnable_agents(&self, caller: &str) -> Result<Vec<AgentDefinition<'_>>, BundleError> {
-        self.snapshot.catalog.spawnable(caller)
+        Ok(self
+            .snapshot
+            .catalog
+            .spawnable(caller)?
+            .into_iter()
+            .map(|definition| self.overlay_agent_model(definition))
+            .collect())
+    }
+
+    fn overlay_agent_model<'a>(&self, definition: AgentDefinition<'a>) -> AgentDefinition<'a> {
+        let model = self
+            .session_agent_model(definition.stable_id)
+            .or_else(|| self.configured_agent_model(definition.stable_id));
+        let Some(model) = model else {
+            return definition;
+        };
+        let mut policy = definition.model_policy.into_owned();
+        policy.model = Some(model.as_str().to_string());
+        AgentDefinition {
+            model_policy: std::borrow::Cow::Owned(policy),
+            ..definition
+        }
     }
 
     /// Compile the agent resource/tool policy for `stable_id`.
-    ///
-    /// The Harness plane is derived from the agent's origin. A built-in gets
-    /// [`AgentToolPlane::Full`]; an installed bundle agent gets
-    /// [`AgentToolPlane::InternalPublic`] and its own bundle resources. There is
-    /// no manifest field that can change this.
     pub fn agent_resource_policy(
         &self,
         stable_id: &str,
@@ -1711,6 +1837,33 @@ fn append_identity_count(bytes: &mut Vec<u8>, count: usize) -> Result<(), Runtim
         )
     })?;
     bytes.extend_from_slice(&count.to_be_bytes());
+    Ok(())
+}
+
+fn append_model_map_identity(
+    bytes: &mut Vec<u8>,
+    models: &BTreeMap<String, ModelRef>,
+) -> Result<(), RuntimeRefreshError> {
+    append_identity_count(bytes, models.len())?;
+    for (agent_id, model) in models {
+        append_identity_bytes(bytes, agent_id.as_bytes())?;
+        append_identity_bytes(bytes, model.as_str().as_bytes())?;
+    }
+    Ok(())
+}
+
+fn append_model_configuration_identity(
+    bytes: &mut Vec<u8>,
+    configuration: &AgentModelConfiguration,
+) -> Result<(), RuntimeRefreshError> {
+    append_identity_tag(bytes, 1);
+    append_model_map_identity(bytes, &configuration.builtin)?;
+    append_identity_tag(bytes, 2);
+    append_identity_count(bytes, configuration.bundles.len())?;
+    for (bundle_id, models) in &configuration.bundles {
+        append_identity_bytes(bytes, bundle_id.as_bytes())?;
+        append_model_map_identity(bytes, models)?;
+    }
     Ok(())
 }
 
@@ -3101,6 +3254,8 @@ agent:
                 TurnBinding {
                     snapshot: Arc::new(snapshot),
                     agent_model_preferences: Arc::new(BTreeMap::new()),
+                    agent_model_configuration: Arc::new(AgentModelConfiguration::default()),
+                    session_agent_models: Arc::new(BTreeMap::new()),
                     workdir: PathBuf::from("/tmp/runtime-fingerprint"),
                 },
                 permission,
@@ -3281,6 +3436,8 @@ agent:
                 TurnBinding {
                     snapshot: Arc::new(snapshot),
                     agent_model_preferences: Arc::new(BTreeMap::new()),
+                    agent_model_configuration: Arc::new(AgentModelConfiguration::default()),
+                    session_agent_models: Arc::new(BTreeMap::new()),
                     workdir,
                 },
                 permission,
@@ -3491,6 +3648,8 @@ agent:
             );
             (
                 TurnBinding {
+                    agent_model_configuration: Arc::new(AgentModelConfiguration::default()),
+                    session_agent_models: Arc::new(BTreeMap::new()),
                     snapshot: tools,
                     agent_model_preferences: Arc::new(BTreeMap::new()),
                     workdir: PathBuf::from("/tmp/runtime-fingerprint-sources"),

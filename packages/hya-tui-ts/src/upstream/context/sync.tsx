@@ -30,8 +30,24 @@ import { batch, onMount } from "solid-js"
 import path from "path"
 import { startupMark } from "../../hya/startup-trace"
 import { useKV } from "./kv"
-import { decodeAgentModels, supportsAgentModelPreferences, type AgentModelIdentity, type AgentModelState } from "../../hya/agent-models"
+import {
+  decodeAgentModels,
+  supportsAgentModelConfiguration,
+  supportsAgentModelPreferences,
+  type AgentModelIdentity,
+  type AgentModelState,
+} from "../../hya/agent-models"
 import { decodeCatalogSelection, type CatalogSelection } from "../../hya/model-catalog"
+
+/** Scope of an Agent model mutation accepted by the model-control endpoint. */
+export type AgentModelMutationScope = "preference" | "session" | "configuration"
+
+/** Optional Session context for Agent model synchronization and mutation. */
+export type AgentModelMutationOptions = {
+  scope?: AgentModelMutationScope
+  sessionID?: string
+}
+
 
 /**
  * Compare Session cache keys using JavaScript code-unit ordering.
@@ -75,6 +91,7 @@ export const {
       capabilities: {
         experimentalBackgroundSubagents: boolean
         agentModelPreferences: boolean
+        agentModelConfiguration: boolean
       }
       agent: Agent[]
       agentModels: AgentModelState[]
@@ -120,6 +137,7 @@ export const {
       capabilities: {
         experimentalBackgroundSubagents: false,
         agentModelPreferences: false,
+        agentModelConfiguration: false,
       },
       config: {},
       status: "loading",
@@ -147,14 +165,16 @@ export const {
     const project = useProject()
     const sdk = useSDK()
     /**
-     * Build a dedicated Agent model URL with the current workspace query.
+     * Build a dedicated Agent model URL with the current workspace and Session query.
      * @param pathname Dedicated control route path.
      * @param workspace Current synchronized workspace, when known.
+     * @param sessionID Optional current Session id for effective overrides.
      * @returns An absolute URL for the existing SDK transport.
      */
-    function agentModelURL(pathname: string, workspace: string | undefined): string {
+    function agentModelURL(pathname: string, workspace: string | undefined, sessionID?: string): string {
       const url = new URL(pathname, sdk.url)
       if (workspace) url.searchParams.set("directory", workspace)
+      if (sessionID) url.searchParams.set("sessionID", sessionID)
       return url.toString()
     }
 
@@ -205,16 +225,18 @@ export const {
     }
 
     /**
-     * Fetch and decode the complete Agent model preference list.
+     * Fetch and decode the complete Agent model state for one optional Session.
      * @param workspace Current synchronized workspace, when known.
      * @param providers Provider catalog paired with the response.
+     * @param sessionID Optional Session id whose root-tree overrides are effective.
      * @returns Allowlisted normalized Agent model rows.
      */
     async function fetchAgentModelRows(
       workspace: string | undefined,
       providers: unknown = store.provider,
+      sessionID?: string,
     ): Promise<AgentModelState[]> {
-      const response = await sdk.fetch(agentModelURL("/tui/agent-models", workspace), {
+      const response = await sdk.fetch(agentModelURL("/tui/agent-models", workspace, sessionID), {
         headers: {
           "x-opencode-directory": sdk.directory ?? "",
           accept: "application/json",
@@ -224,32 +246,58 @@ export const {
       return decodeAgentModels(await readAgentModelJSON(response, "Agent model refresh"), providers)
     }
 
+    // A late response from a Session that is no longer focused must not replace the
+    // rows displayed for the current Session. The monotonically increasing token is
+    // deliberately local to this synchronized context, not a polling mechanism.
+    let agentModelRefreshToken = 0
+    let currentAgentModelScope = ""
+    const agentModelMutationTokens = new Map<string, number>()
+
     /**
      * Refresh synchronized Agent model rows when the backend advertises support.
+     * @param sessionID Optional current route Session id.
      * @returns The refreshed rows, or current rows when unsupported.
      */
-    async function refreshAgentModels(): Promise<AgentModelState[]> {
-      if (!store.capabilities.agentModelPreferences) return store.agentModels
-      const rows = await fetchAgentModelRows(project.workspace.current())
-      setStore("agentModels", reconcile(rows))
+    async function refreshAgentModels(sessionID?: string): Promise<AgentModelState[]> {
+      if (!store.capabilities.agentModelPreferences && !store.capabilities.agentModelConfiguration) {
+        return store.agentModels
+      }
+      const token = ++agentModelRefreshToken
+      const scope = sessionID ?? ""
+      const rows = await fetchAgentModelRows(project.workspace.current(), store.provider, sessionID)
+      if (token === agentModelRefreshToken) {
+        currentAgentModelScope = scope
+        setStore("agentModels", reconcile(rows))
+      }
       return rows
     }
 
     /**
-     * Persist one Agent model preference and replace only its synchronized row.
+     * Persist one Agent model mutation and replace only its synchronized row.
      * @param agentID Exact stable Agent id.
      * @param preference New base-model identity, or null to clear it.
+     * @param options Explicit mutation scope and optional current Session id.
      * @returns The normalized post-commit row.
      */
     async function setAgentModelPreference(
       agentID: string,
       preference: AgentModelIdentity | null,
+      options: AgentModelMutationOptions | AgentModelMutationScope = {},
     ): Promise<AgentModelState> {
-      if (!store.capabilities.agentModelPreferences) {
+      const mutationOptions: AgentModelMutationOptions = typeof options === "string" ? { scope: options } : options
+      const scope = mutationOptions.scope ?? "preference"
+      if (scope === "preference" && !store.capabilities.agentModelPreferences && !store.capabilities.agentModelConfiguration) {
         throw new Error("Agent model preferences are unavailable on this backend")
       }
+      if (scope !== "preference" && !store.capabilities.agentModelConfiguration) {
+        throw new Error("Agent model Session/configuration controls are unavailable on this backend")
+      }
+      const sessionID = mutationOptions.sessionID
+      const mutationKey = `${scope}:${sessionID ?? ""}:${agentID}`
+      const mutationToken = (agentModelMutationTokens.get(mutationKey) ?? 0) + 1
+      agentModelMutationTokens.set(mutationKey, mutationToken)
       const response = await sdk.fetch(
-        agentModelURL(`/tui/agent-models/${encodeURIComponent(agentID)}`, project.workspace.current()),
+        agentModelURL(`/tui/agent-models/${encodeURIComponent(agentID)}`, project.workspace.current(), sessionID),
         {
           method: "PUT",
           headers: {
@@ -262,6 +310,7 @@ export const {
               preference === null
                 ? null
                 : { providerID: preference.providerID, modelID: preference.modelID },
+            ...(scope === "preference" ? {} : { scope }),
           }),
         },
       )
@@ -272,10 +321,23 @@ export const {
       if (!row || row.agentID !== agentID) {
         throw new Error(`Agent model update returned no normalized row for ${agentID}`)
       }
-      const index = store.agentModels.findIndex((item) => item.agentID === agentID)
-      if (index < 0) throw new Error(`Agent model update returned an unknown row for ${agentID}`)
-      setStore("agentModels", index, reconcile(row))
+      if (
+        agentModelMutationTokens.get(mutationKey) === mutationToken &&
+        (currentAgentModelScope === "" || currentAgentModelScope === (sessionID ?? ""))
+      ) {
+        const index = store.agentModels.findIndex((item) => item.agentID === agentID)
+        if (index >= 0) setStore("agentModels", index, reconcile(row))
+      }
       return row
+    }
+
+    /** Persist a configured Agent default while retaining any active Session override. */
+    async function setAgentModelConfiguration(
+      agentID: string,
+      model: AgentModelIdentity | null,
+      sessionID?: string,
+    ): Promise<AgentModelState> {
+      return setAgentModelPreference(agentID, model, { scope: "configuration", sessionID })
     }
 
 
@@ -607,7 +669,11 @@ export const {
       config?: unknown
       providers?: { providers?: unknown; default?: unknown; defaultModel?: unknown }
       provider_list?: unknown
-      capabilities?: { backgroundSubagents?: unknown; agentModelPreferences?: unknown }
+      capabilities?: {
+        backgroundSubagents?: unknown
+        agentModelPreferences?: unknown
+        agentModelConfiguration?: unknown
+      }
       agentModels?: unknown[]
       agents?: unknown[]
       sessions?: Session[]
@@ -648,7 +714,9 @@ export const {
       const providers = bundle.providers?.providers ?? []
       const providerPayloadKnown = bundle.providers?.providers !== undefined
       const catalogDefault = decodeCatalogSelection(bundle.providers?.defaultModel, providers)
-      const agentModelCapability = supportsAgentModelPreferences(bundle.capabilities)
+      const agentModelPreferences = supportsAgentModelPreferences(bundle.capabilities)
+      const agentModelConfiguration = supportsAgentModelConfiguration(bundle.capabilities)
+      const agentModelCapability = agentModelPreferences || agentModelConfiguration
       const agentModels =
         providerPayloadKnown && agentModelCapability
           ? decodeAgentModels(bundle.agentModels ?? [], providers)
@@ -663,7 +731,8 @@ export const {
           setStore("provider_next", reconcile(bundle.provider_list as never))
         }
         setStore("capabilities", "experimentalBackgroundSubagents", bundle.capabilities?.backgroundSubagents === true)
-        setStore("capabilities", "agentModelPreferences", agentModelCapability)
+        setStore("capabilities", "agentModelPreferences", agentModelPreferences)
+        setStore("capabilities", "agentModelConfiguration", agentModelConfiguration)
         if (providerPayloadKnown) setStore("agentModels", reconcile(agentModels))
         if (bundle.agents) setStore("agent", reconcile(bundle.agents as never))
         if (bundle.config !== undefined) setStore("config", reconcile(bundle.config as never))
@@ -713,7 +782,9 @@ export const {
         (providers as typeof providers & { defaultModel?: unknown }).defaultModel,
         providers.providers,
       )
-      const agentModelCapability = supportsAgentModelPreferences(capabilities)
+      const agentModelPreferences = supportsAgentModelPreferences(capabilities)
+      const agentModelConfiguration = supportsAgentModelConfiguration(capabilities)
+      const agentModelCapability = agentModelPreferences || agentModelConfiguration
       const agentModels = agentModelCapability ? await fetchAgentModelRows(workspace, providers.providers) : []
 
       batch(() => {
@@ -722,7 +793,8 @@ export const {
         setStore("provider_catalog_default", catalogDefault)
         setStore("provider_next", reconcile(providerList))
         setStore("capabilities", "experimentalBackgroundSubagents", capabilities?.backgroundSubagents === true)
-        setStore("capabilities", "agentModelPreferences", agentModelCapability)
+        setStore("capabilities", "agentModelPreferences", agentModelPreferences)
+        setStore("capabilities", "agentModelConfiguration", agentModelConfiguration)
         setStore("agentModels", reconcile(agentModels))
         setStore("agent", reconcile(agents))
         setStore("config", reconcile(config))
@@ -776,8 +848,10 @@ export const {
       },
       /** Refresh synchronized Agent model rows through the dedicated backend route. */
       refreshAgentModels,
-      /** Persist one Agent model preference and update its synchronized row on success. */
+      /** Persist one Agent model mutation and update its synchronized row on success. */
       setAgentModelPreference,
+      /** Persist a configured Agent default through the explicit configuration scope. */
+      setAgentModelConfiguration,
       session: {
         get(sessionID: string) {
           const match = search(store.session, sessionID, (s) => s.id)

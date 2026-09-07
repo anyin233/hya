@@ -37,6 +37,12 @@ pub struct SessionProjection {
     pub model: Option<ModelRef>,
     /// Absolute workdir for tools.
     pub workdir: Option<String>,
+    /// Temporary Agent model choices shared by this root Session tree.
+    ///
+    /// The map is event-sourced on the root log and omitted from serialized
+    /// projections when empty for compatibility with older clients.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub agent_model_overrides: BTreeMap<String, ModelRef>,
     /// Display title when set.
     pub title: Option<String>,
     /// Opaque session metadata object.
@@ -596,6 +602,16 @@ impl Projection {
                 self.session.agent = Some(agent.clone());
                 self.session.model = Some(model.clone());
                 self.session.workdir = Some(workdir.clone());
+            }
+            Event::SessionAgentModelOverrideSet { agent, model, .. } => match model {
+                Some(model) => {
+                    self.session
+                        .agent_model_overrides
+                        .insert(agent.as_str().to_string(), model.clone());
+                }
+                None => {
+                    self.session.agent_model_overrides.remove(agent.as_str());
+                }
             }
             Event::SessionMoved { workdir, .. } => {
                 self.session.workdir = Some(workdir.clone());

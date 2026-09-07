@@ -1,8 +1,9 @@
 import { afterEach, expect, test } from "bun:test"
 import { createOpencodeClient, type GlobalEvent } from "@opencode-ai/sdk/v2/client"
-import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
+import { decodeAgentModels, type AgentModelState } from "../src/hya/agent-models"
 
 const root = path.resolve(import.meta.dir, "../../..")
 const backend = path.join(root, "target/debug/hya-backend")
@@ -17,6 +18,7 @@ type StartBackendOptions = {
   providerUrl?: string
   providerModels?: readonly string[]
   model?: string
+  agentModels?: Record<string, string>
 }
 
 async function startBackend({
@@ -24,6 +26,7 @@ async function startBackend({
   providerUrl,
   providerModels = ["model"],
   model = "fixture/model",
+  agentModels = {},
 }: StartBackendOptions = {}) {
   const temp = await realpath(await mkdtemp(path.join(os.tmpdir(), "hya-real-backend-")))
   const project = path.join(temp, "project")
@@ -43,6 +46,7 @@ providers:
     base_url: ${providerUrl}/v1
     api_key: test
     models: [${models.map((entry) => JSON.stringify(entry)).join(", ")}]
+agents: ${JSON.stringify(Object.fromEntries(Object.entries(agentModels).map(([id, model]) => [id, { model }])))}
 mcp: {}
 plugins: {}
 `,
@@ -109,7 +113,7 @@ plugins: {}
     await stop()
     return start()
   }
-  return { project, url, restart, setProviderModels }
+  return { project, url, restart, setProviderModels, configFile }
 }
 
 test("pinned SDK resolves real shell permissions exactly once", async () => {
@@ -764,4 +768,142 @@ test("real backend uses targeted Agent model preference through restart", async 
     }),
   ])
   expect(providerModels).toEqual(["selected", "default", "selected", "default", "default"])
+}, 45_000)
+
+test("global Agent model configuration is authoritative at backend startup", async () => {
+  const { project, url } = await startBackend({
+    providerUrl: "http://127.0.0.1:1",
+    providerModels: ["default", "configured"],
+    model: "fixture/default",
+    agentModels: { "hya-main": "fixture/configured" },
+  })
+  const response = await fetch(`${url}/tui/agent-models`, {
+    headers: { "x-opencode-directory": project },
+  })
+  expect(response.status).toBe(200)
+  const rows = await response.json() as Array<{ agentID: string; configured: boolean; effective: unknown }>
+  expect(rows.find((row) => row.agentID === "hya-main")).toMatchObject({
+    configured: true,
+    effective: { providerID: "fixture", modelID: "configured", source: "configured" },
+  })
+}, 15_000)
+
+test("configured Agent choices isolate Session trees and explicit saves survive restart", async () => {
+  const requests: string[] = []
+  const provider = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    async fetch(request) {
+      if (new URL(request.url).pathname !== "/v1/chat/completions") return new Response(null, { status: 404 })
+      const body: unknown = await request.json()
+      if (!body || typeof body !== "object" || !("model" in body) || typeof body.model !== "string") {
+        throw new Error("provider request has no model identity")
+      }
+      requests.push(body.model)
+      return new Response(
+        `data: ${JSON.stringify({ choices: [{ delta: { content: "model configuration fixture" }, finish_reason: null }] })}\n\n` +
+        `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }] })}\n\ndata: [DONE]\n\n`,
+        { headers: { "content-type": "text/event-stream" } },
+      )
+    },
+  })
+  cleanups.push(async () => provider.stop(true))
+  const fixture = await startBackend({
+    providerUrl: `http://127.0.0.1:${provider.port}`,
+    providerModels: ["default", "configured", "temporary", "saved", "explicit"],
+    model: "fixture/default",
+    agentModels: { "hya-main": "fixture/configured", general: "fixture/configured" },
+  })
+  let url = fixture.url
+  let client = createOpencodeClient({ baseUrl: url, directory: fixture.project })
+  const headers = { "x-opencode-directory": fixture.project, "content-type": "application/json" }
+  const catalog = (await client.provider.list({}, { throwOnError: true })).data!.all
+  const rows = async (session?: string): Promise<AgentModelState[]> => {
+    const response = await fetch(`${url}/tui/agent-models${session ? `?sessionID=${session}` : ""}`, { headers })
+    expect(response.status).toBe(200)
+    return decodeAgentModels(await response.json(), catalog)
+  }
+  const mutate = async (agent: string, model: string | null, scope: string, session?: string) => {
+    return fetch(`${url}/tui/agent-models/${agent}${session ? `?sessionID=${session}` : ""}`, {
+      method: "PUT", headers,
+      body: JSON.stringify({ scope, preference: model ? { providerID: "fixture", modelID: model } : null }),
+    })
+  }
+  const select = async (agent: string, model: string | null, scope: string, session?: string): Promise<AgentModelState> => {
+    const response = await mutate(agent, model, scope, session)
+    expect(response.status).toBe(200)
+    const row = decodeAgentModels([await response.json()], catalog)[0]
+    if (!row) throw new Error(`model mutation returned no valid row for ${agent}`)
+    return row
+  }
+  const create = async (agent: string, parentID?: string) => {
+    const response = await fetch(`${url}/session`, {
+      method: "POST", headers, body: JSON.stringify({ title: "configured model fixture", agent, parentID }),
+    })
+    expect(response.status).toBe(200)
+    const created: unknown = await response.json()
+    if (!created || typeof created !== "object" || !("id" in created) || typeof created.id !== "string") {
+      throw new Error("session creation returned no id")
+    }
+    return created.id
+  }
+  const prompt = async (sessionID: string, expected: string, explicit?: string) => {
+    requests.length = 0
+    await client.session.prompt({
+      sessionID, parts: [{ type: "text", text: "report selected model" }],
+      ...(explicit ? { model: { providerID: "fixture", modelID: explicit } } : {}),
+    }, { throwOnError: true })
+    expect(requests).toEqual([expected])
+  }
+  const original = await readFile(fixture.configFile, "utf8")
+  const rootA = await create("hya-main")
+  const rootB = await create("hya-main")
+  expect((await select("hya-main", "temporary", "session", rootA)).effective).toMatchObject({ modelID: "temporary", source: "session" })
+  await select("general", "temporary", "session", rootA)
+  expect((await rows(rootB)).find((row) => row.agentID === "hya-main")?.effective.modelID).toBe("configured")
+  expect((await rows()).find((row) => row.agentID === "hya-main")?.preference).toBeUndefined()
+  expect(await readFile(fixture.configFile, "utf8")).toBe(original)
+  expect((await mutate("hya-main", "saved", "preference")).status).toBe(409)
+  await prompt(rootA, "temporary")
+  await prompt(rootB, "configured")
+  const childA = await create("general", rootA)
+  const childB = await create("general", rootB)
+  await prompt(childA, "temporary")
+  await prompt(childB, "configured")
+  await prompt(rootA, "explicit", "explicit")
+  await prompt(rootA, "temporary")
+
+  const saved = await select("hya-main", "saved", "configuration", rootA)
+  expect(saved.configuration).toEqual({ providerID: "fixture", modelID: "saved" })
+  expect(saved.effective).toMatchObject({ modelID: "temporary", source: "session" })
+  expect(saved.configurationPath).toBe(fixture.configFile)
+  const globalSaved = await readFile(fixture.configFile, "utf8")
+  expect(Bun.YAML.parse(globalSaved)).toMatchObject({
+    agents: { "hya-main": { model: "fixture/saved" }, general: { model: "fixture/configured" } },
+    providers: { fixture: { kind: "openai", base_url: `http://127.0.0.1:${provider.port}/v1`, api_key: "test", models: ["default", "configured", "temporary", "saved", "explicit"] } },
+  })
+
+  const bundleSaved = await select("plan-impl-review-planner", "saved", "configuration")
+  expect(bundleSaved.configurationPath).toBe(path.join(path.dirname(fixture.configFile), "agents", "hya%2Fplan-impl-review", "config.yml"))
+  expect(await readFile(fixture.configFile, "utf8")).toBe(globalSaved)
+  if (!bundleSaved.configurationPath) throw new Error("bundle save returned no owning configuration path")
+  expect(Bun.YAML.parse(await readFile(bundleSaved.configurationPath, "utf8"))).toMatchObject({
+    agents: { "plan-impl-review-planner": { model: "fixture/saved" } },
+  })
+
+  url = await fixture.restart()
+  client = createOpencodeClient({ baseUrl: url, directory: fixture.project })
+  await prompt(rootA, "temporary")
+  await prompt(childA, "temporary")
+  await prompt(await create("hya-main"), "saved")
+  expect((await rows()).find((row) => row.agentID === "plan-impl-review-planner")?.configuration?.modelID).toBe("saved")
+  expect((await select("hya-main", null, "session", rootA)).effective).toMatchObject({ modelID: "saved", source: "configured" })
+  await prompt(rootA, "saved")
+  await prompt(childA, "temporary")
+
+  await writeFile(fixture.configFile, "agents: [invalid: yaml")
+  expect((await mutate("hya-main", "temporary", "configuration")).status).toBe(503)
+  expect(await readFile(fixture.configFile, "utf8")).toBe("agents: [invalid: yaml")
+  expect((await rows()).find((row) => row.agentID === "hya-main")?.configuration?.modelID).toBe("saved")
+  await writeFile(fixture.configFile, globalSaved)
 }, 45_000)

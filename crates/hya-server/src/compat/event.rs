@@ -366,6 +366,7 @@ async fn envelope_payload(st: &ServerState, envelope: Envelope) -> Value {
         | Event::SessionShareCleared { session }
         | Event::AgentSwitched { session, .. }
         | Event::ModelSwitched { session, .. }
+        | Event::SessionAgentModelOverrideSet { session, .. }
         | Event::WorkflowSelected { session, .. }
         | Event::WorkflowRunStarted { session, .. }
         | Event::WorkflowStageStarted { session, .. }
@@ -585,6 +586,7 @@ async fn api_envelope_payload(st: &ServerState, envelope: Envelope) -> Value {
         | Event::SessionShareCleared { .. }
         | Event::AgentSwitched { .. }
         | Event::ModelSwitched { .. }
+        | Event::SessionAgentModelOverrideSet { .. }
         | Event::CommandExecuted { .. }
         | Event::WorkflowSelected { .. }
         | Event::WorkflowRunStarted { .. }

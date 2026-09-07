@@ -1902,7 +1902,10 @@ impl ResidentSupervisor {
         agent: AgentSpec,
         initial: Option<String>,
     ) -> Result<(), CoreError> {
-        let binding = self.engine.bind_runtime(&agent.workdir)?;
+        let binding = self
+            .engine
+            .bind_session_runtime(session, &agent.workdir)
+            .await?;
         self.register_existing_resident_with_agents(
             root,
             session,
@@ -1931,7 +1934,10 @@ impl ResidentSupervisor {
         initial: Option<String>,
         sidecar_factory: Arc<dyn BoundSidecarFactory>,
     ) -> Result<(), CoreError> {
-        let binding = self.engine.bind_runtime(&agent.workdir)?;
+        let binding = self
+            .engine
+            .bind_session_runtime(session, &agent.workdir)
+            .await?;
         self.register_existing_resident_with_agents(
             root,
             session,

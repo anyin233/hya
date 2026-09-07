@@ -347,13 +347,17 @@ impl PluginClient {
     }
 
     /// Spawns a bundle plugin in its activation directory while retaining a
-    /// bounded stderr tail for lifecycle diagnostics.
+    /// bounded stderr tail and only the explicitly supplied host environment.
     ///
     /// # Errors
     /// `EmptyCommand` if `command` is empty, `Io` on spawn failure, or
     /// `MissingPipe` if the child's stdio could not be captured.
-    pub fn spawn_bundle(command: &[String], cwd: &Path) -> Result<(Self, ChildGuard), PluginError> {
-        Self::spawn_with_options(command, None, Some(cwd), true, true, SpawnMode::Bundle)
+    pub fn spawn_bundle(
+        command: &[String],
+        cwd: &Path,
+        env: Option<&BTreeMap<String, String>>,
+    ) -> Result<(Self, ChildGuard), PluginError> {
+        Self::spawn_with_options(command, env, Some(cwd), true, true, SpawnMode::Bundle)
     }
 
     fn spawn_with_options(

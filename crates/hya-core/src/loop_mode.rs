@@ -305,7 +305,9 @@ pub async fn run_loop(
     cancel: CancellationToken,
 ) -> Result<RunOutcome, CoreError> {
     cost_preflight(&config)?;
-    let binding = engine.bind_root_runtime(&agent.workdir).await?;
+    let binding = engine
+        .bind_session_runtime(lead_session, &agent.workdir)
+        .await?;
     let executor = WorkerSessionExecutor {
         engine,
         lead_session,

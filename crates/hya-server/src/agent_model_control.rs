@@ -54,6 +54,8 @@ impl AgentModelIdentity {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum AgentModelSource {
+    /// An explicit override captured for the current root Session tree.
+    Session,
     /// The Agent has an explicit direct model or category policy.
     Configured,
     /// A durable preference was retained and exactly matches the current catalog.
@@ -88,7 +90,7 @@ pub struct AgentModelState {
     pub hidden: bool,
     /// Whether direct model/category configuration is present.
     pub configured: bool,
-    /// Whether a preference can be set for this Agent.
+    /// Whether an automatic remembered preference can be set for this Agent.
     pub settable: bool,
     /// Retained preference, including stale or configured rows.
     pub preference: Option<AgentModelIdentity>,
@@ -96,6 +98,15 @@ pub struct AgentModelState {
     pub preference_available: bool,
     /// Current effective model and its source.
     pub effective: AgentModelEffective,
+    /// Model explicitly stored in the owning user configuration file.
+    #[serde(default)]
+    pub configuration: Option<AgentModelIdentity>,
+    /// Backend-owned destination for an explicit save, never a client-supplied path.
+    #[serde(default)]
+    pub configuration_path: Option<String>,
+    /// Active root-Session override captured for this Agent.
+    #[serde(default)]
+    pub session_override: Option<AgentModelIdentity>,
 }
 
 /// Bounded structured failure returned by the Agent model control port.
@@ -151,6 +162,9 @@ pub trait AgentModelControl: Send + Sync {
     /// Whether a real application-owned control is installed.
     fn available(&self) -> bool;
 
+    /// Whether owning configuration files can be edited by this runtime.
+    fn configuration_available(&self) -> bool;
+
     /// List normalized state for every Agent in the supplied binding.
     fn list(
         &self,
@@ -166,6 +180,15 @@ pub trait AgentModelControl: Send + Sync {
         preference: Option<AgentModelIdentity>,
         base_model: ModelRef,
     ) -> AgentModelControlFuture<'_, AgentModelState>;
+
+    /// Persist only the configured default, preserving any distinct Session override.
+    fn save_configuration(
+        &self,
+        binding: TurnBinding,
+        agent_id: String,
+        model: Option<AgentModelIdentity>,
+        base_model: ModelRef,
+    ) -> AgentModelControlFuture<'_, AgentModelState>;
 }
 
 /// Default control used by callers that do not install an application runtime.
@@ -173,6 +196,10 @@ pub(crate) struct EmptyAgentModelControl;
 
 impl AgentModelControl for EmptyAgentModelControl {
     fn available(&self) -> bool {
+        false
+    }
+
+    fn configuration_available(&self) -> bool {
         false
     }
 
@@ -189,6 +216,16 @@ impl AgentModelControl for EmptyAgentModelControl {
         _binding: TurnBinding,
         _agent_id: String,
         _preference: Option<AgentModelIdentity>,
+        _base_model: ModelRef,
+    ) -> AgentModelControlFuture<'_, AgentModelState> {
+        Box::pin(async { Err(AgentModelControlError::unavailable()) })
+    }
+
+    fn save_configuration(
+        &self,
+        _binding: TurnBinding,
+        _agent_id: String,
+        _model: Option<AgentModelIdentity>,
         _base_model: ModelRef,
     ) -> AgentModelControlFuture<'_, AgentModelState> {
         Box::pin(async { Err(AgentModelControlError::unavailable()) })

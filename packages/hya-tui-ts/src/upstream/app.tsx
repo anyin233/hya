@@ -612,12 +612,12 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         name: "agent.model.list",
         title: "Configure agent models",
         category: "Agent",
-        hidden: !sync.data.capabilities.agentModelPreferences,
+        hidden: !sync.data.capabilities.agentModelPreferences && !sync.data.capabilities.agentModelConfiguration,
         slashName: "agent-models",
         run: async () => {
-          if (!sync.data.capabilities.agentModelPreferences) return
+          if (!sync.data.capabilities.agentModelPreferences && !sync.data.capabilities.agentModelConfiguration) return
           try {
-            await sync.refreshAgentModels()
+            await sync.refreshAgentModels(route.data.type === "session" ? route.data.sessionID : undefined)
             dialog.replace(() => <DialogAgentModels />)
           } catch (error) {
             toast.show({

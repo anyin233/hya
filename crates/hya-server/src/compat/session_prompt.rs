@@ -123,6 +123,7 @@ async fn prompt(
                     cancel,
                     &external_dirs,
                     turn.guidance,
+                    None,
                 )
                 .await;
             if let Err(error) = result {
@@ -165,8 +166,9 @@ async fn command(
     let run = st
         .start_run(session)
         .ok_or_else(|| ApiError::conflict("session busy"))?;
-    if let Some(model) = req.model_ref() {
-        st.engine.switch_model(session, model).await?;
+    let explicit_model = req.model_ref();
+    if let Some(model) = &explicit_model {
+        st.engine.switch_model(session, model.clone()).await?;
     }
     let workdir = super::reference::session_workdir(&st, session).await;
     let CommandRequest {
@@ -192,6 +194,7 @@ async fn command(
             run.token(),
             &external_dirs,
             turn.guidance,
+            explicit_model,
         )
         .await?;
     let data = super::session_legacy::load_message(&st, session, message).await?;
@@ -257,6 +260,7 @@ fn admission_info(envs: &[Envelope], message: MessageId) -> Result<(u64, u64), A
             | Event::SessionShareCleared { .. }
             | Event::AgentSwitched { .. }
             | Event::ModelSwitched { .. }
+            | Event::SessionAgentModelOverrideSet { .. }
             | Event::SessionStatus { .. }
             | Event::CommandExecuted { .. }
             | Event::WorkflowSelected { .. }

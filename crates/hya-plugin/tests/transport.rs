@@ -292,7 +292,7 @@ async fn bundle_process_uses_activation_cwd_and_shutdown_reaps_with_bounded_stde
         "-c".to_string(),
         BUNDLE_PROCESS_FIXTURE.to_string(),
     ];
-    let (client, mut guard) = PluginClient::spawn_bundle(&command, &dir).unwrap();
+    let (client, mut guard) = PluginClient::spawn_bundle(&command, &dir, None).unwrap();
 
     let init = client
         .initialize_activation(
@@ -327,7 +327,7 @@ async fn bundle_process_uses_activation_cwd_and_shutdown_reaps_with_bounded_stde
 
 #[cfg(unix)]
 #[tokio::test]
-async fn bundle_process_does_not_inherit_host_environment() {
+async fn bundle_process_receives_only_explicit_configuration_environment() {
     let dir = std::env::temp_dir().join(format!(
         "hya-plugin-bundle-env-{}-{}",
         std::process::id(),
@@ -341,9 +341,20 @@ async fn bundle_process_does_not_inherit_host_environment() {
         "/usr/bin/env".to_string(),
         "/bin/sh".to_string(),
         "-c".to_string(),
-        "if [ -n \"${HOME-}\" ]; then printf 'HOST_HOME_INHERITED\\n' >&2; fi".to_string(),
+        "test -z \"${HOME-}\" && test \"$HYA_BUNDLE_CONFIG_FILE\" = /config/agents/reviewer/config.yml && test \"$HYA_BUNDLE_CONFIG_DIR\" = /config/agents/reviewer".to_string(),
     ];
-    let (_client, mut guard) = PluginClient::spawn_bundle(&command, &dir).unwrap();
+    let environment = BTreeMap::from([
+        (
+            "HYA_BUNDLE_CONFIG_FILE".to_string(),
+            "/config/agents/reviewer/config.yml".to_string(),
+        ),
+        (
+            "HYA_BUNDLE_CONFIG_DIR".to_string(),
+            "/config/agents/reviewer".to_string(),
+        ),
+    ]);
+    let (_client, mut guard) =
+        PluginClient::spawn_bundle(&command, &dir, Some(&environment)).unwrap();
 
     let status = guard.wait_for_exit().await.unwrap();
     let tail = guard.stderr_tail();
@@ -374,7 +385,7 @@ async fn bundle_process_terminate_reaps_without_shutdown() {
         "-c".to_string(),
         BUNDLE_PROCESS_FIXTURE.to_string(),
     ];
-    let (client, mut guard) = PluginClient::spawn_bundle(&command, &dir).unwrap();
+    let (client, mut guard) = PluginClient::spawn_bundle(&command, &dir, None).unwrap();
     client
         .initialize_activation(
             HostInfo {
@@ -413,7 +424,7 @@ async fn bundle_process_exit_is_observed_without_transparent_restart() {
         "-c".to_string(),
         BUNDLE_PROCESS_FIXTURE.to_string(),
     ];
-    let (client, mut guard) = PluginClient::spawn_bundle(&command, &dir).unwrap();
+    let (client, mut guard) = PluginClient::spawn_bundle(&command, &dir, None).unwrap();
     client
         .initialize_activation(
             HostInfo {
@@ -467,7 +478,7 @@ async fn bundle_timeout_taints_client_and_prevents_second_rpc() {
         "-c".to_string(),
         BUNDLE_TIMEOUT_FIXTURE.to_string(),
     ];
-    let (client, mut guard) = PluginClient::spawn_bundle(&command, &dir).unwrap();
+    let (client, mut guard) = PluginClient::spawn_bundle(&command, &dir, None).unwrap();
     client
         .initialize_activation(
             HostInfo {
@@ -522,8 +533,8 @@ async fn bundle_process_is_per_activation_and_resident_process_is_stable_while_h
         BUNDLE_PROCESS_FIXTURE.to_string(),
     ];
     let (first, second) = tokio::join!(
-        async { PluginClient::spawn_bundle(&command, &transient_a_dir) },
-        async { PluginClient::spawn_bundle(&command, &transient_b_dir) },
+        async { PluginClient::spawn_bundle(&command, &transient_a_dir, None) },
+        async { PluginClient::spawn_bundle(&command, &transient_b_dir, None) },
     );
     let (first_client, mut first_guard) = first.unwrap();
     let (second_client, mut second_guard) = second.unwrap();
@@ -561,7 +572,7 @@ async fn bundle_process_is_per_activation_and_resident_process_is_stable_while_h
     assert_ne!(first_pid, second_pid);
 
     let (resident_client, mut resident_guard) =
-        PluginClient::spawn_bundle(&command, &resident_dir).unwrap();
+        PluginClient::spawn_bundle(&command, &resident_dir, None).unwrap();
     resident_client
         .initialize_activation(
             HostInfo {

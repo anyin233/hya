@@ -26,6 +26,23 @@ pub(super) struct PromptPayload {
     variant: Option<String>,
 }
 
+impl PromptPayload {
+    pub(super) fn into_model_ref(mut self) -> Option<hya_proto::ModelRef> {
+        if let Some(variant) = self
+            .variant
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            && let Some(Value::Object(model)) = self.model.as_mut()
+        {
+            model.insert("variant".to_string(), Value::String(variant.to_string()));
+        }
+        self.model
+            .as_ref()
+            .and_then(super::model_ref::model_ref_from_value)
+    }
+}
+
 async fn prompt(
     State(st): State<ServerState>,
     Path(id): Path<String>,
@@ -48,21 +65,9 @@ async fn prompt(
     st.engine
         .record_user_prompt_context(session, message, files, agents)
         .await?;
-    let mut model = req.model;
-    if let Some(variant) = req
-        .variant
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        && let Some(Value::Object(model)) = model.as_mut()
-    {
-        model.insert("variant".to_string(), Value::String(variant.to_string()));
-    }
-    if let Some(model) = model
-        .as_ref()
-        .and_then(super::model_ref::model_ref_from_value)
-    {
-        st.engine.switch_model(session, model).await?;
+    let explicit_model = req.into_model_ref();
+    if let Some(model) = &explicit_model {
+        st.engine.switch_model(session, model.clone()).await?;
     }
     if !no_reply {
         let Some(run) = st.start_run(session) else {
@@ -80,6 +85,7 @@ async fn prompt(
                 run.token(),
                 &external_dirs,
                 turn.guidance,
+                explicit_model,
             )
             .await;
         if let Err(error) = &result {

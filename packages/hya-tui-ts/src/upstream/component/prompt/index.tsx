@@ -925,6 +925,7 @@ export function Prompt(props: PromptProps) {
   }
 
   let submitting = false
+  let createdSessionID: string | undefined
   async function submit() {
     // Prevent overlapping invocations (e.g. a double-pressed Enter, or the
     // input's native onSubmit racing another dispatch). Without this guard,
@@ -986,7 +987,7 @@ export function Prompt(props: PromptProps) {
     }
 
     const variant = local.model.variant.current()
-    let sessionID = props.sessionID
+    let sessionID = props.sessionID ?? createdSessionID
     if (sessionID == null) {
       const res = await sdk.client.session.create({
         agent: agent.name,
@@ -1008,7 +1009,15 @@ export function Prompt(props: PromptProps) {
         return true
       }
 
-      sessionID = res.data.id
+      createdSessionID = res.data.id
+      sessionID = createdSessionID
+    }
+    if (!sessionID) return false
+
+    // Draft configured-Agent choices must be durable before the first provider request.
+    if (!props.sessionID) {
+      const applied = await local.model.applyDraftOverrides(sessionID)
+      if (!applied) return false
     }
 
     // Filter out text parts (pasted content) since they're now expanded inline

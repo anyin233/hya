@@ -8,13 +8,14 @@ import path from "node:path"
 
 import { ClipboardProvider } from "../src/upstream/context/clipboard"
 import { DialogModel } from "../src/upstream/component/dialog-model"
+import { DialogAgentModels } from "../src/upstream/component/dialog-agent-models"
 import { DialogProvider, useDialog } from "../src/upstream/ui/dialog"
 import { ArgsProvider } from "../src/upstream/context/args"
 import { ExitProvider } from "../src/upstream/context/exit"
 import { KVProvider } from "../src/upstream/context/kv"
 import { LocalProvider, useLocal } from "../src/upstream/context/local"
 import { ProjectProvider } from "../src/upstream/context/project"
-import { RouteProvider } from "../src/upstream/context/route"
+import { RouteProvider, useRoute } from "../src/upstream/context/route"
 import { TuiPathsProvider, TuiStartupProvider } from "../src/upstream/context/runtime"
 import { SDKProvider, type EventSource } from "../src/upstream/context/sdk"
 import { SyncProvider, useSync } from "../src/upstream/context/sync"
@@ -197,6 +198,139 @@ test("SyncProvider publishes one matching Agent row only after a successful PUT"
     )
     expect(bound.getAgentModel("general")?.effective.modelID).toBe("next")
     expect(requests.filter((request) => request.pathname === "/tui/agent-models/general")).toHaveLength(3)
+    await expect(
+      bound.setAgentModelPreference("general", { providerID: "openai", modelID: "next" }, { scope: "configuration" }),
+    ).rejects.toThrow("Session/configuration controls are unavailable")
+  } finally {
+    setup.renderer.destroy()
+    await rm(temp, { recursive: true, force: true })
+  }
+})
+test("scoped Agent model refreshes isolate Session responses and configuration saves", async () => {
+  const temp = await realpath(await mkdtemp(path.join(os.tmpdir(), "hya-agent-model-scoped-")))
+  const state = path.join(temp, "state")
+  const project = path.join(temp, "project")
+  await mkdir(state, { recursive: true })
+  await mkdir(project, { recursive: true })
+  await writeFile(path.join(state, "kv.json"), "{}")
+
+  const initial = agentRow("build", "current", "default")
+  const delayedA = deferredResponse()
+  const delayedB = deferredResponse()
+  const requests: Array<{ method: string; pathname: string; query: string; body?: string }> = []
+  const events: EventSource = {
+    async subscribe() {
+      return () => undefined
+    },
+  }
+  const fetchImplementation = async (
+    input: Parameters<typeof globalThis.fetch>[0],
+    init?: Parameters<typeof globalThis.fetch>[1],
+  ) => {
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url)
+    const method = init?.method ?? "GET"
+    requests.push({
+      method,
+      pathname: url.pathname,
+      query: url.search,
+      ...(typeof init?.body === "string" ? { body: init.body } : {}),
+    })
+    if (url.pathname === "/tui/bootstrap") {
+      return Response.json({
+        capabilities: { agentModelPreferences: true, agentModelConfiguration: true },
+        config: {},
+        providers: { providers: [provider], default: {}, defaultModel: { providerID: "openai", modelID: "current" } },
+        agentModels: [initial],
+        agents: [],
+        sessions: [],
+        commands: [],
+        lsp: [],
+        mcp: {},
+        mcp_resource: {},
+        formatter: [],
+        session_status: {},
+        vcs: { branch: "main" },
+      })
+    }
+    if (url.pathname === "/path") {
+      return Response.json({ home: temp, state, config: temp, worktree: project, directory: project })
+    }
+    if (url.pathname === "/project/current") return Response.json({ id: "agent-model-scoped", worktree: project })
+    if (url.pathname.endsWith("/directories")) return Response.json([])
+    if (url.pathname === "/tui/agent-models" && method === "GET") {
+      if (url.searchParams.get("sessionID") === "session-a") return delayedA.promise
+      if (url.searchParams.get("sessionID") === "session-b") return delayedB.promise
+      return Response.json([initial])
+    }
+    if (url.pathname === "/tui/agent-models/build" && method === "PUT") {
+      return Response.json({
+        ...initial,
+        configured: true,
+        settable: false,
+        configuration: { providerID: "openai", modelID: "current" },
+        configurationPath: "/config/hya/config.yaml",
+        sessionOverride: { providerID: "openai", modelID: "next" },
+        effective: { providerID: "openai", modelID: "next", source: "session" },
+      })
+    }
+    throw new Error(`unexpected SDK request in scoped Agent model test: ${method} ${url.pathname}`)
+  }
+  const fetch = fetchImplementation as typeof globalThis.fetch
+
+  let sync: ReturnType<typeof useSync> | undefined
+  const Probe = () => {
+    sync = useSync()
+    return <text>{sync.data.agentModels[0]?.effective.modelID ?? ""}</text>
+  }
+  const setup = await testRender(
+    () => (
+      <TuiPathsProvider value={{ cwd: project, home: temp, state, worktree: project }}>
+        <TuiStartupProvider value={{ skipInitialLoading: true }}>
+          <ExitProvider exit={(reason) => { throw reason }}>
+            <ArgsProvider>
+              <KVProvider>
+                <SDKProvider url="http://agent-model-scoped.invalid" directory={project} fetch={fetch} events={events}>
+                  <ProjectProvider>
+                    <SyncProvider>
+                      <Probe />
+                    </SyncProvider>
+                  </ProjectProvider>
+                </SDKProvider>
+              </KVProvider>
+            </ArgsProvider>
+          </ExitProvider>
+        </TuiStartupProvider>
+      </TuiPathsProvider>
+    ),
+    { width: 80, height: 20, footerHeight: 0 },
+  )
+
+  try {
+    for (let attempt = 0; attempt < 200 && sync?.data.status !== "complete"; attempt += 1) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 10))
+    }
+    if (!sync || sync.data.status !== "complete") throw new Error("Scoped model sync did not complete bootstrap")
+    const refreshA = sync.refreshAgentModels("session-a")
+    const refreshB = sync.refreshAgentModels("session-b")
+    delayedB.resolve(Response.json([agentRow("build", "next", "default")]))
+    await refreshB
+    expect(sync.getAgentModel("build")?.effective.modelID).toBe("next")
+    delayedA.resolve(Response.json([agentRow("build", "current", "default")]))
+    await refreshA
+    expect(sync.getAgentModel("build")?.effective.modelID).toBe("next")
+
+    const save = sync.setAgentModelPreference(
+      "build",
+      { providerID: "openai", modelID: "next" },
+      { scope: "configuration", sessionID: "session-b" },
+    )
+    await save
+    const request = requests.at(-1)
+    expect(request?.query).toContain("sessionID=session-b")
+    expect(request?.body).toBe(
+      JSON.stringify({ preference: { providerID: "openai", modelID: "next" }, scope: "configuration" }),
+    )
+    expect(sync.getAgentModel("build")?.effective.source).toBe("session")
   } finally {
     setup.renderer.destroy()
     await rm(temp, { recursive: true, force: true })
@@ -290,17 +424,28 @@ test("remembered startup model and targeted selections control the active Agent 
   let currentModel: (() => { providerID: string; modelID: string } | undefined) | undefined
   let selectCurrent: ((model: { providerID: string; modelID: string }) => Promise<boolean>) | undefined
   let openTarget: ((agentID: string) => void) | undefined
+  let openTargets: (() => void) | undefined
   let seedTargetVariant: (() => string | undefined) | undefined
   let currentVariant: (() => string | undefined) | undefined
   let recentModels: (() => string[]) | undefined
+  let promoteLegacyDraft: (() => Promise<boolean>) | undefined
   const Probe = () => {
     const boundSync = useSync()
     const local = useLocal()
     const dialog = useDialog()
+    const route = useRoute()
+    promoteLegacyDraft = async () => {
+      local.model.set({ providerID: "openai", modelID: "targeted-committed" })
+      local.model.variant.set("high")
+      const applied = await local.model.applyDraftOverrides("legacy-created")
+      route.navigate({ type: "session", sessionID: "legacy-created" })
+      return applied
+    }
     sync = boundSync
     currentModel = () => local.model.current()
     selectCurrent = (model) => local.model.select(model, { recent: true })
     openTarget = (agentID) => dialog.replace(() => <DialogModel agentID={agentID} />)
+    openTargets = () => dialog.replace(() => <DialogAgentModels />)
     seedTargetVariant = () => {
       local.model.set({ providerID: "openai", modelID: "targeted-committed" })
       local.model.variant.set("high")
@@ -397,7 +542,11 @@ test("remembered startup model and targeted selections control the active Agent 
     expect(sync!.getAgentModel("build")?.effective.modelID).toBe("targeted-committed")
     expect(currentVariant()).toBeUndefined()
 
-    openTarget!("general")
+    if (!openTargets) throw new Error("Agent target dialog fixture is unavailable")
+    openTargets()
+    await setup.flush()
+    await setup.mockInput.typeText("general")
+    setup.mockInput.pressEnter()
     await setup.flush()
     expect(setup.captureCharFrame()).toContain("Select model for general")
     await setup.mockInput.typeText("requested")
@@ -431,6 +580,11 @@ test("remembered startup model and targeted selections control the active Agent 
     expect(currentModel()?.modelID).toBe("normal-committed")
     expect(recentModels()).toEqual(recentBeforeFailures)
     expect(sync.getAgentModel("build")?.effective.modelID).toBe("normal-committed")
+    expect(requests.filter((request) => request.method === "PUT")).toHaveLength(5)
+    if (!promoteLegacyDraft) throw new Error("draft promotion fixture is unavailable")
+    await expect(promoteLegacyDraft()).resolves.toBe(true)
+    expect(currentModel()).toEqual({ providerID: "openai", modelID: "targeted-committed" })
+    expect(currentVariant()).toBe("high")
     expect(requests.filter((request) => request.method === "PUT")).toHaveLength(5)
   } finally {
     setup.renderer.destroy()

@@ -32,7 +32,7 @@ impl SessionEngine {
             CoreError::Invalid("session workdir required for summarize_session".to_string())
         })?;
         // Bind once from the persisted session workdir; exact-lookup only.
-        let binding = self.runtime.bind_turn(&workdir)?;
+        let binding = self.bind_session_runtime(session, &workdir).await?;
         let definition = fixed_system_agent(&binding, FixedSystemAgent::Summary)?;
         let options = summarize_options_from_definition(
             &definition,

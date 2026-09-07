@@ -82,24 +82,61 @@ How to tell you are offline:
 
 ## Remembered Agent Models
 
-The `Agent models` TUI flow stores one base `provider/model` identity per stable
-Agent id in the active backend Session database. It covers primary Agents,
-ordinary subagents, and hidden `title`, `summary`, and `compaction` Agents. The
-state is backend-owned, so attached and remote TUIs change the backend instance
-and a clean client exit is not required.
+The `Agent models` TUI flow covers primary Agents, ordinary subagents, and hidden
+`title`, `summary`, and `compaction` Agents. Defaults and temporary choices have
+separate owners: user configuration files, remembered defaults in the backend
+Session database, and temporary overrides in the root Session event stream.
+Attached and remote TUIs update the backend's state, not the client's files.
 
 Model precedence is:
 
 1. request-scoped model/category or explicit Workflow Stage route;
-2. the Agent's configured direct model or model category;
-3. an exact remembered model that still exists in the current provider catalog;
-4. the existing process/default model path.
+2. the active root Session's temporary selection for the target Agent;
+3. the Agent's model in its owning user configuration file;
+4. the authored Agent's direct model or model category;
+5. an exact remembered model that still exists in the current provider catalog;
+6. the existing Session/process default path.
 
-Remembered state never rewrites configuration. A configured Agent is shown but
-disabled in `/agent-models`; an unavailable retained identity remains visible as
-stale state and falls through to the existing default. Reasoning variants, CLI
-overrides, Session hydration, provider credentials, prompts, and responses are
-not stored in this table.
+Ordinary selection for an unconfigured Agent remembers its base model. For an
+Agent with file or authored configuration, ordinary selection changes only the
+active root Session and its descendants. A Home-screen choice remains a draft
+until the first Session is created. Temporary overrides survive resuming that
+Session but do not affect another root; already captured work remains pinned.
+Clearing an override reveals the configured default again. Unavailable retained
+temporary and remembered identities are not used.
+
+Press **Ctrl+S** in either model picker to **Save configured default** for the
+highlighted model. This creates or updates the owning file; it does not erase a
+distinct Session override. The picker shows the destination. Failed saves keep
+the prior effective state and report an error. Old backends without the
+`agentModelConfiguration` capability retain their original selection behavior.
+
+Built-in Agents use the active Hya `config.yaml` (XDG path with the existing HOME
+fallback). Bundle Agents use `agents/<encoded-bundle-id>/config.yml` beside it.
+The immutable Bundle identity is encoded as one canonical percent-encoded
+directory name: `hya/plan-impl-review` becomes `hya%2Fplan-impl-review`. Agents in
+one WorkflowBundle share that file. Both files use the same model leaf:
+
+```yaml
+agents:
+  hya-main:
+    model: openai/gpt-4.1
+```
+
+Use the bundle Agent's stable id instead of `hya-main` in a bundle file. Saves
+lock and reread the file, then atomically replace only the model leaf, preserving
+unrelated settings, credentials, reasoning fields and file permissions.
+Executable bundle sidecars receive `HYA_BUNDLE_CONFIG_DIR` and
+`HYA_BUNDLE_CONFIG_FILE` for their own storage location; prepared bundle content
+is never rewritten.
+
+`GET /tui/agent-models?sessionID=<id>` returns Session-effective rows; omit the
+query for global defaults. `PUT /tui/agent-models/<agent-id>` accepts
+`{ "preference": { "providerID": "openai", "modelID": "gpt-4.1" }, "scope": "configuration" }`.
+Scopes are `preference` (the default), `session` (requires `sessionID` query), and
+`configuration`; `preference: null` clears only the selected layer. Rows expose
+`configuration`, `configurationPath`, `sessionOverride`, and an effective source
+of `configured`, `session`, `remembered`, or `default`.
 
 The default interactive database is
 `$XDG_STATE_HOME/hya/sessions.db` (with the documented HOME fallback). An
@@ -114,8 +151,9 @@ both the client and the backend against the same database.
 
 Non-interactive commands create the starter file without prompting and keep
 machine-readable stdout clean. The only runtime config message they print is
-when a config file is present but fails to parse — then hya logs to stderr and
-still continues offline:
+when provider configuration resolution fails — hya logs to stderr and may
+continue offline. Malformed Agent configuration or storage-read failures instead
+prevent runtime readiness rather than silently publishing empty model defaults:
 
 ```text
 hya: config error (...); using the offline provider

@@ -56,15 +56,24 @@ struct TurnExecution<'a> {
     actor_claim: Option<&'a ActorClaim>,
     /// Immutable triggering-turn guidance scoped into child SpawnerPlane.
     guidance: Option<Arc<str>>,
+    /// Explicit model selected for this one request, if any.
+    ///
+    /// It outranks Session-tree temporary defaults but is never copied into
+    /// child/resident contexts.
+    explicit_model: Option<&'a ModelRef>,
+    /// Whether this activation resolves Session/file defaults freshly.
+    apply_default_overlays: bool,
     /// Request-local Workflow route, absent for ordinary Agent turns.
     workflow_route: Option<&'a WorkflowTurnRoute>,
 }
+
 /// Request-local context shared by one governed turn activation.
 pub(crate) struct TurnRequestContext<'a> {
     cancel: CancellationToken,
     external_dirs: &'a [PathBuf],
     guidance: Option<Arc<str>>,
     actor_claim: Option<&'a ActorClaim>,
+    explicit_model: Option<ModelRef>,
     workflow_route: Option<WorkflowTurnRoute>,
 }
 
@@ -82,6 +91,7 @@ impl<'a> TurnRequestContext<'a> {
             external_dirs,
             guidance,
             actor_claim,
+            explicit_model: None,
             workflow_route,
         }
     }
@@ -380,14 +390,12 @@ impl SessionEngine {
         cancel: CancellationToken,
         external_dirs: &[PathBuf],
         guidance: Option<Arc<str>>,
+        explicit_model: Option<ModelRef>,
     ) -> Result<FinishReason, CoreError> {
-        self.run_turn_with_external_dirs_and_claim(
-            session,
-            agent,
-            TurnActivation::Root,
-            TurnRequestContext::new(cancel, external_dirs, guidance, None, None),
-        )
-        .await
+        let mut request = TurnRequestContext::new(cancel, external_dirs, guidance, None, None);
+        request.explicit_model = explicit_model;
+        self.run_turn_with_external_dirs_and_claim(session, agent, TurnActivation::Root, request)
+            .await
     }
     pub(crate) async fn run_bound_turn(
         &self,
@@ -506,42 +514,45 @@ impl SessionEngine {
             guidance,
             actor_claim,
             workflow_route,
+            explicit_model,
         } = request;
         self.validate_actor_claim(actor_claim).await?;
         let projection = self.store.read_projection(session).await?;
         let workdir = session_workdir(agent, &projection);
-        let (binding, resolved, root_sidecar_tools, mut sidecar_handle) = match activation {
-            TurnActivation::Root => {
-                let binding = self.bind_root_runtime(&workdir).await?;
-                let stable_id = projection
-                    .session
-                    .agent
-                    .as_ref()
-                    .unwrap_or(&agent.name)
-                    .as_str()
-                    .to_string();
-                let (sidecar_handle, sidecar_tools) = start_root_sidecar(
-                    self.sidecar_environment.as_ref(),
-                    &binding,
-                    &stable_id,
-                    &cancel,
-                )
-                .await?;
-                (binding, None, sidecar_tools, sidecar_handle)
-            }
-            TurnActivation::Bound(binding) => (binding, None, Arc::from([]), None),
-            TurnActivation::Resolved {
-                binding,
-                agents,
-                resources,
-                sidecar_tools,
-            } => (
-                binding,
-                Some((agents, resources, sidecar_tools)),
-                Arc::from([]),
-                None,
-            ),
-        };
+        let (binding, resolved, root_sidecar_tools, mut sidecar_handle, apply_default_overlays) =
+            match activation {
+                TurnActivation::Root => {
+                    let binding = self.bind_session_runtime(session, &workdir).await?;
+                    let stable_id = projection
+                        .session
+                        .agent
+                        .as_ref()
+                        .unwrap_or(&agent.name)
+                        .as_str()
+                        .to_string();
+                    let (sidecar_handle, sidecar_tools) = start_root_sidecar(
+                        self.sidecar_environment.as_ref(),
+                        &binding,
+                        &stable_id,
+                        &cancel,
+                    )
+                    .await?;
+                    (binding, None, sidecar_tools, sidecar_handle, true)
+                }
+                TurnActivation::Bound(binding) => (binding, None, Arc::from([]), None, false),
+                TurnActivation::Resolved {
+                    binding,
+                    agents,
+                    resources,
+                    sidecar_tools,
+                } => (
+                    binding,
+                    Some((agents, resources, sidecar_tools)),
+                    Arc::from([]),
+                    None,
+                    false,
+                ),
+            };
         let sidecar_hooks = sidecar_handle
             .as_ref()
             .and_then(|handle| handle.hook_dispatcher());
@@ -617,7 +628,9 @@ impl SessionEngine {
                 actor_claim,
                 // Same Arc for nested spawn scope; no re-discovery.
                 guidance: guidance.clone(),
+                apply_default_overlays,
                 workflow_route: workflow_route.as_ref(),
+                explicit_model: explicit_model.as_ref(),
             };
             let outcome = match sidecar_loss {
                 Some(loss_token) => {
@@ -728,10 +741,12 @@ impl SessionEngine {
             resources,
             agents,
             cancel,
+            apply_default_overlays,
             external_dirs,
             actor_claim,
             guidance,
             workflow_route,
+            explicit_model,
         } = execution;
         let mut rounds: u32 = 0;
         let mut total_tokens = None;
@@ -768,16 +783,50 @@ impl SessionEngine {
             }
 
             let mut projection = self.store.read_projection(session).await?;
-            let mut messages = projection_to_messages(agent, &projection);
+            let stable_id = projection
+                .session
+                .agent
+                .as_ref()
+                .unwrap_or(&agent.name)
+                .as_str();
+            // One explicit request wins for this turn only. Fresh root
+            // activations then use the captured Session override, user-file
+            // model, and authored direct/category policy before falling back
+            // to the persisted Session model. Bound/Resolved child work keeps
+            // its already-resolved AgentSpec model and never reapplies root
+            // defaults over an inline or Workflow choice.
+            let session_model = apply_default_overlays
+                .then(|| binding.session_agent_model(stable_id).cloned())
+                .flatten();
+            let configured_model = apply_default_overlays
+                .then(|| binding.configured_agent_model(stable_id).cloned())
+                .flatten();
+            let authored_model = apply_default_overlays
+                .then(|| {
+                    binding
+                        .agent_catalog()
+                        .resolve(stable_id)
+                        .and_then(|definition| {
+                            crate::category::resolve_configured_agent_model(
+                                &definition.model_policy,
+                                &self.model_categories,
+                                &|candidate| self.providers.resolve(candidate).is_some(),
+                            )
+                        })
+                })
+                .flatten();
+            let model = explicit_model
+                .cloned()
+                .or(session_model)
+                .or(configured_model)
+                .or(authored_model)
+                .or_else(|| projection.session.model.clone())
+                .unwrap_or_else(|| agent.model.clone());
+            let mut messages = projection_to_messages(agent, &projection, &model);
             // Context protection: prefer provider `/responses/compact` when the
             // route supports it; otherwise fall back to the local model summarizer.
             // Active route for this turn. Its advertised context window scales the
             // compaction threshold, so resolve it before deciding.
-            let model = projection
-                .session
-                .model
-                .clone()
-                .unwrap_or_else(|| agent.model.clone());
             let resolved_threshold = crate::compaction::resolved_threshold(
                 &self.compaction,
                 self.providers.capabilities(&model).map(|c| c.max_context),
@@ -874,7 +923,7 @@ impl SessionEngine {
                                 .await?;
                             }
                             projection = self.store.read_projection(session).await?;
-                            messages = projection_to_messages(agent, &projection);
+                            messages = projection_to_messages(agent, &projection, &model);
                         }
                     }
                     Ok(None) | Err(_) => {
@@ -923,7 +972,7 @@ impl SessionEngine {
                                     )
                                     .await?;
                                     projection = self.store.read_projection(session).await?;
-                                    messages = projection_to_messages(agent, &projection);
+                                    messages = projection_to_messages(agent, &projection, &model);
                                 }
                             }
                         }
@@ -942,7 +991,7 @@ impl SessionEngine {
                     messages = compacted;
                 }
             }
-            let request = request_from_messages(agent, &projection, messages, resources);
+            let request = request_from_messages(agent, messages, resources, &model);
             let request = if let Some(hooks) = &self.hooks {
                 match hooks
                     .chat_params(ChatParamsInput {

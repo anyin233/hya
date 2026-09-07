@@ -2,8 +2,11 @@
 
 #![allow(clippy::expect_used)]
 
+use hya_proto::{
+    AgentName, FinishReason, MessageId, ModelRef, PartId, PartProjection, Projection, Role,
+    SessionId,
+};
 use hya_proto::{Envelope, Event, EventSeq};
-use hya_proto::{FinishReason, MessageId, PartId, PartProjection, Projection, Role, SessionId};
 
 fn env(seq: u64, event: Event) -> Envelope {
     Envelope {
@@ -175,4 +178,68 @@ fn reasoning_provider_data_survives_serde_and_projection_replay() {
             provider_data: Some(provider_data),
         }
     );
+}
+
+#[test]
+fn session_agent_model_overrides_replay_replace_and_clear() {
+    let session = SessionId::new();
+    let agent = AgentName::new("general");
+    let other = AgentName::new("plan");
+    let events = vec![
+        env(
+            1,
+            Event::SessionCreated {
+                session,
+                parent: None,
+                agent: agent.clone(),
+                model: ModelRef::new("provider/base"),
+                workdir: "/tmp".to_string(),
+            },
+        ),
+        env(
+            2,
+            Event::SessionAgentModelOverrideSet {
+                session,
+                agent: agent.clone(),
+                model: Some(ModelRef::new("provider/first")),
+            },
+        ),
+        env(
+            3,
+            Event::SessionAgentModelOverrideSet {
+                session,
+                agent: other.clone(),
+                model: Some(ModelRef::new("provider/other")),
+            },
+        ),
+        env(
+            4,
+            Event::SessionAgentModelOverrideSet {
+                session,
+                agent: agent.clone(),
+                model: Some(ModelRef::new("provider/replaced")),
+            },
+        ),
+        env(
+            5,
+            Event::SessionAgentModelOverrideSet {
+                session,
+                agent,
+                model: None,
+            },
+        ),
+    ];
+    let bytes = serde_json::to_vec(&events).expect("serialize override log");
+    let replayed: Vec<Envelope> = serde_json::from_slice(&bytes).expect("replay override log");
+    assert_eq!(replayed, events);
+    let projection = Projection::from_events(&replayed);
+    assert_eq!(
+        projection.session.agent_model_overrides.get("general"),
+        None
+    );
+    assert_eq!(
+        projection.session.agent_model_overrides.get("plan"),
+        Some(&ModelRef::new("provider/other"))
+    );
+    assert_eq!(projection.last_seq, 5);
 }

@@ -29,6 +29,10 @@ impl AgentModelControl for RememberedRootModel {
         true
     }
 
+    fn configuration_available(&self) -> bool {
+        false
+    }
+
     fn list(
         &self,
         _binding: TurnBinding,
@@ -48,6 +52,9 @@ impl AgentModelControl for RememberedRootModel {
                     model: AgentModelIdentity::new("remembered", "root/model"),
                     source: AgentModelSource::Remembered,
                 },
+                configuration: None,
+                configuration_path: None,
+                session_override: None,
             }])
         }
         .boxed()
@@ -61,6 +68,16 @@ impl AgentModelControl for RememberedRootModel {
         _base_model: hya_proto::ModelRef,
     ) -> AgentModelControlFuture<'_, AgentModelState> {
         async move { unreachable!("Session creation never mutates Agent preferences") }.boxed()
+    }
+
+    fn save_configuration(
+        &self,
+        _binding: TurnBinding,
+        _agent_id: String,
+        _model: Option<AgentModelIdentity>,
+        _base_model: hya_proto::ModelRef,
+    ) -> AgentModelControlFuture<'_, AgentModelState> {
+        async move { unreachable!("Session creation never writes model configuration") }.boxed()
     }
 }
 

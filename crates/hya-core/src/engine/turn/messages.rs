@@ -9,8 +9,11 @@ use crate::runtime_registry::CompiledResourceView;
 
 const COMPACT_CONTEXT_MARKER: &str = "HYA_COMPACTED_CONTEXT";
 
-pub(super) fn projection_to_messages(agent: &AgentSpec, projection: &Projection) -> Vec<Message> {
-    let model = active_model(agent, projection);
+pub(super) fn projection_to_messages(
+    agent: &AgentSpec,
+    projection: &Projection,
+    model: &ModelRef,
+) -> Vec<Message> {
     compacted_messages(projection)
         .iter()
         .filter(|m| !(m.role == Role::Assistant && m.parts.is_empty()))
@@ -37,15 +40,14 @@ pub(super) fn projection_to_messages(agent: &AgentSpec, projection: &Projection)
 
 pub(super) fn request_from_messages(
     agent: &AgentSpec,
-    projection: &Projection,
     messages: Vec<Message>,
     resources: &CompiledResourceView,
+    model: &ModelRef,
 ) -> CompletionRequest {
-    let model = active_model(agent, projection);
-    let reasoning = reasoning_for_model(&model, agent.reasoning);
+    let reasoning = reasoning_for_model(model, agent.reasoning);
     CompletionRequest {
-        tools: filtered_tool_schemas(resources, &model),
-        model,
+        tools: filtered_tool_schemas(resources, model),
+        model: model.clone(),
         system: Some(agent.system_prompt.clone()),
         messages,
         temperature: None,
@@ -87,14 +89,6 @@ fn include_tool(id: &str, model: &str) -> bool {
         "edit" | "write" => !patch_only,
         _ => true,
     }
-}
-
-fn active_model(agent: &AgentSpec, projection: &Projection) -> ModelRef {
-    projection
-        .session
-        .model
-        .clone()
-        .unwrap_or_else(|| agent.model.clone())
 }
 
 fn compacted_messages(projection: &Projection) -> &[MessageProjection] {

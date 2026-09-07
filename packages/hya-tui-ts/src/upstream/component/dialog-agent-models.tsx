@@ -12,17 +12,20 @@ import { DialogSelect } from "../ui/dialog-select"
 export function DialogAgentModels() {
   const sync = useSync()
   const dialog = useDialog()
-  const options = createMemo(() => agentModelTargetOptions(sync.data.agentModels))
+  const options = createMemo(() =>
+    agentModelTargetOptions(sync.data.agentModels, {
+      supportsSessionOverrides: sync.data.capabilities.agentModelConfiguration,
+    }),
+  )
 
   return (
     <DialogSelect
       title="Agent models"
       options={options()}
       retainDisabled
-      skipFilter
       onSelect={(option) => {
         const row = sync.getAgentModel(option.value)
-        if (!row || option.disabled || row.configured || !row.settable) return
+        if (!row || option.disabled) return
         dialog.replace(() => <DialogModel agentID={row.agentID} />)
       }}
     />
