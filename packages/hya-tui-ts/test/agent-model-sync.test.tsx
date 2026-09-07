@@ -203,7 +203,7 @@ test("SyncProvider publishes one matching Agent row only after a successful PUT"
   }
 })
 
-test("targeted model selection updates only the active Agent request model", async () => {
+test("remembered startup model and targeted selections control the active Agent request model", async () => {
   const temp = await realpath(await mkdtemp(path.join(os.tmpdir(), "hya-agent-model-selection-")))
   const state = path.join(temp, "state")
   const project = path.join(temp, "project")
@@ -211,7 +211,7 @@ test("targeted model selection updates only the active Agent request model", asy
   await mkdir(project, { recursive: true })
   await writeFile(path.join(state, "kv.json"), "{}")
 
-  const modelIDs = ["current", "requested", "targeted-committed", "other-committed", "normal-committed"]
+  const modelIDs = ["current", "remembered", "requested", "targeted-committed", "other-committed", "normal-committed"]
   const selectionProvider = {
     id: "openai",
     source: "configured",
@@ -228,7 +228,7 @@ test("targeted model selection updates only the active Agent request model", asy
       ]),
     ),
   }
-  const initialBuild = agentRow("build", "current", "default")
+  const initialBuild = agentRow("build", "remembered", "remembered")
   const initialGeneral = agentRow("general", "current", "default")
   const putResponses = [
     Response.json(agentRow("build", "targeted-committed", "remembered")),
@@ -261,7 +261,7 @@ test("targeted model selection updates only the active Agent request model", asy
           defaultModel: { providerID: "openai", modelID: "current" },
         },
         agentModels: [initialBuild, initialGeneral],
-        agents: [{ name: "build", mode: "primary", hidden: false }],
+        agents: [{ name: "build", mode: "primary", hidden: false, model: { providerID: "openai", modelID: "current" } }],
         sessions: [],
         commands: [],
         lsp: [],
@@ -379,11 +379,13 @@ test("targeted model selection updates only the active Agent request model", asy
     ) {
       throw new Error(`Model selection fixture did not become ready: ${JSON.stringify(setup.captureCharFrame())}`)
     }
+    expect(currentModel()).toEqual({ providerID: "openai", modelID: "remembered" })
     expect(seedTargetVariant()).toBe("high")
     openTarget!("build")
     await setup.flush()
     expect(setup.captureCharFrame()).toContain("Select model for build")
     await setup.mockInput.typeText("requested")
+    await setup.flush()
     setup.mockInput.pressEnter()
     await setup.waitFor(() => requests.filter((request) => request.method === "PUT").length === 1)
     expect(requests.filter((request) => request.method === "PUT")[0]).toEqual({

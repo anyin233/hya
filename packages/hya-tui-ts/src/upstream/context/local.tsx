@@ -216,6 +216,9 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           }
         }
 
+        // Legacy Agent metadata is only a fallback when the backend has no effective row.
+        if (a?.model && isModelValid(a.model)) return a.model
+
         if (sync.data.config.model) {
           const { providerID, modelID } = parseModel(sync.data.config.model)
           if (isModelValid({ providerID, modelID })) {
@@ -252,7 +255,6 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         return (
           getFirstValidModel(
             () => a && modelStore.model[a.name],
-            () => a && a.model,
             fallbackModel,
           ) ?? undefined
         )
