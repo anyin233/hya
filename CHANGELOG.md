@@ -1,6 +1,6 @@
-# 0.36.16
+# 0.36.17
 
-## Builtin skill execution
+## Heap snapshots
 
-- Share the builtin/native skill catalog across advertised commands and captured tool execution, with user-authored skills retaining precedence.
-- Track embedded and virtual skill origins without claiming filesystem directories or sampled files; keep existing output limits.
+- Write real V8-compatible heap snapshots in the hya cache with owner-only permissions.
+- Report the actual file path or failure instead of an undefined success; heap dumps may contain sensitive in-memory data.

@@ -758,13 +758,26 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         title: "Write heap snapshot",
         category: "System",
         run: async () => {
-          const files = await props.onSnapshot?.()
-          toast.show({
-            variant: "info",
-            message: `Heap snapshot written to ${files?.join(", ")}`,
-            duration: 5000,
-          })
-          dialog.clear()
+          try {
+            if (!props.onSnapshot) throw new Error("Heap snapshots are unavailable in this build")
+            const files = await props.onSnapshot()
+            if (!Array.isArray(files) || files.length === 0 || files.some((file) => typeof file !== "string" || !file)) {
+              throw new Error("Heap snapshot callback returned no files")
+            }
+            toast.show({
+              variant: "success",
+              message: `Heap snapshot written to ${files.join(", ")}`,
+              duration: 5000,
+            })
+          } catch (error) {
+            toast.show({
+              variant: "error",
+              message: `Failed to write heap snapshot: ${errorMessage(error)}`,
+              duration: 5000,
+            })
+          } finally {
+            dialog.clear()
+          }
         },
       },
       {

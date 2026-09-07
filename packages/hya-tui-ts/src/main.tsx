@@ -3,6 +3,7 @@ import { parseArgs } from "node:util"
 import { Effect } from "effect"
 
 import { HyaPaths, HyaPlatform } from "./hya/platform"
+import { createHeapSnapshotWriter } from "./hya/heap-snapshot"
 import { createStaticPluginHost } from "./hya/static-host"
 import { startupMark } from "./hya/startup-trace"
 import { run, type TuiInput } from "./upstream"
@@ -64,7 +65,12 @@ export async function launch(argv: string[], runner: (input: TuiInput) => Promis
  * @returns Promise that resolves when the TUI Effect program finishes
  */
 function runTui(input: TuiInput) {
-  return Effect.runPromise(run(input).pipe(Effect.provideService(HyaPlatform, HyaPaths)))
+  return Effect.runPromise(
+    run({
+      ...input,
+      onSnapshot: input.onSnapshot ?? createHeapSnapshotWriter(HyaPaths.cache),
+    }).pipe(Effect.provideService(HyaPlatform, HyaPaths)),
+  )
 }
 
 if (import.meta.main) {

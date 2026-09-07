@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import { createOpencodeClient } from "@opencode-ai/sdk/v2/client"
 
-import { mkdir, mkdtemp, readFile, realpath, rm } from "node:fs/promises"
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import stripAnsi from "strip-ansi"
@@ -983,6 +983,36 @@ test("Linux PTY model and reasoning pickers stay local before the selected model
       const frame = await output()
       return frame.includes("ctrl+p commands") && frame.includes("gpt-picker")
     }, "picker Session")
+    const heapStart = (await output()).length
+    await writeSemanticInput(process.stdin, "\x10")
+    await waitFor(async () => (await output()).slice(heapStart).includes("Commands"), "heap command palette")
+    await writeSemanticInput(process.stdin, "Write heap snapshot")
+    await waitFor(
+      async () => (await output()).slice(heapStart).includes("Write heap snapshot"),
+      "heap snapshot command",
+    )
+    await writeSemanticInput(process.stdin, "\r")
+    await waitFor(
+      async () => (await output()).slice(heapStart).includes("Heap snapshot written to"),
+      "heap snapshot success toast",
+    )
+    const heapFrame = (await output()).slice(heapStart)
+    expect(heapFrame).not.toContain("undefined")
+    // Paths wrap inside the toast's terminal border; raw PTY deltas are not a filesystem path.
+    const heapDirectory = path.join(temp, "cache", "hya")
+    const heapFiles = (await readdir(heapDirectory)).filter((name) => name.endsWith(".heapsnapshot"))
+    expect(heapFiles).toHaveLength(1)
+    const heapPath = path.join(heapDirectory, heapFiles[0]!)
+    const parsedSnapshot = JSON.parse(await readFile(heapPath, "utf8")) as {
+      snapshot?: { meta?: unknown }
+      nodes?: unknown
+      edges?: unknown
+      strings?: unknown
+    }
+    expect(parsedSnapshot.snapshot?.meta).toBeDefined()
+    expect(Array.isArray(parsedSnapshot.nodes)).toBe(true)
+    expect(Array.isArray(parsedSnapshot.edges)).toBe(true)
+    expect(Array.isArray(parsedSnapshot.strings)).toBe(true)
     type SessionEvent = {
       event?: {
         type?: string

@@ -280,7 +280,7 @@ collisions. Examples (not exhaustive):
 | `help.show` | unbound | `/help` | Open the help dialog. |
 | `hya.status` | `<leader>s` | `/status` | Open the status dialog. |
 | `app.debug` | unbound | — | Toggle the debug overlay. |
-| `app.heap_snapshot` | unbound | — | Write a heap snapshot. |
+| `app.heap_snapshot` | unbound | — | Write a V8-compatible `.heapsnapshot` in the hya cache directory; report the actual path or an error. Heap dumps can contain sensitive in-memory data. |
 | `app.toggle.animations` | unbound | — | Toggle UI animations. |
 | `app.toggle.file_context` | unbound | — | Toggle file context. |
 | `app.toggle.diffwrap` | unbound | — | Toggle word wrap in inline diffs (`word` ↔ `none`). |
