@@ -130,13 +130,14 @@ pub(crate) struct ServerState {
 
 impl ServerState {
     pub(crate) fn new(app: AppState) -> Self {
+        let global = compat::GlobalState::new(app.engine.lsp().is_configured());
         Self {
             engine: app.engine,
             agent: app.agent,
             runs: runs::RunRegistry::default(),
             permission_requests: app.permission_requests,
             question_requests: app.question_requests,
-            global: compat::GlobalState::new(),
+            global,
             mcp_control: app.mcp_control,
             agent_model_control: app.agent_model_control,
             workflow_control: app.workflow_control,

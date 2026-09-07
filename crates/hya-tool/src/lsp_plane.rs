@@ -85,9 +85,13 @@ pub trait LspProvider: Send + Sync {
     async fn touch_file(&self, _file: &Path, _kind: &str) -> Result<(), LspError> {
         Ok(())
     }
-    /// Collect current diagnostics payload.
-    async fn diagnostics(&self) -> Result<Value, LspError> {
+    /// Collect diagnostics inside `workdir` or for explicitly authorized target files.
+    async fn diagnostics(&self, _workdir: &Path, _targets: &[&Path]) -> Result<Value, LspError> {
         Ok(json!({}))
+    }
+    /// Subscribe to connection lifecycle changes, when the provider supports them.
+    fn subscribe(&self) -> Option<tokio::sync::watch::Receiver<u64>> {
+        None
     }
     /// Status rows for UI / health display.
     async fn status(&self, workdir: &Path) -> Result<Vec<Value>, LspError> {
@@ -117,6 +121,12 @@ impl LspPlane {
         Self {
             provider: Some(provider),
         }
+    }
+
+    /// Whether this plane has a configured provider, before any clients start.
+    #[must_use]
+    pub fn is_configured(&self) -> bool {
+        self.provider.is_some()
     }
 
     pub(crate) async fn has_clients(&self, file: &Path) -> Result<bool, LspError> {
@@ -173,6 +183,14 @@ impl LspPlane {
         }
     }
 
+    /// Subscribe to LSP lifecycle changes without polling or starting clients.
+    #[must_use]
+    pub fn subscribe(&self) -> Option<tokio::sync::watch::Receiver<u64>> {
+        self.provider
+            .as_ref()
+            .and_then(|provider| provider.subscribe())
+    }
+
     /// Notify the provider of a file change; no-op when disconnected.
     ///
     /// # Errors
@@ -184,13 +202,13 @@ impl LspPlane {
         }
     }
 
-    /// Current diagnostics JSON, or `{}` when disconnected.
+    /// Diagnostics scoped to the workdir and authorized target files, or `{}` when disconnected.
     ///
     /// # Errors
     /// Propagates provider failures.
-    pub async fn diagnostics(&self) -> Result<Value, LspError> {
+    pub async fn diagnostics(&self, workdir: &Path, targets: &[&Path]) -> Result<Value, LspError> {
         match &self.provider {
-            Some(provider) => provider.diagnostics().await,
+            Some(provider) => provider.diagnostics(workdir, targets).await,
             None => Ok(json!({})),
         }
     }

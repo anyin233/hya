@@ -17,6 +17,7 @@ pub mod config;
 /// Formatter plane construction from optional formatter config.
 pub mod formatter_config;
 mod installed_bundle_refresh;
+mod lsp;
 /// Interactive OAuth login and access-token refresh.
 pub mod oauth;
 /// Headless permission auto-reject responder for non-interactive runs.

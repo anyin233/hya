@@ -66,14 +66,14 @@ bun test test/real-backend.test.ts test/task-presentation.test.ts test/real-back
 
 ### Built-in tool coverage
 
-`ToolRegistry::builtins()` advertises exactly **28** canonical Tool names. The
-dispatch-only aliases `fetch`, `search`, `todo`, `patch`, and `plan` are hidden
+`ToolRegistry::builtins()` advertises exactly **27** canonical Tool names. The
+dispatch-only aliases `shell`, `fetch`, `search`, `todo`, `patch`, and `plan` are hidden
 from provider schemas and are not counted as canonical Tools. Track P directly
 exercises **15** canonical Tools:
 
-| Covered (15) | Not directly covered by Track P (13) |
+| Covered (15) | Not directly covered by Track P (12) |
 | --- | --- |
-| `read`, `write`, `edit`, `shell`, `question`, `skill`, `task`, `todowrite`, `send`, `roster`, `channels`, `join`, `leave`, `list_agents`, `workflow` | `bash`, `ls`, `glob`, `find`, `grep`, `lsp`, `ask_user`, `apply_patch`, `webfetch`, `websearch`, `plan_exit`, `invalid`, `announce` |
+| `read`, `write`, `edit`, `bash`, `question`, `skill`, `task`, `todowrite`, `send`, `roster`, `channels`, `join`, `leave`, `list_agents`, `workflow` | `ls`, `glob`, `find`, `grep`, `lsp`, `ask_user`, `apply_patch`, `webfetch`, `websearch`, `plan_exit`, `invalid`, `announce` |
 
 ### Multi-agent scenarios need per-agent FakeLlm routing
 

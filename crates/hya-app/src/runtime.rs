@@ -4355,6 +4355,7 @@ async fn build_session_engine_with_mcp_defer(
         .with_model_fallbacks(category_model_fallbacks(&categories))
         .with_compaction(summarizer, compaction_config())
         .with_formatter(formatter_config::load_plane())
+        .with_lsp(crate::lsp::load_plane()?)
         .with_websearch(WebSearchPlane::configured(websearch))
         .with_interaction(interaction)
         // INVARIANT (spawn-intake liveness): the engine *owns* this sender for its

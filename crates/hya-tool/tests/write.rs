@@ -253,7 +253,7 @@ impl LspProvider for RecordingLsp {
         Ok(())
     }
 
-    async fn diagnostics(&self) -> Result<Value, LspError> {
+    async fn diagnostics(&self, _workdir: &Path, _targets: &[&Path]) -> Result<Value, LspError> {
         Ok(self.diagnostics.clone())
     }
 }
@@ -275,7 +275,7 @@ impl LspProvider for FailingLsp {
         Err(LspError("forced LSP touch failure".to_owned()))
     }
 
-    async fn diagnostics(&self) -> Result<Value, LspError> {
+    async fn diagnostics(&self, _workdir: &Path, _targets: &[&Path]) -> Result<Value, LspError> {
         Ok(json!({}))
     }
 }

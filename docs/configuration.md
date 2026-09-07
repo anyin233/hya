@@ -1300,6 +1300,49 @@ comes from [`formatter_command.rs`](../crates/hya-tool/src/formatter_command.rs)
 Disable an unwanted rewrite with a map entry, for example
 `prettier: { disabled: true }` or `rustfmt: { disabled: true }`.
 
+## Language Servers
+
+The optional `lsp` key in `config.yaml` configures app-owned stdio language
+servers. Servers start lazily for `lsp` operations, code-symbol queries, or
+post-edit diagnostics. hya does not download or install language servers.
+
+With the key absent or `lsp: true`, hya detects installed TypeScript
+(`typescript-language-server --stdio`), Rust (`rust-analyzer`), Python
+(`pyright-langserver --stdio`), Bash (`bash-language-server start`), Go (`gopls`),
+and C/C++ (`clangd`) executables on PATH. `lsp: false` disables the plane.
+A map overrides named defaults or adds custom servers:
+
+```yaml
+lsp:
+  typescript:
+    command: [/opt/typescript/bin/typescript-language-server, --stdio]
+  rust:
+    disabled: true
+  custom:
+    command: [/opt/example-language-server, --stdio]
+    extensions: [.example]
+    root_markers: [example.project, .git]
+    environment: {}
+    initialization_options: {}
+    settings: {}
+```
+
+Named builtin overrides retain default extensions and root markers even when
+the default command is not on PATH. Custom servers require `command` and
+`extensions`. Configuration changes take effect after restarting the backend.
+Servers are shared per language/workspace root; requests use advertised server
+capabilities. Connection starts and failures refresh `/lsp` and the TUI through
+`lsp.updated` events.
+
+Write/Edit/Patch diagnostics are limited to the requesting workdir and explicitly
+authorized target files. Versioned publications or pull diagnostics track the
+updated document; stale versions are rejected. Servers publishing without
+versions have no completion signal, so hya collects their notifications for a
+two-second **best-effort** window, including clear-then-delayed updates. No
+publication within that window is reported as unavailable analysis, not a clean
+bill of health. Transport errors, interrupted framed writes, and shutdown close
+owned server processes; Unix teardown also terminates their process groups.
+
 ## Project Config (`opencode.json`)
 
 At runtime hya reads, in this order:
