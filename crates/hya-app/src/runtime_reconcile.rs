@@ -423,6 +423,7 @@ fn parse_skill_contribution(
         model: parsed.model,
         path,
         dir,
+        origin: hya_tool::SkillCatalogOrigin::Virtual,
     })
 }
 

@@ -259,6 +259,7 @@ fn bundle_skill_source(bundle: &PreparedAgentBundle) -> RuntimeSource {
                     model: parsed.model,
                     path,
                     dir,
+                    origin: hya_tool::SkillCatalogOrigin::Virtual,
                 },
             )
         })

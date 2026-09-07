@@ -126,3 +126,32 @@ fn discover_skills_preserves_root_order_and_first_name_wins() {
     assert_eq!(shared.description, "Local shared");
     assert_eq!(shared.content, "local body");
 }
+
+#[test]
+fn merged_builtin_catalog_preserves_native_override_precedence() {
+    let home = tempdir();
+    let workdir = tempdir();
+    let _home = HomeGuard::set(&home);
+    write_skill(
+        &workdir.join(".hya/skills/native-authoring"),
+        "agent-bundle-authoring",
+        "Native authoring",
+        "native authoring body",
+    );
+
+    let skills = hya_tool::discover_skills_with_builtins(&workdir);
+    let authoring = skills
+        .iter()
+        .filter(|skill| skill.name == "agent-bundle-authoring")
+        .collect::<Vec<_>>();
+    assert_eq!(authoring.len(), 1);
+    assert_eq!(authoring[0].description, "Native authoring");
+    assert_eq!(authoring[0].content, "native authoring body");
+    assert_eq!(
+        authoring[0].origin,
+        hya_tool::SkillCatalogOrigin::Filesystem
+    );
+    assert!(skills.iter().any(|skill| {
+        skill.name == "secure-self-update" && skill.origin == hya_tool::SkillCatalogOrigin::Embedded
+    }));
+}

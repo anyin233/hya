@@ -8,7 +8,9 @@ use serde_json::{Value, json};
 use thiserror::Error;
 
 use crate::permission::{Action, Resource};
-use crate::skill_catalog::{discover_skills, discover_skills_from_dirs};
+use crate::skill_catalog::{
+    SkillCatalogOrigin, discover_skills_from_dirs, discover_skills_with_builtins,
+};
 use crate::tool::{Tool, ToolCtx, ToolError};
 
 const FILE_SAMPLE_LIMIT: usize = 10;
@@ -53,7 +55,7 @@ impl SkillPlane {
 
     fn require(&self, workdir: &Path, name: &str) -> Result<SkillInfo, SkillError> {
         let skill = match &self.roots {
-            SkillRoots::DefaultForWorkdir => discover_skills(workdir)
+            SkillRoots::DefaultForWorkdir => discover_skills_with_builtins(workdir)
                 .into_iter()
                 .find(|skill| skill.name == name),
             SkillRoots::ExplicitDirs(dirs) => discover_skills_from_dirs(dirs)
@@ -64,9 +66,16 @@ impl SkillPlane {
         let Some(skill) = skill else {
             return Err(SkillError::NotFound(name.to_string()));
         };
+        let dir = match skill.origin {
+            SkillCatalogOrigin::Embedded => None,
+            SkillCatalogOrigin::Filesystem | SkillCatalogOrigin::Virtual => {
+                Some(canonical_or_self(&skill.dir))
+            }
+        };
         Ok(SkillInfo {
             name: skill.name,
-            dir: canonical_or_self(&skill.dir),
+            dir,
+            origin: skill.origin,
             content: skill.content,
         })
     }
@@ -80,7 +89,8 @@ enum SkillError {
 
 struct SkillInfo {
     name: String,
-    dir: PathBuf,
+    dir: Option<PathBuf>,
+    origin: SkillCatalogOrigin,
     content: String,
 }
 
@@ -125,24 +135,50 @@ impl Tool for SkillTool {
             .skills
             .require(&ctx.workdir, &input.name)
             .map_err(|e| ToolError::Other(e.to_string()))?;
-        let files = sample_files(&info.dir, FILE_SAMPLE_LIMIT);
+        let (base, files) = match info.origin {
+            SkillCatalogOrigin::Embedded => (
+                "This skill is embedded in hya; it has no filesystem base directory or sampled files."
+                    .to_string(),
+                String::new(),
+            ),
+            SkillCatalogOrigin::Filesystem | SkillCatalogOrigin::Virtual => {
+                let dir = info.dir.as_deref().unwrap_or(Path::new(""));
+                let files = sample_files(dir, FILE_SAMPLE_LIMIT);
+                (
+                    format!(
+                        "Base directory for this skill: file://{}\nRelative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.\nNote: file list is sampled.",
+                        dir.to_string_lossy()
+                    ),
+                    format!(
+                        "\n\n<skill_files>\n{}\n</skill_files>",
+                        files
+                            .iter()
+                            .map(|file| format!("<file>{}</file>", file.to_string_lossy()))
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    ),
+                )
+            }
+        };
+        let origin = match info.origin {
+            SkillCatalogOrigin::Filesystem => "filesystem",
+            SkillCatalogOrigin::Embedded => "embedded",
+            SkillCatalogOrigin::Virtual => "virtual",
+        };
         let output = format!(
-            "<skill_content name=\"{}\">\n# Skill: {}\n\n{}\n\nBase directory for this skill: file://{}\nRelative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.\nNote: file list is sampled.\n\n<skill_files>\n{}\n</skill_files>\n</skill_content>",
+            "<skill_content name=\"{}\">\n# Skill: {}\n\n{}\n\n{}{}\n</skill_content>",
             info.name,
             info.name,
             info.content.trim(),
-            info.dir.to_string_lossy(),
+            base,
             files
-                .iter()
-                .map(|file| format!("<file>{}</file>", file.to_string_lossy()))
-                .collect::<Vec<_>>()
-                .join("\n")
         );
         Ok(json!({
             "title": format!("Loaded skill: {}", info.name),
             "output": output,
             "metadata": {
                 "name": info.name,
+                "origin": origin,
                 "dir": info.dir,
             },
         }))
