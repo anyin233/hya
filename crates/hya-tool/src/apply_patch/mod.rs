@@ -85,7 +85,7 @@ impl Tool for ApplyPatchTool {
             }
             summaries.push(summary);
         }
-        let diagnostics = lsp_post_edit::touch_many_and_diagnostics(&ctx.lsp, &lsp_paths).await?;
+        let diagnostics = lsp_post_edit::touch_many_and_diagnostics(ctx, &lsp_paths).await?;
 
         let mut output = format!(
             "Success. Updated the following files:\n{}",

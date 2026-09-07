@@ -347,7 +347,7 @@ impl LspProvider for RecordingLsp {
     }
 
     /// Return the fixture diagnostics that Edit must preserve in metadata.
-    async fn diagnostics(&self) -> Result<Value, LspError> {
+    async fn diagnostics(&self, _workdir: &Path, _targets: &[&Path]) -> Result<Value, LspError> {
         Ok(self.diagnostics.clone())
     }
 }
@@ -1606,7 +1606,7 @@ impl LspProvider for CancellingLsp {
     }
 
     /// Return empty diagnostics after the cancellation signal is delivered.
-    async fn diagnostics(&self) -> Result<Value, LspError> {
+    async fn diagnostics(&self, _workdir: &Path, _targets: &[&Path]) -> Result<Value, LspError> {
         Ok(json!({}))
     }
 }

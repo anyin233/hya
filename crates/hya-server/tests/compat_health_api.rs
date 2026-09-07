@@ -136,10 +136,6 @@ async fn request_json(
 async fn compat_global_config_routes_store_runtime_config() {
     let app = router(state().await);
 
-    let (status, body) = request_json(app.clone(), Method::GET, "/global/config", None).await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(body, json!({}));
-
     let (status, body) = request_json(
         app.clone(),
         Method::PATCH,

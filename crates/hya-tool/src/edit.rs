@@ -246,7 +246,7 @@ impl Tool for EditTool {
             );
         }
         let diagnostics =
-            match lsp_post_edit::touch_and_diagnostics(&ctx.lsp, mutation.target_path()).await {
+            match lsp_post_edit::touch_and_diagnostics(ctx, mutation.target_path()).await {
                 Ok(diagnostics) => diagnostics,
                 Err(error) => {
                     return Err(reconcile_committed_stage(

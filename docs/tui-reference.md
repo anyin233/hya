@@ -83,7 +83,7 @@ and usage live in the prompt footer meta line.
   - **Workflow** — selected Workflow/revision availability, run status, graph level, declaration-ordered active Stages, Agent and Stage progress, and bounded current work.
   - **Context** — total tokens of the last output-producing assistant message, percent of the model context limit, USD spend.
   - **MCP** — collapsible when more than two servers (header click); status dots labelled Connected / failed error / Disabled / Needs auth / Needs client ID.
-  - **LSP** — collapsible; connected/error dots; empty states `LSPs are disabled` or `LSPs will activate as files are read`.
+  - **LSP** — collapsible; connected/error dots; empty states `LSPs are disabled` or `LSPs start on code queries or edits`.
   - **Todo** — collapsible; shown only while at least one todo is incomplete.
   - **Modified Files** — collapsible; left-truncated paths with `+additions` / `-deletions`.
   - **Footer** — session directory home-abbreviated with optional `:branch` suffix (dim parent path, bright basename), green dot, `hya <version>`.

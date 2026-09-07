@@ -50,7 +50,7 @@ impl LspProvider for RecordingLsp {
         Ok(())
     }
 
-    async fn diagnostics(&self) -> Result<Value, LspError> {
+    async fn diagnostics(&self, _workdir: &Path, _targets: &[&Path]) -> Result<Value, LspError> {
         Ok(self.diagnostics.clone())
     }
 }

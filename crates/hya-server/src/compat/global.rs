@@ -18,9 +18,11 @@ pub(crate) struct GlobalState {
 
 impl GlobalState {
     #[must_use]
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(lsp_enabled: bool) -> Self {
         Self {
-            config: Arc::new(RwLock::new(json!({}))),
+            config: Arc::new(RwLock::new(
+                json!({"lsp": if lsp_enabled { json!({}) } else { json!(false) }}),
+            )),
         }
     }
 

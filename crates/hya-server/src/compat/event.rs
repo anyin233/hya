@@ -13,8 +13,8 @@ use futures::stream;
 use hya_proto::{Envelope, Event, FinishReason, MessageId, PartId, Role, SessionId};
 use serde::Serialize;
 use serde_json::{Value, json};
-use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
+use tokio_stream::wrappers::{BroadcastStream, WatchStream};
 
 use crate::ServerState;
 
@@ -31,6 +31,14 @@ struct EventPayload<T> {
     #[serde(rename = "type")]
     kind: &'static str,
     properties: T,
+}
+
+fn lsp_updates(
+    receiver: Option<tokio::sync::watch::Receiver<u64>>,
+) -> impl futures::Stream<Item = Value> {
+    stream::iter(receiver)
+        .flat_map(WatchStream::from_changes)
+        .map(|_| json!({"id": event_id(), "type": "lsp.updated", "properties": {}}))
 }
 
 async fn subscribe(State(st): State<ServerState>) -> axum::response::Response {
@@ -66,8 +74,13 @@ async fn subscribe(State(st): State<ServerState>) -> axum::response::Response {
                 Err(_lagged) => None,
             }
         });
+    let lsp = lsp_updates(st.engine.lsp().subscribe())
+        .map(|value| Ok::<_, Infallible>(json_event(&value)));
     super::sse::compat(Sse::new(initial.chain(stream::select(
-        stream::select(stream::select(live, permissions), questions),
+        stream::select(
+            stream::select(stream::select(live, permissions), questions),
+            lsp,
+        ),
         super::event_heartbeat::stream(heartbeat_event),
     ))))
 }
@@ -88,6 +101,10 @@ async fn subscribe_api(
         properties: json!({}),
     });
     let initial = stream::once(async move { Ok::<_, Infallible>(connected) });
+    let lsp_location = location_info.clone();
+    let lsp = lsp_updates(st.engine.lsp().subscribe()).map(move |value| {
+        Ok::<_, Infallible>(json_event(&native_event_payload(&lsp_location, value)))
+    });
     let live_st = st.clone();
     let perm_location = location_info.clone();
     let live = BroadcastStream::new(st.engine.bus().subscribe())
@@ -132,7 +149,10 @@ async fn subscribe_api(
             }
         });
     super::sse::compat(Sse::new(initial.chain(stream::select(
-        stream::select(stream::select(live, permissions), questions),
+        stream::select(
+            stream::select(stream::select(live, permissions), questions),
+            lsp,
+        ),
         super::event_heartbeat::stream(heartbeat_event),
     ))))
 }
@@ -223,9 +243,16 @@ async fn subscribe_global(State(st): State<ServerState>) -> axum::response::Resp
             }
         })
         .flat_map(stream::iter);
+    let lsp_directory = directory.clone();
+    let lsp = lsp_updates(st.engine.lsp().subscribe()).map(move |value| {
+        Ok::<_, Infallible>(json_event(&global_event_payload(&lsp_directory, value)))
+    });
     let heartbeat_directory = directory;
     super::sse::compat(Sse::new(initial.chain(stream::select(
-        stream::select(stream::select(live, permissions), questions),
+        stream::select(
+            stream::select(stream::select(live, permissions), questions),
+            lsp,
+        ),
         super::event_heartbeat::stream(move || global_heartbeat_event(&heartbeat_directory)),
     ))))
 }
@@ -233,10 +260,7 @@ async fn subscribe_global(State(st): State<ServerState>) -> axum::response::Resp
 async fn global_envelope_payloads(st: &ServerState, envelope: Envelope) -> Vec<Value> {
     let raw = workflow_event(&envelope.event).then(|| fallback_payload(&envelope));
     let adapted = api_envelope_payload(st, envelope).await;
-    match raw {
-        Some(raw) => vec![adapted, raw],
-        None => vec![adapted],
-    }
+    supplemental_payloads(adapted, raw)
 }
 
 async fn recover_pending<F, Fut>(
@@ -269,10 +293,7 @@ fn workflow_event(event: &Event) -> bool {
 async fn envelope_payloads(st: &ServerState, envelope: Envelope) -> Vec<Value> {
     let raw = workflow_event(&envelope.event).then(|| fallback_payload(&envelope));
     let adapted = envelope_payload(st, envelope).await;
-    match raw {
-        Some(raw) => vec![adapted, raw],
-        None => vec![adapted],
-    }
+    supplemental_payloads(adapted, raw)
 }
 
 async fn api_envelope_payloads(
@@ -281,11 +302,18 @@ async fn api_envelope_payloads(
     envelope: Envelope,
 ) -> Vec<Value> {
     let raw = workflow_event(&envelope.event).then(|| fallback_payload(&envelope));
-    let adapted = native_event_payload(location, api_envelope_payload(st, envelope).await);
-    match raw {
-        Some(raw) => vec![adapted, native_event_payload(location, raw)],
-        None => vec![adapted],
+    supplemental_payloads(api_envelope_payload(st, envelope).await, raw)
+        .into_iter()
+        .map(|payload| native_event_payload(location, payload))
+        .collect()
+}
+
+fn supplemental_payloads(adapted: Value, raw: Option<Value>) -> Vec<Value> {
+    let mut payloads = vec![adapted];
+    if let Some(raw) = raw {
+        payloads.push(raw);
     }
+    payloads
 }
 
 fn sse_values(values: Vec<Value>) -> Vec<Result<SseEvent, Infallible>> {
