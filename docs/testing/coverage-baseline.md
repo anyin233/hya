@@ -70,7 +70,7 @@ even when a test fails.
 - One test target (`-p hya-app --lib`) failed during collection. It is the
   known load-dependent flake `recovered_promotions_reconstruct_each_parent_binding`
   (see
-  `.trellis/tasks/archive/2026-08/08-05-land-swarm-branch-to-main/findings.md`).
+  `docs/development-history/tasks/archive/2026-08/08-05-land-swarm-branch-to-main/findings.md`).
   Its effect on the totals is negligible, but the numbers above come from a
   run with one red target, not a fully green one.
 - These are **not** a quality target. This is a baseline. Nothing in this task
