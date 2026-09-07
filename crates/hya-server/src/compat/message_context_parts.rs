@@ -54,13 +54,13 @@ fn file_part(
 ) -> Option<Value> {
     let url = file
         .get("uri")
-        .or_else(|| file.get("url"))
-        .and_then(Value::as_str)?;
+        .and_then(Value::as_str)
+        .or_else(|| file.get("url").and_then(Value::as_str))?;
     let mime = file.get("mime").and_then(Value::as_str)?;
     let filename = file
         .get("name")
-        .or_else(|| file.get("filename"))
-        .and_then(Value::as_str);
+        .and_then(Value::as_str)
+        .or_else(|| file.get("filename").and_then(Value::as_str));
     let mut part = json!({
         "id": derived_part_id(seed, kind, index),
         "sessionID": session.to_string(),

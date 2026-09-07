@@ -15,8 +15,8 @@ use hya_proto::{
 };
 use hya_provider::{
     AnthropicMessagesProtocol, Capabilities, CompletionRequest, EventStream, FakeProvider,
-    FakeStep, GoogleProtocol, OpenAiChatProtocol, Protocol, Provider, ProviderError,
-    ProviderRouter, ReasoningEffort,
+    FakeStep, GoogleProtocol, OpenAiChatProtocol, OpenAiResponsesProtocol, Protocol, Provider,
+    ProviderError, ProviderRouter, ReasoningEffort,
 };
 use serde_json::json;
 
@@ -803,4 +803,108 @@ fn anthropic_encodes_tool_use_and_result() {
         "tool_result must reference the tool_use id"
     );
     assert_eq!(result["content"][0]["content"], "hello");
+}
+
+fn image_request() -> CompletionRequest {
+    CompletionRequest {
+        model: ModelRef::new("image-model"),
+        system: None,
+        messages: vec![Message::User {
+            id: MessageId::new(),
+            parts: vec![
+                Part::Text {
+                    id: PartId::new(),
+                    text: "inspect".to_string(),
+                },
+                Part::Media {
+                    id: PartId::new(),
+                    media_type: "image/png".to_string(),
+                    data: "data:image/png;base64,aGVsbG8=".to_string(),
+                    filename: Some("pixel.png".to_string()),
+                },
+            ],
+        }],
+        tools: Vec::new(),
+        temperature: None,
+        max_output_tokens: None,
+        reasoning: None,
+        headers: Default::default(),
+    }
+}
+
+#[test]
+fn openai_responses_encodes_ordered_image_content() {
+    let body = OpenAiResponsesProtocol.encode(&image_request()).unwrap();
+    assert_eq!(
+        body["input"][0]["content"],
+        json!([
+            {"type": "input_text", "text": "inspect"},
+            {"type": "input_image", "image_url": "data:image/png;base64,aGVsbG8="},
+        ])
+    );
+}
+
+#[test]
+fn openai_responses_encodes_raw_jpeg_bytes_without_path_rejection() {
+    let raw_jpeg = "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////2wBDAf//////////////////////////////////////////////////////////////////////////////////////wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAX/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIQAxAAAAH/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oACAEBAAEFAqf/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oACAEDAQE/AT//xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oACAECAQE/AT//2gAMAwEAAgADAAAAEP/EABQQAQAAAAAAAAAAAAAAAAAAABD/2gAIAQMBAT8Qf//EABQRAQAAAAAAAAAAAAAAAAAAABD/2gAIAQIBAT8Qf//Z";
+    let mut request = image_request();
+    if let Message::User { parts, .. } = &mut request.messages[0] {
+        parts[1] = Part::Media {
+            id: PartId::new(),
+            media_type: "image/jpeg".to_string(),
+            data: raw_jpeg.to_string(),
+            filename: Some("pixel.jpg".to_string()),
+        };
+    }
+    let body = OpenAiResponsesProtocol.encode(&request).unwrap();
+    assert_eq!(
+        body["input"][0]["content"][1]["image_url"],
+        format!("data:image/jpeg;base64,{raw_jpeg}")
+    );
+}
+
+#[test]
+fn openai_chat_encodes_ordered_image_content() {
+    let body = OpenAiChatProtocol.encode(&image_request()).unwrap();
+    assert_eq!(
+        body["messages"][0]["content"],
+        json!([
+            {"type": "text", "text": "inspect"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,aGVsbG8="}},
+        ])
+    );
+}
+
+#[test]
+fn anthropic_encodes_ordered_image_content() {
+    let body = AnthropicMessagesProtocol.encode(&image_request()).unwrap();
+    assert_eq!(
+        body["messages"][0]["content"],
+        json!([
+            {"type": "text", "text": "inspect"},
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": "image/png",
+                    "data": "aGVsbG8="
+                }
+            },
+        ])
+    );
+}
+
+#[test]
+fn openai_image_encoders_reject_unsupported_media_without_dropping_it() {
+    let mut request = image_request();
+    if let Message::User { parts, .. } = &mut request.messages[0] {
+        parts[1] = Part::Media {
+            id: PartId::new(),
+            media_type: "audio/wav".to_string(),
+            data: "ZGF0YQ==".to_string(),
+            filename: None,
+        };
+    }
+    assert!(OpenAiResponsesProtocol.encode(&request).is_err());
+    assert!(OpenAiChatProtocol.encode(&request).is_err());
 }

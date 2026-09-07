@@ -29,7 +29,7 @@ const MEDIA_MIMES: &[&str] = &[
 const MAX_MEDIA_ENCODED_BYTES: usize = 28 * 1024 * 1024;
 const MAX_MEDIA_DECODED_BYTES: usize = 20 * 1024 * 1024;
 
-fn emit_assistant(out: &mut Vec<Value>, parts: &[Part]) {
+fn emit_assistant(out: &mut Vec<Value>, parts: &[Part]) -> Result<(), ProviderError> {
     let mut model_parts: Vec<Value> = Vec::new();
     let mut responses: Vec<Value> = Vec::new();
     for part in parts {
@@ -55,7 +55,11 @@ fn emit_assistant(out: &mut Vec<Value>, parts: &[Part]) {
                 }));
             }
             Part::Reasoning { .. } => {}
-            Part::Media { .. } => {}
+            Part::Media { media_type, .. } => {
+                return Err(ProviderError::Incompatible(format!(
+                    "Google does not support assistant media type {media_type}"
+                )));
+            }
         }
     }
     if !model_parts.is_empty() {
@@ -64,6 +68,7 @@ fn emit_assistant(out: &mut Vec<Value>, parts: &[Part]) {
     if !responses.is_empty() {
         out.push(json!({ "role": "user", "parts": responses }));
     }
+    Ok(())
 }
 
 fn user_parts(parts: &[Part]) -> Result<Vec<Value>, ProviderError> {
@@ -150,7 +155,7 @@ impl Protocol for GoogleProtocol {
                 Message::User { parts, .. } => {
                     contents.push(json!({"role":"user","parts": user_parts(parts)?}));
                 }
-                Message::Assistant { parts, .. } => emit_assistant(&mut contents, parts),
+                Message::Assistant { parts, .. } => emit_assistant(&mut contents, parts)?,
             }
         }
         let mut body = json!({ "contents": contents });
