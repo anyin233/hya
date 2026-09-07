@@ -1,0 +1,1 @@
+Exercise current hya interactive TUI features and every canonical builtin tool. Record actual observations; no untested capability may be reported as passed. Real endpoint may be used only with gpt-5.6-luna. Preserve user configuration and unrelated state. Externally destructive operations require isolated substitutes or explicit blocked coverage.

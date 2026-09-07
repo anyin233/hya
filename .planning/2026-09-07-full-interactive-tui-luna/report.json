@@ -1,0 +1,433 @@
+{
+  "version": "0.36.13",
+  "scope": "Current source build; exhaustive source-derived feature-family and canonical builtin inventory, real interactive PTY scenarios plus all existing TUI/workspace/process suites. Not an assertion of exhaustive input/state/path coverage.",
+  "overall": "FAIL — not all features work normally; full all-success live acceptance blocked",
+  "code_changes": false,
+  "runtime_directory": "/tmp/hya-full-tui-luna-7ubc6nig",
+  "endpoint": "https://api.12th.day/v1",
+  "model_restriction": {
+    "allowed_model": "gpt-5.6-luna",
+    "actual_request_models": [
+      "gpt-5.6-luna"
+    ],
+    "actual_model_request_count": 87,
+    "guard_blocked_requests": 0,
+    "other_real_models_requested": false,
+    "notes": "Local automated suites use scripted/FakeLlm fixtures; those are not live endpoint passes. Inventory scouts made no provider test calls."
+  },
+  "verification": {
+    "build": "cargo +1.91.1 build -p hya -p hya-ts -p hya-backend passed; default 1.90 rejected workspace min version",
+    "tui_typecheck": "passed",
+    "tui_suite": {
+      "passed": 101,
+      "failed": 0,
+      "files": 20,
+      "assertions": 2801,
+      "warning": "Possible EventTarget memory leak: 11 paths:changed listeners"
+    },
+    "tool_suite": {
+      "passed": 365,
+      "failed": 0
+    },
+    "workspace_suite": "cargo +1.91.1 test --workspace --jobs 1 --exclude hya-e2e passed",
+    "process_suite": {
+      "passed": 44,
+      "failed": 0,
+      "duration_seconds": 428.55
+    },
+    "not_run": "No fmt/clippy gate: testing-only task, no Rust/TS product source modifications."
+  },
+  "builtin_tools": {
+    "read": {
+      "statuses": [
+        "completed"
+      ],
+      "calls": 7,
+      "verdict": "live_success_observed",
+      "scope_note": "Rendered/replayed parts can include fork copies; calls is not a billable request count."
+    },
+    "write": {
+      "statuses": [],
+      "calls": 0,
+      "verdict": "blocked_by_model_filter",
+      "scope_note": "Rendered/replayed parts can include fork copies; calls is not a billable request count."
+    },
+    "edit": {
+      "statuses": [],
+      "calls": 0,
+      "verdict": "blocked_by_model_filter",
+      "scope_note": "Rendered/replayed parts can include fork copies; calls is not a billable request count."
+    },
+    "ls": {
+      "statuses": [
+        "completed"
+      ],
+      "calls": 1,
+      "verdict": "live_success_observed",
+      "scope_note": "Rendered/replayed parts can include fork copies; calls is not a billable request count."
+    },
+    "glob": {
+      "statuses": [
+        "completed"
+      ],
+      "calls": 1,
+      "verdict": "live_success_observed",
+      "scope_note": "Rendered/replayed parts can include fork copies; calls is not a billable request count."
+    },
+    "find": {
+      "statuses": [
+        "completed"
+      ],
+      "calls": 1,
+      "verdict": "live_success_observed",
+      "scope_note": "Rendered/replayed parts can include fork copies; calls is not a billable request count."
+    },
+    "grep": {
+      "statuses": [
+        "completed"
+      ],
+      "calls": 1,
+      "verdict": "live_success_observed",
+      "scope_note": "Rendered/replayed parts can include fork copies; calls is not a billable request count."
+    },
+    "question": {
+      "statuses": [
+        "completed"
+      ],
+      "calls": 2,
+      "verdict": "live_success_observed",
+      "scope_note": "Rendered/replayed parts can include fork copies; calls is not a billable request count."
+    },
+    "lsp": {
+      "statuses": [
+        "error"
+      ],
+      "calls": 3,
+      "verdict": "runtime_unavailable",
+      "scope_note": "Rendered/replayed parts can include fork copies; calls is not a billable request count."
+    },
+    "skill": {
+      "statuses": [
+        "completed",
+        "error"
+      ],
+      "calls": 6,
+      "verdict": "live_success_observed",
+      "scope_note": "Rendered/replayed parts can include fork copies; calls is not a billable request count."
+    },
+    "list_agents": {
+      "statuses": [
+        "completed"
+      ],
+      "calls": 1,
+      "verdict": "live_success_observed",
+      "scope_note": "Rendered/replayed parts can include fork copies; calls is not a billable request count."
+    },
+    "ask_user": {
+      "statuses": [
+        "completed"
+      ],
+      "calls": 1,
+      "verdict": "live_success_observed",
+      "scope_note": "Rendered/replayed parts can include fork copies; calls is not a billable request count."
+    },
+    "task": {
+      "statuses": [
+        "completed",
+        "error"
+      ],
+      "calls": 3,
+      "verdict": "live_success_observed",
+      "scope_note": "Rendered/replayed parts can include fork copies; calls is not a billable request count."
+    },
+    "workflow": {
+      "statuses": [
+        "completed"
+      ],
+      "calls": 4,
+      "verdict": "live_success_observed",
+      "scope_note": "Rendered/replayed parts can include fork copies; calls is not a billable request count."
+    },
+    "send": {
+      "statuses": [
+        "completed",
+        "error"
+      ],
+      "calls": 6,
+      "verdict": "live_success_observed",
+      "scope_note": "Rendered/replayed parts can include fork copies; calls is not a billable request count."
+    },
+    "announce": {
+      "statuses": [
+        "completed",
+        "error"
+      ],
+      "calls": 2,
+      "verdict": "live_success_observed",
+      "scope_note": "Rendered/replayed parts can include fork copies; calls is not a billable request count."
+    },
+    "roster": {
+      "statuses": [
+        "completed"
+      ],
+      "calls": 4,
+      "verdict": "live_success_observed",
+      "scope_note": "Rendered/replayed parts can include fork copies; calls is not a billable request count."
+    },
+    "channels": {
+      "statuses": [
+        "completed"
+      ],
+      "calls": 3,
+      "verdict": "live_success_observed",
+      "scope_note": "Rendered/replayed parts can include fork copies; calls is not a billable request count."
+    },
+    "join": {
+      "statuses": [
+        "completed",
+        "error"
+      ],
+      "calls": 3,
+      "verdict": "live_success_observed",
+      "scope_note": "Rendered/replayed parts can include fork copies; calls is not a billable request count."
+    },
+    "leave": {
+      "statuses": [
+        "completed",
+        "error"
+      ],
+      "calls": 3,
+      "verdict": "live_success_observed",
+      "scope_note": "Rendered/replayed parts can include fork copies; calls is not a billable request count."
+    },
+    "invalid": {
+      "statuses": [
+        "completed"
+      ],
+      "calls": 1,
+      "verdict": "live_success_observed",
+      "scope_note": "Rendered/replayed parts can include fork copies; calls is not a billable request count."
+    },
+    "bash": {
+      "statuses": [
+        "completed",
+        "error"
+      ],
+      "calls": 9,
+      "verdict": "live_success_observed",
+      "scope_note": "Rendered/replayed parts can include fork copies; calls is not a billable request count."
+    },
+    "apply_patch": {
+      "statuses": [
+        "completed"
+      ],
+      "calls": 3,
+      "verdict": "live_success_observed",
+      "scope_note": "Rendered/replayed parts can include fork copies; calls is not a billable request count."
+    },
+    "webfetch": {
+      "statuses": [
+        "completed"
+      ],
+      "calls": 1,
+      "verdict": "live_success_observed",
+      "scope_note": "Rendered/replayed parts can include fork copies; calls is not a billable request count."
+    },
+    "websearch": {
+      "statuses": [
+        "completed"
+      ],
+      "calls": 1,
+      "verdict": "live_success_observed",
+      "scope_note": "Rendered/replayed parts can include fork copies; calls is not a billable request count."
+    },
+    "todowrite": {
+      "statuses": [
+        "completed"
+      ],
+      "calls": 2,
+      "verdict": "live_success_observed",
+      "scope_note": "Rendered/replayed parts can include fork copies; calls is not a billable request count."
+    },
+    "plan_exit": {
+      "statuses": [
+        "completed"
+      ],
+      "calls": 2,
+      "verdict": "live_success_observed",
+      "scope_note": "Rendered/replayed parts can include fork copies; calls is not a billable request count."
+    }
+  },
+  "builtin_summary": {
+    "canonical": 27,
+    "live_success_observed": 24,
+    "blocked_by_authorized_model": 2,
+    "unavailable_runtime": 1,
+    "hidden_aliases": {
+      "shell": "bash",
+      "patch": "apply_patch",
+      "fetch": "webfetch",
+      "search": "websearch",
+      "todo": "todowrite",
+      "plan": "plan_exit"
+    },
+    "alias_coverage": "registry/tool/process tests; not claimed as additional live advertised tool names"
+  },
+  "failures": [
+    {
+      "id": "F1",
+      "severity": "high",
+      "feature": "Image attachment provider forwarding",
+      "observed": "TUI sent exact red PNG file data to backend and displayed image badge; approved endpoint received only string content, imageCount=0. TUI answer Blue. Direct same endpoint/model with same PNG answered Red.",
+      "evidence": [
+        "74-image-attachment.txt",
+        "75-image-answer.txt",
+        "76-isolated-image-result.txt",
+        "77-isolated-image-answer.txt",
+        "tui-http.jsonl",
+        "provider-audit.jsonl",
+        "direct-image-comparison.json"
+      ],
+      "scope": "Confirmed end-to-end image transport failure on this Responses route; no source fix."
+    },
+    {
+      "id": "F2",
+      "severity": "high",
+      "feature": "Keyboard cancellation",
+      "observed": "Single and double Escape during observed streaming left session busy. Transparent TUI HTTP recorder saw no /abort request. Direct POST /session/{id}/abort stopped the same session.",
+      "evidence": [
+        "60-interrupt-before.txt",
+        "63-interrupt-while-streaming.txt",
+        "64-double-escape.txt",
+        "65-api-abort-recovery.txt",
+        "71-audited-streaming.txt",
+        "72-audited-escape-result.txt",
+        "tui-http.jsonl"
+      ],
+      "scope": "Observed with Linux tmux/OpenTUI. Exact root cause not established; no claim about all terminal encodings."
+    },
+    {
+      "id": "F3",
+      "severity": "medium",
+      "feature": "Advertised builtin skill loading",
+      "observed": "/skills and GET /skill advertise agent-bundle-authoring; skill(name=agent-bundle-authoring) and harness:skill/agent-bundle-authoring fail not found. Native project skill luna-qa loads successfully.",
+      "evidence": [
+        "dialog-skills.txt",
+        "skill-workflow-messages.json",
+        "canonical-skill-lsp-messages.json",
+        "local-skill-messages.json"
+      ],
+      "scope": "Builtin catalog/tool mismatch; not a claim that all skills fail."
+    },
+    {
+      "id": "F4",
+      "severity": "medium",
+      "feature": "Heap snapshot command",
+      "observed": "Write heap snapshot shows Heap snapshot written to undefined. Shipped main supplies no onSnapshot callback.",
+      "evidence": [
+        "13-heap-command.txt",
+        "14-heap-result.txt"
+      ],
+      "scope": "Misleading success/no usable snapshot destination."
+    },
+    {
+      "id": "F5",
+      "severity": "capability_gap",
+      "feature": "LSP",
+      "observed": "documentSymbol fails with No LSP server available for this file type on both txt and real TypeScript fixture. Stock runtime defaults to disconnected plane; only injected test providers found.",
+      "evidence": [
+        "canonical-skill-lsp-messages.json"
+      ],
+      "scope": "Runtime unavailable. Injected LSP tests passing do not prove live LSP integration."
+    }
+  ],
+  "feature_families": [
+    {
+      "name": "Startup/home/exit/resume",
+      "status": "live_pass",
+      "evidence_scope": "Home, real prompt, attached current binaries, graceful exits, persisted Session resume; launcher/PTy lifecycle suites pass."
+    },
+    {
+      "name": "Sessions/search/rename/delete/pin",
+      "status": "live_pass",
+      "evidence_scope": "Rename persisted, search selected fork, disposable session confirmation/delete removed backend row, pins and quick-switch hint observed."
+    },
+    {
+      "name": "Timeline/fork/undo/redo",
+      "status": "live_pass_with_limit",
+      "evidence_scope": "Timeline and fork selectors, new fork record, explicit session navigation, revert divider and restored draft, eventual backend revert=None after Redo. Not every selected-turn mouse branch exercised."
+    },
+    {
+      "name": "Models/agents/variants/configuration",
+      "status": "live_pass_with_limit",
+      "evidence_scope": "Only Luna catalog row; favorite persisted; agent catalog and targeted general model picker; Ctrl+S saved build/general configuration. Variant picker exercised; not every equivalent alias or invalid storage branch manually exercised."
+    },
+    {
+      "name": "Prompt/editing/history/stash",
+      "status": "live_pass_with_limit",
+      "evidence_scope": "Normal input, Unicode-capable terminal, stash/list/pop, editor handoff to real vi and return marker. Existing PTY tests cover command/multiline/history. Not all terminal-specific modifier combinations manually exercised."
+    },
+    {
+      "name": "Shell/permission",
+      "status": "live_pass",
+      "evidence_scope": "Real shell mode, once side effect, deny no side effect, fullscreen, always confirmation and repeated command AA without prompt."
+    },
+    {
+      "name": "Cancellation",
+      "status": "live_fail",
+      "evidence_scope": "F2; API recovery passed."
+    },
+    {
+      "name": "Attachments",
+      "status": "live_fail",
+      "evidence_scope": "Text attachment selection/send passed; PNG badge/HTTP bytes passed but provider image missing F1. PDF/media format permutations not independently verified."
+    },
+    {
+      "name": "Editor/IDE/clipboard",
+      "status": "mixed",
+      "evidence_scope": "Real vi edit-return passed. Clipboard command attempted, no tmux buffer to independently validate native clipboard; no real desktop/IDE session available for IDE-context/notifications."
+    },
+    {
+      "name": "Questions/plan/todos",
+      "status": "live_pass",
+      "evidence_scope": "Single choice PASS, custom text EVIDENCE_LUNA_42, multi A+B and YES, plan_exit approval and PLAN_EXIT_OK, todowrite state transitions."
+    },
+    {
+      "name": "Subagents/observations/team",
+      "status": "live_pass_with_limit",
+      "evidence_scope": "Luna transient child read; roster/vertical/horizontal/read-only panes; resident background start and PING delivery plus RESIDENT_MAIL_OK; channels join/send/leave and announce. Nested/control-owner edge cases covered by existing PTY/process suites, not every live branch."
+    },
+    {
+      "name": "Workflow",
+      "status": "live_pass",
+      "evidence_scope": "Real 4-stage plan→alpha+beta→review, selected ready/running/completed sidebar, all stage output markers. Workflow restart/recovery/model routing covered by automated suites; not every loop/failed-stage case live."
+    },
+    {
+      "name": "Transcript/diff/sidebar/preferences",
+      "status": "live_pass_with_limit",
+      "evidence_scope": "Structured file/bash/diff/question/task/todo output; full-screen diff controls, persisted theme/diff/timestamps/details, 80/140 widths and sidebar overlay. Not every mouse-only decoration/callback independently exercised."
+    },
+    {
+      "name": "Diagnostics/suspend",
+      "status": "mixed",
+      "evidence_scope": "Debug overlay and frontend process suspension observed T state, exact foreground process group SIGCONT restored UI. Heap command failed F4."
+    },
+    {
+      "name": "Skills/MCP/plugins/formatter/bundles",
+      "status": "mixed",
+      "evidence_scope": "Native skill hot discovery and MCP real local handshake/toggle/echo passed; advertised builtin skill fails F3. Plugin/hook/formatter/bundle install/activate/remove exercised by workspace and process fixtures, not a live third-party installation."
+    },
+    {
+      "name": "Backend/SDK/store/providers/CLI/goal/loop/update",
+      "status": "automated_plus_live",
+      "evidence_scope": "Live HTTP/SSE, exec HEADLESS_LUNA_OK, RPC RPC_LUNA_OK, independent goal Achieved(1), compaction summary persisted. Full workspace and process tests cover remaining SDK/native/store/auth/import/provider/bundle/plugin/loop/updater contracts. No production OAuth grant, release publishing or owner-authorized update activation."
+    }
+  ],
+  "full_live_acceptance_limits": [
+    "Canonical write/edit cannot be exposed for Luna without changing the product or model restriction.",
+    "Stock runtime lacks LSP provider wiring.",
+    "Real desktop clipboard/IDE notifications and production OAuth/update activation were not validated.",
+    "Existing automated fixtures supplement, not replace, interactive live verification; not all UI modifiers/media formats/mouse branches were independently exercised."
+  ],
+  "evidence_archive": "evidence.zip"
+}
