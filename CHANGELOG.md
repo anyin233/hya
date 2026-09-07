@@ -1,6 +1,6 @@
-# 0.36.14
+# 0.36.15
 
-## Image attachment transport
+## Escape cancellation
 
-- Preserve image attachment bytes and ordering across live requests and replay for OpenAI Chat, OpenAI Responses, Anthropic, and Google.
-- Accept TUI URL-shaped images and raw JPEG base64, keep text-file references working, and reject unsupported media explicitly.
+- Restore one-press Escape cancellation by separating interrupt bindings from the prompt palette cache.
+- Avoid duplicate in-flight aborts and preserve shell, autocomplete, modal, and observation-pane Escape ownership.
