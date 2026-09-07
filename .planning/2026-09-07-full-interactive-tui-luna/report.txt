@@ -1,0 +1,41 @@
+hya 0.36.13 交互式 TUI 测试报告
+
+结论：不能通过“所有功能均正常”的验收。已按源码盘点 16 个功能族、24 个本地 slash 命令和 27 个 canonical 内置工具，并结合真实 PTY、真实 Luna 请求、现有全部 TUI/workspace/process 测试进行验证。不是所有输入、状态组合与外部集成的穷尽验证。
+
+真实 endpoint：https://api.12th.day/v1
+所有 87 次记录到的真实模型请求均为 gpt-5.6-luna。主代理、子代理、Workflow、压缩、goal evaluator 和直接图片对照共用只允许 Luna 的拦截网关；未请求其他真实模型。自动化套件的本地 FakeLlm 不计为真实 endpoint 通过。
+
+明确问题
+1. 图片未传到模型：TUI 向后端发送了正确红色 PNG，UI 显示图片附件；后端发到 Responses endpoint 的内容只有 string，input_image 数量为 0。新会话仍答 Blue；直接同 endpoint/同模型/同 PNG 答 Red。
+2. Escape 中断无效：观察到流式生成后发送单次、双次 Escape，仍 busy；TUI HTTP 记录没有 /abort。直接 API abort 可停止。仅对本次 Linux/tmux/OpenTUI 环境作此结论，未断言根因。
+3. 内置技能目录不一致：/skills 和 GET /skill 展示 agent-bundle-authoring，但 skill 工具按短名和 harness:skill 名称均报 not found；项目自定义 luna-qa 技能能正常加载。
+4. Heap snapshot 假成功：执行 Write heap snapshot 显示 Heap snapshot written to undefined；当前入口未提供 onSnapshot 回调。
+5. LSP 实际不可用：真实 TypeScript 文件 documentSymbol 也报 No LSP server available for this file type；stock runtime 没有接入 LSP provider。注入式测试成功不代表真实 LSP 可用。
+
+工具覆盖
+27 个 canonical 工具全部列入 report.json。24 个有真实成功结果；lsp 只有不可用错误；write/edit 被现代 gpt-* 模型的硬编码过滤排除，Luna 下无法正常暴露。没有换模型或绕过产品过滤。365 项工具层测试包含 write/edit/LSP 注入路径，全部通过，但不冒充真实交互成功。
+6 个隐藏别名：shell→bash、patch→apply_patch、fetch→webfetch、search→websearch、todo→todowrite、plan→plan_exit。文档声称 28 个工具并把 shell 当 canonical，与源码不符。
+
+真实交互已观察成功
+- 启动、首页、对话、正常退出/恢复；会话搜索/重命名/确认删除；时间线、分叉、撤销/恢复。
+- 模型目录、收藏、Agent models；Ctrl+S 将 build/general 的 Luna 默认保存到隔离配置。
+- 文件 ls/glob/find/grep/read/apply_patch/bash；文本附件；结构化工具块、diff、80/140 列布局和 sidebar。
+- 选择题、自由文本、多选/多题；todo；plan_exit 批准。
+- Shell 权限允许一次、拒绝、始终允许和 fullscreen；文件副作用分别核对。
+- 瞬时子代理、只读观察 pane、split；常驻后台代理、直接消息回信与频道 join/send/leave/announce。
+- Workflow plan→alpha+beta→review 四个阶段完成，均返回预定 marker，侧栏 completed 4/4。
+- MCP 本地 stdio 握手、禁用/启用、真实 echo；自定义 skill 热发现；webfetch/websearch。
+- stash/list/pop；真实 vi 接管并返回编辑内容；导出；主题与显示偏好；压缩持久化；进程 suspend/SIGCONT。
+- headless 输出 HEADLESS_LUNA_OK；RPC 输出 RPC_LUNA_OK；goal evaluator 单轮 Achieved。
+
+自动化结果
+- cargo +1.91.1 build -p hya -p hya-ts -p hya-backend：通过。默认 Rust 1.90 不满足项目 1.91，已改用现有 1.91.1。
+- bun run typecheck：通过。
+- bun test：101 pass / 0 fail，20 文件，2801 assertions；有 paths:changed 11 listeners 的 EventTarget 警告。
+- cargo +1.91.1 test -p hya-tool -- --test-threads=1：365 pass / 0 fail。
+- cargo +1.91.1 test --workspace --jobs 1 --exclude hya-e2e：通过。
+- cargo +1.91.1 test -p hya-e2e -- --test-threads=1：44 pass / 0 fail，428.55 秒。
+
+边界：真实桌面 clipboard/IDE/通知、生产 OAuth 授权、发布和真实 self-update 激活未验证；不具备相应桌面/授权条件或不应在测试中更改生产安装。Plugin/hook/formatter/bundle/loop/updater 等其余契约由现有 workspace/process fixtures 覆盖，不冒充真实第三方安装或每种 TUI 输入分支实测。PDF/媒体格式、所有组合键/鼠标分支未逐一验证。
+
+未修改产品源码、用户配置或真实凭据；未发布/推送/激活更新。测试服务已停止；临时 credential 副本删除。证据见 evidence.zip（终端截图文本、模型限制审计、TUI HTTP 日志、会话投影、SQLite 快照等），机器可读矩阵见 report.json。
