@@ -191,7 +191,7 @@ impl SessionEngine {
         self.admit_shell_user_message(session).await?;
         let projection = self.store.read_projection(session).await?;
         let workdir = session_workdir(agent, &projection);
-        let binding = self.bind_root_runtime(&workdir).await?;
+        let binding = self.bind_session_runtime(session, &workdir).await?;
         let stable_id = projection
             .session
             .agent

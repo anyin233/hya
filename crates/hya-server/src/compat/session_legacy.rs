@@ -110,8 +110,9 @@ async fn command(
     let Some(run) = st.start_run(session) else {
         return Ok(super::errors::legacy_bad_request("Bad request"));
     };
-    if let Some(model) = req.model_ref() {
-        st.engine.switch_model(session, model).await?;
+    let explicit_model = req.model_ref();
+    if let Some(model) = &explicit_model {
+        st.engine.switch_model(session, model.clone()).await?;
     }
     let workdir = super::reference::session_workdir(&st, session).await;
     let CommandRequest {
@@ -135,6 +136,7 @@ async fn command(
             run.token(),
             &external_dirs,
             turn.guidance,
+            explicit_model,
         )
         .await?;
     Ok(Json(load_message(&st, session, message).await?).into_response())
@@ -245,6 +247,7 @@ pub(in crate::compat) async fn run_session_init(
             run.token(),
             &external_dirs,
             turn.guidance,
+            Some(turn.agent.model.clone()),
         )
         .await?;
     Ok(true)

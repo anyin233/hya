@@ -762,11 +762,41 @@ impl BoundSidecarFactory for BundleSidecarFactory {
             }
         }
 
-        let (client, mut guard) = match PluginClient::spawn_bundle(&command, activation_dir.path())
-        {
-            Ok(result) => result,
-            Err(error) => return Err(CoreError::Invalid(format!("spawn bundle sidecar: {error}"))),
-        };
+        let definition = self
+            .binding
+            .resolve_agent(&self.stable_agent_id)
+            .ok_or_else(|| CoreError::AgentDefinitionMissing {
+                agent_id: self.stable_agent_id.clone(),
+            })?;
+        let files = crate::agent_model_config::AgentModelConfigFiles::new(
+            crate::config::active_config_path(),
+        );
+        let config_file = files
+            .path_for(definition.origin)
+            .and_then(|path| std::path::absolute(path).map_err(Into::into))
+            .map_err(|error| {
+                CoreError::Invalid(format!("resolve bundle configuration path: {error}"))
+            })?;
+        let config_dir = config_file.parent().ok_or_else(|| {
+            CoreError::Invalid("bundle configuration path has no parent".to_string())
+        })?;
+        let environment = BTreeMap::from([
+            (
+                "HYA_BUNDLE_CONFIG_DIR".to_string(),
+                config_dir.to_string_lossy().into_owned(),
+            ),
+            (
+                "HYA_BUNDLE_CONFIG_FILE".to_string(),
+                config_file.to_string_lossy().into_owned(),
+            ),
+        ]);
+        let (client, mut guard) =
+            match PluginClient::spawn_bundle(&command, activation_dir.path(), Some(&environment)) {
+                Ok(result) => result,
+                Err(error) => {
+                    return Err(CoreError::Invalid(format!("spawn bundle sidecar: {error}")));
+                }
+            };
         let lifecycle = match start.lifecycle {
             SidecarLifecycle::Transient => ActivationLifecycle::Transient,
             SidecarLifecycle::Resident => ActivationLifecycle::Resident,
@@ -2383,7 +2413,7 @@ async fn resolve_recovered_admission_launches(
             .map(PathBuf::from)
             .unwrap_or_else(|| resolution.base.workdir.clone());
         let binding = engine
-            .bind_root_runtime(&workdir)
+            .bind_session_runtime(intent.parent(), &workdir)
             .await
             .map_err(|_| SpawnError::Unavailable)?;
         let allowed_agents = engine
@@ -4278,7 +4308,12 @@ async fn build_session_engine_with_mcp_defer(
     )
     .await
     .context("load Agent model preferences before engine readiness")?
-    .with_categories(categories.clone());
+    .with_categories(categories.clone())
+    .with_configuration(crate::agent_model_config::AgentModelConfigFiles::new(
+        crate::config::active_config_path(),
+    ))
+    .await
+    .context("load Agent model configuration before engine readiness")?;
     let catalog_refresh = Arc::new(InstalledBundleRefresh::new(bundle_registry_path()));
 
     let rules = PermissionRules::new(vec![
@@ -4441,9 +4476,12 @@ async fn build_session_engine_with_mcp_defer(
             .agent
             .as_ref()
             .unwrap_or(&entry.agent_type);
+        let recovered_binding = engine
+            .bind_session_runtime(actor_id, &workdir)
+            .await
+            .context("bind recovered resident Session model configuration")?;
         let (recovered_binding, recovered_agent) =
-            resolve_recovered_resident_agent(&engine, agent, recorded, &workdir)
-                .await
+            resolve_recovered_resident_agent(&engine, recovered_binding, agent, recorded)
                 .with_context(|| {
                     format!(
                         "resolve recovered resident agent `{}` from current catalog",
@@ -4536,13 +4574,12 @@ async fn build_session_engine_with_mcp_defer(
 /// Binds once from the recorded session workdir and uses the same production
 /// TurnBinding catalog projection as live turns. Resume is definition resolution,
 /// not a new spawn: no `can_spawn`, no AgentSpec synthesis, no general/base fallback.
-async fn resolve_recovered_resident_agent(
+fn resolve_recovered_resident_agent(
     engine: &SessionEngine,
+    binding: TurnBinding,
     base: &AgentSpec,
     recorded_agent: &AgentName,
-    session_workdir: &Path,
 ) -> Result<(TurnBinding, AgentSpec), CoreError> {
-    let binding = engine.bind_root_runtime(session_workdir).await?;
     let agent = engine.agent_spec_for_binding(&binding, base, recorded_agent.as_str())?;
     Ok((binding, agent))
 }
@@ -11662,8 +11699,12 @@ You are the installed resident agent.
         };
         let recorded = AgentName::new("legacy-resident-only");
 
-        let err = match resolve_recovered_resident_agent(&engine, &base, &recorded, &workdir).await
-        {
+        let err = match resolve_recovered_resident_agent(
+            &engine,
+            engine.bind_runtime(&workdir).unwrap(),
+            &base,
+            &recorded,
+        ) {
             Ok(_) => panic!("absent recorded id must fail typed definition missing"),
             Err(err) => err,
         };
@@ -11699,10 +11740,13 @@ You are the installed resident agent.
         };
         let recorded = AgentName::new("resident-helper");
 
-        let (_binding, resolved) =
-            resolve_recovered_resident_agent(&engine, &base, &recorded, &workdir)
-                .await
-                .expect("exact catalog hit must resolve without can_spawn");
+        let (_binding, resolved) = resolve_recovered_resident_agent(
+            &engine,
+            engine.bind_runtime(&workdir).unwrap(),
+            &base,
+            &recorded,
+        )
+        .expect("exact catalog hit must resolve without can_spawn");
         assert_eq!(
             resolved.name.as_str(),
             "resident-helper",
@@ -11745,10 +11789,13 @@ You are the installed resident agent.
         };
         let recorded = AgentName::new("resident-helper");
 
-        let (_binding, resolved) =
-            resolve_recovered_resident_agent(&engine, &base, &recorded, &session_dir)
-                .await
-                .unwrap();
+        let (_binding, resolved) = resolve_recovered_resident_agent(
+            &engine,
+            engine.bind_runtime(&session_dir).unwrap(),
+            &base,
+            &recorded,
+        )
+        .unwrap();
         assert_eq!(resolved.workdir, session_dir);
         assert_ne!(resolved.workdir, base_dir);
     }

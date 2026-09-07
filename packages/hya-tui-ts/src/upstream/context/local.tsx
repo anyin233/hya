@@ -1,4 +1,4 @@
-import { createStore } from "solid-js/store"
+import { createStore, reconcile } from "solid-js/store"
 import { createSimpleContext } from "./helper"
 import { batch, createEffect, createMemo } from "solid-js"
 import { useSync } from "./sync"
@@ -138,10 +138,13 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         ready: boolean
         model: Record<
           string,
-          {
-            providerID: string
-            modelID: string
-          }
+          Record<
+            string,
+            {
+              providerID: string
+              modelID: string
+            }
+          >
         >
         recent: {
           providerID: string
@@ -159,8 +162,29 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         favorite: [],
         variant: {},
       })
+      const draftOverrides = new Map<string, AgentModelIdentity>()
 
       const filePath = path.join(paths.state, "model.json")
+      /** Return the root Session key used for request-local model state. */
+      function modelScope(sessionID?: string): string {
+        let root = sessionID
+        const seen = new Set<string>()
+        while (root && !seen.has(root)) {
+          seen.add(root)
+          const parentID = sync.session.get(root)?.parentID
+          if (!parentID) break
+          root = parentID
+        }
+        return root ? `session:${root}` : "draft"
+      }
+
+      function activeModelScope(): string {
+        return modelScope(route.data.type === "session" ? route.data.sessionID : undefined)
+      }
+
+      function modelVariantKey(scope: string, agentID: string, model: { providerID: string; modelID: string }): string {
+        return `${scope}:${agentID}:${model.providerID}/${model.modelID}`
+      }
       const state = {
         pending: false,
       }
@@ -199,10 +223,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         if (args.model) {
           const { providerID, modelID } = parseModel(args.model)
           if (isModelValid({ providerID, modelID })) {
-            return {
-              providerID,
-              modelID,
-            }
+            return { providerID, modelID }
           }
         }
 
@@ -222,20 +243,13 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         if (sync.data.config.model) {
           const { providerID, modelID } = parseModel(sync.data.config.model)
           if (isModelValid({ providerID, modelID })) {
-            return {
-              providerID,
-              modelID,
-            }
+            return { providerID, modelID }
           }
         }
 
-        if (sync.data.provider_catalog_default) {
-          return { ...sync.data.provider_catalog_default }
-        }
+        if (sync.data.provider_catalog_default) return { ...sync.data.provider_catalog_default }
         for (const item of modelStore.recent) {
-          if (isModelValid(item)) {
-            return item
-          }
+          if (isModelValid(item)) return item
         }
 
         const provider = sync.data.provider[0]
@@ -244,38 +258,68 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         const firstModel = Object.values(provider.models)[0]
         const model = defaultModel ?? firstModel?.id
         if (!model) return undefined
-        return {
-          providerID: provider.id,
-          modelID: model,
-        }
+        return { providerID: provider.id, modelID: model }
       })
 
       const currentModel = createMemo(() => {
         const a = agent.current()
+        const scope = activeModelScope()
+        return getFirstValidModel(() => a && modelStore.model[scope]?.[a.name], fallbackModel) ?? undefined
+      })
+      function currentForAgent(agentID: string): AgentModelIdentity | undefined {
+        const scope = activeModelScope()
+        const effective = sync.data.agentModels.find((item) => item.agentID === agentID)?.effective
         return (
           getFirstValidModel(
-            () => a && modelStore.model[a.name],
-            fallbackModel,
+            () => modelStore.model[scope]?.[agentID],
+            effective ? () => ({ providerID: effective.providerID, modelID: effective.modelID }) : () => undefined,
           ) ?? undefined
         )
-      })
+      }
+
       /**
-       * Persist a deliberate current-root model choice when the Agent is eligible.
-       * @param agentID Stable current root Agent id.
-       * @param model Selected base-model identity.
-       * @returns The committed effective base-model identity, or undefined after failure.
+       * Persist a deliberate Agent model choice at the correct authority.
+       * Configured Agents use root-Session scope when supported; unconfigured
+       * Agents retain the remembered preference route for legacy behavior.
        */
-      async function persistCurrentAgentModel(
+      async function persistAgentModel(
         agentID: string,
         model: AgentModelIdentity,
       ): Promise<AgentModelIdentity | undefined> {
         const row = sync.data.agentModels.find((item) => item.agentID === agentID)
-        if (!sync.data.capabilities.agentModelPreferences || !row || row.configured || !row.settable) return model
+        const sessionID = route.data.type === "session" ? route.data.sessionID : undefined
+        if (row?.configured && sync.data.capabilities.agentModelConfiguration) {
+          // Before the first Session exists, keep the choice in the draft map.
+          if (!sessionID) {
+            draftOverrides.set(agentID, model)
+            return model
+          }
+          try {
+            const committed = await sync.setAgentModelPreference(agentID, model, {
+              scope: "session",
+              sessionID,
+            })
+            return {
+              providerID: committed.effective.providerID,
+              modelID: committed.effective.modelID,
+            }
+          } catch (error) {
+            toast.show({
+              variant: "error",
+              message: error instanceof Error ? error.message : String(error),
+              duration: 5000,
+            })
+            return undefined
+          }
+        }
+        if (
+          (!sync.data.capabilities.agentModelPreferences && !sync.data.capabilities.agentModelConfiguration) ||
+          !row ||
+          !row.settable
+        )
+          return model
         try {
-          const committed = await sync.setAgentModelPreference(agentID, {
-            providerID: model.providerID,
-            modelID: model.modelID,
-          })
+          const committed = await sync.setAgentModelPreference(agentID, model)
           return {
             providerID: committed.effective.providerID,
             modelID: committed.effective.modelID,
@@ -290,31 +334,25 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         }
       }
 
-      /**
-       * Apply one validated model identity to current-run state.
-       * @param agentID Stable current root Agent id.
-       * @param model Selected base-model identity.
-       * @param recent Whether to add the model to recent presentation state.
-       * @returns Nothing.
-       */
+      /** Apply a validated model identity to one Agent in the active scope. */
       function applyModelSelection(
         agentID: string,
         model: { providerID: string; modelID: string },
         recent: boolean,
+        scope = activeModelScope(),
       ): void {
-        setModelStore("model", agentID, model)
+        setModelStore("model", scope, (current) => ({ ...current, [agentID]: model }))
         if (!recent) return
         setModelStore("recent", recentModels(model, modelStore.recent))
         save()
       }
 
       /**
-       * Persist a deliberate selection before changing current-run state.
-       * @param model Selected base-model identity.
-       * @param options Optional recent-list update.
-       * @returns True only when the selection was valid and any required PUT succeeded.
+       * Select one explicit Agent target. Non-active targets update only their
+       * target map/backend row; `current()` remains owned by the active Agent.
        */
-      async function selectModel(
+      async function selectAgentModel(
+        agentID: string,
         model: { providerID: string; modelID: string },
         options?: { recent?: boolean },
       ): Promise<boolean> {
@@ -326,15 +364,126 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           })
           return false
         }
-        const currentAgent = agent.current()
-        if (!currentAgent) return false
-        const committed = await persistCurrentAgentModel(currentAgent.name, model)
+        const scope = activeModelScope()
+        const committed = await persistAgentModel(agentID, model)
         if (!committed) return false
-        batch(() => applyModelSelection(currentAgent.name, committed, options?.recent === true))
+        batch(() => applyModelSelection(agentID, committed, options?.recent === true, scope))
         return true
       }
 
+      /** Persist a selection for the active Agent. */
+      async function selectModel(
+        model: { providerID: string; modelID: string },
+        options?: { recent?: boolean },
+      ): Promise<boolean> {
+        const currentAgent = agent.current()
+        if (!currentAgent) return false
+        return selectAgentModel(currentAgent.name, model, options)
+      }
+
+      /**
+       * Promote all draft configured-Agent choices after the first Session exists.
+       * The operation is idempotent: a failed entry remains in the draft map so a
+       * later submit retries it without creating another Session.
+       */
+      async function applyDraftOverrides(sessionID: string): Promise<boolean> {
+        const scope = modelScope(sessionID)
+        for (const [agentID, model] of draftOverrides) {
+          try {
+            const committed = await sync.setAgentModelPreference(agentID, model, {
+              scope: "session",
+              sessionID,
+            })
+            applyModelSelection(
+              agentID,
+              { providerID: committed.effective.providerID, modelID: committed.effective.modelID },
+              false,
+              scope,
+            )
+          } catch (error) {
+            toast.show({
+              variant: "error",
+              message: `Failed to apply pending model overrides: ${error instanceof Error ? error.message : String(error)}`,
+              duration: 5000,
+            })
+            return false
+          }
+        }
+        const draft = modelStore.model.draft
+        if (draft) setModelStore("model", scope, (current) => ({ ...draft, ...current }))
+        for (const [key, value] of Object.entries(modelStore.variant)) {
+          if (!key.startsWith("draft:")) continue
+          setModelStore("variant", `${scope}:${key.slice("draft:".length)}`, value)
+          setModelStore("variant", key, undefined)
+        }
+        draftOverrides.clear()
+        setModelStore("model", "draft", reconcile({}))
+        save()
+        return true
+      }
+
+      /** Save one configured Agent default without erasing a Session/draft override. */
+      async function saveConfiguredDefault(agentID: string, model: AgentModelIdentity): Promise<boolean> {
+        if (!isModelValid(model)) {
+          toast.show({
+            variant: "warning",
+            message: `Model ${model.providerID}/${model.modelID} is not valid`,
+            duration: 3000,
+          })
+          return false
+        }
+        if (!sync.data.capabilities.agentModelConfiguration) {
+          toast.show({
+            variant: "error",
+            message: "Configured model saves are unavailable on this backend",
+            duration: 5000,
+          })
+          return false
+        }
+        const row = sync.data.agentModels.find((item) => item.agentID === agentID)
+        if (!row) {
+          toast.show({ variant: "warning", message: "Agent model configuration is unavailable", duration: 3000 })
+          return false
+        }
+        const sessionID = route.data.type === "session" ? route.data.sessionID : undefined
+        const scope = activeModelScope()
+        try {
+          const committed = await sync.setAgentModelConfiguration(agentID, model, sessionID)
+          const draft = scope === "draft" ? draftOverrides.get(agentID) : undefined
+          const effective = draft ?? committed.sessionOverride ?? committed.effective
+          applyModelSelection(
+            agentID,
+            {
+              providerID: effective.providerID,
+              modelID: effective.modelID,
+            },
+            false,
+            scope,
+          )
+          toast.show({
+            variant: "success",
+            message: committed.configurationPath
+              ? `Saved configured default to ${committed.configurationPath}`
+              : "Saved configured default",
+            duration: 4000,
+          })
+          return true
+        } catch (error) {
+          toast.show({
+            variant: "error",
+            message: error instanceof Error ? error.message : String(error),
+            duration: 5000,
+          })
+          return false
+        }
+      }
+
       return {
+        currentForAgent,
+        scope: activeModelScope,
+        selectForAgent: selectAgentModel,
+        applyDraftOverrides,
+        saveConfiguredDefault,
         current: currentModel,
         get ready() {
           return modelStore.ready
@@ -444,8 +593,10 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           selected() {
             const m = currentModel()
             if (!m) return undefined
-            const key = `${m.providerID}/${m.modelID}`
-            return modelStore.variant[key]
+            const agentID = agent.current()?.name
+            if (!agentID) return undefined
+            const key = modelVariantKey(activeModelScope(), agentID, m)
+            return modelStore.variant[key] ?? modelStore.variant[`${m.providerID}/${m.modelID}`]
           },
           current() {
             const v = this.selected()
@@ -464,7 +615,9 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           set(value: string | undefined) {
             const m = currentModel()
             if (!m) return
-            const key = `${m.providerID}/${m.modelID}`
+            const agentID = agent.current()?.name
+            if (!agentID) return
+            const key = modelVariantKey(activeModelScope(), agentID, m)
             setModelStore("variant", key, value ?? "default")
             save()
           },
@@ -488,6 +641,28 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
     }
 
     const model = createModel()
+    let modelRouteSeen = false
+    let lastModelRouteScope: string | undefined
+    createEffect(() => {
+      const sessionID = route.data.type === "session" ? route.data.sessionID : undefined
+      if (!sync.ready) return
+      if (sessionID && !sync.session.get(sessionID)) return
+      if (!sessionID && !modelRouteSeen) {
+        modelRouteSeen = true
+        lastModelRouteScope = undefined
+        return
+      }
+      if (modelRouteSeen && lastModelRouteScope === sessionID) return
+      modelRouteSeen = true
+      lastModelRouteScope = sessionID
+      void sync.refreshAgentModels(sessionID).catch((error) => {
+        toast.show({
+          variant: "error",
+          message: error instanceof Error ? error.message : String(error),
+          duration: 5000,
+        })
+      })
+    })
 
     function createSession() {
       const [sessionStore, setSessionStore] = createStore<{

@@ -1,6 +1,6 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -653,6 +653,77 @@ impl SessionEngine {
             let _ = refresh.refresh_if_changed(self.runtime.as_ref()).await?;
         }
         Ok(self.runtime.bind_turn(workdir)?)
+    }
+
+    /// Bind a fresh runtime for a Session and apply its root-tree model
+    /// overrides. Catalog refresh and skill discovery happen exactly as for a
+    /// root bind; temporary models are filtered against currently available
+    /// providers without mutating their durable projection.
+    ///
+    /// # Errors
+    /// Returns [`CoreError::Invalid`] when `session` (or its lineage root) is
+    /// absent, plus runtime refresh/provider errors from the fresh bind.
+    pub async fn bind_session_runtime(
+        &self,
+        session: SessionId,
+        workdir: &Path,
+    ) -> Result<TurnBinding, CoreError> {
+        let projection = self.read_projection(session).await?;
+        if projection.session.id != Some(session) {
+            return Err(CoreError::Invalid(format!("session not found: {session}")));
+        }
+        let (root, _) = self.session_lineage(session).await?;
+        let root_projection = self.read_projection(root).await?;
+        if root_projection.session.id != Some(root) {
+            return Err(CoreError::Invalid(format!(
+                "session root not found: {root}"
+            )));
+        }
+        let binding = self.bind_root_runtime(workdir).await?;
+        let overrides = root_projection
+            .session
+            .agent_model_overrides
+            .into_iter()
+            .filter(|(_, model)| self.providers.resolve(model).is_some())
+            .collect::<BTreeMap<_, _>>();
+        Ok(binding.with_session_agent_models(overrides))
+    }
+
+    /// Set or clear one temporary model override on the root Session tree.
+    ///
+    /// The event is always appended to the lineage root so descendants resolve
+    /// the same durable map. Existing bindings remain immutable and therefore
+    /// continue using the model captured before this mutation.
+    ///
+    /// # Errors
+    /// Returns [`CoreError::Invalid`] when `session` (or its lineage root) is
+    /// absent, plus store errors from event emission.
+    pub async fn set_agent_model_override(
+        &self,
+        session: SessionId,
+        agent: AgentName,
+        model: Option<ModelRef>,
+    ) -> Result<(), CoreError> {
+        let projection = self.read_projection(session).await?;
+        if projection.session.id != Some(session) {
+            return Err(CoreError::Invalid(format!("session not found: {session}")));
+        }
+        let (root, _) = self.session_lineage(session).await?;
+        let root_projection = self.read_projection(root).await?;
+        if root_projection.session.id != Some(root) {
+            return Err(CoreError::Invalid(format!(
+                "session root not found: {root}"
+            )));
+        }
+        self.emit(
+            root,
+            Event::SessionAgentModelOverrideSet {
+                session: root,
+                agent,
+                model,
+            },
+        )
+        .await
     }
 
     /// Resolve a catalog agent into an [`AgentSpec`] using `binding`.

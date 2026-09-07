@@ -31,6 +31,10 @@ impl AgentModelControl for FakeAgentModelControl {
         true
     }
 
+    fn configuration_available(&self) -> bool {
+        false
+    }
+
     fn list(
         &self,
         _binding: TurnBinding,
@@ -75,6 +79,16 @@ impl AgentModelControl for FakeAgentModelControl {
         }
         .boxed()
     }
+
+    fn save_configuration(
+        &self,
+        _binding: TurnBinding,
+        _agent_id: String,
+        _model: Option<AgentModelIdentity>,
+        _base_model: hya_proto::ModelRef,
+    ) -> AgentModelControlFuture<'_, AgentModelState> {
+        async move { Err(AgentModelControlError::unavailable()) }.boxed()
+    }
 }
 
 fn row(preference: Option<AgentModelIdentity>) -> AgentModelState {
@@ -99,6 +113,9 @@ fn row(preference: Option<AgentModelIdentity>) -> AgentModelState {
                 AgentModelSource::Default
             },
         },
+        configuration: None,
+        configuration_path: None,
+        session_override: None,
     }
 }
 

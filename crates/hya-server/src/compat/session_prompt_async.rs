@@ -21,6 +21,7 @@ pub(super) async fn prompt_async(
         }
         Err(error) => return Err(error),
     }
+    let explicit_model = req.into_model_ref();
     let run_state = st.clone();
     let engine = st.engine.clone();
     let turn = super::reference::session_agent_with_guidance(&st, session).await;
@@ -35,6 +36,9 @@ pub(super) async fn prompt_async(
         let guard = run;
         publish_session_status(&engine, session, "busy").await;
         let result = async {
+            if let Some(model) = &explicit_model {
+                engine.switch_model(session, model.clone()).await?;
+            }
             engine.admit_user_prompt(session, text).await?;
             let _ = engine.auto_title_session(session, &turn.agent.model).await;
             engine
@@ -44,6 +48,7 @@ pub(super) async fn prompt_async(
                     cancel,
                     &external_dirs,
                     turn.guidance,
+                    explicit_model,
                 )
                 .await?;
             Ok::<(), hya_core::CoreError>(())

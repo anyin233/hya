@@ -51,7 +51,7 @@ async fn bootstrap(
     let workdir = super::location::workdir_at(&st, &location);
 
     let agent_models = if st.agent_model_control.available() {
-        load_agent_models(&st, workdir.clone()).await?
+        load_agent_models(&st, workdir.clone(), model_session(&query)?).await?
     } else {
         Vec::new()
     };
@@ -157,6 +157,7 @@ async fn bootstrap(
         "capabilities": {
             "backgroundSubagents": false,
             "agentModelPreferences": st.agent_model_control.available(),
+            "agentModelConfiguration": st.agent_model_control.configuration_available(),
         },
         "agentModels": agent_models,
         "agents": agents,
@@ -173,10 +174,21 @@ async fn bootstrap(
     })))
 }
 
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum AgentModelScope {
+    #[default]
+    Preference,
+    Session,
+    Configuration,
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SetAgentModelPayload {
     preference: Value,
+    #[serde(default)]
+    scope: AgentModelScope,
 }
 
 async fn agent_models(
@@ -193,7 +205,9 @@ async fn agent_models(
     }
     let location = super::location::LocationRef::from_request(&query, &headers);
     let workdir = super::location::workdir_at(&st, &location);
-    Ok(Json(load_agent_models(&st, workdir).await?))
+    Ok(Json(
+        load_agent_models(&st, workdir, model_session(&query)?).await?,
+    ))
 }
 
 async fn set_agent_model(
@@ -232,24 +246,108 @@ async fn set_agent_model(
     }
     let location = super::location::LocationRef::from_request(&query, &headers);
     let workdir = super::location::workdir_at(&st, &location);
-    let binding = st.engine.bind_root_runtime(&workdir).await?;
+    let session = model_session(&query)?;
+    let binding = model_binding(&st, &workdir, session).await?;
     let base_model = st.agent.model.clone();
-    st.agent_model_control
-        .set(binding, agent_id, preference, base_model)
-        .await
-        .map(Json)
-        .map_err(map_agent_model_error)
+    match payload.scope {
+        AgentModelScope::Preference => st
+            .agent_model_control
+            .set(binding, agent_id, preference, base_model)
+            .await
+            .map(Json)
+            .map_err(map_agent_model_error),
+        AgentModelScope::Configuration => st
+            .agent_model_control
+            .save_configuration(binding, agent_id, preference, base_model)
+            .await
+            .map(Json)
+            .map_err(map_agent_model_error),
+        AgentModelScope::Session => {
+            if !st.agent_model_control.configuration_available() {
+                return Err(map_agent_model_error(AgentModelControlError::unavailable()));
+            }
+            let session = session.ok_or_else(|| {
+                invalid_agent_model_request("Session model selection requires sessionID")
+            })?;
+            if binding
+                .resolve_agent(&agent_id)
+                .is_none_or(|definition| definition.stable_id != agent_id)
+            {
+                return Err(map_agent_model_error(AgentModelControlError::new(
+                    AGENT_MODEL_UNKNOWN_AGENT,
+                    format!("unknown Agent `{agent_id}`"),
+                )));
+            }
+            if let Some(identity) = &preference
+                && !st.engine.provider_catalog().iter().any(|model| {
+                    model.provider_id == identity.provider_id && model.model_id == identity.model_id
+                })
+            {
+                return Err(map_agent_model_error(AgentModelControlError::new(
+                    AGENT_MODEL_UNAVAILABLE,
+                    "model is unavailable in the provider catalog",
+                )));
+            }
+            let model = preference.map(|identity| {
+                hya_proto::ModelRef::new(format!("{}/{}", identity.provider_id, identity.model_id,))
+            });
+            st.engine
+                .set_agent_model_override(session, hya_proto::AgentName::new(&agent_id), model)
+                .await?;
+            let rows = load_agent_models(&st, workdir, Some(session)).await?;
+            rows.into_iter()
+                .find(|row| row.agent_id == agent_id)
+                .map(Json)
+                .ok_or_else(|| {
+                    map_agent_model_error(AgentModelControlError::new(
+                        AGENT_MODEL_UNKNOWN_AGENT,
+                        format!("unknown Agent `{agent_id}`"),
+                    ))
+                })
+        }
+    }
 }
 
 async fn load_agent_models(
     st: &ServerState,
     workdir: std::path::PathBuf,
+    session: Option<SessionId>,
 ) -> Result<Vec<AgentModelState>, ApiError> {
-    let binding = st.engine.bind_root_runtime(&workdir).await?;
+    let binding = model_binding(st, &workdir, session).await?;
     st.agent_model_control
         .list(binding, st.agent.model.clone())
         .await
         .map_err(map_agent_model_error)
+}
+
+fn model_session(query: &BTreeMap<String, String>) -> Result<Option<SessionId>, ApiError> {
+    query
+        .get("sessionID")
+        .map(|id| parse_session(id))
+        .transpose()
+}
+
+async fn model_binding(
+    st: &ServerState,
+    workdir: &std::path::Path,
+    session: Option<SessionId>,
+) -> Result<hya_core::TurnBinding, ApiError> {
+    match session {
+        Some(session) => {
+            crate::ensure_session_exists(st, session).await?;
+            let projection = st.engine.read_projection(session).await?;
+            let session_workdir = projection
+                .session
+                .workdir
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| workdir.to_path_buf());
+            Ok(st
+                .engine
+                .bind_session_runtime(session, &session_workdir)
+                .await?)
+        }
+        None => Ok(st.engine.bind_root_runtime(workdir).await?),
+    }
 }
 
 fn validate_identity(identity: &AgentModelIdentity) -> Result<(), ApiError> {

@@ -97,9 +97,9 @@ pub use prompt::{
 };
 pub use resident::{ResidentRecovery, ResidentRecoveryReport, ResidentSupervisor};
 pub use runtime_registry::{
-    AgentResourcePolicy, RuntimeCandidate, RuntimeEffectiveManifest, RuntimeRefreshError,
-    RuntimeRegistry, RuntimeSource, RuntimeSourceExport, RuntimeSourceId, RuntimeSourceKind,
-    RuntimeSourceManifest, RuntimeSourceOwner, TurnBinding,
+    AgentModelConfiguration, AgentResourcePolicy, RuntimeCandidate, RuntimeEffectiveManifest,
+    RuntimeRefreshError, RuntimeRegistry, RuntimeSource, RuntimeSourceExport, RuntimeSourceId,
+    RuntimeSourceKind, RuntimeSourceManifest, RuntimeSourceOwner, TurnBinding,
 };
 pub use sidecar::{
     BoundSidecarFactory, SidecarEnvironment, SidecarHandle, SidecarLifecycle, SidecarStart,

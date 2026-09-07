@@ -9,12 +9,17 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use hya_core::{CategoryRegistry, RuntimeRegistry, TurnBinding, resolve_configured_agent_model};
+use hya_core::{
+    AgentModelConfiguration, AgentOrigin, CategoryRegistry, RuntimeRegistry, TurnBinding,
+    resolve_configured_agent_model,
+};
 use hya_proto::{AgentName, ModelRef, OwnerRunId};
 use hya_provider::ProviderRouter;
 use hya_store::{AgentModelPreference, SessionStore, StoreError};
 use thiserror::Error;
 use tokio::sync::Mutex;
+
+use crate::agent_model_config::AgentModelConfigFiles;
 
 /// Stable provider/model identity persisted for one catalog Agent.
 ///
@@ -92,6 +97,9 @@ pub enum AgentModelControlError {
     /// operation.
     #[error(transparent)]
     Store(#[from] StoreError),
+    /// Owning configuration could not be read or atomically updated.
+    #[error("Agent model configuration failed: {0}")]
+    Configuration(#[source] anyhow::Error),
 }
 
 /// Cloneable owner-fenced control for durable Agent model preferences.
@@ -108,6 +116,8 @@ pub struct PersistentAgentModelControl {
     router: Arc<ProviderRouter>,
     categories: Arc<CategoryRegistry>,
     preferences: Arc<Mutex<BTreeMap<String, ModelRef>>>,
+    configuration_files: Option<Arc<AgentModelConfigFiles>>,
+    configuration: Arc<Mutex<AgentModelConfiguration>>,
 }
 
 impl PersistentAgentModelControl {
@@ -144,6 +154,8 @@ impl PersistentAgentModelControl {
             router,
             categories: Arc::new(CategoryRegistry::default()),
             preferences: Arc::new(Mutex::new(preferences)),
+            configuration_files: None,
+            configuration: Arc::new(Mutex::new(AgentModelConfiguration::default())),
         })
     }
 
@@ -158,11 +170,51 @@ impl PersistentAgentModelControl {
         self
     }
 
+    /// Load user-owned model configuration before publishing runtime readiness.
+    ///
+    /// Pure preference controls remain filesystem-independent until this is called.
+    /// Configuration read/parse failures leave the prior runtime snapshot intact.
+    pub async fn with_configuration(
+        mut self,
+        files: AgentModelConfigFiles,
+    ) -> Result<Self, AgentModelControlError> {
+        let files = Arc::new(files);
+        let reader = files.clone();
+        let configuration = tokio::task::spawn_blocking(move || reader.load())
+            .await
+            .map_err(|error| AgentModelControlError::Configuration(error.into()))?
+            .map_err(AgentModelControlError::Configuration)?;
+        self.runtime
+            .publish_agent_model_configuration(configuration.clone());
+        *self.configuration.lock().await = configuration;
+        self.configuration_files = Some(files);
+        Ok(self)
+    }
+
+    fn configuration_path(
+        &self,
+        binding: &TurnBinding,
+        agent_id: &str,
+    ) -> Result<Option<String>, AgentModelControlError> {
+        let Some(files) = &self.configuration_files else {
+            return Ok(None);
+        };
+        let definition = binding.agent_catalog().resolve(agent_id).ok_or_else(|| {
+            AgentModelControlError::UnknownAgent {
+                agent_id: agent_id.to_string(),
+            }
+        })?;
+        files
+            .path_for(definition.origin)
+            .map(|path| Some(path.to_string_lossy().into_owned()))
+            .map_err(AgentModelControlError::Configuration)
+    }
+
     /// Resolve one Agent's effective model from a captured runtime binding.
     ///
-    /// Direct model and category policy win first. An exact, currently
-    /// available remembered model wins over the supplied process base only
-    /// when the Agent has no explicit model policy.
+    /// Captured Session and user-file models override authored direct/category
+    /// policy. An available remembered model wins over the process base only
+    /// when none of those explicit model layers applies.
     ///
     /// # Errors
     /// Returns [`AgentModelControlError::UnknownAgent`] when `stable_id` does
@@ -230,7 +282,8 @@ impl PersistentAgentModelControl {
     ) -> Result<Option<ModelRef>, AgentModelControlError> {
         let mut preferences = self.preferences.lock().await;
         let definition = binding
-            .resolve_agent(stable_id)
+            .agent_catalog()
+            .resolve(stable_id)
             .filter(|definition| definition.stable_id == stable_id)
             .ok_or_else(|| AgentModelControlError::UnknownAgent {
                 agent_id: stable_id.to_string(),
@@ -238,7 +291,8 @@ impl PersistentAgentModelControl {
 
         let published = match identity {
             Some(identity) => {
-                if definition.model_policy.model.is_some()
+                if binding.configured_agent_model(stable_id).is_some()
+                    || definition.model_policy.model.is_some()
                     || definition.model_policy.category.is_some()
                 {
                     return Err(AgentModelControlError::ConfiguredAgent {
@@ -287,18 +341,24 @@ impl hya_server::AgentModelControl for PersistentAgentModelControl {
         true
     }
 
+    fn configuration_available(&self) -> bool {
+        self.configuration_files.is_some()
+    }
+
     fn list(
         &self,
         binding: TurnBinding,
         base_model: ModelRef,
     ) -> hya_server::AgentModelControlFuture<'_, Vec<hya_server::AgentModelState>> {
         Box::pin(async move {
-            Ok(project_agent_models(
-                &binding,
-                &self.categories,
-                &self.router,
-                &base_model,
-            ))
+            let mut rows =
+                project_agent_models(&binding, &self.categories, &self.router, &base_model);
+            for row in &mut rows {
+                row.configuration_path = self
+                    .configuration_path(&binding, &row.agent_id)
+                    .map_err(server_control_error)?;
+            }
+            Ok(rows)
         })
     }
 
@@ -317,7 +377,8 @@ impl hya_server::AgentModelControl for PersistentAgentModelControl {
                 .await
                 .map_err(server_control_error)?;
             let definition = binding
-                .resolve_agent(&agent_id)
+                .agent_catalog()
+                .resolve(&agent_id)
                 .filter(|definition| definition.stable_id == agent_id)
                 .ok_or_else(|| {
                     hya_server::AgentModelControlError::new(
@@ -326,7 +387,7 @@ impl hya_server::AgentModelControl for PersistentAgentModelControl {
                     )
                 })?;
             let models = self.router.catalog();
-            Ok(project_agent_model(
+            let mut row = project_agent_model(
                 &binding,
                 &self.categories,
                 &self.router,
@@ -334,7 +395,93 @@ impl hya_server::AgentModelControl for PersistentAgentModelControl {
                 &base_model,
                 preference.as_ref(),
                 definition,
-            ))
+            );
+            row.configuration_path = self
+                .configuration_path(&binding, &agent_id)
+                .map_err(server_control_error)?;
+            Ok(row)
+        })
+    }
+
+    fn save_configuration(
+        &self,
+        binding: TurnBinding,
+        agent_id: String,
+        preference: Option<hya_server::AgentModelIdentity>,
+        base_model: ModelRef,
+    ) -> hya_server::AgentModelControlFuture<'_, hya_server::AgentModelState> {
+        Box::pin(async move {
+            let files = self
+                .configuration_files
+                .clone()
+                .ok_or_else(hya_server::AgentModelControlError::unavailable)?;
+            let definition = binding
+                .agent_catalog()
+                .resolve(&agent_id)
+                .filter(|definition| definition.stable_id == agent_id)
+                .ok_or_else(|| {
+                    server_control_error(AgentModelControlError::UnknownAgent {
+                        agent_id: agent_id.clone(),
+                    })
+                })?;
+            let models = self.router.catalog();
+            if let Some(identity) = &preference
+                && !model_is_available(&models, identity)
+            {
+                return Err(server_control_error(
+                    AgentModelControlError::ModelUnavailable {
+                        provider_id: identity.provider_id.clone(),
+                        model_id: identity.model_id.clone(),
+                    },
+                ));
+            }
+            let model = preference.map(|identity| {
+                AgentModelIdentity::new(identity.provider_id, identity.model_id).model_ref()
+            });
+            let bundle_id = definition.origin.bundle_id().map(str::to_string);
+            let writer_bundle = bundle_id.clone();
+            let writer_agent = agent_id.clone();
+            let writer_model = model.clone();
+            let _mutation = self.preferences.lock().await;
+            let mut configuration = self.configuration.lock().await;
+            let path = tokio::task::spawn_blocking(move || {
+                let origin = writer_bundle
+                    .as_deref()
+                    .map_or(AgentOrigin::Builtin, |bundle_id| AgentOrigin::Bundle {
+                        bundle_id,
+                    });
+                files.set_model(origin, &writer_agent, writer_model.as_ref())
+            })
+            .await
+            .map_err(|error| {
+                server_control_error(AgentModelControlError::Configuration(error.into()))
+            })?
+            .map_err(|error| server_control_error(AgentModelControlError::Configuration(error)))?;
+            let configured_models = match bundle_id {
+                Some(bundle_id) => configuration.bundles.entry(bundle_id).or_default(),
+                None => &mut configuration.builtin,
+            };
+            if let Some(model) = model {
+                configured_models.insert(agent_id.clone(), model);
+            } else {
+                configured_models.remove(&agent_id);
+            }
+            self.runtime
+                .publish_agent_model_configuration(configuration.clone());
+            let fresh = binding
+                .clone()
+                .with_agent_model_configuration(configuration.clone());
+            let mut row = project_agent_model(
+                &fresh,
+                &self.categories,
+                &self.router,
+                &models,
+                &base_model,
+                fresh.agent_model_preference(&agent_id),
+                definition,
+            );
+            row.configuration_path = Some(path.to_string_lossy().into_owned());
+            Ok(row)
         })
     }
 }
@@ -360,6 +507,10 @@ fn server_control_error(error: AgentModelControlError) -> hya_server::AgentModel
         AgentModelControlError::Store(error) => (
             hya_server::AGENT_MODEL_CONTROL_FAILURE,
             format!("Agent model preference store failed: {error}"),
+        ),
+        AgentModelControlError::Configuration(error) => (
+            hya_server::AGENT_MODEL_CONTROL_FAILURE,
+            format!("Agent model configuration failed: {error}"),
         ),
     };
     hya_server::AgentModelControlError::new(code, message)
@@ -401,7 +552,16 @@ fn project_agent_model(
     preference_model: Option<&ModelRef>,
     agent: hya_core::AgentDefinition<'_>,
 ) -> hya_server::AgentModelState {
-    let configured = agent.model_policy.model.is_some() || agent.model_policy.category.is_some();
+    let configuration = binding
+        .configured_agent_model(agent.stable_id)
+        .map(|model| model_identity(model.as_str()));
+    let configured = configuration.is_some()
+        || agent.model_policy.model.is_some()
+        || agent.model_policy.category.is_some();
+    let session_override = binding
+        .session_agent_model(agent.stable_id)
+        .map(|model| model_identity(model.as_str()));
+    let agent = binding.resolve_agent(agent.stable_id).unwrap_or(agent);
     let preference = preference_model.map(|model| model_identity(model.as_str()));
     let preference_available = preference
         .as_ref()
@@ -410,7 +570,9 @@ fn project_agent_model(
     let effective_model =
         effective_model_for_definition(categories, router, base_model, preference_model, &agent);
     let effective = model_identity(effective_model.as_str());
-    let source = if configured {
+    let source = if session_override.is_some() {
+        hya_server::AgentModelSource::Session
+    } else if configured {
         hya_server::AgentModelSource::Configured
     } else if preference_available {
         hya_server::AgentModelSource::Remembered
@@ -431,6 +593,9 @@ fn project_agent_model(
             model: effective,
             source,
         },
+        configuration,
+        configuration_path: None,
+        session_override,
     }
 }
 

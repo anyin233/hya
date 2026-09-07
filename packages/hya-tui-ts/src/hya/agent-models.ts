@@ -9,7 +9,7 @@ export type AgentModelIdentity = {
 }
 
 /** Source of the effective model selected for one catalog Agent. */
-export type AgentModelSource = "configured" | "remembered" | "default"
+export type AgentModelSource = "configured" | "remembered" | "session" | "default"
 
 /** Supported catalog Agent modes published by the backend. */
 export type AgentModelMode = "primary" | "subagent" | "system"
@@ -29,6 +29,12 @@ export type AgentModelState = {
   configured: boolean
   preference?: AgentModelIdentity
   preferenceAvailable: boolean
+  /** User-file model, when the owning configuration explicitly sets one. */
+  configuration: AgentModelIdentity | null
+  /** Owning configuration file path, when published by the backend. */
+  configurationPath: string | null
+  /** Temporary root-Session model override, when present. */
+  sessionOverride: AgentModelIdentity | null
   effective: AgentModelEffective
 }
 
@@ -80,7 +86,7 @@ function decodeIdentity(value: unknown): AgentModelIdentity | undefined {
  * @returns The supported source, or undefined.
  */
 function decodeSource(value: unknown): AgentModelSource | undefined {
-  if (value === "configured" || value === "remembered" || value === "default") return value
+  if (value === "configured" || value === "remembered" || value === "session" || value === "default") return value
   return undefined
 }
 
@@ -104,7 +110,7 @@ function decodeMode(value: unknown): AgentModelMode | undefined {
 export function decodeAgentModels(value: unknown, providers: unknown): AgentModelState[] {
   if (!Array.isArray(value)) return []
 
-  // Decode the provider catalog once so stale preference checks use one snapshot.
+  // Decode the provider catalog once so stale preference and effective-model checks use one snapshot.
   const catalog = decodeCatalogProviders(providers)
   const rows: AgentModelState[] = []
 
@@ -117,6 +123,17 @@ export function decodeAgentModels(value: unknown, providers: unknown): AgentMode
     const effectiveRecord = object(record.effective)
     const effectiveIdentity = decodeIdentity(effectiveRecord)
     const effectiveSource = decodeSource(effectiveRecord?.source)
+    const configurationValue = record.configuration
+    const configuration =
+      configurationValue === undefined || configurationValue === null ? null : decodeIdentity(configurationValue)
+    const sessionOverrideValue = record.sessionOverride
+    const sessionOverride =
+      sessionOverrideValue === undefined || sessionOverrideValue === null ? null : decodeIdentity(sessionOverrideValue)
+    const configurationPathValue = record.configurationPath
+    const configurationPath =
+      configurationPathValue === undefined || configurationPathValue === null
+        ? null
+        : boundedIdentityString(configurationPathValue, 16_384) ?? undefined
     if (
       !agentID ||
       !mode ||
@@ -126,21 +143,44 @@ export function decodeAgentModels(value: unknown, providers: unknown): AgentMode
       typeof record.preferenceAvailable !== "boolean" ||
       !effectiveIdentity ||
       !effectiveSource ||
-      !(record.preference === null || object(record.preference))
+      configuration === undefined ||
+      sessionOverride === undefined ||
+      configurationPath === undefined ||
+      !(record.preference === null || record.preference === undefined || object(record.preference))
     ) {
       continue
     }
 
-    const preference = record.preference === null ? undefined : decodeIdentity(record.preference)
-    if (record.preference !== null && !preference) continue
+    const preference = record.preference === null || record.preference === undefined ? undefined : decodeIdentity(record.preference)
+    if (record.preference !== null && record.preference !== undefined && !preference) continue
+
+    // Every identity that can become effective must be present in the exact catalog snapshot.
+    const effectiveAvailable = findCatalogModel(catalog, effectiveIdentity) !== undefined
+    const configurationAvailable = configuration === null || findCatalogModel(catalog, configuration) !== undefined
+    const sessionAvailable = sessionOverride === null || findCatalogModel(catalog, sessionOverride) !== undefined
     const available = preference !== undefined && findCatalogModel(catalog, preference) !== undefined
     const preferenceAvailable = record.preferenceAvailable && available
+    if (!effectiveAvailable || !configurationAvailable || !sessionAvailable) continue
+
+    // A user-file configuration is itself an Agent configuration signal. It may
+    // be temporarily shadowed by a Session override, but never by remembered or
+    // process defaults.
+    if (!record.configured && configuration !== null) continue
+    if (record.configured && (record.settable || (effectiveSource !== "configured" && effectiveSource !== "session"))) continue
+    if (!record.configured && effectiveSource === "configured") continue
     if (
-      record.configured
-        ? record.settable || effectiveSource !== "configured"
-        : !record.settable || effectiveSource === "configured"
+      configuration !== null &&
+      effectiveSource !== "session" &&
+      (effectiveSource !== "configured" ||
+        configuration.providerID !== effectiveIdentity.providerID ||
+        configuration.modelID !== effectiveIdentity.modelID)
     ) {
       continue
+    }
+    if (effectiveSource === "session") {
+      if (!sessionOverride || !sessionAvailable || sessionOverride.providerID !== effectiveIdentity.providerID || sessionOverride.modelID !== effectiveIdentity.modelID) {
+        continue
+      }
     }
     if (
       effectiveSource === "remembered" &&
@@ -161,6 +201,9 @@ export function decodeAgentModels(value: unknown, providers: unknown): AgentMode
       settable: record.settable,
       ...(preference ? { preference } : {}),
       preferenceAvailable,
+      configuration,
+      configurationPath,
+      sessionOverride,
       effective: {
         providerID: effectiveIdentity.providerID,
         modelID: effectiveIdentity.modelID,
@@ -185,16 +228,40 @@ export function supportsAgentModelPreferences(capabilities: unknown): boolean {
 }
 
 /**
+ * Check whether bootstrap capabilities advertise Session-scoped overrides and configuration saves.
+ *
+ * @param capabilities - Unknown bootstrap capability metadata
+ * @returns True only for an exact boolean `agentModelConfiguration: true` flag
+ */
+export function supportsAgentModelConfiguration(capabilities: unknown): boolean {
+  const record = object(capabilities)
+  return record?.agentModelConfiguration === true
+}
+
+/**
  * Convert normalized Agent rows to target-dialog options while retaining disabled rows.
  *
  * @param rows - Normalized Agent model rows from synchronized state
+ * @param options - Whether the backend supports Session-scoped configured-Agent targets
  * @returns One display option per catalog Agent, ordered Main, Subagent, System
  */
-export function agentModelTargetOptions(rows: readonly AgentModelState[]): AgentModelTargetOption[] {
-  const options = rows.map((row) => {
+export function agentModelTargetOptions(
+  rows: readonly AgentModelState[],
+  options: { supportsSessionOverrides?: boolean } | boolean = {},
+): AgentModelTargetOption[] {
+  const supportsSessionOverrides = typeof options === "boolean" ? options : options.supportsSessionOverrides === true
+  const optionsList = rows.map((row) => {
     const details: string[] = []
     if (row.description) details.push(row.description)
-    if (row.configured) details.push("Configured by Agent policy")
+    if (row.configuration) {
+      details.push(`configured: ${row.configuration.providerID}/${row.configuration.modelID}`)
+    } else if (row.configured) {
+      details.push("Configured by Agent policy")
+    }
+    if (row.configurationPath) details.push(`path: ${row.configurationPath}`)
+    if (row.sessionOverride) {
+      details.push(`session: ${row.sessionOverride.providerID}/${row.sessionOverride.modelID}`)
+    }
     if (row.preference && !row.preferenceAvailable) details.push("stale preference")
     details.push(`${row.effective.source}: ${row.effective.providerID}/${row.effective.modelID}`)
     if (row.hidden) details.push("internal")
@@ -204,12 +271,12 @@ export function agentModelTargetOptions(rows: readonly AgentModelState[]): Agent
       title: row.agentID,
       description: details.join(" · "),
       category: row.hidden ? "System" : row.mode === "primary" ? "Main" : "Subagent",
-      disabled: row.configured || !row.settable,
+      disabled: supportsSessionOverrides ? false : row.configured || !row.settable,
     } satisfies AgentModelTargetOption
   })
   const categoryOrder = { Main: 0, Subagent: 1, System: 2 } as const
-  options.sort((left, right) => categoryOrder[left.category] - categoryOrder[right.category])
-  return options
+  optionsList.sort((left, right) => categoryOrder[left.category] - categoryOrder[right.category])
+  return optionsList
 }
 
 /**

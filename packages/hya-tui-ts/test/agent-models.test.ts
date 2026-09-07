@@ -3,6 +3,7 @@ import {
   agentModelPickerTitle,
   agentModelTargetOptions,
   decodeAgentModels,
+  supportsAgentModelConfiguration,
   supportsAgentModelPreferences,
 } from "../src/hya/agent-models"
 import { CommandMap, Definitions } from "../src/upstream/config/keybind"
@@ -59,6 +60,9 @@ test("agent model decoder accepts normalized rows and strips unknown fields", ()
       settable: true,
       preference: { providerID: "openai", modelID: "current" },
       preferenceAvailable: true,
+      configuration: null,
+      configurationPath: null,
+      sessionOverride: null,
       effective: { providerID: "openai", modelID: "current", source: "remembered" },
     },
     {
@@ -68,6 +72,9 @@ test("agent model decoder accepts normalized rows and strips unknown fields", ()
       configured: true,
       settable: false,
       preferenceAvailable: false,
+      configuration: null,
+      configurationPath: null,
+      sessionOverride: null,
       effective: { providerID: "openai", modelID: "current", source: "configured" },
     },
   ])
@@ -126,15 +133,20 @@ test("agent model decoder fails closed for malformed rows and stale preferences"
       agentID: "stale",
       mode: "subagent",
       hidden: false,
-      configured: false,
       settable: true,
+      configured: false,
       preference: { providerID: "openai", modelID: "removed" },
       preferenceAvailable: false,
+      configuration: null,
+      configurationPath: null,
+      sessionOverride: null,
       effective: { providerID: "openai", modelID: "current", source: "default" },
     },
   ])
   expect(supportsAgentModelPreferences({ agentModelPreferences: true })).toBe(true)
   expect(supportsAgentModelPreferences({ agentModelPreferences: "true" })).toBe(false)
+  expect(supportsAgentModelConfiguration({ agentModelConfiguration: true })).toBe(true)
+  expect(supportsAgentModelConfiguration({ agentModelConfiguration: "true" })).toBe(false)
   expect(supportsAgentModelPreferences(undefined)).toBe(false)
 })
 
@@ -165,8 +177,42 @@ test("agent model decoder preserves model-local slashes and rejects inconsistent
     {
       ...remembered,
       preference: { providerID: "openai", modelID: "family/name" },
+      preferenceAvailable: true,
+      configuration: null,
+      configurationPath: null,
+      sessionOverride: null,
       effective: { providerID: "openai", modelID: "family/name", source: "remembered" },
     },
+  ])
+})
+
+test("agent model decoder accepts Session-effective configured rows and preserves provenance", () => {
+  const rows = decodeAgentModels(
+    [
+      {
+        agentID: "build",
+        mode: "primary",
+        hidden: false,
+        configured: true,
+        settable: false,
+        preference: null,
+        preferenceAvailable: false,
+        configuration: { providerID: "openai", modelID: "current" },
+        configurationPath: "/config/hya/config.yaml",
+        sessionOverride: { providerID: "openai", modelID: "family/name" },
+        effective: { providerID: "openai", modelID: "family/name", source: "session" },
+      },
+    ],
+    providers,
+  )
+  expect(rows).toEqual([
+    expect.objectContaining({
+      configured: true,
+      configuration: { providerID: "openai", modelID: "current" },
+      configurationPath: "/config/hya/config.yaml",
+      sessionOverride: { providerID: "openai", modelID: "family/name" },
+      effective: { providerID: "openai", modelID: "family/name", source: "session" },
+    }),
   ])
 })
 
@@ -253,6 +299,7 @@ test("Agent models target options keep every catalog Agent and identify configur
     },
   ])
   expect(agentModelPickerTitle("compaction")).toBe("Select model for compaction")
+  expect(agentModelTargetOptions(rows, { supportsSessionOverrides: true }).find((option) => option.value === "compaction")?.disabled).toBe(false)
 })
 
 test("Agent model command preserves normal Agent cycling", () => {
@@ -262,4 +309,6 @@ test("Agent model command preserves normal Agent cycling", () => {
   expect(Definitions.agent_cycle.default).toBe("tab")
   expect(CommandMap.agent_cycle_reverse).toBe("agent.cycle.reverse")
   expect(Definitions.agent_cycle_reverse.default).toBe("shift+tab")
+  expect(CommandMap.model_config_save).toBe("model.dialog.save_config")
+  expect(Definitions.model_config_save.default).toBe("ctrl+s")
 })

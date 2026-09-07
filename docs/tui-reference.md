@@ -399,7 +399,7 @@ mirrors the static defaults.
 | --- | --- | --- |
 | **Sessions** | `session.list`, `<leader>l`, `/sessions` | Debounced server search, limit 30 results, date/recency grouping, pin/unpin (`ctrl+f`), delete (`ctrl+d`, press again to confirm), rename; footer hint for quick slots when filled |
 | **Model** | `model.list`, `<leader>m`, `/models` | Grouped by provider, favorites section, release-date-aware sort; Favorite on `ctrl+f` |
-| **Agent models** | `agent.model.list`, `/agent-models` | Lists every catalog Agent, including subagents and hidden system Agents. Configured direct/category rows remain visible but disabled; selecting another row reuses the existing model picker and persists immediately through the backend. |
+| **Agent models** | `agent.model.list`, `/agent-models` | Lists every catalog Agent, including subagents and hidden system Agents. Ordinary selection remembers unconfigured defaults or sets a configured Agent's Session override; Ctrl+S explicitly saves the owning configuration file. |
 | **Agent** | `agent.list`, `<leader>a`, `/agents` | Selectable primary agents; subtitle is `native` or the agent description |
 | **Variant** | `variant.list`, `/variants` | Includes a Default entry; palette entry hidden when the model has no variants; otherwise toasts that the model has no variants |
 | **MCP** | `mcp.list`, `/mcps` | Per-server status subtitles; toggle with `dialog.mcp.toggle` (`space`) |
@@ -433,18 +433,25 @@ and **System**, then opens the existing model picker with a title such as
 while Agent model configuration includes primary, subagent, and hidden internal
 rows.
 
-Each row shows its effective `provider/model` and source: `configured`,
-`remembered`, or `default`. A retained model that is no longer in the current
-provider catalog is labeled **stale preference** and is not used. An Agent with
-a direct model or category policy is visible but disabled because configuration
-has higher precedence.
+Each row shows its effective `provider/model` and source: `configured`, `session`,
+`remembered`, or `default`. Stale remembered identities remain visible but are
+not used. On configuration-capable backends, configured Agents are selectable:
+ordinary selection is temporary within the current root Session and descendants.
+Home-screen choices are promoted before the first request. Resuming the same
+Session retains them; a new root returns to defaults. Older backends still show
+configured targets as disabled.
 
-A successful selection writes the base provider/model identity immediately to
-the backend's active Session database; clean TUI shutdown is not required.
-Attached and remote TUIs update that backend, not a local preference file.
-Reasoning variants, Session hydration, CLI overrides, and Workflow Stage routes
-remain request state and are not stored as Agent preferences. Normal `/models`
-selection also remembers the current primary Agent when that Agent is settable.
+For an unconfigured Agent, ordinary selection writes the remembered base model
+to the backend Session database immediately. For any known Agent, **Ctrl+S** in
+the picker explicitly saves the highlighted model as its configured default.
+Built-ins use global Hya configuration; bundle Agents use their bundle-owned
+`agents/<encoded-bundle-id>/config.yml`. The picker shows source and destination
+above its actions. A saved default does not replace a distinct Session choice,
+and failed saves do not change the local selection.
+
+Reasoning variants and explicit request/Workflow routes remain separate from
+saved base-model defaults. Both `/models` and `/agent-models` use this policy;
+changing another target does not change the active Agent's request model.
 
 ### Model recents and favorites
 

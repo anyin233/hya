@@ -736,7 +736,7 @@ impl WorkflowControl {
         let workdir = self.session_workdir(session).await?;
         let binding = match captured_binding {
             Some(binding) => binding,
-            None => self.engine.bind_root_runtime(&workdir).await?,
+            None => self.engine.bind_session_runtime(session, &workdir).await?,
         };
         Ok((workdir, binding))
     }

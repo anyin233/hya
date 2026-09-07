@@ -28,6 +28,7 @@ impl TextPartAccumulator {
             | Event::SessionMoved { .. }
             | Event::SessionTitled { .. }
             | Event::SessionMetadataSet { .. }
+            | Event::SessionAgentModelOverrideSet { .. }
             | Event::SessionPermissionSet { .. }
             | Event::SessionArchived { .. }
             | Event::SessionShareSet { .. }

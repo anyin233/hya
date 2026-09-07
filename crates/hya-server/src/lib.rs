@@ -238,8 +238,9 @@ async fn command(
     let run = st
         .start_run(session)
         .ok_or_else(|| ApiError::conflict("session busy"))?;
-    if let Some(model) = req.model_ref() {
-        st.engine.switch_model(session, model).await?;
+    let explicit_model = req.model_ref();
+    if let Some(model) = &explicit_model {
+        st.engine.switch_model(session, model.clone()).await?;
     }
     let CommandRequest {
         command,
@@ -252,7 +253,17 @@ async fn command(
         .engine
         .admit_command_prompt(session, command, arguments, text)
         .await?;
-    let finish = st.engine.run_turn(session, &st.agent, run.token()).await?;
+    let finish = st
+        .engine
+        .run_turn_with_external_dirs_and_guidance(
+            session,
+            &st.agent,
+            run.token(),
+            &[],
+            None,
+            explicit_model,
+        )
+        .await?;
     Ok(Json(PromptResponse { message, finish }).into_response())
 }
 

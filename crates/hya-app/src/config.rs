@@ -343,6 +343,14 @@ fn config_path() -> Option<PathBuf> {
     path.exists().then_some(path)
 }
 
+/// Configuration file currently used by Hya, or its creation path when absent.
+/// Unlike the creation-only path, this preserves the existing HOME fallback
+/// when an XDG configuration directory has no Hya configuration file yet.
+#[must_use]
+pub fn active_config_path() -> PathBuf {
+    config_path().unwrap_or_else(expected_config_path)
+}
+
 /// Where hya expects its config file, whether or not it currently exists.
 ///
 /// Unlike `config_path` (which only returns a path that exists), this always

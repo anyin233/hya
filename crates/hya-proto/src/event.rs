@@ -44,6 +44,17 @@ pub enum Event {
         /// Absolute workdir for tools.
         workdir: String,
     },
+
+    /// Set or clear one temporary Agent model for the owning root Session tree.
+    /// A `None` model removes the override; unrelated Agent entries remain.
+    SessionAgentModelOverrideSet {
+        /// Root Session whose descendant tree receives this override.
+        session: SessionId,
+        /// Stable Agent id whose temporary model changed.
+        agent: AgentName,
+        /// Temporary model, or `None` to clear it.
+        model: Option<ModelRef>,
+    },
     /// Session workdir changed.
     SessionMoved {
         /// Session this event belongs to.
@@ -807,6 +818,7 @@ impl Event {
     pub fn session(&self) -> Option<SessionId> {
         match self {
             Event::SessionCreated { session, .. }
+            | Event::SessionAgentModelOverrideSet { session, .. }
             | Event::SessionMoved { session, .. }
             | Event::SessionTitled { session, .. }
             | Event::SessionMetadataSet { session, .. }

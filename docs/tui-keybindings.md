@@ -144,6 +144,7 @@ Map of every accepted config key to the command (or role) it drives:
 | `session_quick_switch_9` | `session.quick_switch.9` | `<leader>9` |
 | `stash_delete` | `stash.delete` | `ctrl+d` |
 | `model_favorite_toggle` | `model.dialog.favorite` | `ctrl+f` |
+| `model_config_save` | `model.dialog.save_config` | `ctrl+s` |
 | `model_list` | `model.list` | `<leader>m` |
 | `model_cycle_recent` | `model.cycle_recent` | `f2` |
 | `model_cycle_recent_reverse` | `model.cycle_recent_reverse` | `shift+f2` |
@@ -346,13 +347,14 @@ unmodified Escape returns to Main. See [TUI Reference](tui-reference.md#pane-nav
 | --- | --- | --- | --- |
 | `model.list` | `<leader>m` | `/models` (`/mo`, `/model`) | Open the model picker. |
 | `model.dialog.favorite` | `ctrl+f` | — | Toggle favorite on the selected model (in the model dialog). |
+| `model.dialog.save_config` | `ctrl+s` | — | Save the highlighted base model to the target Agent's owning configuration file; preserve any distinct Session override. |
 | `model.cycle_recent` | `f2` | — | Next recently used model. |
 | `model.cycle_recent_reverse` | `shift+f2` | — | Previous recently used model. |
 | `model.cycle_favorite` | unbound | — | Next favorite model (toasts if none). |
 | `model.cycle_favorite_reverse` | unbound | — | Previous favorite model. |
 | `mcp.list` | unbound | `/mcps` | Open the MCP servers dialog. |
 | `agent.list` | `<leader>a` | `/agents` | Open the agent picker. |
-| `agent.model.list` | unbound | `/agent-models` | Choose any catalog Agent, then persist its default through the model picker. Configured rows are visible but disabled. |
+| `agent.model.list` | unbound | `/agent-models` | Choose any catalog Agent. Ordinary selection remembers unconfigured defaults or sets a configured Agent's Session override; Ctrl+S saves configuration. |
 | `agent.cycle` | `tab` | — | Next primary agent. |
 | `agent.cycle.reverse` | `shift+tab` | — | Previous primary agent. |
 | `variant.cycle` | `ctrl+t` | — | Cycle model variants. |
@@ -546,7 +548,7 @@ submitted as a normal prompt.
 | `/new` | `/clear` | New session (navigate to Home). |
 | `/models` | `/mo`, `/model` | Open the model picker. |
 | `/agents` | — | Open the agent picker. |
-| `/agent-models` | — | Choose and remember a model for any catalog Agent. |
+| `/agent-models` | — | Choose a catalog Agent's remembered/default or Session model; Ctrl+S explicitly saves configuration. |
 | `/mcps` | — | Open the MCP dialog. |
 | `/variants` | `/think` | Open the variant picker. |
 | `/status` | — | Open the status dialog. |

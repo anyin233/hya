@@ -6,6 +6,8 @@
 //! and the HTTP server both call into this crate so they share one composition
 //! path without duplicating bootstrap glue in each binary.
 
+/// Configuration-file model defaults for built-in and installed-bundle Agents.
+pub mod agent_model_config;
 /// Durable per-Agent model preference control owned by the application layer.
 pub mod agent_model_control;
 /// Provider credential files under `~/.config/hya/auth/`.

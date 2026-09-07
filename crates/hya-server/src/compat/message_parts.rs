@@ -192,6 +192,7 @@ fn part_timeline(envs: &[Envelope]) -> BTreeMap<MessageId, Vec<CompatPartCursor>
             | Event::SessionShareCleared { .. }
             | Event::AgentSwitched { .. }
             | Event::ModelSwitched { .. }
+            | Event::SessionAgentModelOverrideSet { .. }
             | Event::SessionStatus { .. }
             | Event::UserPromptContextRecorded { .. }
             | Event::CommandExecuted { .. }
@@ -361,6 +362,7 @@ fn part_times(envs: &[Envelope]) -> BTreeMap<PartId, CompatPartTime> {
             | Event::SessionShareCleared { .. }
             | Event::AgentSwitched { .. }
             | Event::ModelSwitched { .. }
+            | Event::SessionAgentModelOverrideSet { .. }
             | Event::SessionStatus { .. }
             | Event::UserPromptContextRecorded { .. }
             | Event::CommandExecuted { .. }

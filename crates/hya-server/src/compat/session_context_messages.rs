@@ -354,6 +354,7 @@ fn message_content_events(envs: &[Envelope]) -> BTreeMap<MessageId, Vec<ContentC
             | Event::SessionShareCleared { .. }
             | Event::AgentSwitched { .. }
             | Event::ModelSwitched { .. }
+            | Event::SessionAgentModelOverrideSet { .. }
             | Event::SessionStatus { .. }
             | Event::UserPromptContextRecorded { .. }
             | Event::CommandExecuted { .. }
@@ -420,6 +421,7 @@ fn message_times(envs: &[Envelope]) -> BTreeMap<MessageId, MessageTime> {
             | Event::SessionShareCleared { .. }
             | Event::AgentSwitched { .. }
             | Event::ModelSwitched { .. }
+            | Event::SessionAgentModelOverrideSet { .. }
             | Event::SessionStatus { .. }
             | Event::UserPromptContextRecorded { .. }
             | Event::CommandExecuted { .. }
