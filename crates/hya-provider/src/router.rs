@@ -29,6 +29,12 @@ impl ProviderRouter {
         self.providers.is_empty()
     }
 
+    /// Borrow registered routes in registration order.
+    #[must_use]
+    pub fn providers(&self) -> &[Arc<dyn Provider>] {
+        &self.providers
+    }
+
     /// One configured-identity blob per route, or `None` if any route fails closed.
     #[must_use]
     pub fn configured_identities_v1(&self) -> Option<Vec<Vec<u8>>> {

@@ -361,7 +361,10 @@ the PTY sends semantic input.
 ### 3. Contracts
 
 - Components consume only exact backend snapshot rows and typed
-  `source`/`auth`/`result` metadata. No frontend catalog cache or HTTP client.
+  `source`/`auth`/`result` metadata. No frontend-owned catalog file cache or
+  parallel HTTP client.
+- After backend background discovery finishes, Compat SSE `catalog.updated`
+  triggers Sync to re-fetch `/config/providers` and reconcile `sync.data.provider`.
 - Persisted recents, favorites, variants, agent defaults, and Session models stay
   stored but remain hidden when their exact provider/model row is absent.
 - Offline is selectable only when the backend supplies `hya/offline`.

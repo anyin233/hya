@@ -277,7 +277,7 @@ impl SessionEngine {
             let mut attempt = request.clone();
             attempt.model = candidate.clone();
             attempt.reasoning = messages::reasoning_for_model(&attempt.model, request.reasoning);
-            match self.providers.stream(attempt, session, message).await {
+            match self.provider_router().stream(attempt, session, message).await {
                 Ok(stream) => return Ok(stream),
                 Err(error) => {
                     let advance = (error.is_retryable_before_stream()
@@ -318,7 +318,7 @@ impl SessionEngine {
             let mut attempt = request.clone();
             attempt.model = candidate.model.clone();
             attempt.reasoning = Some(candidate.reasoning);
-            match self.providers.stream(attempt, session, message).await {
+            match self.provider_router().stream(attempt, session, message).await {
                 Ok(stream) => {
                     route.selected(index, pending_failure);
                     return Ok(stream);
@@ -811,7 +811,7 @@ impl SessionEngine {
                             crate::category::resolve_configured_agent_model(
                                 &definition.model_policy,
                                 &self.model_categories,
-                                &|candidate| self.providers.resolve(candidate).is_some(),
+                                &|candidate| self.provider_router().resolve(candidate).is_some(),
                             )
                         })
                 })
@@ -830,7 +830,7 @@ impl SessionEngine {
             // compaction threshold, so resolve it before deciding.
             let resolved_threshold = crate::compaction::resolved_threshold(
                 &self.compaction,
-                self.providers.capabilities(&model).map(|c| c.max_context),
+                self.provider_router().capabilities(&model).map(|c| c.max_context),
             );
             // One running token count for the whole reduction sequence. It starts
             // from the provider-measured value when available, then tracks
@@ -883,12 +883,12 @@ impl SessionEngine {
                     &definition,
                     &self.model_categories,
                     binding.agent_model_preference(definition.stable_id),
-                    &|candidate| self.providers.resolve(candidate).is_some(),
+                    &|candidate| self.provider_router().resolve(candidate).is_some(),
                 );
                 let compaction_model = options.model.clone().unwrap_or_else(|| model.clone());
                 let compaction_prompt = definition.prompt;
                 match self
-                    .providers
+                    .provider_router()
                     .compact_if_supported(&compaction_model, &messages, compaction_prompt)
                     .await
                 {

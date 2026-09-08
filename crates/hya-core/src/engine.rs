@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
 use hya_proto::{
@@ -335,8 +335,8 @@ impl hya_tool::WorkflowRequestSink for BoundWorkflowSink {
 /// events to the store and publish on the bus; observers never write the log.
 pub struct SessionEngine {
     store: SessionStore,
-    providers: Arc<ProviderRouter>,
-    catalog: Arc<ProviderCatalogSnapshot>,
+    providers: RwLock<Arc<ProviderRouter>>,
+    catalog: RwLock<Arc<ProviderCatalogSnapshot>>,
     /// Cross-model failover plane: preferred [`ModelRef`] → its ordered
     /// candidate chain (the preferred model itself first). Empty by default,
     /// which keeps turn streaming byte-identical to a direct router call.
@@ -393,8 +393,8 @@ impl SessionEngine {
         });
         Self {
             store,
-            providers,
-            catalog,
+            providers: RwLock::new(providers),
+            catalog: RwLock::new(catalog),
             model_fallbacks: HashMap::new(),
             model_categories: Arc::new(CategoryRegistry::default()),
             runtime,
@@ -598,22 +598,47 @@ impl SessionEngine {
         &self.formatter
     }
 
-    /// Provider catalog models exposed to the UI/API without per-read allocation.
+    /// Provider catalog models exposed to the UI/API.
     #[must_use]
-    pub fn provider_catalog(&self) -> &[ProviderModel] {
-        self.catalog.models()
+    pub fn provider_catalog(&self) -> Vec<ProviderModel> {
+        self.provider_catalog_snapshot().models().to_vec()
     }
 
     /// Shared provider catalog snapshot including declared provider statuses.
     #[must_use]
-    pub fn provider_catalog_snapshot(&self) -> &ProviderCatalogSnapshot {
-        &self.catalog
+    pub fn provider_catalog_snapshot(&self) -> Arc<ProviderCatalogSnapshot> {
+        match self.catalog.read() {
+            Ok(guard) => Arc::clone(&guard),
+            Err(poisoned) => Arc::clone(&poisoned.into_inner()),
+        }
     }
 
     /// Shared provider router retained by this engine for request-local Workflow routes.
     #[must_use]
     pub fn provider_router(&self) -> Arc<ProviderRouter> {
-        Arc::clone(&self.providers)
+        match self.providers.read() {
+            Ok(guard) => Arc::clone(&guard),
+            Err(poisoned) => Arc::clone(&poisoned.into_inner()),
+        }
+    }
+
+    /// Atomically replace live provider routes and the presentation catalog.
+    ///
+    /// Used after background `models.yml.cache` refresh so HTTP/TUI surfaces
+    /// observe the new rows without restarting the process.
+    pub fn publish_provider_catalog(
+        &self,
+        providers: Arc<ProviderRouter>,
+        catalog: Arc<ProviderCatalogSnapshot>,
+    ) {
+        match self.providers.write() {
+            Ok(mut guard) => *guard = providers,
+            Err(poisoned) => *poisoned.into_inner() = providers,
+        }
+        match self.catalog.write() {
+            Ok(mut guard) => *guard = catalog,
+            Err(poisoned) => *poisoned.into_inner() = catalog,
+        }
     }
 
     /// Tool schemas from the current effective runtime snapshot.
@@ -685,7 +710,7 @@ impl SessionEngine {
             .session
             .agent_model_overrides
             .into_iter()
-            .filter(|(_, model)| self.providers.resolve(model).is_some())
+            .filter(|(_, model)| self.provider_router().resolve(model).is_some())
             .collect::<BTreeMap<_, _>>();
         Ok(binding.with_session_agent_models(overrides))
     }

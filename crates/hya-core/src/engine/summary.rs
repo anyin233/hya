@@ -38,7 +38,7 @@ impl SessionEngine {
             &definition,
             &self.model_categories,
             binding.agent_model_preference(definition.stable_id),
-            &|model| self.providers.resolve(model).is_some(),
+            &|model| self.provider_router().resolve(model).is_some(),
         );
         let messages = summary_messages(&projection)?;
         let summarizer = self

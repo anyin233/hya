@@ -1310,6 +1310,8 @@ pub struct RuntimeConfig {
     pub permission: InvocationPolicy,
     /// Web-search plane configuration.
     pub websearch: WebSearchConfig,
+    /// Empty-`models` providers awaiting background discovery refresh.
+    pub pending_discovery: Vec<crate::config::PendingCatalogDiscovery>,
 }
 
 impl RuntimeConfig {
@@ -1348,6 +1350,7 @@ fn offline_runtime(model_override: Option<String>, strict: bool) -> RuntimeConfi
             InvocationPolicy::default()
         },
         websearch: WebSearchConfig::default(),
+        pending_discovery: Vec::new(),
     }
 }
 
@@ -1389,6 +1392,7 @@ pub async fn resolve_runtime(model_override: Option<String>) -> RuntimeConfig {
                 offline_notice,
                 permission: cfg.permission,
                 websearch: cfg.websearch,
+                pending_discovery: cfg.pending_discovery,
             }
         }
         Ok(None) => offline_runtime(model_override, false),

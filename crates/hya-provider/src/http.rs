@@ -150,6 +150,8 @@ pub struct HttpProvider {
     models: HashSet<String>,
     model_reasoning_variants: BTreeMap<String, Vec<String>>,
     model_reasoning_defaults: BTreeMap<String, ReasoningEffort>,
+    /// Optional per-model context/output overrides (from `models.yml.cache`).
+    model_limits: BTreeMap<String, ModelLimitOverride>,
     caps: Capabilities,
     kind: ProviderKind,
     catalog_source: ModelCatalogSource,
@@ -170,6 +172,16 @@ fn request_header_value(value: &str) -> Result<HeaderValue, ProviderError> {
     header.set_sensitive(true);
     Ok(header)
 }
+
+/// Per-model token limits attached to an HTTP route.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ModelLimitOverride {
+    /// Context window in tokens (`0` keeps the route default).
+    pub context: u32,
+    /// Max output tokens (`0` means unspecified).
+    pub output: u32,
+}
+
 impl HttpProvider {
     /// Build a route for `kind` at `base_url` with optional Hya credential
     /// material and the models claimed by this route.
@@ -243,6 +255,7 @@ impl HttpProvider {
             models: models.into_iter().collect(),
             model_reasoning_variants: BTreeMap::new(),
             model_reasoning_defaults: BTreeMap::new(),
+            model_limits: BTreeMap::new(),
             kind,
             catalog_source: ModelCatalogSource::Configured,
             caps: Capabilities {
@@ -251,6 +264,7 @@ impl HttpProvider {
                 usage_reporting: true,
                 reasoning_request: true,
                 max_context: 200_000,
+                max_output: 0,
                 ..Capabilities::default()
             },
             response_header_timeout: RESPONSE_HEADER_TIMEOUT,
@@ -344,6 +358,17 @@ impl HttpProvider {
             .collect();
         self
     }
+
+    /// Attach per-model context / max-output overrides (from durable cache).
+    #[must_use]
+    pub fn with_model_limits(
+        mut self,
+        limits: impl IntoIterator<Item = (String, ModelLimitOverride)>,
+    ) -> Self {
+        self.model_limits = limits.into_iter().collect();
+        self
+    }
+
     /// Set the provenance emitted by this route's catalog rows.
     #[must_use]
     pub fn with_catalog_source(mut self, source: ModelCatalogSource) -> Self {
@@ -592,6 +617,23 @@ impl HttpProvider {
         })
     }
 
+    /// Merge route defaults with any per-model limit overrides.
+    fn caps_for_model(&self, model_id: &str) -> Capabilities {
+        let mut caps = self.caps.clone();
+        if let Some(limit) = self.model_limits.get(model_id) {
+            if limit.context > 0 {
+                caps.max_context = limit.context;
+            }
+            caps.max_output = limit.output;
+        }
+        if !self.model_reasoning_variants.is_empty()
+            || self.model_reasoning_defaults.contains_key(model_id)
+        {
+            caps.reasoning_request = true;
+        }
+        caps
+    }
+
     /// Return the claimed bare model id without allocating.
     fn served_model_name<'a>(&'a self, model: &'a ModelRef) -> Option<&'a str> {
         let base = match model.as_str().rsplit_once('#') {
@@ -791,7 +833,8 @@ impl Provider for HttpProvider {
     }
 
     fn capabilities(&self, model: &ModelRef) -> Option<Capabilities> {
-        self.served_model_name(model).map(|_| self.caps.clone())
+        let served = self.served_model_name(model)?;
+        Some(self.caps_for_model(served))
     }
 
     fn reasoning_default(&self, model: &ModelRef) -> Option<ReasoningEffort> {
@@ -837,7 +880,7 @@ impl Provider for HttpProvider {
             .map(|model| ProviderModel {
                 provider_id: self.id.clone(),
                 model_id: model.clone(),
-                capabilities: self.caps.clone(),
+                capabilities: self.caps_for_model(model),
                 reasoning_variants: self
                     .model_reasoning_variants
                     .get(model)

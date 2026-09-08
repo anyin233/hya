@@ -380,6 +380,24 @@ export const {
         case "server.instance.disposed":
           void bootstrap()
           break
+        case "catalog.updated": {
+          void sdk.client.config
+            .providers({ workspace }, { throwOnError: true })
+            .then((response) => {
+              const providers = response.data
+              if (!providers) return
+              setStore("provider", reconcile(providers.providers as never))
+              setStore("provider_default", reconcile(providers.default as never))
+              if ("defaultModel" in providers) {
+                setStore(
+                  "provider_catalog_default",
+                  reconcile((providers as { defaultModel?: unknown }).defaultModel as never),
+                )
+              }
+            })
+            .catch(() => undefined)
+          break
+        }
         case "permission.replied": {
           const requests = store.permission[event.properties.sessionID]
           if (!requests) break
@@ -707,6 +725,10 @@ export const {
       applyBootstrapBundle(bundle)
       startupMark("sync_partial", "bundle")
       startupMark("sync_complete", "bundle")
+      // Bootstrap deliberately omits hydrated sessions; fill the list after paint.
+      void listSessions()
+        .then((list) => setStore("session", reconcile(list)))
+        .catch(() => undefined)
       return true
     }
 
@@ -804,7 +826,6 @@ export const {
       startupMark("sync_partial", "multi")
 
       await Promise.all([
-        ...(args.continue ? [] : [sessionListPromise.then((list) => setStore("session", reconcile(list)))]),
         sdk.client.command.list({ workspace }).then((x) => setStore("command", reconcile(x.data ?? []))),
         sdk.client.lsp.status({ workspace }).then((x) => setStore("lsp", reconcile(x.data ?? []))),
         sdk.client.mcp.status({ workspace }).then((x) => setStore("mcp", reconcile(x.data ?? {}))),
@@ -819,6 +840,12 @@ export const {
       ])
       setStore("status", "complete")
       startupMark("sync_complete", "multi")
+      // Session list can be large (full projection replay); never block sync-complete.
+      if (!args.continue) {
+        void sessionListPromise
+          .then((list) => setStore("session", reconcile(list)))
+          .catch(() => undefined)
+      }
     }
 
     onMount(() => {

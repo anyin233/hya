@@ -1,10 +1,9 @@
-# 0.36.24
+# 0.36.25
 
-## Cold-start performance
+## Provider catalog cache
 
-- `/tui/bootstrap` returns empty `sessions` and skips full event-log replay; the TUI lists sessions after first paint.
-- Prefer prebundled TUI entry (`packages/hya-tui-ts/dist/boot.js`) when present; set `HYA_TUI_ENTRY=src` to force source.
-- Owned mode overlaps Bun load with backend listen by default (FIFO URL handoff); set `HYA_STARTUP_OVERLAP=0` to disable.
-- Startup Workflow recovery only replays Sessions that contain `workflow_run_started`, so large idle DBs no longer dominate `backend_listen`.
-- Vendor `sevenz-rust2` builds as `rlib` only to avoid Cargo output-filename collisions that broke release builds.
-
+- Empty-`models` providers load model metadata from `$XDG_CONFIG_HOME/hya/models.yml.cache` on startup so cold listen does not wait on discovery HTTP.
+- Cache rows store id plus `limit.context` / `limit.output`, reasoning default/variants, and tools — not bare id lists.
+- Background discovery refreshes the cache, swaps the live engine catalog/router, and emits Compat SSE `catalog.updated`.
+- The TUI Sync context re-fetches `/config/providers` on `catalog.updated` and reconciles the provider store after paint.
+- Explicit `providers.*.models` in `config.yaml` remains authoritative; discovery never rewrites config.yaml.

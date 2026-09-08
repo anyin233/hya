@@ -76,10 +76,20 @@ async fn subscribe(State(st): State<ServerState>) -> axum::response::Response {
         });
     let lsp = lsp_updates(st.engine.lsp().subscribe())
         .map(|value| Ok::<_, Infallible>(json_event(&value)));
+    let catalog =
+        BroadcastStream::new(st.catalog_updates.subscribe()).filter_map(|result| async move {
+            match result {
+                Ok(value) => Some(Ok(json_event(&value))),
+                Err(_lagged) => None,
+            }
+        });
     super::sse::compat(Sse::new(initial.chain(stream::select(
         stream::select(
-            stream::select(stream::select(live, permissions), questions),
-            lsp,
+            stream::select(
+                stream::select(stream::select(live, permissions), questions),
+                lsp,
+            ),
+            catalog,
         ),
         super::event_heartbeat::stream(heartbeat_event),
     ))))
@@ -247,11 +257,25 @@ async fn subscribe_global(State(st): State<ServerState>) -> axum::response::Resp
     let lsp = lsp_updates(st.engine.lsp().subscribe()).map(move |value| {
         Ok::<_, Infallible>(json_event(&global_event_payload(&lsp_directory, value)))
     });
+    let catalog_directory = directory.clone();
+    let catalog =
+        BroadcastStream::new(st.catalog_updates.subscribe()).filter_map(move |result| {
+            let directory = catalog_directory.clone();
+            async move {
+                match result {
+                    Ok(value) => Some(Ok(json_event(&global_event_payload(&directory, value)))),
+                    Err(_lagged) => None,
+                }
+            }
+        });
     let heartbeat_directory = directory;
     super::sse::compat(Sse::new(initial.chain(stream::select(
         stream::select(
-            stream::select(stream::select(live, permissions), questions),
-            lsp,
+            stream::select(
+                stream::select(stream::select(live, permissions), questions),
+                lsp,
+            ),
+            catalog,
         ),
         super::event_heartbeat::stream(move || global_heartbeat_event(&heartbeat_directory)),
     ))))

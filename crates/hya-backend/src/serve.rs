@@ -13,7 +13,8 @@ pub(crate) async fn cmd_serve(
 ) -> anyhow::Result<()> {
     super::first_run_config_bootstrap(false)?;
     let store = open_store(&db).await?;
-    let runtime = resolve_runtime(model_override).await.with_yolo(yolo);
+    let mut runtime = resolve_runtime(model_override).await.with_yolo(yolo);
+    let pending_discovery = std::mem::take(&mut runtime.pending_discovery);
     // Server AppState: base-only agent slot. Environment + AGENTS + references
     // are discovered per turn so Bundle Some does not drop project AGENTS and
     // Bundle None does not duplicate startup-baked AGENTS.
@@ -38,7 +39,7 @@ pub(crate) async fn cmd_serve(
     let agent_model_control = Arc::new(built.agent_model_control());
     let workflow_control = Arc::new(built.workflow_control());
     let plugin_host = built.plugin_host();
-    let mut state = AppState::new(engine, agent)
+    let mut state = AppState::new(Arc::clone(&engine), agent)
         .with_question_requests(questions)
         .with_mcp_control(mcp_control)
         .with_workflow_control(workflow_control)
@@ -49,6 +50,7 @@ pub(crate) async fn cmd_serve(
         eprintln!("hya: --yolo on serve auto-approves ALL tool actions for any client (RCE risk)");
     }
     state = state.with_permission_requests(asks);
+    spawn_provider_catalog_refresh(Arc::clone(&engine), state.catalog_updates_sender(), pending_discovery);
     let listener = tokio::net::TcpListener::bind(&bind)
         .await
         .with_context(|| format!("bind {bind}"))?;
@@ -71,6 +73,42 @@ pub(crate) async fn cmd_serve(
         .context("serve http");
     let shutdown_result = built.shutdown().await.context("shutdown spawn supervisor");
     serve_result.and(shutdown_result)
+}
+
+fn spawn_provider_catalog_refresh(
+    engine: Arc<hya_core::SessionEngine>,
+    catalog_updates: tokio::sync::broadcast::Sender<serde_json::Value>,
+    pending: Vec<hya_app::config::PendingCatalogDiscovery>,
+) {
+    if pending.is_empty() {
+        return;
+    }
+    tokio::spawn(async move {
+        let snapshot = engine.provider_catalog_snapshot();
+        let router = engine.provider_router();
+        match hya_app::config::refresh_pending_catalogs(pending, snapshot.as_ref(), router.as_ref())
+            .await
+        {
+            Ok((router, catalog)) => {
+                engine.publish_provider_catalog(Arc::new(router), catalog);
+                let payload = serde_json::json!({
+                    "id": format!(
+                        "catalog-{}",
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|duration| duration.as_millis())
+                            .unwrap_or(0)
+                    ),
+                    "type": "catalog.updated",
+                    "properties": {}
+                });
+                let _ = catalog_updates.send(payload);
+            }
+            Err(error) => {
+                eprintln!("hya: provider catalog refresh failed ({error:#})");
+            }
+        }
+    });
 }
 
 /// Registered SIGTERM/SIGINT/SIGHUP streams, held so the handlers are live before we serve.
@@ -154,7 +192,8 @@ pub(crate) async fn cmd_tui_hya(
 
     super::first_run_config_bootstrap(true)?;
     let store = open_store(&db).await?;
-    let runtime = resolve_runtime(model_override).await.with_yolo(yolo);
+    let mut runtime = resolve_runtime(model_override).await.with_yolo(yolo);
+    let pending_discovery = std::mem::take(&mut runtime.pending_discovery);
     // Interactive startup (stdout is a terminal, checked above): explain the
     // missing config and the offline fallback. Goes to stderr only.
     if let Some(notice) = &runtime.offline_notice {
@@ -182,7 +221,7 @@ pub(crate) async fn cmd_tui_hya(
     let agent_model_control = Arc::new(built.agent_model_control());
     let workflow_control = Arc::new(built.workflow_control());
     let plugin_host = built.plugin_host();
-    let mut state = AppState::new(engine, agent)
+    let mut state = AppState::new(Arc::clone(&engine), agent)
         .with_question_requests(questions)
         .with_mcp_control(mcp_control)
         .with_workflow_control(workflow_control)
@@ -193,6 +232,11 @@ pub(crate) async fn cmd_tui_hya(
         eprintln!("hya: --yolo auto-approves ALL tool actions for the hya frontend (RCE risk)");
     }
     state = state.with_permission_requests(asks);
+    spawn_provider_catalog_refresh(
+        Arc::clone(&engine),
+        state.catalog_updates_sender(),
+        pending_discovery,
+    );
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
