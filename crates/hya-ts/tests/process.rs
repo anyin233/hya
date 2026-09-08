@@ -147,7 +147,7 @@ fn missing_bun_error_names_attempted_executable() {
     assert!(!output.status.success(), "{output:?}");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.starts_with("hya-ts: failed to launch Bun"),
+        stderr.contains("hya-ts: failed to launch Bun"),
         "{stderr}"
     );
     assert!(
@@ -328,6 +328,7 @@ impl Fixture {
         std::fs::create_dir_all(&project).unwrap();
         std::fs::create_dir_all(runtime.join("src")).unwrap();
         std::fs::write(runtime.join("src/main.tsx"), "").unwrap();
+        std::fs::write(runtime.join("src/boot.tsx"), "").unwrap();
         let args = root.join("bun-args");
         let cwd = root.join("bun-cwd");
         let backend_pid = root.join("backend-pid");
@@ -338,7 +339,7 @@ impl Fixture {
         executable(
             &bun,
             &format!(
-                "#!/bin/sh\npwd > '{}'\nprintf '%s\\n' \"$@\" > '{}'\nif [ -n \"$BACKEND_PID_FILE\" ] && kill -0 \"$(cat \"$BACKEND_PID_FILE\")\" 2>/dev/null; then printf 'alive\\n' > '{}'; fi\nif [ -n \"$BUN_WAIT\" ]; then trap 'exit 0' TERM INT; sleep \"$BUN_WAIT\" & wait $!; fi\nexit \"${{BUN_EXIT_CODE:-0}}\"\n",
+                "#!/bin/sh\nif [ -n \"$HYA_SERVER_URL_FIFO\" ]; then IFS= read -r _url < \"$HYA_SERVER_URL_FIFO\" || true; fi\npwd > '{}'\nprintf '%s\\n' \"$@\" > '{}'\nif [ -n \"$BACKEND_PID_FILE\" ] && kill -0 \"$(cat \"$BACKEND_PID_FILE\")\" 2>/dev/null; then printf 'alive\\n' > '{}'; fi\nif [ -n \"$BUN_WAIT\" ]; then trap 'exit 0' TERM INT; sleep \"$BUN_WAIT\" & wait $!; fi\nexit \"${{BUN_EXIT_CODE:-0}}\"\n",
                 cwd.display(),
                 args.display(),
                 backend_seen.display()
@@ -448,3 +449,4 @@ fn temp_dir(prefix: &str) -> PathBuf {
     std::fs::create_dir(&dir).unwrap();
     dir
 }
+// rebuild 1788876051

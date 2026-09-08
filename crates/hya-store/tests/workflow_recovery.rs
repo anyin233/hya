@@ -54,6 +54,75 @@ fn workflow_stage() -> WorkflowStagePlan {
     }
 }
 
+/// Idle Sessions without any Workflow lifecycle events must not hide a running
+/// Workflow Session from startup recovery (candidate filter must stay complete).
+#[tokio::test]
+async fn recovery_finds_running_workflow_among_idle_sessions() {
+    let path = database_path();
+    let running = SessionId::new();
+    let run = WorkflowRunId::new();
+    let old_owner = OwnerRunId::new();
+    let current_owner = OwnerRunId::new();
+
+    {
+        let store = SessionStore::connect(path.to_str().expect("UTF-8 path"))
+            .await
+            .expect("create store");
+        for _ in 0..32 {
+            let idle = SessionId::new();
+            store
+                .append_event(
+                    idle,
+                    &Event::SessionCreated {
+                        session: idle,
+                        parent: None,
+                        agent: "general".into(),
+                        model: "fake".into(),
+                        workdir: "/tmp".into(),
+                    },
+                )
+                .await
+                .expect("append idle session");
+        }
+        store
+            .append_event(
+                running,
+                &Event::WorkflowRunStarted {
+                    session: running,
+                    run,
+                    workflow: workflow_identity("among-idle"),
+                    request_hash: "inputs".to_string(),
+                    owner: old_owner,
+                    stages: vec![workflow_stage()],
+                },
+            )
+            .await
+            .expect("append running workflow");
+    }
+
+    let store = SessionStore::connect(path.to_str().expect("UTF-8 path"))
+        .await
+        .expect("reopen store");
+    store
+        .claim_runtime_owner(current_owner)
+        .expect("claim runtime owner before recovery");
+    let recovered = store
+        .recover_nonterminal_workflows(current_owner, "backend owner exited")
+        .await
+        .expect("recover among idle sessions");
+    assert_eq!(recovered.len(), 1);
+    assert!(matches!(
+        recovered[0].event,
+        Event::WorkflowRunFinished {
+            run: event_run,
+            status: WorkflowRunStatus::Interrupted,
+            ..
+        } if event_run == run
+    ));
+    drop(store);
+    remove_database(&path);
+}
+
 /// Startup recovery terminalizes a persisted running run exactly once and never
 /// replays Stage side effects.
 #[tokio::test]

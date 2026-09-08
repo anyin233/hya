@@ -1,0 +1,387 @@
+run 1 backend=21 bun=244 shell=810 sync=532 marks=11
+  marks: {"hya_ts_start":{"mark":"hya_ts_start","delta_ms":7},"backend_spawn":{"mark":"backend_spawn","delta_ms":7,"detail":"/mnt/nvme0n1/yanweiye/Projects/hya/target/release/hya-backend"},"bun_spawn":{"mark":"bun_spawn","delta_ms":9,"detail":"fifo_overlap"},"backend_listen":{"mark":"backend_listen","delta_ms":21,"detail":"http://127.0.0.1:39471"},"bun_entry":{"mark":"bun_entry","delta_ms":244,"detail":"boot","mono_ms":232.735},"boot_wait_url":{"mark":"boot_wait_url","delta_ms":247,"detail":"/tmp/hya-url-29464.fifo","mono_ms":235.686},"boot_got_url":{"mark":"boot_got_url","delta_ms":247,"mono_ms":235.847},"theme_resolved":{"mark":"theme_resolved","delta_ms":502,"detail":"dark","mono_ms":491.176},"sync_partial":{"mark":"sync_partial","delta_ms":532,"detail":"bundle","mono_ms":520.627},"sync_complete":{"mark":"sync_complete","delta_ms":532,"detail":"bundle","mono_ms":520.658},"shell_paint":{"mark":"shell_paint","delta_ms":810,"detail":"immediate","mono_ms":799.296}}
+run 2 backend=20 bun=242 shell=811 sync=534 marks=11
+  marks: {"hya_ts_start":{"mark":"hya_ts_start","delta_ms":6},"backend_spawn":{"mark":"backend_spawn","delta_ms":6,"detail":"/mnt/nvme0n1/yanweiye/Projects/hya/target/release/hya-backend"},"bun_spawn":{"mark":"bun_spawn","delta_ms":8,"detail":"fifo_overlap"},"backend_listen":{"mark":"backend_listen","delta_ms":20,"detail":"http://127.0.0.1:43795"},"bun_entry":{"mark":"bun_entry","delta_ms":242,"detail":"boot","mono_ms":231.903},"boot_wait_url":{"mark":"boot_wait_url","delta_ms":245,"detail":"/tmp/hya-url-29662.fifo","mono_ms":234.844},"boot_got_url":{"mark":"boot_got_url","delta_ms":245,"mono_ms":235.022},"theme_resolved":{"mark":"theme_resolved","delta_ms":504,"detail":"dark","mono_ms":493.538},"sync_partial":{"mark":"sync_partial","delta_ms":534,"detail":"bundle","mono_ms":523.808},"sync_complete":{"mark":"sync_complete","delta_ms":534,"detail":"bundle","mono_ms":523.829},"shell_paint":{"mark":"shell_paint","delta_ms":811,"detail":"immediate","mono_ms":800.617}}
+run 3 backend=20 bun=237 shell=806 sync=529 marks=11
+  marks: {"hya_ts_start":{"mark":"hya_ts_start","delta_ms":6},"backend_spawn":{"mark":"backend_spawn","delta_ms":7,"detail":"/mnt/nvme0n1/yanweiye/Projects/hya/target/release/hya-backend"},"bun_spawn":{"mark":"bun_spawn","delta_ms":8,"detail":"fifo_overlap"},"backend_listen":{"mark":"backend_listen","delta_ms":20,"detail":"http://127.0.0.1:39861"},"bun_entry":{"mark":"bun_entry","delta_ms":237,"detail":"boot","mono_ms":226.832},"boot_wait_url":{"mark":"boot_wait_url","delta_ms":242,"detail":"/tmp/hya-url-29918.fifo","mono_ms":231.572},"boot_got_url":{"mark":"boot_got_url","delta_ms":242,"mono_ms":231.744},"theme_resolved":{"mark":"theme_resolved","delta_ms":498,"detail":"dark","mono_ms":487.112},"sync_partial":{"mark":"sync_partial","delta_ms":529,"detail":"bundle","mono_ms":518.272},"sync_complete":{"mark":"sync_complete","delta_ms":529,"detail":"bundle","mono_ms":518.298},"shell_paint":{"mark":"shell_paint","delta_ms":806,"detail":"immediate","mono_ms":795.191}}
+run 4 backend=20 bun=238 shell=808 sync=532 marks=11
+  marks: {"hya_ts_start":{"mark":"hya_ts_start","delta_ms":6},"backend_spawn":{"mark":"backend_spawn","delta_ms":6,"detail":"/mnt/nvme0n1/yanweiye/Projects/hya/target/release/hya-backend"},"bun_spawn":{"mark":"bun_spawn","delta_ms":8,"detail":"fifo_overlap"},"backend_listen":{"mark":"backend_listen","delta_ms":20,"detail":"http://127.0.0.1:43395"},"bun_entry":{"mark":"bun_entry","delta_ms":238,"detail":"boot","mono_ms":228.611},"boot_wait_url":{"mark":"boot_wait_url","delta_ms":243,"detail":"/tmp/hya-url-30566.fifo","mono_ms":233.447},"boot_got_url":{"mark":"boot_got_url","delta_ms":243,"mono_ms":233.646},"theme_resolved":{"mark":"theme_resolved","delta_ms":501,"detail":"dark","mono_ms":491.257},"sync_partial":{"mark":"sync_partial","delta_ms":532,"detail":"bundle","mono_ms":522.665},"sync_complete":{"mark":"sync_complete","delta_ms":532,"detail":"bundle","mono_ms":522.695},"shell_paint":{"mark":"shell_paint","delta_ms":808,"detail":"immediate","mono_ms":798.385}}
+run 5 backend=20 bun=240 shell=816 sync=538 marks=11
+  marks: {"hya_ts_start":{"mark":"hya_ts_start","delta_ms":6},"backend_spawn":{"mark":"backend_spawn","delta_ms":6,"detail":"/mnt/nvme0n1/yanweiye/Projects/hya/target/release/hya-backend"},"bun_spawn":{"mark":"bun_spawn","delta_ms":7,"detail":"fifo_overlap"},"backend_listen":{"mark":"backend_listen","delta_ms":20,"detail":"http://127.0.0.1:44229"},"bun_entry":{"mark":"bun_entry","delta_ms":240,"detail":"boot","mono_ms":230.874},"boot_wait_url":{"mark":"boot_wait_url","delta_ms":245,"detail":"/tmp/hya-url-30963.fifo","mono_ms":235.667},"boot_got_url":{"mark":"boot_got_url","delta_ms":245,"mono_ms":235.874},"theme_resolved":{"mark":"theme_resolved","delta_ms":508,"detail":"dark","mono_ms":498.597},"sync_partial":{"mark":"sync_partial","delta_ms":538,"detail":"bundle","mono_ms":528.543},"sync_complete":{"mark":"sync_complete","delta_ms":538,"detail":"bundle","mono_ms":528.572},"shell_paint":{"mark":"shell_paint","delta_ms":816,"detail":"immediate","mono_ms":806.479}}
+{
+  "mode": "f0",
+  "n": 5,
+  "backend_p50": 20,
+  "backend_p95": 21,
+  "shell_p50": 810,
+  "shell_p95": 816,
+  "sync_p50": 532,
+  "sync_p95": 538,
+  "samples": [
+    {
+      "run": 1,
+      "t0_wall_ms": 1788878428387,
+      "marks": {
+        "hya_ts_start": {
+          "mark": "hya_ts_start",
+          "delta_ms": 7
+        },
+        "backend_spawn": {
+          "mark": "backend_spawn",
+          "delta_ms": 7,
+          "detail": "/mnt/nvme0n1/yanweiye/Projects/hya/target/release/hya-backend"
+        },
+        "bun_spawn": {
+          "mark": "bun_spawn",
+          "delta_ms": 9,
+          "detail": "fifo_overlap"
+        },
+        "backend_listen": {
+          "mark": "backend_listen",
+          "delta_ms": 21,
+          "detail": "http://127.0.0.1:39471"
+        },
+        "bun_entry": {
+          "mark": "bun_entry",
+          "delta_ms": 244,
+          "detail": "boot",
+          "mono_ms": 232.735
+        },
+        "boot_wait_url": {
+          "mark": "boot_wait_url",
+          "delta_ms": 247,
+          "detail": "/tmp/hya-url-29464.fifo",
+          "mono_ms": 235.686
+        },
+        "boot_got_url": {
+          "mark": "boot_got_url",
+          "delta_ms": 247,
+          "mono_ms": 235.847
+        },
+        "theme_resolved": {
+          "mark": "theme_resolved",
+          "delta_ms": 502,
+          "detail": "dark",
+          "mono_ms": 491.176
+        },
+        "sync_partial": {
+          "mark": "sync_partial",
+          "delta_ms": 532,
+          "detail": "bundle",
+          "mono_ms": 520.627
+        },
+        "sync_complete": {
+          "mark": "sync_complete",
+          "delta_ms": 532,
+          "detail": "bundle",
+          "mono_ms": 520.658
+        },
+        "shell_paint": {
+          "mark": "shell_paint",
+          "delta_ms": 810,
+          "detail": "immediate",
+          "mono_ms": 799.296
+        }
+      },
+      "wall_to_shell_ms": 810,
+      "wall_to_sync_ms": 532,
+      "wall_to_backend_ms": 21,
+      "wall_to_bun_ms": 244,
+      "wall_to_bun_spawn_ms": 9,
+      "mark_count": 11,
+      "stderr_tail": "\nSession terminated, killing shell... ...killed.\n"
+    },
+    {
+      "run": 2,
+      "t0_wall_ms": 1788878431222,
+      "marks": {
+        "hya_ts_start": {
+          "mark": "hya_ts_start",
+          "delta_ms": 6
+        },
+        "backend_spawn": {
+          "mark": "backend_spawn",
+          "delta_ms": 6,
+          "detail": "/mnt/nvme0n1/yanweiye/Projects/hya/target/release/hya-backend"
+        },
+        "bun_spawn": {
+          "mark": "bun_spawn",
+          "delta_ms": 8,
+          "detail": "fifo_overlap"
+        },
+        "backend_listen": {
+          "mark": "backend_listen",
+          "delta_ms": 20,
+          "detail": "http://127.0.0.1:43795"
+        },
+        "bun_entry": {
+          "mark": "bun_entry",
+          "delta_ms": 242,
+          "detail": "boot",
+          "mono_ms": 231.903
+        },
+        "boot_wait_url": {
+          "mark": "boot_wait_url",
+          "delta_ms": 245,
+          "detail": "/tmp/hya-url-29662.fifo",
+          "mono_ms": 234.844
+        },
+        "boot_got_url": {
+          "mark": "boot_got_url",
+          "delta_ms": 245,
+          "mono_ms": 235.022
+        },
+        "theme_resolved": {
+          "mark": "theme_resolved",
+          "delta_ms": 504,
+          "detail": "dark",
+          "mono_ms": 493.538
+        },
+        "sync_partial": {
+          "mark": "sync_partial",
+          "delta_ms": 534,
+          "detail": "bundle",
+          "mono_ms": 523.808
+        },
+        "sync_complete": {
+          "mark": "sync_complete",
+          "delta_ms": 534,
+          "detail": "bundle",
+          "mono_ms": 523.829
+        },
+        "shell_paint": {
+          "mark": "shell_paint",
+          "delta_ms": 811,
+          "detail": "immediate",
+          "mono_ms": 800.617
+        }
+      },
+      "wall_to_shell_ms": 811,
+      "wall_to_sync_ms": 534,
+      "wall_to_backend_ms": 20,
+      "wall_to_bun_ms": 242,
+      "wall_to_bun_spawn_ms": 8,
+      "mark_count": 11,
+      "stderr_tail": "\nSession terminated, killing shell... ...killed.\n"
+    },
+    {
+      "run": 3,
+      "t0_wall_ms": 1788878434048,
+      "marks": {
+        "hya_ts_start": {
+          "mark": "hya_ts_start",
+          "delta_ms": 6
+        },
+        "backend_spawn": {
+          "mark": "backend_spawn",
+          "delta_ms": 7,
+          "detail": "/mnt/nvme0n1/yanweiye/Projects/hya/target/release/hya-backend"
+        },
+        "bun_spawn": {
+          "mark": "bun_spawn",
+          "delta_ms": 8,
+          "detail": "fifo_overlap"
+        },
+        "backend_listen": {
+          "mark": "backend_listen",
+          "delta_ms": 20,
+          "detail": "http://127.0.0.1:39861"
+        },
+        "bun_entry": {
+          "mark": "bun_entry",
+          "delta_ms": 237,
+          "detail": "boot",
+          "mono_ms": 226.832
+        },
+        "boot_wait_url": {
+          "mark": "boot_wait_url",
+          "delta_ms": 242,
+          "detail": "/tmp/hya-url-29918.fifo",
+          "mono_ms": 231.572
+        },
+        "boot_got_url": {
+          "mark": "boot_got_url",
+          "delta_ms": 242,
+          "mono_ms": 231.744
+        },
+        "theme_resolved": {
+          "mark": "theme_resolved",
+          "delta_ms": 498,
+          "detail": "dark",
+          "mono_ms": 487.112
+        },
+        "sync_partial": {
+          "mark": "sync_partial",
+          "delta_ms": 529,
+          "detail": "bundle",
+          "mono_ms": 518.272
+        },
+        "sync_complete": {
+          "mark": "sync_complete",
+          "delta_ms": 529,
+          "detail": "bundle",
+          "mono_ms": 518.298
+        },
+        "shell_paint": {
+          "mark": "shell_paint",
+          "delta_ms": 806,
+          "detail": "immediate",
+          "mono_ms": 795.191
+        }
+      },
+      "wall_to_shell_ms": 806,
+      "wall_to_sync_ms": 529,
+      "wall_to_backend_ms": 20,
+      "wall_to_bun_ms": 237,
+      "wall_to_bun_spawn_ms": 8,
+      "mark_count": 11,
+      "stderr_tail": "\nSession terminated, killing shell... ...killed.\n"
+    },
+    {
+      "run": 4,
+      "t0_wall_ms": 1788878436874,
+      "marks": {
+        "hya_ts_start": {
+          "mark": "hya_ts_start",
+          "delta_ms": 6
+        },
+        "backend_spawn": {
+          "mark": "backend_spawn",
+          "delta_ms": 6,
+          "detail": "/mnt/nvme0n1/yanweiye/Projects/hya/target/release/hya-backend"
+        },
+        "bun_spawn": {
+          "mark": "bun_spawn",
+          "delta_ms": 8,
+          "detail": "fifo_overlap"
+        },
+        "backend_listen": {
+          "mark": "backend_listen",
+          "delta_ms": 20,
+          "detail": "http://127.0.0.1:43395"
+        },
+        "bun_entry": {
+          "mark": "bun_entry",
+          "delta_ms": 238,
+          "detail": "boot",
+          "mono_ms": 228.611
+        },
+        "boot_wait_url": {
+          "mark": "boot_wait_url",
+          "delta_ms": 243,
+          "detail": "/tmp/hya-url-30566.fifo",
+          "mono_ms": 233.447
+        },
+        "boot_got_url": {
+          "mark": "boot_got_url",
+          "delta_ms": 243,
+          "mono_ms": 233.646
+        },
+        "theme_resolved": {
+          "mark": "theme_resolved",
+          "delta_ms": 501,
+          "detail": "dark",
+          "mono_ms": 491.257
+        },
+        "sync_partial": {
+          "mark": "sync_partial",
+          "delta_ms": 532,
+          "detail": "bundle",
+          "mono_ms": 522.665
+        },
+        "sync_complete": {
+          "mark": "sync_complete",
+          "delta_ms": 532,
+          "detail": "bundle",
+          "mono_ms": 522.695
+        },
+        "shell_paint": {
+          "mark": "shell_paint",
+          "delta_ms": 808,
+          "detail": "immediate",
+          "mono_ms": 798.385
+        }
+      },
+      "wall_to_shell_ms": 808,
+      "wall_to_sync_ms": 532,
+      "wall_to_backend_ms": 20,
+      "wall_to_bun_ms": 238,
+      "wall_to_bun_spawn_ms": 8,
+      "mark_count": 11,
+      "stderr_tail": "\nSession terminated, killing shell... ...killed.\n"
+    },
+    {
+      "run": 5,
+      "t0_wall_ms": 1788878439705,
+      "marks": {
+        "hya_ts_start": {
+          "mark": "hya_ts_start",
+          "delta_ms": 6
+        },
+        "backend_spawn": {
+          "mark": "backend_spawn",
+          "delta_ms": 6,
+          "detail": "/mnt/nvme0n1/yanweiye/Projects/hya/target/release/hya-backend"
+        },
+        "bun_spawn": {
+          "mark": "bun_spawn",
+          "delta_ms": 7,
+          "detail": "fifo_overlap"
+        },
+        "backend_listen": {
+          "mark": "backend_listen",
+          "delta_ms": 20,
+          "detail": "http://127.0.0.1:44229"
+        },
+        "bun_entry": {
+          "mark": "bun_entry",
+          "delta_ms": 240,
+          "detail": "boot",
+          "mono_ms": 230.874
+        },
+        "boot_wait_url": {
+          "mark": "boot_wait_url",
+          "delta_ms": 245,
+          "detail": "/tmp/hya-url-30963.fifo",
+          "mono_ms": 235.667
+        },
+        "boot_got_url": {
+          "mark": "boot_got_url",
+          "delta_ms": 245,
+          "mono_ms": 235.874
+        },
+        "theme_resolved": {
+          "mark": "theme_resolved",
+          "delta_ms": 508,
+          "detail": "dark",
+          "mono_ms": 498.597
+        },
+        "sync_partial": {
+          "mark": "sync_partial",
+          "delta_ms": 538,
+          "detail": "bundle",
+          "mono_ms": 528.543
+        },
+        "sync_complete": {
+          "mark": "sync_complete",
+          "delta_ms": 538,
+          "detail": "bundle",
+          "mono_ms": 528.572
+        },
+        "shell_paint": {
+          "mark": "shell_paint",
+          "delta_ms": 816,
+          "detail": "immediate",
+          "mono_ms": 806.479
+        }
+      },
+      "wall_to_shell_ms": 816,
+      "wall_to_sync_ms": 538,
+      "wall_to_backend_ms": 20,
+      "wall_to_bun_ms": 240,
+      "wall_to_bun_spawn_ms": 7,
+      "mark_count": 11,
+      "stderr_tail": "\nSession terminated, killing shell... ...killed.\n"
+    }
+  ]
+}

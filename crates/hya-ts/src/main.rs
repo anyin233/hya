@@ -14,8 +14,8 @@ use std::time::Duration;
 use clap::Parser as _;
 use hya_sdk::ServerHandle;
 use hya_ts::{
-    Cli, Command, backend_command_args, build_bun_command_from, invocation_name,
-    resolve_backend_bin, resolve_runtime_dir,
+    Cli, Command, backend_command_args, build_bun_command_from, build_bun_command_with_url_fifo,
+    invocation_name, resolve_backend_bin, resolve_runtime_dir,
 };
 use tokio::process::Command as TokioCommand;
 
@@ -67,6 +67,9 @@ async fn run() -> Result<u8, Box<dyn Error>> {
                 .as_path(),
         );
         emit_startup_mark("backend_spawn", Some(&backend.display().to_string()));
+        if startup_overlap_enabled() {
+            return run_owned_with_overlap(cli, &runtime, &cwd, &project, &backend).await;
+        }
         let handle =
             ServerHandle::spawn_hya_backend(&backend.to_string_lossy(), project_str(&project)?)
                 .await?;
@@ -135,6 +138,156 @@ async fn run() -> Result<u8, Box<dyn Error>> {
     restore_terminal(&mut terminal)?;
     drop(owned);
     Ok(result?)
+}
+
+fn startup_overlap_enabled() -> bool {
+    match std::env::var("HYA_STARTUP_OVERLAP") {
+        Ok(value) => {
+            let text = value.trim();
+            !(text.eq_ignore_ascii_case("0")
+                || text.eq_ignore_ascii_case("false")
+                || text.eq_ignore_ascii_case("no")
+                || text.eq_ignore_ascii_case("off"))
+        }
+        // Default on: Bun module load overlaps backend listen via FIFO URL handoff.
+        Err(_) => true,
+    }
+}
+
+/// Owned-mode path that overlaps Bun module load with backend listen via a FIFO.
+async fn run_owned_with_overlap(
+    cli: Cli,
+    runtime: &Path,
+    cwd: &Path,
+    project: &Path,
+    backend: &Path,
+) -> Result<u8, Box<dyn Error>> {
+    let fifo_path = std::env::temp_dir().join(format!("hya-url-{}.fifo", std::process::id()));
+    let _ = std::fs::remove_file(&fifo_path);
+    nix_mkfifo(&fifo_path)?;
+    let mut boot_cli = cli;
+    boot_cli.server = Some("http://127.0.0.1:0".into());
+    let spec = build_bun_command_with_url_fifo(&boot_cli, runtime, cwd, &fifo_path)?;
+
+    let mut terminal = TerminalState::capture()?;
+    let program = spec.program.clone();
+    let mut bun_cmd = TokioCommand::new(&program);
+    bun_cmd
+        .args(&spec.args)
+        .current_dir(&spec.current_dir)
+        .env("HYA_SERVER_URL_FIFO", &fifo_path)
+        .process_group(0);
+    let mut child = match bun_cmd.spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            let _ = std::fs::remove_file(&fifo_path);
+            restore_terminal(&mut terminal)?;
+            return Err(format!("failed to launch Bun `{}`: {error}", program.display()).into());
+        }
+    };
+    emit_startup_mark("bun_spawn", Some("fifo_overlap"));
+
+    let handle =
+        match ServerHandle::spawn_hya_backend(&backend.to_string_lossy(), project_str(project)?)
+            .await
+        {
+            Ok(handle) => handle,
+            Err(error) => {
+                let _ = child.start_kill();
+                let _ = child.wait().await;
+                let _ = std::fs::remove_file(&fifo_path);
+                restore_terminal(&mut terminal)?;
+                return Err(error.into());
+            }
+        };
+    let url = handle.base_url().to_string();
+    emit_startup_mark("backend_listen", Some(&url));
+    let fifo_writer = match write_url_fifo(&fifo_path, &url) {
+        Ok(file) => file,
+        Err(error) => {
+            let _ = child.start_kill();
+            let _ = child.wait().await;
+            let _ = std::fs::remove_file(&fifo_path);
+            restore_terminal(&mut terminal)?;
+            drop(handle);
+            return Err(format!("failed to write listen URL to FIFO: {error}").into());
+        }
+    };
+
+    let pid = child.id();
+    if let Some(state) = terminal.as_ref() {
+        let Some(pgid) = pid.map(|pid| pid as libc::pid_t) else {
+            let cleanup = terminate_child_group(&mut child, None).await;
+            let restoration = restore_terminal(&mut terminal);
+            drop(fifo_writer);
+            let _ = std::fs::remove_file(&fifo_path);
+            restoration?;
+            cleanup?;
+            return Err(io::Error::other("spawned Bun process has no process ID").into());
+        };
+        if let Err(error) = state.handoff(pgid) {
+            let cleanup = terminate_child_group(&mut child, Some(pgid)).await;
+            let restoration = restore_terminal(&mut terminal);
+            drop(fifo_writer);
+            let _ = std::fs::remove_file(&fifo_path);
+            restoration?;
+            cleanup?;
+            return Err(error.into());
+        }
+        unsafe {
+            libc::kill(-pgid, libc::SIGCONT);
+        }
+    }
+
+    let result = tokio::select! {
+        status = child.wait() => status.map(|status| status.code().and_then(|code| u8::try_from(code).ok()).unwrap_or(1)),
+        signal = termination_signal() => {
+            match signal {
+                Ok(()) => terminate_child_group(&mut child, pid.map(|pid| pid as libc::pid_t)).await.map(|()| 1),
+                Err(error) => match terminate_child_group(&mut child, pid.map(|pid| pid as libc::pid_t)).await {
+                    Ok(()) => Err(error),
+                    Err(cleanup) => Err(cleanup),
+                },
+            }
+        }
+    };
+    restore_terminal(&mut terminal)?;
+    drop(fifo_writer);
+    let _ = std::fs::remove_file(&fifo_path);
+    drop(handle);
+    Ok(result?)
+}
+
+fn nix_mkfifo(path: &Path) -> Result<(), Box<dyn Error>> {
+    use std::os::unix::ffi::OsStrExt;
+    let c_path = std::ffi::CString::new(path.as_os_str().as_bytes())?;
+    let rc = unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) };
+    if rc != 0 {
+        return Err(io::Error::last_os_error().into());
+    }
+    Ok(())
+}
+
+fn write_url_fifo(path: &Path, url: &str) -> io::Result<std::fs::File> {
+    use std::io::Write as _;
+    use std::os::unix::fs::OpenOptionsExt as _;
+    // O_RDWR on a FIFO does not block for a peer on Linux.
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(path)?;
+    let fd = std::os::fd::AsRawFd::as_raw_fd(&file);
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if flags >= 0 {
+        unsafe {
+            libc::fcntl(fd, libc::F_SETFL, flags & !libc::O_NONBLOCK);
+        }
+    }
+    file.write_all(url.as_bytes())?;
+    file.write_all(b"\n")?;
+    file.flush()?;
+    Ok(file)
 }
 
 fn cmd_import(source: &str) -> Result<(), Box<dyn Error>> {

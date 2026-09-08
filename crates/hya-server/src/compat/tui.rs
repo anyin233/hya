@@ -113,25 +113,10 @@ async fn bootstrap(
         .map(super::command_catalog::CommandInfo::bootstrap_summary)
         .collect();
 
-    let sessions = match st.engine.store().list_sessions().await {
-        Ok(list) => {
-            let mut out = Vec::new();
-            for session in list.into_iter().take(100) {
-                if let Ok(snapshot) =
-                    super::load_session(&st, session.session, Some(session.started_millis)).await
-                {
-                    if snapshot.info.empty_unnamed() {
-                        continue;
-                    }
-                    if let Ok(value) = serde_json::to_value(&snapshot.info) {
-                        out.push(value);
-                    }
-                }
-            }
-            out
-        }
-        Err(_) => Vec::new(),
-    };
+    // Cold-start critical path: do not replay each session projection here.
+    // Full session rows are hydrated after first paint via `/session` (TUI
+    // kicks a non-blocking refresh after bootstrap marks sync complete).
+    let sessions: Vec<Value> = Vec::new();
     let session_status = st.runs.statuses();
     let lsp = st.engine.lsp().status(&workdir).await.unwrap_or_default();
     let formatter = if st.formatter_status.is_empty() {
