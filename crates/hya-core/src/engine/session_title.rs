@@ -40,7 +40,7 @@ impl SessionEngine {
             &definition,
             &self.model_categories,
             binding.agent_model_preference(definition.stable_id),
-            &|model| self.providers.resolve(model).is_some(),
+            &|model| self.provider_router().resolve(model).is_some(),
         );
         let model = options
             .model
@@ -80,7 +80,7 @@ impl SessionEngine {
             headers: Default::default(),
         };
         let mut stream = self
-            .providers
+            .provider_router()
             .stream(request, SessionId::new(), MessageId::new())
             .await?;
         let mut output = String::new();

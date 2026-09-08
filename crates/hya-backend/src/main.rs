@@ -390,7 +390,19 @@ async fn main() -> anyhow::Result<()> {
         Some(Command::Workflow { command }) => workflow_cmd::run(command, model, &db, yolo).await,
         Some(Command::Models { provider, verbose }) => {
             first_run_config_bootstrap(false)?;
-            let runtime = resolve_runtime(model).await;
+            let mut runtime = resolve_runtime(model).await;
+            if !runtime.pending_discovery.is_empty() {
+                let pending = std::mem::take(&mut runtime.pending_discovery);
+                let (router, catalog) = config::refresh_pending_catalogs(
+                    pending,
+                    runtime.catalog.as_ref(),
+                    &runtime.router,
+                )
+                .await
+                .context("refresh provider catalog")?;
+                runtime.router = router;
+                runtime.catalog = catalog;
+            }
             models_cmd::cmd_models(&runtime.catalog, provider, verbose)
         }
         Some(Command::Sessions { db: command_db }) => {

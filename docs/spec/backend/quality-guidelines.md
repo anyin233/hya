@@ -1066,10 +1066,19 @@ let metadata = tokio::fs::metadata(&root).await?;
 ### 3. Contracts
 
 - A normalized non-empty Hya model list is network-free and authoritative.
-- An empty list makes one bounded optional-auth discovery sequence each startup.
-- Router, engine, CLI, HTTP/bootstrap, SDK, and TUI consume one immutable
-  snapshot. Only an all-zero-live snapshot contains `hya/offline`.
-- Discovery never writes config/cache or reads foreign product configuration.
+- An empty list prefers `$XDG_CONFIG_HOME/hya/models.yml.cache` (same directory
+  as `config.yaml`) so startup does not block on discovery HTTP. Cache hits
+  publish discovered rows immediately (including `limit.context` /
+  `limit.output` and reasoning variants/default) and queue background refresh.
+- Cache miss still performs one bounded optional-auth discovery sequence during
+  `config::load`, then writes `models.yml.cache`.
+- Background refresh (`refresh_pending_catalogs`) rewrites the cache, swaps the
+  live engine router/catalog, and emits Compat SSE `catalog.updated` so the TUI
+  re-fetches `/config/providers`.
+- Explicit `providers.*.models` in config always wins over cache.
+- Router, engine, CLI, HTTP/bootstrap, SDK, and TUI consume one shared snapshot;
+  the snapshot may be replaced after background refresh.
+- Discovery never mutates `config.yaml` or reads foreign product configuration.
 
 ### 4. Validation & Error Matrix
 

@@ -141,6 +141,7 @@ pub(super) fn provider_info(
                     &model.model_id,
                     model.tools,
                     model.context,
+                    model.output,
                     &model.variants,
                     model.source,
                 ),
@@ -170,6 +171,7 @@ pub(super) fn model_info(
     model_id: &str,
     tools: bool,
     context: u32,
+    output: u32,
     variants: &[String],
     source: &'static str,
 ) -> ModelInfo {
@@ -201,7 +203,7 @@ pub(super) fn model_info(
         cost: Vec::new(),
         status: source,
         enabled: true,
-        limit: ModelLimit { context, output: 0 },
+        limit: ModelLimit { context, output },
         source,
     }
 }
@@ -249,6 +251,7 @@ mod tests {
             "claude-opus-4-8",
             true,
             200_000,
+            0,
             &["low".to_string(), "high".to_string()],
             "configured",
         );
@@ -269,6 +272,7 @@ mod tests {
             "gpt-5.6-sol",
             true,
             200_000,
+            0,
             &[
                 "max".to_string(),
                 "high".to_string(),

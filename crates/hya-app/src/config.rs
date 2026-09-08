@@ -53,7 +53,27 @@ pub struct ResolvedConfig {
     pub permission: InvocationPolicy,
     /// Web-search plane configuration.
     pub websearch: WebSearchConfig,
+    /// Providers that still need background discovery refresh after startup.
+    pub pending_discovery: Vec<PendingCatalogDiscovery>,
 }
+
+/// One empty-`models` provider deferred to background discovery refresh.
+#[derive(Clone, Debug)]
+pub struct PendingCatalogDiscovery {
+    /// Declared provider id.
+    pub provider_id: String,
+    /// Protocol kind for discovery adapters.
+    pub kind: ProviderKind,
+    /// Catalog base URL from config.
+    pub base_url: String,
+    pub(crate) credential: ProviderCredential,
+    pub(crate) provider: ParsedProvider,
+}
+
+pub use crate::models_cache::{
+    CachedModelEntry, CachedModelLimit, ModelsCacheFile, models_cache_path, read_models_cache,
+    upsert_provider_models, write_models_cache_file,
+};
 
 /// Top-level shape of `~/.config/hya/config.yaml`.
 #[derive(Debug, Deserialize)]
@@ -215,14 +235,15 @@ impl From<ProviderKindConfig> for ProviderKind {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct ParsedModel {
     id: String,
     reasoning_variants: Vec<String>,
     reasoning_default: Option<ReasoningEffort>,
 }
 
-struct ParsedProvider {
+#[derive(Clone, Debug)]
+pub(crate) struct ParsedProvider {
     id: String,
     kind: ProviderKind,
     base_url: String,
@@ -231,8 +252,8 @@ struct ParsedProvider {
 }
 
 /// Resolved optional authentication material for one configured provider.
-#[derive(Clone, PartialEq, Eq)]
-struct ProviderCredential {
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ProviderCredential {
     /// Hya-owned bearer or API-key material, when configured.
     token: Option<String>,
     /// When true, attach Grok Build CLI chat-proxy session headers.
@@ -1561,6 +1582,11 @@ async fn resolve_provider_plan(
 }
 
 /// Load Hya config and resolve every empty provider catalog before publishing.
+///
+/// Providers with an explicit non-empty `models:` list stay authoritative.
+/// Empty-`models` providers prefer `$XDG_CONFIG_HOME/hya/models.yml.cache` so
+/// startup does not wait on discovery HTTP. Those providers are also queued on
+/// [`ResolvedConfig::pending_discovery`] for background refresh.
 pub async fn load() -> anyhow::Result<Option<ResolvedConfig>> {
     let Some(path) = config_path() else {
         return Ok(None);
@@ -1585,19 +1611,49 @@ pub async fn load() -> anyhow::Result<Option<ResolvedConfig>> {
         return Ok(None);
     }
 
+    let cache = crate::models_cache::read_models_cache().unwrap_or_default();
     let semaphore = Arc::new(tokio::sync::Semaphore::new(4));
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
     let mut tasks = tokio::task::JoinSet::new();
     let mut plans = Vec::new();
+    let mut pending_discovery = Vec::new();
     for provider in parsed {
         let credential = resolve_provider_credential(&provider);
         if !provider.models.is_empty() {
             plans.push(resolve_provider_plan(provider, credential).await?);
             continue;
         }
+        // Prefer the durable cache so cold listen does not block on discovery.
+        if let Some(cached_models) = cache.providers.get(&provider.id) {
+            let cleaned = cached_models
+                .iter()
+                .cloned()
+                .filter(|entry| !entry.id.trim().is_empty())
+                .collect::<Vec<_>>();
+            if !cleaned.is_empty() {
+                pending_discovery.push(PendingCatalogDiscovery {
+                    provider_id: provider.id.clone(),
+                    kind: provider.kind,
+                    base_url: provider.base_url.clone(),
+                    credential: credential.clone(),
+                    provider: provider.clone(),
+                });
+                plans.push(plan_from_cached_models(provider, credential, cleaned)?);
+                continue;
+            }
+        }
+        // Cache miss: keep today's blocking discovery for correctness, then
+        // still queue a refresh so later startups hit the warm path.
         let timeout_provider_id = provider.id.clone();
         let timeout_kind = provider.kind;
         let timeout_auth = status_auth(&credential);
+        pending_discovery.push(PendingCatalogDiscovery {
+            provider_id: provider.id.clone(),
+            kind: provider.kind,
+            base_url: provider.base_url.clone(),
+            credential: credential.clone(),
+            provider: provider.clone(),
+        });
         let semaphore = Arc::clone(&semaphore);
         tasks.spawn(async move {
             match tokio::time::timeout_at(deadline, async {
@@ -1653,6 +1709,8 @@ pub async fn load() -> anyhow::Result<Option<ResolvedConfig>> {
     let websearch = file
         .tools
         .map_or_else(WebSearchConfig::default, |tools| tools.websearch);
+    // Persist any newly discovered rows so the next cold start can skip HTTP.
+    write_discovered_models_cache(&pending_discovery, &catalog);
     Ok(Some(ResolvedConfig {
         router,
         default_model: catalog.default_model().to_string(),
@@ -1664,7 +1722,177 @@ pub async fn load() -> anyhow::Result<Option<ResolvedConfig>> {
         categories,
         permission,
         websearch,
+        pending_discovery,
     }))
+}
+
+fn plan_from_cached_models(
+    provider: ParsedProvider,
+    credential: ProviderCredential,
+    cached: Vec<crate::models_cache::CachedModelEntry>,
+) -> anyhow::Result<ProviderPlanResult> {
+    let auth_state = status_auth(&credential);
+    let ids = cached
+        .iter()
+        .map(|entry| entry.id.trim().to_string())
+        .filter(|id| !id.is_empty())
+        .collect::<Vec<_>>();
+    let route = route_for_plan(
+        &provider,
+        &credential,
+        &ids,
+        ModelCatalogSource::Discovered,
+    )?
+    .with_model_reasoning_variants(
+        cached
+            .iter()
+            .filter(|entry| !entry.reasoning_variants.is_empty())
+            .map(|entry| (entry.id.clone(), entry.reasoning_variants.clone())),
+    )
+    .with_model_reasoning_defaults(cached.iter().map(|entry| {
+        (
+            entry.id.clone(),
+            entry
+                .reasoning_default
+                .as_deref()
+                .and_then(ReasoningEffort::parse),
+        )
+    }))
+    .with_model_limits(cached.iter().map(|entry| {
+        (
+            entry.id.clone(),
+            hya_provider::ModelLimitOverride {
+                context: entry.limit.context,
+                output: entry.limit.output,
+            },
+        )
+    }));
+    let models = hya_provider::Provider::catalog(&route);
+    Ok(ProviderPlanResult {
+        route: Some(route),
+        models,
+        state: ProviderCatalogState {
+            provider_id: provider.id,
+            kind: provider.kind,
+            source: ProviderCatalogSource::Discovered,
+            auth: auth_state,
+            result: ProviderCatalogResult::Models,
+        },
+    })
+}
+
+fn write_discovered_models_cache(
+    pending: &[PendingCatalogDiscovery],
+    catalog: &ProviderCatalogSnapshot,
+) {
+    if pending.is_empty() {
+        return;
+    }
+    let mut file = crate::models_cache::read_models_cache().unwrap_or_default();
+    for pending in pending {
+        let models = catalog
+            .models()
+            .iter()
+            .filter(|model| {
+                model.provider_id == pending.provider_id
+                    && model.source == ModelCatalogSource::Discovered
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        crate::models_cache::upsert_provider_models(&mut file, &pending.provider_id, &models);
+    }
+    let _ = crate::models_cache::write_models_cache_file(&file);
+}
+
+/// Force network discovery for deferred empty-`models` providers, rewrite
+/// `models.yml.cache`, and return rebuilt routes plus a replacement snapshot.
+///
+/// Callers swap the result onto the live [`hya_core::SessionEngine`] and notify
+/// the TUI (`catalog.updated`) after this future completes.
+///
+/// # Errors
+/// Returns discovery, route-build, or cache write failures.
+pub async fn refresh_pending_catalogs(
+    pending: Vec<PendingCatalogDiscovery>,
+    current: &ProviderCatalogSnapshot,
+    current_router: &ProviderRouter,
+) -> anyhow::Result<(ProviderRouter, Arc<ProviderCatalogSnapshot>)> {
+    if pending.is_empty() {
+        return Ok((
+            current_router.clone(),
+            Arc::new(ProviderCatalogSnapshot::build(
+                current.models().to_vec(),
+                current.providers().to_vec(),
+                Some(current.default_model().clone()),
+            )),
+        ));
+    }
+    let pending_ids = pending
+        .iter()
+        .map(|entry| entry.provider_id.clone())
+        .collect::<BTreeSet<_>>();
+    let mut refreshed_plans = Vec::with_capacity(pending.len());
+    for entry in pending {
+        refreshed_plans.push(
+            resolve_provider_plan(entry.provider, entry.credential).await?,
+        );
+    }
+    let mut cache = crate::models_cache::read_models_cache().unwrap_or_default();
+    for plan in &refreshed_plans {
+        crate::models_cache::upsert_provider_models(
+            &mut cache,
+            &plan.state.provider_id,
+            &plan.models,
+        );
+    }
+    crate::models_cache::write_models_cache_file(&cache)?;
+
+    let mut states = current
+        .providers()
+        .iter()
+        .filter(|state| !pending_ids.contains(&state.provider_id))
+        .cloned()
+        .collect::<Vec<_>>();
+    states.extend(refreshed_plans.iter().map(|plan| plan.state.clone()));
+    states.sort_by(|left, right| left.provider_id.cmp(&right.provider_id));
+
+    let mut models = current
+        .models()
+        .iter()
+        .filter(|model| !pending_ids.contains(&model.provider_id))
+        .cloned()
+        .collect::<Vec<_>>();
+    for plan in &refreshed_plans {
+        models.extend(plan.models.iter().cloned());
+    }
+
+    let catalog = Arc::new(ProviderCatalogSnapshot::build(
+        models,
+        states,
+        Some(current.default_model().clone()),
+    ));
+
+    let mut router = ProviderRouter::new();
+    for provider in current_router.providers() {
+        if pending_ids.contains(provider.id()) {
+            continue;
+        }
+        router = router.with(Arc::clone(provider));
+    }
+    for plan in refreshed_plans {
+        if let Some(route) = plan.route {
+            router = router.with(Arc::new(route));
+        }
+    }
+    if catalog
+        .models()
+        .iter()
+        .all(|model| model.source == ModelCatalogSource::Offline)
+    {
+        router = router.with(Arc::new(hya_provider::DevProvider::new()));
+    }
+    router = router.with_catalog_snapshot(Arc::clone(&catalog));
+    Ok((router, catalog))
 }
 
 #[cfg(test)]

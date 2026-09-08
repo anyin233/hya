@@ -50,6 +50,7 @@ struct CatalogModel {
     model_id: String,
     tools: bool,
     context: u32,
+    output: u32,
     variants: Vec<String>,
     source: &'static str,
 }
@@ -78,7 +79,7 @@ async fn legacy_config_providers(State(st): State<ServerState>) -> Json<LegacyCo
     let models = catalog_models(&st);
     let states = catalog_states(&st);
     Json(LegacyConfigProviders {
-        providers: provider_infos(&models, states),
+        providers: provider_infos(&models, &states),
         default: default_models(&models),
         default_model: catalog_default(&st),
     })
@@ -88,10 +89,10 @@ async fn legacy_provider_list(State(st): State<ServerState>) -> Json<LegacyProvi
     let models = catalog_models(&st);
     let states = catalog_states(&st);
     Json(LegacyProviderList {
-        all: provider_infos(&models, states),
+        all: provider_infos(&models, &states),
         default: default_models(&models),
         default_model: catalog_default(&st),
-        connected: connected_provider_ids(states),
+        connected: connected_provider_ids(&states),
     })
 }
 
@@ -135,7 +136,8 @@ async fn provider_list(
     headers: HeaderMap,
 ) -> Json<LocationResponse<Vec<ProviderInfo>>> {
     let models = catalog_models(&st);
-    let data = provider_infos(&models, catalog_states(&st));
+    let states = catalog_states(&st);
+    let data = provider_infos(&models, &states);
     Json(location_response(&st, &query, &headers, data))
 }
 
@@ -147,7 +149,7 @@ async fn provider_get(
 ) -> Result<Response, ApiError> {
     let models = catalog_models(&st);
     let states = catalog_states(&st);
-    if !provider_ids(states).iter().any(|id| id == &provider_id) {
+    if !provider_ids(&states).iter().any(|id| id == &provider_id) {
         let message = format!("Provider not found: {provider_id}");
         return Ok((
             StatusCode::NOT_FOUND,
@@ -185,6 +187,7 @@ async fn model_list(
                 &model.model_id,
                 model.tools,
                 model.context,
+                model.output,
                 &model.variants,
                 model.source,
             )
@@ -202,14 +205,15 @@ fn catalog_models(st: &ServerState) -> Vec<CatalogModel> {
             model_id: model.model_id.clone(),
             tools: model.capabilities.streaming_tool_calls,
             context: model.capabilities.max_context,
+            output: model.capabilities.max_output,
             variants: model.reasoning_variants.clone(),
             source: model_source(model.source),
         })
         .collect()
 }
 
-fn catalog_states(st: &ServerState) -> &[ProviderCatalogState] {
-    st.engine.provider_catalog_snapshot().providers()
+fn catalog_states(st: &ServerState) -> Vec<ProviderCatalogState> {
+    st.engine.provider_catalog_snapshot().providers().to_vec()
 }
 
 fn provider_ids(states: &[ProviderCatalogState]) -> Vec<String> {
@@ -295,9 +299,9 @@ fn location_response<T>(
 pub(super) fn bootstrap_provider_payload(st: &ServerState) -> (Value, Value) {
     let models = catalog_models(st);
     let states = catalog_states(st);
-    let providers = provider_infos(&models, states);
+    let providers = provider_infos(&models, &states);
     let default = default_models(&models);
-    let connected = connected_provider_ids(states);
+    let connected = connected_provider_ids(&states);
     (
         json!({
             "providers": providers,

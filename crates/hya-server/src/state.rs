@@ -5,7 +5,8 @@ use std::sync::Arc;
 use hya_core::{AgentSpec, SessionEngine};
 use hya_proto::WorkspaceAdapterInfo;
 use hya_tool::{AskRequest, FormatterStatus, QuestionRequest};
-use tokio::sync::mpsc;
+use serde_json::Value;
+use tokio::sync::{broadcast, mpsc};
 
 use crate::agent_model_control::{AgentModelControl, EmptyAgentModelControl};
 use crate::mcp_control::{EmptyMcpControl, McpControl};
@@ -30,6 +31,7 @@ pub struct AppState {
     workspace_adapters: Vec<WorkspaceAdapterInfo>,
     formatter_status: Vec<FormatterStatus>,
     default_agent: Option<String>,
+    catalog_updates: broadcast::Sender<Value>,
 }
 
 impl AppState {
@@ -37,6 +39,7 @@ impl AppState {
     #[must_use]
     pub fn new(engine: Arc<SessionEngine>, agent: Arc<AgentSpec>) -> Self {
         let permission_requests = pending::PermissionRequests::new(engine.store().clone());
+        let (catalog_updates, _) = broadcast::channel(16);
         Self {
             engine,
             agent,
@@ -48,6 +51,7 @@ impl AppState {
             workspace_adapters: Vec::new(),
             formatter_status: Vec::new(),
             default_agent: None,
+            catalog_updates,
         }
     }
 
@@ -107,6 +111,34 @@ impl AppState {
         self.formatter_status = status;
         self
     }
+
+    /// Publish a Compat `catalog.updated` event to global/session SSE subscribers.
+    pub fn notify_catalog_updated(&self) {
+        let payload = serde_json::json!({
+            "id": format!(
+                "catalog-{}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|duration| duration.as_millis())
+                    .unwrap_or(0)
+            ),
+            "type": "catalog.updated",
+            "properties": {}
+        });
+        let _ = self.catalog_updates.send(payload);
+    }
+
+    /// Subscribe to provider-catalog refresh notifications.
+    #[must_use]
+    pub fn subscribe_catalog_updates(&self) -> broadcast::Receiver<Value> {
+        self.catalog_updates.subscribe()
+    }
+
+    /// Clone the catalog-update publisher for background refresh tasks.
+    #[must_use]
+    pub fn catalog_updates_sender(&self) -> broadcast::Sender<Value> {
+        self.catalog_updates.clone()
+    }
 }
 
 #[derive(Clone)]
@@ -126,6 +158,7 @@ pub(crate) struct ServerState {
     pub(crate) workspace_adapters: Vec<WorkspaceAdapterInfo>,
     pub(crate) formatter_status: Vec<FormatterStatus>,
     pub(crate) default_agent: Option<String>,
+    pub(crate) catalog_updates: broadcast::Sender<Value>,
 }
 
 impl ServerState {
@@ -147,6 +180,7 @@ impl ServerState {
             workspace_adapters: app.workspace_adapters,
             formatter_status: app.formatter_status,
             default_agent: app.default_agent,
+            catalog_updates: app.catalog_updates,
         }
     }
 

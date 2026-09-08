@@ -53,7 +53,7 @@ pub use catalog_discovery::{
 pub use dev::DevProvider;
 pub use fake::{FakeProvider, FakeStep};
 pub use google::{GoogleDecoder, GoogleProtocol};
-pub use http::{AuthRefresher, BearerResolver, HttpProvider, ProviderKind};
+pub use http::{AuthRefresher, BearerResolver, HttpProvider, ModelLimitOverride, ProviderKind};
 pub use openai::{
     COMPACT_CONTEXT_MARKER, OpenAiChatDecoder, OpenAiChatProtocol, OpenAiResponsesDecoder,
     OpenAiResponsesProtocol, RESPONSES_COMPACT_ITEMS_MARKER, encode_input_items,
@@ -159,6 +159,8 @@ pub struct Capabilities {
     pub reasoning_request: bool,
     /// Advertised context window in tokens.
     pub max_context: u32,
+    /// Advertised max output tokens (`0` means unspecified / unknown).
+    pub max_output: u32,
 }
 
 pub(crate) fn append_identity_bytes(output: &mut Vec<u8>, bytes: &[u8]) -> Option<()> {
@@ -201,6 +203,7 @@ pub(crate) fn append_capabilities_identity(
         u8::from(caps.reasoning_request),
     ]);
     output.extend_from_slice(&caps.max_context.to_be_bytes());
+    output.extend_from_slice(&caps.max_output.to_be_bytes());
     Some(())
 }
 
