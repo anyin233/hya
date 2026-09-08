@@ -1,7 +1,6 @@
-# 0.36.22
+# 0.36.23
 
-## Steer and queue
+## Abort in-flight provider HTTP
 
-- While a turn is running, Enter queues a follow-up instead of returning session-busy.
-- `ctrl+alt+return` aborts the current turn and sends the composer text now.
-- Wire `session.queued_prompts` (`<leader>q` when the queue is not empty) to inspect and delete waiting follow-ups.
+- Dropping a provider EventStream (Escape / session abort) now closes the HTTP body immediately instead of waiting for the SSE idle deadline.
+- Keepalive-only streams no longer keep the model connection open after the turn is cancelled.
