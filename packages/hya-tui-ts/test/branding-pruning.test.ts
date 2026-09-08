@@ -61,7 +61,7 @@ test("public hya presentation and static registrations are stable", async () => 
 test("reachable source contains no unsupported controls or product branding", async () => {
   const files = await sourceFiles()
   const forbiddenFeature =
-    /global\.upgrade|experimental\.console|console\.org|session\.(?:un)?share|workspace\.(?:list|set|create|remove|warp|adapter)|provider\.auth|plugins\.(?:list|install)|opencode\.ai|opencode\s+mcp\s+auth|consoleManagedProviders|isConsoleManagedProvider|Open console for more details|dialog-provider|DialogWorkspace|DialogRetryAction/i
+    /global\.upgrade|experimental\.console|console\.org|session\.(?:un)?share|workspace\.(?:list|set|create|remove|warp|adapter)|dialog\.move_session|provider\.auth|plugins\.(?:list|install)|opencode\.ai|opencode\s+mcp\s+auth|consoleManagedProviders|isConsoleManagedProvider|Open console for more details|dialog-provider|DialogWorkspace|DialogRetryAction/i
   // Stored user-state/protocol constants, not displayed branding, so they remain allowed.
   const allowedProtocolStrings = new Set([
     "opencode.mode",

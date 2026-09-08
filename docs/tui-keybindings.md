@@ -151,6 +151,7 @@ Map of every accepted config key to the command (or role) it drives:
 | `model_cycle_favorite` | `model.cycle_favorite` | `unbound` |
 | `model_cycle_favorite_reverse` | `model.cycle_favorite_reverse` | `unbound` |
 | `mcp_list` | `mcp.list` | `unbound` |
+| `agent_models` | `agent.model.list` | `unbound` |
 | `agent_list` | `agent.list` | `<leader>a` |
 | `agent_cycle` | `agent.cycle` | `tab` |
 | `agent_cycle_reverse` | `agent.cycle.reverse` | `shift+tab` |
@@ -228,9 +229,6 @@ Map of every accepted config key to the command (or role) it drives:
 | `dialog.select.submit` | `dialog.select.submit` (binding name = key) | `return` |
 | `dialog.prompt.submit` | `dialog.prompt.submit` (binding name = key) | `return` |
 | `dialog.mcp.toggle` | `dialog.mcp.toggle` (binding name = key) | `space` |
-| `dialog.move_session.new` | `dialog.move_session.new` (binding name = key) | `ctrl+m` |
-| `dialog.move_session.delete` | `dialog.move_session.delete` (binding name = key) | `ctrl+d` |
-| `dialog.move_session.refresh` | `dialog.move_session.refresh` (binding name = key) | `ctrl+r` |
 | `prompt.autocomplete.prev` | `prompt.autocomplete.prev` (binding name = key) | `up,ctrl+p` |
 | `prompt.autocomplete.next` | `prompt.autocomplete.next` (binding name = key) | `down,ctrl+n` |
 | `prompt.autocomplete.hide` | `prompt.autocomplete.hide` (binding name = key) | `escape` |
@@ -263,7 +261,7 @@ collisions. Examples (not exhaustive):
 | --- | --- |
 | `<leader>q` | `session.queued_prompts` (accepted but currently unwired); `<leader>q` alternative of `app.exit` |
 | `<leader>h` | `session.toggle.conceal`; `tips.toggle` |
-| `ctrl+d` | `app.exit`; `session.delete`; `stash.delete`; `input.delete`; `dialog.move_session.delete` |
+| `ctrl+d` | `app.exit`; `session.delete`; `stash.delete`; `input.delete` |
 | `ctrl+f` | `session.pin.toggle`; `model.dialog.favorite`; `permission.prompt.fullscreen`; `input.move.right` |
 | `ctrl+p` | `command.palette.show`; `dialog.select.prev`; `prompt.autocomplete.prev` |
 | `escape` | `session.interrupt`; `diff.close`; `prompt.autocomplete.hide` (and shell-mode exit when shell mode is active) |
@@ -451,9 +449,6 @@ Active while a select-style dialog is open.
 | `dialog.select.submit` | `return` | — | Submit selected item. |
 | `dialog.prompt.submit` | `return` | — | Submit a dialog text prompt. |
 | `dialog.mcp.toggle` | `space` | — | Toggle an MCP server in the MCP dialog. |
-| `dialog.move_session.new` | `ctrl+m` | — | New project copy (move-session dialog). |
-| `dialog.move_session.delete` | `ctrl+d` | — | Delete project copy. |
-| `dialog.move_session.refresh` | `ctrl+r` | — | Refresh project copies. |
 
 ## Autocomplete
 

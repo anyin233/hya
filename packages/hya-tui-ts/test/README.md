@@ -1,6 +1,6 @@
 # hya-tui-ts tests
 
-Fourteen Bun test files under this directory. Run from the package root:
+22 Bun test files under this directory. Run from the package root:
 
 ```sh
 cd packages/hya-tui-ts
@@ -128,6 +128,14 @@ client-only importable runtime (install/release packaging would break).
 | Suite | Role |
 | --- | --- |
 | `agent-visibility.test.ts` | Which agents appear in TUI selector vs subagent autocomplete |
+| `agent-models.test.ts` | Agent model row decoding, capability gating, and `/agent-models` command map |
+| `agent-model-sync.test.tsx` | Dialog save/override sync against mocked `/tui/agent-models` |
+| `model-catalog.test.ts` | Model catalog decoding and picker rows |
+| `coding-tool-presentation.test.ts` | Coding-tool view mapping from projected SDK parts |
+| `coding-tool-sync.test.tsx` | Coding-tool render/sync against mocked session parts |
+| `coding-tool-render.test.tsx` | Narrow/wide coding-tool layout |
+| `heap-snapshot.test.ts` | Palette heap-snapshot writer path, permissions, and errors |
+| `keybind-inventory.test.ts` | Shipped keybind registry matches current command docs |
 | `task-presentation.test.ts` | Multi-member task presentation helpers (unit) |
 | `subagent-workspace.test.ts` | Run-tree / split-pane workspace reducer (unit) |
 | `sdk-spine.test.ts` | `launch` + `observeSdkSpine` against a mock server |
