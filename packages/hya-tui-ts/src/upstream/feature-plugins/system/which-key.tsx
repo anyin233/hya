@@ -601,7 +601,7 @@ const tui: TuiPlugin = async (api) => {
 
 const plugin: BuiltinTuiPlugin = {
   id: "which-key",
-  enabled: false,
+  enabled: true,
   tui,
 }
 

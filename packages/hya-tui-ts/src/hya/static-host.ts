@@ -1,12 +1,12 @@
 import type { TuiPluginApi, TuiPluginMeta, TuiPluginStatus, TuiSlotPlugin } from "@opencode-ai/plugin/tui"
 
-import { createBuiltinPlugins } from "../upstream/feature-plugins/builtins"
+import { loadedBuiltinPlugins } from "../upstream/feature-plugins/builtins"
 import type { TuiPluginHost } from "../upstream/plugin/runtime"
 
 /**
  * Create the static (in-process) TUI plugin host used by hya.
  *
- * Loads only enabled built-in plugins from `createBuiltinPlugins()` — no dynamic
+ * Loads only enabled built-in plugins from `loadedBuiltinPlugins()` — no dynamic
  * external plugin loader. Tracks dispose hooks, slot registrations, routes,
  * events, and keymap layers so `dispose()` tears them down in reverse order.
  *
@@ -27,7 +27,7 @@ export function createStaticPluginHost(): TuiPluginHost {
         input.runtime.clear()
       }
 
-      const plugins = createBuiltinPlugins().filter((plugin) => plugin.enabled !== false)
+      const plugins = loadedBuiltinPlugins()
       await Promise.all(
         plugins.map(async (plugin, index) => {
           const controller = new AbortController()

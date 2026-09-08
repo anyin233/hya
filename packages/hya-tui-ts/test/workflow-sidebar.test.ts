@@ -113,6 +113,16 @@ test("static host unregisters the Workflow sidebar during disposal", async () =>
         return () => {}
       },
     },
+    tuiConfig: {
+      keybinds: {
+        gather() {
+          return []
+        },
+        get() {
+          return []
+        },
+      },
+    },
   }
   const host = createStaticPluginHost()
 

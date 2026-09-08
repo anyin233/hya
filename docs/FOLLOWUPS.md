@@ -72,11 +72,6 @@ confirmed against the source directly.
   ([`crates/hya-plugin/src/host.rs:27`](../crates/hya-plugin/src/host.rs)) and no
   backpressure to the engine, so a slow plugin loses events rather than slowing
   the producer.
-- **The which-key panel ships disabled.**
-  `packages/hya-tui-ts/src/upstream/feature-plugins/system/which-key.tsx:604` sets
-  `enabled: false` and `src/hya/static-host.ts:21` filters on
-  `plugin.enabled !== false`, yet the full keybinding defaults and a Home hint
-  still refer to it. It reads as an available feature.
 - **`session.page.up` / `.down` scroll half a page.** The keybinding descriptions
   say "one page"; the handlers use `height / 2`
   ([`packages/hya-tui-ts/src/upstream/routes/session/index.tsx:889`](../packages/hya-tui-ts/src/upstream/routes/session/index.tsx)).
