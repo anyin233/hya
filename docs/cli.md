@@ -197,7 +197,7 @@ therefore expands those templates.
 
 The frontend ships a named keybind registry in
 [`packages/hya-tui-ts/src/upstream/config/keybind.ts`](../packages/hya-tui-ts/src/upstream/config/keybind.ts)
-(`Definitions`: **172** named entries including `leader` and chord defaults).
+(`Definitions`: **175** named entries including `leader` and chord defaults).
 Each registry entry is `{ default, description }`.
 
 - The special entry `leader` defaults to `ctrl+x`. Bindings written as

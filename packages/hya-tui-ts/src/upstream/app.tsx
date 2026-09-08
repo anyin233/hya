@@ -47,6 +47,7 @@ import { Session } from "./routes/session"
 import { PromptHistoryProvider } from "./component/prompt/history"
 import { FrecencyProvider } from "./component/prompt/frecency"
 import { PromptStashProvider } from "./component/prompt/stash"
+import { QueuedPromptProvider } from "./component/prompt/queued"
 import { ToastProvider, useToast } from "./ui/toast"
 import { isDefaultTitle } from "./util/session"
 import { KVProvider, useKV } from "./context/kv"
@@ -282,6 +283,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                                                 <ThemeProvider mode={mode}>
                                                   <LocalProvider>
                                                     <PromptStashProvider>
+                                                      <QueuedPromptProvider>
                                                       <DialogProvider>
                                                         <FrecencyProvider>
                                                           <PromptHistoryProvider>
@@ -296,6 +298,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                                                           </PromptHistoryProvider>
                                                         </FrecencyProvider>
                                                       </DialogProvider>
+                                                      </QueuedPromptProvider>
                                                     </PromptStashProvider>
                                                   </LocalProvider>
                                                 </ThemeProvider>

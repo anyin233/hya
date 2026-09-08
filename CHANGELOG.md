@@ -1,6 +1,7 @@
-# 0.36.21
+# 0.36.22
 
-## Which-key panel
+## Steer and queue
 
-- Load the which-key builtin in the shipped static host.
-- Cover plugin enablement, command mapping, and the default-on docs contract in Bun tests.
+- While a turn is running, Enter queues a follow-up instead of returning session-busy.
+- `ctrl+alt+return` aborts the current turn and sends the composer text now.
+- Wire `session.queued_prompts` (`<leader>q` when the queue is not empty) to inspect and delete waiting follow-ups.

@@ -1,6 +1,6 @@
 # hya-tui-ts tests
 
-23 Bun test files under this directory. Run from the package root:
+24 Bun test files under this directory. Run from the package root:
 
 ```sh
 cd packages/hya-tui-ts
