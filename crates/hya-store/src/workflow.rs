@@ -157,9 +157,15 @@ impl SessionStore {
     ) -> Result<Vec<Envelope>, StoreError> {
         self.require_runtime_owner(current_owner)?;
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
-        let rows = sqlx::query("SELECT DISTINCT session_id FROM event_log ORDER BY session_id")
-            .fetch_all(&mut *tx)
-            .await?;
+        // Only Sessions that ever started a Workflow can be nonterminal. Scanning
+        // every idle Session's full event_log dominated cold listen on large DBs.
+        let rows = sqlx::query(
+            "SELECT DISTINCT session_id FROM event_log \
+             WHERE json_extract(payload, '$.type') = 'workflow_run_started' \
+             ORDER BY session_id",
+        )
+        .fetch_all(&mut *tx)
+        .await?;
         let mut recovered = Vec::new();
         for row in rows {
             let key: Vec<u8> = row.try_get("session_id")?;

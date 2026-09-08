@@ -199,3 +199,112 @@ async fn tui_bootstrap_returns_bound_catalog_rows_and_ignores_legacy_agent_files
         "subagent must remain present but outside primary selector"
     );
 }
+
+/// Bootstrap must not replay every session projection on the critical path.
+///
+/// Session rows are hydrated after first paint via `/session`; returning an empty
+/// `sessions` array here keeps cold start independent of `event_log` size.
+#[tokio::test]
+async fn tui_bootstrap_returns_empty_sessions_without_replaying_event_logs() {
+    use hya_proto::{Event, MessageId, PartId, Role, SessionId};
+
+    let workdir = tempdir();
+    let store = SessionStore::connect_memory().await.unwrap();
+    for _ in 0..8 {
+        let session = SessionId::new();
+        let message = MessageId::new();
+        let part = PartId::new();
+        store
+            .append_event(
+                session,
+                &Event::SessionCreated {
+                    session,
+                    parent: None,
+                    agent: "build".into(),
+                    model: "dev/fake".into(),
+                    workdir: workdir.to_string_lossy().into(),
+                },
+            )
+            .await
+            .unwrap();
+        store
+            .append_event(
+                session,
+                &Event::MessageStarted {
+                    session,
+                    message,
+                    role: Role::User,
+                },
+            )
+            .await
+            .unwrap();
+        store
+            .append_event(
+                session,
+                &Event::TextStart {
+                    session,
+                    message,
+                    part,
+                },
+            )
+            .await
+            .unwrap();
+        for i in 0..64 {
+            store
+                .append_event(
+                    session,
+                    &Event::TextDelta {
+                        session,
+                        message,
+                        part,
+                        delta: format!("chunk-{i} "),
+                    },
+                )
+                .await
+                .unwrap();
+        }
+        store
+            .append_event(
+                session,
+                &Event::SessionTitled {
+                    session,
+                    title: format!("seeded-{session}"),
+                },
+            )
+            .await
+            .unwrap();
+    }
+    assert_eq!(store.list_sessions().await.unwrap().len(), 8);
+
+    let providers = Arc::new(ProviderRouter::new().with(Arc::new(FakeProvider::scripted(vec![]))));
+    let (permission, _rx) = PermissionPlane::new(PermissionRules::new(vec![]));
+    let engine = Arc::new(SessionEngine::new(
+        store,
+        providers,
+        test_runtime(Arc::new(ToolRegistry::builtins())),
+        permission,
+        EventBus::default(),
+    ));
+    let agent = Arc::new(AgentSpec {
+        name: hya_proto::AgentName::new("build"),
+        model: hya_proto::ModelRef::new("dev/fake"),
+        system_prompt: "test".into(),
+        workdir: workdir.clone(),
+        reasoning: None,
+    });
+    let app = router(AppState::new(engine, agent));
+
+    let started = std::time::Instant::now();
+    let (status, body) = get_json(app, "/tui/bootstrap", &workdir).await;
+    let elapsed = started.elapsed();
+    assert_eq!(status, StatusCode::OK, "bootstrap body: {body}");
+    assert_eq!(
+        body["sessions"],
+        serde_json::json!([]),
+        "bootstrap must omit hydrated sessions so cold start skips event_log replay"
+    );
+    assert!(
+        elapsed.as_millis() < 500,
+        "bootstrap must stay fast with seeded event logs, took {elapsed:?}"
+    );
+}

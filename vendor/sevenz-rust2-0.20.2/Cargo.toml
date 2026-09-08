@@ -11,7 +11,7 @@ rust-version = "1.85"
 version = "0.20.2"
 
 [lib]
-crate-type = ["cdylib", "rlib"]
+crate-type = ["rlib"]
 
 [features]
 default = ["aes256", "bzip2", "compress", "ppmd", "util"]

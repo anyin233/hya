@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use clap::{Parser, Subcommand};
 
 /// Public launcher flags for TUI attach/spawn and backend subcommands.
-#[derive(Debug, Parser)]
+#[derive(Debug, Clone, Parser)]
 #[command(name = invocation_name(), version, about = "hya TypeScript terminal frontend")]
 pub struct Cli {
     /// Backend-backed subcommands (when absent, launch the TypeScript TUI).
@@ -303,10 +303,15 @@ pub fn backend_command_args(command: &Command) -> Vec<OsString> {
 pub struct BunCommand {
     /// Bun executable path.
     pub program: PathBuf,
-    /// Full argv including `src/main.tsx` and launcher flags.
+    /// Full argv including the TUI entry script and launcher flags.
     pub args: Vec<OsString>,
     /// Working directory (TUI runtime tree root).
     pub current_dir: PathBuf,
+    /// Optional FIFO path used to deliver the backend URL after Bun starts.
+    ///
+    /// When set, the entry is the boot script and the parent must write one URL
+    /// line once listen succeeds so module load can overlap backend bind.
+    pub url_fifo: Option<PathBuf>,
 }
 
 /// Build the attached-mode Bun command using the process current directory.
@@ -325,7 +330,24 @@ pub fn build_bun_command_from(
         .server
         .as_deref()
         .ok_or_else(|| "--server is required to construct an attached command".to_string())?;
-    build_bun_command_with_url(cli, runtime_dir, cwd, url)
+    build_bun_command_with_url(cli, runtime_dir, cwd, url, false)
+}
+
+/// Build a Bun command that waits for the listen URL on a FIFO (owned-mode overlap).
+pub fn build_bun_command_with_url_fifo(
+    cli: &Cli,
+    runtime_dir: &Path,
+    cwd: &Path,
+    fifo: &Path,
+) -> Result<BunCommand, String> {
+    // Placeholder URL satisfies clap wiring in tests that still pass `--server`;
+    // the boot entry ignores argv `--url` when `HYA_SERVER_URL_FIFO` is set.
+    build_bun_command_with_url(cli, runtime_dir, cwd, "http://127.0.0.1:0", true).map(
+        |mut command| {
+            command.url_fifo = Some(fifo.to_path_buf());
+            command
+        },
+    )
 }
 
 fn build_bun_command_with_url(
@@ -333,6 +355,7 @@ fn build_bun_command_with_url(
     runtime_dir: &Path,
     cwd: &Path,
     url: &str,
+    boot_entry: bool,
 ) -> Result<BunCommand, String> {
     let project = cli
         .project
@@ -351,8 +374,9 @@ fn build_bun_command_with_url(
             runtime_dir.display()
         )
     })?;
+    let entry = resolve_tui_entry(&runtime_dir, boot_entry);
     let mut args = vec![
-        OsString::from("src/main.tsx"),
+        OsString::from(entry),
         OsString::from("--url"),
         OsString::from(url),
         OsString::from("--project"),
@@ -372,7 +396,45 @@ fn build_bun_command_with_url(
         program: cli.bun.clone(),
         args,
         current_dir: runtime_dir,
+        url_fifo: None,
     })
+}
+
+/// Prefer the production bundle when present; fall back to TypeScript sources.
+///
+/// Override with `HYA_TUI_ENTRY=src` to force the dev `src/*.tsx` tree, or set
+/// `HYA_TUI_ENTRY` to an explicit relative entry path under the runtime dir.
+fn resolve_tui_entry(runtime_dir: &Path, boot_entry: bool) -> String {
+    if let Ok(value) = std::env::var("HYA_TUI_ENTRY") {
+        let trimmed = value.trim();
+        if trimmed.eq_ignore_ascii_case("src") {
+            return if boot_entry {
+                "src/boot.tsx".into()
+            } else {
+                "src/main.tsx".into()
+            };
+        }
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+    let bundled = if boot_entry {
+        runtime_dir.join("dist/boot.js")
+    } else {
+        runtime_dir.join("dist/main.js")
+    };
+    if bundled.is_file() {
+        return if boot_entry {
+            "dist/boot.js".into()
+        } else {
+            "dist/main.js".into()
+        };
+    }
+    if boot_entry {
+        "src/boot.tsx".into()
+    } else {
+        "src/main.tsx".into()
+    }
 }
 
 fn push_value(args: &mut Vec<OsString>, flag: &str, value: Option<&str>) {
