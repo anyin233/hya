@@ -132,7 +132,7 @@ Common slash commands (aliases in parentheses):
 | `/new` | `/clear` | Start a new session (home route) |
 | `/models` | `/mo`, `/model` | Open the model picker (`/mo` biases fuzzy match away from `/move`) |
 | `/agents` | | Open the agent picker |
-| `/agent-models` | | Choose any catalog Agent and persist its default model in the active backend database |
+| `/agent-models` | | Choose any catalog Agent. Ordinary selection remembers unconfigured defaults or sets a configured Agent's Session override; Ctrl+S saves the owning configuration file |
 | `/mcps` | | MCP enable/disable dialog |
 | `/variants` | `/think` | Model variant picker (hidden when the model has none) |
 | `/status` | | Status dialog |
@@ -197,7 +197,7 @@ therefore expands those templates.
 
 The frontend ships a named keybind registry in
 [`packages/hya-tui-ts/src/upstream/config/keybind.ts`](../packages/hya-tui-ts/src/upstream/config/keybind.ts)
-(`Definitions`: **173** named entries including `leader` and chord defaults).
+(`Definitions`: **172** named entries including `leader` and chord defaults).
 Each registry entry is `{ default, description }`.
 
 - The special entry `leader` defaults to `ctrl+x`. Bindings written as
