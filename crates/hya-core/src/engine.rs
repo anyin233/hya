@@ -87,6 +87,7 @@ async fn authorize_tool_call(
 }
 
 pub use admission::SpawnAdmissionOutcome;
+pub use turn::advertise_tool;
 
 /// Parameters for creating a new session event log.
 pub struct CreateSession {

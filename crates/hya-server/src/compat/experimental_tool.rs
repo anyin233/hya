@@ -16,7 +16,7 @@ pub(super) async fn list(
     else {
         return Err(ApiError::bad_request("tool list missing provider"));
     };
-    let Some(model) = query.get("model").filter(|model| !model.is_empty()) else {
+    let Some(_model) = query.get("model").filter(|model| !model.is_empty()) else {
         return Err(ApiError::bad_request("tool list missing model"));
     };
     let mut schemas = st.engine.tool_schemas();
@@ -24,7 +24,7 @@ pub(super) async fn list(
     Ok(Json(
         schemas
             .into_iter()
-            .filter(|schema| include_tool(schema.name.as_str(), model))
+            .filter(|schema| hya_core::advertise_tool(schema.name.as_str()))
             .map(|schema| {
                 json!({
                     "id": schema.name.to_string(),
@@ -45,13 +45,4 @@ pub(super) async fn ids(State(st): State<ServerState>) -> Json<Vec<String>> {
         .collect();
     ids.sort();
     Json(ids)
-}
-
-fn include_tool(id: &str, model: &str) -> bool {
-    let use_patch = model.contains("gpt-") && !model.contains("oss") && !model.contains("gpt-4");
-    match id {
-        "apply_patch" => use_patch,
-        "edit" | "write" => !use_patch,
-        _ => true,
-    }
 }

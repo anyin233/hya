@@ -71,24 +71,21 @@ pub(super) fn reasoning_for_model(
 
 fn filtered_tool_schemas(
     resources: &CompiledResourceView,
-    model: &ModelRef,
+    _model: &ModelRef,
 ) -> Vec<hya_proto::ToolSchema> {
     resources
         .tool_schemas()
         .into_iter()
-        .filter(|schema| include_tool(schema.name.as_str(), model.as_str()))
+        .filter(|schema| advertise_tool(schema.name.as_str()))
         .collect()
 }
 
-fn include_tool(id: &str, model: &str) -> bool {
-    let gpt_model = model.contains("gpt-");
-    let legacy_gpt = gpt_model && (model.contains("oss") || model.contains("gpt-4"));
-    let patch_only = gpt_model && !legacy_gpt;
-    match id {
-        "apply_patch" => !legacy_gpt,
-        "edit" | "write" => !patch_only,
-        _ => true,
-    }
+/// Whether a canonical builtin belongs in model-facing schemas.
+///
+/// Hashline `write` and `edit` are advertised to every model. `apply_patch`
+/// stays registered for hidden `patch` dispatch but is never advertised.
+pub fn advertise_tool(name: &str) -> bool {
+    name != "apply_patch"
 }
 
 fn compacted_messages(projection: &Projection) -> &[MessageProjection] {
@@ -207,7 +204,7 @@ mod tests {
     }
 
     #[test]
-    fn gpt_and_glm_advertise_exact_builtin_schema_sets() {
+    fn advertised_builtins_are_hashline_write_edit_without_apply_patch() {
         let builtins = ToolRegistry::builtins()
             .schemas()
             .into_iter()
@@ -215,21 +212,14 @@ mod tests {
             .collect::<BTreeSet<_>>();
         assert_eq!(builtins.len(), 27);
 
-        let gpt = builtins
+        let advertised = builtins
             .iter()
-            .filter(|name| include_tool(name, "12th-oai/gpt-5.6-sol"))
+            .filter(|name| advertise_tool(name))
             .cloned()
             .collect::<BTreeSet<_>>();
-        assert_eq!(gpt.len(), 25);
-        assert!(gpt.contains("apply_patch"));
-        assert!(!gpt.contains("write"));
-        assert!(!gpt.contains("edit"));
-
-        let glm = builtins
-            .iter()
-            .filter(|name| include_tool(name, "12th-oai/glm-5.3"))
-            .cloned()
-            .collect::<BTreeSet<_>>();
-        assert_eq!(glm, builtins);
+        assert_eq!(advertised.len(), 26);
+        assert!(advertised.contains("write"));
+        assert!(advertised.contains("edit"));
+        assert!(!advertised.contains("apply_patch"));
     }
 }
