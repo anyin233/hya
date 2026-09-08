@@ -38,3 +38,8 @@ export const BUILTIN_IDS = BUILTINS.map((plugin) => plugin.id)
 export function createBuiltinPlugins(): BuiltinTuiPlugin[] {
   return [...BUILTINS]
 }
+
+/** Builtins the static host actually starts (`enabled !== false`). */
+export function loadedBuiltinPlugins(): BuiltinTuiPlugin[] {
+  return createBuiltinPlugins().filter((plugin) => plugin.enabled !== false)
+}

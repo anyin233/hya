@@ -329,14 +329,12 @@ This is **unrelated** to the backend `hya-plugin` stdio host.
 
 hya replaces the upstream dynamic plugin loader with a **static host**
 ([`static-host.ts`](../../packages/hya-tui-ts/src/hya/static-host.ts)): starts
-builtin plugins in parallel after
-`createBuiltinPlugins().filter((plugin) => plugin.enabled !== false)`, tracks
-cleanups, reports statuses in stable declaration order. There is no external
-plugin manager and no dynamic loading.
+`loadedBuiltinPlugins()` in parallel, tracks cleanups, and reports statuses in
+stable declaration order. There is no external plugin manager and no dynamic
+loading.
 
-Builtin ids in declaration order (twelve declared; **eleven start by default** —
-`which-key` ships `enabled: false` and is filtered out of the static host; see
-[TUI Keybindings](../tui-keybindings.md)):
+Builtin ids in declaration order (**twelve start by default**, including
+`which-key`; see [TUI Keybindings](../tui-keybindings.md)):
 
 1. `internal:sidebar-workflow`
 2. `internal:home-footer`
@@ -348,7 +346,7 @@ Builtin ids in declaration order (twelve declared; **eleven start by default** �
 8. `internal:sidebar-files`
 9. `internal:sidebar-footer`
 10. `internal:notifications`
-11. `which-key` (**default off** — does not start unless re-enabled)
+11. `which-key`
 12. `diff-viewer`
 
 Render-extension slots used by the shell and builtins:

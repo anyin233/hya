@@ -517,10 +517,8 @@ overlay mode, and a footer that shows its own toggle and layout-switch
 shortcuts. Layout and pending-preview preferences persist in KV as
 `which_key_layout` and `which_key_pending_preview`.
 
-**Default off:** the shipped which-key plugin sets `enabled: false` and is
-filtered out of the static builtin host (`createBuiltinPlugins().filter(p =>
-p.enabled !== false)`). The keybindings above exist in the map, but the panel
-does not load unless that plugin is re-enabled.
+**Default on:** the shipped which-key plugin sets `enabled: true` and loads
+through `loadedBuiltinPlugins()`. Toggle the panel with `ctrl+alt+k`.
 
 ---
 

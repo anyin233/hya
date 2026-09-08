@@ -1,6 +1,6 @@
-# 0.36.20
+# 0.36.21
 
-## Hashline tools for every model
+## Which-key panel
 
-- Advertise hashline `write` and `edit` on every model-facing schema set.
-- Stop swapping modern GPT models onto `apply_patch`. That envelope stays registered for hidden `patch` dispatch and is no longer advertised.
+- Load the which-key builtin in the shipped static host.
+- Cover plugin enablement, command mapping, and the default-on docs contract in Bun tests.
