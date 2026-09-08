@@ -95,9 +95,9 @@ confirmed against the source directly.
   client only forwards the field when explicitly supplied.
 - Output truncation is asymmetric: `shell` keeps the first 16 KiB while the global
   `cap_tool_output` keeps the last 5000 characters.
-- Two leader-key collisions: `<leader>q` is both `app.exit` and
-  `session.queued_prompts`; `<leader>h` is both `session.toggle.conceal` and
-  `tips.toggle`.
+- Two leader-key collisions: `<leader>q` is `session.queued_prompts` when the
+  current session has queued follow-ups, otherwise `app.exit`; `<leader>h` is
+  both `session.toggle.conceal` and `tips.toggle`.
 - `packages/hya-tui-ts/src/upstream/routes/session/footer.tsx` appears unused.
 
 ## Documentation coverage: residual and known limits (2026-08-07)

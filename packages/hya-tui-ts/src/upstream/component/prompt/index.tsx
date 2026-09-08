@@ -33,7 +33,9 @@ import { usePromptHistory, type PromptInfo } from "../../prompt/history"
 import { computePromptTraits } from "../../prompt/traits"
 import { expandPastedTextPlaceholders, expandTrackedPastedText } from "../../prompt/part"
 import { usePromptStash } from "../../prompt/stash"
+import { useQueuedPrompts } from "../../prompt/queued"
 import { DialogStash } from "../dialog-stash"
+import { DialogQueuedPrompts } from "../dialog-queued-prompts"
 import { type AutocompleteRef, Autocomplete } from "./autocomplete"
 import { useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
 import type { AssistantMessage, FilePart, UserMessage } from "@opencode-ai/sdk/v2"
@@ -59,6 +61,7 @@ import {
 import { useTuiConfig } from "../../config"
 import { readLocalAttachment } from "./local-attachment"
 import { catalogStatusSummary, hasLiveCatalogModels } from "../../../hya/model-catalog"
+import { resolvePromptDelivery, type PromptSubmitIntent } from "../../../hya/queued-prompts"
 
 export type PromptProps = {
   sessionID?: string
@@ -162,10 +165,12 @@ export function Prompt(props: PromptProps) {
   const status = createMemo(() => sync.data.session_status?.[props.sessionID ?? ""] ?? { type: "idle" })
   const history = usePromptHistory()
   const stash = usePromptStash()
+  const queued = useQueuedPrompts()
   const keymap = useOpencodeKeymap()
   const slashes = useCommandSlashes()
   const agentShortcut = useCommandShortcut("agent.cycle")
   const paletteShortcut = useCommandShortcut("command.palette.show")
+  const steerShortcut = useCommandShortcut("prompt.submit.steer")
   const renderer = useRenderer()
   const exit = useExit()
   const dimensions = useTerminalDimensions()
@@ -354,6 +359,30 @@ export function Prompt(props: PromptProps) {
         },
       },
       {
+        title: "Steer prompt",
+        name: "prompt.submit.steer",
+        category: "Prompt",
+        hidden: true,
+        run: async () => {
+          if (!input.focused) return
+          const handled = await submit("steer")
+          if (!handled) return
+          dialog.clear()
+        },
+      },
+      {
+        title: "Queue prompt",
+        name: "prompt.submit.queue",
+        category: "Prompt",
+        hidden: true,
+        run: async () => {
+          if (!input.focused) return
+          const handled = await submit("queue")
+          if (!handled) return
+          dialog.clear()
+        },
+      },
+      {
         title: "Remove editor context",
         name: "prompt.editor_context.clear",
         category: "Prompt",
@@ -408,6 +437,30 @@ export function Prompt(props: PromptProps) {
               interruptInFlight = false
             })
           dialog.clear()
+        },
+      },
+      {
+        title: "Manage queued prompts",
+        name: "session.queued_prompts",
+        category: "Session",
+        enabled: Boolean(props.sessionID && queued.list(props.sessionID).length > 0),
+        run: () => {
+          const sessionID = props.sessionID
+          if (!sessionID) return
+          dialog.replace(() => (
+            <DialogQueuedPrompts
+              sessionID={sessionID}
+              onSelect={(entry) => {
+                input.setText(entry.text)
+                setStore("prompt", {
+                  input: entry.text,
+                  parts: entry.parts as PromptInfo["parts"],
+                })
+                restoreExtmarksFromParts(entry.parts as PromptInfo["parts"])
+                input.gotoBufferEnd()
+              }}
+            />
+          ))
         },
       },
       {
@@ -536,11 +589,14 @@ export function Prompt(props: PromptProps) {
     mode: OPENCODE_BASE_MODE,
     bindings: tuiConfig.keybinds.gather("prompt.palette", [
       "prompt.submit",
+      "prompt.submit.steer",
+      "prompt.submit.queue",
       "prompt.editor",
       "prompt.editor_context.clear",
       "prompt.stash",
       "prompt.stash.pop",
       "prompt.stash.list",
+      "session.queued_prompts",
     ]),
   }))
 
@@ -551,6 +607,12 @@ export function Prompt(props: PromptProps) {
     mode: OPENCODE_BASE_MODE,
     enabled: () => props.visible !== false && status().type !== "idle",
     bindings: tuiConfig.keybinds.gather("prompt.interrupt", ["session.interrupt"]),
+  }))
+
+  useBindings(() => ({
+    mode: OPENCODE_BASE_MODE,
+    enabled: () => Boolean(props.sessionID && queued.list(props.sessionID).length > 0),
+    bindings: tuiConfig.keybinds.gather("session.queued", ["session.queued_prompts"]),
   }))
 
   const ref: PromptRef = {
@@ -919,7 +981,7 @@ export function Prompt(props: PromptProps) {
 
   let submitting = false
   let createdSessionID: string | undefined
-  async function submit() {
+  async function submit(intent: PromptSubmitIntent = "submit") {
     // Prevent overlapping invocations (e.g. a double-pressed Enter, or the
     // input's native onSubmit racing another dispatch). Without this guard,
     // a second call slips past the empty-input check before the first call
@@ -929,13 +991,65 @@ export function Prompt(props: PromptProps) {
     if (submitting) return false
     submitting = true
     try {
-      return await submitInner()
+      return await submitInner(intent)
     } finally {
       submitting = false
     }
   }
 
-  async function submitInner() {
+  async function waitForSessionIdle(sessionID: string) {
+    const deadline = Date.now() + 20_000
+    while (Date.now() < deadline) {
+      const current = sync.data.session_status?.[sessionID]
+      if (!current || current.type === "idle") return
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+  }
+
+  async function drainQueuedPrompt() {
+    const sessionID = props.sessionID
+    if (!sessionID || queued.isDrainPaused()) return
+    if (status().type !== "idle") return
+    const item = queued.dequeue(sessionID)
+    if (!item) return
+    const agent = local.agent.current()
+    const selectedModel = local.model.current()
+    if (!agent || !selectedModel) {
+      queued.enqueue(item)
+      return
+    }
+    sdk.client.session
+      .prompt(
+        {
+          sessionID,
+          ...selectedModel,
+          agent: agent.name,
+          model: selectedModel,
+          variant: local.model.variant.current(),
+          parts: [{ type: "text" as const, text: item.text }, ...(item.parts as PromptInfo["parts"])],
+        },
+        { throwOnError: true },
+      )
+      .catch((error) => {
+        queued.enqueue(item)
+        toast.show({
+          title: "Failed to send queued prompt",
+          message: errorMessage(error),
+          variant: "error",
+        })
+      })
+  }
+
+  createEffect(
+    on(
+      () => status().type,
+      (type, prev) => {
+        if (type === "idle" && prev && prev !== "idle") void drainQueuedPrompt()
+      },
+    ),
+  )
+
+  async function submitInner(intent: PromptSubmitIntent = "submit") {
     // IME: double-defer may fire before onContentChange flushes the last
     // composed character (e.g. Korean hangul) to the store, so read
     // plainText directly and sync before any downstream reads.
@@ -1079,33 +1193,79 @@ export function Prompt(props: PromptProps) {
           })
         })
     } else {
-      sdk.client.session
-        .prompt(
-          {
-            sessionID,
-            ...selectedModel,
-            agent: agent.name,
-            model: selectedModel,
-            variant,
-            parts: [
-              ...editorParts,
-              {
-                type: "text",
-                text: inputText,
-              },
-              ...nonTextParts,
-            ],
-          },
-          { throwOnError: true },
-        )
-        .catch((error) => {
-          toast.show({
-            title: "Failed to send prompt",
-            message: errorMessage(error),
-            variant: "error",
-          })
+      const parts = [
+        ...editorParts,
+        {
+          type: "text" as const,
+          text: inputText,
+        },
+        ...nonTextParts,
+      ]
+      const runState = status().type === "idle" ? "idle" : "busy"
+      const delivery = resolvePromptDelivery(runState, intent)
+      if (delivery === "queue") {
+        queued.enqueue({
+          sessionID,
+          text: inputText,
+          parts: [...editorParts, ...nonTextParts],
         })
-      if (editorParts.length > 0) editor.markSelectionSent()
+        toast.show({
+          title: "Queued",
+          message: `${queued.list(sessionID).length} waiting`,
+          variant: "info",
+        })
+      } else if (delivery === "steer") {
+        queued.pauseDrain()
+        try {
+          if (status().type !== "idle") {
+            await sdk.client.session.abort({ sessionID }).catch(() => {})
+            await waitForSessionIdle(sessionID)
+          }
+          sdk.client.session
+            .prompt(
+              {
+                sessionID,
+                ...selectedModel,
+                agent: agent.name,
+                model: selectedModel,
+                variant,
+                parts,
+              },
+              { throwOnError: true },
+            )
+            .catch((error) => {
+              toast.show({
+                title: "Failed to steer prompt",
+                message: errorMessage(error),
+                variant: "error",
+              })
+            })
+        } finally {
+          queued.resumeDrain()
+        }
+        if (editorParts.length > 0) editor.markSelectionSent()
+      } else {
+        sdk.client.session
+          .prompt(
+            {
+              sessionID,
+              ...selectedModel,
+              agent: agent.name,
+              model: selectedModel,
+              variant,
+              parts,
+            },
+            { throwOnError: true },
+          )
+          .catch((error) => {
+            toast.show({
+              title: "Failed to send prompt",
+              message: errorMessage(error),
+              variant: "error",
+            })
+          })
+        if (editorParts.length > 0) editor.markSelectionSent()
+      }
     }
 
     // temporary hack to make sure the message is sent
@@ -1557,6 +1717,13 @@ export function Prompt(props: PromptProps) {
                 </box>
                 <text fg={theme.text}>
                   esc <span style={{ fg: theme.textMuted }}>interrupt</span>
+                  {"  "}
+                  enter <span style={{ fg: theme.textMuted }}>queue</span>
+                  {"  "}
+                  {steerShortcut()} <span style={{ fg: theme.textMuted }}>steer</span>
+                  {props.sessionID && queued.list(props.sessionID).length > 0
+                    ? `  ${queued.list(props.sessionID).length} queued`
+                    : ""}
                 </text>
               </box>
             </Match>

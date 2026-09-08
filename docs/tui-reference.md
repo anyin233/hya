@@ -484,7 +484,14 @@ bold variant badge, with fade-in animations.
 **Status line (while non-idle):** agent-colored block spinner (or a static
 `[⋯]` when animations are off), a retry message with a live
 `[retrying in Xs attempt #N]` countdown that opens a Retry Error alert when
-truncated and clicked, and `esc interrupt`.
+truncated and clicked, `esc interrupt`, `enter queue`, and the steer shortcut
+(`ctrl+alt+return` by default). A non-zero local queue depth is shown as `N queued`.
+
+**Busy follow-ups:** Enter while a turn is running queues the composer text and
+does not abort. `prompt.submit.steer` aborts the current turn, then sends the
+composer text as the next prompt. `session.queued_prompts` (`<leader>q` when the
+queue is not empty) lists waiting follow-ups so they can be restored or deleted.
+Queued items drain in FIFO order when the session returns to idle.
 
 **Escape interrupt:** one `session.interrupt` press aborts a non-idle turn;
 repeated presses do not duplicate an in-flight abort. In shell mode the first

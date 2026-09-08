@@ -123,7 +123,7 @@ Map of every accepted config key to the command (or role) it drives:
 | `session_compact` | `session.compact` | `<leader>c` |
 | `session_toggle_timestamps` | `session.toggle.timestamps` | `unbound` |
 | `session_toggle_generic_tool_output` | `session.toggle.generic_tool_output` | `unbound` |
-| `session_queued_prompts` | `session.queued_prompts` | `<leader>q` | Accepted key definition, but no current command handler is registered; submitted or in-flight prompts are not a local queue. |
+| `session_queued_prompts` | `session.queued_prompts` | `<leader>q` |
 | `pane_roster` | `pane.roster` | `<leader>o` |
 | `pane_open_tab` | `pane.open.tab` | `<leader>T` |
 | `pane_open_vertical` | `pane.open.vertical` | `<leader>V` |
@@ -175,6 +175,9 @@ Map of every accepted config key to the command (or role) it drives:
 | `tool_details` | `session.toggle.actions` | `unbound` |
 | `display_thinking` | `session.toggle.thinking` | `unbound` |
 | `prompt_submit` | `prompt.submit` | `unbound` |
+| `prompt_submit_steer` | `prompt.submit.steer` | `ctrl+alt+return` |
+| `prompt_submit_queue` | `prompt.submit.queue` | `unbound` |
+| `queued_prompt_delete` | `queued_prompt.delete` | `ctrl+d` |
 | `prompt_editor_context_clear` | `prompt.editor_context.clear` | `unbound` |
 | `prompt_skills` | `prompt.skills` | `unbound` |
 | `prompt_stash` | `prompt.stash` | `unbound` |
@@ -259,7 +262,7 @@ collisions. Examples (not exhaustive):
 
 | Chord | Example commands that share it |
 | --- | --- |
-| `<leader>q` | `session.queued_prompts` (accepted but currently unwired); `<leader>q` alternative of `app.exit` |
+| `<leader>q` | `session.queued_prompts` (when the current session has queued follow-ups); `<leader>q` alternative of `app.exit` |
 | `<leader>h` | `session.toggle.conceal`; `tips.toggle` |
 | `ctrl+d` | `app.exit`; `session.delete`; `stash.delete`; `input.delete` |
 | `ctrl+f` | `session.pin.toggle`; `model.dialog.favorite`; `permission.prompt.fullscreen`; `input.move.right` |
@@ -312,7 +315,7 @@ collisions. Examples (not exhaustive):
 | `session.compact` | `<leader>c` | `/compact` (`/summarize`) | Summarize / compact the session. |
 | `session.toggle.timestamps` | unbound | `/timestamps` (`/toggle-timestamps`) | Show or hide message timestamps. |
 | `session.toggle.generic_tool_output` | unbound | — | Expand or collapse generic tool output. |
-| `session.queued_prompts` | `<leader>q` | — | Accepted key definition, but no current command handler is registered; submitted or in-flight prompts are not a local queue. |
+| `session.queued_prompts` | `<leader>q` | — | Open the queued follow-up list for the current session (enabled when the local queue is not empty). |
 | `session.pin.toggle` | `ctrl+f` | — | Pin or unpin a session in the Sessions dialog. |
 | `session.quick_switch.1` … `session.quick_switch.9` | `<leader>1` … `<leader>9` | — | Switch to the session in quick slot 1–9 (global layer). |
 | `session.undo` | `<leader>u` | `/undo` | Abort an in-flight turn if not idle; revert at the last user message before the current revert point (repeatable walks backwards); **overwrites the prompt buffer** with that message’s text and re-attaches its file parts (draft text is lost). |
@@ -363,7 +366,9 @@ unmodified Escape returns to Main. See [TUI Reference](tui-reference.md#pane-nav
 | Command | Default binding | Slash name | Meaning |
 | --- | --- | --- | --- |
 | `prompt.editor` | `<leader>e` | `/editor` | Open `$VISUAL` or `$EDITOR` for the current prompt. |
-| `prompt.submit` | unbound | — | Submit the prompt (hidden; input uses `input.submit`). |
+| `prompt.submit` | unbound | — | Submit the prompt (hidden; input uses `input.submit`). While a turn is running, Enter queues a follow-up instead of aborting. |
+| `prompt.submit.steer` | `ctrl+alt+return` | — | Abort the current turn, then send the composer text as the next prompt. |
+| `prompt.submit.queue` | unbound | — | Queue the composer text until the current turn finishes (same as Enter while busy). |
 | `prompt.clear` | `ctrl+c` | — | Clear the input field. |
 | `prompt.paste` | `ctrl+v` | — | Paste text or attach a clipboard image (`preventDefault: false`). |
 | `prompt.skills` | unbound | `/skills` | Open the skill selector. |
@@ -374,6 +379,7 @@ unmodified Escape returns to Main. See [TUI Reference](tui-reference.md#pane-nav
 | `prompt.history.previous` | `up` | — | Previous prompt history item (at buffer start). |
 | `prompt.history.next` | `down` | — | Next prompt history item (at buffer end). |
 | `stash.delete` | `ctrl+d` | — | Delete a stash entry (press again to confirm in the stash dialog). |
+| `queued_prompt.delete` | `ctrl+d` | — | Delete a queued follow-up (press again to confirm in the queued-prompts dialog). |
 
 ## Input editing
 
