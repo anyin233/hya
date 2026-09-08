@@ -17,7 +17,14 @@ pub(super) async fn pump(
         // The window opens at headers (first event) and resets on every frame
         // (inter-event silence). A miss is post-stream under the no-replay
         // boundary: it surfaces once here and is never retried or failed over.
-        let next = match timeout(idle_timeout, sse.next()).await {
+        // Cancel/drop of the EventStream must abort this HTTP body immediately;
+        // otherwise keepalive comments keep `sse.next()` pending until idle.
+        let next = tokio::select! {
+            biased;
+            () = tx.closed() => return,
+            next = timeout(idle_timeout, sse.next()) => next,
+        };
+        let next = match next {
             Ok(Some(frame)) => frame,
             Ok(None) => break,
             Err(_elapsed) => {

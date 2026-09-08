@@ -953,8 +953,9 @@ Bumping the version means updating **all** of these together:
   and zero failover after stream construction.
 - Core tests cover configured chain order, forward suffixes, `UnknownModel`,
   non-retryable termination, and no fallback after stream construction.
-- SSE tests cover first-frame idle, inter-frame reset, one timeout error, and a
-  continuously active stream with no total lifetime cap.
+- SSE tests cover first-frame idle, inter-frame reset, one timeout error, a
+  continuously active stream with no total lifetime cap, and dropping the
+  EventStream aborting the HTTP body before the idle deadline.
 
 ### 7. Wrong vs Correct
 
@@ -969,6 +970,7 @@ timeout(Duration::from_secs(300), provider.stream(request, session, message)).aw
 
 ```rust
 // Bound headers before stream ownership; bound silence inside the stream pump.
+// Dropping the EventStream closes `tx` and must abort the HTTP body immediately.
 let response = timeout(header_deadline, request.send()).await??;
 pump(response, decoder, tx, stream_idle_deadline);
 ```

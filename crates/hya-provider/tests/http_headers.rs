@@ -159,6 +159,41 @@ async fn http_provider_idle_stall_yields_one_error_without_second_request() {
 }
 
 #[tokio::test]
+async fn http_provider_aborts_http_body_when_event_stream_is_dropped() {
+    let (base_url, disconnected) = start_keepalive_sse_server().await;
+    let provider = HttpProvider::new(
+        "openai",
+        ProviderKind::OpenAiCompatible,
+        &base_url,
+        Some("test-token".to_string()),
+        ["gpt-5".to_string()],
+    )
+    .unwrap()
+    .with_idle_timeout(Duration::from_secs(30));
+    let req = CompletionRequest {
+        model: ModelRef::new("gpt-5"),
+        system: None,
+        messages: Vec::new(),
+        tools: Vec::new(),
+        temperature: None,
+        max_output_tokens: None,
+        reasoning: None,
+        headers: Default::default(),
+    };
+
+    let stream = provider
+        .stream(req, SessionId::new(), MessageId::new())
+        .await
+        .unwrap();
+    drop(stream);
+
+    timeout(Duration::from_millis(750), disconnected)
+        .await
+        .expect("dropping the EventStream must abort the HTTP body before the SSE idle deadline")
+        .expect("keepalive server should observe the client disconnect");
+}
+
+#[tokio::test]
 async fn http_provider_forwards_completion_request_headers() {
     let (base_url, request_rx) = start_sse_server("data: [DONE]\n\n".to_string()).await;
     let provider = HttpProvider::new(
@@ -1338,6 +1373,44 @@ async fn start_stalled_header_server() -> (String, Arc<AtomicUsize>) {
         }
     });
     (format!("http://{addr}"), attempts)
+}
+
+/// Responds with stream headers, then writes SSE comments until the client
+/// disconnects. Used to prove drop/cancel aborts HTTP without waiting for the
+/// idle deadline.
+async fn start_keepalive_sse_server() -> (String, oneshot::Receiver<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (disconnect_tx, disconnect_rx) = oneshot::channel();
+    tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        read_request_head(&mut socket).await;
+        socket
+            .write_all(b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncache-control: no-cache\r\n\r\n")
+            .await
+            .unwrap();
+        let mut buf = [0_u8; 8];
+        loop {
+            tokio::select! {
+                result = socket.read(&mut buf) => {
+                    match result {
+                        Ok(0) | Err(_) => {
+                            let _ = disconnect_tx.send(());
+                            return;
+                        }
+                        Ok(_) => {}
+                    }
+                }
+                _ = tokio::time::sleep(Duration::from_millis(50)) => {
+                    if socket.write_all(b": ping\n\n").await.is_err() {
+                        let _ = disconnect_tx.send(());
+                        return;
+                    }
+                }
+            }
+        }
+    });
+    (format!("http://{addr}"), disconnect_rx)
 }
 
 /// Responds with successful stream headers immediately, then sends no SSE
