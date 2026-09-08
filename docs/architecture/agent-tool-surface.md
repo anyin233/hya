@@ -266,17 +266,16 @@ change a canonical schema's input fields.
 Before each completion request, hya obtains canonical registry schemas and
 applies an advertisement-only filter:
 
-- `use_patch` is true when the model string contains `gpt-`, does not contain
-  `oss`, and does not contain `gpt-4`.
-- `apply_patch` is advertised only when `use_patch` is true.
-- `edit` and `write` are advertised only when `use_patch` is false.
+- Hashline `write` and `edit` are advertised to **every** model.
+- `apply_patch` is never advertised. It remains registered for hidden `patch`
+  dispatch.
 - enabled `websearch` is advertised to every model provider.
 - Every other canonical schema passes through.
 
 The tools remain registered even when their schemas are filtered from the
-request. In particular, `apply_patch` is the **only** file-mutation tool
-advertised to gpt-* models under that filter (edit/write are hidden there).
-([crates/hya-core/src/engine/turn/messages.rs:57-75](../../crates/hya-core/src/engine/turn/messages.rs#L57-L75))
+request. File mutation on the model-facing path is the hashline `write`/`edit`
+pair, not the Codex-style `apply_patch` envelope.
+([`hya_core::advertise_tool`](../../crates/hya-core/src/engine/turn/messages.rs))
 
 ### Why WEBSEARCH was provider-filtered
 
@@ -558,8 +557,9 @@ The result is a Compat-style title plus an aggregate diff and per-file metadata.
 After application, the same post-edit formatter + BOM re-sync + LSP-diagnostics
 step as write/edit runs for non-delete paths.
 
-As noted under advertisement, `apply_patch` is the only file-mutation tool
-advertised to gpt-* models under the `use_patch` filter.
+As noted under advertisement, `apply_patch` is not model-facing. Models receive
+hashline `write`/`edit` instead. The patch envelope remains executable through
+the hidden `patch` alias.
 
 ## LSP
 

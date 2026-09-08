@@ -1,7 +1,6 @@
-# 0.36.19
+# 0.36.20
 
-## TUI command inventory
+## Hashline tools for every model
 
-- Remove pruned `dialog.move_session.*` keybinds so the registry no longer advertises a project-copy dialog that has no handler.
-- Document `agent_models` in the accepted keybind override table, keep the Definitions count aligned with source, and describe `/agent-models` as remembered defaults, configured-Agent Session overrides, and Ctrl+S owning-file save.
-- Record the current TypeScript TUI test-file inventory in the package test README.
+- Advertise hashline `write` and `edit` on every model-facing schema set.
+- Stop swapping modern GPT models onto `apply_patch`. That envelope stays registered for hidden `patch` dispatch and is no longer advertised.

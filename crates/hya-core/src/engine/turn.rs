@@ -30,6 +30,7 @@ use crate::{AgentResourcePolicy, TurnBinding};
 
 mod messages;
 
+pub use messages::advertise_tool;
 use messages::{projection_to_messages, request_from_messages};
 
 /// Range endpoints for a compaction that folded the entire input window.

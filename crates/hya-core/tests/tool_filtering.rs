@@ -138,16 +138,18 @@ async fn tool_ids(provider_id: &'static str, model: &str) -> Vec<String> {
 }
 
 #[tokio::test]
-async fn runtime_tool_request_filters_patch_tools_by_model() {
-    let gpt_ids = tool_ids("recording", "gpt-5").await;
-    assert!(gpt_ids.contains(&"apply_patch".to_string()));
-    assert!(!gpt_ids.contains(&"edit".to_string()));
-    assert!(!gpt_ids.contains(&"write".to_string()));
-
-    let gpt4_ids = tool_ids("recording", "gpt-4o").await;
-    assert!(!gpt4_ids.contains(&"apply_patch".to_string()));
-    assert!(gpt4_ids.contains(&"edit".to_string()));
-    assert!(gpt4_ids.contains(&"write".to_string()));
+async fn runtime_tool_request_advertises_hashline_write_edit_for_every_model() {
+    for model in ["gpt-5", "gpt-4o", "gpt-5.6-sol", "glm-5.3"] {
+        let ids = tool_ids("recording", model).await;
+        assert!(
+            ids.contains(&"edit".to_string()) && ids.contains(&"write".to_string()),
+            "{model} must advertise hashline write/edit"
+        );
+        assert!(
+            !ids.contains(&"apply_patch".to_string()),
+            "{model} must not advertise apply_patch"
+        );
+    }
 }
 
 #[tokio::test]

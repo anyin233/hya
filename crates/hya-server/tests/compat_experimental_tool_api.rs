@@ -69,23 +69,26 @@ fn tool_ids(body: &Value) -> Vec<&str> {
 }
 
 #[tokio::test]
-async fn compat_experimental_tool_list_filters_patch_tools_by_model() {
+async fn compat_experimental_tool_list_advertises_hashline_write_edit_for_every_model() {
     let app = router(state().await);
 
-    let (status, test_body) =
-        get_json(app.clone(), "/experimental/tool?provider=compat&model=test").await;
-    assert_eq!(status, StatusCode::OK);
-    let test_ids = tool_ids(&test_body);
-    assert!(test_ids.contains(&"edit"));
-    assert!(test_ids.contains(&"write"));
-    assert!(!test_ids.contains(&"apply_patch"));
-
-    let (status, gpt_body) = get_json(app, "/experimental/tool?provider=compat&model=gpt-5").await;
-    assert_eq!(status, StatusCode::OK);
-    let gpt_ids = tool_ids(&gpt_body);
-    assert!(gpt_ids.contains(&"apply_patch"));
-    assert!(!gpt_ids.contains(&"edit"));
-    assert!(!gpt_ids.contains(&"write"));
+    for model in ["test", "gpt-5", "gpt-4o"] {
+        let (status, body) = get_json(
+            app.clone(),
+            &format!("/experimental/tool?provider=compat&model={model}"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let ids = tool_ids(&body);
+        assert!(
+            ids.contains(&"edit") && ids.contains(&"write"),
+            "{model} must advertise hashline write/edit"
+        );
+        assert!(
+            !ids.contains(&"apply_patch"),
+            "{model} must not advertise apply_patch"
+        );
+    }
 }
 
 #[tokio::test]
