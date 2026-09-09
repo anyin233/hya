@@ -18,6 +18,18 @@ pub enum ModelCatalogSource {
     Offline,
 }
 
+impl ModelCatalogSource {
+    /// Stable lowercase wire/CLI label for this source.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Configured => "configured",
+            Self::Discovered => "discovered",
+            Self::Offline => "offline",
+        }
+    }
+}
+
 /// Origin of a declared provider's model resolution.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProviderCatalogSource {

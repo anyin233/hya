@@ -5,9 +5,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use hya_provider::{
-    ModelCatalogSource, ProviderCatalogResult, ProviderCatalogSource, ProviderCatalogState,
-};
+use hya_provider::{ProviderCatalogResult, ProviderCatalogSource, ProviderCatalogState};
 use serde_json::{Value, json};
 
 use crate::{ApiError, ServerState};
@@ -207,7 +205,7 @@ fn catalog_models(st: &ServerState) -> Vec<CatalogModel> {
             context: model.capabilities.max_context,
             output: model.capabilities.max_output,
             variants: model.reasoning_variants.clone(),
-            source: model_source(model.source),
+            source: model.source.as_str(),
         })
         .collect()
 }
@@ -275,14 +273,6 @@ fn connected_provider_ids(states: &[ProviderCatalogState]) -> Vec<String> {
         })
         .map(|state| state.provider_id.clone())
         .collect()
-}
-
-fn model_source(source: ModelCatalogSource) -> &'static str {
-    match source {
-        ModelCatalogSource::Configured => "configured",
-        ModelCatalogSource::Discovered => "discovered",
-        ModelCatalogSource::Offline => "offline",
-    }
 }
 
 fn location_response<T>(
