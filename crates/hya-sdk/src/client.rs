@@ -28,7 +28,7 @@ pub trait Transport: Send + Sync {
 /// The backend server client surface used by the TUI.
 ///
 /// FROZEN CONTRACT (W0). State workers hold `Arc<dyn Client>`. Backed by any [`Transport`]
-/// (`HttpClient` over reqwest, or `NativeClient` over the in-process stdio bridge).
+/// (`HttpClient` over reqwest, or `hya_native::HyaNativeClient` over the in-process router).
 #[async_trait]
 pub trait Client: Send + Sync {
     /// Base URL of the server this client targets, e.g. `http://127.0.0.1:NNNNN`.

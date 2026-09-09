@@ -89,14 +89,6 @@ pub struct Session {
     pub rest: Map<String, Value>,
 }
 
-impl Session {
-    /// Message id that begins a revert range, if the session is in revert state.
-    #[must_use]
-    pub fn revert_message_id(&self) -> Option<&str> {
-        self.rest.get("revert")?.get("messageID")?.as_str()
-    }
-}
-
 /// A message (the `message.updated` `info` shape). `session_id` and `time` are lifted to
 /// typed fields (store keying + idle/working status); everything else stays in `rest`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
