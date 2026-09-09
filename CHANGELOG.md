@@ -1,9 +1,10 @@
-# 0.36.25
+# 0.36.26
 
-## Provider catalog cache
+## Repository cleanup (no behavior change)
 
-- Empty-`models` providers load model metadata from `$XDG_CONFIG_HOME/hya/models.yml.cache` on startup so cold listen does not wait on discovery HTTP.
-- Cache rows store id plus `limit.context` / `limit.output`, reasoning default/variants, and tools — not bare id lists.
-- Background discovery refreshes the cache, swaps the live engine catalog/router, and emits Compat SSE `catalog.updated`.
-- The TUI Sync context re-fetches `/config/providers` on `catalog.updated` and reconciles the provider store after paint.
-- Explicit `providers.*.models` in `config.yaml` remains authoritative; discovery never rewrites config.yaml.
+- `hya-sdk`: removed the Rust-TUI-era `PendingClient`/`PendingSlot`, the Bun stdio `NativeBridge`/`NativeClient` (superseded by `hya-native`), `Session::revert_message_id`, and the unused `WorkflowActivity` family; the `native_spike` example is gone.
+- `hya-proto`: removed the never-written `CostBreakdown` type.
+- `hya-app`: dropped the test-only spawn-intent batch encoder and the file-level `allow(dead_code)`.
+- `hya-server`: the six identical Compat `millis` helpers now live in `compat/time.rs`; `hya-provider::ModelCatalogSource::as_str` replaces two copies of the source-label mapper.
+- TUI: removed unused `DialogTag`, the legacy session `Footer`, `toolDisplayMetadata`, `startupTraceEnabled`, keybind `Descriptions`, `win32InstallCtrlCGuard`, `isZedTerminal`, and `offsetToPosition`; `getRelativeTime` and `isRecord` are shared from `util/`.
+- Restored the CI gates that were red on `main`: rustfmt drift, two clippy lints in the provider-cache code, the README workspace version, and the TUI boundary allowlist for `boot.tsx`.
