@@ -258,16 +258,15 @@ async fn subscribe_global(State(st): State<ServerState>) -> axum::response::Resp
         Ok::<_, Infallible>(json_event(&global_event_payload(&lsp_directory, value)))
     });
     let catalog_directory = directory.clone();
-    let catalog =
-        BroadcastStream::new(st.catalog_updates.subscribe()).filter_map(move |result| {
-            let directory = catalog_directory.clone();
-            async move {
-                match result {
-                    Ok(value) => Some(Ok(json_event(&global_event_payload(&directory, value)))),
-                    Err(_lagged) => None,
-                }
+    let catalog = BroadcastStream::new(st.catalog_updates.subscribe()).filter_map(move |result| {
+        let directory = catalog_directory.clone();
+        async move {
+            match result {
+                Ok(value) => Some(Ok(json_event(&global_event_payload(&directory, value)))),
+                Err(_lagged) => None,
             }
-        });
+        }
+    });
     let heartbeat_directory = directory;
     super::sse::compat(Sse::new(initial.chain(stream::select(
         stream::select(

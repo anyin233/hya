@@ -146,10 +146,7 @@ fn missing_bun_error_names_attempted_executable() {
 
     assert!(!output.status.success(), "{output:?}");
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("hya-ts: failed to launch Bun"),
-        "{stderr}"
-    );
+    assert!(stderr.contains("hya-ts: failed to launch Bun"), "{stderr}");
     assert!(
         stderr.contains(&missing_bun.display().to_string()),
         "{output:?}"

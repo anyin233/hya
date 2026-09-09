@@ -277,7 +277,11 @@ impl SessionEngine {
             let mut attempt = request.clone();
             attempt.model = candidate.clone();
             attempt.reasoning = messages::reasoning_for_model(&attempt.model, request.reasoning);
-            match self.provider_router().stream(attempt, session, message).await {
+            match self
+                .provider_router()
+                .stream(attempt, session, message)
+                .await
+            {
                 Ok(stream) => return Ok(stream),
                 Err(error) => {
                     let advance = (error.is_retryable_before_stream()
@@ -318,7 +322,11 @@ impl SessionEngine {
             let mut attempt = request.clone();
             attempt.model = candidate.model.clone();
             attempt.reasoning = Some(candidate.reasoning);
-            match self.provider_router().stream(attempt, session, message).await {
+            match self
+                .provider_router()
+                .stream(attempt, session, message)
+                .await
+            {
                 Ok(stream) => {
                     route.selected(index, pending_failure);
                     return Ok(stream);
@@ -830,7 +838,9 @@ impl SessionEngine {
             // compaction threshold, so resolve it before deciding.
             let resolved_threshold = crate::compaction::resolved_threshold(
                 &self.compaction,
-                self.provider_router().capabilities(&model).map(|c| c.max_context),
+                self.provider_router()
+                    .capabilities(&model)
+                    .map(|c| c.max_context),
             );
             // One running token count for the whole reduction sequence. It starts
             // from the provider-measured value when available, then tracks

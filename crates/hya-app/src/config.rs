@@ -1627,8 +1627,8 @@ pub async fn load() -> anyhow::Result<Option<ResolvedConfig>> {
         if let Some(cached_models) = cache.providers.get(&provider.id) {
             let cleaned = cached_models
                 .iter()
-                .cloned()
                 .filter(|entry| !entry.id.trim().is_empty())
+                .cloned()
                 .collect::<Vec<_>>();
             if !cleaned.is_empty() {
                 pending_discovery.push(PendingCatalogDiscovery {
@@ -1737,36 +1737,31 @@ fn plan_from_cached_models(
         .map(|entry| entry.id.trim().to_string())
         .filter(|id| !id.is_empty())
         .collect::<Vec<_>>();
-    let route = route_for_plan(
-        &provider,
-        &credential,
-        &ids,
-        ModelCatalogSource::Discovered,
-    )?
-    .with_model_reasoning_variants(
-        cached
-            .iter()
-            .filter(|entry| !entry.reasoning_variants.is_empty())
-            .map(|entry| (entry.id.clone(), entry.reasoning_variants.clone())),
-    )
-    .with_model_reasoning_defaults(cached.iter().map(|entry| {
-        (
-            entry.id.clone(),
-            entry
-                .reasoning_default
-                .as_deref()
-                .and_then(ReasoningEffort::parse),
+    let route = route_for_plan(&provider, &credential, &ids, ModelCatalogSource::Discovered)?
+        .with_model_reasoning_variants(
+            cached
+                .iter()
+                .filter(|entry| !entry.reasoning_variants.is_empty())
+                .map(|entry| (entry.id.clone(), entry.reasoning_variants.clone())),
         )
-    }))
-    .with_model_limits(cached.iter().map(|entry| {
-        (
-            entry.id.clone(),
-            hya_provider::ModelLimitOverride {
-                context: entry.limit.context,
-                output: entry.limit.output,
-            },
-        )
-    }));
+        .with_model_reasoning_defaults(cached.iter().map(|entry| {
+            (
+                entry.id.clone(),
+                entry
+                    .reasoning_default
+                    .as_deref()
+                    .and_then(ReasoningEffort::parse),
+            )
+        }))
+        .with_model_limits(cached.iter().map(|entry| {
+            (
+                entry.id.clone(),
+                hya_provider::ModelLimitOverride {
+                    context: entry.limit.context,
+                    output: entry.limit.output,
+                },
+            )
+        }));
     let models = hya_provider::Provider::catalog(&route);
     Ok(ProviderPlanResult {
         route: Some(route),
@@ -1833,9 +1828,7 @@ pub async fn refresh_pending_catalogs(
         .collect::<BTreeSet<_>>();
     let mut refreshed_plans = Vec::with_capacity(pending.len());
     for entry in pending {
-        refreshed_plans.push(
-            resolve_provider_plan(entry.provider, entry.credential).await?,
-        );
+        refreshed_plans.push(resolve_provider_plan(entry.provider, entry.credential).await?);
     }
     let mut cache = crate::models_cache::read_models_cache().unwrap_or_default();
     for plan in &refreshed_plans {

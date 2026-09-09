@@ -62,6 +62,7 @@ const sourcePrefixes = [
   "upstream/util/",
 ]
 const sourceFiles = new Set([
+  "boot.tsx",
   "main.tsx",
   "upstream/app.tsx",
   "upstream/attention.ts",

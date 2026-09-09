@@ -3,14 +3,16 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+use tokio::sync::{Mutex, MutexGuard};
+
+/// Serialize env-sensitive async tests; an async-aware lock so the guard may
+/// legitimately be held across `config::load().await`.
+async fn env_lock() -> MutexGuard<'static, ()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+    LOCK.get_or_init(|| Mutex::new(())).lock().await
 }
 
 struct EnvGuard {
@@ -40,10 +42,7 @@ fn unique_root(label: &str) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |duration| duration.as_nanos());
-    let path = std::env::temp_dir().join(format!(
-        "hya-app-{label}-{}-{nanos}",
-        std::process::id()
-    ));
+    let path = std::env::temp_dir().join(format!("hya-app-{label}-{}-{nanos}", std::process::id()));
     std::fs::create_dir_all(&path).unwrap();
     path
 }
@@ -60,7 +59,7 @@ fn write_hya_config(root: &Path, config_yaml: &str) -> PathBuf {
 /// just bare model ids.
 #[tokio::test]
 async fn load_restores_effort_context_and_max_output_from_models_yml_cache() {
-    let _env = env_lock();
+    let _env = env_lock().await;
     let root = unique_root("provider-cache-rich");
     let config_home = write_hya_config(
         &root,
@@ -119,7 +118,7 @@ async fn load_restores_effort_context_and_max_output_from_models_yml_cache() {
 /// unreachable discovery endpoints.
 #[tokio::test]
 async fn load_uses_models_yml_cache_without_waiting_on_unreachable_discovery() {
-    let _env = env_lock();
+    let _env = env_lock().await;
     let root = unique_root("provider-cache-warm");
     let config_home = write_hya_config(
         &root,
@@ -175,7 +174,7 @@ async fn load_uses_models_yml_cache_without_waiting_on_unreachable_discovery() {
 /// Successful discovery must rewrite `models.yml.cache` and leave `config.yaml` untouched.
 #[tokio::test]
 async fn discovery_refresh_writes_models_yml_cache_without_mutating_config() {
-    let _env = env_lock();
+    let _env = env_lock().await;
     let root = unique_root("provider-cache-write");
     let config_home = write_hya_config(
         &root,
