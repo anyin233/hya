@@ -8,6 +8,7 @@ use hya_proto::{
 use serde_json::{Value, json};
 
 use super::session_context_tool_time::ToolTime;
+use super::time::millis;
 
 #[derive(Clone, Copy, Default)]
 struct MessageTime {
@@ -478,8 +479,4 @@ fn finish_name(finish: FinishReason) -> &'static str {
         FinishReason::Cancelled => "cancelled",
         FinishReason::Error => "error",
     }
-}
-
-fn millis(ts: i64) -> u64 {
-    u64::try_from(ts).unwrap_or(0)
 }

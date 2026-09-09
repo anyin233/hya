@@ -8,6 +8,7 @@ use serde_json::Value;
 
 use super::message_context_parts::prompt_attachment_parts;
 use super::message_parts::{CompatPartContext, compat_parts};
+use super::time::millis;
 
 #[derive(Clone, Debug, Serialize)]
 pub(super) struct CompatMessage {
@@ -241,10 +242,6 @@ fn message_times(envs: &[Envelope]) -> BTreeMap<MessageId, CompatMessageTime> {
         }
     }
     out
-}
-
-fn millis(ts: i64) -> u64 {
-    u64::try_from(ts).unwrap_or(0)
 }
 
 fn role_name(role: Role) -> &'static str {

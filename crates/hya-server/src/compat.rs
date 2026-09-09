@@ -80,6 +80,7 @@ mod session_wait;
 mod skill_catalog;
 mod sse;
 mod sync_projector;
+mod time;
 mod tui;
 mod workspace_id;
 mod worktree_git;

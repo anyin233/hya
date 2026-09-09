@@ -7,6 +7,7 @@ use hya_proto::{Envelope, Event, MessageId, SessionId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use super::time::millis;
 use crate::{ApiError, ServerState, parse_session};
 
 #[derive(Deserialize)]
@@ -313,8 +314,4 @@ fn admission_info(envs: &[Envelope], message: MessageId) -> Result<(u64, u64), A
 fn parse_message(id: &str) -> Result<MessageId, ApiError> {
     id.parse()
         .map_err(|_| ApiError::bad_request("invalid message id"))
-}
-
-fn millis(ts: i64) -> u64 {
-    u64::try_from(ts).unwrap_or(0)
 }
