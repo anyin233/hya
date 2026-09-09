@@ -1,3 +1,5 @@
+import { isRecord } from "../../util/record"
+
 export type MemberRunStatus = "spawning" | "running" | "done" | "failed" | "cancelled"
 export type RosterStatus = "idle" | "busy" | "done" | "failed"
 
@@ -243,10 +245,6 @@ function isRosterStatus(value: unknown): value is RosterStatus {
 
 function isOneOf<const T extends readonly string[]>(value: unknown, values: T): value is T[number] {
   return typeof value === "string" && values.includes(value)
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value)
 }
 
 export type MainPane = { type: "main"; id: "main" }
