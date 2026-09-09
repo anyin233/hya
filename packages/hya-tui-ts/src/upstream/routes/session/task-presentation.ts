@@ -1,3 +1,4 @@
+import { isRecord } from "../../util/record"
 import type { RunTreeNode } from "./subagent-workspace"
 
 /** One launched subagent row rendered inside the main assistant message. */
@@ -10,10 +11,6 @@ export type TaskMemberView = {
   /** Terminal outcome status when the tool has finished. */
   status?: string
   summary?: string
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
 function stringField(value: unknown, key: string): string | undefined {
