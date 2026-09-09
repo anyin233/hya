@@ -38,8 +38,8 @@ pub use ids::{
 };
 pub use mail::{MailEndpoint, MailKind};
 pub use message::{
-    CostBreakdown, FinishReason, MemberRunStatus, Message, Part, Role, RosterStatus, SubagentMode,
-    TokenUsage, ToolPartState,
+    FinishReason, MemberRunStatus, Message, Part, Role, RosterStatus, SubagentMode, TokenUsage,
+    ToolPartState,
 };
 pub use model::{AgentName, ModelRef, ToolName, ToolSchema};
 pub use projection::{
