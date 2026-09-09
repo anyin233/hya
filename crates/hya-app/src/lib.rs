@@ -14,12 +14,12 @@ pub mod agent_model_control;
 pub mod auth;
 /// `config.yaml` load, first-run bootstrap, and Compat import.
 pub mod config;
-/// Durable `models.yml.cache` beside the Hya config directory.
-pub mod models_cache;
 /// Formatter plane construction from optional formatter config.
 pub mod formatter_config;
 mod installed_bundle_refresh;
 mod lsp;
+/// Durable `models.yml.cache` beside the Hya config directory.
+pub mod models_cache;
 /// Interactive OAuth login and access-token refresh.
 pub mod oauth;
 /// Headless permission auto-reject responder for non-interactive runs.

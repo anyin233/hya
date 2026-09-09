@@ -50,7 +50,11 @@ pub(crate) async fn cmd_serve(
         eprintln!("hya: --yolo on serve auto-approves ALL tool actions for any client (RCE risk)");
     }
     state = state.with_permission_requests(asks);
-    spawn_provider_catalog_refresh(Arc::clone(&engine), state.catalog_updates_sender(), pending_discovery);
+    spawn_provider_catalog_refresh(
+        Arc::clone(&engine),
+        state.catalog_updates_sender(),
+        pending_discovery,
+    );
     let listener = tokio::net::TcpListener::bind(&bind)
         .await
         .with_context(|| format!("bind {bind}"))?;

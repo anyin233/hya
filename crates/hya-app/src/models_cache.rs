@@ -75,7 +75,10 @@ impl CachedModelEntry {
                 context: model.capabilities.max_context,
                 output: model.capabilities.max_output,
             },
-            reasoning_default: model.reasoning_default.map(ReasoningEffort::as_str).map(str::to_string),
+            reasoning_default: model
+                .reasoning_default
+                .map(ReasoningEffort::as_str)
+                .map(str::to_string),
             reasoning_variants: model.reasoning_variants.clone(),
             tools: model.capabilities.streaming_tool_calls,
         }
@@ -148,8 +151,7 @@ pub fn read_models_cache() -> anyhow::Result<ModelsCacheFile> {
 pub fn write_models_cache_file(file: &ModelsCacheFile) -> anyhow::Result<()> {
     let path = models_cache_path();
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("create {}", parent.display()))?;
+        std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
     }
     let mut normalized = normalize_cache(file.clone());
     if normalized.version == 0 {
@@ -164,7 +166,11 @@ pub fn write_models_cache_file(file: &ModelsCacheFile) -> anyhow::Result<()> {
 }
 
 /// Replace one provider's cached models from live catalog rows.
-pub fn upsert_provider_models(file: &mut ModelsCacheFile, provider_id: &str, models: &[ProviderModel]) {
+pub fn upsert_provider_models(
+    file: &mut ModelsCacheFile,
+    provider_id: &str,
+    models: &[ProviderModel],
+) {
     let entries = models
         .iter()
         .filter(|model| model.provider_id == provider_id)
