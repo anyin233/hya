@@ -446,7 +446,7 @@ Maintainer-facing surface of `packages/hya-tui-ts`:
 | `HyaPaths`, `HyaPlatform`, `HyaFlag`, `HyaVersion`, `HyaChannel` | `hya/platform.ts` | Paths + Effect service + env flags + version channel. |
 | `PRODUCT_NAME`, `STATUS_COMMAND`, `DEFAULT_THEME`, `DEFAULT_SOUND_PACK`, `CLIPBOARD_TEMP_NAME`, `terminalTitle()` | `hya/product.ts` | Product constants (`"hya"`, `"hya.status"`, `"hya"`, `"hya.default"`, `"hya-clipboard.png"`). |
 | `auditSurface` | `hya/audit.ts` | Freezes branded presentation map, terminal title, default theme/sound pack, XDG paths, temp name, builtin plugin ids, and `hya.status` for branding tests. |
-| `startupMark`, `startupTraceEnabled` | `hya/startup-trace.ts` | Structured startup marks when `HYA_STARTUP_TRACE` is truthy. |
+| `startupMark` | `hya/startup-trace.ts` | Structured startup marks when `HYA_STARTUP_TRACE` is truthy. |
 | `createStaticPluginHost()` | `hya/static-host.ts` | Returns `TuiPluginHost`. |
 | `observeSdkSpine(input, ready)` | `hya/sdk-spine.tsx` | Headless SDK/sync/data provider chain; resolves when `ready` passes; rejects after **5 s** with `SDK spine timed out`. **Test seam.** |
 

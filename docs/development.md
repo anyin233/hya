@@ -150,13 +150,6 @@ cargo run -p xtask -- package-bundle <source-dir> <output.hyabundle>
 cargo run -p xtask -- release-rehearsal --workflow .github/workflows/release.yml --version 0.36.12 --target x86_64-unknown-linux-gnu --no-publish
 ```
 
-### Example-only environment
-
-`HYA_BACKEND_DIR` is read only by the SDK native-bridge example
-([`crates/hya-sdk/examples/native_spike.rs`](../crates/hya-sdk/examples/native_spike.rs))
-and names the package directory for that bridge. It has **no** effect on `hya`,
-`hya-backend`, or the TUI — do not treat it as user configuration.
-
 ## Crate Selection
 
 Use this guide when deciding where a change belongs:

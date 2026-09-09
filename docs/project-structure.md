@@ -270,28 +270,25 @@ Compat-shaped HTTP bodies; exact parity is tracked in
 
 `hya-client` is the small native typed wrapper for create-session, prompt, and
 events calls. The frozen Compat `hya-sdk::Client` is a separate integration
-surface; `hya-sdk::native` is its JSONL/native bridge, and `hya-native` is the
-in-process Axum transport. See [`architecture/server-client.md`](architecture/server-client.md)
+surface, and `hya-native` is its in-process Axum transport. See [`architecture/server-client.md`](architecture/server-client.md)
 for route details.
 
 ## `hya-sdk`, `hya-native`, and `hya-updater`
 
 ### `hya-sdk`
 
-Integration SDK for TUI and embedders talking to **`hya-server`** (or an
-in-process bridge) over the Compat-compatible HTTP/SSE surface.
+Integration SDK for TUI and embedders talking to **`hya-server`** (or the
+in-process `hya-native` transport) over the Compat-compatible HTTP/SSE surface.
 
 | Module | Purpose |
 | --- | --- |
 | [`client.rs`](../crates/hya-sdk/src/client.rs) | Typed `Client` trait and HTTP transport. |
-| [`native.rs`](../crates/hya-sdk/src/native.rs) | In-process stdio/native bridge client surface. |
 | [`server.rs`](../crates/hya-sdk/src/server.rs) | `ServerHandle` — spawn/supervise `hya-backend serve` and parse the listen URL. |
 | [`events.rs`](../crates/hya-sdk/src/events.rs) | Global SSE helpers. |
 | [`store.rs`](../crates/hya-sdk/src/store.rs) | Live `MessageStore` projection for UI. |
 | [`team.rs`](../crates/hya-sdk/src/team.rs) | Frontend `TeamProjection` mirror. |
 | [`reducer.rs`](../crates/hya-sdk/src/reducer.rs) | `session.next.*` V2Event timeline reducer. |
 | [`types.rs`](../crates/hya-sdk/src/types.rs) | Shared SDK wire types. |
-| [`pending.rs`](../crates/hya-sdk/src/pending.rs) | Pending ask/permission coordination slots. |
 | [`error.rs`](../crates/hya-sdk/src/error.rs) | SDK errors and `Result` alias. |
 
 Wire constant: `DIRECTORY_HEADER` = `x-opencode-directory` (working-directory
