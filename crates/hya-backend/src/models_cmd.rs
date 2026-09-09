@@ -1,5 +1,5 @@
 use anyhow::Context as _;
-use hya_provider::{ModelCatalogSource, ProviderCatalogSnapshot, ProviderModel};
+use hya_provider::{ProviderCatalogSnapshot, ProviderModel};
 
 pub(crate) fn cmd_models(
     catalog: &ProviderCatalogSnapshot,
@@ -17,7 +17,7 @@ pub(crate) fn cmd_models(
                 .models()
                 .iter()
                 .find(|model| model.provider_id == provider && model.model_id == id)
-                .map(|model| source_name(model.source))
+                .map(|model| model.source.as_str())
                 .unwrap_or("unknown");
             println!(
                 "{}",
@@ -48,17 +48,10 @@ fn model_lines(models: &[ProviderModel], provider: Option<&str>) -> Result<Vec<S
     Ok(lines)
 }
 
-fn source_name(source: ModelCatalogSource) -> &'static str {
-    match source {
-        ModelCatalogSource::Configured => "configured",
-        ModelCatalogSource::Discovered => "discovered",
-        ModelCatalogSource::Offline => "offline",
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hya_provider::ModelCatalogSource;
 
     fn model(provider: &str, id: &str, source: ModelCatalogSource) -> ProviderModel {
         ProviderModel {
