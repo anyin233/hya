@@ -152,15 +152,6 @@ impl TokenUsage {
     }
 }
 
-/// Per-message USD cost pair (schema companion for `message.cost_json`).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct CostBreakdown {
-    /// Estimated input cost in USD.
-    pub input_usd: f64,
-    /// Estimated output cost in USD.
-    pub output_usd: f64,
-}
-
 /// Lifecycle of a tool call as it streams: pending → running → completed | error.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "phase", rename_all = "snake_case")]
