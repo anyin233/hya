@@ -11,6 +11,7 @@ use serde_json::{Number, Value};
 pub(super) use super::message_projection::CompatMessage;
 use super::message_projection::compat_message;
 pub(super) use super::model_ref::{CompatModel, model_info};
+use super::time::millis;
 
 pub(super) const REVERT_METADATA_KEY: &str = "_hyaCompatRevert";
 
@@ -339,10 +340,6 @@ fn revert_from_value(value: Value) -> Option<CompatSessionRevert> {
         snapshot: None,
         diff: None,
     })
-}
-
-fn millis(ts: i64) -> u64 {
-    u64::try_from(ts).unwrap_or(0)
 }
 
 fn session_tokens(projection: &Projection) -> CompatSessionTokens {

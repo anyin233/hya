@@ -3,6 +3,8 @@ use std::collections::BTreeMap;
 use hya_proto::{Envelope, Event, PartId, ToolPartState};
 use serde_json::{Value, json};
 
+use super::time::millis;
+
 #[derive(Clone, Copy, Default)]
 pub(in crate::compat) struct ToolTime {
     created: Option<u64>,
@@ -64,8 +66,4 @@ fn update_from_part_state(entry: &mut ToolTime, state: &ToolPartState, time: u64
             entry.completed = Some(time);
         }
     }
-}
-
-fn millis(ts: i64) -> u64 {
-    u64::try_from(ts).unwrap_or(0)
 }

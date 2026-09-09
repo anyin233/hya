@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use super::message_context_parts::tool_attachment_parts;
+use super::time::millis;
 
 #[derive(Clone, Copy, Default)]
 struct CompatPartTime {
@@ -553,8 +554,4 @@ fn tool_output_metadata(output: &Value) -> Value {
         Some(metadata) if metadata.is_object() => metadata.clone(),
         _ => json!({}),
     }
-}
-
-fn millis(ts: i64) -> u64 {
-    u64::try_from(ts).unwrap_or(0)
 }
