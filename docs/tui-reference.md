@@ -413,7 +413,7 @@ mirrors the static defaults.
 | **Fork session** | `session.fork`, `/fork` | Full session plus each user message as a fork point; scrolls on move |
 | **Message Actions** | Click a user message | Revert, Copy, Fork |
 | **Export options** | `session.export`, `<leader>x`, `/export` | Filename default `session-<id8>.md`; Space-toggled switches for thinking, tool details, assistant metadata, **open without saving**; Tab between fields. Always calls `$VISUAL`/`$EDITOR` when set (see [External editor](#external-editor)). |
-| **File picker** | Autocomplete / DialogTag | File attach picker |
+| **File picker** | Autocomplete | File attach picker |
 | **Confirm / Alert / Prompt** | Various | Reusable `DialogConfirm`, `DialogAlert` (retry-error text), `DialogPrompt` |
 
 ### Session quick slots

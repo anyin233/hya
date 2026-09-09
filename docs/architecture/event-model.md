@@ -363,16 +363,9 @@ This is **not** the `token_ledger` row shape (session/role/iteration/run-id
 columns in storage). Ledger accounting and envelope `TokenUsage` are different
 models.
 
-### `CostBreakdown`
-
-```text
-CostBreakdown { input_usd: f64, output_usd: f64 }
-```
-
-Defined as the per-message USD cost pair in `hya-proto`. The store schema has a
-`message.cost_json` column; no current workspace writer was found that
-constructs `CostBreakdown` into that column, so integrators should not assume
-live cost population from projection alone.
+The store schema keeps a `message.cost_json` column, but no workspace writer
+populates it and `hya-proto` no longer defines a cost type for it; integrators
+should not assume live cost population from projection alone.
 
 ### `ToolPartState`
 
