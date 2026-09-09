@@ -102,8 +102,8 @@ pub fn decode_http_error(status: u16, raw_body: &[u8]) -> SdkError {
 
 /// Errors surfaced by the SDK layer.
 ///
-/// Covers owned-backend spawn readiness, HTTP/SSE transport, the native bridge,
-/// and JSON decode. Variants are `#[non_exhaustive]` so new failure modes can
+/// Covers owned-backend spawn readiness, HTTP/SSE transport, alternative
+/// [`Transport`](crate::Transport) failures, and JSON decode. Variants are `#[non_exhaustive]` so new failure modes can
 /// land without breaking `match` arms that use a wildcard.
 #[non_exhaustive]
 #[derive(Debug, Error)]
