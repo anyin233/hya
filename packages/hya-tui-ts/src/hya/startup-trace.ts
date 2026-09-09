@@ -55,12 +55,3 @@ export function startupMark(mark: StartupMark | string, detail?: string, options
     // Tracing must never take down the TUI.
   }
 }
-
-/**
- * Whether startup tracing is active for this process.
- *
- * @returns true when `HYA_STARTUP_TRACE` is `1` or `true` (case-insensitive)
- */
-export function startupTraceEnabled() {
-  return enabled
-}
