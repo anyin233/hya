@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use hya_proto::{AgentName, SessionId, ToolCallId};
 use hya_tool::{InlineAgent, SpawnMember, ToolOperation};
 use sha2::{Digest, Sha256};
@@ -308,12 +306,6 @@ impl SpawnIntentV1 {
     pub(crate) fn stable_target(&self) -> &AgentName {
         &self.stable_target
     }
-}
-
-fn encode_spawn_intent_batch_v1(
-    intents: &[SpawnIntentV1],
-) -> Result<Vec<Vec<u8>>, SpawnIntentError> {
-    intents.iter().map(SpawnIntentV1::encode).collect()
 }
 
 impl PartialEq for SpawnIntentV1 {
@@ -633,7 +625,7 @@ mod tests {
     use super::{
         MAX_SPAWN_INTENT_BYTES_V1, PriorStartV1, SPAWN_INTENT_DOMAIN_V1,
         SPAWN_INTENT_INTEGRITY_DOMAIN_V1, SpawnIntentError, SpawnIntentInputV1, SpawnIntentV1,
-        checked_encoded_end_v1, encode_spawn_intent_batch_v1,
+        checked_encoded_end_v1,
     };
 
     #[test]
@@ -808,7 +800,7 @@ mod tests {
     }
 
     #[test]
-    fn spawn_intent_v1_enforces_exact_size_and_batch_preparation() {
+    fn spawn_intent_v1_enforces_exact_size() {
         const FINGERPRINT_WIDTH: usize = 32;
 
         let parent: SessionId = "ses_018f032a3d2f7a21a05c2e61fc57dced"
@@ -860,14 +852,5 @@ mod tests {
             checked_encoded_end_v1(usize::MAX, 1),
             Err(SpawnIntentError::LengthOverflow)
         );
-        assert_eq!(
-            encode_spawn_intent_batch_v1(&[exact.clone(), oversized]),
-            Err(expected_size_error)
-        );
-
-        let exact_batch =
-            encode_spawn_intent_batch_v1(&[exact]).expect("one-member exact batch encoding");
-        assert_eq!(exact_batch.len(), 1);
-        assert_eq!(exact_batch[0].len(), 1_048_576);
     }
 }
