@@ -22,7 +22,7 @@ Launcher or backend changes additionally require the Rust workspace gate:
 ```sh
 cargo fmt --all --check
 cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
+cargo test --workspace --jobs 1 --exclude hya-e2e
 ```
 
 ---

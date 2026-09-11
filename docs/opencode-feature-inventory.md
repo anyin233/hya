@@ -1,6 +1,6 @@
 # OpenCode Feature Inventory
 
-Last updated: 2026-07-07.
+Last updated: 2026-09-11.
 
 This inventory uses official OpenCode docs as a capability baseline, not an implementation clone target. Each capability maps to a hya-native verification owner so capability work becomes executable behavior, not a checklist.
 
@@ -37,7 +37,7 @@ hya-native coverage is first-pass and sourced from current project docs: the com
 
 | Capability family | Priority | hya behavior target | OpenCode analogue/source | Current hya-native coverage | Verification owner |
 | --- | --- | --- | --- | --- | --- |
-| Verification bootstrap | must-have | Product behavior is defined by boundary-owned suites, starting with Registered tool contracts, then Golden path and TUI verification. | OpenCode exposes the capability baseline; verification design is hya-native. | missing as a complete suite; scattered tests exist. | Registered tool contract; Golden path; TUI verification suite |
+| Verification bootstrap | must-have | Product behavior is defined by boundary-owned suites, starting with Registered tool contracts, then Golden path and TUI verification. | OpenCode exposes the capability baseline; verification design is hya-native. | partial: TUI verification suite exists under `packages/hya-tui-ts/test` (Track T live-backend/PTY plus rendering, presentation, and architecture-guard files); Registered tool contract and Golden path are still not a single bootstrap suite. | Registered tool contract; Golden path; TUI verification suite |
 | Rust plugin binary | must-have | Private plugins are Rust executables speaking hya's stable plugin protocol, distinct from JS/TS OpenCode plugins and in-process dynamic libraries. | [Plugins](https://opencode.ai/docs/plugins/), [Custom tools](https://opencode.ai/docs/custom-tools/) | partial: stdio plugin host and plugin tools exist; private Rust distribution story needs contract tests/docs. | `hya-plugin` protocol suite; plugin tool contract |
 | Runtime plugin registration | must-have | Add/start plugin capabilities while the runtime is already running; next admitted Turn sees the updated tool catalog. | OpenCode loads plugins/tools from config/startup; hya extends this with runtime registration. | missing/partial: dynamic HTTP MCP exists in places; plugin runtime registration not complete. | Plugin lifecycle boundary-owned suite |
 | Hot plugin reload | should-have | Replace a registered plugin instance without restarting runtime; visibility follows ADR 0008 next-turn tool visibility. | [Plugins](https://opencode.ai/docs/plugins/) | missing. | Plugin lifecycle suite; event/projection assertions |

@@ -65,7 +65,7 @@ additions/deletions, matching Compat's committed branch-change behavior, and
 branch-mode file discovery preserves Compat's NUL-parsed special filenames.
 VCS default-branch discovery follows Compat's remote/config/local fallback.
 
-## 0.36.9 native coding-tool contract
+## Native coding-tool contract (since 0.36.9)
 
 The following is the shipped hya native equivalent for the coding-agent tools.
 It is not a claim that every Compat implementation detail or harness-only
@@ -194,4 +194,4 @@ PTY/workspace/sync behavior, and ACP.
 
 Each candidate should be implemented with a red test first, verified with
 `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
-and `cargo test --workspace`, then committed atomically.
+and `cargo test --workspace --jobs 1 --exclude hya-e2e`, then committed atomically.

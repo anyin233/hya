@@ -32,6 +32,8 @@ hya-backend / hya-server
 | [`../README.md`](../README.md) | Short public overview and quick command examples. |
 | [`../crates`](../crates) | Production crates. |
 | [`../crates/xtask`](../crates/xtask) | Developer tooling: `sync-compat`, `migrate`, `startup-bench`, `matrix-check`, deterministic `package-bundle`, and non-publishing `release-rehearsal`. |
+| [`../packages`](../packages) | TypeScript packages. |
+| [`../packages/hya-tui-ts`](../packages/hya-tui-ts) | Sole interactive frontend: SolidJS/OpenTUI rendering, interaction, routes, and HTTP/SSE synchronization. |
 | [`../docs`](../docs) | Project documentation. |
 
 ## Crate Responsibilities
@@ -170,6 +172,8 @@ Important modules:
 | [`src/sync.rs`](../crates/hya-store/src/sync.rs) | Compat sync history/replay helpers. |
 | [`src/permission.rs`](../crates/hya-store/src/permission.rs) | Saved permissions. |
 | [`src/bundle_registry.rs`](../crates/hya-store/src/bundle_registry.rs) | **Separate** installed-bundle registry SQLite DB (not the session event log). |
+| [`src/agent_model_preference.rs`](../crates/hya-store/src/agent_model_preference.rs) | Durable per-Agent model preference rows kept outside the session event log. |
+| [`src/workflow.rs`](../crates/hya-store/src/workflow.rs) | Startup convergence for durable Workflow runs (admission and selection). |
 | [`src/error.rs`](../crates/hya-store/src/error.rs) | Store error wrapper. |
 
 Session-store migrations (`migrations/`):
@@ -184,6 +188,7 @@ Session-store migrations (`migrations/`):
 | `0006_admission_queue_states.sql` | Admission queue states. |
 | `0007_admission_bindings.sql` | Admission bindings. |
 | `0008_admission_fairness.sql` | Admission fairness bookkeeping. |
+| `0009_agent_model_preference.sql` | Durable per-Agent model preference table. |
 
 Bundle registry uses a **separate** migration set under
 `bundle_migrations/0001_init.sql` for the installed-bundle database file.
@@ -253,6 +258,7 @@ event folds and `last_seq` advances.
 | `POST /sessions/:id/prompt` | Admit a user prompt and run one turn. |
 | `POST /sessions/:id/command` | Run a command/template turn. |
 | `POST /sessions/:id/shell` | Run a shell tool turn. |
+| `GET /sessions/:id/workflow` | Return projected Workflow state through `WorkflowControl`. |
 | `POST /sessions/:id/workflow` | Select, run, or query governed Workflow state through `WorkflowControl`. |
 | `GET /sessions/:id/events` | Replay envelopes, optionally after `since_seq`. |
 | `GET /sessions/:id/stream` | Stream live envelopes as SSE. |

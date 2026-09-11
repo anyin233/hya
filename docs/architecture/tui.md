@@ -15,7 +15,8 @@ User-facing screens, transcript, dialogs, and prompt behavior live in
 hya
   -> exec adjacent hya-ts
   -> start or attach to hya-backend
-  -> run packages/hya-tui-ts/src/main.tsx with Bun
+  -> resolve TUI entry (boot for FIFO handoff; dist preferred; HYA_TUI_ENTRY)
+  -> run that entry with Bun
   -> use @opencode-ai/sdk/v2 over HTTP/SSE
 ```
 
@@ -72,11 +73,22 @@ Accepted flags:
 | `--model <PROVIDER/MODEL>` | Seed model. |
 | (positional) | Optional project path when `--project` is omitted. |
 
-`hya-ts` builds exactly this argv when it execs Bun: always
-`src/main.tsx --url <url> --project <canonical project>`, then optional
-`--continue`, `--session`, `--fork`, `--prompt`, `--agent`, `--model`
-([`crates/hya-ts/src/lib.rs`](../../crates/hya-ts/src/lib.rs) `build_bun_command_with_url`).
-The two sides must be changed together. After parse, the entrypoint
+`hya-ts` (`build_bun_command_with_url`) chooses the Bun entry via
+[`resolve_tui_entry`](../../crates/hya-ts/src/lib.rs), then always appends
+`--url <url> --project <canonical project>`, then optional `--continue`,
+`--session`, `--fork`, `--prompt`, `--agent`, `--model`. Entry resolution:
+
+1. `HYA_TUI_ENTRY=src` (case-insensitive) forces the TypeScript source tree:
+   `src/boot.tsx` when a boot entry is used, otherwise `src/main.tsx`
+2. any other non-empty `HYA_TUI_ENTRY` is used verbatim as a relative entry
+   path under the runtime dir
+3. otherwise a bundled `dist/boot.js` / `dist/main.js` is preferred when the
+   file is present
+4. otherwise `src/boot.tsx` / `src/main.tsx`
+
+Owned-backend FIFO handoff uses the boot entry
+(`packages/hya-tui-ts/src/boot.tsx`); attach mode uses main. The two sides
+must be changed together. After parse, the entrypoint
 `realpath`s the project directory and `chdir`s into it before rendering.
 
 ## Owned backend lifecycle
@@ -155,10 +167,15 @@ editor-integration probes retained in the vendored frontend:
 
 | Variable | Role |
 | --- | --- |
-| `CLAUDE_CODE_SSE_PORT` | IDE SSE port; checked **first** |
-| `OPENCODE_EDITOR_SSE_PORT` | Fallback IDE SSE port |
 | `OPENCODE_ZED_DB` | Override Zed database path |
-| `ZED_TERM` / `TERM_PROGRAM` | Detect running inside a Zed terminal (`ZED_TERM=true` or `TERM_PROGRAM=zed`) |
+
+IDE connection is discovered from `~/.claude/ide/*.lock`
+(`discoverEditorConnection`). The lock basename is the WebSocket port; JSON
+`workspaceFolders` are scored against the project directory (longest
+containing path, then newest mtime); optional `authToken` is forwarded.
+Transport must be omitted or `"ws"`. `CLAUDE_CODE_SSE_PORT` and
+`OPENCODE_EDITOR_SSE_PORT` are unused. Zed-terminal detection through
+`ZED_TERM` / `TERM_PROGRAM` (`isZedTerminal`) is gone.
 
 ## Frontend Ownership
 

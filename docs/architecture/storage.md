@@ -251,8 +251,10 @@ Returns whether any **event_log** rows were removed.
 replay(session) -> Projection::from_events(envelopes)
 ```
 
-This keeps store replay, HTTP event reads, SSE recovery, transcript rendering,
-and TUI state on the same reducer semantics.
+This keeps store replay, HTTP event reads, SSE recovery, and transcript
+rendering on the same `hya_proto::Projection` reducer. The store, server, and
+native Rust client share that reducer; the TypeScript TUI renders from the
+Compat SDK/sync layer over HTTP+SSE.
 
 ## Token Ledger
 
@@ -392,7 +394,7 @@ migrations live under
 | `BundleNotFound` | Uninstall/lookup of missing bundle |
 | `BundleContentConflict` | Same version, different content on install |
 | `PrivateActivationUnsupported` | Private package inspection cannot be installed |
-| `BundleImmutable` | Attempt to mutate a builtin bundle id |
+| `BundleAgentIdReserved` | Bundle declares a reserved built-in agent id |
 | `OperationIdConflict` | Immutable admission claim fields differ for the same operation id |
 | `AdmissionNotFound` | No journal row for the operation |
 | `AdmissionTransitionConflict` | Illegal state transition |
@@ -402,6 +404,10 @@ migrations live under
 | `StaleActorClaim` | Epoch/owner no longer current |
 | `ActorClaimUnavailable` | No recoverable active claim |
 | `ActorClaimData` | Claim payload/data error |
+| `RuntimeOwnerBusy` | Exclusive runtime-owner lock already held |
+| `RuntimeOwnerClaimRequired` | Matching runtime owner claim required for recovery |
+| `RuntimeOwnerLock` | Runtime-owner lock file I/O failed |
+| `WorkflowData` | Malformed or inconsistent Workflow control mutation |
 | `MailboxRejected` | Mailbox write rejected |
 
 ## Replay Surfaces

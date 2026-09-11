@@ -93,7 +93,7 @@ confirmed against the source directly.
   cannot be expressed through it.
 - `contextMaxCharacters` advertises a default of 10000 in the schema, but the Exa
   client only forwards the field when explicitly supplied.
-- Output truncation is asymmetric: `shell` keeps the first 16 KiB while the global
+- Output truncation is asymmetric: `shell` keeps the first 50 KiB while the global
   `cap_tool_output` keeps the last 5000 characters.
 - Two leader-key collisions: `<leader>q` is `session.queued_prompts` when the
   current session has queued follow-ups, otherwise `app.exit`; `<leader>h` is
@@ -149,3 +149,4 @@ workaround; the fields either need consumers or removal:
 
 Each of these reads as a working feature in configuration. A user setting them
 gets silence, not an error.
+

@@ -25,7 +25,8 @@ interaction behavior belongs only in `packages/hya-tui-ts`.
 ```text
 packages/hya-tui-ts/
 |-- src/
-|   |-- main.tsx             # Bun entrypoint
+|   |-- boot.tsx             # launcher entry (`hya-ts` spawns this by default)
+|   |-- main.tsx             # app entry used when boot handoff is off
 |   |-- hya/                 # hya-owned product/platform/SDK integration
 |   `-- upstream/            # retained SolidJS/OpenTUI frontend boundary
 |       |-- component/

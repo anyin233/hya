@@ -1,6 +1,6 @@
 # hya, Pi, and Compat Feature Comparison
 
-Last researched: 2026-06-30.
+Last researched: 2026-06-30. Tool-name correction: 2026-09-11 (`shell` is a hidden runtime alias of canonical `bash`; other comparison claims were not re-verified).
 
 This page compares hya with upstream stock Pi (`earendil-works/pi`) and current
 Compat (`anomalyco/compat` plus `compat.ai`). It intentionally does not
@@ -65,7 +65,7 @@ Core built-ins include:
 
 - file tools: `read`, `write`, `edit`, `apply_patch`
 - search/navigation: `ls`, `glob`, `find`, `grep`
-- execution and interaction: `shell`/`bash`, `question`/`ask_user`
+- execution and interaction: `bash` (hidden dispatch alias `shell`), `question`/`ask_user`
 - higher-level planes: `lsp`, `skill`, `task`, `todowrite`, `plan_exit`
 - web surfaces: `webfetch`, `websearch`
 

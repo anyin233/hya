@@ -82,7 +82,8 @@ auto ─► OpenTUI capability signal ─► protocol probe ─► kitty
 
 1. OpenTUI 0.3.4 的 `TerminalCapabilities` 已公开 `kitty_graphics`、`sixel`、
    `rgb`、`sgr_pixels` 和 `terminal` 字段，`CliRenderer` 公开只读
-   `capabilities`。把它们当作候选信号。 [installed OpenTUI capability type](../../packages/hya-tui-ts/node_modules/@opentui/core/types.d.ts) [installed renderer API](../../packages/hya-tui-ts/node_modules/@opentui/core/renderer.d.ts)
+   `capabilities`。把它们当作候选信号。（依据安装后的 `@opentui/core` 声明文件
+   `types.d.ts` 与 `renderer.d.ts`，它们只在 `bun install` 之后存在于 `node_modules`。）
 2. 对 Kitty 仍发送规范的 `a=q` + DA 组合探测；只有先收到图像查询回应才启用。
    这是 Kitty 文档规定的判定方式。 [Kitty detection](https://sw.kovidgoyal.net/kitty/graphics-protocol/)
 3. 对 iTerm2 使用其 Feature Reporting，而不是环境变量猜测。 [iTerm2 inline-image detection](https://iterm2.com/documentation-images.html)
@@ -99,7 +100,7 @@ auto ─► OpenTUI capability signal ─► protocol probe ─► kitty
 - hya 当前锁定 `@opentui/core` / `@opentui/solid` **0.3.4**。
   [package manifest](../../packages/hya-tui-ts/package.json) 已安装版本的公开 renderable
   导出列表没有 `Image` renderable，而 renderer 的低层 `writeOut` 是私有成员。
-  [renderable exports](../../packages/hya-tui-ts/node_modules/@opentui/core/renderables/index.d.ts) [renderer declaration](../../packages/hya-tui-ts/node_modules/@opentui/core/renderer.d.ts)
+  （依据 `@opentui/core` 的 `renderables/index.d.ts` 与 `renderer.d.ts` 声明。）
   因而目前不能把原始 Kitty/iTerm/SIXEL 字节简单当成一个现成 JSX `<image>` 元素；需要
   一个经过 OpenTUI 渲染周期协调的专用集成点。这是由当前 API 表面得出的**工程推断**。
 - Bun 可以把 `Bun.file(...).bytes()` 读成 `Uint8Array`，也可以把数据写到 `Bun.stdout`。
@@ -141,4 +142,5 @@ auto ─► OpenTUI capability signal ─► protocol probe ─► kitty
 - 当前项目与安装依赖的链接：
   [hya TUI package manifest](../../packages/hya-tui-ts/package.json)、
   [current logo generator](../../packages/hya-tui-ts/scripts/generate-logo-art.py)、
-  [OpenTUI v0.3.4 declarations](../../packages/hya-tui-ts/node_modules/@opentui/core/types.d.ts)。
+  以及安装后的 `@opentui/core` 0.3.4 声明文件
+  `node_modules/@opentui/core/types.d.ts`（需先 `bun install`）。

@@ -72,9 +72,10 @@ From `packages/hya-tui-ts`:
 
 | Command | What it does |
 | --- | --- |
-| `bun run build` | `bun build src/main.tsx --outdir dist --target bun --packages external` — emits under `dist/` (Bun resolves `with { type: "file" }` audio imports used by attention sounds). |
+| `bun run build` | `bun scripts/build-bundled.mjs` — emits under `dist/` (OpenTUI Solid plugin; native OpenTUI platform packages stay external). |
+| `bun run build:external` | `bun build src/main.tsx --outdir dist --target bun --packages external` — emits under `dist/` (Bun resolves `with { type: "file" }` audio imports used by attention sounds). |
 | `bun run typecheck` | `tsgo --noEmit` over `src` and `test` (`jsx: preserve`, `jsxImportSource: @opentui/solid`). |
-| `bun test` | Full package test suite (see suites below). |
+| `bun test` | Full package test suite (`bun test`; file list in `test/README.md`). |
 
 **Preload prerequisite.** Both the runtime and the test runner must preload
 `@opentui/solid/preload` via [`bunfig.toml`](../packages/hya-tui-ts/bunfig.toml).
@@ -83,28 +84,12 @@ fails to render or tests fail to compile.
 
 **Test suites** under `packages/hya-tui-ts/test/`:
 
-The package currently contains 14 Bun test files. The Workflow suites are
-`workflow-presentation`, `workflow-sidebar`, and `workflow-pty`; the first two
-are focused presentation tests and the PTY suite requires built backend and TUI
-binaries. The full package suite remains the source of truth for the complete
-file list.
-
-| Suite | Role |
-| --- | --- |
-| `boundary` | Forbidden imports/paths and pinned dependency versions |
-| `branding-pruning` | Excluded upstream surface and branding stability |
-| `sdk-spine` | Headless SDK/sync provider chain |
-| `runtime-boundary` | Staged runtime install + prune + build probe |
-| `startup-trace` | Startup mark emission |
-| `agent-visibility` | Agent picker / `@` autocomplete rules |
-| `task-presentation` | Multi-member task row presentation |
-| `subagent-workspace` | Pane reducer / run tree |
-| `workflow-presentation` | Typed Workflow projection and presentation |
-| `workflow-sidebar` | Workflow sidebar plugin registration and rendering |
-| `workflow-pty` | Workflow presentation over a real backend PTY |
-| `pty-smoke` | End-to-end PTY smoke against a real backend |
-| `real-backend` | Real-backend permission/question flows |
-| `real-backend-agents` | Real-backend multi-agent roster |
+The package's own [`test/README.md`](../packages/hya-tui-ts/test/README.md)
+is the inventory of Bun test files and which suites need a built backend
+or a PTY. The Workflow suites are `workflow-presentation`,
+`workflow-sidebar`, and `workflow-pty`; the first two are focused
+presentation tests and the PTY suite requires built backend and TUI
+binaries.
 
 Focused real-backend runs (after `cargo build -p hya-backend --bin hya-backend`):
 

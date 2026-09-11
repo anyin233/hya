@@ -571,11 +571,19 @@ cargo build -p hya-updater --bin hya-updater
   --smoke smoke.sh
 # owner-gated activation only:
 ./target/debug/hya-updater apply ... --owner-authorized-activation
+# optional trust-roots override (default: <root>/trust_roots.json):
+./target/debug/hya-updater apply ... --trust-roots /secure/media/trust_roots.json
 ./target/debug/hya-updater discard --root /var/lib/hya/updater --sequence 42
+./target/debug/hya-updater init-roots \
+  --path /var/lib/hya/updater/trust_roots.json \
+  --root KEY_ID=HEX32
 ```
 
 Network download is outside the TCB. Pass a local package directory or
-`file://` path. `install.sh` remains break-glass recovery.
+`file://` path. `install.sh` remains break-glass recovery. `init-roots`
+requires `--path` and at least one `--root KEY_ID=HEX32` (repeatable).
+`apply --trust-roots` overrides `<root>/trust_roots.json`. The complete
+flag list is in [Secure self-update](self-update.md).
 
 ## Exit Codes
 

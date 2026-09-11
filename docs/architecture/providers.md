@@ -53,7 +53,7 @@ Each `push`/`finish` returns a batch of canonical `Event`s (may be empty).
 
 ### Capabilities
 
-`Capabilities` has seven fields:
+`Capabilities` has eight fields:
 
 | Field | Meaning |
 | --- | --- |
@@ -64,6 +64,7 @@ Each `push`/`finish` returns a batch of canonical `Event`s (may be empty).
 | `reasoning_stream` | Provider streams separate reasoning parts as first-class stream events (flag only; HTTP default is off). |
 | `reasoning_request` | Route accepts a reasoning-effort parameter on the request. |
 | `max_context` | Advertised context window (tokens). |
+| `max_output` | Advertised max output tokens (`0` means unspecified / unknown). Participates in identity hashing with the other caps. |
 
 **HTTP default** (`HttpProvider::new`, every kind and model):
 
@@ -74,6 +75,7 @@ Each `push`/`finish` returns a batch of canonical `Event`s (may be empty).
 - `json_output` = false
 - `reasoning_stream` = false
 - `max_context` = **200_000**
+- `max_output` = 0
 
 There is **no** per-model capability table. Every configured HTTP route reports
 the same caps for every model it serves. The context window surfaced by

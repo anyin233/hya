@@ -15,9 +15,9 @@ model filters hide some registered schemas, and several always-
 registered builtins delegate to runtime planes that can be disconnected or
 empty. The registry stores canonical tools and aliases separately, and only
 canonical tools contribute schemas.
-([crates/hya-tool/src/tool.rs:376-410](../../crates/hya-tool/src/tool.rs#L376-L410),
-[crates/hya-tool/src/tool.rs:484-490](../../crates/hya-tool/src/tool.rs#L484-L490),
-[crates/hya-tool/src/tool.rs:462-469](../../crates/hya-tool/src/tool.rs#L462-L469))
+([`ToolRegistryInner`](../../crates/hya-tool/src/tool.rs),
+[`ToolRegistry::schemas`](../../crates/hya-tool/src/tool.rs),
+[`ToolRegistrySnapshot::schemas`](../../crates/hya-tool/src/tool.rs))
 
 ## Builtin inventory
 
@@ -61,7 +61,7 @@ A cancelled or failed ask does **not** produce a tool error — it returns
 `{"answer": "", "cancelled": true}`. Callers must inspect `cancelled` rather
 than relying on an error. Contrast this with `question`, which renders
 unanswered entries as `Unanswered`.
-([crates/hya-tool/src/tool.rs:1059-1072](../../crates/hya-tool/src/tool.rs#L1059-L1072))
+([`AskUserTool`](../../crates/hya-tool/src/tool.rs))
 
 ### Task
 
@@ -126,7 +126,7 @@ result echoes the list back with a title carrying the count of still-open items
 
 All mailbox tools report that they are available only inside a running team when
 the mailbox plane is disconnected
-([crates/hya-tool/src/mailbox.rs:243-248](../../crates/hya-tool/src/mailbox.rs#L243-L248)).
+([`MailboxError::Unavailable`](../../crates/hya-tool/src/mailbox.rs) / [`map_err`](../../crates/hya-tool/src/mailbox.rs)).
 
 **`send`**: required `to` (teammate handle such as `reviewer-3`, or a channel with
 a leading `#` such as `#build`) and `body`; optional `kind` =
@@ -575,10 +575,9 @@ The call takes a file path (`filePath`) plus 1-based `line` and `character`
 `Action::Lsp` on the resolved path. When no language server is registered for the
 file type, the tool returns a tool error whose message is
 `No LSP server available for this file type.`
-([crates/hya-tool/src/lsp.rs:15-26](../../crates/hya-tool/src/lsp.rs#L15-L26),
-[crates/hya-tool/src/lsp.rs:29-125](../../crates/hya-tool/src/lsp.rs#L29-L125),
-[crates/hya-tool/src/lsp_plane.rs:16-40](../../crates/hya-tool/src/lsp_plane.rs#L16-L40),
-[crates/hya-tool/src/tool.rs:626-634](../../crates/hya-tool/src/tool.rs#L626-L634))
+([`LspTool`](../../crates/hya-tool/src/lsp.rs),
+[`LspOperation`](../../crates/hya-tool/src/lsp_plane.rs),
+[`builtin_permission`](../../crates/hya-tool/src/tool.rs))
 
 ## Local search: GLOB, FIND, and GREP
 
@@ -718,6 +717,7 @@ these wire `type` strings:
 | `Overloaded` | `overloaded` |
 | `OperationIdConflict` | `operation_id_conflict` |
 | `OperationAlreadyHandled` | `operation_already_handled` |
+| `WorkflowControl { code, message }` | the control `code` itself (e.g. `WORKFLOW_BUSY`) |
 | `UnknownAgentId` | `unknown_agent_id` |
 | `AgentSpawnNotAllowed` | `agent_spawn_not_allowed` |
 | `UnsupportedInlineAgentField` | `unsupported_inline_agent_field` |
@@ -734,12 +734,11 @@ plus an immutable caller-reachable `AgentDef` roster derived from the bound
 agent's `can_spawn` reachability (not a mutable agent catalog plane). The
 single `BundleCatalog` authority lives on `RuntimeSnapshot` / `TurnBinding`;
 application wiring does not replace an agent catalog authority.
-([crates/hya-tool/src/tool.rs:40-88](../../crates/hya-tool/src/tool.rs#L40-L88),
-[crates/hya-tool/src/agents.rs:11-20](../../crates/hya-tool/src/agents.rs#L11-L20),
-[crates/hya-core/src/runtime_registry.rs:36-39](../../crates/hya-core/src/runtime_registry.rs#L36-L39),
-[crates/hya-core/src/runtime_registry.rs:22-29](../../crates/hya-core/src/runtime_registry.rs#L22-L29),
-[crates/hya-core/src/runtime_registry.rs:117-120](../../crates/hya-core/src/runtime_registry.rs#L117-L120),
-[crates/hya-app/src/runtime.rs:3917-3940](../../crates/hya-app/src/runtime.rs#L3917-L3940))
+([`ToolCtx`](../../crates/hya-tool/src/tool.rs),
+[`AgentDef`](../../crates/hya-tool/src/agents.rs),
+[`RuntimeSnapshot`](../../crates/hya-core/src/runtime_registry.rs),
+[`TurnBinding::bundle_catalog`](../../crates/hya-core/src/runtime_registry.rs),
+[`build_session_engine`](../../crates/hya-app/src/runtime.rs))
 
 A bare `SessionEngine` starts with a disconnected mailbox and default
 interaction, spawner, todo, skill, websearch, formatter, and LSP planes. The
@@ -750,11 +749,10 @@ an injectable catalog plane. Consequently, registry presence alone does not
 prove that a plane-backed tool can return useful data; for example, mailbox
 operations report that they are available only inside a running team, and LSP
 reports when no server supports a file type.
-([crates/hya-core/src/engine.rs:258-280](../../crates/hya-core/src/engine.rs#L258-L280),
-[crates/hya-app/src/runtime.rs:3917-3940](../../crates/hya-app/src/runtime.rs#L3917-L3940),
-[crates/hya-app/src/runtime.rs:3917-3940](../../crates/hya-app/src/runtime.rs#L3917-L3940),
-[crates/hya-tool/src/mailbox.rs:243-248](../../crates/hya-tool/src/mailbox.rs#L243-L248),
-[crates/hya-tool/src/lsp.rs:15-26](../../crates/hya-tool/src/lsp.rs#L15-L26))
+([`SessionEngine::new`](../../crates/hya-core/src/engine.rs),
+[`build_session_engine`](../../crates/hya-app/src/runtime.rs),
+[`MailboxError::Unavailable`](../../crates/hya-tool/src/mailbox.rs),
+[`LspTool`](../../crates/hya-tool/src/lsp.rs))
 
 ### MCP tools
 
@@ -773,7 +771,7 @@ and are registered with `ToolPermission::Mcp`. Text and supported image/PDF
 content is normalized into hya output and attachments.
 ([crates/hya-mcp/src/bridge.rs:36-80](../../crates/hya-mcp/src/bridge.rs#L36-L80),
 [crates/hya-mcp/src/bridge.rs:83-103](../../crates/hya-mcp/src/bridge.rs#L83-L103),
-[crates/hya-app/src/runtime.rs:3917-3940](../../crates/hya-app/src/runtime.rs#L3917-L3940))
+[`prepare_mcp_results`](../../crates/hya-app/src/runtime.rs))
 
 ### Plugin tools
 
@@ -784,7 +782,7 @@ owning plugin. They are registered as general `ToolPermission::Tool` tools.
 ([crates/hya-plugin/src/plugin_tool.rs:18-34](../../crates/hya-plugin/src/plugin_tool.rs#L18-L34),
 [crates/hya-plugin/src/plugin_tool.rs:36-58](../../crates/hya-plugin/src/plugin_tool.rs#L36-L58),
 [crates/hya-plugin/src/host.rs:387-397](../../crates/hya-plugin/src/host.rs#L387-L397),
-[crates/hya-app/src/runtime.rs:3917-3940](../../crates/hya-app/src/runtime.rs#L3917-L3940))
+[`prepared_plugin_results`](../../crates/hya-app/src/runtime.rs))
 
 Registry names are unique across builtins, MCP tools, plugin tools, and their
 aliases. Any duplicate source, configured/handshake plugin-ID mismatch,
@@ -793,8 +791,8 @@ candidate before generation allocation; the previous effective snapshot stays
 active. There is no insertion-order overwrite.
 MCP namespacing reduces MCP collisions, while unnamespaced plugin declarations
 can collide directly with a builtin or another plugin.
-([crates/hya-tool/src/tool.rs:313-347](../../crates/hya-tool/src/tool.rs#L313-L347),
-[crates/hya-app/src/runtime.rs:3917-3940](../../crates/hya-app/src/runtime.rs#L3917-L3940))
+([`ToolRegistry::register_with_permission_and_aliases`](../../crates/hya-tool/src/tool.rs),
+[`build_session_engine`](../../crates/hya-app/src/runtime.rs))
 
 ## Provenance
 

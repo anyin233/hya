@@ -5,8 +5,9 @@ cross-session recovery, keep `task_plan.md`, `findings.md`, and `progress.md` in
 `.planning/<YYYY-MM-DD-slug>/`. Small tasks may use a lightweight plan.
 
 - Resume the relevant existing plan; keep unrelated task directories intact.
-- `.planning/.active_plan` contains the current plan directory name. Prefer an
-  explicit task or `PLAN_ID` when several sessions are active.
+- `.planning/.active_plan` is an optional pointer to the current plan when several
+  plan directories coexist. Prefer an explicit task or `PLAN_ID` when several
+  sessions are active.
 - Record phase status, decisions, blockers, and verification results as work
   progresses. Recover context from these files when resuming.
 - Use the installed skill when available; the Markdown files remain usable

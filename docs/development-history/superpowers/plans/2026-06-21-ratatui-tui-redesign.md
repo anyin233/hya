@@ -1,9 +1,11 @@
 # Ratatui TUI Redesign Implementation Plan
 
-> **Superseded:** ADR-0005 removed `crates/hya-legacy-tui` and made `--mini` intentionally unknown. This plan remains historical context only; do not implement it against the current `hya-tui` frontend.
-
-
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Superseded, archived:** ADR-0005 removed `crates/hya-legacy-tui` and made
+> `--mini` intentionally unknown; ADR-0010 then deleted the retained Rust TUI
+> entirely. Every crate, module, and command below is gone, and the only
+> interactive frontend is `packages/hya-tui-ts`. This file is a historical
+> record: the unchecked steps are not work items, and no agent should execute
+> them.
 
 **Goal:** Build a polished compat-inspired, Rust-only ratatui TUI for hya's existing chat/session state.
 

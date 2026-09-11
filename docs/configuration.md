@@ -300,9 +300,12 @@ Supported `kind` values:
 
 - A non-empty list is trimmed and exactly deduplicated. It is trusted without a
   model-list request and remains routable when no credential exists.
-- An absent, empty, or blank-only list makes one bounded request during every
-  process startup. Results stay in memory and are never written to config or a
-  cache. Authentication headers are sent only when Hya has a credential.
+- An absent, empty, or blank-only list prefers `models.yml.cache` beside
+  `config.yaml` and refreshes in the background. A cache miss still makes
+  one bounded request during startup. Discovered rows persist in
+  `models.yml.cache` and are preferred on the next load; they are never
+  rewritten into `config.yaml`. Explicit `providers.*.models` still wins.
+  Authentication headers are sent only when Hya has a credential.
 
 Discovery uses the declared provider kind and base URL: OpenAI-compatible and
 Responses use `/models`; Anthropic uses `/models` with bounded cursor pages;
@@ -773,6 +776,7 @@ hya honors `HOME` and `XDG_CONFIG_HOME` / `XDG_DATA_HOME` / `XDG_STATE_HOME` /
 | `HYA_MODEL` | Active request model when `--model` is not passed. **Wins over** the row-backed startup default. Unknown overrides stay outside the catalog and fail through normal routing when used. | Configured `default_model` when it names a resolved row, otherwise the deterministic first live row, otherwise `hya/offline`. | `crates/hya-app/src/runtime.rs`, `crates/hya-app/src/config.rs` |
 | `HYA_COMPACTION_THRESHOLD` | Estimated tokens that trigger context compaction. Env-only (no config.yaml key). Unparseable values ignored. | `100000` | `crates/hya-core/src/compaction.rs`, `crates/hya-app/src/runtime.rs` |
 | `HYA_COMPACTION_KEEP_RECENT` | Most-recent messages kept verbatim during compaction. Env-only. Unparseable values ignored. | `6` | same |
+| `HYA_COMPACTION_CONTEXT_FRACTION` | When the active provider route advertises a nonzero `max_context` window, the compaction trip threshold becomes `max(window * fraction, 1000)` instead of `HYA_COMPACTION_THRESHOLD`. Missing or zero window, or a fraction outside `(0.0, 1.0]`, falls back to `HYA_COMPACTION_THRESHOLD`. Env-only. Unparseable values ignored. | `0.75` | same |
 | `HYA_SUBAGENT_MAX_DEPTH` | Overrides `subagents.max_depth`. **Env wins** over config.yaml; unparseable falls back to file/default. | `5` | `crates/hya-app/src/config.rs` |
 | `HYA_SUBAGENT_MAX_CONCURRENCY` | Overrides `subagents.max_concurrency`. Env wins. | `100` | same |
 | `HYA_SUBAGENT_BUDGET` | Overrides `subagents.per_run_budget` (env name drops `PER_RUN`). Env wins. | `1024` | same |
@@ -1394,8 +1398,8 @@ Optional YAML frontmatter:
 | Field | Meaning |
 | --- | --- |
 | `description` | Shown in the command list / `/api/command` listing. |
-| `agent` | Optional string stored on `CommandInfo` and exposed in `/api/command` listing / bootstrap summary only. **No runtime consumer** switches the session agent from this field (`CommandRequest` carries only `command`, `arguments`, `text`; turn uses the session's current agent). |
-| `model` | Optional string stored and listed the same way as `agent`. **No runtime consumer** switches the turn model from this field. |
+| `agent` | Optional string stored on `CommandInfo` and exposed in `/api/command` listing / bootstrap summary only. **No runtime consumer** switches the session agent from this field; the turn uses the session's current agent. |
+| `model` | Optional string stored and listed the same way as `agent`. Disk frontmatter does not switch the turn model. |
 | `subtask` | Optional boolean parsed into the `/api/command` wire payload. **No runtime consumer** currently reads it (the TUI and engine do not open a child session from this flag). |
 
 ```markdown
@@ -1412,8 +1416,10 @@ All args: $ARGUMENTS
 
 `$1`, `$2`, … and `$ARGUMENTS` inside the body become numbered hint slots.
 Expanded command bodies are submitted as normal prompts under the **session's
-current** agent and model. Frontmatter `agent` / `model` / `subtask` do not
-change that path.
+current** agent. Frontmatter `agent` / `model` / `subtask` do not change that
+path. `CommandRequest` carries `command`, `arguments`, optional `text`, and
+optional `model` / `variant`; when `model` is set, the command path calls
+`model_ref()` and `switch_model` before the turn.
 
 ### Inline config commands
 

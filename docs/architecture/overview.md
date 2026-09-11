@@ -64,7 +64,7 @@ TUI / API clients / transcript renderers
 The event log is the source of truth. This gives hya a few useful properties:
 
 - Replay and live streaming use the same `Envelope` shape.
-- TUI state and API state fold through the same projection reducer.
+- Store, server, and native Rust client share `hya_proto::Projection`; the TypeScript TUI renders from the Compat SDK/sync layer over HTTP+SSE.
 - `tail-session` can debug a session without special introspection hooks.
 - Tool results and provider deltas are stored in the same ordered history.
 

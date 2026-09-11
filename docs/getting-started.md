@@ -104,7 +104,7 @@ Key controls (defaults; leader is `Ctrl-X`):
 | `Enter` | Send the current input when no turn is running. |
 | `Ctrl-P` | List available commands (command palette). |
 | `Ctrl-X` | Leader key — arms a timed chord for `<leader>…` bindings. |
-| `Escape` | Dismiss a dialog, hide autocomplete, clear a pending leader sequence, exit shell mode, return an observation pane to Main, or interrupt the running turn — press **twice** within 5 s (while the prompt is focused) to abort. |
+| `Escape` | Dismiss a dialog, hide autocomplete, clear a pending leader sequence, exit shell mode, return an observation pane to Main, or interrupt a non-idle turn with one Escape. |
 | `Ctrl-C` | Copy the selection if one is active (when explicit copy is required), clear the prompt if it has text, otherwise exit when the prompt is unfocused or empty. |
 | `Ctrl-D` | Exit when the prompt is unfocused **or** empty; deletes forward inside the prompt; deletes the highlighted entry in the Sessions and Stash dialogs. |
 | `<leader>l` | List sessions. |
@@ -205,8 +205,8 @@ hya --import compat
 ```
 
 This imports providers, models, and supported local MCP servers. Skills import
-is not implemented yet. Bare interactive `hya-backend` retains its first-run
-import prompt when it creates the starter config.
+is not implemented yet. First run creates the starter Hya config without an
+import offer.
 
 To switch to a live model manually, edit the starter file:
 
