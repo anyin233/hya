@@ -1,5 +1,11 @@
 # Install Script Design
 
+> **Archived record (0.28.4).** The installer shipped, then diverged: `crates/hya`
+> is now an `exec` trampoline onto the adjacent `hya-ts` launcher, there is no
+> `crates/hya/src/transport.rs`, and `install.sh` places three binaries plus the
+> prepared TypeScript TUI runtime. Read `install.sh` and
+> [`docs/getting-started.md`](../../../getting-started.md) for current behavior.
+
 ## Problem
 
 A source checkout needs one command that installs a complete hya onto the user's system PATH. Complete means both shipped binaries are available:

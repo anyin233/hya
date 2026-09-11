@@ -1,6 +1,10 @@
 # Install Script Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **Archived record (0.28.4).** This plan shipped `install.sh`, and the installer
+> has since changed: it places `hya`, `hya-ts`, and `hya-backend` plus the
+> prepared TypeScript TUI runtime, and `crates/hya` no longer embeds a backend.
+> The steps below are a record of that release, not work items; read `install.sh`
+> for current behavior.
 
 **Goal:** Add a source-checkout installer that puts both real hya binaries on PATH and directs users to configure provider API access.
 

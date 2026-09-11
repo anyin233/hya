@@ -15,8 +15,9 @@ central type is `SessionEngine` in
   MCP, and plugin contributions. `ToolRegistry` is only an offline candidate
   builder.
 - `PermissionPlane` for allow/ask/deny decisions.
-- `InteractionPlane`, `SpawnerPlane`, `TodoPlane`, `WebSearchPlane`,
-  `LspPlane`, and `FormatterPlane` for cross-cutting tool services.
+- `InteractionPlane`, `BoundSpawnSender`, `BoundWorkflowSender`,
+  `MailboxPlane`, `TodoPlane`, `WebSearchPlane`, `LspPlane`, and
+  `FormatterPlane` for cross-cutting tool services.
 - `EventBus` for live subscribers.
 - optional hook dispatcher for plugins.
 
@@ -142,6 +143,7 @@ side effects:
 | --- | --- |
 | `switch_agent` | `AgentSwitched` |
 | `switch_model` | `ModelSwitched` |
+| `set_agent_model_override` | `SessionAgentModelOverrideSet` |
 | `set_title` | `SessionTitled` |
 | `set_workdir` | `SessionMoved` |
 | `set_metadata` | `SessionMetadataSet` |
@@ -553,6 +555,14 @@ exceed `token_threshold`).
 
 - `token_threshold` (default `100_000`)
 - `keep_recent` (default `6`)
+- `context_fraction` (default `0.75`; env
+  `HYA_COMPACTION_CONTEXT_FRACTION`)
+
+When the route advertises a nonzero `max_context`, the trip threshold is
+`max(window * context_fraction, 1_000)` (`MIN_RESOLVED_THRESHOLD`). A
+missing/`0` window or a fraction outside `(0.0, 1.0]` falls back to
+`token_threshold`. `keep_recent` is independent: compaction still
+requires `messages.len() > keep_recent`.
 
 `SummarizeOptions` fields for local summarizer calls:
 

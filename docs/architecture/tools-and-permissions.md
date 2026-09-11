@@ -355,7 +355,7 @@ prompts separately even inside an already-approved tool call.
 | `glob` | Search root directory when outside the workdir. |
 | `grep` | Search root (file or directory) when outside the workdir. |
 | `bash` (including hidden `shell`) | Optional `cwd` when it resolves outside the session workdir (`<cwd>/*`). |
-| `find` | **Does not** perform the external-directory check (deliberate compatibility gap). Asserts `Action::Glob` only; builds the root with `PathBuf::from(path)` (not workdir-resolved). |
+| `find` | Resolved search root directory when outside the workdir (`<root>/*`). Path is workdir-resolved via `resolve_file`; asserts `Action::Glob` on the pattern, then `Action::ExternalDirectory`. |
 | `ls` | **Does not** perform the external-directory check either. Asserts only `Action::Read` on the raw path string; builds the directory with `PathBuf::from(path)` (not workdir-resolved). So `ls /etc` outside the workdir never raises `ExternalDirectory`. |
 
 ### Per-turn external directories
@@ -394,18 +394,19 @@ Mapping from `ToolError` to the wire `type` string
 | `Overloaded` | `overloaded` |
 | `OperationIdConflict` | `operation_id_conflict` |
 | `OperationAlreadyHandled` | `operation_already_handled` |
+| `WorkflowControl { code, message }` | the control `code` itself (e.g. `WORKFLOW_BUSY`) |
 | `UnknownAgentId` | `unknown_agent_id` |
 | `AgentSpawnNotAllowed` | `agent_spawn_not_allowed` |
 | `UnsupportedInlineAgentField` | `unsupported_inline_agent_field` |
 | `Other` | `unknown` |
 
-A thirteenth wire `type` is **not** a `ToolError` variant: when a
+A fourteenth wire `type` is **not** a `ToolError` variant: when a
 `tool.execute.before` hook vetoes a call, the engine emits
 `Event::ToolError` with `value` built as
 `tool_error_message_value("blocked", …)` and message text
 `blocked by plugin: <reason>`
 ([`turn.rs`](../../crates/hya-core/src/engine/turn.rs)). Clients that switch on
-this string should treat the twelve `ToolError` mappings **and** `blocked` as
+this string should treat the thirteen `ToolError` mappings **and** `blocked` as
 first-class. `permission` errors are protected from rewriting by
 `tool.execute.after` hooks; other outcomes may be rewritten by those hooks
 ([`turn.rs`](../../crates/hya-core/src/engine/turn.rs)).

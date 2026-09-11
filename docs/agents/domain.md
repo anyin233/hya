@@ -25,7 +25,8 @@ Single-context repo:
 /
 ├── CONTEXT.md
 ├── docs/adr/
-└── src/
+├── crates/
+└── packages/
 ```
 
 ## Use the glossary's vocabulary

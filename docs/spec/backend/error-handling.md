@@ -106,9 +106,10 @@
   `reconcile_cancelled_after_commit`, records the payload guard and actual
   snapshot, then returns `ToolError::Cancelled`.
 - `ToolError` keeps `Input`, `Permission`, `Io`, `Json`, `Cancelled`,
-  `Overloaded`, `OperationIdConflict`, `OperationAlreadyHandled`, `Other`, and
-  `UnsupportedInlineAgentField` distinct. The engine serializes a failure as
-  `{ "error": { "type": string, "message": string } }` in the existing
+  `Overloaded`, `OperationIdConflict`, `OperationAlreadyHandled`,
+  `WorkflowControl`, `UnknownAgentId`, `AgentSpawnNotAllowed`,
+  `UnsupportedInlineAgentField`, and `Other` distinct. The engine serializes a
+  failure as `{ "error": { "type": string, "message": string } }` in the existing
   `ToolError` event value; it must not replace one class with another.
 - Model-facing schemas are closed: Read `{path,offset?,limit?,raw?}`; Edit
   `{path,edits}` with `replace|append|prepend|replace_text`; Grep

@@ -1,4 +1,4 @@
-# CLAUDE.md — yaca
+# CLAUDE.md — hya
 
 > Project overview, component map, change guidance, and verification live in
 > `AGENTS.md`. This file adds the **plan-execution agent routing** rules.

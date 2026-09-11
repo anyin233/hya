@@ -10,6 +10,9 @@ and the repository's `AGENTS.md`.
 
 - `tasks/`: prior task directories, including the original `archive/` hierarchy.
 - `workspace/`: prior developer journals and indexes.
+- `superpowers/`: plans and specs written for the `superpowers` skill workflow,
+  formerly under `docs/superpowers/`. Their checkbox steps target crates and
+  entrypoints that no longer exist; they are records, not work queues.
 
 Original contents are retained. Resolve historical `.trellis/tasks/` and
 `.trellis/workspace/` references to `docs/development-history/tasks/` and

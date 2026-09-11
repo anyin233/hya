@@ -1,7 +1,7 @@
 # Event Model
 
 The event model lives in [`../../crates/hya-proto`](../../crates/hya-proto).
-It is shared by the engine, store, provider layer, server, client, and TUI.
+It is shared by the engine, store, provider layer, server, and native Rust client, which fold `hya_proto::Projection`. The TypeScript TUI does not fold that projection; it consumes the Compat SDK / SyncProvider over HTTP+SSE.
 
 ## Strong Ids
 
@@ -13,14 +13,17 @@ It is shared by the engine, store, provider layer, server, client, and TUI.
 | `MessageId` | UUIDv7 with `msg_` prefix |
 | `PartId` | UUIDv7 with `part_` prefix |
 | `ToolCallId` | UUIDv7 with `tc_` prefix |
+| `OperationId` | Display `op_` + UUID-simple; durable tool-call operation identity (UUID v5 from `ToolCallId`) |
 | `MemberId` | UUIDv7 with `mbr_` prefix |
 | `TeamRunId` | UUIDv7 with `team_` prefix |
+| `WorkflowRunId` | UUIDv7 with `wfrun_` prefix; durable Workflow run identity (also UUID v5 from `OperationId`) |
 | `GoalId` | UUIDv7 with `goal_` prefix |
 | `LoopRunId` | UUIDv7 with `loop_` prefix |
 | `PermissionRequestId` | UUIDv7 with `perm_` prefix |
 | `QuestionRequestId` | UUIDv7 with `q_` prefix |
 | `ConfigGeneration` | Transparent `u64` (immutable runtime snapshot identity; `INITIAL = 1`) |
 | `ActorEpoch` | Transparent `u64` (resident actor incarnation; independent of config generation) |
+| `OwnerRunId` | Transparent UUID (random v4); per-process runtime ownership and recovery fence |
 | `EventSeq` | Transparent `u64` (see [EventSeq semantics](#eventseq-semantics)) |
 
 The strong types keep different ids from being accidentally swapped at compile
@@ -73,7 +76,7 @@ their original typed values therefore remain visible in replay. Live-only
 fresh replay uses the persisted final state rather than reconstructing live
 stream deltas.
 
-### Full `Event` catalog (54 variants)
+### Full `Event` catalog (56 variants)
 
 Reducer effects:
 
@@ -87,6 +90,7 @@ Reducer effects:
 | Wire `type` | Payload fields | Reducer |
 | --- | --- | --- |
 | `session_created` | `session: SessionId`, `parent: Option<SessionId>`, `agent: AgentName`, `model: ModelRef`, `workdir: String` | Fold: sets session id, parent, agent, model, workdir. `parent` is the link `session_lineage` walks toward the team root. |
+| `session_agent_model_override_set` | `session`, `agent: AgentName`, `model: Option<ModelRef>` | Fold: insert or remove one Agent entry in `agent_model_overrides`. `None` clears that Agent; unrelated entries remain. |
 | `session_moved` | `session`, `workdir: String` | Fold: workdir |
 | `session_titled` | `session`, `title: String` | Fold: title |
 | `session_metadata_set` | `session`, `metadata: Value` | Fold: replaces metadata |
@@ -152,7 +156,7 @@ Field name for streaming chunks is **`delta`**, not `text`.
 
 | Wire `type` | Payload fields | Reducer |
 | --- | --- | --- |
-| `reasoning_start` | `session`, `message`, `part` | Fold: empty `PartProjection::Reasoning` |
+| `reasoning_start` | `session`, `message`, `part`, `reason: Option<String>` | Fold: empty `PartProjection::Reasoning` (copies `reason`) |
 | `reasoning_delta` | `session`, `message`, `part`, `delta: String` | Fold: append |
 | `reasoning_end` | `session`, `message`, `part`, `provider_data: Option<Value>` | Fold: stores `provider_data` (opaque provider state such as encrypted thinking blocks — must be round-tripped back to the provider verbatim) |
 | `reasoning_replace` | `session`, `message`, `part`, `text: String` | Fold: wholesale overwrite |
@@ -207,7 +211,7 @@ leaking child transcripts. They carry only bounded metadata + a short summary.
 
 | Wire `type` | Payload fields | Reducer |
 | --- | --- | --- |
-| `member_spawned` | `session` (parent), `member: MemberId`, `child: Option<SessionId>`, `subagent_type: AgentName`, `description: String`, `depth: u32` | Fold: upsert `MemberProjection`, status → `spawning` |
+| `member_spawned` | `session` (parent), `member: MemberId`, `child: Option<SessionId>`, `subagent_type: AgentName`, `description: String`, `depth: u32`, `directive: String`, `tool_call: Option<ToolCallId>` | Fold: upsert `MemberProjection`, status → `spawning`; copies `directive` when non-empty and `tool_call` when `Some` |
 | `member_status_changed` | `session`, `member`, `status: MemberRunStatus` | Fold: status |
 | `member_finished` | `session`, `member`, `status: MemberRunStatus`, `summary: String`, `child: Option<SessionId>` | Fold: status + bounded summary; optional child update if `Some` |
 
@@ -401,6 +405,7 @@ Projection {
 | Field | Source events |
 | --- | --- |
 | `id`, `parent`, `agent`, `model`, `workdir` | `session_created` (+ switch/move) |
+| `agent_model_overrides` | `session_agent_model_override_set` (`None` model removes that Agent) |
 | `title` | `session_titled` |
 | `metadata` | `session_metadata_set` |
 | `permission` | `session_permission_set` (replace) |
@@ -408,6 +413,7 @@ Projection {
 | `share` | `session_share_set` / `session_share_cleared` |
 | `messages` | message lifecycle + part events |
 | `members` | member lifecycle (parent log) |
+| `workflow` | workflow lifecycle events |
 
 ### `MessageProjection` fields
 
@@ -426,7 +432,7 @@ Projection {
 | `kind` | Fields |
 | --- | --- |
 | `text` | `id`, `text` |
-| `reasoning` | `id`, `text`, `provider_data?` |
+| `reasoning` | `id`, `text`, `reason?`, `provider_data?` |
 | `tool` | `id`, `call`, `name`, `state` |
 
 `Part::Media` exists on the **model-facing** `Message` / `Part` value types

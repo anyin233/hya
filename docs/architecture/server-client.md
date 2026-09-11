@@ -12,9 +12,12 @@ Compat-compatible HTTP/SSE route groups.
 - process-level `AgentSpec`
 - pending permission/question queues
 - a dependency-inverted MCP control handle supplied by `hya-app`
+- a dependency-inverted Agent-model control handle supplied by `hya-app`
 - a dependency-inverted Workflow control handle supplied by `hya-app`
 - workspace adapter metadata
 - formatter status
+- optional process default agent
+- a `catalog_updates` broadcast for Compat `catalog.updated` events
 
 The router wraps it into internal `ServerState`, which adds run tokens for
 busy/abort behavior plus process-local global, project, PTY, and TUI state used
@@ -31,7 +34,7 @@ projection, run registry, and pending queues.
 | --- | --- | --- | --- |
 | `POST` | `/sessions` | `CreateSessionRequest` | `CreateSessionResponse` |
 | `POST` | `/sessions/:id/prompt` | `PromptRequest` | `PromptResponse` |
-| `POST` | `/sessions/:id/command` | `CommandRequest` | `PromptResponse` |
+| `POST` | `/sessions/:id/command` | `CommandRequest` | `PromptResponse` or `WorkflowCommandResult` |
 | `POST` | `/sessions/:id/shell` | `ShellRequest` | `PromptResponse` |
 | `GET` | `/sessions/:id/workflow` | none | `WorkflowCommandResult::State` |
 | `POST` | `/sessions/:id/workflow` | `WorkflowCommand` | `WorkflowCommandResult` |
@@ -50,7 +53,7 @@ Native and Compat handlers share `ApiError` constructors
 | --- | --- | --- |
 | `400 Bad Request` | `bad_request` | Unparseable session id (`invalid session id`); invalid Compat request bodies. |
 | `403 Forbidden` | structured Workflow error | A Stage or verifier Agent is not authorized for the caller. |
-| `404 Not Found` | `not_found` | Missing resources on Compat routes (message/part not found, permission request not found, etc.). Compat summarize/wait also map engine `Invalid("session not found")` here (see below). |
+| `404 Not Found` | `not_found` | Unknown/deleted native sessions (`ensure_session_exists` on `/prompt`, `/command`, `/shell`, `/stream`; empty replay on `GET /sessions/:id/events`). Missing Compat resources (message/part not found, permission request not found, etc.). Compat summarize/wait also map engine `Invalid("session not found")` here (see below). |
 | `409 Conflict` | `conflict` | Busy session (`session busy`) when a second run is started while one is active. |
 | `422 Unprocessable Entity` | structured Workflow error | Invalid Workflow source or required inputs. |
 | `503 Service Unavailable` | `service_unavailable` | Compat paths such as MCP control-handle failures and unavailable compact/summarize operations (for example summarizer not configured). |
@@ -65,10 +68,11 @@ with a terminal failed run.
 **`Invalid("session not found")`:** produced only by
 `summarize_session` / `summary_messages` when the projection has no session id
 ([`engine/summary.rs`](../../crates/hya-core/src/engine/summary.rs)). Native
-`/prompt`, `/command`, and `/shell` call `admit_*` + turn with **no** session
-existence check — they never raise that error. Compat summarize maps it to
-**404**; wait/session-not-found paths use a session-not-found response — not
-500.
+`/prompt`, `/command`, `/shell`, and `/stream` call `ensure_session_exists`
+and return **404** (`session not found: {id}`) — they do not surface that
+`Invalid`. `GET /sessions/:id/events` returns the same **404** when replay
+is empty. Compat summarize maps the engine `Invalid` to **404**;
+wait/session-not-found paths use a session-not-found response — not 500.
 
 Compatibility routes may also emit typed Compat error bodies (for example
 `ProviderNotFoundError`, `PermissionNotFoundError`) with their own status codes
@@ -110,7 +114,9 @@ DTOs are defined in
 
 Admits a user prompt, runs one assistant turn, and returns `PromptResponse`.
 
-**`PromptResponse`** shape (shared by `prompt`, `command`, and `shell`):
+**`PromptResponse`** shape (shared by `prompt` and `shell`; `command`
+returns this unless the workflow slash intercept returns
+`WorkflowCommandResult`):
 
 ```json
 {
@@ -134,7 +140,9 @@ Admits a user prompt, runs one assistant turn, and returns `PromptResponse`.
 {
   "command": "init",
   "arguments": "",
-  "text": null
+  "text": null,
+  "model": null,
+  "variant": null
 }
 ```
 
@@ -143,30 +151,47 @@ Admits a user prompt, runs one assistant turn, and returns `PromptResponse`.
 | `command` | yes | Slash command name (without leading `/`). |
 | `arguments` | yes | Argument string (may be empty). |
 | `text` | no | Optional full user message to admit. |
+| `model` | no | Optional model id for this turn; handler calls `switch_model`. |
+| `variant` | no | Optional reasoning variant for `model` (`model_ref` → `id#variant`). |
 
 When `text` is absent, the server synthesizes the admitted user message as
 `/<command>` if `arguments` is empty/whitespace, otherwise
 `/<command> <arguments>`. The engine still records command metadata
-(`admit_command_prompt`) before running the turn.
+(`admit_command_prompt`) before running the turn. `/workflow` is
+intercepted and returns `WorkflowCommandResult` instead of starting a
+parent-model run. On the parent-model path, a present `model`/`variant`
+calls `switch_model` before the turn.
 
 **`ShellRequest`** — `POST /sessions/:id/shell`:
 
 ```json
 {
-  "command": "ls -la"
+  "command": "ls -la",
+  "agent": null,
+  "model": { "providerID": "...", "modelID": "..." }
 }
 ```
 
+| Field | Required | Meaning |
+| --- | --- | --- |
+| `command` | yes | Shell command line for the builtin `shell` tool. |
+| `agent` | no | Optional Agent name for synthetic-turn attribution. |
+| `model` | no | Optional `{ providerID, modelID }`; handler calls `switch_model`. |
+
 Runs the shell tool directly and records a synthetic assistant tool-result
-message, returning the same `PromptResponse` shape.
+message, returning the same `PromptResponse` shape. Optional `agent`
+overrides message attribution; optional `model` calls `switch_model`
+first (`shell_agent`).
 
 ## Native Events
 
-`GET /sessions/:id/events` replays stored envelopes for a session. Use
-`?since_seq=<n>` to receive only envelopes whose sequence is greater than `n`.
+`GET /sessions/:id/events` replays stored envelopes for a session (**404**
+when replay is empty). Use `?since_seq=<n>` to receive only envelopes
+whose sequence is greater than `n`.
 
 `GET /sessions/:id/stream` subscribes to the engine event bus and emits SSE
-events for the requested session. If the broadcast receiver lags, the server
+events for the requested session after `ensure_session_exists` (**404** if
+missing). If the broadcast receiver lags, the server
 emits an SSE event named `resync`; clients should use the events endpoint with
 their last seen sequence to catch up.
 
@@ -271,9 +296,10 @@ catalog authority or frontend-generated fallback.
 | --- | --- |
 | `config` | Process-local global config bag |
 | `providers` / `provider_list` | Bootstrap provider catalog payload |
-| `capabilities` | e.g. `{ "backgroundSubagents": false }` |
+| `capabilities` | e.g. `{ "backgroundSubagents": false, "agentModelPreferences": true, "agentModelConfiguration": true }` |
+| `agentModels` | `AgentModelState` rows when Agent-model control is available; else `[]` |
 | `agents` | Bound agent metadata for the request location/workdir |
-| `sessions` | Up to **100** hydrated session infos (empty/unnamed filtered out) |
+| `sessions` | Always `[]` (`Vec::new()`); hydrated after first paint via `/session` |
 | `commands` | Command-catalog bootstrap summaries (no full prompt templates) |
 | `lsp` | LSP plane status for the workdir |
 | `mcp` / `mcp_resource` | MCP control status and resources |
@@ -283,8 +309,23 @@ catalog authority or frontend-generated fallback.
 | `path` | Home / state / config / worktree / directory paths |
 | `project` | Project id + worktree |
 
-Related control routes under `/tui/*` (append/submit prompt, open dialogs,
-control channel, etc.) are separate from this bootstrap payload.
+```json
+{
+  "capabilities": {
+    "backgroundSubagents": false,
+    "agentModelPreferences": true,
+    "agentModelConfiguration": true
+  },
+  "agentModels": [],
+  "sessions": []
+}
+```
+
+Related control routes under `/tui/*` include **`GET /tui/agent-models`**
+(list `AgentModelState` rows) and **`PUT /tui/agent-models/:agent_id`**
+(`preference` plus optional `scope`: `preference` / `session` /
+`configuration`). Append/submit prompt, open dialogs, and the control
+channel are separate from this bootstrap payload.
 
 ### Runtime config bag (`/config`, `/global/config`)
 
@@ -410,5 +451,7 @@ provides a typed reqwest wrapper for the native API:
 - `prompt`
 - `events`
 
-The interactive TUI runs in-process through `hya-backend`; the client crate is the
-integration surface for code that talks to a running hya server process.
+Bare `hya-backend` binds an ephemeral HTTP port and `launch_hya` execs a
+separate `hya` process (`--server <url>`) so the frontend attaches over
+HTTP/SSE. The client crate is the integration surface for code that talks
+to a running hya server process.
