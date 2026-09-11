@@ -289,6 +289,14 @@ tags = ["pr", "workflow", "routing", "replay"]
 timeout_secs = 180
 
 [[scenario]]
+id = "T2.15"
+title = "model catalog discovery and offline fallback"
+track = "P"
+path = "crates/hya-e2e/tests/p20_model_catalog_discovery.rs"
+tags = ["pr", "providers", "catalog", "offline"]
+timeout_secs = 180
+
+[[scenario]]
 id = "T3.1"
 title = "TUI real-backend permission reply"
 track = "T"
