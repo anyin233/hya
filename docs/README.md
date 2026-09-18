@@ -61,12 +61,13 @@ If you want to understand the codebase:
 6. [Providers](architecture/providers.md)
 7. [Tools and Permissions](architecture/tools-and-permissions.md)
 8. [Agent tool surface](architecture/agent-tool-surface.md)
-9. [Storage](architecture/storage.md)
-10. [Server and Client](architecture/server-client.md)
-11. [Plugin protocol](plugin-protocol.md)
-12. [TUI](architecture/tui.md)
-13. [Development](development.md)
-14. [Testing](testing/README.md) (process E2E, agent matrix, CI snippet)
+9. [Subagent Orchestration](architecture/subagent-orchestration.md)
+10. [Storage](architecture/storage.md)
+11. [Server and Client](architecture/server-client.md)
+12. [Plugin protocol](plugin-protocol.md)
+13. [TUI](architecture/tui.md)
+14. [Development](development.md)
+15. [Testing](testing/README.md) (process E2E, agent matrix, CI snippet)
 
 ## Docs Map
 
@@ -92,6 +93,7 @@ If you want to understand the codebase:
 | [Providers](architecture/providers.md) | Explain provider routing, OpenAI-compatible, Anthropic, Responses, and Google protocols, SSE decoding, and fallback providers. |
 | [Tools and Permissions](architecture/tools-and-permissions.md) | Explain builtin tools, permission rules, ask flows, and output limits. |
 | [Agent tool surface](architecture/agent-tool-surface.md) | Canonical tool registry surface, aliases, resource views, and agent-facing tool contracts. |
+| [Subagent Orchestration](architecture/subagent-orchestration.md) | Unified resident lifecycle (episodes, report/handoff/archive, revive), channel communication plane, depth policy, and workflow on the unified substrate ([ADR-0015](adr/0015-unified-resident-subagent-lifecycle.md), [ADR-0016](adr/0016-channel-communication-plane.md), [ADR-0017](adr/0017-workflow-on-unified-substrate.md)). |
 | [Compat parity](compat-parity.md) | Feature-by-feature Compat baseline status for tools, APIs, CLI, and remaining gaps. |
 | [Storage](architecture/storage.md) | Explain SQLite persistence, replay, projections, and token ledger behavior. |
 | [Server and Client](architecture/server-client.md) | Explain native HTTP/SSE, Compat-compatible route groups, and the typed client crate. |
