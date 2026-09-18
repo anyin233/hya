@@ -49,6 +49,8 @@ pub mod sidecar;
 pub mod subagent;
 /// Session title generation helpers.
 pub mod title;
+/// Token accounting: local estimation and provider-usage reliability.
+pub mod tokens;
 /// User-authored workflow DAGs over the governed team primitives.
 pub mod workflow;
 /// Git worktree and tmux helpers for isolated workers.
@@ -108,6 +110,9 @@ pub use subagent::{
     MemberEvidence, MemberSpec, MemberStatus, TeamAdmissionError, TeamEvidenceEnvelope,
     pre_admit_team, project_envelope, project_envelope_for_actor, run_pre_admitted_member,
     run_pre_admitted_team, run_pre_admitted_team_for_actor, run_team,
+};
+pub use tokens::{
+    CalibratedTokenizer, TokenAccounting, TokenAccountingMode, TokenCount, TokenSource, Tokenizer,
 };
 pub use workflow::{
     CompiledWorkflow, DurableWorkflowAdmission, DurableWorkflowSelection, FailurePolicy,
