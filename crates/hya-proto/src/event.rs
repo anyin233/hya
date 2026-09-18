@@ -19,6 +19,7 @@ use crate::message::{
     FinishReason, MemberRunStatus, Role, RosterStatus, SubagentMode, TokenUsage, ToolPartState,
 };
 use crate::model::{AgentName, ModelRef, ToolName};
+use crate::tokens::{TokenAccountingMode, TokenSource};
 use crate::workflow::{
     WorkflowIdentity, WorkflowMemberRole, WorkflowRunStatus, WorkflowStagePlan, WorkflowStageStatus,
 };
@@ -720,6 +721,27 @@ pub enum Event {
         threshold: u64,
     },
 
+    /// Window occupancy for one model request, with how the figure was derived.
+    ///
+    /// Emitted once per streaming round, after any compaction ladder walk, so
+    /// the recorded number is the occupancy actually sent. This is the wire
+    /// surface of token accounting: the count, whether it was provider-anchored
+    /// or locally estimated, the accounting mode in force, and the resolved
+    /// threshold it was judged against. The projection keeps the latest per
+    /// session.
+    ContextStatus {
+        /// Session whose request was measured.
+        session: SessionId,
+        /// Tokens the request is believed to occupy.
+        tokens: u64,
+        /// Whether the count was provider-anchored or locally estimated.
+        source: TokenSource,
+        /// Accounting mode in force for the round.
+        mode: TokenAccountingMode,
+        /// Resolved compaction threshold the count was judged against.
+        threshold: u64,
+    },
+
     // -------- errors --------
     /// Runtime error frame; `session` optional for global errors; reducer no-op.
     Error {
@@ -870,7 +892,8 @@ impl Event {
             | Event::ChannelLeft { session, .. } => Some(*session),
             Event::ContextCompacted { session, .. }
             | Event::SessionForked { session, .. }
-            | Event::ContextEvicted { session, .. } => Some(*session),
+            | Event::ContextEvicted { session, .. }
+            | Event::ContextStatus { session, .. } => Some(*session),
             Event::Error { session, .. } => *session,
             Event::Unknown => None,
         }

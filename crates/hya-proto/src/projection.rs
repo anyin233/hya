@@ -19,6 +19,7 @@ use crate::message::{
 };
 use crate::model::{AgentName, ModelRef, ToolName};
 use crate::scope;
+use crate::tokens::{TokenAccountingMode, TokenSource};
 use crate::workflow::{
     WorkflowMemberProjection, WorkflowProjection, WorkflowRunProjection, WorkflowRunStatus,
     WorkflowStageProjection, WorkflowStageStatus,
@@ -62,6 +63,23 @@ pub struct SessionProjection {
     /// Durable Workflow control state; independent from transcript messages.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workflow: Option<WorkflowProjection>,
+    /// Latest window-occupancy report for the session, folded from the newest
+    /// `ContextStatus` event. `None` until a streaming round has reported.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_status: Option<ContextStatusProjection>,
+}
+
+/// Latest window-occupancy report, mirroring the newest `ContextStatus` event.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ContextStatusProjection {
+    /// Tokens the last measured request is believed to occupy.
+    pub tokens: u64,
+    /// Whether the count was provider-anchored or locally estimated.
+    pub source: TokenSource,
+    /// Accounting mode in force for that round.
+    pub mode: TokenAccountingMode,
+    /// Resolved compaction threshold the count was judged against.
+    pub threshold: u64,
 }
 
 /// A single spawned subagent as seen from its parent session. Carries only bounded
@@ -1230,6 +1248,21 @@ impl Projection {
             | Event::SessionForked { .. }
             | Event::ContextEvicted { .. }
             | Event::Unknown => {}
+            // Latest occupancy wins: clients read one current figure, not a history.
+            Event::ContextStatus {
+                tokens,
+                source,
+                mode,
+                threshold,
+                ..
+            } => {
+                self.session.context_status = Some(ContextStatusProjection {
+                    tokens: *tokens,
+                    source: *source,
+                    mode: *mode,
+                    threshold: *threshold,
+                });
+            }
         }
     }
 
@@ -1881,5 +1914,86 @@ mod team_tests {
             !crate::in_scope("main/lead-1/worker-1", "main"),
             "skip-level must stay closed"
         );
+    }
+}
+
+#[cfg(test)]
+mod context_status_tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::*;
+    use crate::ids::EventSeq;
+    use crate::tokens::{TokenAccountingMode, TokenSource};
+
+    fn env(seq: u64, event: Event) -> Envelope {
+        Envelope {
+            seq: EventSeq(seq),
+            ts_millis: 0,
+            event,
+        }
+    }
+
+    #[test]
+    fn folds_latest_context_status_per_session() {
+        let session = SessionId::new();
+        let mut p = Projection::default();
+        p.apply(&env(
+            1,
+            Event::SessionCreated {
+                session,
+                parent: None,
+                agent: AgentName::new("build"),
+                model: ModelRef::new("fake"),
+                workdir: "/tmp".to_string(),
+            },
+        ));
+        assert!(
+            p.session.context_status.is_none(),
+            "a session that has not streamed yet reports nothing"
+        );
+
+        p.apply(&env(
+            2,
+            Event::ContextStatus {
+                session,
+                tokens: 12_000,
+                source: TokenSource::Estimate,
+                mode: TokenAccountingMode::Auto,
+                threshold: 150_000,
+            },
+        ));
+        let first = p.session.context_status.unwrap();
+        assert_eq!(first.tokens, 12_000);
+        assert_eq!(first.source, TokenSource::Estimate);
+        assert_eq!(first.mode, TokenAccountingMode::Auto);
+        assert_eq!(first.threshold, 150_000);
+
+        // A later round replaces the figure; clients read one current value.
+        p.apply(&env(
+            3,
+            Event::ContextStatus {
+                session,
+                tokens: 9_000,
+                source: TokenSource::Provider,
+                mode: TokenAccountingMode::Auto,
+                threshold: 150_000,
+            },
+        ));
+        let latest = p.session.context_status.unwrap();
+        assert_eq!(latest.tokens, 9_000);
+        assert_eq!(latest.source, TokenSource::Provider);
+
+        // Replay of an older seq is a no-op, matching every other fold.
+        p.apply(&env(
+            2,
+            Event::ContextStatus {
+                session,
+                tokens: 12_000,
+                source: TokenSource::Estimate,
+                mode: TokenAccountingMode::Auto,
+                threshold: 150_000,
+            },
+        ));
+        assert_eq!(p.session.context_status.unwrap().tokens, 9_000);
     }
 }

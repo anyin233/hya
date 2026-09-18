@@ -23,6 +23,8 @@ pub mod projection_tree;
 /// Canonical agent paths, the parent/sibling/report scope rule, and
 /// unit-qualified channel keys (task 08-07).
 pub mod scope;
+/// Wire types for token accounting (mode and count provenance).
+pub mod tokens;
 /// Durable Workflow selection, run, Stage, and member projection types.
 pub mod workflow;
 /// Compat workspace-adapter list entry.
@@ -43,9 +45,9 @@ pub use message::{
 };
 pub use model::{AgentName, ModelRef, ToolName, ToolSchema};
 pub use projection::{
-    ChannelProjection, ChannelResolveError, MailMessage, MemberProjection, MessageProjection,
-    PartProjection, Projection, ResidentWorkProjection, RosterEntry, ScopedRoster,
-    SessionProjection, TeamProjection,
+    ChannelProjection, ChannelResolveError, ContextStatusProjection, MailMessage, MemberProjection,
+    MessageProjection, PartProjection, Projection, ResidentWorkProjection, RosterEntry,
+    ScopedRoster, SessionProjection, TeamProjection,
 };
 pub use projection_tree::{RunTreeNode, build_run_tree};
 pub use scope::{ANNOUNCE_CHANNEL, ROOT_HANDLE, Relation, in_scope, relation};

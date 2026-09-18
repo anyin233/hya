@@ -75,6 +75,7 @@ impl TextPartAccumulator {
             | Event::ContextCompacted { .. }
             | Event::SessionForked { .. }
             | Event::ContextEvicted { .. }
+            | Event::ContextStatus { .. }
             | Event::Error { .. }
             | Event::Unknown => None,
         }

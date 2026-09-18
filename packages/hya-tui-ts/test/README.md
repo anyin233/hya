@@ -1,6 +1,6 @@
 # hya-tui-ts tests
 
-25 Bun test files under this directory. Run from the package root:
+26 Bun test files under this directory. Run from the package root:
 
 ```sh
 cd packages/hya-tui-ts
@@ -135,6 +135,7 @@ client-only importable runtime (install/release packaging would break).
 | `coding-tool-sync.test.tsx` | Coding-tool render/sync against mocked session parts |
 | `coding-tool-render.test.tsx` | Narrow/wide coding-tool layout |
 | `tool-card.test.tsx` | Tool-call card title formatting and rendered frame/padding |
+| `context-status.test.ts` | Session context-occupancy decode and presentation (token accounting surface) |
 | `heap-snapshot.test.ts` | Palette heap-snapshot writer path, permissions, and errors |
 | `keybind-inventory.test.ts` | Shipped keybind registry matches current command docs |
 | `task-presentation.test.ts` | Multi-member task presentation helpers (unit) |

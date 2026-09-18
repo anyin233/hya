@@ -424,7 +424,8 @@ async fn envelope_payload(st: &ServerState, envelope: Envelope) -> Value {
         | Event::WorkflowStageMemberLinked { session, .. }
         | Event::WorkflowStageRouteOutcome { session, .. }
         | Event::WorkflowStageFinished { session, .. }
-        | Event::WorkflowRunFinished { session, .. } => {
+        | Event::WorkflowRunFinished { session, .. }
+        | Event::ContextStatus { session, .. } => {
             session_payload(st, &envelope, *session, "session.updated").await
         }
         Event::CommandExecuted {
@@ -678,6 +679,7 @@ async fn api_envelope_payload(st: &ServerState, envelope: Envelope) -> Value {
         | Event::ContextCompacted { .. }
         | Event::SessionForked { .. }
         | Event::ContextEvicted { .. }
+        | Event::ContextStatus { .. }
         | Event::Unknown => envelope_payload(st, envelope).await,
     }
 }
