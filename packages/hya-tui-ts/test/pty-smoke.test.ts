@@ -284,7 +284,11 @@ test("Linux PTY coding tool blocks render live, replay, and narrow unified diff"
     ])
   }
 
-  /** Start hya-ts under `/usr/bin/script` so the PTY transcript records frames. */
+  /**
+   * Start hya-ts under `/usr/bin/script` so the PTY transcript records frames.
+   * The viewport is tall enough to hold every framed tool card of this fixture
+   * at once; each card spends five rows on its frame and padding.
+   */
   const startTui = (columns: number, transcript: string, sessionID: string, url: string) =>
     Bun.spawn(
       [
@@ -293,7 +297,7 @@ test("Linux PTY coding tool blocks render live, replay, and narrow unified diff"
         "-e",
         "-f",
         "-c",
-        `stty rows 60 cols ${columns}; before=$(stty -g); before_fg=$(ps -o tpgid= -p $$ | tr -d " "); "$HYA_TS" "$HYA_PTY_PROJECT" --server "$HYA_PTY_URL" --session "$HYA_PTY_SESSION"; code=$?; after=$(stty -g); after_fg=$(ps -o tpgid= -p $$ | tr -d " "); [ "$before" = "$after" ] || exit 97; [ "$before_fg" = "$after_fg" ] || exit 98; exit "$code"`,
+        `stty rows 100 cols ${columns}; before=$(stty -g); before_fg=$(ps -o tpgid= -p $$ | tr -d " "); "$HYA_TS" "$HYA_PTY_PROJECT" --server "$HYA_PTY_URL" --session "$HYA_PTY_SESSION"; code=$?; after=$(stty -g); after_fg=$(ps -o tpgid= -p $$ | tr -d " "); [ "$before" = "$after" ] || exit 97; [ "$before_fg" = "$after_fg" ] || exit 98; exit "$code"`,
         transcript,
       ],
       {
@@ -345,7 +349,7 @@ test("Linux PTY coding tool blocks render live, replay, and narrow unified diff"
   const assertCodingFrame = (frame: string, label: string) => {
     const lines = frame.split(/\r?\n/)
     expect(frame, `${label}: Read title/path`).toContain("src/read-only.ts")
-    expect(frame, `${label}: Read fallback canonical path`).toContain("Read src/read-directory")
+    expect(frame, `${label}: Read fallback canonical path`).toContain("read [path=src/read-directory]")
     expect(frame, `${label}: Read source`).toContain("READ_ONLY_VALUE")
     expect(
       lines.some((line) => line.includes("READ_ONLY_VALUE") && /(?:^|\D)2(?:\D|$)/.test(line)),

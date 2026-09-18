@@ -8,6 +8,7 @@ import os from "node:os"
 import path from "node:path"
 
 import { CodingToolPresentation } from "../src/hya/coding-tool-presentation"
+import { toolCardTitle } from "../src/hya/tool-card"
 import { ArgsProvider } from "../src/upstream/context/args"
 import { ExitProvider } from "../src/upstream/context/exit"
 import { KVProvider } from "../src/upstream/context/kv"
@@ -148,7 +149,15 @@ test("SyncProvider hydrates one coding-tool part and replaces it from one event 
 
     return (
       <Show when={current()}>
-        {(part) => <CodingToolPresentation part={part()} width={80} diffStyle="auto" diffWrapMode="none" />}
+        {(part) => (
+          <CodingToolPresentation
+            part={part()}
+            title={toolCardTitle(part().tool, part().state.status === "pending" ? undefined : part().state.input)}
+            width={80}
+            diffStyle="auto"
+            diffWrapMode="none"
+          />
+        )}
       </Show>
     )
   }

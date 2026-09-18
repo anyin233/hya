@@ -4,6 +4,7 @@ import type { ToolPart } from "@opencode-ai/sdk/v2"
 import { testRender } from "@opentui/solid"
 
 import { CodingToolPresentation } from "../src/hya/coding-tool-presentation"
+import { toolCardTitle } from "../src/hya/tool-card"
 
 type CompletedPartOptions = {
   tool: string
@@ -39,21 +40,33 @@ function frameText(frame: CapturedFrame): string {
   return lines.join("\n")
 }
 
+/** Return the framed title-bar line of a rendered card. */
+function cardTitle(text: string): string {
+  return text.split("\n").find((line) => line.includes("╭")) ?? ""
+}
+
 /** Find the span carrying one source token in a captured terminal frame. */
 function spanContaining(frame: CapturedFrame, token: string): CapturedSpan | undefined {
   const spans = frame.lines.flatMap((line) => line.spans)
   return spans.find((span) => span.text.includes(token))
 }
 
+/** Find the span carrying one source token below the card title bar. */
+function bodySpanContaining(frame: CapturedFrame, token: string): CapturedSpan | undefined {
+  const body = frame.lines.filter((line) => !line.spans.some((span) => span.text.includes("╭")))
+  return body.flatMap((line) => line.spans).find((span) => span.text.includes(token))
+}
+
 /** Render a completed coding-tool part at the requested terminal width. */
 async function renderPart(part: ToolPart, width: number) {
+  const title = toolCardTitle(part.tool, part.state.status === "pending" ? undefined : part.state.input)
   return testRender(
-    () => <CodingToolPresentation part={part} width={width} diffStyle="auto" diffWrapMode="none" />,
+    () => <CodingToolPresentation part={part} title={title} width={width} diffStyle="auto" diffWrapMode="none" />,
     { width, height: 24, footerHeight: 0 },
   )
 }
 
-test("Read blocks keep their title, source, line offset, and syntax spans at 80 and 140 columns", async () => {
+test("Read cards title-bar the call and keep source, line offset, and syntax spans at 80 and 140 columns", async () => {
   const part = completedPart({
     tool: "read",
     input: { path: "src/main.ts", offset: 12, limit: 2 },
@@ -78,22 +91,21 @@ test("Read blocks keep their title, source, line offset, and syntax spans at 80 
       for (let attempt = 0; attempt < 200 && !syntaxReady; attempt += 1) {
         await new Promise<void>((resolve) => setTimeout(resolve, 10))
         const pending = setup.captureSpans()
-        const keyword = spanContaining(pending, "const")
-        const number = spanContaining(pending, "42")
+        const keyword = bodySpanContaining(pending, "const")
+        const number = bodySpanContaining(pending, "42")
         syntaxReady = keyword !== undefined && number !== undefined && keyword.fg.toString() !== number.fg.toString()
       }
       expect(syntaxReady).toBe(true)
       const captured = setup.captureSpans()
       const text = frameText(captured)
-      expect(text).toContain("Read")
-      expect(text).toContain("src/main.ts")
+      expect(cardTitle(text)).toContain("read [path=src/main.ts, offset=12, limit=2]")
 
       const sourceLine = text.split("\n").find((line) => line.includes("const answer"))
       expect(sourceLine).toBeDefined()
       expect(sourceLine).toMatch(/(?:^|\D)12(?:\D|$)/)
 
-      const keyword = spanContaining(captured, "const")
-      const number = spanContaining(captured, "42")
+      const keyword = bodySpanContaining(captured, "const")
+      const number = bodySpanContaining(captured, "42")
       expect(keyword).toBeDefined()
       expect(number).toBeDefined()
       expect(keyword?.fg.toString()).not.toBe(number?.fg.toString())
@@ -130,9 +142,9 @@ test("an 80-column Edit block uses separate unified added and removed rows", asy
 
   try {
     await setup.waitForFrame((frame) => frame.includes("oldValue") && frame.includes("newValue"))
+    await setup.waitForVisualIdle()
     const lines = frameText(setup.captureSpans()).split("\n")
-    expect(lines.some((line) => line.includes("Edit"))).toBe(true)
-    expect(lines.some((line) => line.includes("src/main.ts"))).toBe(true)
+    expect(cardTitle(lines.join("\n"))).toContain("edit [path=src/main.ts, edits=[1 item]]")
 
     const removedIndex = lines.findIndex((line) => line.includes("oldValue"))
     const addedIndex = lines.findIndex((line) => line.includes("newValue"))
@@ -232,18 +244,18 @@ test("Write and Grep blocks render their bounded content and file groups at 80 a
       for (let attempt = 0; attempt < 200 && !syntaxReady; attempt += 1) {
         await new Promise<void>((resolve) => setTimeout(resolve, 10))
         const pending = writeSetup.captureSpans()
-        const keyword = spanContaining(pending, "const")
-        const string = spanContaining(pending, "WRITE_VALUE")
+        const keyword = bodySpanContaining(pending, "const")
+        const string = bodySpanContaining(pending, "WRITE_VALUE")
         syntaxReady = keyword !== undefined && string !== undefined && keyword.fg.toString() !== string.fg.toString()
       }
       expect(syntaxReady).toBe(true)
       const writeFrame = writeSetup.captureSpans()
       const writeText = frameText(writeFrame)
-      expect(writeText).toContain("Write src/generated.ts")
+      expect(cardTitle(writeText)).toContain("write [path=src/generated.ts")
       expect(writeText).toContain("WRITE_VALUE")
       expect(writeText).toMatch(/(?:^|\D)1(?:\D|$)/)
-      const keyword = spanContaining(writeFrame, "const")
-      const string = spanContaining(writeFrame, "WRITE_VALUE")
+      const keyword = bodySpanContaining(writeFrame, "const")
+      const string = bodySpanContaining(writeFrame, "WRITE_VALUE")
       expect(keyword).toBeDefined()
       expect(string).toBeDefined()
       expect(keyword?.fg.toString()).not.toBe(string?.fg.toString())
@@ -254,7 +266,9 @@ test("Write and Grep blocks render their bounded content and file groups at 80 a
     const grepSetup = await renderPart(grep, width)
     try {
       await grepSetup.waitForFrame((frame) => frame.includes("src/main.ts") && frame.includes("src/config.json"))
+      await grepSetup.waitForVisualIdle()
       const grepText = frameText(grepSetup.captureSpans())
+      expect(cardTitle(grepText)).toContain("grep [pattern=needle, path=src]")
       expect(grepText).toContain("src/main.ts")
       expect(grepText).toContain("src/config.json")
       expect(grepText).toContain("const needle = 1")
@@ -267,7 +281,7 @@ test("Write and Grep blocks render their bounded content and file groups at 80 a
   }
 })
 
-test("Bash blocks remain identifiable with command and plain output at 80 and 140 columns", async () => {
+test("Bash cards title-bar the command and keep output plain at 80 and 140 columns", async () => {
   const part = completedPart({
     tool: "bash",
     input: {
@@ -284,19 +298,11 @@ test("Bash blocks remain identifiable with command and plain output at 80 and 14
     const setup = await renderPart(part, width)
     try {
       await setup.waitForFrame((frame) => frame.includes("BASH_OUTPUT_ONLY"))
-      let syntaxReady = false
-      for (let attempt = 0; attempt < 200 && !syntaxReady; attempt += 1) {
-        await new Promise<void>((resolve) => setTimeout(resolve, 10))
-        const pending = setup.captureSpans()
-        const command = spanContaining(pending, "BASH_COMMAND_LITERAL")
-        const output = spanContaining(pending, "BASH_OUTPUT_ONLY")
-        syntaxReady = command !== undefined && output !== undefined && command.fg.toString() !== output.fg.toString()
-      }
-      expect(syntaxReady).toBe(true)
+      await setup.waitForVisualIdle()
       const captured = setup.captureSpans()
       const text = frameText(captured)
-      expect(text).toContain("Bash")
-      expect(text).toContain('$ printf "%s" "BASH_COMMAND_LITERAL"')
+      expect(cardTitle(text)).toContain('$ printf "%s" "BASH_COMMAND_LITERAL"')
+      expect(text).toContain("cwd /work")
       expect(text).toContain("BASH_OUTPUT_ONLY")
       expect(text).toContain("Completed · exit 0")
       expect(text).not.toContain("must-not-render")

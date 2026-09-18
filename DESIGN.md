@@ -100,7 +100,9 @@ Terminal spacing derives from a single cell.
 
 ### Rules
 
-- Avoid nested framed cards; repeated panels are unframed tonal regions.
+- Tool calls are the one framed surface in the transcript: a rounded box whose
+  border title names the call. Everything inside it stays unframed tonal
+  regions; never nest a framed card in another framed card.
 - Text must fit terminal width through ellipsizing, wrapping, or horizontal input scrolling.
 
 ## 5. Components
@@ -118,12 +120,20 @@ Terminal spacing derives from a single cell.
   label. Agent-colored left border (`border=["left"]`), hover highlight on the
   body panel, optional MIME badges for file parts, optional `QUEUED` badge, and
   an optional compaction divider — not “role label + wrapped lines.”
-- **Assistant / system / tools**: message body plus compact tool rows; assistant
+- **Tool calls** (`ToolCard` in `packages/hya-tui-ts/src/hya/tool-card.tsx`): one
+  rounded frame per call, with a blank row above and below the body so the call
+  separates from assistant prose. The border title carries the call itself —
+  `$ <command>` for `bash`/`shell`, otherwise `tool [key=value, …]` — fitted to
+  the measured card width with a trailing `…`. Border and title take `warning`
+  while pending or running, `error` on failure, `textMuted` on denial, and
+  `borderSubtle` + `accent` once completed.
+- **Assistant / system**: message body plus the tool cards above; assistant
   footer/meta and revert banner behavior live in the TypeScript session route
   (see [TUI Reference](docs/tui-reference.md) Transcript section).
 - **Spacing**: 1-column side gutters, blank line between messages where applicable.
-- **States**: user, assistant, system, tool running, tool completed, tool error.
-- **Accessibility**: tool rows include text status and elapsed time when available.
+- **States**: user, assistant, system, tool pending, tool running, tool completed,
+  tool denied, tool error.
+- **Accessibility**: tool cards state status as text, not color alone.
 
 ### Prompt Composer
 
@@ -170,6 +180,8 @@ Terminal spacing derives from a single cell.
 Tonal-shift.
 
 Surfaces use progressively lighter (or theme-appropriate) values. Borders are
-allowed for modal focus/containment and for semantic accents or separators such
-as user-message splits, the prompt boundary, and compaction dividers. Decorative
-framed cards are not used. Shadows are not used.
+allowed for modal focus/containment, for semantic accents or separators such as
+user-message splits, the prompt boundary, and compaction dividers, and for the
+tool-call card, where the frame carries the call identity and isolates tool
+output from prose. Borders for decoration alone are not used, and neither are
+shadows.

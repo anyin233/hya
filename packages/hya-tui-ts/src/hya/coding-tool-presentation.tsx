@@ -1,21 +1,13 @@
-import { TextAttributes, type SyntaxStyle } from "@opentui/core"
+import { TextAttributes } from "@opentui/core"
 import type { ToolPart } from "@opencode-ai/sdk/v2"
 import type { JSX } from "@opentui/solid"
-import { createMemo, createSignal, For, Match, Show, Switch, type Accessor } from "solid-js"
+import { createMemo, createSignal, For, Match, Show, Switch } from "solid-js"
 import stripAnsi from "strip-ansi"
 
-import {
-  createSyntaxStyleMemo,
-  DEFAULT_THEMES,
-  generateSyntax,
-  resolveTheme,
-  useTheme,
-  type Theme,
-} from "../upstream/context/theme"
 import { collapseToolOutput } from "../upstream/util/collapse-tool-output"
 import { filetype } from "../upstream/util/filetype"
+import { ToolCard, toolCardSyntax, useToolCardTheme } from "./tool-card"
 
-const MAX_TITLE_LENGTH = 8 * 1024
 const MAX_PATH_LENGTH = 16 * 1024
 const MAX_PATTERN_LENGTH = 16 * 1024
 const MAX_COMMAND_LENGTH = 64 * 1024
@@ -44,8 +36,6 @@ const CODE_PREVIEW_LINES = 16
 const OUTPUT_PREVIEW_LINES = 10
 const MIN_PREVIEW_COLUMNS = 20
 const PANEL_CHROME_COLUMNS = 6
-const FALLBACK_THEME = resolveTheme(DEFAULT_THEMES.hya!, "dark")
-const THEME_CONTEXT_ERROR = "Theme context must be used within a context provider"
 
 type DiagnosticPoint = {
   line: number
@@ -75,7 +65,6 @@ type CodingToolGrepGroup = {
 export type CodingToolView =
   | {
       kind: "read-code"
-      title: string
       path: string
       text: string
       lineStart: number
@@ -83,7 +72,6 @@ export type CodingToolView =
     }
   | {
       kind: "write-code"
-      title: string
       path: string
       text: string
       lineStart: number
@@ -92,7 +80,6 @@ export type CodingToolView =
     }
   | {
       kind: "edit-diff"
-      title: string
       path: string
       diff: string
       truncated: boolean
@@ -100,16 +87,12 @@ export type CodingToolView =
     }
   | {
       kind: "grep-output"
-      title: string
-      pattern: string
       groups: CodingToolGrepGroup[]
       output: string
       truncated: boolean
     }
   | {
       kind: "shell-output"
-      title: string
-      command: string
       cwd?: string
       output: string
       exit?: number
@@ -124,19 +107,15 @@ type CodingToolPresentationProps = {
   part?: ToolPart
   /** A view produced by the route's single presentation-adapter invocation. */
   view?: CodingToolView
+  /** Title bar text: the call itself, not the backend's prose summary of it. */
+  title: string
   width: number
   diffStyle: "auto" | "stacked" | undefined
   diffWrapMode: "word" | "none"
 }
 
-type PresentationThemeState = {
-  theme: Theme
-  syntax?: Accessor<SyntaxStyle>
-}
-
 type CompletedEnvelope = {
   tool: "read" | "edit" | "write" | "grep" | "bash" | "shell"
-  title: string
   input: Record<string, unknown>
   metadata: Record<string, unknown>
   output: string
@@ -173,30 +152,34 @@ export function presentCodingTool(part: ToolPart): CodingToolView | undefined {
 export function CodingToolPresentation(props: CodingToolPresentationProps): JSX.Element {
   const view = createMemo(() => props.view ?? (props.part ? presentCodingTool(props.part) : undefined))
   return (
-    <Switch>
-      <Match when={view()?.kind === "read-code" ? (view() as Extract<CodingToolView, { kind: "read-code" }>) : undefined}>
-        {(current) => <CodePresentation view={current()} width={props.width} />}
-      </Match>
-      <Match when={view()?.kind === "write-code" ? (view() as Extract<CodingToolView, { kind: "write-code" }>) : undefined}>
-        {(current) => <CodePresentation view={current()} width={props.width} />}
-      </Match>
-      <Match when={view()?.kind === "edit-diff" ? (view() as Extract<CodingToolView, { kind: "edit-diff" }>) : undefined}>
-        {(current) => (
-          <EditPresentation
-            view={current()}
-            width={props.width}
-            diffStyle={props.diffStyle}
-            diffWrapMode={props.diffWrapMode}
-          />
-        )}
-      </Match>
-      <Match when={view()?.kind === "grep-output" ? (view() as Extract<CodingToolView, { kind: "grep-output" }>) : undefined}>
-        {(current) => <GrepPresentation view={current()} />}
-      </Match>
-      <Match when={view()?.kind === "shell-output" ? (view() as Extract<CodingToolView, { kind: "shell-output" }>) : undefined}>
-        {(current) => <ShellPresentation view={current()} width={props.width} />}
-      </Match>
-    </Switch>
+    <Show when={view()}>
+      <ToolCard title={props.title} state="completed">
+        <Switch>
+          <Match when={view()?.kind === "read-code" ? (view() as Extract<CodingToolView, { kind: "read-code" }>) : undefined}>
+            {(current) => <CodePresentation view={current()} width={props.width} />}
+          </Match>
+          <Match when={view()?.kind === "write-code" ? (view() as Extract<CodingToolView, { kind: "write-code" }>) : undefined}>
+            {(current) => <CodePresentation view={current()} width={props.width} />}
+          </Match>
+          <Match when={view()?.kind === "edit-diff" ? (view() as Extract<CodingToolView, { kind: "edit-diff" }>) : undefined}>
+            {(current) => (
+              <EditPresentation
+                view={current()}
+                width={props.width}
+                diffStyle={props.diffStyle}
+                diffWrapMode={props.diffWrapMode}
+              />
+            )}
+          </Match>
+          <Match when={view()?.kind === "grep-output" ? (view() as Extract<CodingToolView, { kind: "grep-output" }>) : undefined}>
+            {(current) => <GrepPresentation view={current()} />}
+          </Match>
+          <Match when={view()?.kind === "shell-output" ? (view() as Extract<CodingToolView, { kind: "shell-output" }>) : undefined}>
+            {(current) => <ShellPresentation view={current()} width={props.width} />}
+          </Match>
+        </Switch>
+      </ToolCard>
+    </Show>
   )
 }
 
@@ -205,8 +188,8 @@ function CodePresentation(props: {
   view: Extract<CodingToolView, { kind: "read-code" | "write-code" }>
   width: number
 }): JSX.Element {
-  const themeState = usePresentationTheme()
-  const syntax = presentationSyntax(themeState)
+  const themeState = useToolCardTheme()
+  const syntax = toolCardSyntax(themeState)
   const [expanded, setExpanded] = createSignal(false)
   const maxChars = createMemo(() => CODE_PREVIEW_LINES * Math.max(MIN_PREVIEW_COLUMNS, props.width - PANEL_CHROME_COLUMNS))
   const collapsed = createMemo(() => collapseToolOutput(props.view.text, CODE_PREVIEW_LINES, maxChars()))
@@ -214,7 +197,7 @@ function CodePresentation(props: {
   const diagnostics = () => (props.view.kind === "write-code" ? props.view.diagnostics : [])
 
   return (
-    <ToolPanel title={props.view.title} path={props.view.path}>
+    <box gap={1} width="100%">
       <line_number
         fg={themeState.theme.textMuted}
         minWidth={3}
@@ -241,7 +224,7 @@ function CodePresentation(props: {
           {expanded() ? "Click to collapse" : "Click to expand"}
         </text>
       </Show>
-    </ToolPanel>
+    </box>
   )
 }
 
@@ -252,14 +235,14 @@ function EditPresentation(props: {
   diffStyle: CodingToolPresentationProps["diffStyle"]
   diffWrapMode: CodingToolPresentationProps["diffWrapMode"]
 }): JSX.Element {
-  const themeState = usePresentationTheme()
-  const syntax = presentationSyntax(themeState)
+  const themeState = useToolCardTheme()
+  const syntax = toolCardSyntax(themeState)
   const diffView = createMemo<"unified" | "split">(() =>
     props.diffStyle === "stacked" || props.width <= 120 ? "unified" : "split",
   )
 
   return (
-    <ToolPanel title={props.view.title} path={props.view.path}>
+    <box gap={1} width="100%">
       <diff
         diff={props.view.diff}
         view={diffView()}
@@ -283,20 +266,17 @@ function EditPresentation(props: {
       <Show when={props.view.truncated}>
         <text fg={themeState.theme.warning}>Diff truncated</text>
       </Show>
-    </ToolPanel>
+    </box>
   )
 }
 
 /** Render bounded Grep groups with explicit match markers and source line identity. */
 function GrepPresentation(props: { view: Extract<CodingToolView, { kind: "grep-output" }> }): JSX.Element {
-  const themeState = usePresentationTheme()
-  const syntax = presentationSyntax(themeState)
+  const themeState = useToolCardTheme()
+  const syntax = toolCardSyntax(themeState)
 
   return (
-    <ToolPanel title={props.view.title}>
-      <Show when={!props.view.title.includes(props.view.pattern)}>
-        <text fg={themeState.theme.textMuted}>Pattern: {props.view.pattern}</text>
-      </Show>
+    <box gap={1} width="100%">
       <Show when={props.view.groups.length > 0} fallback={<text fg={themeState.theme.textMuted}>No matches</text>}>
         <For each={props.view.groups}>
           {(group) => (
@@ -337,36 +317,23 @@ function GrepPresentation(props: { view: Extract<CodingToolView, { kind: "grep-o
       <Show when={props.view.truncated}>
         <text fg={themeState.theme.warning}>Results truncated</text>
       </Show>
-    </ToolPanel>
+    </box>
   )
 }
 
-/** Render one Bash or Shell result with highlighted command and plain safe output. */
+/** Render one Bash or Shell result as plain, ANSI-stripped output and a status line. */
 function ShellPresentation(props: {
   view: Extract<CodingToolView, { kind: "shell-output" }>
   width: number
 }): JSX.Element {
-  const themeState = usePresentationTheme()
-  const syntax = presentationSyntax(themeState)
+  const themeState = useToolCardTheme()
   const [expanded, setExpanded] = createSignal(false)
   const maxChars = createMemo(() => OUTPUT_PREVIEW_LINES * Math.max(MIN_PREVIEW_COLUMNS, props.width - PANEL_CHROME_COLUMNS))
   const collapsed = createMemo(() => collapseToolOutput(props.view.output, OUTPUT_PREVIEW_LINES, maxChars()))
   const output = createMemo(() => (expanded() || !collapsed().overflow ? props.view.output : collapsed().output))
 
   return (
-    <ToolPanel title={props.view.title}>
-      <box flexDirection="row" width="100%">
-        <text fg={themeState.theme.accent} flexShrink={0}>$ </text>
-        <code
-          conceal={false}
-          fg={themeState.theme.accent}
-          filetype="bash"
-          syntaxStyle={syntax()}
-          content={props.view.command}
-          wrapMode="word"
-          width="100%"
-        />
-      </box>
+    <box gap={1} width="100%">
       <Show when={props.view.cwd}>
         <text fg={themeState.theme.textMuted} width="100%">cwd {props.view.cwd}</text>
       </Show>
@@ -383,42 +350,13 @@ function ShellPresentation(props: {
           {expanded() ? "Click to collapse" : "Click to expand"}
         </text>
       </Show>
-    </ToolPanel>
-  )
-}
-
-/** Provide a compact borderless semantic surface for one coding-tool result. */
-function ToolPanel(props: { title: string; path?: string; children: JSX.Element }): JSX.Element {
-  const { theme } = usePresentationTheme()
-
-  return (
-    <box
-      backgroundColor={theme.backgroundPanel}
-      paddingTop={1}
-      paddingBottom={1}
-      paddingLeft={1}
-      paddingRight={1}
-      gap={1}
-      width="100%"
-    >
-      <box flexDirection="row" gap={1} width="100%">
-        <text fg={theme.textMuted} attributes={TextAttributes.BOLD} wrapMode="word">
-          {props.title}
-        </text>
-        <Show when={props.path && !props.title.includes(props.path)}>
-          <text fg={theme.textMuted} wrapMode="word">
-            {props.path}
-          </text>
-        </Show>
-      </box>
-      {props.children}
     </box>
   )
 }
 
 /** Render one positioned severity-one diagnostic with one-based coordinates. */
 function DiagnosticText(props: { diagnostic: CodingToolDiagnostic }): JSX.Element {
-  const { theme } = usePresentationTheme()
+  const { theme } = useToolCardTheme()
   const location = () => {
     const start = props.diagnostic.range?.start
     return start ? ` [${start.line + 1}:${start.character + 1}]` : ""
@@ -428,21 +366,6 @@ function DiagnosticText(props: { diagnostic: CodingToolDiagnostic }): JSX.Elemen
       Error{location()} {props.diagnostic.message}
     </text>
   )
-}
-
-/** Use the live Theme context, with the shipped semantic hya theme for isolated renderer tests. */
-function usePresentationTheme(): PresentationThemeState {
-  try {
-    return useTheme()
-  } catch (error) {
-    if (!(error instanceof Error) || error.message !== THEME_CONTEXT_ERROR) throw error
-    return { theme: FALLBACK_THEME }
-  }
-}
-
-/** Return the live syntax accessor or create a renderer-owned fallback style. */
-function presentationSyntax(state: PresentationThemeState): Accessor<SyntaxStyle> {
-  return state.syntax ?? createSyntaxStyleMemo(() => generateSyntax(state.theme))
 }
 
 /** Decode the common completed ToolPart envelope and reject compacted or unsupported state. */
@@ -463,7 +386,6 @@ function completedEnvelope(part: ToolPart): CompletedEnvelope | undefined {
 
   return {
     tool,
-    title: boundedString(state.title, "part.state.title", MAX_TITLE_LENGTH),
     input: object(state.input, "part.state.input"),
     metadata: state.metadata === undefined ? {} : object(state.metadata, "part.state.metadata"),
     output: boundedString(state.output, "part.state.output", MAX_OUTPUT_LENGTH),
@@ -485,7 +407,6 @@ function presentRead(envelope: CompletedEnvelope): Extract<CodingToolView, { kin
 
   return {
     kind: "read-code",
-    title: envelope.title,
     path: nonEmptyBoundedString(display.path, "read.metadata.display.path", MAX_PATH_LENGTH),
     text: boundedString(display.text, "read.metadata.display.text", MAX_DISPLAY_TEXT_LENGTH),
     lineStart: positiveInteger(display.lineStart, "read.metadata.display.lineStart"),
@@ -511,7 +432,6 @@ function presentWrite(envelope: CompletedEnvelope): Extract<CodingToolView, { ki
 
   return {
     kind: "write-code",
-    title: envelope.title,
     path,
     text,
     lineStart,
@@ -534,7 +454,6 @@ function presentEdit(envelope: CompletedEnvelope): Extract<CodingToolView, { kin
 
   return {
     kind: "edit-diff",
-    title: envelope.title,
     path,
     diff: boundedString(envelope.metadata.diff, "edit.metadata.diff", MAX_DIFF_LENGTH),
     truncated:
@@ -547,7 +466,7 @@ function presentEdit(envelope: CompletedEnvelope): Extract<CodingToolView, { kin
 /** Normalize bounded per-file Grep display metadata. */
 function presentGrep(envelope: CompletedEnvelope): Extract<CodingToolView, { kind: "grep-output" }> {
   assertKnownKeys(envelope.input, "grep.input", ["pattern", "path", "glob", "ignoreCase", "literal", "context", "limit"])
-  const pattern = boundedString(envelope.input.pattern, "grep.input.pattern", MAX_PATTERN_LENGTH)
+  boundedString(envelope.input.pattern, "grep.input.pattern", MAX_PATTERN_LENGTH)
   optionalBoundedString(envelope.input.path, "grep.input.path", MAX_PATH_LENGTH)
   optionalBoundedString(envelope.input.glob, "grep.input.glob", MAX_PATTERN_LENGTH)
   optionalBoolean(envelope.input.ignoreCase, "grep.input.ignoreCase")
@@ -588,8 +507,6 @@ function presentGrep(envelope: CompletedEnvelope): Extract<CodingToolView, { kin
 
   return {
     kind: "grep-output",
-    title: envelope.title,
-    pattern,
     groups,
     output: envelope.output,
     truncated:
@@ -601,7 +518,7 @@ function presentGrep(envelope: CompletedEnvelope): Extract<CodingToolView, { kin
 /** Normalize Bash and hidden Shell alias data without retaining environment fields. */
 function presentShell(envelope: CompletedEnvelope): Extract<CodingToolView, { kind: "shell-output" }> {
   assertKnownKeys(envelope.input, "shell.input", ["command", "env", "timeout", "cwd", "pty"])
-  const command = nonEmptyBoundedString(envelope.input.command, "shell.input.command", MAX_COMMAND_LENGTH)
+  nonEmptyBoundedString(envelope.input.command, "shell.input.command", MAX_COMMAND_LENGTH)
   const cwd = optionalBoundedString(envelope.input.cwd, "shell.input.cwd", MAX_PATH_LENGTH)
   optionalFiniteNumber(envelope.input.timeout, "shell.input.timeout", 0)
   optionalBoolean(envelope.input.pty, "shell.input.pty")
@@ -614,8 +531,6 @@ function presentShell(envelope: CompletedEnvelope): Extract<CodingToolView, { ki
 
   return {
     kind: "shell-output",
-    title: envelope.title,
-    command,
     cwd,
     output: stripAnsi(envelope.output),
     exit,
