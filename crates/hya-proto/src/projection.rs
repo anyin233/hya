@@ -9,11 +9,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 
 use self::helpers::{find_part, push_part, tool_input, upsert_tool};
-use crate::event::{Envelope, Event, WorkflowStageRouteOutcome};
+use crate::event::{ArchiveReason, Envelope, Event, ReportOutcome, WorkflowStageRouteOutcome};
 use crate::ids::{
     ActorEpoch, ConfigGeneration, MemberId, MessageId, PartId, SessionId, ToolCallId, WorkflowRunId,
 };
-use crate::mail::{MailEndpoint, MailKind};
+use crate::mail::{ChannelKind, MailEndpoint, MailKind, is_minted_channel_id};
 use crate::message::{
     FinishReason, MemberRunStatus, Role, RosterStatus, SubagentMode, TokenUsage, ToolPartState,
 };
@@ -50,6 +50,10 @@ pub struct SessionProjection {
     pub metadata: Option<serde_json::Value>,
     /// Full permission rule list (last `SessionPermissionSet` wins).
     pub permission: Option<Vec<serde_json::Value>>,
+    /// Latest terminal handoff document (ADR-0015): the only state an agent
+    /// carries between episodes; revival seeds model context from it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handoff: Option<HandoffProjection>,
     /// Archive stamp when archived.
     pub archived: Option<serde_json::Number>,
     /// Share URL when shared; `None` after clear.
@@ -201,13 +205,33 @@ pub struct TeamProjection {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub inboxes: BTreeMap<String, Vec<MailMessage>>,
     /// Channels keyed by **unit-qualified key** (`main/lead-1#build`, no leading
-    /// `#`): membership set + full message log. Two units may each own a channel
+    /// `#`) or by their own minted id (`announce-{8}` / `DM-{8}`, ADR-0016):
+    /// membership set + full message log. Two units may each own a channel
     /// of the same name; the qualifier is what keeps them separate.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub channels: BTreeMap<String, ChannelProjection>,
     /// Live team roster keyed by **canonical path**.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub roster: BTreeMap<String, RosterEntry>,
+    /// Archived team history keyed by canonical path (ADR-0015): rows the
+    /// user-side tree keeps after an agent left the live roster. Agent-facing
+    /// tools never read this map; `search_agent` reads the store-derived index.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub archived: BTreeMap<String, ArchivedEntry>,
+}
+
+/// One archived agent's history row (ADR-0015), folded from `AgentArchived`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ArchivedEntry {
+    /// Canonical handle the agent had while live.
+    pub handle: String,
+    /// Agent's own session id.
+    pub session: SessionId,
+    /// Declared agent type (from the removed roster row).
+    #[serde(default)]
+    pub agent_type: AgentName,
+    /// Why the agent archived.
+    pub reason: ArchiveReason,
 }
 
 /// Why a `#channel` address could not be resolved to a unit-qualified key.
@@ -277,7 +301,10 @@ impl TeamProjection {
     /// wake its recipient.
     #[must_use]
     pub fn canonical_member(&self, raw: &str) -> String {
-        if raw.contains(scope::PATH_SEPARATOR) || self.roster.contains_key(raw) {
+        if raw.contains(scope::PATH_SEPARATOR)
+            || raw == scope::ROOT_HANDLE
+            || self.roster.contains_key(raw)
+        {
             return raw.to_string();
         }
         let mut matches = self.roster.keys().filter(|key| scope::leaf(key) == raw);
@@ -290,14 +317,15 @@ impl TeamProjection {
         }
     }
 
-    /// Resolve a channel name as written on the wire to its unit-qualified key.
+    /// Resolve a channel name as written on the wire to its canonical key.
     ///
-    /// New emitters write qualified keys (`main/lead-1#build`). A pre-scoping log
-    /// carries a bare name, which belongs to the root's unit because a legacy
-    /// team is one flat unit under `main`.
+    /// New emitters write qualified keys (`main/lead-1#build`) or minted ids
+    /// (`announce-{8}` / `DM-{8}`, which are their own keys, ADR-0016). A
+    /// pre-scoping log carries a bare name, which belongs to the root's unit
+    /// because a legacy team is one flat unit under `main`.
     #[must_use]
     pub fn canonical_channel(&self, raw: &str) -> String {
-        if raw.contains(scope::CHANNEL_SEPARATOR) {
+        if is_minted_channel_id(raw) || raw.contains(scope::CHANNEL_SEPARATOR) {
             return raw.to_string();
         }
         scope::qualify_channel(scope::ROOT_HANDLE, raw)
@@ -448,6 +476,10 @@ impl ScopedRoster {
 /// to it (independent of who was subscribed when).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ChannelProjection {
+    /// Group broadcast vs DM pair (ADR-0016). Defaults to group: legacy logs
+    /// predate minted channels and every legacy channel was a unit channel.
+    #[serde(default)]
+    pub kind: ChannelKind,
     /// Current subscriber handles (no leading `#`).
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub members: BTreeSet<String>,
@@ -549,6 +581,18 @@ fn is_zero(value: &u64) -> bool {
     *value == 0
 }
 
+/// Latest terminal handoff folded onto a child session (ADR-0015).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct HandoffProjection {
+    /// Episode generation of this document.
+    pub generation: u32,
+    /// Full six-section state document.
+    pub doc: String,
+    /// A deterministic degraded fallback produced this document.
+    #[serde(default)]
+    pub degraded: bool,
+}
+
 /// Full folded view: one session transcript plus optional team mailbox/roster state.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Projection {
@@ -563,7 +607,10 @@ pub struct Projection {
 }
 
 fn team_is_empty(team: &TeamProjection) -> bool {
-    team.inboxes.is_empty() && team.channels.is_empty() && team.roster.is_empty()
+    team.inboxes.is_empty()
+        && team.channels.is_empty()
+        && team.roster.is_empty()
+        && team.archived.is_empty()
 }
 
 impl Projection {
@@ -1176,6 +1223,76 @@ impl Projection {
                 if let Some(ch) = self.team.channels.get_mut(&key) {
                     ch.members.remove(&member);
                 }
+            }
+            Event::ChannelCreated {
+                channel,
+                kind,
+                members,
+                ..
+            } => {
+                let key = self.canonical_channel(channel);
+                let members = members
+                    .iter()
+                    .map(|member| self.canonical_member(member))
+                    .collect::<Vec<_>>();
+                let channel_state = self.team.channels.entry(key).or_default();
+                channel_state.kind = *kind;
+                channel_state.members.extend(members);
+            }
+            Event::SubagentReported {
+                member,
+                outcome,
+                report,
+                ..
+            } => {
+                let entry = self.member_mut(*member);
+                entry.status = match outcome {
+                    ReportOutcome::Done => MemberRunStatus::Done,
+                    ReportOutcome::Failed => MemberRunStatus::Failed,
+                };
+                entry.summary = report.clone();
+            }
+            Event::HandoffCommitted {
+                generation,
+                doc,
+                degraded,
+                ..
+            } => {
+                self.session.handoff = Some(HandoffProjection {
+                    generation: *generation,
+                    doc: doc.clone(),
+                    degraded: *degraded,
+                });
+            }
+            Event::AgentArchived {
+                handle,
+                child,
+                reason,
+                ..
+            } => {
+                let handle = self.canonical_member(handle);
+                if let Some(entry) = self.team.roster.remove(&handle) {
+                    self.team.archived.insert(
+                        handle.clone(),
+                        ArchivedEntry {
+                            handle: handle.clone(),
+                            session: *child,
+                            agent_type: entry.agent_type.clone(),
+                            reason: *reason,
+                        },
+                    );
+                }
+                // Group membership ends at archive; DM channels keep both
+                // members because the DM is the revival address (ADR-0016).
+                for channel in self.team.channels.values_mut() {
+                    if channel.kind == ChannelKind::Group {
+                        channel.members.remove(&handle);
+                    }
+                }
+            }
+            Event::AgentRestarted { handle, .. } => {
+                let handle = self.canonical_member(handle);
+                self.team.archived.remove(&handle);
             }
             Event::MailSent {
                 from,
@@ -1995,5 +2112,230 @@ mod context_status_tests {
             },
         ));
         assert_eq!(p.session.context_status.unwrap().tokens, 9_000);
+    }
+}
+
+#[cfg(test)]
+mod orchestration_tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::*;
+    use crate::event::{ArchiveReason, ReportOutcome};
+    use crate::ids::EventSeq;
+    use crate::mail::ChannelKind;
+
+    fn env(seq: u64, event: Event) -> Envelope {
+        Envelope {
+            seq: EventSeq(seq),
+            ts_millis: 0,
+            event,
+        }
+    }
+
+    fn register_lead(root: SessionId, child: SessionId) -> Event {
+        Event::AgentRegistered {
+            session: root,
+            agent_session: child,
+            handle: "lead-1".to_string(),
+            parent: Some(scope::ROOT_HANDLE.to_string()),
+            agent_type: AgentName::new("lead"),
+            mode: SubagentMode::Resident,
+        }
+    }
+
+    /// Archive is the sole exit (ADR-0015): the live roster row disappears, group
+    /// membership ends, but the DM channel — the revival address — persists, and
+    /// the archived map keeps user-visible history.
+    #[test]
+    fn agent_archived_removes_roster_and_group_membership_but_keeps_dm() {
+        let root = SessionId::new();
+        let lead = SessionId::new();
+        let dm = "DM-aB12Cd34".to_string();
+        let projection = Projection::from_events(&[
+            env(1, register_lead(root, lead)),
+            env(
+                2,
+                Event::ChannelJoined {
+                    session: root,
+                    channel: "build".to_string(),
+                    member: "main/lead-1".to_string(),
+                },
+            ),
+            env(
+                3,
+                Event::ChannelCreated {
+                    session: root,
+                    channel: dm.clone(),
+                    kind: ChannelKind::Dm,
+                    members: vec![scope::ROOT_HANDLE.to_string(), "main/lead-1".to_string()],
+                },
+            ),
+            env(
+                4,
+                Event::AgentArchived {
+                    session: root,
+                    handle: "main/lead-1".to_string(),
+                    child: lead,
+                    reason: ArchiveReason::Reported,
+                },
+            ),
+        ]);
+
+        assert!(
+            !projection.team.roster.contains_key("main/lead-1"),
+            "archived agent leaves the live roster"
+        );
+        let build = projection.team.channels.get("main#build").unwrap();
+        assert!(
+            !build.members.contains("main/lead-1"),
+            "group membership ends at archive"
+        );
+        let dm_channel = projection.team.channels.get(&dm).unwrap();
+        assert!(
+            dm_channel.members.contains("main/lead-1"),
+            "the DM channel persists as the revival address"
+        );
+        let archived = projection.team.archived.get("main/lead-1").unwrap();
+        assert_eq!(archived.session, lead);
+        assert_eq!(archived.reason, ArchiveReason::Reported);
+        assert_eq!(archived.agent_type, AgentName::new("lead"));
+    }
+
+    /// Revive is register-upsert + restart marker: the roster row returns and the
+    /// archive history entry clears in the same replay.
+    #[test]
+    fn agent_restarted_clears_archive_history_once_reregistered() {
+        let root = SessionId::new();
+        let lead = SessionId::new();
+        let projection = Projection::from_events(&[
+            env(1, register_lead(root, lead)),
+            env(
+                2,
+                Event::AgentArchived {
+                    session: root,
+                    handle: "main/lead-1".to_string(),
+                    child: lead,
+                    reason: ArchiveReason::Reported,
+                },
+            ),
+            env(3, register_lead(root, lead)),
+            env(
+                4,
+                Event::AgentRestarted {
+                    session: root,
+                    handle: "main/lead-1".to_string(),
+                    child: lead,
+                    epoch: ActorEpoch::INITIAL,
+                },
+            ),
+        ]);
+
+        let entry = projection.team.roster.get("main/lead-1").unwrap();
+        assert_eq!(entry.session, lead, "revived agent is live again");
+        assert!(
+            !projection.team.archived.contains_key("main/lead-1"),
+            "restart clears the archive history row"
+        );
+    }
+
+    /// `ChannelCreated` is the minting fact: kind and initial members fold.
+    /// A legacy channel (no creation event) still defaults to group kind.
+    #[test]
+    fn channel_created_folds_kind_and_members() {
+        let root = SessionId::new();
+        let projection = Projection::from_events(&[
+            env(
+                1,
+                Event::ChannelCreated {
+                    session: root,
+                    channel: "announce-aB12Cd34".to_string(),
+                    kind: ChannelKind::Group,
+                    members: vec![scope::ROOT_HANDLE.to_string()],
+                },
+            ),
+            env(
+                2,
+                Event::ChannelJoined {
+                    session: root,
+                    channel: "build".to_string(),
+                    member: "main".to_string(),
+                },
+            ),
+        ]);
+        let announce = projection.team.channels.get("announce-aB12Cd34").unwrap();
+        assert_eq!(announce.kind, ChannelKind::Group);
+        assert!(announce.members.contains("main"));
+        let legacy = projection.team.channels.get("main#build").unwrap();
+        assert_eq!(legacy.kind, ChannelKind::Group, "old logs default to group");
+    }
+
+    /// A report is a terminal member status on the parent log (ADR-0015).
+    #[test]
+    fn subagent_reported_marks_the_member_terminal() {
+        let parent = SessionId::new();
+        let child = SessionId::new();
+        let member = MemberId::new();
+        let projection = Projection::from_events(&[
+            env(
+                1,
+                Event::MemberSpawned {
+                    session: parent,
+                    member,
+                    child: Some(child),
+                    subagent_type: AgentName::new("explore"),
+                    description: "scan".to_string(),
+                    depth: 1,
+                    directive: "find it".to_string(),
+                    tool_call: None,
+                },
+            ),
+            env(
+                2,
+                Event::SubagentReported {
+                    session: parent,
+                    member,
+                    child,
+                    handle: "main/explore-1".to_string(),
+                    outcome: ReportOutcome::Done,
+                    report: "found it".to_string(),
+                },
+            ),
+        ]);
+        let row = &projection.session.members[0];
+        assert_eq!(row.status, MemberRunStatus::Done);
+        assert_eq!(row.summary, "found it");
+    }
+
+    /// The handoff is the only carried state (ADR-0015): it projects onto the
+    /// child session for revival context and search.
+    #[test]
+    fn handoff_committed_projects_onto_the_child_session() {
+        let child = SessionId::new();
+        let projection = Projection::from_events(&[
+            env(
+                1,
+                Event::SessionCreated {
+                    session: child,
+                    parent: None,
+                    agent: AgentName::new("explore"),
+                    model: ModelRef::new("fake"),
+                    workdir: "/w".to_string(),
+                },
+            ),
+            env(
+                2,
+                Event::HandoffCommitted {
+                    session: child,
+                    handle: "main/explore-1".to_string(),
+                    generation: 2,
+                    doc: "1. Goal - find it".to_string(),
+                    degraded: true,
+                },
+            ),
+        ]);
+        let handoff = projection.session.handoff.as_ref().unwrap();
+        assert_eq!(handoff.generation, 2);
+        assert!(handoff.degraded);
+        assert_eq!(handoff.doc, "1. Goal - find it");
     }
 }

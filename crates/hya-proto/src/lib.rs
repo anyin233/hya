@@ -31,23 +31,27 @@ pub mod workflow;
 pub mod workspace;
 
 pub use event::{
-    CompactionStrategy, Envelope, Event, WorkflowRouteFailureClass, WorkflowStageRouteOutcome,
+    ArchiveReason, CompactionStrategy, Envelope, Event, ReportOutcome, WorkflowRouteFailureClass,
+    WorkflowStageRouteOutcome,
 };
 pub use ids::{
     ActorClaim, ActorEpoch, ConfigGeneration, EventSeq, GoalId, LoopRunId, MemberId, MessageId,
     OperationId, OwnerRunId, PartId, PermissionRequestId, QuestionRequestId, SessionId, TeamRunId,
     ToolCallId, WorkflowRunId,
 };
-pub use mail::{MailEndpoint, MailKind};
+pub use mail::{
+    CHANNEL_RANDOM_LEN, ChannelKind, MailEndpoint, MailKind, is_minted_channel_id, mint_channel_id,
+};
 pub use message::{
     FinishReason, MemberRunStatus, Message, Part, Role, RosterStatus, SubagentMode, TokenUsage,
     ToolPartState,
 };
 pub use model::{AgentName, ModelRef, ToolName, ToolSchema};
 pub use projection::{
-    ChannelProjection, ChannelResolveError, ContextStatusProjection, MailMessage, MemberProjection,
-    MessageProjection, PartProjection, Projection, ResidentWorkProjection, RosterEntry,
-    ScopedRoster, SessionProjection, TeamProjection,
+    ArchivedEntry, ChannelProjection, ChannelResolveError, ContextStatusProjection,
+    HandoffProjection, MailMessage, MemberProjection, MessageProjection, PartProjection,
+    Projection, ResidentWorkProjection, RosterEntry, ScopedRoster, SessionProjection,
+    TeamProjection,
 };
 pub use projection_tree::{RunTreeNode, build_run_tree};
 pub use scope::{ANNOUNCE_CHANNEL, ROOT_HANDLE, Relation, in_scope, relation};

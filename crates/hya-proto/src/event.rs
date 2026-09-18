@@ -14,7 +14,7 @@ use crate::ids::{
     ActorEpoch, ConfigGeneration, EventSeq, MemberId, MessageId, OwnerRunId, PartId, SessionId,
     ToolCallId, WorkflowRunId,
 };
-use crate::mail::{MailEndpoint, MailKind};
+use crate::mail::{ChannelKind, MailEndpoint, MailKind};
 use crate::message::{
     FinishReason, MemberRunStatus, Role, RosterStatus, SubagentMode, TokenUsage, ToolPartState,
 };
@@ -649,6 +649,81 @@ pub enum Event {
         member: String,
     },
 
+    // -------- unified orchestration lifecycle (ADR-0015/0016) --------
+    /// A channel was minted as an event fact: group channels carry the leader
+    /// plus its direct reports; DM channels carry the vertical pair. The id is
+    /// the canonical channel key (`announce-{8}` / `DM-{8}`).
+    ChannelCreated {
+        /// Team-root log session.
+        session: SessionId,
+        /// Channel key without the leading `#`.
+        channel: String,
+        /// Group broadcast vs DM pair.
+        #[serde(default)]
+        kind: ChannelKind,
+        /// Canonical handles of the founding members.
+        #[serde(default)]
+        members: Vec<String>,
+    },
+    /// Terminal task report from a subagent to its parent. Appended to the
+    /// PARENT log; the engine also delivers the report as mail on the
+    /// parent-child DM channel.
+    SubagentReported {
+        /// Parent session log.
+        session: SessionId,
+        /// Member id within the parent tree.
+        member: MemberId,
+        /// Reporting child session.
+        child: SessionId,
+        /// Reporting agent's canonical handle (team-root key).
+        handle: String,
+        /// Terminal outcome.
+        outcome: ReportOutcome,
+        /// Bounded result text for the parent.
+        report: String,
+    },
+    /// The state-only handoff document that survives an archive. Appended to
+    /// the CHILD's own log; `generation` counts episodes and each document
+    /// anchors on its predecessor.
+    HandoffCommitted {
+        /// Child session log.
+        session: SessionId,
+        /// Handle within the team (cross-log discovery).
+        handle: String,
+        /// Episode generation of this document.
+        generation: u32,
+        /// Full handoff document (six state-only sections).
+        doc: String,
+        /// A deterministic projection-derived fallback produced this document.
+        #[serde(default)]
+        degraded: bool,
+    },
+    /// An agent left the live roster: the sole archive marker. Removes the
+    /// roster row and group-channel membership; the DM channel persists as the
+    /// revival address.
+    AgentArchived {
+        /// Team-root log session.
+        session: SessionId,
+        /// Archived agent's canonical handle.
+        handle: String,
+        /// Archived agent's session.
+        child: SessionId,
+        /// Why the agent archived.
+        reason: ArchiveReason,
+    },
+    /// An archived agent was revived by a downward DM. Paired with an
+    /// `AgentRegistered` upsert in the same transaction.
+    AgentRestarted {
+        /// Team-root log session.
+        session: SessionId,
+        /// Revived agent's canonical handle.
+        handle: String,
+        /// Revived agent's session.
+        child: SessionId,
+        /// New actor epoch for this incarnation.
+        epoch: ActorEpoch,
+    },
+
     // -------- context observability --------
     /// A compaction folded part of this session's transcript.
     ///
@@ -763,6 +838,28 @@ pub enum Event {
     #[serde(other)]
     Unknown,
 }
+/// Terminal outcome of a subagent's task report (ADR-0015).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReportOutcome {
+    /// Task completed successfully.
+    Done,
+    /// Task failed; the report carries the blocker.
+    Failed,
+}
+
+/// Why an agent left the live roster (ADR-0015). Archive is the sole exit.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArchiveReason {
+    /// Terminal report accepted (model-issued or engine-synthesized).
+    Reported,
+    /// Parent force-kill or per-team budget kill.
+    Killed,
+    /// Root-turn teardown force-archive.
+    RootTeardown,
+}
+
 /// Stable, bounded classification for one Workflow route outcome.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -893,7 +990,12 @@ impl Event {
             | Event::ResidentWorkStarted { session, .. }
             | Event::MailSent { session, .. }
             | Event::ChannelJoined { session, .. }
-            | Event::ChannelLeft { session, .. } => Some(*session),
+            | Event::ChannelLeft { session, .. }
+            | Event::ChannelCreated { session, .. }
+            | Event::SubagentReported { session, .. }
+            | Event::HandoffCommitted { session, .. }
+            | Event::AgentArchived { session, .. }
+            | Event::AgentRestarted { session, .. } => Some(*session),
             Event::ContextCompacted { session, .. }
             | Event::SessionForked { session, .. }
             | Event::ContextEvicted { session, .. }
@@ -1254,6 +1356,110 @@ mod tests {
                 assert_eq!(handle, "reviewer-1");
             }
             other => panic!("expected AgentRegistered, got {other:?}"),
+        }
+    }
+
+    /// Orchestration events (ADR-0015/0016) round-trip and report the right
+    /// owning session: root log for channel/archive/restart, parent log for the
+    /// report, child log for the handoff.
+    #[test]
+    fn orchestration_events_round_trip_through_json() {
+        let root = SessionId::new();
+        let parent = SessionId::new();
+        let child = SessionId::new();
+        let cases: Vec<(Event, SessionId)> = vec![
+            (
+                Event::ChannelCreated {
+                    session: root,
+                    channel: "announce-aB12Cd34".to_string(),
+                    kind: ChannelKind::Group,
+                    members: vec!["main".to_string()],
+                },
+                root,
+            ),
+            (
+                Event::ChannelCreated {
+                    session: root,
+                    channel: "DM-aB12Cd34".to_string(),
+                    kind: ChannelKind::Dm,
+                    members: vec!["main".to_string(), "main/lead-1".to_string()],
+                },
+                root,
+            ),
+            (
+                Event::SubagentReported {
+                    session: parent,
+                    member: MemberId::new(),
+                    child,
+                    handle: "main/lead-1".to_string(),
+                    outcome: ReportOutcome::Done,
+                    report: "shipped".to_string(),
+                },
+                parent,
+            ),
+            (
+                Event::SubagentReported {
+                    session: parent,
+                    member: MemberId::new(),
+                    child,
+                    handle: "main/lead-1".to_string(),
+                    outcome: ReportOutcome::Failed,
+                    report: "blocked on tests".to_string(),
+                },
+                parent,
+            ),
+            (
+                Event::HandoffCommitted {
+                    session: child,
+                    handle: "main/lead-1".to_string(),
+                    generation: 1,
+                    doc: "1. Goal - ship".to_string(),
+                    degraded: false,
+                },
+                child,
+            ),
+            (
+                Event::AgentArchived {
+                    session: root,
+                    handle: "main/lead-1".to_string(),
+                    child,
+                    reason: ArchiveReason::Reported,
+                },
+                root,
+            ),
+            (
+                Event::AgentArchived {
+                    session: root,
+                    handle: "main/lead-1".to_string(),
+                    child,
+                    reason: ArchiveReason::Killed,
+                },
+                root,
+            ),
+            (
+                Event::AgentArchived {
+                    session: root,
+                    handle: "main/lead-1".to_string(),
+                    child,
+                    reason: ArchiveReason::RootTeardown,
+                },
+                root,
+            ),
+            (
+                Event::AgentRestarted {
+                    session: root,
+                    handle: "main/lead-1".to_string(),
+                    child,
+                    epoch: ActorEpoch::INITIAL,
+                },
+                root,
+            ),
+        ];
+        for (event, owner) in cases {
+            let json = serde_json::to_string(&event).expect("serialize");
+            let back: Event = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(event, back, "orchestration event must round-trip: {json}");
+            assert_eq!(back.session(), Some(owner), "owning session for {json}");
         }
     }
 
