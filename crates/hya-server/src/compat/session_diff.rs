@@ -177,10 +177,18 @@ fn file_name(object: &Map<String, Value>) -> Option<&str> {
 
 fn normalize_file(workdir: &FsPath, raw: &str) -> String {
     let path = FsPath::new(raw);
-    if path.is_absolute()
-        && let Ok(relative) = path.strip_prefix(workdir)
-    {
-        return display_path(relative);
+    if path.is_absolute() {
+        if let Ok(relative) = path.strip_prefix(workdir) {
+            return display_path(relative);
+        }
+        // macOS tempdirs sit behind a /var -> /private/var symlink: upstream
+        // file paths arrive canonicalized while the workdir keeps its $TMPDIR
+        // spelling, so also strip against the resolved workdir.
+        if let Ok(resolved) = std::fs::canonicalize(workdir)
+            && let Ok(relative) = path.strip_prefix(&resolved)
+        {
+            return display_path(relative);
+        }
     }
     display_path(path)
 }

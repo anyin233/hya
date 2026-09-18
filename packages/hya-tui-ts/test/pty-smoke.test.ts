@@ -10,6 +10,10 @@ const root = path.resolve(import.meta.dir, "../../..")
 const backend = path.join(root, "target/debug/hya-backend")
 const launcher = path.join(root, "target/debug/hya-ts")
 
+// The PTY harness below drives util-linux `script` (`-e -f -c`); BSD script
+// on macOS has no such flags, so the PTY suites run on Linux/CI only.
+const linuxPty = test.skipIf(process.platform !== "linux")
+
 type FileSinkLike = {
   write(value: string): number | Promise<number>
   flush(): number | Promise<number>
@@ -62,7 +66,7 @@ test("semantic_input_flushes_before_next_action", async () => {
  * Exercise all completed coding-tool views through a real backend and hya-ts
  * PTY, then prove the same Session replays the persisted presentation.
  */
-test("Linux PTY coding tool blocks render live, replay, and narrow unified diff", async () => {
+linuxPty("Linux PTY coding tool blocks render live, replay, and narrow unified diff", async () => {
   const temp = await realpath(await mkdtemp(path.join(os.tmpdir(), "hya-pty-coding-tools-")))
   const project = path.join(temp, "project")
   const home = path.join(temp, "home")
@@ -484,7 +488,7 @@ test("Linux PTY coding tool blocks render live, replay, and narrow unified diff"
   }
 }, 90_000)
 
-test("Linux PTY renders home, opens a session, and restores the terminal", async () => {
+linuxPty("Linux PTY renders home, opens a session, and restores the terminal", async () => {
   const temp = await realpath(await mkdtemp(path.join(os.tmpdir(), "hya-pty-smoke-")))
   const project = path.join(temp, "project")
   const transcript = path.join(temp, "typescript")
@@ -586,7 +590,7 @@ test("Linux PTY renders home, opens a session, and restores the terminal", async
   }
 }, 45_000)
 
-test("Linux PTY shows backend-discovered rows and auth-required offline status", async () => {
+linuxPty("Linux PTY shows backend-discovered rows and auth-required offline status", async () => {
   const temp = await realpath(await mkdtemp(path.join(os.tmpdir(), "hya-pty-catalog-")))
   const project = path.join(temp, "project")
   const transcript = path.join(temp, "typescript-catalog")
@@ -827,7 +831,7 @@ test("Linux PTY shows backend-discovered rows and auth-required offline status",
   }
 }, 90_000)
 
-test("Linux PTY model and reasoning pickers stay local before the selected model reaches the provider", async () => {
+linuxPty("Linux PTY model and reasoning pickers stay local before the selected model reaches the provider", async () => {
   const temp = await realpath(await mkdtemp(path.join(os.tmpdir(), "hya-pty-picker-")))
   const project = path.join(temp, "project")
   const transcript = path.join(temp, "typescript")
@@ -2550,9 +2554,9 @@ async function runChildObservation(columns: number) {
 }
 
 for (const columns of [80, 140]) {
-  test(`Linux PTY ${columns}-column subagent workspace`, () => runChildObservation(columns), Bun.env.CI ? 120_000 : 60_000)
+  linuxPty(`Linux PTY ${columns}-column subagent workspace`, () => runChildObservation(columns), Bun.env.CI ? 120_000 : 60_000)
 }
-test("Linux PTY Escape aborts exactly once for single and double input while streaming", async () => {
+linuxPty("Linux PTY Escape aborts exactly once for single and double input while streaming", async () => {
   const temp = await realpath(await mkdtemp(path.join(os.tmpdir(), "hya-pty-escape-abort-")))
   const project = path.join(temp, "project")
   const transcript = path.join(temp, "typescript")

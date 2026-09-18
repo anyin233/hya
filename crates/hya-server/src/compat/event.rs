@@ -1050,7 +1050,6 @@ fn event_id() -> String {
 mod recover_pending_tests {
     use std::cell::Cell;
 
-    use futures::StreamExt as _;
     use tokio::sync::broadcast;
 
     use super::*;

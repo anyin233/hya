@@ -13,11 +13,15 @@ use hya_store::{SessionStore, StoreError, WorkflowAdmissionOutcome, WorkflowSele
 
 /// Return one process-unique SQLite path.
 fn database_path() -> PathBuf {
+    // macOS clock reads share ~1us granularity, so parallel test threads can
+    // draw the same nanosecond; a serial suffix keeps the paths distinct.
+    static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |duration| duration.as_nanos());
+    let serial = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     std::env::temp_dir().join(format!(
-        "hya-workflow-recovery-{}-{nonce}.db",
+        "hya-workflow-recovery-{}-{nonce}-{serial}.db",
         std::process::id()
     ))
 }

@@ -896,7 +896,12 @@ mod tests {
         if let Err(error) = std::fs::create_dir_all(&path) {
             panic!("create test directory: {error}");
         }
-        path
+        // macOS tempdirs sit behind the /var -> /private/var symlink; the
+        // canonical spelling keeps that prefix out of the fixture's own hops.
+        match std::fs::canonicalize(&path) {
+            Ok(canonical) => canonical,
+            Err(error) => panic!("canonicalize test directory: {error}"),
+        }
     }
 
     /// Remove a filesystem seam test directory without masking its assertions.
