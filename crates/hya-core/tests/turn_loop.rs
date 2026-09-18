@@ -12,6 +12,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use hya_core::{
     AgentSpec, CompactionConfig, CoreError, CreateSession, EventBus, SessionEngine, Summarizer,
+    TokenAccountingMode, TokenSource,
 };
 use hya_proto::Event;
 use hya_proto::{
@@ -852,4 +853,94 @@ async fn tool_output_eviction_avoids_summarizing_and_preserves_the_log() {
         logged,
         "eviction is request-local; the event log must keep full fidelity"
     );
+}
+
+#[tokio::test]
+async fn context_status_reports_round_occupancy_and_accounting_mode() {
+    let dir = tempdir();
+    let provider = FakeProvider::scripted_turns(vec![vec![
+        FakeStep::Text("done".to_string()),
+        FakeStep::Finish(FinishReason::Stop),
+    ]]);
+    let router = Arc::new(ProviderRouter::new().with(Arc::new(provider)));
+    let (perm, _rx) = PermissionPlane::new(PermissionRules::new(vec![]));
+    let store = SessionStore::connect_memory().await.unwrap();
+    let engine = SessionEngine::new(
+        store,
+        router,
+        support::test_runtime(Arc::new(ToolRegistry::builtins())),
+        perm,
+        EventBus::default(),
+    )
+    .with_compaction(
+        Arc::new(Recording(Arc::new(AtomicBool::new(false)))),
+        CompactionConfig::default(),
+    );
+
+    let session = engine
+        .create(CreateSession {
+            parent: None,
+            agent: AgentName::new("build"),
+            model: ModelRef::new("fake"),
+            workdir: dir.to_string_lossy().into_owned(),
+        })
+        .await
+        .unwrap();
+    engine
+        .admit_user_prompt(session, "hello".to_string())
+        .await
+        .unwrap();
+    let agent = AgentSpec {
+        name: AgentName::new("build"),
+        model: ModelRef::new("fake"),
+        system_prompt: "you are build".to_string(),
+        workdir: dir.clone(),
+        reasoning: None,
+    };
+    engine
+        .run_turn(session, &agent, CancellationToken::new())
+        .await
+        .unwrap();
+
+    let envelopes = engine.store().replay(session).await.unwrap();
+    let statuses: Vec<_> = envelopes
+        .iter()
+        .filter_map(|envelope| match &envelope.event {
+            Event::ContextStatus {
+                tokens,
+                source,
+                mode,
+                threshold,
+                ..
+            } => Some((*tokens, *source, *mode, *threshold)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        statuses.len(),
+        1,
+        "one streaming round must report window occupancy exactly once"
+    );
+    let (tokens, source, mode, threshold) = statuses[0];
+    assert!(tokens > 0, "occupancy must be a positive estimate");
+    assert_eq!(mode, TokenAccountingMode::Auto, "engine default is Auto");
+    assert_eq!(
+        source,
+        TokenSource::Estimate,
+        "a round with no reported usage must be estimated, not provider-anchored"
+    );
+    assert_eq!(
+        threshold, 150_000,
+        "fake route advertises a 200k window: min(0.75 * window, window - reserve)"
+    );
+
+    let projection = engine.store().read_projection(session).await.unwrap();
+    let folded = projection
+        .session
+        .context_status
+        .expect("projection folds the latest ContextStatus");
+    assert_eq!(folded.tokens, tokens);
+    assert_eq!(folded.source, source);
+    assert_eq!(folded.mode, mode);
+    assert_eq!(folded.threshold, threshold);
 }

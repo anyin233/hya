@@ -185,53 +185,9 @@ impl Tokenizer for CalibratedTokenizer {
     }
 }
 
-/// How window occupancy is derived from a transcript.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum TokenAccountingMode {
-    /// Trust reported usage until the route proves unreliable, then estimate.
-    #[default]
-    Auto,
-    /// Always trust reported usage, even when it is absent or implausible.
-    Provider,
-    /// Always estimate locally and ignore reported usage.
-    Estimate,
-}
-
-impl TokenAccountingMode {
-    /// Parse a configuration or environment value.
-    ///
-    /// Unrecognized values return `None` so callers can keep their default
-    /// rather than silently adopting a mode the user did not ask for.
-    #[must_use]
-    pub fn parse(value: &str) -> Option<Self> {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "auto" => Some(Self::Auto),
-            "provider" => Some(Self::Provider),
-            "estimate" => Some(Self::Estimate),
-            _ => None,
-        }
-    }
-
-    /// Stable lowercase name, the inverse of [`Self::parse`].
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Auto => "auto",
-            Self::Provider => "provider",
-            Self::Estimate => "estimate",
-        }
-    }
-}
-
-/// Where a token count came from.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum TokenSource {
-    /// The provider's reported prompt size, plus an estimate of what was
-    /// appended after the message that reported it.
-    ProviderAnchored,
-    /// A local tokenizer estimate over the whole transcript.
-    Estimated,
-}
+// The mode and provenance enums are wire types: events, projections, and
+// clients all spell them the same way, so hya-proto owns the single definition.
+pub use hya_proto::tokens::{TokenAccountingMode, TokenSource};
 
 /// A window-occupancy measurement and how it was derived.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -321,7 +277,7 @@ impl TokenAccounting {
     pub fn tokens_in_use(&self, messages: &[Message], usage_reporting: bool) -> TokenCount {
         let estimated = TokenCount {
             tokens: self.estimate(messages),
-            source: TokenSource::Estimated,
+            source: TokenSource::Estimate,
         };
         if self.mode == TokenAccountingMode::Estimate {
             return estimated;
@@ -332,7 +288,7 @@ impl TokenAccounting {
         let anchored = TokenCount {
             tokens: reported
                 .saturating_add(self.estimate(messages.get(index + 1..).unwrap_or_default())),
-            source: TokenSource::ProviderAnchored,
+            source: TokenSource::Provider,
         };
         if self.mode == TokenAccountingMode::Provider {
             return anchored;

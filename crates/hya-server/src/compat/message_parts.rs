@@ -231,6 +231,7 @@ fn part_timeline(envs: &[Envelope]) -> BTreeMap<MessageId, Vec<CompatPartCursor>
             | Event::ContextCompacted { .. }
             | Event::SessionForked { .. }
             | Event::ContextEvicted { .. }
+            | Event::ContextStatus { .. }
             | Event::Unknown => {}
         }
     }
@@ -399,6 +400,7 @@ fn part_times(envs: &[Envelope]) -> BTreeMap<PartId, CompatPartTime> {
             | Event::ContextCompacted { .. }
             | Event::SessionForked { .. }
             | Event::ContextEvicted { .. }
+            | Event::ContextStatus { .. }
             | Event::Unknown => {}
         }
     }

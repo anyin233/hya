@@ -1934,3 +1934,27 @@ async fn compat_session_todo_returns_empty_array_for_fresh_session() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body, json!([]));
 }
+
+#[tokio::test]
+async fn session_json_exposes_context_status_after_a_round() {
+    let app = router(state().await);
+    let session = create_session(app.clone(), None).await;
+    post_prompt(app.clone(), &session).await;
+
+    let (status, body) = get_json(app, format!("/session/{session}")).await;
+    assert_eq!(status, StatusCode::OK);
+    let context = body["context"]
+        .as_object()
+        .expect("session JSON carries the latest context occupancy report");
+    assert!(
+        context["tokens"].as_u64().unwrap_or(0) > 0,
+        "occupancy is a positive estimate: {context:?}"
+    );
+    assert_eq!(context["source"], json!("estimate"));
+    assert_eq!(context["mode"], json!("auto"));
+    assert_eq!(
+        context["threshold"].as_u64(),
+        Some(150_000),
+        "fake route advertises a 200k window: min(0.75 * window, window - reserve)"
+    );
+}

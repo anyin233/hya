@@ -894,10 +894,11 @@ impl SessionEngine {
             // from the provider-measured value when that is believable, then tracks
             // request-local edits by delta — re-measuring after an edit would
             // return the stale pre-edit number and hide the saving.
-            let mut tokens = self
+            let initial_count = self
                 .token_accounting
-                .tokens_in_use(&messages, usage_reporting)
-                .tokens;
+                .tokens_in_use(&messages, usage_reporting);
+            let mut tokens = initial_count.tokens;
+            let token_source = initial_count.source;
             let over_threshold = |tokens: usize, messages: &[_]| {
                 messages.len() > self.compaction.keep_recent && tokens > resolved_threshold
             };
@@ -1065,6 +1066,21 @@ impl SessionEngine {
                     }
                 }
             }
+            // The wire surface of token accounting: one report per round,
+            // recorded after the ladder so the figure is the occupancy this
+            // request actually carries.
+            self.emit_for_actor(
+                actor_claim,
+                session,
+                Event::ContextStatus {
+                    session,
+                    tokens: u64::try_from(tokens).unwrap_or(u64::MAX),
+                    source: token_source,
+                    mode: self.token_accounting.mode(),
+                    threshold: u64::try_from(resolved_threshold).unwrap_or(u64::MAX),
+                },
+            )
+            .await?;
             let request = request_from_messages(agent, messages, resources, &model);
             let request = if let Some(hooks) = &self.hooks {
                 match hooks

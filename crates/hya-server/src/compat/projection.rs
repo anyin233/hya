@@ -2,8 +2,8 @@ use std::collections::BTreeSet;
 
 use hya_core::title;
 use hya_proto::{
-    AgentName, Envelope, Event, MemberId, MemberRunStatus, ModelRef, Projection, SessionId,
-    TokenUsage, WorkflowProjection,
+    AgentName, ContextStatusProjection, Envelope, Event, MemberId, MemberRunStatus, ModelRef,
+    Projection, SessionId, TokenUsage, WorkflowProjection,
 };
 use serde::Serialize;
 use serde_json::{Number, Value};
@@ -33,6 +33,10 @@ pub(super) struct CompatSessionInfo {
     version: String,
     cost: u64,
     tokens: CompatSessionTokens,
+    /// Latest window-occupancy report from token accounting, when a streaming
+    /// round has reported one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    context: Option<ContextStatusProjection>,
     #[serde(skip_serializing_if = "Option::is_none")]
     metadata: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -255,6 +259,7 @@ fn session_info(
         version: env!("CARGO_PKG_VERSION").to_string(),
         cost: 0,
         tokens: session_tokens(projection),
+        context: projection.session.context_status,
         metadata,
         share: projection
             .session

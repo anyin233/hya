@@ -258,7 +258,7 @@ fn transcript(reported: Option<TokenUsage>) -> Vec<Message> {
 fn auto_mode_estimates_when_the_route_reports_no_usage() {
     let accounting = TokenAccounting::new(TokenAccountingMode::Auto);
     let counted = accounting.tokens_in_use(&transcript(None), true);
-    assert_eq!(counted.source, TokenSource::Estimated);
+    assert_eq!(counted.source, TokenSource::Estimate);
     assert!(counted.tokens > 0, "an estimate must still be produced");
 }
 
@@ -271,7 +271,7 @@ fn auto_mode_estimates_when_the_route_disclaims_usage_support() {
     };
     let accounting = TokenAccounting::new(TokenAccountingMode::Auto);
     let counted = accounting.tokens_in_use(&transcript(Some(usage)), false);
-    assert_eq!(counted.source, TokenSource::Estimated);
+    assert_eq!(counted.source, TokenSource::Estimate);
 }
 
 /// A route reporting a token count wildly inconsistent with the prompt it was
@@ -288,7 +288,7 @@ fn auto_mode_rejects_implausible_reported_usage() {
     let counted = accounting.tokens_in_use(&messages, true);
     assert_eq!(
         counted.source,
-        TokenSource::Estimated,
+        TokenSource::Estimate,
         "a 3-token claim for a 4000-byte prompt is not believable"
     );
     assert!(counted.tokens > 100, "got {}", counted.tokens);
@@ -304,7 +304,7 @@ fn auto_mode_anchors_on_plausible_reported_usage() {
         ..TokenUsage::default()
     }));
     let counted = accounting.tokens_in_use(&messages, true);
-    assert_eq!(counted.source, TokenSource::ProviderAnchored);
+    assert_eq!(counted.source, TokenSource::Provider);
 }
 
 #[test]
@@ -316,7 +316,7 @@ fn provider_mode_trusts_even_implausible_usage() {
         ..TokenUsage::default()
     }));
     let counted = accounting.tokens_in_use(&messages, true);
-    assert_eq!(counted.source, TokenSource::ProviderAnchored);
+    assert_eq!(counted.source, TokenSource::Provider);
     assert_eq!(counted.tokens, 3, "nothing was appended after the report");
 }
 
@@ -329,7 +329,7 @@ fn estimate_mode_ignores_reported_usage() {
         ..TokenUsage::default()
     }));
     let counted = accounting.tokens_in_use(&messages, true);
-    assert_eq!(counted.source, TokenSource::Estimated);
+    assert_eq!(counted.source, TokenSource::Estimate);
     assert!(counted.tokens < 999_999);
 }
 
