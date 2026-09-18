@@ -1,19 +1,16 @@
-# 0.36.32
+# 0.36.33
 
-## Removed the compat integration and credential stub routes (server)
+## Strip release binaries for a faster cold start (workspace)
 
-- The nine `/api/integration/*` and `/api/credential/*` compatibility routes
-  are gone. Every one was a stub with no storage, engine wiring, or
-  consumer: integration discovery always returned `[]`/`null`, the connect
-  and attempt-complete endpoints returned a hardcoded 400
-  `integration_authorization` error, attempt status returned 500, and the
-  attempt/credential mutations returned 204 without doing anything.
-- `GET /api/reference` — the one real capability that shared the module —
-  moved to the metadata route group and behaves exactly as before. The
-  generated OpenAPI document (`/doc`, `/openapi.json`) no longer lists the
-  removed paths.
-- This is an accepted break for the existing TUI's vendored upstream data
-  layer, whose lazy `integration.list` call now finds no endpoint. It is
-  the first cleanup step of the API v1 consolidation toward the dual
-  HTTP/gRPC contract; third-party service connectors, if ever needed, will
-  be designed as real v1 RPCs rather than carried over as stubs.
+- Release builds now strip local symbol tables
+  (`[profile.release] strip = "symbols"`). The `hya-backend` release binary
+  shrinks from ~43MB to ~33MB (-22%) with no runtime behavior change.
+- Backend first-execution cold start is dominated by pre-main work —
+  page-in, code-signature verification, and dyld fixups — which scales with
+  binary size. Measured on Apple M4 (spawn → HTTP listen, first exec of a
+  freshly linked binary, median of 3): ~408ms → ~328ms (-20%). Warm
+  restarts are unchanged (~6–11ms).
+- Per-step startup timing (pre-main exec/dyld, SQLite connect and
+  migrations, config load, engine build, MCP handshake) was gathered with
+  temporary `HYA_STARTUP_TRACE` instrumentation; `cargo run -p xtask --
+  startup-bench` remains the committed spawn→listen regression harness.
