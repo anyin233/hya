@@ -8,6 +8,7 @@ import { createStaticPluginHost } from "./hya/static-host"
 import { startupMark } from "./hya/startup-trace"
 import { run, type TuiInput } from "./upstream"
 import { resolve } from "./upstream/config"
+import { isTearingDown } from "./upstream/util/renderer"
 
 /**
  * Parse Bun CLI argv and start the TypeScript TUI against a running backend.
@@ -73,6 +74,23 @@ function runTui(input: TuiInput) {
   )
 }
 
+/**
+ * Keep a teardown `AbortError` from failing the process.
+ *
+ * Exiting aborts the SDK event stream, which makes the SSE reader reject the
+ * `cancel()` it issues from its own abort listener with nothing awaiting it.
+ * Bun fails the process on that stray rejection, so without this the TUI would
+ * exit nonzero and print a stack trace over the freshly restored terminal.
+ */
+function ignoreTeardownAborts() {
+  process.on("unhandledRejection", (reason) => {
+    const name = typeof reason === "object" && reason !== null ? (reason as { name?: unknown }).name : undefined
+    if (isTearingDown() && name === "AbortError") return
+    throw reason
+  })
+}
+
 if (import.meta.main) {
+  ignoreTeardownAborts()
   await launch(process.argv.slice(2))
 }

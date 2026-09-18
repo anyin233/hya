@@ -23,8 +23,12 @@ const SOURCE_CHARS = 1024
 const SHELL_TOOLS = new Set(["bash", "shell"])
 /** Argument keys rendered through the session path formatter instead of verbatim. */
 const PATH_KEYS = new Set(["path", "filePath", "cwd", "directory"])
-/** Failure markers that mean the user declined the call rather than the tool failing. */
-const DENIED_ERRORS = ["QuestionRejectedError", "rejected permission", "specified a rule", "user dismissed"]
+/**
+ * Failure markers that mean the call was refused rather than the tool failing.
+ * Mirrors `PermissionError::Denied` in `crates/hya-tool/src/permission.rs`, which
+ * covers both an explicit deny rule and a user reject.
+ */
+const DENIED_ERRORS = ["permission denied"]
 const THEME_CONTEXT_ERROR = "Theme context must be used within a context provider"
 const FALLBACK_THEME = resolveTheme(DEFAULT_THEMES.hya!, "dark")
 

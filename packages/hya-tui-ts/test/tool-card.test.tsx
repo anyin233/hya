@@ -1,9 +1,10 @@
 import { describe, expect, test } from "bun:test"
 import type { CapturedFrame } from "@opentui/core"
+import type { ToolPart } from "@opencode-ai/sdk/v2"
 import type { JSX } from "@opentui/solid"
 import { testRender } from "@opentui/solid"
 
-import { ToolCard, toolCardTitle } from "../src/hya/tool-card"
+import { ToolCard, toolCardError, toolCardState, toolCardTitle } from "../src/hya/tool-card"
 
 /** Flatten a captured frame into trailing-space-free terminal lines. */
 function frameLines(frame: CapturedFrame): string[] {
@@ -61,6 +62,40 @@ describe("toolCardTitle", () => {
     expect(title.startsWith("custom [blob=x")).toBe(true)
     expect(title.endsWith("…, after=7]")).toBe(true)
     expect(title.length).toBeLessThan(160)
+  })
+})
+
+describe("toolCardState", () => {
+  /** Build one tool part carrying just the state the card reads. */
+  const part = (state: ToolPart["state"]) => ({ state }) as ToolPart
+
+  test("maps each lifecycle status to its card state", () => {
+    expect(toolCardState(part({ status: "pending" } as ToolPart["state"]))).toBe("pending")
+    expect(toolCardState(part({ status: "running" } as ToolPart["state"]))).toBe("running")
+    expect(toolCardState(part({ status: "completed" } as ToolPart["state"]))).toBe("completed")
+  })
+
+  test("reads a refused call as denied rather than failed", () => {
+    // Exact text of `PermissionError::Denied`, with and without user feedback.
+    const denied = part({ status: "error", error: 'permission denied: Tool on Tool("bash")' } as ToolPart["state"])
+    const withFeedback = part({
+      status: "error",
+      error: 'permission denied: Tool on Tool("bash") — user says: not now',
+    } as ToolPart["state"])
+    expect(toolCardState(denied)).toBe("denied")
+    expect(toolCardState(withFeedback)).toBe("denied")
+  })
+
+  test("keeps tool failures and permission outages as errors", () => {
+    expect(toolCardState(part({ status: "error", error: "permission channel unavailable" } as ToolPart["state"]))).toBe(
+      "error",
+    )
+    expect(toolCardState(part({ status: "error", error: "ENOENT: no such file" } as ToolPart["state"]))).toBe("error")
+  })
+
+  test("surfaces the failure text only for failed parts", () => {
+    expect(toolCardError(part({ status: "error", error: "boom" } as ToolPart["state"]))).toBe("boom")
+    expect(toolCardError(part({ status: "completed" } as ToolPart["state"]))).toBeUndefined()
   })
 })
 
