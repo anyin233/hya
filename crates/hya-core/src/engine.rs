@@ -589,6 +589,18 @@ impl SessionEngine {
         self
     }
 
+    /// Set compaction thresholds without wiring a summarizer.
+    ///
+    /// Legitimate since the model-free rungs landed: a ladder ordered onto
+    /// `shake`/`snapcompact` folds with no model call at all, so an engine can
+    /// compact without a summarizer and the summarizer-backed rungs simply
+    /// advance past.
+    #[must_use]
+    pub fn with_compaction_config(mut self, config: CompactionConfig) -> Self {
+        self.compaction = config;
+        self
+    }
+
     /// Choose how window occupancy is measured for compaction decisions.
     ///
     /// Defaults to [`crate::tokens::TokenAccountingMode::Auto`], which believes
@@ -1138,10 +1150,12 @@ pub(crate) fn summarize_options_from_definition(
             .reasoning
             .as_deref()
             .and_then(ReasoningEffort::parse),
-        // Anchoring and output budget are per-call, not per-definition: the
-        // caller knows the transcript and the active compaction config.
+        // Anchoring, output budget, and handoff mode are per-call, not
+        // per-definition: the caller knows the transcript and the active
+        // compaction config.
         previous_summary: None,
         max_output_tokens: None,
+        handoff: false,
     }
 }
 

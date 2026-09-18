@@ -195,6 +195,11 @@ pub(crate) struct CompactionFile {
     /// `auto`, `provider`, or `estimate`; anything else is ignored.
     #[serde(default)]
     token_accounting: Option<String>,
+    /// oh-my-pi `compaction.methodOrder` names (`shake`, `remote`,
+    /// `snapcompact`, `handoff`, `soft`); a partial list is completed with the
+    /// unmentioned methods in default order, an unknown name ignores the field.
+    #[serde(default)]
+    method_order: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1371,6 +1376,32 @@ pub struct ContextSettings {
     pub token_accounting: TokenAccountingMode,
 }
 
+/// Resolve a configured method order (oh-my-pi `compaction.methodOrder`).
+///
+/// A partial list is honoured and completed with the unmentioned methods in
+/// default order — omp's filter-and-drop behaviour, minus its ability to
+/// silently lose a mechanism. An unknown name or an empty list invalidates the
+/// whole value, so a typo cannot reorder the ladder by accident; the caller
+/// then keeps whatever it had (file value or engine default).
+fn resolve_method_order(names: &[String]) -> Option<[hya_core::CompactionRung; 5]> {
+    let mut order: Vec<hya_core::CompactionRung> = Vec::new();
+    for name in names {
+        let rung = hya_core::CompactionRung::from_wire_name(name.trim())?;
+        if !order.contains(&rung) {
+            order.push(rung);
+        }
+    }
+    if order.is_empty() {
+        return None;
+    }
+    for rung in hya_core::CompactionRung::DEFAULT_ORDER {
+        if !order.contains(&rung) {
+            order.push(rung);
+        }
+    }
+    order.try_into().ok()
+}
+
 /// Resolve context settings from an optional file block, then apply per-field
 /// `HYA_COMPACTION_*` and `HYA_TOKEN_ACCOUNTING` env overrides (env wins).
 ///
@@ -1396,6 +1427,10 @@ fn resolve_context_settings(file: Option<&CompactionFile>) -> ContextSettings {
             summary_max_tokens: file
                 .and_then(|f| f.summary_max_tokens)
                 .unwrap_or(defaults.summary_max_tokens),
+            method_order: file
+                .and_then(|f| f.method_order.as_deref())
+                .and_then(resolve_method_order)
+                .unwrap_or(defaults.method_order),
         },
         token_accounting: file
             .and_then(|f| f.token_accounting.as_deref())
@@ -1426,6 +1461,12 @@ fn resolve_context_settings(file: Option<&CompactionFile>) -> ContextSettings {
         && let Ok(parsed) = v.trim().parse()
     {
         settings.compaction.summary_max_tokens = parsed;
+    }
+    if let Ok(v) = std::env::var("HYA_COMPACTION_METHOD_ORDER") {
+        let names: Vec<String> = v.split(',').map(str::to_string).collect();
+        if let Some(parsed) = resolve_method_order(&names) {
+            settings.compaction.method_order = parsed;
+        }
     }
     if let Ok(v) = std::env::var("HYA_TOKEN_ACCOUNTING")
         && let Some(parsed) = TokenAccountingMode::parse(&v)
@@ -2156,6 +2197,57 @@ permission:
         let bogus = resolve_context_settings(file.compaction.as_ref());
         unsafe { std::env::remove_var("HYA_TOKEN_ACCOUNTING") };
         assert_eq!(bogus.token_accounting, TokenAccountingMode::Estimate);
+    }
+
+    #[test]
+    fn compaction_method_order_parses_from_file_and_env_wins() {
+        // oh-my-pi's own default order, spelled as an omp user would.
+        let file = parse_config(
+            "default_model: x\ncompaction:\n  method_order: [remote, snapcompact, handoff, shake, soft]\n",
+        )
+        .unwrap();
+        let from_file = resolve_context_settings(file.compaction.as_ref());
+        assert_eq!(
+            from_file.compaction.method_order,
+            hya_core::parse_method_order(&["remote", "snapcompact", "handoff", "shake", "soft"])
+                .unwrap(),
+            "file order is honoured"
+        );
+
+        // Env wins over the file order; a partial list is completed with the
+        // unmentioned methods in default order (omp filter-and-drop, but the
+        // ladder never loses a mechanism).
+        unsafe { std::env::set_var("HYA_COMPACTION_METHOD_ORDER", "handoff, soft, shake") };
+        let overridden = resolve_context_settings(file.compaction.as_ref());
+        unsafe { std::env::remove_var("HYA_COMPACTION_METHOD_ORDER") };
+        assert_eq!(
+            overridden.compaction.method_order,
+            hya_core::parse_method_order(&["handoff", "soft", "shake", "remote", "snapcompact"])
+                .unwrap(),
+            "env order wins and missing methods append in default order"
+        );
+
+        // An unknown method name invalidates the env value, which keeps the
+        // file order — matching how unparseable numbers keep the file value.
+        unsafe { std::env::set_var("HYA_COMPACTION_METHOD_ORDER", "shake, banana") };
+        let bogus_env = resolve_context_settings(file.compaction.as_ref());
+        unsafe { std::env::remove_var("HYA_COMPACTION_METHOD_ORDER") };
+        assert_eq!(
+            bogus_env.compaction.method_order, from_file.compaction.method_order,
+            "an invalid env order keeps the file order"
+        );
+
+        // An unknown name in the file falls back to the engine default rather
+        // than silently dropping a mechanism from the ladder.
+        let broken =
+            parse_config("default_model: x\ncompaction:\n  method_order: [shake, banana]\n")
+                .unwrap();
+        let bogus_file = resolve_context_settings(broken.compaction.as_ref());
+        assert_eq!(
+            bogus_file.compaction.method_order,
+            hya_core::CompactionConfig::default().method_order,
+            "a broken file order keeps the default ladder"
+        );
     }
 
     const FIXTURE: &str = "

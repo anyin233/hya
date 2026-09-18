@@ -661,6 +661,245 @@ async fn local_compaction_persists_and_is_not_repeated_next_round() {
     }
 }
 
+/// The turn loop walks `compaction.method_order`, not a hardcoded ladder: with
+/// `snapcompact` configured first and no summarizer wired at all, the archive
+/// rung folds the prefix where the old fixed order would have stalled (spill
+/// has nothing to evict on a prose transcript, the fake route has no native
+/// compact, and there is no summarizer).
+#[tokio::test]
+async fn configured_method_order_puts_snapcompact_first_and_it_needs_no_model() {
+    let dir = tempdir();
+    let provider = FakeProvider::scripted_turns(vec![vec![
+        FakeStep::Text("ok".to_string()),
+        FakeStep::Finish(FinishReason::Stop),
+    ]]);
+    let router = Arc::new(ProviderRouter::new().with(Arc::new(provider)));
+    let tools = Arc::new(ToolRegistry::builtins());
+    let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
+    let store = SessionStore::connect_memory().await.unwrap();
+    // Deliberately NO `.with_compaction(...)` summarizer: snapcompact is
+    // model-free, and the configured order puts it ahead of every model rung.
+    let method_order =
+        hya_core::parse_method_order(&["snapcompact", "handoff", "soft", "remote", "shake"])
+            .unwrap();
+    let engine = SessionEngine::new(
+        store,
+        router,
+        support::test_runtime(tools),
+        perm,
+        EventBus::default(),
+    )
+    .with_compaction_config(CompactionConfig {
+        // The fake route advertises a 200k window, so the threshold is
+        // window-scaled; 0.001 clamps to MIN_RESOLVED_THRESHOLD (1000).
+        token_threshold: 1_000_000,
+        keep_recent: 1,
+        context_fraction: 0.001,
+        method_order,
+        ..CompactionConfig::default()
+    });
+    let session = engine
+        .create(CreateSession {
+            parent: None,
+            agent: AgentName::new("build"),
+            model: ModelRef::new("fake"),
+            workdir: dir.to_string_lossy().into_owned(),
+        })
+        .await
+        .unwrap();
+    for i in 0..3 {
+        engine
+            .admit_user_prompt(session, format!("PROMPT_{i} {}", "p".repeat(3000)))
+            .await
+            .unwrap();
+    }
+    let agent = AgentSpec {
+        name: AgentName::new("build"),
+        model: ModelRef::new("fake"),
+        system_prompt: "x".to_string(),
+        workdir: dir,
+        reasoning: None,
+    };
+    engine
+        .run_turn(session, &agent, CancellationToken::new())
+        .await
+        .unwrap();
+
+    let envelopes = engine.replay(session).await.unwrap();
+    let compacted: Vec<_> = envelopes
+        .iter()
+        .filter_map(|e| match &e.event {
+            Event::ContextCompacted { strategy, .. } => Some(*strategy),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        compacted,
+        vec![hya_proto::CompactionStrategy::SnapCompact],
+        "the configured first rung must run and fold"
+    );
+    assert!(
+        envelopes
+            .iter()
+            .all(|e| !matches!(e.event, Event::ContextEvicted { .. })),
+        "a snapcompact-first order never reaches the spill rung on this transcript"
+    );
+    let projection = hya_proto::Projection::from_events(&envelopes);
+    let archive_text: String = projection
+        .session
+        .messages
+        .iter()
+        .filter(|m| m.role == Role::System)
+        .flat_map(|m| {
+            m.parts
+                .iter()
+                .filter_map(|p| match p {
+                    PartProjection::Text { text, .. } => Some(text.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    assert!(
+        archive_text.contains("HYA_COMPACTED_CONTEXT"),
+        "archive persists behind the shared marker: {archive_text}"
+    );
+    assert!(
+        archive_text.contains("[snapcompact archive of 2 messages]"),
+        "the archive names the two folded prompts: {archive_text}"
+    );
+}
+
+/// Records the message count and handoff flag of every call.
+struct HandoffRecorder(Arc<Mutex<Vec<(usize, bool)>>>);
+
+#[async_trait::async_trait]
+impl Summarizer for HandoffRecorder {
+    async fn summarize(
+        &self,
+        messages: &[Message],
+        options: hya_core::SummarizeOptions,
+    ) -> Result<String, CoreError> {
+        self.0
+            .lock()
+            .unwrap()
+            .push((messages.len(), options.handoff));
+        Ok("HANDOFF DOC".to_string())
+    }
+}
+
+/// The handoff rung commits a handoff document as its compaction summary, and
+/// the model writing it reads the whole live transcript, not a rendered slice.
+#[tokio::test]
+async fn handoff_rung_folds_via_a_call_over_the_whole_transcript() {
+    let dir = tempdir();
+    let provider = FakeProvider::scripted_turns(vec![vec![
+        FakeStep::Text("ok".to_string()),
+        FakeStep::Finish(FinishReason::Stop),
+    ]]);
+    let router = Arc::new(ProviderRouter::new().with(Arc::new(provider)));
+    let tools = Arc::new(ToolRegistry::builtins());
+    let (perm, _rx) = PermissionPlane::new(PermissionRules::default());
+    let store = SessionStore::connect_memory().await.unwrap();
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let method_order =
+        hya_core::parse_method_order(&["handoff", "snapcompact", "remote", "shake", "soft"])
+            .unwrap();
+    let engine = SessionEngine::new(
+        store,
+        router,
+        support::test_runtime(tools),
+        perm,
+        EventBus::default(),
+    )
+    .with_compaction(
+        Arc::new(HandoffRecorder(calls.clone())),
+        CompactionConfig {
+            // The fake route advertises a 200k window, so the threshold is
+            // window-scaled; 0.001 clamps to MIN_RESOLVED_THRESHOLD (1000).
+            token_threshold: 1_000_000,
+            keep_recent: 1,
+            context_fraction: 0.001,
+            method_order,
+            ..CompactionConfig::default()
+        },
+    );
+    let session = engine
+        .create(CreateSession {
+            parent: None,
+            agent: AgentName::new("build"),
+            model: ModelRef::new("fake"),
+            workdir: dir.to_string_lossy().into_owned(),
+        })
+        .await
+        .unwrap();
+    for i in 0..3 {
+        engine
+            .admit_user_prompt(session, format!("PROMPT_{i} {}", "p".repeat(3000)))
+            .await
+            .unwrap();
+    }
+    let agent = AgentSpec {
+        name: AgentName::new("build"),
+        model: ModelRef::new("fake"),
+        system_prompt: "x".to_string(),
+        workdir: dir,
+        reasoning: None,
+    };
+    engine
+        .run_turn(session, &agent, CancellationToken::new())
+        .await
+        .unwrap();
+
+    let envelopes = engine.replay(session).await.unwrap();
+    let strategies: Vec<_> = envelopes
+        .iter()
+        .filter_map(|e| match &e.event {
+            Event::ContextCompacted { strategy, .. } => Some(*strategy),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        strategies,
+        vec![hya_proto::CompactionStrategy::Handoff],
+        "the configured handoff-first order must run the handoff rung"
+    );
+    let calls = calls.lock().unwrap().clone();
+    assert_eq!(calls.len(), 1, "exactly one handoff model call");
+    assert!(calls[0].1, "the call is a handoff call");
+    assert_eq!(
+        calls[0].0, 3,
+        "the handoff sees the whole transcript (the trailing handoff prompt is \
+         appended by the ModelSummarizer itself, not by the rung)"
+    );
+    let projection = hya_proto::Projection::from_events(&envelopes);
+    let doc: String = projection
+        .session
+        .messages
+        .iter()
+        .filter(|m| m.role == Role::System)
+        .flat_map(|m| {
+            m.parts
+                .iter()
+                .filter_map(|p| match p {
+                    PartProjection::Text { text, .. } => Some(text.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    assert!(
+        doc.contains("HYA_COMPACTED_CONTEXT"),
+        "handoff persists behind the shared marker: {doc}"
+    );
+    assert!(
+        doc.contains("HANDOFF DOC"),
+        "the committed summary is the handoff document: {doc}"
+    );
+}
+
 #[tokio::test]
 async fn provider_error_still_finishes_the_assistant_message() {
     let dir = tempdir();

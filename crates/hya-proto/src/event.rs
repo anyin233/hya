@@ -832,6 +832,10 @@ pub enum CompactionStrategy {
     /// Local model summarizer fallback.
     #[default]
     LocalSummarizer,
+    /// Local deterministic dense archive of the folded prefix, no model call.
+    SnapCompact,
+    /// Model-written handoff document over the verbatim transcript.
+    Handoff,
 }
 
 impl Event {
@@ -1059,10 +1063,12 @@ mod tests {
     }
 
     #[test]
-    fn compaction_strategy_round_trips_both_variants() {
+    fn compaction_strategy_round_trips_every_variant() {
         for strategy in [
             CompactionStrategy::Native,
             CompactionStrategy::LocalSummarizer,
+            CompactionStrategy::SnapCompact,
+            CompactionStrategy::Handoff,
         ] {
             let json = serde_json::to_string(&strategy).expect("serialize");
             let back: CompactionStrategy = serde_json::from_str(&json).expect("deserialize");
@@ -1071,6 +1077,16 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&CompactionStrategy::LocalSummarizer).expect("serialize"),
             "\"local_summarizer\"",
+            "strategy uses snake_case on the wire"
+        );
+        assert_eq!(
+            serde_json::to_string(&CompactionStrategy::SnapCompact).expect("serialize"),
+            "\"snap_compact\"",
+            "strategy uses snake_case on the wire"
+        );
+        assert_eq!(
+            serde_json::to_string(&CompactionStrategy::Handoff).expect("serialize"),
+            "\"handoff\"",
             "strategy uses snake_case on the wire"
         );
     }

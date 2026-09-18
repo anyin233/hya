@@ -903,19 +903,22 @@ impl SessionEngine {
                 messages.len() > self.compaction.keep_recent && tokens > resolved_threshold
             };
 
-            // Reduction ladder, cheapest and most recoverable rung first. The
+            // Reduction ladder: the five built-in mechanisms (oh-my-pi parity),
+            // walked in the configured order — `compaction.method_order`. The
             // walk stops at the first rung that brings the transcript under the
-            // threshold, so a turn never pays for a summarizer call that
-            // spilling alone would have avoided. Escalation matters in the other
-            // direction too: a native compact that succeeded but left the
-            // transcript over threshold used to end the sequence, sending the
-            // request out still over the window it was trying to fit.
+            // threshold, so a turn never pays for a model call that spilling
+            // alone would have avoided, and an unavailable or failed rung
+            // (unsupported route, no summarizer wired) advances to the next.
+            // Escalation matters in the other direction too: a native compact
+            // that succeeded but left the transcript over threshold used to end
+            // the sequence, sending the request out still over the window it
+            // was trying to fit.
             let spill = ArtifactEvictionSink::new(&session_workdir(agent, &projection));
-            // Resolved on first use, so a turn that spilling rescued never
-            // requires the fixed Compaction agent to exist.
+            // Resolved on first use, so a turn that an earlier rung rescued
+            // never requires the fixed Compaction agent to exist.
             let mut compaction_agent: Option<AgentDefinition<'_>> = None;
 
-            for rung in crate::compaction::CompactionRung::LADDER {
+            for rung in self.compaction.method_order {
                 if !over_threshold(tokens, &messages) {
                     break;
                 }
@@ -1006,6 +1009,100 @@ impl SessionEngine {
                             )
                             .await?;
                         }
+                        (projection, messages, tokens) =
+                            self.reload_after_compaction(session, agent, &model).await?;
+                    }
+                    crate::compaction::CompactionRung::SnapCompact => {
+                        // Local and deterministic: no model call, no capability
+                        // gate. Folds the same prefix a summary would into the
+                        // dense archive, so the ladder's model-free rung works
+                        // even where no summarizer is wired at all.
+                        if messages.len() <= self.compaction.keep_recent {
+                            continue;
+                        }
+                        let split = messages.len() - self.compaction.keep_recent;
+                        let (Some(from), Some(to)) = (messages.first(), messages.get(split - 1))
+                        else {
+                            continue;
+                        };
+                        let archive = crate::compaction::snapcompact_archive(&messages[..split]);
+                        let body = format!("{}\n{}", hya_provider::COMPACT_CONTEXT_MARKER, archive);
+                        let injected = match actor_claim {
+                            Some(claim) => {
+                                self.inject_system_message_for_actor(claim, session, body)
+                                    .await
+                            }
+                            None => self.inject_system_message(session, body).await,
+                        };
+                        let Ok(marker) = injected else {
+                            continue;
+                        };
+                        self.emit_for_actor(
+                            actor_claim,
+                            session,
+                            Event::ContextCompacted {
+                                session,
+                                message: marker,
+                                strategy: CompactionStrategy::SnapCompact,
+                                from_message: from.id(),
+                                to_message: to.id(),
+                                folded_count: u32::try_from(split).unwrap_or(u32::MAX),
+                                input_tokens_est,
+                                threshold,
+                            },
+                        )
+                        .await?;
+                        (projection, messages, tokens) =
+                            self.reload_after_compaction(session, agent, &model).await?;
+                    }
+                    crate::compaction::CompactionRung::Handoff => {
+                        let Some(summarizer) = &self.summarizer else {
+                            continue;
+                        };
+                        let definition = match &compaction_agent {
+                            Some(definition) => definition,
+                            None => compaction_agent
+                                .insert(fixed_system_agent(binding, FixedSystemAgent::Compaction)?),
+                        };
+                        // The handoff call sees the whole transcript verbatim;
+                        // the fold range still leaves the recent tail in place.
+                        let Ok(Some(plan)) = crate::compaction::plan_handoff(
+                            &messages,
+                            &self.compaction,
+                            summarizer.as_ref(),
+                            self.folding_options(definition, binding, &messages),
+                        )
+                        .await
+                        else {
+                            continue;
+                        };
+                        let body =
+                            format!("{}\n{}", hya_provider::COMPACT_CONTEXT_MARKER, plan.summary);
+                        let injected = match actor_claim {
+                            Some(claim) => {
+                                self.inject_system_message_for_actor(claim, session, body)
+                                    .await
+                            }
+                            None => self.inject_system_message(session, body).await,
+                        };
+                        let Ok(marker) = injected else {
+                            continue;
+                        };
+                        self.emit_for_actor(
+                            actor_claim,
+                            session,
+                            Event::ContextCompacted {
+                                session,
+                                message: marker,
+                                strategy: CompactionStrategy::Handoff,
+                                from_message: plan.from_message,
+                                to_message: plan.to_message,
+                                folded_count: plan.folded_count,
+                                input_tokens_est,
+                                threshold,
+                            },
+                        )
+                        .await?;
                         (projection, messages, tokens) =
                             self.reload_after_compaction(session, agent, &model).await?;
                     }
