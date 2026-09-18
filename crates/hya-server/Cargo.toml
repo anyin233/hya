@@ -9,6 +9,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+hya-api = { workspace = true }
 hya-bundle = { workspace = true }
 hya-core = { workspace = true }
 hya-mcp = { workspace = true }
@@ -22,6 +23,8 @@ tokio = { workspace = true }
 tokio-stream = { workspace = true }
 tokio-util = { workspace = true }
 futures = { workspace = true }
+libc = { workspace = true }
+pbjson-types = { workspace = true }
 mime_guess = { workspace = true }
 regex = { workspace = true }
 serde = { workspace = true }

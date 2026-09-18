@@ -26,11 +26,11 @@ impl GlobalState {
         }
     }
 
-    pub(in crate::compat) async fn config(&self) -> Value {
+    pub(crate) async fn config(&self) -> Value {
         self.config.read().await.clone()
     }
 
-    pub(in crate::compat) async fn update_config(&self, config: Value) {
+    pub(crate) async fn update_config(&self, config: Value) {
         *self.config.write().await = config;
     }
 }

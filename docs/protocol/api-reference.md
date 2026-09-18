@@ -40,8 +40,8 @@ third-party service connectors, which are out of scope for v1.
 |---|---|---|---|---|
 | `SetProviderAuth` | `PUT /v1/auth/{provider_id}` | `hya.v1.Auth.SetProviderAuth` | `SetProviderAuthRequest` | `SetProviderAuthResponse` |
 | `RemoveProviderAuth` | `DELETE /v1/auth/{provider_id}` | `hya.v1.Auth.RemoveProviderAuth` | `RemoveProviderAuthRequest` | `RemoveProviderAuthResponse` |
-| `StartOauth` | `POST /v1/auth/{provider_id}/oauth:start` | `hya.v1.Auth.StartOauth` | `StartOauthRequest` | `StartOauthResponse` |
-| `CompleteOauth` | `POST /v1/auth/{provider_id}/oauth:callback` | `hya.v1.Auth.CompleteOauth` | `CompleteOauthRequest` | `CompleteOauthResponse` |
+| `StartOauth` | `POST /v1/auth/{provider_id}/oauth/start` | `hya.v1.Auth.StartOauth` | `StartOauthRequest` | `StartOauthResponse` |
+| `CompleteOauth` | `POST /v1/auth/{provider_id}/oauth/callback` | `hya.v1.Auth.CompleteOauth` | `CompleteOauthRequest` | `CompleteOauthResponse` |
 
 ### `Auth.SetProviderAuth`
 
@@ -183,7 +183,7 @@ Interaction surface shared by permission and question requests.
 | RPC | HTTP | gRPC | Request | Response |
 |---|---|---|---|---|
 | `ListInteractions` | `GET /v1/interactions` | `hya.v1.Interactions.ListInteractions` | `ListInteractionsRequest` | `ListInteractionsResponse` |
-| `RespondInteraction` | `POST /v1/interactions/{request}:respond` | `hya.v1.Interactions.RespondInteraction` | `RespondInteractionRequest` | `RespondInteractionResponse` |
+| `RespondInteraction` | `POST /v1/interactions/{request}/respond` | `hya.v1.Interactions.RespondInteraction` | `RespondInteractionRequest` | `RespondInteractionResponse` |
 | `ListSavedRules` | `GET /v1/permissions/rules` | `hya.v1.Interactions.ListSavedRules` | `ListSavedRulesRequest` | `ListSavedRulesResponse` |
 | `DeleteSavedRule` | `DELETE /v1/permissions/rules/{rule}` | `hya.v1.Interactions.DeleteSavedRule` | `DeleteSavedRuleRequest` | `DeleteSavedRuleResponse` |
 
@@ -232,10 +232,10 @@ observed state.
 |---|---|---|---|---|
 | `GetMcpStatus` | `GET /v1/mcp` | `hya.v1.Mcp.GetMcpStatus` | `GetMcpStatusRequest` | `GetMcpStatusResponse` |
 | `AddMcpServer` | `POST /v1/mcp` | `hya.v1.Mcp.AddMcpServer` | `AddMcpServerRequest` | `McpServerStatus` |
-| `ConnectMcp` | `POST /v1/mcp/{name}:connect` | `hya.v1.Mcp.ConnectMcp` | `ConnectMcpRequest` | `McpServerStatus` |
-| `DisconnectMcp` | `POST /v1/mcp/{name}:disconnect` | `hya.v1.Mcp.DisconnectMcp` | `DisconnectMcpRequest` | `McpServerStatus` |
+| `ConnectMcp` | `POST /v1/mcp/{name}/connect` | `hya.v1.Mcp.ConnectMcp` | `ConnectMcpRequest` | `McpServerStatus` |
+| `DisconnectMcp` | `POST /v1/mcp/{name}/disconnect` | `hya.v1.Mcp.DisconnectMcp` | `DisconnectMcpRequest` | `McpServerStatus` |
 | `StartMcpAuth` | `POST /v1/mcp/{name}/auth` | `hya.v1.Mcp.StartMcpAuth` | `StartMcpAuthRequest` | `StartMcpAuthResponse` |
-| `CompleteMcpAuth` | `POST /v1/mcp/{name}/auth:complete` | `hya.v1.Mcp.CompleteMcpAuth` | `CompleteMcpAuthRequest` | `McpServerStatus` |
+| `CompleteMcpAuth` | `POST /v1/mcp/{name}/auth/complete` | `hya.v1.Mcp.CompleteMcpAuth` | `CompleteMcpAuthRequest` | `McpServerStatus` |
 | `RemoveMcpAuth` | `DELETE /v1/mcp/{name}/auth` | `hya.v1.Mcp.RemoveMcpAuth` | `RemoveMcpAuthRequest` | `RemoveMcpAuthResponse` |
 
 ### `Mcp.GetMcpStatus`
@@ -316,8 +316,8 @@ process disposal/upgrade, and the one-round-trip bootstrap snapshot.
 | `GetLocation` | `GET /v1/location` | `hya.v1.Process.GetLocation` | `GetLocationRequest` | `LocationInfo` |
 | `GetConfig` | `GET /v1/config` | `hya.v1.Process.GetConfig` | `GetConfigRequest` | `GetConfigResponse` |
 | `UpdateConfig` | `PATCH /v1/config` | `hya.v1.Process.UpdateConfig` | `UpdateConfigRequest` | `GetConfigResponse` |
-| `DisposeProcess` | `POST /v1/process:dispose` | `hya.v1.Process.DisposeProcess` | `DisposeProcessRequest` | `DisposeProcessResponse` |
-| `UpgradeProcess` | `POST /v1/process:upgrade` | `hya.v1.Process.UpgradeProcess` | `UpgradeProcessRequest` | `UpgradeProcessResponse` |
+| `DisposeProcess` | `POST /v1/process/dispose` | `hya.v1.Process.DisposeProcess` | `DisposeProcessRequest` | `DisposeProcessResponse` |
+| `UpgradeProcess` | `POST /v1/process/upgrade` | `hya.v1.Process.UpgradeProcess` | `UpgradeProcessRequest` | `UpgradeProcessResponse` |
 | `GetBootstrap` | `GET /v1/bootstrap` | `hya.v1.Process.GetBootstrap` | `GetBootstrapRequest` | `Bootstrap` |
 
 ### `Process.GetHealth`
@@ -367,7 +367,7 @@ Project and VCS surface for directory-aware frontends.
 | `GetCurrentProject` | `GET /v1/projects/current` | `hya.v1.Project.GetCurrentProject` | `GetCurrentProjectRequest` | `ProjectInfo` |
 | `UpdateProject` | `PATCH /v1/projects/{project}` | `hya.v1.Project.UpdateProject` | `UpdateProjectRequest` | `ProjectInfo` |
 | `ListProjectDirectories` | `GET /v1/projects/{project}/directories` | `hya.v1.Project.ListProjectDirectories` | `ListProjectDirectoriesRequest` | `ListProjectDirectoriesResponse` |
-| `InitProjectGit` | `POST /v1/projects/{project}:init-git` | `hya.v1.Project.InitProjectGit` | `InitProjectGitRequest` | `InitProjectGitResponse` |
+| `InitProjectGit` | `POST /v1/projects/{project}/init-git` | `hya.v1.Project.InitProjectGit` | `InitProjectGitRequest` | `InitProjectGitResponse` |
 | `GetVcsStatus` | `GET /v1/vcs` | `hya.v1.Project.GetVcsStatus` | `GetVcsStatusRequest` | `VcsStatus` |
 | `GetVcsDiff` | `GET /v1/vcs/diff` | `hya.v1.Project.GetVcsDiff` | `GetVcsDiffRequest` | `GetVcsDiffResponse` |
 | `ApplyPatch` | `POST /v1/vcs/apply` | `hya.v1.Project.ApplyPatch` | `ApplyPatchRequest` | `ApplyPatchResponse` |
@@ -474,10 +474,10 @@ every turn, message, and projection read hangs off a session id.
 | `ListSessions` | `GET /v1/sessions` | `hya.v1.Session.ListSessions` | `ListSessionsRequest` | `ListSessionsResponse` |
 | `UpdateSession` | `PATCH /v1/sessions/{session}` | `hya.v1.Session.UpdateSession` | `UpdateSessionRequest` | `SessionInfo` |
 | `DeleteSession` | `DELETE /v1/sessions/{session}` | `hya.v1.Session.DeleteSession` | `DeleteSessionRequest` | `DeleteSessionResponse` |
-| `ForkSession` | `POST /v1/sessions/{session}:fork` | `hya.v1.Session.ForkSession` | `ForkSessionRequest` | `ForkSessionResponse` |
-| `CompactSession` | `POST /v1/sessions/{session}:compact` | `hya.v1.Session.CompactSession` | `CompactSessionRequest` | `CompactSessionResponse` |
-| `SummarizeSession` | `POST /v1/sessions/{session}:summarize` | `hya.v1.Session.SummarizeSession` | `SummarizeSessionRequest` | `SummarizeSessionResponse` |
-| `RevertSession` | `POST /v1/sessions/{session}:revert` | `hya.v1.Session.RevertSession` | `RevertSessionRequest` | `RevertSessionResponse` |
+| `ForkSession` | `POST /v1/sessions/{session}/fork` | `hya.v1.Session.ForkSession` | `ForkSessionRequest` | `ForkSessionResponse` |
+| `CompactSession` | `POST /v1/sessions/{session}/compact` | `hya.v1.Session.CompactSession` | `CompactSessionRequest` | `CompactSessionResponse` |
+| `SummarizeSession` | `POST /v1/sessions/{session}/summarize` | `hya.v1.Session.SummarizeSession` | `SummarizeSessionRequest` | `SummarizeSessionResponse` |
+| `RevertSession` | `POST /v1/sessions/{session}/revert` | `hya.v1.Session.RevertSession` | `RevertSessionRequest` | `RevertSessionResponse` |
 
 ### `Session.CreateSession`
 
@@ -533,8 +533,8 @@ Turn admission and control surface.
 |---|---|---|---|---|
 | `CreateTurn` | `POST /v1/sessions/{session}/turns` | `hya.v1.Turn.CreateTurn` | `CreateTurnRequest` | `CreateTurnResponse` |
 | `GetTurn` | `GET /v1/sessions/{session}/turns/{turn}` | `hya.v1.Turn.GetTurn` | `GetTurnRequest` | `TurnInfo` |
-| `WaitTurn` | `POST /v1/sessions/{session}/turns/{turn}:wait` | `hya.v1.Turn.WaitTurn` | `WaitTurnRequest` | `TurnInfo` |
-| `CancelTurn` | `POST /v1/sessions/{session}/turns/{turn}:cancel` | `hya.v1.Turn.CancelTurn` | `CancelTurnRequest` | `TurnInfo` |
+| `WaitTurn` | `POST /v1/sessions/{session}/turns/{turn}/wait` | `hya.v1.Turn.WaitTurn` | `WaitTurnRequest` | `TurnInfo` |
+| `CancelTurn` | `POST /v1/sessions/{session}/turns/{turn}/cancel` | `hya.v1.Turn.CancelTurn` | `CancelTurnRequest` | `TurnInfo` |
 
 ### `Turn.CreateTurn`
 
@@ -593,7 +593,7 @@ helpers.
 | `ListWorktrees` | `GET /v1/worktrees` | `hya.v1.Worktrees.ListWorktrees` | `ListWorktreesRequest` | `ListWorktreesResponse` |
 | `CreateWorktree` | `POST /v1/worktrees` | `hya.v1.Worktrees.CreateWorktree` | `CreateWorktreeRequest` | `Worktree` |
 | `DeleteWorktree` | `DELETE /v1/worktrees/{worktree}` | `hya.v1.Worktrees.DeleteWorktree` | `DeleteWorktreeRequest` | `DeleteWorktreeResponse` |
-| `ResetWorktree` | `POST /v1/worktrees/{worktree}:reset` | `hya.v1.Worktrees.ResetWorktree` | `ResetWorktreeRequest` | `Worktree` |
+| `ResetWorktree` | `POST /v1/worktrees/{worktree}/reset` | `hya.v1.Worktrees.ResetWorktree` | `ResetWorktreeRequest` | `Worktree` |
 
 ### `Worktrees.ListWorktrees`
 

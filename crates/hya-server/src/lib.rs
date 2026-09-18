@@ -35,6 +35,7 @@ mod mcp_control;
 mod pending;
 mod runs;
 mod state;
+mod v1;
 mod workflow;
 mod workflow_control;
 
@@ -71,6 +72,7 @@ pub fn router(state: AppState) -> Router {
     let state = ServerState::new(state);
     Router::new()
         .merge(compat::router())
+        .merge(v1::router())
         .merge(workflow::native_router())
         .merge(workflow::compat_router())
         .route("/sessions", post(create_session))
@@ -124,6 +126,14 @@ impl ApiError {
     pub(crate) fn workflow(error: crate::WorkflowControlError) -> Self {
         let status = crate::workflow::error_status(&error);
         Self::structured(status, error.code, error.message)
+    }
+
+    pub(crate) fn code(&self) -> Option<&str> {
+        self.code.as_deref()
+    }
+
+    pub(crate) fn text(&self) -> &str {
+        &self.message
     }
 
     fn bad_request(message: impl Into<String>) -> Self {

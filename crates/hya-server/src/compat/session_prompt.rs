@@ -276,6 +276,11 @@ fn admission_info(envs: &[Envelope], message: MessageId) -> Result<(u64, u64), A
             | Event::TurnBindingRecorded { .. }
             | Event::MessageFinished { .. }
             | Event::MessageDeleted { .. }
+            | Event::AgentArchived { .. }
+            | Event::AgentRestarted { .. }
+            | Event::ChannelCreated { .. }
+            | Event::HandoffCommitted { .. }
+            | Event::SubagentReported { .. }
             | Event::PartDeleted { .. }
             | Event::StepStarted { .. }
             | Event::StepFinished { .. }

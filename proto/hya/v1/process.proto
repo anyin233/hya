@@ -33,12 +33,12 @@ service Process {
 
   // Ask the backend process to shut down gracefully.
   //
-  // hya.http: POST /v1/process:dispose
+  // hya.http: POST /v1/process/dispose
   rpc DisposeProcess(DisposeProcessRequest) returns (DisposeProcessResponse);
 
   // Ask the backend to self-update via the verified updater.
   //
-  // hya.http: POST /v1/process:upgrade
+  // hya.http: POST /v1/process/upgrade
   rpc UpgradeProcess(UpgradeProcessRequest) returns (UpgradeProcessResponse);
 
   // Aggregated startup snapshot: config, catalogs, pending interactions,

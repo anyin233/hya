@@ -27,12 +27,12 @@ service Turn {
 
   // Block until the turn reaches a terminal state or the timeout elapses.
   //
-  // hya.http: POST /v1/sessions/{session}/turns/{turn}:wait
+  // hya.http: POST /v1/sessions/{session}/turns/{turn}/wait
   rpc WaitTurn(WaitTurnRequest) returns (TurnInfo);
 
   // Request cancellation of a running turn (cooperative abort).
   //
-  // hya.http: POST /v1/sessions/{session}/turns/{turn}:cancel
+  // hya.http: POST /v1/sessions/{session}/turns/{turn}/cancel
   rpc CancelTurn(CancelTurnRequest) returns (TurnInfo);
 }
 

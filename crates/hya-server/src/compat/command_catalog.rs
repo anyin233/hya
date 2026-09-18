@@ -6,10 +6,10 @@ const INIT_TEMPLATE: &str = include_str!("command_templates/initialize.txt");
 const REVIEW_TEMPLATE: &str = include_str!("command_templates/review.txt");
 
 #[derive(Serialize)]
-pub(in crate::compat) struct CommandInfo {
-    name: String,
+pub(crate) struct CommandInfo {
+    pub(crate) name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    description: Option<String>,
+    pub(crate) description: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     agent: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -23,7 +23,7 @@ pub(in crate::compat) struct CommandInfo {
     subtask: Option<bool>,
 }
 
-pub(in crate::compat) fn list(workdir: &Path) -> Vec<CommandInfo> {
+pub(crate) fn list(workdir: &Path) -> Vec<CommandInfo> {
     let workdir = workdir.to_string_lossy();
     let mut commands = vec![
         command_info(

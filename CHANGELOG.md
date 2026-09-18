@@ -1,27 +1,33 @@
-# 0.36.34
+# 0.36.35
 
-## Added the `hya.v1` dual-protocol API contract: IDL, codegen, and generated docs (api)
+## HTTP `/v1` binding goes live: sessions, event-driven turns, streams (server)
 
-- The new `proto/hya/v1` directory is the single source of truth for the
-  consolidated API: 15 services and 77 rpcs covering process/config/
-  bootstrap, catalogs, provider auth, sessions, event-driven turns,
-  messages/todos, replay+SSE/gRPC event streams, the unified
-  permission/question interaction plane, workflow state/commands,
-  filesystem reads, project/VCS, worktrees, MCP, PTY (including the
-  bidirectional `StreamPty`), and log ingest. Every rpc and field carries
-  documentation comments, and every rpc declares its HTTP binding via the
-  `// hya.http:` convention.
-- `crates/hya-api` is the contract crate: generated prost types, tonic
-  clients/servers, canonical protojson (pbjson) serde, the stable error
-  code table mapped identically to HTTP statuses and gRPC status codes,
-  and opaque pagination cursor helpers. Generated output is committed, so
-  normal builds and CI never need `protoc`.
-- `cargo run -p xtask -- gen-api` regenerates everything from the IDL
-  using a vendored protoc (no system dependency): Rust codegen plus
-  `docs/protocol/api-reference.md` and `docs/protocol/openapi.json` for
-  third-party TUI/GUI/WebUI integrations. The task fails when any rpc is
-  missing its HTTP mapping or when two rpcs claim the same route, keeping
-  the dual-protocol parity promise checkable rather than aspirational.
-- This lands phase P1 of the API consolidation plan: no runtime behavior
-  changed yet. The HTTP `/v1` binding (P2) and the gRPC listener (P3)
-  build on this crate; the legacy surface is untouched until the cutover.
+- The `/v1` HTTP surface from the `hya.v1` contract is now served by
+  `hya-server`, mounted alongside the legacy routes: process
+  health/location/config (deep-merge PATCH), the aggregated bootstrap
+  snapshot, catalog reads (agents, models, providers, commands, skills,
+  tools), provider auth key storage/removal, frontend log ingest, and the
+  saved permission-rule list.
+- Session lifecycle: create (with validation), get, list (parent filter,
+  cursor pagination), patch (title/agent/model), delete, fork (provenance
+  + metadata + message copy), compact, and summarize. Sequence-targeted
+  revert answers `unavailable` until the legacy diff machinery is ported.
+- Turns are event-driven as designed: `CreateTurn` admits a prompt,
+  slash-command (with workflow interception), or shell turn and returns a
+  `RUNNING` handle immediately; the model round runs on a spawned task and
+  terminal state arrives via `GetTurn`/`WaitTurn`/`CancelTurn` and the
+  streams. Messages and the todo list read from the shared projection —
+  no second read model.
+- Events: replay with `since_seq` watermark plus the two SSE streams
+  (session-scoped and global) emitting the curated `StreamFrame` protojson
+  with the typed `resync` signal and keepalives. The unified interaction
+  plane lists and answers pending permission/question requests.
+- Cross-cutting: stable error model rendered as
+  `{"error":{"code","message"}}`, opaque cursor pagination, and the
+  `x-hya-directory` scope header. Action RPCs use subpath routes
+  (`POST /v1/sessions/{id}/turns/{turn}/wait`); the IDL and generated
+  docs/OpenAPI were regenerated to match.
+- Integration coverage: `tests/v1_api.rs` exercises process/config,
+  catalog, auth storage, session lifecycle, an end-to-end event-driven
+  turn (finish + transcript + replay + SSE headers), and the error model.
+  Legacy routes are untouched; the gRPC binding lands next.

@@ -17,14 +17,14 @@ use serde::Deserialize;
 use crate::{ApiError, ServerState};
 
 /// Shared projection used by `/api/agent` and legacy `/agent`.
-pub(super) struct BoundAgentRow {
-    pub(super) name: String,
-    pub(super) description: Option<String>,
-    pub(super) mode: String,
-    pub(super) hidden: bool,
-    pub(super) color: Option<String>,
-    pub(super) prompt: Option<String>,
-    pub(super) model: Option<String>,
+pub(crate) struct BoundAgentRow {
+    pub(crate) name: String,
+    pub(crate) description: Option<String>,
+    pub(crate) mode: String,
+    pub(crate) hidden: bool,
+    pub(crate) color: Option<String>,
+    pub(crate) prompt: Option<String>,
+    pub(crate) model: Option<String>,
 }
 
 /// Only the approved config key. Inline agent/permissions/options/model fields
@@ -138,7 +138,7 @@ async fn resolve_session_model(
 ///
 /// Bind failures surface as typed `ApiError` (via `CoreError`) rather than an
 /// empty list fallback — there is no second authority when binding fails.
-pub(super) async fn list(st: &ServerState, workdir: &Path) -> Result<Vec<BoundAgentRow>, ApiError> {
+pub(crate) async fn list(st: &ServerState, workdir: &Path) -> Result<Vec<BoundAgentRow>, ApiError> {
     let binding = st.engine.bind_root_runtime(workdir).await?;
     let catalog = binding.agent_catalog();
 

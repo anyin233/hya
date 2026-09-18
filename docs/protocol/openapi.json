@@ -37,7 +37,7 @@
         "x-server-streaming": false
       }
     },
-    "/v1/auth/{provider_id}/oauth:callback": {
+    "/v1/auth/{provider_id}/oauth/callback": {
       "post": {
         "operationId": "Auth.CompleteOauth",
         "summary": "Complete a provider OAuth flow with the callback code.",
@@ -48,7 +48,7 @@
         "x-server-streaming": false
       }
     },
-    "/v1/auth/{provider_id}/oauth:start": {
+    "/v1/auth/{provider_id}/oauth/start": {
       "post": {
         "operationId": "Auth.StartOauth",
         "summary": "Begin a provider OAuth flow; returns the authorization URL to open.",
@@ -189,7 +189,7 @@
         "x-server-streaming": false
       }
     },
-    "/v1/interactions/{request}:respond": {
+    "/v1/interactions/{request}/respond": {
       "post": {
         "operationId": "Interactions.RespondInteraction",
         "summary": "Respond to one pending request. Exactly one response kind is set.",
@@ -262,7 +262,7 @@
         "x-server-streaming": false
       }
     },
-    "/v1/mcp/{name}/auth:complete": {
+    "/v1/mcp/{name}/auth/complete": {
       "post": {
         "operationId": "Mcp.CompleteMcpAuth",
         "summary": "Complete an MCP server OAuth flow.",
@@ -273,7 +273,7 @@
         "x-server-streaming": false
       }
     },
-    "/v1/mcp/{name}:connect": {
+    "/v1/mcp/{name}/connect": {
       "post": {
         "operationId": "Mcp.ConnectMcp",
         "summary": "Connect one MCP server now.",
@@ -284,7 +284,7 @@
         "x-server-streaming": false
       }
     },
-    "/v1/mcp/{name}:disconnect": {
+    "/v1/mcp/{name}/disconnect": {
       "post": {
         "operationId": "Mcp.DisconnectMcp",
         "summary": "Disconnect one MCP server.",
@@ -328,7 +328,7 @@
         "x-server-streaming": false
       }
     },
-    "/v1/process:dispose": {
+    "/v1/process/dispose": {
       "post": {
         "operationId": "Process.DisposeProcess",
         "summary": "Ask the backend process to shut down gracefully.",
@@ -339,7 +339,7 @@
         "x-server-streaming": false
       }
     },
-    "/v1/process:upgrade": {
+    "/v1/process/upgrade": {
       "post": {
         "operationId": "Process.UpgradeProcess",
         "summary": "Ask the backend to self-update via the verified updater.",
@@ -394,7 +394,7 @@
         "x-server-streaming": false
       }
     },
-    "/v1/projects/{project}:init-git": {
+    "/v1/projects/{project}/init-git": {
       "post": {
         "operationId": "Project.InitProjectGit",
         "summary": "Initialize git in a project that has no repository yet.",
@@ -549,6 +549,17 @@
         "x-server-streaming": false
       }
     },
+    "/v1/sessions/{session}/compact": {
+      "post": {
+        "operationId": "Session.CompactSession",
+        "summary": "Compact a session's context using the configured method ladder.",
+        "tags": [
+          "Session"
+        ],
+        "x-grpc-method": "hya.v1.Session.CompactSession",
+        "x-server-streaming": false
+      }
+    },
     "/v1/sessions/{session}/events": {
       "get": {
         "operationId": "Events.ListEvents",
@@ -569,6 +580,17 @@
         ],
         "x-grpc-method": "hya.v1.Events.StreamSessionEvents",
         "x-server-streaming": true
+      }
+    },
+    "/v1/sessions/{session}/fork": {
+      "post": {
+        "operationId": "Session.ForkSession",
+        "summary": "Fork a session into a new session id, copying events up to a watermark.",
+        "tags": [
+          "Session"
+        ],
+        "x-grpc-method": "hya.v1.Session.ForkSession",
+        "x-server-streaming": false
       }
     },
     "/v1/sessions/{session}/messages": {
@@ -601,6 +623,28 @@
           "Messages"
         ],
         "x-grpc-method": "hya.v1.Messages.DeleteMessagePart",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/sessions/{session}/revert": {
+      "post": {
+        "operationId": "Session.RevertSession",
+        "summary": "Revert a session to an earlier watermark, or undo the last revert.",
+        "tags": [
+          "Session"
+        ],
+        "x-grpc-method": "hya.v1.Session.RevertSession",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/sessions/{session}/summarize": {
+      "post": {
+        "operationId": "Session.SummarizeSession",
+        "summary": "Produce a summary message for a session (titles, handoffs).",
+        "tags": [
+          "Session"
+        ],
+        "x-grpc-method": "hya.v1.Session.SummarizeSession",
         "x-server-streaming": false
       }
     },
@@ -637,7 +681,7 @@
         "x-server-streaming": false
       }
     },
-    "/v1/sessions/{session}/turns/{turn}:cancel": {
+    "/v1/sessions/{session}/turns/{turn}/cancel": {
       "post": {
         "operationId": "Turn.CancelTurn",
         "summary": "Request cancellation of a running turn (cooperative abort).",
@@ -648,7 +692,7 @@
         "x-server-streaming": false
       }
     },
-    "/v1/sessions/{session}/turns/{turn}:wait": {
+    "/v1/sessions/{session}/turns/{turn}/wait": {
       "post": {
         "operationId": "Turn.WaitTurn",
         "summary": "Block until the turn reaches a terminal state or the timeout elapses.",
@@ -676,50 +720,6 @@
           "Workflow"
         ],
         "x-grpc-method": "hya.v1.Workflow.SubmitWorkflowCommand",
-        "x-server-streaming": false
-      }
-    },
-    "/v1/sessions/{session}:compact": {
-      "post": {
-        "operationId": "Session.CompactSession",
-        "summary": "Compact a session's context using the configured method ladder.",
-        "tags": [
-          "Session"
-        ],
-        "x-grpc-method": "hya.v1.Session.CompactSession",
-        "x-server-streaming": false
-      }
-    },
-    "/v1/sessions/{session}:fork": {
-      "post": {
-        "operationId": "Session.ForkSession",
-        "summary": "Fork a session into a new session id, copying events up to a watermark.",
-        "tags": [
-          "Session"
-        ],
-        "x-grpc-method": "hya.v1.Session.ForkSession",
-        "x-server-streaming": false
-      }
-    },
-    "/v1/sessions/{session}:revert": {
-      "post": {
-        "operationId": "Session.RevertSession",
-        "summary": "Revert a session to an earlier watermark, or undo the last revert.",
-        "tags": [
-          "Session"
-        ],
-        "x-grpc-method": "hya.v1.Session.RevertSession",
-        "x-server-streaming": false
-      }
-    },
-    "/v1/sessions/{session}:summarize": {
-      "post": {
-        "operationId": "Session.SummarizeSession",
-        "summary": "Produce a summary message for a session (titles, handoffs).",
-        "tags": [
-          "Session"
-        ],
-        "x-grpc-method": "hya.v1.Session.SummarizeSession",
         "x-server-streaming": false
       }
     },
@@ -820,7 +820,7 @@
         "x-server-streaming": false
       }
     },
-    "/v1/worktrees/{worktree}:reset": {
+    "/v1/worktrees/{worktree}/reset": {
       "post": {
         "operationId": "Worktrees.ResetWorktree",
         "summary": "Reset a worktree to a clean state at its branch head.",
