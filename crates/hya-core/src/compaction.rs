@@ -33,6 +33,15 @@ pub struct SummarizeOptions {
     /// used to hard-code, and a truncated summary loses its trailing sections —
     /// which are the ones describing what to do next.
     pub max_output_tokens: Option<u32>,
+    /// Write a handoff document instead of a summary.
+    ///
+    /// A handoff call sees the transcript *verbatim* plus one trailing handoff
+    /// prompt (see [`handoff_request_messages`]), rather than the rendered
+    /// single-message serialization a summary gets: the document must describe
+    /// where the session stands — including recent turns — for an agent taking
+    /// over, and the request shape it rides matches the live conversation so a
+    /// cache-capable provider can reuse the prefix.
+    pub handoff: bool,
 }
 
 /// Thresholds for when and how aggressively to compact a transcript.
@@ -56,6 +65,12 @@ pub struct CompactionConfig {
     pub reserve_tokens: usize,
     /// Output cap for the summarizer call that folds the transcript prefix.
     pub summary_max_tokens: u32,
+    /// Order the five mechanisms are tried in when a turn crosses the threshold.
+    ///
+    /// A permutation of every rung (see [`CompactionRung::DEFAULT_ORDER`]), so
+    /// reordering can never silently drop a mechanism. Parsed from
+    /// oh-my-pi-compatible wire names by [`parse_method_order`].
+    pub method_order: [CompactionRung; 5],
 }
 
 impl Default for CompactionConfig {
@@ -66,6 +81,7 @@ impl Default for CompactionConfig {
             context_fraction: 0.75,
             reserve_tokens: 16_384,
             summary_max_tokens: 4_096,
+            method_order: CompactionRung::DEFAULT_ORDER,
         }
     }
 }
@@ -216,25 +232,40 @@ pub fn needs_compaction_at(messages: &[Message], cfg: &CompactionConfig, thresho
     messages.len() > cfg.keep_recent && tokens_in_use(messages) > threshold
 }
 
-/// One step of the context-reduction ladder.
+/// One of the five built-in context-reduction mechanisms (oh-my-pi parity).
 ///
-/// The ladder is walked in order and stops at the first rung that brings the
-/// transcript under the threshold, so an expensive reduction is only paid for
-/// when the cheaper ones were not enough.
+/// The turn loop walks the configured order (see
+/// [`CompactionConfig::method_order`]) and stops at the first rung that brings
+/// the transcript under the threshold, so an expensive reduction is only paid
+/// for when the cheaper ones were not enough. An unavailable or failed rung
+/// advances to the next one.
 ///
-/// The order encodes how much the model loses, not a preference, which is why
-/// it is fixed in code rather than exposed as configuration:
+/// Each rung's wire name matches oh-my-pi's `compaction.methodOrder` exactly:
 ///
-/// 1. [`SpillToolOutputs`] moves output bodies out of the request and leaves a
-///    handle behind. Every call, input, and reasoning step survives and the
-///    body stays retrievable — nothing is destroyed, it costs a fetch to read.
-/// 2. [`ProviderCompact`] lets the route fold its own window, keeping whatever
-///    internal fidelity it chooses.
-/// 3. [`Summarize`] folds whole turns into prose. It is the only rung that
-///    destroys detail outright, so it runs last.
+/// 1. [`SpillToolOutputs`] (`shake`) moves output bodies out of the request and
+///    leaves a handle behind. Every call, input, and reasoning step survives
+///    and the body stays retrievable — nothing is destroyed, it costs a fetch
+///    to read.
+/// 2. [`ProviderCompact`] (`remote`) lets the route fold its own window,
+///    keeping whatever internal fidelity it chooses.
+/// 3. [`Summarize`] (`soft`) folds the transcript prefix into a structured,
+///    incrementally anchored summary — hya's primary fold.
+/// 4. [`SnapCompact`] (`snapcompact`) replaces the folded prefix with a local
+///    deterministic dense archive — no model call at all, so it also works
+///    where no summarizer is wired or a model call just failed.
+/// 5. [`Handoff`] (`handoff`) has a model write a handoff document over the
+///    verbatim transcript, committed as the compaction summary — the hardest
+///    fold, for taking a session over rather than continuing it.
+///
+/// The default order keeps hya's verified spill-first ladder intact and adds
+/// the new mechanisms as escalation; oh-my-pi's own default
+/// (`remote, snapcompact, handoff, shake, soft`) is one
+/// [`parse_method_order`] away.
 ///
 /// [`SpillToolOutputs`]: CompactionRung::SpillToolOutputs
 /// [`ProviderCompact`]: CompactionRung::ProviderCompact
+/// [`SnapCompact`]: CompactionRung::SnapCompact
+/// [`Handoff`]: CompactionRung::Handoff
 /// [`Summarize`]: CompactionRung::Summarize
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CompactionRung {
@@ -242,17 +273,77 @@ pub enum CompactionRung {
     SpillToolOutputs,
     /// Ask the route to fold its own context window.
     ProviderCompact,
+    /// Replace the foldable prefix with a local deterministic dense archive.
+    SnapCompact,
+    /// Fold the prefix behind a model-written handoff document.
+    Handoff,
     /// Fold the transcript prefix into a structured summary.
     Summarize,
 }
 
 impl CompactionRung {
-    /// The ladder, in escalation order.
-    pub const LADDER: [Self; 3] = [
+    /// The default escalation order: hya's verified spill-first ladder, with
+    /// the new mechanisms as escalation — the model-free archive before the
+    /// final model call, so a session with no summarizer still folds.
+    pub const DEFAULT_ORDER: [Self; 5] = [
         Self::SpillToolOutputs,
         Self::ProviderCompact,
         Self::Summarize,
+        Self::SnapCompact,
+        Self::Handoff,
     ];
+
+    /// Every rung, in declaration order (the canonical permutation).
+    pub const ALL: [Self; 5] = [
+        Self::SpillToolOutputs,
+        Self::ProviderCompact,
+        Self::SnapCompact,
+        Self::Handoff,
+        Self::Summarize,
+    ];
+
+    /// The oh-my-pi `compaction.methodOrder` name for this rung.
+    #[must_use]
+    pub const fn wire_name(self) -> &'static str {
+        match self {
+            Self::SpillToolOutputs => "shake",
+            Self::ProviderCompact => "remote",
+            Self::SnapCompact => "snapcompact",
+            Self::Handoff => "handoff",
+            Self::Summarize => "soft",
+        }
+    }
+
+    /// Parse one oh-my-pi method name.
+    #[must_use]
+    pub fn from_wire_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|rung| rung.wire_name() == name)
+    }
+}
+
+/// Parse a configured method order into a permutation of all five rungs.
+///
+/// oh-my-pi names are accepted verbatim, but unlike omp's filter-and-drop
+/// policy the result must name every mechanism exactly once: a list with a
+/// duplicate or a typo means one rung is silently missing from the ladder, so
+/// [`None`] is returned and callers keep their default order rather than
+/// trusting a broken one.
+#[must_use]
+pub fn parse_method_order(names: &[&str]) -> Option<[CompactionRung; 5]> {
+    if names.len() != CompactionRung::ALL.len() {
+        return None;
+    }
+    let mut order = [CompactionRung::SpillToolOutputs; 5];
+    for (slot, name) in order.iter_mut().zip(names) {
+        *slot = CompactionRung::from_wire_name(name.trim())?;
+    }
+    // A repeated rung means another one is missing from the ladder.
+    for i in 0..order.len() {
+        if order[i + 1..].contains(&order[i]) {
+            return None;
+        }
+    }
+    Some(order)
 }
 
 /// Replaces a dropped tool output when no sink preserved the body.
@@ -490,6 +581,315 @@ pub async fn fold_prefix(
     }))
 }
 
+/// Max rendered characters of one tool result in a snapcompact archive.
+///
+/// oh-my-pi's `toolResultMaxChars` default: the ends of an output carry its
+/// verdict and final state, so they are kept and the middle is dropped.
+pub const SNAP_TOOL_RESULT_MAX_CHARS: usize = 2_000;
+/// Share of [`SNAP_TOOL_RESULT_MAX_CHARS`] kept from the head of a payload.
+const SNAP_HEAD_RATIO: f32 = 0.6;
+/// Max rendered characters of one string value inside a tool-call input.
+///
+/// oh-my-pi's `toolArgMaxChars` default.
+const SNAP_TOOL_ARG_MAX_CHARS: usize = 500;
+/// Max rendered characters of a tool call's whole input object.
+///
+/// oh-my-pi's `toolCallMaxChars` default.
+const SNAP_TOOL_CALL_MAX_CHARS: usize = 2_000;
+
+/// Largest char-boundary-safe prefix of at most `max` bytes.
+fn floor_boundary(text: &str, max: usize) -> usize {
+    let mut end = max.min(text.len());
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    end
+}
+
+/// Smallest char-boundary-safe suffix start of at least `min` bytes from the end.
+fn ceil_boundary(text: &str, min: usize) -> usize {
+    let mut start = text.len().saturating_sub(min);
+    while start < text.len() && !text.is_char_boundary(start) {
+        start += 1;
+    }
+    start
+}
+
+/// Keep the head and tail of `text` under a byte budget, saying how much was
+/// dropped. Errors and final state live at the ends of a tool output, not its
+/// middle, so a head+tail split preserves more usable signal than a prefix cut.
+fn head_tail_budgeted(text: &str, max: usize, head_ratio: f32) -> String {
+    if text.len() <= max {
+        return text.to_string();
+    }
+    let head = ((max as f32) * head_ratio) as usize;
+    let head = head.clamp(1, max.saturating_sub(1));
+    let tail = max - head;
+    let head_end = floor_boundary(text, head);
+    let tail_start = ceil_boundary(text, tail);
+    let omitted = text.len() - head_end - (text.len() - tail_start);
+    format!(
+        "{}…[{} chars omitted]…{}",
+        &text[..head_end],
+        omitted,
+        &text[tail_start..]
+    )
+}
+
+/// Collapse runs of blanks to one blank line and runs of spaces/tabs to one.
+///
+/// An archive trades formatting for density: the words and structure survive,
+/// the indentation that carried them does not.
+fn collapse_whitespace(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut blank_run = false;
+    for line in text.lines() {
+        let collapsed: String = line.split_whitespace().collect::<Vec<_>>().join(" ");
+        if collapsed.is_empty() {
+            blank_run = true;
+            continue;
+        }
+        if blank_run && !out.is_empty() {
+            out.push('\n');
+        }
+        blank_run = false;
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(&collapsed);
+    }
+    out
+}
+
+/// Cap every string leaf of a JSON value at [`SNAP_TOOL_ARG_MAX_CHARS`].
+fn cap_json_strings(value: &serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::String(s) if s.len() > SNAP_TOOL_ARG_MAX_CHARS => {
+            let end = floor_boundary(s, SNAP_TOOL_ARG_MAX_CHARS);
+            serde_json::Value::String(format!("{}…", &s[..end]))
+        }
+        serde_json::Value::Array(items) => {
+            serde_json::Value::Array(items.iter().map(cap_json_strings).collect())
+        }
+        serde_json::Value::Object(map) => serde_json::Value::Object(
+            map.iter()
+                .map(|(k, v)| (k.clone(), cap_json_strings(v)))
+                .collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
+/// Render a tool-call input under the per-value and per-call budgets.
+fn budget_tool_input(input: &serde_json::Value) -> String {
+    let rendered = cap_json_strings(input).to_string();
+    head_tail_budgeted(&rendered, SNAP_TOOL_CALL_MAX_CHARS, SNAP_HEAD_RATIO)
+}
+
+/// Serialize a transcript into the snapcompact archive: a local, deterministic,
+/// model-free fold of the discarded history.
+///
+/// This is hya's `snapcompact` mechanism. oh-my-pi renders the same serialized
+/// archive onto bitmap image frames for vision-capable models; hya commits the
+/// dense text itself, which every route can read, with omp's serialization
+/// budgets (head+tail tool results, capped call arguments, collapsed
+/// whitespace) so one huge payload cannot crowd out the turns around it.
+pub fn snapcompact_archive(messages: &[Message]) -> String {
+    let mut out = String::new();
+    let _ = writeln!(out, "[snapcompact archive of {} messages]", messages.len());
+    for message in messages {
+        match message {
+            Message::User { parts, .. } => {
+                let _ = writeln!(out, "[user]");
+                snap_parts(&mut out, parts);
+            }
+            Message::Assistant { parts, .. } => {
+                let _ = writeln!(out, "[assistant]");
+                snap_parts(&mut out, parts);
+            }
+            Message::System { content, .. } => {
+                let _ = writeln!(
+                    out,
+                    "[system] {}",
+                    head_tail_budgeted(
+                        &collapse_whitespace(content),
+                        SNAP_TOOL_RESULT_MAX_CHARS,
+                        SNAP_HEAD_RATIO
+                    )
+                );
+            }
+        }
+    }
+    out
+}
+
+fn snap_parts(out: &mut String, parts: &[Part]) {
+    for part in parts {
+        match part {
+            Part::Text { text, .. } if !text.trim().is_empty() => {
+                let _ = writeln!(
+                    out,
+                    "{}",
+                    head_tail_budgeted(
+                        &collapse_whitespace(text),
+                        SNAP_TOOL_RESULT_MAX_CHARS,
+                        SNAP_HEAD_RATIO
+                    )
+                );
+            }
+            Part::Reasoning { text, .. } if !text.trim().is_empty() => {
+                let _ = writeln!(
+                    out,
+                    "[reasoning] {}",
+                    head_tail_budgeted(
+                        &collapse_whitespace(text),
+                        SNAP_TOOL_RESULT_MAX_CHARS,
+                        SNAP_HEAD_RATIO
+                    )
+                );
+            }
+            Part::Media {
+                media_type,
+                data,
+                filename,
+                ..
+            } => {
+                let name = filename.as_deref().unwrap_or("attachment");
+                let _ = writeln!(out, "[media {name} ({media_type}), {} bytes]", data.len());
+            }
+            Part::Tool { name, state, .. } => {
+                let tool = name.as_str();
+                match state {
+                    hya_proto::ToolPartState::Pending { input }
+                    | hya_proto::ToolPartState::Running { input } => {
+                        let _ = writeln!(
+                            out,
+                            "[tool {tool}] input: {} (did not finish)",
+                            budget_tool_input(input)
+                        );
+                    }
+                    hya_proto::ToolPartState::Completed { input, output, .. } => {
+                        let _ = writeln!(out, "[tool {tool}] input: {}", budget_tool_input(input));
+                        let _ = writeln!(
+                            out,
+                            "[tool {tool}] output: {}",
+                            head_tail_budgeted(
+                                &collapse_whitespace(&value_text(output)),
+                                SNAP_TOOL_RESULT_MAX_CHARS,
+                                SNAP_HEAD_RATIO
+                            )
+                        );
+                    }
+                    hya_proto::ToolPartState::Error { input, message, .. } => {
+                        let _ = writeln!(out, "[tool {tool}] input: {}", budget_tool_input(input));
+                        let _ = writeln!(
+                            out,
+                            "[tool {tool}] failed: {}",
+                            head_tail_budgeted(
+                                &collapse_whitespace(message),
+                                SNAP_TOOL_RESULT_MAX_CHARS,
+                                SNAP_HEAD_RATIO
+                            )
+                        );
+                    }
+                }
+            }
+            Part::Text { .. } | Part::Reasoning { .. } => {}
+        }
+    }
+}
+
+/// Section structure of a handoff document.
+///
+/// A handoff differs from a summary in audience: it is written for an agent
+/// taking over the session exactly where it stands, so it leads with goal and
+/// current state rather than narrative, and the model writing it sees the
+/// verbatim recent turns instead of a rendered serialization.
+const HANDOFF_TEMPLATE: &str = "\
+Write a handoff document for an agent taking over this session exactly where \
+it stands, under exactly these headings, keeping every heading even when its \
+section is empty:
+
+1. Goal - what the user asked for, in their terms.
+2. Current state - what exists and works right now.
+3. Files and code - exact paths touched, and what changed or matters in each.
+4. Decisions - choices made and why, including what was ruled out.
+5. Errors and fixes - failures hit, their causes, and how they were resolved.
+6. Pending tasks - work explicitly requested and not yet done.
+7. Next step - the single next action, or `none` when the work is complete.
+
+Preserve exact file paths, identifiers, signatures, and command lines. Prefer \
+terse bullets over paragraphs. The reader sees the recent turns only through \
+this document.";
+
+/// Request messages for a handoff call: the transcript verbatim, plus exactly
+/// one trailing prompt.
+///
+/// Verbatim matters twice over: the document must cover where the session
+/// *stands* — including recent turns — and a cache-capable provider can reuse
+/// the live prefix because the request shape matches the conversation it
+/// already saw.
+#[must_use]
+pub fn handoff_request_messages(messages: &[Message], options: &SummarizeOptions) -> Vec<Message> {
+    let mut prompt = String::new();
+    if let Some(previous) = options
+        .previous_summary
+        .as_deref()
+        .filter(|s| !s.trim().is_empty())
+    {
+        let _ = write!(
+            prompt,
+            "<previous-summary>\n{previous}\n</previous-summary>\n\n"
+        );
+    }
+    let _ = write!(prompt, "{HANDOFF_TEMPLATE}");
+    let mut out = messages.to_vec();
+    out.push(Message::User {
+        id: MessageId::new(),
+        parts: vec![Part::Text {
+            id: PartId::new(),
+            text: prompt,
+        }],
+    });
+    out
+}
+
+/// Plan a handoff fold: same folded prefix as [`fold_prefix`], document written
+/// over the whole transcript.
+///
+/// # Errors
+/// Propagates summarizer failures.
+pub async fn plan_handoff(
+    messages: &[Message],
+    cfg: &CompactionConfig,
+    summarizer: &dyn Summarizer,
+    options: SummarizeOptions,
+) -> Result<Option<CompactionPlan>, CoreError> {
+    if messages.len() <= cfg.keep_recent {
+        return Ok(None);
+    }
+    let split = messages.len() - cfg.keep_recent;
+    // `needs_compaction` guarantees `split >= 1`; stay panic-free regardless.
+    let (Some(first), Some(last)) = (messages.first(), messages.get(split - 1)) else {
+        return Ok(None);
+    };
+    let summary = summarizer
+        .summarize(
+            messages,
+            SummarizeOptions {
+                handoff: true,
+                ..options
+            },
+        )
+        .await?;
+    Ok(Some(CompactionPlan {
+        summary,
+        from_message: first.id(),
+        to_message: last.id(),
+        folded_count: u32::try_from(split).unwrap_or(u32::MAX),
+    }))
+}
+
 /// Compact `messages` when thresholds are exceeded; otherwise return them unchanged.
 ///
 /// Request-local: the returned transcript is not persisted. Callers that must
@@ -679,34 +1079,42 @@ impl Summarizer for ModelSummarizer {
         messages: &[Message],
         options: SummarizeOptions,
     ) -> Result<String, CoreError> {
-        let transcript = render_for_summary(messages);
-        let mut prompt = String::new();
-        // Anchoring block first: the model reads it as the state to update, and
-        // the conversation below as the delta to fold into it.
-        if let Some(previous) = options
-            .previous_summary
-            .as_deref()
-            .filter(|s| !s.trim().is_empty())
-        {
+        // A handoff rides the transcript itself plus one trailing prompt, so
+        // the model reads the session verbatim (and a cache-capable provider
+        // reuses the prefix). A summary reads the rendered serialization.
+        let request_messages = if options.handoff {
+            handoff_request_messages(messages, &options)
+        } else {
+            let transcript = render_for_summary(messages);
+            let mut prompt = String::new();
+            // Anchoring block first: the model reads it as the state to update,
+            // and the conversation below as the delta to fold into it.
+            if let Some(previous) = options
+                .previous_summary
+                .as_deref()
+                .filter(|s| !s.trim().is_empty())
+            {
+                let _ = write!(
+                    prompt,
+                    "<previous-summary>\n{previous}\n</previous-summary>\n\n"
+                );
+            }
             let _ = write!(
                 prompt,
-                "<previous-summary>\n{previous}\n</previous-summary>\n\n"
+                "{SUMMARY_TEMPLATE}\n\n<conversation>\n{transcript}</conversation>\n"
             );
-        }
-        let _ = write!(
-            prompt,
-            "{SUMMARY_TEMPLATE}\n\n<conversation>\n{transcript}</conversation>\n"
-        );
-        let request = CompletionRequest {
-            model: options.model.unwrap_or_else(|| self.model.clone()),
-            system: options.system,
-            messages: vec![Message::User {
+            vec![Message::User {
                 id: MessageId::new(),
                 parts: vec![Part::Text {
                     id: PartId::new(),
                     text: prompt,
                 }],
-            }],
+            }]
+        };
+        let request = CompletionRequest {
+            model: options.model.unwrap_or_else(|| self.model.clone()),
+            system: options.system,
+            messages: request_messages,
             tools: Vec::new(),
             temperature: Some(0.0),
             max_output_tokens: Some(
@@ -937,17 +1345,226 @@ mod tests {
         }
     }
 
-    /// The ladder escalates from the cheapest reduction to the only lossy one.
+    /// The five oh-my-pi mechanisms ship built in, wire-named exactly as omp
+    /// names them; the default order preserves hya's verified ladder and adds
+    /// the new mechanisms as escalation.
     #[test]
-    fn ladder_runs_cheapest_reduction_first() {
+    fn method_order_defaults_to_the_documented_ladder() {
         assert_eq!(
-            CompactionRung::LADDER,
+            CompactionConfig::default().method_order,
             [
                 CompactionRung::SpillToolOutputs,
                 CompactionRung::ProviderCompact,
                 CompactionRung::Summarize,
+                CompactionRung::SnapCompact,
+                CompactionRung::Handoff,
             ]
         );
+        for (rung, wire) in [
+            (CompactionRung::SpillToolOutputs, "shake"),
+            (CompactionRung::ProviderCompact, "remote"),
+            (CompactionRung::SnapCompact, "snapcompact"),
+            (CompactionRung::Handoff, "handoff"),
+            (CompactionRung::Summarize, "soft"),
+        ] {
+            assert_eq!(rung.wire_name(), wire);
+            assert_eq!(CompactionRung::from_wire_name(wire), Some(rung));
+        }
+    }
+
+    /// oh-my-pi's own default order (`remote, snapcompact, handoff, shake,
+    /// soft`) is one parse away, so parity is a config line, not a patch.
+    #[test]
+    fn method_order_parses_the_omp_default() {
+        assert_eq!(
+            parse_method_order(&["remote", "snapcompact", "handoff", "shake", "soft"]),
+            Some([
+                CompactionRung::ProviderCompact,
+                CompactionRung::SnapCompact,
+                CompactionRung::Handoff,
+                CompactionRung::SpillToolOutputs,
+                CompactionRung::Summarize,
+            ])
+        );
+    }
+
+    /// Anything that is not a permutation of the five mechanisms is rejected,
+    /// so a typo cannot silently drop a mechanism from the ladder.
+    #[test]
+    fn method_order_rejects_non_permutations() {
+        assert_eq!(parse_method_order(&[]), None);
+        assert_eq!(parse_method_order(&["shake"]), None);
+        assert_eq!(
+            parse_method_order(&["shake", "remote", "snapcompact", "handoff", "handoff"]),
+            None,
+            "a duplicate means one mechanism is missing"
+        );
+        assert_eq!(
+            parse_method_order(&["shake", "remote", "snapcompact", "handoff", "xd"]),
+            None,
+            "unknown names are rejected"
+        );
+    }
+
+    /// snapcompact is the no-LLM rung: a deterministic dense archive under the
+    /// oh-my-pi budgets. A long tool output keeps its head and tail around an
+    /// explicit omission marker, because errors and final state live at the
+    /// ends of an output, not its middle.
+    #[test]
+    fn snapcompact_archive_keeps_head_and_tail_and_collapses_whitespace() {
+        let body = format!(
+            "{}{}{}",
+            "H".repeat(2_000),
+            "M".repeat(5_000),
+            "T".repeat(2_000)
+        );
+        let mut msgs = vec![assistant_with_tool(&body)];
+        msgs.push(user("a\n\n\n\nb   c"));
+        let archive = snapcompact_archive(&msgs);
+        assert!(
+            archive.contains(&"H".repeat(100)),
+            "head must survive: {archive}"
+        );
+        assert!(
+            archive.contains(&"T".repeat(100)),
+            "tail must survive: {archive}"
+        );
+        assert!(
+            !archive.contains(&"M".repeat(50)),
+            "the middle is omitted, not archived: {archive}"
+        );
+        assert!(archive.contains("chars omitted"), "{archive}");
+        // Whitespace-collapsed: runs of blank lines and trailing space fold.
+        assert!(
+            archive.contains("a\n\nb c"),
+            "whitespace is collapsed: {archive}"
+        );
+        assert_eq!(
+            archive,
+            snapcompact_archive(&msgs),
+            "archive is deterministic"
+        );
+    }
+
+    /// Tool-call arguments are capped per value and per call, matching omp's
+    /// `SerializeOptions`, so one huge path glob cannot fill the archive.
+    #[test]
+    fn snapcompact_archive_budgets_tool_arguments() {
+        let long_value = "v".repeat(1_000);
+        let msgs = vec![Message::Assistant {
+            id: MessageId::new(),
+            agent: hya_proto::AgentName::new("build"),
+            model: ModelRef::new("m"),
+            parts: vec![Part::Tool {
+                id: PartId::new(),
+                call_id: hya_proto::ToolCallId::new(),
+                name: hya_proto::ToolName::new("bash"),
+                state: hya_proto::ToolPartState::Completed {
+                    input: serde_json::json!({ "command": long_value }),
+                    output: serde_json::Value::String("ok".to_string()),
+                    time_ms: 1,
+                },
+            }],
+            finish: None,
+            tokens: None,
+        }];
+        let archive = snapcompact_archive(&msgs);
+        assert!(
+            !archive.contains(&"v".repeat(600)),
+            "a single argument value is capped: {archive}"
+        );
+    }
+
+    /// Records how many messages and what options it was handed.
+    struct RecordingSummarizer(std::sync::Mutex<Vec<(usize, bool)>>);
+
+    #[async_trait]
+    impl Summarizer for RecordingSummarizer {
+        async fn summarize(
+            &self,
+            messages: &[Message],
+            options: SummarizeOptions,
+        ) -> Result<String, CoreError> {
+            self.0
+                .lock()
+                .expect("recorder lock")
+                .push((messages.len(), options.handoff));
+            Ok("HANDOFF".to_string())
+        }
+    }
+
+    /// The handoff plan folds the same prefix a summary would, but the model
+    /// writing the document reads the whole live transcript — the next agent
+    /// must be told where the session *stands*, including recent turns.
+    #[tokio::test]
+    async fn plan_handoff_folds_the_prefix_but_shows_the_whole_transcript() {
+        let msgs: Vec<Message> = (0..6)
+            .map(|i| user(&format!("m{i} {}", "x".repeat(20))))
+            .collect();
+        let cfg = CompactionConfig {
+            keep_recent: 2,
+            ..CompactionConfig::default()
+        };
+        let recorder = RecordingSummarizer(std::sync::Mutex::new(Vec::new()));
+        let plan = plan_handoff(&msgs, &cfg, &recorder, SummarizeOptions::default())
+            .await
+            .unwrap()
+            .expect("over threshold must produce a plan");
+        assert_eq!(plan.folded_count, 4);
+        assert_eq!(plan.from_message, msgs[0].id());
+        assert_eq!(plan.to_message, msgs[3].id());
+        assert_eq!(plan.summary, "HANDOFF");
+        let seen = recorder.0.lock().expect("recorder lock").clone();
+        assert_eq!(
+            seen,
+            vec![(msgs.len(), true)],
+            "the handoff call sees the whole transcript with handoff options"
+        );
+    }
+
+    /// A transcript too small to fold hands back `None`, exactly like
+    /// `fold_prefix`.
+    #[tokio::test]
+    async fn plan_handoff_declines_a_transcript_with_nothing_to_fold() {
+        let msgs = vec![user("short")];
+        let cfg = CompactionConfig {
+            keep_recent: 2,
+            ..CompactionConfig::default()
+        };
+        let recorder = RecordingSummarizer(std::sync::Mutex::new(Vec::new()));
+        assert!(
+            plan_handoff(&msgs, &cfg, &recorder, SummarizeOptions::default())
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            recorder.0.lock().expect("recorder lock").is_empty(),
+            "no foldable prefix means no model call"
+        );
+    }
+
+    /// The handoff request carries the transcript verbatim and appends exactly
+    /// one prompt message, anchored on any previous summary.
+    #[test]
+    fn handoff_request_appends_one_prompt_after_the_verbatim_transcript() {
+        let msgs = vec![user("hello"), user("world")];
+        let options = SummarizeOptions {
+            previous_summary: Some("PRIOR".to_string()),
+            ..SummarizeOptions::default()
+        };
+        let out = handoff_request_messages(&msgs, &options);
+        assert_eq!(out.len(), msgs.len() + 1);
+        assert_eq!(out[0].id(), msgs[0].id(), "transcript is verbatim");
+        assert_eq!(out[1].id(), msgs[1].id());
+        let Message::User { parts, .. } = out.last().expect("trailing prompt") else {
+            panic!("handoff prompt is a user message");
+        };
+        let Part::Text { text, .. } = &parts[0] else {
+            panic!("handoff prompt is text");
+        };
+        assert!(text.contains("<previous-summary>\nPRIOR\n</previous-summary>"));
+        assert!(text.contains("handoff document"), "{text}");
     }
 
     /// With a sink the body is preserved and the transcript says where it went,
@@ -1063,6 +1680,7 @@ mod tests {
             context_fraction: 0.95,
             reserve_tokens: 16_384,
             summary_max_tokens: 4_096,
+            method_order: CompactionRung::DEFAULT_ORDER,
         };
         // 0.95 * 200_000 = 190_000 leaves only 10_000 for the reply, so the
         // reserve is the binding constraint.

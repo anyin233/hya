@@ -197,6 +197,17 @@ compaction:
   reserve_tokens: 16384        # held back for the reply; tighter bound wins
   summary_max_tokens: 4096     # output cap for the summarizer call
   token_accounting: auto       # auto | provider | estimate
+  # Order the five built-in reduction mechanisms (oh-my-pi names) are tried in
+  # when a turn crosses the threshold. The walk stops at the first mechanism
+  # that fits; an unavailable one (unsupported route, no summarizer) advances
+  # to the next. A partial list is completed with the unmentioned names in
+  # default order; an unknown name ignores the whole list.
+  #   shake        evict stale tool outputs to artifact:// handles (no model)
+  #   remote       provider-native compaction (/responses/compact)
+  #   soft         structured LLM summary of the folded prefix
+  #   snapcompact  local deterministic dense archive (no model call)
+  #   handoff      LLM handoff document over the verbatim transcript
+  method_order: [shake, remote, soft, snapcompact, handoff]
 
 # Logical model categories → ordered provider/model failover lists.
 categories:
@@ -790,6 +801,7 @@ hya honors `HOME` and `XDG_CONFIG_HOME` / `XDG_DATA_HOME` / `XDG_STATE_HOME` /
 | `HYA_COMPACTION_CONTEXT_FRACTION` | Share of an advertised `max_context` window the transcript may occupy. With a window, the trip threshold is the **tighter** of `window * fraction` and `window - reserve_tokens`, floored at `1000`. Missing or zero window, or a fraction outside `(0.0, 1.0]`, falls back to `HYA_COMPACTION_THRESHOLD`. Overrides `compaction.context_fraction`; env wins. | `0.75` | same |
 | `HYA_COMPACTION_RESERVE_TOKENS` | Tokens held back from the advertised window for the model's reply. Bounds the trigger independently of the fraction: a generous fraction on a large window can still leave less headroom than the reply needs. Overrides `compaction.reserve_tokens`; env wins. | `16384` | same |
 | `HYA_COMPACTION_SUMMARY_MAX_TOKENS` | Output cap for the summarizer call that folds the transcript prefix. The structured section template does not fit a smaller cap, and a truncated summary loses its trailing sections — the ones describing what to do next. Overrides `compaction.summary_max_tokens`; env wins. | `4096` | same |
+| `HYA_COMPACTION_METHOD_ORDER` | Comma-separated order of the five compaction mechanisms (`shake`, `remote`, `soft`, `snapcompact`, `handoff` — oh-my-pi `methodOrder` names). A partial list is completed with the unmentioned mechanisms in default order; an unknown name ignores the value. Overrides `compaction.method_order`; env wins. | `shake,remote,soft,snapcompact,handoff` | `crates/hya-core/src/compaction.rs`, `crates/hya-app/src/config.rs` |
 | `HYA_TOKEN_ACCOUNTING` | How window occupancy is measured. `auto` believes a route's reported usage only while it advertises usage support and stays plausible against the local estimate (ratio within `[0.5, 2.0]`), otherwise estimates locally; `provider` always trusts reported usage; `estimate` always counts locally. Overrides `compaction.token_accounting`; env wins. Unrecognized values ignored. | `auto` | `crates/hya-core/src/tokens.rs`, `crates/hya-app/src/config.rs` |
 | `HYA_SUBAGENT_MAX_DEPTH` | Overrides `subagents.max_depth`. **Env wins** over config.yaml; unparseable falls back to file/default. | `5` | `crates/hya-app/src/config.rs` |
 | `HYA_SUBAGENT_MAX_CONCURRENCY` | Overrides `subagents.max_concurrency`. Env wins. | `100` | same |
