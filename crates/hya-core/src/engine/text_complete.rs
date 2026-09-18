@@ -72,6 +72,11 @@ impl TextPartAccumulator {
             | Event::MailSent { .. }
             | Event::ChannelJoined { .. }
             | Event::ChannelLeft { .. }
+            | Event::ChannelCreated { .. }
+            | Event::SubagentReported { .. }
+            | Event::HandoffCommitted { .. }
+            | Event::AgentArchived { .. }
+            | Event::AgentRestarted { .. }
             | Event::ContextCompacted { .. }
             | Event::SessionForked { .. }
             | Event::ContextEvicted { .. }
