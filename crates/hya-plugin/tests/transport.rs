@@ -314,7 +314,13 @@ async fn bundle_process_uses_activation_cwd_and_shutdown_reaps_with_bounded_stde
         .await
         .unwrap();
     assert_eq!(info["pid"].as_u64(), guard.pid().map(u64::from));
-    assert_eq!(info["cwd"].as_str(), Some(dir.to_string_lossy().as_ref()));
+    // The child reports os.getcwd(), which resolves symlinks (macOS tempdirs
+    // live under /var -> /private/var), so canonicalize the expected path.
+    let expected_cwd = std::fs::canonicalize(&dir).unwrap();
+    assert_eq!(
+        info["cwd"].as_str(),
+        Some(expected_cwd.to_string_lossy().as_ref())
+    );
 
     let status = guard.shutdown().await.unwrap();
     assert!(status.success());

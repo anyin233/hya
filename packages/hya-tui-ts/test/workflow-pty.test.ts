@@ -1,5 +1,9 @@
 import { expect, test } from "bun:test"
 
+// The harness below drives util-linux `script` (`-e -f -c`); BSD script on
+// macOS has no such flags, so this suite runs on Linux/CI only.
+const linuxPty = test.skipIf(process.platform !== "linux")
+
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -78,7 +82,7 @@ async function stopTui(process: ReturnType<typeof Bun.spawn>) {
   await Promise.race([process.exited, Bun.sleep(2_000).then(() => process.kill(9))])
 }
 
-test("real PTY shows Workflow fan-out, terminal replay, and narrow layout", async () => {
+linuxPty("real PTY shows Workflow fan-out, terminal replay, and narrow layout", async () => {
   const temp = await mkdtemp(path.join(os.tmpdir(), "hya-workflow-pty-"))
   const project = path.join(temp, "project")
   const configHome = path.join(temp, "config")
