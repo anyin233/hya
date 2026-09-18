@@ -1,0 +1,248 @@
+// hya API v1 — message and part read model over the session projection,
+// plus the per-session todo list.
+syntax = "proto3";
+
+package hya.v1;
+
+import "google/protobuf/timestamp.proto";
+import "hya/v1/common.proto";
+
+// Read surface over the projected transcript. This is a view over the
+// event log via the shared projection — the only durable read model.
+service Messages {
+  // List the transcript messages of a session.
+  //
+  // hya.http: GET /v1/sessions/{session}/messages
+  rpc ListMessages(ListMessagesRequest) returns (ListMessagesResponse);
+
+  // Fetch one message with its parts.
+  //
+  // hya.http: GET /v1/sessions/{session}/messages/{message}
+  rpc GetMessage(GetMessageRequest) returns (MessageInfo);
+
+  // Delete one part of a message (message editing / redaction).
+  //
+  // hya.http: DELETE /v1/sessions/{session}/messages/{message}/parts/{part}
+  rpc DeleteMessagePart(DeleteMessagePartRequest) returns (DeleteMessagePartResponse);
+
+  // Read the session's todo list projection.
+  //
+  // hya.http: GET /v1/sessions/{session}/todo
+  rpc GetSessionTodo(GetSessionTodoRequest) returns (TodoList);
+}
+
+// Terminal reason of an assistant message.
+enum FinishReason {
+  // Unset sentinel; never emitted by the server.
+  FINISH_REASON_UNSPECIFIED = 0;
+  // Normal completion with no further tool calls.
+  FINISH_REASON_STOP = 1;
+  // Model requested tools; the turn continues with another round.
+  FINISH_REASON_TOOL_CALLS = 2;
+  // Hit an output length limit.
+  FINISH_REASON_LENGTH = 3;
+  // Cancel token, sidecar loss, or client abort.
+  FINISH_REASON_CANCELLED = 4;
+  // Hard provider/tool failure after the assistant message started.
+  FINISH_REASON_ERROR = 5;
+}
+
+// Author role of a message.
+enum Role {
+  // Unset sentinel; never emitted by the server.
+  ROLE_UNSPECIFIED = 0;
+  // Human user message.
+  ROLE_USER = 1;
+  // Model-generated message.
+  ROLE_ASSISTANT = 2;
+  // Engine-injected system message.
+  ROLE_SYSTEM = 3;
+  // Synthetic tool-authored message (for example shell turns).
+  ROLE_TOOL = 4;
+}
+
+// Token accounting for one model round.
+message TokenUsage {
+  // Billed input tokens of the round.
+  uint64 input = 1;
+  // Billed output tokens of the round.
+  uint64 output = 2;
+  // Reasoning tokens counted within the round.
+  uint64 reasoning = 3;
+  // Input tokens served from cache.
+  uint64 cache_read = 4;
+  // Input tokens written to cache.
+  uint64 cache_write = 5;
+}
+
+// Text part of a message.
+message TextPart {
+  // Concatenated text content so far.
+  string text = 1;
+}
+
+// Model reasoning trace part.
+message ReasoningPart {
+  // Concatenated reasoning content so far.
+  string text = 1;
+  // Reasoning variant tag when the route exposes one.
+  string variant = 2;
+}
+
+// A tool invocation requested by the model.
+message ToolCallPart {
+  // Engine-issued call id used to match the result part.
+  string call_id = 1;
+  // Canonical tool name.
+  string tool = 2;
+  // Tool input as a JSON object.
+  string input_json = 3;
+  // Execution state of the call.
+  ToolExecutionState state = 4;
+}
+
+// Execution state of one tool call.
+enum ToolExecutionState {
+  // Unset sentinel; never emitted by the server.
+  TOOL_EXECUTION_STATE_UNSPECIFIED = 0;
+  // Waiting for admission or permission.
+  TOOL_EXECUTION_STATE_PENDING = 1;
+  // Currently executing.
+  TOOL_EXECUTION_STATE_RUNNING = 2;
+  // Completed successfully.
+  TOOL_EXECUTION_STATE_OK = 3;
+  // Failed with an error.
+  TOOL_EXECUTION_STATE_ERROR = 4;
+  // Rejected by policy or the user.
+  TOOL_EXECUTION_STATE_DENIED = 5;
+}
+
+// The outcome of a tool invocation.
+message ToolResultPart {
+  // Matching call id from `ToolCallPart.call_id`.
+  string call_id = 1;
+  // Tool output payload (text or serialized JSON).
+  string output = 2;
+  // Stable error code when the call failed.
+  string error_code = 3;
+  // Human-readable error text when the call failed.
+  string error_message = 4;
+}
+
+// A binary or file attachment on a message.
+message AttachmentPart {
+  // Attachment file name.
+  string name = 1;
+  // MIME type when known.
+  string mime = 2;
+  // Inline payload when the backend stored it inline; empty otherwise.
+  bytes data = 3;
+  // Path reference when the attachment is stored on disk.
+  string path = 4;
+}
+
+// One part of a message body.
+message PartInfo {
+  // Part identifier unique within the message.
+  string id = 1;
+  // Part payload; exactly one kind is set.
+  oneof kind {
+    // Visible text content.
+    TextPart text = 2;
+    // Reasoning trace content.
+    ReasoningPart reasoning = 3;
+    // A tool invocation.
+    ToolCallPart tool_call = 4;
+    // A tool invocation outcome.
+    ToolResultPart tool_result = 5;
+    // An attachment.
+    AttachmentPart attachment = 6;
+  }
+}
+
+// Projection snapshot of one message.
+message MessageInfo {
+  // Message identifier.
+  string id = 1;
+  // Owning session identifier.
+  string session = 2;
+  // Author role.
+  Role role = 3;
+  // Agent name attributed to the message when applicable.
+  string agent = 4;
+  // Model that produced the message when applicable.
+  string model = 5;
+  // Terminal finish reason for assistant messages.
+  FinishReason finish = 6;
+  // Ordered message parts.
+  repeated PartInfo parts = 7;
+  // When the message was created.
+  google.protobuf.Timestamp time_created = 8;
+  // When the message projection last changed.
+  google.protobuf.Timestamp time_updated = 9;
+}
+
+message ListMessagesRequest {
+  // Session identifier.
+  string session = 1;
+  // Standard pagination controls.
+  PageRequest page = 2;
+}
+
+message ListMessagesResponse {
+  // Messages in append order.
+  repeated MessageInfo messages = 1;
+  // Pagination outcome.
+  PageInfo page = 2;
+}
+
+message GetMessageRequest {
+  // Session identifier.
+  string session = 1;
+  // Message identifier.
+  string message = 2;
+}
+
+message DeleteMessagePartRequest {
+  // Session identifier.
+  string session = 1;
+  // Message identifier.
+  string message = 2;
+  // Part identifier within the message.
+  string part = 3;
+}
+
+message DeleteMessagePartResponse {}
+
+// One todo item of a session's plan.
+message TodoItem {
+  // Stable item identifier.
+  string id = 1;
+  // Item content text.
+  string content = 2;
+  // Lifecycle status of the item.
+  TodoStatus status = 3;
+}
+
+// Lifecycle status of a todo item.
+enum TodoStatus {
+  // Unset sentinel; never emitted by the server.
+  TODO_STATUS_UNSPECIFIED = 0;
+  // Not started.
+  TODO_STATUS_PENDING = 1;
+  // Currently being worked on.
+  TODO_STATUS_IN_PROGRESS = 2;
+  // Done.
+  TODO_STATUS_COMPLETED = 3;
+}
+
+message GetSessionTodoRequest {
+  // Session identifier.
+  string session = 1;
+}
+
+// A session's todo list projection.
+message TodoList {
+  // Ordered todo items.
+  repeated TodoItem items = 1;
+}

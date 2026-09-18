@@ -1,0 +1,169 @@
+// hya API v1 — read-only filesystem surface: file content, directory
+// listing, file/text/symbol search.
+syntax = "proto3";
+
+package hya.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// Filesystem reads for frontends (tree views, editors, go-to-symbol).
+service Files {
+  // Read one file's content.
+  //
+  // hya.http: GET /v1/fs/read
+  rpc ReadFile(ReadFileRequest) returns (ReadFileResponse);
+
+  // List one directory's entries.
+  //
+  // hya.http: GET /v1/fs/list
+  rpc ListDirectory(ListDirectoryRequest) returns (ListDirectoryResponse);
+
+  // Find files by glob-ish name pattern.
+  //
+  // hya.http: GET /v1/fs/find
+  rpc FindFiles(FindFilesRequest) returns (FindFilesResponse);
+
+  // Full-text search across files (ripgrep-backed).
+  //
+  // hya.http: GET /v1/fs/search
+  rpc SearchText(SearchTextRequest) returns (SearchTextResponse);
+
+  // Symbol search (definitions) across the directory.
+  //
+  // hya.http: GET /v1/fs/symbols
+  rpc SearchSymbols(SearchSymbolsRequest) returns (SearchSymbolsResponse);
+}
+
+message ReadFileRequest {
+  // Directory scope; empty means the process default directory.
+  string directory = 1;
+  // File path relative to the directory.
+  string path = 2;
+  // Truncate after this many bytes; 0 reads the whole file.
+  uint64 max_bytes = 3;
+}
+
+message ReadFileResponse {
+  // File content; raw bytes for binary files.
+  bytes content = 1;
+  // Whether `content` decodes as UTF-8 text.
+  bool text = 2;
+  // Guessed MIME type.
+  string mime = 3;
+}
+
+message ListDirectoryRequest {
+  // Directory scope; empty means the process default directory.
+  string directory = 1;
+  // Subdirectory path relative to the directory; empty lists the root.
+  string path = 2;
+}
+
+// Kind of a directory entry.
+enum DirEntryKind {
+  // Unset sentinel; never emitted by the server.
+  DIR_ENTRY_KIND_UNSPECIFIED = 0;
+  // A regular file.
+  DIR_ENTRY_KIND_FILE = 1;
+  // A subdirectory.
+  DIR_ENTRY_KIND_DIRECTORY = 2;
+  // A symbolic link.
+  DIR_ENTRY_KIND_SYMLINK = 3;
+}
+
+// One directory entry.
+message DirEntry {
+  // Entry name within its parent directory.
+  string name = 1;
+  // Entry kind.
+  DirEntryKind kind = 2;
+  // File size in bytes when known.
+  uint64 size = 3;
+  // Modification time when known.
+  google.protobuf.Timestamp time_modified = 4;
+}
+
+message ListDirectoryResponse {
+  // Entries in stable name order.
+  repeated DirEntry entries = 1;
+}
+
+message FindFilesRequest {
+  // Directory scope; empty means the process default directory.
+  string directory = 1;
+  // Glob pattern matched against relative paths (`**/*.rs`).
+  string pattern = 2;
+  // Maximum paths to return; 0 uses the server default.
+  uint32 limit = 3;
+}
+
+message FindFilesResponse {
+  // Matching relative paths.
+  repeated string paths = 1;
+}
+
+message SearchTextRequest {
+  // Directory scope; empty means the process default directory.
+  string directory = 1;
+  // Search query (regex when the backend enables it, else literal).
+  string query = 2;
+  // Restrict search to files matching this glob; empty searches all.
+  string glob = 3;
+  // Maximum matches to return; 0 uses the server default.
+  uint32 limit = 4;
+}
+
+// One text search match.
+message TextMatch {
+  // Relative file path.
+  string path = 1;
+  // 1-based line number.
+  uint32 line_number = 2;
+  // Matched line content.
+  string text = 3;
+}
+
+message SearchTextResponse {
+  // Matches in path order.
+  repeated TextMatch matches = 1;
+}
+
+message SearchSymbolsRequest {
+  // Directory scope; empty means the process default directory.
+  string directory = 1;
+  // Symbol name query.
+  string query = 2;
+  // Maximum symbols to return; 0 uses the server default.
+  uint32 limit = 3;
+}
+
+// Kind of a discovered symbol.
+enum SymbolKind {
+  // Unset sentinel; never emitted by the server.
+  SYMBOL_KIND_UNSPECIFIED = 0;
+  // A function definition.
+  SYMBOL_KIND_FUNCTION = 1;
+  // A type, struct, or class definition.
+  SYMBOL_KIND_TYPE = 2;
+  // A module or namespace.
+  SYMBOL_KIND_MODULE = 3;
+  // Anything else.
+  SYMBOL_KIND_OTHER = 4;
+}
+
+// One discovered symbol.
+message Symbol {
+  // Relative file path.
+  string path = 1;
+  // Symbol name.
+  string name = 2;
+  // Symbol kind.
+  SymbolKind kind = 3;
+  // 1-based line number.
+  uint32 line_number = 4;
+}
+
+message SearchSymbolsResponse {
+  // Symbols matching the query.
+  repeated Symbol symbols = 1;
+}

@@ -1,0 +1,275 @@
+// hya API v1 — event replay and live streaming.
+//
+// The streams are the backbone of the event-driven contract: writes admit
+// work and return handles; every projection change arrives here. Frames
+// are identical over HTTP SSE and gRPC server-streaming, including the
+// typed `resync` signal emitted when a consumer falls behind the bus.
+//
+// `StreamEvent` is a curated wire projection of the internal event log:
+// it exposes the categories clients consume, not the internal storage
+// encoding, and both transports serialize it identically (protojson).
+syntax = "proto3";
+
+package hya.v1;
+
+import "google/protobuf/timestamp.proto";
+import "hya/v1/interaction.proto";
+import "hya/v1/message.proto";
+import "hya/v1/workflow.proto";
+
+// Replay and live-stream surface.
+service Events {
+  // Replay events of one session after a sequence watermark.
+  //
+  // hya.http: GET /v1/sessions/{session}/events
+  rpc ListEvents(ListEventsRequest) returns (ListEventsResponse);
+
+  // Live stream for one session; server-streaming over gRPC and SSE over
+  // HTTP. Emits `resync` when the consumer lags and must re-replay.
+  //
+  // hya.http: GET /v1/sessions/{session}/events/stream
+  rpc StreamSessionEvents(StreamSessionEventsRequest) returns (stream StreamFrame);
+
+  // Live stream across all sessions of a directory scope.
+  //
+  // hya.http: GET /v1/events/stream
+  rpc StreamGlobalEvents(StreamGlobalEventsRequest) returns (stream StreamFrame);
+}
+
+message ListEventsRequest {
+  // Session identifier to replay.
+  string session = 1;
+  // Return only events with `seq` strictly greater than this value.
+  uint64 since_seq = 2;
+  // Maximum events to return; 0 uses the server default.
+  uint32 limit = 3;
+}
+
+message ListEventsResponse {
+  // Session identifier.
+  string session = 1;
+  // Replayed events in sequence order.
+  repeated StreamEvent events = 2;
+  // Highest `seq` contained in this response; pass as the next
+  // `since_seq`.
+  uint64 next_seq = 3;
+}
+
+message StreamSessionEventsRequest {
+  // Session identifier to stream.
+  string session = 1;
+  // Emit events after this watermark first, then continue live.
+  uint64 since_seq = 2;
+}
+
+message StreamGlobalEventsRequest {
+  // Directory scope; empty means the process default directory.
+  string directory = 1;
+  // Emit events after this watermark first, then continue live.
+  uint64 since_seq = 2;
+}
+
+// One frame on a live stream.
+message StreamFrame {
+  // Frame payload; exactly one kind is set.
+  oneof frame {
+    // A projected event.
+    StreamEvent event = 1;
+    // Lag signal: replay from `last_seq` to recover.
+    ResyncFrame resync = 2;
+  }
+}
+
+// Typed lag signal replacing the legacy SSE `resync` event name.
+message ResyncFrame {
+  // Highest sequence number the server guarantees delivered; resume with
+  // `since_seq = last_seq`.
+  uint64 last_seq = 1;
+}
+
+// One curated projected event from the event log.
+message StreamEvent {
+  // Monotonic sequence number within the session.
+  uint64 seq = 1;
+  // Owning session identifier.
+  string session = 2;
+  // When the event was recorded.
+  google.protobuf.Timestamp time_recorded = 3;
+  // Event payload; exactly one kind is set.
+  oneof payload {
+    // A session was created.
+    SessionStarted session_started = 4;
+    // Session metadata changed (title, model, agent, background).
+    SessionUpdated session_updated = 5;
+    // A message started (user admitted or assistant round began).
+    MessageStarted message_started = 6;
+    // A message reached a terminal state.
+    MessageFinished message_finished = 7;
+    // A part was appended to a message.
+    PartStarted part_started = 8;
+    // Content was appended to a streaming part (text/reasoning deltas).
+    PartAppended part_appended = 9;
+    // A part reached its final form.
+    PartCompleted part_completed = 10;
+    // A tool call's execution state changed.
+    ToolStateChanged tool_state_changed = 11;
+    // A permission decision is pending.
+    PermissionRequested permission_requested = 12;
+    // A question is pending.
+    QuestionRequested question_requested = 13;
+    // A pending interaction was resolved.
+    InteractionResolved interaction_resolved = 14;
+    // The session todo list changed.
+    TodoUpdated todo_updated = 15;
+    // The workflow projection changed.
+    WorkflowUpdated workflow_updated = 16;
+    // Token usage was recorded for a round.
+    TokensRecorded tokens_recorded = 17;
+    // A compaction strategy was applied to the context.
+    CompactionApplied compaction_applied = 18;
+    // A session was deleted.
+    SessionDeleted session_deleted = 19;
+  }
+}
+
+// A session was created.
+message SessionStarted {
+  // Agent name bound to the new session.
+  string agent = 1;
+  // Model reference string the session starts on.
+  string model = 2;
+  // Absolute working directory of the session.
+  string workdir = 3;
+  // Parent session id when this is a child.
+  string parent = 4;
+}
+
+// Session metadata changed.
+message SessionUpdated {
+  // New title when changed.
+  optional string title = 1;
+  // New model reference string when changed.
+  optional string model = 2;
+  // New agent name when changed.
+  optional string agent = 3;
+  // New background flag when changed.
+  optional bool background = 4;
+}
+
+// A session was deleted.
+message SessionDeleted {}
+
+// A message started.
+message MessageStarted {
+  // Message identifier.
+  string message = 1;
+  // Author role.
+  Role role = 2;
+  // Agent name attributed when applicable.
+  string agent = 3;
+  // Model producing the message when applicable.
+  string model = 4;
+}
+
+// A message reached a terminal state.
+message MessageFinished {
+  // Message identifier.
+  string message = 1;
+  // Terminal finish reason.
+  FinishReason finish = 2;
+  // Token usage of the final round when the backend accounts it here.
+  TokenUsage usage = 3;
+}
+
+// A part was appended to a message.
+message PartStarted {
+  // Owning message identifier.
+  string message = 1;
+  // Part identifier.
+  string part = 2;
+  // Part kind discriminator matching `PartInfo.kind`.
+  string kind = 3;
+}
+
+// Streaming delta appended to a part.
+message PartAppended {
+  // Owning message identifier.
+  string message = 1;
+  // Part identifier.
+  string part = 2;
+  // Incremental text delta for text/reasoning parts.
+  string text_delta = 3;
+}
+
+// A part reached its final form.
+message PartCompleted {
+  // Owning message identifier.
+  string message = 1;
+  // Part identifier.
+  string part = 2;
+}
+
+// A tool call's execution state changed.
+message ToolStateChanged {
+  // Owning message identifier.
+  string message = 1;
+  // Part identifier of the tool call.
+  string part = 2;
+  // Matching call id.
+  string call_id = 3;
+  // New execution state.
+  ToolExecutionState state = 4;
+  // Stable error code when the call failed.
+  string error_code = 5;
+}
+
+// A permission decision is pending.
+message PermissionRequested {
+  // Pending interaction id; respond via `Interactions.RespondInteraction`.
+  string request = 1;
+  // Interaction summary (title, options, payload).
+  Interaction interaction = 2;
+}
+
+// A question is pending.
+message QuestionRequested {
+  // Pending interaction id; respond via `Interactions.RespondInteraction`.
+  string request = 1;
+  // Interaction summary (title, options, payload).
+  Interaction interaction = 2;
+}
+
+// A pending interaction was resolved.
+message InteractionResolved {
+  // Resolved interaction id.
+  string request = 1;
+}
+
+// The session todo list changed.
+message TodoUpdated {
+  // Full replacement todo list.
+  repeated TodoItem items = 1;
+}
+
+// The workflow projection changed.
+message WorkflowUpdated {
+  // Full replacement workflow state.
+  WorkflowState state = 1;
+}
+
+// Token usage was recorded for a round.
+message TokensRecorded {
+  // Message the round belongs to.
+  string message = 1;
+  // Usage recorded for the round.
+  TokenUsage usage = 2;
+}
+
+// A compaction strategy was applied to the context.
+message CompactionApplied {
+  // Watermark the context was compacted up to.
+  uint64 until_seq = 1;
+  // Strategy that fired (`shake`, `remote`, `soft`, `snap_compact`,
+  // `handoff`).
+  string strategy = 2;
+}

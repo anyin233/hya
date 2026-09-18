@@ -1,0 +1,153 @@
+// hya API v1 — PTY session management and the bidirectional terminal
+// stream.
+//
+// `StreamPty` is the only bidirectional rpc in v1: it carries terminal
+// input, resizes, and pings upstream, and output/exit frames downstream.
+// The HTTP binding serves it over the WebSocket upgrade used by
+// `CreateConnectToken`; both transports use the same frame types.
+syntax = "proto3";
+
+package hya.v1;
+
+
+// PTY session surface for embedded terminals.
+service Pty {
+  // List available shell binaries on the host.
+  //
+  // hya.http: GET /v1/pty/shells
+  rpc ListShells(ListShellsRequest) returns (ListShellsResponse);
+
+  // Create a PTY session.
+  //
+  // hya.http: POST /v1/pty
+  rpc CreatePty(CreatePtyRequest) returns (PtySession);
+
+  // Read one PTY session's state.
+  //
+  // hya.http: GET /v1/pty/{id}
+  rpc GetPty(GetPtyRequest) returns (PtySession);
+
+  // Resize or otherwise update a PTY session.
+  //
+  // hya.http: PUT /v1/pty/{id}
+  rpc UpdatePty(UpdatePtyRequest) returns (PtySession);
+
+  // Terminate a PTY session.
+  //
+  // hya.http: DELETE /v1/pty/{id}
+  rpc DeletePty(DeletePtyRequest) returns (DeletePtyResponse);
+
+  // Mint a one-time token authorizing a terminal connection.
+  //
+  // hya.http: POST /v1/pty/{id}/connect-token
+  rpc CreateConnectToken(CreateConnectTokenRequest) returns (CreateConnectTokenResponse);
+
+  // Bidirectional terminal stream: client sends input/resize/ping,
+  // server replies output/exit/pong.
+  //
+  // hya.http: GET /v1/pty/{id}/connect
+  rpc StreamPty(stream PtyClientFrame) returns (stream PtyServerFrame);
+}
+
+// State snapshot of one PTY session.
+message PtySession {
+  // PTY session identifier.
+  string id = 1;
+  // Shell binary the session runs.
+  string shell = 2;
+  // Current terminal width in columns.
+  uint32 cols = 3;
+  // Current terminal height in rows.
+  uint32 rows = 4;
+  // Working directory the session started in.
+  string cwd = 5;
+}
+
+message ListShellsRequest {}
+
+message ListShellsResponse {
+  // Absolute paths of available shell binaries.
+  repeated string shells = 1;
+}
+
+message CreatePtyRequest {
+  // Directory scope; empty means the process default directory.
+  string directory = 1;
+  // Shell binary name or path; empty picks the default shell.
+  string shell = 2;
+  // Initial terminal width in columns.
+  uint32 cols = 3;
+  // Initial terminal height in rows.
+  uint32 rows = 4;
+  // Working directory for the shell; defaults to the scope directory.
+  string cwd = 5;
+  // Extra environment variables for the shell process.
+  map<string, string> env = 6;
+}
+
+message GetPtyRequest {
+  // PTY session identifier.
+  string id = 1;
+}
+
+message UpdatePtyRequest {
+  // PTY session identifier.
+  string id = 1;
+  // New terminal width in columns when resizing.
+  optional uint32 cols = 2;
+  // New terminal height in rows when resizing.
+  optional uint32 rows = 3;
+}
+
+message DeletePtyRequest {
+  // PTY session identifier.
+  string id = 1;
+}
+
+message DeletePtyResponse {}
+
+message CreateConnectTokenRequest {
+  // PTY session identifier.
+  string id = 1;
+}
+
+message CreateConnectTokenResponse {
+  // One-time connection token.
+  string token = 1;
+  // WebSocket URL to connect to with the token.
+  string url = 2;
+}
+
+// Client-to-server terminal frame.
+message PtyClientFrame {
+  // Frame payload; exactly one kind is set.
+  oneof frame {
+    // Terminal input bytes (keystrokes, paste).
+    bytes input = 1;
+    // Terminal resize.
+    PtyResize resize = 2;
+    // Liveness ping.
+    bool ping = 3;
+  }
+}
+
+// Terminal resize request.
+message PtyResize {
+  // New width in columns.
+  uint32 cols = 1;
+  // New height in rows.
+  uint32 rows = 2;
+}
+
+// Server-to-client terminal frame.
+message PtyServerFrame {
+  // Frame payload; exactly one kind is set.
+  oneof frame {
+    // Terminal output bytes.
+    bytes output = 1;
+    // Session exit with the shell's exit code.
+    int32 exit = 2;
+    // Liveness pong.
+    bool pong = 3;
+  }
+}

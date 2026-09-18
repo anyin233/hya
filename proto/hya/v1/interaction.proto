@@ -1,0 +1,168 @@
+// hya API v1 — the unified interaction plane: pending permission and
+// question requests, their responses, and saved permission rules.
+//
+// Pending requests are also delivered live through the event streams
+// (`PermissionRequested`, `QuestionRequested`, `InteractionResolved`).
+syntax = "proto3";
+
+package hya.v1;
+
+import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
+import "hya/v1/common.proto";
+
+// Interaction surface shared by permission and question requests.
+service Interactions {
+  // List pending permission/question requests, optionally scoped to one
+  // session and filtered by type.
+  //
+  // hya.http: GET /v1/interactions
+  rpc ListInteractions(ListInteractionsRequest) returns (ListInteractionsResponse);
+
+  // Respond to one pending request. Exactly one response kind is set.
+  //
+  // hya.http: POST /v1/interactions/{request}:respond
+  rpc RespondInteraction(RespondInteractionRequest) returns (RespondInteractionResponse);
+
+  // List saved permission rules (persisted allow/deny/ask decisions).
+  //
+  // hya.http: GET /v1/permissions/rules
+  rpc ListSavedRules(ListSavedRulesRequest) returns (ListSavedRulesResponse);
+
+  // Delete one saved permission rule.
+  //
+  // hya.http: DELETE /v1/permissions/rules/{rule}
+  rpc DeleteSavedRule(DeleteSavedRuleRequest) returns (DeleteSavedRuleResponse);
+}
+
+// Kind of a pending interaction.
+enum InteractionType {
+  // Unset sentinel; never emitted by the server.
+  INTERACTION_TYPE_UNSPECIFIED = 0;
+  // A tool permission decision.
+  INTERACTION_TYPE_PERMISSION = 1;
+  // A question the engine asks the user.
+  INTERACTION_TYPE_QUESTION = 2;
+}
+
+// One pending interaction request.
+message Interaction {
+  // Interaction identifier used in `RespondInteraction`.
+  string id = 1;
+  // Owning session identifier; empty for process-wide requests.
+  string session = 2;
+  // Whether this is a permission or a question request.
+  InteractionType type = 3;
+  // Short human-readable title (for example the tool call summary).
+  string title = 4;
+  // Longer explanation body when the backend provides one.
+  string detail = 5;
+  // Selectable option labels when the request is multiple-choice.
+  repeated string options = 6;
+  // Structured payload (tool input, question metadata) as a JSON object.
+  google.protobuf.Struct payload = 7;
+  // When the request was created.
+  google.protobuf.Timestamp time_created = 8;
+}
+
+message ListInteractionsRequest {
+  // Directory scope; empty means the process default directory.
+  string directory = 1;
+  // Restrict to one session when non-empty.
+  string session = 2;
+  // Restrict to one interaction type when set.
+  InteractionType type = 3;
+  // Standard pagination controls.
+  PageRequest page = 4;
+}
+
+message ListInteractionsResponse {
+  // Pending requests, oldest first.
+  repeated Interaction interactions = 1;
+  // Pagination outcome.
+  PageInfo page = 2;
+}
+
+// Response to a permission request.
+message PermissionResponse {
+  // Whether the tool call is allowed to proceed.
+  bool allowed = 1;
+  // Persist the decision as a saved rule for future matching calls.
+  bool persist = 2;
+}
+
+// Response to a question request.
+message QuestionResponse {
+  // Chosen answer text (a free-form answer or one of `options`).
+  string answer = 1;
+  // Reject the question instead of answering it.
+  bool rejected = 2;
+}
+
+message RespondInteractionRequest {
+  // Interaction identifier being responded to.
+  string request = 1;
+  // Response payload; exactly one kind is set and must match the request
+  // type.
+  oneof response {
+    // Answer a permission request.
+    PermissionResponse permission = 2;
+    // Answer a question request.
+    QuestionResponse question = 3;
+  }
+}
+
+message RespondInteractionResponse {
+  // Whether the response was applied to a still-pending request. False
+  // means the request was already resolved elsewhere (idempotent replay).
+  bool applied = 1;
+}
+
+// A persisted permission decision.
+message SavedRule {
+  // Rule identifier.
+  string id = 1;
+  // Effect of the rule.
+  RulePermission permission = 2;
+  // Tool name the rule matches; empty matches every tool.
+  string tool = 3;
+  // Pattern the rule matches (command prefix, path prefix, ...).
+  string pattern = 4;
+  // When the rule was saved.
+  google.protobuf.Timestamp time_created = 5;
+}
+
+// Effect of a saved permission rule.
+enum RulePermission {
+  // Unset sentinel; never emitted by the server.
+  RULE_PERMISSION_UNSPECIFIED = 0;
+  // Allow matching calls without asking.
+  RULE_PERMISSION_ALLOW = 1;
+  // Ask the user for matching calls.
+  RULE_PERMISSION_ASK = 2;
+  // Deny matching calls without asking.
+  RULE_PERMISSION_DENY = 3;
+}
+
+message ListSavedRulesRequest {
+  // Directory scope; empty means the process default directory.
+  string directory = 1;
+  // Standard pagination controls.
+  PageRequest page = 2;
+}
+
+message ListSavedRulesResponse {
+  // Saved rules in stable id order.
+  repeated SavedRule rules = 1;
+  // Pagination outcome.
+  PageInfo page = 2;
+}
+
+message DeleteSavedRuleRequest {
+  // Directory scope; empty means the process default directory.
+  string directory = 1;
+  // Rule identifier to delete.
+  string rule = 2;
+}
+
+message DeleteSavedRuleResponse {}

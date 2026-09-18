@@ -1,0 +1,42 @@
+// hya API v1 — client log ingest for frontend diagnostics.
+syntax = "proto3";
+
+package hya.v1;
+
+import "google/protobuf/struct.proto";
+
+// Frontends forward their own structured logs so backend logs correlate
+// with client-side behavior.
+service Logs {
+  // Ingest one frontend log entry.
+  //
+  // hya.http: POST /v1/logs
+  rpc IngestLog(IngestLogRequest) returns (IngestLogResponse);
+}
+
+// Severity of an ingested log entry.
+enum LogLevel {
+  // Unset sentinel; never emitted by the server.
+  LOG_LEVEL_UNSPECIFIED = 0;
+  // Debug-level diagnostics.
+  LOG_LEVEL_DEBUG = 1;
+  // Informational entries.
+  LOG_LEVEL_INFO = 2;
+  // Warnings.
+  LOG_LEVEL_WARN = 3;
+  // Errors.
+  LOG_LEVEL_ERROR = 4;
+}
+
+message IngestLogRequest {
+  // Which frontend surface emitted the entry (for example `tui`).
+  string service = 1;
+  // Entry severity.
+  LogLevel level = 2;
+  // Entry message text.
+  string message = 3;
+  // Structured extras as a JSON object.
+  google.protobuf.Struct extra = 4;
+}
+
+message IngestLogResponse {}

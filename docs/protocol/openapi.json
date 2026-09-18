@@ -1,0 +1,3766 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "hya API v1",
+    "summary": "Generated from proto/hya/v1 by cargo xtask gen-api; do not edit by hand.",
+    "version": "1.0.0"
+  },
+  "paths": {
+    "/v1/agents": {
+      "get": {
+        "operationId": "Catalog.ListAgents",
+        "summary": "Agents that can be bound to a session.",
+        "tags": [
+          "Catalog"
+        ],
+        "x-grpc-method": "hya.v1.Catalog.ListAgents",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/auth/{provider_id}": {
+      "put": {
+        "operationId": "Auth.SetProviderAuth",
+        "summary": "Store an API key or refresh tokens for a provider.",
+        "tags": [
+          "Auth"
+        ],
+        "x-grpc-method": "hya.v1.Auth.SetProviderAuth",
+        "x-server-streaming": false
+      },
+      "delete": {
+        "operationId": "Auth.RemoveProviderAuth",
+        "summary": "Delete the stored credentials for a provider.",
+        "tags": [
+          "Auth"
+        ],
+        "x-grpc-method": "hya.v1.Auth.RemoveProviderAuth",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/auth/{provider_id}/oauth:callback": {
+      "post": {
+        "operationId": "Auth.CompleteOauth",
+        "summary": "Complete a provider OAuth flow with the callback code.",
+        "tags": [
+          "Auth"
+        ],
+        "x-grpc-method": "hya.v1.Auth.CompleteOauth",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/auth/{provider_id}/oauth:start": {
+      "post": {
+        "operationId": "Auth.StartOauth",
+        "summary": "Begin a provider OAuth flow; returns the authorization URL to open.",
+        "tags": [
+          "Auth"
+        ],
+        "x-grpc-method": "hya.v1.Auth.StartOauth",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/bootstrap": {
+      "get": {
+        "operationId": "Process.GetBootstrap",
+        "summary": "Aggregated startup snapshot: config, catalogs, pending interactions,",
+        "tags": [
+          "Process"
+        ],
+        "x-grpc-method": "hya.v1.Process.GetBootstrap",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/commands": {
+      "get": {
+        "operationId": "Catalog.ListCommands",
+        "summary": "Slash-command catalog entries.",
+        "tags": [
+          "Catalog"
+        ],
+        "x-grpc-method": "hya.v1.Catalog.ListCommands",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/config": {
+      "get": {
+        "operationId": "Process.GetConfig",
+        "summary": "Read the effective runtime configuration bag for a directory.",
+        "tags": [
+          "Process"
+        ],
+        "x-grpc-method": "hya.v1.Process.GetConfig",
+        "x-server-streaming": false
+      },
+      "patch": {
+        "operationId": "Process.UpdateConfig",
+        "summary": "Deep-merge a JSON object into the runtime configuration bag.",
+        "tags": [
+          "Process"
+        ],
+        "x-grpc-method": "hya.v1.Process.UpdateConfig",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/events/stream": {
+      "get": {
+        "operationId": "Events.StreamGlobalEvents",
+        "summary": "Live stream across all sessions of a directory scope.",
+        "tags": [
+          "Events"
+        ],
+        "x-grpc-method": "hya.v1.Events.StreamGlobalEvents",
+        "x-server-streaming": true
+      }
+    },
+    "/v1/fs/find": {
+      "get": {
+        "operationId": "Files.FindFiles",
+        "summary": "Find files by glob-ish name pattern.",
+        "tags": [
+          "Files"
+        ],
+        "x-grpc-method": "hya.v1.Files.FindFiles",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/fs/list": {
+      "get": {
+        "operationId": "Files.ListDirectory",
+        "summary": "List one directory's entries.",
+        "tags": [
+          "Files"
+        ],
+        "x-grpc-method": "hya.v1.Files.ListDirectory",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/fs/read": {
+      "get": {
+        "operationId": "Files.ReadFile",
+        "summary": "Read one file's content.",
+        "tags": [
+          "Files"
+        ],
+        "x-grpc-method": "hya.v1.Files.ReadFile",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/fs/search": {
+      "get": {
+        "operationId": "Files.SearchText",
+        "summary": "Full-text search across files (ripgrep-backed).",
+        "tags": [
+          "Files"
+        ],
+        "x-grpc-method": "hya.v1.Files.SearchText",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/fs/symbols": {
+      "get": {
+        "operationId": "Files.SearchSymbols",
+        "summary": "Symbol search (definitions) across the directory.",
+        "tags": [
+          "Files"
+        ],
+        "x-grpc-method": "hya.v1.Files.SearchSymbols",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/health": {
+      "get": {
+        "operationId": "Process.GetHealth",
+        "summary": "Liveness and version probe.",
+        "tags": [
+          "Process"
+        ],
+        "x-grpc-method": "hya.v1.Process.GetHealth",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/interactions": {
+      "get": {
+        "operationId": "Interactions.ListInteractions",
+        "summary": "List pending permission/question requests, optionally scoped to one",
+        "tags": [
+          "Interactions"
+        ],
+        "x-grpc-method": "hya.v1.Interactions.ListInteractions",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/interactions/{request}:respond": {
+      "post": {
+        "operationId": "Interactions.RespondInteraction",
+        "summary": "Respond to one pending request. Exactly one response kind is set.",
+        "tags": [
+          "Interactions"
+        ],
+        "x-grpc-method": "hya.v1.Interactions.RespondInteraction",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/location": {
+      "get": {
+        "operationId": "Process.GetLocation",
+        "summary": "Identity of this backend process and the directory it serves.",
+        "tags": [
+          "Process"
+        ],
+        "x-grpc-method": "hya.v1.Process.GetLocation",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/logs": {
+      "post": {
+        "operationId": "Logs.IngestLog",
+        "summary": "Ingest one frontend log entry.",
+        "tags": [
+          "Logs"
+        ],
+        "x-grpc-method": "hya.v1.Logs.IngestLog",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/mcp": {
+      "get": {
+        "operationId": "Mcp.GetMcpStatus",
+        "summary": "Status of every configured MCP server in a directory.",
+        "tags": [
+          "Mcp"
+        ],
+        "x-grpc-method": "hya.v1.Mcp.GetMcpStatus",
+        "x-server-streaming": false
+      },
+      "post": {
+        "operationId": "Mcp.AddMcpServer",
+        "summary": "Add (or replace) one MCP server in desired state.",
+        "tags": [
+          "Mcp"
+        ],
+        "x-grpc-method": "hya.v1.Mcp.AddMcpServer",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/mcp/{name}/auth": {
+      "post": {
+        "operationId": "Mcp.StartMcpAuth",
+        "summary": "Begin an MCP server OAuth flow.",
+        "tags": [
+          "Mcp"
+        ],
+        "x-grpc-method": "hya.v1.Mcp.StartMcpAuth",
+        "x-server-streaming": false
+      },
+      "delete": {
+        "operationId": "Mcp.RemoveMcpAuth",
+        "summary": "Remove stored MCP server credentials.",
+        "tags": [
+          "Mcp"
+        ],
+        "x-grpc-method": "hya.v1.Mcp.RemoveMcpAuth",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/mcp/{name}/auth:complete": {
+      "post": {
+        "operationId": "Mcp.CompleteMcpAuth",
+        "summary": "Complete an MCP server OAuth flow.",
+        "tags": [
+          "Mcp"
+        ],
+        "x-grpc-method": "hya.v1.Mcp.CompleteMcpAuth",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/mcp/{name}:connect": {
+      "post": {
+        "operationId": "Mcp.ConnectMcp",
+        "summary": "Connect one MCP server now.",
+        "tags": [
+          "Mcp"
+        ],
+        "x-grpc-method": "hya.v1.Mcp.ConnectMcp",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/mcp/{name}:disconnect": {
+      "post": {
+        "operationId": "Mcp.DisconnectMcp",
+        "summary": "Disconnect one MCP server.",
+        "tags": [
+          "Mcp"
+        ],
+        "x-grpc-method": "hya.v1.Mcp.DisconnectMcp",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/models": {
+      "get": {
+        "operationId": "Catalog.ListModels",
+        "summary": "Models across providers, optionally filtered to one provider.",
+        "tags": [
+          "Catalog"
+        ],
+        "x-grpc-method": "hya.v1.Catalog.ListModels",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/permissions/rules": {
+      "get": {
+        "operationId": "Interactions.ListSavedRules",
+        "summary": "List saved permission rules (persisted allow/deny/ask decisions).",
+        "tags": [
+          "Interactions"
+        ],
+        "x-grpc-method": "hya.v1.Interactions.ListSavedRules",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/permissions/rules/{rule}": {
+      "delete": {
+        "operationId": "Interactions.DeleteSavedRule",
+        "summary": "Delete one saved permission rule.",
+        "tags": [
+          "Interactions"
+        ],
+        "x-grpc-method": "hya.v1.Interactions.DeleteSavedRule",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/process:dispose": {
+      "post": {
+        "operationId": "Process.DisposeProcess",
+        "summary": "Ask the backend process to shut down gracefully.",
+        "tags": [
+          "Process"
+        ],
+        "x-grpc-method": "hya.v1.Process.DisposeProcess",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/process:upgrade": {
+      "post": {
+        "operationId": "Process.UpgradeProcess",
+        "summary": "Ask the backend to self-update via the verified updater.",
+        "tags": [
+          "Process"
+        ],
+        "x-grpc-method": "hya.v1.Process.UpgradeProcess",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/projects": {
+      "get": {
+        "operationId": "Project.ListProjects",
+        "summary": "List known projects.",
+        "tags": [
+          "Project"
+        ],
+        "x-grpc-method": "hya.v1.Project.ListProjects",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/projects/current": {
+      "get": {
+        "operationId": "Project.GetCurrentProject",
+        "summary": "The project served by this backend process.",
+        "tags": [
+          "Project"
+        ],
+        "x-grpc-method": "hya.v1.Project.GetCurrentProject",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/projects/{project}": {
+      "patch": {
+        "operationId": "Project.UpdateProject",
+        "summary": "Update project metadata (display name).",
+        "tags": [
+          "Project"
+        ],
+        "x-grpc-method": "hya.v1.Project.UpdateProject",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/projects/{project}/directories": {
+      "get": {
+        "operationId": "Project.ListProjectDirectories",
+        "summary": "List the work directories registered under a project.",
+        "tags": [
+          "Project"
+        ],
+        "x-grpc-method": "hya.v1.Project.ListProjectDirectories",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/projects/{project}:init-git": {
+      "post": {
+        "operationId": "Project.InitProjectGit",
+        "summary": "Initialize git in a project that has no repository yet.",
+        "tags": [
+          "Project"
+        ],
+        "x-grpc-method": "hya.v1.Project.InitProjectGit",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/providers": {
+      "get": {
+        "operationId": "Catalog.ListProviders",
+        "summary": "Providers with their aggregate auth status.",
+        "tags": [
+          "Catalog"
+        ],
+        "x-grpc-method": "hya.v1.Catalog.ListProviders",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/providers/{provider_id}": {
+      "get": {
+        "operationId": "Catalog.GetProvider",
+        "summary": "One provider's detail including its models.",
+        "tags": [
+          "Catalog"
+        ],
+        "x-grpc-method": "hya.v1.Catalog.GetProvider",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/pty": {
+      "post": {
+        "operationId": "Pty.CreatePty",
+        "summary": "Create a PTY session.",
+        "tags": [
+          "Pty"
+        ],
+        "x-grpc-method": "hya.v1.Pty.CreatePty",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/pty/shells": {
+      "get": {
+        "operationId": "Pty.ListShells",
+        "summary": "List available shell binaries on the host.",
+        "tags": [
+          "Pty"
+        ],
+        "x-grpc-method": "hya.v1.Pty.ListShells",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/pty/{id}": {
+      "get": {
+        "operationId": "Pty.GetPty",
+        "summary": "Read one PTY session's state.",
+        "tags": [
+          "Pty"
+        ],
+        "x-grpc-method": "hya.v1.Pty.GetPty",
+        "x-server-streaming": false
+      },
+      "put": {
+        "operationId": "Pty.UpdatePty",
+        "summary": "Resize or otherwise update a PTY session.",
+        "tags": [
+          "Pty"
+        ],
+        "x-grpc-method": "hya.v1.Pty.UpdatePty",
+        "x-server-streaming": false
+      },
+      "delete": {
+        "operationId": "Pty.DeletePty",
+        "summary": "Terminate a PTY session.",
+        "tags": [
+          "Pty"
+        ],
+        "x-grpc-method": "hya.v1.Pty.DeletePty",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/pty/{id}/connect": {
+      "get": {
+        "operationId": "Pty.StreamPty",
+        "summary": "Bidirectional terminal stream: client sends input/resize/ping,",
+        "tags": [
+          "Pty"
+        ],
+        "x-grpc-method": "hya.v1.Pty.StreamPty",
+        "x-server-streaming": true
+      }
+    },
+    "/v1/pty/{id}/connect-token": {
+      "post": {
+        "operationId": "Pty.CreateConnectToken",
+        "summary": "Mint a one-time token authorizing a terminal connection.",
+        "tags": [
+          "Pty"
+        ],
+        "x-grpc-method": "hya.v1.Pty.CreateConnectToken",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/sessions": {
+      "post": {
+        "operationId": "Session.CreateSession",
+        "summary": "Create a session, optionally as a child of an existing session and",
+        "tags": [
+          "Session"
+        ],
+        "x-grpc-method": "hya.v1.Session.CreateSession",
+        "x-server-streaming": false
+      },
+      "get": {
+        "operationId": "Session.ListSessions",
+        "summary": "List sessions, optionally scoped under one parent (subagent tree).",
+        "tags": [
+          "Session"
+        ],
+        "x-grpc-method": "hya.v1.Session.ListSessions",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/sessions/{session}": {
+      "get": {
+        "operationId": "Session.GetSession",
+        "summary": "Fetch one session's projection summary.",
+        "tags": [
+          "Session"
+        ],
+        "x-grpc-method": "hya.v1.Session.GetSession",
+        "x-server-streaming": false
+      },
+      "patch": {
+        "operationId": "Session.UpdateSession",
+        "summary": "Update mutable session fields: title, agent, model, background flag.",
+        "tags": [
+          "Session"
+        ],
+        "x-grpc-method": "hya.v1.Session.UpdateSession",
+        "x-server-streaming": false
+      },
+      "delete": {
+        "operationId": "Session.DeleteSession",
+        "summary": "Delete a session and its event log.",
+        "tags": [
+          "Session"
+        ],
+        "x-grpc-method": "hya.v1.Session.DeleteSession",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/sessions/{session}/events": {
+      "get": {
+        "operationId": "Events.ListEvents",
+        "summary": "Replay events of one session after a sequence watermark.",
+        "tags": [
+          "Events"
+        ],
+        "x-grpc-method": "hya.v1.Events.ListEvents",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/sessions/{session}/events/stream": {
+      "get": {
+        "operationId": "Events.StreamSessionEvents",
+        "summary": "Live stream for one session; server-streaming over gRPC and SSE over",
+        "tags": [
+          "Events"
+        ],
+        "x-grpc-method": "hya.v1.Events.StreamSessionEvents",
+        "x-server-streaming": true
+      }
+    },
+    "/v1/sessions/{session}/messages": {
+      "get": {
+        "operationId": "Messages.ListMessages",
+        "summary": "List the transcript messages of a session.",
+        "tags": [
+          "Messages"
+        ],
+        "x-grpc-method": "hya.v1.Messages.ListMessages",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/sessions/{session}/messages/{message}": {
+      "get": {
+        "operationId": "Messages.GetMessage",
+        "summary": "Fetch one message with its parts.",
+        "tags": [
+          "Messages"
+        ],
+        "x-grpc-method": "hya.v1.Messages.GetMessage",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/sessions/{session}/messages/{message}/parts/{part}": {
+      "delete": {
+        "operationId": "Messages.DeleteMessagePart",
+        "summary": "Delete one part of a message (message editing / redaction).",
+        "tags": [
+          "Messages"
+        ],
+        "x-grpc-method": "hya.v1.Messages.DeleteMessagePart",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/sessions/{session}/todo": {
+      "get": {
+        "operationId": "Messages.GetSessionTodo",
+        "summary": "Read the session's todo list projection.",
+        "tags": [
+          "Messages"
+        ],
+        "x-grpc-method": "hya.v1.Messages.GetSessionTodo",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/sessions/{session}/turns": {
+      "post": {
+        "operationId": "Turn.CreateTurn",
+        "summary": "Admit one turn into a session: a user prompt, a slash command, or a",
+        "tags": [
+          "Turn"
+        ],
+        "x-grpc-method": "hya.v1.Turn.CreateTurn",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/sessions/{session}/turns/{turn}": {
+      "get": {
+        "operationId": "Turn.GetTurn",
+        "summary": "Read the current state of one turn.",
+        "tags": [
+          "Turn"
+        ],
+        "x-grpc-method": "hya.v1.Turn.GetTurn",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/sessions/{session}/turns/{turn}:cancel": {
+      "post": {
+        "operationId": "Turn.CancelTurn",
+        "summary": "Request cancellation of a running turn (cooperative abort).",
+        "tags": [
+          "Turn"
+        ],
+        "x-grpc-method": "hya.v1.Turn.CancelTurn",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/sessions/{session}/turns/{turn}:wait": {
+      "post": {
+        "operationId": "Turn.WaitTurn",
+        "summary": "Block until the turn reaches a terminal state or the timeout elapses.",
+        "tags": [
+          "Turn"
+        ],
+        "x-grpc-method": "hya.v1.Turn.WaitTurn",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/sessions/{session}/workflow": {
+      "get": {
+        "operationId": "Workflow.GetWorkflowState",
+        "summary": "Read the projected workflow state of one session.",
+        "tags": [
+          "Workflow"
+        ],
+        "x-grpc-method": "hya.v1.Workflow.GetWorkflowState",
+        "x-server-streaming": false
+      },
+      "post": {
+        "operationId": "Workflow.SubmitWorkflowCommand",
+        "summary": "Submit one typed workflow command against a session (select source,",
+        "tags": [
+          "Workflow"
+        ],
+        "x-grpc-method": "hya.v1.Workflow.SubmitWorkflowCommand",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/sessions/{session}:compact": {
+      "post": {
+        "operationId": "Session.CompactSession",
+        "summary": "Compact a session's context using the configured method ladder.",
+        "tags": [
+          "Session"
+        ],
+        "x-grpc-method": "hya.v1.Session.CompactSession",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/sessions/{session}:fork": {
+      "post": {
+        "operationId": "Session.ForkSession",
+        "summary": "Fork a session into a new session id, copying events up to a watermark.",
+        "tags": [
+          "Session"
+        ],
+        "x-grpc-method": "hya.v1.Session.ForkSession",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/sessions/{session}:revert": {
+      "post": {
+        "operationId": "Session.RevertSession",
+        "summary": "Revert a session to an earlier watermark, or undo the last revert.",
+        "tags": [
+          "Session"
+        ],
+        "x-grpc-method": "hya.v1.Session.RevertSession",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/sessions/{session}:summarize": {
+      "post": {
+        "operationId": "Session.SummarizeSession",
+        "summary": "Produce a summary message for a session (titles, handoffs).",
+        "tags": [
+          "Session"
+        ],
+        "x-grpc-method": "hya.v1.Session.SummarizeSession",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/skills": {
+      "get": {
+        "operationId": "Catalog.ListSkills",
+        "summary": "Skill catalog entries.",
+        "tags": [
+          "Catalog"
+        ],
+        "x-grpc-method": "hya.v1.Catalog.ListSkills",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/tools": {
+      "get": {
+        "operationId": "Catalog.ListTools",
+        "summary": "Tool registry entries including hidden aliases.",
+        "tags": [
+          "Catalog"
+        ],
+        "x-grpc-method": "hya.v1.Catalog.ListTools",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/vcs": {
+      "get": {
+        "operationId": "Project.GetVcsStatus",
+        "summary": "Repository status: branch, head, and changed files.",
+        "tags": [
+          "Project"
+        ],
+        "x-grpc-method": "hya.v1.Project.GetVcsStatus",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/vcs/apply": {
+      "post": {
+        "operationId": "Project.ApplyPatch",
+        "summary": "Apply a unified diff patch to the working tree.",
+        "tags": [
+          "Project"
+        ],
+        "x-grpc-method": "hya.v1.Project.ApplyPatch",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/vcs/diff": {
+      "get": {
+        "operationId": "Project.GetVcsDiff",
+        "summary": "Unified diff of working-tree changes.",
+        "tags": [
+          "Project"
+        ],
+        "x-grpc-method": "hya.v1.Project.GetVcsDiff",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/workflows": {
+      "get": {
+        "operationId": "Workflow.ListWorkflows",
+        "summary": "List discovered workflow sources for a directory.",
+        "tags": [
+          "Workflow"
+        ],
+        "x-grpc-method": "hya.v1.Workflow.ListWorkflows",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/worktrees": {
+      "get": {
+        "operationId": "Worktrees.ListWorktrees",
+        "summary": "List worktrees of a repository.",
+        "tags": [
+          "Worktrees"
+        ],
+        "x-grpc-method": "hya.v1.Worktrees.ListWorktrees",
+        "x-server-streaming": false
+      },
+      "post": {
+        "operationId": "Worktrees.CreateWorktree",
+        "summary": "Create a new worktree (and its branch when needed).",
+        "tags": [
+          "Worktrees"
+        ],
+        "x-grpc-method": "hya.v1.Worktrees.CreateWorktree",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/worktrees/{worktree}": {
+      "delete": {
+        "operationId": "Worktrees.DeleteWorktree",
+        "summary": "Delete a worktree and optionally its branch.",
+        "tags": [
+          "Worktrees"
+        ],
+        "x-grpc-method": "hya.v1.Worktrees.DeleteWorktree",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/worktrees/{worktree}:reset": {
+      "post": {
+        "operationId": "Worktrees.ResetWorktree",
+        "summary": "Reset a worktree to a clean state at its branch head.",
+        "tags": [
+          "Worktrees"
+        ],
+        "x-grpc-method": "hya.v1.Worktrees.ResetWorktree",
+        "x-server-streaming": false
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "OauthTokens": {
+        "type": "object",
+        "description": "OAuth tokens captured from a completed provider flow.",
+        "properties": {
+          "access_token": {
+            "type": "string"
+          },
+          "refresh_token": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "SetProviderAuthRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "directory": {
+            "type": "string"
+          },
+          "provider_id": {
+            "type": "string"
+          },
+          "api_key": {
+            "type": "string"
+          },
+          "oauth": {
+            "$ref": "#/components/schemas/OauthTokens"
+          }
+        }
+      },
+      "SetProviderAuthResponse": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/AuthStatus"
+          }
+        }
+      },
+      "RemoveProviderAuthRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "directory": {
+            "type": "string"
+          },
+          "provider_id": {
+            "type": "string"
+          }
+        }
+      },
+      "StartOauthRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "directory": {
+            "type": "string"
+          },
+          "provider_id": {
+            "type": "string"
+          }
+        }
+      },
+      "StartOauthResponse": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "authorization_url": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          }
+        }
+      },
+      "CompleteOauthRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "directory": {
+            "type": "string"
+          },
+          "provider_id": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          }
+        }
+      },
+      "CompleteOauthResponse": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/AuthStatus"
+          }
+        }
+      },
+      "ModelRef": {
+        "type": "object",
+        "description": "Provider/model identity pair. `model_id` is provider-local.",
+        "properties": {
+          "provider_id": {
+            "type": "string"
+          },
+          "model_id": {
+            "type": "string"
+          },
+          "variant": {
+            "type": "string"
+          }
+        }
+      },
+      "ListAgentsRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "directory": {
+            "type": "string"
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageRequest"
+          }
+        }
+      },
+      "AgentSummary": {
+        "type": "object",
+        "description": "One selectable agent.",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "model": {
+            "$ref": "#/components/schemas/ModelRef"
+          },
+          "description": {
+            "type": "string"
+          },
+          "hidden": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ListAgentsResponse": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "agents": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AgentSummary"
+            }
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageInfo"
+          }
+        }
+      },
+      "ListModelsRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "directory": {
+            "type": "string"
+          },
+          "provider_id": {
+            "type": "string"
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageRequest"
+          }
+        }
+      },
+      "ModelSummary": {
+        "type": "object",
+        "description": "One selectable model.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "provider_id": {
+            "type": "string"
+          },
+          "model_id": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "reasoning": {
+            "type": "boolean"
+          },
+          "auth": {
+            "$ref": "#/components/schemas/AuthStatus"
+          }
+        }
+      },
+      "ListModelsResponse": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "models": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ModelSummary"
+            }
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageInfo"
+          }
+        }
+      },
+      "ListProvidersRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "directory": {
+            "type": "string"
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageRequest"
+          }
+        }
+      },
+      "ProviderSummary": {
+        "type": "object",
+        "description": "One provider route with aggregate auth state.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "auth": {
+            "$ref": "#/components/schemas/AuthStatus"
+          },
+          "website": {
+            "type": "string"
+          }
+        }
+      },
+      "ListProvidersResponse": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "providers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProviderSummary"
+            }
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageInfo"
+          }
+        }
+      },
+      "GetProviderRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "directory": {
+            "type": "string"
+          },
+          "provider_id": {
+            "type": "string"
+          }
+        }
+      },
+      "ProviderInfo": {
+        "type": "object",
+        "description": "Provider detail with its model rows.",
+        "properties": {
+          "summary": {
+            "$ref": "#/components/schemas/ProviderSummary"
+          },
+          "models": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ModelSummary"
+            }
+          },
+          "supports_api_key": {
+            "type": "boolean"
+          },
+          "supports_oauth": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ListCommandsRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "directory": {
+            "type": "string"
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageRequest"
+          }
+        }
+      },
+      "CommandSummary": {
+        "type": "object",
+        "description": "One slash-command entry.",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "argument_hint": {
+            "type": "string"
+          }
+        }
+      },
+      "ListCommandsResponse": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "commands": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CommandSummary"
+            }
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageInfo"
+          }
+        }
+      },
+      "ListSkillsRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "directory": {
+            "type": "string"
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageRequest"
+          }
+        }
+      },
+      "SkillSummary": {
+        "type": "object",
+        "description": "One invocable skill.",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          }
+        }
+      },
+      "ListSkillsResponse": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "skills": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SkillSummary"
+            }
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageInfo"
+          }
+        }
+      },
+      "ListToolsRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "directory": {
+            "type": "string"
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageRequest"
+          }
+        }
+      },
+      "ToolSummary": {
+        "type": "object",
+        "description": "One tool registry entry.",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "hidden": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ListToolsResponse": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "tools": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ToolSummary"
+            }
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageInfo"
+          }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "description": "Stable, machine-readable error returned by every failed v1 call.  HTTP bindings render `{\"error\": {\"code\": ..., \"message\": ...}}` with the status mapped from the code; gRPC bindings carry the same code in the trailer/status details.",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "PageRequest": {
+        "type": "object",
+        "description": "Standard list controls shared by every paginated rpc.",
+        "properties": {
+          "cursor": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "PageInfo": {
+        "type": "object",
+        "description": "Pagination outcome attached to every paginated response.",
+        "properties": {
+          "next_cursor": {
+            "type": "string"
+          },
+          "has_more": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ListEventsRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "session": {
+            "type": "string"
+          },
+          "since_seq": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "limit": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "ListEventsResponse": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "session": {
+            "type": "string"
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/StreamEvent"
+            }
+          },
+          "next_seq": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "StreamSessionEventsRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "session": {
+            "type": "string"
+          },
+          "since_seq": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "StreamGlobalEventsRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "directory": {
+            "type": "string"
+          },
+          "since_seq": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "StreamFrame": {
+        "type": "object",
+        "description": "One frame on a live stream.",
+        "properties": {
+          "event": {
+            "$ref": "#/components/schemas/StreamEvent"
+          },
+          "resync": {
+            "$ref": "#/components/schemas/ResyncFrame"
+          }
+        }
+      },
+      "ResyncFrame": {
+        "type": "object",
+        "description": "Typed lag signal replacing the legacy SSE `resync` event name.",
+        "properties": {
+          "last_seq": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "StreamEvent": {
+        "type": "object",
+        "description": "One curated projected event from the event log.",
+        "properties": {
+          "seq": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "session": {
+            "type": "string"
+          },
+          "time_recorded": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "session_started": {
+            "$ref": "#/components/schemas/SessionStarted"
+          },
+          "session_updated": {
+            "$ref": "#/components/schemas/SessionUpdated"
+          },
+          "message_started": {
+            "$ref": "#/components/schemas/MessageStarted"
+          },
+          "message_finished": {
+            "$ref": "#/components/schemas/MessageFinished"
+          },
+          "part_started": {
+            "$ref": "#/components/schemas/PartStarted"
+          },
+          "part_appended": {
+            "$ref": "#/components/schemas/PartAppended"
+          },
+          "part_completed": {
+            "$ref": "#/components/schemas/PartCompleted"
+          },
+          "tool_state_changed": {
+            "$ref": "#/components/schemas/ToolStateChanged"
+          },
+          "permission_requested": {
+            "$ref": "#/components/schemas/PermissionRequested"
+          },
+          "question_requested": {
+            "$ref": "#/components/schemas/QuestionRequested"
+          },
+          "interaction_resolved": {
+            "$ref": "#/components/schemas/InteractionResolved"
+          },
+          "todo_updated": {
+            "$ref": "#/components/schemas/TodoUpdated"
+          },
+          "workflow_updated": {
+            "$ref": "#/components/schemas/WorkflowUpdated"
+          },
+          "tokens_recorded": {
+            "$ref": "#/components/schemas/TokensRecorded"
+          },
+          "compaction_applied": {
+            "$ref": "#/components/schemas/CompactionApplied"
+          },
+          "session_deleted": {
+            "$ref": "#/components/schemas/SessionDeleted"
+          }
+        }
+      },
+      "SessionStarted": {
+        "type": "object",
+        "description": "A session was created.",
+        "properties": {
+          "agent": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "workdir": {
+            "type": "string"
+          },
+          "parent": {
+            "type": "string"
+          }
+        }
+      },
+      "SessionUpdated": {
+        "type": "object",
+        "description": "Session metadata changed.",
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "agent": {
+            "type": "string"
+          },
+          "background": {
+            "type": "boolean"
+          }
+        }
+      },
+      "MessageStarted": {
+        "type": "object",
+        "description": "A session was deleted. A message started.",
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "role": {
+            "$ref": "#/components/schemas/Role"
+          },
+          "agent": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          }
+        }
+      },
+      "MessageFinished": {
+        "type": "object",
+        "description": "A message reached a terminal state.",
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "finish": {
+            "$ref": "#/components/schemas/FinishReason"
+          },
+          "usage": {
+            "$ref": "#/components/schemas/TokenUsage"
+          }
+        }
+      },
+      "PartStarted": {
+        "type": "object",
+        "description": "A part was appended to a message.",
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "part": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          }
+        }
+      },
+      "PartAppended": {
+        "type": "object",
+        "description": "Streaming delta appended to a part.",
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "part": {
+            "type": "string"
+          },
+          "text_delta": {
+            "type": "string"
+          }
+        }
+      },
+      "PartCompleted": {
+        "type": "object",
+        "description": "A part reached its final form.",
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "part": {
+            "type": "string"
+          }
+        }
+      },
+      "ToolStateChanged": {
+        "type": "object",
+        "description": "A tool call's execution state changed.",
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "part": {
+            "type": "string"
+          },
+          "call_id": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/ToolExecutionState"
+          },
+          "error_code": {
+            "type": "string"
+          }
+        }
+      },
+      "PermissionRequested": {
+        "type": "object",
+        "description": "A permission decision is pending.",
+        "properties": {
+          "request": {
+            "type": "string"
+          },
+          "interaction": {
+            "$ref": "#/components/schemas/Interaction"
+          }
+        }
+      },
+      "QuestionRequested": {
+        "type": "object",
+        "description": "A question is pending.",
+        "properties": {
+          "request": {
+            "type": "string"
+          },
+          "interaction": {
+            "$ref": "#/components/schemas/Interaction"
+          }
+        }
+      },
+      "InteractionResolved": {
+        "type": "object",
+        "description": "A pending interaction was resolved.",
+        "properties": {
+          "request": {
+            "type": "string"
+          }
+        }
+      },
+      "TodoUpdated": {
+        "type": "object",
+        "description": "The session todo list changed.",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TodoItem"
+            }
+          }
+        }
+      },
+      "WorkflowUpdated": {
+        "type": "object",
+        "description": "The workflow projection changed.",
+        "properties": {
+          "state": {
+            "$ref": "#/components/schemas/WorkflowState"
+          }
+        }
+      },
+      "TokensRecorded": {
+        "type": "object",
+        "description": "Token usage was recorded for a round.",
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "usage": {
+            "$ref": "#/components/schemas/TokenUsage"
+          }
+        }
+      },
+      "CompactionApplied": {
+        "type": "object",
+        "description": "A compaction strategy was applied to the context.",
+        "properties": {
+          "until_seq": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "strategy": {
+            "type": "string"
+          }
+        }
+      },
+      "ReadFileRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "directory": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "max_bytes": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "ReadFileResponse": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "content": {
+            "type": "string",
+            "contentEncoding": "base64"
+          },
+          "text": {
+            "type": "boolean"
+          },
+          "mime": {
+            "type": "string"
+          }
+        }
+      },
+      "ListDirectoryRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "directory": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        }
+      },
+      "DirEntry": {
+        "type": "object",
+        "description": "One directory entry.",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/DirEntryKind"
+          },
+          "size": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "time_modified": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ListDirectoryResponse": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DirEntry"
+            }
+          }
+        }
+      },
+      "FindFilesRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "directory": {
+            "type": "string"
+          },
+          "pattern": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "FindFilesResponse": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "SearchTextRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "directory": {
+            "type": "string"
+          },
+          "query": {
+            "type": "string"
+          },
+          "glob": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "TextMatch": {
+        "type": "object",
+        "description": "One text search match.",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "line_number": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "text": {
+            "type": "string"
+          }
+        }
+      },
+      "SearchTextResponse": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "matches": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TextMatch"
+            }
+          }
+        }
+      },
+      "SearchSymbolsRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "directory": {
+            "type": "string"
+          },
+          "query": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "Symbol": {
+        "type": "object",
+        "description": "One discovered symbol.",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/SymbolKind"
+          },
+          "line_number": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "SearchSymbolsResponse": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "symbols": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Symbol"
+            }
+          }
+        }
+      },
+      "Interaction": {
+        "type": "object",
+        "description": "One pending interaction request.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "session": {
+            "type": "string"
+          },
+          "type": {
+            "$ref": "#/components/schemas/InteractionType"
+          },
+          "title": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "payload": {
+            "type": "object"
+          },
+          "time_created": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ListInteractionsRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "directory": {
+            "type": "string"
+          },
+          "session": {
+            "type": "string"
+          },
+          "type": {
+            "$ref": "#/components/schemas/InteractionType"
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageRequest"
+          }
+        }
+      },
+      "ListInteractionsResponse": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "interactions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Interaction"
+            }
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageInfo"
+          }
+        }
+      },
+      "PermissionResponse": {
+        "type": "object",
+        "description": "Response to a permission request.",
+        "properties": {
+          "allowed": {
+            "type": "boolean"
+          },
+          "persist": {
+            "type": "boolean"
+          }
+        }
+      },
+      "QuestionResponse": {
+        "type": "object",
+        "description": "Response to a question request.",
+        "properties": {
+          "answer": {
+            "type": "string"
+          },
+          "rejected": {
+            "type": "boolean"
+          }
+        }
+      },
+      "RespondInteractionRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "request": {
+            "type": "string"
+          },
+          "permission": {
+            "$ref": "#/components/schemas/PermissionResponse"
+          },
+          "question": {
+            "$ref": "#/components/schemas/QuestionResponse"
+          }
+        }
+      },
+      "RespondInteractionResponse": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "applied": {
+            "type": "boolean"
+          }
+        }
+      },
+      "SavedRule": {
+        "type": "object",
+        "description": "A persisted permission decision.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "permission": {
+            "$ref": "#/components/schemas/RulePermission"
+          },
+          "tool": {
+            "type": "string"
+          },
+          "pattern": {
+            "type": "string"
+          },
+          "time_created": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ListSavedRulesRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "directory": {
+            "type": "string"
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageRequest"
+          }
+        }
+      },
+      "ListSavedRulesResponse": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "rules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SavedRule"
+            }
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageInfo"
+          }
+        }
+      },
+      "DeleteSavedRuleRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "directory": {
+            "type": "string"
+          },
+          "rule": {
+            "type": "string"
+          }
+        }
+      },
+      "IngestLogRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "service": {
+            "type": "string"
+          },
+          "level": {
+            "$ref": "#/components/schemas/LogLevel"
+          },
+          "message": {
+            "type": "string"
+          },
+          "extra": {
+            "type": "object"
+          }
+        }
+      },
+      "McpServerStatus": {
+        "type": "object",
+        "description": "Status of one MCP server.",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/McpServerState"
+          },
+          "tools": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "error": {
+            "type": "string"
+          },
+          "auth_required": {
+            "type": "boolean"
+          }
+        }
+      },
+      "GetMcpStatusRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "directory": {
+            "type": "string"
+          }
+        }
+      },
+      "GetMcpStatusResponse": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "servers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/McpServerStatus"
+            }
+          }
+        }
+      },
+      "CommandTransport": {
+        "type": "object",
+        "description": "stdio transport: launch a local command.",
+        "properties": {
+          "command": {
+            "type": "string"
+          },
+          "args": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "string> env": {
+            "$ref": "#/components/schemas/map<string,"
+          }
+        }
+      },
+      "UrlTransport": {
+        "type": "object",
+        "description": "HTTP/SSE transport: connect to a URL.",
+        "properties": {
+          "url": {
+            "type": "string"
+          }
+        }
+      },
+      "AddMcpServerRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "directory": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "command": {
+            "$ref": "#/components/schemas/CommandTransport"
+          },
+          "url": {
+            "$ref": "#/components/schemas/UrlTransport"
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ConnectMcpRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "directory": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "DisconnectMcpRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "directory": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "StartMcpAuthRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "directory": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "StartMcpAuthResponse": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "authorization_url": {
+            "type": "string"
+          }
+        }
+      },
+      "CompleteMcpAuthRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "directory": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          }
+        }
+      },
+      "RemoveMcpAuthRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "directory": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "TokenUsage": {
+        "type": "object",
+        "description": "Token accounting for one model round.",
+        "properties": {
+          "input": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "output": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "reasoning": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "cache_read": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "cache_write": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "TextPart": {
+        "type": "object",
+        "description": "Text part of a message.",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        }
+      },
+      "ReasoningPart": {
+        "type": "object",
+        "description": "Model reasoning trace part.",
+        "properties": {
+          "text": {
+            "type": "string"
+          },
+          "variant": {
+            "type": "string"
+          }
+        }
+      },
+      "ToolCallPart": {
+        "type": "object",
+        "description": "A tool invocation requested by the model.",
+        "properties": {
+          "call_id": {
+            "type": "string"
+          },
+          "tool": {
+            "type": "string"
+          },
+          "input_json": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/ToolExecutionState"
+          }
+        }
+      },
+      "ToolResultPart": {
+        "type": "object",
+        "description": "The outcome of a tool invocation.",
+        "properties": {
+          "call_id": {
+            "type": "string"
+          },
+          "output": {
+            "type": "string"
+          },
+          "error_code": {
+            "type": "string"
+          },
+          "error_message": {
+            "type": "string"
+          }
+        }
+      },
+      "AttachmentPart": {
+        "type": "object",
+        "description": "A binary or file attachment on a message.",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "mime": {
+            "type": "string"
+          },
+          "data": {
+            "type": "string",
+            "contentEncoding": "base64"
+          },
+          "path": {
+            "type": "string"
+          }
+        }
+      },
+      "PartInfo": {
+        "type": "object",
+        "description": "One part of a message body.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "text": {
+            "$ref": "#/components/schemas/TextPart"
+          },
+          "reasoning": {
+            "$ref": "#/components/schemas/ReasoningPart"
+          },
+          "tool_call": {
+            "$ref": "#/components/schemas/ToolCallPart"
+          },
+          "tool_result": {
+            "$ref": "#/components/schemas/ToolResultPart"
+          },
+          "attachment": {
+            "$ref": "#/components/schemas/AttachmentPart"
+          }
+        }
+      },
+      "MessageInfo": {
+        "type": "object",
+        "description": "Projection snapshot of one message.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "session": {
+            "type": "string"
+          },
+          "role": {
+            "$ref": "#/components/schemas/Role"
+          },
+          "agent": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "finish": {
+            "$ref": "#/components/schemas/FinishReason"
+          },
+          "parts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PartInfo"
+            }
+          },
+          "time_created": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "time_updated": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ListMessagesRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "session": {
+            "type": "string"
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageRequest"
+          }
+        }
+      },
+      "ListMessagesResponse": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "messages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MessageInfo"
+            }
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageInfo"
+          }
+        }
+      },
+      "GetMessageRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "session": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "DeleteMessagePartRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "session": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "part": {
+            "type": "string"
+          }
+        }
+      },
+      "TodoItem": {
+        "type": "object",
+        "description": "One todo item of a session's plan.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "content": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/TodoStatus"
+          }
+        }
+      },
+      "GetSessionTodoRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "session": {
+            "type": "string"
+          }
+        }
+      },
+      "TodoList": {
+        "type": "object",
+        "description": "A session's todo list projection.",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TodoItem"
+            }
+          }
+        }
+      },
+      "GetHealthResponse": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
+      "LocationInfo": {
+        "type": "object",
+        "description": "Where this backend runs and which directory it serves.",
+        "properties": {
+          "directory": {
+            "type": "string"
+          },
+          "hostname": {
+            "type": "string"
+          },
+          "pid": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
+      "GetConfigRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "directory": {
+            "type": "string"
+          }
+        }
+      },
+      "GetConfigResponse": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "values": {
+            "type": "object"
+          }
+        }
+      },
+      "UpdateConfigRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "directory": {
+            "type": "string"
+          },
+          "patch": {
+            "type": "object"
+          }
+        }
+      },
+      "UpgradeProcessResponse": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "GetBootstrapRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "directory": {
+            "type": "string"
+          }
+        }
+      },
+      "Bootstrap": {
+        "type": "object",
+        "description": "One-round-trip startup snapshot for frontends.",
+        "properties": {
+          "location": {
+            "$ref": "#/components/schemas/LocationInfo"
+          },
+          "config": {
+            "type": "object"
+          },
+          "agents": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AgentSummary"
+            }
+          },
+          "models": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ModelSummary"
+            }
+          },
+          "providers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProviderSummary"
+            }
+          },
+          "commands": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CommandSummary"
+            }
+          },
+          "skills": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SkillSummary"
+            }
+          },
+          "tools": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ToolSummary"
+            }
+          },
+          "interactions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Interaction"
+            }
+          },
+          "saved_rules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SavedRule"
+            }
+          },
+          "formatter_available": {
+            "type": "boolean"
+          },
+          "sessions_cursor": {
+            "type": "string"
+          }
+        }
+      },
+      "ProjectInfo": {
+        "type": "object",
+        "description": "One registered project.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "directory": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "ListProjectsRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "page": {
+            "$ref": "#/components/schemas/PageRequest"
+          }
+        }
+      },
+      "ListProjectsResponse": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "projects": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProjectInfo"
+            }
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageInfo"
+          }
+        }
+      },
+      "UpdateProjectRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "project": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "ListProjectDirectoriesRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "project": {
+            "type": "string"
+          }
+        }
+      },
+      "ListProjectDirectoriesResponse": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "directories": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "InitProjectGitRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "project": {
+            "type": "string"
+          }
+        }
+      },
+      "InitProjectGitResponse": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "initialized": {
+            "type": "boolean"
+          }
+        }
+      },
+      "GetVcsStatusRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "directory": {
+            "type": "string"
+          }
+        }
+      },
+      "VcsStatus": {
+        "type": "object",
+        "description": "Repository status snapshot.",
+        "properties": {
+          "branch": {
+            "type": "string"
+          },
+          "head": {
+            "type": "string"
+          },
+          "dirty": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "ahead": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "behind": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/VcsFileChange"
+            }
+          }
+        }
+      },
+      "VcsFileChange": {
+        "type": "object",
+        "description": "One changed file.",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/VcsFileStatus"
+          }
+        }
+      },
+      "GetVcsDiffRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "directory": {
+            "type": "string"
+          },
+          "raw": {
+            "type": "boolean"
+          },
+          "paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "GetVcsDiffResponse": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "diff": {
+            "type": "string"
+          }
+        }
+      },
+      "ApplyPatchRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "directory": {
+            "type": "string"
+          },
+          "patch": {
+            "type": "string"
+          }
+        }
+      },
+      "ApplyPatchResponse": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "applied": {
+            "type": "boolean"
+          },
+          "summary": {
+            "type": "string"
+          }
+        }
+      },
+      "PtySession": {
+        "type": "object",
+        "description": "State snapshot of one PTY session.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "shell": {
+            "type": "string"
+          },
+          "cols": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "rows": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "cwd": {
+            "type": "string"
+          }
+        }
+      },
+      "ListShellsResponse": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "shells": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "CreatePtyRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "directory": {
+            "type": "string"
+          },
+          "shell": {
+            "type": "string"
+          },
+          "cols": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "rows": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "cwd": {
+            "type": "string"
+          },
+          "string> env": {
+            "$ref": "#/components/schemas/map<string,"
+          }
+        }
+      },
+      "GetPtyRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        }
+      },
+      "UpdatePtyRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "cols": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "rows": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "DeletePtyRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateConnectTokenRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateConnectTokenResponse": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "token": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        }
+      },
+      "PtyClientFrame": {
+        "type": "object",
+        "description": "Client-to-server terminal frame.",
+        "properties": {
+          "input": {
+            "type": "string",
+            "contentEncoding": "base64"
+          },
+          "resize": {
+            "$ref": "#/components/schemas/PtyResize"
+          },
+          "ping": {
+            "type": "boolean"
+          }
+        }
+      },
+      "PtyResize": {
+        "type": "object",
+        "description": "Terminal resize request.",
+        "properties": {
+          "cols": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "rows": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "PtyServerFrame": {
+        "type": "object",
+        "description": "Server-to-client terminal frame.",
+        "properties": {
+          "output": {
+            "type": "string",
+            "contentEncoding": "base64"
+          },
+          "exit": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "pong": {
+            "type": "boolean"
+          }
+        }
+      },
+      "SessionRef": {
+        "type": "object",
+        "description": "Session id string (`hysec_...`, `ses_...`, or legacy raw UUID accepted on input; canonical form on output).",
+        "properties": {
+          "session": {
+            "type": "string"
+          }
+        }
+      },
+      "SessionInfo": {
+        "type": "object",
+        "description": "Projection summary of one session.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "parent": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "agent": {
+            "type": "string"
+          },
+          "model": {
+            "$ref": "#/components/schemas/ModelRef"
+          },
+          "workdir": {
+            "type": "string"
+          },
+          "background": {
+            "type": "boolean"
+          },
+          "time_created": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "time_updated": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "last_seq": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "CreateSessionRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "agent": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "workdir": {
+            "type": "string"
+          },
+          "parent": {
+            "type": "string"
+          },
+          "initialize": {
+            "type": "boolean"
+          },
+          "title": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateSessionResponse": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "session": {
+            "$ref": "#/components/schemas/SessionInfo"
+          }
+        }
+      },
+      "GetSessionRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "session": {
+            "type": "string"
+          }
+        }
+      },
+      "ListSessionsRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "directory": {
+            "type": "string"
+          },
+          "parent": {
+            "type": "string"
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageRequest"
+          }
+        }
+      },
+      "ListSessionsResponse": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "sessions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SessionInfo"
+            }
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageInfo"
+          }
+        }
+      },
+      "UpdateSessionRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "session": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "agent": {
+            "type": "string"
+          },
+          "background": {
+            "type": "boolean"
+          }
+        }
+      },
+      "DeleteSessionRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "session": {
+            "type": "string"
+          }
+        }
+      },
+      "ForkSessionRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "session": {
+            "type": "string"
+          },
+          "until_seq": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "ForkSessionResponse": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "session": {
+            "$ref": "#/components/schemas/SessionInfo"
+          }
+        }
+      },
+      "CompactSessionRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "session": {
+            "type": "string"
+          },
+          "until_seq": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "CompactSessionResponse": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "compacted_until_seq": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "strategy": {
+            "type": "string"
+          }
+        }
+      },
+      "SummarizeSessionRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "session": {
+            "type": "string"
+          }
+        }
+      },
+      "SummarizeSessionResponse": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "summary_message": {
+            "type": "string"
+          }
+        }
+      },
+      "RevertSessionRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "session": {
+            "type": "string"
+          },
+          "until_seq": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "undo": {
+            "type": "boolean"
+          }
+        }
+      },
+      "RevertSessionResponse": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "session": {
+            "$ref": "#/components/schemas/SessionInfo"
+          }
+        }
+      },
+      "PromptTurn": {
+        "type": "object",
+        "description": "A plain user prompt turn.",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        }
+      },
+      "CommandTurn": {
+        "type": "object",
+        "description": "A slash-command turn.",
+        "properties": {
+          "command": {
+            "type": "string"
+          },
+          "arguments": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          }
+        }
+      },
+      "ShellTurn": {
+        "type": "object",
+        "description": "A synthetic shell turn: the command runs via the builtin shell tool with no model round.",
+        "properties": {
+          "command": {
+            "type": "string"
+          },
+          "agent": {
+            "type": "string"
+          },
+          "model": {
+            "$ref": "#/components/schemas/ModelRef"
+          }
+        }
+      },
+      "CreateTurnRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "session": {
+            "type": "string"
+          },
+          "prompt": {
+            "$ref": "#/components/schemas/PromptTurn"
+          },
+          "command": {
+            "$ref": "#/components/schemas/CommandTurn"
+          },
+          "shell": {
+            "$ref": "#/components/schemas/ShellTurn"
+          }
+        }
+      },
+      "CreateTurnResponse": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "turn": {
+            "$ref": "#/components/schemas/TurnInfo"
+          }
+        }
+      },
+      "TurnInfo": {
+        "type": "object",
+        "description": "Projection snapshot of one admitted turn. The turn id is the id of the assistant message the engine drives for that turn.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "session": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/TurnState"
+          },
+          "finish": {
+            "$ref": "#/components/schemas/FinishReason"
+          },
+          "error_code": {
+            "type": "string"
+          },
+          "error_message": {
+            "type": "string"
+          }
+        }
+      },
+      "GetTurnRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "session": {
+            "type": "string"
+          },
+          "turn": {
+            "type": "string"
+          }
+        }
+      },
+      "WaitTurnRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "session": {
+            "type": "string"
+          },
+          "turn": {
+            "type": "string"
+          },
+          "timeout_ms": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "CancelTurnRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "session": {
+            "type": "string"
+          },
+          "turn": {
+            "type": "string"
+          }
+        }
+      },
+      "WorkflowSummary": {
+        "type": "object",
+        "description": "One discovered workflow source.",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "stage_count": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "ListWorkflowsRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "directory": {
+            "type": "string"
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageRequest"
+          }
+        }
+      },
+      "ListWorkflowsResponse": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "workflows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowSummary"
+            }
+          },
+          "page": {
+            "$ref": "#/components/schemas/PageInfo"
+          }
+        }
+      },
+      "GetWorkflowStateRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "session": {
+            "type": "string"
+          }
+        }
+      },
+      "WorkflowStageRun": {
+        "type": "object",
+        "description": "Execution state of one stage member.",
+        "properties": {
+          "stage": {
+            "type": "string"
+          },
+          "member": {
+            "type": "string"
+          },
+          "agent": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/WorkflowRunStatus"
+          }
+        }
+      },
+      "WorkflowState": {
+        "type": "object",
+        "description": "Projected workflow state of a session.",
+        "properties": {
+          "session": {
+            "type": "string"
+          },
+          "workflow": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/WorkflowRunStatus"
+          },
+          "stages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowStageRun"
+            }
+          },
+          "error_code": {
+            "type": "string"
+          }
+        }
+      },
+      "WorkflowInfoCommand": {
+        "type": "object",
+        "description": "`list` command: enumerate workflow sources. `info` command: inspect one compiled workflow.",
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "WorkflowSelectCommand": {
+        "type": "object",
+        "description": "`select` command: persist one source/revision identity.",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "expected_revision": {
+            "type": "string"
+          }
+        }
+      },
+      "WorkflowRunCommand": {
+        "type": "object",
+        "description": "`run` command: start the selected workflow.",
+        "properties": {
+          "inputs": {
+            "type": "object"
+          }
+        }
+      },
+      "SubmitWorkflowCommandRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "session": {
+            "type": "string"
+          },
+          "list": {
+            "$ref": "#/components/schemas/WorkflowListCommand"
+          },
+          "info": {
+            "$ref": "#/components/schemas/WorkflowInfoCommand"
+          },
+          "select": {
+            "$ref": "#/components/schemas/WorkflowSelectCommand"
+          },
+          "run": {
+            "$ref": "#/components/schemas/WorkflowRunCommand"
+          }
+        }
+      },
+      "WorkflowInfoResult": {
+        "type": "object",
+        "description": "Result payload of the `info` command.",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string"
+          },
+          "stage_names": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "SubmitWorkflowCommandResponse": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "list": {
+            "$ref": "#/components/schemas/ListWorkflowsResponse"
+          },
+          "info": {
+            "$ref": "#/components/schemas/WorkflowInfoResult"
+          },
+          "selected": {
+            "$ref": "#/components/schemas/WorkflowState"
+          },
+          "started": {
+            "$ref": "#/components/schemas/WorkflowState"
+          }
+        }
+      },
+      "Worktree": {
+        "type": "object",
+        "description": "One git worktree.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "branch": {
+            "type": "string"
+          },
+          "head": {
+            "type": "string"
+          }
+        }
+      },
+      "ListWorktreesRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "directory": {
+            "type": "string"
+          }
+        }
+      },
+      "ListWorktreesResponse": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "worktrees": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Worktree"
+            }
+          }
+        }
+      },
+      "CreateWorktreeRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "directory": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "branch": {
+            "type": "string"
+          }
+        }
+      },
+      "DeleteWorktreeRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "worktree": {
+            "type": "string"
+          },
+          "delete_branch": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ResetWorktreeRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "worktree": {
+            "type": "string"
+          }
+        }
+      },
+      "AuthStatus": {
+        "type": "string",
+        "description": "Authentication state of a provider route.",
+        "enum": [
+          "AUTH_STATUS_UNSPECIFIED",
+          "AUTH_STATUS_CREDENTIALED",
+          "AUTH_STATUS_UNAUTHENTICATED",
+          "AUTH_STATUS_AUTH_REQUIRED",
+          "AUTH_STATUS_AUTH_REJECTED",
+          "AUTH_STATUS_NOT_APPLICABLE"
+        ]
+      },
+      "DirEntryKind": {
+        "type": "string",
+        "description": "Kind of a directory entry.",
+        "enum": [
+          "DIR_ENTRY_KIND_UNSPECIFIED",
+          "DIR_ENTRY_KIND_FILE",
+          "DIR_ENTRY_KIND_DIRECTORY",
+          "DIR_ENTRY_KIND_SYMLINK"
+        ]
+      },
+      "SymbolKind": {
+        "type": "string",
+        "description": "Kind of a discovered symbol.",
+        "enum": [
+          "SYMBOL_KIND_UNSPECIFIED",
+          "SYMBOL_KIND_FUNCTION",
+          "SYMBOL_KIND_TYPE",
+          "SYMBOL_KIND_MODULE",
+          "SYMBOL_KIND_OTHER"
+        ]
+      },
+      "InteractionType": {
+        "type": "string",
+        "description": "Kind of a pending interaction.",
+        "enum": [
+          "INTERACTION_TYPE_UNSPECIFIED",
+          "INTERACTION_TYPE_PERMISSION",
+          "INTERACTION_TYPE_QUESTION"
+        ]
+      },
+      "RulePermission": {
+        "type": "string",
+        "description": "Effect of a saved permission rule.",
+        "enum": [
+          "RULE_PERMISSION_UNSPECIFIED",
+          "RULE_PERMISSION_ALLOW",
+          "RULE_PERMISSION_ASK",
+          "RULE_PERMISSION_DENY"
+        ]
+      },
+      "LogLevel": {
+        "type": "string",
+        "description": "Severity of an ingested log entry.",
+        "enum": [
+          "LOG_LEVEL_UNSPECIFIED",
+          "LOG_LEVEL_DEBUG",
+          "LOG_LEVEL_INFO",
+          "LOG_LEVEL_WARN",
+          "LOG_LEVEL_ERROR"
+        ]
+      },
+      "McpServerState": {
+        "type": "string",
+        "description": "Connection state of an MCP server.",
+        "enum": [
+          "MCP_SERVER_STATE_UNSPECIFIED",
+          "MCP_SERVER_STATE_DESIRED",
+          "MCP_SERVER_STATE_CONNECTED",
+          "MCP_SERVER_STATE_DISCONNECTED",
+          "MCP_SERVER_STATE_FAILED"
+        ]
+      },
+      "FinishReason": {
+        "type": "string",
+        "description": "Terminal reason of an assistant message.",
+        "enum": [
+          "FINISH_REASON_UNSPECIFIED",
+          "FINISH_REASON_STOP",
+          "FINISH_REASON_TOOL_CALLS",
+          "FINISH_REASON_LENGTH",
+          "FINISH_REASON_CANCELLED",
+          "FINISH_REASON_ERROR"
+        ]
+      },
+      "Role": {
+        "type": "string",
+        "description": "Author role of a message.",
+        "enum": [
+          "ROLE_UNSPECIFIED",
+          "ROLE_USER",
+          "ROLE_ASSISTANT",
+          "ROLE_SYSTEM",
+          "ROLE_TOOL"
+        ]
+      },
+      "ToolExecutionState": {
+        "type": "string",
+        "description": "Execution state of one tool call.",
+        "enum": [
+          "TOOL_EXECUTION_STATE_UNSPECIFIED",
+          "TOOL_EXECUTION_STATE_PENDING",
+          "TOOL_EXECUTION_STATE_RUNNING",
+          "TOOL_EXECUTION_STATE_OK",
+          "TOOL_EXECUTION_STATE_ERROR",
+          "TOOL_EXECUTION_STATE_DENIED"
+        ]
+      },
+      "TodoStatus": {
+        "type": "string",
+        "description": "Lifecycle status of a todo item.",
+        "enum": [
+          "TODO_STATUS_UNSPECIFIED",
+          "TODO_STATUS_PENDING",
+          "TODO_STATUS_IN_PROGRESS",
+          "TODO_STATUS_COMPLETED"
+        ]
+      },
+      "VcsFileStatus": {
+        "type": "string",
+        "description": "Change status of one file.",
+        "enum": [
+          "VCS_FILE_STATUS_UNSPECIFIED",
+          "VCS_FILE_STATUS_ADDED",
+          "VCS_FILE_STATUS_MODIFIED",
+          "VCS_FILE_STATUS_DELETED",
+          "VCS_FILE_STATUS_RENAMED",
+          "VCS_FILE_STATUS_UNTRACKED"
+        ]
+      },
+      "TurnState": {
+        "type": "string",
+        "description": "Terminal state of a turn.",
+        "enum": [
+          "TURN_STATE_UNSPECIFIED",
+          "TURN_STATE_ADMITTED",
+          "TURN_STATE_RUNNING",
+          "TURN_STATE_FINISHED",
+          "TURN_STATE_FAILED",
+          "TURN_STATE_CANCELLED"
+        ]
+      },
+      "WorkflowRunStatus": {
+        "type": "string",
+        "description": "Lifecycle status of a workflow run.",
+        "enum": [
+          "WORKFLOW_RUN_STATUS_UNSPECIFIED",
+          "WORKFLOW_RUN_STATUS_SELECTED",
+          "WORKFLOW_RUN_STATUS_RUNNING",
+          "WORKFLOW_RUN_STATUS_FINISHED",
+          "WORKFLOW_RUN_STATUS_FAILED",
+          "WORKFLOW_RUN_STATUS_CANCELLED"
+        ]
+      }
+    }
+  }
+}

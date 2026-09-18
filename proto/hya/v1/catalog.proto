@@ -1,0 +1,248 @@
+// hya API v1 — agent, model, provider, command, skill, and tool catalogs.
+syntax = "proto3";
+
+package hya.v1;
+
+import "hya/v1/common.proto";
+
+// Read-only catalog surface used by pickers, completion UIs, and setup
+// flows.
+service Catalog {
+  // Agents that can be bound to a session.
+  //
+  // hya.http: GET /v1/agents
+  rpc ListAgents(ListAgentsRequest) returns (ListAgentsResponse);
+
+  // Models across providers, optionally filtered to one provider.
+  //
+  // hya.http: GET /v1/models
+  rpc ListModels(ListModelsRequest) returns (ListModelsResponse);
+
+  // Providers with their aggregate auth status.
+  //
+  // hya.http: GET /v1/providers
+  rpc ListProviders(ListProvidersRequest) returns (ListProvidersResponse);
+
+  // One provider's detail including its models.
+  //
+  // hya.http: GET /v1/providers/{provider_id}
+  rpc GetProvider(GetProviderRequest) returns (ProviderInfo);
+
+  // Slash-command catalog entries.
+  //
+  // hya.http: GET /v1/commands
+  rpc ListCommands(ListCommandsRequest) returns (ListCommandsResponse);
+
+  // Skill catalog entries.
+  //
+  // hya.http: GET /v1/skills
+  rpc ListSkills(ListSkillsRequest) returns (ListSkillsResponse);
+
+  // Tool registry entries including hidden aliases.
+  //
+  // hya.http: GET /v1/tools
+  rpc ListTools(ListToolsRequest) returns (ListToolsResponse);
+}
+
+// Provider/model identity pair. `model_id` is provider-local.
+message ModelRef {
+  // Provider identifier as configured (e.g. `anthropic`).
+  string provider_id = 1;
+  // Provider-local model identifier (e.g. `claude-sonnet-4-6`).
+  string model_id = 2;
+  // Optional reasoning variant suffix (e.g. `high`).
+  string variant = 3;
+}
+
+// Authentication state of a provider route.
+enum AuthStatus {
+  // Unset sentinel; never emitted by the server.
+  AUTH_STATUS_UNSPECIFIED = 0;
+  // Credentials present and accepted.
+  AUTH_STATUS_CREDENTIALED = 1;
+  // Route needs no credentials.
+  AUTH_STATUS_UNAUTHENTICATED = 2;
+  // Credentials missing; provider requires them.
+  AUTH_STATUS_AUTH_REQUIRED = 3;
+  // Credentials present but rejected by the provider.
+  AUTH_STATUS_AUTH_REJECTED = 4;
+  // Auth does not apply to this route kind.
+  AUTH_STATUS_NOT_APPLICABLE = 5;
+}
+
+message ListAgentsRequest {
+  // Directory whose bound agent catalog should be listed.
+  string directory = 1;
+  // Standard pagination controls.
+  PageRequest page = 2;
+}
+
+// One selectable agent.
+message AgentSummary {
+  // Agent name used in `CreateSessionRequest.agent`.
+  string name = 1;
+  // Default model the agent runs on.
+  ModelRef model = 2;
+  // One-line description for pickers.
+  string description = 3;
+  // Whether the agent is hidden from default pickers.
+  bool hidden = 4;
+}
+
+message ListAgentsResponse {
+  // Agents bound to the directory.
+  repeated AgentSummary agents = 1;
+  // Pagination outcome.
+  PageInfo page = 2;
+}
+
+message ListModelsRequest {
+  // Directory whose model catalog should be listed.
+  string directory = 1;
+  // Restrict to one provider when non-empty.
+  string provider_id = 2;
+  // Standard pagination controls.
+  PageRequest page = 3;
+}
+
+// One selectable model.
+message ModelSummary {
+  // Fully qualified model reference string (`provider/model`).
+  string id = 1;
+  // Provider identifier.
+  string provider_id = 2;
+  // Provider-local model identifier.
+  string model_id = 3;
+  // Display name when the provider publishes one.
+  string display_name = 4;
+  // Whether the route supports reasoning effort variants.
+  bool reasoning = 5;
+  // Auth state of the owning provider route.
+  AuthStatus auth = 6;
+}
+
+message ListModelsResponse {
+  // Models matching the filter.
+  repeated ModelSummary models = 1;
+  // Pagination outcome.
+  PageInfo page = 2;
+}
+
+message ListProvidersRequest {
+  // Directory whose provider catalog should be listed.
+  string directory = 1;
+  // Standard pagination controls.
+  PageRequest page = 2;
+}
+
+// One provider route with aggregate auth state.
+message ProviderSummary {
+  // Provider identifier as configured.
+  string id = 1;
+  // Human-readable provider name.
+  string name = 2;
+  // Aggregate auth status across the provider's routes.
+  AuthStatus auth = 3;
+  // Vendor documentation/auth URL when known.
+  string website = 4;
+}
+
+message ListProvidersResponse {
+  // Providers visible in this directory.
+  repeated ProviderSummary providers = 1;
+  // Pagination outcome.
+  PageInfo page = 2;
+}
+
+message GetProviderRequest {
+  // Directory context for the provider lookup.
+  string directory = 1;
+  // Provider identifier.
+  string provider_id = 2;
+}
+
+// Provider detail with its model rows.
+message ProviderInfo {
+  // Provider summary.
+  ProviderSummary summary = 1;
+  // Models exposed by this provider.
+  repeated ModelSummary models = 2;
+  // Whether an API-key auth method is supported.
+  bool supports_api_key = 3;
+  // Whether an OAuth flow is supported.
+  bool supports_oauth = 4;
+}
+
+message ListCommandsRequest {
+  // Directory whose command catalog should be listed.
+  string directory = 1;
+  // Standard pagination controls.
+  PageRequest page = 2;
+}
+
+// One slash-command entry.
+message CommandSummary {
+  // Command name without the leading `/`.
+  string name = 1;
+  // One-line description for completion UIs.
+  string description = 2;
+  // Argument hint shown after the command name.
+  string argument_hint = 3;
+}
+
+message ListCommandsResponse {
+  // Commands visible in this directory.
+  repeated CommandSummary commands = 1;
+  // Pagination outcome.
+  PageInfo page = 2;
+}
+
+message ListSkillsRequest {
+  // Directory whose skill catalog should be listed.
+  string directory = 1;
+  // Standard pagination controls.
+  PageRequest page = 2;
+}
+
+// One invocable skill.
+message SkillSummary {
+  // Skill name used with `/skill` and the skill plane.
+  string name = 1;
+  // One-line description of what the skill does.
+  string description = 2;
+  // Where the skill was discovered (`builtin`, `bundle`, `project`, ...).
+  string source = 3;
+}
+
+message ListSkillsResponse {
+  // Skills visible in this directory.
+  repeated SkillSummary skills = 1;
+  // Pagination outcome.
+  PageInfo page = 2;
+}
+
+message ListToolsRequest {
+  // Directory whose tool catalog should be listed.
+  string directory = 1;
+  // Standard pagination controls.
+  PageRequest page = 2;
+}
+
+// One tool registry entry.
+message ToolSummary {
+  // Canonical tool name.
+  string name = 1;
+  // One-line description of the tool's contract.
+  string description = 2;
+  // Tool origin: `builtin`, `mcp`, or `plugin`.
+  string kind = 3;
+  // Whether the name is a hidden alias.
+  bool hidden = 4;
+}
+
+message ListToolsResponse {
+  // Tools visible in this directory.
+  repeated ToolSummary tools = 1;
+  // Pagination outcome.
+  PageInfo page = 2;
+}

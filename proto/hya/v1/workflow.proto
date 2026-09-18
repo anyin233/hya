@@ -1,0 +1,169 @@
+// hya API v1 — workflow catalog reads and durable per-session workflow
+// execution.
+//
+// Workflow state is event-sourced: the session event log plus the shared
+// projection is the only durable read model. Commands return `Started`;
+// terminal progress arrives through events and `GetWorkflowState` reads.
+syntax = "proto3";
+
+package hya.v1;
+
+import "google/protobuf/struct.proto";
+import "hya/v1/common.proto";
+
+// Workflow catalog and per-session execution surface.
+service Workflow {
+  // List discovered workflow sources for a directory.
+  //
+  // hya.http: GET /v1/workflows
+  rpc ListWorkflows(ListWorkflowsRequest) returns (ListWorkflowsResponse);
+
+  // Read the projected workflow state of one session.
+  //
+  // hya.http: GET /v1/sessions/{session}/workflow
+  rpc GetWorkflowState(GetWorkflowStateRequest) returns (WorkflowState);
+
+  // Submit one typed workflow command against a session (select source,
+  // run, inspect). Mirrors the slash-command `/workflow` surface.
+  //
+  // hya.http: POST /v1/sessions/{session}/workflow
+  rpc SubmitWorkflowCommand(SubmitWorkflowCommandRequest) returns (SubmitWorkflowCommandResponse);
+}
+
+// One discovered workflow source.
+message WorkflowSummary {
+  // Declared workflow name.
+  string name = 1;
+  // Current compiler revision of the source.
+  string revision = 2;
+  // One-line description from the source frontmatter.
+  string description = 3;
+  // Number of stages in the compiled plan.
+  uint32 stage_count = 4;
+}
+
+message ListWorkflowsRequest {
+  // Directory whose workflow sources should be listed.
+  string directory = 1;
+  // Standard pagination controls.
+  PageRequest page = 2;
+}
+
+message ListWorkflowsResponse {
+  // Discovered workflow sources.
+  repeated WorkflowSummary workflows = 1;
+  // Pagination outcome.
+  PageInfo page = 2;
+}
+
+message GetWorkflowStateRequest {
+  // Session identifier.
+  string session = 1;
+}
+
+// Lifecycle status of a workflow run.
+enum WorkflowRunStatus {
+  // Unset sentinel; never emitted by the server.
+  WORKFLOW_RUN_STATUS_UNSPECIFIED = 0;
+  // Selected but not started.
+  WORKFLOW_RUN_STATUS_SELECTED = 1;
+  // Stages are executing.
+  WORKFLOW_RUN_STATUS_RUNNING = 2;
+  // All stages completed successfully.
+  WORKFLOW_RUN_STATUS_FINISHED = 3;
+  // A stage failed terminally.
+  WORKFLOW_RUN_STATUS_FAILED = 4;
+  // Cancelled by command or shutdown.
+  WORKFLOW_RUN_STATUS_CANCELLED = 5;
+}
+
+// Execution state of one stage member.
+message WorkflowStageRun {
+  // Stage name from the compiled plan.
+  string stage = 1;
+  // Member/session id executing the stage when spawned.
+  string member = 2;
+  // Agent name bound to the stage.
+  string agent = 3;
+  // Stage lifecycle status.
+  WorkflowRunStatus status = 4;
+}
+
+// Projected workflow state of a session.
+message WorkflowState {
+  // Owning session identifier.
+  string session = 1;
+  // Selected workflow name; empty when none is selected.
+  string workflow = 2;
+  // Selected compiler revision.
+  string revision = 3;
+  // Aggregate run status.
+  WorkflowRunStatus status = 4;
+  // Stage execution rows in plan order.
+  repeated WorkflowStageRun stages = 5;
+  // Terminal failure code when status is FAILED.
+  string error_code = 6;
+}
+
+// `list` command: enumerate workflow sources.
+message WorkflowListCommand {}
+
+// `info` command: inspect one compiled workflow.
+message WorkflowInfoCommand {
+  // Declared workflow name.
+  string name = 1;
+}
+
+// `select` command: persist one source/revision identity.
+message WorkflowSelectCommand {
+  // Declared workflow name.
+  string name = 1;
+  // Optional optimistic compiler revision to match.
+  string expected_revision = 2;
+}
+
+// `run` command: start the selected workflow.
+message WorkflowRunCommand {
+  // Workflow inputs as a JSON object.
+  google.protobuf.Struct inputs = 1;
+}
+
+message SubmitWorkflowCommandRequest {
+  // Session identifier the command applies to.
+  string session = 1;
+  // Command payload; exactly one kind is set.
+  oneof command {
+    // List workflow sources.
+    WorkflowListCommand list = 2;
+    // Inspect one compiled workflow.
+    WorkflowInfoCommand info = 3;
+    // Select a workflow source.
+    WorkflowSelectCommand select = 4;
+    // Run the selected workflow.
+    WorkflowRunCommand run = 5;
+  }
+}
+
+// Result payload of the `info` command.
+message WorkflowInfoResult {
+  // Compiled workflow name.
+  string name = 1;
+  // Compiler revision of this graph.
+  string revision = 2;
+  // Stage names in execution order.
+  repeated string stage_names = 3;
+}
+
+message SubmitWorkflowCommandResponse {
+  // Command outcome; exactly one kind is set.
+  oneof result {
+    // Rows from the `list` command.
+    ListWorkflowsResponse list = 1;
+    // Compiled graph from the `info` command.
+    WorkflowInfoResult info = 2;
+    // State after the `select` command.
+    WorkflowState selected = 3;
+    // State after admitting the `run` command (status becomes RUNNING).
+    WorkflowState started = 4;
+  }
+}
