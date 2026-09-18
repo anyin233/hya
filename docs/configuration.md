@@ -180,8 +180,9 @@ default_model: anthropic/claude-sonnet-4-6
 default_agent: build
 
 # Nested subagent caps (optional; defaults shown).
+# Recursion depth is NOT configurable: it is hardcoded to two subagent
+# layers (ADR-0015). A legacy `max_depth` key parses but is ignored.
 subagents:
-  max_depth: 5
   max_concurrency: 100
   per_run_budget: 1024
   per_team_turn_budget: 1024
@@ -694,16 +695,17 @@ offline (independent loader). See also
 
 ```yaml
 subagents:
-  max_depth: 5
   max_concurrency: 100
   per_run_budget: 1024
   per_team_turn_budget: 1024
   per_team_message_budget: 1024
 ```
 
+Recursion depth is hardcoded to two subagent layers (ADR-0015) and is not a
+config key; a legacy `max_depth` entry in the block parses but is ignored.
+
 | Key | Type | Default | Meaning |
 | --- | --- | --- | --- |
-| `max_depth` | u32 | `5` | Maximum nesting depth of subagent spawns (lead session = depth 0). |
 | `max_concurrency` | usize | `100` | Ceiling on concurrently streaming general members (`1..=100`); excess members park rather than fail. |
 | `per_run_budget` | u64 | `1024` | Maximum total members spawned under one top-level run. |
 | `per_team_turn_budget` | u64 | `1024` | Total resident turns one team may run; tripping it **kills the team** (runaway re-wake backstop). |
@@ -805,7 +807,6 @@ hya honors `HOME` and `XDG_CONFIG_HOME` / `XDG_DATA_HOME` / `XDG_STATE_HOME` /
 | `HYA_COMPACTION_SUMMARY_MAX_TOKENS` | Output cap for the summarizer call that folds the transcript prefix. The structured section template does not fit a smaller cap, and a truncated summary loses its trailing sections — the ones describing what to do next. Overrides `compaction.summary_max_tokens`; env wins. | `4096` | same |
 | `HYA_COMPACTION_METHOD_ORDER` | Comma-separated order of the five compaction mechanisms (`shake`, `remote`, `soft`, `snapcompact`, `handoff` — oh-my-pi `methodOrder` names). A partial list is completed with the unmentioned mechanisms in default order; an unknown name ignores the value. Overrides `compaction.method_order`; env wins. | `shake,remote,soft,snapcompact,handoff` | `crates/hya-core/src/compaction.rs`, `crates/hya-app/src/config.rs` |
 | `HYA_TOKEN_ACCOUNTING` | How window occupancy is measured. `auto` believes a route's reported usage only while it advertises usage support and stays plausible against the local estimate (ratio within `[0.5, 2.0]`), otherwise estimates locally; `provider` always trusts reported usage; `estimate` always counts locally. Overrides `compaction.token_accounting`; env wins. Unrecognized values ignored. | `auto` | `crates/hya-core/src/tokens.rs`, `crates/hya-app/src/config.rs` |
-| `HYA_SUBAGENT_MAX_DEPTH` | Overrides `subagents.max_depth`. **Env wins** over config.yaml; unparseable falls back to file/default. | `5` | `crates/hya-app/src/config.rs` |
 | `HYA_SUBAGENT_MAX_CONCURRENCY` | Overrides `subagents.max_concurrency`. Env wins. | `100` | same |
 | `HYA_SUBAGENT_BUDGET` | Overrides `subagents.per_run_budget` (env name drops `PER_RUN`). Env wins. | `1024` | same |
 | `HYA_SUBAGENT_TURN_BUDGET` | Overrides `subagents.per_team_turn_budget`. Env wins. | `1024` | same |

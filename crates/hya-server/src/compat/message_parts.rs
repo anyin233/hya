@@ -233,6 +233,11 @@ fn part_timeline(envs: &[Envelope]) -> BTreeMap<MessageId, Vec<CompatPartCursor>
             | Event::ContextEvicted { .. }
             | Event::ContextStatus { .. }
             | Event::Unknown => {}
+            Event::AgentArchived { .. }
+            | Event::AgentRestarted { .. }
+            | Event::ChannelCreated { .. }
+            | Event::HandoffCommitted { .. }
+            | Event::SubagentReported { .. } => {}
         }
     }
     out
@@ -402,6 +407,11 @@ fn part_times(envs: &[Envelope]) -> BTreeMap<PartId, CompatPartTime> {
             | Event::ContextEvicted { .. }
             | Event::ContextStatus { .. }
             | Event::Unknown => {}
+            Event::AgentArchived { .. }
+            | Event::AgentRestarted { .. }
+            | Event::ChannelCreated { .. }
+            | Event::HandoffCommitted { .. }
+            | Event::SubagentReported { .. } => {}
         }
     }
     out

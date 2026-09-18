@@ -13,6 +13,12 @@
 //! Downstream crates wire planes (permission, tools, mailbox) and plugins; this
 //! crate stays free of terminal UI and HTTP routing.
 
+/// Hardcoded subagent recursion cap (ADR-0015): the interactive root is depth
+/// 0 and may open exactly two subagent layers beneath it. Not configurable —
+/// admission depth checks and the depth-2 tool advertisement filter both
+/// read this constant.
+pub const MAX_SUBAGENT_DEPTH: u32 = 2;
+
 /// Built-ins plus installed bundles resolved as one agent namespace.
 pub mod agent_catalog;
 /// Compiled-in agent definitions (not AgentBundles).

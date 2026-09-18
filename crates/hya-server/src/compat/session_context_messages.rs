@@ -395,6 +395,11 @@ fn message_content_events(envs: &[Envelope]) -> BTreeMap<MessageId, Vec<ContentC
             | Event::ContextEvicted { .. }
             | Event::ContextStatus { .. }
             | Event::Unknown => {}
+            Event::AgentArchived { .. }
+            | Event::AgentRestarted { .. }
+            | Event::ChannelCreated { .. }
+            | Event::HandoffCommitted { .. }
+            | Event::SubagentReported { .. } => {}
         }
     }
     out
@@ -468,6 +473,11 @@ fn message_times(envs: &[Envelope]) -> BTreeMap<MessageId, MessageTime> {
             | Event::ContextEvicted { .. }
             | Event::ContextStatus { .. }
             | Event::Unknown => {}
+            Event::AgentArchived { .. }
+            | Event::AgentRestarted { .. }
+            | Event::ChannelCreated { .. }
+            | Event::HandoffCommitted { .. }
+            | Event::SubagentReported { .. } => {}
         }
     }
     out
