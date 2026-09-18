@@ -8,7 +8,7 @@ use super::{
 };
 use crate::error::CoreError;
 
-const COMPACT_CONTEXT_MARKER: &str = "HYA_COMPACTED_CONTEXT";
+use hya_provider::COMPACT_CONTEXT_MARKER;
 
 impl SessionEngine {
     /// Compact the session transcript when thresholds are exceeded.
@@ -41,16 +41,21 @@ impl SessionEngine {
             &|model| self.provider_router().resolve(model).is_some(),
         );
         let messages = summary_messages(&projection)?;
+        let options = crate::compaction::SummarizeOptions {
+            previous_summary: crate::compaction::previous_summary(&messages),
+            max_output_tokens: Some(self.compaction.summary_max_tokens),
+            ..options
+        };
         let summarizer = self
             .summarizer
             .as_ref()
             .ok_or_else(|| CoreError::Invalid("summarizer not configured".to_string()))?;
         let summary = summarizer.summarize(&messages, options).await?;
-        self.inject_system_message(
-            session,
-            format!("Summary of earlier conversation:\n{summary}"),
-        )
-        .await
+        // Behind the marker, not merely appended. Without it `compacted_messages`
+        // never finds a cut point, so the summarized history stays in the
+        // transcript and `/compact` *grows* the context it was asked to shrink.
+        self.inject_system_message(session, format!("{COMPACT_CONTEXT_MARKER}\n{summary}"))
+            .await
     }
 }
 

@@ -24,6 +24,7 @@ async fn invalid_tool_reports_argument_error_in_open_code_shape() {
                 parent_session: None,
                 todo: hya_tool::TodoPlane::default(),
                 skills: hya_tool::SkillPlane::default(),
+                artifacts: hya_tool::handle::ArtifactPlane::default(),
                 websearch: hya_tool::WebSearchPlane::default(),
                 lsp: hya_tool::LspPlane::default(),
                 formatter: hya_tool::FormatterPlane::default(),

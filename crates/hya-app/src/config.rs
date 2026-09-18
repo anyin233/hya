@@ -14,7 +14,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Context as _;
-use hya_core::{CategoryEntry, CategoryRegistry, SubagentLimits};
+use hya_core::{
+    CategoryEntry, CategoryRegistry, CompactionConfig, SubagentLimits, TokenAccountingMode,
+};
 use hya_mcp::McpServerConfig;
 use hya_plugin::config::PluginEntry;
 use hya_provider::{
@@ -103,6 +105,11 @@ struct FileConfig {
     categories: BTreeMap<String, Vec<String>>,
     #[serde(default)]
     permission: Option<PermissionConfig>,
+    /// Compaction thresholds and token-accounting mode. Absent → engine
+    /// defaults; per-field `HYA_COMPACTION_*` / `HYA_TOKEN_ACCOUNTING` env
+    /// overrides win over file values.
+    #[serde(default)]
+    pub(crate) compaction: Option<CompactionFile>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -167,6 +174,27 @@ struct SubagentLimitsFile {
     /// Per-team mail message budget (ADR-0002); a message loop trips it.
     #[serde(default)]
     per_team_message_budget: Option<u64>,
+}
+
+/// `compaction:` block of `~/.config/hya/config.yaml`.
+///
+/// Absent fields keep the engine's [`CompactionConfig`] default; per-field
+/// `HYA_COMPACTION_*` and `HYA_TOKEN_ACCOUNTING` env overrides win over these.
+#[derive(Debug, Deserialize)]
+pub(crate) struct CompactionFile {
+    #[serde(default)]
+    token_threshold: Option<usize>,
+    #[serde(default)]
+    keep_recent: Option<usize>,
+    #[serde(default)]
+    context_fraction: Option<f32>,
+    #[serde(default)]
+    reserve_tokens: Option<usize>,
+    #[serde(default)]
+    summary_max_tokens: Option<u32>,
+    /// `auto`, `provider`, or `estimate`; anything else is ignored.
+    #[serde(default)]
+    token_accounting: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1331,6 +1359,93 @@ pub fn load_subagent_limits() -> SubagentLimits {
     resolve_subagent_limits(file_block.as_ref())
 }
 
+/// Compaction thresholds plus the token-accounting mode they are measured with.
+///
+/// The two travel together because a threshold is only as trustworthy as the
+/// token count it is compared against.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ContextSettings {
+    /// Thresholds handed to the engine's compaction plane.
+    pub compaction: CompactionConfig,
+    /// How window occupancy is measured for those thresholds.
+    pub token_accounting: TokenAccountingMode,
+}
+
+/// Resolve context settings from an optional file block, then apply per-field
+/// `HYA_COMPACTION_*` and `HYA_TOKEN_ACCOUNTING` env overrides (env wins).
+///
+/// Unset file fields and unparseable values fall back to the engine default
+/// rather than to a guess: an unrecognized accounting mode keeps whatever the
+/// file asked for, and an unparseable number keeps the default.
+fn resolve_context_settings(file: Option<&CompactionFile>) -> ContextSettings {
+    let defaults = CompactionConfig::default();
+    let mut settings = ContextSettings {
+        compaction: CompactionConfig {
+            token_threshold: file
+                .and_then(|f| f.token_threshold)
+                .unwrap_or(defaults.token_threshold),
+            keep_recent: file
+                .and_then(|f| f.keep_recent)
+                .unwrap_or(defaults.keep_recent),
+            context_fraction: file
+                .and_then(|f| f.context_fraction)
+                .unwrap_or(defaults.context_fraction),
+            reserve_tokens: file
+                .and_then(|f| f.reserve_tokens)
+                .unwrap_or(defaults.reserve_tokens),
+            summary_max_tokens: file
+                .and_then(|f| f.summary_max_tokens)
+                .unwrap_or(defaults.summary_max_tokens),
+        },
+        token_accounting: file
+            .and_then(|f| f.token_accounting.as_deref())
+            .and_then(TokenAccountingMode::parse)
+            .unwrap_or_default(),
+    };
+    if let Ok(v) = std::env::var("HYA_COMPACTION_THRESHOLD")
+        && let Ok(parsed) = v.trim().parse()
+    {
+        settings.compaction.token_threshold = parsed;
+    }
+    if let Ok(v) = std::env::var("HYA_COMPACTION_KEEP_RECENT")
+        && let Ok(parsed) = v.trim().parse()
+    {
+        settings.compaction.keep_recent = parsed;
+    }
+    if let Ok(v) = std::env::var("HYA_COMPACTION_CONTEXT_FRACTION")
+        && let Ok(parsed) = v.trim().parse()
+    {
+        settings.compaction.context_fraction = parsed;
+    }
+    if let Ok(v) = std::env::var("HYA_COMPACTION_RESERVE_TOKENS")
+        && let Ok(parsed) = v.trim().parse()
+    {
+        settings.compaction.reserve_tokens = parsed;
+    }
+    if let Ok(v) = std::env::var("HYA_COMPACTION_SUMMARY_MAX_TOKENS")
+        && let Ok(parsed) = v.trim().parse()
+    {
+        settings.compaction.summary_max_tokens = parsed;
+    }
+    if let Ok(v) = std::env::var("HYA_TOKEN_ACCOUNTING")
+        && let Some(parsed) = TokenAccountingMode::parse(&v)
+    {
+        settings.token_accounting = parsed;
+    }
+    settings
+}
+
+/// Context settings from `config.yaml`, with env overrides applied.
+#[must_use]
+pub fn load_context_settings() -> ContextSettings {
+    let file_block = config_path()
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .filter(|yaml| !yaml.trim().is_empty())
+        .and_then(|yaml| parse_config(&yaml).ok())
+        .and_then(|file| file.compaction);
+    resolve_context_settings(file_block.as_ref())
+}
+
 /// Map OAuth failures onto provider errors exactly as the bearer-resolver
 /// route already does: re-login/entitlement issues are human actions and stay
 /// non-retryable `ProviderError::AuthExpired` for router/engine failover.
@@ -2002,6 +2117,45 @@ permission:
             overridden.max_concurrency, 200,
             "untouched field stays file"
         );
+    }
+
+    #[test]
+    fn compaction_settings_parse_from_file_and_env_wins() {
+        let file = parse_config(
+            "default_model: x\ncompaction:\n  token_threshold: 40000\n  keep_recent: 12\n  context_fraction: 0.6\n  reserve_tokens: 32768\n  summary_max_tokens: 8192\n  token_accounting: estimate\n",
+        )
+        .unwrap();
+        let from_file = resolve_context_settings(file.compaction.as_ref());
+        assert_eq!(from_file.compaction.token_threshold, 40_000);
+        assert_eq!(from_file.compaction.keep_recent, 12);
+        assert!((from_file.compaction.context_fraction - 0.6).abs() < f32::EPSILON);
+        assert_eq!(from_file.compaction.reserve_tokens, 32_768);
+        assert_eq!(from_file.compaction.summary_max_tokens, 8_192);
+        assert_eq!(from_file.token_accounting, TokenAccountingMode::Estimate);
+
+        // Absent block → engine defaults, accounting on Auto.
+        let defaults = resolve_context_settings(None);
+        assert_eq!(defaults.compaction.reserve_tokens, 16_384);
+        assert_eq!(defaults.token_accounting, TokenAccountingMode::Auto);
+
+        // Env wins over the file value.
+        unsafe { std::env::set_var("HYA_COMPACTION_RESERVE_TOKENS", "4096") };
+        unsafe { std::env::set_var("HYA_TOKEN_ACCOUNTING", "provider") };
+        let overridden = resolve_context_settings(file.compaction.as_ref());
+        unsafe { std::env::remove_var("HYA_COMPACTION_RESERVE_TOKENS") };
+        unsafe { std::env::remove_var("HYA_TOKEN_ACCOUNTING") };
+        assert_eq!(overridden.compaction.reserve_tokens, 4_096, "env must win");
+        assert_eq!(overridden.token_accounting, TokenAccountingMode::Provider);
+        assert_eq!(
+            overridden.compaction.keep_recent, 12,
+            "untouched field stays file"
+        );
+
+        // An unparseable accounting mode is ignored rather than guessed at.
+        unsafe { std::env::set_var("HYA_TOKEN_ACCOUNTING", "banana") };
+        let bogus = resolve_context_settings(file.compaction.as_ref());
+        unsafe { std::env::remove_var("HYA_TOKEN_ACCOUNTING") };
+        assert_eq!(bogus.token_accounting, TokenAccountingMode::Estimate);
     }
 
     const FIXTURE: &str = "

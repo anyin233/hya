@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -7,6 +7,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
+use crate::handle::{HandleError, HandleRef};
 use crate::hashline::{
     DEFAULT_READ_LIMIT, HashlineRuntime, MAX_READ_BYTES, ReadOptions, ReadResult, ReadRuntimeError,
 };
@@ -63,7 +64,18 @@ impl Tool for ReadTool {
     fn schema(&self) -> ToolSchema {
         ToolSchema {
             name: ToolName::new("read"),
-            description: "Read a file or directory's contents.".to_string(),
+            description: concat!(
+                "Read a file or directory's contents.\n\n",
+                "`path` also accepts an internal handle naming an agent-owned resource: ",
+                "`artifact://<id>` for tool output spilled out of the transcript, ",
+                "`skill://<name>` for a skill body, `local://<path>` for a scratch payload. ",
+                "A handle may carry one projection so you retrieve a slice instead of the ",
+                "whole body: `?lines=N`, `?lines=N-M`, `?head=N`, `?tail=N`, ",
+                "`?grep=<pattern>`, or `?q=<.dotted.path>` against a JSON body.\n\n",
+                "Handles are a separate namespace from the workspace — an ordinary ",
+                "filesystem path is read exactly as it always was."
+            )
+            .to_string(),
             input_schema: json!({
                 "type": "object",
                 "additionalProperties": false,
@@ -97,7 +109,7 @@ impl Tool for ReadTool {
         }
 
         let workdir = normalize(&absolutize(&ctx.workdir));
-        let path = resolve_file(&workdir, file_path);
+        let path = resolve_read_target(ctx, &workdir, file_path)?;
         check_cancel(ctx)?;
         let external_result = assert_external_path(ctx, &workdir, &path).await;
         check_cancel(ctx)?;
@@ -184,6 +196,34 @@ impl Tool for ReadTool {
         }
         Ok(file_value(&result, &workdir, input.raw, legacy_display))
     }
+}
+
+/// Resolve what a Read call should open: an internal handle, or a workspace path.
+///
+/// A handle resolves to the file holding its body, so the rest of Read —
+/// permission checks, line numbering, paging, truncation notices — runs
+/// unchanged over it. That is why this returns a path and not a body: an
+/// `artifact://` result is presented by exactly the code that presents a file,
+/// and so cannot drift away from it.
+///
+/// Anything without a `scheme://` prefix is a filesystem path and takes the
+/// original route untouched, which is every ordinary Read.
+fn resolve_read_target(
+    ctx: &ToolCtx,
+    workdir: &Path,
+    requested: &str,
+) -> Result<PathBuf, ToolError> {
+    let reference = match requested.parse::<HandleRef>() {
+        Ok(reference) => reference,
+        Err(HandleError::NotAHandle(_)) => return Ok(resolve_file(workdir, requested)),
+        Err(error) => return Err(ToolError::Input(error.to_string())),
+    };
+    ctx.handles()
+        .resolve_to_path(&reference)
+        .map_err(|error| match error {
+            HandleError::NotFound(handle) => ToolError::Other(format!("{handle} does not exist")),
+            other => ToolError::Input(other.to_string()),
+        })
 }
 
 /// Resolve canonical and legacy path spellings without trimming filenames.

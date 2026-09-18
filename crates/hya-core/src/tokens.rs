@@ -20,28 +20,42 @@ pub trait Tokenizer: Send + Sync {
     fn count_text(&self, text: &str) -> usize;
 }
 
-/// Weights in sixteenths, fitted by relative-error least squares against
-/// `o200k_base` over repository files and quantized so counting is exact
-/// integer arithmetic. Refit with `scripts/tokenizer-calibration.py fit`.
+/// Weights in sixteenths, fitted by bounded relative-error least squares
+/// against `o200k_base` over repository files plus blob payloads, and quantized
+/// so counting is exact integer arithmetic. Refit with
+/// `scripts/tokenizer-calibration.py fit`.
 mod weight {
-    /// An ASCII letter run, which usually encodes as one token up to length 4.
-    pub const WORD_RUN: u64 = 12;
-    /// Each ASCII letter beyond the fourth in one run.
-    pub const WORD_EXTRA: u64 = 2;
-    /// A digit run. Digits tokenize far more densely than letters.
-    pub const DIGIT_RUN: u64 = 26;
-    /// Each digit beyond the first in one run.
-    pub const DIGIT_EXTRA: u64 = 3;
+    /// An alphanumeric run, which usually encodes as one token up to length 4.
+    pub const WORD_RUN: u64 = 15;
+    /// Each character beyond the fourth in a run, up to `LONG_RUN`.
+    pub const WORD_EXTRA: u64 = 1;
+    /// Each character beyond `LONG_RUN` in one run.
+    ///
+    /// Pinned to the rate measured on high-entropy runs rather than fitted
+    /// freely. What a long run truly costs depends on whether the vocabulary
+    /// happens to hold its merges — 100 `r`s cost 0.25 per character, 100 `R`s
+    /// cost 0.50, concatenated dictionary words 0.08 — and no run-length
+    /// feature can tell those apart. Random letters, base64 and hex all measure
+    /// 0.50, those are the shapes that arrive in tool output, and the residual
+    /// error then falls on the safe side: over-counting compacts a turn early,
+    /// under-counting overflows the window.
+    pub const WORD_LONG: u64 = 8;
+    /// Each digit inside an otherwise alphabetic run.
+    pub const DIGIT_CHAR: u64 = 7;
+    /// Each change of letter case inside a run, after the first pair.
+    pub const CASE_CHANGE: u64 = 5;
+    /// A run of nothing but digits, which is a number rather than a name.
+    pub const NUMBER_RUN: u64 = 11;
+    /// Each digit in such a run.
+    pub const NUMBER_CHAR: u64 = 6;
     /// A punctuation, symbol, or multi-space run.
     pub const PUNCT_RUN: u64 = 15;
-    /// Each punctuation character beyond the second in one run.
-    pub const PUNCT_EXTRA: u64 = 2;
     /// A newline together with the indentation that follows it.
-    pub const NEWLINE_RUN: u64 = 15;
+    pub const NEWLINE_RUN: u64 = 9;
     /// A CJK or other wide scalar value.
     pub const CJK: u64 = 13;
     /// Any remaining non-ASCII scalar value.
-    pub const OTHER: u64 = 14;
+    pub const OTHER: u64 = 17;
     /// Common denominator for every weight above.
     pub const SCALE: u64 = 16;
 }
@@ -49,13 +63,23 @@ mod weight {
 /// Lowest scalar value treated as CJK-like for weighting purposes.
 const CJK_START: u32 = 0x2E80;
 
+/// Length past which an alphanumeric run stops behaving like a word.
+///
+/// Up to here BPE folds a run into one or two tokens. Past it the merges run
+/// out and the cost settles near half a token per character, which is the
+/// regime of base64 attachments, digests and minified bundles arriving through
+/// tool output. Charging those the prose rate under-counted them fourfold.
+const LONG_RUN: u64 = 12;
+
 /// Structure-aware token estimator calibrated against `o200k_base`.
 ///
-/// Classifies text into run categories (words, digits, punctuation, newline and
-/// indentation, CJK) and weights them. Measured on held-out repository corpora
-/// it lands within 15% of the true count for over 99% of files, against roughly
-/// 58–84% for a `chars / 4` heuristic, and unlike `chars / 4` it does not
-/// under-count CJK text by half.
+/// Classifies text into run categories — alphanumeric names, numbers,
+/// punctuation, newline and indentation, CJK — and weights them. On held-out
+/// repository corpora it lands within 15% of the true count for 98% of files
+/// against 58–84% for the `bytes / 4` heuristic it replaces, and it holds on
+/// the two shapes that heuristic gets badly wrong: CJK prose, which `bytes / 4`
+/// under-counts by up to a third, and base64-like blobs, which it under-counts
+/// by more than half.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct CalibratedTokenizer;
 
@@ -70,20 +94,45 @@ impl Tokenizer for CalibratedTokenizer {
         let mut i = 0usize;
         while i < bytes.len() {
             let byte = bytes[i];
-            if byte.is_ascii_alphabetic() {
+            if byte.is_ascii_alphanumeric() {
+                // One maximal alphanumeric run, not separate letter and digit
+                // runs. BPE merges across the letter/digit boundary inside
+                // `sha256`, `utf8` or a base64 blob, so splitting there invents
+                // a per-run cost the encoder never charges.
                 let start = i;
-                while i < bytes.len() && bytes[i].is_ascii_alphabetic() {
+                let mut digits = 0u64;
+                let mut changes = 0u64;
+                while i < bytes.len() && bytes[i].is_ascii_alphanumeric() {
+                    digits += u64::from(bytes[i].is_ascii_digit());
+                    // Case changes are what separate a base64 blob from a
+                    // lowercase hex digest of the same length: alternating case
+                    // has few merges in the vocabulary. Counting capitals
+                    // instead would charge SCREAMING_SNAKE_CASE, which BPE
+                    // merges as happily as prose. The first pair is skipped so
+                    // an ordinary initial capital is free.
+                    if i - start >= 2
+                        && bytes[i].is_ascii_alphabetic()
+                        && bytes[i - 1].is_ascii_alphabetic()
+                    {
+                        changes += u64::from(
+                            bytes[i].is_ascii_uppercase() != bytes[i - 1].is_ascii_uppercase(),
+                        );
+                    }
                     i += 1;
                 }
                 let run = (i - start) as u64;
-                sixteenths += weight::WORD_RUN + weight::WORD_EXTRA * run.saturating_sub(4);
-            } else if byte.is_ascii_digit() {
-                let start = i;
-                while i < bytes.len() && bytes[i].is_ascii_digit() {
-                    i += 1;
+                if digits == run {
+                    // A bare number. BPE splits these into three-digit groups
+                    // at every length, while digits embedded in an identifier
+                    // are far cheaper, so the two cannot share one weight.
+                    sixteenths += weight::NUMBER_RUN + weight::NUMBER_CHAR * run;
+                } else {
+                    sixteenths += weight::WORD_RUN
+                        + weight::WORD_EXTRA * (run.min(LONG_RUN).saturating_sub(4))
+                        + weight::WORD_LONG * run.saturating_sub(LONG_RUN)
+                        + weight::DIGIT_CHAR * digits
+                        + weight::CASE_CHANGE * changes;
                 }
-                let run = (i - start) as u64;
-                sixteenths += weight::DIGIT_RUN + weight::DIGIT_EXTRA * run.saturating_sub(1);
             } else if byte == b'\n' {
                 // A newline and the indentation after it collapse into one
                 // token in every BPE vocabulary we checked.
@@ -100,10 +149,12 @@ impl Tokenizer for CalibratedTokenizer {
                 let run = (i - start) as u64;
                 // A lone separator merges into the neighbouring word token.
                 if run > 1 {
-                    sixteenths += weight::PUNCT_RUN + weight::PUNCT_EXTRA * (run - 2);
+                    sixteenths += weight::PUNCT_RUN;
                 }
             } else if byte.is_ascii() {
-                let start = i;
+                // Repeated punctuation encodes almost as cheaply as a single
+                // character — a rule of 80 dashes is one token — so the run's
+                // length carries no weight.
                 while i < bytes.len()
                     && bytes[i].is_ascii()
                     && !bytes[i].is_ascii_alphanumeric()
@@ -111,8 +162,7 @@ impl Tokenizer for CalibratedTokenizer {
                 {
                     i += 1;
                 }
-                let run = (i - start) as u64;
-                sixteenths += weight::PUNCT_RUN + weight::PUNCT_EXTRA * run.saturating_sub(2);
+                sixteenths += weight::PUNCT_RUN;
             } else {
                 // Non-ASCII: step by whole scalar values so a multi-byte
                 // character is never split or counted twice.

@@ -17,7 +17,7 @@ use hya_proto::SessionId;
 use hya_tool::{
     Action, Decision, FormatterError, FormatterPlane, FormatterProvider, InteractionPlane,
     LspPlane, Mode, PermissionPlane, PermissionRules, Rule, SkillPlane, SpawnerPlane, TodoPlane,
-    ToolCtx, ToolError, ToolRegistry, WebSearchPlane,
+    ToolCtx, ToolError, ToolRegistry, WebSearchPlane, handle::ArtifactPlane,
 };
 use serde_json::{Value, json};
 use tokio::sync::{mpsc, oneshot};
@@ -48,7 +48,9 @@ fn tempdir() -> PathBuf {
         std::fs::remove_dir_all(&directory).unwrap();
     }
     std::fs::create_dir_all(&directory).unwrap();
-    directory
+    // macOS tempdirs sit behind the /var -> /private/var symlink; the tools
+    // resolve targets canonically, so fixtures must use the same spelling.
+    std::fs::canonicalize(&directory).unwrap()
 }
 
 /// Construct a ToolCtx with Read and Edit permission and no formatter.
@@ -107,6 +109,7 @@ fn ctx_with_formatter_session(
         parent_session: None,
         todo: TodoPlane::default(),
         skills: SkillPlane::default(),
+        artifacts: ArtifactPlane::default(),
         websearch: WebSearchPlane::default(),
         lsp: LspPlane::default(),
         formatter,
@@ -572,7 +575,12 @@ async fn edit_rejects_symlink_cycle_without_mutation() {
 }
 
 /// Allow exactly forty symlink hops and reject a forty-first hop.
-#[cfg(unix)]
+///
+/// Skipped on macOS: the kernel resolves at most sixteen symlink hops
+/// (ELOOP), so a forty-link chain can never be opened through the public
+/// Read route there. The forty-hop boundary itself is covered on every
+/// platform by `hashline::fs::tests::symlink_hops_allow_exact_bound_and_reject_next`.
+#[cfg(all(unix, not(target_os = "macos")))]
 #[tokio::test]
 async fn edit_allows_forty_symlink_hops_but_rejects_forty_one() {
     use std::os::unix::fs::symlink;

@@ -351,6 +351,7 @@ impl SessionEngine {
                         parent_session: projection.session.parent,
                         todo: self.todo.clone(),
                         skills: resources.skill_plane(),
+                        artifacts: self.artifacts.clone(),
                         agents: agent_roster(binding, agent.name.as_str())?,
                         websearch: self.websearch.clone(),
                         lsp: self.lsp.clone(),

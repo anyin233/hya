@@ -12,7 +12,7 @@ use hya_tool::{
     Action, InteractionPlane, LspPlane, MailboxPlane, Mode, PermissionPlane, PermissionRules, Rule,
     SkillPlane, SpawnerPlane, TodoPlane, Tool, ToolCtx, ToolOperation, WebSearchPlane,
     WorkflowHostError, WorkflowPlane, WorkflowRequest, WorkflowRequestSink, WorkflowSendError,
-    WorkflowTool,
+    WorkflowTool, handle::ArtifactPlane,
 };
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -72,6 +72,7 @@ fn context(sink: Arc<CaptureSink>, session: hya_proto::SessionId) -> ToolCtx {
         parent_session: None,
         todo: TodoPlane::default(),
         skills: SkillPlane::default(),
+        artifacts: ArtifactPlane::default(),
         websearch: WebSearchPlane::default(),
         lsp: LspPlane::default(),
         formatter: hya_tool::FormatterPlane::default(),

@@ -10,6 +10,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use hya_tool::{
     Action, InteractionPlane, LspPlane, Mode, PermissionPlane, PermissionRules, Rule, SkillPlane,
     SpawnerPlane, TodoPlane, ToolCtx, ToolError, ToolRegistry, WebSearchPlane,
+    handle::ArtifactPlane,
 };
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -90,6 +91,7 @@ fn ctx_with(rules: Vec<Rule>, skills: SkillPlane) -> ToolCtx {
         websearch: WebSearchPlane::default(),
         lsp: LspPlane::default(),
         formatter: hya_tool::FormatterPlane::default(),
+        artifacts: ArtifactPlane::default(),
         agents: Default::default(),
         workdir: PathBuf::from("."),
         cancel: CancellationToken::new(),

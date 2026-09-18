@@ -15,6 +15,7 @@ use crate::apply_patch::ApplyPatchTool;
 use crate::edit::EditTool;
 use crate::formatter::FormatterPlane;
 pub use crate::grep::GrepTool;
+use crate::handle::{ArtifactPlane, HandleRouter};
 use crate::hashline::HashlineRuntime;
 use crate::interaction::{InteractionPlane, QuestionAnswer, QuestionKind};
 use crate::invalid::InvalidTool;
@@ -133,6 +134,8 @@ pub struct ToolCtx {
     pub todo: TodoPlane,
     /// Skill catalog plane for the `skill` tool.
     pub skills: SkillPlane,
+    /// Post-processing chain applied when an `artifact://` handle is retrieved.
+    pub artifacts: ArtifactPlane,
     /// Immutable caller-reachable agent roster for spawn authorization and listing.
     pub agents: Arc<[AgentDef]>,
     /// Configured web-search plane.
@@ -145,6 +148,24 @@ pub struct ToolCtx {
     pub workdir: PathBuf,
     /// Cancellation token for cooperative abort.
     pub cancel: CancellationToken,
+}
+
+impl ToolCtx {
+    /// Internal resource URLs reachable from this call.
+    ///
+    /// Built from the call's own `workdir` and skill catalog rather than stored
+    /// alongside them, so a router can never resolve against a different session
+    /// than the context it came from.
+    ///
+    /// This is the agent's own namespace — spilled output, skill bodies, scratch
+    /// payloads. It has no bearing on how `read`, `write`, `grep`, or `bash`
+    /// treat an ordinary filesystem path.
+    #[must_use]
+    pub fn handles(&self) -> HandleRouter {
+        HandleRouter::new(&self.workdir)
+            .with_skills(self.skills.clone())
+            .with_artifacts(self.artifacts.store(&self.workdir))
+    }
 }
 
 /// Immutable identity of the persisted tool invocation and its admission operation.

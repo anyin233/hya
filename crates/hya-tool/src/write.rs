@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use crate::handle::{HandleError, HandleRef};
 use crate::hashline::{
     HashlineMutation, HashlineRuntime, MAX_READ_BYTES, MutationBeginError, MutationText,
     MutationWriteError, append_bounded_notices, bound_output,
@@ -51,7 +52,14 @@ impl Tool for WriteTool {
     fn schema(&self) -> ToolSchema {
         ToolSchema {
             name: ToolName::new("write"),
-            description: "Write content to a file (creating parent dirs).".to_string(),
+            description: concat!(
+                "Write content to a file (creating parent dirs).\n\n",
+                "`path` also accepts `local://<name>` to stash an agent scratch payload ",
+                "outside the transcript; pass that handle around and `read` it back when ",
+                "the body is actually needed. `artifact://` and `skill://` are read-only. ",
+                "An ordinary filesystem path is written exactly as it always was."
+            )
+            .to_string(),
             input_schema: json!({
                 "type": "object",
                 "additionalProperties": false,
@@ -74,7 +82,7 @@ impl Tool for WriteTool {
         let input: WriteInput =
             serde_json::from_value(input).map_err(|error| ToolError::Input(error.to_string()))?;
         let workdir = normalize(&absolutize(&ctx.workdir));
-        let requested_path = resolve_file(&workdir, &input.path);
+        let requested_path = resolve_write_target(ctx, &workdir, &input.path)?;
 
         // Keep the lexical permission boundary before any symlink resolution or I/O.
         assert_external_file(ctx, &workdir, &requested_path).await?;
@@ -200,6 +208,29 @@ impl Tool for WriteTool {
             workdir: &workdir,
         }))
     }
+}
+
+/// Resolve what a Write call should create: a `local://` payload, or a path.
+///
+/// Returning a path keeps the rest of Write — permission checks, the hashline
+/// mutation, formatting, LSP post-edit — running unchanged over a handle, so a
+/// scratch payload cannot drift away from how an ordinary file is written.
+///
+/// Anything without a `scheme://` prefix is a filesystem path and takes the
+/// original route untouched, which is every ordinary Write.
+fn resolve_write_target(
+    ctx: &ToolCtx,
+    workdir: &Path,
+    requested: &str,
+) -> Result<PathBuf, ToolError> {
+    let reference = match requested.parse::<HandleRef>() {
+        Ok(reference) => reference,
+        Err(HandleError::NotAHandle(_)) => return Ok(resolve_file(workdir, requested)),
+        Err(error) => return Err(ToolError::Input(error.to_string())),
+    };
+    ctx.handles()
+        .write_target(&reference)
+        .map_err(|error| ToolError::Input(error.to_string()))
 }
 
 /// Return a cancellation error when a Write call has been cancelled.

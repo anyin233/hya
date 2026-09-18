@@ -11,7 +11,7 @@ use hya_proto::{ToolName, ToolSchema};
 use hya_tool::{
     Action, Decision, InteractionPlane, LspPlane, Mode, PermissionPlane, PermissionRules,
     QuestionAnswer, Resource, Rule, SkillPlane, SpawnerPlane, TodoPlane, Tool, ToolCtx, ToolError,
-    ToolPermission, ToolRegistry, WebSearchPlane,
+    ToolPermission, ToolRegistry, WebSearchPlane, handle::ArtifactPlane,
 };
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
@@ -48,6 +48,7 @@ fn ctx_with(rules: Vec<Rule>, workdir: PathBuf) -> ToolCtx {
         parent_session: None,
         todo: TodoPlane::default(),
         skills: SkillPlane::default(),
+        artifacts: ArtifactPlane::default(),
         websearch: WebSearchPlane::default(),
         lsp: LspPlane::default(),
         formatter: hya_tool::FormatterPlane::default(),
@@ -106,9 +107,14 @@ fn registry_rejects_duplicate_tool_name() {
     let registry = ToolRegistry::builtins();
     let result = registry.register(Arc::new(DuplicateTool));
     assert!(result.is_err());
-    assert_eq!(
-        registry.get("read").unwrap().schema().description,
-        "Read a file or directory's contents."
+    assert!(
+        registry
+            .get("read")
+            .unwrap()
+            .schema()
+            .description
+            .starts_with("Read a file or directory's contents."),
+        "the surviving `read` must be the builtin, not the duplicate"
     );
 }
 
@@ -497,6 +503,7 @@ async fn bash_happy_and_cancelled() {
         parent_session: None,
         todo: ctx.todo.clone(),
         skills: ctx.skills.clone(),
+        artifacts: ArtifactPlane::default(),
         websearch: ctx.websearch.clone(),
         lsp: ctx.lsp.clone(),
         formatter: ctx.formatter.clone(),
@@ -532,6 +539,7 @@ async fn task_tool_is_lead_only() {
         parent_session: Some(hya_proto::SessionId::new()),
         todo: TodoPlane::default(),
         skills: SkillPlane::default(),
+        artifacts: ArtifactPlane::default(),
         websearch: WebSearchPlane::default(),
         lsp: LspPlane::default(),
         formatter: hya_tool::FormatterPlane::default(),
@@ -564,6 +572,7 @@ async fn ask_user_select_returns_index_and_answer() {
         parent_session: None,
         todo: TodoPlane::default(),
         skills: SkillPlane::default(),
+        artifacts: ArtifactPlane::default(),
         websearch: WebSearchPlane::default(),
         lsp: LspPlane::default(),
         formatter: hya_tool::FormatterPlane::default(),

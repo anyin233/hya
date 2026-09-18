@@ -187,6 +187,17 @@ subagents:
   per_team_turn_budget: 1024
   per_team_message_budget: 1024
 
+# Context management (optional; defaults shown). Thresholds and the token
+# accounting they are measured with. Per-field HYA_COMPACTION_* and
+# HYA_TOKEN_ACCOUNTING env vars override these.
+compaction:
+  token_threshold: 100000      # used when the route advertises no window
+  keep_recent: 6               # messages kept verbatim
+  context_fraction: 0.75       # share of an advertised window
+  reserve_tokens: 16384        # held back for the reply; tighter bound wins
+  summary_max_tokens: 4096     # output cap for the summarizer call
+  token_accounting: auto       # auto | provider | estimate
+
 # Logical model categories → ordered provider/model failover lists.
 categories:
   deep:
@@ -774,9 +785,12 @@ hya honors `HOME` and `XDG_CONFIG_HOME` / `XDG_DATA_HOME` / `XDG_STATE_HOME` /
 | Variable | Effect | Default | Source |
 | --- | --- | --- | --- |
 | `HYA_MODEL` | Active request model when `--model` is not passed. **Wins over** the row-backed startup default. Unknown overrides stay outside the catalog and fail through normal routing when used. | Configured `default_model` when it names a resolved row, otherwise the deterministic first live row, otherwise `hya/offline`. | `crates/hya-app/src/runtime.rs`, `crates/hya-app/src/config.rs` |
-| `HYA_COMPACTION_THRESHOLD` | Estimated tokens that trigger context compaction. Env-only (no config.yaml key). Unparseable values ignored. | `100000` | `crates/hya-core/src/compaction.rs`, `crates/hya-app/src/runtime.rs` |
-| `HYA_COMPACTION_KEEP_RECENT` | Most-recent messages kept verbatim during compaction. Env-only. Unparseable values ignored. | `6` | same |
-| `HYA_COMPACTION_CONTEXT_FRACTION` | When the active provider route advertises a nonzero `max_context` window, the compaction trip threshold becomes `max(window * fraction, 1000)` instead of `HYA_COMPACTION_THRESHOLD`. Missing or zero window, or a fraction outside `(0.0, 1.0]`, falls back to `HYA_COMPACTION_THRESHOLD`. Env-only. Unparseable values ignored. | `0.75` | same |
+| `HYA_COMPACTION_THRESHOLD` | Estimated tokens that trigger context compaction, used when the route advertises no context window. Overrides `compaction.token_threshold`; **env wins**. Unparseable values ignored. | `100000` | `crates/hya-core/src/compaction.rs`, `crates/hya-app/src/config.rs` |
+| `HYA_COMPACTION_KEEP_RECENT` | Most-recent messages kept verbatim during compaction. Overrides `compaction.keep_recent`; env wins. Unparseable values ignored. | `6` | same |
+| `HYA_COMPACTION_CONTEXT_FRACTION` | Share of an advertised `max_context` window the transcript may occupy. With a window, the trip threshold is the **tighter** of `window * fraction` and `window - reserve_tokens`, floored at `1000`. Missing or zero window, or a fraction outside `(0.0, 1.0]`, falls back to `HYA_COMPACTION_THRESHOLD`. Overrides `compaction.context_fraction`; env wins. | `0.75` | same |
+| `HYA_COMPACTION_RESERVE_TOKENS` | Tokens held back from the advertised window for the model's reply. Bounds the trigger independently of the fraction: a generous fraction on a large window can still leave less headroom than the reply needs. Overrides `compaction.reserve_tokens`; env wins. | `16384` | same |
+| `HYA_COMPACTION_SUMMARY_MAX_TOKENS` | Output cap for the summarizer call that folds the transcript prefix. The structured section template does not fit a smaller cap, and a truncated summary loses its trailing sections — the ones describing what to do next. Overrides `compaction.summary_max_tokens`; env wins. | `4096` | same |
+| `HYA_TOKEN_ACCOUNTING` | How window occupancy is measured. `auto` believes a route's reported usage only while it advertises usage support and stays plausible against the local estimate (ratio within `[0.5, 2.0]`), otherwise estimates locally; `provider` always trusts reported usage; `estimate` always counts locally. Overrides `compaction.token_accounting`; env wins. Unrecognized values ignored. | `auto` | `crates/hya-core/src/tokens.rs`, `crates/hya-app/src/config.rs` |
 | `HYA_SUBAGENT_MAX_DEPTH` | Overrides `subagents.max_depth`. **Env wins** over config.yaml; unparseable falls back to file/default. | `5` | `crates/hya-app/src/config.rs` |
 | `HYA_SUBAGENT_MAX_CONCURRENCY` | Overrides `subagents.max_concurrency`. Env wins. | `100` | same |
 | `HYA_SUBAGENT_BUDGET` | Overrides `subagents.per_run_budget` (env name drops `PER_RUN`). Env wins. | `1024` | same |

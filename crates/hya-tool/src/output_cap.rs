@@ -5,6 +5,7 @@
 //! metadata survive the trip through the durable event log without permitting
 //! hostile fields to grow without bound.
 
+use crate::handle::ArtifactStore;
 use crate::tool::ToolResultPolicy;
 use serde_json::{Map, Value, json};
 
@@ -155,6 +156,46 @@ pub fn cap_tool_output_with_policy(output: Value, policy: ToolResultPolicy) -> V
         ToolResultPolicy::Coding => cap_coding_result(output, false),
         ToolResultPolicy::CodingWithDiff => cap_coding_result(output, true),
     }
+}
+
+/// Cap a successful result, preserving whatever the cap drops.
+///
+/// Truncation on its own tells the model *that* output was lost; it cannot say
+/// where the rest went, so the only route back to the full result is to run the
+/// tool again and pay its cost a second time. Writing the whole value to `store`
+/// first and naming the artifact in the notice turns a one-way truncation into a
+/// bounded view plus an address.
+///
+/// Only [`ToolResultPolicy::Default`] results spill. A coding envelope already
+/// describes a file the model can re-read by path, so an artifact would be a
+/// second copy of something that is addressable.
+#[must_use]
+pub fn cap_tool_output_spilling(
+    output: Value,
+    policy: ToolResultPolicy,
+    store: &ArtifactStore,
+    tool: &str,
+) -> Value {
+    if !matches!(policy, ToolResultPolicy::Default) {
+        return cap_tool_output_with_policy(output, policy);
+    }
+    let text = value_as_display_text(&output);
+    let n = text.chars().count();
+    if n <= MAX_TOOL_OUTPUT_CHARS {
+        return output;
+    }
+    // A store that cannot accept the body still yields a capped result. Bounding
+    // the transcript is the job that cannot be skipped; losing the recovery path
+    // is better than losing the turn.
+    let Ok(meta) = store.store(tool, "text/plain", text.as_bytes()) else {
+        return cap_tool_output(output);
+    };
+    let kept = last_n_chars(&text, MAX_TOOL_OUTPUT_CHARS);
+    Value::String(format!(
+        "[tool output truncated: original {n} chars; showing last {MAX_TOOL_OUTPUT_CHARS}. \
+         Full output: artifact://{} — read that handle for the rest]\n{kept}",
+        meta.id
+    ))
 }
 
 /// Bound one coding envelope while retaining semantic fields needed by the TUI.

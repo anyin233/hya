@@ -1237,6 +1237,7 @@ async fn recorded_observability_never_enters_the_parent_model_input() {
                 token_threshold: 1_000_000,
                 keep_recent: 0,
                 context_fraction: 0.001,
+                ..hya_core::CompactionConfig::default()
             },
         ),
     );

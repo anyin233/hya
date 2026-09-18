@@ -14,7 +14,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use hya_tool::{
     Action, Decision, InteractionPlane, LspPlane, Mode, PermissionInterceptor, PermissionPlane,
     PermissionRules, Resource, Rule, SkillPlane, SpawnerPlane, TodoPlane, ToolCtx, ToolError,
-    ToolRegistry, WebSearchPlane,
+    ToolRegistry, WebSearchPlane, handle::ArtifactPlane,
 };
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
@@ -102,6 +102,7 @@ fn ctx_with_components(workdir: PathBuf, cancel: CancellationToken, rules: Vec<R
         parent_session: None,
         todo: TodoPlane::default(),
         skills: SkillPlane::default(),
+        artifacts: ArtifactPlane::default(),
         websearch: WebSearchPlane::default(),
         lsp: LspPlane::default(),
         formatter: hya_tool::FormatterPlane::default(),
