@@ -547,66 +547,68 @@ spawned Unix process group on cancellation.
 ## Compaction and Summaries
 
 Compaction lives in [`compaction.rs`](../../crates/hya-core/src/compaction.rs)
-and is driven from the turn loop when
-`needs_compaction` fires (`messages.len() > keep_recent` and estimated tokens
-exceed `token_threshold`).
+and is walked from the turn loop. The mechanism set, the configurable firing
+order, thresholds, and wire records are documented canonically in
+[Compaction](../compaction.md); this section records the runtime contracts.
 
-`CompactionConfig` fields:
+`CompactionConfig` fields: `token_threshold` (default `100_000`),
+`keep_recent` (default `6`), `context_fraction` (default `0.75`),
+`reserve_tokens` (default `16_384`), `summary_max_tokens` (default `4_096`),
+and `method_order` (a permutation of the five rungs; see below).
 
-- `token_threshold` (default `100_000`)
-- `keep_recent` (default `6`)
-- `context_fraction` (default `0.75`; env
-  `HYA_COMPACTION_CONTEXT_FRACTION`)
+The trip threshold is `min(window * context_fraction, window -
+reserve_tokens)` floored at `MIN_RESOLVED_THRESHOLD` (`1_000`) when the route
+advertises a nonzero `max_context`; otherwise the flat `token_threshold`
+applies. A fraction outside `(0.0, 1.0]` falls back to the flat threshold.
+`keep_recent` is independent: compaction still requires
+`messages.len() > keep_recent`.
 
-When the route advertises a nonzero `max_context`, the trip threshold is
-`max(window * context_fraction, 1_000)` (`MIN_RESOLVED_THRESHOLD`). A
-missing/`0` window or a fraction outside `(0.0, 1.0]` falls back to
-`token_threshold`. `keep_recent` is independent: compaction still
-requires `messages.len() > keep_recent`.
+`SummarizeOptions` fields for summarizer calls: `system`, `model`,
+`reasoning`, `previous_summary` (the anchored summary this one updates),
+`max_output_tokens`, and `handoff` (send the verbatim transcript plus one
+trailing handoff prompt instead of the rendered serialization).
 
-`SummarizeOptions` fields for local summarizer calls:
+### The reduction ladder
 
-- `system: Option<String>`
-- `model: Option<ModelRef>`
-- `reasoning: Option<ReasoningEffort>`
+When the window is over threshold, the turn walks
+`CompactionConfig::method_order` — the five oh-my-pi mechanisms under their
+omp wire names: `shake` (`SpillToolOutputs`), `remote` (`ProviderCompact`),
+`soft` (`Summarize`), `snapcompact` (`SnapCompact`), `handoff` (`Handoff`).
+Default order: `shake, remote, soft, snapcompact, handoff`.
 
-### Two-tier compact path
+1. Before each rung the loop re-checks the threshold; the walk stops at the
+   first rung that fits the transcript back under it.
+2. An unavailable rung advances: `remote` on a route without compact support
+   (only `openai-response`, `openai-codex`, and `grok-build` advertise
+   `/responses/compact`), `soft`/`handoff` when no summarizer is wired,
+   `shake` when nothing is left to evict. A failed rung advances the same
+   way, so a model-free order still folds.
+3. `remote` resolves the fixed `compaction` system agent (missing definition
+   fails closed with `AgentDefinitionMissing`), calls
+   `ProviderRouter::compact_if_supported`, and persists the folded items
+   behind `HYA_COMPACTED_CONTEXT` + `<<<RESPONSES_COMPACT_ITEMS>>>` via
+   `format_responses_compact_system`; later `/responses` requests re-inject
+   the items verbatim.
+4. `soft` folds the prefix through `fold_prefix`/`ModelSummarizer` behind the
+   same marker; `snapcompact` commits a local deterministic archive of the
+   folded prefix (no model call); `handoff` commits a model-written handoff
+   document over the whole transcript. All three emit `ContextCompacted`
+   with their own strategy (`local_summarizer` / `snap_compact` / `handoff`).
+5. `shake` evicts stale completed tool outputs to `artifact://` handles
+   (request-local, idempotent, `keep_recent` protected; a 512-byte floor
+   keeps bodies that cost more to reference than to keep) and emits
+   `ContextEvicted` whenever it saved tokens — including when the saving
+   alone did not suffice and the walk escalated.
 
-When the window is over threshold, the turn:
+Every fold is persisted behind the `HYA_COMPACTED_CONTEXT` marker, and
+`compacted_messages` (`engine/turn/messages.rs`) drops pre-marker history on
+later requests. `previous_summary` reads the marker-prefixed body so the
+next fold anchors on it — including snapcompact archives and handoff
+documents.
 
-1. **Resolves the fixed `compaction` system agent** from the bound catalog.
-   Missing definition **fails closed** (`AgentDefinitionMissing`) before any
-   provider compact call.
-2. **Tier 1 (native):** calls `ProviderRouter::compact_if_supported`, which
-   resolves the model's provider and delegates to
-   `Provider::compact_responses`. Only `openai-response`, `openai-codex`, and
-   `grok-build` routes advertise support. The endpoint is derived by appending
-   `/compact` to an endpoint already ending in `/responses`, otherwise
-   `/responses/compact` on the trimmed endpoint. The call POSTs
-   `{ model, input }` (optional system item prepended) and requires an
-   `output` array in the reply, else it fails with
-   `Decode("responses compact reply missing output array")`. Success yields a
-   `CompactedWindow` whose item array is persisted as a system message via
-   `format_responses_compact_system` — body starts with `HYA_COMPACTED_CONTEXT`,
-   then `<<<RESPONSES_COMPACT_ITEMS>>>`, then the JSON array. Subsequent
-   `/responses` requests re-inject those items verbatim into `input`.
-3. **Tier 2 (fallback):** on `Ok(None)` (no compact endpoint) or **any** error,
-   the turn falls back to the local `ModelSummarizer` via `compact_with`. That
-   helper returns an **in-memory** `Vec<Message>` for the current round only:
-   older messages are replaced by a system message of the form
-   `Summary of {n} earlier messages:\n{summary}` — **no**
-   `HYA_COMPACTED_CONTEXT` marker, and **no** store write. The turn assigns
-   `messages = compacted` for the next provider request; the fallback is
-   recomputed from scratch whenever thresholds still require it.
-
-The `HYA_COMPACTED_CONTEXT` marker (and the history drop in
-`compacted_messages` that selects on that prefix) is written only by durable
-paths: **Tier 1** native Responses compact inject, and the explicit
-`SessionEngine::compact_context` / `/compact` path
-(`engine/summary.rs`), not by Tier 2 `compact_with`.
-
-The CLI exposes local compact via `/compact`; legacy Compat summarize routes
-persist the same native summary shape.
+The CLI exposes local compact via `/compact` (`engine/summary.rs`, which
+also writes the marker); legacy Compat summarize routes persist the same
+native summary shape.
 
 ## Session Titles
 

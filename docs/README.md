@@ -15,12 +15,13 @@ If you want to run hya:
 
 1. [Getting Started](getting-started.md)
 2. [Configuration](configuration.md)
-3. [CLI Reference](cli.md)
-4. [TUI Keybindings](tui-keybindings.md) — slash commands, leader chords, and the command palette
-5. [TUI Reference](tui-reference.md) — screens, transcript, dialogs, and prompt behavior
-6. [Skills](skills.md) — discovery, skill tool, and authoring
-7. [Workflows](workflows.md) — user-authored stage DAGs over subagent teams
-8. [Troubleshooting](troubleshooting.md)
+3. [Compaction](compaction.md) — the five context-reduction mechanisms and their configurable order
+4. [CLI Reference](cli.md)
+5. [TUI Keybindings](tui-keybindings.md) — slash commands, leader chords, and the command palette
+6. [TUI Reference](tui-reference.md) — screens, transcript, dialogs, and prompt behavior
+7. [Skills](skills.md) — discovery, skill tool, and authoring
+8. [Workflows](workflows.md) — user-authored stage DAGs over subagent teams
+9. [Troubleshooting](troubleshooting.md)
 
 If you want to compare hya with adjacent coding agents:
 
@@ -73,6 +74,7 @@ If you want to understand the codebase:
 | --- | --- |
 | [Getting Started](getting-started.md) | Build and run the TUI, a headless prompt, a goal run, and the server. |
 | [Configuration](configuration.md) | Explain hya config, provider/auth resolution, MCP, plugins, formatter, and prompt-command discovery. |
+| [Compaction](compaction.md) | The five built-in context-reduction mechanisms (oh-my-pi parity), the configurable firing order, thresholds, and wire records. |
 | [CLI Reference](cli.md) | Document shipped `hya` / `hya-backend` commands, flags, exit codes, and a TUI slash-command overview. |
 | [TUI Keybindings](tui-keybindings.md) | Full keyboard shortcuts, slash commands, leader chords, and which-key. |
 | [TUI Reference](tui-reference.md) | User-facing screens, transcript, dialogs, prompt, and overlays. |
