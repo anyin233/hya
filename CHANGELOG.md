@@ -40,3 +40,8 @@
   prompt — not the rendered single-message serialization a summary gets — so
   the document describes where the session stands, including recent turns,
   and a cache-capable provider can reuse the live prefix.
+- New canonical doc page `docs/compaction.md`: the mechanism set, walk
+  semantics, order configuration, thresholds, wire records, and the explicit
+  differences from oh-my-pi. `docs/architecture/runtime.md`'s compaction
+  section was rewritten to match the current ladder (it still described the
+  pre-0.36.29 two-tier path) and now defers to it.

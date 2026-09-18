@@ -189,7 +189,9 @@ subagents:
 
 # Context management (optional; defaults shown). Thresholds and the token
 # accounting they are measured with. Per-field HYA_COMPACTION_* and
-# HYA_TOKEN_ACCOUNTING env vars override these.
+# HYA_TOKEN_ACCOUNTING env vars override these. The five reduction
+# mechanisms and the method_order semantics are documented in
+# docs/compaction.md.
 compaction:
   token_threshold: 100000      # used when the route advertises no window
   keep_recent: 6               # messages kept verbatim
