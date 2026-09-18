@@ -805,6 +805,50 @@ fn anthropic_encodes_tool_use_and_result() {
     assert_eq!(result["content"][0]["content"], "hello");
 }
 
+/// A compaction summary is injected as a mid-conversation `Message::System`
+/// carrying `HYA_COMPACTED_CONTEXT`, and the turn loop slices the transcript to
+/// start at that marker. If the encoder drops the marker message, Anthropic
+/// receives neither the folded history nor the summary that replaced it.
+#[test]
+fn anthropic_preserves_mid_conversation_system_message() {
+    let req = CompletionRequest {
+        model: ModelRef::new("claude-sonnet-4"),
+        system: Some("cached agent prefix".to_string()),
+        messages: vec![
+            Message::System {
+                id: MessageId::new(),
+                content: "HYA_COMPACTED_CONTEXT\nearlier work: edited lib.rs".to_string(),
+            },
+            Message::User {
+                id: MessageId::new(),
+                parts: vec![Part::Text {
+                    id: PartId::new(),
+                    text: "carry on".to_string(),
+                }],
+            },
+        ],
+        tools: Vec::new(),
+        temperature: None,
+        max_output_tokens: None,
+        reasoning: None,
+        headers: Default::default(),
+    };
+    let body = AnthropicMessagesProtocol.encode(&req).unwrap();
+    assert_eq!(
+        body["system"], "cached agent prefix",
+        "the summary must not be folded into the cached system prefix"
+    );
+    let encoded = body["messages"].to_string();
+    assert!(
+        encoded.contains("HYA_COMPACTED_CONTEXT"),
+        "compaction marker must survive encoding, got {encoded}"
+    );
+    assert!(
+        encoded.contains("earlier work: edited lib.rs"),
+        "summary body must survive encoding, got {encoded}"
+    );
+}
+
 fn image_request() -> CompletionRequest {
     CompletionRequest {
         model: ModelRef::new("image-model"),
