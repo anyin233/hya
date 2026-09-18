@@ -54,7 +54,6 @@ test("completed Read normalizes display text, path, and starting line", () => {
 
   expect(view).toMatchObject({
     kind: "read-code",
-    title: "Read src/main.ts",
     path: "src/main.ts",
     text,
     lineStart: 12,
@@ -77,7 +76,6 @@ test("completed Edit normalizes its bounded diff and diagnostics", () => {
 
   expect(view).toMatchObject({
     kind: "edit-diff",
-    title: "Edit src/main.ts",
     path: "src/main.ts",
     diff,
     diagnostics,
@@ -285,8 +283,6 @@ test("completed Grep keeps per-file groups and match identity", () => {
 
   expect(view).toMatchObject({
     kind: "grep-output",
-    title: "Grep needle",
-    pattern: "needle",
     groups,
     output: "src/main.ts:4:const needle = 1\nsrc/other.ts:9:needle()",
     truncated: false,
@@ -307,7 +303,6 @@ test("completed Write normalizes the requested path and content", () => {
 
   expect(view).toMatchObject({
     kind: "write-code",
-    title: "Write src/generated.ts",
     path: "src/generated.ts",
     text: content,
     diagnostics: [],
@@ -328,8 +323,6 @@ test("bash and its hidden shell alias share the shell-output view", () => {
 
     expect(view).toMatchObject({
       kind: "shell-output",
-      title: "Bash",
-      command: "printf coding-tool",
       cwd: "/work",
       output: "coding-tool",
       exit: 0,
