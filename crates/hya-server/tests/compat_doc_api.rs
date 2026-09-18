@@ -111,9 +111,10 @@ async fn compat_doc_route_returns_openapi_document() {
     assert!(body["paths"]["/api/session/{sessionID}/permission/{requestID}/reply"].is_object());
     assert!(body["paths"]["/api/session/{sessionID}/message/{messageID}"]["get"].is_object());
     assert!(body["paths"]["/api/session/{sessionID}/question/{requestID}/reject"].is_object());
-    assert!(body["paths"]["/api/integration/{integrationID}/connect/key"].is_object());
-    assert!(body["paths"]["/api/integration/attempt/{attemptID}"].is_object());
-    assert!(body["paths"]["/api/credential/{credentialID}"]["delete"].is_object());
+    assert!(body["paths"]["/api/reference"].is_object());
+    assert!(body["paths"]["/api/integration/{integrationID}/connect/key"].is_null());
+    assert!(body["paths"]["/api/integration/attempt/{attemptID}"].is_null());
+    assert!(body["paths"]["/api/credential/{credentialID}"]["delete"].is_null());
 }
 
 #[tokio::test]

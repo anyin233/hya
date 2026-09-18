@@ -20,6 +20,12 @@ pub(super) fn router() -> Router<ServerState> {
         .route("/api/agent", get(agent))
         .route("/api/command", get(command))
         .route("/api/skill", get(skill))
+        .route("/api/reference", get(reference_list))
+}
+
+async fn reference_list(State(st): State<ServerState>) -> Json<LocationResponse<Vec<Value>>> {
+    let references = super::reference::list(&st).await;
+    Json(super::location::response(&st, references))
 }
 
 #[derive(Serialize)]

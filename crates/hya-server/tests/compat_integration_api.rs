@@ -132,24 +132,15 @@ async fn request_json(
 }
 
 #[tokio::test]
-async fn compat_v2_reference_and_integration_routes_return_empty_discovery() {
+async fn compat_v2_reference_route_returns_empty_discovery() {
     let workdir = tempdir();
     let app = router(state(&workdir).await);
     let expected = workdir.to_string_lossy();
 
-    let (status, references) = get_json(app.clone(), "/api/reference").await;
+    let (status, references) = get_json(app, "/api/reference").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(references["location"]["directory"], expected.as_ref());
     assert_eq!(references["data"], serde_json::json!([]));
-
-    let (status, integrations) = get_json(app.clone(), "/api/integration").await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(integrations["location"]["directory"], expected.as_ref());
-    assert_eq!(integrations["data"], serde_json::json!([]));
-
-    let (status, integration) = get_json(app, "/api/integration/github").await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(integration["data"].is_null());
 }
 
 #[tokio::test]
@@ -201,31 +192,33 @@ async fn compat_v2_reference_route_lists_configured_local_references() {
 }
 
 #[tokio::test]
-async fn compat_v2_integration_mutation_routes_match_empty_backend() {
+async fn compat_v2_integration_and_credential_routes_are_removed() {
     let workdir = tempdir();
     let app = router(state(&workdir).await);
 
-    let (status, error) = request_json(
+    let (status, _) = get_json(app.clone(), "/api/integration").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let (status, _) = get_json(app.clone(), "/api/integration/github").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let status = request_status(
         app.clone(),
         Method::POST,
         "/api/integration/missing/connect/key",
         serde_json::json!({"key": "test"}),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert_eq!(error["_tag"], "InvalidRequestError");
-    assert_eq!(error["kind"], "integration_authorization");
+    assert_eq!(status, StatusCode::NOT_FOUND);
 
-    let (status, error) = request_json(
+    let status = request_status(
         app.clone(),
         Method::POST,
         "/api/integration/missing/connect/oauth",
         serde_json::json!({"methodID": "missing", "inputs": {}}),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert_eq!(error["_tag"], "InvalidRequestError");
-    assert_eq!(error["kind"], "integration_authorization");
+    assert_eq!(status, StatusCode::NOT_FOUND);
 
     let status = request_status(
         app.clone(),
@@ -234,18 +227,16 @@ async fn compat_v2_integration_mutation_routes_match_empty_backend() {
         Value::Null,
     )
     .await;
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(status, StatusCode::NOT_FOUND);
 
-    let (status, error) = request_json(
+    let status = request_status(
         app.clone(),
         Method::POST,
         "/api/integration/attempt/con_missing/complete",
         serde_json::json!({}),
     )
     .await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert_eq!(error["_tag"], "InvalidRequestError");
-    assert_eq!(error["kind"], "integration_authorization");
+    assert_eq!(status, StatusCode::NOT_FOUND);
 
     let status = request_status(
         app.clone(),
@@ -254,7 +245,7 @@ async fn compat_v2_integration_mutation_routes_match_empty_backend() {
         Value::Null,
     )
     .await;
-    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(status, StatusCode::NOT_FOUND);
 
     let status = request_status(
         app.clone(),
@@ -263,7 +254,7 @@ async fn compat_v2_integration_mutation_routes_match_empty_backend() {
         Value::Null,
     )
     .await;
-    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(status, StatusCode::NOT_FOUND);
 
     let status = request_status(
         app,
@@ -272,5 +263,5 @@ async fn compat_v2_integration_mutation_routes_match_empty_backend() {
         serde_json::json!({"label": "Work"}),
     )
     .await;
-    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }

@@ -22,7 +22,6 @@ mod formatter;
 mod global;
 mod health;
 mod instance;
-mod integration;
 mod jsonc;
 mod location;
 mod mcp;
@@ -105,7 +104,6 @@ pub(super) fn router() -> Router<ServerState> {
         .merge(global::router())
         .merge(health::router())
         .merge(instance::router())
-        .merge(integration::router())
         .merge(metadata::router())
         .merge(mcp::router())
         .merge(openapi_doc::router())
