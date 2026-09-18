@@ -18,10 +18,19 @@ impl Protocol for AnthropicMessagesProtocol {
         for m in &req.messages {
             match m {
                 Message::User { parts, .. } => {
-                    messages.push(json!({"role": "user", "content": user_content(parts)?}));
+                    push_coalesced(&mut messages, "user", user_content(parts)?);
                 }
                 Message::Assistant { parts, .. } => emit_assistant(&mut messages, parts)?,
-                Message::System { .. } => {}
+                // Mid-conversation system text is where compaction summaries
+                // live. The Messages API has no system role inside `messages`,
+                // and folding it into the top-level `system` field would
+                // invalidate the cached prefix on every compaction, so it is
+                // encoded as user text at the position it was injected.
+                Message::System { content, .. } => {
+                    if !content.is_empty() {
+                        push_coalesced(&mut messages, "user", Value::String(content.clone()));
+                    }
+                }
             }
         }
         let tools: Vec<Value> = req
@@ -64,6 +73,34 @@ impl Protocol for AnthropicMessagesProtocol {
         reasoning: Option<ReasoningEffort>,
     ) -> Box<dyn Decoder> {
         Box::new(AnthropicDecoder::new(session, message, reasoning))
+    }
+}
+
+/// Append a message, merging it into the previous entry when the role repeats.
+///
+/// The Messages API requires alternating roles. Tool-result clusters already end
+/// on a `user` entry, so a summary or follow-up landing next to one would
+/// otherwise produce two consecutive `user` messages and be rejected.
+fn push_coalesced(out: &mut Vec<Value>, role: &str, content: Value) {
+    if let Some(last) = out.last_mut()
+        && last.get("role").and_then(Value::as_str) == Some(role)
+    {
+        let mut blocks = content_blocks(last["content"].take());
+        blocks.extend(content_blocks(content));
+        last["content"] = Value::Array(blocks);
+        return;
+    }
+    out.push(json!({"role": role, "content": content}));
+}
+
+/// Normalize a message `content` field into a content-block array.
+fn content_blocks(content: Value) -> Vec<Value> {
+    match content {
+        Value::Array(blocks) => blocks,
+        Value::String(text) if text.is_empty() => Vec::new(),
+        Value::String(text) => vec![json!({"type": "text", "text": text})],
+        Value::Null => Vec::new(),
+        other => vec![other],
     }
 }
 
@@ -125,7 +162,7 @@ fn emit_assistant(out: &mut Vec<Value>, parts: &[Part]) -> Result<(), ProviderEr
     }
     if tools.is_empty() {
         if !text.is_empty() {
-            out.push(json!({"role": "assistant", "content": [{"type": "text", "text": text}]}));
+            push_coalesced(out, "assistant", json!([{"type": "text", "text": text}]));
         }
     } else {
         flush_cluster(out, &text, &tools);
@@ -160,7 +197,7 @@ fn flush_cluster(out: &mut Vec<Value>, text: &str, tools: &[&Part]) {
             }));
         }
     }
-    out.push(json!({"role": "assistant", "content": content}));
+    push_coalesced(out, "assistant", Value::Array(content));
     let results: Vec<Value> = tools
         .iter()
         .filter_map(|&p| {
@@ -176,5 +213,5 @@ fn flush_cluster(out: &mut Vec<Value>, text: &str, tools: &[&Part]) {
             }))
         })
         .collect();
-    out.push(json!({"role": "user", "content": results}));
+    push_coalesced(out, "user", Value::Array(results));
 }
