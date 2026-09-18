@@ -5353,7 +5353,6 @@ async fn governor_caps_streaming_concurrency() {
     });
     let (engine, agent) = governed_engine(
         SubagentLimits {
-            max_depth: 5,
             max_concurrency: 2,
             per_run_budget: 100,
             ..SubagentLimits::default()
@@ -5387,7 +5386,6 @@ async fn governor_caps_streaming_concurrency() {
 async fn governor_rejects_members_beyond_budget() {
     let (engine, agent) = governed_engine(
         SubagentLimits {
-            max_depth: 5,
             max_concurrency: 8,
             per_run_budget: 1,
             ..SubagentLimits::default()
@@ -5433,7 +5431,6 @@ async fn governor_rejects_members_beyond_budget() {
 async fn governor_rejects_spawn_beyond_max_depth() {
     let (engine, agent) = governed_engine(
         SubagentLimits {
-            max_depth: 1,
             max_concurrency: 8,
             per_run_budget: 100,
             ..SubagentLimits::default()
@@ -5441,7 +5438,7 @@ async fn governor_rejects_spawn_beyond_max_depth() {
         Arc::new(SelectiveFakeProvider),
     )
     .await;
-    let lead = engine
+    let root = engine
         .create(CreateSession {
             parent: None,
             agent: AgentName::new("build"),
@@ -5450,10 +5447,20 @@ async fn governor_rejects_spawn_beyond_max_depth() {
         })
         .await
         .unwrap();
-    // A depth-1 child; its member would be depth 2 > max_depth 1.
+    // ADR-0015: depth is hardcoded to two layers. Build a depth-2 session;
+    // its member would be depth 3 > MAX_SUBAGENT_DEPTH 2.
     let child = engine
         .create(CreateSession {
-            parent: Some(lead),
+            parent: Some(root),
+            agent: AgentName::new("build"),
+            model: ModelRef::new("fake"),
+            workdir: "/tmp".to_string(),
+        })
+        .await
+        .unwrap();
+    let grandchild = engine
+        .create(CreateSession {
+            parent: Some(child),
             agent: AgentName::new("build"),
             model: ModelRef::new("fake"),
             workdir: "/tmp".to_string(),
@@ -5462,7 +5469,7 @@ async fn governor_rejects_spawn_beyond_max_depth() {
         .unwrap();
     let evidence = run_team(
         engine.clone(),
-        child,
+        grandchild,
         vec![member(&engine, &agent, "too deep")],
         CancellationToken::new(),
     )

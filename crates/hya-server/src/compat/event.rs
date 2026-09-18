@@ -626,7 +626,12 @@ async fn api_envelope_payload(st: &ServerState, envelope: Envelope) -> Value {
             finish,
             ..
         } => step_ended_event_payload(&envelope, *session, *message, *finish),
-        Event::Error { .. }
+        Event::AgentArchived { .. }
+        | Event::AgentRestarted { .. }
+        | Event::ChannelCreated { .. }
+        | Event::HandoffCommitted { .. }
+        | Event::SubagentReported { .. }
+        | Event::Error { .. }
         | Event::SessionStatus { .. }
         | Event::SessionCreated { .. }
         | Event::SessionTitled { .. }

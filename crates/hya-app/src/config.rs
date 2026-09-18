@@ -160,10 +160,10 @@ impl From<PermissionModeConfig> for Mode {
 
 /// File shape of the `subagents:` block. Every field is optional so a partial
 /// block keeps the [`SubagentLimits`] default for the fields it omits.
+/// Recursion depth is deliberately absent: it is the hardcoded engine
+/// constant `MAX_SUBAGENT_DEPTH` (ADR-0015), not a config knob.
 #[derive(Debug, Default, Deserialize)]
 struct SubagentLimitsFile {
-    #[serde(default)]
-    max_depth: Option<u32>,
     #[serde(default)]
     max_concurrency: Option<usize>,
     #[serde(default)]
@@ -1270,7 +1270,6 @@ fn resolve_mcp(file: &FileConfig) -> anyhow::Result<BTreeMap<String, McpServerCo
 fn resolve_subagent_limits(file: Option<&SubagentLimitsFile>) -> SubagentLimits {
     let defaults = SubagentLimits::default();
     let mut limits = SubagentLimits {
-        max_depth: file.and_then(|f| f.max_depth).unwrap_or(defaults.max_depth),
         max_concurrency: file
             .and_then(|f| f.max_concurrency)
             .unwrap_or(defaults.max_concurrency),
@@ -1284,11 +1283,6 @@ fn resolve_subagent_limits(file: Option<&SubagentLimitsFile>) -> SubagentLimits 
             .and_then(|f| f.per_team_message_budget)
             .unwrap_or(defaults.per_team_message_budget),
     };
-    if let Ok(v) = std::env::var("HYA_SUBAGENT_MAX_DEPTH")
-        && let Ok(parsed) = v.trim().parse()
-    {
-        limits.max_depth = parsed;
-    }
     if let Ok(v) = std::env::var("HYA_SUBAGENT_MAX_CONCURRENCY")
         && let Ok(parsed) = v.trim().parse()
     {
@@ -2123,12 +2117,13 @@ permission:
     #[test]
     fn subagent_limits_parse_from_file_and_env_wins() {
         // File block sets every field; a partial block keeps defaults elsewhere.
+        // A legacy `max_depth` key parses but is ignored: depth is the hardcoded
+        // engine constant (ADR-0015), not a config knob.
         let file = parse_config(
             "default_model: x\nsubagents:\n  max_depth: 9\n  max_concurrency: 200\n  per_run_budget: 1000\n  per_team_turn_budget: 700\n  per_team_message_budget: 800\n",
         )
         .unwrap();
         let from_file = resolve_subagent_limits(file.subagents.as_ref());
-        assert_eq!(from_file.max_depth, 9);
         assert_eq!(from_file.max_concurrency, 200);
         assert_eq!(from_file.per_run_budget, 1000);
         assert_eq!(from_file.per_team_turn_budget, 700);
@@ -2150,12 +2145,12 @@ permission:
         assert_eq!(msg.per_team_turn_budget, 700, "untouched field stays file");
 
         // Env override wins over the file value.
-        unsafe { std::env::set_var("HYA_SUBAGENT_MAX_DEPTH", "3") };
+        unsafe { std::env::set_var("HYA_SUBAGENT_MAX_CONCURRENCY", "64") };
         let overridden = resolve_subagent_limits(file.subagents.as_ref());
-        unsafe { std::env::remove_var("HYA_SUBAGENT_MAX_DEPTH") };
-        assert_eq!(overridden.max_depth, 3, "env must win over file");
+        unsafe { std::env::remove_var("HYA_SUBAGENT_MAX_CONCURRENCY") };
+        assert_eq!(overridden.max_concurrency, 64, "env must win over file");
         assert_eq!(
-            overridden.max_concurrency, 200,
+            overridden.per_run_budget, 1000,
             "untouched field stays file"
         );
     }

@@ -21,12 +21,10 @@ const RESERVED_STREAM_PERMITS: usize = 28;
 
 /// Configurable caps for nested/parallel subagent execution.
 ///
-/// - `max_depth`: how many levels a subagent tree may recurse (the interactive
-///   lead session is depth 0; its direct subagents are depth 1, and so on).
 /// - `max_concurrency`: configurable ceiling on general members whose provider
 ///   stream is running at the same time. It is normalized to `1..=100`; excess
 ///   members park until a slot frees. The default live stream budget is 128,
-///   split into 100 general and 28 reserved permits.
+///   split into 100 general 28 reserved permits.
 /// - `per_run_budget`: maximum total number of members that may be spawned under a
 ///   single top-level run, bounding the total task fan-out.
 /// - `per_team_turn_budget`: maximum total number of resident *turns* a single
@@ -35,10 +33,11 @@ const RESERVED_STREAM_PERMITS: usize = 28;
 /// - `per_team_message_budget`: maximum total number of `MailSent` a single team
 ///   may emit. The message-loop backstop: a runaway A↔B exchange trips this and
 ///   the team is killed instead of spending forever.
+///
+/// Recursion depth is **not** here: it is the hardcoded
+/// [`MAX_SUBAGENT_DEPTH`](crate::MAX_SUBAGENT_DEPTH) (ADR-0015).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SubagentLimits {
-    /// Max recursion depth (lead = 0).
-    pub max_depth: u32,
     /// Concurrent general streaming slots (clamped 1..=100).
     pub max_concurrency: usize,
     /// Max members spawnable under one top-level run.
@@ -52,7 +51,6 @@ pub struct SubagentLimits {
 impl Default for SubagentLimits {
     fn default() -> Self {
         Self {
-            max_depth: 5,
             max_concurrency: DEFAULT_GENERAL_STREAM_PERMITS,
             // Raised from 256 so a large resident swarm (100+) comfortably fits
             // under one team's total-spawn ceiling (decision 7).
@@ -145,9 +143,10 @@ impl SubagentGovernor {
     }
 
     #[must_use]
-    /// Maximum subagent recursion depth.
+    /// Maximum subagent recursion depth: the hardcoded
+    /// [`MAX_SUBAGENT_DEPTH`](crate::MAX_SUBAGENT_DEPTH) (ADR-0015).
     pub fn max_depth(&self) -> u32 {
-        self.limits.max_depth
+        crate::MAX_SUBAGENT_DEPTH
     }
 
     /// Acquire one general streaming permit. Kept as a compatibility alias for
@@ -384,10 +383,29 @@ mod tests {
     use hya_proto::{OperationId, ToolCallId};
     use tokio_util::sync::CancellationToken;
 
+    /// ADR-0015: exactly two subagent layers, engine-owned and not
+    /// configurable — no limits field can raise it.
+    #[test]
+    fn subagent_depth_is_hardcoded_to_two_layers() {
+        assert_eq!(crate::MAX_SUBAGENT_DEPTH, 2);
+        assert_eq!(
+            SubagentGovernor::new(SubagentLimits::default()).max_depth(),
+            2
+        );
+        assert_eq!(
+            SubagentGovernor::new(SubagentLimits {
+                max_concurrency: 100,
+                per_run_budget: 1024,
+                ..SubagentLimits::default()
+            })
+            .max_depth(),
+            2
+        );
+    }
+
     #[test]
     fn reserve_grants_up_to_budget_then_stops() {
         let gov = SubagentGovernor::new(SubagentLimits {
-            max_depth: 5,
             max_concurrency: 4,
             per_run_budget: 3,
             ..SubagentLimits::default()
@@ -456,7 +474,6 @@ mod tests {
     #[tokio::test]
     async fn acquire_stream_caps_concurrency() {
         let gov = SubagentGovernor::new(SubagentLimits {
-            max_depth: 5,
             max_concurrency: 2,
             per_run_budget: 100,
             ..SubagentLimits::default()
