@@ -19,6 +19,7 @@ use hya_tool::{
     Action, FormatterError, FormatterPlane, FormatterProvider, InteractionPlane, LspError,
     LspPlane, LspProvider, LspRequest, Mode, PermissionPlane, PermissionRules, Rule, SkillPlane,
     SpawnerPlane, TodoPlane, Tool, ToolCtx, ToolError, ToolRegistry, WebSearchPlane,
+    handle::ArtifactPlane,
 };
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
@@ -68,7 +69,10 @@ fn tempdir() -> PathBuf {
         std::process::id()
     ));
     std::fs::create_dir_all(&dir).unwrap();
-    dir
+    // macOS tempdirs sit behind the /var -> /private/var symlink; the tools
+    // resolve targets canonically, so fixtures must start from the same
+    // spelling to keep titles and diagnostics relativizable.
+    std::fs::canonicalize(&dir).unwrap()
 }
 
 /// Construct a normal Edit context with disconnected optional planes.
@@ -142,6 +146,7 @@ fn ctx_with_components(
         parent_session: None,
         todo: TodoPlane::default(),
         skills: SkillPlane::default(),
+        artifacts: ArtifactPlane::default(),
         websearch: WebSearchPlane::default(),
         lsp,
         formatter,

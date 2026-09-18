@@ -29,6 +29,9 @@ mod formatter_catalog;
 mod formatter_command;
 mod formatter_definition;
 mod grep;
+/// Internal resource URLs (`artifact://`, `skill://`, `local://`) for
+/// agent-owned payloads. Ordinary filesystem paths are unaffected.
+pub mod handle;
 mod hashline;
 /// Human interaction channel for structured questions and free-text asks.
 pub mod interaction;
@@ -79,7 +82,9 @@ pub use interaction::{
 };
 pub use lsp_plane::{LspError, LspOperation, LspPlane, LspProvider, LspRequest};
 pub use mailbox::{ChannelInfo, MailReceipt, MailboxError, MailboxPlane, MailboxRequest};
-pub use output_cap::{MAX_TOOL_OUTPUT_CHARS, cap_tool_output, cap_tool_output_with_policy};
+pub use output_cap::{
+    MAX_TOOL_OUTPUT_CHARS, cap_tool_output, cap_tool_output_spilling, cap_tool_output_with_policy,
+};
 pub use permission::{
     Action, AskRequest, Decision, ExactSubject, Invocation, InvocationDecision, InvocationPolicy,
     InvocationRule, Mode, PermissionError, PermissionInterceptor, PermissionModel, PermissionPlane,

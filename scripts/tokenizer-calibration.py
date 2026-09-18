@@ -23,25 +23,35 @@ The Python featurizer below must stay a faithful mirror of `count_text` in
 import glob
 import json
 import random
+import re
 import sys
 
 FEATURES = [
     "word_runs",
     "word_extra",
-    "digit_runs",
-    "digit_extra",
+    "word_long",
+    "digit_chars",
+    "case_changes",
+    "number_runs",
+    "number_chars",
     "punct_runs",
-    "punct_extra",
     "newline_runs",
-    "newline_extra",
     "cjk",
     "other",
 ]
 
 # Sixteenths, as committed in `tokens.rs::weight`.
-QUANTIZED = [12, 2, 26, 3, 15, 2, 15, 0, 13, 14]
+QUANTIZED = [15, 1, 8, 7, 5, 11, 6, 15, 9, 13, 17]
 SCALE = 16
 CJK_START = 0x2E80
+
+# Alpha runs longer than this stop behaving like vocabulary words. Up to here
+# BPE folds a run into one or two tokens; past it the merges run out and the
+# cost settles near half a token per character. That is the regime of base64
+# blobs, long digests and minified bundles in tool output, and charging them the
+# prose rate under-counts them fourfold. Digits need no such split: BPE groups
+# them in threes at every length, so one per-character rate covers both regimes.
+LONG_RUN = 12
 
 CORPUS_GLOBS = [
     "crates/**/*.rs",
@@ -60,18 +70,37 @@ def featurize(text):
     i, length = 0, len(text)
     while i < length:
         char = text[i]
-        if char.isascii() and char.isalpha():
+        if char.isascii() and char.isalnum():
+            # One maximal alphanumeric run, not separate letter and digit runs.
+            # BPE merges across the letter/digit boundary inside `sha256`, `utf8`
+            # or a base64 blob, so splitting there invents a per-run cost that
+            # the encoder never charges.
             start = i
-            while i < length and text[i].isascii() and text[i].isalpha():
+            digits = changes = 0
+            while i < length and text[i].isascii() and text[i].isalnum():
+                digits += text[i].isdigit()
+                # Case changes are what separate a base64 blob from a lowercase
+                # hex digest of the same length: alternating case has few merges
+                # in the vocabulary. Counting capitals instead would charge
+                # SCREAMING_SNAKE_CASE, which BPE merges as happily as prose.
+                # The first pair is skipped so an ordinary initial capital is
+                # free.
+                if i - start >= 2 and text[i].isalpha() and text[i - 1].isalpha():
+                    changes += text[i].isupper() != text[i - 1].isupper()
                 i += 1
-            counts["word_runs"] += 1
-            counts["word_extra"] += max(0, (i - start) - 4)
-        elif char.isascii() and char.isdigit():
-            start = i
-            while i < length and text[i].isascii() and text[i].isdigit():
-                i += 1
-            counts["digit_runs"] += 1
-            counts["digit_extra"] += max(0, (i - start) - 1)
+            run = i - start
+            if digits == run:
+                # A bare number, which BPE splits into three-digit groups at
+                # every length. Digits embedded in an identifier are far cheaper,
+                # so the two cannot share one weight.
+                counts["number_runs"] += 1
+                counts["number_chars"] += run
+            else:
+                counts["word_runs"] += 1
+                counts["word_extra"] += max(0, min(run, LONG_RUN) - 4)
+                counts["word_long"] += max(0, run - LONG_RUN)
+                counts["digit_chars"] += digits
+                counts["case_changes"] += changes
         elif char == "\n":
             # A newline and the indentation after it collapse into one token.
             i += 1
@@ -86,7 +115,6 @@ def featurize(text):
             # A lone separator merges into the neighbouring word token.
             if run > 1:
                 counts["punct_runs"] += 1
-                counts["punct_extra"] += run - 2
         elif char.isascii():
             start = i
             while (
@@ -97,7 +125,6 @@ def featurize(text):
             ):
                 i += 1
             counts["punct_runs"] += 1
-            counts["punct_extra"] += max(0, (i - start) - 2)
         elif ord(char) >= CJK_START:
             counts["cjk"] += 1
             i += 1
@@ -131,24 +158,123 @@ def load_corpus(patterns, limit, seed):
     return corpus
 
 
+def blob_corpus(seed=11):
+    """Long-run payloads that repository files barely contain.
+
+    Base64 attachments, hex digests, JWTs and minified bundles arrive through
+    tool output rather than checked-in source, so a corpus of `.rs` and `.md`
+    files gives the long-run weights almost no signal. These samples supply it.
+    """
+    rng = random.Random(seed)
+    b64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+    hexits = "0123456789abcdef"
+
+    def draw(alphabet, n):
+        return "".join(rng.choice(alphabet) for _ in range(n))
+
+    samples = []
+    # Vary run lengths within every sample. Fitting a per-character weight
+    # against runs that are all the same length leaves it collinear with the
+    # per-run weight, and least squares answers with a nonsense split.
+    for n in (512, 2048, 8192):
+        samples.append(draw(b64, n))
+        samples.append("\n".join(draw(b64, rng.randint(40, 96)) for _ in range(n // 76)))
+    for count in (20, 40, 80):
+        samples.append(" ".join(draw(hexits, rng.randint(8, 128)) for _ in range(count)))
+    samples.append(".".join(draw(b64, k) for k in (36, 210, 43)))  # JWT-shaped
+    samples.append(
+        ";".join(
+            f"function {draw('abcdefghijklmnopqrstuvwxyz', rng.randint(6, 40))}"
+            f"(a,b){{return a.{draw('abcdefghijklmnopqrstuvwxyz', rng.randint(4, 30))}(b)}}"
+            for _ in range(60)
+        )
+    )
+    for count in (50, 200):
+        samples.append(
+            " ".join(draw("0123456789", rng.randint(1, 40)) for _ in range(count))
+        )
+    return samples
+
+
+# A token covers at least one character, so a per-character weight above 1.0 is
+# unphysical; a per-run weight covers the run's first few characters. Bounding
+# the solve keeps a collinear corpus from answering with an absurd split that
+# happens to fit, such as two tokens per digit.
+UPPER_BOUND = {
+    "word_runs": 4.0,
+    "word_extra": 1.0,
+    "word_long": 1.0,
+    "digit_chars": 1.0,
+    "case_changes": 2.0,
+    # A number costs about `ceil(len / 3)` tokens. The fixed part of that is the
+    # rounding, worth at most two thirds of a token — never the 1.6 an
+    # unconstrained solve reaches for by leaning on digits as a proxy for the
+    # punctuation around them, which over-charges every short number by half.
+    "number_runs": 2.0 / 3.0,
+    "number_chars": 1.0,
+    "punct_runs": 2.0,
+    "newline_runs": 2.0,
+    "cjk": 1.5,
+    "other": 1.5,
+}
+
+# Zero is a wrong answer for a length term even when the corpus tolerates it:
+# `case_changes` and `word_long` can absorb its variance, and the fit then
+# claims a twelve-character word costs what a five-character one does. These
+# floors are the marginal rates measured on runs of those lengths in isolation.
+#
+# `word_long` needs a floor for a second reason. What a long run really costs
+# depends on whether the vocabulary happens to contain its merges: 100 `r`s cost
+# 0.25 per character, 100 `R`s cost 0.50, and a concatenation of dictionary
+# words costs 0.08. No run-length feature can tell those apart, so the weight is
+# pinned to the rate measured on high-entropy runs — random letters, base64, hex
+# — at 0.50. Those are the shapes that actually arrive in tool output, and the
+# residual error then lands on the safe side: over-counting compacts a turn
+# early, while under-counting overflows the window.
+LOWER_BOUND = {
+    "word_extra": 0.05,
+    "word_long": 0.50,
+}
+
+
+def bounded_lstsq(design, target, lower, upper, iterations=20_000):
+    """Least squares over a box, by projected gradient descent.
+
+    `numpy.linalg.lstsq` is unconstrained and scipy is not a dependency here,
+    so this projects onto `[lower, upper]` after every step. The objective is
+    convex and the box is convex, so the fixed point is the constrained
+    optimum.
+    """
+    import numpy as np
+
+    gram = design.T @ design
+    moment = design.T @ target
+    step = 1.0 / np.linalg.eigvalsh(gram).max()
+    weights = lower.copy()
+    for _ in range(iterations):
+        weights = np.clip(weights - step * (gram @ weights - moment), lower, upper)
+    return weights
+
+
 def fit():
     import numpy as np
     import tiktoken
 
     enc = tiktoken.get_encoding("o200k_base")
-    corpus = load_corpus(CORPUS_GLOBS, 900, seed=7)
+    corpus = load_corpus(CORPUS_GLOBS, 900, seed=7) + blob_corpus()
     features = np.array([featurize(t) for t in corpus], dtype=float)
     truth = np.array(
         [len(enc.encode(t, disallowed_special=())) for t in corpus], dtype=float
     )
-    # Weight each file so relative, not absolute, error is minimised: a 200-line
-    # file must not be drowned out by a 5000-line one.
+    # Weight each sample so relative, not absolute, error is minimised: a
+    # 200-line file must not be drowned out by a 5000-line one.
     inverse = 1.0 / np.maximum(truth, 1.0)
-    coefficients, *_ = np.linalg.lstsq(
-        features * inverse[:, None], truth * inverse, rcond=None
+    lower = np.array([LOWER_BOUND.get(name, 0.0) for name in FEATURES])
+    upper = np.array([UPPER_BOUND[name] for name in FEATURES])
+    coefficients = bounded_lstsq(
+        features * inverse[:, None], truth * inverse, lower, upper
     )
-    coefficients = np.maximum(coefficients, 0.0)
-    print(f"fitted on {len(corpus)} files")
+    print(f"fitted on {len(corpus)} samples")
     for name, raw in zip(FEATURES, coefficients):
         print(f"  {name:14s} {raw:.4f}  ->  {round(raw * SCALE)}/{SCALE}")
     print(f"\nquantized: {[round(c * SCALE) for c in coefficients]}")
@@ -169,11 +295,30 @@ def score(label, predicted, truth):
     )
 
 
+def cjk_spans(minimum=8):
+    """Contiguous CJK spans found in repository files.
+
+    Scoring one sentence repeated N times measures BPE merging across the
+    repeats, not Chinese prose, and reports an over-count that real text never
+    shows. Distinct spans are the honest sample.
+    """
+    span = re.compile(r"[\u2e80-\u9fff\uf900-\ufaff\uff00-\uffef]{%d,}" % minimum)
+    spans = []
+    for pattern in ("docs/**/*.md", "docs/**/*.json", "crates/**/*.rs"):
+        for path in glob.glob(pattern, recursive=True):
+            if "/target/" in path:
+                continue
+            try:
+                spans += span.findall(open(path, encoding="utf-8").read())
+            except (OSError, UnicodeDecodeError):
+                continue
+    return spans
+
+
 def evaluate():
     import numpy as np
     import tiktoken
 
-    cjk_line = "本次我们开始开发上下文管理功能，首先阅读当前仓库，分析系统如何管理上下文。"
     suites = [
         ("held-out code", ["crates/**/*.rs", "packages/**/*.ts"], "o200k_base"),
         ("held-out docs/json", ["docs/**/*.md", "**/*.json"], "o200k_base"),
@@ -182,32 +327,24 @@ def evaluate():
     for label, patterns, encoding in suites:
         enc = tiktoken.get_encoding(encoding)
         corpus = load_corpus(patterns, 4000, seed=99)
-        truth = np.array(
-            [len(enc.encode(t, disallowed_special=())) for t in corpus], dtype=float
-        )
-        print(f"{label}  n={len(corpus)}")
-        score(
-            "bytes/4 (baseline)",
-            np.array([len(t.encode("utf-8")) // 4 for t in corpus], dtype=float),
-            truth,
-        )
-        score(
-            "calibrated",
-            np.array([predict(t) for t in corpus], dtype=float),
-            truth,
-        )
-    enc = tiktoken.get_encoding("o200k_base")
-    cjk = [cjk_line * k for k in (2, 6, 20)]
+        report(label, corpus, enc)
+    report("CJK spans", cjk_spans(), tiktoken.get_encoding("o200k_base"))
+    report("long runs", blob_corpus(seed=23), tiktoken.get_encoding("o200k_base"))
+
+
+def report(label, corpus, enc):
+    import numpy as np
+
     truth = np.array(
-        [len(enc.encode(t, disallowed_special=())) for t in cjk], dtype=float
+        [len(enc.encode(t, disallowed_special=())) for t in corpus], dtype=float
     )
-    print(f"CJK  n={len(cjk)}")
+    print(f"{label}  n={len(corpus)}")
     score(
         "bytes/4 (baseline)",
-        np.array([len(t.encode("utf-8")) // 4 for t in cjk], dtype=float),
+        np.array([len(t.encode("utf-8")) // 4 for t in corpus], dtype=float),
         truth,
     )
-    score("calibrated", np.array([predict(t) for t in cjk], dtype=float), truth)
+    score("calibrated", np.array([predict(t) for t in corpus], dtype=float), truth)
 
 
 # Mirrors the `FIXTURES` table in `crates/hya-core/tests/token_accounting.rs`.
@@ -290,23 +427,39 @@ TEST_FIXTURES = {
     ),
 }
 
+# Mirrors the `BLOB_FIXTURES` table in the same test file. These are weighted
+# one-sidedly on purpose; see `weight::WORD_LONG` in `tokens.rs`.
+BLOB_FIXTURES = {
+    "base64_attachment": (
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA"
+        "60e6kgAAAABJRU5ErkJggg=="
+    ),
+    "hex_digest_table": (
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\n"
+        "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08\n"
+    ),
+    "long_identifier_run": (
+        "averyveryverylongunbrokenidentifiernamethatkeepsgoingwithoutanyseparators"
+    ),
+}
+
 
 def fixtures():
     import tiktoken
 
     enc = tiktoken.get_encoding("o200k_base")
-    header = f"{'fixture':16s} {'truth':>6s} {'calib':>6s} {'bytes/4':>8s}"
-    print(f"{header}   err_calib   err_bytes4")
-    for name, text in TEST_FIXTURES.items():
-        truth = len(enc.encode(text, disallowed_special=()))
-        calibrated = predict(text)
-        baseline = len(text.encode("utf-8")) // 4
-        err_c = (calibrated - truth) / truth
-        err_b = (baseline - truth) / truth
-        print(
-            f"{name:16s} {truth:6d} {calibrated:6d} {baseline:8d}"
-            f"   {err_c:+8.1%}   {err_b:+8.1%}"
-        )
+    header = f"{'fixture':20s} {'truth':>6s} {'calib':>6s} {'bytes/4':>8s}"
+    for label, table in (("prose/code", TEST_FIXTURES), ("blobs", BLOB_FIXTURES)):
+        print(f"\n{label}\n{header}   err_calib   err_bytes4")
+        for name, text in table.items():
+            truth = len(enc.encode(text, disallowed_special=()))
+            calibrated = predict(text)
+            baseline = len(text.encode("utf-8")) // 4
+            print(
+                f"{name:20s} {truth:6d} {calibrated:6d} {baseline:8d}"
+                f"   {(calibrated - truth) / truth:+8.1%}"
+                f"   {(baseline - truth) / truth:+8.1%}"
+            )
 
 
 if __name__ == "__main__":

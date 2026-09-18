@@ -370,6 +370,7 @@ async fn compaction_auto_triggers_when_over_threshold() {
             token_threshold: 1_000_000,
             keep_recent: 1,
             context_fraction: 0.001,
+            ..CompactionConfig::default()
         },
     );
     let session = engine
@@ -434,6 +435,7 @@ async fn compaction_threshold_scales_to_the_advertised_context_window() {
             token_threshold: 1_000_000,
             keep_recent: 1,
             context_fraction: 0.001,
+            ..CompactionConfig::default()
         },
     );
     let session = engine
@@ -535,6 +537,7 @@ async fn local_compaction_persists_and_is_not_repeated_next_round() {
             token_threshold: 1_000_000,
             keep_recent: 1,
             context_fraction: 0.001,
+            ..CompactionConfig::default()
         },
     );
     let session = engine
@@ -764,10 +767,13 @@ async fn tool_output_eviction_avoids_summarizing_and_preserves_the_log() {
         CompactionConfig {
             token_threshold: 1_000_000,
             keep_recent: 1,
-            // 200k window * 0.10 = 20,000 tokens. The bounded structured Read
-            // result stays under alone; turn 2 pushes it over while remaining
-            // below the threshold after stale tool-output eviction.
-            context_fraction: 0.10,
+            // 200k window * 0.16 = 32,000 tokens. The line-numbered Read result
+            // for this file serializes to ~65KB of JSON, which really is about
+            // 30,100 tokens, so turn 1 stays just under it on its own. Turn 2's
+            // prompt adds ~3,300 and pushes it over, and evicting turn 1's
+            // now-stale tool output drops it back to a few thousand.
+            context_fraction: 0.16,
+            ..CompactionConfig::default()
         },
     );
     let session = engine

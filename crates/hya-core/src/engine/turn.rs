@@ -30,6 +30,8 @@ use crate::{AgentResourcePolicy, TurnBinding};
 
 mod messages;
 
+use super::spill::ArtifactEvictionSink;
+use crate::agent_catalog::AgentDefinition;
 pub use messages::advertise_tool;
 use messages::{projection_to_messages, request_from_messages};
 
@@ -738,6 +740,52 @@ impl SessionEngine {
         outcome
     }
 
+    /// Summarize options for one folding attempt, anchored on the transcript as
+    /// it stands right now.
+    ///
+    /// Rebuilt per rung rather than shared, because `previous_summary` reads the
+    /// transcript and by the time the ladder escalates the transcript is no
+    /// longer the one the earlier rung saw.
+    fn folding_options(
+        &self,
+        definition: &AgentDefinition<'_>,
+        binding: &TurnBinding,
+        messages: &[Message],
+    ) -> crate::compaction::SummarizeOptions {
+        let options = summarize_options_from_definition(
+            definition,
+            &self.model_categories,
+            binding.agent_model_preference(definition.stable_id),
+            &|candidate| self.provider_router().resolve(candidate).is_some(),
+        );
+        // Anchor on whatever summary the session already carries, and give the
+        // call room for the full section template.
+        crate::compaction::SummarizeOptions {
+            previous_summary: crate::compaction::previous_summary(messages),
+            max_output_tokens: Some(self.compaction.summary_max_tokens),
+            ..options
+        }
+    }
+
+    /// Re-read the transcript after a rung replaced it, and re-count it.
+    ///
+    /// The count is estimated rather than measured on purpose. A provider's
+    /// reported usage describes the prompt it was sent, and after compaction that
+    /// prompt no longer exists; trusting the stale anchor would report the
+    /// pre-compaction size and escalate the ladder straight past the rung that
+    /// had just worked.
+    async fn reload_after_compaction(
+        &self,
+        session: SessionId,
+        agent: &AgentSpec,
+        model: &ModelRef,
+    ) -> Result<(hya_proto::Projection, Vec<Message>, usize), CoreError> {
+        let projection = self.store.read_projection(session).await?;
+        let messages = projection_to_messages(agent, &projection, model);
+        let tokens = self.token_accounting.estimate(&messages);
+        Ok((projection, messages, tokens))
+    }
+
     async fn run_turn_rounds(
         &self,
         session: SessionId,
@@ -832,77 +880,99 @@ impl SessionEngine {
                 .or_else(|| projection.session.model.clone())
                 .unwrap_or_else(|| agent.model.clone());
             let mut messages = projection_to_messages(agent, &projection, &model);
-            // Context protection: prefer provider `/responses/compact` when the
-            // route supports it; otherwise fall back to the local model summarizer.
-            // Active route for this turn. Its advertised context window scales the
-            // compaction threshold, so resolve it before deciding.
+            // Active route for this turn. Its advertised context window scales
+            // the compaction threshold, so resolve it before deciding.
+            let capabilities = self.provider_router().capabilities(&model);
             let resolved_threshold = crate::compaction::resolved_threshold(
                 &self.compaction,
-                self.provider_router()
-                    .capabilities(&model)
-                    .map(|c| c.max_context),
+                capabilities.as_ref().map(|c| c.max_context),
             );
+            // Routes advertise usage support they do not always honour, so the
+            // claim is an input to the accounting decision, not the decision.
+            let usage_reporting = capabilities.as_ref().is_some_and(|c| c.usage_reporting);
             // One running token count for the whole reduction sequence. It starts
-            // from the provider-measured value when available, then tracks
+            // from the provider-measured value when that is believable, then tracks
             // request-local edits by delta — re-measuring after an edit would
             // return the stale pre-edit number and hide the saving.
-            let mut tokens = crate::compaction::tokens_in_use(&messages);
+            let mut tokens = self
+                .token_accounting
+                .tokens_in_use(&messages, usage_reporting)
+                .tokens;
             let over_threshold = |tokens: usize, messages: &[_]| {
                 messages.len() > self.compaction.keep_recent && tokens > resolved_threshold
             };
 
-            // Cheapest reduction first: drop stale tool outputs. Only if that is
-            // not enough do we pay a summarizer call and lose whole turns to prose.
-            if over_threshold(tokens, &messages) {
-                let estimate_before = crate::compaction::estimate_tokens(&messages);
-                let evicted = crate::compaction::evict_stale_tool_outputs(
-                    &mut messages,
-                    self.compaction.keep_recent,
-                );
-                if evicted > 0 {
-                    let saved = estimate_before
-                        .saturating_sub(crate::compaction::estimate_tokens(&messages));
-                    let before = tokens;
-                    tokens = tokens.saturating_sub(saved);
-                    if !over_threshold(tokens, &messages) {
+            // Reduction ladder, cheapest and most recoverable rung first. The
+            // walk stops at the first rung that brings the transcript under the
+            // threshold, so a turn never pays for a summarizer call that
+            // spilling alone would have avoided. Escalation matters in the other
+            // direction too: a native compact that succeeded but left the
+            // transcript over threshold used to end the sequence, sending the
+            // request out still over the window it was trying to fit.
+            let spill = ArtifactEvictionSink::new(&session_workdir(agent, &projection));
+            // Resolved on first use, so a turn that spilling rescued never
+            // requires the fixed Compaction agent to exist.
+            let mut compaction_agent: Option<AgentDefinition<'_>> = None;
+
+            for rung in crate::compaction::CompactionRung::LADDER {
+                if !over_threshold(tokens, &messages) {
+                    break;
+                }
+                // Snapshot what tripped the threshold before this rung edits the
+                // transcript, so each record explains why that rung ran.
+                let input_tokens_est = u64::try_from(tokens).unwrap_or(u64::MAX);
+                let threshold = u64::try_from(resolved_threshold).unwrap_or(u64::MAX);
+
+                match rung {
+                    crate::compaction::CompactionRung::SpillToolOutputs => {
+                        let estimate_before = self.token_accounting.estimate(&messages);
+                        let evicted = crate::compaction::evict_stale_tool_outputs(
+                            &mut messages,
+                            self.compaction.keep_recent,
+                            Some(&spill),
+                        );
+                        if evicted == 0 {
+                            continue;
+                        }
+                        let saved = estimate_before
+                            .saturating_sub(self.token_accounting.estimate(&messages));
+                        tokens = tokens.saturating_sub(saved);
+                        // Record the saving whether or not it sufficed. A partial
+                        // reduction that still needed a summary is real work, and
+                        // hiding it made the ledger disagree with the transcript.
                         self.emit_for_actor(
                             actor_claim,
                             session,
                             Event::ContextEvicted {
                                 session,
                                 evicted_parts: evicted,
-                                tokens_before: u64::try_from(before).unwrap_or(u64::MAX),
+                                tokens_before: input_tokens_est,
                                 tokens_after: u64::try_from(tokens).unwrap_or(u64::MAX),
-                                threshold: u64::try_from(resolved_threshold).unwrap_or(u64::MAX),
+                                threshold,
                             },
                         )
                         .await?;
                     }
-                }
-            }
-            if over_threshold(tokens, &messages) {
-                // Snapshot what tripped the threshold before the transcript is
-                // replaced, so the ContextCompacted record explains why it ran.
-                let input_tokens_est = u64::try_from(tokens).unwrap_or(u64::MAX);
-                let threshold = u64::try_from(resolved_threshold).unwrap_or(u64::MAX);
-                // Exact-resolve fixed Compaction once before any compact provider
-                // call (native or local). Missing definition fails closed here.
-                // Reuse the turn's captured binding; never re-bind or open a second catalog.
-                let definition = fixed_system_agent(binding, FixedSystemAgent::Compaction)?;
-                let options = summarize_options_from_definition(
-                    &definition,
-                    &self.model_categories,
-                    binding.agent_model_preference(definition.stable_id),
-                    &|candidate| self.provider_router().resolve(candidate).is_some(),
-                );
-                let compaction_model = options.model.clone().unwrap_or_else(|| model.clone());
-                let compaction_prompt = definition.prompt;
-                match self
-                    .provider_router()
-                    .compact_if_supported(&compaction_model, &messages, compaction_prompt)
-                    .await
-                {
-                    Ok(Some(window)) => {
+                    crate::compaction::CompactionRung::ProviderCompact => {
+                        // Exact-resolve the fixed Compaction agent before any
+                        // compact provider call. Missing definition fails closed.
+                        // Reuse the turn's captured binding; never re-bind or open
+                        // a second catalog.
+                        let definition = match &compaction_agent {
+                            Some(definition) => definition,
+                            None => compaction_agent
+                                .insert(fixed_system_agent(binding, FixedSystemAgent::Compaction)?),
+                        };
+                        let options = self.folding_options(definition, binding, &messages);
+                        let compaction_model =
+                            options.model.clone().unwrap_or_else(|| model.clone());
+                        let Ok(Some(window)) = self
+                            .provider_router()
+                            .compact_if_supported(&compaction_model, &messages, definition.prompt)
+                            .await
+                        else {
+                            continue;
+                        };
                         let body = hya_provider::format_responses_compact_system(&window.items);
                         // Native compact folds the whole input window it was given.
                         let folded = whole_window_range(&messages);
@@ -915,91 +985,84 @@ impl SessionEngine {
                             }
                             None => self.inject_system_message(session, body).await,
                         };
-                        if let Ok(marker) = injected {
-                            if let Some((from_message, to_message, folded_count)) = folded {
-                                self.emit_for_actor(
-                                    actor_claim,
+                        let Ok(marker) = injected else {
+                            continue;
+                        };
+                        if let Some((from_message, to_message, folded_count)) = folded {
+                            self.emit_for_actor(
+                                actor_claim,
+                                session,
+                                Event::ContextCompacted {
                                     session,
-                                    Event::ContextCompacted {
-                                        session,
-                                        message: marker,
-                                        strategy: CompactionStrategy::Native,
-                                        from_message,
-                                        to_message,
-                                        folded_count,
-                                        input_tokens_est,
-                                        threshold,
-                                    },
-                                )
-                                .await?;
-                            }
-                            projection = self.store.read_projection(session).await?;
-                            messages = projection_to_messages(agent, &projection, &model);
-                        }
-                    }
-                    Ok(None) | Err(_) => {
-                        if let Some(summarizer) = &self.summarizer {
-                            // Local fallback reuses the same exact-resolved definition
-                            // and model decision as the native path. Provider failures
-                            // stay soft; missing definition already failed closed above.
-                            if let Ok(Some(plan)) = crate::compaction::fold_prefix(
-                                &messages,
-                                &self.compaction,
-                                summarizer.as_ref(),
-                                options,
+                                    message: marker,
+                                    strategy: CompactionStrategy::Native,
+                                    from_message,
+                                    to_message,
+                                    folded_count,
+                                    input_tokens_est,
+                                    threshold,
+                                },
                             )
-                            .await
-                            {
-                                // Persist the local summary behind the same marker the
-                                // native path uses. Without this the summary died with
-                                // the request and every later round re-summarized the
-                                // same history.
-                                let body = format!(
-                                    "{}\n{}",
-                                    hya_provider::COMPACT_CONTEXT_MARKER,
-                                    plan.summary
-                                );
-                                let injected = match actor_claim {
-                                    Some(claim) => {
-                                        self.inject_system_message_for_actor(claim, session, body)
-                                            .await
-                                    }
-                                    None => self.inject_system_message(session, body).await,
-                                };
-                                if let Ok(marker) = injected {
-                                    self.emit_for_actor(
-                                        actor_claim,
-                                        session,
-                                        Event::ContextCompacted {
-                                            session,
-                                            message: marker,
-                                            strategy: CompactionStrategy::LocalSummarizer,
-                                            from_message: plan.from_message,
-                                            to_message: plan.to_message,
-                                            folded_count: plan.folded_count,
-                                            input_tokens_est,
-                                            threshold,
-                                        },
-                                    )
-                                    .await?;
-                                    projection = self.store.read_projection(session).await?;
-                                    messages = projection_to_messages(agent, &projection, &model);
-                                }
-                            }
+                            .await?;
                         }
+                        (projection, messages, tokens) =
+                            self.reload_after_compaction(session, agent, &model).await?;
                     }
-                }
-            } else if let Some(summarizer) = &self.summarizer {
-                // Under threshold, compact_with is a no-op; no fixed definition required.
-                if let Ok(compacted) = crate::compaction::compact_with(
-                    messages.clone(),
-                    &self.compaction,
-                    summarizer.as_ref(),
-                    crate::compaction::SummarizeOptions::default(),
-                )
-                .await
-                {
-                    messages = compacted;
+                    crate::compaction::CompactionRung::Summarize => {
+                        let Some(summarizer) = &self.summarizer else {
+                            continue;
+                        };
+                        let definition = match &compaction_agent {
+                            Some(definition) => definition,
+                            None => compaction_agent
+                                .insert(fixed_system_agent(binding, FixedSystemAgent::Compaction)?),
+                        };
+                        // Provider failures stay soft; a missing definition has
+                        // already failed closed by the time we are here.
+                        let Ok(Some(plan)) = crate::compaction::fold_prefix(
+                            &messages,
+                            &self.compaction,
+                            summarizer.as_ref(),
+                            self.folding_options(definition, binding, &messages),
+                        )
+                        .await
+                        else {
+                            continue;
+                        };
+                        // Persist the local summary behind the same marker the
+                        // native path uses. Without this the summary died with the
+                        // request and every later round re-summarized the same
+                        // history.
+                        let body =
+                            format!("{}\n{}", hya_provider::COMPACT_CONTEXT_MARKER, plan.summary);
+                        let injected = match actor_claim {
+                            Some(claim) => {
+                                self.inject_system_message_for_actor(claim, session, body)
+                                    .await
+                            }
+                            None => self.inject_system_message(session, body).await,
+                        };
+                        let Ok(marker) = injected else {
+                            continue;
+                        };
+                        self.emit_for_actor(
+                            actor_claim,
+                            session,
+                            Event::ContextCompacted {
+                                session,
+                                message: marker,
+                                strategy: CompactionStrategy::LocalSummarizer,
+                                from_message: plan.from_message,
+                                to_message: plan.to_message,
+                                folded_count: plan.folded_count,
+                                input_tokens_est,
+                                threshold,
+                            },
+                        )
+                        .await?;
+                        (projection, messages, tokens) =
+                            self.reload_after_compaction(session, agent, &model).await?;
+                    }
                 }
             }
             let request = request_from_messages(agent, messages, resources, &model);
@@ -1190,6 +1253,7 @@ impl SessionEngine {
                                     parent_session: projection.session.parent,
                                     todo: self.todo.clone(),
                                     skills: resources.skill_plane(),
+                                    artifacts: self.artifacts.clone(),
                                     agents: agents.clone(),
                                     websearch: self.websearch.clone(),
                                     lsp: self.lsp.clone(),
@@ -1268,8 +1332,16 @@ impl SessionEngine {
                             artifact_guard.discard()?;
                         }
                         // Cap every tool (builtin/MCP/plugin) after hooks and
-                        // immediately before durable Event publication.
-                        let output = hya_tool::cap_tool_output_with_policy(output, result_policy);
+                        // immediately before durable Event publication. Whatever
+                        // the cap drops is preserved as an artifact first, so a
+                        // truncated result stays reachable without re-running the
+                        // tool that produced it.
+                        let output = hya_tool::cap_tool_output_spilling(
+                            output,
+                            result_policy,
+                            &self.artifacts.store(binding.workdir()),
+                            tc.name.as_str(),
+                        );
                         let retains_artifact = artifact_guard.retained_by(&output);
                         (
                             Event::ToolResult {

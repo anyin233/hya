@@ -7,7 +7,7 @@ use serde_json::Value;
 use crate::engine::AgentSpec;
 use crate::runtime_registry::CompiledResourceView;
 
-const COMPACT_CONTEXT_MARKER: &str = "HYA_COMPACTED_CONTEXT";
+use hya_provider::COMPACT_CONTEXT_MARKER;
 
 pub(super) fn projection_to_messages(
     agent: &AgentSpec,

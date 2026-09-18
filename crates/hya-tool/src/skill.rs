@@ -53,6 +53,14 @@ impl SkillPlane {
         }
     }
 
+    /// Skill body for `skill://<name>`, without the `skill` tool's framing.
+    ///
+    /// Returns `None` for an unknown name so the router can report it as a
+    /// missing handle rather than leaking a tool-level error type.
+    pub(crate) fn body(&self, workdir: &Path, name: &str) -> Option<String> {
+        self.require(workdir, name).ok().map(|info| info.content)
+    }
+
     fn require(&self, workdir: &Path, name: &str) -> Result<SkillInfo, SkillError> {
         let skill = match &self.roots {
             SkillRoots::DefaultForWorkdir => discover_skills_with_builtins(workdir)

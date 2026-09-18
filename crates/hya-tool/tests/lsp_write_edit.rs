@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use hya_tool::{
     Action, FormatterError, FormatterPlane, FormatterProvider, InteractionPlane, LspError,
     LspPlane, LspProvider, LspRequest, Mode, PermissionPlane, PermissionRules, Rule, SkillPlane,
-    SpawnerPlane, TodoPlane, ToolCtx, ToolRegistry, WebSearchPlane,
+    SpawnerPlane, TodoPlane, ToolCtx, ToolRegistry, WebSearchPlane, handle::ArtifactPlane,
 };
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
@@ -90,7 +90,9 @@ fn tempdir() -> PathBuf {
         std::process::id()
     ));
     std::fs::create_dir_all(&dir).unwrap();
-    dir
+    // macOS tempdirs sit behind the /var -> /private/var symlink; the tools
+    // resolve targets canonically, so fixtures must use the same spelling.
+    std::fs::canonicalize(&dir).unwrap()
 }
 
 fn ctx_with(workdir: PathBuf, lsp: LspPlane, formatter: FormatterPlane) -> ToolCtx {
@@ -109,6 +111,7 @@ fn ctx_with(workdir: PathBuf, lsp: LspPlane, formatter: FormatterPlane) -> ToolC
         parent_session: None,
         todo: TodoPlane::default(),
         skills: SkillPlane::default(),
+        artifacts: ArtifactPlane::default(),
         websearch: WebSearchPlane::default(),
         lsp,
         formatter,

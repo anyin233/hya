@@ -8,6 +8,7 @@ use hya_proto::SessionId;
 use hya_tool::{
     Action, InteractionPlane, LspPlane, Mode, PermissionPlane, PermissionRules, Rule, SkillPlane,
     SpawnerPlane, TodoPlane, ToolCtx, ToolError, ToolRegistry, WebSearchPlane,
+    handle::ArtifactPlane,
 };
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -35,6 +36,7 @@ fn ctx_with(rules: Vec<Rule>, session: SessionId, todo: TodoPlane) -> ToolCtx {
         parent_session: None,
         todo,
         skills: SkillPlane::default(),
+        artifacts: ArtifactPlane::default(),
         websearch: WebSearchPlane::default(),
         lsp: LspPlane::default(),
         formatter: hya_tool::FormatterPlane::default(),

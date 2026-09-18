@@ -11,7 +11,7 @@ use hya_plugin::messages::{HostInfo, PluginKindWire};
 use hya_proto::SessionId;
 use hya_tool::{
     FormatterPlane, InteractionPlane, LspPlane, PermissionPlane, PermissionRules, SkillPlane,
-    SpawnerPlane, TodoPlane, ToolCtx, WebSearchPlane,
+    SpawnerPlane, TodoPlane, ToolCtx, WebSearchPlane, handle::ArtifactPlane,
 };
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -92,6 +92,7 @@ fn ctx_with(session: SessionId) -> ToolCtx {
         parent_session: None,
         todo: TodoPlane::default(),
         skills: SkillPlane::default(),
+        artifacts: ArtifactPlane::default(),
         websearch: WebSearchPlane::default(),
         formatter: FormatterPlane::default(),
         agents: Default::default(),

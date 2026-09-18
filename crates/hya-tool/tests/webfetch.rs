@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use hya_tool::{
     Action, InteractionPlane, LspPlane, Mode, PermissionPlane, PermissionRules, Resource, Rule,
     SkillPlane, SpawnerPlane, TodoPlane, ToolCtx, ToolRegistry, WebSearchPlane,
+    handle::ArtifactPlane,
 };
 use serde_json::json;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -37,6 +38,7 @@ fn ctx_with(rules: Vec<Rule>) -> ToolCtx {
         parent_session: None,
         todo: TodoPlane::default(),
         skills: SkillPlane::default(),
+        artifacts: ArtifactPlane::default(),
         websearch: WebSearchPlane::default(),
         lsp: LspPlane::default(),
         formatter: hya_tool::FormatterPlane::default(),

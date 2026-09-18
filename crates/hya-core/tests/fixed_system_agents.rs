@@ -257,6 +257,7 @@ async fn engine_with(
                 token_threshold: 1,
                 keep_recent: 1,
                 context_fraction: 0.75,
+                ..CompactionConfig::default()
             },
         );
     }

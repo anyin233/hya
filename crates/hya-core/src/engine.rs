@@ -10,6 +10,7 @@ use hya_proto::{
 };
 use hya_provider::{ProviderCatalogSnapshot, ProviderModel, ProviderRouter, ReasoningEffort};
 use hya_store::{ActorClaim, SessionStore};
+use hya_tool::handle::{ArtifactHook, ArtifactPlane};
 use hya_tool::{
     AgentDef, FormatterPlane, InteractionPlane, LspPlane, MailboxPlane, PermissionPlane,
     PermissionRules, ResolvedTool, SpawnRequest, SpawnRequestSendError, SpawnRequestSink,
@@ -27,6 +28,7 @@ use crate::error::CoreError;
 use crate::hooks::{HookDispatcher, dispatch_activation_event};
 use crate::runtime_registry::CompiledResourceView;
 use crate::sidecar::SidecarEnvironment;
+use crate::tokens::TokenAccounting;
 use crate::{
     AgentResourcePolicy, CategoryRegistry, RuntimeCandidate, RuntimeRefreshError, RuntimeRegistry,
     TurnBinding,
@@ -63,6 +65,7 @@ mod session_cleanup;
 mod session_state;
 mod session_title;
 mod shell;
+mod spill;
 mod stream_round;
 mod summary;
 mod text_complete;
@@ -352,11 +355,14 @@ pub struct SessionEngine {
     mailbox: MailboxPlane,
     todo: TodoPlane,
     websearch: WebSearchPlane,
+    /// User-registered `artifact://` post-processing, carried to every tool call.
+    artifacts: ArtifactPlane,
     formatter: FormatterPlane,
     lsp: LspPlane,
     bus: EventBus,
     summarizer: Option<Arc<dyn Summarizer>>,
     compaction: CompactionConfig,
+    token_accounting: TokenAccounting,
     hooks: Option<Arc<dyn HookDispatcher>>,
     governor: Option<crate::orchestrator::SubagentGovernor>,
     sidecar_environment: Option<Arc<dyn SidecarEnvironment>>,
@@ -406,11 +412,13 @@ impl SessionEngine {
             mailbox,
             todo,
             websearch,
+            artifacts: ArtifactPlane::default(),
             formatter,
             lsp,
             bus,
             summarizer: None,
             compaction: CompactionConfig::default(),
+            token_accounting: TokenAccounting::default(),
             hooks: None,
             governor: None,
             sidecar_environment: None,
@@ -556,6 +564,19 @@ impl SessionEngine {
         self
     }
 
+    /// Register the `artifact://` post-processing chain.
+    ///
+    /// Hooks run when an artifact is *retrieved*, never when it is written, so
+    /// the captured bytes stay authoritative and a hook that turns out to be
+    /// wrong has not already destroyed the output it was summarizing. They are
+    /// applied in the order given, which is what lets "strip build noise" and
+    /// "extract the failing assertion" compose into one retrieval.
+    #[must_use]
+    pub fn with_artifact_hooks(mut self, hooks: Vec<Arc<dyn ArtifactHook>>) -> Self {
+        self.artifacts = ArtifactPlane::new(hooks);
+        self
+    }
+
     /// Enable compaction with a summarizer implementation and thresholds.
     #[must_use]
     pub fn with_compaction(
@@ -565,6 +586,17 @@ impl SessionEngine {
     ) -> Self {
         self.summarizer = Some(summarizer);
         self.compaction = config;
+        self
+    }
+
+    /// Choose how window occupancy is measured for compaction decisions.
+    ///
+    /// Defaults to [`crate::tokens::TokenAccountingMode::Auto`], which believes
+    /// a route's reported usage only while it stays plausible and otherwise
+    /// falls back to the local tokenizer.
+    #[must_use]
+    pub fn with_token_accounting(mut self, accounting: TokenAccounting) -> Self {
+        self.token_accounting = accounting;
         self
     }
 
@@ -1106,6 +1138,10 @@ pub(crate) fn summarize_options_from_definition(
             .reasoning
             .as_deref()
             .and_then(ReasoningEffort::parse),
+        // Anchoring and output budget are per-call, not per-definition: the
+        // caller knows the transcript and the active compaction config.
+        previous_summary: None,
+        max_output_tokens: None,
     }
 }
 

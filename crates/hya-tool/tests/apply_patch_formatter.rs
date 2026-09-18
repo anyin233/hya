@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use hya_tool::{
     Action, FormatterError, FormatterPlane, FormatterProvider, FormatterStatus, InteractionPlane,
     LspPlane, Mode, PermissionPlane, PermissionRules, Rule, SkillPlane, SpawnerPlane, TodoPlane,
-    ToolCtx, ToolRegistry, WebSearchPlane,
+    ToolCtx, ToolRegistry, WebSearchPlane, handle::ArtifactPlane,
 };
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -47,6 +47,7 @@ fn ctx_with_formatter(rules: Vec<Rule>, workdir: PathBuf, formatter: FormatterPl
         parent_session: None,
         todo: TodoPlane::default(),
         skills: SkillPlane::default(),
+        artifacts: ArtifactPlane::default(),
         websearch: WebSearchPlane::default(),
         lsp: LspPlane::default(),
         formatter,

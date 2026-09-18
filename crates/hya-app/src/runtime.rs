@@ -19,9 +19,10 @@ use hya_core::{
     MemberSpec, MemberStatus, ModelSummarizer, OperationReservation, PromptEnv, ResidentSupervisor,
     RuntimeRegistry, RuntimeSourceKind, SessionEngine, SidecarEnvironment, SidecarHandle,
     SidecarLifecycle, SidecarStart, SpawnAdmissionOutcome, SubagentGovernor, Summarizer,
-    TeamEvidenceEnvelope, TurnBinding, apply_agent_model_preference, apply_spawn_model_policy,
-    build_system_prompt, project_envelope, project_envelope_for_actor, run_mailbox_service,
-    run_pre_admitted_member, run_pre_admitted_team, run_pre_admitted_team_for_actor,
+    TeamEvidenceEnvelope, TokenAccounting, TurnBinding, apply_agent_model_preference,
+    apply_spawn_model_policy, build_system_prompt, project_envelope, project_envelope_for_actor,
+    run_mailbox_service, run_pre_admitted_member, run_pre_admitted_team,
+    run_pre_admitted_team_for_actor,
 };
 
 // Single discovery/date implementation lives in hya-core; re-export for callers.
@@ -103,26 +104,13 @@ pub(crate) fn process_owner_run_id() -> OwnerRunId {
     *OWNER_RUN_ID.get_or_init(OwnerRunId::new)
 }
 
-/// Compaction thresholds from env (`HYA_COMPACTION_*`) or [`CompactionConfig`] defaults.
+/// Compaction thresholds from `config.yaml`, with `HYA_COMPACTION_*` env overrides.
+///
+/// Prefer [`crate::config::load_context_settings`] when the token-accounting
+/// mode is needed too; this returns only the thresholds.
+#[must_use]
 pub fn compaction_config() -> CompactionConfig {
-    let default = CompactionConfig::default();
-    let token_threshold = std::env::var("HYA_COMPACTION_THRESHOLD")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(default.token_threshold);
-    let keep_recent = std::env::var("HYA_COMPACTION_KEEP_RECENT")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(default.keep_recent);
-    let context_fraction = std::env::var("HYA_COMPACTION_CONTEXT_FRACTION")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(default.context_fraction);
-    CompactionConfig {
-        token_threshold,
-        keep_recent,
-        context_fraction,
-    }
+    crate::config::load_context_settings().compaction
 }
 
 /// Canonical Harness agent base string (no Environment / AGENTS).
@@ -4349,6 +4337,7 @@ async fn build_session_engine_with_mcp_defer(
     // can test category-candidate servability against the same live providers.
     let spawn_router = router.clone();
     let sidecar_environment = Arc::new(BundleSidecarEnvironment::production());
+    let context_settings = crate::config::load_context_settings();
     let mut engine_builder = SessionEngine::new(store, router, runtime, permission, bus)
         .with_catalog_refresh(catalog_refresh)
         .with_sidecar_environment(sidecar_environment.clone())
@@ -4357,7 +4346,8 @@ async fn build_session_engine_with_mcp_defer(
         // plane so turn-time pre-stream failures advance through the ordered
         // candidates instead of failing the whole turn.
         .with_model_fallbacks(category_model_fallbacks(&categories))
-        .with_compaction(summarizer, compaction_config())
+        .with_compaction(summarizer, context_settings.compaction)
+        .with_token_accounting(TokenAccounting::new(context_settings.token_accounting))
         .with_formatter(formatter_config::load_plane())
         .with_lsp(crate::lsp::load_plane()?)
         .with_websearch(WebSearchPlane::configured(websearch))
@@ -4809,7 +4799,7 @@ mod tests {
         AgentDef, FormatterPlane, InlineAgent, InteractionPlane, LspPlane, MailboxPlane, Mode,
         PermissionModel, PermissionPlane, PermissionRules, Rule, SkillPlane, SpawnerPlane,
         TodoPlane, Tool, ToolCtx, ToolError, ToolOperation, ToolPermission, ToolRegistry,
-        WebSearchPlane,
+        WebSearchPlane, handle::ArtifactPlane,
     };
     use serde_json::{Value, json};
     use sqlx::{Connection, SqliteConnection};
@@ -10268,6 +10258,7 @@ flowchart TD
             parent_session: None,
             todo: TodoPlane::default(),
             skills: SkillPlane::default(),
+            artifacts: ArtifactPlane::default(),
             websearch: WebSearchPlane::default(),
             lsp: LspPlane::default(),
             formatter: FormatterPlane::default(),
@@ -10691,6 +10682,19 @@ for line in sys.stdin:
         ));
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    fn temp_socket(tag: &str) -> PathBuf {
+        static NEXT_SOCKET_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let serial = NEXT_SOCKET_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        // A tempdir() path already fills most of macOS's 104-byte sun_path
+        // budget, so unix sockets bind directly in the temp root under a
+        // short unique name.
+        std::env::temp_dir().join(format!("hya-sock-{tag}-{nanos}-{serial}.sock"))
     }
 
     fn write_skill(dir: &Path, name: &str, description: &str, body: &str) {
@@ -13816,7 +13820,7 @@ export default {
             .expect("capture resident loss binding");
         let old_generation = binding.generation();
         let staging_root = tempdir();
-        let socket_path = staging_root.join("sidecar-loss.sock");
+        let socket_path = temp_socket("sl");
         let listener = std::os::unix::net::UnixListener::bind(&socket_path)
             .expect("bind sidecar loss listener");
         let socket_literal = serde_json::to_string(socket_path.to_string_lossy().as_ref())
@@ -14151,9 +14155,9 @@ for line in sys.stdin:
             .expect("capture resident running loss binding");
         let old_generation = binding.generation();
         let staging_root = tempdir();
-        let marker_socket = staging_root.join("resident-running-loss-marker.sock");
+        let marker_socket = temp_socket("rrlm");
         let incarnation_claim = staging_root.join("resident-running-loss-incarnation");
-        let release_socket = staging_root.join("resident-running-loss-release.sock");
+        let release_socket = temp_socket("rrlr");
         let marker_listener = std::os::unix::net::UnixListener::bind(&marker_socket)
             .expect("bind resident running loss marker listener");
         let release_listener = std::os::unix::net::UnixListener::bind(&release_socket)
@@ -15310,6 +15314,7 @@ export default {
             parent_session: None,
             todo: TodoPlane::default(),
             skills: SkillPlane::default(),
+            artifacts: ArtifactPlane::default(),
             websearch: WebSearchPlane::default(),
             formatter: FormatterPlane::default(),
             agents: Default::default(),
