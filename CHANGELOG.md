@@ -1,22 +1,42 @@
-# 0.36.30
+# 0.36.31
 
-## Token accounting is visible on the wire and in the TUI (core, server, TUI)
+## All five oh-my-pi compaction mechanisms are built in, with a user-adjustable order (core, app)
 
-- Every streaming round now emits a `ContextStatus` event: the window
-  occupancy the request actually carries, whether the figure was
-  provider-anchored or locally estimated, the accounting mode in force
-  (`auto` / `provider` / `estimate`), and the resolved compaction threshold it
-  was judged against. The event is recorded after the compaction ladder, so
-  the reported number matches what was sent.
-- The session projection folds the latest report and the session JSON carries
-  it as a `context` block (`tokens`, `source`, `mode`, `threshold`), so any
-  client can see what the engine believed — including the fallback to a local
-  estimate when a route's reported usage is absent or implausible.
-- The TUI sidebar's Context panel now prefers the accounting report and shows
-  occupancy against the resolved threshold — `4 / 150,000 tokens`, `0% used` —
-  with an `estimated` badge whenever the figure is a local estimate instead of
-  a provider-reported one. Sessions on older backends fall back to the previous
-  last-message computation.
-- `TokenAccountingMode` and `TokenSource` moved into `hya-proto` as wire types
-  (`hya_core` re-exports both), so events, projections, and clients share one
-  spelling.
+- hya now ships every context-reduction mechanism oh-my-pi exposes under
+  `compaction.methodOrder`, under the same names: `shake` (evict stale tool
+  outputs to `artifact://` handles), `remote` (provider-native
+  `/responses/compact`), `soft` (structured LLM summary of the folded prefix),
+  `snapcompact` (a local, deterministic dense archive of the discarded
+  history — no model call at all), and `handoff` (an LLM handoff document
+  written over the verbatim transcript and committed as the compaction
+  summary).
+- The two new mechanisms make the ladder complete: a session with no
+  summarizer wired — or a route whose model call fails mid-fold — can still
+  compact, because `snapcompact` is entirely local; and a takeover can be
+  handed a real handoff document instead of a prose summary. Both record
+  their own `ContextCompacted` strategy on the wire (`snap_compact`,
+  `handoff`).
+- The order the mechanisms fire in is now user configuration, not a hardcoded
+  ladder: `compaction.method_order` in `config.yaml` takes the oh-my-pi
+  method names, and `HYA_COMPACTION_METHOD_ORDER` (comma-separated) wins over
+  it. The walk stops at the first mechanism that fits; an unavailable one —
+  an unsupported route, no summarizer — advances to the next. A partial list
+  is completed with the unmentioned mechanisms in default order, and an
+  unknown name ignores the whole value rather than silently reordering the
+  ladder.
+- The default order preserves hya's verified behavior exactly:
+  `shake, remote, soft` first, then the new `snapcompact` and `handoff` as
+  escalation. oh-my-pi's own default (`remote, snapcompact, handoff, shake,
+  soft`) is one config line away.
+- `snapcompact` archives use oh-my-pi's serialization budgets: tool results
+  keep a 2,000-character head+tail around an explicit omission marker
+  (verdicts and final state live at the ends of an output), tool-call
+  arguments are capped per value and per call, and whitespace is collapsed —
+  so one huge payload cannot crowd the turns around it out of the archive.
+  oh-my-pi additionally renders the archive onto bitmap image frames for
+  vision-capable models; hya commits the dense text itself, which every route
+  can read (frame rendering remains a follow-up).
+- A handoff call sends the transcript verbatim plus one trailing handoff
+  prompt — not the rendered single-message serialization a summary gets — so
+  the document describes where the session stands, including recent turns,
+  and a cache-capable provider can reuse the live prefix.
