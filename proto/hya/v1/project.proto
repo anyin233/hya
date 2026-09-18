@@ -29,7 +29,7 @@ service Project {
 
   // Initialize git in a project that has no repository yet.
   //
-  // hya.http: POST /v1/projects/{project}:init-git
+  // hya.http: POST /v1/projects/{project}/init-git
   rpc InitProjectGit(InitProjectGitRequest) returns (InitProjectGitResponse);
 
   // Repository status: branch, head, and changed files.

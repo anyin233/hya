@@ -1355,7 +1355,7 @@ pub mod auth_client {
         }
         /// Begin a provider OAuth flow; returns the authorization URL to open.
         ///
-        /// hya.http: POST /v1/auth/{provider_id}/oauth:start
+        /// hya.http: POST /v1/auth/{provider_id}/oauth/start
         pub async fn start_oauth(
             &mut self,
             request: impl tonic::IntoRequest<super::StartOauthRequest>,
@@ -1379,7 +1379,7 @@ pub mod auth_client {
         }
         /// Complete a provider OAuth flow with the callback code.
         ///
-        /// hya.http: POST /v1/auth/{provider_id}/oauth:callback
+        /// hya.http: POST /v1/auth/{provider_id}/oauth/callback
         pub async fn complete_oauth(
             &mut self,
             request: impl tonic::IntoRequest<super::CompleteOauthRequest>,
@@ -1440,7 +1440,7 @@ pub mod auth_server {
         >;
         /// Begin a provider OAuth flow; returns the authorization URL to open.
         ///
-        /// hya.http: POST /v1/auth/{provider_id}/oauth:start
+        /// hya.http: POST /v1/auth/{provider_id}/oauth/start
         async fn start_oauth(
             &self,
             request: tonic::Request<super::StartOauthRequest>,
@@ -1450,7 +1450,7 @@ pub mod auth_server {
         >;
         /// Complete a provider OAuth flow with the callback code.
         ///
-        /// hya.http: POST /v1/auth/{provider_id}/oauth:callback
+        /// hya.http: POST /v1/auth/{provider_id}/oauth/callback
         async fn complete_oauth(
             &self,
             request: tonic::Request<super::CompleteOauthRequest>,
@@ -2099,7 +2099,7 @@ pub mod interactions_client {
         }
         /// Respond to one pending request. Exactly one response kind is set.
         ///
-        /// hya.http: POST /v1/interactions/{request}:respond
+        /// hya.http: POST /v1/interactions/{request}/respond
         pub async fn respond_interaction(
             &mut self,
             request: impl tonic::IntoRequest<super::RespondInteractionRequest>,
@@ -2206,7 +2206,7 @@ pub mod interactions_server {
         >;
         /// Respond to one pending request. Exactly one response kind is set.
         ///
-        /// hya.http: POST /v1/interactions/{request}:respond
+        /// hya.http: POST /v1/interactions/{request}/respond
         async fn respond_interaction(
             &self,
             request: tonic::Request<super::RespondInteractionRequest>,
@@ -6478,7 +6478,7 @@ pub mod mcp_client {
         }
         /// Connect one MCP server now.
         ///
-        /// hya.http: POST /v1/mcp/{name}:connect
+        /// hya.http: POST /v1/mcp/{name}/connect
         pub async fn connect_mcp(
             &mut self,
             request: impl tonic::IntoRequest<super::ConnectMcpRequest>,
@@ -6502,7 +6502,7 @@ pub mod mcp_client {
         }
         /// Disconnect one MCP server.
         ///
-        /// hya.http: POST /v1/mcp/{name}:disconnect
+        /// hya.http: POST /v1/mcp/{name}/disconnect
         pub async fn disconnect_mcp(
             &mut self,
             request: impl tonic::IntoRequest<super::DisconnectMcpRequest>,
@@ -6550,7 +6550,7 @@ pub mod mcp_client {
         }
         /// Complete an MCP server OAuth flow.
         ///
-        /// hya.http: POST /v1/mcp/{name}/auth:complete
+        /// hya.http: POST /v1/mcp/{name}/auth/complete
         pub async fn complete_mcp_auth(
             &mut self,
             request: impl tonic::IntoRequest<super::CompleteMcpAuthRequest>,
@@ -6633,14 +6633,14 @@ pub mod mcp_server {
         ) -> std::result::Result<tonic::Response<super::McpServerStatus>, tonic::Status>;
         /// Connect one MCP server now.
         ///
-        /// hya.http: POST /v1/mcp/{name}:connect
+        /// hya.http: POST /v1/mcp/{name}/connect
         async fn connect_mcp(
             &self,
             request: tonic::Request<super::ConnectMcpRequest>,
         ) -> std::result::Result<tonic::Response<super::McpServerStatus>, tonic::Status>;
         /// Disconnect one MCP server.
         ///
-        /// hya.http: POST /v1/mcp/{name}:disconnect
+        /// hya.http: POST /v1/mcp/{name}/disconnect
         async fn disconnect_mcp(
             &self,
             request: tonic::Request<super::DisconnectMcpRequest>,
@@ -6657,7 +6657,7 @@ pub mod mcp_server {
         >;
         /// Complete an MCP server OAuth flow.
         ///
-        /// hya.http: POST /v1/mcp/{name}/auth:complete
+        /// hya.http: POST /v1/mcp/{name}/auth/complete
         async fn complete_mcp_auth(
             &self,
             request: tonic::Request<super::CompleteMcpAuthRequest>,
@@ -7399,7 +7399,7 @@ pub mod process_client {
         }
         /// Ask the backend process to shut down gracefully.
         ///
-        /// hya.http: POST /v1/process:dispose
+        /// hya.http: POST /v1/process/dispose
         pub async fn dispose_process(
             &mut self,
             request: impl tonic::IntoRequest<super::DisposeProcessRequest>,
@@ -7426,7 +7426,7 @@ pub mod process_client {
         }
         /// Ask the backend to self-update via the verified updater.
         ///
-        /// hya.http: POST /v1/process:upgrade
+        /// hya.http: POST /v1/process/upgrade
         pub async fn upgrade_process(
             &mut self,
             request: impl tonic::IntoRequest<super::UpgradeProcessRequest>,
@@ -7531,7 +7531,7 @@ pub mod process_server {
         >;
         /// Ask the backend process to shut down gracefully.
         ///
-        /// hya.http: POST /v1/process:dispose
+        /// hya.http: POST /v1/process/dispose
         async fn dispose_process(
             &self,
             request: tonic::Request<super::DisposeProcessRequest>,
@@ -7541,7 +7541,7 @@ pub mod process_server {
         >;
         /// Ask the backend to self-update via the verified updater.
         ///
-        /// hya.http: POST /v1/process:upgrade
+        /// hya.http: POST /v1/process/upgrade
         async fn upgrade_process(
             &self,
             request: tonic::Request<super::UpgradeProcessRequest>,
@@ -8366,7 +8366,7 @@ pub mod project_client {
         }
         /// Initialize git in a project that has no repository yet.
         ///
-        /// hya.http: POST /v1/projects/{project}:init-git
+        /// hya.http: POST /v1/projects/{project}/init-git
         pub async fn init_project_git(
             &mut self,
             request: impl tonic::IntoRequest<super::InitProjectGitRequest>,
@@ -8518,7 +8518,7 @@ pub mod project_server {
         >;
         /// Initialize git in a project that has no repository yet.
         ///
-        /// hya.http: POST /v1/projects/{project}:init-git
+        /// hya.http: POST /v1/projects/{project}/init-git
         async fn init_project_git(
             &self,
             request: tonic::Request<super::InitProjectGitRequest>,
@@ -10349,7 +10349,7 @@ pub mod session_client {
         }
         /// Fork a session into a new session id, copying events up to a watermark.
         ///
-        /// hya.http: POST /v1/sessions/{session}:fork
+        /// hya.http: POST /v1/sessions/{session}/fork
         pub async fn fork_session(
             &mut self,
             request: impl tonic::IntoRequest<super::ForkSessionRequest>,
@@ -10376,7 +10376,7 @@ pub mod session_client {
         }
         /// Compact a session's context using the configured method ladder.
         ///
-        /// hya.http: POST /v1/sessions/{session}:compact
+        /// hya.http: POST /v1/sessions/{session}/compact
         pub async fn compact_session(
             &mut self,
             request: impl tonic::IntoRequest<super::CompactSessionRequest>,
@@ -10403,7 +10403,7 @@ pub mod session_client {
         }
         /// Produce a summary message for a session (titles, handoffs).
         ///
-        /// hya.http: POST /v1/sessions/{session}:summarize
+        /// hya.http: POST /v1/sessions/{session}/summarize
         pub async fn summarize_session(
             &mut self,
             request: impl tonic::IntoRequest<super::SummarizeSessionRequest>,
@@ -10430,7 +10430,7 @@ pub mod session_client {
         }
         /// Revert a session to an earlier watermark, or undo the last revert.
         ///
-        /// hya.http: POST /v1/sessions/{session}:revert
+        /// hya.http: POST /v1/sessions/{session}/revert
         pub async fn revert_session(
             &mut self,
             request: impl tonic::IntoRequest<super::RevertSessionRequest>,
@@ -10517,7 +10517,7 @@ pub mod session_server {
         >;
         /// Fork a session into a new session id, copying events up to a watermark.
         ///
-        /// hya.http: POST /v1/sessions/{session}:fork
+        /// hya.http: POST /v1/sessions/{session}/fork
         async fn fork_session(
             &self,
             request: tonic::Request<super::ForkSessionRequest>,
@@ -10527,7 +10527,7 @@ pub mod session_server {
         >;
         /// Compact a session's context using the configured method ladder.
         ///
-        /// hya.http: POST /v1/sessions/{session}:compact
+        /// hya.http: POST /v1/sessions/{session}/compact
         async fn compact_session(
             &self,
             request: tonic::Request<super::CompactSessionRequest>,
@@ -10537,7 +10537,7 @@ pub mod session_server {
         >;
         /// Produce a summary message for a session (titles, handoffs).
         ///
-        /// hya.http: POST /v1/sessions/{session}:summarize
+        /// hya.http: POST /v1/sessions/{session}/summarize
         async fn summarize_session(
             &self,
             request: tonic::Request<super::SummarizeSessionRequest>,
@@ -10547,7 +10547,7 @@ pub mod session_server {
         >;
         /// Revert a session to an earlier watermark, or undo the last revert.
         ///
-        /// hya.http: POST /v1/sessions/{session}:revert
+        /// hya.http: POST /v1/sessions/{session}/revert
         async fn revert_session(
             &self,
             request: tonic::Request<super::RevertSessionRequest>,
@@ -11386,7 +11386,7 @@ pub mod turn_client {
         }
         /// Block until the turn reaches a terminal state or the timeout elapses.
         ///
-        /// hya.http: POST /v1/sessions/{session}/turns/{turn}:wait
+        /// hya.http: POST /v1/sessions/{session}/turns/{turn}/wait
         pub async fn wait_turn(
             &mut self,
             request: impl tonic::IntoRequest<super::WaitTurnRequest>,
@@ -11407,7 +11407,7 @@ pub mod turn_client {
         }
         /// Request cancellation of a running turn (cooperative abort).
         ///
-        /// hya.http: POST /v1/sessions/{session}/turns/{turn}:cancel
+        /// hya.http: POST /v1/sessions/{session}/turns/{turn}/cancel
         pub async fn cancel_turn(
             &mut self,
             request: impl tonic::IntoRequest<super::CancelTurnRequest>,
@@ -11461,14 +11461,14 @@ pub mod turn_server {
         ) -> std::result::Result<tonic::Response<super::TurnInfo>, tonic::Status>;
         /// Block until the turn reaches a terminal state or the timeout elapses.
         ///
-        /// hya.http: POST /v1/sessions/{session}/turns/{turn}:wait
+        /// hya.http: POST /v1/sessions/{session}/turns/{turn}/wait
         async fn wait_turn(
             &self,
             request: tonic::Request<super::WaitTurnRequest>,
         ) -> std::result::Result<tonic::Response<super::TurnInfo>, tonic::Status>;
         /// Request cancellation of a running turn (cooperative abort).
         ///
-        /// hya.http: POST /v1/sessions/{session}/turns/{turn}:cancel
+        /// hya.http: POST /v1/sessions/{session}/turns/{turn}/cancel
         async fn cancel_turn(
             &self,
             request: tonic::Request<super::CancelTurnRequest>,
@@ -11995,7 +11995,7 @@ pub mod worktrees_client {
         }
         /// Reset a worktree to a clean state at its branch head.
         ///
-        /// hya.http: POST /v1/worktrees/{worktree}:reset
+        /// hya.http: POST /v1/worktrees/{worktree}/reset
         pub async fn reset_worktree(
             &mut self,
             request: impl tonic::IntoRequest<super::ResetWorktreeRequest>,
@@ -12061,7 +12061,7 @@ pub mod worktrees_server {
         >;
         /// Reset a worktree to a clean state at its branch head.
         ///
-        /// hya.http: POST /v1/worktrees/{worktree}:reset
+        /// hya.http: POST /v1/worktrees/{worktree}/reset
         async fn reset_worktree(
             &self,
             request: tonic::Request<super::ResetWorktreeRequest>,

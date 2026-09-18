@@ -21,12 +21,12 @@ service Mcp {
 
   // Connect one MCP server now.
   //
-  // hya.http: POST /v1/mcp/{name}:connect
+  // hya.http: POST /v1/mcp/{name}/connect
   rpc ConnectMcp(ConnectMcpRequest) returns (McpServerStatus);
 
   // Disconnect one MCP server.
   //
-  // hya.http: POST /v1/mcp/{name}:disconnect
+  // hya.http: POST /v1/mcp/{name}/disconnect
   rpc DisconnectMcp(DisconnectMcpRequest) returns (McpServerStatus);
 
   // Begin an MCP server OAuth flow.
@@ -36,7 +36,7 @@ service Mcp {
 
   // Complete an MCP server OAuth flow.
   //
-  // hya.http: POST /v1/mcp/{name}/auth:complete
+  // hya.http: POST /v1/mcp/{name}/auth/complete
   rpc CompleteMcpAuth(CompleteMcpAuthRequest) returns (McpServerStatus);
 
   // Remove stored MCP server credentials.

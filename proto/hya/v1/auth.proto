@@ -21,12 +21,12 @@ service Auth {
 
   // Begin a provider OAuth flow; returns the authorization URL to open.
   //
-  // hya.http: POST /v1/auth/{provider_id}/oauth:start
+  // hya.http: POST /v1/auth/{provider_id}/oauth/start
   rpc StartOauth(StartOauthRequest) returns (StartOauthResponse);
 
   // Complete a provider OAuth flow with the callback code.
   //
-  // hya.http: POST /v1/auth/{provider_id}/oauth:callback
+  // hya.http: POST /v1/auth/{provider_id}/oauth/callback
   rpc CompleteOauth(CompleteOauthRequest) returns (CompleteOauthResponse);
 }
 

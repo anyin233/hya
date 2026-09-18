@@ -25,7 +25,7 @@ service Worktrees {
 
   // Reset a worktree to a clean state at its branch head.
   //
-  // hya.http: POST /v1/worktrees/{worktree}:reset
+  // hya.http: POST /v1/worktrees/{worktree}/reset
   rpc ResetWorktree(ResetWorktreeRequest) returns (Worktree);
 }
 

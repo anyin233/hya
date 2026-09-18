@@ -39,22 +39,22 @@ service Session {
 
   // Fork a session into a new session id, copying events up to a watermark.
   //
-  // hya.http: POST /v1/sessions/{session}:fork
+  // hya.http: POST /v1/sessions/{session}/fork
   rpc ForkSession(ForkSessionRequest) returns (ForkSessionResponse);
 
   // Compact a session's context using the configured method ladder.
   //
-  // hya.http: POST /v1/sessions/{session}:compact
+  // hya.http: POST /v1/sessions/{session}/compact
   rpc CompactSession(CompactSessionRequest) returns (CompactSessionResponse);
 
   // Produce a summary message for a session (titles, handoffs).
   //
-  // hya.http: POST /v1/sessions/{session}:summarize
+  // hya.http: POST /v1/sessions/{session}/summarize
   rpc SummarizeSession(SummarizeSessionRequest) returns (SummarizeSessionResponse);
 
   // Revert a session to an earlier watermark, or undo the last revert.
   //
-  // hya.http: POST /v1/sessions/{session}:revert
+  // hya.http: POST /v1/sessions/{session}/revert
   rpc RevertSession(RevertSessionRequest) returns (RevertSessionResponse);
 }
 

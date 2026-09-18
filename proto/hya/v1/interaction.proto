@@ -21,7 +21,7 @@ service Interactions {
 
   // Respond to one pending request. Exactly one response kind is set.
   //
-  // hya.http: POST /v1/interactions/{request}:respond
+  // hya.http: POST /v1/interactions/{request}/respond
   rpc RespondInteraction(RespondInteractionRequest) returns (RespondInteractionResponse);
 
   // List saved permission rules (persisted allow/deny/ask decisions).
