@@ -1,0 +1,173 @@
+// hya API v1 — project registry, VCS status/diff/apply, and git init.
+syntax = "proto3";
+
+package hya.v1;
+
+import "hya/v1/common.proto";
+
+// Project and VCS surface for directory-aware frontends.
+service Project {
+  // List known projects.
+  //
+  // hya.http: GET /v1/projects
+  rpc ListProjects(ListProjectsRequest) returns (ListProjectsResponse);
+
+  // The project served by this backend process.
+  //
+  // hya.http: GET /v1/projects/current
+  rpc GetCurrentProject(GetCurrentProjectRequest) returns (ProjectInfo);
+
+  // Update project metadata (display name).
+  //
+  // hya.http: PATCH /v1/projects/{project}
+  rpc UpdateProject(UpdateProjectRequest) returns (ProjectInfo);
+
+  // List the work directories registered under a project.
+  //
+  // hya.http: GET /v1/projects/{project}/directories
+  rpc ListProjectDirectories(ListProjectDirectoriesRequest) returns (ListProjectDirectoriesResponse);
+
+  // Initialize git in a project that has no repository yet.
+  //
+  // hya.http: POST /v1/projects/{project}:init-git
+  rpc InitProjectGit(InitProjectGitRequest) returns (InitProjectGitResponse);
+
+  // Repository status: branch, head, and changed files.
+  //
+  // hya.http: GET /v1/vcs
+  rpc GetVcsStatus(GetVcsStatusRequest) returns (VcsStatus);
+
+  // Unified diff of working-tree changes.
+  //
+  // hya.http: GET /v1/vcs/diff
+  rpc GetVcsDiff(GetVcsDiffRequest) returns (GetVcsDiffResponse);
+
+  // Apply a unified diff patch to the working tree.
+  //
+  // hya.http: POST /v1/vcs/apply
+  rpc ApplyPatch(ApplyPatchRequest) returns (ApplyPatchResponse);
+}
+
+// One registered project.
+message ProjectInfo {
+  // Project identifier.
+  string id = 1;
+  // Absolute directory of the project.
+  string directory = 2;
+  // Display name; defaults to the directory basename.
+  string name = 3;
+}
+
+message ListProjectsRequest {
+  // Standard pagination controls.
+  PageRequest page = 1;
+}
+
+message ListProjectsResponse {
+  // Known projects.
+  repeated ProjectInfo projects = 1;
+  // Pagination outcome.
+  PageInfo page = 2;
+}
+
+message GetCurrentProjectRequest {}
+
+message UpdateProjectRequest {
+  // Project identifier.
+  string project = 1;
+  // New display name when set.
+  optional string name = 2;
+}
+
+message ListProjectDirectoriesRequest {
+  // Project identifier.
+  string project = 1;
+}
+
+message ListProjectDirectoriesResponse {
+  // Absolute directory paths registered under the project.
+  repeated string directories = 1;
+}
+
+message InitProjectGitRequest {
+  // Project identifier.
+  string project = 1;
+}
+
+message InitProjectGitResponse {
+  // Whether a new repository was initialized (false when one existed).
+  bool initialized = 1;
+}
+
+message GetVcsStatusRequest {
+  // Directory scope; empty means the process default directory.
+  string directory = 1;
+}
+
+// Change status of one file.
+enum VcsFileStatus {
+  // Unset sentinel; never emitted by the server.
+  VCS_FILE_STATUS_UNSPECIFIED = 0;
+  // Staged or unstaged addition.
+  VCS_FILE_STATUS_ADDED = 1;
+  // Content modification.
+  VCS_FILE_STATUS_MODIFIED = 2;
+  // Deletion.
+  VCS_FILE_STATUS_DELETED = 3;
+  // Rename.
+  VCS_FILE_STATUS_RENAMED = 4;
+  // Not tracked by VCS.
+  VCS_FILE_STATUS_UNTRACKED = 5;
+}
+
+// Repository status snapshot.
+message VcsStatus {
+  // Current branch name; empty in detached HEAD.
+  string branch = 1;
+  // Current HEAD commit hash.
+  string head = 2;
+  // Number of uncommitted changes.
+  uint32 dirty = 3;
+  // Commits ahead of the upstream when known.
+  uint32 ahead = 4;
+  // Commits behind the upstream when known.
+  uint32 behind = 5;
+  // Changed files with their status.
+  repeated VcsFileChange files = 6;
+}
+
+// One changed file.
+message VcsFileChange {
+  // Repository-relative path.
+  string path = 1;
+  // Change status.
+  VcsFileStatus status = 2;
+}
+
+message GetVcsDiffRequest {
+  // Directory scope; empty means the process default directory.
+  string directory = 1;
+  // Output format: unified patch (default) or raw.
+  bool raw = 2;
+  // Restrict to these repository-relative paths; empty diffs everything.
+  repeated string paths = 3;
+}
+
+message GetVcsDiffResponse {
+  // Diff payload in the requested format.
+  string diff = 1;
+}
+
+message ApplyPatchRequest {
+  // Directory scope; empty means the process default directory.
+  string directory = 1;
+  // Unified diff patch to apply.
+  string patch = 2;
+}
+
+message ApplyPatchResponse {
+  // Whether the patch applied cleanly.
+  bool applied = 1;
+  // Human-readable summary of the applied hunks.
+  string summary = 2;
+}

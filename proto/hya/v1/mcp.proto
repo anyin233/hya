@@ -1,0 +1,160 @@
+// hya API v1 — MCP server management: desired-state registry, connection
+// control, and OAuth flows.
+syntax = "proto3";
+
+package hya.v1;
+
+
+// MCP control surface. Servers are managed as desired state mutated
+// through the app-owned MCP control handle; status composes desired and
+// observed state.
+service Mcp {
+  // Status of every configured MCP server in a directory.
+  //
+  // hya.http: GET /v1/mcp
+  rpc GetMcpStatus(GetMcpStatusRequest) returns (GetMcpStatusResponse);
+
+  // Add (or replace) one MCP server in desired state.
+  //
+  // hya.http: POST /v1/mcp
+  rpc AddMcpServer(AddMcpServerRequest) returns (McpServerStatus);
+
+  // Connect one MCP server now.
+  //
+  // hya.http: POST /v1/mcp/{name}:connect
+  rpc ConnectMcp(ConnectMcpRequest) returns (McpServerStatus);
+
+  // Disconnect one MCP server.
+  //
+  // hya.http: POST /v1/mcp/{name}:disconnect
+  rpc DisconnectMcp(DisconnectMcpRequest) returns (McpServerStatus);
+
+  // Begin an MCP server OAuth flow.
+  //
+  // hya.http: POST /v1/mcp/{name}/auth
+  rpc StartMcpAuth(StartMcpAuthRequest) returns (StartMcpAuthResponse);
+
+  // Complete an MCP server OAuth flow.
+  //
+  // hya.http: POST /v1/mcp/{name}/auth:complete
+  rpc CompleteMcpAuth(CompleteMcpAuthRequest) returns (McpServerStatus);
+
+  // Remove stored MCP server credentials.
+  //
+  // hya.http: DELETE /v1/mcp/{name}/auth
+  rpc RemoveMcpAuth(RemoveMcpAuthRequest) returns (RemoveMcpAuthResponse);
+}
+
+// Connection state of an MCP server.
+enum McpServerState {
+  // Unset sentinel; never emitted by the server.
+  MCP_SERVER_STATE_UNSPECIFIED = 0;
+  // Present in desired state but not yet connected.
+  MCP_SERVER_STATE_DESIRED = 1;
+  // Transport established and tools listed.
+  MCP_SERVER_STATE_CONNECTED = 2;
+  // Deliberately disconnected.
+  MCP_SERVER_STATE_DISCONNECTED = 3;
+  // Connection or protocol failure.
+  MCP_SERVER_STATE_FAILED = 4;
+}
+
+// Status of one MCP server.
+message McpServerStatus {
+  // Server name as configured.
+  string name = 1;
+  // Connection state.
+  McpServerState state = 2;
+  // Namespaced tools exposed by this server (`mcp__server__tool`).
+  repeated string tools = 3;
+  // Human-readable error when state is FAILED.
+  string error = 4;
+  // Whether the server requires an OAuth login.
+  bool auth_required = 5;
+}
+
+message GetMcpStatusRequest {
+  // Directory scope; empty means the process default directory.
+  string directory = 1;
+}
+
+message GetMcpStatusResponse {
+  // Status of every configured server.
+  repeated McpServerStatus servers = 1;
+}
+
+// stdio transport: launch a local command.
+message CommandTransport {
+  // Executable to launch.
+  string command = 1;
+  // Arguments passed to the executable.
+  repeated string args = 2;
+  // Extra environment variables for the child process.
+  map<string, string> env = 3;
+}
+
+// HTTP/SSE transport: connect to a URL.
+message UrlTransport {
+  // Server base URL.
+  string url = 1;
+}
+
+message AddMcpServerRequest {
+  // Directory scope; empty means the process default directory.
+  string directory = 1;
+  // Server name used in tool namespaces.
+  string name = 2;
+  // Transport definition; exactly one kind is set.
+  oneof transport {
+    // Launch a local stdio server.
+    CommandTransport command = 3;
+    // Connect to a remote HTTP server.
+    UrlTransport url = 4;
+  }
+  // Whether the server starts enabled; defaults to true.
+  optional bool enabled = 5;
+}
+
+message ConnectMcpRequest {
+  // Directory scope; empty means the process default directory.
+  string directory = 1;
+  // Server name to connect.
+  string name = 2;
+}
+
+message DisconnectMcpRequest {
+  // Directory scope; empty means the process default directory.
+  string directory = 1;
+  // Server name to disconnect.
+  string name = 2;
+}
+
+message StartMcpAuthRequest {
+  // Directory scope; empty means the process default directory.
+  string directory = 1;
+  // Server name to authenticate.
+  string name = 2;
+}
+
+message StartMcpAuthResponse {
+  // Authorization URL the client must open in a browser.
+  string authorization_url = 1;
+}
+
+message CompleteMcpAuthRequest {
+  // Directory scope; empty means the process default directory.
+  string directory = 1;
+  // Server name completing the flow.
+  string name = 2;
+  // Authorization code returned by the provider callback.
+  string code = 3;
+}
+
+message RemoveMcpAuthRequest {
+  // Directory scope; empty means the process default directory.
+  string directory = 1;
+  // Server name whose credentials should be removed.
+  string name = 2;
+}
+
+message RemoveMcpAuthResponse {}

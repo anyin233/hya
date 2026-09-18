@@ -1,0 +1,136 @@
+// hya API v1 — process lifecycle, runtime configuration, and the aggregated
+// bootstrap snapshot for frontend startup.
+syntax = "proto3";
+
+package hya.v1;
+
+import "google/protobuf/struct.proto";
+import "hya/v1/catalog.proto";
+import "hya/v1/interaction.proto";
+
+// Process-wide surface: health, location metadata, the runtime config bag,
+// process disposal/upgrade, and the one-round-trip bootstrap snapshot.
+service Process {
+  // Liveness and version probe.
+  //
+  // hya.http: GET /v1/health
+  rpc GetHealth(GetHealthRequest) returns (GetHealthResponse);
+
+  // Identity of this backend process and the directory it serves.
+  //
+  // hya.http: GET /v1/location
+  rpc GetLocation(GetLocationRequest) returns (LocationInfo);
+
+  // Read the effective runtime configuration bag for a directory.
+  //
+  // hya.http: GET /v1/config
+  rpc GetConfig(GetConfigRequest) returns (GetConfigResponse);
+
+  // Deep-merge a JSON object into the runtime configuration bag.
+  //
+  // hya.http: PATCH /v1/config
+  rpc UpdateConfig(UpdateConfigRequest) returns (GetConfigResponse);
+
+  // Ask the backend process to shut down gracefully.
+  //
+  // hya.http: POST /v1/process:dispose
+  rpc DisposeProcess(DisposeProcessRequest) returns (DisposeProcessResponse);
+
+  // Ask the backend to self-update via the verified updater.
+  //
+  // hya.http: POST /v1/process:upgrade
+  rpc UpgradeProcess(UpgradeProcessRequest) returns (UpgradeProcessResponse);
+
+  // Aggregated startup snapshot: config, catalogs, pending interactions,
+  // and session summaries in a single round trip. Frontends call this once
+  // at launch instead of fanning out over every list rpc.
+  //
+  // hya.http: GET /v1/bootstrap
+  rpc GetBootstrap(GetBootstrapRequest) returns (Bootstrap);
+}
+
+message GetHealthRequest {}
+
+message GetHealthResponse {
+  // Always `true` when the endpoint answers successfully.
+  bool ok = 1;
+  // Backend version string (workspace release version).
+  string version = 2;
+}
+
+message GetLocationRequest {}
+
+// Where this backend runs and which directory it serves.
+message LocationInfo {
+  // Absolute working directory this backend instance serves.
+  string directory = 1;
+  // Hostname of the machine running the backend.
+  string hostname = 2;
+  // OS process id of the backend.
+  uint32 pid = 3;
+  // Backend version string (workspace release version).
+  string version = 4;
+}
+
+message GetConfigRequest {
+  // Directory whose effective config should be read; empty means the
+  // process default directory.
+  string directory = 1;
+}
+
+message GetConfigResponse {
+  // Effective merged configuration as a JSON object.
+  google.protobuf.Struct values = 1;
+}
+
+message UpdateConfigRequest {
+  // Directory whose config should be patched; empty means the process
+  // default directory.
+  string directory = 1;
+  // JSON object deep-merged into the stored config for that directory.
+  google.protobuf.Struct patch = 2;
+}
+
+message DisposeProcessRequest {}
+
+message DisposeProcessResponse {}
+
+message UpgradeProcessRequest {}
+
+message UpgradeProcessResponse {
+  // Human-readable outcome of the upgrade attempt.
+  string status = 1;
+}
+
+message GetBootstrapRequest {
+  // Directory to bootstrap against; empty means the process default.
+  string directory = 1;
+}
+
+// One-round-trip startup snapshot for frontends.
+message Bootstrap {
+  // Process identity (directory, hostname, pid, version).
+  LocationInfo location = 1;
+  // Effective runtime configuration for the directory.
+  google.protobuf.Struct config = 2;
+  // Available agents bound to this directory.
+  repeated AgentSummary agents = 3;
+  // Available models across providers.
+  repeated ModelSummary models = 4;
+  // Provider catalog with per-provider auth status.
+  repeated ProviderSummary providers = 5;
+  // Slash-command catalog.
+  repeated CommandSummary commands = 6;
+  // Skill catalog.
+  repeated SkillSummary skills = 7;
+  // Tool catalog including hidden aliases for completion UIs.
+  repeated ToolSummary tools = 8;
+  // Pending permission/question requests across sessions.
+  repeated Interaction interactions = 9;
+  // Saved permission rules.
+  repeated SavedRule saved_rules = 10;
+  // Formatter availability advertised to the frontend.
+  bool formatter_available = 11;
+  // Cursor for the session list; fetch sessions with `Session.List`.
+  string sessions_cursor = 12;
+}

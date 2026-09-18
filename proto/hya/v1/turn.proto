@@ -1,0 +1,142 @@
+// hya API v1 — turn execution: the unified admit surface for prompts,
+// slash commands, and shell turns, plus turn status/wait/cancel.
+//
+// Execution is event-driven: `CreateTurn` admits work and returns a turn
+// handle immediately; progress and terminal state arrive as events on the
+// event streams. `WaitTurn` exists only as a convenience for synchronous
+// clients (CLI, headless scripts).
+syntax = "proto3";
+
+package hya.v1;
+
+import "hya/v1/catalog.proto";
+import "hya/v1/message.proto";
+
+// Turn admission and control surface.
+service Turn {
+  // Admit one turn into a session: a user prompt, a slash command, or a
+  // direct shell execution. Returns as soon as the turn is admitted.
+  //
+  // hya.http: POST /v1/sessions/{session}/turns
+  rpc CreateTurn(CreateTurnRequest) returns (CreateTurnResponse);
+
+  // Read the current state of one turn.
+  //
+  // hya.http: GET /v1/sessions/{session}/turns/{turn}
+  rpc GetTurn(GetTurnRequest) returns (TurnInfo);
+
+  // Block until the turn reaches a terminal state or the timeout elapses.
+  //
+  // hya.http: POST /v1/sessions/{session}/turns/{turn}:wait
+  rpc WaitTurn(WaitTurnRequest) returns (TurnInfo);
+
+  // Request cancellation of a running turn (cooperative abort).
+  //
+  // hya.http: POST /v1/sessions/{session}/turns/{turn}:cancel
+  rpc CancelTurn(CancelTurnRequest) returns (TurnInfo);
+}
+
+// A plain user prompt turn.
+message PromptTurn {
+  // User text recorded as the next user message.
+  string text = 1;
+}
+
+// A slash-command turn.
+message CommandTurn {
+  // Command name without the leading `/` (for example `compact`).
+  string command = 1;
+  // Raw argument string after the command name.
+  string arguments = 2;
+  // Full composed text to store when the client already rendered the
+  // message body; empty lets the backend compose it.
+  string text = 3;
+  // Model override for this turn (`provider/model[#variant]`).
+  string model = 4;
+}
+
+// A synthetic shell turn: the command runs via the builtin shell tool with
+// no model round.
+message ShellTurn {
+  // Shell command line to execute.
+  string command = 1;
+  // Agent name used for message attribution.
+  string agent = 2;
+  // Client model selection retained for session continuity.
+  ModelRef model = 3;
+}
+
+message CreateTurnRequest {
+  // Session identifier to admit the turn into.
+  string session = 1;
+  // Turn payload; exactly one kind is set.
+  oneof kind {
+    // Admit a user prompt.
+    PromptTurn prompt = 2;
+    // Admit a slash command.
+    CommandTurn command = 3;
+    // Admit a direct shell execution.
+    ShellTurn shell = 4;
+  }
+}
+
+message CreateTurnResponse {
+  // Handle for the admitted turn.
+  TurnInfo turn = 1;
+}
+
+// Terminal state of a turn.
+enum TurnState {
+  // Unset sentinel; never emitted by the server.
+  TURN_STATE_UNSPECIFIED = 0;
+  // Admitted and queued, not yet running.
+  TURN_STATE_ADMITTED = 1;
+  // Model/tool rounds in flight.
+  TURN_STATE_RUNNING = 2;
+  // Terminal success.
+  TURN_STATE_FINISHED = 3;
+  // Terminal failure.
+  TURN_STATE_FAILED = 4;
+  // Cancelled by the client or a stop signal.
+  TURN_STATE_CANCELLED = 5;
+}
+
+// Projection snapshot of one admitted turn. The turn id is the id of the
+// assistant message the engine drives for that turn.
+message TurnInfo {
+  // Turn identifier (assistant message id).
+  string id = 1;
+  // Owning session identifier.
+  string session = 2;
+  // Current lifecycle state.
+  TurnState state = 3;
+  // Terminal finish reason once state is FINISHED.
+  FinishReason finish = 4;
+  // Stable error code when state is FAILED.
+  string error_code = 5;
+  // Human-readable error message when state is FAILED.
+  string error_message = 6;
+}
+
+message GetTurnRequest {
+  // Session identifier.
+  string session = 1;
+  // Turn identifier.
+  string turn = 2;
+}
+
+message WaitTurnRequest {
+  // Session identifier.
+  string session = 1;
+  // Turn identifier.
+  string turn = 2;
+  // Maximum time to wait in milliseconds; 0 waits indefinitely.
+  uint64 timeout_ms = 3;
+}
+
+message CancelTurnRequest {
+  // Session identifier.
+  string session = 1;
+  // Turn identifier.
+  string turn = 2;
+}

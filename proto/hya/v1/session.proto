@@ -1,0 +1,202 @@
+// hya API v1 — session lifecycle: create, read, list, update, delete,
+// fork, compact, summarize, and revert.
+syntax = "proto3";
+
+package hya.v1;
+
+import "google/protobuf/timestamp.proto";
+import "hya/v1/catalog.proto";
+import "hya/v1/common.proto";
+
+// Session lifecycle surface. Sessions are the durable event-sourced roots;
+// every turn, message, and projection read hangs off a session id.
+service Session {
+  // Create a session, optionally as a child of an existing session and
+  // optionally running the directory init turn.
+  //
+  // hya.http: POST /v1/sessions
+  rpc CreateSession(CreateSessionRequest) returns (CreateSessionResponse);
+
+  // Fetch one session's projection summary.
+  //
+  // hya.http: GET /v1/sessions/{session}
+  rpc GetSession(GetSessionRequest) returns (SessionInfo);
+
+  // List sessions, optionally scoped under one parent (subagent tree).
+  //
+  // hya.http: GET /v1/sessions
+  rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
+
+  // Update mutable session fields: title, agent, model, background flag.
+  //
+  // hya.http: PATCH /v1/sessions/{session}
+  rpc UpdateSession(UpdateSessionRequest) returns (SessionInfo);
+
+  // Delete a session and its event log.
+  //
+  // hya.http: DELETE /v1/sessions/{session}
+  rpc DeleteSession(DeleteSessionRequest) returns (DeleteSessionResponse);
+
+  // Fork a session into a new session id, copying events up to a watermark.
+  //
+  // hya.http: POST /v1/sessions/{session}:fork
+  rpc ForkSession(ForkSessionRequest) returns (ForkSessionResponse);
+
+  // Compact a session's context using the configured method ladder.
+  //
+  // hya.http: POST /v1/sessions/{session}:compact
+  rpc CompactSession(CompactSessionRequest) returns (CompactSessionResponse);
+
+  // Produce a summary message for a session (titles, handoffs).
+  //
+  // hya.http: POST /v1/sessions/{session}:summarize
+  rpc SummarizeSession(SummarizeSessionRequest) returns (SummarizeSessionResponse);
+
+  // Revert a session to an earlier watermark, or undo the last revert.
+  //
+  // hya.http: POST /v1/sessions/{session}:revert
+  rpc RevertSession(RevertSessionRequest) returns (RevertSessionResponse);
+}
+
+// Session id string (`hysec_...`, `ses_...`, or legacy raw UUID accepted on
+// input; canonical form on output).
+message SessionRef {
+  // Session identifier.
+  string session = 1;
+}
+
+// Projection summary of one session.
+message SessionInfo {
+  // Canonical session id.
+  string id = 1;
+  // Parent session id when this is a subagent/team child.
+  string parent = 2;
+  // Human-editable title; empty when unset.
+  string title = 3;
+  // Agent name bound to this session.
+  string agent = 4;
+  // Model the session currently runs on.
+  ModelRef model = 5;
+  // Absolute working directory of the session.
+  string workdir = 6;
+  // Whether the session is flagged as background work.
+  bool background = 7;
+  // When the session was created.
+  google.protobuf.Timestamp time_created = 8;
+  // When the session projection last changed.
+  google.protobuf.Timestamp time_updated = 9;
+  // Highest event sequence number recorded for this session.
+  uint64 last_seq = 10;
+}
+
+message CreateSessionRequest {
+  // Agent name or catalog id to bind as the session's default agent.
+  string agent = 1;
+  // Model reference the session starts on (`provider/model[#variant]`).
+  string model = 2;
+  // Absolute workdir for tools and relative paths in this session.
+  string workdir = 3;
+  // When set, marks the new session as a child of this parent id.
+  string parent = 4;
+  // When true, run the directory initialization turn after creation.
+  bool initialize = 5;
+  // Initial title; empty lets the backend derive one.
+  string title = 6;
+}
+
+message CreateSessionResponse {
+  // Projection summary of the new session.
+  SessionInfo session = 1;
+}
+
+message GetSessionRequest {
+  // Session identifier.
+  string session = 1;
+}
+
+message ListSessionsRequest {
+  // Directory whose sessions should be listed.
+  string directory = 1;
+  // Restrict to direct children of this session id when non-empty.
+  string parent = 2;
+  // Standard pagination controls.
+  PageRequest page = 3;
+}
+
+message ListSessionsResponse {
+  // Session summaries in reverse-creation order.
+  repeated SessionInfo sessions = 1;
+  // Pagination outcome.
+  PageInfo page = 2;
+}
+
+message UpdateSessionRequest {
+  // Session identifier.
+  string session = 1;
+  // New title when set.
+  optional string title = 2;
+  // New model reference string when set.
+  optional string model = 3;
+  // New agent name when set.
+  optional string agent = 4;
+  // New background flag when set.
+  optional bool background = 5;
+}
+
+message DeleteSessionRequest {
+  // Session identifier.
+  string session = 1;
+}
+
+message DeleteSessionResponse {}
+
+message ForkSessionRequest {
+  // Session identifier to fork from.
+  string session = 1;
+  // Copy events up to this sequence number; 0 forks at the current head.
+  uint64 until_seq = 2;
+}
+
+message ForkSessionResponse {
+  // Projection summary of the forked session.
+  SessionInfo session = 1;
+}
+
+message CompactSessionRequest {
+  // Session identifier to compact.
+  string session = 1;
+  // Compact events up to this sequence number; 0 compacts at the head.
+  uint64 until_seq = 2;
+}
+
+message CompactSessionResponse {
+  // Watermark the context was compacted up to.
+  uint64 compacted_until_seq = 1;
+  // Which compaction method fired (`shake`, `remote`, `soft`,
+  // `snap_compact`, `handoff`).
+  string strategy = 2;
+}
+
+message SummarizeSessionRequest {
+  // Session identifier to summarize.
+  string session = 1;
+}
+
+message SummarizeSessionResponse {
+  // Id of the generated summary message.
+  string summary_message = 1;
+}
+
+message RevertSessionRequest {
+  // Session identifier to revert.
+  string session = 1;
+  // Revert target sequence number; 0 uses the last revert point.
+  uint64 until_seq = 2;
+  // When true, undo the previous revert instead of reverting.
+  bool undo = 3;
+}
+
+message RevertSessionResponse {
+  // Projection summary after the revert.
+  SessionInfo session = 1;
+}

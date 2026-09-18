@@ -1,0 +1,77 @@
+// hya API v1 — git worktree management, graduated from the legacy
+// experimental surface.
+syntax = "proto3";
+
+package hya.v1;
+
+
+// Worktree create/list/delete surface backed by the engine's worktree
+// helpers.
+service Worktrees {
+  // List worktrees of a repository.
+  //
+  // hya.http: GET /v1/worktrees
+  rpc ListWorktrees(ListWorktreesRequest) returns (ListWorktreesResponse);
+
+  // Create a new worktree (and its branch when needed).
+  //
+  // hya.http: POST /v1/worktrees
+  rpc CreateWorktree(CreateWorktreeRequest) returns (Worktree);
+
+  // Delete a worktree and optionally its branch.
+  //
+  // hya.http: DELETE /v1/worktrees/{worktree}
+  rpc DeleteWorktree(DeleteWorktreeRequest) returns (DeleteWorktreeResponse);
+
+  // Reset a worktree to a clean state at its branch head.
+  //
+  // hya.http: POST /v1/worktrees/{worktree}:reset
+  rpc ResetWorktree(ResetWorktreeRequest) returns (Worktree);
+}
+
+// One git worktree.
+message Worktree {
+  // Worktree identifier.
+  string id = 1;
+  // Absolute path of the worktree directory.
+  string path = 2;
+  // Branch checked out in the worktree.
+  string branch = 3;
+  // HEAD commit hash when known.
+  string head = 4;
+}
+
+message ListWorktreesRequest {
+  // Directory scope of the owning repository; empty means the process
+  // default directory.
+  string directory = 1;
+}
+
+message ListWorktreesResponse {
+  // Worktrees of the repository.
+  repeated Worktree worktrees = 1;
+}
+
+message CreateWorktreeRequest {
+  // Directory scope of the owning repository; empty means the process
+  // default directory.
+  string directory = 1;
+  // Worktree name; derived from the branch when empty.
+  string name = 2;
+  // Branch to check out; created from the current HEAD when empty.
+  string branch = 3;
+}
+
+message DeleteWorktreeRequest {
+  // Worktree identifier to delete.
+  string worktree = 1;
+  // Also delete the checked-out branch.
+  bool delete_branch = 2;
+}
+
+message DeleteWorktreeResponse {}
+
+message ResetWorktreeRequest {
+  // Worktree identifier to reset.
+  string worktree = 1;
+}

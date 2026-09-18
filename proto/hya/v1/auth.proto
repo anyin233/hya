@@ -1,0 +1,99 @@
+// hya API v1 — provider credential management (API keys and OAuth).
+syntax = "proto3";
+
+package hya.v1;
+
+import "hya/v1/catalog.proto";
+
+// Credential surface for model providers. This is hya's real auth system
+// (per-provider credentials in the user auth directory); it does not cover
+// third-party service connectors, which are out of scope for v1.
+service Auth {
+  // Store an API key or refresh tokens for a provider.
+  //
+  // hya.http: PUT /v1/auth/{provider_id}
+  rpc SetProviderAuth(SetProviderAuthRequest) returns (SetProviderAuthResponse);
+
+  // Delete the stored credentials for a provider.
+  //
+  // hya.http: DELETE /v1/auth/{provider_id}
+  rpc RemoveProviderAuth(RemoveProviderAuthRequest) returns (RemoveProviderAuthResponse);
+
+  // Begin a provider OAuth flow; returns the authorization URL to open.
+  //
+  // hya.http: POST /v1/auth/{provider_id}/oauth:start
+  rpc StartOauth(StartOauthRequest) returns (StartOauthResponse);
+
+  // Complete a provider OAuth flow with the callback code.
+  //
+  // hya.http: POST /v1/auth/{provider_id}/oauth:callback
+  rpc CompleteOauth(CompleteOauthRequest) returns (CompleteOauthResponse);
+}
+
+// OAuth tokens captured from a completed provider flow.
+message OauthTokens {
+  // Access token issued by the provider.
+  string access_token = 1;
+  // Refresh token when the provider issued one.
+  string refresh_token = 2;
+  // Token expiry as unix epoch seconds; 0 when unknown.
+  int64 expires_at = 3;
+}
+
+message SetProviderAuthRequest {
+  // Directory context for auth resolution.
+  string directory = 1;
+  // Provider identifier the credentials belong to.
+  string provider_id = 2;
+  // Credential payload: an API key or captured OAuth tokens.
+  oneof secret {
+    // Raw API key string.
+    string api_key = 3;
+    // OAuth token pair captured by the client.
+    OauthTokens oauth = 4;
+  }
+}
+
+message SetProviderAuthResponse {
+  // Resulting auth status for the provider.
+  AuthStatus status = 1;
+}
+
+message RemoveProviderAuthRequest {
+  // Directory context for auth resolution.
+  string directory = 1;
+  // Provider identifier whose credentials should be deleted.
+  string provider_id = 2;
+}
+
+message RemoveProviderAuthResponse {}
+
+message StartOauthRequest {
+  // Directory context for auth resolution.
+  string directory = 1;
+  // Provider identifier to authenticate.
+  string provider_id = 2;
+}
+
+message StartOauthResponse {
+  // Authorization URL the client must open in a browser.
+  string authorization_url = 1;
+  // State value to echo back in `CompleteOauth`.
+  string state = 2;
+}
+
+message CompleteOauthRequest {
+  // Directory context for auth resolution.
+  string directory = 1;
+  // Provider identifier completing the flow.
+  string provider_id = 2;
+  // Authorization code returned by the provider callback.
+  string code = 3;
+  // State value from `StartOauth` when the provider requires it.
+  string state = 4;
+}
+
+message CompleteOauthResponse {
+  // Resulting auth status for the provider.
+  AuthStatus status = 1;
+}
