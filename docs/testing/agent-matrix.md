@@ -1,9 +1,10 @@
 # Agent feature matrix
 
 Process E2E lives in `crates/hya-e2e` (**Track P**): real `hya-backend` +
-scripted OpenAI-compatible FakeLlm. Existing in-process tests remain the
-authority for deep engine semantics (**Track I**); they are indexed, not
-duplicated. TUI/SDK coverage is **Track T**.
+scripted OpenAI-compatible FakeLlm, driven entirely through the `hya.v1`
+contract. Existing in-process tests remain the authority for deep engine
+semantics (**Track I**); they are indexed, not duplicated. TUI coverage is
+**Track T**.
 
 | Resource | Path |
 | --- | --- |
@@ -18,9 +19,10 @@ duplicated. TUI/SDK coverage is **Track T**.
 cargo build -p hya-backend --bin hya-backend
 cargo test -p hya-e2e -- --test-threads=1
 
-# Track T — non-PTY real-backend / presentation
+# Track T — frontend package checks (presentation coverage)
 cd packages/hya-tui-ts
-bun test test/real-backend.test.ts test/task-presentation.test.ts test/real-backend-agents.test.ts
+bun run typecheck
+bun test
 ```
 
 ## Track P scenarios (implemented)
@@ -34,10 +36,10 @@ bun test test/real-backend.test.ts test/task-presentation.test.ts test/real-back
 | T1.5 | shell | `tests/p02_tool_loop_fs.rs` | Disk file from shell |
 | T1.7 | Permissions once/reject | `tests/p03_permissions.rs` | File created only after `once` |
 | T1.8 | Questions + reply | `tests/p04_questions.rs` | Turn continues after question reply |
-| T1.9 | Skills load | `tests/p05_skills.rs` | `/skill` lists skill; follow-up FakeLlm has body marker |
+| T1.9 | Skills load | `tests/p05_skills.rs` | `GET /v1/skills` lists skill; follow-up FakeLlm has body marker |
 | T1.10 | MCP tool call | `tests/p06_mcp.rs` | `/mcp` connected; follow-up has `echo:…` result |
-| T1.11 | Session list + resume | `tests/p07_session_lifecycle.rs` | Compat list shows active sessions; second prompt on same id |
-| T1.12 | Session context API | `tests/p12_context_api.rs` | Multi-turn user/assistant text in `/api/session/{id}/context` |
+| T1.11 | Session list + resume | `tests/p07_session_lifecycle.rs` | `GET /v1/sessions` shows active sessions; second prompt on same id |
+| T1.12 | Session transcript read | `tests/p12_context_api.rs` | Multi-turn user/assistant text in `GET /v1/sessions/{id}/messages` |
 | T1.13 | Project AGENTS.md guidance | `tests/p13_project_agents_context.rs` | Compat-guided FakeLlm request contains AGENTS body marker |
 | T1.14 | Compact / summarize | `tests/p14_compact_summarize.rs` | Compact injects summary into context; follow-up turn works |
 | T1.15 | todowrite + edit | `tests/p15_todo_and_edit.rs` | Todo route lists item; edit rewrites file on disk |
@@ -51,7 +53,7 @@ bun test test/real-backend.test.ts test/task-presentation.test.ts test/real-back
 | T1.23 | Structured custom Tool errors recover | `tests/p18_custom_slash_resources.rs` | One terminal Tool Event, structured replay, no replay execution, and later same-Session success |
 | T2.1 | Subagent task | `tests/p08_subagent_task.rs` | Tree children ≥ 1, `general`, distinct child session |
 | T2.2 | Nested tree depth≥2 | `tests/p09_nested_subagent.rs` | Depth ≥ 2, explore+plan, ≥ 3 session ids |
-| T2.3 | Agent roster / roles | `tests/p10_agent_roster.rs` | `/api/agent` lists build + spawnable roles |
+| T2.3 | Agent roster / roles | `tests/p10_agent_roster.rs` | `GET /v1/agents` lists build + spawnable roles |
 | T2.4 | Swarm `roster` + `list_agents` | `tests/p16_swarm_mailbox.rs` | Caller's follow-up carries the teammate's handle, type, status and **real session id** |
 | T2.5 | Swarm `send` (direct) | `tests/p16_swarm_mailbox.rs` | **Recipient's** next request contains `[mail from main/general-2] …` |
 | T2.6 | Swarm `send` (`#channel`) | `tests/p16_swarm_mailbox.rs` | Subscriber's next request contains the post; receipt reads `to #squad (1 recipient)` — the channel-branch count, not the direct-send constant |
@@ -63,7 +65,7 @@ bun test test/real-backend.test.ts test/task-presentation.test.ts test/real-back
 | T2.12 | Cross-unit `send` refused | `tests/p16_swarm_mailbox.rs` | Two units, two levels deep: sender's follow-up carries the scope refusal AND the payload never reaches the other unit ([ADR-0011](../adr/0011-hierarchy-scoped-mailbox.md)) |
 | T2.13 | User-authored Workflow fan-out/fan-in | `tests/p17_workflow_composition.rs` | One discovered Workflow spawns four distinct stage Sessions, joins both parallel implementations into review, and returns the final report to the lead |
 | T2.14 | Workflow Stage model routing and replay | `tests/p19_workflow_model_routing.rs` | Preferred 503 responses advance to the declared fallback with per-candidate effort; worker, verifier, and final route outcomes survive backend close/reopen without another provider request |
-| T2.15 | model catalog discovery and offline fallback | `tests/p20_model_catalog_discovery.rs` | Explicit lists stay network-free and unwritten; empty lists rediscover anonymously each run without mutating config or a foreign OpenCode file; 401 and credentialed-forbidden catalogs surface `hya/offline` (exec prints the configuration explanation); mixed provider failure keeps the valid rows identical across CLI, `/api/model`, `/api/provider`, legacy `/provider`, `/config/providers`, and TUI bootstrap |
+| T2.15 | model catalog discovery and offline fallback | `tests/p20_model_catalog_discovery.rs` | Explicit lists stay network-free and unwritten; empty lists rediscover anonymously each run without mutating config or a foreign OpenCode file; 401 and credentialed-forbidden catalogs surface `hya/offline` (exec prints the configuration explanation); mixed provider failure keeps the valid rows identical across CLI, `/v1/models`, `/v1/providers`, and `GET /v1/bootstrap` |
 
 ### Built-in tool coverage
 
@@ -92,33 +94,27 @@ prompts). The recipient's own next model request is therefore the only honest
 delivery oracle — see the module docs of `tests/p16_swarm_mailbox.rs` for the
 ordering rules that keep those scenarios deterministic.
 
-## Track T scenarios (implemented)
+## Track T scenarios
 
-| ID | Title | Test |
-| --- | --- | --- |
-| T3.1 | Real-backend permission reply | `packages/hya-tui-ts/test/real-backend.test.ts` |
-| T3.2 | Multi-agent task presentation | `packages/hya-tui-ts/test/task-presentation.test.ts` |
-| T3.3 | Real-backend agent roster | `packages/hya-tui-ts/test/real-backend-agents.test.ts` |
-| T3.4 | Custom resource slash command transport | `packages/hya-tui-ts/test/pty-smoke.test.ts` |
+The old TUI's real-backend Track T scenarios (T3.1 permission reply, T3.2
+multi-agent task presentation, T3.3 agent roster — the
+`real-backend*`/`task-presentation` test trio — plus T3.4 PTY smoke,
+`pty-smoke.test.ts`) verified the deleted Compat HTTP surface and are
+**retired with it**; the tests were removed alongside the old TUI's backend
+integration.
 
-The first three scenarios are the **enforced** Track T gate in
-`.github/workflows/ci.yml`; the workflow names them explicitly rather than
-running a blanket `bun test`. T3.4 is matrix-registered PTY coverage in the
-non-gating TUI smoke step.
+Track T today is the frontend package's own checks (`bun run typecheck`,
+`bun test`): presentation helpers and package smoke (for example
+`workflow-presentation.test.ts`, `workflow-sidebar.test.ts`,
+`subagent-workspace.test.ts`, branding/boundary guards).
+Frontend-on-`hya-sdk-v1` scenarios return to the matrix with the new TUI;
+register them under the T3 series when they land, following the ID allocation
+rule below.
 
-The package also has focused Workflow presentation, sidebar-registration, and
-PTY suites: `workflow-presentation.test.ts`, `workflow-sidebar.test.ts`, and
-`workflow-pty.test.ts`. They are package-level smoke/contract coverage rather
-than additional matrix IDs. `workflow-pty.test.ts` runs only with the non-gating
-full Bun suite; this does not expand the enforced Track T gate.
+### PTY policy and recorded timeout
 
-### PTY smoke policy and recorded timeout
-
-Current policy is defined by `.github/workflows/ci.yml`: the three-file Track T
-set above is gating, while the full Bun suite is `continue-on-error: true`.
-Matrix-registered `pty-smoke.test.ts` (T3.4) and package-only
-`workflow-pty.test.ts` therefore report presentation coverage without blocking
-the Rust gate.
+The old PTY suites (`pty-smoke.test.ts`, `workflow-pty.test.ts`) ran in the
+non-gating Bun step and were removed with the old TUI's backend integration.
 
 The retained historical observation is run `31053432077` on commit `fee38938`:
 the stable test `Linux PTY renders home, opens a session, and restores the
@@ -162,12 +158,15 @@ replace these.
 | --- | --- | --- |
 | I.nested | Nested spawn tree | `crates/hya-app/tests/nested_spawn_tree.rs` |
 | I.subagent | Subagent/resident core | `crates/hya-core/tests/subagent.rs` |
-| I.permission_api | Compat permission/question | `crates/hya-server/tests/compat_permission_question_api.rs` |
-| I.mcp_api | Compat MCP | `crates/hya-server/tests/compat_mcp_api.rs` |
+| I.v1_api | v1 HTTP contract | `crates/hya-server/tests/v1_api.rs` |
+| I.v1_grpc_parity | v1 HTTP/gRPC parity | `crates/hya-server/tests/v1_grpc_parity.rs` |
 | I.bundle_cli | Bundle CLI | `crates/hya-backend/tests/bundle_cli.rs` |
-| I.context_api | Compat session context | `crates/hya-server/tests/compat_session_v2_context_api.rs` |
-| I.compact_api | Compat compact | `crates/hya-server/tests/compat_session_v2_compact_api.rs` |
 | I.compact_engine | Engine compact_context | `crates/hya-core/tests/compact_context.rs` |
+
+The previous Compat-route index rows (permission/question, MCP, session
+context, compact APIs under `crates/hya-server/tests/compat_*.rs`) were removed
+with the deleted surface; `v1_api.rs` and `v1_grpc_parity.rs` own that coverage
+for the `hya.v1` contract.
 
 ## The registry is enforced
 

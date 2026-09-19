@@ -712,82 +712,9 @@ fn model_variant_names(info: &Value) -> Vec<String> {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-    use tokio::sync::Mutex;
+    use serde_json::json;
 
-    use std::sync::Arc;
-
-    use async_trait::async_trait;
-    use serde_json::{json, Value};
-
-    use super::{
-        model_variant_names, parse_plugin_entry, question_path, ApiClient, Client, Transport,
-    };
-    use crate::error::Result;
-    use crate::workflow::{WorkflowCommand, WorkflowCommandResult};
-    type RecordedCall = (String, String, Option<Value>);
-
-    struct RecordingTransport {
-        calls: Arc<Mutex<Vec<RecordedCall>>>,
-        response: Value,
-    }
-
-    #[async_trait]
-    impl Transport for RecordingTransport {
-        fn base_url(&self) -> &str {
-            "http://test.invalid"
-        }
-
-        fn directory(&self) -> &str {
-            "/tmp"
-        }
-
-        async fn request(&self, method: &str, path: &str, body: Option<&Value>) -> Result<Value> {
-            self.calls
-                .lock()
-                .await
-                .push((method.to_owned(), path.to_owned(), body.cloned()));
-            Ok(self.response.clone())
-        }
-    }
-    #[tokio::test]
-    async fn workflow_methods_use_shared_endpoint_and_typed_json() {
-        let calls = Arc::new(Mutex::new(Vec::new()));
-        let client = ApiClient::with_transport(RecordingTransport {
-            calls: Arc::clone(&calls),
-            response: json!({ "kind": "list", "workflows": [] }),
-        });
-        let result = client
-            .workflow_command("ses_1", WorkflowCommand::List)
-            .await
-            .expect("typed list result");
-        assert!(
-            matches!(result, WorkflowCommandResult::List { workflows } if workflows.is_empty())
-        );
-        let recorded = calls.lock().await;
-        assert_eq!(
-            recorded.as_slice(),
-            &[(
-                String::from("POST"),
-                String::from("/session/ses_1/workflow"),
-                Some(json!({ "command": "list" })),
-            )]
-        );
-
-        let state_calls = Arc::new(Mutex::new(Vec::new()));
-        let state_client = ApiClient::with_transport(RecordingTransport {
-            calls: Arc::clone(&state_calls),
-            response: json!({ "kind": "state", "state": { "selection": null, "run": null } }),
-        });
-        let state = state_client
-            .workflow_state("ses_1")
-            .await
-            .expect("typed state result");
-        assert!(state.selection.is_none());
-        let state_calls = state_calls.lock().await;
-        assert_eq!(state_calls[0].0, "GET");
-        assert_eq!(state_calls[0].1, "/session/ses_1/workflow");
-    }
-
+    use super::{model_variant_names, parse_plugin_entry};
     #[test]
     fn parse_plugin_entry_handles_name_at_version_and_file_urls() {
         assert_eq!(
@@ -821,18 +748,6 @@ mod tests {
     }
 
     #[test]
-    fn question_path_carries_optional_directory_query() {
-        assert_eq!(
-            question_path("que_1", "reply", Some("/tmp/hya project")),
-            "/question/que_1/reply?directory=/tmp/hya%20project"
-        );
-        assert_eq!(
-            question_path("que_1", "reject", None),
-            "/question/que_1/reject"
-        );
-    }
-
-    #[test]
     fn model_variant_names_preserve_server_key_order() {
         // Intentionally not effort-ranked and not alphabetical.
         let info = json!({
@@ -848,97 +763,5 @@ mod tests {
             vec!["max", "high", "low", "medium"]
         );
         assert!(model_variant_names(&json!({})).is_empty());
-    }
-
-    #[tokio::test]
-    async fn models_preserve_shared_catalog_rows_variants_and_offline_membership() {
-        let calls = Arc::new(Mutex::new(Vec::new()));
-        let client = ApiClient::with_transport(RecordingTransport {
-            calls: Arc::clone(&calls),
-            response: json!({
-                "providers": [
-                    {
-                        "id": "configured",
-                        "name": "Configured",
-                        "source": "configured",
-                        "auth": "unauthenticated",
-                        "result": "models",
-                        "models": {
-                            "alpha": {
-                                "name": "Alpha",
-                                "status": "configured",
-                                "source": "configured",
-                                "limit": { "context": 128000 },
-                                "variants": { "low": {}, "high": {} }
-                            }
-                        }
-                    },
-                    {
-                        "id": "needs-auth",
-                        "source": "none",
-                        "auth": "auth_required",
-                        "result": "unavailable",
-                        "models": {}
-                    }
-                ],
-                "defaultModel": { "providerID": "configured", "modelID": "alpha" }
-            }),
-        });
-
-        assert_eq!(
-            client.models().await.expect("catalog rows"),
-            vec![(
-                "configured/alpha".to_string(),
-                "Alpha".to_string(),
-                "Configured".to_string(),
-                128_000,
-                vec!["low".to_string(), "high".to_string()],
-            )]
-        );
-        assert_eq!(calls.lock().await[0].1, "/config/providers");
-
-        let offline = ApiClient::with_transport(RecordingTransport {
-            calls: Arc::new(Mutex::new(Vec::new())),
-            response: json!({
-                "providers": [{
-                    "id": "hya",
-                    "name": "hya",
-                    "source": "offline",
-                    "auth": "not_applicable",
-                    "result": "offline",
-                    "models": {
-                        "offline": {
-                            "status": "offline",
-                            "source": "offline",
-                            "limit": { "context": 0 },
-                            "variants": {}
-                        }
-                    }
-                }],
-                "defaultModel": { "providerID": "hya", "modelID": "offline" }
-            }),
-        });
-        let rows = offline.models().await.expect("offline row");
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].0, "hya/offline");
-    }
-
-    #[tokio::test]
-    async fn models_never_synthesize_active_session_metadata() {
-        let client = ApiClient::with_transport(RecordingTransport {
-            calls: Arc::new(Mutex::new(Vec::new())),
-            response: json!({
-                "providers": [{
-                    "id": "failed",
-                    "source": "none",
-                    "auth": "auth_rejected",
-                    "result": "unavailable",
-                    "models": {}
-                }],
-                "activeModel": { "providerID": "openai", "modelID": "guessed" }
-            }),
-        });
-
-        assert!(client.models().await.expect("empty catalog").is_empty());
     }
 }

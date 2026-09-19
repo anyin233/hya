@@ -477,7 +477,7 @@ impl E2eEnv {
             .collect())
     }
 
-    /// Wait until the session is not listed as busy under `/session/status`.
+    /// Wait until the session is not listed as busy (v1 session listing).
     pub async fn wait_session_idle(
         &self,
         session: &SessionId,
@@ -716,7 +716,7 @@ impl E2eEnv {
         .await
     }
 
-    /// Wait until `/mcp` reports `name` with status `connected`.
+    /// Wait until `/v1/mcp` reports `name` with status `connected`.
     pub async fn wait_mcp_connected(
         &self,
         name: &str,

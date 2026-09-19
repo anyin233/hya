@@ -1,4 +1,4 @@
-//! T1.12 — multi-turn conversation exposed via Compat `/api/session/{id}/context`.
+//! T1.12 — multi-turn conversation exposed via the v1 `/v1/sessions/{id}/messages` route.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use hya_e2e::{E2eEnvBuilder, text_step};

@@ -162,8 +162,9 @@ and default binding.
 
 In addition to the frontend-registered slash commands above, the backend serves
 a built-in command catalog from
-[`command_catalog.rs`](../crates/hya-server/src/compat/command_catalog.rs) over
-`GET /api/command` (and the Compat `/command` surface).
+[`command_catalog.rs`](../crates/hya-server/src/support/command_catalog.rs) over
+`GET /v1/commands` (Catalog `ListCommands` on the `hya.v1` contract; the former
+Compat `/api/command` surface is deleted).
 
 **Expandability.** Every built-in is constructed with `expandable: false`.
 Server-side `expand_prompt` only expands entries with `expandable: true`
@@ -417,7 +418,9 @@ hya server listening on <url>
 ```
 
 That string is a stability contract: `hya-sdk`'s `ServerHandle` parses this exact
-line from merged stdout/stderr to discover the base URL. Do not change its
+line from merged stdout/stderr to discover the base URL (`hya-sdk` is the legacy
+crate, but the launcher's owned-backend supervision still uses its
+`ServerHandle`; its Compat HTTP client side is retired). Do not change its
 wording. Source: [`serve.rs`](../crates/hya-backend/src/serve.rs),
 [`hya-sdk` server](../crates/hya-sdk/src/server.rs).
 
@@ -434,9 +437,13 @@ serve also emits a JSON `backend_listen` startup mark on stderr after the listen
 line, for example
 `{"hya_startup":true,"mark":"backend_listen","wall_ms":…,"detail":"<url>"}`.
 
-The server mounts native `/sessions/*` routes plus Compat-compatible legacy
-and v2 route groups. See
-[`compat-parity.md`](compat-parity.md) for exact compatibility status.
+The server serves exactly one HTTP contract — `hya.v1` — under `/v1`
+(HTTP/JSON + SSE + WebSocket). The former native `/sessions/*` routes and the
+Compat-compatible legacy/v2 route groups are deleted. Setting
+`HYA_GRPC_BIND=<host:port>` additionally serves the same fifteen services over
+gRPC (reflection enabled). See [Protocol guide](protocol/README.md),
+[API reference](protocol/api-reference.md), and
+[Server and Client](architecture/server-client.md).
 
 ## Auth and Catalog Commands
 

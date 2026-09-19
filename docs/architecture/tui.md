@@ -4,6 +4,16 @@ The shipped interactive frontend is the TypeScript/OpenTUI application under
 [`../../packages/hya-tui-ts`](../../packages/hya-tui-ts). The Rust `hya`
 binary is only its canonical Unix entrypoint.
 
+> **Status (v1 API consolidation).** The vendored frontend's backend
+> integration targeted the deleted Compat HTTP surface, so the shipped TUI is
+> **deliberately broken at runtime** until it is replaced. The replacement is
+> a new TUI built on [`hya-sdk-v1`](../../crates/hya-sdk-v1) against the
+> `hya.v1` contract (see [Server and Client](server-client.md)). Everything
+> below the HTTP boundary is unchanged — launcher chain, process handoff,
+> runtime resolution, and installation contract still apply — and this
+> document remains the design reference for the vendored frontend (panes,
+> dialogs, static plugin host) that the new TUI inherits.
+
 This document covers **process ownership, contracts, and package boundaries**.
 User-facing screens, transcript, dialogs, and prompt behavior live in
 [TUI Reference](../tui-reference.md). Keybindings and slash commands live in
@@ -17,7 +27,7 @@ hya
   -> start or attach to hya-backend
   -> resolve TUI entry (boot for FIFO handoff; dist preferred; HYA_TUI_ENTRY)
   -> run that entry with Bun
-  -> use @opencode-ai/sdk/v2 over HTTP/SSE
+  -> talk to the backend over its /v1 HTTP/SSE contract (new TUI: hya-sdk-v1)
 ```
 
 [`../../crates/hya/src/main.rs`](../../crates/hya/src/main.rs) resolves
@@ -27,8 +37,9 @@ canonical help and errors use the public product name.
 
 [`../../crates/hya-ts`](../../crates/hya-ts) owns launcher argument parsing,
 runtime and backend discovery, and terminal process-group handoff (below). It
-either starts an owned local `hya-backend` through `hya-sdk`, or attaches to the
-URL supplied by `--server`.
+either starts an owned local `hya-backend` through `hya-sdk`
+(`ServerHandle` process supervision only — its Compat HTTP client side is
+retired), or attaches to the URL supplied by `--server`.
 
 ## Terminal Handoff
 
@@ -189,8 +200,9 @@ The TypeScript package owns terminal rendering and interaction:
 
 The package is frontend-only. Provider execution, tools, permissions, events,
 and persistence remain in `hya-backend` and its Rust library dependencies. The
-frontend consumes the Compat-shaped SDK surface instead of constructing a
-second runtime or projection.
+frontend consumes the backend through its HTTP API instead of constructing a
+second runtime or projection (the vendored frontend used the retired
+Compat-shaped SDK; the new TUI uses `hya-sdk-v1`).
 
 User-visible chrome is described in [TUI Reference](../tui-reference.md) and
 [TUI Keybindings](../tui-keybindings.md).
@@ -280,9 +292,14 @@ duplicate the binding tables.
 
 ### Run tree data contract
 
-- **Endpoint.** The session route polls `GET /session/{id}/tree` through the raw
-  SDK `fetch`. A non-ok HTTP response surfaces the error path; the UI text is
-  `Subagent tree unavailable - press r to retry`.
+> The endpoint below was part of the deleted Compat surface; it documents the
+> vendored frontend's retired integration and will be re-pointed at the v1
+> session/workflow surfaces with the new TUI. The loader, schema, and
+> invalidation contracts remain the reference for that rebuild.
+
+- **Endpoint.** The session route polled `GET /session/{id}/tree` through the
+  raw SDK `fetch`. A non-ok HTTP response surfaced the error path; the UI text
+  is `Subagent tree unavailable - press r to retry`.
 - **Loader.** Generation-guarded: keeps the last valid tree on failure; allows
   one in-flight request plus one trailing refresh (`queued`); ignores stale
   responses; on a successful tree whose root `session` differs from the route,
@@ -408,15 +425,19 @@ ctrl+z folds into `input.undo` instead.
 
 ## Backend-driven control events
 
-The TypeScript frontend consumes these events in the main app loop (each
+> The `tui.*` control queue was part of the deleted Compat surface; the table
+> below documents the vendored frontend's retired integration. Whether the new
+> TUI reintroduces a control channel is a `hya.v1` contract decision.
+
+The TypeScript frontend consumed these events in the main app loop (each
 `tui.*` handler is ignored unless the event's workspace matches the current
 workspace):
 
 | Event | Effect |
 | --- | --- |
-| `tui.command.execute` | Dispatches a keymap command by name |
+| `tui.command.execute` | Dispatched a keymap command by name |
 | `tui.toast.show` | Toast with `title` / `message` / `variant` / `duration` |
-| `tui.session.select` | Navigates to the given session |
+| `tui.session.select` | Navigated to the given session |
 | `session.deleted` | If the open session was deleted → navigate home with toast `The current session was deleted` |
 | `session.error` | 5 s error toast unless the error name is `MessageAbortedError` |
 
@@ -450,7 +471,7 @@ asserts that `crates/hya-tui`, `crates/hya-tui-lib`, and `crates/hya-parity` do
 not exist and that no Cargo manifest references them.
 
 Intent: the TypeScript package is frontend-only and must consume the
-Compat-shaped SDK rather than construct a second runtime.
+backend's HTTP API rather than construct a second runtime.
 
 ## Package exports
 

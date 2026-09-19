@@ -13,9 +13,11 @@
 # Every gate step there carries `if: ${{ !cancelled() }}` so that one failing
 # step reports on its own instead of skipping the rest of the gate.
 #
-# Track T's enforced set is named explicitly (real-backend.test.ts,
-# task-presentation.test.ts, real-backend-agents.test.ts). The remainder of the
-# bun suite, PTY smoke included, runs in a non-gating step.
+# Track T's former enforced set (real-backend.test.ts,
+# task-presentation.test.ts, real-backend-agents.test.ts) verified the deleted
+# Compat HTTP surface and was removed with it; the remainder of the bun suite,
+# PTY smoke included, runs in a non-gating step. See docs/testing/agent-matrix.md
+# for the current Track T policy.
 #
 # This file is kept only so existing links do not break.
 # Docs: docs/testing/README.md, docs/testing/agent-matrix.md, docs/testing/process-e2e.md

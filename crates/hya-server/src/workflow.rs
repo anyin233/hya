@@ -1,7 +1,7 @@
 //! Shared Workflow HTTP adapters and slash-command decision logic.
 //!
-//! All native, legacy Compat, and Compat v2 command routes call the parser in
-//! this module before they reserve a parent-model run. Typed endpoints call
+//! Every `/v1` Workflow command route calls the parser in this module before
+//! it reserves a parent-model run. Typed endpoints call
 //! the same server-owned control port and serialize the shared proto DTOs.
 
 use std::collections::BTreeMap;

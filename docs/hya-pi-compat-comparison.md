@@ -1,6 +1,6 @@
 # hya, Pi, and Compat Feature Comparison
 
-Last researched: 2026-06-30. Tool-name correction: 2026-09-11 (`shell` is a hidden runtime alias of canonical `bash`; other comparison claims were not re-verified).
+Last researched: 2026-06-30. Tool-name correction: 2026-09-11 (`shell` is a hidden runtime alias of canonical `bash`; other comparison claims were not re-verified). HTTP-surface correction: 2026-09-19 (hya now serves only the `hya.v1` contract over `/v1` HTTP/SSE/WebSocket and gRPC; the Compat HTTP surface referenced by older research below is deleted — see [compat-parity.md](compat-parity.md)).
 
 This page compares hya with upstream stock Pi (`earendil-works/pi`) and current
 Compat (`anomalyco/compat` plus `compat.ai`). It intentionally does not
@@ -24,8 +24,9 @@ archived `compat-ai/compat` repository as the Compat baseline.
   [Runtime](architecture/runtime.md),
   [Providers](architecture/providers.md),
   [Tools and Permissions](architecture/tools-and-permissions.md),
-  [TUI](architecture/tui.md), [Configuration](configuration.md), and the
-  Compat compatibility tracker [Compat Parity Matrix](compat-parity.md).
+  [TUI](architecture/tui.md), [Configuration](configuration.md), the
+  [protocol guide](protocol/README.md), and the historical
+  [Compat Parity Matrix](compat-parity.md).
 - **Pi baseline:** upstream stock Pi, primarily
   [`packages/coding-agent/README.md`](https://raw.githubusercontent.com/earendil-works/pi/main/packages/coding-agent/README.md),
   [`docs/skills.md`](https://raw.githubusercontent.com/earendil-works/pi/main/packages/coding-agent/docs/skills.md),
@@ -72,7 +73,8 @@ Core built-ins include:
 MCP servers are configured in `config.yaml`. Enabled servers start during
 runtime composition; each exposed server tool is registered as
 `mcp__<server>__<tool>` and uses the same permission plane as native tools. The
-Compat-shaped HTTP MCP routes (`/mcp` add/connect/disconnect) do **not** durably
+v1 MCP control routes (`POST /v1/mcp`, `POST /v1/mcp/{name}/connect`,
+`POST /v1/mcp/{name}/disconnect`) do **not** durably
 rewrite `config.yaml`, but a successful reconciliation **does** publish a
 complete observation through `RuntimeRegistry` so the **next turn** can call
 newly connected tools (atomic next-turn tool callability). They are not a pure
@@ -81,15 +83,16 @@ status-only façade.
 Skills are first-class runtime content. Native runtime discovery reads hya skill
 locations such as `.hya/skills` and user config skill directories, injects an
 available-skill list into the prompt, and exposes a `skill` tool to load full
-content on demand. The Compat-compatible server also scans Compat-style
-skill locations for `/skill` and `/api/skill` catalog responses.
+content on demand. Discovery also scans Compat-style skill locations (`.claude`,
+`.codex`, OpenCode dirs), surfaced through the v1 catalog (`GET /v1/skills`
+and the bootstrap snapshot).
 
 Evidence: [Tools and Permissions](architecture/tools-and-permissions.md),
 [Runtime](architecture/runtime.md), [Configuration](configuration.md),
 [`crates/hya-tool/src/tool.rs`](../crates/hya-tool/src/tool.rs),
 [`crates/hya-mcp/src/bridge.rs`](../crates/hya-mcp/src/bridge.rs),
 [`crates/hya-app/src/runtime.rs`](../crates/hya-app/src/runtime.rs), and
-[`crates/hya-server/src/compat/skill_catalog.rs`](../crates/hya-server/src/compat/skill_catalog.rs).
+[`crates/hya-server/src/support/skill_catalog.rs`](../crates/hya-server/src/support/skill_catalog.rs).
 
 ### Pi coding agent
 
@@ -286,13 +289,17 @@ Evidence: Compat [agents](https://compat.ai/docs/agents),
 
 hya is terminal-first. The canonical `hya` entrypoint delegates to the `hya-ts`
 supervisor, which starts the SolidJS/OpenTUI frontend under
-`packages/hya-tui-ts` and connects it to `hya-backend` through
-`@opencode-ai/sdk/v2`. The frontend retains the upstream command palette,
-leader-key actions, themes, prompt and transcript rendering, session/model/agent
-dialogs, permission and question flows, status surfaces, and subagent views.
+`packages/hya-tui-ts` and connects it to `hya-backend` over the `hya.v1`
+HTTP/SSE contract (the vendored frontend previously used `@opencode-ai/sdk/v2`
+against the deleted Compat surface and is deliberately broken until the new
+TUI — built on `hya-sdk-v1` — replaces it). The frontend retains the upstream
+command palette, leader-key actions, themes, prompt and transcript rendering,
+session/model/agent dialogs, permission and question flows, status surfaces,
+and subagent views.
 
-Compat parity tracking now focuses on hya backend behavior exposed through the
-shared SDK contract rather than a separate Rust renderer.
+Compat parity tracking is a historical record now; the backend exposes one
+contract (`hya.v1` over HTTP/SSE/WebSocket and gRPC) rather than a separate
+Rust renderer or a Compat-shaped HTTP surface.
 
 Evidence: [TUI](architecture/tui.md),
 [Compat Parity Matrix](compat-parity.md),
@@ -355,8 +362,8 @@ it, and repeated failures disable it.
 Adding a new hya tool through a plugin means declaring a plugin tool; once the
 host connects, the tool is registered with `ToolRegistry` and the agent sees it
 in the next tool schema set. Adding a skill means placing skill content in a hya
-skill directory for native runtime discovery, or an Compat-style skill
-directory when targeting the Compat-compatible server catalog. Letting the
+skill directory or an Compat-style skill directory — both are discovered by
+hya's own runtime catalog. Letting the
 agent communicate with MCP means adding an MCP server under `mcp:` in
 `config.yaml`; hya starts the server, calls `tools/list`, wraps each tool as
 `mcp__<server>__<tool>`, and later calls `tools/call` when the model invokes it.

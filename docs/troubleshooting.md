@@ -175,11 +175,11 @@ for the same database path.
 
 ## Server SSE Emits `resync`
 
-`GET /sessions/:id/stream` emits a `resync` SSE event if the broadcast receiver
-lagged. The client should call:
+`GET /v1/sessions/{session}/events/stream` emits a `resync` SSE frame if the
+broadcast receiver lagged. The client should call:
 
 ```text
-GET /sessions/:id/events?since_seq=<last_seen_seq>
+GET /v1/sessions/{session}/events?sinceSeq=<last_seen_seq>
 ```
 
 then resume reading the stream.
@@ -216,7 +216,8 @@ Track P tests spawn a real `hya-backend` against a local FakeLlm. Common failure
 2. **Port / process flakiness** — always use `--test-threads=1`.
 3. **MCP `unknown tool: mcp__…`** — MCP must finish connecting before the tool
    call. The harness sets `HYA_DEFER_SIDEPLANES=0` for MCP fixtures and waits on
-   `GET /mcp` status `connected`. See [process-e2e.md](testing/process-e2e.md).
+   `GET /v1/mcp` (Mcp `GetMcpStatus`) until the server reports `connected`. See
+   [process-e2e.md](testing/process-e2e.md).
 4. **Hyabundle “exact lowercase .hyabundle suffix”** — install paths must end in
    `.hyabundle` (use `materialize_public_bundle`, not the raw `.7z` fixture path).
 5. **Weak-looking asserts** — oracles should check disk effects, tree depth, or

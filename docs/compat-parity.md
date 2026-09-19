@@ -1,13 +1,26 @@
 # Compat Parity Matrix
 
+> **Historical record — the Compat HTTP surface is deleted.** The Compat
+> v2 `/api/*`, legacy bare-path, and native `/sessions/*` routes this page
+> tracks were removed in the API consolidation (commit `23b4dbf3`); the
+> `hya.v1` contract under `/v1` (HTTP/JSON+SSE+WebSocket) and gRPC is now the
+> only HTTP surface — see the [protocol guide](protocol/README.md) and
+> [Server and Client](architecture/server-client.md). Every route-level claim
+> below describes that deleted surface and is retained as evidence of the
+> pre-consolidation parity work. Compat touchpoints that are still living
+> product surface: the Compat-compatible CLI aliases and no-op flags
+> (`run`, `--print-logs`, `--log-level`, `--pure`, `serve --hostname/--port`,
+> `--cors`, `--mdns`), the Compat plugin adapter
+> ([compat-plugins.md](compat-plugins.md)), and Compat config import.
+
 Last refreshed: 2026-09-02.
 
 Latest upstream check: `compat-ai/compat` `main`
 `73ee493265acf15fcd8caab2bc8cd3bd375b63cb`
 (`docs(readme): update archive note`) is an archived repository handoff
 tree that says the project continued as Crush. The compatibility matrix below
-therefore keeps tracking the TypeScript Compat server/SDK line that hya's
-Compat API surface implements.
+therefore kept tracking the TypeScript Compat server/SDK line that hya's
+(now deleted) Compat API surface implemented.
 
 Compat baseline: `anomalyco/compat` `origin/dev`
 `09757c605a567e19d48dbba1674983ce47deef34`
@@ -180,6 +193,10 @@ PTY/workspace/sync behavior, and ACP.
 | Compat SDK client completeness for plugins | The adapter provides app log, path, `project.current`, `project.list`, `config.get`, empty app agent/skill/tool-id discovery, bad-request auth mutation shims, basic LSP status, provider-backed formatter status, and VCS client shims, including Compat-style VCS `default_branch` discovery, but not the full Compat SDK HTTP client surface expected by every possible plugin, especially TUI/plugin UI APIs. |
 
 ## Next Implementation Candidates
+
+> Superseded by the consolidation: these candidates targeted the deleted
+> Compat HTTP surface and will not be implemented. HTTP-level work now extends
+> the `hya.v1` contract instead.
 
 1. Add richer Compat run-state lifecycle, including retry statuses and status events beyond `prompt_async`.
 2. Finish non-prompt Compat file/source materialization and remaining
