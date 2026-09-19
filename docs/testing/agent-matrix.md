@@ -66,6 +66,7 @@ bun test
 | T2.13 | User-authored Workflow fan-out/fan-in | `tests/p17_workflow_composition.rs` | One discovered Workflow spawns four distinct stage Sessions, joins both parallel implementations into review, and returns the final report to the lead |
 | T2.14 | Workflow Stage model routing and replay | `tests/p19_workflow_model_routing.rs` | Preferred 503 responses advance to the declared fallback with per-candidate effort; worker, verifier, and final route outcomes survive backend close/reopen without another provider request |
 | T2.15 | model catalog discovery and offline fallback | `tests/p20_model_catalog_discovery.rs` | Explicit lists stay network-free and unwritten; empty lists rediscover anonymously each run without mutating config or a foreign OpenCode file; 401 and credentialed-forbidden catalogs surface `hya/offline` (exec prints the configuration explanation); mixed provider failure keeps the valid rows identical across CLI, `/v1/models`, `/v1/providers`, and `GET /v1/bootstrap` |
+| T2.16 | [p21_agent_model_preference.rs](../../crates/hya-e2e/tests/p21_agent_model_preference.rs) | v1 agent-model preference set -> spawned `general` runs on the preferred model; listing reports `REMEMBERED` source | e2e (Track P) |
 
 ### Built-in tool coverage
 

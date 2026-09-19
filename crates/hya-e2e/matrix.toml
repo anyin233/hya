@@ -304,6 +304,14 @@ path = "packages/hya-tui-ts/test/task-presentation.test.ts"
 tags = ["pr", "tui", "multi-agent"]
 timeout_secs = 30
 
+[[scenario]]
+id = "T2.16"
+title = "agent model preference steers spawned subagent model"
+track = "P"
+path = "crates/hya-e2e/tests/p21_agent_model_preference.rs"
+tags = ["pr", "agents", "models", "preferences"]
+timeout_secs = 120
+
 # Index-only deep engine coverage (not duplicated in Track P).
 [[scenario]]
 id = "I.nested"
