@@ -47,6 +47,7 @@ async fn list_events(
         request.limit as usize
     };
     let mut events = Vec::new();
+    let mut raw_envelopes = Vec::new();
     let mut next_seq = request.since_seq;
     for envelope in envelopes
         .into_iter()
@@ -57,11 +58,17 @@ async fn list_events(
         if let Some(event) = stream_event(&envelope) {
             events.push(event);
         }
+        if request.include_raw
+            && let Ok(line) = serde_json::to_string(&envelope)
+        {
+            raw_envelopes.push(line);
+        }
     }
     Ok(Json(pb::ListEventsResponse {
         session: session.to_string(),
         events,
         next_seq,
+        raw_envelopes,
     }))
 }
 

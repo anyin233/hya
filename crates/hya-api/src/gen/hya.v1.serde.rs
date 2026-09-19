@@ -8503,6 +8503,9 @@ impl serde::Serialize for ListEventsRequest {
         if self.limit != 0 {
             len += 1;
         }
+        if self.include_raw {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("hya.v1.ListEventsRequest", len)?;
         if !self.session.is_empty() {
             struct_ser.serialize_field("session", &self.session)?;
@@ -8514,6 +8517,9 @@ impl serde::Serialize for ListEventsRequest {
         }
         if self.limit != 0 {
             struct_ser.serialize_field("limit", &self.limit)?;
+        }
+        if self.include_raw {
+            struct_ser.serialize_field("includeRaw", &self.include_raw)?;
         }
         struct_ser.end()
     }
@@ -8529,6 +8535,8 @@ impl<'de> serde::Deserialize<'de> for ListEventsRequest {
             "since_seq",
             "sinceSeq",
             "limit",
+            "include_raw",
+            "includeRaw",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -8536,6 +8544,7 @@ impl<'de> serde::Deserialize<'de> for ListEventsRequest {
             Session,
             SinceSeq,
             Limit,
+            IncludeRaw,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -8560,6 +8569,7 @@ impl<'de> serde::Deserialize<'de> for ListEventsRequest {
                             "session" => Ok(GeneratedField::Session),
                             "sinceSeq" | "since_seq" => Ok(GeneratedField::SinceSeq),
                             "limit" => Ok(GeneratedField::Limit),
+                            "includeRaw" | "include_raw" => Ok(GeneratedField::IncludeRaw),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -8582,6 +8592,7 @@ impl<'de> serde::Deserialize<'de> for ListEventsRequest {
                 let mut session__ = None;
                 let mut since_seq__ = None;
                 let mut limit__ = None;
+                let mut include_raw__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Session => {
@@ -8606,12 +8617,19 @@ impl<'de> serde::Deserialize<'de> for ListEventsRequest {
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
+                        GeneratedField::IncludeRaw => {
+                            if include_raw__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("includeRaw"));
+                            }
+                            include_raw__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(ListEventsRequest {
                     session: session__.unwrap_or_default(),
                     since_seq: since_seq__.unwrap_or_default(),
                     limit: limit__.unwrap_or_default(),
+                    include_raw: include_raw__.unwrap_or_default(),
                 })
             }
         }
@@ -8635,6 +8653,9 @@ impl serde::Serialize for ListEventsResponse {
         if self.next_seq != 0 {
             len += 1;
         }
+        if !self.raw_envelopes.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("hya.v1.ListEventsResponse", len)?;
         if !self.session.is_empty() {
             struct_ser.serialize_field("session", &self.session)?;
@@ -8646,6 +8667,9 @@ impl serde::Serialize for ListEventsResponse {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("nextSeq", ToString::to_string(&self.next_seq).as_str())?;
+        }
+        if !self.raw_envelopes.is_empty() {
+            struct_ser.serialize_field("rawEnvelopes", &self.raw_envelopes)?;
         }
         struct_ser.end()
     }
@@ -8661,6 +8685,8 @@ impl<'de> serde::Deserialize<'de> for ListEventsResponse {
             "events",
             "next_seq",
             "nextSeq",
+            "raw_envelopes",
+            "rawEnvelopes",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -8668,6 +8694,7 @@ impl<'de> serde::Deserialize<'de> for ListEventsResponse {
             Session,
             Events,
             NextSeq,
+            RawEnvelopes,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -8692,6 +8719,7 @@ impl<'de> serde::Deserialize<'de> for ListEventsResponse {
                             "session" => Ok(GeneratedField::Session),
                             "events" => Ok(GeneratedField::Events),
                             "nextSeq" | "next_seq" => Ok(GeneratedField::NextSeq),
+                            "rawEnvelopes" | "raw_envelopes" => Ok(GeneratedField::RawEnvelopes),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -8714,6 +8742,7 @@ impl<'de> serde::Deserialize<'de> for ListEventsResponse {
                 let mut session__ = None;
                 let mut events__ = None;
                 let mut next_seq__ = None;
+                let mut raw_envelopes__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Session => {
@@ -8736,12 +8765,19 @@ impl<'de> serde::Deserialize<'de> for ListEventsResponse {
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
+                        GeneratedField::RawEnvelopes => {
+                            if raw_envelopes__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("rawEnvelopes"));
+                            }
+                            raw_envelopes__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(ListEventsResponse {
                     session: session__.unwrap_or_default(),
                     events: events__.unwrap_or_default(),
                     next_seq: next_seq__.unwrap_or_default(),
+                    raw_envelopes: raw_envelopes__.unwrap_or_default(),
                 })
             }
         }
