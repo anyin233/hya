@@ -120,7 +120,9 @@ async fn p17_user_authored_workflow_runs_fan_out_fan_in_via_tool() {
                 .contains(needle)
         })
     };
-    for directive in ["\"EXPLORE the parser\"", "IMPL A", "IMPL B", "REVIEW both"] {
+    // Resident delivery prefixes directives with `[mail from main] ` (ADR-0015),
+    // so match the directive text without requiring adjacent quote boundaries.
+    for directive in ["EXPLORE the parser", "IMPL A", "IMPL B", "REVIEW both"] {
         assert!(
             contains(directive),
             "member directive `{directive}` must reach a member; {}",

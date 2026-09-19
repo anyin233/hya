@@ -1,4 +1,4 @@
-//! T2.1 — single-member `task` subagent spawn via FakeLlm.
+//! T2.1 — single-member `task` subagent spawn via FakeLlm (ADR-0015 flow).
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use hya_e2e::{
@@ -9,27 +9,21 @@ use serde_json::json;
 
 #[tokio::test]
 async fn t2_1_task_tool_spawns_general_subagent() {
-    // Script order: root requests task → child completes with text → root finishes.
+    // Non-blocking flow (ADR-0015): the root's `task` call returns the child's
+    // handle immediately, the root finishes its turn, and the child resident
+    // runs its first episode in its own session.
     let env = E2eEnvBuilder::new()
         .scripts(vec![
             tool_step(
                 "task",
                 json!({
                     "description": "e2e child",
-                    "prompt": "report CHILD_TASK_OK",
-                    "subagent_type": "general",
-                    "inline_agent": {
-                        "description": "",
-                        "category": "",
-                        "model": "",
-                        "name": "",
-                        "prompt": "",
-                        "resident": false
-                    }
+                    "prompt": "do the child work",
+                    "subagent_type": "general"
                 }),
             ),
-            text_step("CHILD_TASK_OK"),
             text_step("PARENT_AFTER_TASK"),
+            text_step("CHILD_TASK_OK"),
         ])
         .build()
         .await
@@ -65,6 +59,7 @@ async fn t2_1_task_tool_spawns_general_subagent() {
         env.diagnostics()
     );
 
+    // The root's own turn completes after the non-blocking spawn…
     let events = env.events(session, None).await.expect("events");
     let mut text = String::new();
     for env_evt in events {
@@ -76,7 +71,34 @@ async fn t2_1_task_tool_spawns_general_subagent() {
     }
     assert!(
         text.contains("PARENT_AFTER_TASK"),
-        "parent must resume with final text after subagent; text={text:?}; {}",
+        "parent completes its turn after the non-blocking spawn; text={text:?}; {}",
+        env.diagnostics()
+    );
+
+    // …and the child resident runs its first episode in its own session.
+    let mut child_ok = false;
+    for _ in 0..600 {
+        let mut child_text = String::new();
+        for id in &child_ids {
+            if let Ok(events) = env.events(id.parse().unwrap(), None).await {
+                for env_evt in events {
+                    match env_evt.event {
+                        Event::TextDelta { delta, .. } => child_text.push_str(&delta),
+                        Event::TextReplace { text: t, .. } => child_text.push_str(&t),
+                        _ => {}
+                    }
+                }
+            }
+        }
+        if child_text.contains("CHILD_TASK_OK") {
+            child_ok = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert!(
+        child_ok,
+        "child resident must run its first episode; ids={child_ids:?}; {}",
         env.diagnostics()
     );
 }
