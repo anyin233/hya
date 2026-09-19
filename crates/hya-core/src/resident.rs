@@ -33,6 +33,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use hya_proto::{
     ActorClaim, ActorEpoch, ArchiveReason, ChannelKind, Event, MailEndpoint, MailKind, MemberId,
@@ -150,6 +151,17 @@ const SYNTHESIS_DIRECTIVE: &str = "TEAM QUIESCED — every team member is idle a
 Review the team's results (roster, channels, and your inbox) and produce the final synthesized answer. \
 If more work is genuinely required, delegate it; otherwise conclude.";
 
+/// Minimum spacing between harness heartbeats for one busy slot (ADR-0002
+/// liveness). A busy child that is really progressing emits fresh engine
+/// events; the supervisor folds those observations into `AgentHeartbeat` at
+/// most this often so the parent can tell progress from a stall.
+const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
+
+/// Current wall-clock as non-zero epoch milliseconds for a heartbeat value.
+fn heartbeat_now_ms() -> u64 {
+    u64::try_from(hya_proto::now_millis()).unwrap_or(0).max(1)
+}
+
 /// Per-slot activity, tracked in-memory (the durable mirror is `RosterStatus`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SlotStatus {
@@ -200,6 +212,12 @@ struct SlotState {
     pending_archive: Option<PendingReport>,
     /// How many of this handle's inbox messages have already been injected.
     cursor: usize,
+    /// Epoch-ms of the last engine activity observed on the bus for this
+    /// actor. Harness truth only; drives heartbeat values, never scheduling.
+    last_activity: Option<u64>,
+    /// When the harness last emitted an `AgentHeartbeat` for this slot; the
+    /// 30-second throttle window anchors here.
+    last_heartbeat_emit: Option<Instant>,
     notify: Arc<Notify>,
 }
 
@@ -415,6 +433,96 @@ impl TeamActor {
                     .await
             }
         }
+    }
+
+    /// Append one harness heartbeat to the team-root log. A failed append is a
+    /// dropped liveness hint, never an error path: a fenced claim racing a
+    /// stop/kill simply loses that heartbeat.
+    async fn record_heartbeat(&self, claim: Option<&ActorClaim>, handle: &str, heartbeat_ms: u64) {
+        let event = Event::AgentHeartbeat {
+            session: self.root,
+            handle: handle.to_string(),
+            heartbeat_ms,
+        };
+        let _ = self.engine.emit_for_actor(claim, self.root, event).await;
+    }
+
+    /// Record that `session`'s actor produced real engine work (an event the
+    /// supervisor observed on the bus, owned by that session) and emit a
+    /// throttled `AgentHeartbeat` while the slot is busy.
+    async fn note_activity(&self, session: SessionId) {
+        let Some((handle, claim, heartbeat_ms)) = self.touch_activity(session) else {
+            return;
+        };
+        self.record_heartbeat(claim.as_ref(), &handle, heartbeat_ms)
+            .await;
+    }
+
+    /// Lock-scoped activity accounting: stamps the slot's last activity and
+    /// decides — busy state plus the 30-second window — whether this
+    /// observation is the one that emits. The window is consumed here so at
+    /// most one heartbeat lands per interval per slot.
+    fn touch_activity(&self, session: SessionId) -> Option<(String, Option<ActorClaim>, u64)> {
+        let mut st = self.lock();
+        let slot = st.residents.get_mut(&session)?;
+        let heartbeat_ms = heartbeat_now_ms();
+        slot.last_activity = Some(heartbeat_ms);
+        if slot.status != SlotStatus::Busy {
+            return None;
+        }
+        let due = slot
+            .last_heartbeat_emit
+            .is_none_or(|last| Instant::now().duration_since(last) >= HEARTBEAT_INTERVAL);
+        if !due {
+            return None;
+        }
+        slot.last_heartbeat_emit = Some(Instant::now());
+        Some((slot.handle.clone(), slot.claim, heartbeat_ms))
+    }
+
+    /// Turn-start heartbeat: unconditional and stamped "now" — work is
+    /// beginning this instant. It also re-arms the throttle window so mid-turn
+    /// bus events inside the window stay quiet. A missing slot (already torn
+    /// down) still emits once; the fold drops unknown handles.
+    async fn heartbeat_turn_start(
+        &self,
+        session: SessionId,
+        claim: Option<&ActorClaim>,
+        handle: &str,
+    ) {
+        let heartbeat_ms = heartbeat_now_ms();
+        {
+            let mut st = self.lock();
+            if let Some(slot) = st.residents.get_mut(&session) {
+                slot.last_activity = Some(heartbeat_ms);
+                slot.last_heartbeat_emit = Some(Instant::now());
+            }
+        }
+        self.record_heartbeat(claim, handle, heartbeat_ms).await;
+    }
+
+    /// Turn-finish heartbeat: unconditional, but stamped with the slot's LAST
+    /// observed activity rather than "now" — a turn that went quiet long before
+    /// finishing must not overstate liveness, and the max-fold makes an older
+    /// stamp safe. Re-arms the throttle window for the next turn.
+    async fn heartbeat_turn_finish(
+        &self,
+        session: SessionId,
+        claim: Option<&ActorClaim>,
+        handle: &str,
+    ) {
+        let now_ms = heartbeat_now_ms();
+        let heartbeat_ms = {
+            let mut st = self.lock();
+            match st.residents.get_mut(&session) {
+                Some(slot) => {
+                    slot.last_heartbeat_emit = Some(Instant::now());
+                    slot.last_activity.unwrap_or(now_ms)
+                }
+                None => now_ms,
+            }
+        };
+        self.record_heartbeat(claim, handle, heartbeat_ms).await;
     }
 
     /// Decide (atomically) what the resident on `session` does next. Charges the
@@ -799,6 +907,10 @@ impl TeamActor {
             self.record_activity(None, handle.clone(), RosterStatus::Busy, Some(task_label))
                 .await?;
         }
+        // Harness heartbeat at the turn boundary: liveness is visible the
+        // moment work starts, before any engine event lands on the bus.
+        self.heartbeat_turn_start(session, claim.as_ref(), &handle)
+            .await;
         if synth && is_main {
             match claim.as_ref() {
                 Some(claim) => {
@@ -892,6 +1004,10 @@ impl TeamActor {
                     .await?;
             }
         }
+        // Turn finished: a fresh boundary heartbeat closes the window even
+        // when the turn's own engine events never tripped the throttle.
+        self.heartbeat_turn_finish(session, claim.as_ref(), &handle)
+            .await;
         Ok(())
     }
 
@@ -1745,9 +1861,17 @@ impl ResidentSupervisor {
     }
 
     /// The single, zero-cost wake loop: park on the bus, route each `MailSent` to
-    /// its team. On a broadcast lag, re-arm every team's residents so no wake is
-    /// lost (the cursor makes re-arming safe — a spurious wake with no new mail
+    /// its team. On a broadcast lag, re-arm every team's residents so no wake
+    /// is lost (the cursor makes re-arming safe — a spurious wake with no new mail
     /// simply idles again).
+    ///
+    /// Every non-heartbeat envelope also feeds harness liveness (ADR-0002): an
+    /// event whose owning session is a registered actor slot proves that slot
+    /// is making real progress, and a busy slot emits a throttled
+    /// `AgentHeartbeat` for the parent to observe. Heartbeat envelopes
+    /// themselves are excluded — liveness derives from agent work only, never
+    /// from the harness's own observations (which would also feed a busy main
+    /// actor its children's heartbeats as activity).
     async fn run_bus(
         self: Arc<Self>,
         mut rx: tokio::sync::broadcast::Receiver<hya_proto::Envelope>,
@@ -1767,6 +1891,12 @@ impl ResidentSupervisor {
                             team.on_mail(from, to).await;
                         }
                     }
+                    if !matches!(envelope.event, Event::AgentHeartbeat { .. })
+                        && let Some(actor) = envelope.event.session()
+                        && let Some(team) = self.team_with_resident(actor)
+                    {
+                        team.note_activity(actor).await;
+                    }
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
                     let teams: Vec<Arc<TeamActor>> = self.teams().values().cloned().collect();
@@ -1777,6 +1907,17 @@ impl ResidentSupervisor {
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             }
         }
+    }
+
+    /// The team tracking `session` as a resident slot, if any. Scans tracked
+    /// teams, taking each team lock only long enough for a key lookup; the
+    /// supervisor lock is held throughout, matching the supervisor→team lock
+    /// order every other path obeys.
+    fn team_with_resident(&self, session: SessionId) -> Option<Arc<TeamActor>> {
+        self.teams()
+            .values()
+            .find(|team| team.lock().residents.contains_key(&session))
+            .cloned()
     }
 
     /// Get or create the team actor for `root`, sharing the team-wide cancellation.
@@ -2348,6 +2489,8 @@ impl ResidentSupervisor {
                         cancel: team.cancel.child_token(),
                         stop_request: None,
                         cursor: 0, // main-as-actor injects child mail from its inbox
+                        last_activity: None,
+                        last_heartbeat_emit: None,
                         notify: notify.clone(),
                     },
                 );
@@ -2805,6 +2948,8 @@ impl ResidentSupervisor {
                     cancel: team.cancel.child_token(),
                     stop_request: None,
                     cursor: 0,
+                    last_activity: None,
+                    last_heartbeat_emit: None,
                     notify: notify.clone(),
                 },
             );
@@ -2873,6 +3018,8 @@ impl ResidentSupervisor {
                     cancel: team.cancel.child_token(),
                     stop_request: None,
                     cursor: usize::try_from(cursor).unwrap_or(usize::MAX),
+                    last_activity: None,
+                    last_heartbeat_emit: None,
                     notify: notify.clone(),
                 },
             );

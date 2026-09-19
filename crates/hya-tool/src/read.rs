@@ -1254,7 +1254,7 @@ async fn execute_channel_read(
     ctx: &ToolCtx,
     control: ChannelReadControl,
 ) -> Result<Value, ToolError> {
-    let (channel, messages, unread_remaining) = ctx
+    let (channel, messages, unread_remaining, warning) = ctx
         .mailbox
         .read_channel(control.channel.clone(), control.last)
         .await
@@ -1264,10 +1264,16 @@ async fn execute_channel_read(
         .iter()
         .map(|(from, body)| format!("[{from}] {body}"))
         .collect();
-    let output = if rendered.is_empty() {
+    let body = if rendered.is_empty() {
         format!("#{channel} has no messages yet.")
     } else {
         rendered.join("\n")
+    };
+    // Echo the correction whenever the engine had to normalize the id, so the
+    // model learns the exact spelling instead of repeating `##X` / `#X`.
+    let output = match &warning {
+        Some(warning) => format!("[warning] {warning}\n{body}"),
+        None => body,
     };
     let tail = if unread_remaining > 0 {
         format!(
@@ -1285,6 +1291,7 @@ async fn execute_channel_read(
             "channel": channel,
             "count": count,
             "unreadRemaining": unread_remaining,
+            "warning": warning,
         },
     }))
 }

@@ -412,14 +412,23 @@ impl SessionEngine {
         let root = self.team_root(session).await?;
         let handle = self.resolve_handle(root, session).await?;
         let projection = self.read_projection(root).await?;
+        // Models write `##X`, `#X`, or whitespace-padded ids when reading mail
+        // history. Normalize (trim + strip every leading `#`; case stays
+        // exact) and echo the correction so the right spelling is learned
+        // in-turn instead of failing the read.
+        let normalized = channel.trim().trim_start_matches('#');
+        let warning = (normalized != channel)
+            .then(|| format!("normalized channel id `{channel}` → `{normalized}`"));
         let channel_state = projection
             .team
             .channels
-            .get(channel)
-            .ok_or_else(|| CoreError::Invalid(format!("unknown channel `#{channel}`")))?;
+            .get(normalized)
+            .ok_or_else(|| CoreError::Invalid(format!("unknown channel `#{normalized}`")))?;
         if !channel_state.members.contains(&handle) {
             // Unknown and not-a-member are deliberately indistinguishable.
-            return Err(CoreError::Invalid(format!("unknown channel `#{channel}`")));
+            return Err(CoreError::Invalid(format!(
+                "unknown channel `#{normalized}`"
+            )));
         }
         let last_n = last.unwrap_or(1).clamp(1, 50);
         // Newest-first: the most recent message leads, matching how a chat
@@ -454,10 +463,40 @@ impl SessionEngine {
             .await?;
         }
         Ok(ChannelHistoryRead {
-            channel: channel.to_string(),
+            channel: normalized.to_string(),
             messages,
             unread_remaining: 0,
+            warning,
         })
+    }
+
+    /// Direct-child liveness rows for the acting agent (ADR-0002): each roster
+    /// entry whose parent is the caller's canonical handle, with its live
+    /// status and harness-heartbeat freshness. Seconds-since-activity is
+    /// computed here because the tool plane has no clock; `None` means no
+    /// heartbeat was ever observed for that child.
+    pub async fn team_member_status(
+        &self,
+        session: SessionId,
+    ) -> Result<Vec<hya_tool::MemberStatusRow>, CoreError> {
+        let root = self.team_root(session).await?;
+        let handle = self.resolve_handle(root, session).await?;
+        let projection = self.read_projection(root).await?;
+        let now = u64::try_from(hya_proto::now_millis()).unwrap_or(0);
+        let mut rows = Vec::new();
+        for (path, entry) in &projection.team.roster {
+            if scope::parent_path(path) != Some(handle.as_str()) {
+                continue;
+            }
+            rows.push(hya_tool::MemberStatusRow {
+                handle: path.clone(),
+                status: roster_status_label(entry.status).to_string(),
+                last_active_seconds: (entry.heartbeat_ms > 0)
+                    .then(|| now.saturating_sub(entry.heartbeat_ms) / 1_000),
+            });
+        }
+        rows.sort_by(|left, right| left.handle.cmp(&right.handle));
+        Ok(rows)
     }
 
     /// `search_agent` rows (ADR-0015 §7): the caller's own archived DIRECT
@@ -505,6 +544,16 @@ impl SessionEngine {
         }
         rows.sort_by(|left, right| left.handle.cmp(&right.handle));
         Ok(rows)
+    }
+}
+
+/// Stable lowercase label for one live roster status row.
+fn roster_status_label(status: RosterStatus) -> &'static str {
+    match status {
+        RosterStatus::Idle => "idle",
+        RosterStatus::Busy => "busy",
+        RosterStatus::Done => "done",
+        RosterStatus::Failed => "failed",
     }
 }
 
@@ -1124,10 +1173,13 @@ mod tests {
 /// One `channel://` read result.
 #[derive(Clone, Debug)]
 pub struct ChannelHistoryRead {
-    /// Channel id that was read.
+    /// Channel id that was read (after normalization).
     pub channel: String,
     /// Newest-last (from, body) pairs.
     pub messages: Vec<(String, String)>,
     /// Unread messages remaining in the caller's inbox after this read.
     pub unread_remaining: usize,
+    /// Set when the caller's id spelling was normalized (leading `#`s and/or
+    /// padding stripped): the echo that teaches the correct spelling.
+    pub warning: Option<String>,
 }

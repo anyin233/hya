@@ -31,9 +31,10 @@ pub struct MailReceipt {
     pub recipients: usize,
 }
 
-/// One `channel://` read result: (channel id, newest-first `(from, body)`
-/// pairs, unread messages remaining in the caller's inbox).
-pub type ChannelHistory = (String, Vec<(String, String)>, usize);
+/// One `channel://` read result: (channel id after normalization, newest-first
+/// `(from, body)` pairs, unread messages remaining in the caller's inbox, and
+/// the normalization warning echo when the caller's id spelling was fixed).
+pub type ChannelHistory = (String, Vec<(String, String)>, usize, Option<String>);
 
 /// A channel plus its current membership, for the `channels` tool.
 #[derive(Clone, Debug)]
@@ -99,12 +100,20 @@ pub enum MailboxRequest {
     ReadChannel {
         /// Acting session.
         session: SessionId,
-        /// Channel id without the leading `#`.
+        /// Channel id; leading `#`s and padding are normalized engine-side.
         channel: String,
         /// Message count (newest-last); `None` reads the latest one.
         last: Option<usize>,
-        /// Host reply: (channel, [(from, body)...], unread_remaining).
+        /// Host reply: (channel, [(from, body)...], unread_remaining, warning).
         reply: oneshot::Sender<Result<ChannelHistory, String>>,
+    },
+    /// The acting agent's direct children: live roster status plus harness
+    /// heartbeat freshness (ADR-0002 liveness).
+    TeamStatus {
+        /// Acting session.
+        session: SessionId,
+        /// Host reply with member status rows.
+        reply: oneshot::Sender<Result<Vec<MemberStatusRow>, String>>,
     },
 }
 
@@ -139,6 +148,20 @@ pub struct ArchivedAgentRow {
     pub pending: String,
     /// Whether the handoff was degraded.
     pub degraded: bool,
+}
+
+/// One team row of `list_channel`: a direct child's live status and harness
+/// heartbeat freshness, so the parent can tell a busy child that is really
+/// progressing (fresh heartbeat) from one that has stalled.
+#[derive(Clone, Debug)]
+pub struct MemberStatusRow {
+    /// Canonical handle of the direct child.
+    pub handle: String,
+    /// Live roster status: `idle` / `busy` / `done` / `failed`.
+    pub status: String,
+    /// Seconds since the child's last harness-observed activity; `None` when
+    /// no heartbeat was ever observed.
+    pub last_active_seconds: Option<u64>,
 }
 
 /// Mailbox plane or service failure.
@@ -291,6 +314,14 @@ impl MailboxPlane {
         .await?
         .map_err(MailboxError::Rejected)
     }
+
+    /// The acting agent's direct children: live status + heartbeat freshness.
+    pub async fn team_status(&self) -> Result<Vec<MemberStatusRow>, MailboxError> {
+        let session = self.session.ok_or(MailboxError::Unavailable)?;
+        self.request(|reply| MailboxRequest::TeamStatus { session, reply })
+            .await?
+            .map_err(MailboxError::Rejected)
+    }
 }
 
 fn map_err(err: MailboxError) -> ToolError {
@@ -429,7 +460,11 @@ impl Tool for ListChannelTool {
             "list_channel",
             "List your channels: the group broadcast pipes you can hear (and \
              post to, when you lead the unit) and your DM channels with live \
-             peers and their unread counts. Group channels never list members.",
+             peers and their unread counts. Group channels never list members. \
+             When you lead agents, a team section follows with each direct \
+             child's live status and how long ago the harness last saw it make \
+             progress (heartbeat) — a busy child with a stale heartbeat may be \
+             stalled, a fresh one is progressing.",
             json!({}),
             &[],
         )
@@ -437,6 +472,7 @@ impl Tool for ListChannelTool {
 
     async fn execute(&self, ctx: &ToolCtx, _input: Value) -> Result<Value, ToolError> {
         let rows = ctx.mailbox.list_channels().await.map_err(map_err)?;
+        let team = ctx.mailbox.team_status().await.map_err(map_err)?;
         let rendered: Vec<String> = rows
             .iter()
             .map(|row| {
@@ -463,12 +499,36 @@ impl Tool for ListChannelTool {
                 }
             })
             .collect();
-        let output = if rendered.is_empty() {
-            "You have no channels yet.".to_string()
+        // Team section: the caller's direct children and their harness
+        // heartbeat freshness (ADR-0002 liveness). Omitted entirely when the
+        // caller leads nobody.
+        let team_lines: Vec<String> = team
+            .iter()
+            .map(|row| {
+                let freshness = match row.last_active_seconds {
+                    Some(seconds) => format!("last active {seconds}s ago (heartbeat)"),
+                    None => "no heartbeat yet".to_string(),
+                };
+                format!(
+                    "  {} · {} · {freshness}",
+                    hya_proto::scope::leaf(&row.handle),
+                    row.status
+                )
+            })
+            .collect();
+        let mut lines = rendered;
+        if team_lines.is_empty() {
+            if lines.is_empty() {
+                lines.push("You have no channels yet.".to_string());
+            }
         } else {
-            rendered.join("\n")
-        };
-        Ok(json!({
+            if !lines.is_empty() {
+                lines.push(String::new());
+            }
+            lines.extend(team_lines);
+        }
+        let output = lines.join("\n");
+        let mut result = json!({
             "title": format!("{} channel(s)", rows.len()),
             "output": output,
             "channels": rows.iter().map(|row| json!({
@@ -478,7 +538,21 @@ impl Tool for ListChannelTool {
                 "peer": row.peer,
                 "unread": row.unread,
             })).collect::<Vec<_>>(),
-        }))
+        });
+        if !team.is_empty() {
+            result["team"] = Value::Array(
+                team.iter()
+                    .map(|row| {
+                        json!({
+                            "handle": row.handle,
+                            "status": row.status,
+                            "lastActiveSeconds": row.last_active_seconds,
+                        })
+                    })
+                    .collect(),
+            );
+        }
+        Ok(result)
     }
 }
 

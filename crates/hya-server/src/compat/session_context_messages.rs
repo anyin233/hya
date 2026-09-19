@@ -398,7 +398,7 @@ fn message_content_events(envs: &[Envelope]) -> BTreeMap<MessageId, Vec<ContentC
             Event::AgentArchived { .. }
             | Event::AgentRestarted { .. }
             | Event::MailConsumed { .. }
-        | Event::MailConsumed { .. }
+            | Event::AgentHeartbeat { .. }
             | Event::ChannelCreated { .. }
             | Event::HandoffCommitted { .. }
             | Event::SubagentReported { .. } => {}
@@ -478,7 +478,7 @@ fn message_times(envs: &[Envelope]) -> BTreeMap<MessageId, MessageTime> {
             Event::AgentArchived { .. }
             | Event::AgentRestarted { .. }
             | Event::MailConsumed { .. }
-        | Event::MailConsumed { .. }
+            | Event::AgentHeartbeat { .. }
             | Event::ChannelCreated { .. }
             | Event::HandoffCommitted { .. }
             | Event::SubagentReported { .. } => {}

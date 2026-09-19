@@ -551,6 +551,11 @@ pub struct RosterEntry {
     /// Number of inbox messages durably consumed by terminal resident turns.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub resident_cursor: u64,
+    /// Latest harness-observed activity time (Unix-epoch ms), folded from
+    /// `AgentHeartbeat` as a max; `0` when no heartbeat was ever observed.
+    /// Harness truth only — the agent itself cannot emit heartbeats.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub heartbeat_ms: u64,
     /// Present only after work starts and before it reaches a terminal/idle state.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resident_work: Option<ResidentWorkProjection>,
@@ -1162,6 +1167,7 @@ impl Projection {
                         status: RosterStatus::default(),
                         current_task: None,
                         resident_cursor: 0,
+                        heartbeat_ms: 0,
                         resident_work: None,
                     });
                 entry.session = *agent_session;
@@ -1217,6 +1223,19 @@ impl Projection {
                         epoch: *epoch,
                         inbox_through: *inbox_through,
                     });
+                }
+            }
+            Event::AgentHeartbeat {
+                handle,
+                heartbeat_ms,
+                ..
+            } => {
+                // Max-fold: liveness only ever advances. A heartbeat observes an
+                // existing row (the slot must be registered to be tracked) and
+                // never materializes one, matching every other roster update.
+                let handle = &self.canonical_member(handle);
+                if let Some(entry) = self.team.roster.get_mut(handle) {
+                    entry.heartbeat_ms = entry.heartbeat_ms.max(*heartbeat_ms);
                 }
             }
             Event::ChannelJoined {
@@ -2315,6 +2334,45 @@ mod orchestration_tests {
         assert_eq!(
             entry.resident_cursor, 1,
             "steer consumption advances the cursor"
+        );
+    }
+
+    /// Harness heartbeats (ADR-0002 liveness) fold onto the roster row and
+    /// never regress: the fold keeps the max, so a stale (lower) heartbeat —
+    /// replayed or reordered — cannot make a progressing agent look stalled,
+    /// and an unknown handle invents no roster row.
+    #[test]
+    fn agent_heartbeat_records_max_activity_on_the_roster_row() {
+        let root = SessionId::new();
+        let lead = SessionId::new();
+        let heartbeat = |heartbeat_ms: u64| Event::AgentHeartbeat {
+            session: root,
+            handle: "main/lead-1".to_string(),
+            heartbeat_ms,
+        };
+        let projection = Projection::from_events(&[
+            env(1, register_lead(root, lead)),
+            env(2, heartbeat(2_000)),
+            env(3, heartbeat(1_000)),
+        ]);
+        let entry = projection.team.roster.get("main/lead-1").unwrap();
+        assert_eq!(
+            entry.heartbeat_ms, 2_000,
+            "a stale heartbeat must never overwrite a newer one"
+        );
+
+        // A heartbeat for an unknown handle is dropped, not materialized.
+        let projection = Projection::from_events(&[env(
+            1,
+            Event::AgentHeartbeat {
+                session: root,
+                handle: "main/ghost".to_string(),
+                heartbeat_ms: 5,
+            },
+        )]);
+        assert!(
+            !projection.team.roster.contains_key("main/ghost"),
+            "heartbeats observe existing roster rows; they never create one"
         );
     }
 

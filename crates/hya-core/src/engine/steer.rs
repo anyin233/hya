@@ -9,18 +9,23 @@
 //! the turn loop drains the queue into a notice appended to the tool result
 //! and commits a `MailConsumed` event advancing the durable cursor.
 
+use std::collections::HashMap;
+
 use hya_proto::{Envelope, Event, MailEndpoint, SessionId};
 
 use super::SessionEngine;
 use crate::error::CoreError;
 
-/// One steered message: sender and body.
+/// One steered message: sender, body, and the channel it arrived through.
 #[derive(Clone, Debug)]
 pub struct SteeredMail {
     /// Sender canonical handle.
     pub from: String,
     /// Message body.
     pub body: String,
+    /// Channel id the message was delivered through (`DM-{8}` / `announce-{8}`);
+    /// `None` when no channel matches (e.g. handle mail with no minted DM yet).
+    pub channel: Option<String>,
 }
 
 /// Per-turn steer state: the backlog plus the live bus tail.
@@ -34,6 +39,10 @@ pub struct SteerMailbox {
     bus: tokio::sync::broadcast::Receiver<Envelope>,
     /// Channels the acting handle is a member of (for channel fan-out).
     channels: Vec<String>,
+    /// Peer handle → the DM channel shared with the acting handle (first
+    /// minted pair wins). Maps `to`-endpoints to the channel a reader can
+    /// `read channel://<id>` for the full conversation.
+    dm_by_peer: HashMap<String, String>,
 }
 
 impl SessionEngine {
@@ -51,6 +60,7 @@ impl SessionEngine {
                 through: 0,
                 bus,
                 channels: Vec::new(),
+                dm_by_peer: HashMap::new(),
             };
         };
         let Ok(handle) = self.resolve_handle(root, session).await else {
@@ -61,6 +71,7 @@ impl SessionEngine {
                 through: 0,
                 bus,
                 channels: Vec::new(),
+                dm_by_peer: HashMap::new(),
             };
         };
         let Ok(projection) = self.read_projection(root).await else {
@@ -71,6 +82,7 @@ impl SessionEngine {
                 through: 0,
                 bus,
                 channels: Vec::new(),
+                dm_by_peer: HashMap::new(),
             };
         };
         // Baseline: mail already claimed by THIS turn's wake. A resident wake
@@ -90,6 +102,20 @@ impl SessionEngine {
             .filter(|(_, channel)| channel.members.contains(&handle))
             .map(|(key, _)| key.clone())
             .collect();
+        // DM resolution table: every Dm channel the acting handle is in, keyed
+        // by each member so a `to` handle maps to the pair's channel (the
+        // first minted pair wins when several exist).
+        let mut dm_by_peer: HashMap<String, String> = HashMap::new();
+        for (id, channel) in &projection.team.channels {
+            if channel.kind != hya_proto::ChannelKind::Dm || !channel.members.contains(&handle) {
+                continue;
+            }
+            for member in &channel.members {
+                dm_by_peer
+                    .entry(member.clone())
+                    .or_insert_with(|| id.clone());
+            }
+        }
         let queue: Vec<SteeredMail> = projection
             .team
             .inboxes
@@ -101,6 +127,7 @@ impl SessionEngine {
                     .map(|message| SteeredMail {
                         from: message.from.clone(),
                         body: message.body.clone(),
+                        channel: delivered_channel(&message.to, &dm_by_peer),
                     })
                     .collect()
             })
@@ -112,7 +139,21 @@ impl SessionEngine {
             through: cursor,
             bus,
             channels,
+            dm_by_peer,
         }
+    }
+}
+
+/// The channel a delivered message arrived through, from its original address.
+///
+/// Channel-addressed mail names the channel directly. Handle-addressed mail
+/// resolves to the DM pair shared by the acting handle and the endpoint (the
+/// degenerate self-address picks the first DM the acting handle belongs to);
+/// `None` when no such channel exists.
+fn delivered_channel(to: &MailEndpoint, dm_by_peer: &HashMap<String, String>) -> Option<String> {
+    match to {
+        MailEndpoint::Channel(channel) => Some(channel.clone()),
+        MailEndpoint::Handle(peer) => dm_by_peer.get(peer).cloned(),
     }
 }
 
@@ -134,6 +175,7 @@ impl SteerMailbox {
                         self.queue.push(SteeredMail {
                             from: from.clone(),
                             body: body.clone(),
+                            channel: delivered_channel(to, &self.dm_by_peer),
                         });
                     }
                 }
@@ -186,7 +228,13 @@ impl SteerMailbox {
             } else {
                 mail.body.clone()
             };
-            notice.push_str(&format!("\n[mail from {}] {}", mail.from, body));
+            // Name the channel inline so the reader can `read channel://<id>`
+            // directly instead of guessing id spellings (`##DM-x`, `#dm-x`).
+            let channel = mail
+                .channel
+                .as_ref()
+                .map_or(String::new(), |id| format!(" @{id}"));
+            notice.push_str(&format!("\n[mail from {}{channel}] {}", mail.from, body));
         }
         notice.push_str("\n(history: read channel://<id>?last=N · unread overview: list_channel)");
         Ok(Some(notice))

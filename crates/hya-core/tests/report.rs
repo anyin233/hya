@@ -792,6 +792,136 @@ async fn channel_read_returns_history_and_marks_inbox_seen() {
     );
 }
 
+/// Models write channel ids as `##X`, `#X`, or padded with whitespace when
+/// reading mail history. `read_channel_history` must normalize all of those
+/// (trim + strip every leading `#`, case untouched) and echo a warning naming
+/// the correction, while a genuinely unknown id still errors.
+#[tokio::test]
+async fn channel_read_normalizes_channel_id_spellings_with_warning() {
+    let engine = engine().await;
+    let root = root_team(&engine).await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    ensure_main(&supervisor, &engine, root).await;
+    let (_child, handle) = spawn_idle_resident(&supervisor, &engine, root, "explore").await;
+
+    engine
+        .mail_announce(root, "broadcast body".to_string())
+        .await
+        .unwrap();
+    let projection = engine.read_projection(root).await.unwrap();
+    let group = projection
+        .team
+        .channels
+        .keys()
+        .find(|key| key.starts_with("announce-"))
+        .unwrap()
+        .clone();
+    let child: SessionId = projection.team.roster.get(&handle).unwrap().session;
+
+    let doubled = engine
+        .read_channel_history(child, &format!("##{group}"), None)
+        .await
+        .unwrap();
+    assert_eq!(doubled.channel, group, "lookup uses the stripped id");
+    assert_eq!(doubled.messages.len(), 1);
+    assert_eq!(
+        doubled.warning.as_deref(),
+        Some(format!("normalized channel id `##{group}` → `{group}`").as_str()),
+        "a `##`-prefixed read must warn with the exact correction"
+    );
+
+    let padded = engine
+        .read_channel_history(child, &format!("  {group}  "), None)
+        .await
+        .unwrap();
+    assert_eq!(padded.channel, group, "padded read still finds the channel");
+    assert_eq!(
+        padded.warning.as_deref(),
+        Some(format!("normalized channel id `  {group}  ` → `{group}`").as_str()),
+        "a whitespace-padded read must warn too"
+    );
+
+    // A clean id stays silent; an unknown id is still an error.
+    let clean = engine
+        .read_channel_history(child, &group, None)
+        .await
+        .unwrap();
+    assert_eq!(clean.warning, None, "no warning when nothing was stripped");
+    let unknown = engine
+        .read_channel_history(child, "no-such-channel", None)
+        .await;
+    assert!(unknown.is_err(), "an unknown channel id must still error");
+}
+
+/// Harness heartbeats (ADR-0002 liveness): a resident's turn boundaries leave
+/// a durable heartbeat on its roster row, so the parent can tell a busy child
+/// that is progressing from one that has stalled without polling its DMs.
+#[tokio::test]
+async fn resident_turn_boundaries_leave_a_heartbeat_on_the_roster() {
+    let engine = engine().await;
+    let root = root_team(&engine).await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    ensure_main(&supervisor, &engine, root).await;
+    let (_child, handle) = spawn_idle_resident(&supervisor, &engine, root, "explore").await;
+
+    // The work-start boundary heartbeat fired (emission is async; poll briefly).
+    let mut heartbeat_ms = 0;
+    for _ in 0..500 {
+        let projection = engine.read_projection(root).await.unwrap();
+        heartbeat_ms = projection
+            .team
+            .roster
+            .get(&handle)
+            .map_or(0, |entry| entry.heartbeat_ms);
+        if heartbeat_ms > 0 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert!(
+        heartbeat_ms > 0,
+        "the work-start heartbeat must land on the roster row"
+    );
+
+    // And it is durable: the root log carries the harness event.
+    assert!(
+        engine
+            .replay(root)
+            .await
+            .unwrap()
+            .iter()
+            .any(|envelope| matches!(&envelope.event, Event::AgentHeartbeat { .. })),
+        "AgentHeartbeat must be on the root log"
+    );
+}
+
+/// `team_member_status` reports exactly the caller's DIRECT children with
+/// live status and heartbeat freshness, computed engine-side (the tool plane
+/// has no clock).
+#[tokio::test]
+async fn team_member_status_reports_direct_children_with_heartbeat_freshness() {
+    let engine = engine().await;
+    let root = root_team(&engine).await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    ensure_main(&supervisor, &engine, root).await;
+    let (_child, handle) = spawn_idle_resident(&supervisor, &engine, root, "work").await;
+
+    let rows = engine.team_member_status(root).await.unwrap();
+    assert_eq!(rows.len(), 1, "main sees exactly its one direct child");
+    assert_eq!(rows[0].handle, handle);
+    assert_eq!(rows[0].status, "idle");
+    assert!(
+        rows[0].last_active_seconds.is_some(),
+        "a heartbeat was observed, so freshness must be present"
+    );
+
+    // A resident's own view has no children at all.
+    let projection = engine.read_projection(root).await.unwrap();
+    let child = projection.team.roster.get(&handle).unwrap().session;
+    let rows = engine.team_member_status(child).await.unwrap();
+    assert!(rows.is_empty(), "a leaf resident leads nobody");
+}
+
 #[tokio::test]
 async fn steer_notice_truncation_survives_multibyte_bodies() {
     // Regression: a raw byte slice at 600 panicked on Chinese text (the
@@ -815,5 +945,51 @@ async fn steer_notice_truncation_survives_multibyte_bodies() {
     assert!(
         notice.contains("[mail from main]"),
         "notice carries the body"
+    );
+}
+
+/// Steer notices name the channel each message arrived through, so the reader
+/// can `read channel://<id>` directly instead of guessing id spellings
+/// (`##DM-x`, `#dm-x`) — the exact failure observed in a real multi-agent run.
+#[tokio::test]
+async fn steer_notice_carries_the_channel_id_for_handle_mail() {
+    let engine = engine().await;
+    let root = root_team(&engine).await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    ensure_main(&supervisor, &engine, root).await;
+    let (child, handle) = spawn_idle_resident(&supervisor, &engine, root, "explore").await;
+
+    // The persistent DM pair minted at the child's registration.
+    let projection = engine.read_projection(root).await.unwrap();
+    let dm = projection
+        .team
+        .channels
+        .iter()
+        .find(|(_, channel)| {
+            channel.kind == hya_proto::ChannelKind::Dm
+                && channel.members.contains(&handle)
+                && channel.members.contains("main")
+        })
+        .map(|(id, _)| id.clone())
+        .expect("registration mints the parent-child DM channel");
+
+    engine
+        .mail_send(
+            child,
+            MailEndpoint::Handle("main".to_string()),
+            MailKind::Message,
+            "handle-addressed status update".to_string(),
+        )
+        .await
+        .unwrap();
+    let mut steer = engine.steer_mailbox_snapshot(root).await;
+    let notice = steer.drain(&engine).await.unwrap().expect("notice");
+    assert!(
+        notice.contains(&format!("@{dm}")),
+        "notice must name the DM channel inline: {notice}"
+    );
+    assert!(
+        notice.contains("handle-addressed status update"),
+        "notice still carries the body"
     );
 }

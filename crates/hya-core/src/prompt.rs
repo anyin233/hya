@@ -151,6 +151,7 @@ pub fn render_environment_and_context(
 /// archived agents. Every line here exists to prevent one of those.
 const TEAM_QUICK_REFERENCE: &str = "## Team quick reference\n\
 - `task` is non-blocking: it returns the child's handle immediately. Results arrive later as mail — watch for `[NEW MAIL]` notices appended to tool results.\n\
+- New mail arrives automatically appended to tool results (`[NEW MAIL]`) — do NOT poll `list_channel` or sleep waiting for mail; children's live status is in `list_channel`'s team section (busy + last-heartbeat age).\n\
 - `report` is ONLY for subagents to end their own task. As the main agent NEVER call `report` — deliver your final answer as normal text.\n\
 - Read mail history with `read channel://<id>` (latest) or `channel://<id>?last=N`; `list_channel` shows channels + unread counts. A `#id` is never a file path.\n\
 - `dm`: omit `to` to reach your parent; name a child handle to message (or revive an archived child with its saved state). `broadcast`: one-way to all your direct children.\n\
@@ -235,6 +236,19 @@ mod tests {
         assert!(out.contains("Base."));
         assert!(out.contains("/work/proj"));
         assert!(!out.contains("Project context"));
+    }
+
+    #[test]
+    fn team_reference_forbids_polling_for_mail() {
+        let out = build_system_prompt("", &env(), &[]);
+        assert!(
+            out.contains("do NOT poll `list_channel`"),
+            "the quick reference must forbid polling for mail: {out}"
+        );
+        assert!(
+            out.contains("[NEW MAIL]"),
+            "the reference must say mail arrives via [NEW MAIL] notices"
+        );
     }
 
     #[test]

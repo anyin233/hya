@@ -45,7 +45,21 @@ pub async fn run_mailbox_service(
                     let result = engine
                         .read_channel_history(session, &channel, last)
                         .await
-                        .map(|read| (read.channel, read.messages, read.unread_remaining))
+                        .map(|read| {
+                            (
+                                read.channel,
+                                read.messages,
+                                read.unread_remaining,
+                                read.warning,
+                            )
+                        })
+                        .map_err(|e| e.to_string());
+                    let _ = reply.send(result);
+                }
+                MailboxRequest::TeamStatus { session, reply } => {
+                    let result = engine
+                        .team_member_status(session)
+                        .await
                         .map_err(|e| e.to_string());
                     let _ = reply.send(result);
                 }
