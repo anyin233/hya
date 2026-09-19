@@ -1180,7 +1180,7 @@ impl SessionEngine {
                 },
             )
             .await?;
-            let request = request_from_messages(agent, messages, resources, &model);
+            let request = request_from_messages(agent, messages, resources, &model, depth);
             let request = if let Some(hooks) = &self.hooks {
                 match hooks
                     .chat_params(ChatParamsInput {

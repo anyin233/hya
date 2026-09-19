@@ -43,10 +43,11 @@ pub(super) fn request_from_messages(
     messages: Vec<Message>,
     resources: &CompiledResourceView,
     model: &ModelRef,
+    depth: u32,
 ) -> CompletionRequest {
     let reasoning = reasoning_for_model(model, agent.reasoning);
     CompletionRequest {
-        tools: filtered_tool_schemas(resources, model),
+        tools: filtered_tool_schemas(resources, model, depth),
         model: model.clone(),
         system: Some(agent.system_prompt.clone()),
         messages,
@@ -72,11 +73,12 @@ pub(super) fn reasoning_for_model(
 fn filtered_tool_schemas(
     resources: &CompiledResourceView,
     _model: &ModelRef,
+    depth: u32,
 ) -> Vec<hya_proto::ToolSchema> {
     resources
         .tool_schemas()
         .into_iter()
-        .filter(|schema| advertise_tool(schema.name.as_str()))
+        .filter(|schema| advertise_tool_at_depth(schema.name.as_str(), depth))
         .collect()
 }
 
@@ -86,6 +88,19 @@ fn filtered_tool_schemas(
 /// stays registered for hidden `patch` dispatch but is never advertised.
 pub fn advertise_tool(name: &str) -> bool {
     name != "apply_patch"
+}
+
+/// The orchestration plane (ADR-0015): spawn, discovery, workflow control,
+/// archive search, and force-kill. Unadvertised for sessions at the hardcoded
+/// depth cap — the bottom layer communicates, it does not orchestrate.
+pub const ORCHESTRATION_TOOLS: &[&str] =
+    &["task", "list_agents", "workflow", "search_agent", "kill"];
+
+/// Depth-aware advertisement: at [`crate::MAX_SUBAGENT_DEPTH`] the
+/// orchestration plane disappears from the model-facing schema list.
+pub fn advertise_tool_at_depth(name: &str, depth: u32) -> bool {
+    advertise_tool(name)
+        && !(depth >= crate::MAX_SUBAGENT_DEPTH && ORCHESTRATION_TOOLS.contains(&name))
 }
 
 fn compacted_messages(projection: &Projection) -> &[MessageProjection] {
@@ -201,6 +216,25 @@ mod tests {
             reasoning_for_model(&ModelRef::new("fallback#unknown"), original),
             original,
         );
+    }
+
+    #[test]
+    fn orchestration_tools_disappear_at_the_depth_cap() {
+        // Above the cap everything normal is advertised.
+        assert!(advertise_tool_at_depth("task", 1));
+        assert!(advertise_tool_at_depth("kill", 0));
+        // At the hardcoded cap (ADR-0015) the orchestration plane vanishes…
+        for name in ORCHESTRATION_TOOLS {
+            assert!(
+                !advertise_tool_at_depth(name, crate::MAX_SUBAGENT_DEPTH),
+                "{name} must not be advertised at depth {}",
+                crate::MAX_SUBAGENT_DEPTH
+            );
+        }
+        // …while communication and coding tools stay.
+        assert!(advertise_tool_at_depth("dm", crate::MAX_SUBAGENT_DEPTH));
+        assert!(advertise_tool_at_depth("report", crate::MAX_SUBAGENT_DEPTH));
+        assert!(advertise_tool_at_depth("bash", crate::MAX_SUBAGENT_DEPTH));
     }
 
     #[test]
