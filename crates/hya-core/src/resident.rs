@@ -1501,8 +1501,8 @@ pub struct ResidentSupervisor {
 /// → claim release → archive marker. Ordered so nothing can be lost; the
 /// caller owns the gate and the slot teardown.
 #[allow(clippy::too_many_arguments)]
-async fn archive_reported_agent(
-    engine: &Arc<SessionEngine>,
+pub(crate) async fn archive_reported_agent(
+    engine: &SessionEngine,
     root: SessionId,
     canonical: &str,
     child: SessionId,
@@ -1650,6 +1650,36 @@ impl ArchiveReviver for ResidentSupervisor {
         body: String,
     ) -> Result<(), CoreError> {
         self.revive_child(root, parent, child_handle, body).await
+    }
+
+    async fn teardown_root(&self, root: SessionId) -> Result<(), CoreError> {
+        let claims = {
+            let team = self.teams().get(&root).cloned();
+            let Some(team) = team else {
+                return Ok(());
+            };
+            let mut state = team.lock();
+            if state.residents.is_empty() {
+                return Ok(());
+            }
+            // Kill the team: every parked task observes `killed` and exits,
+            // and in-flight turns see the cancelled team token.
+            let claims: Vec<hya_store::ActorClaim> = state
+                .residents
+                .values()
+                .filter_map(|slot| slot.claim)
+                .collect();
+            for slot in state.residents.values() {
+                slot.notify.notify_one();
+            }
+            state.residents.clear();
+            state.main_session = None;
+            claims
+        };
+        for claim in claims {
+            let _ = self.engine.release_resident_actor_claim(&claim).await;
+        }
+        Ok(())
     }
 }
 
