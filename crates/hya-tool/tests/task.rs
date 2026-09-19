@@ -184,9 +184,19 @@ fn task_schema_exposes_open_code_fields() {
     assert_eq!(props["description"]["type"], "string");
     assert_eq!(props["prompt"]["type"], "string");
     assert_eq!(props["subagent_type"]["type"], "string");
-    assert_eq!(props["task_id"]["type"], "string");
     assert_eq!(props["command"]["type"], "string");
-    assert_eq!(props["background"]["type"], "boolean");
+    assert!(
+        props.get("task_id").is_none(),
+        "task_id is gone: mail revival supersedes resume"
+    );
+    assert!(
+        props.get("background").is_none(),
+        "background is gone: every spawn is non-blocking"
+    );
+    assert!(
+        props.get("resident").is_none(),
+        "resident is gone: every agent is resident"
+    );
 }
 
 #[test]
@@ -260,8 +270,7 @@ async fn task_normalizes_empty_inline_description() {
                     "category": "",
                     "model": "",
                     "name": "",
-                    "prompt": "",
-                    "resident": false
+                    "prompt": ""
                 }
             }),
         )
@@ -335,204 +344,6 @@ async fn task_foreground_result_uses_open_code_output_shape() {
 }
 
 #[tokio::test]
-async fn task_empty_or_sentinel_task_id_creates_fresh_spawn() {
-    let parent = SessionId::new();
-    for task_id in ["", "   ", "new", "NULL", "none"] {
-        let (spawner, mut rx) = SpawnerPlane::new();
-        let ctx = ctx_with_session(vec![allow(Action::Task, "explore")], spawner, parent);
-        let tool = ToolRegistry::builtins().get("task").unwrap();
-        let task_id = task_id.to_string();
-        let handle = tokio::spawn(async move {
-            tool.execute(
-                &ctx,
-                json!({
-                    "description": "Fresh explore",
-                    "prompt": "start clean",
-                    "subagent_type": "explore",
-                    "task_id": task_id,
-                }),
-            )
-            .await
-        });
-        let req = rx.recv().await.unwrap();
-        assert!(
-            req.members[0].task_id.is_none(),
-            "sentinel/empty task_id must not resume"
-        );
-        req.reply
-            .send(Ok(vec![MemberOutcome {
-                member: "mbr_1".to_string(),
-                session: "ses_child".to_string(),
-                status: "done".to_string(),
-                summary: "ok".to_string(),
-            }]))
-            .unwrap();
-        handle.await.unwrap().unwrap();
-    }
-}
-
-#[tokio::test]
-async fn task_invalid_task_id_errors_with_create_hint() {
-    let parent = SessionId::new();
-    let (spawner, _rx) = SpawnerPlane::new();
-    let ctx = ctx_with_session(vec![allow(Action::Task, "explore")], spawner, parent);
-    let tool = ToolRegistry::builtins().get("task").unwrap();
-    let err = tool
-        .execute(
-            &ctx,
-            json!({
-                "description": "Bad resume",
-                "prompt": "nope",
-                "subagent_type": "explore",
-                "task_id": "not-a-session-id",
-            }),
-        )
-        .await
-        .expect_err("garbage task_id must fail input validation");
-    match err {
-        ToolError::Input(message) => {
-            assert!(message.contains("invalid task_id"), "{message}");
-            assert!(
-                message.contains("omit task_id"),
-                "error should hint how to create fresh: {message}"
-            );
-        }
-        other => panic!("expected ToolError::Input, got {other:?}"),
-    }
-}
-
-#[tokio::test]
-async fn task_forwards_task_id_to_spawner_for_resume() {
-    let parent = SessionId::new();
-    let child = SessionId::new().to_string();
-    let child_for_input = child.clone();
-    let (spawner, mut rx) = SpawnerPlane::new();
-    let ctx = ctx_with_session(vec![allow(Action::Task, "explore")], spawner, parent);
-    let tool = ToolRegistry::builtins().get("task").unwrap();
-
-    let handle = tokio::spawn(async move {
-        tool.execute(
-            &ctx,
-            json!({
-                "description": "Continue routing",
-                "prompt": "Use the prior findings",
-                "subagent_type": "explore",
-                "task_id": child_for_input
-            }),
-        )
-        .await
-    });
-
-    let req = rx.recv().await.unwrap();
-    assert_eq!(req.members[0].task_id.as_deref(), Some(child.as_str()));
-    req.reply
-        .send(Ok(vec![MemberOutcome {
-            member: "mbr_1".to_string(),
-            session: child.clone(),
-            status: "done".to_string(),
-            summary: "continued".to_string(),
-        }]))
-        .unwrap();
-
-    let out = handle.await.unwrap().unwrap();
-    assert_eq!(out["metadata"]["sessionId"], child);
-    assert_eq!(
-        out["output"],
-        format!(
-            "<task id=\"{child}\" state=\"completed\">\n<task_result>\ncontinued\n</task_result>\n</task>"
-        )
-    );
-}
-
-#[tokio::test]
-async fn task_batch_ignores_invalid_top_level_task_id() {
-    let parent = SessionId::new();
-    let (spawner, mut rx) = SpawnerPlane::new();
-    let ctx = ctx_with_session(vec![allow(Action::Task, "explore")], spawner, parent);
-    let tool = ToolRegistry::builtins().get("task").unwrap();
-
-    let mut handle = tokio::spawn(async move {
-        tool.execute(
-            &ctx,
-            json!({
-                "description": "Inspect batch",
-                "prompt": "Inspect both paths",
-                "subagent_type": "explore",
-                "task_id": "",
-                "members": [
-                    {
-                        "description": "Inspect tools",
-                        "prompt": "Inspect tool dispatch",
-                        "subagent_type": "explore"
-                    },
-                    {
-                        "description": "Inspect runtime",
-                        "prompt": "Inspect runtime dispatch",
-                        "subagent_type": "explore"
-                    }
-                ]
-            }),
-        )
-        .await
-    });
-
-    let req = tokio::select! {
-        biased;
-        result = &mut handle => panic!("batch rejected before spawn: {result:?}"),
-        req = rx.recv() => req.unwrap(),
-    };
-    assert_eq!(req.members.len(), 2);
-    assert!(req.members.iter().all(|member| member.task_id.is_none()));
-    req.reply
-        .send(Ok(vec![
-            MemberOutcome {
-                member: "mbr_1".to_string(),
-                session: SessionId::new().to_string(),
-                status: "done".to_string(),
-                summary: "tools inspected".to_string(),
-            },
-            MemberOutcome {
-                member: "mbr_2".to_string(),
-                session: SessionId::new().to_string(),
-                status: "done".to_string(),
-                summary: "runtime inspected".to_string(),
-            },
-        ]))
-        .unwrap();
-
-    let out = handle.await.unwrap().unwrap();
-    let members = out["metadata"]["members"].as_array().unwrap();
-    assert_eq!(members.len(), 2);
-    assert_eq!(members[0]["description"], "Inspect tools");
-    assert_eq!(members[0]["subagent_type"], "explore");
-    assert_eq!(members[1]["description"], "Inspect runtime");
-    assert_eq!(out["title"], "2 subagents");
-}
-
-#[tokio::test]
-async fn task_rejects_invalid_task_id() {
-    let parent = SessionId::new();
-    let (spawner, _rx) = SpawnerPlane::new();
-    let ctx = ctx_with_session(vec![allow(Action::Task, "explore")], spawner, parent);
-    let tool = ToolRegistry::builtins().get("task").unwrap();
-
-    let err = tool
-        .execute(
-            &ctx,
-            json!({
-                "description": "Continue routing",
-                "prompt": "Use the prior findings",
-                "subagent_type": "explore",
-                "task_id": "not-a-session-id"
-            }),
-        )
-        .await
-        .unwrap_err();
-
-    assert!(matches!(err, ToolError::Input(message) if message.contains("invalid task_id")));
-}
-
-#[tokio::test]
 async fn task_preserves_typed_spawn_overload() {
     let parent = SessionId::new();
     let (spawner, rx) = SpawnerPlane::new();
@@ -574,7 +385,7 @@ async fn task_preserves_typed_spawn_overload() {
 }
 
 #[tokio::test]
-async fn task_background_returns_running_task_result() {
+async fn task_returns_immediately_with_running_handles() {
     let parent = SessionId::new();
     let child = SessionId::new().to_string();
     let (spawner, mut rx) = SpawnerPlane::new();
@@ -587,33 +398,29 @@ async fn task_background_returns_running_task_result() {
             json!({
                 "description": "Inspect routing",
                 "prompt": "Find the routing entry points",
-                "subagent_type": "explore",
-                "background": true
+                "subagent_type": "explore"
             }),
         )
         .await
     });
 
     let req = rx.recv().await.unwrap();
-    assert!(req.background);
     req.reply
         .send(Ok(vec![MemberOutcome {
-            member: "mbr_1".to_string(),
+            member: "main/explore-1".to_string(),
             session: child.clone(),
             status: "running".to_string(),
-            summary: "The task is working in the background.".to_string(),
+            summary: "Resident main/explore-1 is live; results arrive as its report.".to_string(),
         }]))
         .unwrap();
 
     let out = handle.await.unwrap().unwrap();
     assert_eq!(out["title"], "Inspect routing");
-    assert_eq!(out["metadata"]["background"], true);
-    assert_eq!(out["metadata"]["jobId"], child);
     assert_eq!(out["metadata"]["sessionId"], child);
-    assert_eq!(
-        out["output"],
-        format!(
-            "<task id=\"{child}\" state=\"running\">\n<summary>Background task started</summary>\n<task_result>\nThe task is working in the background.\n</task_result>\n</task>"
-        )
+    assert_eq!(out["metadata"]["status"], "running");
+    assert!(
+        out["output"].to_string().contains("running"),
+        "single-member output stays a task block: {}",
+        out["output"]
     );
 }

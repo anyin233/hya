@@ -19,8 +19,6 @@ pub struct SpawnMember {
     pub prompt: String,
     /// Agent id / subagent type to spawn.
     pub subagent_type: String,
-    /// Optional existing subagent session to resume.
-    pub task_id: Option<String>,
     /// Spawn-time explicit model override (highest precedence). `None`/empty
     /// defers down the Bundle definition / request-overlay model chain.
     pub model: Option<String>,
@@ -31,10 +29,6 @@ pub struct SpawnMember {
     /// prompt + name and folds into the model/category precedence chain; never
     /// a catalog or Bundle definition authority.
     pub inline_agent: Option<InlineAgent>,
-    /// Spawn-time opt-in to the resident (long-lived actor) lifecycle (ADR-0002).
-    /// OR'd with Bundle definition and request-scoped inline `resident` — `true`
-    /// from any source makes the member resident. Default `false` (transient).
-    pub resident: bool,
 }
 
 /// Request-scoped agent overlay attached to a single spawn.
@@ -53,8 +47,6 @@ pub struct InlineAgent {
     pub category: Option<String>,
     /// Concrete `provider/model` (request-overlay layer in spawn model precedence).
     pub model: Option<String>,
-    /// Request-scoped opt-in to the resident lifecycle.
-    pub resident: Option<bool>,
 }
 
 /// Result for one spawned member after the host finishes (or admits) the spawn.
@@ -85,8 +77,6 @@ pub struct SpawnRequest {
     pub members: Vec<SpawnMember>,
     /// Cancellation for the spawn work.
     pub cancel: CancellationToken,
-    /// When true, host should not block the tool on completion.
-    pub background: bool,
     /// Reply with per-member outcomes or a spawn error.
     pub reply: oneshot::Sender<Result<Vec<MemberOutcome>, SpawnError>>,
 }
@@ -251,7 +241,7 @@ impl SpawnerPlane {
         members: Vec<SpawnMember>,
         cancel: CancellationToken,
     ) -> Result<Vec<MemberOutcome>, SpawnError> {
-        self.spawn_inner(operation, members, cancel, false).await
+        self.spawn_inner(operation, members, cancel).await
     }
 
     /// Spawn members with `background = true` (host may return early).
@@ -264,7 +254,7 @@ impl SpawnerPlane {
         members: Vec<SpawnMember>,
         cancel: CancellationToken,
     ) -> Result<Vec<MemberOutcome>, SpawnError> {
-        self.spawn_inner(operation, members, cancel, true).await
+        self.spawn_inner(operation, members, cancel).await
     }
 
     async fn spawn_inner(
@@ -272,7 +262,6 @@ impl SpawnerPlane {
         operation: ToolOperation,
         members: Vec<SpawnMember>,
         cancel: CancellationToken,
-        background: bool,
     ) -> Result<Vec<MemberOutcome>, SpawnError> {
         let parent = self.session.ok_or(SpawnError::Unavailable)?;
         let (tx, rx) = oneshot::channel();
@@ -283,7 +272,6 @@ impl SpawnerPlane {
             operation,
             members,
             cancel,
-            background,
             reply: tx,
         };
         self.sink.try_send(req).map_err(|error| match error {
@@ -316,11 +304,9 @@ mod tests {
                         description: "d".to_string(),
                         prompt: "p".to_string(),
                         subagent_type: "quick".to_string(),
-                        task_id: None,
                         model: None,
                         category: None,
                         inline_agent: None,
-                        resident: false,
                     }],
                     CancellationToken::new(),
                 )

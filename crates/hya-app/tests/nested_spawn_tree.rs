@@ -213,7 +213,7 @@ async fn nested_spawn_registers_two_generations_in_root_roster() {
             .expect("descendant roster entry");
         assert!(!entry.handle.is_empty());
         assert_eq!(entry.agent_type, agent_type);
-        assert_eq!(entry.mode, SubagentMode::Transient);
+        assert_eq!(entry.mode, SubagentMode::Resident);
     }
 }
 
