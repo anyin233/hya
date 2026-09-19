@@ -6,31 +6,11 @@
 
 use std::collections::BTreeMap;
 
-use axum::body::Bytes;
-use axum::extract::{Path, State};
-use axum::response::{IntoResponse, Response};
-use axum::routing::get;
-use axum::{Json, Router};
 use hya_proto::api::CommandRequest;
 use hya_proto::{SessionId, WorkflowCommand, WorkflowCommandResult, WorkflowDelivery};
 
 use crate::workflow_control::WorkflowControlError;
 use crate::{ApiError, ServerState};
-
-/// Build native `/sessions/:id/workflow` routes.
-pub(crate) fn native_router() -> Router<ServerState> {
-    Router::new().route("/sessions/:id/workflow", get(state).post(command_endpoint))
-}
-
-/// Build legacy Compat and Compat v2 `/session/:id/workflow` routes.
-pub(crate) fn compat_router() -> Router<ServerState> {
-    Router::new()
-        .route("/session/:id/workflow", get(state).post(command_endpoint))
-        .route(
-            "/api/session/:id/workflow",
-            get(state).post(command_endpoint),
-        )
-}
 
 /// Parse and, when applicable, execute one `/workflow` command.
 //
@@ -57,10 +37,20 @@ pub(crate) async fn intercept_slash(
     }
     let _reservation = reserve_workflow_command(st, session, &command)?;
     let arguments = request.arguments.clone();
-    let text = request
-        .text
-        .clone()
-        .unwrap_or_else(|| crate::command_prompt_text(&request.command, &arguments));
+    let text = request.text.clone().unwrap_or_else(|| {
+        crate::support::command_catalog::expand_prompt(
+            std::path::Path::new("."),
+            &request.command,
+            &arguments,
+        )
+        .unwrap_or_else(|| {
+            if arguments.trim().is_empty() {
+                format!("/{}", request.command)
+            } else {
+                format!("/{} {}", request.command, arguments)
+            }
+        })
+    });
     st.engine
         .admit_command_prompt(session, request.command.clone(), arguments, text)
         .await?;
@@ -155,33 +145,6 @@ fn syntax(message: impl Into<String>) -> ApiError {
         "WORKFLOW_SYNTAX",
         message,
     )
-}
-
-async fn command_endpoint(
-    State(st): State<ServerState>,
-    Path(id): Path<String>,
-    body: Bytes,
-) -> Result<Response, ApiError> {
-    let session = crate::parse_session(&id)?;
-    let command = serde_json::from_slice::<WorkflowCommand>(&body)
-        .map_err(|error| syntax(format!("invalid Workflow command: {error}")))?;
-    let result = execute(&st, session, command, WorkflowDelivery::Started).await?;
-    Ok(Json(result).into_response())
-}
-
-async fn state(
-    State(st): State<ServerState>,
-    Path(id): Path<String>,
-) -> Result<Response, ApiError> {
-    let session = crate::parse_session(&id)?;
-    let result = execute(
-        &st,
-        session,
-        WorkflowCommand::State,
-        WorkflowDelivery::Started,
-    )
-    .await?;
-    Ok(Json(result).into_response())
 }
 
 /// Reserve a Session for commands that can change durable Workflow state.

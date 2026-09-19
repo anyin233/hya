@@ -67,6 +67,7 @@ pub(crate) enum PermissionReply {
 
 impl PermissionRequests {
     #[must_use]
+    #[allow(dead_code)]
     pub(crate) fn new(store: SessionStore) -> Self {
         let (events, _) = broadcast::channel(256);
         Self {
@@ -77,6 +78,7 @@ impl PermissionRequests {
     }
 
     #[must_use]
+    #[allow(dead_code)]
     pub(crate) fn spawn(mut rx: mpsc::UnboundedReceiver<AskRequest>, store: SessionStore) -> Self {
         let requests = Self::new(store.clone());
         let inner = requests.inner.clone();
@@ -102,10 +104,16 @@ impl PermissionRequests {
         requests
     }
 
+    /// Pending-plane bridge retained for the interaction event stream.
+    #[allow(dead_code)]
+    #[allow(dead_code)]
     pub(crate) fn subscribe(&self) -> broadcast::Receiver<Value> {
         self.events.subscribe()
     }
 
+    /// Pending-plane bridge retained for the interaction event stream.
+    #[allow(dead_code)]
+    #[allow(dead_code)]
     pub(crate) async fn snapshot_asked(&self) -> Vec<Value> {
         let pending = {
             let entries = self.inner.lock().await;
@@ -151,6 +159,9 @@ impl PermissionRequests {
             .send(permission_replied_event(session, id, reply));
     }
 
+    /// Pending-plane bridge retained for the interaction event stream.
+    #[allow(dead_code)]
+    #[allow(dead_code)]
     pub(crate) async fn list(&self) -> Vec<PermissionRequestView> {
         self.inner
             .lock()
@@ -160,6 +171,9 @@ impl PermissionRequests {
             .collect()
     }
 
+    /// Pending-plane bridge retained for the interaction event stream.
+    #[allow(dead_code)]
+    #[allow(dead_code)]
     pub(crate) async fn list_legacy(&self) -> Vec<LegacyPermissionRequestView> {
         self.inner
             .lock()
@@ -173,6 +187,7 @@ impl PermissionRequests {
             .collect()
     }
 
+    #[allow(dead_code)]
     pub(crate) async fn list_session(&self, session: SessionId) -> Vec<PermissionRequestView> {
         self.inner
             .lock()
@@ -186,6 +201,7 @@ impl PermissionRequests {
             .collect()
     }
 
+    #[allow(dead_code)]
     pub(crate) async fn reply(
         &self,
         session: SessionId,
@@ -225,6 +241,7 @@ impl PermissionRequests {
         Ok(ok)
     }
 
+    #[allow(dead_code)]
     pub(crate) async fn reply_any(
         &self,
         id: &str,
@@ -264,6 +281,7 @@ impl PermissionRequests {
         Ok(ok)
     }
 
+    #[allow(dead_code)]
     pub(crate) async fn list_saved(
         &self,
         project_id: Option<&str>,
@@ -271,6 +289,7 @@ impl PermissionRequests {
         self.saved.list(project_id).await
     }
 
+    #[allow(dead_code)]
     pub(crate) async fn remove_saved(&self, id: &str) -> Result<(), StoreError> {
         self.saved.remove(id).await
     }

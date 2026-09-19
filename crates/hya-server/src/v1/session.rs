@@ -55,7 +55,7 @@ async fn create_session(
     if request.workdir.trim().is_empty() {
         return Err(V1Error::invalid_argument("workdir is required"));
     }
-    let agent = crate::compat::bound_agent_metadata::resolve_session_agent(
+    let agent = crate::support::bound_agent_metadata::resolve_session_agent(
         &st,
         std::path::Path::new(&request.workdir),
         Some(request.agent.as_str()),

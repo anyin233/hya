@@ -1141,7 +1141,7 @@ impl pb::pty_server::Pty for V1Grpc {
         &self,
         request: GrpcRequest<tonic::Streaming<pb::PtyClientFrame>>,
     ) -> Result<GrpcResponse<Self::StreamPtyStream>, Status> {
-        use crate::compat::pty_state::PtyEvent;
+        use crate::support::pty_state::PtyEvent;
         use hya_api::v1::pty_client_frame::Frame as F;
         let mut client = request.into_inner();
         // The first client frame must attach to a PTY session.

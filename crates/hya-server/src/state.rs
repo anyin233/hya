@@ -10,8 +10,9 @@ use tokio::sync::{broadcast, mpsc};
 
 use crate::agent_model_control::{AgentModelControl, EmptyAgentModelControl};
 use crate::mcp_control::{EmptyMcpControl, McpControl};
+use crate::support;
 use crate::workflow_control::{EmptyWorkflowControl, WorkflowControl};
-use crate::{compat, pending, runs};
+use crate::{pending, runs};
 
 /// Holds the session engine, process agent base, permission/question queues,
 /// MCP and Workflow control handles, workspace adapters, and formatter status.
@@ -142,19 +143,18 @@ impl AppState {
 }
 
 #[derive(Clone)]
+#[allow(dead_code)]
 pub(crate) struct ServerState {
     pub(crate) engine: Arc<SessionEngine>,
     pub(crate) agent: Arc<AgentSpec>,
     pub(crate) runs: runs::RunRegistry,
     pub(crate) permission_requests: pending::PermissionRequests,
     pub(crate) question_requests: pending::QuestionRequests,
-    pub(crate) global: compat::GlobalState,
+    pub(crate) global: support::global_state::GlobalState,
     pub(crate) mcp_control: Arc<dyn McpControl>,
     pub(crate) agent_model_control: Arc<dyn AgentModelControl>,
     pub(crate) workflow_control: Arc<dyn WorkflowControl>,
-    pub(crate) project: compat::ProjectState,
-    pub(crate) pty: compat::PtyState,
-    pub(crate) tui: compat::TuiState,
+    pub(crate) pty: support::pty_state::PtyState,
     pub(crate) workspace_adapters: Vec<WorkspaceAdapterInfo>,
     pub(crate) formatter_status: Vec<FormatterStatus>,
     pub(crate) default_agent: Option<String>,
@@ -163,7 +163,7 @@ pub(crate) struct ServerState {
 
 impl ServerState {
     pub(crate) fn new(app: AppState) -> Self {
-        let global = compat::GlobalState::new(app.engine.lsp().is_configured());
+        let global = support::global_state::GlobalState::new(app.engine.lsp().is_configured());
         Self {
             engine: app.engine,
             agent: app.agent,
@@ -174,9 +174,7 @@ impl ServerState {
             mcp_control: app.mcp_control,
             agent_model_control: app.agent_model_control,
             workflow_control: app.workflow_control,
-            project: compat::ProjectState::new(),
-            pty: compat::PtyState::new(),
-            tui: compat::TuiState::new(),
+            pty: support::pty_state::PtyState::new(),
             workspace_adapters: app.workspace_adapters,
             formatter_status: app.formatter_status,
             default_agent: app.default_agent,

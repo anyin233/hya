@@ -1,40 +1,26 @@
 //! `hya-server` — Axum HTTP and SSE surface over `hya-core`.
 //!
-//! Serves:
+//! Serves the consolidated `hya.v1` contract:
 //!
-//! - **Native routes** — `POST /sessions`, `POST /sessions/:id/{prompt,command,shell}`,
-//!   `GET /sessions/:id/events`, `GET /sessions/:id/stream`
-//! - **Compat route groups** (via `compat::router`) — sessions, events, files/search,
-//!   catalogs/metadata, provider/auth, permissions/questions, MCP, PTY, VCS/project,
-//!   worktree, TUI/global/sync/experimental surfaces
+//! - **HTTP/JSON + SSE + WebSocket** — the `/v1` routes generated from the
+//!   `hya.v1` IDL (`crates/hya-api`), plus the gRPC binding (`V1Grpc`)
+//!   dispatching through the same router.
 //!
 //! CORS mirrors the request origin and headers and allows any method. See
-//! `docs/architecture/server-client.md` for request bodies and status codes.
+//! `docs/protocol/` for the contract, integration guide, and generated
+//! reference/OpenAPI.
 
-use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use axum::response::sse::{Event as SseEvent, Sse};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
 use axum::{Json, Router};
-use futures::Stream;
-use futures::StreamExt;
-use hya_core::CreateSession;
-use hya_proto::api::{
-    CommandRequest, CreateSessionRequest, CreateSessionResponse, EventsQuery, PromptRequest,
-    PromptResponse, ShellRequest,
-};
-use hya_proto::{Envelope, ModelRef, SessionId};
-use std::convert::Infallible;
-use tokio_stream::wrappers::BroadcastStream;
 use tower_http::cors::{AllowHeaders, AllowOrigin, Any, CorsLayer};
 
 mod agent_model_control;
-mod compat;
 mod mcp_control;
 mod pending;
 mod runs;
 mod state;
+mod support;
 mod v1;
 mod workflow;
 mod workflow_control;
@@ -69,21 +55,13 @@ pub use workflow_control::{
 ///
 /// Merges `compat::router()` for Compat-compatible surfaces. CORS:
 /// `AllowOrigin::mirror_request()`, `AllowHeaders::mirror_request()`, methods `Any`.
+/// Build the full HTTP app: the `/v1` contract routes + CORS.
+///
+/// The gRPC binding (`V1Grpc`) dispatches through this same router, so the
+/// two transports share one handler set.
 pub fn router(state: AppState) -> Router {
     let state = ServerState::new(state);
-    Router::new()
-        .merge(compat::router())
-        .merge(v1::router())
-        .merge(workflow::native_router())
-        .merge(workflow::compat_router())
-        .route("/sessions", post(create_session))
-        .route("/sessions/:id/prompt", post(prompt))
-        .route("/sessions/:id/command", post(command))
-        .route("/sessions/:id/shell", post(shell))
-        .route("/sessions/:id/events", get(events))
-        .route("/sessions/:id/stream", get(stream))
-        .with_state(state)
-        .layer(cors())
+    v1::router().with_state(state).layer(cors())
 }
 
 fn cors() -> CorsLayer {
@@ -141,6 +119,7 @@ impl ApiError {
         Self::with_status(StatusCode::BAD_REQUEST, message)
     }
 
+    #[allow(dead_code)]
     fn not_found(message: impl Into<String>) -> Self {
         Self::with_status(StatusCode::NOT_FOUND, message)
     }
@@ -149,10 +128,12 @@ impl ApiError {
         Self::with_status(StatusCode::INTERNAL_SERVER_ERROR, message)
     }
 
+    #[allow(dead_code)]
     fn conflict(message: impl Into<String>) -> Self {
         Self::with_status(StatusCode::CONFLICT, message)
     }
 
+    #[allow(dead_code)]
     fn service_unavailable(message: impl Into<String>) -> Self {
         Self::with_status(StatusCode::SERVICE_UNAVAILABLE, message)
     }
@@ -183,157 +164,4 @@ impl IntoResponse for ApiError {
         }
         (self.status, self.message).into_response()
     }
-}
-
-fn parse_session(id: &str) -> Result<SessionId, ApiError> {
-    id.parse::<SessionId>()
-        .map_err(|_| ApiError::bad_request("invalid session id"))
-}
-
-/// Reject native Session routes after deletion or for unknown identifiers.
-async fn ensure_session_exists(st: &ServerState, session: SessionId) -> Result<(), ApiError> {
-    if st.engine.session_exists(session).await? {
-        Ok(())
-    } else {
-        Err(ApiError::not_found(format!("session not found: {session}")))
-    }
-}
-
-async fn create_session(
-    State(st): State<ServerState>,
-    Json(req): Json<CreateSessionRequest>,
-) -> Result<Json<CreateSessionResponse>, ApiError> {
-    let agent = compat::bound_agent_metadata::resolve_session_agent(
-        &st,
-        std::path::Path::new(&req.workdir),
-        Some(req.agent.as_str()),
-    )
-    .await?;
-    let session = st
-        .engine
-        .create(CreateSession {
-            parent: req.parent,
-            agent,
-            model: ModelRef::new(req.model),
-            workdir: req.workdir,
-        })
-        .await?;
-    Ok(Json(CreateSessionResponse { session }))
-}
-
-async fn prompt(
-    State(st): State<ServerState>,
-    Path(id): Path<String>,
-    Json(req): Json<PromptRequest>,
-) -> Result<Json<PromptResponse>, ApiError> {
-    let session = parse_session(&id)?;
-    ensure_session_exists(&st, session).await?;
-    let run = st
-        .start_run(session)
-        .ok_or_else(|| ApiError::conflict("session busy"))?;
-    let message = st.engine.admit_user_prompt(session, req.text).await?;
-    let finish = st.engine.run_turn(session, &st.agent, run.token()).await?;
-    Ok(Json(PromptResponse { message, finish }))
-}
-
-async fn command(
-    State(st): State<ServerState>,
-    Path(id): Path<String>,
-    Json(req): Json<CommandRequest>,
-) -> Result<Response, ApiError> {
-    let session = parse_session(&id)?;
-    ensure_session_exists(&st, session).await?;
-    if let Some(result) = workflow::intercept_slash(&st, session, &req).await? {
-        return Ok(Json(result).into_response());
-    }
-    let run = st
-        .start_run(session)
-        .ok_or_else(|| ApiError::conflict("session busy"))?;
-    let explicit_model = req.model_ref();
-    if let Some(model) = &explicit_model {
-        st.engine.switch_model(session, model.clone()).await?;
-    }
-    let CommandRequest {
-        command,
-        arguments,
-        text,
-        ..
-    } = req;
-    let text = text.unwrap_or_else(|| command_prompt_text(&command, &arguments));
-    let message = st
-        .engine
-        .admit_command_prompt(session, command, arguments, text)
-        .await?;
-    let finish = st
-        .engine
-        .run_turn_with_external_dirs_and_guidance(
-            session,
-            &st.agent,
-            run.token(),
-            &[],
-            None,
-            explicit_model,
-        )
-        .await?;
-    Ok(Json(PromptResponse { message, finish }).into_response())
-}
-
-async fn shell(
-    State(st): State<ServerState>,
-    Path(id): Path<String>,
-    Json(req): Json<ShellRequest>,
-) -> Result<Json<PromptResponse>, ApiError> {
-    let session = parse_session(&id)?;
-    ensure_session_exists(&st, session).await?;
-    let run = st
-        .start_run(session)
-        .ok_or_else(|| ApiError::conflict("session busy"))?;
-    let agent = compat::shell_agent(&st, session, &req).await?;
-    let (message, finish) = st
-        .engine
-        .run_shell(session, &agent, req.command, run.token())
-        .await?;
-    Ok(Json(PromptResponse { message, finish }))
-}
-
-fn command_prompt_text(command: &str, arguments: &str) -> String {
-    if arguments.trim().is_empty() {
-        format!("/{command}")
-    } else {
-        format!("/{command} {arguments}")
-    }
-}
-
-async fn events(
-    State(st): State<ServerState>,
-    Path(id): Path<String>,
-    Query(q): Query<EventsQuery>,
-) -> Result<Json<Vec<Envelope>>, ApiError> {
-    let session = parse_session(&id)?;
-    let since = q.since_seq.unwrap_or(0);
-    let envelopes = st.engine.replay(session).await?;
-    if envelopes.is_empty() {
-        return Err(ApiError::not_found(format!("session not found: {session}")));
-    }
-    let envelopes = envelopes.into_iter().filter(|e| e.seq.0 > since).collect();
-    Ok(Json(envelopes))
-}
-
-async fn stream(
-    State(st): State<ServerState>,
-    Path(id): Path<String>,
-) -> Result<Sse<impl Stream<Item = Result<SseEvent, Infallible>>>, ApiError> {
-    let session = parse_session(&id)?;
-    ensure_session_exists(&st, session).await?;
-    let rx = st.engine.bus().subscribe();
-    let events = BroadcastStream::new(rx).filter_map(move |result| async move {
-        match result {
-            Ok(env) if env.event.session() == Some(session) => {
-                Some(Ok(SseEvent::default().json_data(&env).unwrap_or_default()))
-            }
-            Ok(_) => None,
-            Err(_lagged) => Some(Ok(SseEvent::default().event("resync"))),
-        }
-    });
-    Ok(Sse::new(events))
 }

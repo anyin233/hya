@@ -1720,13 +1720,15 @@ async fn custom_command_invokes_mcp_tool() {
         .wait_mcp_connected("echo", TIMEOUT)
         .await
         .expect("disconnected MCP startup");
-    let disconnect = post_ok(&disconnected_env, "/mcp/echo/disconnect", Value::Null).await;
-    assert_eq!(disconnect, true);
+    post_ok(&disconnected_env, "/v1/mcp/echo/disconnect", Value::Null).await;
     let status = disconnected_env
-        .get_json("/mcp")
+        .get_json("/v1/mcp")
         .await
         .expect("disabled status");
-    assert_eq!(status["echo"]["status"], "disabled");
+    assert_eq!(
+        status["servers"][0]["state"],
+        "MCP_SERVER_STATE_DISCONNECTED"
+    );
     let disconnected_session = disconnected_env
         .create_session()
         .await
@@ -1747,21 +1749,21 @@ async fn custom_command_invokes_mcp_tool() {
     }));
     assert_eq!(
         disconnected_env
-            .get_json("/mcp")
+            .get_json("/v1/mcp")
             .await
-            .expect("no auto respawn")["echo"]["status"],
-        "disabled"
+            .expect("no auto respawn")["servers"][0]["state"],
+        "MCP_SERVER_STATE_DISCONNECTED"
     );
     let (missing_status, missing_body) = request_json(
         &disconnected_env,
         Method::POST,
-        "/mcp/unknown/connect",
+        "/v1/mcp/unknown/connect",
         None,
     )
     .await;
     assert_eq!(missing_status, StatusCode::NOT_FOUND);
-    assert!(missing_body.to_string().contains("MCP server not found"));
-    post_ok(&disconnected_env, "/mcp/echo/connect", Value::Null).await;
+    assert!(missing_body.to_string().contains("unknown mcp server"));
+    post_ok(&disconnected_env, "/v1/mcp/echo/connect", Value::Null).await;
     disconnected_env
         .wait_mcp_connected("echo", TIMEOUT)
         .await
@@ -1852,10 +1854,10 @@ async fn custom_command_invokes_mcp_tool() {
     let (add_status, add_body) = request_json(
         &timeout_env,
         Method::POST,
-        "/mcp",
+        "/v1/mcp",
         Some(json!({
             "name": "fast",
-            "config": {"type": "local", "command": ["python3", "fixtures/mcp_echo.py"], "timeout": 50}
+            "command": {"command": "python3", "args": ["fixtures/mcp_echo.py"]}
         })),
     )
     .await;
@@ -1929,8 +1931,8 @@ async fn custom_command_invokes_mcp_tool() {
             Event::TurnBindingRecorded { generation, .. } => Some(*generation),
             _ => None,
         });
-    post_ok(&death_env, "/mcp/echo/disconnect", Value::Null).await;
-    post_ok(&death_env, "/mcp/echo/connect", Value::Null).await;
+    post_ok(&death_env, "/v1/mcp/echo/disconnect", Value::Null).await;
+    post_ok(&death_env, "/v1/mcp/echo/connect", Value::Null).await;
     death_env
         .wait_mcp_connected("echo", TIMEOUT)
         .await
@@ -2057,10 +2059,10 @@ async fn resource_name_conflicts_fail_closed() {
         let (status, body) = request_json(
             &mcp,
             Method::POST,
-            "/mcp",
+            "/v1/mcp",
             Some(json!({
                 "name": name,
-                "config": {"type": "local", "command": ["python3", "fixtures/mcp_echo.py", tool]}
+                "command": {"command": "python3", "args": ["fixtures/mcp_echo.py", tool]}
             })),
         )
         .await;
@@ -2181,8 +2183,8 @@ async fn dynamic_resource_snapshots_and_reload() {
     assert!(first_context.to_string().contains("SKILL_EDITED_BODY NEW"));
 
     // MCP disconnect/connect is the explicit dynamic publication boundary.
-    post_ok(&env, "/mcp/echo/disconnect", Value::Null).await;
-    post_ok(&env, "/mcp/echo/connect", Value::Null).await;
+    post_ok(&env, "/v1/mcp/echo/disconnect", Value::Null).await;
+    post_ok(&env, "/v1/mcp/echo/connect", Value::Null).await;
     env.wait_mcp_connected("echo", TIMEOUT)
         .await
         .expect("MCP refreshed");
