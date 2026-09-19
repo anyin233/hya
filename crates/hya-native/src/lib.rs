@@ -5,8 +5,6 @@
 //! in-process `/global/event` bridge ([`spawn_event_bridge`]). No TCP, no reqwest — the Rust
 //! analogue of compat's in-process `app.fetch`.
 
-mod events;
 mod transport;
 
-pub use events::spawn_event_bridge;
 pub use transport::{HyaNativeClient, HyaNativeTransport};
