@@ -197,6 +197,16 @@ When changing a boundary, update the nearest docs page:
 | TUI behavior | [TUI](architecture/tui.md), [TUI Reference](tui-reference.md), [TUI Keybindings](tui-keybindings.md) |
 | Agent process E2E / matrix | [Testing](testing/README.md), [Agent matrix](testing/agent-matrix.md) |
 
+Every new or modified feature ships with its documentation in the same change.
+The feature's documentation must state, at minimum:
+
+1. **Introduction** — what the feature does and why it exists.
+2. **Usage** — how to invoke or configure it: CLI commands and flags, config
+   keys, TUI keys or slash commands, plus a short worked example.
+3. **Interface definition** — the exact contracts it exposes: HTTP/RPC routes
+   with request/response schemas, event and payload types, tool names and
+   parameter schemas, or config field names and types.
+
 Keep docs grounded in shipped behavior. If a table or schema reserves space for
 future functionality that is not wired into the current read path, say that
 plainly.

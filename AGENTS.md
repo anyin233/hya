@@ -32,6 +32,13 @@ cross-session recovery, keep `task_plan.md`, `findings.md`, and `progress.md` in
 - After the implementation is verified, the agent must commit and push the atomic feature change.
 - If the feature cannot be verified, do not commit or push; report the blocker and the commands or checks that failed.
 
+## Feature Documentation Rule
+
+- Every new or modified feature must ship with its documentation in the same atomic change; a feature is not done until its docs exist.
+- The documentation must cover three parts: an introduction (what the feature does and why it exists), usage (how to invoke or configure it — CLI commands and flags, config keys, TUI keys or slash commands, and a short worked example), and interface definitions (the exact contracts it exposes — HTTP/RPC routes with request/response schemas, event and payload types, tool names and parameter schemas, or config field names and types).
+- Place the documentation using the boundary-to-page table in `docs/development.md`; a genuinely new surface gets a new page under `docs/` linked from `docs/README.md`.
+- Documentation is part of the feature's verification gate: do not commit or push feature work until the matching documentation is updated.
+
 ## Release & Changelog Rule
 
 - Before publishing a new version, the local agent must ensure `[workspace.package].version` in `Cargo.toml`, the `vX.Y.Z` release tag, and root `CHANGELOG.md` all describe the same version.
