@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use hya_proto::ToolSchema;
+use hya_proto::{SessionId, ToolSchema};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
