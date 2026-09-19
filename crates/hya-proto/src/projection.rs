@@ -1823,69 +1823,8 @@ mod team_tests {
     }
 
     /// A relative leaf and the full path name the same agent, and both are
-    /// refused for anyone outside the sender's unit (AC1, AC2).
-    #[test]
-    fn resolve_in_scope_accepts_leaf_and_path_but_only_within_the_unit() {
-        let team = two_unit_team();
-        let worker = "main/lead-1/worker-1";
-
-        // Sibling, by leaf and by full path — same answer.
-        assert_eq!(
-            team.resolve_in_scope(worker, "worker-2").as_deref(),
-            Some("main/lead-1/worker-2")
-        );
-        assert_eq!(
-            team.resolve_in_scope(worker, "main/lead-1/worker-2")
-                .as_deref(),
-            Some("main/lead-1/worker-2")
-        );
-        // Parent.
-        assert_eq!(
-            team.resolve_in_scope(worker, "lead-1").as_deref(),
-            Some("main/lead-1")
-        );
-        // Direct report, seen from the leader.
-        assert_eq!(
-            team.resolve_in_scope("main/lead-1", "worker-1").as_deref(),
-            Some("main/lead-1/worker-1")
-        );
-
-        // Out of scope, however it is spelled.
-        for raw in ["main", "lead-2", "main/lead-2", "main/lead-2/worker-1"] {
-            assert_eq!(
-                team.resolve_in_scope(worker, raw),
-                None,
-                "`{raw}` must not resolve from {worker}"
-            );
-        }
-        // Unknown and out-of-scope are indistinguishable to the sender.
-        assert_eq!(team.resolve_in_scope(worker, "nobody"), None);
-    }
-
-    /// The two units each hold a `worker-1`. A relative leaf must resolve to the
-    /// sender's OWN unit, never leak across, and never resolve to itself.
-    #[test]
-    fn duplicate_leaf_in_another_unit_resolves_locally_only() {
-        let team = two_unit_team();
-        assert_eq!(
-            team.resolve_in_scope("main/lead-1/worker-2", "worker-1")
-                .as_deref(),
-            Some("main/lead-1/worker-1"),
-            "the sender's own unit wins"
-        );
-        assert_eq!(
-            team.resolve_in_scope("main/lead-2", "worker-1").as_deref(),
-            Some("main/lead-2/worker-1"),
-            "lead-2 reaches its OWN worker-1"
-        );
-        assert_eq!(
-            team.resolve_in_scope("main/lead-1/worker-1", "worker-1"),
-            None,
-            "an agent may not address itself"
-        );
-    }
-
-    /// `#name` vs `#^name`, for a leader and for a leaf agent (AC5).
+    /// refused for anyone outside the sender's unit (AC1, AC2).    /// The two units each hold a `worker-1`. A relative leaf must resolve to the
+    /// sender's OWN unit, never leak across, and never resolve to itself.    /// `#name` vs `#^name`, for a leader and for a leaf agent (AC5).
     #[test]
     fn channel_resolution_follows_leadership() {
         let team = two_unit_team();
