@@ -1,25 +1,25 @@
-# 0.36.36
+# 0.36.37
 
-## HTTP `/v1` binding covers workflow, filesystem, project/VCS, worktrees, and MCP (server)
+## HTTP `/v1` binding completed: PTY sessions, WebSocket terminal stream, and the protocol guide (server)
 
-- Workflow: `GET /v1/workflows` lists discovered sources through the
-  app-owned control handle, `GET/POST /v1/sessions/{id}/workflow` reads the
-  projected state and submits typed commands (list/info/select/run) with
-  the same admission semantics and stable error codes as the legacy
-  mirrors.
-- Filesystem: `GET /v1/fs/read|list|find|search|symbols` serve scoped
-  reads under the directory scope with traversal rejection, bounded
-  walks that skip VCS/build directories, glob-to-regex file finding,
-  substring text search, and LSP-backed symbol search.
-- Project and VCS: project registry/current/directories plus
-  `init-git`, git status (branch/head/dirty files), raw diff, and patch
-  apply reuse the shared git helpers.
-- Worktrees graduate to `GET/POST/DELETE /v1/worktrees` and
-  `POST /v1/worktrees/{id}/reset` over the engine's worktree helpers.
-- MCP: `GET/POST /v1/mcp` and `:connect`/`:disconnect` map onto the
-  app-owned MCP control handle (stdio transports; typed status). OAuth
-  surfaces answer `unavailable` honestly until wired.
-- Two integration tests extend `tests/v1_api.rs` (filesystem round trip
-  with traversal rejection; project/vcs/mcp/workflow catalog probes).
-  All `/v1` domains are now live over HTTP; the gRPC binding and the
-  PTY/`StreamPty` surface land next.
+- The PTY domain joins `/v1`: `GET /v1/pty/shells`, `POST /v1/pty`,
+  `GET/PUT/DELETE /v1/pty/{id}`, and `POST /v1/pty/{id}/connect-token`
+  over the shared PTY runtime (typed create/update payloads, one-time
+  connect tickets with expiry).
+- `GET /v1/pty/{id}/connect?ticket=...` upgrades to a WebSocket carrying
+  protojson `PtyClientFrame` / `PtyServerFrame` — the same frame types as
+  the future gRPC `StreamPty` rpc: base64 `input`/`output` bytes,
+  `resize`, `ping`/`pong`, and terminal `exit`. The first server frame
+  replays the current buffer; raw-binary frames from legacy clients are
+  still accepted as terminal input. Runtime resize stays a documented
+  no-op until the PTY state grows a resize API (shell-side SIGWINCH
+  applies).
+- `docs/protocol/README.md` is the third-party integration guide: base
+  URL and `x-hya-directory` scoping, protojson rules (camelCase fields,
+  full enum names, uint64-as-string, omitted defaults), the stable error
+  table mapped across HTTP and gRPC, cursor pagination, the event-driven
+  turn workflow with SSE frame examples, the interaction plane, PTY
+  frames, and a minimal client walkthrough.
+- Every `/v1` rpc in the `hya.v1` contract now has a live HTTP handler.
+  A PTY lifecycle integration test extends `tests/v1_api.rs` (8 green).
+  Next: the gRPC binding and the dual-transport parity suite.
