@@ -495,3 +495,34 @@ async fn kill_archives_with_a_synthesized_failure_report() {
         "kill synthesizes a degraded handoff"
     );
 }
+
+#[tokio::test]
+async fn root_teardown_force_archives_live_descendants() {
+    let engine = engine().await;
+    let root = root_team(&engine).await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    ensure_main(&supervisor, &engine, root).await;
+    let (lead, lead_handle) = spawn_idle_resident(&supervisor, &engine, root, "lead").await;
+    let (worker, worker_handle) = spawn_idle_resident(&supervisor, &engine, lead, "work").await;
+
+    engine.force_archive_team(root).await.unwrap();
+
+    let projection = engine.read_projection(root).await.unwrap();
+    assert!(
+        !projection.team.roster.keys().any(|path| path != "main"),
+        "teardown empties the live roster below the root"
+    );
+    for handle in [&lead_handle, &worker_handle] {
+        let archived = projection
+            .team
+            .archived
+            .get(handle)
+            .unwrap_or_else(|| panic!("`{handle}` must be archived"));
+        assert_eq!(archived.reason, ArchiveReason::RootTeardown);
+    }
+    let active = engine.store().active_actor_ids().await.unwrap();
+    assert!(
+        !active.contains(&lead) && !active.contains(&worker),
+        "claims released"
+    );
+}

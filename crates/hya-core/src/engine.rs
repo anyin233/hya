@@ -399,6 +399,11 @@ pub trait ArchiveReviver: Send + Sync {
         child_handle: &str,
         body: String,
     ) -> Result<(), CoreError>;
+
+    /// Root-turn teardown (ADR-0015): release every live actor claim under
+    /// `root` and stop the resident tasks. Event emission happens engine-side
+    /// before this is called.
+    async fn teardown_root(&self, root: SessionId) -> Result<(), CoreError>;
 }
 
 impl SessionEngine {

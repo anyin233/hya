@@ -242,6 +242,45 @@ impl SessionEngine {
         Ok((outcome.work, aborted_operations))
     }
 
+    /// Root-turn teardown (ADR-0015): force-archive every live descendant with
+    /// a degraded handoff and a synthesized failure report, then hand claim
+    /// release to the installed supervisor seam. The durable log keeps
+    /// everything; the roster empties below the root.
+    ///
+    /// # Errors
+    /// Propagates store/event failures; a failed row aborts the sweep.
+    pub async fn force_archive_team(&self, root: SessionId) -> Result<(), CoreError> {
+        let projection = self.read_projection(root).await?;
+        // Deepest paths first so a child's report mail still finds its (live)
+        // parent inside the same sweep.
+        let mut paths: Vec<&String> = projection
+            .team
+            .roster
+            .keys()
+            .filter(|path| path.as_str() != hya_proto::ROOT_HANDLE)
+            .collect();
+        paths.sort_by_key(|path| std::cmp::Reverse(path.len()));
+        for path in paths {
+            let child = projection.team.roster[path].session;
+            crate::resident::archive_reported_agent(
+                self,
+                root,
+                path,
+                child,
+                None,
+                hya_proto::ReportOutcome::Failed,
+                "root turn teardown".to_string(),
+                hya_proto::ArchiveReason::RootTeardown,
+                true,
+            )
+            .await?;
+        }
+        if let Some(reviver) = self.archive_reviver() {
+            reviver.teardown_root(root).await?;
+        }
+        Ok(())
+    }
+
     pub(crate) async fn release_resident_actor_claim(
         &self,
         claim: &ActorClaim,
