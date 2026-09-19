@@ -21,8 +21,8 @@ use hya_core::{
     SidecarLifecycle, SidecarStart, SpawnAdmissionOutcome, SubagentGovernor, Summarizer,
     TeamEvidenceEnvelope, TokenAccounting, TurnBinding, apply_agent_model_preference,
     apply_spawn_model_policy, build_system_prompt, project_envelope, project_envelope_for_actor,
-    run_lifecycle_service, run_mailbox_service, run_pre_admitted_member, run_pre_admitted_team,
-    run_pre_admitted_team_for_actor,
+    resolve_dispatch_model, run_lifecycle_service, run_mailbox_service, run_pre_admitted_member,
+    run_pre_admitted_team, run_pre_admitted_team_for_actor,
 };
 
 // Single discovery/date implementation lives in hya-core; re-export for callers.
@@ -2200,6 +2200,51 @@ fn resolve_spawn_member(
     resolve_authorized_spawn_member(ctx, member, &definition)
 }
 
+/// Resolve a member's caller-supplied model request against the live catalog.
+///
+/// Branch 1 (exact valid id) and branch 2 (first substring match, bare
+/// vendor ids excluded) replace the request with the resolved id; anything
+/// else clears it so [`apply_spawn_model_policy`] falls through to the
+/// definition/preference chain.
+fn resolve_member_dispatch_model(
+    ctx: &ResolveSpawnMemberCtx<'_>,
+    mut member: SpawnMember,
+) -> SpawnMember {
+    let catalog = ctx.engine.provider_catalog();
+    let model_ids: Vec<String> = catalog
+        .iter()
+        .map(|row| format!("{}/{}", row.provider_id, row.model_id))
+        .collect();
+    let provider_ids: Vec<String> = ctx
+        .engine
+        .provider_catalog_snapshot()
+        .providers()
+        .iter()
+        .map(|state| state.provider_id.clone())
+        .collect();
+    let requested = member
+        .model
+        .clone()
+        .or_else(|| {
+            member
+                .inline_agent
+                .as_ref()
+                .and_then(|inline| inline.model.clone())
+        })
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
+    let Some(requested) = requested else {
+        return member;
+    };
+    let resolved = resolve_dispatch_model(&requested, &model_ids, &provider_ids)
+        .map(|model| model.to_string());
+    member.model = resolved.clone();
+    if let Some(inline) = member.inline_agent.as_mut() {
+        inline.model = resolved;
+    }
+    member
+}
+
 fn resolve_authorized_spawn_member(
     ctx: &ResolveSpawnMemberCtx<'_>,
     member: SpawnMember,
@@ -2230,6 +2275,11 @@ fn resolve_authorized_spawn_member(
         ctx.binding.agent_model_preference(definition.stable_id),
         ctx.is_servable,
     );
+    // Dispatch-time model resolution: a caller-supplied model id is resolved
+    // against the live catalog (exact -> substring, bare vendor ids never
+    // substring-dispatch). Unresolvable requests defer to the user's
+    // configured chain instead of overriding it verbatim.
+    let member = resolve_member_dispatch_model(ctx, member);
     let mut agent =
         apply_spawn_model_policy(agent, definition, &member, ctx.categories, ctx.is_servable);
     let mut resident = definition.spawn_lifecycle == SpawnLifecycle::Resident || member.resident;
@@ -11933,9 +11983,13 @@ You are the installed resident agent.
         };
 
         assert_eq!(resolve(None), ModelRef::new("remembered/model"));
+        // Dispatch-time resolution: an explicit id that is not in the catalog
+        // and substring-matches nothing defers to the remembered tier instead
+        // of overriding verbatim. (Exact and substring dispatch are covered by
+        // `resolve_dispatch_model` unit tests and the p22 e2e scenario.)
         assert_eq!(
             resolve(Some("explicit/model")),
-            ModelRef::new("explicit/model")
+            ModelRef::new("remembered/model")
         );
     }
 
@@ -12021,14 +12075,14 @@ You are the installed resident agent.
                 expected: "bundle/model",
             },
             Case {
-                label: "inline model over Bundle model",
+                label: "dispatchable inline model over Bundle model",
                 bundle_model: Some("bundle/model"),
                 bundle_category: Some("bundle-cat"),
-                inline_model: Some("inline/model"),
+                inline_model: Some("hya/offline"),
                 inline_category: Some("inline-cat"),
                 spawn_model: None,
                 spawn_category: None,
-                expected: "inline/model",
+                expected: "hya/offline",
             },
             Case {
                 label: "spawn category over inline model",
@@ -12041,14 +12095,14 @@ You are the installed resident agent.
                 expected: "cat/spawn-model",
             },
             Case {
-                label: "spawn explicit model highest",
+                label: "dispatchable spawn model highest",
                 bundle_model: Some("bundle/model"),
                 bundle_category: Some("bundle-cat"),
                 inline_model: Some("inline/model"),
                 inline_category: Some("inline-cat"),
-                spawn_model: Some("spawn/model"),
+                spawn_model: Some("offline"),
                 spawn_category: Some("spawn-cat"),
-                expected: "spawn/model",
+                expected: "hya/offline",
             },
         ];
 

@@ -72,7 +72,7 @@ pub use bus::EventBus;
 pub use category::{
     CategoryEntry, CategoryRegistry, ResolvedCategory, apply_agent_model_preference,
     apply_spawn_model_policy, build_member_agent, eligible_agent_model_preference, inject_skills,
-    resolve_configured_agent_model,
+    resolve_configured_agent_model, resolve_dispatch_model,
 };
 pub use compaction::{
     CompactionConfig, CompactionPlan, CompactionRung, MIN_RESOLVED_THRESHOLD, ModelSummarizer,
