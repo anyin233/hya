@@ -157,6 +157,14 @@ enum SlotStatus {
     Busy,
 }
 
+/// A report accepted from the `report` tool, executed once the actor is at
+/// rest (ADR-0015): the gate was checked at call time; the archive runs after
+/// the current turn ends and re-checks.
+struct PendingReport {
+    outcome: ReportOutcome,
+    report: String,
+}
+
 /// One resident (or the main actor) inside a team.
 struct SlotState {
     handle: String,
@@ -188,6 +196,8 @@ struct SlotState {
     cancel: CancellationToken,
     /// One-shot explicit stop request consumed by the resident task.
     stop_request: Option<StopRequest>,
+    /// Accepted-but-not-yet-executed terminal report (ADR-0015).
+    pending_archive: Option<PendingReport>,
     /// How many of this handle's inbox messages have already been injected.
     cursor: usize,
     notify: Arc<Notify>,
@@ -925,6 +935,67 @@ impl TeamActor {
             .collect()
     }
 
+    /// Take the slot's accepted report for execution (ADR-0015).
+    fn take_pending_archive(&self, session: SessionId) -> Option<PendingReport> {
+        let mut state = self.lock();
+        state
+            .residents
+            .get_mut(&session)
+            .and_then(|slot| slot.pending_archive.take())
+    }
+
+    /// Put an unexecuted report back (the gate re-check failed; the wake that
+    /// comes with whatever blocked it will retry).
+    fn restore_pending_archive(&self, session: SessionId, pending: PendingReport) {
+        let mut state = self.lock();
+        if let Some(slot) = state.residents.get_mut(&session) {
+            slot.pending_archive = Some(pending);
+        }
+    }
+
+    /// Execute an accepted report at rest: gate re-check, shared terminal
+    /// sequence, then local slot cleanup. `Err(pending)` means the gate
+    /// re-check failed and the report stays owed.
+    async fn run_pending_archive(
+        &self,
+        session: SessionId,
+        pending: PendingReport,
+    ) -> Result<(), PendingReport> {
+        let (canonical, child, claim) = {
+            let state = self.lock();
+            let Some(slot) = state.residents.get(&session) else {
+                return Ok(());
+            };
+            (slot.handle.clone(), session, slot.claim)
+        };
+        if report_gate_projection(&self.engine, self.root, &canonical)
+            .await
+            .is_err()
+        {
+            return Err(pending);
+        }
+        let PendingReport { outcome, report } = pending;
+        match archive_reported_agent(
+            &self.engine,
+            self.root,
+            &canonical,
+            child,
+            claim.as_ref(),
+            outcome,
+            report.clone(),
+            ArchiveReason::Reported,
+            false,
+        )
+        .await
+        {
+            Ok(()) => {
+                let _ = self.remove_slot(session);
+                Ok(())
+            }
+            Err(_) => Err(PendingReport { outcome, report }),
+        }
+    }
+
     /// Handle one `MailSent` for this team: charge the message budget, count the
     /// work, and deliver a wake to every resident recipient (never the sender).
     async fn on_mail(&self, from: &str, to: &MailEndpoint) {
@@ -989,6 +1060,17 @@ async fn resident_task(team: Arc<TeamActor>, session: SessionId, notify: Arc<Not
     let mut stop_cleanup_pending = false;
     let mut stop_cleanup_requires_request = false;
     loop {
+        // At rest: execute an accepted report (ADR-0015). The gate re-check
+        // inside keeps this lossless; a failed re-check re-arms the pending
+        // report and the wake that comes with whatever blocked it.
+        if let Some(pending) = team.take_pending_archive(session) {
+            match team.run_pending_archive(session, pending).await {
+                Ok(()) => return,
+                Err(pending) => {
+                    team.restore_pending_archive(session, pending);
+                }
+            }
+        }
         if stop_cleanup_pending {
             notify.notified().await;
             if stop_cleanup_requires_request {
@@ -1286,17 +1368,46 @@ async fn resident_task(team: Arc<TeamActor>, session: SessionId, notify: Arc<Not
                                 .record_activity(claim.as_ref(), handle, RosterStatus::Idle, None)
                                 .await;
                         }
-                        Err(err) => {
-                            // A turn error must not wedge the actor: record it and let
-                            // the loop re-decide (it will idle if nothing else is owed).
+                        Err(CoreError::Cancelled) => {
+                            // Team-level cancellation: the kill/stop machinery
+                            // owns terminalization; keep the old loop behavior.
                             let _ = team
                                 .record_activity(
                                     claim.as_ref(),
                                     handle,
                                     RosterStatus::Failed,
-                                    Some(format!("turn error: {err}")),
+                                    Some("turn error: cancelled".to_string()),
                                 )
                                 .await;
+                        }
+                        Err(err) => {
+                            // Engine-synthesized terminality (ADR-0015): a
+                            // terminal turn error IS the agent's failure
+                            // report — degraded handoff, archive, exit. The
+                            // parent can revive with the handoff context.
+                            let reason = format!("turn error: {err}");
+                            let _ = team
+                                .record_activity(
+                                    claim.as_ref(),
+                                    handle.clone(),
+                                    RosterStatus::Failed,
+                                    Some(reason.clone()),
+                                )
+                                .await;
+                            let _ = archive_reported_agent(
+                                &team.engine,
+                                team.root,
+                                &handle,
+                                session,
+                                claim.as_ref(),
+                                ReportOutcome::Failed,
+                                reason,
+                                ArchiveReason::Reported,
+                                true,
+                            )
+                            .await;
+                            let _ = team.remove_slot(session);
+                            return;
                         }
                     }
                 }
@@ -1383,6 +1494,148 @@ pub struct ResidentSupervisor {
     engine: Arc<SessionEngine>,
     owner_run_id: OwnerRunId,
     teams: Mutex<HashMap<SessionId, Arc<TeamActor>>>,
+}
+
+/// The shared terminal sequence (ADR-0015): handoff → report marker on the
+/// parent log → report mail (child still live, so the scope gate accepts it)
+/// → claim release → archive marker. Ordered so nothing can be lost; the
+/// caller owns the gate and the slot teardown.
+#[allow(clippy::too_many_arguments)]
+async fn archive_reported_agent(
+    engine: &Arc<SessionEngine>,
+    root: SessionId,
+    canonical: &str,
+    child: SessionId,
+    claim: Option<&ActorClaim>,
+    outcome: ReportOutcome,
+    report: String,
+    reason: ArchiveReason,
+    force_degraded: bool,
+) -> Result<(), CoreError> {
+    let projection = engine.read_projection(root).await?;
+
+    // 1. Terminal handoff (never fails; degrades deterministically). Force-
+    //    degraded paths (kill, budget) never wait on a model call.
+    let handoff = if force_degraded {
+        engine.degraded_terminal_handoff(child).await
+    } else {
+        engine.terminal_handoff(child).await
+    };
+    engine
+        .emit_for_actor(
+            None,
+            child,
+            Event::HandoffCommitted {
+                session: child,
+                handle: canonical.to_string(),
+                generation: handoff.generation,
+                doc: handoff.doc.clone(),
+                degraded: handoff.degraded,
+            },
+        )
+        .await?;
+
+    // 2. Report marker on the PARENT log (member row goes terminal).
+    let parent_path = scope::parent_path(canonical).unwrap_or(scope::ROOT_HANDLE);
+    let parent_session = projection
+        .team
+        .roster
+        .get(parent_path)
+        .map_or(root, |entry| entry.session);
+    let parent_projection = engine.read_projection(parent_session).await?;
+    let member = parent_projection
+        .session
+        .members
+        .iter()
+        .find(|row| row.child == Some(child))
+        .map_or_else(MemberId::new, |row| row.member);
+    engine
+        .emit_for_actor(
+            None,
+            parent_session,
+            Event::SubagentReported {
+                session: parent_session,
+                member,
+                child,
+                handle: canonical.to_string(),
+                outcome,
+                report: report.clone(),
+            },
+        )
+        .await?;
+
+    // 3. Report mail to the parent — while the child is still on the roster,
+    //    so the scope gate accepts the send and wakes the parent.
+    engine
+        .mail_send_for_actor(
+            child,
+            MailEndpoint::Handle(parent_path.to_string()),
+            MailKind::Message,
+            report,
+            claim,
+        )
+        .await?;
+
+    // 4. Durable claim release FIRST — its store-side registration check
+    //    requires the roster row to still exist, and its terminal activity
+    //    event lands on a row the next marker removes.
+    if let Some(claim) = claim {
+        engine
+            .store()
+            .finalize_resident_stop(claim, root, canonical)
+            .await?;
+    }
+
+    // 5. The archive marker: sole exit from the live roster.
+    engine
+        .emit_for_actor(
+            None,
+            root,
+            Event::AgentArchived {
+                session: root,
+                handle: canonical.to_string(),
+                child,
+                reason,
+            },
+        )
+        .await?;
+    Ok(())
+}
+
+/// Projection-level report gate (ADR-0015): live roster row, inbox drained,
+/// no live children. Pure read; shared by the tool pre-check, the direct
+/// archive path, and the at-rest pending-report execution.
+async fn report_gate_projection(
+    engine: &Arc<SessionEngine>,
+    root: SessionId,
+    canonical: &str,
+) -> Result<hya_proto::Projection, CoreError> {
+    let projection = engine.read_projection(root).await?;
+    let entry = projection.team.roster.get(canonical).ok_or_else(|| {
+        CoreError::Invalid(format!("resident `{canonical}` is not on the roster"))
+    })?;
+    let inbox_len = projection
+        .team
+        .inboxes
+        .get(canonical)
+        .map_or(0, |inbox| inbox.len() as u64);
+    if entry.resident_cursor < inbox_len {
+        return Err(CoreError::Invalid(format!(
+            "report rejected: `{canonical}` has {} unread mail message(s); answer them first",
+            inbox_len - entry.resident_cursor
+        )));
+    }
+    let live_children = projection
+        .team
+        .roster
+        .keys()
+        .any(|path| scope::parent_path(path) == Some(canonical));
+    if live_children {
+        return Err(CoreError::Invalid(format!(
+            "report rejected: `{canonical}` still has live children; archive them first"
+        )));
+    }
+    Ok(projection)
 }
 
 /// A downward mail to an archived direct child revives it (ADR-0015): the
@@ -1665,32 +1918,7 @@ impl ResidentSupervisor {
         root: SessionId,
         canonical: &str,
     ) -> Result<hya_proto::Projection, CoreError> {
-        let projection = self.engine.read_projection(root).await?;
-        let entry = projection.team.roster.get(canonical).ok_or_else(|| {
-            CoreError::Invalid(format!("resident `{canonical}` is not on the roster"))
-        })?;
-        let inbox_len = projection
-            .team
-            .inboxes
-            .get(canonical)
-            .map_or(0, |inbox| inbox.len() as u64);
-        if entry.resident_cursor < inbox_len {
-            return Err(CoreError::Invalid(format!(
-                "report rejected: `{canonical}` has {} unread mail message(s); answer them first",
-                inbox_len - entry.resident_cursor
-            )));
-        }
-        let live_children = projection
-            .team
-            .roster
-            .keys()
-            .any(|path| scope::parent_path(path) == Some(canonical));
-        if live_children {
-            return Err(CoreError::Invalid(format!(
-                "report rejected: `{canonical}` still has live children; archive them first"
-            )));
-        }
-        Ok(projection)
+        report_gate_projection(&self.engine, root, canonical).await
     }
 
     /// Terminal report + immediate archive (ADR-0015).
@@ -1738,88 +1966,19 @@ impl ResidentSupervisor {
 
         // Projection-level gate (unread mail / live children); re-checked here
         // even for pre-checked tool callers.
-        let projection = self.report_gate_state(root, &canonical).await?;
-
-        // 1. Terminal handoff (never fails; degrades deterministically).
-        let handoff = self.engine.terminal_handoff(child).await;
-        self.engine
-            .emit_for_actor(
-                None,
-                child,
-                Event::HandoffCommitted {
-                    session: child,
-                    handle: canonical.clone(),
-                    generation: handoff.generation,
-                    doc: handoff.doc.clone(),
-                    degraded: handoff.degraded,
-                },
-            )
-            .await?;
-
-        // 2. Report marker on the PARENT log (member row goes terminal).
-        let parent_path = scope::parent_path(&canonical).unwrap_or(scope::ROOT_HANDLE);
-        let parent_session = projection
-            .team
-            .roster
-            .get(parent_path)
-            .map_or(root, |entry| entry.session);
-        let parent_projection = self.engine.read_projection(parent_session).await?;
-        let member = parent_projection
-            .session
-            .members
-            .iter()
-            .find(|row| row.child == Some(child))
-            .map_or_else(MemberId::new, |row| row.member);
-        self.engine
-            .emit_for_actor(
-                None,
-                parent_session,
-                Event::SubagentReported {
-                    session: parent_session,
-                    member,
-                    child,
-                    handle: canonical.clone(),
-                    outcome,
-                    report: report.clone(),
-                },
-            )
-            .await?;
-
-        // 3. Report mail to the parent — while the child is still on the
-        //    roster, so the scope gate accepts the send and wakes the parent.
-        self.engine
-            .mail_send_for_actor(
-                child,
-                MailEndpoint::Handle(parent_path.to_string()),
-                MailKind::Message,
-                report,
-                claim.as_ref(),
-            )
-            .await?;
-
-        // 4. Durable claim release FIRST — its store-side registration check
-        //    requires the roster row to still exist, and its terminal
-        //    activity event lands on a row the next marker removes.
-        if let Some(claim) = claim.as_ref() {
-            self.engine
-                .store()
-                .finalize_resident_stop(claim, root, &canonical)
-                .await?;
-        }
-
-        // 5. The archive marker: sole exit from the live roster.
-        self.engine
-            .emit_for_actor(
-                None,
-                root,
-                Event::AgentArchived {
-                    session: root,
-                    handle: canonical.clone(),
-                    child,
-                    reason: ArchiveReason::Reported,
-                },
-            )
-            .await?;
+        self.report_gate_state(root, &canonical).await?;
+        archive_reported_agent(
+            &self.engine,
+            root,
+            &canonical,
+            child,
+            claim.as_ref(),
+            outcome,
+            report,
+            ArchiveReason::Reported,
+            false,
+        )
+        .await?;
 
         // 6. Slot teardown: idle by the gate, so a plain stop handshake ends
         //    the resident task and releases the team budget counters.
@@ -1846,6 +2005,116 @@ impl ResidentSupervisor {
             if queued {
                 let _ = receiver.await;
             }
+        }
+        Ok(())
+    }
+
+    /// The `report` tool entry (ADR-0015): gate feedback now, archive once the
+    /// actor is at rest. Works mid-turn — the accepted report parks on the
+    /// slot and executes after the current turn ends (gate re-checked there).
+    ///
+    /// # Errors
+    /// Returns [`CoreError::Invalid`] for gate failures or a dead handle.
+    pub async fn submit_report(
+        &self,
+        root: SessionId,
+        handle: &str,
+        outcome: ReportOutcome,
+        report: String,
+    ) -> Result<(), CoreError> {
+        // Fast gate feedback against durable truth (unread mail / children).
+        let canonical = self.report_gate(root, handle).await?;
+        let team =
+            self.teams().get(&root).cloned().ok_or_else(|| {
+                CoreError::Invalid(format!("resident `{handle}` has no live team"))
+            })?;
+        {
+            let mut state = team.lock();
+            let slot = state
+                .residents
+                .iter_mut()
+                .find(|(_, slot)| slot.handle == canonical)
+                .map(|(_, slot)| slot)
+                .ok_or_else(|| CoreError::Invalid(format!("resident `{handle}` is not live")))?;
+            if slot.is_main {
+                return Err(CoreError::Invalid(
+                    "the main actor cannot report".to_string(),
+                ));
+            }
+            slot.pending_archive = Some(PendingReport { outcome, report });
+            slot.notify.notify_one();
+        }
+        Ok(())
+    }
+
+    /// Parent-side force kill (ADR-0015): cancel the child's in-flight turn,
+    /// synthesize a degraded failure report + handoff, archive, and tear the
+    /// slot down. This is the zombie answer for a child that blocks the
+    /// parent's report gate.
+    ///
+    /// # Errors
+    /// Returns [`CoreError::Invalid`] when the handle is not a live non-main
+    /// resident of the team.
+    pub async fn kill_and_archive(
+        &self,
+        root: SessionId,
+        handle: &str,
+        reason: &str,
+    ) -> Result<(), CoreError> {
+        let (canonical, child, claim, notify) = {
+            let team = self.teams().get(&root).cloned().ok_or_else(|| {
+                CoreError::Invalid(format!("resident `{handle}` has no live team"))
+            })?;
+            let mut state = team.lock();
+            let (&session, slot) = state
+                .residents
+                .iter_mut()
+                .find(|(_, slot)| slot.handle == handle)
+                .ok_or_else(|| CoreError::Invalid(format!("resident `{handle}` is not live")))?;
+            if slot.is_main {
+                return Err(CoreError::Invalid(
+                    "the main actor cannot be killed".to_string(),
+                ));
+            }
+            slot.pending_archive = None;
+            slot.pending = false;
+            slot.initial_directive = None;
+            // Stop any in-flight turn before the durable sequence commits.
+            slot.cancel.cancel();
+            (
+                slot.handle.clone(),
+                session,
+                slot.claim,
+                slot.notify.clone(),
+            )
+        };
+        archive_reported_agent(
+            &self.engine,
+            root,
+            &canonical,
+            child,
+            claim.as_ref(),
+            ReportOutcome::Failed,
+            reason.to_string(),
+            ArchiveReason::Killed,
+            true,
+        )
+        .await?;
+        // Slot teardown: the task observes the archived roster + its cancelled
+        // token; nudge it so a parked task exits promptly.
+        notify.notify_one();
+        if let Some(team) = self.teams().get(&root).cloned() {
+            let mut state = team.lock();
+            if let Some(slot) = state.residents.get_mut(&child) {
+                let (reply, _receiver) = oneshot::channel();
+                slot.stop_request = Some(StopRequest {
+                    terminate: true,
+                    reply,
+                });
+                slot.notify.notify_one();
+                state.residents.remove(&child);
+            }
+            drop(state);
         }
         Ok(())
     }
@@ -2019,6 +2288,7 @@ impl ResidentSupervisor {
                         status: SlotStatus::Idle,
                         pending: false,
                         initial_directive: None,
+                        pending_archive: None,
                         synth_pending: false,
                         claim: None,
                         kill_finalized: false,
@@ -2419,6 +2689,7 @@ impl ResidentSupervisor {
                     status: SlotStatus::Idle,
                     pending: has_initial,
                     initial_directive: initial,
+                    pending_archive: None,
                     synth_pending: false,
                     claim: Some(claim),
                     kill_finalized: false,
@@ -2486,6 +2757,7 @@ impl ResidentSupervisor {
                     status: SlotStatus::Idle,
                     pending,
                     initial_directive: None,
+                    pending_archive: None,
                     synth_pending: false,
                     claim: Some(recovered.claim),
                     kill_finalized: false,

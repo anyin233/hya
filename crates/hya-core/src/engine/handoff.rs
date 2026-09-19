@@ -114,3 +114,29 @@ fn degraded_handoff_doc(projection: Option<&Projection>) -> String {
     );
     doc
 }
+
+impl SessionEngine {
+    /// Deterministic degraded handoff, bypassing the summarizer entirely
+    /// (kill / budget-kill paths must never wait on a model call).
+    pub async fn degraded_terminal_handoff(&self, session: SessionId) -> TerminalHandoff {
+        match self.read_projection(session).await {
+            Ok(projection) => {
+                let generation = projection
+                    .session
+                    .handoff
+                    .as_ref()
+                    .map_or(1, |handoff| handoff.generation.saturating_add(1));
+                TerminalHandoff {
+                    generation,
+                    doc: degraded_handoff_doc(Some(&projection)),
+                    degraded: true,
+                }
+            }
+            Err(_) => TerminalHandoff {
+                generation: 1,
+                doc: degraded_handoff_doc(None),
+                degraded: true,
+            },
+        }
+    }
+}
