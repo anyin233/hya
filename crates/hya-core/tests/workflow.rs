@@ -140,7 +140,7 @@ impl Provider for RecordingProvider {
                 }
             }
         }
-        let reply = if user_text.starts_with("EXPLORE") {
+        let reply = if directive_of(&user_text).starts_with("EXPLORE") {
             "EXPLORER_REPORT"
         } else if user_text.contains("FAIL_ME") {
             return Err(ProviderError::Transport("member scripted failure".into()));
@@ -243,7 +243,7 @@ impl Provider for BarrierProvider {
     ) -> Result<EventStream, ProviderError> {
         let parallel = request.messages.iter().any(|message| {
             matches!(message, Message::User { parts, .. } if parts.iter().any(|part| {
-                matches!(part, Part::Text { text, .. } if text.starts_with("PARALLEL"))
+                matches!(part, Part::Text { text, .. } if directive_of(text).starts_with("PARALLEL"))
             }))
         });
         if parallel {
@@ -310,6 +310,12 @@ impl Provider for ResidentHangingProvider {
         self.started.notify_one();
         futures::future::pending::<Result<EventStream, ProviderError>>().await
     }
+}
+
+/// Strip the resident wake prefix (ADR-0015): stage directives reach the
+/// actor's model request as `[mail from main] <directive>`.
+fn directive_of(text: &str) -> &str {
+    text.trim_start_matches("[mail from main] ")
 }
 
 async fn engine(provider: Arc<dyn Provider>) -> Arc<SessionEngine> {
@@ -431,7 +437,7 @@ async fn two_stage_workflow_runs_in_order_and_hands_off_evidence() {
     let prompts = provider.prompts();
     assert_eq!(prompts.len(), 2, "one turn per stage");
     assert!(
-        prompts[0].1.starts_with("EXPLORE the retry paths"),
+        directive_of(&prompts[0].1).starts_with("EXPLORE the retry paths"),
         "inputs substitute into the first directive: {:?}",
         prompts[0].1
     );
@@ -517,7 +523,7 @@ flowchart TD
 
     let (_, review_prompt) = prompts
         .iter()
-        .find(|(_, text)| text.starts_with("REVIEW both"))
+        .find(|(_, text)| directive_of(text).starts_with("REVIEW both"))
         .expect("review prompt appears once");
     assert!(
         review_prompt.contains("<stage id=\"impl_a\"")
@@ -577,11 +583,16 @@ flowchart TD
     assert_eq!(
         report.status,
         WorkflowStatus::Completed,
-        "reports={:?}, entered={}",
+        "reports={:#?}, entered={}",
         report.stages,
         provider.entered.load(Ordering::SeqCst)
     );
-    assert_eq!(provider.entered.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        provider.entered.load(Ordering::SeqCst),
+        2,
+        "entered wrong; reports={:#?}",
+        report.stages
+    );
 }
 
 /// `on_member_failure: collect_all` keeps the DAG running: the failed stage is
@@ -643,7 +654,7 @@ flowchart TD
     let prompts = provider.prompts();
     let (_, review_prompt) = prompts
         .iter()
-        .find(|(_, text)| text.starts_with("REVIEW all"))
+        .find(|(_, text)| directive_of(text).starts_with("REVIEW all"))
         .expect("review still ran");
     assert!(
         review_prompt.contains("id=\"good\"") && review_prompt.contains("WORKER_DONE"),
@@ -725,7 +736,7 @@ flowchart TD
     let prompts = provider.prompts();
     let (_, review_prompt) = prompts
         .iter()
-        .find(|(_, text)| text.starts_with("REVIEW loop"))
+        .find(|(_, text)| directive_of(text).starts_with("REVIEW loop"))
         .expect("review receives loop evidence");
     assert!(review_prompt.contains("id=\"build\"") && review_prompt.contains("status=\"failed\""));
 }
