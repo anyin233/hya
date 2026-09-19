@@ -42,6 +42,13 @@ pub struct SummarizeOptions {
     /// over, and the request shape it rides matches the live conversation so a
     /// cache-capable provider can reuse the prefix.
     pub handoff: bool,
+    /// Terminal handoff variant (ADR-0015): state only, no narrative.
+    ///
+    /// Selects [`STATE_HANDOFF_TEMPLATE`] over [`HANDOFF_TEMPLATE`] in
+    /// [`handoff_request_messages`]. The terminal document is the only state an
+    /// archived agent carries into its next episode, so it records what *is*,
+    /// never how the session got there.
+    pub state_only: bool,
 }
 
 /// Thresholds for when and how aggressively to compact a transcript.
@@ -822,6 +829,27 @@ Preserve exact file paths, identifiers, signatures, and command lines. Prefer \
 terse bullets over paragraphs. The reader sees the recent turns only through \
 this document.";
 
+/// Section structure of a **terminal** handoff document (ADR-0015).
+///
+/// The terminal handoff is the only state an archived agent carries into its
+/// next episode, so it records what *is* — never how the session got there.
+/// Resolved errors fold into Decisions/Current state; there is no
+/// errors-and-fixes narrative section.
+const STATE_HANDOFF_TEMPLATE: &str = "\
+Write a state handoff for an agent resuming this work in a fresh episode, \
+under exactly these headings, keeping every heading even when its section is \
+empty. Record only current state — never narrate how it came to be:
+
+1. Goal - the task, in the parent's terms.
+2. Current state - what exists and works right now.
+3. Files and code - exact paths touched, and what changed or matters in each.
+4. Decisions - choices in force, including what was ruled out.
+5. Pending tasks - work explicitly requested and not yet done.
+6. Next step - the single next action, or `none`.
+
+Preserve exact file paths, identifiers, signatures, and command lines. Prefer \
+terse bullets over paragraphs.";
+
 /// Request messages for a handoff call: the transcript verbatim, plus exactly
 /// one trailing prompt.
 ///
@@ -842,7 +870,12 @@ pub fn handoff_request_messages(messages: &[Message], options: &SummarizeOptions
             "<previous-summary>\n{previous}\n</previous-summary>\n\n"
         );
     }
-    let _ = write!(prompt, "{HANDOFF_TEMPLATE}");
+    let template = if options.state_only {
+        STATE_HANDOFF_TEMPLATE
+    } else {
+        HANDOFF_TEMPLATE
+    };
+    let _ = write!(prompt, "{template}");
     let mut out = messages.to_vec();
     out.push(Message::User {
         id: MessageId::new(),

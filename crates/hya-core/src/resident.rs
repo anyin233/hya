@@ -35,14 +35,14 @@ use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
 
 use hya_proto::{
-    ActorClaim, Event, MailEndpoint, MemberId, OwnerRunId, RosterStatus, SessionId, SubagentMode,
-    scope,
+    ActorClaim, ActorEpoch, ArchiveReason, Event, MailEndpoint, MailKind, MemberId, ModelRef,
+    OwnerRunId, ReportOutcome, RosterStatus, SessionId, SubagentMode, scope,
 };
 use hya_tool::{AgentDef, ResolvedTool};
 use tokio::sync::{Notify, oneshot};
 use tokio_util::sync::CancellationToken;
 
-use crate::engine::{AgentSpec, CreateSession, SessionEngine, TurnRequestContext};
+use crate::engine::{AgentSpec, ArchiveReviver, CreateSession, SessionEngine, TurnRequestContext};
 use crate::error::CoreError;
 use crate::hooks::{HookDispatcher, scope_activation_hooks};
 use crate::orchestrator::TeamBudget;
@@ -1276,6 +1276,10 @@ async fn resident_task(team: Arc<TeamActor>, session: SessionId, notify: Arc<Not
                         team.finish_run(session);
                         continue;
                     }
+                    // Flip the slot idle BEFORE recording the roster activity:
+                    // observers gate on "roster says idle" (the report gate),
+                    // so that observation must imply the slot is idle too.
+                    team.finish_run(session);
                     match turn_result {
                         Ok(()) => {
                             let _ = team
@@ -1295,7 +1299,6 @@ async fn resident_task(team: Arc<TeamActor>, session: SessionId, notify: Arc<Not
                                 .await;
                         }
                     }
-                    team.finish_run(session);
                 }
                 Action::StopResident { terminate, reply } => {
                     stop_requires_terminate |= terminate;
@@ -1382,6 +1385,21 @@ pub struct ResidentSupervisor {
     teams: Mutex<HashMap<SessionId, Arc<TeamActor>>>,
 }
 
+/// A downward mail to an archived direct child revives it (ADR-0015): the
+/// supervisor is the engine's [`ArchiveReviver`].
+#[async_trait::async_trait]
+impl ArchiveReviver for ResidentSupervisor {
+    async fn revive(
+        &self,
+        root: SessionId,
+        parent: &str,
+        child_handle: &str,
+        body: String,
+    ) -> Result<(), CoreError> {
+        self.revive_child(root, parent, child_handle, body).await
+    }
+}
+
 impl ResidentSupervisor {
     /// Build the supervisor and spawn its bus listener. The returned `Arc` is the
     /// registration handle used by the spawn path.
@@ -1403,6 +1421,11 @@ impl ResidentSupervisor {
             owner_run_id,
             teams: Mutex::new(HashMap::new()),
         });
+        // The supervisor is the engine's revive seam (ADR-0015): wire it before
+        // the listener task starts so no mail send can race the installation.
+        supervisor
+            .engine
+            .set_reviver(supervisor.clone() as Arc<dyn ArchiveReviver>);
         let listener = supervisor.clone();
         tokio::spawn(async move { listener.run_bus(rx).await });
         supervisor
@@ -1620,6 +1643,332 @@ impl ResidentSupervisor {
                 "resident `{handle}` is not terminal"
             )))
         }
+    }
+
+    /// Projection-only report-gate check (ADR-0015): the handle must be live,
+    /// its inbox drained, and it must have no live children. The tool surface
+    /// calls this for fast feedback; [`Self::report_and_archive`] re-checks it.
+    ///
+    /// # Errors
+    /// Returns [`CoreError::Invalid`] for each gate failure.
+    pub async fn report_gate(&self, root: SessionId, handle: &str) -> Result<String, CoreError> {
+        let projection = self.engine.read_projection(root).await?;
+        let canonical = projection.team.canonical_member(handle);
+        self.report_gate_state(root, &canonical).await?;
+        Ok(canonical)
+    }
+
+    /// Shared gate body over an already-canonical handle; returns the
+    /// projection it validated.
+    async fn report_gate_state(
+        &self,
+        root: SessionId,
+        canonical: &str,
+    ) -> Result<hya_proto::Projection, CoreError> {
+        let projection = self.engine.read_projection(root).await?;
+        let entry = projection.team.roster.get(canonical).ok_or_else(|| {
+            CoreError::Invalid(format!("resident `{canonical}` is not on the roster"))
+        })?;
+        let inbox_len = projection
+            .team
+            .inboxes
+            .get(canonical)
+            .map_or(0, |inbox| inbox.len() as u64);
+        if entry.resident_cursor < inbox_len {
+            return Err(CoreError::Invalid(format!(
+                "report rejected: `{canonical}` has {} unread mail message(s); answer them first",
+                inbox_len - entry.resident_cursor
+            )));
+        }
+        let live_children = projection
+            .team
+            .roster
+            .keys()
+            .any(|path| scope::parent_path(path) == Some(canonical));
+        if live_children {
+            return Err(CoreError::Invalid(format!(
+                "report rejected: `{canonical}` still has live children; archive them first"
+            )));
+        }
+        Ok(projection)
+    }
+
+    /// Terminal report + immediate archive (ADR-0015).
+    ///
+    /// The gate is checked against durable projection truth (inbox drained ∧
+    /// no live children) and the sequence is ordered so nothing can be lost:
+    /// handoff → report marker on the parent log → report mail (child still
+    /// live, so the scope gate accepts it) → archive marker → claim release →
+    /// slot teardown. Only the model-issued path calls this directly; the
+    /// `report` tool performs the same gate check at call time and routes the
+    /// archive here after its turn ends.
+    ///
+    /// # Errors
+    /// Returns [`CoreError::Invalid`] for every gate failure (not live, main
+    /// actor, still working, unread mail, live children).
+    pub async fn report_and_archive(
+        &self,
+        root: SessionId,
+        handle: &str,
+        outcome: ReportOutcome,
+        report: String,
+    ) -> Result<(), CoreError> {
+        let (canonical, child, claim) = {
+            let team = self.teams().get(&root).cloned().ok_or_else(|| {
+                CoreError::Invalid(format!("resident `{handle}` has no live team"))
+            })?;
+            let state = team.lock();
+            let (&session, slot) = state
+                .residents
+                .iter()
+                .find(|(_, slot)| slot.handle == handle)
+                .ok_or_else(|| CoreError::Invalid(format!("resident `{handle}` is not live")))?;
+            if slot.is_main {
+                return Err(CoreError::Invalid(
+                    "the main actor cannot report".to_string(),
+                ));
+            }
+            if slot.status == SlotStatus::Busy {
+                return Err(CoreError::Invalid(format!(
+                    "resident `{handle}` is still working; report between turns"
+                )));
+            }
+            (slot.handle.clone(), session, slot.claim)
+        };
+
+        // Projection-level gate (unread mail / live children); re-checked here
+        // even for pre-checked tool callers.
+        let projection = self.report_gate_state(root, &canonical).await?;
+
+        // 1. Terminal handoff (never fails; degrades deterministically).
+        let handoff = self.engine.terminal_handoff(child).await;
+        self.engine
+            .emit_for_actor(
+                None,
+                child,
+                Event::HandoffCommitted {
+                    session: child,
+                    handle: canonical.clone(),
+                    generation: handoff.generation,
+                    doc: handoff.doc.clone(),
+                    degraded: handoff.degraded,
+                },
+            )
+            .await?;
+
+        // 2. Report marker on the PARENT log (member row goes terminal).
+        let parent_path = scope::parent_path(&canonical).unwrap_or(scope::ROOT_HANDLE);
+        let parent_session = projection
+            .team
+            .roster
+            .get(parent_path)
+            .map_or(root, |entry| entry.session);
+        let parent_projection = self.engine.read_projection(parent_session).await?;
+        let member = parent_projection
+            .session
+            .members
+            .iter()
+            .find(|row| row.child == Some(child))
+            .map_or_else(MemberId::new, |row| row.member);
+        self.engine
+            .emit_for_actor(
+                None,
+                parent_session,
+                Event::SubagentReported {
+                    session: parent_session,
+                    member,
+                    child,
+                    handle: canonical.clone(),
+                    outcome,
+                    report: report.clone(),
+                },
+            )
+            .await?;
+
+        // 3. Report mail to the parent — while the child is still on the
+        //    roster, so the scope gate accepts the send and wakes the parent.
+        self.engine
+            .mail_send_for_actor(
+                child,
+                MailEndpoint::Handle(parent_path.to_string()),
+                MailKind::Message,
+                report,
+                claim.as_ref(),
+            )
+            .await?;
+
+        // 4. Durable claim release FIRST — its store-side registration check
+        //    requires the roster row to still exist, and its terminal
+        //    activity event lands on a row the next marker removes.
+        if let Some(claim) = claim.as_ref() {
+            self.engine
+                .store()
+                .finalize_resident_stop(claim, root, &canonical)
+                .await?;
+        }
+
+        // 5. The archive marker: sole exit from the live roster.
+        self.engine
+            .emit_for_actor(
+                None,
+                root,
+                Event::AgentArchived {
+                    session: root,
+                    handle: canonical.clone(),
+                    child,
+                    reason: ArchiveReason::Reported,
+                },
+            )
+            .await?;
+
+        // 6. Slot teardown: idle by the gate, so a plain stop handshake ends
+        //    the resident task and releases the team budget counters.
+        let team = self.teams().get(&root).cloned();
+        if let Some(team) = team {
+            let (reply, receiver) = oneshot::channel();
+            let queued = {
+                let mut state = team.lock();
+                match state.residents.get_mut(&child) {
+                    Some(slot) => {
+                        slot.pending = false;
+                        slot.initial_directive = None;
+                        slot.synth_pending = false;
+                        slot.stop_request = Some(StopRequest {
+                            terminate: false,
+                            reply,
+                        });
+                        slot.notify.notify_one();
+                        true
+                    }
+                    None => false,
+                }
+            };
+            if queued {
+                let _ = receiver.await;
+            }
+        }
+        Ok(())
+    }
+
+    /// Revive one archived direct child of `parent` with `body` as the wake
+    /// prompt (ADR-0015 §4). Re-resolves the episode runtime from the CURRENT
+    /// binding, seeds the fresh episode with the latest handoff, re-registers
+    /// the agent under a new claim epoch, and marks the restart durably.
+    pub async fn revive_child(
+        &self,
+        root: SessionId,
+        parent: &str,
+        child_handle: &str,
+        body: String,
+    ) -> Result<(), CoreError> {
+        let projection = self.engine.read_projection(root).await?;
+        let canonical = projection.team.canonical_member(child_handle);
+        let entry = projection.team.archived.get(&canonical).ok_or_else(|| {
+            CoreError::Invalid(format!("`{child_handle}` is not an archived agent"))
+        })?;
+        if scope::parent_path(&canonical) != Some(parent) {
+            return Err(CoreError::Invalid(format!(
+                "`{child_handle}` is not a direct child of `{parent}`"
+            )));
+        }
+        let child = entry.session;
+        let stable = entry.agent_type.clone();
+
+        // Re-resolve from the current runtime; a vanished stable id fails the
+        // revive closed instead of silently downgrading the agent.
+        let child_projection = self.engine.read_projection(child).await?;
+        let workdir = child_projection
+            .session
+            .workdir
+            .clone()
+            .unwrap_or_else(|| ".".to_string());
+        let workdir = std::path::PathBuf::from(workdir);
+        let binding = self.engine.bind_session_runtime(child, &workdir).await?;
+        let agents = self
+            .engine
+            .agent_roster_for_binding(&binding, stable.as_str())?;
+        let resources = self
+            .engine
+            .agent_resource_policy_for_binding(&binding, stable.as_str())?;
+        let base = AgentSpec {
+            name: stable.clone(),
+            model: child_projection
+                .session
+                .model
+                .clone()
+                .unwrap_or_else(|| ModelRef::new("fake")),
+            system_prompt: String::new(),
+            workdir: workdir.clone(),
+            reasoning: None,
+        };
+        let agent = self
+            .engine
+            .agent_spec_for_binding(&binding, &base, stable.as_str())?;
+
+        // Seed the episode context BEFORE arming, so the handoff precedes the
+        // wake prompt in the child's transcript.
+        if let Some(handoff) = child_projection.session.handoff.clone() {
+            self.engine
+                .inject_system_message(
+                    child,
+                    format!(
+                        "PRIOR HANDOFF (generation {})\n{}",
+                        handoff.generation, handoff.doc
+                    ),
+                )
+                .await?;
+        }
+
+        let parent_path = scope::parent_path(&canonical).unwrap_or(scope::ROOT_HANDLE);
+        let leaf = scope::leaf(&canonical).to_string();
+        let arming = format!("[mail from {parent}] {body}");
+        self.register_existing_resident_at(
+            root,
+            child,
+            parent_path.to_string(),
+            leaf,
+            agent,
+            ResidentRuntimeContext::Resolved {
+                binding,
+                agents,
+                resources,
+            },
+            ResidentActivation {
+                initial: Some(arming),
+                guidance: None,
+                route: None,
+                sidecar_factory: None,
+            },
+        )
+        .await?;
+
+        // Durable restart marker under the new incarnation's epoch.
+        let epoch = self
+            .slot_claim_epoch(root, child)
+            .unwrap_or(ActorEpoch::INITIAL);
+        self.engine
+            .emit_for_actor(
+                None,
+                root,
+                Event::AgentRestarted {
+                    session: root,
+                    handle: canonical,
+                    child,
+                    epoch,
+                },
+            )
+            .await?;
+        Ok(())
+    }
+
+    fn slot_claim_epoch(&self, root: SessionId, session: SessionId) -> Option<ActorEpoch> {
+        self.teams().get(&root).and_then(|team| {
+            let state = team.lock();
+            state
+                .residents
+                .get(&session)
+                .and_then(|slot| slot.claim.as_ref().map(|claim| claim.epoch))
+        })
     }
 
     /// Register the team root as the main actor so child mail (and quiescence) wake
@@ -1963,6 +2312,44 @@ impl ResidentSupervisor {
         runtime: ResidentRuntimeContext,
         activation: ResidentActivation,
     ) -> Result<(), CoreError> {
+        // `handle` arrives either as a canonical path (from `spawn_resident`) or
+        // as a bare leaf (from the public `register_existing_resident*` entry
+        // points). Taking its leaf and re-deriving the unit from the session's
+        // own lineage normalizes both into one canonical path.
+        let parent_path = self.engine.parent_agent_path(root, session).await;
+        let leaf = scope::leaf(&handle).to_string();
+        self.register_existing_resident_at(
+            root,
+            session,
+            parent_path,
+            leaf,
+            agent,
+            runtime,
+            activation,
+        )
+        .await
+    }
+
+    /// Register a resident at an **explicit** canonical path (ADR-0015 revive):
+    /// lineage-derived parents disappear from the roster once archived, so
+    /// revival must pass the archived entry's own parent path and leaf.
+    #[allow(clippy::too_many_arguments)]
+    async fn register_existing_resident_at(
+        &self,
+        root: SessionId,
+        session: SessionId,
+        parent_path: String,
+        leaf: String,
+        agent: AgentSpec,
+        runtime: ResidentRuntimeContext,
+        activation: ResidentActivation,
+    ) -> Result<(), CoreError> {
+        let ResidentActivation {
+            initial,
+            guidance,
+            route,
+            sidecar_factory,
+        } = activation;
         let (binding, agents, resources) = match runtime {
             ResidentRuntimeContext::Bound(binding) => (binding, None, None),
             ResidentRuntimeContext::Resolved {
@@ -1971,18 +2358,6 @@ impl ResidentSupervisor {
                 resources,
             } => (binding, Some(agents), Some(resources)),
         };
-        let ResidentActivation {
-            initial,
-            guidance,
-            route,
-            sidecar_factory,
-        } = activation;
-        // `handle` arrives either as a canonical path (from `spawn_resident`) or
-        // as a bare leaf (from the public `register_existing_resident*` entry
-        // points). Taking its leaf and re-deriving the unit from the session's
-        // own lineage normalizes both into one canonical path.
-        let parent_path = self.engine.parent_agent_path(root, session).await;
-        let leaf = scope::leaf(&handle).to_string();
         let handle = scope::join_path(&parent_path, &leaf);
         let claim = self
             .engine
