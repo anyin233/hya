@@ -526,3 +526,48 @@ async fn root_teardown_force_archives_live_descendants() {
         "claims released"
     );
 }
+
+#[tokio::test]
+async fn registration_mints_the_unit_group_and_pair_dm_channels() {
+    let engine = engine().await;
+    let root = root_team(&engine).await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    ensure_main(&supervisor, &engine, root).await;
+    let (_child, handle) =
+        spawn_idle_resident(&supervisor, &engine, root, "explore the tree").await;
+
+    let projection = engine.read_projection(root).await.unwrap();
+    // One group channel for the root's unit: leader (main) + the child, unit
+    // path recorded, minted id shape.
+    let group = projection
+        .team
+        .channels
+        .values()
+        .find(|channel| {
+            channel.kind == hya_proto::ChannelKind::Group && channel.unit.as_deref() == Some("main")
+        })
+        .expect("unit group channel minted");
+    assert!(group.members.contains("main"));
+    assert!(group.members.contains(&handle));
+    assert!(
+        projection
+            .team
+            .channels
+            .keys()
+            .any(|key| key.starts_with("announce-"))
+    );
+
+    // One DM channel for the pair, persisted with exactly the two members.
+    let dm = projection
+        .team
+        .channels
+        .values()
+        .find(|channel| {
+            channel.kind == hya_proto::ChannelKind::Dm
+                && channel.members.contains("main")
+                && channel.members.contains(&handle)
+        })
+        .expect("pair DM channel minted");
+    assert_eq!(dm.members.len(), 2);
+    assert!(dm.unit.is_none());
+}

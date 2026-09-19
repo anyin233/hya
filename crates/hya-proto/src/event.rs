@@ -661,6 +661,11 @@ pub enum Event {
         /// Group broadcast vs DM pair.
         #[serde(default)]
         kind: ChannelKind,
+        /// Owning unit path for group channels (`main/lead-1`); `None` for DM
+        /// pairs. Durable unit→channel mapping so leader-only posting and
+        /// broadcast resolution replay without derivation.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        unit: Option<String>,
         /// Canonical handles of the founding members.
         #[serde(default)]
         members: Vec<String>,
@@ -1373,6 +1378,7 @@ mod tests {
                     session: root,
                     channel: "announce-aB12Cd34".to_string(),
                     kind: ChannelKind::Group,
+                    unit: None,
                     members: vec!["main".to_string()],
                 },
                 root,
@@ -1382,6 +1388,7 @@ mod tests {
                     session: root,
                     channel: "DM-aB12Cd34".to_string(),
                     kind: ChannelKind::Dm,
+                    unit: None,
                     members: vec!["main".to_string(), "main/lead-1".to_string()],
                 },
                 root,
