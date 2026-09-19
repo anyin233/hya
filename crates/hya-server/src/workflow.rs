@@ -207,7 +207,7 @@ fn reserve_workflow_command(
     })
 }
 
-async fn execute(
+pub(crate) async fn execute(
     st: &ServerState,
     session: SessionId,
     command: WorkflowCommand,

@@ -363,3 +363,170 @@ async fn v1_invalid_requests_render_the_stable_error_model() {
     let (status, _) = send(app, Method::GET, "/v1/interactions", Value::Null).await;
     assert_eq!(status, StatusCode::OK);
 }
+
+#[tokio::test]
+async fn v1_fs_reads_lists_finds_and_searches() {
+    let app = router(state().await);
+    let root = std::env::temp_dir().join(format!(
+        "hya-v1-fs-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(root.join("src/a.rs"), "fn alpha() {}\n").unwrap();
+    std::fs::write(root.join("notes.txt"), "hello v1 probe\n").unwrap();
+    let scope = root.to_string_lossy().into_owned();
+
+    let (status, body) = send(
+        app.clone(),
+        Method::GET,
+        &format!("/v1/fs/read?directory={}&path=notes.txt", enc(&scope)),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["text"], json!(true));
+    assert!(String::from_utf8_lossy(&decode_b64(&body)).contains("hello v1 probe"));
+
+    let (status, body) = send(
+        app.clone(),
+        Method::GET,
+        &format!("/v1/fs/list?directory={}", enc(&scope)),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        body["entries"]
+            .as_array()
+            .is_some_and(|rows| rows.iter().any(|row| row["name"] == json!("src")))
+    );
+
+    let (status, body) = send(
+        app.clone(),
+        Method::GET,
+        &format!(
+            "/v1/fs/find?directory={}&pattern={}",
+            enc(&scope),
+            enc("**/*.rs")
+        ),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body["paths"].as_array().is_some_and(|rows| {
+        rows.iter()
+            .any(|p| p.as_str().is_some_and(|p| p.ends_with("a.rs")))
+    }));
+
+    let (status, body) = send(
+        app.clone(),
+        Method::GET,
+        &format!(
+            "/v1/fs/search?directory={}&query={}",
+            enc(&scope),
+            enc("v1 probe")
+        ),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        body["matches"]
+            .as_array()
+            .is_some_and(|rows| !rows.is_empty())
+    );
+
+    let (status, body) = send(
+        app.clone(),
+        Method::GET,
+        &format!(
+            "/v1/fs/read?directory={}&path={}",
+            enc(&scope),
+            enc("../../etc/passwd")
+        ),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"]["code"], json!("invalid_argument"));
+}
+
+/// Percent-encode a query component for URI construction in tests.
+fn enc(text: &str) -> String {
+    text.bytes()
+        .map(|byte| match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (byte as char).to_string()
+            }
+            _ => format!("%{byte:02X}"),
+        })
+        .collect()
+}
+
+fn decode_b64(body: &Value) -> Vec<u8> {
+    use base64::Engine;
+    body["content"]
+        .as_str()
+        .map(|text| {
+            base64::engine::general_purpose::STANDARD
+                .decode(text)
+                .unwrap_or_default()
+        })
+        .unwrap_or_default()
+}
+
+#[tokio::test]
+async fn v1_project_vcs_mcp_and_workflow_catalog_answer() {
+    let app = router(state().await);
+    let root = std::env::temp_dir().join(format!(
+        "hya-v1-proj-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    let scope = root.to_string_lossy().into_owned();
+
+    let (status, body) = send(app.clone(), Method::GET, "/v1/projects", Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        body["projects"]
+            .as_array()
+            .is_some_and(|rows| !rows.is_empty())
+    );
+
+    let (status, body) = send(
+        app.clone(),
+        Method::GET,
+        &format!("/v1/vcs?directory={}", enc(&scope)),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body["branch"].is_null() || body["branch"] == json!(""));
+    assert!(body["files"].as_array().is_none_or(|rows| rows.is_empty()));
+
+    let (status, body) = send(app.clone(), Method::GET, "/v1/mcp", Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        body["servers"]
+            .as_array()
+            .is_none_or(|rows| rows.is_empty()),
+        "{body}"
+    );
+
+    let (status, body) = send(app, Method::GET, "/v1/workflows", Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        body["workflows"]
+            .as_array()
+            .is_none_or(|rows| rows.is_empty()),
+        "{body}"
+    );
+}

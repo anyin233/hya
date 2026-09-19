@@ -11,7 +11,7 @@ mod patch;
 mod status;
 
 #[derive(Serialize)]
-pub(super) struct FileStatus {
+pub(crate) struct FileStatus {
     file: String,
     additions: usize,
     deletions: usize,
@@ -19,7 +19,7 @@ pub(super) struct FileStatus {
 }
 
 #[derive(Serialize)]
-pub(super) struct FileDiff {
+pub(crate) struct FileDiff {
     file: String,
     patch: String,
     additions: usize,
@@ -34,19 +34,19 @@ struct GitItem {
     status: &'static str,
 }
 
-pub(in crate::compat) fn branch(workdir: &Path) -> Option<String> {
+pub(crate) fn branch(workdir: &Path) -> Option<String> {
     output(workdir, &["branch", "--show-current"])
 }
 
-pub(in crate::compat) fn default_branch(workdir: &Path) -> Option<String> {
+pub(crate) fn default_branch(workdir: &Path) -> Option<String> {
     default_branch::get(workdir)
 }
 
-pub(super) fn is_repo(workdir: &Path) -> bool {
+pub(crate) fn is_repo(workdir: &Path) -> bool {
     output(workdir, &["rev-parse", "--is-inside-work-tree"]).as_deref() == Some("true")
 }
 
-pub(super) fn status(workdir: &Path) -> Result<Vec<FileStatus>, ApiError> {
+pub(crate) fn status(workdir: &Path) -> Result<Vec<FileStatus>, ApiError> {
     let ref_name = has_head(workdir).then_some("HEAD");
     let mut out = Vec::new();
     for item in status::items(workdir)? {
@@ -61,7 +61,7 @@ pub(super) fn status(workdir: &Path) -> Result<Vec<FileStatus>, ApiError> {
     Ok(out)
 }
 
-pub(super) fn diff(
+pub(crate) fn diff(
     workdir: &Path,
     mode: &str,
     context: Option<usize>,
@@ -85,7 +85,7 @@ pub(super) fn diff(
     Ok(out)
 }
 
-pub(super) fn raw_diff(workdir: &Path) -> Result<String, ApiError> {
+pub(crate) fn raw_diff(workdir: &Path) -> Result<String, ApiError> {
     let mut chunks = Vec::new();
     if has_head(workdir) {
         let tracked = text(workdir, &["diff", "HEAD"])?;
@@ -102,7 +102,7 @@ pub(super) fn raw_diff(workdir: &Path) -> Result<String, ApiError> {
     Ok(chunks.join("\n"))
 }
 
-pub(super) fn apply_patch(workdir: &Path, patch: &str) -> Result<(), ()> {
+pub(crate) fn apply_patch(workdir: &Path, patch: &str) -> Result<(), ()> {
     let mut child = Command::new("git")
         .arg("-C")
         .arg(workdir)

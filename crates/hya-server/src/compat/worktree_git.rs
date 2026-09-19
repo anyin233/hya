@@ -3,14 +3,14 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use tokio::process::Command;
 
-pub(super) use super::worktree_git_info::Info;
+pub(crate) use super::worktree_git_info::Info;
 
 struct Entry {
     path: String,
     branch: Option<String>,
 }
 
-pub(super) async fn list(source: &Path) -> Result<Vec<String>, String> {
+pub(crate) async fn list(source: &Path) -> Result<Vec<String>, String> {
     Ok(infos(source)
         .await?
         .into_iter()
@@ -18,7 +18,7 @@ pub(super) async fn list(source: &Path) -> Result<Vec<String>, String> {
         .collect())
 }
 
-pub(super) async fn infos(source: &Path) -> Result<Vec<Info>, String> {
+pub(crate) async fn infos(source: &Path) -> Result<Vec<Info>, String> {
     if !is_git_source(source).await {
         return Ok(Vec::new());
     }
@@ -37,7 +37,7 @@ pub(super) async fn infos(source: &Path) -> Result<Vec<Info>, String> {
         .collect())
 }
 
-pub(super) async fn create(source: &Path, requested: Option<&str>) -> Result<Info, String> {
+pub(crate) async fn create(source: &Path, requested: Option<&str>) -> Result<Info, String> {
     ensure_git_source(source).await?;
     let slug = requested.map_or_else(fallback_name, |name| {
         let slug = slugify(name);
@@ -79,7 +79,7 @@ pub(super) async fn create(source: &Path, requested: Option<&str>) -> Result<Inf
     Ok(Info::new(slug, Some(branch), directory_text))
 }
 
-pub(super) async fn remove(source: &Path, directory: &str) -> Result<bool, String> {
+pub(crate) async fn remove(source: &Path, directory: &str) -> Result<bool, String> {
     ensure_git_source(source).await?;
     let Some(entry) = locate(source, directory).await? else {
         return Ok(true);
@@ -100,7 +100,7 @@ pub(super) async fn remove(source: &Path, directory: &str) -> Result<bool, Strin
     Ok(true)
 }
 
-pub(super) async fn reset(source: &Path, directory: &str) -> Result<bool, String> {
+pub(crate) async fn reset(source: &Path, directory: &str) -> Result<bool, String> {
     ensure_git_source(source).await?;
     if canonical_text(Path::new(directory)) == canonical_text(source) {
         return Err("Cannot reset the primary workspace".to_string());

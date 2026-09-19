@@ -14,7 +14,7 @@ use crate::{ApiError, ServerState};
 
 use super::agent_permission::PermissionRule;
 
-pub(in crate::compat) mod vcs;
+pub(crate) mod vcs;
 
 pub(super) fn router() -> Router<ServerState> {
     Router::new()
