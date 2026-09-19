@@ -109,7 +109,11 @@ async fn submit_command(
             expected_revision: revision_opt(&select.expected_revision),
         },
         Some(Command::Run(run)) => WorkflowCommand::Run {
-            name: None,
+            name: if run.name.is_empty() {
+                None
+            } else {
+                Some(run.name.clone())
+            },
             expected_revision: None,
             inputs: run
                 .inputs
@@ -134,15 +138,34 @@ async fn submit_command(
         }
         WorkflowCommandResult::Info { workflow } => {
             let value = serde_json::to_value(&workflow).unwrap_or(Value::Null);
-            let stage_names: Vec<String> = value
+            let stages_json = value
                 .get("stages")
                 .and_then(Value::as_array)
-                .map(|stages| stages.iter().map(|stage| field(stage, "name")).collect())
+                .cloned()
                 .unwrap_or_default();
+            let stage_names: Vec<String> =
+                stages_json.iter().map(|stage| field(stage, "id")).collect();
+            let stages: Vec<pb::WorkflowStageInfo> = stages_json
+                .iter()
+                .map(|stage| pb::WorkflowStageInfo {
+                    name: field(stage, "id"),
+                    agent: field(stage, "agent"),
+                    level: stage.get("level").and_then(Value::as_u64).unwrap_or(0) as u32,
+                    worker_model: stage.get("worker_model").map(model_assignment),
+                    verifier_model: stage.get("verifier_model").map(model_assignment),
+                })
+                .collect();
             pb::submit_workflow_command_response::Result::Info(pb::WorkflowInfoResult {
-                name: field(&value, "name"),
-                revision: field(&value, "revision"),
+                name: value
+                    .get("identity")
+                    .map(|identity| field(identity, "name"))
+                    .unwrap_or_default(),
+                revision: value
+                    .get("identity")
+                    .map(|identity| field(identity, "revision"))
+                    .unwrap_or_default(),
                 stage_names,
+                stages,
             })
         }
         WorkflowCommandResult::Selected { .. }
@@ -169,6 +192,7 @@ fn map_state(result: &WorkflowCommandResult) -> pb::WorkflowState {
     };
     let selection = value.get("selection").cloned().unwrap_or(Value::Null);
     let run = value.get("run").cloned().unwrap_or(Value::Null);
+    let raw_json = value.to_string();
     pb::WorkflowState {
         session: field(&run, "session"),
         workflow: field(&selection, "name"),
@@ -176,6 +200,7 @@ fn map_state(result: &WorkflowCommandResult) -> pb::WorkflowState {
         status: run_status(&run),
         stages: Vec::new(),
         error_code: String::new(),
+        raw_json,
     }
 }
 
@@ -185,6 +210,26 @@ fn revision_opt(revision: &str) -> Option<hya_proto::workflow::WorkflowRevision>
         return None;
     }
     hya_proto::workflow::WorkflowRevision::from_str(revision).ok()
+}
+
+/// Map an authored model assignment JSON object onto the wire type.
+fn model_assignment(model: &Value) -> pb::WorkflowModelAssignment {
+    pb::WorkflowModelAssignment {
+        id: field(model, "id"),
+        reasoning: field(model, "reasoning"),
+        fallback: model
+            .get("fallback")
+            .and_then(Value::as_array)
+            .map(|rows| {
+                rows.iter()
+                    .map(|row| pb::WorkflowModelCandidate {
+                        id: field(row, "id"),
+                        reasoning: field(row, "reasoning"),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+    }
 }
 
 fn run_status(run: &Value) -> i32 {

@@ -1081,6 +1081,9 @@
           },
           "website": {
             "type": "string"
+          },
+          "result": {
+            "type": "string"
           }
         }
       },
@@ -1156,6 +1159,27 @@
           },
           "argument_hint": {
             "type": "string"
+          },
+          "hints": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "source": {
+            "type": "string"
+          },
+          "template": {
+            "type": "string"
+          },
+          "agent": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "subtask": {
+            "type": "boolean"
           }
         }
       },
@@ -1197,6 +1221,12 @@
             "type": "string"
           },
           "source": {
+            "type": "string"
+          },
+          "content": {
+            "type": "string"
+          },
+          "location": {
             "type": "string"
           }
         }
@@ -2286,6 +2316,12 @@
           },
           "state": {
             "$ref": "#/components/schemas/ToolExecutionState"
+          },
+          "error_code": {
+            "type": "string"
+          },
+          "error_message": {
+            "type": "string"
           }
         }
       },
@@ -3039,6 +3075,9 @@
           "last_seq": {
             "type": "integer",
             "format": "int64"
+          },
+          "busy": {
+            "type": "boolean"
           }
         }
       },
@@ -3465,6 +3504,9 @@
           },
           "error_code": {
             "type": "string"
+          },
+          "raw_json": {
+            "type": "string"
           }
         }
       },
@@ -3491,8 +3533,11 @@
       },
       "WorkflowRunCommand": {
         "type": "object",
-        "description": "`run` command: start the selected workflow.",
+        "description": "`run` command: start the selected or named workflow.",
         "properties": {
+          "name": {
+            "type": "string"
+          },
           "inputs": {
             "type": "object"
           }
@@ -3519,6 +3564,36 @@
           }
         }
       },
+      "WorkflowModelCandidate": {
+        "type": "object",
+        "description": "One authored fallback candidate.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "reasoning": {
+            "type": "string"
+          }
+        }
+      },
+      "WorkflowModelAssignment": {
+        "type": "object",
+        "description": "Authored worker model assignment for a stage.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "reasoning": {
+            "type": "string"
+          },
+          "fallback": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowModelCandidate"
+            }
+          }
+        }
+      },
       "WorkflowInfoResult": {
         "type": "object",
         "description": "Result payload of the `info` command.",
@@ -3534,6 +3609,34 @@
             "items": {
               "type": "string"
             }
+          },
+          "stages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowStageInfo"
+            }
+          }
+        }
+      },
+      "WorkflowStageInfo": {
+        "type": "object",
+        "description": "Compiled stage metadata from the `info` result.",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "agent": {
+            "type": "string"
+          },
+          "level": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "worker_model": {
+            "$ref": "#/components/schemas/WorkflowModelAssignment"
+          },
+          "verifier_model": {
+            "$ref": "#/components/schemas/WorkflowModelAssignment"
           }
         }
       },

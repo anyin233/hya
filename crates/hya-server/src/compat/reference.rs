@@ -13,7 +13,7 @@ use crate::ServerState;
 ///
 /// Guidance is pre-rendered separately and passed into core's one composition
 /// seam; it must not live on [`AgentSpec`].
-pub(in crate::compat) struct SessionTurnAgent {
+pub(crate) struct SessionTurnAgent {
     pub agent: AgentSpec,
     /// Immutable pre-rendered reference guidance for this turn, if any.
     pub guidance: Option<Arc<str>>,
@@ -50,7 +50,7 @@ pub(in crate::compat) async fn session_workdir(st: &ServerState, session: Sessio
 // engine already resolves the model per session; this overrides agent identity).
 //
 // Pre-renders reference guidance once for the turn; does not put it on AgentSpec.
-pub(in crate::compat) async fn session_agent_with_guidance(
+pub(crate) async fn session_agent_with_guidance(
     st: &ServerState,
     session: SessionId,
 ) -> SessionTurnAgent {
@@ -105,10 +105,7 @@ pub(in crate::compat) async fn list_at(st: &ServerState, workdir: &Path) -> Vec<
     references
 }
 
-pub(in crate::compat) async fn external_directories_at(
-    st: &ServerState,
-    workdir: &Path,
-) -> Vec<PathBuf> {
+pub(crate) async fn external_directories_at(st: &ServerState, workdir: &Path) -> Vec<PathBuf> {
     list_at(st, workdir)
         .await
         .into_iter()

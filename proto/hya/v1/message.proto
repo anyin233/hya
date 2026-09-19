@@ -99,6 +99,10 @@ message ToolCallPart {
   string input_json = 3;
   // Execution state of the call.
   ToolExecutionState state = 4;
+  // Stable structured error type when the call failed (e.g. `unknown`).
+  string error_code = 5;
+  // Structured error message when the call failed.
+  string error_message = 6;
 }
 
 // Execution state of one tool call.

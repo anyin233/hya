@@ -7,8 +7,8 @@ use serde::Serialize;
 pub(crate) struct SkillInfo {
     pub(crate) name: String,
     pub(crate) description: String,
-    pub(in crate::compat) location: String,
-    pub(in crate::compat) content: String,
+    pub(crate) location: String,
+    pub(crate) content: String,
 }
 
 pub(crate) fn list(workdir: &Path) -> Vec<SkillInfo> {

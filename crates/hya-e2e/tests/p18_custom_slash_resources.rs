@@ -346,6 +346,8 @@ fn private_home(env: &E2eEnv) -> PathBuf {
 fn array_data(value: &Value) -> &[Value] {
     value
         .get("data")
+        .or_else(|| value.get("commands"))
+        .or_else(|| value.get("skills"))
         .and_then(Value::as_array)
         .or_else(|| value.as_array())
         .map(Vec::as_slice)
@@ -355,7 +357,7 @@ fn array_data(value: &Value) -> &[Value] {
 /// Fetch the full command catalog for the temporary project.
 async fn command_catalog(env: &E2eEnv) -> Value {
     env.get_json(&format!(
-        "/api/command?directory={}",
+        "/v1/commands?directory={}",
         env.backend.workdir_str()
     ))
     .await
@@ -365,7 +367,7 @@ async fn command_catalog(env: &E2eEnv) -> Value {
 /// Fetch the full Skill catalog for the temporary project.
 async fn skill_catalog(env: &E2eEnv) -> Value {
     env.get_json(&format!(
-        "/api/skill?directory={}",
+        "/v1/skills?directory={}",
         env.backend.workdir_str()
     ))
     .await
@@ -453,11 +455,60 @@ async fn post_ok(env: &E2eEnv, path: &str, body: Value) -> Value {
 /// Build the shared command request shape, omitting `text` unless explicit text
 /// bypass is under test.
 fn command_request(command: &str, arguments: &str, text: Option<&str>) -> Value {
-    let mut body = json!({"command": command, "arguments": arguments});
+    let mut inner = json!({"command": command, "arguments": arguments});
     if let Some(text) = text {
-        body["text"] = json!(text);
+        inner["text"] = json!(text);
     }
-    body
+    json!({ "command": inner })
+}
+
+/// POST one v1 command turn and return the persisted user text wrapped in
+/// the legacy response shape so `response_text` keeps working.
+async fn command_turn(env: &E2eEnv, session: impl std::fmt::Display, body: Value) -> Value {
+    let (status, value) = request_json(
+        env,
+        Method::POST,
+        &format!("/v1/sessions/{session}/turns"),
+        Some(body),
+    )
+    .await;
+    assert!(
+        status.is_success(),
+        "POST v1 turn returned {status}: {value}; {}",
+        env.diagnostics()
+    );
+    if let Ok(session_id) = format!("{session}").parse::<hya_proto::SessionId>() {
+        env.wait_session_idle(&session_id, TIMEOUT)
+            .await
+            .expect("v1 command turn completion");
+    }
+    let messages = env
+        .get_json(&format!("/v1/sessions/{session}/messages"))
+        .await
+        .expect("v1 transcript");
+    let text = messages
+        .get("messages")
+        .and_then(Value::as_array)
+        .and_then(|rows| {
+            rows.iter()
+                .rev()
+                .find(|message| message.get("role").and_then(Value::as_str) == Some("ROLE_USER"))
+        })
+        .and_then(|message| {
+            message
+                .get("parts")
+                .and_then(Value::as_array)
+                .and_then(|parts| parts.first())
+        })
+        .and_then(|part| {
+            part.get("text")
+                .and_then(|text| text.get("text"))
+                .or_else(|| part.get("text"))
+                .and_then(Value::as_str)
+        })
+        .unwrap_or_default()
+        .to_string();
+    json!({ "parts": [{ "text": text }] })
 }
 
 /// Read the first user text from a legacy or V2 command response.
@@ -836,9 +887,9 @@ async fn custom_slash_catalog_and_routes_expand_all_supported_sources() {
     // correlated CommandExecuted event.  The native route intentionally keeps
     // the literal slash because it has no catalog expansion seam.
     let legacy_session = env.create_session().await.expect("legacy session");
-    let legacy = post_ok(
+    let legacy = command_turn(
         &env,
-        &format!("/session/{legacy_session}/command"),
+        legacy_session,
         command_request("inline-root-singular", "alpha beta", None),
     )
     .await;
@@ -852,9 +903,9 @@ async fn custom_slash_catalog_and_routes_expand_all_supported_sources() {
     );
 
     let v2_session = env.compat_create_session().await.expect("v2 session");
-    let v2 = post_ok(
+    let v2 = command_turn(
         &env,
-        &format!("/api/session/{v2_session}/command"),
+        v2_session,
         command_request(
             "inline-dot-plural",
             "one two three four five six seven eight nine ten",
@@ -872,115 +923,46 @@ async fn custom_slash_catalog_and_routes_expand_all_supported_sources() {
         "one two three four five six seven eight nine ten",
     );
 
-    let native_session = env.create_session().await.expect("native session");
-    let native = post_ok(
-        &env,
-        &format!("/sessions/{native_session}/command"),
-        command_request("inline-root-singular", "alpha beta", None),
-    )
-    .await;
-    assert!(
-        native.get("message").is_some(),
-        "native command response: {native}"
-    );
-    let native_events = env
-        .events(native_session, None)
-        .await
-        .expect("native events");
-    assert_command_event(&native_events, "inline-root-singular", "alpha beta");
-    let native_context = env
-        .get_json(&format!("/api/session/{native_session}/context"))
-        .await
-        .expect("native context");
-    assert!(
-        native_context
-            .to_string()
-            .contains("/inline-root-singular alpha beta"),
-        "native command must preserve literal slash: {native_context}"
-    );
+    // v1 unifies the surfaces: every command turn expands through the
+    // same catalog seam (the historical native-literal behavior is gone).
 
-    for (route, path_prefix, command, arguments, expected) in [
+    for (command, arguments, expected) in [
         (
-            "legacy",
-            "/session/",
             "quotes",
             "\"hello world\" tail",
             "QUOTES=\"hello world\" tail|hello world|tail",
         ),
         (
-            "legacy",
-            "/session/",
             "unclosed",
             "\"open value",
             "UNCLOSED=open value|\"open value",
         ),
-        ("legacy", "/session/", "empty", "", "EMPTY=||"),
+        ("empty", "", "EMPTY=||"),
         (
-            "legacy",
-            "/session/",
             "positions",
             "a b c d e f g h i j literal-$1",
             "POSITION=a|j|b|literal-$1|a b c d e f g h i j literal-$1",
         ),
         (
-            "legacy",
-            "/session/",
             "multiline",
             "first line\nsecond line",
             "MULTILINE-BEGIN\nfirst line\nsecond line\nMULTILINE-END",
         ),
     ] {
         let session = env.create_session().await.expect("expansion session");
-        let response = post_ok(
-            &env,
-            &format!("{path_prefix}{session}/command"),
-            command_request(command, arguments, None),
-        )
-        .await;
-        assert_eq!(
-            response_text(&response),
-            expected,
-            "route={route} command={command}"
-        );
+        let response = command_turn(&env, session, command_request(command, arguments, None)).await;
+        assert_eq!(response_text(&response), expected, "command={command}");
     }
 
-    // Explicit text bypasses expansion on all three routes.
-    let explicit_legacy_session = env.create_session().await.expect("explicit legacy session");
-    let explicit_legacy = post_ok(
+    // Explicit text bypasses expansion.
+    let explicit_session = env.create_session().await.expect("explicit session");
+    let explicit = command_turn(
         &env,
-        &format!("/session/{explicit_legacy_session}/command"),
-        command_request("positions", "one two", Some("EXPLICIT_LEGACY")),
+        explicit_session,
+        command_request("positions", "one two", Some("EXPLICIT_TEXT")),
     )
     .await;
-    assert_eq!(response_text(&explicit_legacy), "EXPLICIT_LEGACY");
-    let explicit_v2_session = env
-        .compat_create_session()
-        .await
-        .expect("explicit v2 session");
-    let explicit_v2 = post_ok(
-        &env,
-        &format!("/api/session/{explicit_v2_session}/command"),
-        command_request("positions", "one two", Some("EXPLICIT_V2")),
-    )
-    .await;
-    assert_eq!(response_text(&explicit_v2), "EXPLICIT_V2");
-    let explicit_native_session = env.create_session().await.expect("explicit native session");
-    let explicit_native = post_ok(
-        &env,
-        &format!("/sessions/{explicit_native_session}/command"),
-        command_request("positions", "one two", Some("EXPLICIT_NATIVE")),
-    )
-    .await;
-    assert!(explicit_native.get("message").is_some());
-    let explicit_native_context = env
-        .get_json(&format!("/api/session/{explicit_native_session}/context"))
-        .await
-        .expect("explicit native context");
-    assert!(
-        explicit_native_context
-            .to_string()
-            .contains("EXPLICIT_NATIVE")
-    );
+    assert_eq!(response_text(&explicit), "EXPLICIT_TEXT");
 
     // Replacing one recognized config file with malformed JSONC omits that
     // source without crashing the remaining catalog.
@@ -1097,9 +1079,9 @@ async fn skill_backed_slash_expands_without_skill_tool_call() {
     // permissions would reject Action::Skill, but no Skill Tool call or
     // permission request is involved in this path.
     let direct_session = env.create_session().await.expect("direct skill session");
-    let direct = post_ok(
+    let direct = command_turn(
         &env,
-        &format!("/session/{direct_session}/command"),
+        direct_session,
         command_request("user-playbook", "DIRECT_NONCE", None),
     )
     .await;
@@ -1134,9 +1116,9 @@ async fn skill_backed_slash_expands_without_skill_tool_call() {
     let picker_skill = catalog_entry(&skills, "user-playbook");
     assert_eq!(picker_skill["content"], SKILL_BODY);
     let picker_session = env.create_session().await.expect("skills picker session");
-    let picker = post_ok(
+    let picker = command_turn(
         &env,
-        &format!("/session/{picker_session}/command"),
+        picker_session,
         command_request("user-playbook", "PICKER_NONCE", None),
     )
     .await;
@@ -1149,9 +1131,9 @@ async fn skill_backed_slash_expands_without_skill_tool_call() {
     // backend catalog correctly falls back to literal slash text.
     std::fs::remove_file(env.project_path(SKILL_PATH)).expect("remove Skill");
     let stale_session = env.create_session().await.expect("stale Skill session");
-    let stale = post_ok(
+    let stale = command_turn(
         &env,
-        &format!("/session/{stale_session}/command"),
+        stale_session,
         command_request("user-playbook", "STALE_NONCE", None),
     )
     .await;
@@ -1180,18 +1162,27 @@ async fn skill_backed_slash_expands_without_skill_tool_call() {
             .any(|entry| entry["name"] == "new-after-bootstrap")
     );
     let new_session = env.create_session().await.expect("new Skill session");
-    let new_command = post_ok(
+    let new_command = command_turn(
         &env,
-        &format!("/sessions/{new_session}/command"),
+        new_session,
         command_request("new-after-bootstrap", "ARG", None),
     )
     .await;
     let new_context = env
-        .get_json(&format!("/api/session/{new_session}/context"))
+        .session_context(&new_session)
         .await
         .expect("new Skill context");
-    assert!(new_command.get("message").is_some());
-    assert!(new_context.to_string().contains("/new-after-bootstrap ARG"));
+    assert!(
+        new_command
+            .pointer("/parts/0/text")
+            .and_then(Value::as_str)
+            .is_some(),
+        "v1 command turn response: {new_command}"
+    );
+    // v1 unifies on the expansion seam: the freshly written skill is
+    // expanded at command time even though the bootstrap catalog snapshot
+    // (asserted above) stays stale until the next bootstrap.
+    assert!(new_context.to_string().contains("NEW_SKILL_BODY"));
 }
 
 #[tokio::test]
@@ -1223,9 +1214,9 @@ async fn custom_command_invokes_builtin_skill_tool() {
         .expect("e2e env");
 
     let session = env.create_session().await.expect("session");
-    let success = post_ok(
+    let success = command_turn(
         &env,
-        &format!("/session/{session}/command"),
+        session,
         command_request("use-skill", "SKILL_NONCE", None),
     )
     .await;
@@ -1304,9 +1295,9 @@ async fn custom_command_invokes_builtin_skill_tool() {
         )
     }));
 
-    let unknown = post_ok(
+    let unknown = command_turn(
         &env,
-        &format!("/session/{session}/command"),
+        session,
         command_request("use-skill", "UNKNOWN_NONCE", None),
     )
     .await;
@@ -1327,9 +1318,9 @@ async fn custom_command_invokes_builtin_skill_tool() {
         "unknown Skill must be structured: {unknown_events:?}"
     );
 
-    let missing = post_ok(
+    let missing = command_turn(
         &env,
-        &format!("/session/{session}/command"),
+        session,
         command_request("use-skill", "MISSING_NONCE", None),
     )
     .await;
@@ -1351,9 +1342,9 @@ async fn custom_command_invokes_builtin_skill_tool() {
     // Removing the Skill makes a previously valid Tool name unavailable.  The
     // command transport itself remains usable and the same Session recovers.
     std::fs::remove_file(env.project_path(SKILL_PATH)).expect("remove Skill");
-    let unavailable = post_ok(
+    let unavailable = command_turn(
         &env,
-        &format!("/session/{session}/command"),
+        session,
         command_request("use-skill", "UNAVAILABLE_NONCE", None),
     )
     .await;
@@ -1379,9 +1370,9 @@ async fn custom_command_invokes_builtin_skill_tool() {
         skill_markdown("user-playbook", "User playbook", SKILL_BODY),
     )
     .expect("restore Skill");
-    let recovered = post_ok(
+    let recovered = command_turn(
         &env,
-        &format!("/session/{session}/command"),
+        session,
         command_request("use-skill", "RECOVERED_NONCE", None),
     )
     .await;
@@ -1404,9 +1395,9 @@ async fn custom_command_invokes_builtin_skill_tool() {
     // causes command transport to store literal slash text.
     std::fs::remove_file(env.project_path(".opencode/commands/use-skill.md"))
         .expect("remove command");
-    let stale = post_ok(
+    let stale = command_turn(
         &env,
-        &format!("/session/{session}/command"),
+        session,
         command_request("use-skill", "STALE_COMMAND", None),
     )
     .await;
@@ -1439,9 +1430,9 @@ async fn custom_command_invokes_plugin_tool() {
     .expect("e2e env");
 
     let session = env.create_session().await.expect("session");
-    let success = post_ok(
+    let success = command_turn(
         &env,
-        &format!("/session/{session}/command"),
+        session,
         command_request("use-plugin", "PLUGIN_NONCE", None),
     )
     .await;
@@ -1468,11 +1459,8 @@ async fn custom_command_invokes_plugin_tool() {
             .any(|name| name == "remember")
     );
     assert!(fake_requests_from(&requests, 1).contains("PLUGIN_NONCE"));
-    let context = env
-        .get_json(&format!("/api/session/{session}/context"))
-        .await
-        .expect("plugin context");
-    assert_context_tool_marker(&context, "PLUGIN_NONCE", "completed");
+    let context = env.session_context(&session).await.expect("plugin context");
+    assert_context_tool_marker(&context, "PLUGIN_NONCE", "TOOL_EXECUTION_STATE_OK");
     // Action::Write rejection is independent from plugin Tool authorization.
     // Use a separate non-yolo process so the first scripted Tool is guaranteed
     // to traverse the permission plane and the denied file remains absent.
@@ -1511,9 +1499,9 @@ async fn custom_command_invokes_plugin_tool() {
         )
     }));
 
-    let malformed = post_ok(
+    let malformed = command_turn(
         &env,
-        &format!("/session/{session}/command"),
+        session,
         command_request("use-plugin", "MALFORMED_NONCE", None),
     )
     .await;
@@ -1533,19 +1521,14 @@ async fn custom_command_invokes_plugin_tool() {
         )
     }));
 
-    let killed = post_ok(
-        &env,
-        &format!("/session/{session}/command"),
-        command_request("use-plugin", "KILL", None),
-    )
-    .await;
+    let killed = command_turn(&env, session, command_request("use-plugin", "KILL", None)).await;
     assert_eq!(
         response_text(&killed),
         "Call plugin Tool remember with value=KILL, then return the plugin result."
     );
-    let after_kill = post_ok(
+    let after_kill = command_turn(
         &env,
-        &format!("/session/{session}/command"),
+        session,
         command_request("use-plugin", "RESPAWN", None),
     )
     .await;
@@ -1571,22 +1554,13 @@ async fn custom_command_invokes_plugin_tool() {
         PLUGIN_SCRIPT_DRIFT,
     )
     .expect("drift plugin script");
-    let drift_kill = post_ok(
-        &env,
-        &format!("/session/{session}/command"),
-        command_request("use-plugin", "KILL", None),
-    )
-    .await;
+    let drift_kill = command_turn(&env, session, command_request("use-plugin", "KILL", None)).await;
     assert_eq!(
         response_text(&drift_kill),
         "Call plugin Tool remember with value=KILL, then return the plugin result."
     );
-    let drift_error = post_ok(
-        &env,
-        &format!("/session/{session}/command"),
-        command_request("use-plugin", "DRIFT", None),
-    )
-    .await;
+    let drift_error =
+        command_turn(&env, session, command_request("use-plugin", "DRIFT", None)).await;
     assert_eq!(
         response_text(&drift_error),
         "Call plugin Tool remember with value=DRIFT, then return the plugin result."
@@ -1668,12 +1642,7 @@ async fn custom_command_invokes_mcp_tool() {
         .await
         .expect("MCP connected");
     let session = env.create_session().await.expect("mcp session");
-    let command = post_ok(
-        &env,
-        &format!("/session/{session}/command"),
-        command_request("use-mcp", "MCP_NONCE", None),
-    )
-    .await;
+    let command = command_turn(&env, session, command_request("use-mcp", "MCP_NONCE", None)).await;
     assert_eq!(
         response_text(&command),
         "Call mcp__echo__ping with msg=MCP_NONCE, then return echo:MCP_NONCE."
@@ -1690,11 +1659,8 @@ async fn custom_command_invokes_mcp_tool() {
         fake_requests_from(&env.fake_requests().expect("MCP requests"), 1)
             .contains("echo:MCP_NONCE")
     );
-    let context = env
-        .get_json(&format!("/api/session/{session}/context"))
-        .await
-        .expect("MCP context");
-    assert_context_tool_marker(&context, "echo:MCP_NONCE", "completed");
+    let context = env.session_context(&session).await.expect("MCP context");
+    assert_context_tool_marker(&context, "echo:MCP_NONCE", "TOOL_EXECUTION_STATE_OK");
 
     // A separate non-yolo process proves that the MCP permission is asked once
     // and that the explicit allow is consumed before the terminal Tool event.
@@ -2166,12 +2132,8 @@ async fn dynamic_resource_snapshots_and_reload() {
     .expect("dynamic env");
 
     let first = env.create_session().await.expect("dynamic session");
-    let first_command = post_ok(
-        &env,
-        &format!("/session/{first}/command"),
-        command_request("user-playbook", "OLD", None),
-    )
-    .await;
+    let first_command =
+        command_turn(&env, first, command_request("user-playbook", "OLD", None)).await;
     assert_eq!(response_text(&first_command), "SKILL_OLD_BODY OLD\n");
     let before_events = env
         .events(first, None)
@@ -2196,12 +2158,7 @@ async fn dynamic_resource_snapshots_and_reload() {
         ),
     )
     .expect("edit Skill");
-    let second = post_ok(
-        &env,
-        &format!("/session/{first}/command"),
-        command_request("user-playbook", "NEW", None),
-    )
-    .await;
+    let second = command_turn(&env, first, command_request("user-playbook", "NEW", None)).await;
     assert_eq!(response_text(&second), "SKILL_EDITED_BODY NEW\n");
     let after_skill_events = env.events(first, None).await.expect("after Skill events");
     assert!(
@@ -2219,10 +2176,7 @@ async fn dynamic_resource_snapshots_and_reload() {
             .any(|generation| generation != old_generation),
         "edited Skill must publish a new generation"
     );
-    let first_context = env
-        .get_json(&format!("/api/session/{first}/context"))
-        .await
-        .expect("Skill context");
+    let first_context = env.session_context(&first).await.expect("Skill context");
     assert!(first_context.to_string().contains("SKILL_OLD_BODY OLD"));
     assert!(first_context.to_string().contains("SKILL_EDITED_BODY NEW"));
 
@@ -2232,12 +2186,7 @@ async fn dynamic_resource_snapshots_and_reload() {
     env.wait_mcp_connected("echo", TIMEOUT)
         .await
         .expect("MCP refreshed");
-    post_ok(
-        &env,
-        &format!("/session/{first}/command"),
-        command_request("use-mcp", "MCP_RELOAD", None),
-    )
-    .await;
+    command_turn(&env, first, command_request("use-mcp", "MCP_RELOAD", None)).await;
     let reload_events = env.events(first, None).await.expect("MCP reload events");
     let reload_generations = reload_events
         .iter()
@@ -2354,9 +2303,9 @@ async fn structured_custom_tool_errors_replay_and_session_recovers() {
         .await
         .expect("structured error session");
 
-    post_ok(
+    command_turn(
         &env,
-        &format!("/session/{session}/command"),
+        session,
         command_request("use-plugin", "ERR_ONCE", None),
     )
     .await;
@@ -2391,21 +2340,22 @@ async fn structured_custom_tool_errors_replay_and_session_recovers() {
             <= 2048
     );
 
-    // Canonical API replay and the projected TUI card retain the same typed
-    // value.error.type/message, not only a flattened human string.
-    let replay = env
-        .get_json(&format!("/sessions/{session}/events"))
+    // Canonical replay and the projected transcript retain the typed tool
+    // error code/message, not only a flattened human string.
+    let envelopes = env
+        .events(session, None)
         .await
         .expect("API canonical replay");
+    let replay = serde_json::to_value(&envelopes).unwrap_or_default();
     assert!(replay.to_string().contains("\"type\":\"unknown\""));
     assert!(replay.to_string().contains("ERR_ONCE"));
     let context = env
-        .get_json(&format!("/api/session/{session}/context"))
+        .session_context(&session)
         .await
         .expect("TUI context replay");
-    assert!(context.to_string().contains("\"status\":\"error\""));
-    assert!(context.to_string().contains("\"type\":\"unknown\""));
-    assert!(context.to_string().contains("\"message\""));
+    assert!(context.to_string().contains("TOOL_EXECUTION_STATE_ERROR"));
+    assert!(context.to_string().contains("\"errorCode\":\"unknown\""));
+    assert!(context.to_string().contains("ERR_ONCE"));
     assert!(
         context.to_string().len() <= 64 * 1024,
         "TUI error presentation is unbounded"
@@ -2424,7 +2374,7 @@ async fn structured_custom_tool_errors_replay_and_session_recovers() {
         .await
         .expect("second canonical replay");
     let _ = env
-        .get_json(&format!("/api/session/{session}/context"))
+        .session_context(&session)
         .await
         .expect("second context replay");
     let call_count_after = std::fs::read_to_string(&calls_path)
@@ -2441,9 +2391,9 @@ async fn structured_custom_tool_errors_replay_and_session_recovers() {
     );
 
     // A later valid custom slash command succeeds in the same Session.
-    post_ok(
+    command_turn(
         &env,
-        &format!("/session/{session}/command"),
+        session,
         command_request("use-plugin", "VALID_AFTER_ERROR", None),
     )
     .await;

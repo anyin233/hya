@@ -770,6 +770,7 @@ One provider route with aggregate auth state.
 | `name` (2) | `string` | Human-readable provider name. |
 | `auth` (3) | `AuthStatus` | Aggregate auth status across the provider's routes. |
 | `website` (4) | `string` | Vendor documentation/auth URL when known. |
+| `result` (5) | `string` | Model discovery outcome: `models`, `empty`, `unavailable`, `invalid`. |
 
 ### `ListProvidersResponse`
 
@@ -815,6 +816,12 @@ One slash-command entry.
 | `name` (1) | `string` | Command name without the leading `/`. |
 | `description` (2) | `string` | One-line description for completion UIs. |
 | `argument_hint` (3) | `string` | Argument hint shown after the command name. |
+| `hints` (5) | `repeated string` | Positional/flag hints from the command template, in template order. |
+| `source` (6) | `string` | Where the command was discovered (`command`, `skill`, ...). |
+| `template` (7) | `string` | Expansion template (positional `$1`/`$ARGUMENTS` placeholders). |
+| `agent` (8) | `string` | Agent the command run binds when authored. |
+| `model` (9) | `string` | Model the command run binds when authored. |
+| `subtask` (10) | `optional bool` | Whether the command runs as a detached subtask. |
 
 ### `ListCommandsResponse`
 
@@ -841,6 +848,8 @@ One invocable skill.
 | `name` (1) | `string` | Skill name used with `/skill` and the skill plane. |
 | `description` (2) | `string` | One-line description of what the skill does. |
 | `source` (3) | `string` | Where the skill was discovered (`builtin`, `bundle`, `project`, ...). |
+| `content` (4) | `string` | Full skill markdown body (frontmatter + content). |
+| `location` (5) | `string` | Where the skill file lives (`<built-in>` for compiled-in skills). |
 
 ### `ListSkillsResponse`
 
@@ -1501,6 +1510,8 @@ A tool invocation requested by the model.
 | `tool` (2) | `string` | Canonical tool name. |
 | `input_json` (3) | `string` | Tool input as a JSON object. |
 | `state` (4) | `ToolExecutionState` | Execution state of the call. |
+| `error_code` (5) | `string` | Stable structured error type when the call failed (e.g. `unknown`). |
+| `error_message` (6) | `string` | Structured error message when the call failed. |
 
 ### `ToolResultPart`
 
@@ -1940,6 +1951,7 @@ Projection summary of one session.
 | `time_created` (8) | `google.protobuf.Timestamp` | When the session was created. |
 | `time_updated` (9) | `google.protobuf.Timestamp` | When the session projection last changed. |
 | `last_seq` (10) | `uint64` | Highest event sequence number recorded for this session. |
+| `busy` (11) | `bool` | Whether a run currently owns the session's admission slot (derived from the process run registry, not the durable log). |
 
 ### `CreateSessionRequest`
 
@@ -2206,6 +2218,7 @@ Projected workflow state of a session.
 | `status` (4) | `WorkflowRunStatus` | Aggregate run status. |
 | `stages` (5) | `repeated WorkflowStageRun` | Stage execution rows in plan order. |
 | `error_code` (6) | `string` | Terminal failure code when status is FAILED. |
+| `raw_json` (7) | `string` | Opaque canonical projection JSON for tooling and replay parity. The internal shape is not a stable contract; prefer the typed fields. |
 
 ### `WorkflowInfoCommand`
 
@@ -2227,11 +2240,12 @@ Projected workflow state of a session.
 
 ### `WorkflowRunCommand`
 
-`run` command: start the selected workflow.
+`run` command: start the selected or named workflow.
 
 | Field | Type | Description |
 |---|---|---|
-| `inputs` (1) | `google.protobuf.Struct` | Workflow inputs as a JSON object. |
+| `name` (1) | `string` | Declared workflow name; empty uses the durable selection. |
+| `inputs` (2) | `google.protobuf.Struct` | Workflow inputs as a JSON object. |
 
 ### `SubmitWorkflowCommandRequest`
 
@@ -2244,6 +2258,25 @@ Projected workflow state of a session.
 | `select` (4) | `oneof `command`: WorkflowSelectCommand` | Select a workflow source. |
 | `run` (5) | `oneof `command`: WorkflowRunCommand` | Run the selected workflow. |
 
+### `WorkflowModelCandidate`
+
+One authored fallback candidate.
+
+| Field | Type | Description |
+|---|---|---|
+| `id` (1) | `string` | Base model identity (`provider/model`). |
+| `reasoning` (2) | `string` | Optional author-provided effort label. |
+
+### `WorkflowModelAssignment`
+
+Authored worker model assignment for a stage.
+
+| Field | Type | Description |
+|---|---|---|
+| `id` (1) | `string` | Preferred base model identity (`provider/model`). |
+| `reasoning` (2) | `string` | Optional preferred effort label. |
+| `fallback` (3) | `repeated WorkflowModelCandidate` | Ordered fallback tail. |
+
 ### `WorkflowInfoResult`
 
 Result payload of the `info` command.
@@ -2253,6 +2286,19 @@ Result payload of the `info` command.
 | `name` (1) | `string` | Compiled workflow name. |
 | `revision` (2) | `string` | Compiler revision of this graph. |
 | `stage_names` (3) | `repeated string` | Stage names in execution order. |
+| `stages` (4) | `repeated WorkflowStageInfo` | Stage metadata in execution order. |
+
+### `WorkflowStageInfo`
+
+Compiled stage metadata from the `info` result.
+
+| Field | Type | Description |
+|---|---|---|
+| `name` (1) | `string` | Compiled stage id. |
+| `agent` (2) | `string` | Target agent id. |
+| `level` (3) | `uint32` | Zero-based topological level. |
+| `worker_model` (4) | `WorkflowModelAssignment` | Authored worker model assignment when present. |
+| `verifier_model` (5) | `WorkflowModelAssignment` | Authored verifier model assignment when present. |
 
 ### `SubmitWorkflowCommandResponse`
 

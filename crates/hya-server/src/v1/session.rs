@@ -89,7 +89,9 @@ async fn projection_info(st: &ServerState, session: SessionId) -> Result<pb::Ses
         .find(|row| row.session == session)
         .map(|row| (row.started_millis, row.updated_millis))
         .unwrap_or((0, 0));
-    Ok(session_info(&projection, started, updated))
+    let mut info = session_info(&projection, started, updated);
+    info.busy = st.is_busy(session);
+    Ok(info)
 }
 
 async fn get_session(

@@ -148,6 +148,9 @@ pub struct ProviderSummary {
     /// Vendor documentation/auth URL when known.
     #[prost(string, tag = "4")]
     pub website: ::prost::alloc::string::String,
+    /// Model discovery outcome: `models`, `empty`, `unavailable`, `invalid`.
+    #[prost(string, tag = "5")]
+    pub result: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListProvidersResponse {
@@ -204,6 +207,24 @@ pub struct CommandSummary {
     /// Argument hint shown after the command name.
     #[prost(string, tag = "3")]
     pub argument_hint: ::prost::alloc::string::String,
+    /// Positional/flag hints from the command template, in template order.
+    #[prost(string, repeated, tag = "5")]
+    pub hints: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    /// Where the command was discovered (`command`, `skill`, ...).
+    #[prost(string, tag = "6")]
+    pub source: ::prost::alloc::string::String,
+    /// Expansion template (positional `$1`/`$ARGUMENTS` placeholders).
+    #[prost(string, tag = "7")]
+    pub template: ::prost::alloc::string::String,
+    /// Agent the command run binds when authored.
+    #[prost(string, tag = "8")]
+    pub agent: ::prost::alloc::string::String,
+    /// Model the command run binds when authored.
+    #[prost(string, tag = "9")]
+    pub model: ::prost::alloc::string::String,
+    /// Whether the command runs as a detached subtask.
+    #[prost(bool, optional, tag = "10")]
+    pub subtask: ::core::option::Option<bool>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListCommandsResponse {
@@ -235,6 +256,12 @@ pub struct SkillSummary {
     /// Where the skill was discovered (`builtin`, `bundle`, `project`, ...).
     #[prost(string, tag = "3")]
     pub source: ::prost::alloc::string::String,
+    /// Full skill markdown body (frontmatter + content).
+    #[prost(string, tag = "4")]
+    pub content: ::prost::alloc::string::String,
+    /// Where the skill file lives (`<built-in>` for compiled-in skills).
+    #[prost(string, tag = "5")]
+    pub location: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListSkillsResponse {
@@ -2586,6 +2613,12 @@ pub struct ToolCallPart {
     /// Execution state of the call.
     #[prost(enumeration = "ToolExecutionState", tag = "4")]
     pub state: i32,
+    /// Stable structured error type when the call failed (e.g. `unknown`).
+    #[prost(string, tag = "5")]
+    pub error_code: ::prost::alloc::string::String,
+    /// Structured error message when the call failed.
+    #[prost(string, tag = "6")]
+    pub error_message: ::prost::alloc::string::String,
 }
 /// The outcome of a tool invocation.
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -3537,6 +3570,10 @@ pub struct WorkflowState {
     /// Terminal failure code when status is FAILED.
     #[prost(string, tag = "6")]
     pub error_code: ::prost::alloc::string::String,
+    /// Opaque canonical projection JSON for tooling and replay parity. The
+    /// internal shape is not a stable contract; prefer the typed fields.
+    #[prost(string, tag = "7")]
+    pub raw_json: ::prost::alloc::string::String,
 }
 /// `list` command: enumerate workflow sources.
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
@@ -3558,11 +3595,14 @@ pub struct WorkflowSelectCommand {
     #[prost(string, tag = "2")]
     pub expected_revision: ::prost::alloc::string::String,
 }
-/// `run` command: start the selected workflow.
+/// `run` command: start the selected or named workflow.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct WorkflowRunCommand {
+    /// Declared workflow name; empty uses the durable selection.
+    #[prost(string, tag = "1")]
+    pub name: ::prost::alloc::string::String,
     /// Workflow inputs as a JSON object.
-    #[prost(message, optional, tag = "1")]
+    #[prost(message, optional, tag = "2")]
     pub inputs: ::core::option::Option<::pbjson_types::Struct>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -3593,6 +3633,29 @@ pub mod submit_workflow_command_request {
         Run(super::WorkflowRunCommand),
     }
 }
+/// / One authored fallback candidate.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct WorkflowModelCandidate {
+    /// Base model identity (`provider/model`).
+    #[prost(string, tag = "1")]
+    pub id: ::prost::alloc::string::String,
+    /// Optional author-provided effort label.
+    #[prost(string, tag = "2")]
+    pub reasoning: ::prost::alloc::string::String,
+}
+/// / Authored worker model assignment for a stage.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct WorkflowModelAssignment {
+    /// Preferred base model identity (`provider/model`).
+    #[prost(string, tag = "1")]
+    pub id: ::prost::alloc::string::String,
+    /// Optional preferred effort label.
+    #[prost(string, tag = "2")]
+    pub reasoning: ::prost::alloc::string::String,
+    /// Ordered fallback tail.
+    #[prost(message, repeated, tag = "3")]
+    pub fallback: ::prost::alloc::vec::Vec<WorkflowModelCandidate>,
+}
 /// Result payload of the `info` command.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct WorkflowInfoResult {
@@ -3605,6 +3668,28 @@ pub struct WorkflowInfoResult {
     /// Stage names in execution order.
     #[prost(string, repeated, tag = "3")]
     pub stage_names: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    /// Stage metadata in execution order.
+    #[prost(message, repeated, tag = "4")]
+    pub stages: ::prost::alloc::vec::Vec<WorkflowStageInfo>,
+}
+/// / Compiled stage metadata from the `info` result.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct WorkflowStageInfo {
+    /// Compiled stage id.
+    #[prost(string, tag = "1")]
+    pub name: ::prost::alloc::string::String,
+    /// Target agent id.
+    #[prost(string, tag = "2")]
+    pub agent: ::prost::alloc::string::String,
+    /// Zero-based topological level.
+    #[prost(uint32, tag = "3")]
+    pub level: u32,
+    /// Authored worker model assignment when present.
+    #[prost(message, optional, tag = "4")]
+    pub worker_model: ::core::option::Option<WorkflowModelAssignment>,
+    /// Authored verifier model assignment when present.
+    #[prost(message, optional, tag = "5")]
+    pub verifier_model: ::core::option::Option<WorkflowModelAssignment>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SubmitWorkflowCommandResponse {
@@ -10002,6 +10087,10 @@ pub struct SessionInfo {
     /// Highest event sequence number recorded for this session.
     #[prost(uint64, tag = "10")]
     pub last_seq: u64,
+    /// Whether a run currently owns the session's admission slot (derived
+    /// from the process run registry, not the durable log).
+    #[prost(bool, tag = "11")]
+    pub busy: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CreateSessionRequest {

@@ -135,18 +135,51 @@ async fn list_models(
 
 /// Model rows shared with the bootstrap snapshot.
 pub(crate) fn model_rows(st: &ServerState) -> Vec<pb::ModelSummary> {
-    st.engine
-        .provider_catalog()
-        .into_iter()
+    let snapshot = st.engine.provider_catalog_snapshot();
+    let auth_by_provider: std::collections::BTreeMap<String, i32> = snapshot
+        .providers()
+        .iter()
+        .map(|state| (state.provider_id.clone(), auth_status(state.auth)))
+        .collect();
+    snapshot
+        .models()
+        .iter()
         .map(|row| pb::ModelSummary {
             id: format!("{}/{}", row.provider_id, row.model_id),
             provider_id: row.provider_id.clone(),
             model_id: row.model_id.clone(),
             display_name: String::new(),
             reasoning: !row.reasoning_variants.is_empty(),
-            auth: pb::AuthStatus::NotApplicable as i32,
+            auth: *auth_by_provider
+                .get(&row.provider_id)
+                .unwrap_or(&(pb::AuthStatus::NotApplicable as i32)),
         })
         .collect()
+}
+
+/// Map the provider auth state onto the wire enum.
+fn auth_status(auth: hya_provider::ProviderAuthState) -> i32 {
+    use hya_provider::ProviderAuthState as A;
+    match auth {
+        A::Credentialed => pb::AuthStatus::Credentialed as i32,
+        A::Unauthenticated => pb::AuthStatus::Unauthenticated as i32,
+        A::AuthRequired => pb::AuthStatus::AuthRequired as i32,
+        A::AuthRejected => pb::AuthStatus::AuthRejected as i32,
+        A::NotApplicable => pb::AuthStatus::NotApplicable as i32,
+    }
+}
+
+/// Map the provider discovery outcome onto its wire string.
+fn catalog_result(result: hya_provider::ProviderCatalogResult) -> String {
+    use hya_provider::ProviderCatalogResult as R;
+    match result {
+        R::Models => "models",
+        R::Empty => "empty",
+        R::Unavailable => "unavailable",
+        R::Invalid => "invalid",
+        R::Unsupported | R::Offline => "unavailable",
+    }
+    .to_owned()
 }
 
 async fn list_providers(
@@ -166,20 +199,19 @@ async fn list_providers(
 
 /// Provider rows shared with the bootstrap snapshot.
 pub(crate) fn provider_rows(
-    _st: &ServerState,
-    models: &[pb::ModelSummary],
+    st: &ServerState,
+    _models: &[pb::ModelSummary],
 ) -> Vec<pb::ProviderSummary> {
-    let mut ids: Vec<String> = models
+    let snapshot = st.engine.provider_catalog_snapshot();
+    snapshot
+        .providers()
         .iter()
-        .map(|model| model.provider_id.clone())
-        .collect();
-    ids.dedup();
-    ids.into_iter()
-        .map(|id| pb::ProviderSummary {
-            name: id.clone(),
-            auth: pb::AuthStatus::NotApplicable as i32,
+        .map(|state| pb::ProviderSummary {
+            name: state.provider_id.clone(),
+            auth: auth_status(state.auth),
             website: String::new(),
-            id,
+            result: catalog_result(state.result),
+            id: state.provider_id.clone(),
         })
         .collect()
 }
@@ -206,9 +238,13 @@ async fn get_provider(
     Ok(Json(pb::ProviderInfo {
         summary: Some(pb::ProviderSummary {
             id: request.provider_id.clone(),
-            name: request.provider_id,
+            name: request.provider_id.clone(),
             auth: pb::AuthStatus::NotApplicable as i32,
             website: String::new(),
+            result: provider_rows(&st, &[])
+                .into_iter()
+                .find(|row| row.id == request.provider_id)
+                .map_or_else(String::new, |row| row.result),
         }),
         models,
         supports_api_key: true,
@@ -239,6 +275,12 @@ pub(crate) fn command_rows(workdir: &Path) -> Vec<pb::CommandSummary> {
             name: row.name.clone(),
             description: row.description.clone().unwrap_or_default(),
             argument_hint: String::new(),
+            hints: row.hints.clone(),
+            source: row.source.to_owned(),
+            template: row.template.clone(),
+            agent: row.agent.clone().unwrap_or_default(),
+            model: row.model.clone().unwrap_or_default(),
+            subtask: row.subtask,
         })
         .collect()
 }
@@ -266,6 +308,8 @@ pub(crate) fn skill_rows(workdir: &Path) -> Vec<pb::SkillSummary> {
             name: row.name.clone(),
             description: row.description.clone(),
             source: "builtin".to_owned(),
+            content: row.content.clone(),
+            location: row.location.clone(),
         })
         .collect()
 }

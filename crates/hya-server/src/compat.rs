@@ -42,7 +42,7 @@ mod pty_runtime;
 pub(crate) mod pty_shell;
 pub(crate) mod pty_state;
 mod question;
-mod reference;
+pub(crate) mod reference;
 mod reference_cache;
 mod reference_entries;
 mod reference_repository;

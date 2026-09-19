@@ -175,34 +175,27 @@ async fn get_json(base_url: &str, path: &str) -> (StatusCode, Value) {
     (status, body)
 }
 
-/// Convert `/api/model` rows to canonical provider/model references.
+/// Convert `/v1/models` rows (`id` = `provider/model`) to a set.
 fn model_ids(body: &Value) -> BTreeSet<String> {
-    body["data"]
+    body["models"]
         .as_array()
         .unwrap()
         .iter()
-        .filter_map(|model| {
-            Some(format!(
-                "{}/{}",
-                model["providerID"].as_str()?,
-                model["id"].as_str()?
-            ))
-        })
+        .filter_map(|model| model["id"].as_str().map(str::to_owned))
         .collect()
 }
 
-/// Convert provider DTO rows to canonical provider/model references.
+/// Convert v1 provider-detail model rows to a set.
 fn provider_model_ids(rows: &[Value]) -> BTreeSet<String> {
     rows.iter()
         .flat_map(|provider| {
-            let provider_id = provider["id"].as_str().unwrap_or_default();
             provider["models"]
-                .as_object()
+                .as_array()
                 .into_iter()
-                .flat_map(move |models| {
+                .flat_map(|models| {
                     models
-                        .keys()
-                        .map(move |model| format!("{provider_id}/{model}"))
+                        .iter()
+                        .filter_map(|model| model["id"].as_str().map(str::to_owned))
                 })
         })
         .collect()
@@ -323,16 +316,15 @@ async fn credentialed_forbidden_catalog_is_rejected_and_offline_exec_explains_co
     let config_bytes = std::fs::read(&config).unwrap();
     let binary = default_backend_bin();
     let mut backend = start_backend(&binary, &root).await;
-    let (status, providers) = get_json(&backend.url, "/api/provider").await;
+    let (status, providers) = get_json(&backend.url, "/v1/providers").await;
     assert_eq!(status, StatusCode::OK);
-    let provider_rows = providers["data"].as_array().unwrap();
+    let provider_rows = providers["providers"].as_array().unwrap();
     let rejected = provider_row(provider_rows, "rejected");
-    assert_eq!(rejected["auth"], "auth_rejected");
+    assert_eq!(rejected["auth"], "AUTH_STATUS_AUTH_REJECTED");
     assert_eq!(rejected["result"], "unavailable");
-    assert!(rejected["models"].as_object().unwrap().is_empty());
     assert!(state.saw_auth.load(Ordering::SeqCst));
 
-    let (status, models) = get_json(&backend.url, "/api/model").await;
+    let (status, models) = get_json(&backend.url, "/v1/models").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(
         model_ids(&models),
@@ -392,52 +384,30 @@ async fn mixed_provider_failure_keeps_valid_rows_equal_across_catalog_surfaces()
     );
 
     let mut backend = start_backend(&binary, &root).await;
-    let (status, api_models) = get_json(&backend.url, "/api/model").await;
+    let (status, api_models) = get_json(&backend.url, "/v1/models").await;
     assert_eq!(status, StatusCode::OK);
     let expected = BTreeSet::from(["valid/discovered".to_string()]);
     assert_eq!(model_ids(&api_models), expected);
 
-    let (status, api_providers) = get_json(&backend.url, "/api/provider").await;
+    let (status, api_providers) = get_json(&backend.url, "/v1/providers").await;
     assert_eq!(status, StatusCode::OK);
-    let api_rows = api_providers["data"].as_array().unwrap();
-    assert_eq!(provider_model_ids(api_rows), expected);
-    let (status, provider_detail) = get_json(&backend.url, "/api/provider/valid").await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(
-        provider_model_ids(std::slice::from_ref(&provider_detail["data"])),
-        expected
-    );
+    let api_rows = api_providers["providers"].as_array().unwrap();
     assert_eq!(provider_row(api_rows, "valid")["result"], "models");
     assert_eq!(provider_row(api_rows, "failed")["result"], "unavailable");
+    let (status, provider_detail) = get_json(&backend.url, "/v1/providers/valid").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        provider_model_ids(std::slice::from_ref(&provider_detail)),
+        expected
+    );
+
+    let (status, bootstrap) = get_json(&backend.url, "/v1/bootstrap").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(model_ids(&bootstrap), expected);
     assert!(
-        provider_row(api_rows, "failed")["models"]
-            .as_object()
-            .unwrap()
-            .is_empty()
-    );
-
-    let (status, legacy_providers) = get_json(&backend.url, "/provider").await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(
-        provider_model_ids(legacy_providers["all"].as_array().unwrap()),
-        expected
-    );
-    let (status, config_providers) = get_json(&backend.url, "/config/providers").await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(
-        provider_model_ids(config_providers["providers"].as_array().unwrap()),
-        expected
-    );
-
-    let (status, bootstrap) = get_json(&backend.url, "/tui/bootstrap").await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(
-        provider_model_ids(bootstrap["providers"]["providers"].as_array().unwrap()),
-        expected
-    );
-    assert_eq!(
-        provider_model_ids(bootstrap["provider_list"]["all"].as_array().unwrap()),
-        expected
+        bootstrap["providers"]
+            .as_array()
+            .is_some_and(|rows| rows.iter().any(|row| row["id"] == "valid"))
     );
     assert_eq!(std::fs::read(&config).unwrap(), config_bytes);
 
