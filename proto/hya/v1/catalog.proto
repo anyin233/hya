@@ -145,6 +145,8 @@ message ProviderSummary {
   AuthStatus auth = 3;
   // Vendor documentation/auth URL when known.
   string website = 4;
+  // Model discovery outcome: `models`, `empty`, `unavailable`, `invalid`.
+  string result = 5;
 }
 
 message ListProvidersResponse {
@@ -188,6 +190,18 @@ message CommandSummary {
   string description = 2;
   // Argument hint shown after the command name.
   string argument_hint = 3;
+  // Positional/flag hints from the command template, in template order.
+  repeated string hints = 5;
+  // Where the command was discovered (`command`, `skill`, ...).
+  string source = 6;
+  // Expansion template (positional `$1`/`$ARGUMENTS` placeholders).
+  string template = 7;
+  // Agent the command run binds when authored.
+  string agent = 8;
+  // Model the command run binds when authored.
+  string model = 9;
+  // Whether the command runs as a detached subtask.
+  optional bool subtask = 10;
 }
 
 message ListCommandsResponse {
@@ -212,6 +226,10 @@ message SkillSummary {
   string description = 2;
   // Where the skill was discovered (`builtin`, `bundle`, `project`, ...).
   string source = 3;
+  // Full skill markdown body (frontmatter + content).
+  string content = 4;
+  // Where the skill file lives (`<built-in>` for compiled-in skills).
+  string location = 5;
 }
 
 message ListSkillsResponse {

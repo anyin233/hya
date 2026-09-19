@@ -11,16 +11,19 @@ pub(crate) struct CommandInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) description: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    agent: Option<String>,
+    pub(crate) agent: Option<String>,
+
     #[serde(skip_serializing_if = "Option::is_none")]
-    model: Option<String>,
-    source: &'static str,
+    pub(crate) model: Option<String>,
+
+    pub(crate) source: &'static str,
     #[serde(skip)]
     expandable: bool,
-    template: String,
-    hints: Vec<String>,
+    pub(crate) template: String,
+
+    pub(crate) hints: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    subtask: Option<bool>,
+    pub(crate) subtask: Option<bool>,
 }
 
 pub(crate) fn list(workdir: &Path) -> Vec<CommandInfo> {
@@ -95,11 +98,7 @@ pub(crate) fn list(workdir: &Path) -> Vec<CommandInfo> {
     commands
 }
 
-pub(in crate::compat) fn expand_prompt(
-    workdir: &Path,
-    command: &str,
-    arguments: &str,
-) -> Option<String> {
+pub(crate) fn expand_prompt(workdir: &Path, command: &str, arguments: &str) -> Option<String> {
     list(workdir)
         .into_iter()
         .find(|item| item.name == command && item.expandable)

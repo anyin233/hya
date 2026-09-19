@@ -1151,6 +1151,24 @@ impl serde::Serialize for CommandSummary {
         if !self.argument_hint.is_empty() {
             len += 1;
         }
+        if !self.hints.is_empty() {
+            len += 1;
+        }
+        if !self.source.is_empty() {
+            len += 1;
+        }
+        if !self.template.is_empty() {
+            len += 1;
+        }
+        if !self.agent.is_empty() {
+            len += 1;
+        }
+        if !self.model.is_empty() {
+            len += 1;
+        }
+        if self.subtask.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("hya.v1.CommandSummary", len)?;
         if !self.name.is_empty() {
             struct_ser.serialize_field("name", &self.name)?;
@@ -1160,6 +1178,24 @@ impl serde::Serialize for CommandSummary {
         }
         if !self.argument_hint.is_empty() {
             struct_ser.serialize_field("argumentHint", &self.argument_hint)?;
+        }
+        if !self.hints.is_empty() {
+            struct_ser.serialize_field("hints", &self.hints)?;
+        }
+        if !self.source.is_empty() {
+            struct_ser.serialize_field("source", &self.source)?;
+        }
+        if !self.template.is_empty() {
+            struct_ser.serialize_field("template", &self.template)?;
+        }
+        if !self.agent.is_empty() {
+            struct_ser.serialize_field("agent", &self.agent)?;
+        }
+        if !self.model.is_empty() {
+            struct_ser.serialize_field("model", &self.model)?;
+        }
+        if let Some(v) = self.subtask.as_ref() {
+            struct_ser.serialize_field("subtask", v)?;
         }
         struct_ser.end()
     }
@@ -1175,6 +1211,12 @@ impl<'de> serde::Deserialize<'de> for CommandSummary {
             "description",
             "argument_hint",
             "argumentHint",
+            "hints",
+            "source",
+            "template",
+            "agent",
+            "model",
+            "subtask",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -1182,6 +1224,12 @@ impl<'de> serde::Deserialize<'de> for CommandSummary {
             Name,
             Description,
             ArgumentHint,
+            Hints,
+            Source,
+            Template,
+            Agent,
+            Model,
+            Subtask,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -1206,6 +1254,12 @@ impl<'de> serde::Deserialize<'de> for CommandSummary {
                             "name" => Ok(GeneratedField::Name),
                             "description" => Ok(GeneratedField::Description),
                             "argumentHint" | "argument_hint" => Ok(GeneratedField::ArgumentHint),
+                            "hints" => Ok(GeneratedField::Hints),
+                            "source" => Ok(GeneratedField::Source),
+                            "template" => Ok(GeneratedField::Template),
+                            "agent" => Ok(GeneratedField::Agent),
+                            "model" => Ok(GeneratedField::Model),
+                            "subtask" => Ok(GeneratedField::Subtask),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -1228,6 +1282,12 @@ impl<'de> serde::Deserialize<'de> for CommandSummary {
                 let mut name__ = None;
                 let mut description__ = None;
                 let mut argument_hint__ = None;
+                let mut hints__ = None;
+                let mut source__ = None;
+                let mut template__ = None;
+                let mut agent__ = None;
+                let mut model__ = None;
+                let mut subtask__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Name => {
@@ -1248,12 +1308,54 @@ impl<'de> serde::Deserialize<'de> for CommandSummary {
                             }
                             argument_hint__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::Hints => {
+                            if hints__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("hints"));
+                            }
+                            hints__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Source => {
+                            if source__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("source"));
+                            }
+                            source__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Template => {
+                            if template__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("template"));
+                            }
+                            template__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Agent => {
+                            if agent__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("agent"));
+                            }
+                            agent__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Model => {
+                            if model__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("model"));
+                            }
+                            model__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Subtask => {
+                            if subtask__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("subtask"));
+                            }
+                            subtask__ = map_.next_value()?;
+                        }
                     }
                 }
                 Ok(CommandSummary {
                     name: name__.unwrap_or_default(),
                     description: description__.unwrap_or_default(),
                     argument_hint: argument_hint__.unwrap_or_default(),
+                    hints: hints__.unwrap_or_default(),
+                    source: source__.unwrap_or_default(),
+                    template: template__.unwrap_or_default(),
+                    agent: agent__.unwrap_or_default(),
+                    model: model__.unwrap_or_default(),
+                    subtask: subtask__,
                 })
             }
         }
@@ -14276,6 +14378,9 @@ impl serde::Serialize for ProviderSummary {
         if !self.website.is_empty() {
             len += 1;
         }
+        if !self.result.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("hya.v1.ProviderSummary", len)?;
         if !self.id.is_empty() {
             struct_ser.serialize_field("id", &self.id)?;
@@ -14291,6 +14396,9 @@ impl serde::Serialize for ProviderSummary {
         if !self.website.is_empty() {
             struct_ser.serialize_field("website", &self.website)?;
         }
+        if !self.result.is_empty() {
+            struct_ser.serialize_field("result", &self.result)?;
+        }
         struct_ser.end()
     }
 }
@@ -14305,6 +14413,7 @@ impl<'de> serde::Deserialize<'de> for ProviderSummary {
             "name",
             "auth",
             "website",
+            "result",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -14313,6 +14422,7 @@ impl<'de> serde::Deserialize<'de> for ProviderSummary {
             Name,
             Auth,
             Website,
+            Result,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -14338,6 +14448,7 @@ impl<'de> serde::Deserialize<'de> for ProviderSummary {
                             "name" => Ok(GeneratedField::Name),
                             "auth" => Ok(GeneratedField::Auth),
                             "website" => Ok(GeneratedField::Website),
+                            "result" => Ok(GeneratedField::Result),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -14361,6 +14472,7 @@ impl<'de> serde::Deserialize<'de> for ProviderSummary {
                 let mut name__ = None;
                 let mut auth__ = None;
                 let mut website__ = None;
+                let mut result__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Id => {
@@ -14387,6 +14499,12 @@ impl<'de> serde::Deserialize<'de> for ProviderSummary {
                             }
                             website__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::Result => {
+                            if result__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("result"));
+                            }
+                            result__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(ProviderSummary {
@@ -14394,6 +14512,7 @@ impl<'de> serde::Deserialize<'de> for ProviderSummary {
                     name: name__.unwrap_or_default(),
                     auth: auth__.unwrap_or_default(),
                     website: website__.unwrap_or_default(),
+                    result: result__.unwrap_or_default(),
                 })
             }
         }
@@ -17487,6 +17606,9 @@ impl serde::Serialize for SessionInfo {
         if self.last_seq != 0 {
             len += 1;
         }
+        if self.busy {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("hya.v1.SessionInfo", len)?;
         if !self.id.is_empty() {
             struct_ser.serialize_field("id", &self.id)?;
@@ -17520,6 +17642,9 @@ impl serde::Serialize for SessionInfo {
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("lastSeq", ToString::to_string(&self.last_seq).as_str())?;
         }
+        if self.busy {
+            struct_ser.serialize_field("busy", &self.busy)?;
+        }
         struct_ser.end()
     }
 }
@@ -17543,6 +17668,7 @@ impl<'de> serde::Deserialize<'de> for SessionInfo {
             "timeUpdated",
             "last_seq",
             "lastSeq",
+            "busy",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -17557,6 +17683,7 @@ impl<'de> serde::Deserialize<'de> for SessionInfo {
             TimeCreated,
             TimeUpdated,
             LastSeq,
+            Busy,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -17588,6 +17715,7 @@ impl<'de> serde::Deserialize<'de> for SessionInfo {
                             "timeCreated" | "time_created" => Ok(GeneratedField::TimeCreated),
                             "timeUpdated" | "time_updated" => Ok(GeneratedField::TimeUpdated),
                             "lastSeq" | "last_seq" => Ok(GeneratedField::LastSeq),
+                            "busy" => Ok(GeneratedField::Busy),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -17617,6 +17745,7 @@ impl<'de> serde::Deserialize<'de> for SessionInfo {
                 let mut time_created__ = None;
                 let mut time_updated__ = None;
                 let mut last_seq__ = None;
+                let mut busy__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Id => {
@@ -17681,6 +17810,12 @@ impl<'de> serde::Deserialize<'de> for SessionInfo {
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
+                        GeneratedField::Busy => {
+                            if busy__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("busy"));
+                            }
+                            busy__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(SessionInfo {
@@ -17694,6 +17829,7 @@ impl<'de> serde::Deserialize<'de> for SessionInfo {
                     time_created: time_created__,
                     time_updated: time_updated__,
                     last_seq: last_seq__.unwrap_or_default(),
+                    busy: busy__.unwrap_or_default(),
                 })
             }
         }
@@ -18454,6 +18590,12 @@ impl serde::Serialize for SkillSummary {
         if !self.source.is_empty() {
             len += 1;
         }
+        if !self.content.is_empty() {
+            len += 1;
+        }
+        if !self.location.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("hya.v1.SkillSummary", len)?;
         if !self.name.is_empty() {
             struct_ser.serialize_field("name", &self.name)?;
@@ -18463,6 +18605,12 @@ impl serde::Serialize for SkillSummary {
         }
         if !self.source.is_empty() {
             struct_ser.serialize_field("source", &self.source)?;
+        }
+        if !self.content.is_empty() {
+            struct_ser.serialize_field("content", &self.content)?;
+        }
+        if !self.location.is_empty() {
+            struct_ser.serialize_field("location", &self.location)?;
         }
         struct_ser.end()
     }
@@ -18477,6 +18625,8 @@ impl<'de> serde::Deserialize<'de> for SkillSummary {
             "name",
             "description",
             "source",
+            "content",
+            "location",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -18484,6 +18634,8 @@ impl<'de> serde::Deserialize<'de> for SkillSummary {
             Name,
             Description,
             Source,
+            Content,
+            Location,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -18508,6 +18660,8 @@ impl<'de> serde::Deserialize<'de> for SkillSummary {
                             "name" => Ok(GeneratedField::Name),
                             "description" => Ok(GeneratedField::Description),
                             "source" => Ok(GeneratedField::Source),
+                            "content" => Ok(GeneratedField::Content),
+                            "location" => Ok(GeneratedField::Location),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -18530,6 +18684,8 @@ impl<'de> serde::Deserialize<'de> for SkillSummary {
                 let mut name__ = None;
                 let mut description__ = None;
                 let mut source__ = None;
+                let mut content__ = None;
+                let mut location__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Name => {
@@ -18550,12 +18706,26 @@ impl<'de> serde::Deserialize<'de> for SkillSummary {
                             }
                             source__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::Content => {
+                            if content__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("content"));
+                            }
+                            content__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Location => {
+                            if location__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("location"));
+                            }
+                            location__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(SkillSummary {
                     name: name__.unwrap_or_default(),
                     description: description__.unwrap_or_default(),
                     source: source__.unwrap_or_default(),
+                    content: content__.unwrap_or_default(),
+                    location: location__.unwrap_or_default(),
                 })
             }
         }
@@ -21289,6 +21459,12 @@ impl serde::Serialize for ToolCallPart {
         if self.state != 0 {
             len += 1;
         }
+        if !self.error_code.is_empty() {
+            len += 1;
+        }
+        if !self.error_message.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("hya.v1.ToolCallPart", len)?;
         if !self.call_id.is_empty() {
             struct_ser.serialize_field("callId", &self.call_id)?;
@@ -21303,6 +21479,12 @@ impl serde::Serialize for ToolCallPart {
             let v = ToolExecutionState::try_from(self.state)
                 .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.state)))?;
             struct_ser.serialize_field("state", &v)?;
+        }
+        if !self.error_code.is_empty() {
+            struct_ser.serialize_field("errorCode", &self.error_code)?;
+        }
+        if !self.error_message.is_empty() {
+            struct_ser.serialize_field("errorMessage", &self.error_message)?;
         }
         struct_ser.end()
     }
@@ -21320,6 +21502,10 @@ impl<'de> serde::Deserialize<'de> for ToolCallPart {
             "input_json",
             "inputJson",
             "state",
+            "error_code",
+            "errorCode",
+            "error_message",
+            "errorMessage",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -21328,6 +21514,8 @@ impl<'de> serde::Deserialize<'de> for ToolCallPart {
             Tool,
             InputJson,
             State,
+            ErrorCode,
+            ErrorMessage,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -21353,6 +21541,8 @@ impl<'de> serde::Deserialize<'de> for ToolCallPart {
                             "tool" => Ok(GeneratedField::Tool),
                             "inputJson" | "input_json" => Ok(GeneratedField::InputJson),
                             "state" => Ok(GeneratedField::State),
+                            "errorCode" | "error_code" => Ok(GeneratedField::ErrorCode),
+                            "errorMessage" | "error_message" => Ok(GeneratedField::ErrorMessage),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -21376,6 +21566,8 @@ impl<'de> serde::Deserialize<'de> for ToolCallPart {
                 let mut tool__ = None;
                 let mut input_json__ = None;
                 let mut state__ = None;
+                let mut error_code__ = None;
+                let mut error_message__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::CallId => {
@@ -21402,6 +21594,18 @@ impl<'de> serde::Deserialize<'de> for ToolCallPart {
                             }
                             state__ = Some(map_.next_value::<ToolExecutionState>()? as i32);
                         }
+                        GeneratedField::ErrorCode => {
+                            if error_code__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("errorCode"));
+                            }
+                            error_code__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::ErrorMessage => {
+                            if error_message__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("errorMessage"));
+                            }
+                            error_message__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(ToolCallPart {
@@ -21409,6 +21613,8 @@ impl<'de> serde::Deserialize<'de> for ToolCallPart {
                     tool: tool__.unwrap_or_default(),
                     input_json: input_json__.unwrap_or_default(),
                     state: state__.unwrap_or_default(),
+                    error_code: error_code__.unwrap_or_default(),
+                    error_message: error_message__.unwrap_or_default(),
                 })
             }
         }
@@ -23583,6 +23789,9 @@ impl serde::Serialize for WorkflowInfoResult {
         if !self.stage_names.is_empty() {
             len += 1;
         }
+        if !self.stages.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("hya.v1.WorkflowInfoResult", len)?;
         if !self.name.is_empty() {
             struct_ser.serialize_field("name", &self.name)?;
@@ -23592,6 +23801,9 @@ impl serde::Serialize for WorkflowInfoResult {
         }
         if !self.stage_names.is_empty() {
             struct_ser.serialize_field("stageNames", &self.stage_names)?;
+        }
+        if !self.stages.is_empty() {
+            struct_ser.serialize_field("stages", &self.stages)?;
         }
         struct_ser.end()
     }
@@ -23607,6 +23819,7 @@ impl<'de> serde::Deserialize<'de> for WorkflowInfoResult {
             "revision",
             "stage_names",
             "stageNames",
+            "stages",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -23614,6 +23827,7 @@ impl<'de> serde::Deserialize<'de> for WorkflowInfoResult {
             Name,
             Revision,
             StageNames,
+            Stages,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -23638,6 +23852,7 @@ impl<'de> serde::Deserialize<'de> for WorkflowInfoResult {
                             "name" => Ok(GeneratedField::Name),
                             "revision" => Ok(GeneratedField::Revision),
                             "stageNames" | "stage_names" => Ok(GeneratedField::StageNames),
+                            "stages" => Ok(GeneratedField::Stages),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -23660,6 +23875,7 @@ impl<'de> serde::Deserialize<'de> for WorkflowInfoResult {
                 let mut name__ = None;
                 let mut revision__ = None;
                 let mut stage_names__ = None;
+                let mut stages__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Name => {
@@ -23680,12 +23896,19 @@ impl<'de> serde::Deserialize<'de> for WorkflowInfoResult {
                             }
                             stage_names__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::Stages => {
+                            if stages__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("stages"));
+                            }
+                            stages__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(WorkflowInfoResult {
                     name: name__.unwrap_or_default(),
                     revision: revision__.unwrap_or_default(),
                     stage_names: stage_names__.unwrap_or_default(),
+                    stages: stages__.unwrap_or_default(),
                 })
             }
         }
@@ -23763,6 +23986,239 @@ impl<'de> serde::Deserialize<'de> for WorkflowListCommand {
         deserializer.deserialize_struct("hya.v1.WorkflowListCommand", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for WorkflowModelAssignment {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.id.is_empty() {
+            len += 1;
+        }
+        if !self.reasoning.is_empty() {
+            len += 1;
+        }
+        if !self.fallback.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("hya.v1.WorkflowModelAssignment", len)?;
+        if !self.id.is_empty() {
+            struct_ser.serialize_field("id", &self.id)?;
+        }
+        if !self.reasoning.is_empty() {
+            struct_ser.serialize_field("reasoning", &self.reasoning)?;
+        }
+        if !self.fallback.is_empty() {
+            struct_ser.serialize_field("fallback", &self.fallback)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for WorkflowModelAssignment {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "id",
+            "reasoning",
+            "fallback",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Id,
+            Reasoning,
+            Fallback,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "id" => Ok(GeneratedField::Id),
+                            "reasoning" => Ok(GeneratedField::Reasoning),
+                            "fallback" => Ok(GeneratedField::Fallback),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = WorkflowModelAssignment;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct hya.v1.WorkflowModelAssignment")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<WorkflowModelAssignment, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut id__ = None;
+                let mut reasoning__ = None;
+                let mut fallback__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Id => {
+                            if id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("id"));
+                            }
+                            id__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Reasoning => {
+                            if reasoning__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("reasoning"));
+                            }
+                            reasoning__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Fallback => {
+                            if fallback__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("fallback"));
+                            }
+                            fallback__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(WorkflowModelAssignment {
+                    id: id__.unwrap_or_default(),
+                    reasoning: reasoning__.unwrap_or_default(),
+                    fallback: fallback__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("hya.v1.WorkflowModelAssignment", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for WorkflowModelCandidate {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.id.is_empty() {
+            len += 1;
+        }
+        if !self.reasoning.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("hya.v1.WorkflowModelCandidate", len)?;
+        if !self.id.is_empty() {
+            struct_ser.serialize_field("id", &self.id)?;
+        }
+        if !self.reasoning.is_empty() {
+            struct_ser.serialize_field("reasoning", &self.reasoning)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for WorkflowModelCandidate {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "id",
+            "reasoning",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Id,
+            Reasoning,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "id" => Ok(GeneratedField::Id),
+                            "reasoning" => Ok(GeneratedField::Reasoning),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = WorkflowModelCandidate;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct hya.v1.WorkflowModelCandidate")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<WorkflowModelCandidate, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut id__ = None;
+                let mut reasoning__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Id => {
+                            if id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("id"));
+                            }
+                            id__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Reasoning => {
+                            if reasoning__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("reasoning"));
+                            }
+                            reasoning__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(WorkflowModelCandidate {
+                    id: id__.unwrap_or_default(),
+                    reasoning: reasoning__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("hya.v1.WorkflowModelCandidate", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for WorkflowRunCommand {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -23771,10 +24227,16 @@ impl serde::Serialize for WorkflowRunCommand {
     {
         use serde::ser::SerializeStruct;
         let mut len = 0;
+        if !self.name.is_empty() {
+            len += 1;
+        }
         if self.inputs.is_some() {
             len += 1;
         }
         let mut struct_ser = serializer.serialize_struct("hya.v1.WorkflowRunCommand", len)?;
+        if !self.name.is_empty() {
+            struct_ser.serialize_field("name", &self.name)?;
+        }
         if let Some(v) = self.inputs.as_ref() {
             struct_ser.serialize_field("inputs", v)?;
         }
@@ -23788,11 +24250,13 @@ impl<'de> serde::Deserialize<'de> for WorkflowRunCommand {
         D: serde::Deserializer<'de>,
     {
         const FIELDS: &[&str] = &[
+            "name",
             "inputs",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
+            Name,
             Inputs,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
@@ -23815,6 +24279,7 @@ impl<'de> serde::Deserialize<'de> for WorkflowRunCommand {
                         E: serde::de::Error,
                     {
                         match value {
+                            "name" => Ok(GeneratedField::Name),
                             "inputs" => Ok(GeneratedField::Inputs),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
@@ -23835,9 +24300,16 @@ impl<'de> serde::Deserialize<'de> for WorkflowRunCommand {
                 where
                     V: serde::de::MapAccess<'de>,
             {
+                let mut name__ = None;
                 let mut inputs__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
+                        GeneratedField::Name => {
+                            if name__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("name"));
+                            }
+                            name__ = Some(map_.next_value()?);
+                        }
                         GeneratedField::Inputs => {
                             if inputs__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("inputs"));
@@ -23847,6 +24319,7 @@ impl<'de> serde::Deserialize<'de> for WorkflowRunCommand {
                     }
                 }
                 Ok(WorkflowRunCommand {
+                    name: name__.unwrap_or_default(),
                     inputs: inputs__,
                 })
             }
@@ -24046,6 +24519,169 @@ impl<'de> serde::Deserialize<'de> for WorkflowSelectCommand {
         deserializer.deserialize_struct("hya.v1.WorkflowSelectCommand", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for WorkflowStageInfo {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.name.is_empty() {
+            len += 1;
+        }
+        if !self.agent.is_empty() {
+            len += 1;
+        }
+        if self.level != 0 {
+            len += 1;
+        }
+        if self.worker_model.is_some() {
+            len += 1;
+        }
+        if self.verifier_model.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("hya.v1.WorkflowStageInfo", len)?;
+        if !self.name.is_empty() {
+            struct_ser.serialize_field("name", &self.name)?;
+        }
+        if !self.agent.is_empty() {
+            struct_ser.serialize_field("agent", &self.agent)?;
+        }
+        if self.level != 0 {
+            struct_ser.serialize_field("level", &self.level)?;
+        }
+        if let Some(v) = self.worker_model.as_ref() {
+            struct_ser.serialize_field("workerModel", v)?;
+        }
+        if let Some(v) = self.verifier_model.as_ref() {
+            struct_ser.serialize_field("verifierModel", v)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for WorkflowStageInfo {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "name",
+            "agent",
+            "level",
+            "worker_model",
+            "workerModel",
+            "verifier_model",
+            "verifierModel",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Name,
+            Agent,
+            Level,
+            WorkerModel,
+            VerifierModel,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "name" => Ok(GeneratedField::Name),
+                            "agent" => Ok(GeneratedField::Agent),
+                            "level" => Ok(GeneratedField::Level),
+                            "workerModel" | "worker_model" => Ok(GeneratedField::WorkerModel),
+                            "verifierModel" | "verifier_model" => Ok(GeneratedField::VerifierModel),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = WorkflowStageInfo;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct hya.v1.WorkflowStageInfo")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<WorkflowStageInfo, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut name__ = None;
+                let mut agent__ = None;
+                let mut level__ = None;
+                let mut worker_model__ = None;
+                let mut verifier_model__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Name => {
+                            if name__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("name"));
+                            }
+                            name__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Agent => {
+                            if agent__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("agent"));
+                            }
+                            agent__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Level => {
+                            if level__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("level"));
+                            }
+                            level__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::WorkerModel => {
+                            if worker_model__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("workerModel"));
+                            }
+                            worker_model__ = map_.next_value()?;
+                        }
+                        GeneratedField::VerifierModel => {
+                            if verifier_model__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("verifierModel"));
+                            }
+                            verifier_model__ = map_.next_value()?;
+                        }
+                    }
+                }
+                Ok(WorkflowStageInfo {
+                    name: name__.unwrap_or_default(),
+                    agent: agent__.unwrap_or_default(),
+                    level: level__.unwrap_or_default(),
+                    worker_model: worker_model__,
+                    verifier_model: verifier_model__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("hya.v1.WorkflowStageInfo", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for WorkflowStageRun {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -24216,6 +24852,9 @@ impl serde::Serialize for WorkflowState {
         if !self.error_code.is_empty() {
             len += 1;
         }
+        if !self.raw_json.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("hya.v1.WorkflowState", len)?;
         if !self.session.is_empty() {
             struct_ser.serialize_field("session", &self.session)?;
@@ -24237,6 +24876,9 @@ impl serde::Serialize for WorkflowState {
         if !self.error_code.is_empty() {
             struct_ser.serialize_field("errorCode", &self.error_code)?;
         }
+        if !self.raw_json.is_empty() {
+            struct_ser.serialize_field("rawJson", &self.raw_json)?;
+        }
         struct_ser.end()
     }
 }
@@ -24254,6 +24896,8 @@ impl<'de> serde::Deserialize<'de> for WorkflowState {
             "stages",
             "error_code",
             "errorCode",
+            "raw_json",
+            "rawJson",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -24264,6 +24908,7 @@ impl<'de> serde::Deserialize<'de> for WorkflowState {
             Status,
             Stages,
             ErrorCode,
+            RawJson,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -24291,6 +24936,7 @@ impl<'de> serde::Deserialize<'de> for WorkflowState {
                             "status" => Ok(GeneratedField::Status),
                             "stages" => Ok(GeneratedField::Stages),
                             "errorCode" | "error_code" => Ok(GeneratedField::ErrorCode),
+                            "rawJson" | "raw_json" => Ok(GeneratedField::RawJson),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -24316,6 +24962,7 @@ impl<'de> serde::Deserialize<'de> for WorkflowState {
                 let mut status__ = None;
                 let mut stages__ = None;
                 let mut error_code__ = None;
+                let mut raw_json__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Session => {
@@ -24354,6 +25001,12 @@ impl<'de> serde::Deserialize<'de> for WorkflowState {
                             }
                             error_code__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::RawJson => {
+                            if raw_json__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("rawJson"));
+                            }
+                            raw_json__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(WorkflowState {
@@ -24363,6 +25016,7 @@ impl<'de> serde::Deserialize<'de> for WorkflowState {
                     status: status__.unwrap_or_default(),
                     stages: stages__.unwrap_or_default(),
                     error_code: error_code__.unwrap_or_default(),
+                    raw_json: raw_json__.unwrap_or_default(),
                 })
             }
         }

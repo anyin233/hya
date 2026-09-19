@@ -30,7 +30,7 @@ async fn t2_3_agent_roster_lists_build_and_spawnable_roles() {
     // Optional directory-scoped route (same catalog).
     let scoped = env
         .get_json(&format!(
-            "/api/agent?directory={}",
+            "/v1/agents?directory={}",
             env.backend.workdir_str()
         ))
         .await
@@ -38,7 +38,7 @@ async fn t2_3_agent_roster_lists_build_and_spawnable_roles() {
     let scoped_text = scoped.to_string();
     assert!(
         scoped_text.contains("build"),
-        "directory-scoped /api/agent must list build; {}",
+        "directory-scoped /v1/agents must list build; {}",
         env.diagnostics()
     );
 }

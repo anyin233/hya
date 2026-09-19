@@ -87,6 +87,9 @@ message SessionInfo {
   google.protobuf.Timestamp time_updated = 9;
   // Highest event sequence number recorded for this session.
   uint64 last_seq = 10;
+  // Whether a run currently owns the session's admission slot (derived
+  // from the process run registry, not the durable log).
+  bool busy = 11;
 }
 
 message CreateSessionRequest {

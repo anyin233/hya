@@ -103,6 +103,9 @@ message WorkflowState {
   repeated WorkflowStageRun stages = 5;
   // Terminal failure code when status is FAILED.
   string error_code = 6;
+  // Opaque canonical projection JSON for tooling and replay parity. The
+  // internal shape is not a stable contract; prefer the typed fields.
+  string raw_json = 7;
 }
 
 // `list` command: enumerate workflow sources.
@@ -122,10 +125,12 @@ message WorkflowSelectCommand {
   string expected_revision = 2;
 }
 
-// `run` command: start the selected workflow.
+// `run` command: start the selected or named workflow.
 message WorkflowRunCommand {
+  // Declared workflow name; empty uses the durable selection.
+  string name = 1;
   // Workflow inputs as a JSON object.
-  google.protobuf.Struct inputs = 1;
+  google.protobuf.Struct inputs = 2;
 }
 
 message SubmitWorkflowCommandRequest {
@@ -144,6 +149,24 @@ message SubmitWorkflowCommandRequest {
   }
 }
 
+/// One authored fallback candidate.
+message WorkflowModelCandidate {
+  // Base model identity (`provider/model`).
+  string id = 1;
+  // Optional author-provided effort label.
+  string reasoning = 2;
+}
+
+/// Authored worker model assignment for a stage.
+message WorkflowModelAssignment {
+  // Preferred base model identity (`provider/model`).
+  string id = 1;
+  // Optional preferred effort label.
+  string reasoning = 2;
+  // Ordered fallback tail.
+  repeated WorkflowModelCandidate fallback = 3;
+}
+
 // Result payload of the `info` command.
 message WorkflowInfoResult {
   // Compiled workflow name.
@@ -152,6 +175,22 @@ message WorkflowInfoResult {
   string revision = 2;
   // Stage names in execution order.
   repeated string stage_names = 3;
+  // Stage metadata in execution order.
+  repeated WorkflowStageInfo stages = 4;
+}
+
+/// Compiled stage metadata from the `info` result.
+message WorkflowStageInfo {
+  // Compiled stage id.
+  string name = 1;
+  // Target agent id.
+  string agent = 2;
+  // Zero-based topological level.
+  uint32 level = 3;
+  // Authored worker model assignment when present.
+  WorkflowModelAssignment worker_model = 4;
+  // Authored verifier model assignment when present.
+  WorkflowModelAssignment verifier_model = 5;
 }
 
 message SubmitWorkflowCommandResponse {
