@@ -737,8 +737,17 @@ impl TeamActor {
             cancel,
         } = plan;
         // Snapshot new inbox mail for this handle (folded before its wake, so it is
-        // already visible here).
+        // already visible here). The durable cursor leads the in-memory slot
+        // cursor when steer already surfaced mail inside a tool result — sync
+        // so the wake never re-injects steered messages as user prompts.
         let projection = self.engine.read_projection(self.root).await?;
+        if let Some(entry) = projection.team.roster.get(&handle) {
+            let durable = usize::try_from(entry.resident_cursor).unwrap_or(usize::MAX);
+            let mut st = self.lock();
+            if let Some(slot) = st.residents.get_mut(&session) {
+                slot.cursor = slot.cursor.max(durable);
+            }
+        }
         let inbox_len = projection
             .team
             .inboxes

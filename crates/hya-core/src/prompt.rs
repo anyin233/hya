@@ -144,6 +144,18 @@ pub fn render_environment_and_context(
     out
 }
 
+/// The shortest correct mental model of the subagent system (ADR-0015/0016).
+///
+/// Written from the observed failure modes of a real multi-agent run: the main
+/// agent tried to `report`, read `#channel` ids as files, and killed already
+/// archived agents. Every line here exists to prevent one of those.
+const TEAM_QUICK_REFERENCE: &str = "## Team quick reference\n\
+- `task` is non-blocking: it returns the child's handle immediately. Results arrive later as mail — watch for `[NEW MAIL]` notices appended to tool results.\n\
+- `report` is ONLY for subagents to end their own task. As the main agent NEVER call `report` — deliver your final answer as normal text.\n\
+- Read mail history with `read channel://<id>` (latest) or `channel://<id>?last=N`; `list_channel` shows channels + unread counts. A `#id` is never a file path.\n\
+- `dm`: omit `to` to reach your parent; name a child handle to message (or revive an archived child with its saved state). `broadcast`: one-way to all your direct children.\n\
+- `kill` only works on LIVE agents. Archived agents are gone from the roster — check `list_channel`/`search_agent` first; to reach one again, `dm` its handle.";
+
 /// Compose agent base + Environment + discovered project context files.
 #[must_use]
 pub fn build_system_prompt(
@@ -153,10 +165,15 @@ pub fn build_system_prompt(
 ) -> String {
     let layer = render_environment_and_context(env, context_files);
     let base = base.trim();
-    if base.is_empty() {
-        layer
+    let with_team = if base.is_empty() {
+        TEAM_QUICK_REFERENCE.to_string()
     } else {
-        format!("{base}\n\n{layer}")
+        format!("{base}\n\n{TEAM_QUICK_REFERENCE}")
+    };
+    if layer.is_empty() {
+        with_team
+    } else {
+        format!("{with_team}\n\n{layer}")
     }
 }
 

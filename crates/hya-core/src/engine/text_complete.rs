@@ -77,6 +77,7 @@ impl TextPartAccumulator {
             | Event::HandoffCommitted { .. }
             | Event::AgentArchived { .. }
             | Event::AgentRestarted { .. }
+            | Event::MailConsumed { .. }
             | Event::ContextCompacted { .. }
             | Event::SessionForked { .. }
             | Event::ContextEvicted { .. }

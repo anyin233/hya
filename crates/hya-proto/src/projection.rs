@@ -1310,6 +1310,12 @@ impl Projection {
                     }
                 }
             }
+            Event::MailConsumed { handle, through, .. } => {
+                let handle = self.canonical_member(handle);
+                if let Some(entry) = self.team.roster.get_mut(&handle) {
+                    entry.resident_cursor = entry.resident_cursor.max(*through);
+                }
+            }
             Event::AgentRestarted { handle, .. } => {
                 let handle = self.canonical_member(handle);
                 self.team.archived.remove(&handle);
@@ -2265,6 +2271,51 @@ mod orchestration_tests {
         let row = &projection.session.members[0];
         assert_eq!(row.status, MemberRunStatus::Done);
         assert_eq!(row.summary, "found it");
+    }
+
+    /// Steer consumption advances the durable cursor without touching
+    /// liveness — the report gate must not re-block on mail the agent saw
+    /// inside a tool result (fix for the unread-mail report loop).
+    #[test]
+    fn mail_consumed_advances_the_durable_inbox_cursor() {
+        let root = SessionId::new();
+        let lead = SessionId::new();
+        let projection = Projection::from_events(&[
+            env(
+                1,
+                Event::AgentRegistered {
+                    session: root,
+                    agent_session: lead,
+                    handle: "lead-1".to_string(),
+                    parent: Some(scope::ROOT_HANDLE.to_string()),
+                    agent_type: AgentName::new("lead"),
+                    mode: SubagentMode::Resident,
+                },
+            ),
+            env(
+                2,
+                Event::MailSent {
+                    session: root,
+                    from: scope::ROOT_HANDLE.to_string(),
+                    to: MailEndpoint::Handle("main/lead-1".to_string()),
+                    kind: MailKind::Message,
+                    body: "urgent".to_string(),
+                },
+            ),
+            env(
+                3,
+                Event::MailConsumed {
+                    session: root,
+                    handle: "main/lead-1".to_string(),
+                    through: 1,
+                },
+            ),
+        ]);
+        let entry = projection.team.roster.get("main/lead-1").unwrap();
+        assert_eq!(
+            entry.resident_cursor, 1,
+            "steer consumption advances the cursor"
+        );
     }
 
     /// The handoff is the only carried state (ADR-0015): it projects onto the

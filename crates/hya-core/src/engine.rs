@@ -67,6 +67,7 @@ mod session_state;
 mod session_title;
 mod shell;
 mod spill;
+mod steer;
 mod stream_round;
 mod summary;
 mod text_complete;

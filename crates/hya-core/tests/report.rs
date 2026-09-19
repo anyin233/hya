@@ -22,6 +22,7 @@ use hya_provider::{
 };
 use hya_store::SessionStore;
 use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
+use tokio_util::sync::CancellationToken;
 
 use hya_core::CoreError;
 use hya_core::bus::EventBus;
@@ -590,5 +591,203 @@ async fn deleting_the_root_session_force_archives_descendants() {
     assert!(
         !active_after.contains(&lead),
         "delete-driven teardown must release descendant claims: {active_after:?}"
+    );
+}
+
+#[tokio::test]
+async fn steer_surfaces_mail_inside_a_root_turn_tool_result() {
+    // A provider that first issues one harmless tool call (ls) then finishes:
+    // the steer notice must ride that tool result.
+    struct OneToolProvider {
+        called: std::sync::atomic::AtomicBool,
+    }
+    #[async_trait::async_trait]
+    impl Provider for OneToolProvider {
+        fn id(&self) -> &str {
+            "fake"
+        }
+        fn capabilities(&self, model: &ModelRef) -> Option<Capabilities> {
+            (model.as_str() == "fake").then_some(Capabilities {
+                streaming_tool_calls: true,
+                parallel_tool_calls: false,
+                usage_reporting: true,
+                max_context: 200_000,
+                ..Capabilities::default()
+            })
+        }
+        async fn stream(
+            &self,
+            _req: CompletionRequest,
+            session: SessionId,
+            message: MessageId,
+        ) -> Result<EventStream, ProviderError> {
+            use std::sync::atomic::Ordering;
+            let first = !self.called.swap(true, Ordering::SeqCst);
+            let steps = if first {
+                vec![
+                    FakeStep::ToolCall {
+                        name: "ls".to_string(),
+                        input: serde_json::json!({"path": "."}),
+                    },
+                    FakeStep::Finish(FinishReason::ToolCalls),
+                ]
+            } else {
+                vec![
+                    FakeStep::Text("done".to_string()),
+                    FakeStep::Finish(FinishReason::Stop),
+                ]
+            };
+            let events = FakeProvider::materialize(&steps, session, message);
+            Ok(Box::pin(futures::stream::iter(
+                events.into_iter().map(Ok::<Event, ProviderError>),
+            )))
+        }
+    }
+    let (permission, _permission_rx) =
+        PermissionPlane::new(PermissionRules::new(vec![hya_tool::Rule {
+            action: hya_tool::Action::Read,
+            resource_pattern: "*".to_string(),
+            mode: hya_tool::Mode::Allow,
+        }]));
+    let engine = Arc::new(SessionEngine::new(
+        SessionStore::connect_memory().await.unwrap(),
+        Arc::new(ProviderRouter::new().with(Arc::new(OneToolProvider {
+            called: std::sync::atomic::AtomicBool::new(false),
+        }))),
+        support::test_runtime(Arc::new(ToolRegistry::builtins())),
+        permission,
+        EventBus::default(),
+    ));
+    let root = root_team(&engine).await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    ensure_main(&supervisor, &engine, root).await;
+
+    engine
+        .mail_send(
+            root,
+            MailEndpoint::Handle("main".to_string()),
+            MailKind::Message,
+            "steer payload for main".to_string(),
+        )
+        .await
+        .unwrap();
+
+    let agent = AgentSpec {
+        name: AgentName::new("build"),
+        model: ModelRef::new("fake"),
+        system_prompt: String::new(),
+        workdir: PathBuf::from("."),
+        reasoning: None,
+    };
+    engine
+        .admit_user_prompt(root, "list the directory then stop".to_string())
+        .await
+        .unwrap();
+    let finish = engine
+        .run_turn_with_external_dirs_and_guidance(
+            root,
+            &agent,
+            CancellationToken::new(),
+            &[],
+            None,
+            None,
+        )
+        .await;
+    let _ = finish;
+
+    // The durable cursor for main advanced past the steered mail.
+    let projection = engine.read_projection(root).await.unwrap();
+    let entry = projection.team.roster.get("main").unwrap();
+    assert!(
+        entry.resident_cursor >= 1,
+        "steer must advance main's durable cursor (cursor={})",
+        entry.resident_cursor
+    );
+    let replay = engine.replay(root).await.unwrap();
+    assert!(
+        replay
+            .iter()
+            .any(|envelope| matches!(&envelope.event, Event::MailConsumed { .. })),
+        "MailConsumed must be committed"
+    );
+    // And the tool result carried the notice text.
+    let tool_results: Vec<String> = replay
+        .iter()
+        .filter_map(|envelope| match &envelope.event {
+            Event::ToolResult { output, .. } => serde_json::to_string(output).ok(),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        tool_results
+            .iter()
+            .any(|text| text.contains("steer payload for main")),
+        "some tool result must embed the steered mail; got {tool_results:?}"
+    );
+}
+
+#[tokio::test]
+async fn channel_read_returns_history_and_marks_inbox_seen() {
+    let engine = engine().await;
+    let root = root_team(&engine).await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    ensure_main(&supervisor, &engine, root).await;
+    let (_child, handle) = spawn_idle_resident(&supervisor, &engine, root, "explore").await;
+
+    // Two broadcasts on the unit group channel; the child reads it.
+    for body in ["first note", "second note"] {
+        engine.mail_announce(root, body.to_string()).await.unwrap();
+    }
+    let projection = engine.read_projection(root).await.unwrap();
+    let group = projection
+        .team
+        .channels
+        .keys()
+        .find(|key| key.starts_with("announce-"))
+        .unwrap()
+        .clone();
+    let child: SessionId = projection.team.roster.get(&handle).unwrap().session;
+
+    let latest = engine
+        .read_channel_history(child, &group, None)
+        .await
+        .unwrap();
+    assert_eq!(latest.messages.len(), 1, "no `last` reads exactly one");
+    assert_eq!(
+        latest.messages[0].1, "second note",
+        "the latest message wins"
+    );
+
+    let history = engine
+        .read_channel_history(child, &group, Some(10))
+        .await
+        .unwrap();
+    assert_eq!(history.messages.len(), 2);
+    assert_eq!(
+        history.messages[0].1, "second note",
+        "newest-first ordering"
+    );
+    assert_eq!(history.messages[1].1, "first note");
+
+    // Reading marked the inbox seen: the durable cursor caught up.
+    let projection = engine.read_projection(root).await.unwrap();
+    let inbox_len = projection
+        .team
+        .inboxes
+        .get(&handle)
+        .map(Vec::len)
+        .unwrap_or(0) as u64;
+    let cursor = projection.team.roster.get(&handle).unwrap().resident_cursor;
+    assert!(
+        cursor >= inbox_len,
+        "channel read must mark the inbox seen (cursor={cursor}, inbox={inbox_len})"
+    );
+    assert!(
+        engine
+            .replay(root)
+            .await
+            .unwrap()
+            .iter()
+            .any(|envelope| matches!(&envelope.event, Event::MailConsumed { .. }))
     );
 }

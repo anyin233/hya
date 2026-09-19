@@ -716,6 +716,19 @@ pub enum Event {
         /// Why the agent archived.
         reason: ArchiveReason,
     },
+    /// In-turn mail consumption (steer): unread mail surfaced to the agent
+    /// inside a tool result advances the durable inbox cursor, so the report
+    /// gate and later turns never re-inject or re-block on mail the agent has
+    /// already seen mid-turn.
+    MailConsumed {
+        /// Team-root log session.
+        session: SessionId,
+        /// Consuming roster handle.
+        handle: String,
+        /// Inbox length covered by this consumption.
+        through: u64,
+    },
+
     /// An archived agent was revived by a downward DM. Paired with an
     /// `AgentRegistered` upsert in the same transaction.
     AgentRestarted {
@@ -1000,7 +1013,8 @@ impl Event {
             | Event::SubagentReported { session, .. }
             | Event::HandoffCommitted { session, .. }
             | Event::AgentArchived { session, .. }
-            | Event::AgentRestarted { session, .. } => Some(*session),
+            | Event::AgentRestarted { session, .. }
+            | Event::MailConsumed { session, .. } => Some(*session),
             Event::ContextCompacted { session, .. }
             | Event::SessionForked { session, .. }
             | Event::ContextEvicted { session, .. }
