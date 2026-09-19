@@ -12,7 +12,7 @@
 
 use std::time::Duration;
 
-use hya_e2e::{E2eEnvBuilder, ScriptStep, text_step, tool_step};
+use hya_e2e::{E2eEnvBuilder, text_step, tool_step};
 use serde_json::{Value, json};
 
 /// Route markers — prefixes of each agent's system prompt (routing keys).
@@ -69,7 +69,12 @@ async fn t2_5_dm_to_parent_is_delivered_into_the_parents_next_turn() {
 
     env.wait_route_contains(SYS_ROOT, "CHILD_HELLO_PARENT", TIMEOUT)
         .await
-        .unwrap_or_else(|e| panic!("parent never received the dm: {e}; root={}", env.route_dump(SYS_ROOT).unwrap_or_default()));
+        .unwrap_or_else(|e| {
+            panic!(
+                "parent never received the dm: {e}; root={}",
+                env.route_dump(SYS_ROOT).unwrap_or_default()
+            )
+        });
 }
 
 /// T2.6 (broadcast): the root's broadcast reaches its direct child.
@@ -106,5 +111,10 @@ async fn t2_6_broadcast_reaches_the_direct_child() {
 
     env.wait_route_contains(SYS_CHILD, "ALL_HANDS_BROADCAST", TIMEOUT)
         .await
-        .unwrap_or_else(|e| panic!("child never heard the broadcast: {e}; child={}", env.route_dump(SYS_CHILD).unwrap_or_default()));
+        .unwrap_or_else(|e| {
+            panic!(
+                "child never heard the broadcast: {e}; child={}",
+                env.route_dump(SYS_CHILD).unwrap_or_default()
+            )
+        });
 }

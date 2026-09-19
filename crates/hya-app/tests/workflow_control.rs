@@ -517,17 +517,25 @@ async fn run_is_idempotent_by_tool_operation_and_rejects_changed_inputs() {
             hya_proto::Event::WorkflowStageMemberLinked { member, .. } if *member == linked_member
         ))
         .expect("Workflow member link");
-    let spawn_index = events
+    // Under the unified substrate (ADR-0017) the member session is created
+    // (MemberSpawned) before the durable link; the governed turn starts when
+    // the directive mail reaches the actor, so the link must precede THAT.
+    let turn_start_index = events
         .iter()
         .position(|envelope| {
             matches!(
                 &envelope.event,
-                hya_proto::Event::MemberSpawned { member, .. } if *member == linked_member
+                hya_proto::Event::ResidentWorkStarted { .. }
             )
         })
-        .expect("canonical member spawn");
+        .or_else(|| {
+            events
+                .iter()
+                .position(|envelope| matches!(&envelope.event, hya_proto::Event::MailSent { .. }))
+        })
+        .expect("governed turn start marker");
     assert!(
-        link_index < spawn_index,
+        link_index < turn_start_index,
         "Workflow activity must reference the member before its governed turn starts"
     );
     let replay = match control
