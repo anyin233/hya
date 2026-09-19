@@ -55,6 +55,40 @@ pub(crate) async fn cmd_serve(
         state.catalog_updates_sender(),
         pending_discovery,
     );
+    // Optional gRPC listener: HYA_GRPC_BIND=host:port serves the same
+    // hya.v1 contract over tonic next to the HTTP surface.
+    if let Some(grpc_bind) = std::env::var("HYA_GRPC_BIND").ok().filter(|value| !value.is_empty()) {
+        let grpc_state = state.clone();
+        tokio::spawn(async move {
+            if let Ok(listener) = tokio::net::TcpListener::bind(&grpc_bind).await {
+                let addr = listener.local_addr().map_or_else(
+                    |_| grpc_bind.clone(),
+                    |addr| addr.to_string(),
+                );
+                println!("hya grpc listening on http://{addr}");
+                let grpc = hya_server::V1Grpc::new(grpc_state);
+                use hya_api::v1 as pbv1;
+                let server = tonic::transport::Server::builder()
+                    .add_service(pbv1::process_server::ProcessServer::new(grpc.clone()))
+                    .add_service(pbv1::catalog_server::CatalogServer::new(grpc.clone()))
+                    .add_service(pbv1::auth_server::AuthServer::new(grpc.clone()))
+                    .add_service(pbv1::session_server::SessionServer::new(grpc.clone()))
+                    .add_service(pbv1::turn_server::TurnServer::new(grpc.clone()))
+                    .add_service(pbv1::messages_server::MessagesServer::new(grpc.clone()))
+                    .add_service(pbv1::events_server::EventsServer::new(grpc.clone()))
+                    .add_service(pbv1::interactions_server::InteractionsServer::new(grpc.clone()))
+                    .add_service(pbv1::workflow_server::WorkflowServer::new(grpc.clone()))
+                    .add_service(pbv1::files_server::FilesServer::new(grpc.clone()))
+                    .add_service(pbv1::project_server::ProjectServer::new(grpc.clone()))
+                    .add_service(pbv1::worktrees_server::WorktreesServer::new(grpc.clone()))
+                    .add_service(pbv1::mcp_server::McpServer::new(grpc.clone()))
+                    .add_service(pbv1::pty_server::PtyServer::new(grpc.clone()))
+                    .add_service(pbv1::logs_server::LogsServer::new(grpc.clone()))
+                    .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener));
+                let _ = server.await;
+            }
+        });
+    }
     let listener = tokio::net::TcpListener::bind(&bind)
         .await
         .with_context(|| format!("bind {bind}"))?;

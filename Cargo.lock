@@ -992,6 +992,7 @@ dependencies = [
  "anyhow",
  "axum 0.7.9",
  "clap",
+ "hya-api",
  "hya-app",
  "hya-bundle",
  "hya-core",
@@ -1004,7 +1005,9 @@ dependencies = [
  "serde_json",
  "serde_norway",
  "tokio",
+ "tokio-stream",
  "tokio-util",
+ "tonic",
 ]
 
 [[package]]

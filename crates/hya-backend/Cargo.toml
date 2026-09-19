@@ -14,13 +14,16 @@ workspace = true
 
 [dependencies]
 hya-bundle = { workspace = true }
+hya-api = { workspace = true }
 hya-core = { workspace = true }
 hya-provider = { workspace = true }
 hya-store = { workspace = true }
 hya-server = { workspace = true }
 hya-proto = { workspace = true }
 hya-app = { workspace = true }
+tokio-stream = { workspace = true }
 tokio = { workspace = true }
+tonic = { workspace = true }
 tokio-util = { workspace = true }
 axum = { workspace = true }
 clap = { workspace = true }
