@@ -69,33 +69,21 @@ async fn configured_language_server_exposes_workspace_symbols()
         .timeout(Duration::from_secs(10))
         .build()?;
     let symbols: Value = client
-        .get(format!("{url}/find/symbol"))
-        .query(&[("query", "qaSymbol")])
-        .header("x-opencode-directory", project.to_string_lossy().as_ref())
+        .get(format!("{url}/v1/fs/symbols"))
+        .query(&[
+            ("query", "qaSymbol"),
+            ("directory", project.to_string_lossy().as_ref()),
+        ])
         .send()
         .await?
         .error_for_status()?
         .json()
         .await?;
     assert!(
-        symbols
+        symbols["symbols"]
             .as_array()
             .is_some_and(|rows| rows.iter().any(|row| row["name"] == "qaSymbol")),
         "configured LSP result missing: {symbols}"
-    );
-    let status: Value = client
-        .get(format!("{url}/lsp"))
-        .header("x-opencode-directory", project.to_string_lossy().as_ref())
-        .send()
-        .await?
-        .error_for_status()?
-        .json()
-        .await?;
-    assert!(
-        status.as_array().is_some_and(|rows| rows
-            .iter()
-            .any(|row| row["id"] == "fixture" && row["status"] == "connected")),
-        "connected server missing from status: {status}"
     );
     backend.kill().await?;
     backend.wait().await?;

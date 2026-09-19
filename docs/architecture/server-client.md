@@ -1,457 +1,95 @@
 # Server and Client
 
 The server lives in [`../../crates/hya-server`](../../crates/hya-server). It
-wraps `SessionEngine` with Axum routes, native SSE streams, and
-Compat-compatible HTTP/SSE route groups.
+serves exactly one contract — `hya.v1` — over two transports:
+
+- **HTTP/JSON + SSE + WebSocket** (axum): the `/v1` routes generated from
+  the `proto/hya/v1` IDL (`crates/hya-api`).
+- **gRPC** (tonic): `hya_server::V1Grpc` implements all fifteen generated
+  services and dispatches every unary call through the *same* axum `/v1`
+  router (protojson in, protojson out, stable error codes mapped from the
+  JSON error body), so dual-transport parity holds by construction.
+  Serve it with `HYA_GRPC_BIND=host:port`.
+
+Contract references:
+
+- [`../protocol/README.md`](../protocol/README.md) — the integration guide
+  (serialization rules, error table, pagination, event-driven model, SSE
+  frames, PTY, walkthrough).
+- [`../protocol/api-reference.md`](../protocol/api-reference.md) — generated
+  per-rpc reference (HTTP binding + gRPC method for every rpc).
+- [`../protocol/openapi.json`](../protocol/openapi.json) — generated OpenAPI.
+- `proto/hya/v1/*.proto` — the source of truth; regenerate everything with
+  `cargo run -p xtask -- gen-api` (vendored protoc, output committed).
 
 ## App State
 
-`AppState` contains:
-
-- shared `SessionEngine`
-- process-level `AgentSpec`
-- pending permission/question queues
-- a dependency-inverted MCP control handle supplied by `hya-app`
-- a dependency-inverted Agent-model control handle supplied by `hya-app`
-- a dependency-inverted Workflow control handle supplied by `hya-app`
-- workspace adapter metadata
-- formatter status
-- optional process default agent
-- a `catalog_updates` broadcast for Compat `catalog.updated` events
-
-The router wraps it into internal `ServerState`, which adds run tokens for
-busy/abort behavior plus process-local global, project, PTY, and TUI state used
-by compatibility routes. MCP routes do not own a manager or status map: the
-control handle mutates app-owned desired state and composes status from
-desired/observed state plus the effective registry manifest. The native routes run prompts through
-the server's configured `AgentSpec`. Compat-compatible routes translate
-Compat-shaped request/response bodies to the same engine, event log,
-projection, run registry, and pending queues.
-
-## Native Routes
-
-| Method | Path | Request | Response |
-| --- | --- | --- | --- |
-| `POST` | `/sessions` | `CreateSessionRequest` | `CreateSessionResponse` |
-| `POST` | `/sessions/:id/prompt` | `PromptRequest` | `PromptResponse` |
-| `POST` | `/sessions/:id/command` | `CommandRequest` | `PromptResponse` or `WorkflowCommandResult` |
-| `POST` | `/sessions/:id/shell` | `ShellRequest` | `PromptResponse` |
-| `GET` | `/sessions/:id/workflow` | none | `WorkflowCommandResult::State` |
-| `POST` | `/sessions/:id/workflow` | `WorkflowCommand` | `WorkflowCommandResult` |
-| `GET` | `/sessions/:id/events` | optional `since_seq` query | `Vec<Envelope>` |
-| `GET` | `/sessions/:id/stream` | none | SSE stream of envelopes |
-
-Session ids in native URL paths accept any valid shared `SessionId` form:
-`hysec_...`, `ses_...`, or legacy raw UUID.
-
-### Status codes (`ApiError`)
-
-Native and Compat handlers share `ApiError` constructors
-([`lib.rs`](../../crates/hya-server/src/lib.rs)):
-
-| Status | Constructor | Typical use |
-| --- | --- | --- |
-| `400 Bad Request` | `bad_request` | Unparseable session id (`invalid session id`); invalid Compat request bodies. |
-| `403 Forbidden` | structured Workflow error | A Stage or verifier Agent is not authorized for the caller. |
-| `404 Not Found` | `not_found` | Unknown/deleted native sessions (`ensure_session_exists` on `/prompt`, `/command`, `/shell`, `/stream`; empty replay on `GET /sessions/:id/events`). Missing Compat resources (message/part not found, permission request not found, etc.). Compat summarize/wait also map engine `Invalid("session not found")` here (see below). |
-| `409 Conflict` | `conflict` | Busy session (`session busy`) when a second run is started while one is active. |
-| `422 Unprocessable Entity` | structured Workflow error | Invalid Workflow source or required inputs. |
-| `503 Service Unavailable` | `service_unavailable` | Compat paths such as MCP control-handle failures and unavailable compact/summarize operations (for example summarizer not configured). |
-| `500 Internal Server Error` | `internal` | Default for every unhandled `CoreError` and `StoreError` (`From` impls → `ApiError::internal`). |
-
-Workflow failures use `{ "error": { "code", "message" } }`. Stable codes
-distinguish syntax, source/input validation, missing Session/source/selection,
-authorization, busy/stale/idempotency conflicts, runtime unavailability, and
-internal failures. Governed Stage failure remains a successful transport result
-with a terminal failed run.
-
-**`Invalid("session not found")`:** produced only by
-`summarize_session` / `summary_messages` when the projection has no session id
-([`engine/summary.rs`](../../crates/hya-core/src/engine/summary.rs)). Native
-`/prompt`, `/command`, `/shell`, and `/stream` call `ensure_session_exists`
-and return **404** (`session not found: {id}`) — they do not surface that
-`Invalid`. `GET /sessions/:id/events` returns the same **404** when replay
-is empty. Compat summarize maps the engine `Invalid` to **404**;
-wait/session-not-found paths use a session-not-found response — not 500.
-
-Compatibility routes may also emit typed Compat error bodies (for example
-`ProviderNotFoundError`, `PermissionNotFoundError`) with their own status codes
-instead of plain `ApiError` text.
-
-## Native Session Calls
-
-`POST /sessions` accepts:
-
-```json
-{
-  "agent": "build",
-  "model": "claude-sonnet-4-6",
-  "workdir": ".",
-  "parent": null
-}
-```
-
-and returns:
-
-```json
-{
-  "session": "..."
-}
-```
-
-### Prompt, command, and shell bodies
-
-DTOs are defined in
-[`hya-proto` `api.rs`](../../crates/hya-proto/src/api.rs).
-
-**`PromptRequest`** — `POST /sessions/:id/prompt`:
-
-```json
-{
-  "text": "summarize this repo"
-}
-```
-
-Admits a user prompt, runs one assistant turn, and returns `PromptResponse`.
-
-**`PromptResponse`** shape (shared by `prompt` and `shell`; `command`
-returns this unless the workflow slash intercept returns
-`WorkflowCommandResult`):
-
-```json
-{
-  "message": "<MessageId>",
-  "finish": "stop"
-}
-```
-
-| Route | `message` identity |
-| --- | --- |
-| `POST …/prompt` | User message id from `admit_user_prompt` |
-| `POST …/command` | User message id from `admit_command_prompt` |
-| `POST …/shell` | **Assistant** message id from `run_shell` (synthetic assistant turn around the shell tool) |
-
-`finish` is a `FinishReason` enum value (for example `stop`, `tool_calls`,
-`length`, `error`, depending on the turn outcome).
-
-**`CommandRequest`** — `POST /sessions/:id/command`:
-
-```json
-{
-  "command": "init",
-  "arguments": "",
-  "text": null,
-  "model": null,
-  "variant": null
-}
-```
-
-| Field | Required | Meaning |
-| --- | --- | --- |
-| `command` | yes | Slash command name (without leading `/`). |
-| `arguments` | yes | Argument string (may be empty). |
-| `text` | no | Optional full user message to admit. |
-| `model` | no | Optional model id for this turn; handler calls `switch_model`. |
-| `variant` | no | Optional reasoning variant for `model` (`model_ref` → `id#variant`). |
-
-When `text` is absent, the server synthesizes the admitted user message as
-`/<command>` if `arguments` is empty/whitespace, otherwise
-`/<command> <arguments>`. The engine still records command metadata
-(`admit_command_prompt`) before running the turn. `/workflow` is
-intercepted and returns `WorkflowCommandResult` instead of starting a
-parent-model run. On the parent-model path, a present `model`/`variant`
-calls `switch_model` before the turn.
-
-**`ShellRequest`** — `POST /sessions/:id/shell`:
-
-```json
-{
-  "command": "ls -la",
-  "agent": null,
-  "model": { "providerID": "...", "modelID": "..." }
-}
-```
-
-| Field | Required | Meaning |
-| --- | --- | --- |
-| `command` | yes | Shell command line for the builtin `shell` tool. |
-| `agent` | no | Optional Agent name for synthetic-turn attribution. |
-| `model` | no | Optional `{ providerID, modelID }`; handler calls `switch_model`. |
-
-Runs the shell tool directly and records a synthetic assistant tool-result
-message, returning the same `PromptResponse` shape. Optional `agent`
-overrides message attribution; optional `model` calls `switch_model`
-first (`shell_agent`).
-
-## Native Events
-
-`GET /sessions/:id/events` replays stored envelopes for a session (**404**
-when replay is empty). Use `?since_seq=<n>` to receive only envelopes
-whose sequence is greater than `n`.
-
-`GET /sessions/:id/stream` subscribes to the engine event bus and emits SSE
-events for the requested session after `ensure_session_exists` (**404** if
-missing). If the broadcast receiver lags, the server
-emits an SSE event named `resync`; clients should use the events endpoint with
-their last seen sequence to catch up.
-
-### `resync` on Compat SSE streams
-
-`resync` is **not** native-only. Legacy `GET /event`, `GET /api/event`, and
-`GET /global/event` also emit `SseEvent::default().event("resync")` when the
-**engine envelope** broadcast lags
-([`compat/event.rs`](../../crates/hya-server/src/compat/event.rs)). Those
-frames typically have no `data` body. Unlike the native stream, Compat lag
-recovery is **not** `?since_seq=` on `/sessions/:id/events` for every frame
-type: clients should re-fetch session/message state via Compat session APIs
-and re-subscribe. Permission/question lag on `/event` and `/api/event` is
-mapped to **drop** (`None`), not `resync` — see pending-queue notes below.
-
-## Compat permission / question SSE frames
-
-Permission and question pending queues publish JSON frames merged into
-`/event`, `/api/event`, and `/global/event` (alongside translated envelopes).
-A client that ignores them cannot see that a turn is blocked on human input.
-
-| `type` | Properties (summary) |
-| --- | --- |
-| `permission.asked` | Legacy permission view: `id`, `sessionID`, `permission` (action name), `patterns[]`, `metadata`, `always[]` (remember patterns), `tool.{messageID,callID}` |
-| `permission.replied` | `sessionID`, `requestID`, `reply` ∈ `once` \| `always` \| `reject` |
-| `question.asked` | `id`, `sessionID`, `questions[]` each with `question`, `header`, `options[{label,description}]`, optional `multiple`, optional `custom` |
-| `question.replied` | `sessionID`, `requestID`, `answers` as `string[][]` (one array of selected labels per question) |
-| `question.rejected` | `sessionID`, `requestID` |
-
-Wire envelope shape for each frame:
-
-```json
-{
-  "id": "evt_hya_perm_<requestId>",
-  "type": "permission.asked",
-  "properties": { }
-}
-```
-
-(`/api/event` and `/global/event` may wrap payloads in location/`directory`
-envelopes; the inner `type` / `properties` are as above.)
-
-### Pending-queue snapshot and lag recovery
-
-| Stream | On connect | Permission/question lag |
-| --- | --- | --- |
-| `GET /global/event` | After `server.connected`, emits a **snapshot** of every currently pending `permission.asked` / `question.asked`. On broadcast **lag**, re-emits the full pending set via `recover_pending` (expect **duplicate** `asked` frames; dedupe by request id). |
-| `GET /event`, `GET /api/event` | **No** connect snapshot of pending asks. Permission/question lag → **drop** the error (no frame). A late subscriber never sees an already-open ask unless it polls `GET /permission` / question list APIs. |
-| Engine envelope lag | All three Compat streams emit `resync` (see above). | |
-
-### Provider-round step frames (`session.next.step.*`)
-
-Engine `StepStarted` / `StepFinished` are **rendered differently** by stream:
-
-| Stream | StepStarted / StepFinished |
-| --- | --- |
-| Legacy `GET /event` | Translated as Compat `message.part.updated` step parts (not `session.next.*`). |
-| `GET /api/event`, `GET /global/event` | `session.next.step.started` and `session.next.step.ended` |
-
-**`session.next.step.started` properties:** `timestamp`, `sessionID`,
-`assistantMessageID`, `agent`, `model`.
-
-**`session.next.step.ended` properties:** `timestamp`, `sessionID`,
-`assistantMessageID`, `finish`, `cost` (currently `0`), `tokens` (empty token
-object placeholder).
-
-hya-sdk’s `V2Event` enum lists a larger `session.next.*` family; the server
-currently emits **only** these two step frames from live envelopes.
-
-## Compat-Compatible Route Groups
-
-`compat::router()` is merged into the same Axum app. Current route groups
-include:
-
-| Group | Examples | Backing implementation |
-| --- | --- | --- |
-| Sessions | `/session`, `/session/:id`, `/api/session`, `/api/session/:id/context`, `/api/session/:id/message`, prompt/command/shell/abort/fork/share/update/delete/revert/summarize routes | hya event log, projection, run registry, switch/session-state events, pending queues |
-| Workflows | `/session/:id/workflow`, `/api/session/:id/workflow` | the same app-owned typed Workflow control port and replay-derived Session Projection as native routes |
-| Events | `/event`, `/api/event`, `/global/event` | translated live envelopes, permission/question SSE frames, `resync` on envelope lag, heartbeat/`server.connected`; `/api/event` and `/global/event` also emit `session.next.step.*` (see above) |
-| Files/search | `/file`, `/file/content`, `/find`, `/find/file`, `/find/symbol`, `/api/fs/read/*path`, `/api/fs/list`, `/api/fs/find` | filesystem reads, ignore matching, MIME sniffing, fuzzy path search, optional `LspPlane` |
-| Catalogs/metadata | `/path`, `/agent`, `/command`, `/skill`, `/lsp`, `/formatter`, `/api/location`, `/api/agent`, `/api/command`, `/api/skill` | built-in catalog sources, prompt directories, local skills, formatter/LSP planes |
-| Provider/auth | `/config`, `/config/providers`, `/provider`, `/provider/auth`, `/auth/:providerID`, `/api/provider`, `/api/model`, credential/integration routes | resolved hya provider catalog and local auth token store; runtime config bag (not `config.yaml`) |
-| Permissions/questions | `/permission`, `/question`, `/api/permission/*`, `/api/question/*`, session-scoped pending queues | hya ask/question channels and SQLite-backed saved permissions |
-| MCP | `/mcp`, `/mcp/:name/connect`, `/mcp/:name/disconnect`, auth routes | narrow app-supplied reconciliation control handle; one runtime effective registry |
-| PTY | `/pty/*`, `/api/pty/*` | in-process PTY metadata and websocket shell attach lifecycle |
-| VCS/project/worktree | `/vcs/*`, `/project/*`, `/experimental/project/*/copy`, `/experimental/worktree/*` | git commands, project state, git worktree helpers |
-| TUI/global/sync/experimental | `/tui/*` (including **`GET /tui/bootstrap`** — see below), `/global/*`, `/sync/*`, `/experimental/*` | process-local compatibility queues/state and event-log-backed sync history |
-
-The Compat surface intentionally favors shaped compatibility over pretending
-to be a full Compat superset. Known limits are tracked in
-[`../compat-parity.md`](../compat-parity.md).
-
-### TUI bootstrap (`GET /tui/bootstrap`)
-
-Single-RTT startup aggregate used by the shipped TypeScript TUI
-([`compat/tui.rs`](../../crates/hya-server/src/compat/tui.rs)). One `GET`
-returns a JSON object with these top-level keys. The provider fields are direct
-projections of the process catalog snapshot; there is no older multi-call
-catalog authority or frontend-generated fallback.
-
-| Key | Contents (summary) |
-| --- | --- |
-| `config` | Process-local global config bag |
-| `providers` / `provider_list` | Bootstrap provider catalog payload |
-| `capabilities` | e.g. `{ "backgroundSubagents": false, "agentModelPreferences": true, "agentModelConfiguration": true }` |
-| `agentModels` | `AgentModelState` rows when Agent-model control is available; else `[]` |
-| `agents` | Bound agent metadata for the request location/workdir |
-| `sessions` | Always `[]` (`Vec::new()`); hydrated after first paint via `/session` |
-| `commands` | Command-catalog bootstrap summaries (no full prompt templates) |
-| `lsp` | LSP plane status for the workdir |
-| `mcp` / `mcp_resource` | MCP control status and resources |
-| `formatter` | Formatter plane status |
-| `session_status` | Run-registry busy map |
-| `vcs` | `{ branch, default_branch }` |
-| `path` | Home / state / config / worktree / directory paths |
-| `project` | Project id + worktree |
-
-```json
-{
-  "capabilities": {
-    "backgroundSubagents": false,
-    "agentModelPreferences": true,
-    "agentModelConfiguration": true
-  },
-  "agentModels": [],
-  "sessions": []
-}
-```
-
-Related control routes under `/tui/*` include **`GET /tui/agent-models`**
-(list `AgentModelState` rows) and **`PUT /tui/agent-models/:agent_id`**
-(`preference` plus optional `scope`: `preference` / `session` /
-`configuration`). Append/submit prompt, open dialogs, and the control
-channel are separate from this bootstrap payload.
-
-### Runtime config bag (`/config`, `/global/config`)
-
-`GET`/`PATCH` **`/config`** and **`/global/config`** expose the same process-local
-in-memory JSON object (`GlobalState` starts as `{}`). They are **not** backed
-by, loaded from, or written to `config.yaml`.
-
-- **PATCH replaces the entire object** (no deep merge). The payload must be a
-  JSON object.
-- The only field validation is: if `username` is present, it must be a string.
-- All state is lost on process restart.
-
-These routes are for Compat clients that expect a live config bag. Durable
-provider/MCP configuration remains on disk via
-[`../configuration.md`](../configuration.md) (MCP HTTP routes also do not
-durably rewrite `config.yaml`).
-
-### Provider and model catalog
-
-All catalog endpoints project the immutable snapshot stored by
-`SessionEngine::provider_catalog_snapshot()`. This is the same object used by
-runtime routing and `hya-backend models`.
-
-| Method | Path | Response |
-| --- | --- | --- |
-| `GET` | `/api/provider` | Location-wrapped list for every declared provider status, including declarations with no rows. |
-| `GET` | `/api/provider/:provider_id` | One provider status and its rows, or typed `ProviderNotFoundError`. |
-| `GET` | `/api/model` | Location-wrapped list of exactly the snapshot rows. |
-| `GET` | `/config/providers` | Legacy shape: `{ providers, default, defaultModel }`. |
-| `GET` | `/provider` | Legacy shape: `{ all, default, defaultModel, connected }`. |
-| `GET` | `/provider/auth` | Declared non-offline provider ids mapped to the existing API-key method shape. |
-
-Each provider carries `source`, `auth`, and `result`. `connected` contains only
-providers whose startup discovery returned rows; it is not a claim that an
-explicit route is active or that credentials are valid.
-
-Each catalog model is projected with its snapshot `source`, tools capability,
-context limit, and ordered reasoning variants. The process default is present
-only when it is one of these rows.
-
-**Empty-catalog fallback.** The snapshot, not the server, supplies exactly
-`hya/offline` when no live row resolved. The server never derives a row from an
-agent, Session, category, Workflow route, stale default, or failed provider.
-
-### Permissions
-
-Concrete permission routes
-([`compat/permission.rs`](../../crates/hya-server/src/compat/permission.rs)):
-
-| Method | Path | Role |
-| --- | --- | --- |
-| `GET` | `/permission` | List pending requests (legacy list shape). |
-| `POST` | `/permission/:request/reply` | Reply by request id (any session); body parsed for `reply` + optional `message`. |
-| `GET` | `/api/permission/request` | List pending requests (location-wrapped). |
-| `GET` | `/api/permission/saved` | List SQLite-backed saved permissions (optional `projectID` query). |
-| `DELETE` | `/api/permission/saved/:id` | Remove a saved permission. |
-| `GET` | `/api/session/:id/permission` | List pending requests for one session. |
-| `POST` | `/api/session/:id/permission/:request/reply` | Session-scoped reply. |
-| `POST` | `/session/:id/permissions/:request` | Legacy session-scoped reply (`response` field instead of `reply`). |
-
-**Reply vocabulary** (lowercase JSON strings, `rename_all = "lowercase"`):
-
-| Value | Meaning |
-| --- | --- |
-| `once` | Allow this invocation once. |
-| `always` | Allow and remember (saved permission row). |
-| `reject` | Deny. |
-
-Modern reply body:
-
-```json
-{
-  "reply": "reject",
-  "message": "do not touch production"
-}
-```
-
-- `message` is optional. On `reject`, it is forwarded as the permission
-  `Decision::Reject { feedback }` and appears in the denial error the model
-  sees (`permission denied: … — user says: <feedback>` in
-  `hya-tool`). Related auto-replies for the same remember scope do **not**
-  copy the feedback (related rejects use `feedback: None`).
-- Legacy `POST /session/:id/permissions/:request` uses `{ "response": "once"|"always"|"reject" }`
-  with no feedback field.
-- Successful modern session reply returns **204 No Content**; root
-  `/permission/:request/reply` returns JSON `true`. Unknown request ids return
-  404 with a `PermissionNotFoundError` body.
-
-### Workspace adapters
-
-`GET /experimental/workspace/adapter` returns a JSON array of
-`WorkspaceAdapterInfo`
-([`hya-proto` `workspace.rs`](../../crates/hya-proto/src/workspace.rs)):
-
-```json
-{
-  "type": "worktree",
-  "name": "Worktree",
-  "description": "Create a git worktree"
-}
-```
-
-Wire fields: **`type`**, **`name`**, **`description`** (default empty string).
-
-The handler always includes the built-in `worktree` adapter, then appends
-plugin-provided adapters registered on `AppState` / `ServerState`
-(`with_workspace_adapters`), skipping any plugin entry whose `type` is already
-`worktree`.
-
-## CORS and OpenAPI
-
-The server mirrors request origins and headers globally through
-`tower_http::cors`. Compat-compatible OpenAPI discovery is exposed at `/doc`
-and `/openapi.json`; it provides implemented path/method skeletons rather than
-full request/response schemas.
-
-## Client Crate
-
-[`../../crates/hya-client/src/lib.rs`](../../crates/hya-client/src/lib.rs)
-provides a typed reqwest wrapper for the native API:
-
-- `create_session`
-- `prompt`
-- `events`
-
-Bare `hya-backend` binds an ephemeral HTTP port and `launch_hya` execs a
-separate `hya` process (`--server <url>`) so the frontend attaches over
-HTTP/SSE. The client crate is the integration surface for code that talks
-to a running hya server process.
+`AppState` holds the shared `SessionEngine`, process agent, pending
+permission/question queues, dependency-inverted MCP / Agent-model /
+Workflow control handles, workspace adapters, formatter status, and a
+catalog-update broadcast. The router wraps it into internal `ServerState`,
+adding run tokens for busy/abort behavior plus the process-local config
+bag and PTY state. Helper machinery (catalogs, guidance, PTY, worktree,
+git) lives under `hya_server::support`.
+
+## The v1 surface
+
+Sixteen services, 79 rpcs: AgentModels (durable per-agent model
+preferences), Process (health/location/config/dispose/
+upgrade/bootstrap), Catalog (agents/models/providers/commands/skills/
+tools), Auth, Session (lifecycle + fork/compact/summarize/revert), Turn
+(event-driven admit + get/wait/cancel), Messages + Todo, Events (replay
+with `includeRaw` + session/global streams), Interactions (unified
+permission/question plane + saved rules), Workflow, Files, Project + VCS,
+Worktrees, MCP, Pty (incl. the `StreamPty` bidi bridge), Logs.
+
+Semantics highlights:
+
+- **Event-driven execution**: `CreateTurn` admits and returns a handle;
+  progress and terminal state arrive on the streams. `WaitTurn` is a
+  convenience for synchronous clients. `SessionInfo.busy` derives from
+  the run registry.
+- **Reads fold the shared projection**: transcript/todo reads come from
+  the event log through `hya_proto::Projection` — no second read model.
+  `ListEvents.include_raw` exposes the canonical envelope JSON lines for
+  tooling (internal shape documented opaque).
+- **Guidance parity**: prompt and command turns compose the session
+  agent with AGENTS/reference guidance (`support::reference`), the same
+  seam the best legacy path provided.
+- **Command expansion**: `/v1` command turns expand through the directory
+  command/skill catalog (`support::command_catalog::expand_prompt`),
+  falling back to the literal slash for unknown commands. The bootstrap
+  catalog snapshot stays stale until the next bootstrap, but command-time
+  expansion picks up newly written sources.
+
+## Status codes
+
+Errors render `{"error":{"code","message"}}` with the canonical HTTP
+status; gRPC maps the same code to a tonic status. The stable table:
+`invalid_argument` 400, `not_found`/`session_not_found` 404,
+`permission_denied` 403, `session_busy`/`conflict` 409, `unavailable`
+503, `internal` 500. Workflow failures keep their structured
+`{"error":{"code","message"}}` codes.
+
+## CORS
+
+`AllowOrigin::mirror_request()`, `AllowHeaders::mirror_request()`,
+methods `Any`.
+
+## Clients
+
+- [`../../crates/hya-sdk-v1`](../../crates/hya-sdk-v1) — typed SDK for new
+  frontends (HTTP + SSE + `V1SessionMirror`).
+- [`../../crates/hya-client`](../../crates/hya-client) — lean typed
+  `reqwest` client (tooling, e2e harness).
+- `crates/hya-sdk` / `crates/hya-native` — legacy SDK/transport for the
+  retired Compat surface (old TUI only; slated for deletion at the
+  new-TUI cutover).
+
+## Testing
+
+- `crates/hya-server/tests/v1_api.rs` — v1 HTTP integration suite.
+- `crates/hya-server/tests/v1_grpc_parity.rs` — dual-transport
+  conformance over a real tonic listener.
+- `crates/hya-e2e` (Track P) — the process matrix drives real backends
+  entirely through the v1 client.

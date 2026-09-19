@@ -1,4 +1,4 @@
-//! T1.12 — multi-turn conversation exposed via Compat `/api/session/{id}/context`.
+//! T1.12 — multi-turn conversation exposed via the v1 `/v1/sessions/{id}/messages` route.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use hya_e2e::{E2eEnvBuilder, text_step};
@@ -53,7 +53,7 @@ async fn t1_12_session_context_lists_user_and_assistant_turns() {
         env.diagnostics()
     );
     assert!(
-        blob.contains("user") && blob.contains("assistant"),
+        blob.contains("ROLE_USER") && blob.contains("ROLE_ASSISTANT"),
         "context should include user and assistant roles; context={context}; {}",
         env.diagnostics()
     );

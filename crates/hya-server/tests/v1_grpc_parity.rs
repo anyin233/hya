@@ -90,6 +90,9 @@ async fn grpc_endpoint(app: AppState) -> std::net::SocketAddr {
     let serve = Server::builder()
         .add_service(pb::process_server::ProcessServer::new(grpc.clone()))
         .add_service(pb::catalog_server::CatalogServer::new(grpc.clone()))
+        .add_service(pb::agent_models_server::AgentModelsServer::new(
+            grpc.clone(),
+        ))
         .add_service(pb::auth_server::AuthServer::new(grpc.clone()))
         .add_service(pb::session_server::SessionServer::new(grpc.clone()))
         .add_service(pb::turn_server::TurnServer::new(grpc.clone()))
@@ -261,6 +264,17 @@ async fn http_and_grpc_answers_match_across_representative_calls() {
         http_events["events"].as_array().map(Vec::len),
         "both transports must replay the same curated event count"
     );
+
+    // Agent-models parity: both transports report the missing control.
+    let mut agent_models = pb::agent_models_client::AgentModelsClient::new(channel.clone());
+    let grpc_models = agent_models
+        .list_agent_models(tonic::Request::new(pb::ListAgentModelsRequest::default()))
+        .await;
+    assert!(grpc_models.is_err());
+    assert_eq!(grpc_models.unwrap_err().code(), tonic::Code::Unavailable);
+    let (status, body) = http_json(&app, Method::GET, "/v1/agent-models", Value::Null).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(body["error"]["code"], json!("unavailable"));
 
     // Error parity: unknown session maps to the same code on both.
     let missing = "00000000-0000-0000-0000-000000000000".to_owned();

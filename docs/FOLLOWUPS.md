@@ -138,8 +138,9 @@ The audits repeatedly found configuration fields that are parsed, serialized ont
 the wire, and then **silently dropped**. Documenting them accurately is a
 workaround; the fields either need consumers or removal:
 
-- Per-command `agent` and `model` (disk frontmatter and config maps) are listed on
-  `/api/command` but `CommandRequest` carries only `command`, `arguments`, `text`.
+- Per-command `agent` and `model` (disk frontmatter and config maps) are listed
+  in the command catalog (`GET /v1/commands` / bootstrap) but `CommandRequest`
+  carries only `command`, `arguments`, `text`.
 - Per-command `subtask` has no consumer anywhere in `crates/` or `packages/`.
 - `PreparedAgent::workdir` has no reader.
 - `resolve_default_reasoning`'s `last_used` branch is unreachable — its one

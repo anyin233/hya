@@ -13,18 +13,29 @@ async fn t2_1_task_tool_spawns_general_subagent() {
     // handle immediately, the root finishes its turn, and the child resident
     // runs its first episode in its own session.
     let env = E2eEnvBuilder::new()
-        .scripts(vec![
-            tool_step(
-                "task",
-                json!({
-                    "description": "e2e child",
-                    "prompt": "do the child work",
-                    "subagent_type": "general"
-                }),
-            ),
-            text_step("PARENT_AFTER_TASK"),
-            text_step("CHILD_TASK_OK"),
-        ])
+        .route(
+            "You are hya",
+            vec![
+                tool_step(
+                    "task",
+                    json!({
+                        "description": "e2e child",
+                        "prompt": "do the child work",
+                        "subagent_type": "general",
+                        "inline_agent": {
+                            "description": "",
+                            "category": "",
+                            "model": "",
+                            "name": "",
+                            "prompt": "MARKER_CHILD_PROMPT do the child work",
+                            "resident": false
+                        }
+                    }),
+                ),
+                text_step("PARENT_AFTER_TASK"),
+            ],
+        )
+        .route("MARKER_CHILD_PROMPT", vec![text_step("CHILD_TASK_OK")])
         .build()
         .await
         .expect("e2e env");
@@ -59,18 +70,29 @@ async fn t2_1_task_tool_spawns_general_subagent() {
         env.diagnostics()
     );
 
-    // The root's own turn completes after the non-blocking spawn…
-    let events = env.events(session, None).await.expect("events");
+    // The root's own turn completes after the non-blocking spawn. The
+    // quiesce steer can delay the continuation round, so poll for the
+    // terminal text instead of reading the log once.
+    let mut parent_ok = false;
     let mut text = String::new();
-    for env_evt in events {
-        match env_evt.event {
-            Event::TextDelta { delta, .. } => text.push_str(&delta),
-            Event::TextReplace { text: t, .. } => text.push_str(&t),
-            _ => {}
+    for _ in 0..600 {
+        let events = env.events(session, None).await.expect("events");
+        text = String::new();
+        for env_evt in events {
+            match env_evt.event {
+                Event::TextDelta { delta, .. } => text.push_str(&delta),
+                Event::TextReplace { text: t, .. } => text.push_str(&t),
+                _ => {}
+            }
         }
+        if text.contains("PARENT_AFTER_TASK") {
+            parent_ok = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
     assert!(
-        text.contains("PARENT_AFTER_TASK"),
+        parent_ok,
         "parent completes its turn after the non-blocking spawn; text={text:?}; {}",
         env.diagnostics()
     );

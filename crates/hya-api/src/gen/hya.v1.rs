@@ -34,6 +34,519 @@ pub struct PageInfo {
     #[prost(bool, tag = "2")]
     pub has_more: bool,
 }
+/// A concrete provider/model selection.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct AgentModelSelection {
+    /// Provider identifier.
+    #[prost(string, tag = "1")]
+    pub provider_id: ::prost::alloc::string::String,
+    /// Provider-local model identifier.
+    #[prost(string, tag = "2")]
+    pub model_id: ::prost::alloc::string::String,
+}
+/// Effective model state for one catalog agent.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct AgentModelState {
+    /// Stable catalog agent id.
+    #[prost(string, tag = "1")]
+    pub agent_id: ::prost::alloc::string::String,
+    /// Human-readable agent description.
+    #[prost(string, tag = "2")]
+    pub description: ::prost::alloc::string::String,
+    /// Selector role (`primary` or `subagent`).
+    #[prost(string, tag = "3")]
+    pub mode: ::prost::alloc::string::String,
+    /// Whether the agent is hidden from ordinary selection.
+    #[prost(bool, tag = "4")]
+    pub hidden: bool,
+    /// Whether direct model/category configuration is present (such agents
+    /// cannot take a remembered preference).
+    #[prost(bool, tag = "5")]
+    pub configured: bool,
+    /// Whether an automatic remembered preference can be set.
+    #[prost(bool, tag = "6")]
+    pub settable: bool,
+    /// Retained preference, including stale or configured rows.
+    #[prost(message, optional, tag = "7")]
+    pub preference: ::core::option::Option<AgentModelSelection>,
+    /// Whether the retained preference exactly matches the current catalog.
+    #[prost(bool, tag = "8")]
+    pub preference_available: bool,
+    /// Current effective model identity.
+    #[prost(message, optional, tag = "9")]
+    pub effective: ::core::option::Option<AgentModelSelection>,
+    /// Which tier resolved the effective model.
+    #[prost(enumeration = "AgentModelSource", tag = "10")]
+    pub source: i32,
+    /// Model explicitly stored in the owning user configuration file.
+    #[prost(message, optional, tag = "11")]
+    pub configuration: ::core::option::Option<AgentModelSelection>,
+    /// Active root-session override captured for this agent.
+    #[prost(message, optional, tag = "12")]
+    pub session_override: ::core::option::Option<AgentModelSelection>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ListAgentModelsRequest {
+    /// Directory scope for the agent binding; empty means the process default.
+    #[prost(string, tag = "1")]
+    pub directory: ::prost::alloc::string::String,
+    /// Bind against this session's runtime when non-empty (its workdir and
+    /// session overrides); otherwise the directory root binding is used.
+    #[prost(string, tag = "2")]
+    pub session: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ListAgentModelsResponse {
+    /// Effective state for every agent in the binding, stable id order.
+    #[prost(message, repeated, tag = "1")]
+    pub agents: ::prost::alloc::vec::Vec<AgentModelState>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SetAgentModelRequest {
+    /// Directory scope for the agent binding; empty means the process default.
+    #[prost(string, tag = "1")]
+    pub directory: ::prost::alloc::string::String,
+    /// Bind against this session's runtime when non-empty.
+    #[prost(string, tag = "2")]
+    pub session: ::prost::alloc::string::String,
+    /// Stable catalog agent id whose preference is being set.
+    #[prost(string, tag = "3")]
+    pub agent_id: ::prost::alloc::string::String,
+    /// New remembered preference; absent/null clears it.
+    #[prost(message, optional, tag = "4")]
+    pub preference: ::core::option::Option<AgentModelSelection>,
+}
+/// Which tier resolved an agent's effective base model.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum AgentModelSource {
+    /// Unset sentinel; never emitted by the server.
+    Unspecified = 0,
+    /// An explicit override captured for the current root session tree.
+    Session = 1,
+    /// The agent has an explicit direct model or category policy.
+    Configured = 2,
+    /// A durable preference retained and matching the current catalog.
+    Remembered = 3,
+    /// No configured or retained model; the process base is used.
+    Default = 4,
+}
+impl AgentModelSource {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "AGENT_MODEL_SOURCE_UNSPECIFIED",
+            Self::Session => "AGENT_MODEL_SOURCE_SESSION",
+            Self::Configured => "AGENT_MODEL_SOURCE_CONFIGURED",
+            Self::Remembered => "AGENT_MODEL_SOURCE_REMEMBERED",
+            Self::Default => "AGENT_MODEL_SOURCE_DEFAULT",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "AGENT_MODEL_SOURCE_UNSPECIFIED" => Some(Self::Unspecified),
+            "AGENT_MODEL_SOURCE_SESSION" => Some(Self::Session),
+            "AGENT_MODEL_SOURCE_CONFIGURED" => Some(Self::Configured),
+            "AGENT_MODEL_SOURCE_REMEMBERED" => Some(Self::Remembered),
+            "AGENT_MODEL_SOURCE_DEFAULT" => Some(Self::Default),
+            _ => None,
+        }
+    }
+}
+/// Generated client implementations.
+pub mod agent_models_client {
+    #![allow(
+        unused_variables,
+        dead_code,
+        missing_docs,
+        clippy::wildcard_imports,
+        clippy::let_unit_value,
+    )]
+    use tonic::codegen::*;
+    use tonic::codegen::http::Uri;
+    /// Durable per-agent model preference surface, backed by the app-owned
+    /// control handle.
+    #[derive(Debug, Clone)]
+    pub struct AgentModelsClient<T> {
+        inner: tonic::client::Grpc<T>,
+    }
+    impl AgentModelsClient<tonic::transport::Channel> {
+        /// Attempt to create a new client by connecting to a given endpoint.
+        pub async fn connect<D>(dst: D) -> Result<Self, tonic::transport::Error>
+        where
+            D: TryInto<tonic::transport::Endpoint>,
+            D::Error: Into<StdError>,
+        {
+            let conn = tonic::transport::Endpoint::new(dst)?.connect().await?;
+            Ok(Self::new(conn))
+        }
+    }
+    impl<T> AgentModelsClient<T>
+    where
+        T: tonic::client::GrpcService<tonic::body::Body>,
+        T::Error: Into<StdError>,
+        T::ResponseBody: Body<Data = Bytes> + std::marker::Send + 'static,
+        <T::ResponseBody as Body>::Error: Into<StdError> + std::marker::Send,
+    {
+        pub fn new(inner: T) -> Self {
+            let inner = tonic::client::Grpc::new(inner);
+            Self { inner }
+        }
+        pub fn with_origin(inner: T, origin: Uri) -> Self {
+            let inner = tonic::client::Grpc::with_origin(inner, origin);
+            Self { inner }
+        }
+        pub fn with_interceptor<F>(
+            inner: T,
+            interceptor: F,
+        ) -> AgentModelsClient<InterceptedService<T, F>>
+        where
+            F: tonic::service::Interceptor,
+            T::ResponseBody: Default,
+            T: tonic::codegen::Service<
+                http::Request<tonic::body::Body>,
+                Response = http::Response<
+                    <T as tonic::client::GrpcService<tonic::body::Body>>::ResponseBody,
+                >,
+            >,
+            <T as tonic::codegen::Service<
+                http::Request<tonic::body::Body>,
+            >>::Error: Into<StdError> + std::marker::Send + std::marker::Sync,
+        {
+            AgentModelsClient::new(InterceptedService::new(inner, interceptor))
+        }
+        /// Compress requests with the given encoding.
+        ///
+        /// This requires the server to support it otherwise it might respond with an
+        /// error.
+        #[must_use]
+        pub fn send_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.inner = self.inner.send_compressed(encoding);
+            self
+        }
+        /// Enable decompressing responses.
+        #[must_use]
+        pub fn accept_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.inner = self.inner.accept_compressed(encoding);
+            self
+        }
+        /// Limits the maximum size of a decoded message.
+        ///
+        /// Default: `4MB`
+        #[must_use]
+        pub fn max_decoding_message_size(mut self, limit: usize) -> Self {
+            self.inner = self.inner.max_decoding_message_size(limit);
+            self
+        }
+        /// Limits the maximum size of an encoded message.
+        ///
+        /// Default: `usize::MAX`
+        #[must_use]
+        pub fn max_encoding_message_size(mut self, limit: usize) -> Self {
+            self.inner = self.inner.max_encoding_message_size(limit);
+            self
+        }
+        /// Effective model state for every catalog agent under one binding.
+        ///
+        /// hya.http: GET /v1/agent-models
+        pub async fn list_agent_models(
+            &mut self,
+            request: impl tonic::IntoRequest<super::ListAgentModelsRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ListAgentModelsResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/hya.v1.AgentModels/ListAgentModels",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("hya.v1.AgentModels", "ListAgentModels"));
+            self.inner.unary(req, path, codec).await
+        }
+        /// Set or clear one agent's remembered preference; returns the
+        /// post-commit state.
+        ///
+        /// hya.http: PUT /v1/agent-models/{agent_id}
+        pub async fn set_agent_model(
+            &mut self,
+            request: impl tonic::IntoRequest<super::SetAgentModelRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::AgentModelState>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/hya.v1.AgentModels/SetAgentModel",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("hya.v1.AgentModels", "SetAgentModel"));
+            self.inner.unary(req, path, codec).await
+        }
+    }
+}
+/// Generated server implementations.
+pub mod agent_models_server {
+    #![allow(
+        unused_variables,
+        dead_code,
+        missing_docs,
+        clippy::wildcard_imports,
+        clippy::let_unit_value,
+    )]
+    use tonic::codegen::*;
+    /// Generated trait containing gRPC methods that should be implemented for use with AgentModelsServer.
+    #[async_trait]
+    pub trait AgentModels: std::marker::Send + std::marker::Sync + 'static {
+        /// Effective model state for every catalog agent under one binding.
+        ///
+        /// hya.http: GET /v1/agent-models
+        async fn list_agent_models(
+            &self,
+            request: tonic::Request<super::ListAgentModelsRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ListAgentModelsResponse>,
+            tonic::Status,
+        >;
+        /// Set or clear one agent's remembered preference; returns the
+        /// post-commit state.
+        ///
+        /// hya.http: PUT /v1/agent-models/{agent_id}
+        async fn set_agent_model(
+            &self,
+            request: tonic::Request<super::SetAgentModelRequest>,
+        ) -> std::result::Result<tonic::Response<super::AgentModelState>, tonic::Status>;
+    }
+    /// Durable per-agent model preference surface, backed by the app-owned
+    /// control handle.
+    #[derive(Debug)]
+    pub struct AgentModelsServer<T> {
+        inner: Arc<T>,
+        accept_compression_encodings: EnabledCompressionEncodings,
+        send_compression_encodings: EnabledCompressionEncodings,
+        max_decoding_message_size: Option<usize>,
+        max_encoding_message_size: Option<usize>,
+    }
+    impl<T> AgentModelsServer<T> {
+        pub fn new(inner: T) -> Self {
+            Self::from_arc(Arc::new(inner))
+        }
+        pub fn from_arc(inner: Arc<T>) -> Self {
+            Self {
+                inner,
+                accept_compression_encodings: Default::default(),
+                send_compression_encodings: Default::default(),
+                max_decoding_message_size: None,
+                max_encoding_message_size: None,
+            }
+        }
+        pub fn with_interceptor<F>(
+            inner: T,
+            interceptor: F,
+        ) -> InterceptedService<Self, F>
+        where
+            F: tonic::service::Interceptor,
+        {
+            InterceptedService::new(Self::new(inner), interceptor)
+        }
+        /// Enable decompressing requests with the given encoding.
+        #[must_use]
+        pub fn accept_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.accept_compression_encodings.enable(encoding);
+            self
+        }
+        /// Compress responses with the given encoding, if the client supports it.
+        #[must_use]
+        pub fn send_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.send_compression_encodings.enable(encoding);
+            self
+        }
+        /// Limits the maximum size of a decoded message.
+        ///
+        /// Default: `4MB`
+        #[must_use]
+        pub fn max_decoding_message_size(mut self, limit: usize) -> Self {
+            self.max_decoding_message_size = Some(limit);
+            self
+        }
+        /// Limits the maximum size of an encoded message.
+        ///
+        /// Default: `usize::MAX`
+        #[must_use]
+        pub fn max_encoding_message_size(mut self, limit: usize) -> Self {
+            self.max_encoding_message_size = Some(limit);
+            self
+        }
+    }
+    impl<T, B> tonic::codegen::Service<http::Request<B>> for AgentModelsServer<T>
+    where
+        T: AgentModels,
+        B: Body + std::marker::Send + 'static,
+        B::Error: Into<StdError> + std::marker::Send + 'static,
+    {
+        type Response = http::Response<tonic::body::Body>;
+        type Error = std::convert::Infallible;
+        type Future = BoxFuture<Self::Response, Self::Error>;
+        fn poll_ready(
+            &mut self,
+            _cx: &mut Context<'_>,
+        ) -> Poll<std::result::Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+        fn call(&mut self, req: http::Request<B>) -> Self::Future {
+            match req.uri().path() {
+                "/hya.v1.AgentModels/ListAgentModels" => {
+                    #[allow(non_camel_case_types)]
+                    struct ListAgentModelsSvc<T: AgentModels>(pub Arc<T>);
+                    impl<
+                        T: AgentModels,
+                    > tonic::server::UnaryService<super::ListAgentModelsRequest>
+                    for ListAgentModelsSvc<T> {
+                        type Response = super::ListAgentModelsResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::ListAgentModelsRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as AgentModels>::list_agent_models(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = ListAgentModelsSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/hya.v1.AgentModels/SetAgentModel" => {
+                    #[allow(non_camel_case_types)]
+                    struct SetAgentModelSvc<T: AgentModels>(pub Arc<T>);
+                    impl<
+                        T: AgentModels,
+                    > tonic::server::UnaryService<super::SetAgentModelRequest>
+                    for SetAgentModelSvc<T> {
+                        type Response = super::AgentModelState;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::SetAgentModelRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as AgentModels>::set_agent_model(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = SetAgentModelSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                _ => {
+                    Box::pin(async move {
+                        let mut response = http::Response::new(
+                            tonic::body::Body::default(),
+                        );
+                        let headers = response.headers_mut();
+                        headers
+                            .insert(
+                                tonic::Status::GRPC_STATUS,
+                                (tonic::Code::Unimplemented as i32).into(),
+                            );
+                        headers
+                            .insert(
+                                http::header::CONTENT_TYPE,
+                                tonic::metadata::GRPC_CONTENT_TYPE,
+                            );
+                        Ok(response)
+                    })
+                }
+            }
+        }
+    }
+    impl<T> Clone for AgentModelsServer<T> {
+        fn clone(&self) -> Self {
+            let inner = self.inner.clone();
+            Self {
+                inner,
+                accept_compression_encodings: self.accept_compression_encodings,
+                send_compression_encodings: self.send_compression_encodings,
+                max_decoding_message_size: self.max_decoding_message_size,
+                max_encoding_message_size: self.max_encoding_message_size,
+            }
+        }
+    }
+    /// Generated gRPC service name
+    pub const SERVICE_NAME: &str = "hya.v1.AgentModels";
+    impl<T> tonic::server::NamedService for AgentModelsServer<T> {
+        const NAME: &'static str = SERVICE_NAME;
+    }
+}
 /// Provider/model identity pair. `model_id` is provider-local.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ModelRef {
@@ -148,6 +661,9 @@ pub struct ProviderSummary {
     /// Vendor documentation/auth URL when known.
     #[prost(string, tag = "4")]
     pub website: ::prost::alloc::string::String,
+    /// Model discovery outcome: `models`, `empty`, `unavailable`, `invalid`.
+    #[prost(string, tag = "5")]
+    pub result: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListProvidersResponse {
@@ -204,6 +720,24 @@ pub struct CommandSummary {
     /// Argument hint shown after the command name.
     #[prost(string, tag = "3")]
     pub argument_hint: ::prost::alloc::string::String,
+    /// Positional/flag hints from the command template, in template order.
+    #[prost(string, repeated, tag = "5")]
+    pub hints: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    /// Where the command was discovered (`command`, `skill`, ...).
+    #[prost(string, tag = "6")]
+    pub source: ::prost::alloc::string::String,
+    /// Expansion template (positional `$1`/`$ARGUMENTS` placeholders).
+    #[prost(string, tag = "7")]
+    pub template: ::prost::alloc::string::String,
+    /// Agent the command run binds when authored.
+    #[prost(string, tag = "8")]
+    pub agent: ::prost::alloc::string::String,
+    /// Model the command run binds when authored.
+    #[prost(string, tag = "9")]
+    pub model: ::prost::alloc::string::String,
+    /// Whether the command runs as a detached subtask.
+    #[prost(bool, optional, tag = "10")]
+    pub subtask: ::core::option::Option<bool>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListCommandsResponse {
@@ -235,6 +769,12 @@ pub struct SkillSummary {
     /// Where the skill was discovered (`builtin`, `bundle`, `project`, ...).
     #[prost(string, tag = "3")]
     pub source: ::prost::alloc::string::String,
+    /// Full skill markdown body (frontmatter + content).
+    #[prost(string, tag = "4")]
+    pub content: ::prost::alloc::string::String,
+    /// Where the skill file lives (`<built-in>` for compiled-in skills).
+    #[prost(string, tag = "5")]
+    pub location: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListSkillsResponse {
@@ -2586,6 +3126,12 @@ pub struct ToolCallPart {
     /// Execution state of the call.
     #[prost(enumeration = "ToolExecutionState", tag = "4")]
     pub state: i32,
+    /// Stable structured error type when the call failed (e.g. `unknown`).
+    #[prost(string, tag = "5")]
+    pub error_code: ::prost::alloc::string::String,
+    /// Structured error message when the call failed.
+    #[prost(string, tag = "6")]
+    pub error_message: ::prost::alloc::string::String,
 }
 /// The outcome of a tool invocation.
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -3537,6 +4083,10 @@ pub struct WorkflowState {
     /// Terminal failure code when status is FAILED.
     #[prost(string, tag = "6")]
     pub error_code: ::prost::alloc::string::String,
+    /// Opaque canonical projection JSON for tooling and replay parity. The
+    /// internal shape is not a stable contract; prefer the typed fields.
+    #[prost(string, tag = "7")]
+    pub raw_json: ::prost::alloc::string::String,
 }
 /// `list` command: enumerate workflow sources.
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
@@ -3558,11 +4108,14 @@ pub struct WorkflowSelectCommand {
     #[prost(string, tag = "2")]
     pub expected_revision: ::prost::alloc::string::String,
 }
-/// `run` command: start the selected workflow.
+/// `run` command: start the selected or named workflow.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct WorkflowRunCommand {
+    /// Declared workflow name; empty uses the durable selection.
+    #[prost(string, tag = "1")]
+    pub name: ::prost::alloc::string::String,
     /// Workflow inputs as a JSON object.
-    #[prost(message, optional, tag = "1")]
+    #[prost(message, optional, tag = "2")]
     pub inputs: ::core::option::Option<::pbjson_types::Struct>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -3593,6 +4146,29 @@ pub mod submit_workflow_command_request {
         Run(super::WorkflowRunCommand),
     }
 }
+/// / One authored fallback candidate.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct WorkflowModelCandidate {
+    /// Base model identity (`provider/model`).
+    #[prost(string, tag = "1")]
+    pub id: ::prost::alloc::string::String,
+    /// Optional author-provided effort label.
+    #[prost(string, tag = "2")]
+    pub reasoning: ::prost::alloc::string::String,
+}
+/// / Authored worker model assignment for a stage.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct WorkflowModelAssignment {
+    /// Preferred base model identity (`provider/model`).
+    #[prost(string, tag = "1")]
+    pub id: ::prost::alloc::string::String,
+    /// Optional preferred effort label.
+    #[prost(string, tag = "2")]
+    pub reasoning: ::prost::alloc::string::String,
+    /// Ordered fallback tail.
+    #[prost(message, repeated, tag = "3")]
+    pub fallback: ::prost::alloc::vec::Vec<WorkflowModelCandidate>,
+}
 /// Result payload of the `info` command.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct WorkflowInfoResult {
@@ -3605,6 +4181,28 @@ pub struct WorkflowInfoResult {
     /// Stage names in execution order.
     #[prost(string, repeated, tag = "3")]
     pub stage_names: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    /// Stage metadata in execution order.
+    #[prost(message, repeated, tag = "4")]
+    pub stages: ::prost::alloc::vec::Vec<WorkflowStageInfo>,
+}
+/// / Compiled stage metadata from the `info` result.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct WorkflowStageInfo {
+    /// Compiled stage id.
+    #[prost(string, tag = "1")]
+    pub name: ::prost::alloc::string::String,
+    /// Target agent id.
+    #[prost(string, tag = "2")]
+    pub agent: ::prost::alloc::string::String,
+    /// Zero-based topological level.
+    #[prost(uint32, tag = "3")]
+    pub level: u32,
+    /// Authored worker model assignment when present.
+    #[prost(message, optional, tag = "4")]
+    pub worker_model: ::core::option::Option<WorkflowModelAssignment>,
+    /// Authored verifier model assignment when present.
+    #[prost(message, optional, tag = "5")]
+    pub verifier_model: ::core::option::Option<WorkflowModelAssignment>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SubmitWorkflowCommandResponse {
@@ -4155,6 +4753,11 @@ pub struct ListEventsRequest {
     /// Maximum events to return; 0 uses the server default.
     #[prost(uint32, tag = "3")]
     pub limit: u32,
+    /// When true, also return the canonical durable envelope JSON lines in
+    /// `raw_envelopes` for tooling and test harnesses. The internal envelope
+    /// shape is not a stable contract; clients must treat it as opaque.
+    #[prost(bool, tag = "4")]
+    pub include_raw: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListEventsResponse {
@@ -4168,6 +4771,10 @@ pub struct ListEventsResponse {
     /// `since_seq`.
     #[prost(uint64, tag = "3")]
     pub next_seq: u64,
+    /// Canonical durable envelope JSON lines, present only when the request
+    /// set `include_raw`. Internal shape; treat as opaque beyond replay.
+    #[prost(string, repeated, tag = "4")]
+    pub raw_envelopes: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct StreamSessionEventsRequest {
@@ -9993,6 +10600,10 @@ pub struct SessionInfo {
     /// Highest event sequence number recorded for this session.
     #[prost(uint64, tag = "10")]
     pub last_seq: u64,
+    /// Whether a run currently owns the session's admission slot (derived
+    /// from the process run registry, not the durable log).
+    #[prost(bool, tag = "11")]
+    pub busy: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CreateSessionRequest {

@@ -1141,7 +1141,7 @@ impl pb::pty_server::Pty for V1Grpc {
         &self,
         request: GrpcRequest<tonic::Streaming<pb::PtyClientFrame>>,
     ) -> Result<GrpcResponse<Self::StreamPtyStream>, Status> {
-        use crate::compat::pty_state::PtyEvent;
+        use crate::support::pty_state::PtyEvent;
         use hya_api::v1::pty_client_frame::Frame as F;
         let mut client = request.into_inner();
         // The first client frame must attach to a PTY session.
@@ -1228,5 +1228,36 @@ impl pb::logs_server::Logs for V1Grpc {
         request: GrpcRequest<pb::IngestLogRequest>,
     ) -> Result<GrpcResponse<pb::IngestLogResponse>, Status> {
         unary!(self, "POST", "/v1/logs", request)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// AgentModels
+// ---------------------------------------------------------------------------
+
+#[tonic::async_trait]
+impl pb::agent_models_server::AgentModels for V1Grpc {
+    async fn list_agent_models(
+        &self,
+        request: GrpcRequest<pb::ListAgentModelsRequest>,
+    ) -> Result<GrpcResponse<pb::ListAgentModelsResponse>, Status> {
+        get_rpc!(self, "/v1/agent-models", request)
+    }
+
+    async fn set_agent_model(
+        &self,
+        request: GrpcRequest<pb::SetAgentModelRequest>,
+    ) -> Result<GrpcResponse<pb::AgentModelState>, Status> {
+        let inner = request.into_inner();
+        let agent_id = field(&inner, "agentId");
+        into_response(
+            self.dispatch::<_, _>(
+                "PUT",
+                &format!("/v1/agent-models/{agent_id}"),
+                BTreeMap::new(),
+                &inner,
+            )
+            .await?,
+        )
     }
 }

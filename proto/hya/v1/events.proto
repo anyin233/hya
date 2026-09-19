@@ -43,6 +43,10 @@ message ListEventsRequest {
   uint64 since_seq = 2;
   // Maximum events to return; 0 uses the server default.
   uint32 limit = 3;
+  // When true, also return the canonical durable envelope JSON lines in
+  // `raw_envelopes` for tooling and test harnesses. The internal envelope
+  // shape is not a stable contract; clients must treat it as opaque.
+  bool include_raw = 4;
 }
 
 message ListEventsResponse {
@@ -53,6 +57,9 @@ message ListEventsResponse {
   // Highest `seq` contained in this response; pass as the next
   // `since_seq`.
   uint64 next_seq = 3;
+  // Canonical durable envelope JSON lines, present only when the request
+  // set `include_raw`. Internal shape; treat as opaque beyond replay.
+  repeated string raw_envelopes = 4;
 }
 
 message StreamSessionEventsRequest {

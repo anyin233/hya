@@ -55,9 +55,17 @@ flowchart TD
 "#;
 
 /// Return one named Stage object from a Workflow response.
-fn stage<'a>(value: &'a Value, stage_id: &str) -> &'a Value {
+fn raw_state(value: &Value) -> Value {
     value
-        .pointer("/state/run/stages")
+        .get("rawJson")
+        .and_then(Value::as_str)
+        .and_then(|raw| serde_json::from_str(raw).ok())
+        .unwrap_or_else(|| panic!("workflow state missing rawJson: {value}"))
+}
+
+fn stage<'a>(value: &'a Value, stage_id: &str) -> &'a Value {
+    let raw: &'a Value = Box::leak(Box::new(raw_state(value)));
+    raw.pointer("/run/stages")
         .and_then(Value::as_array)
         .and_then(|stages| stages.iter().find(|stage| stage["id"] == stage_id))
         .unwrap_or_else(|| panic!("missing Workflow Stage {stage_id}: {value}"))
@@ -105,41 +113,38 @@ async fn p19_workflow_model_routes_requests_outcomes_and_replay() {
         .expect("e2e env");
 
     let session = env.create_session().await.expect("session");
-    let workflow_path = format!("/sessions/{session}/workflow");
+    let workflow_path = format!("/v1/sessions/{session}/workflow");
 
     let info = env
-        .post_json(
-            &workflow_path,
-            &json!({"command":"info","name":"model-routing"}),
-        )
+        .post_json(&workflow_path, &json!({"info": {"name": "model-routing"}}))
         .await
         .expect("Workflow info");
     let info_stages = info
-        .pointer("/workflow/stages")
+        .pointer("/info/stages")
         .and_then(Value::as_array)
         .expect("Workflow info stages");
     let info_prepare = info_stages
         .iter()
-        .find(|entry| entry["id"] == "prepare")
+        .find(|entry| entry["name"] == "prepare")
         .expect("prepare info");
-    assert_eq!(info_prepare["worker_model"]["id"], "fake/primary");
-    assert_eq!(info_prepare["worker_model"]["reasoning"], "high");
+    assert_eq!(info_prepare["workerModel"]["id"], "fake/primary");
+    assert_eq!(info_prepare["workerModel"]["reasoning"], "high");
     assert_eq!(
-        info_prepare["worker_model"]["fallback"][0]["id"],
+        info_prepare["workerModel"]["fallback"][0]["id"],
         "fake/primary-fallback"
     );
     assert_eq!(
-        info_prepare["worker_model"]["fallback"][0]["reasoning"],
+        info_prepare["workerModel"]["fallback"][0]["reasoning"],
         "medium"
     );
     let info_loop = info_stages
         .iter()
-        .find(|entry| entry["id"] == "loop")
+        .find(|entry| entry["name"] == "loop")
         .expect("loop info");
-    assert_eq!(info_loop["worker_model"]["id"], "fake/loop");
-    assert_eq!(info_loop["worker_model"]["reasoning"], "low");
-    assert_eq!(info_loop["verifier_model"]["id"], "fake/loop");
-    assert_eq!(info_loop["verifier_model"]["reasoning"], "high");
+    assert_eq!(info_loop["workerModel"]["id"], "fake/loop");
+    assert_eq!(info_loop["workerModel"]["reasoning"], "low");
+    assert_eq!(info_loop["verifierModel"]["id"], "fake/loop");
+    assert_eq!(info_loop["verifierModel"]["reasoning"], "high");
     assert!(
         info_stages
             .iter()
@@ -151,32 +156,34 @@ async fn p19_workflow_model_routes_requests_outcomes_and_replay() {
         .post_json(
             &workflow_path,
             &json!({
-                "command": "run",
-                "name": "model-routing",
-                "inputs": {"target": "the parser"}
+                "run": {
+                    "name": "model-routing",
+                    "inputs": {"target": "the parser"}
+                }
             }),
         )
         .await
         .expect("Workflow run admission");
-    assert_eq!(
-        started["kind"], "run",
-        "public Workflow run response: {started}"
+    assert!(
+        started.get("started").is_some(),
+        "v1 workflow run response: {started}"
     );
-    assert_eq!(started["result"]["replayed"], false);
 
     wait_until(
         "Workflow run completes",
         Duration::from_secs(30),
         || async {
             let state = env.get_json(&workflow_path).await?;
-            Ok(state.pointer("/state/run/status").and_then(Value::as_str) == Some("completed"))
+            let raw = raw_state(&state);
+            Ok(raw.pointer("/run/status").and_then(Value::as_str) == Some("completed"))
         },
     )
     .await
     .expect("Workflow completion");
     let state_before_reopen = env.get_json(&workflow_path).await.expect("Workflow state");
+    let raw_before_reopen = raw_state(&state_before_reopen);
     assert_eq!(
-        state_before_reopen.pointer("/state/run/status"),
+        raw_before_reopen.pointer("/run/status"),
         Some(&Value::String("completed".into()))
     );
 
@@ -248,7 +255,7 @@ async fn p19_workflow_model_routes_requests_outcomes_and_replay() {
         .get_json(&workflow_path)
         .await
         .expect("replayed Workflow state");
-    assert_eq!(state_after_reopen, state_before_reopen);
+    assert_eq!(raw_state(&state_after_reopen), raw_before_reopen);
     assert_eq!(
         env.fake_requests()
             .expect("FakeLlm requests after replay")

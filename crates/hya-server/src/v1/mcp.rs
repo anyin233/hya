@@ -85,7 +85,13 @@ async fn add_server(
     st.mcp_control
         .upsert(request.name.clone(), config)
         .await
-        .map_err(V1Error::internal)?;
+        .map_err(|error| {
+            if error.starts_with("duplicate tool name") {
+                V1Error::unavailable(error)
+            } else {
+                V1Error::internal(error)
+            }
+        })?;
     let statuses = st.mcp_control.status().await;
     let status = statuses
         .get(&request.name)

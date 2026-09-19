@@ -79,7 +79,7 @@ async fn init_project_git(
     AxumPath(_project): AxumPath<String>,
 ) -> Result<Json<pb::InitProjectGitResponse>, V1Error> {
     let workdir = PathBuf::from(&st.agent.workdir);
-    if crate::compat::instance::vcs::git::is_repo(&workdir) {
+    if crate::support::git::is_repo(&workdir) {
         return Ok(Json(pb::InitProjectGitResponse { initialized: false }));
     }
     let output = tokio::process::Command::new("git")
@@ -103,7 +103,7 @@ async fn get_vcs_status(
 ) -> Result<Json<pb::VcsStatus>, V1Error> {
     let request: pb::GetVcsStatusRequest = super::query_request(&[], &query)?;
     let workdir = scope_directory(&headers, &request.directory);
-    let branch = crate::compat::instance::vcs::git::branch(&workdir);
+    let branch = crate::support::git::branch(&workdir);
     let head = tokio::process::Command::new("git")
         .args(["rev-parse", "HEAD"])
         .current_dir(&workdir)
@@ -113,8 +113,8 @@ async fn get_vcs_status(
         .filter(|output| output.status.success())
         .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
         .unwrap_or_default();
-    let files = if crate::compat::instance::vcs::git::is_repo(&workdir) {
-        crate::compat::instance::vcs::git::status(&workdir).map_err(V1Error::from)?
+    let files = if crate::support::git::is_repo(&workdir) {
+        crate::support::git::status(&workdir).map_err(V1Error::from)?
     } else {
         Vec::new()
     };
@@ -144,7 +144,7 @@ async fn get_vcs_status(
     }))
 }
 
-fn file_status(file: &crate::compat::instance::vcs::git::FileStatus) -> i32 {
+fn file_status(file: &crate::support::git::FileStatus) -> i32 {
     let value = serde_json::to_value(file).unwrap_or(serde_json::Value::Null);
     match value
         .get("status")
@@ -167,8 +167,8 @@ async fn get_vcs_diff(
 ) -> Result<Json<pb::GetVcsDiffResponse>, V1Error> {
     let request: pb::GetVcsDiffRequest = super::query_request(&[], &query)?;
     let workdir = scope_directory(&headers, &request.directory);
-    let diff = if crate::compat::instance::vcs::git::is_repo(&workdir) {
-        crate::compat::instance::vcs::git::raw_diff(&workdir).map_err(V1Error::from)?
+    let diff = if crate::support::git::is_repo(&workdir) {
+        crate::support::git::raw_diff(&workdir).map_err(V1Error::from)?
     } else {
         String::new()
     };
@@ -184,12 +184,12 @@ async fn apply_patch(
     let scope: pb::GetVcsStatusRequest = super::query_request(&[], &query)?;
     let workdir = scope_directory(&headers, &scope.directory);
     let _ = &request.directory;
-    if !crate::compat::instance::vcs::git::is_repo(&workdir) {
+    if !crate::support::git::is_repo(&workdir) {
         return Err(V1Error::invalid_argument(
             "patch cannot be applied: the directory is not a git repository",
         ));
     }
-    match crate::compat::instance::vcs::git::apply_patch(&workdir, &request.patch) {
+    match crate::support::git::apply_patch(&workdir, &request.patch) {
         Ok(()) => Ok(Json(pb::ApplyPatchResponse {
             applied: true,
             summary: String::new(),

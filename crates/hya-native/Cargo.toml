@@ -9,8 +9,6 @@ hya-sdk = { path = "../hya-sdk" }
 axum = { workspace = true }
 tower = { workspace = true }
 http-body-util = { workspace = true }
-eventsource-stream = "0.2"
-futures-util = "0.3"
 tokio = { workspace = true }
 serde_json = { workspace = true }
 async-trait = { workspace = true }

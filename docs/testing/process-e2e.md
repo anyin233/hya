@@ -2,7 +2,9 @@
 
 Track P runs the **production** backend binary against a temp XDG config and a
 local scripted OpenAI-compatible chat-completions server (FakeLlm). No live
-model keys are required.
+model keys are required. Every product assertion goes through the `hya.v1`
+contract (the typed `hya-client` plus raw `/v1` JSON), so the matrix exercises
+the same API real frontends consume.
 
 ## Layout
 
@@ -93,23 +95,31 @@ Helpers:
 - `fake_requests_from(&requests, 1)` — dump later turns as one string
 - `env.prompt_with_permission_reply(session, text, "once"|"reject", timeout)`
 - `env.prompt_with_question_reply(session, text, answers, timeout)`
-- `env.wait_mcp_connected("echo", timeout)`
-- `env.session_context` / `env.compact_session` / `env.summarize_session_legacy`
-- `env.compat_create_session` / `env.compat_prompt_and_wait` (AGENTS guidance path)
+- `env.wait_mcp_connected("echo", timeout)` — polls `GET /v1/mcp` for
+  `connected`
+- `env.session_context` (wraps `GET /v1/sessions/{id}/messages`) /
+  `env.compact_session` (v1 compact) / `env.summarize_session_legacy`
+  (name kept for history; hits `POST /v1/sessions/{id}/summarize`)
+- `env.compat_create_session` / `env.compat_prompt_and_wait` — historical
+  names; both are v1-backed (`POST /v1/sessions`, admit + wait through
+  `POST /v1/sessions/{id}/turns`) and `compat_prompt_and_wait` drives the
+  AGENTS-guidance path
 - `env.session_todos` / `env.wait_session_idle`
 - `tree_children` / `tree_max_depth` / `tree_session_ids` / `tree_subagent_types`
-  for `/session/{id}/tree`
+  for the session tree that `env.session_tree` assembles from v1
+  parent-filtered session listings (`GET /v1/sessions?parent={id}`)
 
 ### Context management notes
 
-- **Native** `POST /sessions/:id/prompt` is synchronous and does **not** inject
-  per-turn AGENTS/reference guidance (server AppState keeps agent base only).
-- **Compat** `POST /api/session/:id/prompt` is async and runs
+- The v1 turn path (`POST /v1/sessions/{id}/turns`) is event-driven: it admits
+  the turn and progress arrives on the event stream; the synchronous helpers
+  above wait for the terminal state. Prompt and command turns run
   `run_turn_with_external_dirs_and_guidance` after discovering workdir
-  `AGENTS.md`. Use `compat_prompt_and_wait` for T1.13-style tests.
-- **Compact** (`POST /api/session/:id/compact`) and legacy summarize call
-  `ModelSummarizer`, which hits the same FakeLlm as normal turns — script an
-  extra `text_step` for the summary body before any post-compact turn.
+  `AGENTS.md` — use `compat_prompt_and_wait` for T1.13-style guidance tests.
+- **Compact** (`POST /v1/sessions/{id}/compact`) and summarize
+  (`POST /v1/sessions/{id}/summarize`) call `ModelSummarizer`, which hits the
+  same FakeLlm as normal turns — script an extra `text_step` for the summary
+  body before any post-compact turn.
 
 ## Oracle rules (do not weaken)
 
@@ -118,15 +128,15 @@ Helpers:
 | Filesystem tools | Disk side effects under the project dir |
 | Permissions | File present/absent after once/reject |
 | Skills | Follow-up FakeLlm body contains skill body marker (not only skill name) |
-| MCP | Follow-up body contains MCP success text (e.g. `echo:…`); wait until `/mcp` is `connected` |
-| Subagents | `/session/{id}/tree` children ≥ 1, `subagent_type`, distinct child session ids |
+| MCP | Follow-up body contains MCP success text (e.g. `echo:…`); wait until `GET /v1/mcp` reports `connected` |
+| Subagents | Session-tree children ≥ 1 (v1 parent-filtered listing), `subagent_type`, distinct child session ids |
 | Nested | `tree_max_depth >= 2` and ≥ 3 distinct session ids |
 | Hyabundle CLI | `bundle install/list/info/uninstall` stdout markers |
-| Package agent | `/api/agent` lists package agent; event text matches scripted final token |
-| Session context | `/api/session/{id}/context` includes multi-turn user/assistant content |
-| Project AGENTS.md | Compat-guided FakeLlm request contains AGENTS body (not only native prompt) |
+| Package agent | `GET /v1/agents` lists package agent; event text matches scripted final token |
+| Session context | `GET /v1/sessions/{id}/messages` includes multi-turn user/assistant content |
+| Project AGENTS.md | Guided FakeLlm request contains AGENTS body (not just the raw prompt text) |
 | Compact / summarize | Context contains summary marker after compact; follow-up turn still works |
-| Todo | `/session/{id}/todo` lists items written via `todowrite` |
+| Todo | `GET /v1/sessions/{id}/todo` lists items written via `todowrite` |
 | Edit | Disk file content after `edit` tool |
 | Mailbox `send` | The **recipient's** next FakeLlm request contains `[mail from …] <body>` — never the sender's success string or call args |
 | Mailbox `send` receipts | A *direct* send hard-codes `recipients: 1`; only a `#channel` send counts real subscribers. Any receipt assertion must name the channel (`to #squad (N recipient…)`), never bare `recipients:1` |

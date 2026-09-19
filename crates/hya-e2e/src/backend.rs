@@ -230,11 +230,11 @@ permission:
             .spawn()
             .map_err(|e| E2eError::Backend(format!("spawn hya-backend: {e}")))?;
 
-        let stdout = child
+        let mut stdout = child
             .stdout
             .take()
             .ok_or_else(|| E2eError::Backend("missing stdout".into()))?;
-        let url = wait_for_listen(stdout, Duration::from_secs(30)).map_err(|e| {
+        let url = wait_for_listen(&mut stdout, Duration::from_secs(30)).map_err(|e| {
             let stderr = child
                 .stderr
                 .as_mut()
@@ -249,6 +249,29 @@ permission:
             terminate_process_group(&mut child);
             E2eError::Backend(format!("{e}; stderr={stderr}"))
         })?;
+
+        {
+            use std::io::BufRead;
+            std::thread::spawn(move || {
+                for line in std::io::BufReader::new(stdout).lines() {
+                    match line {
+                        Ok(line) => eprintln!("[backend-out] {line}"),
+                        Err(_) => break,
+                    }
+                }
+            });
+        }
+        if let Some(stderr) = child.stderr.take() {
+            std::thread::spawn(move || {
+                use std::io::BufRead;
+                for line in std::io::BufReader::new(stderr).lines() {
+                    match line {
+                        Ok(line) => eprintln!("[backend] {line}"),
+                        Err(_) => break,
+                    }
+                }
+            });
+        }
 
         Ok(Self {
             url,
@@ -304,14 +327,14 @@ permission:
         let mut child = cmd
             .spawn()
             .map_err(|e| E2eError::Backend(format!("reopen hya-backend: {e}")))?;
-        let stdout = match child.stdout.take() {
+        let mut stdout = match child.stdout.take() {
             Some(stdout) => stdout,
             None => {
                 terminate_process_group(&mut child);
                 return Err(E2eError::Backend("reopen backend missing stdout".into()));
             }
         };
-        let url = match wait_for_listen(stdout, Duration::from_secs(30)) {
+        let url = match wait_for_listen(&mut stdout, Duration::from_secs(30)) {
             Ok(url) => url,
             Err(error) => {
                 let stderr = child
@@ -465,7 +488,7 @@ fn temp_root(label: &str) -> Result<PathBuf, E2eError> {
     Ok(dir)
 }
 
-fn wait_for_listen(mut stdout: impl std::io::Read, timeout: Duration) -> Result<String, E2eError> {
+fn wait_for_listen(stdout: &mut impl std::io::Read, timeout: Duration) -> Result<String, E2eError> {
     let start = Instant::now();
     let mut buf = [0u8; 1024];
     let mut acc = String::new();
@@ -475,7 +498,7 @@ fn wait_for_listen(mut stdout: impl std::io::Read, timeout: Duration) -> Result<
                 "timeout waiting for listen line; got: {acc}"
             )));
         }
-        match std::io::Read::read(&mut stdout, &mut buf) {
+        match std::io::Read::read(stdout, &mut buf) {
             Ok(0) => {
                 return Err(E2eError::Backend(format!(
                     "backend exited before readiness; output={acc}"

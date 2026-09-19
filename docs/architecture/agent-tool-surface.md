@@ -5,8 +5,8 @@ coverage of file access, local search, interaction, network, and mailbox tools.
 It distinguishes three related but different surfaces:
 
 1. **Registered**: a name resolves in `ToolRegistry`.
-2. **Advertised**: a canonical schema is included in a model request or Compat
-   tool-list response.
+2. **Advertised**: a canonical schema is included in a model request or the
+   v1 tool catalog.
 3. **Executable**: the tool has the runtime plane, session, permissions, and
    other resources needed to complete a call.
 
@@ -310,12 +310,10 @@ Descriptions and input schemas are forwarded with the same values.
 [crates/hya-provider/src/anthropic.rs:15-57](../../crates/hya-provider/src/anthropic.rs#L15-L57),
 [crates/hya-provider/src/google.rs:139-194](../../crates/hya-provider/src/google.rs#L139-L194))
 
-The Compat tool-list implementation sorts canonical schemas by name and
-preserves each schema name as the returned `id`. Its separate ID listing is
-also sorted; both surfaces now reflect the configured registry without a
-websearch model/provider filter.
-([crates/hya-server/src/compat/experimental_tool.rs:9-36](../../crates/hya-server/src/compat/experimental_tool.rs#L9-L36),
-[crates/hya-server/src/compat/experimental_tool.rs:39-57](../../crates/hya-server/src/compat/experimental_tool.rs#L39-L57))
+The v1 tool catalog (`GET /v1/tools` and the bootstrap snapshot) surfaces the
+configured registry without a websearch model/provider filter; each
+`ToolSummary` carries the canonical schema `name`.
+([crates/hya-server/src/v1/catalog.rs](../../crates/hya-server/src/v1/catalog.rs))
 
 ## READ
 
@@ -743,11 +741,13 @@ reports when no server supports a file type.
 
 ### MCP tools
 
-At startup or through the Compat MCP control routes, hya prepares enabled MCP
-servers and adapts tools returned by `tools/list`. Disabled or failed servers
-contribute no new tools. A complete current-revision candidate is published for
-the next turn; an older bound turn keeps its retained source client and view.
-Only MCP tools whose input schema has `type: "object"` are accepted.
+At startup or through the v1 MCP control routes (`POST /v1/mcp`,
+`POST /v1/mcp/{name}/connect`, `POST /v1/mcp/{name}/disconnect`), hya prepares
+enabled MCP servers and adapts tools returned by `tools/list`. Disabled or
+failed servers contribute no new tools. A complete current-revision candidate
+is published for the next turn; an older bound turn keeps its retained source
+client and view. Only MCP tools whose input schema has `type: "object"` are
+accepted.
 ([crates/hya-mcp/src/manager.rs:59-100](../../crates/hya-mcp/src/manager.rs#L59-L100),
 [crates/hya-mcp/src/manager.rs:105-140](../../crates/hya-mcp/src/manager.rs#L105-L140),
 [crates/hya-mcp/src/bridge.rs:20-43](../../crates/hya-mcp/src/bridge.rs#L20-L43))

@@ -359,3 +359,138 @@ pub fn build_member_agent(
         reasoning: base.reasoning,
     }
 }
+
+/// Resolve a dispatch-time model request against the current catalog.
+///
+/// Selection branches, in order:
+///
+/// 1. **Exact override** — the request is a full, valid model id
+///    (`provider/model`) present in the catalog; it dispatches directly.
+/// 2. **Substring fallback** — an invalid request dispatches the first
+///    catalog id (stable provider/model sort order) that contains the
+///    request as a substring. This branch is disabled when the request is
+///    exactly a provider (vendor) id — a bare vendor name never
+///    substring-dispatches.
+/// 3. **User configuration** — `None` when nothing is requested or neither
+///    branch matched; the caller then falls through to the user's
+///    configured model chain (definition policy, remembered preference,
+///    process default).
+///
+/// # Arguments
+///
+/// * `requested` - Raw model request string from the spawning caller.
+/// * `model_ids` - Full catalog model ids (`provider/model`) in stable
+///   sort order.
+/// * `provider_ids` - Known provider (vendor) ids; exact matches disable
+///   the substring branch.
+///
+/// # Returns
+///
+/// The resolved model, or `None` to defer to the user configuration chain.
+#[must_use]
+pub fn resolve_dispatch_model(
+    requested: &str,
+    model_ids: &[String],
+    provider_ids: &[String],
+) -> Option<ModelRef> {
+    let requested = requested.trim();
+    if requested.is_empty() {
+        return None;
+    }
+    // Branch 1: exact valid id dispatches directly.
+    if model_ids.iter().any(|id| id == requested) {
+        return Some(ModelRef::new(requested));
+    }
+    // Branch 2 is disabled for bare vendor ids.
+    if provider_ids.iter().any(|provider| provider == requested) {
+        return None;
+    }
+    // Branch 2: first catalog id containing the request as a substring.
+    model_ids
+        .iter()
+        .find(|id| id.contains(requested))
+        .map(|id| ModelRef::new(id.clone()))
+}
+
+#[cfg(test)]
+mod dispatch_tests {
+    use super::resolve_dispatch_model;
+
+    fn catalog() -> (Vec<String>, Vec<String>) {
+        (
+            vec![
+                "anthropic/claude-opus".to_string(),
+                "anthropic/claude-sonnet".to_string(),
+                "fake/model".to_string(),
+                "fake/override-target".to_string(),
+                "fake/pref-target".to_string(),
+            ],
+            vec![
+                "anthropic".to_string(),
+                "fake".to_string(),
+                "openai".to_string(),
+            ],
+        )
+    }
+
+    #[test]
+    fn branch1_exact_valid_id_overrides_directly() {
+        let (models, providers) = catalog();
+        assert_eq!(
+            resolve_dispatch_model("fake/pref-target", &models, &providers)
+                .map(|model| model.to_string()),
+            Some("fake/pref-target".to_string())
+        );
+    }
+
+    #[test]
+    fn branch2_substring_dispatches_first_stable_match() {
+        let (models, providers) = catalog();
+        // "target" is a substring of override-target and pref-target; the
+        // stable sort puts override-target first.
+        assert_eq!(
+            resolve_dispatch_model("target", &models, &providers).map(|model| model.to_string()),
+            Some("fake/override-target".to_string())
+        );
+        assert_eq!(
+            resolve_dispatch_model("sonnet", &models, &providers).map(|model| model.to_string()),
+            Some("anthropic/claude-sonnet".to_string())
+        );
+    }
+
+    #[test]
+    fn branch2_disabled_for_bare_vendor_ids() {
+        let (models, providers) = catalog();
+        assert_eq!(resolve_dispatch_model("fake", &models, &providers), None);
+        assert_eq!(
+            resolve_dispatch_model("anthropic", &models, &providers),
+            None
+        );
+        // A bare vendor id that is NOT a substring of any id also stays None.
+        assert_eq!(
+            resolve_dispatch_model("deepseek", &models, &providers),
+            None
+        );
+    }
+
+    #[test]
+    fn branch3_no_request_or_no_match_defers_to_user_config() {
+        let (models, providers) = catalog();
+        assert_eq!(resolve_dispatch_model("", &models, &providers), None);
+        assert_eq!(resolve_dispatch_model("   ", &models, &providers), None);
+        assert_eq!(
+            resolve_dispatch_model("nonexistent-xyz", &models, &providers),
+            None
+        );
+    }
+
+    #[test]
+    fn bare_model_id_that_is_a_substring_still_dispatches() {
+        let (models, providers) = catalog();
+        // "model" is not a provider id and is a substring of fake/model.
+        assert_eq!(
+            resolve_dispatch_model("model", &models, &providers).map(|model| model.to_string()),
+            Some("fake/model".to_string())
+        );
+    }
+}

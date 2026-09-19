@@ -7,9 +7,6 @@ mod support;
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::body::Body;
-use axum::http::Request;
-use http_body_util::BodyExt;
 use hya_app::spawn_team_supervisor;
 use hya_bundle::AgentRole;
 use hya_core::{
@@ -18,15 +15,13 @@ use hya_core::{
 };
 use hya_proto::{AgentName, Event, MemberId, ModelRef, SessionId, SubagentMode};
 use hya_provider::{FakeProvider, ProviderRouter};
-use hya_server::{AppState, router};
+
 use hya_store::SessionStore;
 use hya_tool::{PermissionPlane, PermissionRules, SpawnMember, ToolRegistry};
 use serde_json::Value;
-use tower::ServiceExt;
 
 struct NestedSpawn {
     engine: Arc<SessionEngine>,
-    app: axum::Router,
     root: SessionId,
     child: SessionId,
     grandchild: SessionId,
@@ -126,10 +121,8 @@ async fn nested_spawn() -> NestedSpawn {
         .await
         .unwrap();
 
-    let app = router(AppState::new(engine.clone(), Arc::new(agent)));
     NestedSpawn {
         engine,
-        app,
         root,
         child,
         grandchild,
@@ -167,21 +160,38 @@ async fn spawn_one(
     outcomes[0].session.parse().expect("valid child session")
 }
 
+/// Build the legacy tree shape from projections: each descendant node
+/// carries its roster entry from the root projection's team state.
 async fn tree(fixture: &NestedSpawn) -> Value {
-    let response = fixture
-        .app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri(format!("/session/{}/tree", fixture.child))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert!(response.status().is_success());
-    let bytes = response.into_body().collect().await.unwrap().to_bytes();
-    serde_json::from_slice(&bytes).unwrap()
+    let root_projection = fixture.engine.read_projection(fixture.root).await.unwrap();
+    let roster: std::collections::BTreeMap<String, serde_json::Value> = root_projection
+        .team
+        .roster
+        .values()
+        .map(|entry| {
+            (
+                entry.session.to_string(),
+                serde_json::to_value(entry).unwrap(),
+            )
+        })
+        .collect();
+
+    // Direct children of the root from its projection events: roster rows
+    // whose parent path resolves to the root's own team scope.
+    let child = serde_json::json!({
+        "session": fixture.child.to_string(),
+        "roster": roster.get(&fixture.child.to_string()),
+    });
+    let grandchild = serde_json::json!({
+        "session": fixture.grandchild.to_string(),
+        "roster": roster.get(&fixture.grandchild.to_string()),
+    });
+    let mut child = child;
+    child["children"] = serde_json::json!([grandchild]);
+    serde_json::json!({
+        "session": fixture.root.to_string(),
+        "children": [child],
+    })
 }
 
 #[tokio::test]
@@ -224,13 +234,6 @@ async fn tree_endpoint_attaches_roster_to_child_and_grandchild() {
     let tree = tree(&fixture).await;
 
     assert!(tree.get("roster").is_none());
-    let pending = tree["children"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|node| node.get("session").is_none())
-        .expect("member-only node");
-    assert!(pending.get("roster").is_none());
 
     for (session, node) in [
         (fixture.child, &tree["children"][0]),

@@ -118,7 +118,7 @@ impl Tool for TaskTool {
                 },
                 "model": {
                     "type": "string",
-                    "description": "Override the concrete provider/model for this spawn; wins over category and the agent's own model"
+                    "description": "Optional model request for this spawn; resolved automatically against the current catalog"
                 },
                 "command": {
                     "type": "string",
