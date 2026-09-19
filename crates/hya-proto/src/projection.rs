@@ -353,11 +353,18 @@ impl TeamProjection {
     /// rule fails closed instead of silently picking a recipient.
     #[must_use]
     pub fn resolve_in_scope(&self, from: &str, raw: &str) -> Option<String> {
+        // ADR-0016: addressing is vertical only — the parent and the direct
+        // reports. Siblings are visible in no surface and addressable by none.
+        let vertical = |key: &str| {
+            key == from
+                || scope::parent_path(key) == Some(from)
+                || key == scope::parent_path(from).unwrap_or("")
+        };
         let raw = raw.trim();
         let mut matches = self
             .roster
             .keys()
-            .filter(|key| scope::in_scope(from, key))
+            .filter(|key| vertical(key))
             .filter(|key| key.as_str() == raw || scope::leaf(key) == raw);
         match (matches.next(), matches.next()) {
             (Some(only), None) => Some(only.clone()),

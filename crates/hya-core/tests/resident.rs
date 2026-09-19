@@ -314,12 +314,13 @@ async fn message_budget_kill_cancels_the_team() {
     let cancel = supervisor.team_cancel(root).expect("team is tracked");
     assert!(!cancel.is_cancelled(), "team starts live");
 
-    // Drive a message loop past the budget of 3.
+    // Drive a vertical mail loop past the budget of 3 (ADR-0016: sibling DMs
+    // no longer exist, so the loop runs between the root and worker-1).
     for i in 0..10 {
         let (from, to) = if i % 2 == 0 {
-            (a, "worker-2")
+            (root, "worker-1")
         } else {
-            (b, "worker-1")
+            (a, "main")
         };
         let _ = engine
             .mail_send(

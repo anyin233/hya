@@ -83,7 +83,10 @@ pub use interaction::{
 };
 pub use lifecycle::{LifecyclePlane, LifecycleRequest};
 pub use lsp_plane::{LspError, LspOperation, LspPlane, LspProvider, LspRequest};
-pub use mailbox::{ChannelInfo, MailReceipt, MailboxError, MailboxPlane, MailboxRequest};
+pub use mailbox::{
+    ArchivedAgentRow, ChannelInfo, ChannelRow, MailReceipt, MailboxError, MailboxPlane,
+    MailboxRequest,
+};
 pub use output_cap::{
     MAX_TOOL_OUTPUT_CHARS, cap_tool_output, cap_tool_output_spilling, cap_tool_output_with_policy,
 };
