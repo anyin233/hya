@@ -1,26 +1,23 @@
-# 0.36.47
+# 0.36.48
 
-## Agent-model preferences reachable over v1; interaction frames are live on the streams (server, api)
+## The agent-model preference mechanism is double-checked and proven end to end (e2e)
 
-- New `AgentModels` service (16th service, 79 rpcs total):
-  `GET /v1/agent-models` lists every catalog agent's effective model and
-  its source tier (session / configured / remembered / default), and
-  `PUT /v1/agent-models/{agent_id}` sets or clears one agent's durable
-  remembered preference — the surface the retired `/tui/agent-models`
-  routes provided, now on the consolidated contract over the same
-  app-owned `PersistentAgentModelControl` (owner-fenced store commits,
-  catalog validation, live snapshot publication). The gRPC binding
-  serves both rpcs through the same router and the parity suite
-  asserts the unavailable-control error matches across transports.
-- Interaction frames are wired end to end: the pending permission and
-  question planes now merge into the shared live frame producer, so
-  `permissionRequested`, `questionRequested`, and `interactionResolved`
-  frames arrive on the session and global streams (SSE and gRPC alike,
-  `seq == 0` live-only semantics). An agent's permission ask reaches
-  the user through `/v1/interactions` listing and these frames; an
-  "always" answer both resolves the frame in flight and persists a
-  saved rule (`GET /v1/permissions/rules`).
-- New integration suites: `v1_agent_models_api.rs` (list/set/clear,
-  full stable-error table, unavailable control) and
-  `v1_interaction_stream.rs` (asked + resolved frames over SSE, saved
-  rule persistence, question reject resolution).
+- Code-path audit of the durable per-Agent model preference, confirmed
+  against source: the control publishes an immutable snapshot into the
+  runtime registry; turn bindings capture it at bind time; the
+  preference applies only to agents whose catalog definition has neither
+  a direct model nor a category policy (reasoning-only does not
+  suppress), and only when the exact model resolves in the current
+  provider catalog. Session-tree overrides (`SessionAgentModelOverrideSet`,
+  event-sourced on the lineage root) take precedence via the binding's
+  overlay; configured policy next; the remembered preference is the
+  lowest-precedence default. It steers spawned subagent member specs,
+  the summarizer/compaction model, and session-title generation — the
+  interactive root turn keeps using the session model by design.
+- New e2e scenario T2.16 (`p21_agent_model_preference.rs`): register an
+  extra fake model, `PUT /v1/agent-models/general` to it, spawn a
+  `general` subagent through the task tool, and assert the recorded
+  provider request ran on the preferred model while the listing
+  reports the `AGENT_MODEL_SOURCE_REMEMBERED` tier (default tier
+  asserted before the set). The e2e harness gains a `put_json` helper;
+  the matrix registers the scenario (45 scenarios, 9 retired).

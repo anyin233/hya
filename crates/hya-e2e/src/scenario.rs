@@ -317,6 +317,21 @@ impl E2eEnv {
         Ok(serde_json::from_str(&text)?)
     }
 
+    /// PUT JSON to a backend path; empty bodies become `null`.
+    pub async fn put_json(&self, path: &str, body: &Value) -> Result<Value, E2eError> {
+        let url = format!("{}{path}", self.backend.url);
+        let resp = self.http.put(url).json(body).send().await?;
+        let status = resp.status();
+        let text = resp.text().await?;
+        if !status.is_success() {
+            return Err(E2eError::Http(format!("PUT {path} -> {status}: {text}")));
+        }
+        if text.trim().is_empty() {
+            return Ok(Value::Null);
+        }
+        Ok(serde_json::from_str(&text)?)
+    }
+
     /// List pending permission requests (v1 interaction plane), as an array.
     pub async fn list_permissions(&self) -> Result<Value, E2eError> {
         let body = self
