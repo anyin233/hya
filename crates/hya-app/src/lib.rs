@@ -29,7 +29,6 @@ pub mod plugins;
 /// Runtime assembly: store, engine, team supervisor, and [`HyaRuntime`].
 pub mod runtime;
 mod runtime_reconcile;
-mod spawn_intent;
 /// Shared Workflow discovery, selection, state, and execution control.
 pub mod workflow_control;
 

@@ -65,14 +65,18 @@ unanswered entries as `Unanswered`.
 
 ### Task
 
-`task` launches one subagent or a multi-member team extension. Nested `task`
-calls are allowed; recursion depth and total fan-out are bounded by
-`SubagentGovernor` (see [`docs/configuration.md`](../configuration.md#subagent-limits)).
-Execution requires a session and checks `Action::Task` for every member; the
-spawner also enforces the caller's `can_spawn` roster (unknown or disallowed
-agents surface as `unknown_agent_id` / `agent_spawn_not_allowed`). An empty or
-omitted `subagent_type` normalizes to `"general"`; a non-empty unknown id does
-not fall back to `general`.
+`task` launches one subagent or a multi-member batch. Under the unified
+lifecycle ([ADR-0015](../adr/0015-unified-resident-subagent-lifecycle.md))
+every spawn is a **non-blocking resident**: the call returns immediately with
+the agent's handle and session; results arrive later as the agent's `report`
+mail. Nested `task` calls are allowed up to the hardcoded two-layer depth cap
+(`MAX_SUBAGENT_DEPTH = 2`); total fan-out is bounded by the
+`SubagentGovernor` per-run budget. Execution requires a session and checks
+`Action::Task` for every member; the spawner also enforces the caller's
+`can_spawn` roster (unknown or disallowed agents surface as
+`unknown_agent_id` / `agent_spawn_not_allowed`). An empty or omitted
+`subagent_type` normalizes to `"general"`; a non-empty unknown id does not
+fall back to `general`.
 
 | Parameter | Role |
 | --- | --- |
@@ -81,12 +85,14 @@ not fall back to `general`.
 | `subagent_type` | Agent id; empty/omitted normalizes to `"general"`. |
 | `category` | Logical model-category override. |
 | `model` | Concrete provider/model override (wins over category). |
-| `task_id` | Resume an existing subagent session. Sentinels `new`, `null`, `none`, and `undefined` (case-insensitive), plus empty/whitespace, all mean "start fresh". |
 | `command` | Optional command that triggered the task. |
-| `background` | Bool; non-blocking single-member spawn. Multi-member background is rejected. |
-| `resident` | Long-lived actor (non-blocking spawn) rather than a one-shot turn. |
-| `inline_agent` | Request-scoped overlay. Published fields are `name`, `prompt`, `category`, `model`, and `resident`; nested `description` is not advertised. |
-| `members[]` | hya extension: fan one call out to several subagents (each needs `prompt`; optional per-member overrides). |
+| `inline_agent` | Request-scoped overlay. Published fields are `name`, `prompt`, `category`, and `model`; nested `description` is not advertised. |
+| `members[]` | Fan one call out to several subagents (each needs `prompt`; optional per-member overrides). |
+
+Removed fields: `task_id` (resume is superseded by mail revival of archived
+agents), `background` (every spawn is non-blocking), and `resident` (every
+agent is resident). Stale callers sending them are ignored by the closed-parse
+schema.
 
 The nested `inline_agent.description` parser field is retained only to handle
 stale/direct callers. Empty or whitespace-only values normalize to absence, so

@@ -19,17 +19,14 @@ use hya_core::{
     RuntimeRegistry, SessionEngine, SubagentGovernor, SubagentLimits,
 };
 use hya_proto::{
-    AgentName, Event, FinishReason, MailEndpoint, MailKind, MemberRunStatus, MessageId, ModelRef,
-    SessionId, SubagentMode, ToolCallId,
+    AgentName, Event, FinishReason, MailEndpoint, MailKind, MessageId, ModelRef, SessionId,
+    SubagentMode, ToolCallId,
 };
 use hya_provider::{
     Capabilities, CompletionRequest, EventStream, FakeProvider, FakeStep, Provider, ProviderError,
     ProviderRouter,
 };
-use hya_store::{
-    AdmissionBatchClaimOutcome, AdmissionClaim, AdmissionIntent, AdmissionState, AdmissionTerminal,
-    SessionStore,
-};
+use hya_store::{AdmissionState, SessionStore};
 use hya_tool::{
     Action, AgentDef, Mode, PermissionPlane, PermissionRules, Rule, SpawnError, SpawnMember,
     SpawnerPlane, ToolOperation, ToolRegistry,
@@ -82,6 +79,40 @@ impl AdmissionFixture {
         self.spawner
             .for_session_with_agents(self.parent, self.agents.clone())
     }
+}
+
+/// Wait until the spawned member (non-blocking handle reply, ADR-0015)
+/// finishes its first resident turn: an assistant message exists and the
+/// roster row is idle. Skips the roster's default-Idle pre-turn window.
+async fn wait_member_turn_done(engine: &SessionEngine, member: &str) {
+    let session: SessionId = member.parse().expect("member session id");
+    let (root, _) = engine.session_lineage(session).await.unwrap();
+    for _ in range_500() {
+        let projection = engine.read_projection(root).await.unwrap();
+        let turn_done = engine
+            .read_projection(session)
+            .await
+            .unwrap()
+            .session
+            .messages
+            .iter()
+            .any(|message| message.role == hya_proto::Role::Assistant);
+        let idle = projection
+            .team
+            .roster
+            .values()
+            .find(|entry| entry.session == session)
+            .is_some_and(|entry| entry.status == hya_proto::RosterStatus::Idle);
+        if turn_done && idle {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    panic!("spawned member {member} never completed its first turn");
+}
+
+fn range_500() -> std::ops::Range<i32> {
+    0..500
 }
 
 struct CountingProvider {
@@ -371,7 +402,8 @@ async fn authorized_inline_overlay_executes_without_catalog_entry() {
         .await
         .expect("authorized inline spawn");
 
-    assert_eq!(result[0].status, "done", "{result:?}");
+    assert_eq!(result[0].status, "running", "{result:?}");
+    wait_member_turn_done(&fixture.engine, &result[0].session).await;
     assert_eq!(fixture.provider_calls.load(Ordering::SeqCst), 1);
     let binding = fixture.engine.bind_runtime(&std::env::temp_dir()).unwrap();
     assert!(binding.resolve_agent("inline-one").is_none());
@@ -476,7 +508,8 @@ async fn inline_child_spawns_through_its_authorized_base_roster() {
         )
         .await
         .expect("authorized inline spawn");
-    assert_eq!(outcome[0].status, "done", "{outcome:?}");
+    assert_eq!(outcome[0].status, "running", "{outcome:?}");
+    wait_member_turn_done(&engine, &outcome[0].session).await;
 
     let sessions = engine.store().list_sessions().await.unwrap();
     let mut agents = Vec::new();
@@ -492,129 +525,6 @@ async fn inline_child_spawns_through_its_authorized_base_roster() {
         "inline child did not retain quick's authorized plan target: {agents:?}"
     );
 }
-
-#[tokio::test]
-async fn admitted_background_transient_releases_its_exact_debit_on_completion() {
-    let fixture = admission_fixture(1).await;
-    let first_operation = operation();
-    let outcome = tokio::time::timeout(
-        Duration::from_secs(5),
-        fixture.scoped_spawner().spawn_background(
-            first_operation,
-            vec![SpawnMember {
-                description: "single reservation".to_string(),
-                prompt: "finish once".to_string(),
-                subagent_type: "quick".to_string(),
-                ..SpawnMember::default()
-            }],
-            Default::default(),
-        ),
-    )
-    .await
-    .expect("spawn timed out")
-    .expect("first spawn should be admitted");
-    let child: SessionId = outcome[0].session.parse().expect("valid child session");
-
-    tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            let projection = fixture
-                .engine
-                .read_projection(fixture.parent)
-                .await
-                .unwrap();
-            if let Some(member) = projection
-                .session
-                .members
-                .iter()
-                .find(|member| member.child == Some(child))
-            {
-                match member.status {
-                    MemberRunStatus::Done => break,
-                    MemberRunStatus::Failed | MemberRunStatus::Cancelled => {
-                        panic!("admitted member did not finish: {}", member.summary)
-                    }
-                    MemberRunStatus::Spawning | MemberRunStatus::Running => {}
-                }
-            }
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("admitted member did not finish");
-
-    tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            let record = fixture
-                .engine
-                .store()
-                .admission(first_operation.operation_id())
-                .await
-                .unwrap()
-                .unwrap();
-            if record.state == hya_store::AdmissionState::Completed {
-                assert!(record.logical_released);
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("operation did not finalize");
-    // The journal row is finalized by the member task, while the owner returns
-    // the operation's governor units later; poll instead of assuming ordering.
-    tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            if fixture
-                .engine
-                .governor()
-                .unwrap()
-                .remaining_budget(fixture.parent)
-                == 1
-            {
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("operation did not release its debit");
-    // `remaining_budget` alone cannot prove *exactness*: it clamps at
-    // `per_run_budget` (1 here), and it falls back to `per_run_budget` whenever the
-    // root has no budget entry at all -- so a budget of 1 is also what a
-    // never-debited or wholly-dropped root reads. The precise observable is the
-    // debit entry itself. `SubagentGovernor::release_operation` removes the
-    // operation from its map *before* touching `remaining` and returns `false` when
-    // the entry is already gone, so a release cannot be performed twice. Asserting
-    // `false` here therefore proves the owner retired *this* operation's debit
-    // through the governor, exactly once; `true` would mean the budget above was
-    // restored by some other path while the debit stayed outstanding.
-    assert!(
-        !fixture
-            .engine
-            .governor()
-            .unwrap()
-            .release_operation(first_operation.operation_id()),
-        "owner must retire its own operation debit exactly once: the debit entry \
-         was still outstanding after the budget already read as released"
-    );
-
-    let retry = fixture
-        .scoped_spawner()
-        .spawn_background(
-            operation(),
-            vec![SpawnMember {
-                description: "budget exhausted".to_string(),
-                prompt: "must not start".to_string(),
-                subagent_type: "quick".to_string(),
-                ..SpawnMember::default()
-            }],
-            Default::default(),
-        )
-        .await
-        .expect("released capacity should admit the next operation");
-    assert_eq!(retry.len(), 1);
-}
-
 /// Regression for the release window between member-journal finalize and the
 /// owner's governor release.
 ///
@@ -703,7 +613,6 @@ async fn admitted_background_resident_uses_the_common_pre_create_path() {
                 description: "resident admission".to_string(),
                 prompt: "wait for mail".to_string(),
                 subagent_type: "quick".to_string(),
-                resident: true,
                 ..SpawnMember::default()
             }],
             Default::default(),
@@ -777,7 +686,6 @@ async fn resident_root_registration_failure_aborts_without_child_side_effects() 
                 description: "root registration failure".to_string(),
                 prompt: "must not run".to_string(),
                 subagent_type: "quick".to_string(),
-                resident: true,
                 ..SpawnMember::default()
             }],
             Default::default(),
@@ -879,370 +787,7 @@ async fn foreground_completion_uses_one_debit_and_one_finalize() {
         1
     );
 }
-
-#[tokio::test]
-async fn queued_foreground_reply_waits_for_all_terminal() {
-    let gate = Arc::new(ProviderGate {
-        entered: Notify::new(),
-        release: Notify::new(),
-    });
-    let fixture = admission_fixture_with_gate(101, Some(gate.clone())).await;
-    let operation = operation();
-    let operation_id = operation.operation_id();
-    let members = (0..101)
-        .map(|index| SpawnMember {
-            description: format!("queued foreground member {index}"),
-            prompt: format!("complete foreground member {index}"),
-            subagent_type: "quick".to_string(),
-            ..SpawnMember::default()
-        })
-        .collect::<Vec<_>>();
-    let plane = fixture.scoped_spawner();
-    let mut spawn =
-        tokio::spawn(async move { plane.spawn(operation, members, Default::default()).await });
-
-    tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            if !fixture
-                .engine
-                .store()
-                .admissions(operation_id)
-                .await
-                .unwrap()
-                .is_empty()
-            {
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("durable foreground admission did not appear");
-
-    assert_eq!(
-        fixture.engine.store().admission_counts().await.unwrap(),
-        hya_store::AdmissionCounts {
-            active: 100,
-            non_active: 1,
-            total: 101,
-        }
-    );
-
-    let records = fixture
-        .engine
-        .store()
-        .admissions(operation_id)
-        .await
-        .unwrap();
-    assert_eq!(records.len(), 101);
-    for (index, record) in records.iter().enumerate() {
-        assert_eq!(record.member_ordinal, u32::try_from(index).unwrap());
-    }
-    assert!(records[..100].iter().all(|record| matches!(
-        record.state,
-        hya_store::AdmissionState::Accepted | hya_store::AdmissionState::Started
-    )));
-    assert_eq!(records[100].state, hya_store::AdmissionState::Queued);
-    assert!(records.iter().all(|record| record.actor.is_none()));
-    assert!(records.iter().all(|record| !record.state.is_terminal()));
-
-    tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            if fixture.provider_calls.load(Ordering::SeqCst) == 100 {
-                let records = fixture
-                    .engine
-                    .store()
-                    .admissions(operation_id)
-                    .await
-                    .unwrap();
-                if records.len() == 101
-                    && records[..100]
-                        .iter()
-                        .all(|record| record.state == hya_store::AdmissionState::Started)
-                    && records[100].state == hya_store::AdmissionState::Queued
-                {
-                    break;
-                }
-            }
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("the first 100 foreground members did not become active");
-    assert_eq!(fixture.provider_calls.load(Ordering::SeqCst), 100);
-    assert!(
-        tokio::time::timeout(Duration::from_millis(100), &mut spawn)
-            .await
-            .is_err()
-    );
-    assert_eq!(
-        fixture.engine.store().list_sessions().await.unwrap().len(),
-        101
-    );
-    assert!(fixture.resident.team_cancel(fixture.parent).is_none());
-    assert!(
-        fixture
-            .engine
-            .store()
-            .active_actor_ids()
-            .await
-            .unwrap()
-            .is_empty()
-    );
-
-    gate.release.notify_one();
-    tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            let records = fixture
-                .engine
-                .store()
-                .admissions(operation_id)
-                .await
-                .unwrap();
-            if records.len() == 101 && records[100].state != hya_store::AdmissionState::Queued {
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("queued foreground member was not promoted");
-    assert!(
-        tokio::time::timeout(Duration::from_millis(100), &mut spawn)
-            .await
-            .is_err()
-    );
-
-    tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            let records = fixture
-                .engine
-                .store()
-                .admissions(operation_id)
-                .await
-                .unwrap();
-            if records.len() == 101
-                && records[100].state == hya_store::AdmissionState::Started
-                && fixture.provider_calls.load(Ordering::SeqCst) == 101
-            {
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("promoted foreground member did not reach its provider turn");
-    assert!(
-        tokio::time::timeout(Duration::from_millis(100), &mut spawn)
-            .await
-            .is_err()
-    );
-
-    gate.release.notify_waiters();
-    let outcomes = tokio::time::timeout(Duration::from_secs(5), spawn)
-        .await
-        .expect("foreground spawn timed out")
-        .expect("foreground spawn task panicked")
-        .expect("foreground spawn failed");
-    assert_eq!(outcomes.len(), 101);
-    assert!(outcomes.iter().all(|outcome| outcome.status == "done"));
-
-    let records = fixture
-        .engine
-        .store()
-        .admissions(operation_id)
-        .await
-        .unwrap();
-    assert_eq!(records.len(), 101);
-    assert!(
-        records
-            .iter()
-            .all(|record| record.state == hya_store::AdmissionState::Completed)
-    );
-    assert_eq!(
-        fixture.engine.store().admission_counts().await.unwrap(),
-        hya_store::AdmissionCounts {
-            active: 0,
-            non_active: 0,
-            total: 0,
-        }
-    );
-    assert_eq!(fixture.provider_calls.load(Ordering::SeqCst), 101);
-    assert_eq!(
-        fixture.engine.store().list_sessions().await.unwrap().len(),
-        102
-    );
-}
-
-#[tokio::test]
-async fn all_queued_owner_uses_authoritative_batch_cardinality() {
-    let fixture = admission_fixture(2).await;
-    let filler_operation = operation();
-    let filler_intents = (0..100)
-        .map(|ordinal| AdmissionIntent {
-            runtime_fingerprint_version: 1,
-            runtime_fingerprint: [0x11; 32],
-            admission_binding_fingerprint_version: 1,
-            admission_binding_fingerprint: [0x22; 32],
-            spawn_intent: vec![0x33, u8::try_from(ordinal).unwrap()],
-        })
-        .collect::<Vec<_>>();
-    let filler_launches = fixture
-        .engine
-        .store()
-        .claim_admission_batch(
-            &AdmissionClaim {
-                operation_id: filler_operation.operation_id(),
-                source_tool_call_id: filler_operation.source_tool_call_id(),
-                root_session: fixture.parent,
-                request_fingerprint: [0x44; 32],
-                admission_units: 100,
-                actor_claim: None,
-            },
-            filler_intents,
-        )
-        .await
-        .unwrap();
-    let AdmissionBatchClaimOutcome::Claimed(filler_launches) = filler_launches else {
-        panic!("unrelated store-only filler admission must be newly claimed");
-    };
-    assert_eq!(filler_launches.len(), 100);
-    assert!(filler_launches.iter().enumerate().all(|(index, launch)| {
-        launch.record.member_ordinal == u32::try_from(index).unwrap()
-            && launch.record.batch_size == 100
-            && launch.record.state == AdmissionState::Accepted
-    }));
-
-    let operation = operation();
-    let operation_id = operation.operation_id();
-    let members = (0..2)
-        .map(|index| SpawnMember {
-            description: format!("all queued member {index}"),
-            prompt: format!("finish all queued member {index}"),
-            subagent_type: "quick".to_string(),
-            ..SpawnMember::default()
-        })
-        .collect::<Vec<_>>();
-    let plane = fixture.scoped_spawner();
-    let mut spawn =
-        tokio::spawn(async move { plane.spawn(operation, members, Default::default()).await });
-
-    tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            if fixture
-                .engine
-                .store()
-                .admissions(operation_id)
-                .await
-                .unwrap()
-                .len()
-                == 2
-            {
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("all-queued foreground admission did not appear");
-
-    assert!(
-        tokio::time::timeout(Duration::from_millis(150), &mut spawn)
-            .await
-            .is_err(),
-        "queued foreground caller completed before durable promotion"
-    );
-
-    let records = fixture
-        .engine
-        .store()
-        .admissions(operation_id)
-        .await
-        .unwrap();
-    assert_eq!(records.len(), 2);
-    for (index, record) in records.iter().enumerate() {
-        assert_eq!(record.member_ordinal, u32::try_from(index).unwrap());
-        assert_eq!(record.batch_size, 2);
-        assert_eq!(record.state, AdmissionState::Queued);
-        assert!(!record.state.is_terminal());
-        assert!(record.actor.is_none());
-    }
-    assert_eq!(fixture.provider_calls.load(Ordering::SeqCst), 0);
-    assert_eq!(
-        fixture.engine.store().list_sessions().await.unwrap().len(),
-        1
-    );
-    assert!(
-        fixture
-            .engine
-            .store()
-            .active_actor_ids()
-            .await
-            .unwrap()
-            .is_empty()
-    );
-    assert!(fixture.resident.team_cancel(fixture.parent).is_none());
-
-    spawn.abort();
-    let _ = spawn.await;
-}
-
-#[tokio::test]
-async fn conflicting_terminal_finalize_fails_closed_to_foreground_caller() {
-    let gate = Arc::new(ProviderGate {
-        entered: Notify::new(),
-        release: Notify::new(),
-    });
-    let fixture = admission_fixture_with_gate(1, Some(gate.clone())).await;
-    let operation = operation();
-    let plane = fixture.scoped_spawner();
-    let spawn = tokio::spawn(async move {
-        plane
-            .spawn(
-                operation,
-                vec![SpawnMember {
-                    description: "foreground terminal conflict".to_string(),
-                    prompt: "wait for terminal conflict".to_string(),
-                    subagent_type: "quick".to_string(),
-                    ..SpawnMember::default()
-                }],
-                Default::default(),
-            )
-            .await
-    });
-
-    tokio::time::timeout(Duration::from_secs(5), gate.entered.notified())
-        .await
-        .expect("provider did not start");
-    fixture
-        .engine
-        .store()
-        .finalize_admission(
-            operation.operation_id(),
-            AdmissionTerminal::Cancelled,
-            "test terminal conflict",
-            None,
-        )
-        .await
-        .expect("test terminal transition");
-    gate.release.notify_one();
-
-    let result = tokio::time::timeout(Duration::from_secs(5), spawn)
-        .await
-        .expect("foreground spawn timed out")
-        .expect("spawn task panicked");
-    assert!(matches!(result, Err(SpawnError::Unavailable)));
-    let record = fixture
-        .engine
-        .store()
-        .admission(operation.operation_id())
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(record.state, hya_store::AdmissionState::Cancelled);
-}
-
-async fn background_overload_prevents_child_creation(resident_member: bool) {
+async fn background_overload_prevents_child_creation(_resident_member: bool) {
     let fixture = admission_fixture(0).await;
     let operation = operation();
     let sessions_before = fixture.engine.store().list_sessions().await.unwrap();
@@ -1263,7 +808,6 @@ async fn background_overload_prevents_child_creation(resident_member: bool) {
                 description: "overloaded member".to_string(),
                 prompt: "must not start".to_string(),
                 subagent_type: "quick".to_string(),
-                resident: resident_member,
                 ..SpawnMember::default()
             }],
             Default::default(),
@@ -1469,19 +1013,6 @@ async fn admission_fixture(per_run_budget: u64) -> AdmissionFixture {
     )
     .await
 }
-
-async fn admission_fixture_with_gate(
-    per_run_budget: u64,
-    gate: Option<Arc<ProviderGate>>,
-) -> AdmissionFixture {
-    admission_fixture_with_store_and_gate(
-        per_run_budget,
-        gate,
-        SessionStore::connect_memory().await.unwrap(),
-    )
-    .await
-}
-
 async fn admission_fixture_with_store(
     per_run_budget: u64,
     store: SessionStore,
@@ -1757,6 +1288,7 @@ async fn queued_spawn_uses_parent_turn_binding_after_catalog_publication() {
         .expect("queued spawn task")
         .expect("queued foreground spawn");
     let child: SessionId = outcomes[0].session.parse().expect("child session id");
+    wait_member_turn_done(&engine, &outcomes[0].session).await;
     let child_binding_generations: Vec<_> = engine
         .replay(child)
         .await
@@ -1950,7 +1482,8 @@ async fn transient_child_uses_triggering_turn_guidance_once_without_child_scan()
         )
         .await
         .expect("transient spawn");
-    assert_eq!(outcomes[0].status, "done", "{outcomes:?}");
+    assert_eq!(outcomes[0].status, "running", "{outcomes:?}");
+    wait_member_turn_done(&fixture.engine, &outcomes[0].session).await;
 
     let systems = fixture.systems.lock().unwrap().clone();
     assert!(
@@ -2006,7 +1539,6 @@ async fn resident_activations_reuse_in_process_triggering_guidance() {
                 description: "resident worker".to_string(),
                 prompt: "initial resident directive".to_string(),
                 subagent_type: "quick".to_string(),
-                resident: true,
                 ..SpawnMember::default()
             }],
             Default::default(),
@@ -2126,7 +1658,8 @@ async fn nested_spawn_inherits_same_immutable_guidance() {
         )
         .await
         .expect("nested parent spawn");
-    assert_eq!(outcomes[0].status, "done", "{outcomes:?}");
+    assert_eq!(outcomes[0].status, "running", "{outcomes:?}");
+    wait_member_turn_done(&fixture.engine, &outcomes[0].session).await;
 
     let systems = fixture.systems.lock().unwrap().clone();
     assert!(
@@ -2174,7 +1707,6 @@ async fn resident_guidance_is_ephemeral_not_persisted_in_events() {
                 description: "ephemeral guidance".to_string(),
                 prompt: "initial".to_string(),
                 subagent_type: "quick".to_string(),
-                resident: true,
                 ..SpawnMember::default()
             }],
             Default::default(),
@@ -2352,7 +1884,17 @@ async fn root_turn_task_tool_propagates_guidance_to_child_provider_once() {
         .expect("parent turn with task tool");
     assert_eq!(finish, FinishReason::Stop);
 
-    let by_session = fixture.by_session.lock().unwrap().clone();
+    let mut by_session = fixture.by_session.lock().unwrap().clone();
+    for _ in 0..500 {
+        by_session = fixture.by_session.lock().unwrap().clone();
+        if by_session
+            .iter()
+            .any(|(session, _)| *session != fixture.parent)
+        {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
     let child_systems: Vec<&String> = by_session
         .iter()
         .filter(|(session, _)| *session != fixture.parent)
@@ -2417,7 +1959,6 @@ async fn quiescence_main_synthesis_uses_triggering_guidance_once() {
                 description: "resident then quiesce".to_string(),
                 prompt: "finish quickly".to_string(),
                 subagent_type: "quick".to_string(),
-                resident: true,
                 ..SpawnMember::default()
             }],
             Default::default(),
@@ -2666,7 +2207,6 @@ async fn nested_first_resident_main_synthesis_uses_root_definition_not_caller() 
                 description: "nested first resident".to_string(),
                 prompt: "finish quickly".to_string(),
                 subagent_type: "quick".to_string(),
-                resident: true,
                 ..SpawnMember::default()
             }],
             Default::default(),
@@ -2899,7 +2439,6 @@ async fn missing_root_definition_fails_before_admission_for_resident_batch() {
                 description: "resident under missing root".to_string(),
                 prompt: "must not run".to_string(),
                 subagent_type: "quick".to_string(),
-                resident: true,
                 ..SpawnMember::default()
             }],
             Default::default(),
