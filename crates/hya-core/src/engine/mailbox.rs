@@ -188,10 +188,42 @@ impl SessionEngine {
             gate.release.notified().await;
         }
         if let MailEndpoint::Handle(handle) = &to {
-            let envelope = self
+            let append = self
                 .store()
-                .append_direct_mail(root, from.clone(), handle.clone(), kind, body, actor_claim)
-                .await?;
+                .append_direct_mail(
+                    root,
+                    from.clone(),
+                    handle.clone(),
+                    kind,
+                    body.clone(),
+                    actor_claim,
+                )
+                .await;
+            let envelope = match append {
+                Ok(envelope) => envelope,
+                Err(error @ hya_store::StoreError::MailboxRejected(_)) => {
+                    // ADR-0015: a downward mail to one of the sender's own
+                    // ARCHIVED direct children revives it instead of failing.
+                    // Everything else keeps the indistinguishable rejection.
+                    if let Some(reviver) = self.archive_reviver()
+                        && let Ok(projection) = self.read_projection(root).await
+                    {
+                        let canonical = projection.team.canonical_member(handle);
+                        let own_archived_child = projection.team.archived.contains_key(&canonical)
+                            && scope::parent_path(&canonical) == Some(from.as_str());
+                        if own_archived_child {
+                            reviver.revive(root, &from, &canonical, body).await?;
+                            return Ok(MailReceipt {
+                                from,
+                                to,
+                                recipients: 1,
+                            });
+                        }
+                    }
+                    return Err(CoreError::Store(error));
+                }
+                Err(error) => return Err(error.into()),
+            };
             self.publish_envelope(envelope);
             return Ok(MailReceipt {
                 from,

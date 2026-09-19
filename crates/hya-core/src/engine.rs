@@ -58,6 +58,7 @@ impl FixedSystemAgent {
 
 mod admission;
 mod fork;
+mod handoff;
 mod mailbox;
 mod members;
 pub(crate) use members::MemberSpawnRecord;
@@ -366,8 +367,38 @@ pub struct SessionEngine {
     hooks: Option<Arc<dyn HookDispatcher>>,
     governor: Option<crate::orchestrator::SubagentGovernor>,
     sidecar_environment: Option<Arc<dyn SidecarEnvironment>>,
+    /// Revival seam (ADR-0015): a downward mail to an archived direct child
+    /// routes here instead of failing the send. Interior-mutable because the
+    /// implementor (resident supervisor) itself holds the engine —
+    /// [`ResidentSupervisor::start`](crate::resident::ResidentSupervisor::start)
+    /// wires it.
+    reviver: RwLock<Option<Arc<dyn ArchiveReviver>>>,
     #[cfg(test)]
     direct_mail_pre_append_gate: Option<Arc<DirectMailPreAppendGate>>,
+}
+
+/// Revival seam for archived direct children (ADR-0015).
+///
+/// The mailbox write gate calls this when a direct-handle send resolves to an
+/// archived agent that is the **sender's own direct child**; everything else
+/// stays an indistinguishable rejection. The implementation (resident
+/// supervisor) re-registers the agent under a bumped claim epoch, seeds the
+/// new episode from the latest handoff, and arms it with `body` as the wake
+/// prompt.
+#[async_trait::async_trait]
+pub trait ArchiveReviver: Send + Sync {
+    /// Revive `child_handle` on team `root` for parent handle `parent`.
+    ///
+    /// # Errors
+    /// Returns [`CoreError::Invalid`] when the handle is not an archived
+    /// direct child of `parent`, or registration cannot be re-resolved.
+    async fn revive(
+        &self,
+        root: SessionId,
+        parent: &str,
+        child_handle: &str,
+        body: String,
+    ) -> Result<(), CoreError>;
 }
 
 impl SessionEngine {
@@ -422,6 +453,7 @@ impl SessionEngine {
             hooks: None,
             governor: None,
             sidecar_environment: None,
+            reviver: RwLock::new(None),
             #[cfg(test)]
             direct_mail_pre_append_gate: None,
         }
@@ -527,6 +559,32 @@ impl SessionEngine {
     pub fn with_mailbox(mut self, mailbox: MailboxPlane) -> Self {
         self.mailbox = mailbox;
         self
+    }
+
+    /// Install the archive-revival seam (ADR-0015). Without it, mail to an
+    /// archived handle stays an ordinary rejection.
+    #[must_use]
+    pub fn with_reviver(self, reviver: Arc<dyn ArchiveReviver>) -> Self {
+        self.set_reviver(reviver);
+        self
+    }
+
+    /// Wire the archive-revival seam on a shared engine. Idempotent; the
+    /// resident supervisor calls this from its own start.
+    pub fn set_reviver(&self, reviver: Arc<dyn ArchiveReviver>) {
+        match self.reviver.write() {
+            Ok(mut slot) => *slot = Some(reviver),
+            Err(poisoned) => *poisoned.into_inner() = Some(reviver),
+        }
+    }
+
+    /// The installed archive reviver, if any.
+    #[must_use]
+    pub fn archive_reviver(&self) -> Option<Arc<dyn ArchiveReviver>> {
+        match self.reviver.read() {
+            Ok(slot) => slot.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        }
     }
 
     /// Install the `SubagentGovernor` that bounds nested/parallel subagent
@@ -1156,6 +1214,7 @@ pub(crate) fn summarize_options_from_definition(
         previous_summary: None,
         max_output_tokens: None,
         handoff: false,
+        state_only: false,
     }
 }
 

@@ -59,7 +59,7 @@ impl SessionEngine {
     }
 }
 
-fn summary_messages(projection: &Projection) -> Result<Vec<Message>, CoreError> {
+pub(crate) fn summary_messages(projection: &Projection) -> Result<Vec<Message>, CoreError> {
     if projection.session.id.is_none() {
         return Err(CoreError::Invalid("session not found".to_string()));
     }
