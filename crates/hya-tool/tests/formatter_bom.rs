@@ -49,6 +49,7 @@ fn ctx_with_formatter(workdir: PathBuf, formatter: FormatterPlane) -> ToolCtx {
         spawner,
         operation: hya_tool::ToolOperation::from_tool_call(hya_proto::ToolCallId::new()),
         mailbox: hya_tool::MailboxPlane::disconnected(),
+        lifecycle: hya_tool::LifecyclePlane::disconnected(),
         session: None,
         parent_session: None,
         todo: TodoPlane::default(),

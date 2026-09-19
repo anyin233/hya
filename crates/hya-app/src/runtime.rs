@@ -21,7 +21,7 @@ use hya_core::{
     SidecarLifecycle, SidecarStart, SpawnAdmissionOutcome, SubagentGovernor, Summarizer,
     TeamEvidenceEnvelope, TokenAccounting, TurnBinding, apply_agent_model_preference,
     apply_spawn_model_policy, build_system_prompt, project_envelope, project_envelope_for_actor,
-    run_mailbox_service, run_pre_admitted_member, run_pre_admitted_team,
+    run_lifecycle_service, run_mailbox_service, run_pre_admitted_member, run_pre_admitted_team,
     run_pre_admitted_team_for_actor,
 };
 
@@ -44,10 +44,10 @@ use hya_store::{
     AdmissionTerminal, SessionStore, StoreError,
 };
 use hya_tool::{
-    Action, AskRequest, InteractionPlane, InvocationPolicy, MailboxPlane, MemberOutcome, Mode,
-    PermissionModel, PermissionPlane, PermissionRules, QuestionRequest, ResolvedTool, Resource,
-    Rule, SpawnError, SpawnMember, SpawnRequest, Tool, ToolCtx, ToolError, ToolPermission,
-    ToolRegistry, WebSearchConfig, WebSearchPlane,
+    Action, AskRequest, InteractionPlane, InvocationPolicy, LifecyclePlane, MailboxPlane,
+    MemberOutcome, Mode, PermissionModel, PermissionPlane, PermissionRules, QuestionRequest,
+    ResolvedTool, Resource, Rule, SpawnError, SpawnMember, SpawnRequest, Tool, ToolCtx, ToolError,
+    ToolPermission, ToolRegistry, WebSearchConfig, WebSearchPlane,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -4329,6 +4329,7 @@ async fn build_session_engine_with_mcp_defer(
     let (spawn_sender, spawn_rx) = BoundSpawnSender::with_capacity(spawn_queue_capacity);
     let (workflow_sender, workflow_rx) = BoundWorkflowSender::with_capacity(spawn_queue_capacity);
     let (mailbox, mailbox_rx) = MailboxPlane::new();
+    let (lifecycle, lifecycle_rx) = LifecyclePlane::new();
     let summarizer: Arc<dyn Summarizer> =
         Arc::new(ModelSummarizer::new(router.clone(), agent.model.clone()));
     let bus = EventBus::new(crate::config::resolve_event_bus_capacity());
@@ -4377,6 +4378,7 @@ async fn build_session_engine_with_mcp_defer(
         // `Arc<SessionEngine>`, so queued requests always find a live executor.
         .with_workflow_sender(workflow_sender)
         .with_mailbox(mailbox)
+        .with_lifecycle(lifecycle)
         .with_governor(governor);
     if !plugin_host.is_empty() {
         engine_builder = engine_builder.with_hooks(plugin_host.clone());
@@ -4551,6 +4553,11 @@ async fn build_session_engine_with_mcp_defer(
     // Drive the event-sourced mailbox: append MailSent/Channel*/AgentRegistered to
     // the team-root log and serve roster/channel reads (ADR-0001).
     tokio::spawn(run_mailbox_service(engine.clone(), mailbox_rx));
+    tokio::spawn(run_lifecycle_service(
+        engine.clone(),
+        resident_supervisor.clone(),
+        lifecycle_rx,
+    ));
     Ok(BuiltSessionEngine {
         engine,
         resident_supervisor,
@@ -10254,6 +10261,7 @@ flowchart TD
             spawner,
             operation: ToolOperation::from_tool_call(hya_proto::ToolCallId::new()),
             mailbox: MailboxPlane::disconnected(),
+            lifecycle: LifecyclePlane::disconnected(),
             session: Some(lead),
             parent_session: None,
             todo: TodoPlane::default(),
@@ -15310,6 +15318,7 @@ export default {
             spawner,
             operation: ToolOperation::from_tool_call(call),
             mailbox: MailboxPlane::disconnected(),
+            lifecycle: LifecyclePlane::disconnected(),
             session: Some(session),
             parent_session: None,
             todo: TodoPlane::default(),
