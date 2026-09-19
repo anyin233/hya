@@ -1,33 +1,25 @@
-# 0.36.35
+# 0.36.36
 
-## HTTP `/v1` binding goes live: sessions, event-driven turns, streams (server)
+## HTTP `/v1` binding covers workflow, filesystem, project/VCS, worktrees, and MCP (server)
 
-- The `/v1` HTTP surface from the `hya.v1` contract is now served by
-  `hya-server`, mounted alongside the legacy routes: process
-  health/location/config (deep-merge PATCH), the aggregated bootstrap
-  snapshot, catalog reads (agents, models, providers, commands, skills,
-  tools), provider auth key storage/removal, frontend log ingest, and the
-  saved permission-rule list.
-- Session lifecycle: create (with validation), get, list (parent filter,
-  cursor pagination), patch (title/agent/model), delete, fork (provenance
-  + metadata + message copy), compact, and summarize. Sequence-targeted
-  revert answers `unavailable` until the legacy diff machinery is ported.
-- Turns are event-driven as designed: `CreateTurn` admits a prompt,
-  slash-command (with workflow interception), or shell turn and returns a
-  `RUNNING` handle immediately; the model round runs on a spawned task and
-  terminal state arrives via `GetTurn`/`WaitTurn`/`CancelTurn` and the
-  streams. Messages and the todo list read from the shared projection —
-  no second read model.
-- Events: replay with `since_seq` watermark plus the two SSE streams
-  (session-scoped and global) emitting the curated `StreamFrame` protojson
-  with the typed `resync` signal and keepalives. The unified interaction
-  plane lists and answers pending permission/question requests.
-- Cross-cutting: stable error model rendered as
-  `{"error":{"code","message"}}`, opaque cursor pagination, and the
-  `x-hya-directory` scope header. Action RPCs use subpath routes
-  (`POST /v1/sessions/{id}/turns/{turn}/wait`); the IDL and generated
-  docs/OpenAPI were regenerated to match.
-- Integration coverage: `tests/v1_api.rs` exercises process/config,
-  catalog, auth storage, session lifecycle, an end-to-end event-driven
-  turn (finish + transcript + replay + SSE headers), and the error model.
-  Legacy routes are untouched; the gRPC binding lands next.
+- Workflow: `GET /v1/workflows` lists discovered sources through the
+  app-owned control handle, `GET/POST /v1/sessions/{id}/workflow` reads the
+  projected state and submits typed commands (list/info/select/run) with
+  the same admission semantics and stable error codes as the legacy
+  mirrors.
+- Filesystem: `GET /v1/fs/read|list|find|search|symbols` serve scoped
+  reads under the directory scope with traversal rejection, bounded
+  walks that skip VCS/build directories, glob-to-regex file finding,
+  substring text search, and LSP-backed symbol search.
+- Project and VCS: project registry/current/directories plus
+  `init-git`, git status (branch/head/dirty files), raw diff, and patch
+  apply reuse the shared git helpers.
+- Worktrees graduate to `GET/POST/DELETE /v1/worktrees` and
+  `POST /v1/worktrees/{id}/reset` over the engine's worktree helpers.
+- MCP: `GET/POST /v1/mcp` and `:connect`/`:disconnect` map onto the
+  app-owned MCP control handle (stdio transports; typed status). OAuth
+  surfaces answer `unavailable` honestly until wired.
+- Two integration tests extend `tests/v1_api.rs` (filesystem round trip
+  with traversal rejection; project/vcs/mcp/workflow catalog probes).
+  All `/v1` domains are now live over HTTP; the gRPC binding and the
+  PTY/`StreamPty` surface land next.

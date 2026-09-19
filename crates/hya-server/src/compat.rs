@@ -21,7 +21,7 @@ mod file;
 mod formatter;
 mod global;
 mod health;
-mod instance;
+pub(crate) mod instance;
 mod jsonc;
 mod location;
 mod mcp;
@@ -82,7 +82,7 @@ mod sync_projector;
 mod time;
 mod tui;
 mod workspace_id;
-mod worktree_git;
+pub(crate) mod worktree_git;
 mod worktree_git_info;
 mod worktree_git_lookup;
 

@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use serde::Serialize;
 
 #[derive(Serialize)]
-pub(super) struct Info {
+pub(crate) struct Info {
     name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     branch: Option<String>,
@@ -11,7 +11,7 @@ pub(super) struct Info {
 }
 
 impl Info {
-    pub(super) fn new(name: String, branch: Option<String>, directory: String) -> Self {
+    pub(crate) fn new(name: String, branch: Option<String>, directory: String) -> Self {
         Self {
             name,
             branch,
@@ -19,7 +19,7 @@ impl Info {
         }
     }
 
-    pub(super) fn from_path(directory: String, branch: Option<String>) -> Self {
+    pub(crate) fn from_path(directory: String, branch: Option<String>) -> Self {
         let path = PathBuf::from(&directory);
         let name = path
             .file_name()
@@ -28,19 +28,19 @@ impl Info {
         Self::new(name, branch, directory)
     }
 
-    pub(super) fn name(&self) -> &str {
+    pub(crate) fn name(&self) -> &str {
         &self.name
     }
 
-    pub(super) fn branch(&self) -> Option<&str> {
+    pub(crate) fn branch(&self) -> Option<&str> {
         self.branch.as_deref()
     }
 
-    pub(super) fn directory(&self) -> &str {
+    pub(crate) fn directory(&self) -> &str {
         &self.directory
     }
 
-    pub(super) fn into_directory(self) -> String {
+    pub(crate) fn into_directory(self) -> String {
         self.directory
     }
 }

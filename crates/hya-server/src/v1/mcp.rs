@@ -1,0 +1,167 @@
+//! `/v1` MCP domain: desired-state registry and connection control over
+//! the app-owned MCP control handle.
+
+use axum::extract::{Path as AxumPath, State};
+use axum::routing::{get, post};
+use axum::{Json, Router};
+use hya_mcp::{McpServerConfig, McpStatus};
+
+use crate::ServerState;
+use hya_api::v1 as pb;
+use hya_api::v1::add_mcp_server_request::Transport;
+
+use super::V1Error;
+
+pub(crate) fn router() -> Router<ServerState> {
+    Router::new()
+        .route("/v1/mcp", get(get_status).post(add_server))
+        .route("/v1/mcp/:name/connect", post(connect))
+        .route("/v1/mcp/:name/disconnect", post(disconnect))
+        .route("/v1/mcp/:name/auth", post(start_auth).delete(remove_auth))
+        .route("/v1/mcp/:name/auth/complete", post(complete_auth))
+}
+
+fn server_status(name: &str, status: &McpStatus) -> pb::McpServerStatus {
+    let (state, error, auth_required) = match status {
+        McpStatus::Connecting => (pb::McpServerState::Desired as i32, String::new(), false),
+        McpStatus::Connected => (pb::McpServerState::Connected as i32, String::new(), false),
+        McpStatus::Disabled => (
+            pb::McpServerState::Disconnected as i32,
+            String::new(),
+            false,
+        ),
+        McpStatus::Failed { error } => (pb::McpServerState::Failed as i32, error.clone(), false),
+        McpStatus::NeedsAuth => (pb::McpServerState::Desired as i32, String::new(), true),
+        McpStatus::NeedsClientRegistration { error } => {
+            (pb::McpServerState::Failed as i32, error.clone(), true)
+        }
+    };
+    pb::McpServerStatus {
+        name: name.to_owned(),
+        state,
+        tools: Vec::new(),
+        error,
+        auth_required,
+    }
+}
+
+async fn get_status(
+    State(st): State<ServerState>,
+) -> Result<Json<pb::GetMcpStatusResponse>, V1Error> {
+    let statuses = st.mcp_control.status().await;
+    let servers = statuses
+        .iter()
+        .map(|(name, status)| server_status(name, status))
+        .collect();
+    Ok(Json(pb::GetMcpStatusResponse { servers }))
+}
+
+async fn add_server(
+    State(st): State<ServerState>,
+    Json(request): Json<pb::AddMcpServerRequest>,
+) -> Result<Json<pb::McpServerStatus>, V1Error> {
+    let config = match request.transport {
+        Some(Transport::Command(command)) => McpServerConfig {
+            command: {
+                let mut argv = vec![command.command.clone()];
+                argv.extend(command.args);
+                argv
+            },
+            env: if command.env.is_empty() {
+                None
+            } else {
+                Some(command.env.into_iter().collect())
+            },
+            enabled: request.enabled,
+            timeout_ms: None,
+        },
+        Some(Transport::Url(_)) => {
+            return Err(V1Error::unavailable(
+                "remote url transports are not wired for the mcp control handle",
+            ));
+        }
+        None => return Err(V1Error::invalid_argument("missing mcp transport")),
+    };
+    st.mcp_control
+        .upsert(request.name.clone(), config)
+        .await
+        .map_err(V1Error::internal)?;
+    let statuses = st.mcp_control.status().await;
+    let status = statuses
+        .get(&request.name)
+        .cloned()
+        .unwrap_or(McpStatus::Disabled);
+    Ok(Json(server_status(&request.name, &status)))
+}
+
+async fn connect(
+    State(st): State<ServerState>,
+    AxumPath(name): AxumPath<String>,
+) -> Result<Json<pb::McpServerStatus>, V1Error> {
+    let enabled = st
+        .mcp_control
+        .set_enabled(name.clone(), true)
+        .await
+        .map_err(|_| {
+            V1Error::new(
+                hya_api::error::Code::NotFound,
+                format!("unknown mcp server: {name}"),
+            )
+        })?;
+    if !enabled {
+        return Err(V1Error::new(
+            hya_api::error::Code::NotFound,
+            format!("unknown mcp server: {name}"),
+        ));
+    }
+    let statuses = st.mcp_control.status().await;
+    let status = statuses.get(&name).cloned().unwrap_or(McpStatus::Disabled);
+    Ok(Json(server_status(&name, &status)))
+}
+
+async fn disconnect(
+    State(st): State<ServerState>,
+    AxumPath(name): AxumPath<String>,
+) -> Result<Json<pb::McpServerStatus>, V1Error> {
+    let disabled = st
+        .mcp_control
+        .set_enabled(name.clone(), false)
+        .await
+        .map_err(|_| {
+            V1Error::new(
+                hya_api::error::Code::NotFound,
+                format!("unknown mcp server: {name}"),
+            )
+        })?;
+    if !disabled {
+        return Err(V1Error::new(
+            hya_api::error::Code::NotFound,
+            format!("unknown mcp server: {name}"),
+        ));
+    }
+    let statuses = st.mcp_control.status().await;
+    let status = statuses.get(&name).cloned().unwrap_or(McpStatus::Disabled);
+    Ok(Json(server_status(&name, &status)))
+}
+
+async fn start_auth(
+    AxumPath(name): AxumPath<String>,
+) -> Result<Json<pb::StartMcpAuthResponse>, V1Error> {
+    Err(V1Error::unavailable(format!(
+        "mcp oauth start is not wired for {name}"
+    )))
+}
+
+async fn complete_auth(
+    AxumPath(name): AxumPath<String>,
+) -> Result<Json<pb::McpServerStatus>, V1Error> {
+    Err(V1Error::unavailable(format!(
+        "mcp oauth completion is not wired for {name}"
+    )))
+}
+
+async fn remove_auth(
+    AxumPath(_name): AxumPath<String>,
+) -> Result<Json<pb::RemoveMcpAuthResponse>, V1Error> {
+    Err(V1Error::unavailable("mcp credential removal is not wired"))
+}

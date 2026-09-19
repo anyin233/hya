@@ -10,12 +10,17 @@ mod auth;
 mod catalog;
 mod convert;
 mod events;
+mod fs;
 mod interaction;
 mod logs;
+mod mcp;
 mod message;
 mod process;
+mod project;
 mod session;
 mod turn;
+mod workflow;
+mod worktree;
 
 use std::collections::BTreeMap;
 
@@ -42,6 +47,11 @@ pub(crate) fn router() -> Router<ServerState> {
         .merge(message::router())
         .merge(events::router())
         .merge(interaction::router())
+        .merge(workflow::router())
+        .merge(fs::router())
+        .merge(project::router())
+        .merge(worktree::router())
+        .merge(mcp::router())
 }
 
 /// One failed v1 call rendered as `{"error": {"code", "message"}}` with the

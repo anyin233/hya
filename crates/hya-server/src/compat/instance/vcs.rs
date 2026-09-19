@@ -11,7 +11,7 @@ use serde_json::json;
 
 use crate::{ApiError, ServerState};
 
-pub(in crate::compat) mod git;
+pub(crate) mod git;
 
 pub(super) fn router() -> Router<ServerState> {
     Router::new()
