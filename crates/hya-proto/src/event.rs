@@ -614,6 +614,21 @@ pub enum Event {
         /// Inbox length covered by this coalesced resident turn.
         inbox_through: u64,
     },
+    /// Harness-observed liveness for one resident (ADR-0002). Emitted ONLY by
+    /// the resident supervisor — never by the agent (no tool surface can) —
+    /// derived from real engine events the harness observed on the bus (tool
+    /// results, text deltas, turn boundaries). Folds onto the roster row as a
+    /// max, so the parent can tell a busy child that is progressing from one
+    /// that has stalled.
+    AgentHeartbeat {
+        /// Team-root log session.
+        session: SessionId,
+        /// Roster handle whose actor showed harness-observed activity.
+        handle: String,
+        /// Unix-epoch milliseconds of the observed activity; the fold keeps
+        /// the max, so stale values never regress liveness.
+        heartbeat_ms: u64,
+    },
     /// A message from one handle to another handle or a `#channel`. Channel sends
     /// fan out to every current eligible subscriber in the deterministic reducer, so no
     /// recipient set is baked into the event.
@@ -1006,6 +1021,7 @@ impl Event {
             Event::AgentRegistered { session, .. }
             | Event::AgentActivityChanged { session, .. }
             | Event::ResidentWorkStarted { session, .. }
+            | Event::AgentHeartbeat { session, .. }
             | Event::MailSent { session, .. }
             | Event::ChannelJoined { session, .. }
             | Event::ChannelLeft { session, .. }

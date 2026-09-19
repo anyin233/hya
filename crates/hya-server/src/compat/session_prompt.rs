@@ -279,6 +279,7 @@ fn admission_info(envs: &[Envelope], message: MessageId) -> Result<(u64, u64), A
             | Event::AgentArchived { .. }
             | Event::AgentRestarted { .. }
             | Event::MailConsumed { .. }
+            | Event::AgentHeartbeat { .. }
             | Event::ChannelCreated { .. }
             | Event::HandoffCommitted { .. }
             | Event::SubagentReported { .. }
