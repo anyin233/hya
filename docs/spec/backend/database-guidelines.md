@@ -93,9 +93,14 @@
 ### 1. Scope / Trigger
 
 - Trigger: changing Agent model persistence, runtime binding, root/subagent/
-  Workflow/fixed-Agent model resolution, or `/tui/agent-models`.
+  Workflow/fixed-Agent model resolution, or the agent-model preference
+  control.
 - The preference table is backend control state. It is not a Session projection
   and must not emit a public `Event`.
+- The former HTTP surface (`GET`/`PUT /tui/agent-models`) was deleted with the
+  legacy routes; the `hya.v1` contract currently exposes no
+  agent-model-preference rpc, so the store/app control below is not reachable
+  over HTTP until one is added.
 
 ### 2. Signatures
 
@@ -107,9 +112,11 @@
   `remove_agent_model_preference(owner, agent)`.
 - App: `PersistentAgentModelControl::set(binding, agent_id, identity)` and
   `effective_model(binding, agent_id, base_model)`.
-- Server: `GET /tui/agent-models`; `PUT /tui/agent-models/:agent_id` with
+- Server: none today. The deleted legacy surface was `GET /tui/agent-models`;
+  `PUT /tui/agent-models/:agent_id` with
   `{ "preference": { "providerID", "modelID" } }` or
-  `{ "preference": null }`.
+  `{ "preference": null }`. A v1 equivalent must be designed as a
+  `hya.v1` rpc before any new HTTP exposure.
 
 ### 3. Contracts
 
@@ -140,7 +147,7 @@
 
 ### 4. Validation & Error Matrix
 
-| Condition | Result |
+| Condition | Result (as defined by the deleted HTTP surface; re-derive for any future v1 rpc) |
 | --- | --- |
 | Missing/unknown Agent | `404 AGENT_MODEL_UNKNOWN_AGENT` |
 | Set on direct/category-configured Agent | `409 AGENT_MODEL_CONFIGURED` |
@@ -170,13 +177,15 @@
   Workflow routes, and configured categories.
 - Fixed-Agent tests capture provider requests for Title, Summary, native
   Compaction, and local Compaction.
-- Server tests assert bootstrap/list/set/clear, model-local slashes, one-binding
-  root creation, exact 400/404/409/503 bodies, and empty-control behavior.
-- Real process tests compare normalized API state with fake-provider request
-  model identity for targeted Agent B, untouched Agent A, restart, clear, and
-  stale-catalog fallback. A normal-picker process test covers the separate
-  open-Session request-local switch; never encode it as a global PUT rewriting
-  Session replay.
+- Server tests (historical): the deleted route's bootstrap/list/set/clear,
+  model-local-slash, one-binding root creation, exact 400/404/409/503 bodies,
+  and empty-control assertions were retired with it; no v1 suite covers this
+  control today.
+- Real process tests (historical): the deleted surface's targeted-Agent B /
+  untouched-Agent A / restart / clear / stale-catalog fallback comparisons were
+  retired with it. A normal-picker process test must cover the separate
+  open-Session request-local switch; never encode it as a global mutation
+  rewriting Session replay.
 
 ### 7. Wrong vs Correct
 

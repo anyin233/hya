@@ -10,6 +10,15 @@ The shipped TUI is `packages/hya-tui-ts`. Cover behavior with focused Bun tests
 at the existing SDK, state, command, or rendering boundary. Prefer semantic
 assertions over brittle full-screen snapshots.
 
+> **Status (v1 API consolidation).** The vendored package's backend
+> integration (`@opencode-ai/sdk/v2`, `/tui/bootstrap`, `GET /permission`,
+> `GET /question`, `/config/providers`, `/tui/agent-models`) targeted the
+> deleted Compat surface, so the tests this guide shapes around live-backend
+> requests are retired with it; presentation/rendering/architecture-guard
+> tests remain. New integration code targets `hya-sdk-v1` and the `hya.v1`
+> contract — see the [frontend index status note](./index.md). SDK-version pin
+> rules below still apply to the retained vendored package as-is.
+
 Run from `packages/hya-tui-ts` after frontend changes:
 
 ```sh
@@ -43,7 +52,9 @@ cargo test --workspace --jobs 1 --exclude hya-e2e
 - Write and run one focused failing test before changing frontend behavior.
 - Preserve the `src/hya` and `src/upstream` ownership boundary.
 - Reuse the existing Solid contexts, routes, command registry, and plugin slots.
-- Keep backend state synchronized through `@opencode-ai/sdk/v2`.
+- Keep backend state synchronized through the package's SDK/sync context
+  (`@opencode-ai/sdk/v2` in the retained vendored package; `hya-sdk-v1` for
+  new integration code).
 - Preserve prompt visibility and readable state labels on narrow terminals.
 
 ---

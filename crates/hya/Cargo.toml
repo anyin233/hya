@@ -14,7 +14,6 @@ axum = { workspace = true }
 http-body-util = { workspace = true }
 tower = { workspace = true }
 hya-app = { workspace = true }
-hya-sdk = { path = "../hya-sdk" }
 serde_json = { workspace = true }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
 

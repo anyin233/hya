@@ -371,9 +371,9 @@ Rule { action: ExternalDirectory, resource: "<dir>/*", mode: Allow }
 
 for each directory in `external_dirs`. Directories the caller explicitly
 attached therefore never prompt for that turn. The overlay is **not** persisted
-as a `SessionPermissionSet` and does not survive the turn. The HTTP/Compat
-prompt path derives the list from the session's reference directories
-([`session_prompt.rs`](../../crates/hya-server/src/compat/session_prompt.rs)).
+as a `SessionPermissionSet` and does not survive the turn. The v1 turn path
+derives the list from the session's reference directories
+([`reference.rs`](../../crates/hya-server/src/support/reference.rs)).
 
 Failed tools become `Event::ToolError` with a structured value:
 

@@ -1,5 +1,11 @@
 # Remove retained Rust TUI crates
 
+> **Amended 2026-09-19 (v1 API consolidation).** The consequence below that
+> the Compat HTTP `/tui/*` control endpoints "remain" no longer holds: the
+> whole Compat HTTP surface, `/tui/*` included, was deleted, and `hya.v1` is
+> the only HTTP contract. The decision itself — no Rust TUI crate, the
+> TypeScript package is the sole interactive frontend — still stands.
+
 We delete the retained Rust interactive TUI crates (`crates/hya-tui`,
 `crates/hya-tui-lib`) and the orphan TS-vs-Rust parity harness
 (`crates/hya-parity`). The TypeScript package `packages/hya-tui-ts` is the only

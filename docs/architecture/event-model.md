@@ -1,7 +1,14 @@
 # Event Model
 
 The event model lives in [`../../crates/hya-proto`](../../crates/hya-proto).
-It is shared by the engine, store, provider layer, server, and native Rust client, which fold `hya_proto::Projection`. The TypeScript TUI does not fold that projection; it consumes the Compat SDK / SyncProvider over HTTP+SSE.
+It is shared by the engine, store, provider layer, and server, which fold
+`hya_proto::Projection`. Rust clients over the `hya.v1` contract do not fold
+this projection directly either: `hya-sdk-v1`'s `V1SessionMirror` folds the
+curated v1 `StreamFrame`/read shapes into an equivalent client-side view, and
+server-side reads (`ListMessages`, `GetSessionTodo`, …) are produced by folding
+this same projection before serialization. The legacy TypeScript TUI consumed
+the deleted Compat SDK/SyncProvider surface and is broken at runtime pending
+its `hya-sdk-v1` rewrite.
 
 ## Strong Ids
 
@@ -65,8 +72,10 @@ An `Envelope` wraps an event with:
 | `event` | `Event` | Payload |
 
 The envelope is the unit stored in SQLite replay results and streamed over SSE
-for the native event bus. Compat permission frames use a separate payload shape
-(see [Permission SSE payloads](#permission-sse-payloads-server-side)).
+for the event bus. Pending permission/question requests are **not** envelopes:
+the server parks them in a per-process pending plane and surfaces them through
+the v1 Interactions service (see
+[Pending permission plane (server-side)](#pending-permission-plane-server-side)).
 
 Durable Events are append-only and immutable after persistence. A projection may
 replace its current derived value while folding a later event, but it never
@@ -98,10 +107,10 @@ Reducer effects:
 | `session_archived` | `session`, `archived: Number` | Fold: archived stamp |
 | `session_share_set` | `session`, `url: String` | Fold: share url |
 | `session_share_cleared` | `session` | Fold: share → `None` |
-| `agent_switched` | `session`, `message: Option<MessageId>`, `agent: AgentName` | Fold: session agent only (`message` is **not** stored on the session row). Engine emit always sets `message: Some(MessageId::new())` — a **fresh** id that is **not** a pointer into existing `SessionProjection.messages`. Compat uses that id as the identity of a **synthetic** switch pseudo-message in the message list (`session_context_messages`), not as a transcript anchor. |
+| `agent_switched` | `session`, `message: Option<MessageId>`, `agent: AgentName` | Fold: session agent only (`message` is **not** stored on the session row). Engine emit always sets `message: Some(MessageId::new())` — a **fresh** id that is **not** a pointer into existing `SessionProjection.messages`. (The deleted Compat surface used that id as the identity of a **synthetic** switch pseudo-message in its message list, not as a transcript anchor.) |
 | `model_switched` | `session`, `message: Option<MessageId>`, `model: ModelRef` | Fold: session model only. Same `message` semantics as `agent_switched` (fresh synthetic id on emit). |
-| `session_status` | `session`, `status: Value` | **no-op** — free-form status ping; bridged to compat `session.status` |
-| `command_executed` | `session`, `command: String`, `arguments: String`, `message: MessageId` | **no-op** — records that a `/slash` command produced that user message; bridged to compat `command.executed` |
+| `session_status` | `session`, `status: Value` | **no-op** — free-form status ping; the deleted Compat surface bridged it to `session.status` |
+| `command_executed` | `session`, `command: String`, `arguments: String`, `message: MessageId` | **no-op** — records that a `/slash` command produced that user message; the deleted Compat surface bridged it to `command.executed` |
 
 #### Workflow lifecycle and routing
 
@@ -255,7 +264,7 @@ from one request.
 
 | Wire `type` | Payload fields | Reducer |
 | --- | --- | --- |
-| `error` | `session: Option<SessionId>`, `code: String`, `message: String` | **no-op** for projection. `session` optional so a global error is expressible; `Event::session()` returns `None` when absent. Bridged to compat `session.error`. |
+| `error` | `session: Option<SessionId>`, `code: String`, `message: String` | **no-op** for projection. `session` optional so a global error is expressible; `Event::session()` returns `None` when absent. The deleted Compat surface bridged it to `session.error`. |
 | `unknown` | (unit; original payload dropped on typed decode) | **no-op**. `#[serde(other)]` catch-all so older binaries can deserialize newer tags without failing. Lossless forwarding must keep raw JSON. |
 
 ### Events the reducer does not fold
@@ -275,31 +284,21 @@ but `Projection::apply_event` ignores them:
 - `error`
 - `unknown`
 
-## Permission SSE payloads (server-side)
+## Pending permission plane (server-side)
 
 These are **not** `Event` enum variants. `hya-server` parks `AskRequest`s in a
-per-server pending map and publishes separate JSON frames to permission
-subscribers:
+per-server pending map
+([`pending/permission.rs`](../../crates/hya-server/src/pending/permission.rs)).
+Over the wire, clients see this plane only through the v1 Interactions service:
+`GET /v1/interactions` lists pending permission/question requests as
+`Interaction` summaries, and `POST /v1/interactions/{id}/respond` answers one
+(idempotent — `applied` is `false` on replay). Saved `always` rules are listed
+and deleted through the same service.
 
-```json
-{
-  "id": "evt_hya_perm_<request_id>",
-  "type": "permission.asked",
-  "properties": { /* sessionID, permission, patterns, tool correlation, always/remember, ... */ }
-}
-```
-
-```json
-{
-  "id": "evt_hya_perm_reply_<request_id>",
-  "type": "permission.replied",
-  "properties": {
-    "sessionID": "...",
-    "requestID": "...",
-    "reply": "once" | "always" | "reject"
-  }
-}
-```
+Internally the plane still builds legacy Compat-shaped `permission.asked` /
+`permission.replied` JSON frames and keeps a broadcast bridge for a future
+interaction event stream; nothing on the current HTTP surface subscribes to
+them.
 
 **Fan-out when answering one request**
 (`take_related_for_reply` in
@@ -523,7 +522,7 @@ During a provider round, `collect_stream_round`
 Consequences:
 
 1. An SSE subscriber can see many `text_delta` frames that
-   `GET /sessions/:id/events` (store replay) will never return.
+   `GET /v1/sessions/{session}/events` (store replay) will never return.
 2. A replay of the log yields final text in one `text_replace` instead of the
    live delta stream.
 3. **Projection state is identical either way**, which is what makes the two

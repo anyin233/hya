@@ -41,20 +41,6 @@ pub use workflow_control::{
     WorkflowControl, WorkflowControlError, WorkflowControlFuture, WorkflowDecorationFuture,
 };
 
-/// Build the full HTTP app: Compat routes + native session routes + CORS.
-///
-/// Native paths:
-/// - `POST /sessions` — create session
-/// - `POST /sessions/:id/prompt` — admit user prompt and run one turn
-/// - `POST /sessions/:id/command` — admit command prompt and run one turn
-/// - `POST /sessions/:id/shell` — run shell tool turn
-/// - `GET /sessions/:id/workflow` — return projected Workflow state
-/// - `POST /sessions/:id/workflow` — execute a typed Workflow command
-/// - `GET /sessions/:id/events` — replay envelopes (`?since_seq=`)
-/// - `GET /sessions/:id/stream` — SSE of live envelopes (emits `resync` on lag)
-///
-/// Merges `compat::router()` for Compat-compatible surfaces. CORS:
-/// `AllowOrigin::mirror_request()`, `AllowHeaders::mirror_request()`, methods `Any`.
 /// Build the full HTTP app: the `/v1` contract routes + CORS.
 ///
 /// The gRPC binding (`V1Grpc`) dispatches through this same router, so the
@@ -71,7 +57,7 @@ fn cors() -> CorsLayer {
         .allow_methods(Any)
 }
 
-/// HTTP error returned by native and many Compat handlers as `(status, message)`.
+/// HTTP error returned by `/v1` handlers as `(status, message)`.
 ///
 /// Constructed via private helpers (`bad_request`, `not_found`, `conflict`,
 /// `service_unavailable`, `internal`). `CoreError` / `StoreError` map to 500.

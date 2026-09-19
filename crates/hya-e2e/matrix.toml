@@ -297,36 +297,12 @@ tags = ["pr", "providers", "catalog", "offline"]
 timeout_secs = 180
 
 [[scenario]]
-id = "T3.1"
-title = "TUI real-backend permission reply"
-track = "T"
-path = "packages/hya-tui-ts/test/real-backend.test.ts"
-tags = ["pr", "tui", "permissions"]
-timeout_secs = 60
-
-[[scenario]]
 id = "T3.2"
 title = "TUI multi-agent task presentation"
 track = "T"
 path = "packages/hya-tui-ts/test/task-presentation.test.ts"
 tags = ["pr", "tui", "multi-agent"]
 timeout_secs = 30
-
-[[scenario]]
-id = "T3.3"
-title = "TUI real-backend agent roster"
-track = "T"
-path = "packages/hya-tui-ts/test/real-backend-agents.test.ts"
-tags = ["pr", "tui", "roster"]
-timeout_secs = 60
-
-[[scenario]]
-id = "T3.4"
-title = "TUI custom resource slash command transport"
-track = "T"
-path = "packages/hya-tui-ts/test/pty-smoke.test.ts"
-tags = ["pr", "tui", "resources", "commands"]
-timeout_secs = 180
 
 # Index-only deep engine coverage (not duplicated in Track P).
 [[scenario]]
@@ -346,19 +322,19 @@ tags = ["index-only", "subagent"]
 timeout_secs = 0
 
 [[scenario]]
-id = "I.permission_api"
-title = "compat permission/question API"
+id = "I.v1_api"
+title = "v1 HTTP contract integration"
 track = "I"
-path = "crates/hya-server/tests/compat_permission_question_api.rs"
-tags = ["index-only", "permissions"]
+path = "crates/hya-server/tests/v1_api.rs"
+tags = ["index-only", "v1"]
 timeout_secs = 0
 
 [[scenario]]
-id = "I.mcp_api"
-title = "compat MCP API"
+id = "I.v1_grpc_parity"
+title = "v1 HTTP/gRPC dual-transport conformance"
 track = "I"
-path = "crates/hya-server/tests/compat_mcp_api.rs"
-tags = ["index-only", "mcp"]
+path = "crates/hya-server/tests/v1_grpc_parity.rs"
+tags = ["index-only", "v1", "grpc"]
 timeout_secs = 0
 
 [[scenario]]
@@ -367,22 +343,6 @@ title = "backend bundle CLI unit"
 track = "I"
 path = "crates/hya-backend/tests/bundle_cli.rs"
 tags = ["index-only", "hyabundle"]
-timeout_secs = 0
-
-[[scenario]]
-id = "I.context_api"
-title = "compat session context API"
-track = "I"
-path = "crates/hya-server/tests/compat_session_v2_context_api.rs"
-tags = ["index-only", "context"]
-timeout_secs = 0
-
-[[scenario]]
-id = "I.compact_api"
-title = "compat session compact API"
-track = "I"
-path = "crates/hya-server/tests/compat_session_v2_compact_api.rs"
-tags = ["index-only", "context", "compact"]
 timeout_secs = 0
 
 [[scenario]]
@@ -396,6 +356,34 @@ timeout_secs = 0
 # Retired ids. Every number in a T-series range must be either used above or
 # retired here, so a numbering hole can never again go untracked.
 # `cargo xtask matrix-check` enforces this.
+
+[[retired]]
+id = "T3.1"
+reason = "verified the old TUI against the deleted Compat surface; retired with the surface (test file removed)"
+
+[[retired]]
+id = "T3.3"
+reason = "verified the old TUI against the deleted Compat surface; retired with the surface (test file removed)"
+
+[[retired]]
+id = "T3.4"
+reason = "PTY/real-backend smoke against the deleted surface; retired with the surface (test file removed)"
+
+[[retired]]
+id = "I.permission_api"
+reason = "compat permission/question route tests deleted with the Compat surface; v1 coverage is I.v1_api"
+
+[[retired]]
+id = "I.mcp_api"
+reason = "compat MCP route tests deleted with the Compat surface; v1 coverage is I.v1_api"
+
+[[retired]]
+id = "I.context_api"
+reason = "compat context route tests deleted with the Compat surface; v1 transcript reads are covered by I.v1_api"
+
+[[retired]]
+id = "I.compact_api"
+reason = "compat compact route tests deleted with the Compat surface; v1 compact is covered by the e2e matrix (p14)"
 
 [[retired]]
 id = "T1.1"

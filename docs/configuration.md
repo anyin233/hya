@@ -130,13 +130,13 @@ Executable bundle sidecars receive `HYA_BUNDLE_CONFIG_DIR` and
 `HYA_BUNDLE_CONFIG_FILE` for their own storage location; prepared bundle content
 is never rewritten.
 
-`GET /tui/agent-models?sessionID=<id>` returns Session-effective rows; omit the
-query for global defaults. `PUT /tui/agent-models/<agent-id>` accepts
-`{ "preference": { "providerID": "openai", "modelID": "gpt-4.1" }, "scope": "configuration" }`.
-Scopes are `preference` (the default), `session` (requires `sessionID` query), and
-`configuration`; `preference: null` clears only the selected layer. Rows expose
-`configuration`, `configurationPath`, `sessionOverride`, and an effective source
-of `configured`, `session`, `remembered`, or `default`.
+`GET /v1/bootstrap` advertises the effective catalog (agents, models,
+providers) to frontends, and `PATCH /v1/sessions/{session}` switches a
+session's `agent`/`model` fields. The dedicated per-Agent model-preference
+HTTP control (`GET/PUT /tui/agent-models`) was part of the deleted Compat
+surface; the durable preference files above are still read by runtime
+composition (`PersistentAgentModelControl`), and a v1 rpc for reading/writing
+per-Agent preferences has not been re-added yet.
 
 The default interactive database is
 `$XDG_STATE_HOME/hya/sessions.db` (with the documented HOME fallback). An
@@ -679,10 +679,10 @@ The `#variant` suffix is split off before matching and is **never** sent
 upstream — it only selects the reasoning variant. An empty variant (trailing
 `#`) is not treated as a suffix.
 
-Compat HTTP surfaces additionally accept a model-ref object
-`{ providerID, modelID|id, variant? }` or a plain string; `providerID: "hya"` is
-dropped so the bare id still resolves, and `variant` becomes the `#variant`
-suffix.
+The `hya.v1` contract carries model references as this plain string form (for
+example `CreateSession.model`). The former Compat HTTP surfaces also accepted a
+model-ref object `{ providerID, modelID|id, variant? }`; that object form was
+deleted with them and is not part of v1.
 
 ## Subagent Limits
 
@@ -860,9 +860,9 @@ Read by the bundled Compat plugin adapter
 | --- | --- | --- |
 | `BUN` | Bun binary used to run the bundled Compat adapter. | `crates/hya-app/src/plugins.rs` |
 | `EDITOR` / `VISUAL` | External editor for the TUI (`openEditor`): `/editor` (`<leader>e`) **and** session export (`/export`, `<leader>x`). On the saving export path the editor output is written back over the exported `.md`. `$VISUAL` is preferred when set. | `packages/hya-tui-ts/src/upstream/editor.ts` |
-| `SHELL` | Shell program for PTY sessions on Compat PTY routes; also listed among shell candidates. Defaults to `/bin/sh` when **unset**. A variable that is set but empty is **not** replaced — PTY create may receive an empty command. | `crates/hya-server/src/compat/pty_payload.rs`, `pty_shell.rs` |
-| `COMPAT_REPO_CLONE_GITHUB_BASE_URL` | Overrides the GitHub base URL when cloning reference repositories (Enterprise / internal mirror). Trailing slashes trimmed. Default remote is `https://github.com/<path>.git`. Store under `$XDG_DATA_HOME/compat/repos` (else `~/.local/share/compat/repos`). | `crates/hya-server/src/compat/reference_repository.rs` |
-| `COMPAT_TERMINAL` | **Output only:** set to `1` in every PTY child environment so programs can detect the hya terminal. hya never reads it. | `crates/hya-server/src/compat/pty_state.rs` |
+| `SHELL` | Shell program for PTY sessions on the v1 PTY routes; also listed among shell candidates. Defaults to `/bin/sh` when **unset**. A variable that is set but empty is **not** replaced — PTY create may receive an empty command. | `crates/hya-server/src/support/pty_shell.rs` |
+| `COMPAT_REPO_CLONE_GITHUB_BASE_URL` | Overrides the GitHub base URL when cloning reference repositories (Enterprise / internal mirror). Trailing slashes trimmed. Default remote is `https://github.com/<path>.git`. Store under `$XDG_DATA_HOME/compat/repos` (else `~/.local/share/compat/repos`). | `crates/hya-server/src/support/reference_repository.rs` |
+| `COMPAT_TERMINAL` | **Output only:** set to `1` in every PTY child environment so programs can detect the hya terminal. hya never reads it. | `crates/hya-server/src/support/pty_state.rs` |
 
 **Editor integration probes** (see also [Editor context integration](#editor-context-integration)
 and [TUI architecture](architecture/tui.md)): `OPENCODE_EDITOR_SSE_PORT` /
@@ -920,18 +920,19 @@ Only steps 1–4 are mandatory for a successful connection.
 
 Enabled servers are prepared during runtime composition. Their tools keep the
 external name `mcp__<server>__<tool>` and use the existing permission plane.
-`GET /mcp` composes connected, disabled, and failed status from the current
-desired revision, observed handshake result, and effective runtime generation.
-Compat HTTP MCP add/connect/disconnect updates that same in-process desired
-state. A complete successful observation is published atomically for the next
-turn; a failed handshake or name collision leaves the prior effective view
-unchanged, and disconnect removes the source for the next turn while an
-already-running turn retains its old binding. These routes do not durably
-rewrite `config.yaml`.
+`GET /v1/mcp` (Mcp `GetMcpStatus`) composes connected, disabled, and failed
+status from the current desired revision, observed handshake result, and
+effective runtime generation. The v1 MCP control routes
+(`POST /v1/mcp`, `POST /v1/mcp/{name}/connect`, `POST /v1/mcp/{name}/disconnect`)
+update that same in-process desired state. A complete successful observation is
+published atomically for the next turn; a failed handshake or name collision
+leaves the prior effective view unchanged, and disconnect removes the source for
+the next turn while an already-running turn retains its old binding. These
+routes do not durably rewrite `config.yaml`.
 
 With default `HYA_DEFER_SIDEPLANES`, the HTTP listener can come up before MCP
-handshakes finish, so `GET /mcp` may briefly report servers as not yet connected
-right after startup. See [Environment Variables](#environment-variables) and
+handshakes finish, so `GET /v1/mcp` may briefly report servers as not yet
+connected right after startup. See [Environment Variables](#environment-variables) and
 [`docs/testing/process-e2e.md`](testing/process-e2e.md).
 
 ### Runnable dynamic MCP control example
@@ -974,29 +975,29 @@ mcp:
     enabled: false
 ```
 
-Start the server, then exercise the actual Compat control routes:
+Start the server, then exercise the actual v1 MCP control routes:
 
 ```sh
 cargo run -p hya-backend -- serve --bind 127.0.0.1:8080 --db /tmp/hya-mcp-demo.db
 
 # Status: initially absent unless it came from config.yaml.
-curl -sS http://127.0.0.1:8080/mcp
+curl -sS http://127.0.0.1:8080/v1/mcp
 
-# Add to in-process desired state and connect. The HTTP schema uses
-# type=local, environment, timeout, and enabled.
-curl -sS -X POST http://127.0.0.1:8080/mcp \
+# Add to in-process desired state and connect. The v1 schema takes a
+# `command` transport ({command, args, env}) and an optional `enabled`.
+curl -sS -X POST http://127.0.0.1:8080/v1/mcp \
   -H 'content-type: application/json' \
-  --data '{"name":"live-demo","config":{"type":"local","command":["python3","/tmp/hya-mcp-ping.py"],"environment":{},"timeout":1000,"enabled":true}}'
+  --data '{"name":"live-demo","command":{"command":"python3","args":["/tmp/hya-mcp-ping.py"]},"env":{},"enabled":true}'
 
 # Observe desired/observed/effective status.
-curl -sS http://127.0.0.1:8080/mcp
+curl -sS http://127.0.0.1:8080/v1/mcp
 
 # Disable and atomically remove its tools from the next TurnBinding.
-curl -sS -X POST http://127.0.0.1:8080/mcp/live-demo/disconnect
-curl -sS http://127.0.0.1:8080/mcp
+curl -sS -X POST http://127.0.0.1:8080/v1/mcp/live-demo/disconnect
+curl -sS http://127.0.0.1:8080/v1/mcp
 
 # Re-enable the retained in-process desired entry.
-curl -sS -X POST http://127.0.0.1:8080/mcp/live-demo/connect
+curl -sS -X POST http://127.0.0.1:8080/v1/mcp/live-demo/connect
 ```
 
 `disconnect` is the current remove-from-effective-view operation. There is no
@@ -1241,8 +1242,10 @@ existing hook and `PermissionPlane` behavior is unchanged.
 
 ## Formatter
 
-The `formatter` key controls the formatter plane exposed through tools and the
-Compat-compatible `/formatter` route. It is untagged: either a bool or a map.
+The `formatter` key controls the formatter plane exposed through tools; the
+v1 bootstrap snapshot advertises availability as the `formatterAvailable` flag
+(the former Compat `/formatter` status route is deleted). It is untagged:
+either a bool or a map.
 
 When the key is **absent**, the default is `false` (`FormatterConfig::Disabled`).
 `true` enables the built-in formatter set (`FormatterConfig::Builtins`). A
@@ -1364,8 +1367,9 @@ Named builtin overrides retain default extensions and root markers even when
 the default command is not on PATH. Custom servers require `command` and
 `extensions`. Configuration changes take effect after restarting the backend.
 Servers are shared per language/workspace root; requests use advertised server
-capabilities. Connection starts and failures refresh `/lsp` and the TUI through
-`lsp.updated` events.
+capabilities. Connection starts and failures refresh the LSP plane's internal
+status (the former Compat `/lsp` status route and its TUI refresh events are
+deleted; the v1 surface does not yet expose an LSP status rpc).
 
 Write/Edit/Patch diagnostics are limited to the requesting workdir and explicitly
 authorized target files. Versioned publications or pull diagnostics track the
@@ -1386,7 +1390,7 @@ At runtime hya reads, in this order:
 4. `{workdir}/.opencode/opencode.jsonc`
 
 A **later** file that sets a key overrides an earlier one
-([`bound_agent_metadata.rs`](../crates/hya-server/src/compat/bound_agent_metadata.rs)).
+([`bound_agent_metadata.rs`](../crates/hya-server/src/support/bound_agent_metadata.rs)).
 Only **`default_agent`** is honoured for agent selection — inline `agent`,
 `permission`, `model`, and `options` fields present in an OpenCode project
 config are deliberately **not** read. Unreadable or invalid files are skipped
@@ -1410,7 +1414,7 @@ prompt commands.
 ### Disk markdown commands
 
 hya scans exactly two project-local roots
-([`command_sources.rs`](../crates/hya-server/src/compat/command_sources.rs)
+([`command_sources.rs`](../crates/hya-server/src/support/command_sources.rs)
 `disk_commands`):
 
 1. `<workdir>/.opencode/command/**/*.md`
@@ -1426,10 +1430,10 @@ Optional YAML frontmatter:
 
 | Field | Meaning |
 | --- | --- |
-| `description` | Shown in the command list / `/api/command` listing. |
-| `agent` | Optional string stored on `CommandInfo` and exposed in `/api/command` listing / bootstrap summary only. **No runtime consumer** switches the session agent from this field; the turn uses the session's current agent. |
+| `description` | Shown in the command list / `GET /v1/commands` catalog. |
+| `agent` | Optional string stored on `CommandInfo` and exposed in the command catalog / bootstrap summary only. **No runtime consumer** switches the session agent from this field; the turn uses the session's current agent. |
 | `model` | Optional string stored and listed the same way as `agent`. Disk frontmatter does not switch the turn model. |
-| `subtask` | Optional boolean parsed into the `/api/command` wire payload. **No runtime consumer** currently reads it (the TUI and engine do not open a child session from this flag). |
+| `subtask` | Optional boolean parsed into the command wire payload. **No runtime consumer** currently reads it (frontends and the engine do not open a child session from this flag). |
 
 ```markdown
 ---
@@ -1460,9 +1464,9 @@ keyed by command name:
 | --- | --- | --- |
 | `template` | yes | Prompt body (`$1` / `$ARGUMENTS` hint slots apply). |
 | `description` | no | List description. |
-| `agent` | no | Listed on `/api/command` only; **not** applied as a turn agent override (same as disk frontmatter). |
-| `model` | no | Listed on `/api/command` only; **not** applied as a turn model override. |
-| `subtask` | no | Optional boolean on the command API; **not** used to spawn a child session today. |
+| `agent` | no | Listed in the command catalog only; **not** applied as a turn agent override (same as disk frontmatter). |
+| `model` | no | Listed in the command catalog only; **not** applied as a turn model override. |
+| `subtask` | no | Optional boolean on the command catalog; **not** used to spawn a child session today. |
 
 These are upserted over the backend built-ins, so an entry named `review`
 replaces the built-in `/review`.
@@ -1504,15 +1508,17 @@ Project **references** are external directories the agent may use (local paths o
 git clones). They power `@` alias autocomplete, turn-scoped
 `ExternalDirectory` allow rules, and optional system-prompt guidance. There is
 **no** `config.yaml` key and **no** on-disk file for this map: the only way to
-declare them is the process-local Compat config bag —
+declare them is the process-local runtime config bag —
 
-- `PATCH /config` or `PATCH /global/config` (same in-memory JSON object)
+- `PATCH /v1/config` (scope with the `directory` body field or
+  `x-hya-directory` header)
 - bag key: `references` **or** `reference` (object of alias → entry)
 
-PATCH **replaces** the whole bag (no deep merge). State is lost on process
+`PATCH /v1/config` **deep-merges** objects and replaces non-object leaves, so
+patching `references` replaces that whole map. State is lost on process
 restart. Source:
-[`reference_entries.rs`](../crates/hya-server/src/compat/reference_entries.rs),
-[`reference.rs`](../crates/hya-server/src/compat/reference.rs).
+[`reference_entries.rs`](../crates/hya-server/src/support/reference_entries.rs),
+[`reference.rs`](../crates/hya-server/src/support/reference.rs).
 
 ### Entry shapes
 

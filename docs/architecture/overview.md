@@ -36,7 +36,7 @@ TUI / API clients / transcript renderers
 | Persistence | [`hya-store`](../../crates/hya-store) | Append and replay events from SQLite; fold projections on read. |
 | Runtime | [`hya-core`](../../crates/hya-core) | Own sessions, turn execution, durable Workflow execution/replay, event publication, hooks, compaction, goal/loop/team primitives. |
 | Composition/control | [`hya-app`](../../crates/hya-app), [`hya-bundle`](../../crates/hya-bundle) | Build runtime bindings, admit Workflow commands, and model AgentBundle/WorkflowBundle packages. |
-| Surfaces/transports | [`hya`](../../crates/hya), [`hya-ts`](../../crates/hya-ts), [`hya-backend`](../../crates/hya-backend), [`hya-server`](../../crates/hya-server), [`hya-client`](../../crates/hya-client), [`hya-sdk`](../../crates/hya-sdk), [`hya-native`](../../crates/hya-native), [`hya-plugin-compat`](../../crates/hya-plugin-compat), [`hya-tui-ts`](../../packages/hya-tui-ts) | Expose launcher, CLI, native/Compat HTTP/SSE, typed/native clients, Compat adapter, and the TypeScript/OpenTUI frontend. |
+| Surfaces/transports | [`hya`](../../crates/hya), [`hya-ts`](../../crates/hya-ts), [`hya-backend`](../../crates/hya-backend), [`hya-server`](../../crates/hya-server), [`hya-api`](../../crates/hya-api), [`hya-client`](../../crates/hya-client), [`hya-sdk-v1`](../../crates/hya-sdk-v1), [`hya-plugin-compat`](../../crates/hya-plugin-compat), [`hya-tui-ts`](../../packages/hya-tui-ts) | Expose the launcher, CLI, the `hya.v1` HTTP/SSE/WebSocket + gRPC contract, typed clients, the Compat plugin adapter, and the TypeScript/OpenTUI frontend. The legacy `hya-sdk`/`hya-native` Compat transport serves no live surface. |
 
 ## Turn Flow
 
@@ -64,7 +64,9 @@ TUI / API clients / transcript renderers
 The event log is the source of truth. This gives hya a few useful properties:
 
 - Replay and live streaming use the same `Envelope` shape.
-- Store, server, and native Rust client share `hya_proto::Projection`; the TypeScript TUI renders from the Compat SDK/sync layer over HTTP+SSE.
+- Store, server, and native Rust clients share `hya_proto::Projection`; remote
+  clients consume the same projection through the `hya.v1` contract's curated
+  event stream (see [Server and Client](server-client.md)).
 - `tail-session` can debug a session without special introspection hooks.
 - Tool results and provider deltas are stored in the same ordered history.
 
@@ -73,13 +75,15 @@ The event log is the source of truth. This gives hya a few useful properties:
 - The default `hya` command delegates to `hya-ts`, which starts the
   TypeScript/OpenTUI frontend and an owned local backend.
 - `hya-backend exec` runs one turn and prints a transcript.
-- `hya-backend run` is an Compat-compatible alias for headless prompt execution.
+- `hya-backend run` is a Compat-compatible alias for headless prompt execution.
 - `hya-backend -p` runs goal mode with an independent model-backed evaluator.
-- `hya-backend serve` exposes HTTP and SSE over the same engine.
+- `hya-backend serve` exposes the `hya.v1` contract over HTTP/JSON+SSE+WebSocket
+  on `/v1` and, with `HYA_GRPC_BIND`, over gRPC (see
+  [Server and Client](server-client.md)).
 - `hya-backend tail-session` replays JSON envelopes from a persisted SQLite event log.
 - `hya-backend models`, `login`, `auth`/`providers`, `agent`, `sessions`, and
   `rpc` expose local catalogs, auth tokens, session listing, and JSONL
   integration modes.
-- `hya-backend workflow` and native `/sessions/:id/workflow` use the same
-  app-owned `WorkflowControl` path; route assignment and bounded outcomes remain
-  in the canonical event stream.
+- `hya-backend workflow` and `GET/POST /v1/sessions/{session}/workflow` use
+  the same app-owned `WorkflowControl` path; route assignment and bounded
+  outcomes remain in the canonical event stream.

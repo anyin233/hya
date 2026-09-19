@@ -59,7 +59,9 @@ crates/hya-ts/src/           # supervisor library and binary
 - Reuse the existing context/provider and feature-plugin boundaries before
   adding another cross-cutting state path.
 - Keep backend execution and persistence out of the package. Access them through
-  `@opencode-ai/sdk/v2` over the configured server URL.
+  the backend SDK over the configured server URL — `hya-sdk-v1` for new
+  integration code (the vendored package's `@opencode-ai/sdk/v2` client targeted
+  the deleted Compat surface; see the index status note).
 - Keep launcher concerns in `crates/hya-ts`; do not teach the frontend to spawn
   or locate `hya-backend`.
 

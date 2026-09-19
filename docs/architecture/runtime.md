@@ -128,11 +128,11 @@ The same shape is used by `inject_system_message` for system messages.
 `admit_command_prompt` records command metadata while admitting a user message.
 
 `record_user_prompt_context` emits `UserPromptContextRecorded { files, agents }`
-for Compat-compatible v2 prompt admission. It **short-circuits** to `Ok(())`
-and emits **nothing** when both vectors are empty — a prompt with no
-`@mentions` leaves no context event in the log, and consumers must not expect
-one per user message. When present, that metadata is replayed through the
-projection and provider request builder.
+when a caller records per-prompt context (files, `@mentions`). It
+**short-circuits** to `Ok(())` and emits **nothing** when both vectors are
+empty — a prompt with no `@mentions` leaves no context event in the log, and
+consumers must not expect one per user message. When present, that metadata is
+replayed through the projection and provider request builder.
 
 ## Session-state mutators
 
@@ -607,7 +607,7 @@ next fold anchors on it — including snapcompact archives and handoff
 documents.
 
 The CLI exposes local compact via `/compact` (`engine/summary.rs`, which
-also writes the marker); legacy Compat summarize routes persist the same
+also writes the marker); the v1 `SummarizeSession` rpc persists the same
 native summary shape.
 
 ## Session Titles
@@ -840,7 +840,8 @@ JSONL RPC surfaces.
 | `AgentDefinitionMissing { agent_id }` | Fixed system agent not in catalog |
 | `Invalid(String)` | Other invalid runtime state |
 
-`hya-server` maps every `CoreError` to HTTP 500 via `ApiError::internal`
-except where a Compat route translates the error itself. `Cancelled` and
-`AgentDefinitionMissing` are therefore **not** distinguishable over the native
-HTTP mapping today.
+`hya-server` maps every `CoreError` to the `internal` error code (HTTP 500 /
+gRPC `Internal`) via the v1 error table (see
+[Server and Client](server-client.md)); only Workflow control keeps its own
+structured failure codes. `Cancelled` and `AgentDefinitionMissing` are
+therefore **not** distinguishable through the generic mapping today.

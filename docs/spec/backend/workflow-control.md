@@ -64,7 +64,7 @@ WorkflowControl::cancel(session)
 - Startup must call `claim_runtime_owner` before Workflow recovery. A file-backed store holds an exclusive `0600` `<canonical-db>.runtime-owner.lock` until the final clone drops. The lock path rejects symbolic links. No heartbeat or TTL is used.
 - Recovery requires the matching held owner claim. It appends one `Interrupted` terminal Event for each prior nonterminal run and never replays a Stage.
 - `WorkflowProjection.availability` is runtime-only. Replay leaves it absent. Exact source ID + name + revision is `available`; an existing changed or invalid exact source is `stale`; a missing exact source is `unavailable`.
-- Compat Session hydration calls the app decoration port once. SDK activity joins Workflow Member references to canonical Member projections and excludes unrelated run-tree members.
+- Replayed-state decoration calls the app decoration port once (the former Compat Session-hydration caller is deleted; v1 state reads go through the same control handle). SDK activity joins Workflow Member references to canonical Member projections and excludes unrelated run-tree members.
 - Every Workflow lifecycle Event emits the normal `session.updated` invalidation and the raw envelope, in that order.
 
 ### 4. Validation & Error Matrix
