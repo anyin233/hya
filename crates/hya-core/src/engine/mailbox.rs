@@ -29,7 +29,7 @@ pub(crate) const MAIN_HANDLE: &str = scope::ROOT_HANDLE;
 
 impl SessionEngine {
     /// The team-root session for `session` (walks the `parent` chain to the top).
-    async fn team_root(&self, session: SessionId) -> Result<SessionId, CoreError> {
+    pub(crate) async fn team_root(&self, session: SessionId) -> Result<SessionId, CoreError> {
         Ok(self.session_lineage(session).await?.0)
     }
 
@@ -395,6 +395,69 @@ impl SessionEngine {
         }
         rows.sort_by(|left, right| left.id.cmp(&right.id));
         Ok(rows)
+    }
+
+    /// Read one channel's recent history for the acting agent (ADR-0016
+    /// `channel://` read): newest-last, at most `last` messages (1 when
+    /// `None`). Reading marks the caller's whole current inbox as seen (a
+    /// single durable cursor cannot selectively consume one channel), and the
+    /// result reports how many unread remain so the model knows to iterate
+    /// `list_channel`.
+    pub async fn read_channel_history(
+        &self,
+        session: SessionId,
+        channel: &str,
+        last: Option<usize>,
+    ) -> Result<ChannelHistoryRead, CoreError> {
+        let root = self.team_root(session).await?;
+        let handle = self.resolve_handle(root, session).await?;
+        let projection = self.read_projection(root).await?;
+        let channel_state = projection
+            .team
+            .channels
+            .get(channel)
+            .ok_or_else(|| CoreError::Invalid(format!("unknown channel `#{channel}`")))?;
+        if !channel_state.members.contains(&handle) {
+            // Unknown and not-a-member are deliberately indistinguishable.
+            return Err(CoreError::Invalid(format!("unknown channel `#{channel}`")));
+        }
+        let last_n = last.unwrap_or(1).clamp(1, 50);
+        // Newest-first: the most recent message leads, matching how a chat
+        // backlog is scanned.
+        let messages: Vec<(String, String)> = channel_state
+            .log
+            .iter()
+            .rev()
+            .take(last_n)
+            .map(|message| (message.from.clone(), message.body.clone()))
+            .collect();
+        let inbox_len = projection
+            .team
+            .inboxes
+            .get(&handle)
+            .map_or(0, |inbox| inbox.len() as u64);
+        let cursor = projection
+            .team
+            .roster
+            .get(&handle)
+            .map_or(0, |entry| entry.resident_cursor);
+        if cursor < inbox_len {
+            self.emit_for_actor(
+                None,
+                root,
+                Event::MailConsumed {
+                    session: root,
+                    handle: handle.clone(),
+                    through: inbox_len,
+                },
+            )
+            .await?;
+        }
+        Ok(ChannelHistoryRead {
+            channel: channel.to_string(),
+            messages,
+            unread_remaining: 0,
+        })
     }
 
     /// `search_agent` rows (ADR-0015 §7): the caller's own archived DIRECT
@@ -1056,4 +1119,15 @@ mod tests {
             "the message crossed units, one in-scope hop at a time"
         );
     }
+}
+
+/// One `channel://` read result.
+#[derive(Clone, Debug)]
+pub struct ChannelHistoryRead {
+    /// Channel id that was read.
+    pub channel: String,
+    /// Newest-last (from, body) pairs.
+    pub messages: Vec<(String, String)>,
+    /// Unread messages remaining in the caller's inbox after this read.
+    pub unread_remaining: usize,
 }

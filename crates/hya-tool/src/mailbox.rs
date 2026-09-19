@@ -31,6 +31,10 @@ pub struct MailReceipt {
     pub recipients: usize,
 }
 
+/// One `channel://` read result: (channel id, newest-first `(from, body)`
+/// pairs, unread messages remaining in the caller's inbox).
+pub type ChannelHistory = (String, Vec<(String, String)>, usize);
+
 /// A channel plus its current membership, for the `channels` tool.
 #[derive(Clone, Debug)]
 pub struct ChannelInfo {
@@ -90,6 +94,17 @@ pub enum MailboxRequest {
         query: String,
         /// Host reply with archive rows.
         reply: oneshot::Sender<Result<Vec<ArchivedAgentRow>, String>>,
+    },
+    /// Read one channel's recent history, marking the inbox seen.
+    ReadChannel {
+        /// Acting session.
+        session: SessionId,
+        /// Channel id without the leading `#`.
+        channel: String,
+        /// Message count (newest-last); `None` reads the latest one.
+        last: Option<usize>,
+        /// Host reply: (channel, [(from, body)...], unread_remaining).
+        reply: oneshot::Sender<Result<ChannelHistory, String>>,
     },
 }
 
@@ -255,6 +270,22 @@ impl MailboxPlane {
         self.request(|reply| MailboxRequest::SearchAgents {
             session,
             query,
+            reply,
+        })
+        .await?
+        .map_err(MailboxError::Rejected)
+    }
+    /// Read one channel's recent history (ADR-0016 `channel://`).
+    pub async fn read_channel(
+        &self,
+        channel: String,
+        last: Option<usize>,
+    ) -> Result<ChannelHistory, MailboxError> {
+        let session = self.session.ok_or(MailboxError::Unavailable)?;
+        self.request(|reply| MailboxRequest::ReadChannel {
+            session,
+            channel,
+            last,
             reply,
         })
         .await?

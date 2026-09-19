@@ -36,6 +36,19 @@ pub async fn run_mailbox_service(
                         .map_err(|e| e.to_string());
                     let _ = reply.send(result);
                 }
+                MailboxRequest::ReadChannel {
+                    session,
+                    channel,
+                    last,
+                    reply,
+                } => {
+                    let result = engine
+                        .read_channel_history(session, &channel, last)
+                        .await
+                        .map(|read| (read.channel, read.messages, read.unread_remaining))
+                        .map_err(|e| e.to_string());
+                    let _ = reply.send(result);
+                }
                 MailboxRequest::SearchAgents {
                     session,
                     query,

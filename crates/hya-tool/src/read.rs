@@ -68,7 +68,8 @@ impl Tool for ReadTool {
                 "Read a file or directory's contents.\n\n",
                 "`path` also accepts an internal handle naming an agent-owned resource: ",
                 "`artifact://<id>` for tool output spilled out of the transcript, ",
-                "`skill://<name>` for a skill body, `local://<path>` for a scratch payload. ",
+                "`skill://<name>` for a skill body, `local://<path>` for a scratch payload, ",
+                "`channel://<id>` for team mail history (add `?last=N` for N messages). ",
                 "A handle may carry one projection so you retrieve a slice instead of the ",
                 "whole body: `?lines=N`, `?lines=N-M`, `?head=N`, `?tail=N`, ",
                 "`?grep=<pattern>`, or `?q=<.dotted.path>` against a JSON body.\n\n",
@@ -106,6 +107,22 @@ impl Tool for ReadTool {
             return Err(ToolError::Input(
                 "limit must be a positive integer".to_string(),
             ));
+        }
+
+        // ADR-0016 channel plane: `channel://<id>[?last=N]` reads team mail
+        // history (and marks the inbox seen); a bare `#<id>` is the same
+        // mistake models made before this existed — reject it with the
+        // correct spelling instead of a file-not-found.
+        if let Some(control) = read_channel_control(file_path) {
+            return execute_channel_read(ctx, control).await;
+        }
+        if file_path.trim_start().starts_with('#')
+            && hya_proto::is_minted_channel_id(file_path.trim_start_matches('#'))
+        {
+            return Err(ToolError::Input(format!(
+                "`{file_path}` is a channel id, not a file. Read mail history with                  `channel://{}?last=N` (omit `?last` for the latest message).",
+                file_path.trim_start_matches('#')
+            )));
         }
 
         let workdir = normalize(&absolutize(&ctx.workdir));
@@ -1124,6 +1141,33 @@ fn directory_footer(shown: usize, total: usize, offset: usize, truncated: bool) 
 }
 
 #[cfg(test)]
+mod channel_tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::*;
+
+    #[test]
+    fn channel_control_parses_id_last_and_defaults() {
+        let plain = read_channel_control("channel://DM-aB12Cd34").unwrap();
+        assert_eq!(plain.channel, "DM-aB12Cd34");
+        assert_eq!(plain.last, None);
+
+        let history = read_channel_control("channel://announce-aB12Cd34?last=20").unwrap();
+        assert_eq!(history.channel, "announce-aB12Cd34");
+        assert_eq!(history.last, Some(20));
+
+        assert!(
+            read_channel_control("channel://").is_none(),
+            "empty id rejected"
+        );
+        assert!(
+            read_channel_control("artifact://x").is_none(),
+            "other schemes untouched"
+        );
+    }
+}
+
+#[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
@@ -1174,5 +1218,83 @@ mod tests {
         assert!(serde_json::to_vec(&content).unwrap().len() <= MAX_READ_BYTES);
         assert!(serde_json::to_vec(&fitted.entries).unwrap().len() <= MAX_READ_BYTES);
         assert_eq!(fitted.next_offset, Some(fitted.entries.len() + 1));
+    }
+}
+
+/// A parsed `channel://` read request.
+struct ChannelReadControl {
+    /// Channel id without the leading `#`.
+    channel: String,
+    /// Message count (newest-last); `None` = the latest message only.
+    last: Option<usize>,
+}
+
+/// Parse `channel://<id>` / `channel://<id>?last=N`.
+fn read_channel_control(requested: &str) -> Option<ChannelReadControl> {
+    let rest = requested.strip_prefix("channel://")?;
+    let (id, query) = match rest.split_once('?') {
+        Some((id, query)) => (id, Some(query)),
+        None => (rest, None),
+    };
+    let last = query.map(|text| {
+        text.split('&')
+            .find_map(|pair| pair.strip_prefix("last="))
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(1)
+    });
+    let id = id.trim().to_string();
+    if id.is_empty() {
+        return None;
+    }
+    Some(ChannelReadControl { channel: id, last })
+}
+
+/// Serve a `channel://` read over the mailbox plane.
+async fn execute_channel_read(
+    ctx: &ToolCtx,
+    control: ChannelReadControl,
+) -> Result<Value, ToolError> {
+    let (channel, messages, unread_remaining) = ctx
+        .mailbox
+        .read_channel(control.channel.clone(), control.last)
+        .await
+        .map_err(map_mailbox_error)?;
+    let count = messages.len();
+    let rendered: Vec<String> = messages
+        .iter()
+        .map(|(from, body)| format!("[{from}] {body}"))
+        .collect();
+    let output = if rendered.is_empty() {
+        format!("#{channel} has no messages yet.")
+    } else {
+        rendered.join("\n")
+    };
+    let tail = if unread_remaining > 0 {
+        format!(
+            "\n\n{unread_remaining} unread message(s) remain in your inbox — run `list_channel` \
+             for per-channel counts."
+        )
+    } else {
+        String::new()
+    };
+    Ok(json!({
+        "title": format!("#{channel} · {count} message(s)"),
+        "output": format!("{output}{tail}"),
+        "metadata": {
+            "type": "channel",
+            "channel": channel,
+            "count": count,
+            "unreadRemaining": unread_remaining,
+        },
+    }))
+}
+
+/// Map mailbox plane failures to read tool errors.
+fn map_mailbox_error(error: crate::mailbox::MailboxError) -> ToolError {
+    match error {
+        crate::mailbox::MailboxError::Unavailable => ToolError::Other(
+            "channel:// reads are only available inside a running team".to_string(),
+        ),
+        crate::mailbox::MailboxError::Rejected(message) => ToolError::Input(message),
     }
 }

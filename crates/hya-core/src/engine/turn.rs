@@ -820,6 +820,11 @@ impl SessionEngine {
                 .unwrap_or(0),
             None => 0,
         };
+        // Steer mailbox (fix for the unread-mail blindness): unread mail is
+        // surfaced inside tool results, mid-turn, without breaking the model's
+        // chain of thought. Snapshot the durable backlog once, then follow the
+        // live bus so no per-tool projection replay is needed.
+        let mut steer = self.steer_mailbox_snapshot(session).await;
         loop {
             self.validate_actor_claim(actor_claim).await?;
             if activation_hook_for(session).is_some_and(|hooks| !hooks.is_healthy()) {
@@ -1452,12 +1457,18 @@ impl SessionEngine {
                         // the cap drops is preserved as an artifact first, so a
                         // truncated result stays reachable without re-running the
                         // tool that produced it.
-                        let output = hya_tool::cap_tool_output_spilling(
+                        let mut output = hya_tool::cap_tool_output_spilling(
                             output,
                             result_policy,
                             &self.artifacts.store(binding.workdir()),
                             tc.name.as_str(),
                         );
+                        // Steer (ADR-0016 follow-up): unread team mail rides the
+                        // tail of this tool result so a long turn stays aware
+                        // of new messages without breaking the model's flow.
+                        if let Some(notice) = steer.drain(self).await? {
+                            append_steer_notice(&mut output, &notice);
+                        }
                         let retains_artifact = artifact_guard.retained_by(&output);
                         (
                             Event::ToolResult {
@@ -1527,4 +1538,20 @@ fn permission_for_session(
         })
         .collect();
     permission.with_snapshot_rules(rules)
+}
+
+/// Splice a steer notice into a tool result's model-facing text.
+fn append_steer_notice(output: &mut serde_json::Value, notice: &str) {
+    let Some(object) = output.as_object_mut() else {
+        return;
+    };
+    if let Some(serde_json::Value::String(text)) = object.get("output") {
+        let updated = format!("{text}{notice}");
+        object.insert("output".to_string(), serde_json::Value::String(updated));
+    } else {
+        object.insert(
+            "steer".to_string(),
+            serde_json::Value::String(notice.trim_start().to_string()),
+        );
+    }
 }
