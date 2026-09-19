@@ -1127,68 +1127,78 @@ async fn activate_resident_stage(
         .and_then(|length| u64::try_from(length).ok())
         .unwrap_or(u64::MAX);
     let mut stop_requested = false;
-
-    loop {
-        let projection = engine.read_projection(root).await?;
-        if let Some(entry) = projection.team.roster.get(&actor.handle)
-            && entry.resident_cursor >= boundary
-            && entry.resident_work.is_none()
-        {
-            match entry.status {
-                RosterStatus::Idle => {
-                    let output =
-                        final_assistant_text(&engine.read_projection(actor.session).await?);
-                    return Ok(StageReport {
-                        stage: stage.id().to_string(),
-                        agent: stage.agent().to_string(),
-                        status: StageStatus::Done,
-                        session: Some(actor.session.to_string()),
-                        output,
-                    });
+    // The parked actor outlives the Stage, but its request-local route does
+    // not: clear it on every exit or the run's route-persistence task waits
+    // on the recorder's open channel forever.
+    let actor_session = actor.session;
+    let report = async {
+        loop {
+            let projection = engine.read_projection(root).await?;
+            if let Some(entry) = projection.team.roster.get(&actor.handle)
+                && entry.resident_cursor >= boundary
+                && entry.resident_work.is_none()
+            {
+                match entry.status {
+                    RosterStatus::Idle => {
+                        let output =
+                            final_assistant_text(&engine.read_projection(actor.session).await?);
+                        return Ok(StageReport {
+                            stage: stage.id().to_string(),
+                            agent: stage.agent().to_string(),
+                            status: StageStatus::Done,
+                            session: Some(actor.session.to_string()),
+                            output,
+                        });
+                    }
+                    RosterStatus::Failed | RosterStatus::Done => {
+                        return Ok(StageReport {
+                            stage: stage.id().to_string(),
+                            agent: stage.agent().to_string(),
+                            status: if stop_requested {
+                                StageStatus::Cancelled
+                            } else {
+                                StageStatus::Failed
+                            },
+                            session: Some(actor.session.to_string()),
+                            output: clamp(
+                                entry
+                                    .current_task
+                                    .clone()
+                                    .unwrap_or_else(|| "resident actor failed".to_string()),
+                            ),
+                        });
+                    }
+                    RosterStatus::Busy => {}
                 }
-                RosterStatus::Failed | RosterStatus::Done => {
-                    return Ok(StageReport {
-                        stage: stage.id().to_string(),
-                        agent: stage.agent().to_string(),
-                        status: if stop_requested {
-                            StageStatus::Cancelled
-                        } else {
-                            StageStatus::Failed
-                        },
-                        session: Some(actor.session.to_string()),
-                        output: clamp(
-                            entry
-                                .current_task
-                                .clone()
-                                .unwrap_or_else(|| "resident actor failed".to_string()),
-                        ),
-                    });
+            }
+            let event = if stop_requested {
+                Some(events.recv().await)
+            } else {
+                tokio::select! {
+                    _ = cancel.cancelled() => None,
+                    event = events.recv() => Some(event),
                 }
-                RosterStatus::Busy => {}
-            }
-        }
-        let event = if stop_requested {
-            Some(events.recv().await)
-        } else {
-            tokio::select! {
-                _ = cancel.cancelled() => None,
-                event = events.recv() => Some(event),
-            }
-        };
-        let Some(event) = event else {
-            supervisor.stop_resident(root, &actor.handle).await?;
-            stop_requested = true;
-            continue;
-        };
-        match event {
-            Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
-            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                return Err(WorkflowError::Engine(CoreError::Invalid(
-                    "event bus closed before resident Stage settled".to_string(),
-                )));
+            };
+            let Some(event) = event else {
+                supervisor.stop_resident(root, &actor.handle).await?;
+                stop_requested = true;
+                continue;
+            };
+            match event {
+                Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    return Err(WorkflowError::Engine(CoreError::Invalid(
+                        "event bus closed before resident Stage settled".to_string(),
+                    )));
+                }
             }
         }
     }
+    .await;
+    let _ = supervisor
+        .clear_resident_workflow_route(actor_session)
+        .await;
+    report
 }
 
 fn clamp(mut text: String) -> String {

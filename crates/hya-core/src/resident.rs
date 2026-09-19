@@ -2554,6 +2554,35 @@ impl ResidentSupervisor {
         Ok(())
     }
 
+    /// Clear one idle resident's request-local workflow route (ADR-0017).
+    ///
+    /// Stage routes hold a route-recorder sender clone; the parked actor keeps
+    /// living after the Stage settles, so the route MUST be dropped here or the
+    /// owning run's route-persistence task waits on an open channel forever.
+    pub(crate) async fn clear_resident_workflow_route(
+        &self,
+        session: SessionId,
+    ) -> Result<(), CoreError> {
+        let (root, _) = self.engine.session_lineage(session).await?;
+        let team = self
+            .teams()
+            .get(&root)
+            .cloned()
+            .ok_or_else(|| CoreError::Invalid("resident team is not registered".to_string()))?;
+        let mut state = team.lock();
+        let slot = state
+            .residents
+            .get_mut(&session)
+            .ok_or_else(|| CoreError::Invalid("resident session is not registered".to_string()))?;
+        if slot.status != SlotStatus::Idle || slot.has_work() {
+            return Err(CoreError::Invalid(
+                "resident Workflow route cannot clear during active work".to_string(),
+            ));
+        }
+        slot.route = None;
+        Ok(())
+    }
+
     /// Register an already-created `session` as a resident of team `root`, arm it,
     /// and (when `initial` is set) give it a first wake. Used by
     /// [`spawn_resident`](Self::spawn_resident); also the seam tests drive directly.
