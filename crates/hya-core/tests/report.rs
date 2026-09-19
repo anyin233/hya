@@ -791,3 +791,29 @@ async fn channel_read_returns_history_and_marks_inbox_seen() {
             .any(|envelope| matches!(&envelope.event, Event::MailConsumed { .. }))
     );
 }
+
+#[tokio::test]
+async fn steer_notice_truncation_survives_multibyte_bodies() {
+    // Regression: a raw byte slice at 600 panicked on Chinese text (the
+    // run2 backend lost its tokio worker to this). Exercise drain directly.
+    let engine = engine().await;
+    let root = root_team(&engine).await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    ensure_main(&supervisor, &engine, root).await;
+    let long_body = "配置很长的中文邮件内容".repeat(120);
+    engine
+        .mail_send(
+            root,
+            MailEndpoint::Handle("main".to_string()),
+            MailKind::Message,
+            long_body,
+        )
+        .await
+        .unwrap();
+    let mut steer = engine.steer_mailbox_snapshot(root).await;
+    let notice = steer.drain(&engine).await.unwrap().expect("notice");
+    assert!(
+        notice.contains("[mail from main]"),
+        "notice carries the body"
+    );
+}

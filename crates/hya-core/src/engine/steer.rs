@@ -16,7 +16,7 @@ use crate::error::CoreError;
 
 /// One steered message: sender and body.
 #[derive(Clone, Debug)]
-pub(super) struct SteeredMail {
+pub struct SteeredMail {
     /// Sender canonical handle.
     pub from: String,
     /// Message body.
@@ -24,7 +24,7 @@ pub(super) struct SteeredMail {
 }
 
 /// Per-turn steer state: the backlog plus the live bus tail.
-pub(crate) struct SteerMailbox {
+pub struct SteerMailbox {
     root: SessionId,
     handle: String,
     queue: Vec<SteeredMail>,
@@ -41,7 +41,7 @@ impl SessionEngine {
     ///
     /// Never fails the turn: a session outside a team gets an empty, inert
     /// mailbox (every drain returns nothing).
-    pub(crate) async fn steer_mailbox_snapshot(&self, session: SessionId) -> SteerMailbox {
+    pub async fn steer_mailbox_snapshot(&self, session: SessionId) -> SteerMailbox {
         let bus = self.bus().subscribe();
         let Ok(root) = self.team_root(session).await else {
             return SteerMailbox {
@@ -152,10 +152,7 @@ impl SteerMailbox {
 
     /// Drain pending mail into a notice appended to a tool result, advancing
     /// the durable cursor via `MailConsumed`. `None` when nothing is pending.
-    pub(crate) async fn drain(
-        &mut self,
-        engine: &SessionEngine,
-    ) -> Result<Option<String>, CoreError> {
+    pub async fn drain(&mut self, engine: &SessionEngine) -> Result<Option<String>, CoreError> {
         self.poll_live();
         if self.handle.is_empty() || self.queue.is_empty() {
             return Ok(None);
@@ -178,8 +175,14 @@ impl SteerMailbox {
             .await?;
         let mut notice = String::from("\n\n--- [NEW MAIL · answer or acknowledge via dm] ---");
         for mail in shown {
+            // Truncate on a char boundary — bodies are UTF-8 and a raw byte
+            // slice panics on multi-byte characters.
             let body = if mail.body.len() > 600 {
-                format!("{}…", &mail.body[..600])
+                let mut end = 600;
+                while end > 0 && !mail.body.is_char_boundary(end) {
+                    end -= 1;
+                }
+                format!("{}…", &mail.body[..end])
             } else {
                 mail.body.clone()
             };
