@@ -21,9 +21,7 @@ use crate::interaction::{InteractionPlane, QuestionAnswer, QuestionKind};
 use crate::invalid::InvalidTool;
 use crate::lsp::{LspPlane, LspTool};
 use crate::lsp_path::{absolutize, display_path, normalize, resolve_file};
-use crate::mailbox::{
-    AnnounceTool, ChannelsTool, JoinTool, LeaveTool, MailboxPlane, RosterTool, SendTool,
-};
+use crate::mailbox::{BroadcastTool, DmTool, ListChannelTool, MailboxPlane, SearchAgentTool};
 use crate::permission::{
     Action, Invocation, Mode, PermissionError, PermissionPlane, Resource, glob_match,
 };
@@ -464,14 +462,12 @@ impl ToolRegistry {
             Arc::new(AskUserTool),
             Arc::new(TaskTool),
             Arc::new(WorkflowTool),
-            Arc::new(SendTool),
+            Arc::new(DmTool),
+            Arc::new(BroadcastTool),
+            Arc::new(ListChannelTool),
+            Arc::new(SearchAgentTool),
             Arc::new(crate::lifecycle::ReportTool),
             Arc::new(crate::lifecycle::KillTool),
-            Arc::new(AnnounceTool),
-            Arc::new(RosterTool),
-            Arc::new(ChannelsTool),
-            Arc::new(JoinTool),
-            Arc::new(LeaveTool),
         ] {
             registry.insert_builtin(tool);
         }
@@ -746,8 +742,8 @@ impl ToolRegistrySnapshot {
 
 fn builtin_permission(name: &str) -> ToolPermission {
     match name {
-        "read" | "ls" | "glob" | "find" | "grep" | "lsp" | "skill" | "list_agents" | "roster"
-        | "channels" => ToolPermission::ReadOnly,
+        "read" | "ls" | "glob" | "find" | "grep" | "lsp" | "skill" | "list_agents"
+        | "list_channel" | "search_agent" => ToolPermission::ReadOnly,
         "task" | "kill" => ToolPermission::Task,
         "shell" | "bash" => ToolPermission::Command,
         _ => ToolPermission::Tool,

@@ -29,6 +29,24 @@ pub async fn run_mailbox_service(
         // line block the others (sends/reads are independent per session).
         tokio::spawn(async move {
             match req {
+                MailboxRequest::ListChannels { session, reply } => {
+                    let result = engine
+                        .team_channel_rows(session)
+                        .await
+                        .map_err(|e| e.to_string());
+                    let _ = reply.send(result);
+                }
+                MailboxRequest::SearchAgents {
+                    session,
+                    query,
+                    reply,
+                } => {
+                    let result = engine
+                        .search_archived_agents(session, &query)
+                        .await
+                        .map_err(|e| e.to_string());
+                    let _ = reply.send(result);
+                }
                 MailboxRequest::Send {
                     from,
                     actor_claim,
@@ -51,41 +69,6 @@ pub async fn run_mailbox_service(
                 } => {
                     let result = engine
                         .mail_announce_for_actor(from, body, actor_claim.as_ref())
-                        .await
-                        .map_err(|e| e.to_string());
-                    let _ = reply.send(result);
-                }
-                MailboxRequest::Join {
-                    session,
-                    actor_claim,
-                    channel,
-                    reply,
-                } => {
-                    let result = engine
-                        .channel_join(session, channel, actor_claim.as_ref())
-                        .await
-                        .map_err(|e| e.to_string());
-                    let _ = reply.send(result);
-                }
-                MailboxRequest::Leave {
-                    session,
-                    actor_claim,
-                    channel,
-                    reply,
-                } => {
-                    let result = engine
-                        .channel_leave(session, channel, actor_claim.as_ref())
-                        .await
-                        .map_err(|e| e.to_string());
-                    let _ = reply.send(result);
-                }
-                MailboxRequest::Roster { session, reply } => {
-                    let result = engine.team_roster(session).await.map_err(|e| e.to_string());
-                    let _ = reply.send(result);
-                }
-                MailboxRequest::Channels { session, reply } => {
-                    let result = engine
-                        .team_channels(session)
                         .await
                         .map_err(|e| e.to_string());
                     let _ = reply.send(result);

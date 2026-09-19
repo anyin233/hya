@@ -4700,7 +4700,7 @@ agent:
             .into_iter()
             .map(|schema| schema.name.as_str().to_string())
             .collect::<BTreeSet<_>>();
-        assert_eq!(expected.len(), 29);
+        assert_eq!(expected.len(), 27);
         for (agent_id, plane, workdir) in [
             (
                 "full-alias",

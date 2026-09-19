@@ -287,8 +287,8 @@ fn registry_resolves_canonical_names_with_explicit_permission_metadata() {
         "lsp",
         "skill",
         "list_agents",
-        "roster",
-        "channels",
+        "list_channel",
+        "search_agent",
     ] {
         assert_eq!(
             registry.resolve(name).unwrap().permission,

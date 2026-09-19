@@ -11,10 +11,7 @@
 //! so an agent can only see/address its own team (decision 6).
 
 use async_trait::async_trait;
-use hya_proto::{
-    ActorClaim, MailEndpoint, MailKind, RosterEntry, RosterStatus, ScopedRoster, SessionId,
-    ToolSchema,
-};
+use hya_proto::{ActorClaim, ChannelKind, MailEndpoint, MailKind, SessionId, ToolSchema};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use thiserror::Error;
@@ -52,7 +49,7 @@ pub struct ChannelInfo {
 /// typed result or a human-readable rejection string (the service maps its typed
 /// errors to strings so this enum stays free of `hya-core` types).
 pub enum MailboxRequest {
-    /// Deliver mail to a handle or `#channel`.
+    /// Deliver private mail to a vertical peer (parent or direct child).
     Send {
         /// Sending session.
         from: SessionId,
@@ -67,29 +64,7 @@ pub enum MailboxRequest {
         /// Host reply with receipt or rejection.
         reply: oneshot::Sender<Result<MailReceipt, String>>,
     },
-    /// Subscribe (creating the channel if needed).
-    Join {
-        /// Acting session.
-        session: SessionId,
-        /// Optional actor claim.
-        actor_claim: Option<ActorClaim>,
-        /// Channel name.
-        channel: String,
-        /// Host reply.
-        reply: oneshot::Sender<Result<(), String>>,
-    },
-    /// Unsubscribe from a channel.
-    Leave {
-        /// Acting session.
-        session: SessionId,
-        /// Optional actor claim.
-        actor_claim: Option<ActorClaim>,
-        /// Channel name.
-        channel: String,
-        /// Host reply.
-        reply: oneshot::Sender<Result<(), String>>,
-    },
-    /// Post a one-way announcement to the agents the sender leads.
+    /// Post a one-way announcement on the unit's group channel.
     Announce {
         /// Sending session.
         from: SessionId,
@@ -100,20 +75,55 @@ pub enum MailboxRequest {
         /// Host reply with receipt or rejection.
         reply: oneshot::Sender<Result<MailReceipt, String>>,
     },
-    /// List the teammates the sender may address, grouped by relation.
-    Roster {
-        /// Acting session (scope resolution).
-        session: SessionId,
-        /// Host reply with the scoped roster.
-        reply: oneshot::Sender<Result<ScopedRoster, String>>,
-    },
-    /// List channels for the team.
-    Channels {
+    /// List the acting agent's channels (group pipes + live-peer DMs).
+    ListChannels {
         /// Acting session.
         session: SessionId,
-        /// Host reply with channel info.
-        reply: oneshot::Sender<Result<Vec<ChannelInfo>, String>>,
+        /// Host reply with channel rows.
+        reply: oneshot::Sender<Result<Vec<ChannelRow>, String>>,
     },
+    /// Search the caller's own archived direct children by handoff digest.
+    SearchAgents {
+        /// Acting session.
+        session: SessionId,
+        /// Free-text query over goal/state/pending digests.
+        query: String,
+        /// Host reply with archive rows.
+        reply: oneshot::Sender<Result<Vec<ArchivedAgentRow>, String>>,
+    },
+}
+
+/// One row of `list_channel`: what the acting agent can see. Group channels
+/// never expose a member list (ADR-0016); DM channels always name their peer.
+#[derive(Clone, Debug)]
+pub struct ChannelRow {
+    /// Channel id (`announce-{8}` / `DM-{8}`).
+    pub id: String,
+    /// Group broadcast pipe or DM pair.
+    pub kind: ChannelKind,
+    /// Whether the acting agent may post (group: unit leader only; dm: yes).
+    pub can_speak: bool,
+    /// DM peer identity; `None` for group channels.
+    pub peer: Option<String>,
+    /// Unread message count for the acting agent.
+    pub unread: usize,
+}
+
+/// One row of `search_agent`: an archived direct child's handoff digest.
+#[derive(Clone, Debug)]
+pub struct ArchivedAgentRow {
+    /// Canonical handle the agent had while live.
+    pub handle: String,
+    /// Agent type / stable id.
+    pub agent_type: String,
+    /// Session id string.
+    pub session: String,
+    /// `goal` section digest of the latest handoff.
+    pub goal: String,
+    /// `pending tasks` section digest.
+    pub pending: String,
+    /// Whether the handoff was degraded.
+    pub degraded: bool,
 }
 
 /// Mailbox plane or service failure.
@@ -210,33 +220,12 @@ impl MailboxPlane {
         .map_err(MailboxError::Rejected)
     }
 
-    /// Subscribe the acting agent's handle to `channel`.
-    pub async fn join(&self, channel: String) -> Result<(), MailboxError> {
-        let session = self.session.ok_or(MailboxError::Unavailable)?;
-        self.request(|reply| MailboxRequest::Join {
-            session,
-            actor_claim: self.actor_claim,
-            channel,
-            reply,
-        })
-        .await?
-        .map_err(MailboxError::Rejected)
+    /// Send private mail to a vertical peer (ADR-0016 dm).
+    pub async fn dm(&self, to: MailEndpoint, body: String) -> Result<MailReceipt, MailboxError> {
+        self.send(to, MailKind::Message, body).await
     }
 
-    /// Unsubscribe the acting agent's handle from `channel`.
-    pub async fn leave(&self, channel: String) -> Result<(), MailboxError> {
-        let session = self.session.ok_or(MailboxError::Unavailable)?;
-        self.request(|reply| MailboxRequest::Leave {
-            session,
-            actor_claim: self.actor_claim,
-            channel,
-            reply,
-        })
-        .await?
-        .map_err(MailboxError::Rejected)
-    }
-
-    /// Post a one-way announcement to the agents the acting agent leads.
+    /// Post a one-way announcement on the unit's group channel.
     pub async fn announce(&self, body: String) -> Result<MailReceipt, MailboxError> {
         let from = self.session.ok_or(MailboxError::Unavailable)?;
         self.request(|reply| MailboxRequest::Announce {
@@ -249,20 +238,27 @@ impl MailboxPlane {
         .map_err(MailboxError::Rejected)
     }
 
-    /// The roster as the acting agent sees it, grouped by relation.
-    pub async fn roster(&self) -> Result<ScopedRoster, MailboxError> {
+    /// The acting agent's channels: group pipes plus live-peer DMs.
+    pub async fn list_channels(&self) -> Result<Vec<ChannelRow>, MailboxError> {
         let session = self.session.ok_or(MailboxError::Unavailable)?;
-        self.request(|reply| MailboxRequest::Roster { session, reply })
+        self.request(|reply| MailboxRequest::ListChannels { session, reply })
             .await?
             .map_err(MailboxError::Rejected)
     }
 
-    /// List channels + membership for the acting agent's team.
-    pub async fn channels(&self) -> Result<Vec<ChannelInfo>, MailboxError> {
+    /// Search the caller's own archived direct children.
+    pub async fn search_agents(
+        &self,
+        query: String,
+    ) -> Result<Vec<ArchivedAgentRow>, MailboxError> {
         let session = self.session.ok_or(MailboxError::Unavailable)?;
-        self.request(|reply| MailboxRequest::Channels { session, reply })
-            .await?
-            .map_err(MailboxError::Rejected)
+        self.request(|reply| MailboxRequest::SearchAgents {
+            session,
+            query,
+            reply,
+        })
+        .await?
+        .map_err(MailboxError::Rejected)
     }
 }
 
@@ -275,55 +271,49 @@ fn map_err(err: MailboxError) -> ToolError {
     }
 }
 
-pub(crate) struct SendTool;
+pub(crate) struct DmTool;
 
 #[derive(Deserialize)]
-struct SendInput {
+struct DmInput {
+    #[serde(default)]
     to: String,
     body: String,
-    #[serde(default)]
-    kind: String,
 }
 
 #[async_trait]
-impl Tool for SendTool {
+impl Tool for DmTool {
     fn name(&self) -> &str {
-        "send"
+        "dm"
     }
 
     fn schema(&self) -> ToolSchema {
         obj_schema(
-            "send",
-            "Send mail to a teammate, or post to a channel (prefix with `#`).\n\n\
-             You can only reach your own unit: your parent, the teammates who \
-             share your parent, and the agents you lead. Anyone else must be \
-             reached by asking your parent to pass it on. Run `roster` to see \
-             who you can reach.\n\n\
-             Name a teammate by its short name (`worker-1`) or its full path \
-             (`main/lead-1/worker-1`). `#build` is your unit's channel; if you \
-             lead agents, `#^build` is your parent's unit's channel instead.",
+            "dm",
+            "Send a private message over your DM channel with one vertical peer. \
+             As a subordinate this reaches your parent (the only peer you have); \
+             as a leader name one of your direct children. Mail to an archived \
+             child revives it with its saved state. Siblings are not addressable.",
             json!({
-                "to": {"type": "string", "description": "A teammate's short name or full path, or a #channel"},
-                "body": {"type": "string", "description": "The message body"},
-                "kind": {"type": "string", "enum": ["message", "announcement"], "description": "Message intent; defaults to message"}
+                "to": {"type": "string", "description": "A direct child's handle (leaders); omit to reach your parent"},
+                "body": {"type": "string", "description": "The message body"}
             }),
-            &["to", "body"],
+            &["body"],
         )
     }
 
     async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError> {
-        let input: SendInput =
+        let input: DmInput =
             serde_json::from_value(input).map_err(|e| ToolError::Input(e.to_string()))?;
         if input.body.trim().is_empty() {
             return Err(ToolError::Input("message body is empty".to_string()));
         }
-        let to = MailEndpoint::parse(&input.to);
-        let kind = MailKind::parse(&input.kind);
-        let receipt = ctx
-            .mailbox
-            .send(to, kind, input.body)
-            .await
-            .map_err(map_err)?;
+        let to = if input.to.trim().is_empty() {
+            // Subordinate default: the parent — the only vertical peer upward.
+            MailEndpoint::Handle("^parent".to_string())
+        } else {
+            MailEndpoint::Handle(input.to.trim().to_string())
+        };
+        let receipt = ctx.mailbox.dm(to, input.body).await.map_err(map_err)?;
         let address = match &receipt.to {
             MailEndpoint::Handle(handle) => handle.clone(),
             MailEndpoint::Channel(channel) => format!("#{channel}"),
@@ -346,53 +336,25 @@ impl Tool for SendTool {
     }
 }
 
-pub(crate) struct RosterTool;
-
-#[async_trait]
-impl Tool for RosterTool {
-    fn name(&self) -> &str {
-        "roster"
-    }
-
-    fn schema(&self) -> ToolSchema {
-        obj_schema(
-            "roster",
-            "List the agents you can message, grouped by how they relate to you: \
-             your parent, your peers (same parent), and your reports (agents you \
-             lead). Nobody outside your unit is listed, because you cannot \
-             message them directly.",
-            json!({}),
-            &[],
-        )
-    }
-
-    async fn execute(&self, ctx: &ToolCtx, _input: Value) -> Result<Value, ToolError> {
-        let roster = ctx.mailbox.roster().await.map_err(map_err)?;
-        Ok(render_roster(&roster))
-    }
-}
-
-pub(crate) struct AnnounceTool;
+pub(crate) struct BroadcastTool;
 
 #[derive(Deserialize)]
-struct AnnounceInput {
+struct BroadcastInput {
     body: String,
 }
 
 #[async_trait]
-impl Tool for AnnounceTool {
+impl Tool for BroadcastTool {
     fn name(&self) -> &str {
-        "announce"
+        "broadcast"
     }
 
     fn schema(&self) -> ToolSchema {
         obj_schema(
-            "announce",
-            "Announce something to every agent you directly lead. One-way: they \
-             cannot reply on this path, and they will answer with ordinary mail \
-             to you if they need to.\n\n\
-             It reaches your DIRECT reports only, not the agents they lead. To \
-             reach further down, your reports must announce in turn.",
+            "broadcast",
+            "Post a one-way announcement on your unit's group channel: every \
+             agent you directly lead hears it, and nobody further down. Your \
+             reports answer with ordinary `dm` mail to you.",
             json!({
                 "body": {"type": "string", "description": "The announcement body"}
             }),
@@ -401,7 +363,7 @@ impl Tool for AnnounceTool {
     }
 
     async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError> {
-        let input: AnnounceInput =
+        let input: BroadcastInput =
             serde_json::from_value(input).map_err(|e| ToolError::Input(e.to_string()))?;
         if input.body.trim().is_empty() {
             return Err(ToolError::Input("announcement body is empty".to_string()));
@@ -423,315 +385,141 @@ impl Tool for AnnounceTool {
     }
 }
 
-/// Human-readable label for a teammate's live activity, folded into the roster
-/// projection from `AgentActivityChanged` by the resident supervisor.
-fn status_label(status: &RosterStatus) -> &'static str {
-    match status {
-        RosterStatus::Idle => "idle",
-        RosterStatus::Busy => "busy",
-        RosterStatus::Done => "done",
-        RosterStatus::Failed => "failed",
-    }
-}
-
-/// One roster row as the model sees it.
-fn roster_row(entry: &RosterEntry, relation: &str) -> Value {
-    json!({
-        "handle": entry.handle,
-        "name": hya_proto::scope::leaf(&entry.handle),
-        "relation": relation,
-        "type": entry.agent_type.as_str(),
-        "session": entry.session.to_string(),
-        "mode": entry.mode,
-        "status": status_label(&entry.status),
-        "current_task": entry.current_task,
-    })
-}
-
-/// One human-readable roster line: short name first (that is what you address),
-/// with the full path kept for disambiguation.
-fn roster_line(entry: &RosterEntry) -> String {
-    let mut line = format!(
-        "  {} ({}) · status {} · {} · session {}",
-        hya_proto::scope::leaf(&entry.handle),
-        entry.agent_type.as_str(),
-        status_label(&entry.status),
-        entry.handle,
-        entry.session,
-    );
-    if let Some(task) = entry.current_task.as_deref().filter(|t| !t.is_empty()) {
-        line.push_str(" — ");
-        line.push_str(task);
-    }
-    line
-}
-
-/// Render the `roster` payload grouped by relation, so the model reads its own
-/// position in the org straight off the result. Empty groups are omitted rather
-/// than shown as empty headings.
-fn render_roster(roster: &ScopedRoster) -> Value {
-    let mut rows = Vec::new();
-    let mut sections: Vec<String> = Vec::new();
-
-    if let Some(parent) = &roster.parent {
-        rows.push(roster_row(parent, "parent"));
-        sections.push(format!("parent:\n{}", roster_line(parent)));
-    }
-    for (label, group) in [("peers", &roster.peers), ("reports", &roster.reports)] {
-        if group.is_empty() {
-            continue;
-        }
-        for entry in group.iter() {
-            rows.push(roster_row(entry, label.trim_end_matches('s')));
-        }
-        let lines: Vec<String> = group.iter().map(roster_line).collect();
-        sections.push(format!("{label}:\n{}", lines.join("\n")));
-    }
-
-    let output = if sections.is_empty() {
-        "You have no teammates yet: no parent, no peers, and no reports.".to_string()
-    } else {
-        format!("self: {}\n\n{}", roster.self_path, sections.join("\n\n"))
-    };
-
-    json!({
-        "title": format!("{} teammate(s) in scope", rows.len()),
-        "output": output,
-        "self": roster.self_path,
-        "members": rows,
-    })
-}
-
-pub(crate) struct ChannelsTool;
+pub(crate) struct ListChannelTool;
 
 #[async_trait]
-impl Tool for ChannelsTool {
+impl Tool for ListChannelTool {
     fn name(&self) -> &str {
-        "channels"
+        "list_channel"
     }
 
     fn schema(&self) -> ToolSchema {
         obj_schema(
-            "channels",
-            "List the channels you can use and their current members. A channel \
-             belongs to one unit, so the same name can exist in another unit and \
-             be a different channel; `unit` says which one this is.",
+            "list_channel",
+            "List your channels: the group broadcast pipes you can hear (and \
+             post to, when you lead the unit) and your DM channels with live \
+             peers and their unread counts. Group channels never list members.",
             json!({}),
             &[],
         )
     }
 
     async fn execute(&self, ctx: &ToolCtx, _input: Value) -> Result<Value, ToolError> {
-        let channels = ctx.mailbox.channels().await.map_err(map_err)?;
-        let rows: Vec<Value> = channels
+        let rows = ctx.mailbox.list_channels().await.map_err(map_err)?;
+        let rendered: Vec<String> = rows
             .iter()
-            .map(|ch| {
-                json!({
-                    "name": format!("#{}", ch.name),
-                    "unit": ch.unit,
-                    "members": ch.members,
-                    "messages": ch.messages,
-                })
+            .map(|row| {
+                let kind = if row.kind == ChannelKind::Group {
+                    "group"
+                } else {
+                    "dm"
+                };
+                match &row.peer {
+                    Some(peer) => format!(
+                        "  #{} · {kind} · peer {peer} · {} unread",
+                        row.id, row.unread
+                    ),
+                    None => format!(
+                        "  #{} · {kind} · {} · {} unread",
+                        row.id,
+                        if row.can_speak {
+                            "you can post"
+                        } else {
+                            "listen only"
+                        },
+                        row.unread
+                    ),
+                }
             })
             .collect();
-        let output = if channels.is_empty() {
-            "No channels yet. Post to a #channel to create it.".to_string()
+        let output = if rendered.is_empty() {
+            "You have no channels yet.".to_string()
         } else {
-            channels
-                .iter()
-                .map(|ch| {
-                    let members = if ch.members.is_empty() {
-                        "none".to_string()
-                    } else {
-                        ch.members.join(", ")
-                    };
-                    format!(
-                        "#{} · unit {} · members: {} · messages: {}",
-                        ch.name, ch.unit, members, ch.messages
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join("\n")
+            rendered.join("\n")
         };
         Ok(json!({
-            "title": format!("{} channel(s)", channels.len()),
+            "title": format!("{} channel(s)", rows.len()),
             "output": output,
-            "channels": rows,
+            "channels": rows.iter().map(|row| json!({
+                "id": row.id,
+                "kind": if row.kind == ChannelKind::Group { "group" } else { "dm" },
+                "can_speak": row.can_speak,
+                "peer": row.peer,
+                "unread": row.unread,
+            })).collect::<Vec<_>>(),
         }))
     }
 }
 
-pub(crate) struct JoinTool;
+pub(crate) struct SearchAgentTool;
 
 #[derive(Deserialize)]
-struct ChannelInput {
-    channel: String,
+struct SearchAgentInput {
+    #[serde(default)]
+    query: String,
 }
 
 #[async_trait]
-impl Tool for JoinTool {
+impl Tool for SearchAgentTool {
     fn name(&self) -> &str {
-        "join"
+        "search_agent"
     }
 
     fn schema(&self) -> ToolSchema {
         obj_schema(
-            "join",
-            "Subscribe to a channel in your own unit so you receive its mail. \
-             The channel is created if it does not exist. If you lead agents, a \
-             bare name is your unit's channel and `^name` is your parent's \
-             unit's.",
+            "search_agent",
+            "Search YOUR OWN archived direct subagents by their final state \
+             handoff (goal / current state / pending). Returns each agent's \
+             handle and digest; `dm` that handle to revive the agent with its \
+             saved state.",
             json!({
-                "channel": {"type": "string", "description": "Channel name (the leading # is optional; prefix ^ for your parent's unit)"}
+                "query": {"type": "string", "description": "Free-text query over goal/state/pending digests; empty lists all"}
             }),
-            &["channel"],
+            &[],
         )
     }
 
     async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError> {
-        let input: ChannelInput =
+        let input: SearchAgentInput =
             serde_json::from_value(input).map_err(|e| ToolError::Input(e.to_string()))?;
-        let channel = normalize_channel(&input.channel)?;
-        ctx.mailbox.join(channel.clone()).await.map_err(map_err)?;
-        Ok(json!({
-            "title": format!("Joined #{channel}"),
-            "output": format!("You now receive mail on #{channel}."),
-        }))
-    }
-}
-
-pub(crate) struct LeaveTool;
-
-#[async_trait]
-impl Tool for LeaveTool {
-    fn name(&self) -> &str {
-        "leave"
-    }
-
-    fn schema(&self) -> ToolSchema {
-        obj_schema(
-            "leave",
-            "Unsubscribe from a channel; you stop receiving its mail.",
-            json!({
-                "channel": {"type": "string", "description": "Channel name (the leading # is optional)"}
-            }),
-            &["channel"],
-        )
-    }
-
-    async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError> {
-        let input: ChannelInput =
-            serde_json::from_value(input).map_err(|e| ToolError::Input(e.to_string()))?;
-        let channel = normalize_channel(&input.channel)?;
-        ctx.mailbox.leave(channel.clone()).await.map_err(map_err)?;
-        Ok(json!({
-            "title": format!("Left #{channel}"),
-            "output": format!("You no longer receive mail on #{channel}."),
-        }))
-    }
-}
-
-/// Strip an optional leading `#` and reject an empty channel name.
-fn normalize_channel(raw: &str) -> Result<String, ToolError> {
-    let channel = raw.trim().strip_prefix('#').unwrap_or(raw.trim()).trim();
-    if channel.is_empty() {
-        return Err(ToolError::Input("channel name is empty".to_string()));
-    }
-    Ok(channel.to_string())
-}
-
-#[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used)]
-mod tests {
-    use super::*;
-    use hya_proto::{AgentName, SubagentMode};
-
-    fn entry(path: &str, status: RosterStatus, task: Option<&str>) -> RosterEntry {
-        RosterEntry {
-            handle: path.to_string(),
-            session: SessionId::new(),
-            agent_type: AgentName::new("reviewer"),
-            mode: SubagentMode::Resident,
-            status,
-            current_task: task.map(str::to_string),
-            resident_cursor: 0,
-            resident_work: None,
-        }
-    }
-
-    #[test]
-    fn render_roster_surfaces_live_status_mode_and_task() {
-        let roster = ScopedRoster {
-            self_path: "main/lead-1/worker-2".to_string(),
-            parent: None,
-            peers: vec![entry(
-                "main/lead-1/reviewer-1",
-                RosterStatus::Busy,
-                Some("reviewing auth.rs"),
-            )],
-            reports: Vec::new(),
+        let rows = ctx
+            .mailbox
+            .search_agents(input.query)
+            .await
+            .map_err(map_err)?;
+        let rendered: Vec<String> = rows
+            .iter()
+            .map(|row| {
+                format!(
+                    "  {} ({}) · goal: {} · pending: {}{}",
+                    row.handle,
+                    row.agent_type,
+                    row.goal,
+                    row.pending,
+                    if row.degraded {
+                        " · degraded handoff"
+                    } else {
+                        ""
+                    }
+                )
+            })
+            .collect();
+        let output = if rendered.is_empty() {
+            "No archived agents match.".to_string()
+        } else {
+            rendered.join("\n")
         };
-        let value = render_roster(&roster);
-        let member = &value["members"][0];
-        assert_eq!(member["status"], "busy");
-        assert_eq!(member["mode"], "resident");
-        assert_eq!(member["current_task"], "reviewing auth.rs");
-        assert_eq!(member["relation"], "peer");
-        assert_eq!(
-            member["name"], "reviewer-1",
-            "the short name is what the model addresses"
-        );
-        let output = value["output"].as_str().unwrap_or_default();
-        let session = member["session"].as_str().unwrap();
-        assert!(
-            output.contains(&format!(
-                "reviewer-1 (reviewer) · status busy · main/lead-1/reviewer-1 · session {session}"
-            )),
-            "output was: {output}"
-        );
-        assert!(output.contains("reviewing auth.rs"), "output was: {output}");
-    }
-
-    /// Each group is labeled, and a group with no members is omitted rather than
-    /// rendered as an empty heading (AC7).
-    #[test]
-    fn render_roster_groups_by_relation_and_omits_empty_groups() {
-        let roster = ScopedRoster {
-            self_path: "main/lead-1".to_string(),
-            parent: Some(entry("main", RosterStatus::Idle, None)),
-            peers: Vec::new(),
-            reports: vec![
-                entry("main/lead-1/worker-1", RosterStatus::Idle, None),
-                entry("main/lead-1/worker-2", RosterStatus::Idle, None),
-            ],
-        };
-        let value = render_roster(&roster);
-        let output = value["output"].as_str().unwrap_or_default();
-
-        assert!(output.contains("self: main/lead-1"), "output was: {output}");
-        assert!(output.contains("parent:"), "output was: {output}");
-        assert!(output.contains("reports:"), "output was: {output}");
-        assert!(
-            !output.contains("peers:"),
-            "an empty group must be omitted, not shown empty: {output}"
-        );
-        assert_eq!(value["title"], "3 teammate(s) in scope");
-        assert_eq!(value["members"][0]["relation"], "parent");
-        assert_eq!(value["members"][1]["relation"], "report");
-    }
-
-    #[test]
-    fn render_roster_reports_an_agent_that_can_reach_nobody() {
-        let value = render_roster(&ScopedRoster {
-            self_path: "main".to_string(),
-            parent: None,
-            peers: Vec::new(),
-            reports: Vec::new(),
-        });
-        assert_eq!(value["title"], "0 teammate(s) in scope");
-        assert_eq!(
-            value["output"],
-            "You have no teammates yet: no parent, no peers, and no reports."
-        );
+        Ok(json!({
+            "title": format!("{} archived agent(s)", rows.len()),
+            "output": output,
+            "agents": rows.iter().map(|row| json!({
+                "handle": row.handle,
+                "agent_type": row.agent_type,
+                "session": row.session,
+                "goal": row.goal,
+                "pending": row.pending,
+                "degraded": row.degraded,
+            })).collect::<Vec<_>>(),
+        }))
     }
 }
