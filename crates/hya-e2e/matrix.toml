@@ -312,6 +312,14 @@ path = "crates/hya-e2e/tests/p21_agent_model_preference.rs"
 tags = ["pr", "agents", "models", "preferences"]
 timeout_secs = 120
 
+[[scenario]]
+id = "T2.17"
+title = "dispatch-time model resolution branches"
+track = "P"
+path = "crates/hya-e2e/tests/p22_dispatch_model_resolution.rs"
+tags = ["pr", "agents", "models", "dispatch"]
+timeout_secs = 120
+
 # Index-only deep engine coverage (not duplicated in Track P).
 [[scenario]]
 id = "I.nested"

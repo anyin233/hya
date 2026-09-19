@@ -1,23 +1,31 @@
-# 0.36.48
+# 0.36.49
 
-## The agent-model preference mechanism is double-checked and proven end to end (e2e)
+## Dispatch-time model resolution for subagent spawns (core, app, tool)
 
-- Code-path audit of the durable per-Agent model preference, confirmed
-  against source: the control publishes an immutable snapshot into the
-  runtime registry; turn bindings capture it at bind time; the
-  preference applies only to agents whose catalog definition has neither
-  a direct model nor a category policy (reasoning-only does not
-  suppress), and only when the exact model resolves in the current
-  provider catalog. Session-tree overrides (`SessionAgentModelOverrideSet`,
-  event-sourced on the lineage root) take precedence via the binding's
-  overlay; configured policy next; the remembered preference is the
-  lowest-precedence default. It steers spawned subagent member specs,
-  the summarizer/compaction model, and session-title generation — the
-  interactive root turn keeps using the session model by design.
-- New e2e scenario T2.16 (`p21_agent_model_preference.rs`): register an
-  extra fake model, `PUT /v1/agent-models/general` to it, spawn a
-  `general` subagent through the task tool, and assert the recorded
-  provider request ran on the preferred model while the listing
-  reports the `AGENT_MODEL_SOURCE_REMEMBERED` tier (default tier
-  asserted before the set). The e2e harness gains a `put_json` helper;
-  the matrix registers the scenario (45 scenarios, 9 retired).
+- The parent agent no longer needs to know concrete model ids. A
+  caller-supplied model request on a `task` spawn (member or inline
+  overlay) is now resolved automatically at dispatch against the live
+  catalog, in three branches:
+  1. **Exact valid id** — a full `provider/model` id present in the
+     catalog dispatches directly (highest precedence, as before).
+  2. **Substring fallback** — an invalid id dispatches the first
+     catalog id (stable provider/model sort order) containing it as a
+     substring. A bare vendor id (`fake`, `anthropic`, `openai`, ...)
+     never substring-dispatches; the branch is disabled for it.
+  3. **User configuration** — no request, an empty request, or a
+     request neither branch could dispatch defers to the user's
+     configured chain (definition policy, remembered preference,
+     process default) instead of overriding verbatim.
+- New `hya_core::category::resolve_dispatch_model` (pure, unit-tested);
+  wired into the app runtime's spawn-member resolution. Workflow
+  member routing keeps its explicit assignment semantics.
+- The `task` tool schema keeps the optional `model` parameter with a
+  neutral description ("resolved automatically against the current
+  catalog"); the tool prose no longer advertises passing model ids.
+- Verification: 5 resolver unit tests; hya-app spawn-precedence tests
+  updated to the new contract (non-dispatchable ids defer, dispatchable
+  ids still win at their layer); new e2e scenario T2.17 proves all
+  three branches plus the bare-vendor deferral against a real backend
+  (exact id -> `pref-target`; substring `target` -> first stable match
+  `fake/override-target`; bare `fake` and no model -> remembered
+  preference). Matrix: 46 scenarios, 9 retired.
