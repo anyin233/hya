@@ -179,6 +179,21 @@ impl SessionEngine {
     ) -> Result<MailReceipt, CoreError> {
         let root = self.team_root(from_session).await?;
         let from = self.resolve_handle(root, from_session).await?;
+        // ADR-0016 `dm` default: a subordinate omits `to` (or writes the
+        // parent sentinel) and the engine resolves its one upward peer.
+        let to = match to {
+            MailEndpoint::Handle(target)
+                if target.trim().is_empty()
+                    || target.trim() == "^parent"
+                    || target.trim() == "^" =>
+            {
+                let parent = hya_proto::scope::parent_path(&from)
+                    .map(str::to_string)
+                    .unwrap_or_else(|| hya_proto::scope::ROOT_HANDLE.to_string());
+                MailEndpoint::Handle(parent)
+            }
+            other => other,
+        };
         #[cfg(test)]
         if matches!(&to, MailEndpoint::Handle(_))
             && let Some(gate) = self.direct_mail_pre_append_gate.as_ref()
