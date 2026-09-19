@@ -96,10 +96,14 @@ pub fn advertise_tool(name: &str) -> bool {
 pub const ORCHESTRATION_TOOLS: &[&str] =
     &["task", "list_agents", "workflow", "search_agent", "kill"];
 
-/// Depth-aware advertisement: at [`crate::MAX_SUBAGENT_DEPTH`] the
-/// orchestration plane disappears from the model-facing schema list.
+/// Depth-aware advertisement, two rules (ADR-0015 follow-up):
+/// - depth 0 (the main agent) never sees `report`: reporting ends a
+///   subagent's episode, and the main agent must deliver its answer as text.
+/// - at [`crate::MAX_SUBAGENT_DEPTH`] the orchestration plane disappears from
+///   the model-facing schema list.
 pub fn advertise_tool_at_depth(name: &str, depth: u32) -> bool {
     advertise_tool(name)
+        && !(depth == 0 && name == "report")
         && !(depth >= crate::MAX_SUBAGENT_DEPTH && ORCHESTRATION_TOOLS.contains(&name))
 }
 
@@ -233,8 +237,18 @@ mod tests {
         }
         // …while communication and coding tools stay.
         assert!(advertise_tool_at_depth("dm", crate::MAX_SUBAGENT_DEPTH));
-        assert!(advertise_tool_at_depth("report", crate::MAX_SUBAGENT_DEPTH));
         assert!(advertise_tool_at_depth("bash", crate::MAX_SUBAGENT_DEPTH));
+        // report belongs to subagents only: hidden at depth 0, present at
+        // every subagent depth including the cap.
+        assert!(
+            !advertise_tool_at_depth("report", 0),
+            "the main agent must never see the report schema"
+        );
+        assert!(advertise_tool_at_depth("report", 1));
+        assert!(
+            advertise_tool_at_depth("report", crate::MAX_SUBAGENT_DEPTH),
+            "subagents at the depth cap still report to finish their episode"
+        );
     }
 
     #[test]

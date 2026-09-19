@@ -238,6 +238,26 @@ mod tests {
         assert!(!out.contains("Project context"));
     }
 
+    /// The report prohibition is main-only: build_system_prompt output (the
+    /// root agent's prompt) carries it, and no builtin subagent prompt may
+    /// contain the prohibition wording (subagents MUST report freely).
+    #[test]
+    fn report_prohibition_is_main_only() {
+        let out = build_system_prompt("You are hya.", &env(), &[]);
+        assert!(
+            out.contains("As the main agent NEVER call `report`"),
+            "the main prompt keeps the prohibition line"
+        );
+        for agent in crate::builtin_agents::BUILTIN_AGENTS {
+            let Some(prompt) = agent.prompt else { continue };
+            assert!(
+                !prompt.contains("NEVER call `report`"),
+                "subagent prompt `{}` must not forbid report",
+                agent.id
+            );
+        }
+    }
+
     #[test]
     fn team_reference_forbids_polling_for_mail() {
         let out = build_system_prompt("", &env(), &[]);
