@@ -1312,6 +1312,9 @@
           "limit": {
             "type": "integer",
             "format": "int64"
+          },
+          "include_raw": {
+            "type": "boolean"
           }
         }
       },
@@ -1331,6 +1334,12 @@
           "next_seq": {
             "type": "integer",
             "format": "int64"
+          },
+          "raw_envelopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         }
       },

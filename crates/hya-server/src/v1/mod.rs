@@ -175,7 +175,14 @@ pub(crate) fn query_request<T: DeserializeOwned>(
         if value.is_empty() {
             continue;
         }
-        map.insert(key.clone(), Value::String(value.clone()));
+        // Query strings carry every value as text; protojson bools need
+        // real JSON booleans, so coerce the canonical literals.
+        let json = match value.as_str() {
+            "true" => Value::Bool(true),
+            "false" => Value::Bool(false),
+            _ => Value::String(value.clone()),
+        };
+        map.insert(key.clone(), json);
     }
     for (key, value) in path_vars {
         map.insert((*key).to_owned(), Value::String((*value).to_owned()));

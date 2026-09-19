@@ -916,6 +916,7 @@ Pagination outcome attached to every paginated response.
 | `session` (1) | `string` | Session identifier to replay. |
 | `since_seq` (2) | `uint64` | Return only events with `seq` strictly greater than this value. |
 | `limit` (3) | `uint32` | Maximum events to return; 0 uses the server default. |
+| `include_raw` (4) | `bool` | When true, also return the canonical durable envelope JSON lines in `raw_envelopes` for tooling and test harnesses. The internal envelope shape is not a stable contract; clients must treat it as opaque. |
 
 ### `ListEventsResponse`
 
@@ -925,6 +926,7 @@ Pagination outcome attached to every paginated response.
 | `session` (1) | `string` | Session identifier. |
 | `events` (2) | `repeated StreamEvent` | Replayed events in sequence order. |
 | `next_seq` (3) | `uint64` | Highest `seq` contained in this response; pass as the next `since_seq`. |
+| `raw_envelopes` (4) | `repeated string` | Canonical durable envelope JSON lines, present only when the request set `include_raw`. Internal shape; treat as opaque beyond replay. |
 
 ### `StreamSessionEventsRequest`
 

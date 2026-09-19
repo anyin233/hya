@@ -3,9 +3,9 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+use hya_api::v1 as pb;
 use hya_client::Client;
 use hya_proto::SessionId;
-use hya_proto::api::{CreateSessionRequest, PromptRequest};
 use serde_json::Value;
 
 use crate::backend::{
@@ -229,26 +229,28 @@ impl E2eEnv {
     pub async fn create_session_with_agent(&self, agent: &str) -> Result<SessionId, E2eError> {
         let resp = self
             .client
-            .create_session(&CreateSessionRequest {
+            .create_session(&pb::CreateSessionRequest {
                 agent: agent.to_string(),
                 model: self.model.clone(),
                 workdir: self.backend.workdir_str(),
-                parent: None,
+                ..Default::default()
             })
             .await?;
-        Ok(resp.session)
+        let id = resp
+            .session
+            .and_then(|session| session.id.parse().ok())
+            .ok_or_else(|| E2eError::Other("create session response missing id".into()))?;
+        Ok(id)
     }
 
-    /// Send a user prompt on the native API and return the admit response.
+    /// Send a user prompt through the v1 event-driven API (admit + wait)
+    /// and return the terminal turn state.
     pub async fn prompt(
         &self,
         session: SessionId,
         text: impl Into<String>,
-    ) -> Result<hya_proto::api::PromptResponse, E2eError> {
-        Ok(self
-            .client
-            .prompt(session, &PromptRequest { text: text.into() })
-            .await?)
+    ) -> Result<pb::TurnInfo, E2eError> {
+        Ok(self.client.prompt(session, text).await?)
     }
 
     /// Reopen the production backend on the same durable store and project.
@@ -492,7 +494,7 @@ impl E2eEnv {
         text: impl Into<String>,
         reply: &str,
         timeout: Duration,
-    ) -> Result<hya_proto::api::PromptResponse, E2eError> {
+    ) -> Result<pb::TurnInfo, E2eError> {
         let http = self.http.clone();
         let base = self.backend.url.clone();
         let reply = reply.to_string();
@@ -521,7 +523,7 @@ impl E2eEnv {
         text: impl Into<String>,
         answers: Value,
         timeout: Duration,
-    ) -> Result<hya_proto::api::PromptResponse, E2eError> {
+    ) -> Result<pb::TurnInfo, E2eError> {
         let http = self.http.clone();
         let base = self.backend.url.clone();
         let replier =

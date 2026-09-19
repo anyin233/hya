@@ -57,14 +57,16 @@ pub(crate) async fn cmd_serve(
     );
     // Optional gRPC listener: HYA_GRPC_BIND=host:port serves the same
     // hya.v1 contract over tonic next to the HTTP surface.
-    if let Some(grpc_bind) = std::env::var("HYA_GRPC_BIND").ok().filter(|value| !value.is_empty()) {
+    if let Some(grpc_bind) = std::env::var("HYA_GRPC_BIND")
+        .ok()
+        .filter(|value| !value.is_empty())
+    {
         let grpc_state = state.clone();
         tokio::spawn(async move {
             if let Ok(listener) = tokio::net::TcpListener::bind(&grpc_bind).await {
-                let addr = listener.local_addr().map_or_else(
-                    |_| grpc_bind.clone(),
-                    |addr| addr.to_string(),
-                );
+                let addr = listener
+                    .local_addr()
+                    .map_or_else(|_| grpc_bind.clone(), |addr| addr.to_string());
                 println!("hya grpc listening on http://{addr}");
                 let grpc = hya_server::V1Grpc::new(grpc_state);
                 use hya_api::v1 as pbv1;
@@ -76,7 +78,9 @@ pub(crate) async fn cmd_serve(
                     .add_service(pbv1::turn_server::TurnServer::new(grpc.clone()))
                     .add_service(pbv1::messages_server::MessagesServer::new(grpc.clone()))
                     .add_service(pbv1::events_server::EventsServer::new(grpc.clone()))
-                    .add_service(pbv1::interactions_server::InteractionsServer::new(grpc.clone()))
+                    .add_service(pbv1::interactions_server::InteractionsServer::new(
+                        grpc.clone(),
+                    ))
                     .add_service(pbv1::workflow_server::WorkflowServer::new(grpc.clone()))
                     .add_service(pbv1::files_server::FilesServer::new(grpc.clone()))
                     .add_service(pbv1::project_server::ProjectServer::new(grpc.clone()))

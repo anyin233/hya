@@ -4155,6 +4155,11 @@ pub struct ListEventsRequest {
     /// Maximum events to return; 0 uses the server default.
     #[prost(uint32, tag = "3")]
     pub limit: u32,
+    /// When true, also return the canonical durable envelope JSON lines in
+    /// `raw_envelopes` for tooling and test harnesses. The internal envelope
+    /// shape is not a stable contract; clients must treat it as opaque.
+    #[prost(bool, tag = "4")]
+    pub include_raw: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListEventsResponse {
@@ -4168,6 +4173,10 @@ pub struct ListEventsResponse {
     /// `since_seq`.
     #[prost(uint64, tag = "3")]
     pub next_seq: u64,
+    /// Canonical durable envelope JSON lines, present only when the request
+    /// set `include_raw`. Internal shape; treat as opaque beyond replay.
+    #[prost(string, repeated, tag = "4")]
+    pub raw_envelopes: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct StreamSessionEventsRequest {
