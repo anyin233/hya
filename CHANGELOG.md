@@ -1,24 +1,28 @@
-# 0.36.38
+# 0.36.39
 
-## gRPC binding lands: `hya.v1` now serves identical functionality over HTTP and gRPC (server, api)
+## Subagent orchestration redesign: unified episodic-resident lifecycle, channel communication plane, workflow on one substrate (core, tool, app, proto)
 
-- `hya-server::V1Grpc` implements all fifteen generated tonic services.
-  Every unary rpc dispatches through the exact same axum `/v1` router the
-  HTTP transport serves (protojson in, protojson out, stable error codes
-  mapped from the JSON error body to gRPC statuses), so dual-transport
-  parity holds by construction rather than by duplication.
-- Streaming rpcs share producers with SSE: `StreamSessionEvents` and
-  `StreamGlobalEvents` are backed by the same curated `StreamFrame`
-  producer (typed `resync` included), and `StreamPty` is a bidirectional
-  bridge over the PTY runtime whose first client frame is a new
-  `PtyClientFrame.attach { id, token }` envelope added to the contract.
-- The conformance gate is real network I/O, not a mock:
-  `tests/v1_grpc_parity.rs` serves all fifteen services on an ephemeral
-  port via tonic, drives health/catalog/session lifecycle, a full
-  event-driven turn to terminal state, event replay, and error mapping
-  through both a generated gRPC client and the HTTP router, and asserts
-  the responses match (volatile ids/timestamps normalized).
-- Embedders serve the binding with
-  `tonic::transport::Server::builder().add_service(ProcessServer::new(V1Grpc::new(state))...)`;
-  backend listener wiring follows in the cutover phase together with the
-  SDK migration.
+- **Unified lifecycle (ADR-0015)**: every subagent spawns as a resident actor
+  through one admission path; `task` is always non-blocking and returns the
+  child's handle immediately. Completion is the `report` tool, gated on a
+  drained inbox and archived children; the engine then writes a state-only
+  six-section handoff (degraded deterministically on summarizer failure),
+  delivers the report to the parent over the pair DM channel, and archives the
+  agent (roster exit, claim release, archive history). A downward `dm` revives
+  an archived direct child from its handoff. Turn errors synthesize a failure
+  report; parents can `kill` a stuck child; subagent depth is hardcoded to two
+  layers and the orchestration tools (`task`, `list_agents`, `workflow`,
+  `search_agent`, `kill`) are hidden at depth 2.
+- **Channel plane (ADR-0016)**: registration mints a unit group channel
+  (`announce-{8}`, leader-only posting, no member list) and a persistent
+  parent-child DM channel (`DM-{8}`, the revival address). New tools `dm`,
+  `broadcast`, `list_channel`, and `search_agent` replace `send`, `announce`,
+  `roster`, `channels`, `join`, and `leave`; addressing is vertical only.
+- **Workflow on the unified substrate (ADR-0017)**: every stage member runs as
+  a parked resident actor; the transient team join is retired from the
+  stage path.
+- **Breaking by mandate**: `task_id` resume, `background`/`resident` task
+  fields, sibling mail, named user channels, and the `subagents.max_depth`
+  config key are removed with no compatibility shim. Known follow-up: the
+  workflow model-routing process e2e (p19) times out on run completion and
+  channel-plane e2e choreography (p16) needs re-adding.

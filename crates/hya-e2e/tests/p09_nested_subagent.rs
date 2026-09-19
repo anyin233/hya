@@ -1,4 +1,4 @@
-//! T2.2 — nested subagent tree depth ≥ 2 via `task` tool.
+//! T2.2 — nested subagent tree depth ≥ 2 via `task` tool (ADR-0015 flow).
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use hya_e2e::{
@@ -8,7 +8,9 @@ use serde_json::json;
 
 #[tokio::test]
 async fn t2_2_nested_task_tree_depth_at_least_two() {
-    // Root → explore → plan (grandchild text) → explore text → root text.
+    // Non-blocking flow (ADR-0015): the root spawns `explore` and ends its
+    // turn; the explore resident's first episode spawns `plan`; the plan
+    // grandchild runs its own episode last.
     let env = E2eEnvBuilder::new()
         .scripts(vec![
             tool_step(
@@ -19,6 +21,7 @@ async fn t2_2_nested_task_tree_depth_at_least_two() {
                     "subagent_type": "explore"
                 }),
             ),
+            text_step("ROOT_OK"),
             tool_step(
                 "task",
                 json!({
@@ -27,9 +30,8 @@ async fn t2_2_nested_task_tree_depth_at_least_two() {
                     "subagent_type": "plan"
                 }),
             ),
-            text_step("GRANDCHILD_OK"),
             text_step("CHILD_OK"),
-            text_step("ROOT_OK"),
+            text_step("GRANDCHILD_OK"),
         ])
         .build()
         .await
@@ -42,7 +44,27 @@ async fn t2_2_nested_task_tree_depth_at_least_two() {
         .await
         .expect("nested prompt");
 
-    let tree = env.session_tree(&session).await.expect("tree");
+    // Both episodes race; wait until the tree shows all three sessions.
+    let mut tree_ok = false;
+    let mut tree = serde_json::Value::Null;
+    for _ in 0..600 {
+        tree = env.session_tree(&session).await.expect("tree");
+        let ids = tree_session_ids(&tree);
+        let mut unique = ids.clone();
+        unique.sort();
+        unique.dedup();
+        if unique.len() >= 3 {
+            tree_ok = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert!(
+        tree_ok,
+        "nested spawn must produce >=3 sessions (root→child→grandchild); tree={tree}; {}",
+        env.diagnostics()
+    );
+
     let depth = tree_max_depth(&tree);
     assert!(
         depth >= 2,
@@ -62,13 +84,5 @@ async fn t2_2_nested_task_tree_depth_at_least_two() {
         env.diagnostics()
     );
 
-    let ids = tree_session_ids(&tree);
-    let mut unique = ids.clone();
-    unique.sort();
-    unique.dedup();
-    assert!(
-        unique.len() >= 3,
-        "depth>=2 requires >=3 distinct session ids (root+child+grandchild); root={root_id}; ids={unique:?}; tree={tree}; {}",
-        env.diagnostics()
-    );
+    let _ = root_id;
 }
