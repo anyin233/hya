@@ -235,6 +235,8 @@ fn part_timeline(envs: &[Envelope]) -> BTreeMap<MessageId, Vec<CompatPartCursor>
             | Event::Unknown => {}
             Event::AgentArchived { .. }
             | Event::AgentRestarted { .. }
+            | Event::MailConsumed { .. }
+        | Event::MailConsumed { .. }
             | Event::ChannelCreated { .. }
             | Event::HandoffCommitted { .. }
             | Event::SubagentReported { .. } => {}
@@ -409,6 +411,8 @@ fn part_times(envs: &[Envelope]) -> BTreeMap<PartId, CompatPartTime> {
             | Event::Unknown => {}
             Event::AgentArchived { .. }
             | Event::AgentRestarted { .. }
+            | Event::MailConsumed { .. }
+        | Event::MailConsumed { .. }
             | Event::ChannelCreated { .. }
             | Event::HandoffCommitted { .. }
             | Event::SubagentReported { .. } => {}
