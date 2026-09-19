@@ -256,7 +256,7 @@ async fn handle_client_frame(st: &ServerState, id: &str, text: &str) -> Result<(
         Some(ClientFrame::Input(bytes)) => {
             let _ = st.pty.write(id, &String::from_utf8_lossy(&bytes)).await;
         }
-        Some(ClientFrame::Resize(_resize)) => {}
+        Some(ClientFrame::Resize(_)) | Some(ClientFrame::Attach(_)) => {}
         Some(ClientFrame::Ping(_)) | None => {}
     }
     Ok(())

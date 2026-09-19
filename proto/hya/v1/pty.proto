@@ -122,6 +122,8 @@ message CreateConnectTokenResponse {
 message PtyClientFrame {
   // Frame payload; exactly one kind is set.
   oneof frame {
+    // First frame on the gRPC `StreamPty` rpc: which session to attach to.
+    PtyAttach attach = 4;
     // Terminal input bytes (keystrokes, paste).
     bytes input = 1;
     // Terminal resize.
@@ -129,6 +131,14 @@ message PtyClientFrame {
     // Liveness ping.
     bool ping = 3;
   }
+}
+
+// Session attachment envelope for the gRPC terminal stream.
+message PtyAttach {
+  // PTY session identifier to attach.
+  string id = 1;
+  // Optional one-time connect token.
+  string token = 2;
 }
 
 // Terminal resize request.

@@ -93,8 +93,24 @@ fn session_stream(
     session: Option<SessionId>,
     since_seq: u64,
 ) -> Sse<impl Stream<Item = Result<SseEvent, Infallible>>> {
+    let events = frame_stream(st, session, since_seq).map(|frame| {
+        let event = match frame {
+            Ok(frame) => SseEvent::default().json_data(frame).unwrap_or_default(),
+            Err(status) => SseEvent::default().event("error").data(status.message()),
+        };
+        Ok(event)
+    });
+    Sse::new(events).keep_alive(KeepAlive::default())
+}
+
+/// The shared live frame producer backing both SSE and gRPC streams.
+pub(crate) fn frame_stream(
+    st: ServerState,
+    session: Option<SessionId>,
+    since_seq: u64,
+) -> impl Stream<Item = Result<pb::StreamFrame, tonic::Status>> {
     let rx = st.engine.bus().subscribe();
-    let events = BroadcastStream::new(rx).filter_map(move |result| async move {
+    BroadcastStream::new(rx).filter_map(move |result| async move {
         match result {
             Ok(envelope) => {
                 if let Some(session) = session
@@ -109,18 +125,13 @@ fn session_stream(
                     Some(event) => pb::stream_frame::Frame::Event(event),
                     None => return None,
                 };
-                let frame = pb::StreamFrame { frame: Some(frame) };
-                Some(Ok(SseEvent::default().json_data(frame).unwrap_or_default()))
+                Some(Ok(pb::StreamFrame { frame: Some(frame) }))
             }
-            Err(_lagged) => {
-                let frame = pb::StreamFrame {
-                    frame: Some(pb::stream_frame::Frame::Resync(pb::ResyncFrame {
-                        last_seq: since_seq,
-                    })),
-                };
-                Some(Ok(SseEvent::default().json_data(frame).unwrap_or_default()))
-            }
+            Err(_lagged) => Some(Ok(pb::StreamFrame {
+                frame: Some(pb::stream_frame::Frame::Resync(pb::ResyncFrame {
+                    last_seq: since_seq,
+                })),
+            })),
         }
-    });
-    Sse::new(events).keep_alive(KeepAlive::default())
+    })
 }

@@ -2927,6 +2927,9 @@
         "type": "object",
         "description": "Client-to-server terminal frame.",
         "properties": {
+          "attach": {
+            "$ref": "#/components/schemas/PtyAttach"
+          },
           "input": {
             "type": "string",
             "contentEncoding": "base64"
@@ -2936,6 +2939,18 @@
           },
           "ping": {
             "type": "boolean"
+          }
+        }
+      },
+      "PtyAttach": {
+        "type": "object",
+        "description": "Session attachment envelope for the gRPC terminal stream.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "token": {
+            "type": "string"
           }
         }
       },

@@ -1,25 +1,24 @@
-# 0.36.37
+# 0.36.38
 
-## HTTP `/v1` binding completed: PTY sessions, WebSocket terminal stream, and the protocol guide (server)
+## gRPC binding lands: `hya.v1` now serves identical functionality over HTTP and gRPC (server, api)
 
-- The PTY domain joins `/v1`: `GET /v1/pty/shells`, `POST /v1/pty`,
-  `GET/PUT/DELETE /v1/pty/{id}`, and `POST /v1/pty/{id}/connect-token`
-  over the shared PTY runtime (typed create/update payloads, one-time
-  connect tickets with expiry).
-- `GET /v1/pty/{id}/connect?ticket=...` upgrades to a WebSocket carrying
-  protojson `PtyClientFrame` / `PtyServerFrame` — the same frame types as
-  the future gRPC `StreamPty` rpc: base64 `input`/`output` bytes,
-  `resize`, `ping`/`pong`, and terminal `exit`. The first server frame
-  replays the current buffer; raw-binary frames from legacy clients are
-  still accepted as terminal input. Runtime resize stays a documented
-  no-op until the PTY state grows a resize API (shell-side SIGWINCH
-  applies).
-- `docs/protocol/README.md` is the third-party integration guide: base
-  URL and `x-hya-directory` scoping, protojson rules (camelCase fields,
-  full enum names, uint64-as-string, omitted defaults), the stable error
-  table mapped across HTTP and gRPC, cursor pagination, the event-driven
-  turn workflow with SSE frame examples, the interaction plane, PTY
-  frames, and a minimal client walkthrough.
-- Every `/v1` rpc in the `hya.v1` contract now has a live HTTP handler.
-  A PTY lifecycle integration test extends `tests/v1_api.rs` (8 green).
-  Next: the gRPC binding and the dual-transport parity suite.
+- `hya-server::V1Grpc` implements all fifteen generated tonic services.
+  Every unary rpc dispatches through the exact same axum `/v1` router the
+  HTTP transport serves (protojson in, protojson out, stable error codes
+  mapped from the JSON error body to gRPC statuses), so dual-transport
+  parity holds by construction rather than by duplication.
+- Streaming rpcs share producers with SSE: `StreamSessionEvents` and
+  `StreamGlobalEvents` are backed by the same curated `StreamFrame`
+  producer (typed `resync` included), and `StreamPty` is a bidirectional
+  bridge over the PTY runtime whose first client frame is a new
+  `PtyClientFrame.attach { id, token }` envelope added to the contract.
+- The conformance gate is real network I/O, not a mock:
+  `tests/v1_grpc_parity.rs` serves all fifteen services on an ephemeral
+  port via tonic, drives health/catalog/session lifecycle, a full
+  event-driven turn to terminal state, event replay, and error mapping
+  through both a generated gRPC client and the HTTP router, and asserts
+  the responses match (volatile ids/timestamps normalized).
+- Embedders serve the binding with
+  `tonic::transport::Server::builder().add_service(ProcessServer::new(V1Grpc::new(state))...)`;
+  backend listener wiring follows in the cutover phase together with the
+  SDK migration.
