@@ -17,6 +17,7 @@ mod mcp;
 mod message;
 mod process;
 mod project;
+mod pty;
 mod session;
 mod turn;
 mod workflow;
@@ -52,6 +53,7 @@ pub(crate) fn router() -> Router<ServerState> {
         .merge(project::router())
         .merge(worktree::router())
         .merge(mcp::router())
+        .merge(pty::router())
 }
 
 /// One failed v1 call rendered as `{"error": {"code", "message"}}` with the

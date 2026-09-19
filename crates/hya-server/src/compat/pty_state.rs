@@ -18,31 +18,31 @@ pub(crate) struct PtyState {
 }
 
 #[derive(Default)]
-pub(super) struct PtyRuntime {
+pub(crate) struct PtyRuntime {
     next: u64,
     pub(super) sessions: BTreeMap<String, PtySession>,
     pub(super) exited: VecDeque<String>,
     pub(super) tickets: BTreeMap<String, ConnectTicket>,
 }
 
-pub(super) struct PtySession {
-    pub(super) info: PtyInfo,
+pub(crate) struct PtySession {
+    pub(crate) info: PtyInfo,
     pub(super) stdin: Arc<Mutex<ChildStdin>>,
     pub(super) buffer: String,
     pub(super) buffer_cursor: u64,
-    pub(super) cursor: u64,
+    pub(crate) cursor: u64,
     pub(super) output: broadcast::Sender<PtyEvent>,
 }
 
-pub(super) struct ConnectTicket {
+pub(crate) struct ConnectTicket {
     pub(super) pty_id: String,
     expires_at: Instant,
 }
 
 #[derive(Clone, Serialize)]
-pub(super) struct PtyInfo {
-    pub(super) id: String,
-    pub(super) title: String,
+pub(crate) struct PtyInfo {
+    pub(crate) id: String,
+    pub(crate) title: String,
     pub(super) command: String,
     pub(super) args: Vec<String>,
     pub(super) cwd: String,
@@ -52,33 +52,33 @@ pub(super) struct PtyInfo {
     pub(super) exit_code: Option<u64>,
 }
 
-pub(super) struct CreatePayload {
-    pub(super) command: String,
-    pub(super) args: Vec<String>,
-    pub(super) cwd: String,
-    pub(super) title: String,
+pub(crate) struct CreatePayload {
+    pub(crate) command: String,
+    pub(crate) args: Vec<String>,
+    pub(crate) cwd: String,
+    pub(crate) title: String,
 }
 
-pub(super) struct UpdatePayload {
-    pub(super) title: Option<String>,
+pub(crate) struct UpdatePayload {
+    pub(crate) title: Option<String>,
 }
 
-pub(super) enum TicketStatus {
+pub(crate) enum TicketStatus {
     Accepted,
     Invalid,
     NotFound,
 }
 
 #[derive(Clone)]
-pub(super) enum PtyEvent {
+pub(crate) enum PtyEvent {
     Data(String),
     End,
 }
 
-pub(super) struct PtyAttachment {
-    pub(super) replay: String,
-    pub(super) cursor: u64,
-    pub(super) events: broadcast::Receiver<PtyEvent>,
+pub(crate) struct PtyAttachment {
+    pub(crate) replay: String,
+    pub(crate) cursor: u64,
+    pub(crate) events: broadcast::Receiver<PtyEvent>,
 }
 
 impl PtyState {
@@ -86,7 +86,7 @@ impl PtyState {
         Self::default()
     }
 
-    pub(super) async fn list(&self) -> Vec<PtyInfo> {
+    pub(crate) async fn list(&self) -> Vec<PtyInfo> {
         self.inner
             .read()
             .await
@@ -96,7 +96,7 @@ impl PtyState {
             .collect()
     }
 
-    pub(super) async fn create(&self, payload: CreatePayload) -> Result<PtyInfo, String> {
+    pub(crate) async fn create(&self, payload: CreatePayload) -> Result<PtyInfo, String> {
         std::fs::create_dir_all(&payload.cwd).map_err(|e| e.to_string())?;
         let mut command = Command::new(&payload.command);
         command
@@ -154,7 +154,7 @@ impl PtyState {
         Ok(info)
     }
 
-    pub(super) async fn get(&self, id: &str) -> Option<PtyInfo> {
+    pub(crate) async fn get(&self, id: &str) -> Option<PtyInfo> {
         self.inner
             .read()
             .await
@@ -163,7 +163,7 @@ impl PtyState {
             .map(|session| session.info.clone())
     }
 
-    pub(super) async fn update(&self, id: &str, payload: UpdatePayload) -> Option<PtyInfo> {
+    pub(crate) async fn update(&self, id: &str, payload: UpdatePayload) -> Option<PtyInfo> {
         let mut state = self.inner.write().await;
         let session = state.sessions.get_mut(id)?;
         if let Some(title) = payload.title {
@@ -172,7 +172,7 @@ impl PtyState {
         Some(session.info.clone())
     }
 
-    pub(super) async fn remove(&self, id: &str) -> bool {
+    pub(crate) async fn remove(&self, id: &str) -> bool {
         let mut state = self.inner.write().await;
         state.tickets.retain(|_, ticket| ticket.pty_id != id);
         state.exited.retain(|exited| exited != id);
@@ -184,7 +184,7 @@ impl PtyState {
         true
     }
 
-    pub(super) async fn issue_ticket(&self, id: &str) -> Option<(String, u64)> {
+    pub(crate) async fn issue_ticket(&self, id: &str) -> Option<(String, u64)> {
         let mut state = self.inner.write().await;
         if !matches!(
             state.sessions.get(id).map(|session| session.info.status),
@@ -205,7 +205,7 @@ impl PtyState {
         Some((ticket, CONNECT_TICKET_TTL.as_secs()))
     }
 
-    pub(super) async fn consume_ticket(&self, id: &str, ticket: &str) -> TicketStatus {
+    pub(crate) async fn consume_ticket(&self, id: &str, ticket: &str) -> TicketStatus {
         let mut state = self.inner.write().await;
         if !matches!(
             state.sessions.get(id).map(|session| session.info.status),
@@ -222,7 +222,7 @@ impl PtyState {
         TicketStatus::Accepted
     }
 
-    pub(super) async fn attach(&self, id: &str, cursor: Option<i64>) -> Option<PtyAttachment> {
+    pub(crate) async fn attach(&self, id: &str, cursor: Option<i64>) -> Option<PtyAttachment> {
         let state = self.inner.read().await;
         let session = state.sessions.get(id)?;
         if session.info.status != "running" {
@@ -243,7 +243,7 @@ impl PtyState {
         })
     }
 
-    pub(super) async fn write(&self, id: &str, data: &str) -> bool {
+    pub(crate) async fn write(&self, id: &str, data: &str) -> bool {
         let stdin = {
             let state = self.inner.read().await;
             let Some(session) = state.sessions.get(id) else {

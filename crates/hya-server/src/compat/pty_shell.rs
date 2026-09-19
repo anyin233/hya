@@ -15,6 +15,15 @@ pub(super) async fn shells() -> Json<Vec<ShellItem>> {
     Json(shell_candidates().into_iter().map(shell_item).collect())
 }
 
+/// Acceptable shell binary paths for v1 shell listing.
+pub(crate) fn shell_paths() -> Vec<std::path::PathBuf> {
+    shell_candidates()
+        .into_iter()
+        .filter(|path| is_executable(path))
+        .map(std::path::PathBuf::from)
+        .collect()
+}
+
 fn shell_candidates() -> Vec<String> {
     let mut paths = BTreeSet::new();
     if let Some(shell) = std::env::var_os("SHELL").and_then(|value| value.into_string().ok()) {

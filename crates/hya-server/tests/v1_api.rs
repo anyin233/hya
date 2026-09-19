@@ -530,3 +530,68 @@ async fn v1_project_vcs_mcp_and_workflow_catalog_answer() {
         "{body}"
     );
 }
+
+#[tokio::test]
+async fn v1_pty_lifecycle_creates_lists_tokens_and_deletes() {
+    let app = router(state().await);
+
+    let (status, body) = send(app.clone(), Method::GET, "/v1/pty/shells", Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        body["shells"]
+            .as_array()
+            .is_none_or(|rows| rows.iter().all(|row| row.as_str().is_some()))
+    );
+
+    let (status, body) = send(
+        app.clone(),
+        Method::POST,
+        "/v1/pty",
+        json!({"shell": "/bin/sh", "cwd": std::env::temp_dir().to_string_lossy()}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let id = body["id"].as_str().unwrap().to_owned();
+
+    let (status, body) = send(
+        app.clone(),
+        Method::GET,
+        &format!("/v1/pty/{id}"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["id"], json!(id));
+
+    let (status, body) = send(
+        app.clone(),
+        Method::POST,
+        &format!("/v1/pty/{id}/connect-token"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        body["token"]
+            .as_str()
+            .is_some_and(|token| !token.is_empty())
+    );
+    assert!(
+        body["url"]
+            .as_str()
+            .is_some_and(|url| url.contains("/connect"))
+    );
+
+    let (status, _) = send(
+        app.clone(),
+        Method::DELETE,
+        &format!("/v1/pty/{id}"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, body) = send(app, Method::GET, &format!("/v1/pty/{id}"), Value::Null).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"]["code"], json!("not_found"));
+}
