@@ -115,13 +115,14 @@ There is **no** Cargo alias named `xtask` in this workspace: invoke it as
 `cargo run -p xtask -- <task> …`. The binary uses a hand-rolled positional
 dispatcher (not clap): the first positional argument selects the task and every
 remaining argument is forwarded verbatim. The currently supported tasks are
-`sync-compat`, `migrate`, `startup-bench`, `matrix-check`, `package-bundle`, and
+`sync-compat`, `migrate`, `startup-bench`, `matrix-check`, `package-bundle`, `gen-api`, and
 `release-rehearsal`.
 
 | Task | Role |
 | --- | --- |
 | `sync-compat` | Import supported MCP servers and skills from an OpenCode/Compat config into hya config / skill roots. Does not import providers or models — use `hya --import compat` for those. |
 | `migrate` | Alias that dispatches to the same implementation as `sync-compat`. |
+| `gen-api` | Regenerate the `hya.v1` contract from `proto/hya/v1`: Rust types (prost/tonic/pbjson), the API reference, and OpenAPI. Uses a vendored protoc; output is committed, and the task fails when any rpc lacks its `// hya.http:` mapping or two rpcs collide. |
 | `startup-bench` | Startup latency benchmark. Honours `HYA_BACKEND_BIN` to select the binary under test. |
 | `matrix-check` | Validates `crates/hya-e2e/matrix.toml`. See [agent-matrix.md](testing/agent-matrix.md). |
 | `package-bundle` | Validates a source directory and atomically writes the canonical deterministic public `.hyabundle` package. |
@@ -191,7 +192,7 @@ When changing a boundary, update the nearest docs page:
 | Providers | [Providers](architecture/providers.md) |
 | Tools/permissions | [Tools and Permissions](architecture/tools-and-permissions.md) |
 | Store/schema | [Storage](architecture/storage.md) |
-| Server/client API | [Server and Client](architecture/server-client.md) |
+| Server/client API | [Server and Client](architecture/server-client.md), [Protocol guide](protocol/README.md) |
 | TUI behavior | [TUI](architecture/tui.md), [TUI Reference](tui-reference.md), [TUI Keybindings](tui-keybindings.md) |
 | Agent process E2E / matrix | [Testing](testing/README.md), [Agent matrix](testing/agent-matrix.md) |
 

@@ -1,25 +1,19 @@
-# 0.36.43
+# 0.36.44
 
-## The Compat surface is gone: `/v1` is the only HTTP contract (server)
+## Documentation rewritten for the consolidated contract (docs)
 
-- Deleted the entire legacy route surface: all Compat route groups
-  (~63 modules), the three `/session`-family mirrors, the legacy
-  `/tui` control plane, `/doc`+`/openapi.json`, the old native
-  `/sessions/*` routes, and the legacy `/event`-family SSE endpoints.
-  The server now serves exactly one contract: `hya.v1` over
-  HTTP/JSON+SSE+WebSocket (and gRPC via `V1Grpc` through the same
-  router). 86 legacy integration-test files were removed with it.
-- The shared machinery those routes used survives re-homed under
-  `hya-server::support` (unchanged logic, route handlers stripped):
-  command/skill catalogs with template expansion, bound-agent
-  resolution and AGENTS/reference guidance, PTY runtime, worktree git
-  helpers, the VCS git module, the config bag, and the JSONC/model-ref
-  utilities. Pending permission/question planes keep their full
-  bridges for the interaction stream.
-- v1 fixes surfaced by the deletion sweep: MCP duplicate-tool
-  collisions map to `unavailable` (503) instead of `internal`; MCP
-  add/connect bodies use the inlined oneof (`command: {...}`); skill
-  listings and MCP status reads in the e2e harness moved to `/v1`.
-- Gates: server suite 26/26 green; the full process e2e matrix (p01–
-  p20, minus the pre-existing main-broken catalog test) 43/43 green
-  against real backends running the v1-only surface.
+- `docs/architecture/server-client.md` is now the v1-only reference: the
+  one-contract/two-transport model (HTTP+SSE+WebSocket and gRPC through
+  the same router), app state, the 15-service/77-rpc surface map,
+  event-driven and projection-read semantics, guidance parity, command
+  expansion, the error table, CORS, clients, and the testing story.
+- The component map in `AGENTS.md` reflects the new crate landscape:
+  `hya-api` (contract crate + gen-api pipeline), `hya-sdk-v1` (SDK for
+  new frontends), the v1-oriented `hya-server`/`hya-client` entries, and
+  `hya-sdk`/`hya-native` marked legacy (old TUI only, deletion at the
+  new-TUI cutover).
+- `docs/README.md` gains a protocol-contract reading path; the
+  boundary-to-page table routes server/client API changes to both the
+  architecture page and the protocol guide; `docs/development.md`
+  documents the `gen-api` xtask (vendored protoc, committed output,
+  hya.http coverage/collision gates).
