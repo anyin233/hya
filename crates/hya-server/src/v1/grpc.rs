@@ -1230,3 +1230,34 @@ impl pb::logs_server::Logs for V1Grpc {
         unary!(self, "POST", "/v1/logs", request)
     }
 }
+
+// ---------------------------------------------------------------------------
+// AgentModels
+// ---------------------------------------------------------------------------
+
+#[tonic::async_trait]
+impl pb::agent_models_server::AgentModels for V1Grpc {
+    async fn list_agent_models(
+        &self,
+        request: GrpcRequest<pb::ListAgentModelsRequest>,
+    ) -> Result<GrpcResponse<pb::ListAgentModelsResponse>, Status> {
+        get_rpc!(self, "/v1/agent-models", request)
+    }
+
+    async fn set_agent_model(
+        &self,
+        request: GrpcRequest<pb::SetAgentModelRequest>,
+    ) -> Result<GrpcResponse<pb::AgentModelState>, Status> {
+        let inner = request.into_inner();
+        let agent_id = field(&inner, "agentId");
+        into_response(
+            self.dispatch::<_, _>(
+                "PUT",
+                &format!("/v1/agent-models/{agent_id}"),
+                BTreeMap::new(),
+                &inner,
+            )
+            .await?,
+        )
+    }
+}

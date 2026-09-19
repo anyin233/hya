@@ -10,6 +10,7 @@ table (`hya_api::error`); timestamps are RFC 3339 strings in JSON.
 
 ## Contents
 
+- [AgentModels service](#service-agentmodels)
 - [Auth service](#service-auth)
 - [Catalog service](#service-catalog)
 - [Events service](#service-events)
@@ -29,6 +30,27 @@ table (`hya_api::error`); timestamps are RFC 3339 strings in JSON.
 - [Enums](#enums)
 
 ---
+
+## Service `AgentModels`
+
+Durable per-agent model preference surface, backed by the app-owned
+control handle.
+
+| RPC | HTTP | gRPC | Request | Response |
+|---|---|---|---|---|
+| `ListAgentModels` | `GET /v1/agent-models` | `hya.v1.AgentModels.ListAgentModels` | `ListAgentModelsRequest` | `ListAgentModelsResponse` |
+| `SetAgentModel` | `PUT /v1/agent-models/{agent_id}` | `hya.v1.AgentModels.SetAgentModel` | `SetAgentModelRequest` | `AgentModelState` |
+
+### `AgentModels.ListAgentModels`
+
+Effective model state for every catalog agent under one binding.
+
+
+### `AgentModels.SetAgentModel`
+
+Set or clear one agent's remembered preference; returns the
+post-commit state.
+
 
 ## Service `Auth`
 
@@ -616,6 +638,59 @@ Reset a worktree to a clean state at its branch head.
 
 
 ## Messages
+
+### `AgentModelSelection`
+
+A concrete provider/model selection.
+
+| Field | Type | Description |
+|---|---|---|
+| `provider_id` (1) | `string` | Provider identifier. |
+| `model_id` (2) | `string` | Provider-local model identifier. |
+
+### `AgentModelState`
+
+Effective model state for one catalog agent.
+
+| Field | Type | Description |
+|---|---|---|
+| `agent_id` (1) | `string` | Stable catalog agent id. |
+| `description` (2) | `string` | Human-readable agent description. |
+| `mode` (3) | `string` | Selector role (`primary` or `subagent`). |
+| `hidden` (4) | `bool` | Whether the agent is hidden from ordinary selection. |
+| `configured` (5) | `bool` | Whether direct model/category configuration is present (such agents cannot take a remembered preference). |
+| `settable` (6) | `bool` | Whether an automatic remembered preference can be set. |
+| `preference` (7) | `AgentModelSelection` | Retained preference, including stale or configured rows. |
+| `preference_available` (8) | `bool` | Whether the retained preference exactly matches the current catalog. |
+| `effective` (9) | `AgentModelSelection` | Current effective model identity. |
+| `source` (10) | `AgentModelSource` | Which tier resolved the effective model. |
+| `configuration` (11) | `AgentModelSelection` | Model explicitly stored in the owning user configuration file. |
+| `session_override` (12) | `AgentModelSelection` | Active root-session override captured for this agent. |
+
+### `ListAgentModelsRequest`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `directory` (1) | `string` | Directory scope for the agent binding; empty means the process default. |
+| `session` (2) | `string` | Bind against this session's runtime when non-empty (its workdir and session overrides); otherwise the directory root binding is used. |
+
+### `ListAgentModelsResponse`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `agents` (1) | `repeated AgentModelState` | Effective state for every agent in the binding, stable id order. |
+
+### `SetAgentModelRequest`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `directory` (1) | `string` | Directory scope for the agent binding; empty means the process default. |
+| `session` (2) | `string` | Bind against this session's runtime when non-empty. |
+| `agent_id` (3) | `string` | Stable catalog agent id whose preference is being set. |
+| `preference` (4) | `optional AgentModelSelection` | New remembered preference; absent/null clears it. |
 
 ### `OauthTokens`
 
@@ -2360,6 +2435,18 @@ One git worktree.
 | `worktree` (1) | `string` | Worktree identifier to reset. |
 
 ## Enums
+
+### `AgentModelSource`
+
+Which tier resolved an agent's effective base model.
+
+| Value | Number | Description |
+|---|---|---|
+| `AGENT_MODEL_SOURCE_UNSPECIFIED` | 0 | Unset sentinel; never emitted by the server. |
+| `AGENT_MODEL_SOURCE_SESSION` | 1 | An explicit override captured for the current root session tree. |
+| `AGENT_MODEL_SOURCE_CONFIGURED` | 2 | The agent has an explicit direct model or category policy. |
+| `AGENT_MODEL_SOURCE_REMEMBERED` | 3 | A durable preference retained and matching the current catalog. |
+| `AGENT_MODEL_SOURCE_DEFAULT` | 4 | No configured or retained model; the process base is used. |
 
 ### `AuthStatus`
 

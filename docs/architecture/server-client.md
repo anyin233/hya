@@ -34,7 +34,8 @@ git) lives under `hya_server::support`.
 
 ## The v1 surface
 
-Fifteen services, 77 rpcs: Process (health/location/config/dispose/
+Sixteen services, 79 rpcs: AgentModels (durable per-agent model
+preferences), Process (health/location/config/dispose/
 upgrade/bootstrap), Catalog (agents/models/providers/commands/skills/
 tools), Auth, Session (lifecycle + fork/compact/summarize/revert), Turn
 (event-driven admit + get/wait/cancel), Messages + Todo, Events (replay

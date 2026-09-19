@@ -73,6 +73,9 @@ pub(crate) async fn cmd_serve(
                 let server = tonic::transport::Server::builder()
                     .add_service(pbv1::process_server::ProcessServer::new(grpc.clone()))
                     .add_service(pbv1::catalog_server::CatalogServer::new(grpc.clone()))
+                    .add_service(pbv1::agent_models_server::AgentModelsServer::new(
+                        grpc.clone(),
+                    ))
                     .add_service(pbv1::auth_server::AuthServer::new(grpc.clone()))
                     .add_service(pbv1::session_server::SessionServer::new(grpc.clone()))
                     .add_service(pbv1::turn_server::TurnServer::new(grpc.clone()))

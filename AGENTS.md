@@ -47,7 +47,7 @@ workspace: user prompts, model deltas, tool calls, permissions, token usage, and
 session lifecycle changes are appended as `Event`s, then replayed into a
 projection for the TUI, HTTP API, and client surfaces.
 
-The server exposes exactly one contract — `hya.v1` (15 services / 77 rpcs in
+The server exposes exactly one contract — `hya.v1` (16 services / 79 rpcs in
 `proto/hya/v1`) — over HTTP/JSON+SSE+WebSocket under `/v1` and, when
 `HYA_GRPC_BIND` is set, over gRPC through `hya_server::V1Grpc`, which dispatches
 through the same router. The legacy Compat `/api/*`, bare native routes, and

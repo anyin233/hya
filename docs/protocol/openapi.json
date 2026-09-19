@@ -6,6 +6,28 @@
     "version": "1.0.0"
   },
   "paths": {
+    "/v1/agent-models": {
+      "get": {
+        "operationId": "AgentModels.ListAgentModels",
+        "summary": "Effective model state for every catalog agent under one binding.",
+        "tags": [
+          "AgentModels"
+        ],
+        "x-grpc-method": "hya.v1.AgentModels.ListAgentModels",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/agent-models/{agent_id}": {
+      "put": {
+        "operationId": "AgentModels.SetAgentModel",
+        "summary": "Set or clear one agent's remembered preference; returns the",
+        "tags": [
+          "AgentModels"
+        ],
+        "x-grpc-method": "hya.v1.AgentModels.SetAgentModel",
+        "x-server-streaming": false
+      }
+    },
     "/v1/agents": {
       "get": {
         "operationId": "Catalog.ListAgents",
@@ -834,6 +856,102 @@
   },
   "components": {
     "schemas": {
+      "AgentModelSelection": {
+        "type": "object",
+        "description": "A concrete provider/model selection.",
+        "properties": {
+          "provider_id": {
+            "type": "string"
+          },
+          "model_id": {
+            "type": "string"
+          }
+        }
+      },
+      "AgentModelState": {
+        "type": "object",
+        "description": "Effective model state for one catalog agent.",
+        "properties": {
+          "agent_id": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string"
+          },
+          "hidden": {
+            "type": "boolean"
+          },
+          "configured": {
+            "type": "boolean"
+          },
+          "settable": {
+            "type": "boolean"
+          },
+          "preference": {
+            "$ref": "#/components/schemas/AgentModelSelection"
+          },
+          "preference_available": {
+            "type": "boolean"
+          },
+          "effective": {
+            "$ref": "#/components/schemas/AgentModelSelection"
+          },
+          "source": {
+            "$ref": "#/components/schemas/AgentModelSource"
+          },
+          "configuration": {
+            "$ref": "#/components/schemas/AgentModelSelection"
+          },
+          "session_override": {
+            "$ref": "#/components/schemas/AgentModelSelection"
+          }
+        }
+      },
+      "ListAgentModelsRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "directory": {
+            "type": "string"
+          },
+          "session": {
+            "type": "string"
+          }
+        }
+      },
+      "ListAgentModelsResponse": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "agents": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AgentModelState"
+            }
+          }
+        }
+      },
+      "SetAgentModelRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "directory": {
+            "type": "string"
+          },
+          "session": {
+            "type": "string"
+          },
+          "agent_id": {
+            "type": "string"
+          },
+          "preference": {
+            "$ref": "#/components/schemas/AgentModelSelection"
+          }
+        }
+      },
       "OauthTokens": {
         "type": "object",
         "description": "OAuth tokens captured from a completed provider flow.",
@@ -3732,6 +3850,17 @@
             "type": "string"
           }
         }
+      },
+      "AgentModelSource": {
+        "type": "string",
+        "description": "Which tier resolved an agent's effective base model.",
+        "enum": [
+          "AGENT_MODEL_SOURCE_UNSPECIFIED",
+          "AGENT_MODEL_SOURCE_SESSION",
+          "AGENT_MODEL_SOURCE_CONFIGURED",
+          "AGENT_MODEL_SOURCE_REMEMBERED",
+          "AGENT_MODEL_SOURCE_DEFAULT"
+        ]
       },
       "AuthStatus": {
         "type": "string",
