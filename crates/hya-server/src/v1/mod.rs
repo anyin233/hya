@@ -6,6 +6,7 @@
 //! the same engine/app state as the legacy surface. The gRPC binding
 //! (phase P3) wraps the same handler logic.
 
+mod agent_models;
 mod auth;
 mod catalog;
 mod convert;
@@ -42,6 +43,7 @@ pub(crate) fn router() -> Router<ServerState> {
     Router::new()
         .merge(process::router())
         .merge(catalog::router())
+        .merge(agent_models::router())
         .merge(auth::router())
         .merge(logs::router())
         .merge(session::router())

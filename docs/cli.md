@@ -440,7 +440,7 @@ line, for example
 The server serves exactly one HTTP contract — `hya.v1` — under `/v1`
 (HTTP/JSON + SSE + WebSocket). The former native `/sessions/*` routes and the
 Compat-compatible legacy/v2 route groups are deleted. Setting
-`HYA_GRPC_BIND=<host:port>` additionally serves the same fifteen services over
+`HYA_GRPC_BIND=<host:port>` additionally serves the same sixteen services over
 gRPC (reflection enabled). See [Protocol guide](protocol/README.md),
 [API reference](protocol/api-reference.md), and
 [Server and Client](architecture/server-client.md).

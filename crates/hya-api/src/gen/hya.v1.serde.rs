@@ -158,6 +158,479 @@ impl<'de> serde::Deserialize<'de> for AddMcpServerRequest {
         deserializer.deserialize_struct("hya.v1.AddMcpServerRequest", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for AgentModelSelection {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.provider_id.is_empty() {
+            len += 1;
+        }
+        if !self.model_id.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("hya.v1.AgentModelSelection", len)?;
+        if !self.provider_id.is_empty() {
+            struct_ser.serialize_field("providerId", &self.provider_id)?;
+        }
+        if !self.model_id.is_empty() {
+            struct_ser.serialize_field("modelId", &self.model_id)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for AgentModelSelection {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "provider_id",
+            "providerId",
+            "model_id",
+            "modelId",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            ProviderId,
+            ModelId,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "providerId" | "provider_id" => Ok(GeneratedField::ProviderId),
+                            "modelId" | "model_id" => Ok(GeneratedField::ModelId),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = AgentModelSelection;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct hya.v1.AgentModelSelection")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<AgentModelSelection, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut provider_id__ = None;
+                let mut model_id__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::ProviderId => {
+                            if provider_id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("providerId"));
+                            }
+                            provider_id__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::ModelId => {
+                            if model_id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("modelId"));
+                            }
+                            model_id__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(AgentModelSelection {
+                    provider_id: provider_id__.unwrap_or_default(),
+                    model_id: model_id__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("hya.v1.AgentModelSelection", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for AgentModelSource {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let variant = match self {
+            Self::Unspecified => "AGENT_MODEL_SOURCE_UNSPECIFIED",
+            Self::Session => "AGENT_MODEL_SOURCE_SESSION",
+            Self::Configured => "AGENT_MODEL_SOURCE_CONFIGURED",
+            Self::Remembered => "AGENT_MODEL_SOURCE_REMEMBERED",
+            Self::Default => "AGENT_MODEL_SOURCE_DEFAULT",
+        };
+        serializer.serialize_str(variant)
+    }
+}
+impl<'de> serde::Deserialize<'de> for AgentModelSource {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "AGENT_MODEL_SOURCE_UNSPECIFIED",
+            "AGENT_MODEL_SOURCE_SESSION",
+            "AGENT_MODEL_SOURCE_CONFIGURED",
+            "AGENT_MODEL_SOURCE_REMEMBERED",
+            "AGENT_MODEL_SOURCE_DEFAULT",
+        ];
+
+        struct GeneratedVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = AgentModelSource;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(formatter, "expected one of: {:?}", &FIELDS)
+            }
+
+            fn visit_i64<E>(self, v: i64) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                i32::try_from(v)
+                    .ok()
+                    .and_then(|x| x.try_into().ok())
+                    .ok_or_else(|| {
+                        serde::de::Error::invalid_value(serde::de::Unexpected::Signed(v), &self)
+                    })
+            }
+
+            fn visit_u64<E>(self, v: u64) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                i32::try_from(v)
+                    .ok()
+                    .and_then(|x| x.try_into().ok())
+                    .ok_or_else(|| {
+                        serde::de::Error::invalid_value(serde::de::Unexpected::Unsigned(v), &self)
+                    })
+            }
+
+            fn visit_str<E>(self, value: &str) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                match value {
+                    "AGENT_MODEL_SOURCE_UNSPECIFIED" => Ok(AgentModelSource::Unspecified),
+                    "AGENT_MODEL_SOURCE_SESSION" => Ok(AgentModelSource::Session),
+                    "AGENT_MODEL_SOURCE_CONFIGURED" => Ok(AgentModelSource::Configured),
+                    "AGENT_MODEL_SOURCE_REMEMBERED" => Ok(AgentModelSource::Remembered),
+                    "AGENT_MODEL_SOURCE_DEFAULT" => Ok(AgentModelSource::Default),
+                    _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
+                }
+            }
+        }
+        deserializer.deserialize_any(GeneratedVisitor)
+    }
+}
+impl serde::Serialize for AgentModelState {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.agent_id.is_empty() {
+            len += 1;
+        }
+        if !self.description.is_empty() {
+            len += 1;
+        }
+        if !self.mode.is_empty() {
+            len += 1;
+        }
+        if self.hidden {
+            len += 1;
+        }
+        if self.configured {
+            len += 1;
+        }
+        if self.settable {
+            len += 1;
+        }
+        if self.preference.is_some() {
+            len += 1;
+        }
+        if self.preference_available {
+            len += 1;
+        }
+        if self.effective.is_some() {
+            len += 1;
+        }
+        if self.source != 0 {
+            len += 1;
+        }
+        if self.configuration.is_some() {
+            len += 1;
+        }
+        if self.session_override.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("hya.v1.AgentModelState", len)?;
+        if !self.agent_id.is_empty() {
+            struct_ser.serialize_field("agentId", &self.agent_id)?;
+        }
+        if !self.description.is_empty() {
+            struct_ser.serialize_field("description", &self.description)?;
+        }
+        if !self.mode.is_empty() {
+            struct_ser.serialize_field("mode", &self.mode)?;
+        }
+        if self.hidden {
+            struct_ser.serialize_field("hidden", &self.hidden)?;
+        }
+        if self.configured {
+            struct_ser.serialize_field("configured", &self.configured)?;
+        }
+        if self.settable {
+            struct_ser.serialize_field("settable", &self.settable)?;
+        }
+        if let Some(v) = self.preference.as_ref() {
+            struct_ser.serialize_field("preference", v)?;
+        }
+        if self.preference_available {
+            struct_ser.serialize_field("preferenceAvailable", &self.preference_available)?;
+        }
+        if let Some(v) = self.effective.as_ref() {
+            struct_ser.serialize_field("effective", v)?;
+        }
+        if self.source != 0 {
+            let v = AgentModelSource::try_from(self.source)
+                .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.source)))?;
+            struct_ser.serialize_field("source", &v)?;
+        }
+        if let Some(v) = self.configuration.as_ref() {
+            struct_ser.serialize_field("configuration", v)?;
+        }
+        if let Some(v) = self.session_override.as_ref() {
+            struct_ser.serialize_field("sessionOverride", v)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for AgentModelState {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "agent_id",
+            "agentId",
+            "description",
+            "mode",
+            "hidden",
+            "configured",
+            "settable",
+            "preference",
+            "preference_available",
+            "preferenceAvailable",
+            "effective",
+            "source",
+            "configuration",
+            "session_override",
+            "sessionOverride",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            AgentId,
+            Description,
+            Mode,
+            Hidden,
+            Configured,
+            Settable,
+            Preference,
+            PreferenceAvailable,
+            Effective,
+            Source,
+            Configuration,
+            SessionOverride,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "agentId" | "agent_id" => Ok(GeneratedField::AgentId),
+                            "description" => Ok(GeneratedField::Description),
+                            "mode" => Ok(GeneratedField::Mode),
+                            "hidden" => Ok(GeneratedField::Hidden),
+                            "configured" => Ok(GeneratedField::Configured),
+                            "settable" => Ok(GeneratedField::Settable),
+                            "preference" => Ok(GeneratedField::Preference),
+                            "preferenceAvailable" | "preference_available" => Ok(GeneratedField::PreferenceAvailable),
+                            "effective" => Ok(GeneratedField::Effective),
+                            "source" => Ok(GeneratedField::Source),
+                            "configuration" => Ok(GeneratedField::Configuration),
+                            "sessionOverride" | "session_override" => Ok(GeneratedField::SessionOverride),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = AgentModelState;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct hya.v1.AgentModelState")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<AgentModelState, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut agent_id__ = None;
+                let mut description__ = None;
+                let mut mode__ = None;
+                let mut hidden__ = None;
+                let mut configured__ = None;
+                let mut settable__ = None;
+                let mut preference__ = None;
+                let mut preference_available__ = None;
+                let mut effective__ = None;
+                let mut source__ = None;
+                let mut configuration__ = None;
+                let mut session_override__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::AgentId => {
+                            if agent_id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("agentId"));
+                            }
+                            agent_id__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Description => {
+                            if description__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("description"));
+                            }
+                            description__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Mode => {
+                            if mode__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("mode"));
+                            }
+                            mode__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Hidden => {
+                            if hidden__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("hidden"));
+                            }
+                            hidden__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Configured => {
+                            if configured__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("configured"));
+                            }
+                            configured__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Settable => {
+                            if settable__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("settable"));
+                            }
+                            settable__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Preference => {
+                            if preference__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("preference"));
+                            }
+                            preference__ = map_.next_value()?;
+                        }
+                        GeneratedField::PreferenceAvailable => {
+                            if preference_available__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("preferenceAvailable"));
+                            }
+                            preference_available__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Effective => {
+                            if effective__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("effective"));
+                            }
+                            effective__ = map_.next_value()?;
+                        }
+                        GeneratedField::Source => {
+                            if source__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("source"));
+                            }
+                            source__ = Some(map_.next_value::<AgentModelSource>()? as i32);
+                        }
+                        GeneratedField::Configuration => {
+                            if configuration__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("configuration"));
+                            }
+                            configuration__ = map_.next_value()?;
+                        }
+                        GeneratedField::SessionOverride => {
+                            if session_override__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("sessionOverride"));
+                            }
+                            session_override__ = map_.next_value()?;
+                        }
+                    }
+                }
+                Ok(AgentModelState {
+                    agent_id: agent_id__.unwrap_or_default(),
+                    description: description__.unwrap_or_default(),
+                    mode: mode__.unwrap_or_default(),
+                    hidden: hidden__.unwrap_or_default(),
+                    configured: configured__.unwrap_or_default(),
+                    settable: settable__.unwrap_or_default(),
+                    preference: preference__,
+                    preference_available: preference_available__.unwrap_or_default(),
+                    effective: effective__,
+                    source: source__.unwrap_or_default(),
+                    configuration: configuration__,
+                    session_override: session_override__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("hya.v1.AgentModelState", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for AgentSummary {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -7955,6 +8428,205 @@ impl<'de> serde::Deserialize<'de> for InteractionType {
             }
         }
         deserializer.deserialize_any(GeneratedVisitor)
+    }
+}
+impl serde::Serialize for ListAgentModelsRequest {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.directory.is_empty() {
+            len += 1;
+        }
+        if !self.session.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("hya.v1.ListAgentModelsRequest", len)?;
+        if !self.directory.is_empty() {
+            struct_ser.serialize_field("directory", &self.directory)?;
+        }
+        if !self.session.is_empty() {
+            struct_ser.serialize_field("session", &self.session)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for ListAgentModelsRequest {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "directory",
+            "session",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Directory,
+            Session,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "directory" => Ok(GeneratedField::Directory),
+                            "session" => Ok(GeneratedField::Session),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = ListAgentModelsRequest;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct hya.v1.ListAgentModelsRequest")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<ListAgentModelsRequest, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut directory__ = None;
+                let mut session__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Directory => {
+                            if directory__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("directory"));
+                            }
+                            directory__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Session => {
+                            if session__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("session"));
+                            }
+                            session__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(ListAgentModelsRequest {
+                    directory: directory__.unwrap_or_default(),
+                    session: session__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("hya.v1.ListAgentModelsRequest", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for ListAgentModelsResponse {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.agents.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("hya.v1.ListAgentModelsResponse", len)?;
+        if !self.agents.is_empty() {
+            struct_ser.serialize_field("agents", &self.agents)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for ListAgentModelsResponse {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "agents",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Agents,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "agents" => Ok(GeneratedField::Agents),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = ListAgentModelsResponse;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct hya.v1.ListAgentModelsResponse")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<ListAgentModelsResponse, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut agents__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Agents => {
+                            if agents__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("agents"));
+                            }
+                            agents__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(ListAgentModelsResponse {
+                    agents: agents__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("hya.v1.ListAgentModelsResponse", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for ListAgentsRequest {
@@ -18209,6 +18881,149 @@ impl<'de> serde::Deserialize<'de> for SessionUpdated {
             }
         }
         deserializer.deserialize_struct("hya.v1.SessionUpdated", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for SetAgentModelRequest {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.directory.is_empty() {
+            len += 1;
+        }
+        if !self.session.is_empty() {
+            len += 1;
+        }
+        if !self.agent_id.is_empty() {
+            len += 1;
+        }
+        if self.preference.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("hya.v1.SetAgentModelRequest", len)?;
+        if !self.directory.is_empty() {
+            struct_ser.serialize_field("directory", &self.directory)?;
+        }
+        if !self.session.is_empty() {
+            struct_ser.serialize_field("session", &self.session)?;
+        }
+        if !self.agent_id.is_empty() {
+            struct_ser.serialize_field("agentId", &self.agent_id)?;
+        }
+        if let Some(v) = self.preference.as_ref() {
+            struct_ser.serialize_field("preference", v)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for SetAgentModelRequest {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "directory",
+            "session",
+            "agent_id",
+            "agentId",
+            "preference",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Directory,
+            Session,
+            AgentId,
+            Preference,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "directory" => Ok(GeneratedField::Directory),
+                            "session" => Ok(GeneratedField::Session),
+                            "agentId" | "agent_id" => Ok(GeneratedField::AgentId),
+                            "preference" => Ok(GeneratedField::Preference),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = SetAgentModelRequest;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct hya.v1.SetAgentModelRequest")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<SetAgentModelRequest, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut directory__ = None;
+                let mut session__ = None;
+                let mut agent_id__ = None;
+                let mut preference__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Directory => {
+                            if directory__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("directory"));
+                            }
+                            directory__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Session => {
+                            if session__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("session"));
+                            }
+                            session__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::AgentId => {
+                            if agent_id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("agentId"));
+                            }
+                            agent_id__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Preference => {
+                            if preference__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("preference"));
+                            }
+                            preference__ = map_.next_value()?;
+                        }
+                    }
+                }
+                Ok(SetAgentModelRequest {
+                    directory: directory__.unwrap_or_default(),
+                    session: session__.unwrap_or_default(),
+                    agent_id: agent_id__.unwrap_or_default(),
+                    preference: preference__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("hya.v1.SetAgentModelRequest", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for SetProviderAuthRequest {

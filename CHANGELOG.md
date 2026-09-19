@@ -1,34 +1,26 @@
-# 0.36.46
+# 0.36.47
 
-## Compat endpoints verified gone; old-TUI verification removed; documentation fully updated (repo-wide)
+## Agent-model preferences reachable over v1; interaction frames are live on the streams (server, api)
 
-- Endpoint audit (subagent-verified): zero legacy route registrations
-  remain anywhere in `crates/` — every route is `/v1/...` from the
-  `hya-server::v1` router plus the gRPC binding through the same router.
-  Stale doc comments referencing the deleted modules were cleaned.
-- Old-TUI compatibility is now deliberately and completely broken, and
-  its verification is removed with it: the seven backend-integration
-  bun suites that drove the vendored TUI against deleted endpoints
-  (`real-backend`, `real-backend-agents`, `workflow-pty`, `pty-smoke`,
-  `sdk-spine`, `agent-model-sync`, `coding-tool-sync`) are deleted; the
-  legacy `hya-sdk` endpoint-verifying unit tests and the
-  `backend_spike` example hitting `/config` + `/global/event` are gone;
-  the `hya` crate drops its unused `hya-sdk` dev-dependency. The TUI
-  source stays compiling (`tsgo --noEmit` clean); new-TUI coverage on
-  `hya-sdk-v1` returns with that frontend.
-- Test infrastructure aligned: the e2e matrix retires the deleted Track
-  T real-backend scenarios and compat Track I rows (replaced by
-  `I.v1_api` + `I.v1_grpc_parity`; `xtask matrix-check` green), and the
-  CI Track T gate now runs the surviving registered suite only.
-- Documentation fully updated (40+ pages): architecture pages, testing
-  guides, spec pages, configuration/CLI/troubleshooting, project
-  structure, README, AGENTS.md — every stale reference to the deleted
-  surface is rewritten to its v1 equivalent, marked historical, or the
-  section removed; `compat-parity.md` is banner-marked as a historical
-  record. Living CLI no-op flags, the internal event enum, the plugin
-  JSON-RPC adapter, and `ServerHandle` supervision are deliberately
-  preserved as documented living surface.
-- Gates: fmt clean; workspace clippy `-D warnings` zero; workspace
-  tests green (two known load-flakes in the concurrent workstream's
-  hya-app/hya-tool timing tests pass isolated and in-crate); backend
-  binary builds; TUI package typechecks.
+- New `AgentModels` service (16th service, 79 rpcs total):
+  `GET /v1/agent-models` lists every catalog agent's effective model and
+  its source tier (session / configured / remembered / default), and
+  `PUT /v1/agent-models/{agent_id}` sets or clears one agent's durable
+  remembered preference — the surface the retired `/tui/agent-models`
+  routes provided, now on the consolidated contract over the same
+  app-owned `PersistentAgentModelControl` (owner-fenced store commits,
+  catalog validation, live snapshot publication). The gRPC binding
+  serves both rpcs through the same router and the parity suite
+  asserts the unavailable-control error matches across transports.
+- Interaction frames are wired end to end: the pending permission and
+  question planes now merge into the shared live frame producer, so
+  `permissionRequested`, `questionRequested`, and `interactionResolved`
+  frames arrive on the session and global streams (SSE and gRPC alike,
+  `seq == 0` live-only semantics). An agent's permission ask reaches
+  the user through `/v1/interactions` listing and these frames; an
+  "always" answer both resolves the frame in flight and persists a
+  saved rule (`GET /v1/permissions/rules`).
+- New integration suites: `v1_agent_models_api.rs` (list/set/clear,
+  full stable-error table, unavailable control) and
+  `v1_interaction_stream.rs` (asked + resolved frames over SSE, saved
+  rule persistence, question reject resolution).

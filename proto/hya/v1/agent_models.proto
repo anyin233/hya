@@ -1,0 +1,102 @@
+// hya API v1 — durable per-agent base-model preferences.
+//
+// An agent without its own explicit model/category policy resolves its base
+// model through tiers: session override > agent configuration > the durable
+// preference set here (when it exactly matches the current catalog) > the
+// process default. The `source` field on every row tells the client which
+// tier is effective.
+syntax = "proto3";
+
+package hya.v1;
+
+import "hya/v1/common.proto";
+
+// Durable per-agent model preference surface, backed by the app-owned
+// control handle.
+service AgentModels {
+  // Effective model state for every catalog agent under one binding.
+  //
+  // hya.http: GET /v1/agent-models
+  rpc ListAgentModels(ListAgentModelsRequest) returns (ListAgentModelsResponse);
+
+  // Set or clear one agent's remembered preference; returns the
+  // post-commit state.
+  //
+  // hya.http: PUT /v1/agent-models/{agent_id}
+  rpc SetAgentModel(SetAgentModelRequest) returns (AgentModelState);
+}
+
+// A concrete provider/model selection.
+message AgentModelSelection {
+  // Provider identifier.
+  string provider_id = 1;
+  // Provider-local model identifier.
+  string model_id = 2;
+}
+
+// Which tier resolved an agent's effective base model.
+enum AgentModelSource {
+  // Unset sentinel; never emitted by the server.
+  AGENT_MODEL_SOURCE_UNSPECIFIED = 0;
+  // An explicit override captured for the current root session tree.
+  AGENT_MODEL_SOURCE_SESSION = 1;
+  // The agent has an explicit direct model or category policy.
+  AGENT_MODEL_SOURCE_CONFIGURED = 2;
+  // A durable preference retained and matching the current catalog.
+  AGENT_MODEL_SOURCE_REMEMBERED = 3;
+  // No configured or retained model; the process base is used.
+  AGENT_MODEL_SOURCE_DEFAULT = 4;
+}
+
+// Effective model state for one catalog agent.
+message AgentModelState {
+  // Stable catalog agent id.
+  string agent_id = 1;
+  // Human-readable agent description.
+  string description = 2;
+  // Selector role (`primary` or `subagent`).
+  string mode = 3;
+  // Whether the agent is hidden from ordinary selection.
+  bool hidden = 4;
+  // Whether direct model/category configuration is present (such agents
+  // cannot take a remembered preference).
+  bool configured = 5;
+  // Whether an automatic remembered preference can be set.
+  bool settable = 6;
+  // Retained preference, including stale or configured rows.
+  AgentModelSelection preference = 7;
+  // Whether the retained preference exactly matches the current catalog.
+  bool preference_available = 8;
+  // Current effective model identity.
+  AgentModelSelection effective = 9;
+  // Which tier resolved the effective model.
+  AgentModelSource source = 10;
+  // Model explicitly stored in the owning user configuration file.
+  AgentModelSelection configuration = 11;
+  // Active root-session override captured for this agent.
+  AgentModelSelection session_override = 12;
+}
+
+message ListAgentModelsRequest {
+  // Directory scope for the agent binding; empty means the process default.
+  string directory = 1;
+  // Bind against this session's runtime when non-empty (its workdir and
+  // session overrides); otherwise the directory root binding is used.
+  string session = 2;
+}
+
+message ListAgentModelsResponse {
+  // Effective state for every agent in the binding, stable id order.
+  repeated AgentModelState agents = 1;
+}
+
+message SetAgentModelRequest {
+  // Directory scope for the agent binding; empty means the process default.
+  string directory = 1;
+  // Bind against this session's runtime when non-empty.
+  string session = 2;
+  // Stable catalog agent id whose preference is being set.
+  string agent_id = 3;
+  // New remembered preference; absent/null clears it.
+  optional AgentModelSelection preference = 4;
+}
