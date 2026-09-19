@@ -377,6 +377,11 @@ impl TeamProjection {
     /// coordinates; `^` reaches sideways to its fellow leaders.
     pub fn resolve_channel(&self, from: &str, raw: &str) -> Result<String, ChannelResolveError> {
         let raw = raw.trim();
+        // Minted channel ids (ADR-0016) are their own canonical keys: a group
+        // or DM id addresses that channel directly, with no unit derivation.
+        if crate::mail::is_minted_channel_id(raw) {
+            return Ok(raw.to_string());
+        }
         let (name, want_home) = match raw.strip_prefix('^') {
             Some(name) => (name.trim(), true),
             None => (raw, false),
@@ -480,6 +485,10 @@ pub struct ChannelProjection {
     /// predate minted channels and every legacy channel was a unit channel.
     #[serde(default)]
     pub kind: ChannelKind,
+    /// Owning unit path for group channels; `None` for DM pairs and legacy
+    /// channels (derive those from the unit-qualified key).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unit: Option<String>,
     /// Current subscriber handles (no leading `#`).
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub members: BTreeSet<String>,
@@ -1227,6 +1236,7 @@ impl Projection {
             Event::ChannelCreated {
                 channel,
                 kind,
+                unit,
                 members,
                 ..
             } => {
@@ -1237,6 +1247,9 @@ impl Projection {
                     .collect::<Vec<_>>();
                 let channel_state = self.team.channels.entry(key).or_default();
                 channel_state.kind = *kind;
+                if unit.is_some() {
+                    channel_state.unit = unit.clone();
+                }
                 channel_state.members.extend(members);
             }
             Event::SubagentReported {
@@ -2167,6 +2180,7 @@ mod orchestration_tests {
                     session: root,
                     channel: dm.clone(),
                     kind: ChannelKind::Dm,
+                    unit: None,
                     members: vec![scope::ROOT_HANDLE.to_string(), "main/lead-1".to_string()],
                 },
             ),
@@ -2250,6 +2264,7 @@ mod orchestration_tests {
                     session: root,
                     channel: "announce-aB12Cd34".to_string(),
                     kind: ChannelKind::Group,
+                    unit: None,
                     members: vec![scope::ROOT_HANDLE.to_string()],
                 },
             ),

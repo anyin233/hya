@@ -35,8 +35,8 @@ use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
 
 use hya_proto::{
-    ActorClaim, ActorEpoch, ArchiveReason, Event, MailEndpoint, MailKind, MemberId, ModelRef,
-    OwnerRunId, ReportOutcome, RosterStatus, SessionId, SubagentMode, scope,
+    ActorClaim, ActorEpoch, ArchiveReason, ChannelKind, Event, MailEndpoint, MailKind, MemberId,
+    ModelRef, OwnerRunId, ReportOutcome, RosterStatus, SessionId, SubagentMode, scope,
 };
 use hya_tool::{AgentDef, ResolvedTool};
 use tokio::sync::{Notify, oneshot};
@@ -1564,12 +1564,26 @@ pub(crate) async fn archive_reported_agent(
         )
         .await?;
 
-    // 3. Report mail to the parent — while the child is still on the roster,
-    //    so the scope gate accepts the send and wakes the parent.
+    // 3. Report mail to the parent on the pair's persistent DM channel —
+    //    while the child is still on the roster, so the scope gate accepts
+    //    the send and the wake fans out to the parent.
+    let dm_channel = projection
+        .team
+        .channels
+        .iter()
+        .find(|(_, channel)| {
+            channel.kind == ChannelKind::Dm
+                && channel.members.contains(canonical)
+                && channel
+                    .members
+                    .contains(projection.team.canonical_member(parent_path).as_str())
+        })
+        .map(|(key, _)| key.clone())
+        .unwrap_or_else(|| parent_path.to_string());
     engine
         .mail_send_for_actor(
             child,
-            MailEndpoint::Handle(parent_path.to_string()),
+            MailEndpoint::Channel(dm_channel),
             MailKind::Message,
             report,
             claim,
@@ -2659,6 +2673,21 @@ impl ResidentSupervisor {
             } => (binding, Some(agents), Some(resources)),
         };
         let handle = scope::join_path(&parent_path, &leaf);
+        // ADR-0016 channel plane: resolve (or mint) the unit's group channel
+        // and mint the pair's persistent DM channel. Both are event facts
+        // committed in the same registration transaction.
+        let projection = self.engine.read_projection(root).await?;
+        let group_channel = projection
+            .team
+            .channels
+            .iter()
+            .find(|(_, channel)| {
+                channel.kind == ChannelKind::Group
+                    && channel.unit.as_deref() == Some(parent_path.as_str())
+            })
+            .map(|(key, _)| key.clone())
+            .unwrap_or_else(|| hya_proto::mint_channel_id(ChannelKind::Group));
+        let dm_channel = hya_proto::mint_channel_id(ChannelKind::Dm);
         let claim = self
             .engine
             .store()
@@ -2678,12 +2707,24 @@ impl ResidentSupervisor {
                         agent_type: agent.name.clone(),
                         mode: SubagentMode::Resident,
                     },
-                    // Auto-join the unit's announce channel so a leader's
-                    // `announce` reaches this resident and stops here (R6).
-                    Event::ChannelJoined {
+                    // The unit's leader-only broadcast channel: minted with the
+                    // leader as founding member on first registration, joined
+                    // by every child thereafter.
+                    Event::ChannelCreated {
                         session: root,
-                        channel: scope::announce_channel_of(&parent_path),
-                        member: handle.clone(),
+                        channel: group_channel,
+                        kind: ChannelKind::Group,
+                        unit: Some(parent_path.clone()),
+                        members: vec![parent_path.clone(), handle.clone()],
+                    },
+                    // The persistent parent-child DM pair: the revival address
+                    // that outlives archive cycles.
+                    Event::ChannelCreated {
+                        session: root,
+                        channel: dm_channel,
+                        kind: ChannelKind::Dm,
+                        unit: None,
+                        members: vec![parent_path.clone(), handle.clone()],
                     },
                 ],
             )
