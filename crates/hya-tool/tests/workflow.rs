@@ -9,10 +9,10 @@ use hya_proto::{
     ToolCallId, WorkflowCommand, WorkflowCommandResult, WorkflowProjection, WorkflowRevision,
 };
 use hya_tool::{
-    Action, InteractionPlane, LspPlane, MailboxPlane, Mode, PermissionPlane, PermissionRules, Rule,
-    SkillPlane, SpawnerPlane, TodoPlane, Tool, ToolCtx, ToolOperation, WebSearchPlane,
-    WorkflowHostError, WorkflowPlane, WorkflowRequest, WorkflowRequestSink, WorkflowSendError,
-    WorkflowTool, handle::ArtifactPlane,
+    Action, InteractionPlane, LifecyclePlane, LspPlane, MailboxPlane, Mode, PermissionPlane,
+    PermissionRules, Rule, SkillPlane, SpawnerPlane, TodoPlane, Tool, ToolCtx, ToolOperation,
+    WebSearchPlane, WorkflowHostError, WorkflowPlane, WorkflowRequest, WorkflowRequestSink,
+    WorkflowSendError, WorkflowTool, handle::ArtifactPlane,
 };
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -68,6 +68,7 @@ fn context(sink: Arc<CaptureSink>, session: hya_proto::SessionId) -> ToolCtx {
         spawner,
         operation: ToolOperation::from_tool_call(ToolCallId::new()),
         mailbox: MailboxPlane::disconnected(),
+        lifecycle: LifecyclePlane::disconnected(),
         session: Some(session),
         parent_session: None,
         todo: TodoPlane::default(),

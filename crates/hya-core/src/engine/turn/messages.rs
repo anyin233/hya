@@ -210,14 +210,14 @@ mod tests {
             .into_iter()
             .map(|schema| schema.name.as_str().to_string())
             .collect::<BTreeSet<_>>();
-        assert_eq!(builtins.len(), 27);
+        assert_eq!(builtins.len(), 29);
 
         let advertised = builtins
             .iter()
             .filter(|name| advertise_tool(name))
             .cloned()
             .collect::<BTreeSet<_>>();
-        assert_eq!(advertised.len(), 26);
+        assert_eq!(advertised.len(), 28);
         assert!(advertised.contains("write"));
         assert!(advertised.contains("edit"));
         assert!(!advertised.contains("apply_patch"));

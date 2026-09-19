@@ -11,8 +11,8 @@ use hya_plugin::config::PluginSpec;
 use hya_plugin::messages::{HostInfo, PluginKindWire};
 use hya_proto::SessionId;
 use hya_tool::{
-    FormatterPlane, InteractionPlane, LspPlane, MailboxPlane, PermissionPlane, PermissionRules,
-    SkillPlane, SpawnerPlane, TodoPlane, ToolCtx, ToolOperation, WebSearchPlane,
+    FormatterPlane, InteractionPlane, LifecyclePlane, LspPlane, MailboxPlane, PermissionPlane,
+    PermissionRules, SkillPlane, SpawnerPlane, TodoPlane, ToolCtx, ToolOperation, WebSearchPlane,
     handle::ArtifactPlane,
 };
 use serde_json::json;
@@ -73,6 +73,7 @@ fn ctx() -> ToolCtx {
         spawner,
         operation: ToolOperation::from_tool_call(hya_proto::ToolCallId::new()),
         mailbox: MailboxPlane::disconnected(),
+        lifecycle: LifecyclePlane::disconnected(),
         session: Some(session),
         parent_session: None,
         todo: TodoPlane::default(),

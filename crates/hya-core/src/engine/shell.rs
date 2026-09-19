@@ -347,6 +347,7 @@ impl SessionEngine {
                         ),
                         operation: hya_tool::ToolOperation::from_tool_call(shell_part.call),
                         mailbox: self.mailbox.for_session(session),
+                        lifecycle: self.lifecycle.for_session(session),
                         session: Some(session),
                         parent_session: projection.session.parent,
                         todo: self.todo.clone(),

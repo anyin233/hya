@@ -37,9 +37,10 @@ pub mod engine;
 pub mod error;
 /// Plugin/host hook dispatch contract and native payload types.
 pub mod hooks;
+/// Team mailbox service loop (event-sourced mail/channels).
+pub mod lifecycle;
 /// Loop-mode verifier/planner traits and drive helpers.
 pub mod loop_mode;
-/// Team mailbox service loop (event-sourced mail/channels).
 pub mod mailbox;
 /// Subagent concurrency governor and team budgets.
 pub mod orchestrator;
@@ -94,6 +95,7 @@ pub use hooks::{
     TextCompleteInput, TextCompleteOutcome, ToolExecuteAfterInput, ToolExecuteAfterOutcome,
     ToolExecuteBeforeInput, ToolExecuteBeforeOutcome, ToolOutcomeNative,
 };
+pub use lifecycle::run_lifecycle_service;
 pub use loop_mode::{
     EvidenceQuality, LoopConfig, LoopPlanner, LoopVerifier, PlannerOutput, VerifierVerdict,
     cost_preflight, drive_loop, run_loop,

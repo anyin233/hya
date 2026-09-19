@@ -105,6 +105,7 @@ fn ctx_with_formatter_session(
         spawner,
         operation: hya_tool::ToolOperation::from_tool_call(hya_proto::ToolCallId::new()),
         mailbox: hya_tool::MailboxPlane::disconnected(),
+        lifecycle: hya_tool::LifecyclePlane::disconnected(),
         session,
         parent_session: None,
         todo: TodoPlane::default(),

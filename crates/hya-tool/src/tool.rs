@@ -126,6 +126,8 @@ pub struct ToolCtx {
     pub operation: ToolOperation,
     /// Team mailbox plane (disconnected outside a running team).
     pub mailbox: MailboxPlane,
+    /// Subagent lifecycle plane for `report`/`kill` (ADR-0015).
+    pub lifecycle: crate::lifecycle::LifecyclePlane,
     /// Active session id when the tool runs inside a session.
     pub session: Option<SessionId>,
     /// Parent session id for nested/subagent turns, when applicable.
@@ -463,6 +465,8 @@ impl ToolRegistry {
             Arc::new(TaskTool),
             Arc::new(WorkflowTool),
             Arc::new(SendTool),
+            Arc::new(crate::lifecycle::ReportTool),
+            Arc::new(crate::lifecycle::KillTool),
             Arc::new(AnnounceTool),
             Arc::new(RosterTool),
             Arc::new(ChannelsTool),
@@ -744,7 +748,7 @@ fn builtin_permission(name: &str) -> ToolPermission {
     match name {
         "read" | "ls" | "glob" | "find" | "grep" | "lsp" | "skill" | "list_agents" | "roster"
         | "channels" => ToolPermission::ReadOnly,
-        "task" => ToolPermission::Task,
+        "task" | "kill" => ToolPermission::Task,
         "shell" | "bash" => ToolPermission::Command,
         _ => ToolPermission::Tool,
     }

@@ -251,7 +251,9 @@ async fn quiescence_wakes_main_to_synthesize() {
         "quiescence must wake main with a synthesis directive and no user input"
     );
 
-    // Both residents finished idle and are quiescent.
+    // Both residents finished idle and are quiescent. Root teardown
+    // (`force_archive_team`) is an explicit driver-owned call at the end of an
+    // interactive root turn, so a parked quiescent team stays parked.
     assert_eq!(
         roster_status(&engine, root, "worker-1").await,
         Some(RosterStatus::Idle)

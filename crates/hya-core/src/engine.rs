@@ -12,9 +12,9 @@ use hya_provider::{ProviderCatalogSnapshot, ProviderModel, ProviderRouter, Reaso
 use hya_store::{ActorClaim, SessionStore};
 use hya_tool::handle::{ArtifactHook, ArtifactPlane};
 use hya_tool::{
-    AgentDef, FormatterPlane, InteractionPlane, LspPlane, MailboxPlane, PermissionPlane,
-    PermissionRules, ResolvedTool, SpawnRequest, SpawnRequestSendError, SpawnRequestSink,
-    SpawnerPlane, TodoPlane, ToolError, WebSearchPlane,
+    AgentDef, FormatterPlane, InteractionPlane, LifecyclePlane, LspPlane, MailboxPlane,
+    PermissionPlane, PermissionRules, ResolvedTool, SpawnRequest, SpawnRequestSendError,
+    SpawnRequestSink, SpawnerPlane, TodoPlane, ToolError, WebSearchPlane,
 };
 use serde_json::Value;
 
@@ -354,6 +354,7 @@ pub struct SessionEngine {
     spawner: BoundSpawnSender,
     workflows: BoundWorkflowSender,
     mailbox: MailboxPlane,
+    lifecycle: LifecyclePlane,
     todo: TodoPlane,
     websearch: WebSearchPlane,
     /// User-registered `artifact://` post-processing, carried to every tool call.
@@ -422,6 +423,7 @@ impl SessionEngine {
         let spawner = BoundSpawnSender::disconnected();
         let workflows = BoundWorkflowSender::disconnected();
         let mailbox = MailboxPlane::disconnected();
+        let lifecycle = LifecyclePlane::disconnected();
         let todo = TodoPlane::default();
         let websearch = WebSearchPlane::default();
         let formatter = FormatterPlane::default();
@@ -446,6 +448,7 @@ impl SessionEngine {
             spawner,
             workflows,
             mailbox,
+            lifecycle,
             todo,
             websearch,
             artifacts: ArtifactPlane::default(),
@@ -563,6 +566,14 @@ impl SessionEngine {
     #[must_use]
     pub fn with_mailbox(mut self, mailbox: MailboxPlane) -> Self {
         self.mailbox = mailbox;
+        self
+    }
+
+    /// Install the lifecycle plane drained by
+    /// [`run_lifecycle_service`](crate::run_lifecycle_service).
+    #[must_use]
+    pub fn with_lifecycle(mut self, lifecycle: LifecyclePlane) -> Self {
+        self.lifecycle = lifecycle;
         self
     }
 

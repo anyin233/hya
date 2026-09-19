@@ -728,14 +728,14 @@ impl SessionEngine {
             terminate_sidecar(&mut sidecar_handle).await;
             Ok(())
         };
-        // A completed top-level (depth-0) turn ends the "run": force-archive
-        // every live descendant (ADR-0015 — the root's turn result supersedes
-        // them), then release the per-run subagent budget so long-lived root
-        // sessions do not leak budget entries.
+        // A completed top-level (depth-0) turn ends the "run": release its per-run
+        // subagent budget so long-lived root sessions do not leak budget entries.
+        // Descendant force-archive happens on terminal quiescence instead
+        // (resident supervisor), so engine-driven synthesis turns on the root
+        // session do not tear down a still-running team.
         if self.governor.is_some()
             && let Ok((root, 0)) = self.session_lineage(session).await
         {
-            self.force_archive_team(root).await?;
             self.finalize_root_spawn_admissions(root).await?;
         }
         cleanup_result?;
@@ -1364,6 +1364,7 @@ impl SessionEngine {
                                     mailbox: self
                                         .mailbox
                                         .for_session_with_actor(session, actor_claim.copied()),
+                                    lifecycle: self.lifecycle.for_session(session),
                                     session: Some(session),
                                     parent_session: projection.session.parent,
                                     todo: self.todo.clone(),

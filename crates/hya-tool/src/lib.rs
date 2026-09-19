@@ -36,11 +36,12 @@ mod hashline;
 /// Human interaction channel for structured questions and free-text asks.
 pub mod interaction;
 mod invalid;
+/// Team mailbox requests and the mailbox plane used by send/roster/channel tools.
+pub mod lifecycle;
 mod lsp;
 mod lsp_path;
 mod lsp_plane;
 mod lsp_post_edit;
-/// Team mailbox requests and the mailbox plane used by send/roster/channel tools.
 pub mod mailbox;
 mod output_cap;
 /// Allow/ask/deny permission plane: invocation policy, resource rules, and asks.
@@ -80,6 +81,7 @@ pub use interaction::{
     InteractionError, InteractionPlane, QuestionAnswer, QuestionInfo, QuestionKind, QuestionOption,
     QuestionPrompt, QuestionReply, QuestionRequest,
 };
+pub use lifecycle::{LifecyclePlane, LifecycleRequest};
 pub use lsp_plane::{LspError, LspOperation, LspPlane, LspProvider, LspRequest};
 pub use mailbox::{ChannelInfo, MailReceipt, MailboxError, MailboxPlane, MailboxRequest};
 pub use output_cap::{
