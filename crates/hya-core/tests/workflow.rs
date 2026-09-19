@@ -414,7 +414,7 @@ async fn two_stage_workflow_runs_in_order_and_hands_off_evidence() {
             caller: "build".to_string(),
             base_agent: base,
             inputs: BTreeMap::from([("target".to_string(), "the retry paths".to_string())]),
-            resident_supervisor: None,
+            resident_supervisor: Some(hya_core::ResidentSupervisor::start(engine.clone())),
             routing: None,
         },
         CancellationToken::new(),
@@ -485,7 +485,7 @@ flowchart TD
         .unwrap();
 
     let report = run_workflow(
-        engine,
+        engine.clone(),
         lead,
         &def,
         hya_core::WorkflowRunContext {
@@ -493,7 +493,7 @@ flowchart TD
             caller: "build".to_string(),
             base_agent: base,
             inputs: BTreeMap::new(),
-            resident_supervisor: None,
+            resident_supervisor: Some(hya_core::ResidentSupervisor::start(engine.clone())),
             routing: None,
         },
         CancellationToken::new(),
@@ -557,7 +557,7 @@ flowchart TD
     let report = tokio::time::timeout(
         std::time::Duration::from_secs(2),
         run_workflow(
-            engine,
+            engine.clone(),
             lead,
             &workflow,
             hya_core::WorkflowRunContext {
@@ -565,7 +565,7 @@ flowchart TD
                 caller: "build".to_string(),
                 base_agent: base,
                 inputs: BTreeMap::new(),
-                resident_supervisor: None,
+                resident_supervisor: Some(hya_core::ResidentSupervisor::start(engine.clone())),
                 routing: None,
             },
             CancellationToken::new(),
@@ -620,7 +620,7 @@ flowchart TD
         .unwrap();
 
     let report = run_workflow(
-        engine,
+        engine.clone(),
         lead,
         &def,
         hya_core::WorkflowRunContext {
@@ -628,7 +628,7 @@ flowchart TD
             caller: "build".to_string(),
             base_agent: base,
             inputs: BTreeMap::new(),
-            resident_supervisor: None,
+            resident_supervisor: Some(hya_core::ResidentSupervisor::start(engine.clone())),
             routing: None,
         },
         CancellationToken::new(),
@@ -693,7 +693,7 @@ flowchart TD
         .unwrap();
 
     let report = run_workflow(
-        engine,
+        engine.clone(),
         lead,
         &def,
         hya_core::WorkflowRunContext {
@@ -701,7 +701,7 @@ flowchart TD
             caller: "build".to_string(),
             base_agent: base,
             inputs: BTreeMap::new(),
-            resident_supervisor: None,
+            resident_supervisor: Some(hya_core::ResidentSupervisor::start(engine.clone())),
             routing: None,
         },
         CancellationToken::new(),
@@ -780,7 +780,7 @@ async fn run_def(
             caller: "build".to_string(),
             base_agent: base,
             inputs,
-            resident_supervisor: None,
+            resident_supervisor: Some(hya_core::ResidentSupervisor::start(run.engine.clone())),
             routing: None,
         },
         CancellationToken::new(),
@@ -831,7 +831,7 @@ flowchart TD
             caller: "build".to_string(),
             base_agent: base_spec(),
             inputs: BTreeMap::new(),
-            resident_supervisor: None,
+            resident_supervisor: Some(hya_core::ResidentSupervisor::start(run.engine.clone())),
             routing: None,
         },
         CancellationToken::new(),
@@ -960,7 +960,7 @@ flowchart TD
         .agent_spec_for_binding(&binding, &base_spec(), "build")
         .unwrap();
     let error = run_workflow(
-        engine,
+        engine.clone(),
         lead,
         &def,
         hya_core::WorkflowRunContext {
@@ -968,7 +968,7 @@ flowchart TD
             caller: "build".to_string(),
             base_agent: base,
             inputs: BTreeMap::new(),
-            resident_supervisor: None,
+            resident_supervisor: Some(hya_core::ResidentSupervisor::start(engine.clone())),
             routing: None,
         },
         CancellationToken::new(),
@@ -1059,7 +1059,7 @@ flowchart TD
         .agent_spec_for_binding(&binding, &base_spec(), "build")
         .unwrap();
     let report = run_workflow(
-        engine,
+        engine.clone(),
         lead,
         &def,
         hya_core::WorkflowRunContext {
@@ -1067,7 +1067,7 @@ flowchart TD
             caller: "build".to_string(),
             base_agent: base,
             inputs: BTreeMap::new(),
-            resident_supervisor: None,
+            resident_supervisor: Some(hya_core::ResidentSupervisor::start(engine.clone())),
             routing: None,
         },
         CancellationToken::new(),
@@ -1087,7 +1087,10 @@ flowchart TD
     let prompts = provider.prompts();
     let worker_rounds: Vec<_> = prompts
         .iter()
-        .filter(|(_, t)| t.starts_with("LOOP_BUILD"))
+        .filter(|(_, t)| {
+            t.trim_start_matches("[mail from main] ")
+                .starts_with("LOOP_BUILD")
+        })
         .collect();
     assert_eq!(
         worker_rounds.len(),
@@ -1152,7 +1155,7 @@ flowchart TD
     let run_cancel = cancel.clone();
     let run = tokio::spawn(async move {
         run_workflow(
-            engine,
+            engine.clone(),
             lead,
             &def,
             hya_core::WorkflowRunContext {
@@ -1160,7 +1163,7 @@ flowchart TD
                 caller: "build".to_string(),
                 base_agent: base,
                 inputs: BTreeMap::new(),
-                resident_supervisor: None,
+                resident_supervisor: Some(hya_core::ResidentSupervisor::start(engine.clone())),
                 routing: None,
             },
             run_cancel,
@@ -1772,7 +1775,7 @@ flowchart TD
         caller: "build".to_string(),
         base_agent: base.clone(),
         inputs: BTreeMap::new(),
-        resident_supervisor: None,
+        resident_supervisor: Some(hya_core::ResidentSupervisor::start(engine.clone())),
         routing: None,
     };
 
@@ -2049,7 +2052,7 @@ flowchart TD
             caller: "build".to_string(),
             base_agent: base,
             inputs: BTreeMap::new(),
-            resident_supervisor: None,
+            resident_supervisor: Some(hya_core::ResidentSupervisor::start(engine.clone())),
             routing: None,
         },
         CancellationToken::new(),
