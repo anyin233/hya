@@ -78,9 +78,9 @@ Each `push`/`finish` returns a batch of canonical `Event`s (may be empty).
 - `max_output` = 0
 
 There is **no** per-model capability table. Every configured HTTP route reports
-the same caps for every model it serves. The context window surfaced by
-`GET /api/model` (and similar catalog views) is therefore this fixed **200k**
-default, not the model's real limit.
+the same caps for every model it serves. The context window surfaced by the v1
+catalog (`GET /v1/models` and the bootstrap snapshot) is therefore this fixed
+**200k** default, not the model's real limit.
 
 `DevProvider` claims the same set **minus** `reasoning_request` (left false via
 `Capabilities::default()`). It accepts any `ModelRef` because
@@ -609,6 +609,7 @@ without API keys.
 ## CLI Configuration
 
 `hya-backend` builds routes from `~/.config/hya/config.yaml`. Provider ids and
-models are surfaced through `hya-backend models`, Compat-compatible provider/model
-HTTP routes, and saved-token auth commands. See
+models are surfaced through `hya-backend models`, the v1 catalog routes
+(`GET /v1/models`, `GET /v1/providers`, and the bootstrap snapshot), and
+saved-token auth commands. See
 [`../configuration.md`](../configuration.md) for the YAML shape.

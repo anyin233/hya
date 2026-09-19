@@ -1,6 +1,6 @@
 # hya-tui-ts tests
 
-26 Bun test files under this directory. Run from the package root:
+19 Bun test files under this directory. Run from the package root:
 
 ```sh
 cd packages/hya-tui-ts
@@ -9,53 +9,20 @@ bun test
 
 OpenTUI Solid is preloaded via `bunfig.toml` (`[test] preload`).
 
-## Track T scope
-
-**Track T** exercises the real frontend ↔ backend path over the pinned
-`@opencode-ai/sdk/v2` client: session/prompt, permissions, questions, multi-agent
-roster, and (where marked) a full PTY session through `hya-ts`.
-
-These suites assume a built debug backend:
-
-```sh
-cargo build -p hya-backend --bin hya-backend
-```
-
-PTY smoke also needs the launcher:
-
-```sh
-cargo build -p hya-ts --bin hya-ts
-```
-
-Focused Track T files (also listed in root `AGENTS.md`):
-
-```sh
-bun test test/real-backend.test.ts test/task-presentation.test.ts test/real-backend-agents.test.ts
-```
-
-Workflow-focused suites:
-
-```sh
-bun test test/workflow-presentation.test.ts test/workflow-sidebar.test.ts
-```
-
-`workflow-presentation.test.ts` checks projection parsing and deterministic
-status/progress text. `workflow-sidebar.test.ts` checks first registration,
-session-state synchronization, and sidebar rendering. These are package-level
-smoke/unit tests and do not start a backend.
-
+> The retired Track T suites (`real-backend.test.ts`,
+> `real-backend-agents.test.ts`, `pty-smoke.test.ts`,
+> `workflow-pty.test.ts`, `sdk-spine.test.ts`,
+> `agent-model-sync.test.tsx`, `coding-tool-sync.test.tsx`) verified this
+> frontend against the deleted legacy HTTP surface. They were removed together
+> with that surface; this package is expected to break at runtime against the
+> consolidated `/v1` contract until the new TUI lands.
 
 ## Which suites need `hya-backend`
 
 | Suite | Needs `target/debug/hya-backend` |
 | --- | --- |
-| `real-backend.test.ts` | **Yes** — spawns `serve` on an ephemeral port |
-| `real-backend-agents.test.ts` | **Yes** — multi-agent roster via live API |
-| `pty-smoke.test.ts` | **Yes** (plus `hya-ts`) — PTY cases drive a real backend and launcher |
 | `workflow-presentation.test.ts` | No — deterministic projection unit coverage |
 | `workflow-sidebar.test.ts` | No — static host/sidebar integration seam |
-| `workflow-pty.test.ts` | **Yes** (plus `hya-ts`) — Workflow state over a real PTY-backed TUI |
-| `sdk-spine.test.ts` | No — local `Bun.serve` mock for HTTP/SSE |
 | `startup-trace.test.ts` | No |
 | `agent-visibility.test.ts` | No |
 | `task-presentation.test.ts` | No (unit) |
@@ -63,20 +30,6 @@ smoke/unit tests and do not start a backend.
 | `boundary.test.ts` | No |
 | `branding-pruning.test.ts` | No |
 | `runtime-boundary.test.ts` | No (uses `bun install` + prune; no Rust backend) |
-
-If the backend binary is missing, Track T / PTY tests fail at spawn with a
-filesystem or process error — not a soft skip.
-
-## Which suites spawn a PTY
-
-| Suite | PTY |
-| --- | --- |
-| `pty-smoke.test.ts` | **Yes** — Linux PTY sessions via `hya-ts`, terminal restore, observation panes |
-| `workflow-pty.test.ts` | **Yes** — Linux PTY Workflow presentation and backend lifecycle |
-| All others | No |
-
-PTY cases are Linux-oriented (stty / process-group checks). Expect failures or
-environment skips on platforms without that shell setup.
 
 ## Architecture / invariant guards
 
@@ -129,10 +82,8 @@ client-only importable runtime (install/release packaging would break).
 | --- | --- |
 | `agent-visibility.test.ts` | Which agents appear in TUI selector vs subagent autocomplete |
 | `agent-models.test.ts` | Agent model row decoding, capability gating, and `/agent-models` command map |
-| `agent-model-sync.test.tsx` | Dialog save/override sync against mocked `/tui/agent-models` |
 | `model-catalog.test.ts` | Model catalog decoding and picker rows |
 | `coding-tool-presentation.test.ts` | Coding-tool view mapping from projected SDK parts |
-| `coding-tool-sync.test.tsx` | Coding-tool render/sync against mocked session parts |
 | `coding-tool-render.test.tsx` | Narrow/wide coding-tool layout |
 | `tool-card.test.tsx` | Tool-call card title formatting and rendered frame/padding |
 | `context-status.test.ts` | Session context-occupancy decode and presentation (token accounting surface) |
@@ -140,7 +91,7 @@ client-only importable runtime (install/release packaging would break).
 | `keybind-inventory.test.ts` | Shipped keybind registry matches current command docs |
 | `task-presentation.test.ts` | Multi-member task presentation helpers (unit) |
 | `subagent-workspace.test.ts` | Run-tree / split-pane workspace reducer (unit) |
-| `sdk-spine.test.ts` | `launch` + `observeSdkSpine` against a mock server |
+| `queued-prompts.test.ts` | Queued-prompt admission helpers (unit) |
 | `startup-trace.test.ts` | `HYA_STARTUP_TRACE` JSON mark emission |
-| `real-backend*.test.ts` | Track T live backend contracts |
-| `pty-smoke.test.ts` | Track T PTY end-to-end smoke |
+| `workflow-presentation.test.ts` | Workflow projection parsing and deterministic status/progress text |
+| `workflow-sidebar.test.ts` | First registration, session-state synchronization, and sidebar rendering |

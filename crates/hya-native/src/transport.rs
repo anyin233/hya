@@ -97,8 +97,6 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
     use hya_app::{HyaRuntime, RuntimeOptions};
-    use hya_sdk::Client;
-
     async fn offline_runtime() -> HyaRuntime {
         HyaRuntime::start(RuntimeOptions {
             model: None,
@@ -111,57 +109,18 @@ mod tests {
         .expect("offline runtime should start")
     }
 
-    fn native_client(rt: &HyaRuntime) -> HyaNativeClient {
-        ApiClient::with_transport(HyaNativeTransport::new(rt.router().clone(), "/tmp"))
-    }
-
     #[tokio::test]
-    async fn get_config_returns_object() {
+    async fn get_health_returns_object_over_the_v1_router() {
         let rt = offline_runtime().await;
         let transport = HyaNativeTransport::new(rt.router().clone(), "/tmp");
         let value = transport
-            .request("GET", "/config", None)
+            .request("GET", "/v1/health", None)
             .await
-            .expect("GET /config should succeed");
-        assert!(value.is_object(), "expected a /config object, got {value}");
-    }
-
-    #[tokio::test]
-    async fn post_session_create_returns_id() {
-        let rt = offline_runtime().await;
-        let session = native_client(&rt)
-            .session_create()
-            .await
-            .expect("session_create should succeed");
-        assert!(!session.id.is_empty(), "created session should have an id");
-    }
-
-    #[tokio::test]
-    async fn delete_session_returns_ok() {
-        let rt = offline_runtime().await;
-        let client = native_client(&rt);
-        let session = client.session_create().await.expect("create");
-        // The raw DELETE /session/{id} route returns Json(<bool>), not an empty body; the Client
-        // maps the body away, so this asserts Ok(()).
-        client
-            .session_delete(&session.id)
-            .await
-            .expect("session_delete should return Ok");
-    }
-
-    #[tokio::test]
-    async fn non_2xx_preserves_structured_status_and_body() {
-        let rt = offline_runtime().await;
-        let transport = HyaNativeTransport::new(rt.router().clone(), "/tmp");
-        let err = transport
-            .request("GET", "/session/zzz", None)
-            .await
-            .expect_err("a bogus session id should be a non-2xx error");
-        let SdkError::HttpStatus(error) = err else {
-            panic!("expected SdkError::HttpStatus, got {err:?}");
-        };
-        assert_eq!(error.status, 400);
-        assert!(!error.raw_body.is_empty());
+            .expect("GET /v1/health should succeed");
+        assert!(
+            value.is_object(),
+            "expected a /v1/health object, got {value}"
+        );
     }
 
     #[tokio::test]
@@ -171,8 +130,8 @@ mod tests {
         assert_eq!(transport.directory(), "/tmp/hya-test-dir");
         // The directory header is injected on every request; a request carrying it must still succeed.
         transport
-            .request("GET", "/config", None)
+            .request("GET", "/v1/health", None)
             .await
-            .expect("GET /config with a directory header should succeed");
+            .expect("GET /v1/health with a directory header should succeed");
     }
 }

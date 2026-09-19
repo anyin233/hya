@@ -3,6 +3,7 @@
 
 use hya_e2e::{E2eEnvBuilder, text_step};
 use hya_proto::Event;
+use serde_json::Value;
 
 #[tokio::test]
 async fn t1_14_compact_injects_summary_and_allows_follow_up_turn() {
@@ -94,10 +95,13 @@ async fn t1_14_legacy_summarize_persists_summary_metadata_path() {
         .summarize_session_legacy(&session)
         .await
         .expect("legacy summarize");
-    // Endpoint returns JSON `true` on success.
+    // v1 returns the generated summary message id.
     assert!(
-        result.as_bool() == Some(true) || result == serde_json::json!(true),
-        "summarize should return true; got={result}; {}",
+        result
+            .get("summaryMessage")
+            .and_then(Value::as_str)
+            .is_some_and(|id| !id.is_empty()),
+        "summarize must return a summary message id; got={result}; {}",
         env.diagnostics()
     );
 

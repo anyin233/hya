@@ -105,40 +105,25 @@ async fn get_session_todo(
     if projection.session.id.is_none() {
         return Err(V1Error::session_not_found(&id));
     }
-    Ok(Json(todo_list(&projection)))
+    let items = st.engine.todos(session).await;
+    Ok(Json(todo_list(&items)))
 }
 
-/// Map the projected todo rows onto the wire list.
-pub(crate) fn todo_list(projection: &hya_proto::Projection) -> pb::TodoList {
-    let Some(todos) = todo_source(projection) else {
-        return pb::TodoList { items: Vec::new() };
-    };
-    let items = todos
-        .as_array()
-        .map(|rows| {
-            rows.iter()
-                .map(|row| pb::TodoItem {
-                    id: field(row, "id"),
-                    content: field(row, "content"),
-                    status: match field(row, "status").as_str() {
-                        "in_progress" => pb::TodoStatus::InProgress as i32,
-                        "completed" => pb::TodoStatus::Completed as i32,
-                        _ => pb::TodoStatus::Pending as i32,
-                    },
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    pb::TodoList { items }
-}
-
-fn todo_source(projection: &hya_proto::Projection) -> Option<serde_json::Value> {
-    projection.session.metadata.as_ref()?.get("todo").cloned()
-}
-
-fn field(row: &serde_json::Value, name: &str) -> String {
-    row.get(name)
-        .and_then(|value| value.as_str())
-        .map(str::to_owned)
-        .unwrap_or_default()
+/// Map the engine's todo rows onto the wire list.
+pub(crate) fn todo_list(items: &[hya_tool::TodoItem]) -> pb::TodoList {
+    pb::TodoList {
+        items: items
+            .iter()
+            .enumerate()
+            .map(|(index, item)| pb::TodoItem {
+                id: format!("todo-{index}"),
+                content: item.content.clone(),
+                status: match item.status.as_str() {
+                    "in_progress" => pb::TodoStatus::InProgress as i32,
+                    "completed" => pb::TodoStatus::Completed as i32,
+                    _ => pb::TodoStatus::Pending as i32,
+                },
+            })
+            .collect(),
+    }
 }

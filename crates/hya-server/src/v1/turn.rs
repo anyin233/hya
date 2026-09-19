@@ -112,9 +112,22 @@ async fn create_turn(
             let run = st.start_run(session).ok_or_else(V1Error::session_busy)?;
             let message = st.engine.admit_user_prompt(session, prompt.text).await?;
             let engine = st.engine.clone();
-            let agent = st.agent.clone();
+            let turn = crate::support::reference::session_agent_with_guidance(&st, session).await;
+            let external_dirs =
+                crate::support::reference::external_directories_at(&st, &turn.agent.workdir).await;
+            let agent = turn.agent.clone();
+            let guidance = turn.guidance.clone();
             tokio::spawn(async move {
-                let _ = engine.run_turn(session, &agent, run.token()).await;
+                let _ = engine
+                    .run_turn_with_external_dirs_and_guidance(
+                        session,
+                        &agent,
+                        run.token(),
+                        &external_dirs,
+                        guidance,
+                        None,
+                    )
+                    .await;
                 drop(run);
             });
             Ok(Json(running_turn(session, &message.to_string())))
@@ -158,13 +171,32 @@ async fn create_turn(
             if let Some(model) = &explicit_model {
                 st.engine.switch_model(session, model.clone()).await?;
             }
-            let text = native_request.text.clone().unwrap_or_else(|| {
-                if command.arguments.trim().is_empty() {
-                    format!("/{}", command.command)
-                } else {
-                    format!("/{} {}", command.command, command.arguments)
+            // Custom slash commands from the directory catalog expand
+            // server-side; unknown commands keep the literal slash.
+            let text = match native_request.text.clone() {
+                Some(text) => text,
+                None => {
+                    let workdir = st
+                        .engine
+                        .read_projection(session)
+                        .await
+                        .ok()
+                        .and_then(|projection| projection.session.workdir.clone())
+                        .map_or_else(|| st.agent.workdir.clone(), std::path::PathBuf::from);
+                    crate::support::command_catalog::expand_prompt(
+                        &workdir,
+                        &command.command,
+                        &command.arguments,
+                    )
+                    .unwrap_or_else(|| {
+                        if command.arguments.trim().is_empty() {
+                            format!("/{}", command.command)
+                        } else {
+                            format!("/{} {}", command.command, command.arguments)
+                        }
+                    })
                 }
-            });
+            };
             let message = st
                 .engine
                 .admit_command_prompt(
@@ -175,15 +207,19 @@ async fn create_turn(
                 )
                 .await?;
             let engine = st.engine.clone();
-            let agent = st.agent.clone();
+            let turn = crate::support::reference::session_agent_with_guidance(&st, session).await;
+            let external_dirs =
+                crate::support::reference::external_directories_at(&st, &turn.agent.workdir).await;
+            let agent = turn.agent.clone();
+            let guidance = turn.guidance.clone();
             tokio::spawn(async move {
                 let _ = engine
                     .run_turn_with_external_dirs_and_guidance(
                         session,
                         &agent,
                         run.token(),
-                        &[],
-                        None,
+                        &external_dirs,
+                        guidance,
                         explicit_model,
                     )
                     .await;
@@ -204,7 +240,7 @@ async fn create_turn(
                     model_id: model.model_id.clone(),
                 }),
             };
-            let agent = crate::compat::shell_agent(&st, session, &native_request)
+            let agent = crate::support::reference::shell_agent(&st, session, &native_request)
                 .await
                 .map_err(|error| {
                     V1Error::new(hya_api::error::Code::Internal, error.text().to_owned())
@@ -268,10 +304,23 @@ async fn wait_turn(
     } else {
         Some(tokio::time::Instant::now() + Duration::from_millis(request.timeout_ms.min(600_000)))
     };
+    // The resident substrate may release and re-acquire the admission slot
+    // across one logical turn (parent continuation after a non-blocking
+    // spawn): a single idle sample is not completion. Return on a terminal
+    // turn state, or on idle sustained across consecutive samples.
+    let mut idle_samples = 0u8;
     loop {
         let projection = st.engine.read_projection(session).await?;
         let info = turn_info(&st, session, &request.turn, &projection);
-        if is_terminal(info.state) || !st.is_busy(session) {
+        if is_terminal(info.state) {
+            return Ok(Json(info));
+        }
+        idle_samples = if st.is_busy(session) {
+            0
+        } else {
+            idle_samples.saturating_add(1)
+        };
+        if idle_samples >= 3 {
             return Ok(Json(info));
         }
         if let Some(deadline) = deadline

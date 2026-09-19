@@ -10,6 +10,7 @@ table (`hya_api::error`); timestamps are RFC 3339 strings in JSON.
 
 ## Contents
 
+- [AgentModels service](#service-agentmodels)
 - [Auth service](#service-auth)
 - [Catalog service](#service-catalog)
 - [Events service](#service-events)
@@ -29,6 +30,27 @@ table (`hya_api::error`); timestamps are RFC 3339 strings in JSON.
 - [Enums](#enums)
 
 ---
+
+## Service `AgentModels`
+
+Durable per-agent model preference surface, backed by the app-owned
+control handle.
+
+| RPC | HTTP | gRPC | Request | Response |
+|---|---|---|---|---|
+| `ListAgentModels` | `GET /v1/agent-models` | `hya.v1.AgentModels.ListAgentModels` | `ListAgentModelsRequest` | `ListAgentModelsResponse` |
+| `SetAgentModel` | `PUT /v1/agent-models/{agent_id}` | `hya.v1.AgentModels.SetAgentModel` | `SetAgentModelRequest` | `AgentModelState` |
+
+### `AgentModels.ListAgentModels`
+
+Effective model state for every catalog agent under one binding.
+
+
+### `AgentModels.SetAgentModel`
+
+Set or clear one agent's remembered preference; returns the
+post-commit state.
+
 
 ## Service `Auth`
 
@@ -617,6 +639,59 @@ Reset a worktree to a clean state at its branch head.
 
 ## Messages
 
+### `AgentModelSelection`
+
+A concrete provider/model selection.
+
+| Field | Type | Description |
+|---|---|---|
+| `provider_id` (1) | `string` | Provider identifier. |
+| `model_id` (2) | `string` | Provider-local model identifier. |
+
+### `AgentModelState`
+
+Effective model state for one catalog agent.
+
+| Field | Type | Description |
+|---|---|---|
+| `agent_id` (1) | `string` | Stable catalog agent id. |
+| `description` (2) | `string` | Human-readable agent description. |
+| `mode` (3) | `string` | Selector role (`primary` or `subagent`). |
+| `hidden` (4) | `bool` | Whether the agent is hidden from ordinary selection. |
+| `configured` (5) | `bool` | Whether direct model/category configuration is present (such agents cannot take a remembered preference). |
+| `settable` (6) | `bool` | Whether an automatic remembered preference can be set. |
+| `preference` (7) | `AgentModelSelection` | Retained preference, including stale or configured rows. |
+| `preference_available` (8) | `bool` | Whether the retained preference exactly matches the current catalog. |
+| `effective` (9) | `AgentModelSelection` | Current effective model identity. |
+| `source` (10) | `AgentModelSource` | Which tier resolved the effective model. |
+| `configuration` (11) | `AgentModelSelection` | Model explicitly stored in the owning user configuration file. |
+| `session_override` (12) | `AgentModelSelection` | Active root-session override captured for this agent. |
+
+### `ListAgentModelsRequest`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `directory` (1) | `string` | Directory scope for the agent binding; empty means the process default. |
+| `session` (2) | `string` | Bind against this session's runtime when non-empty (its workdir and session overrides); otherwise the directory root binding is used. |
+
+### `ListAgentModelsResponse`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `agents` (1) | `repeated AgentModelState` | Effective state for every agent in the binding, stable id order. |
+
+### `SetAgentModelRequest`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `directory` (1) | `string` | Directory scope for the agent binding; empty means the process default. |
+| `session` (2) | `string` | Bind against this session's runtime when non-empty. |
+| `agent_id` (3) | `string` | Stable catalog agent id whose preference is being set. |
+| `preference` (4) | `optional AgentModelSelection` | New remembered preference; absent/null clears it. |
+
 ### `OauthTokens`
 
 OAuth tokens captured from a completed provider flow.
@@ -770,6 +845,7 @@ One provider route with aggregate auth state.
 | `name` (2) | `string` | Human-readable provider name. |
 | `auth` (3) | `AuthStatus` | Aggregate auth status across the provider's routes. |
 | `website` (4) | `string` | Vendor documentation/auth URL when known. |
+| `result` (5) | `string` | Model discovery outcome: `models`, `empty`, `unavailable`, `invalid`. |
 
 ### `ListProvidersResponse`
 
@@ -815,6 +891,12 @@ One slash-command entry.
 | `name` (1) | `string` | Command name without the leading `/`. |
 | `description` (2) | `string` | One-line description for completion UIs. |
 | `argument_hint` (3) | `string` | Argument hint shown after the command name. |
+| `hints` (5) | `repeated string` | Positional/flag hints from the command template, in template order. |
+| `source` (6) | `string` | Where the command was discovered (`command`, `skill`, ...). |
+| `template` (7) | `string` | Expansion template (positional `$1`/`$ARGUMENTS` placeholders). |
+| `agent` (8) | `string` | Agent the command run binds when authored. |
+| `model` (9) | `string` | Model the command run binds when authored. |
+| `subtask` (10) | `optional bool` | Whether the command runs as a detached subtask. |
 
 ### `ListCommandsResponse`
 
@@ -841,6 +923,8 @@ One invocable skill.
 | `name` (1) | `string` | Skill name used with `/skill` and the skill plane. |
 | `description` (2) | `string` | One-line description of what the skill does. |
 | `source` (3) | `string` | Where the skill was discovered (`builtin`, `bundle`, `project`, ...). |
+| `content` (4) | `string` | Full skill markdown body (frontmatter + content). |
+| `location` (5) | `string` | Where the skill file lives (`<built-in>` for compiled-in skills). |
 
 ### `ListSkillsResponse`
 
@@ -916,6 +1000,7 @@ Pagination outcome attached to every paginated response.
 | `session` (1) | `string` | Session identifier to replay. |
 | `since_seq` (2) | `uint64` | Return only events with `seq` strictly greater than this value. |
 | `limit` (3) | `uint32` | Maximum events to return; 0 uses the server default. |
+| `include_raw` (4) | `bool` | When true, also return the canonical durable envelope JSON lines in `raw_envelopes` for tooling and test harnesses. The internal envelope shape is not a stable contract; clients must treat it as opaque. |
 
 ### `ListEventsResponse`
 
@@ -925,6 +1010,7 @@ Pagination outcome attached to every paginated response.
 | `session` (1) | `string` | Session identifier. |
 | `events` (2) | `repeated StreamEvent` | Replayed events in sequence order. |
 | `next_seq` (3) | `uint64` | Highest `seq` contained in this response; pass as the next `since_seq`. |
+| `raw_envelopes` (4) | `repeated string` | Canonical durable envelope JSON lines, present only when the request set `include_raw`. Internal shape; treat as opaque beyond replay. |
 
 ### `StreamSessionEventsRequest`
 
@@ -1499,6 +1585,8 @@ A tool invocation requested by the model.
 | `tool` (2) | `string` | Canonical tool name. |
 | `input_json` (3) | `string` | Tool input as a JSON object. |
 | `state` (4) | `ToolExecutionState` | Execution state of the call. |
+| `error_code` (5) | `string` | Stable structured error type when the call failed (e.g. `unknown`). |
+| `error_message` (6) | `string` | Structured error message when the call failed. |
 
 ### `ToolResultPart`
 
@@ -1938,6 +2026,7 @@ Projection summary of one session.
 | `time_created` (8) | `google.protobuf.Timestamp` | When the session was created. |
 | `time_updated` (9) | `google.protobuf.Timestamp` | When the session projection last changed. |
 | `last_seq` (10) | `uint64` | Highest event sequence number recorded for this session. |
+| `busy` (11) | `bool` | Whether a run currently owns the session's admission slot (derived from the process run registry, not the durable log). |
 
 ### `CreateSessionRequest`
 
@@ -2204,6 +2293,7 @@ Projected workflow state of a session.
 | `status` (4) | `WorkflowRunStatus` | Aggregate run status. |
 | `stages` (5) | `repeated WorkflowStageRun` | Stage execution rows in plan order. |
 | `error_code` (6) | `string` | Terminal failure code when status is FAILED. |
+| `raw_json` (7) | `string` | Opaque canonical projection JSON for tooling and replay parity. The internal shape is not a stable contract; prefer the typed fields. |
 
 ### `WorkflowInfoCommand`
 
@@ -2225,11 +2315,12 @@ Projected workflow state of a session.
 
 ### `WorkflowRunCommand`
 
-`run` command: start the selected workflow.
+`run` command: start the selected or named workflow.
 
 | Field | Type | Description |
 |---|---|---|
-| `inputs` (1) | `google.protobuf.Struct` | Workflow inputs as a JSON object. |
+| `name` (1) | `string` | Declared workflow name; empty uses the durable selection. |
+| `inputs` (2) | `google.protobuf.Struct` | Workflow inputs as a JSON object. |
 
 ### `SubmitWorkflowCommandRequest`
 
@@ -2242,6 +2333,25 @@ Projected workflow state of a session.
 | `select` (4) | `oneof `command`: WorkflowSelectCommand` | Select a workflow source. |
 | `run` (5) | `oneof `command`: WorkflowRunCommand` | Run the selected workflow. |
 
+### `WorkflowModelCandidate`
+
+One authored fallback candidate.
+
+| Field | Type | Description |
+|---|---|---|
+| `id` (1) | `string` | Base model identity (`provider/model`). |
+| `reasoning` (2) | `string` | Optional author-provided effort label. |
+
+### `WorkflowModelAssignment`
+
+Authored worker model assignment for a stage.
+
+| Field | Type | Description |
+|---|---|---|
+| `id` (1) | `string` | Preferred base model identity (`provider/model`). |
+| `reasoning` (2) | `string` | Optional preferred effort label. |
+| `fallback` (3) | `repeated WorkflowModelCandidate` | Ordered fallback tail. |
+
 ### `WorkflowInfoResult`
 
 Result payload of the `info` command.
@@ -2251,6 +2361,19 @@ Result payload of the `info` command.
 | `name` (1) | `string` | Compiled workflow name. |
 | `revision` (2) | `string` | Compiler revision of this graph. |
 | `stage_names` (3) | `repeated string` | Stage names in execution order. |
+| `stages` (4) | `repeated WorkflowStageInfo` | Stage metadata in execution order. |
+
+### `WorkflowStageInfo`
+
+Compiled stage metadata from the `info` result.
+
+| Field | Type | Description |
+|---|---|---|
+| `name` (1) | `string` | Compiled stage id. |
+| `agent` (2) | `string` | Target agent id. |
+| `level` (3) | `uint32` | Zero-based topological level. |
+| `worker_model` (4) | `WorkflowModelAssignment` | Authored worker model assignment when present. |
+| `verifier_model` (5) | `WorkflowModelAssignment` | Authored verifier model assignment when present. |
 
 ### `SubmitWorkflowCommandResponse`
 
@@ -2312,6 +2435,18 @@ One git worktree.
 | `worktree` (1) | `string` | Worktree identifier to reset. |
 
 ## Enums
+
+### `AgentModelSource`
+
+Which tier resolved an agent's effective base model.
+
+| Value | Number | Description |
+|---|---|---|
+| `AGENT_MODEL_SOURCE_UNSPECIFIED` | 0 | Unset sentinel; never emitted by the server. |
+| `AGENT_MODEL_SOURCE_SESSION` | 1 | An explicit override captured for the current root session tree. |
+| `AGENT_MODEL_SOURCE_CONFIGURED` | 2 | The agent has an explicit direct model or category policy. |
+| `AGENT_MODEL_SOURCE_REMEMBERED` | 3 | A durable preference retained and matching the current catalog. |
+| `AGENT_MODEL_SOURCE_DEFAULT` | 4 | No configured or retained model; the process base is used. |
 
 ### `AuthStatus`
 

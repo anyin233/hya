@@ -42,19 +42,17 @@ jobs:
       - name: Build TypeScript TUI test binaries
         if: ${{ !cancelled() }}
         run: cargo build --locked -p hya -p hya-backend -p hya-ts --bins
-      # Track T gate: exactly the scenarios registered in crates/hya-e2e/matrix.toml.
+      # Track T gate: the registered suite (crates/hya-e2e/matrix.toml T3.2).
+      # The old TUI's real-backend trio retired with the deleted Compat surface;
+      # frontend-on-hya-sdk-v1 coverage returns with the new TUI.
       - name: Test TypeScript TUI (Track T)
         if: ${{ !cancelled() }}
         working-directory: packages/hya-tui-ts
         run: |
-          "$HOME/.bun/bin/bun" test \
-            test/real-backend.test.ts \
-            test/task-presentation.test.ts \
-            test/real-backend-agents.test.ts
-      # Everything else in the bun suite, PTY smoke included. docs/testing/agent-matrix.md
-      # states PTY is presentation smoke and not a PR requirement, so it reports but
-      # must never gate: pty-smoke.test.ts is flaky under CI load and has already
-      # blocked the entire Rust gate once (run 31053432077).
+          "$HOME/.bun/bin/bun" test test/task-presentation.test.ts
+      # Everything else in the bun suite. Presentation smoke reports but must
+      # never gate: it is flaky under CI load and has already blocked the entire
+      # Rust gate once (run 31053432077).
       - name: TUI smoke (non-gating)
         if: ${{ !cancelled() }}
         continue-on-error: true

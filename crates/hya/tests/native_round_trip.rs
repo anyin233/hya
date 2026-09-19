@@ -1,16 +1,18 @@
 //! Accept-gate proof: a full session turn against the in-process `hya` backend completes through
-//! the native transport, and OUR PROCESS opens zero network sockets while doing it.
+//! the `/v1` router driven in-process (no TCP transport), and OUR PROCESS opens zero network
+//! sockets while doing it.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::collections::HashSet;
 use std::time::Duration;
 
+use axum::body::Body;
+use axum::http::{header, Method, Request, StatusCode};
+use http_body_util::BodyExt;
 use hya_app::{HyaRuntime, RuntimeOptions};
-use hya_native::{spawn_event_bridge, HyaNativeTransport};
-use hya_sdk::{ApiClient, Client, GlobalEvent};
-use serde_json::json;
-use tokio::sync::mpsc;
+use serde_json::{json, Value};
+use tower::ServiceExt;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn native_turn_opens_no_socket() {
@@ -23,72 +25,102 @@ async fn native_turn_opens_no_socket() {
     })
     .await
     .expect("offline runtime should start");
+    let app = runtime.router();
 
-    let client =
-        ApiClient::with_transport(HyaNativeTransport::new(runtime.router().clone(), "/tmp"));
-    let (event_tx, mut event_rx) = mpsc::unbounded_channel::<GlobalEvent>();
-    let _bridge = spawn_event_bridge(runtime.router().clone(), "/tmp".to_owned(), event_tx);
+    let (status, created) = call(
+        app.clone(),
+        Method::POST,
+        "/v1/sessions",
+        json!({"agent": "build", "model": "hya/offline", "workdir": "/tmp"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    let session = created["session"]["id"].as_str().unwrap().to_owned();
+    assert!(!session.is_empty(), "created session should have an id");
 
-    let session = client.session_create().await.expect("session_create");
-    assert!(!session.id.is_empty(), "created session should have an id");
+    // Event-driven turn: admit, then poll to a terminal state — all
+    // through oneshot requests to the in-process router.
+    let (status, admitted) = call(
+        app.clone(),
+        Method::POST,
+        &format!("/v1/sessions/{session}/turns"),
+        json!({"prompt": {"text": "hi"}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{admitted}");
+    let turn = admitted["turn"]["id"].as_str().unwrap().to_owned();
 
-    client
-        .session_prompt(
-            &session.id,
-            json!({ "parts": [{ "type": "text", "text": "hi" }] }),
-        )
-        .await
-        .expect("session_prompt should be admitted");
-
-    let mut kinds = Vec::new();
-    let mut saw_turn_event = false;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let mut terminal = false;
     while tokio::time::Instant::now() < deadline {
-        match tokio::time::timeout(Duration::from_secs(5), event_rx.recv()).await {
-            Ok(Some(event)) => {
-                let kind = event.payload.kind.clone();
-                if kind != "server.connected" && kind != "server.heartbeat" {
-                    saw_turn_event = true;
-                    kinds.push(kind);
-                    break;
-                }
-                kinds.push(kind);
-            }
-            Ok(None) => break,
-            Err(_) => break,
+        let (status, info) = call(
+            app.clone(),
+            Method::GET,
+            &format!("/v1/sessions/{session}/turns/{turn}"),
+            Value::Null,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{info}");
+        let state = info["state"].as_str().unwrap_or_default();
+        if state != "TURN_STATE_RUNNING" && state != "TURN_STATE_ADMITTED" && !state.is_empty() {
+            terminal = true;
+            break;
         }
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    assert!(
-        kinds.iter().any(|k| k == "server.connected"),
-        "bridge should deliver server.connected; saw {kinds:?}"
-    );
-    assert!(
-        saw_turn_event,
-        "the offline turn should forward at least one non-connected event; saw {kinds:?}"
-    );
+    assert!(terminal, "the offline turn should reach a terminal state");
 
     let offenders = offending_sockets(&owned_socket_inodes());
     assert!(
         offenders.is_empty(),
-        "native turn must open ZERO inet sockets, found: {offenders:?}"
+        "in-process turn must open ZERO loopback sockets, found: {offenders:?}"
     );
+}
+
+async fn call(app: axum::Router, method: Method, uri: &str, body: Value) -> (StatusCode, Value) {
+    let body = if body.is_null() {
+        Body::empty()
+    } else {
+        Body::from(body.to_string())
+    };
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method(method)
+                .uri(uri)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(body)
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let json = if bytes.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(&bytes)
+            .unwrap_or(Value::String(String::from_utf8_lossy(&bytes).into_owned()))
+    };
+    (status, json)
 }
 
 /// Inodes of sockets THIS process owns (from `/proc/self/fd/*` -> `socket:[INODE]`).
 fn owned_socket_inodes() -> HashSet<String> {
     let mut inodes = HashSet::new();
     let Ok(entries) = std::fs::read_dir("/proc/self/fd") else {
-        return inodes;
+        return inodes; // Not Linux: no procfs socket audit available.
     };
     for entry in entries.flatten() {
-        if let Ok(target) = std::fs::read_link(entry.path()) {
-            let target = target.to_string_lossy();
-            if let Some(inode) = target
-                .strip_prefix("socket:[")
-                .and_then(|rest| rest.strip_suffix(']'))
-            {
-                inodes.insert(inode.to_owned());
-            }
+        let Ok(target) = std::fs::read_link(entry.path()) else {
+            continue;
+        };
+        let target = target.to_string_lossy();
+        if let Some(inode) = target
+            .strip_prefix("socket:[")
+            .and_then(|rest| rest.strip_suffix(']'))
+        {
+            inodes.insert(inode.to_owned());
         }
     }
     inodes

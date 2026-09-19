@@ -12,6 +12,7 @@ workspace = true
 
 [dependencies]
 axum = { workspace = true }
+hya-api = { path = "../hya-api" }
 hya-client = { path = "../hya-client" }
 hya-proto = { workspace = true }
 libc = { workspace = true }

@@ -12,27 +12,35 @@ async fn t2_2_nested_task_tree_depth_at_least_two() {
     // turn; the explore resident's first episode spawns `plan`; the plan
     // grandchild runs its own episode last.
     let env = E2eEnvBuilder::new()
-        .scripts(vec![
-            tool_step(
-                "task",
-                json!({
-                    "description": "spawn explore",
-                    "prompt": "spawn a plan child then finish",
-                    "subagent_type": "explore"
-                }),
-            ),
-            text_step("ROOT_OK"),
-            tool_step(
-                "task",
-                json!({
-                    "description": "spawn plan",
-                    "prompt": "report GRANDCHILD_OK",
-                    "subagent_type": "plan"
-                }),
-            ),
-            text_step("CHILD_OK"),
-            text_step("GRANDCHILD_OK"),
-        ])
+        .route(
+            "You are hya,",
+            vec![
+                tool_step(
+                    "task",
+                    json!({
+                        "description": "spawn explore",
+                        "prompt": "spawn a plan child then finish",
+                        "subagent_type": "explore"
+                    }),
+                ),
+                text_step("ROOT_OK"),
+            ],
+        )
+        .route(
+            "file search specialist",
+            vec![
+                tool_step(
+                    "task",
+                    json!({
+                        "description": "spawn plan",
+                        "prompt": "report GRANDCHILD_OK",
+                        "subagent_type": "plan"
+                    }),
+                ),
+                text_step("CHILD_OK"),
+            ],
+        )
+        .route("hya-planner", vec![text_step("GRANDCHILD_OK")])
         .build()
         .await
         .expect("e2e env");

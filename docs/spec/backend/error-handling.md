@@ -80,9 +80,11 @@
 - Trigger: changing native hashline Read/Edit/Grep, host Write/Bash, Task inline
   parsing, tool-result capping, event/projection replay, or the SDK/TUI boundary.
 - Applies to the error handoff from `hya-tool` through `hya-core` and
-  `hya-proto`, Compat SDK tool parts, provider replay, and the hya-owned
-  OpenTUI presentation. This scenario supplements the execution contract in
-  `backend/quality-guidelines.md`; it does not introduce a second error store.
+  `hya-proto`, projected SDK tool parts (the shape the legacy Compat-era TUI
+  consumed; new frontends read it through `hya-sdk-v1`), provider replay, and
+  the hya-owned OpenTUI presentation. This scenario supplements the execution
+  contract in `backend/quality-guidelines.md`; it does not introduce a second
+  error store.
 - Source-derived hashline diagnostics follow `pi-hashline-edit` 0.8.3 at npm
   `gitHead ba7db9943d0f58499b24c1f6bd64722580f772a5` (tarball SHA-1
   `8985f24c3493be375cc225a5522ed54de8daabc9`).

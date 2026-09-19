@@ -70,6 +70,7 @@ pub(crate) fn session_info(
             .and_then(|reference| super::catalog::model_ref(&reference)),
         workdir: session.workdir.clone().unwrap_or_default(),
         background: false,
+        busy: false,
         time_created: timestamp(started_millis),
         time_updated: timestamp(updated_millis),
         last_seq: projection.last_seq,
@@ -173,15 +174,31 @@ fn part(part: &PartProjection) -> Option<pb::PartInfo> {
         ),
         PartProjection::Tool {
             id, name, state, ..
-        } => (
-            id.to_string(),
-            K::ToolCall(pb::ToolCallPart {
-                call_id: String::new(),
-                tool: name.to_string(),
-                input_json: String::new(),
-                state: tool_state(state),
-            }),
-        ),
+        } => {
+            let (error_code, error_message) = match state {
+                ToolPartState::Error { message, value, .. } => {
+                    let code = value
+                        .as_ref()
+                        .and_then(|value| value.pointer("/error/type"))
+                        .and_then(|code| code.as_str())
+                        .unwrap_or("unknown")
+                        .to_owned();
+                    (code, message.clone())
+                }
+                _ => (String::new(), String::new()),
+            };
+            (
+                id.to_string(),
+                K::ToolCall(pb::ToolCallPart {
+                    call_id: String::new(),
+                    tool: name.to_string(),
+                    input_json: String::new(),
+                    state: tool_state(state),
+                    error_code,
+                    error_message,
+                }),
+            )
+        }
     };
     Some(pb::PartInfo {
         id,

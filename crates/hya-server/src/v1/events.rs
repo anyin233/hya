@@ -12,6 +12,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 use futures::StreamExt;
+use serde_json::Value;
 use tokio_stream::Stream;
 use tokio_stream::wrappers::BroadcastStream;
 
@@ -47,6 +48,7 @@ async fn list_events(
         request.limit as usize
     };
     let mut events = Vec::new();
+    let mut raw_envelopes = Vec::new();
     let mut next_seq = request.since_seq;
     for envelope in envelopes
         .into_iter()
@@ -57,11 +59,17 @@ async fn list_events(
         if let Some(event) = stream_event(&envelope) {
             events.push(event);
         }
+        if request.include_raw
+            && let Ok(line) = serde_json::to_string(&envelope)
+        {
+            raw_envelopes.push(line);
+        }
     }
     Ok(Json(pb::ListEventsResponse {
         session: session.to_string(),
         events,
         next_seq,
+        raw_envelopes,
     }))
 }
 
@@ -104,34 +112,179 @@ fn session_stream(
 }
 
 /// The shared live frame producer backing both SSE and gRPC streams.
+///
+/// Merges three feeds: the engine event bus (durable events), the pending
+/// permission plane, and the pending question plane. Permission and
+/// question frames are live-only (`seq == 0`): the pending queues are the
+/// authoritative listing, the streams are delivery.
 pub(crate) fn frame_stream(
     st: ServerState,
     session: Option<SessionId>,
     since_seq: u64,
 ) -> impl Stream<Item = Result<pb::StreamFrame, tonic::Status>> {
-    let rx = st.engine.bus().subscribe();
-    BroadcastStream::new(rx).filter_map(move |result| async move {
-        match result {
-            Ok(envelope) => {
-                if let Some(session) = session
-                    && envelope.event.session() != Some(session)
-                {
-                    return None;
+    let engine =
+        BroadcastStream::new(st.engine.bus().subscribe()).filter_map(move |result| async move {
+            match result {
+                Ok(envelope) => {
+                    if let Some(session) = session
+                        && envelope.event.session() != Some(session)
+                    {
+                        return None;
+                    }
+                    if envelope.seq.0 <= since_seq {
+                        return None;
+                    }
+                    let frame = match stream_event(&envelope) {
+                        Some(event) => pb::stream_frame::Frame::Event(event),
+                        None => return None,
+                    };
+                    Some(Ok(pb::StreamFrame { frame: Some(frame) }))
                 }
-                if envelope.seq.0 <= since_seq {
-                    return None;
-                }
-                let frame = match stream_event(&envelope) {
-                    Some(event) => pb::stream_frame::Frame::Event(event),
-                    None => return None,
-                };
-                Some(Ok(pb::StreamFrame { frame: Some(frame) }))
-            }
-            Err(_lagged) => Some(Ok(pb::StreamFrame {
-                frame: Some(pb::stream_frame::Frame::Resync(pb::ResyncFrame {
-                    last_seq: since_seq,
+                Err(_lagged) => Some(Ok(pb::StreamFrame {
+                    frame: Some(pb::stream_frame::Frame::Resync(pb::ResyncFrame {
+                        last_seq: since_seq,
+                    })),
                 })),
-            })),
+            }
+        });
+    // Pending planes never error; the Result wrapper matches the merged
+    // engine-stream item type (tonic::Status is large but never constructed
+    // on these branches).
+    #[allow(clippy::result_large_err)]
+    let permission = BroadcastStream::new(st.permission_requests.subscribe()).filter_map(
+        move |result| async move {
+            let Ok(value) = result else { return None };
+            interaction_frame(&value, session)
+                .map(|frame| Ok(pb::StreamFrame { frame: Some(frame) }))
+        },
+    );
+    #[allow(clippy::result_large_err)]
+    let question = BroadcastStream::new(st.question_requests.subscribe()).filter_map(
+        move |result| async move {
+            let Ok(value) = result else { return None };
+            interaction_frame(&value, session)
+                .map(|frame| Ok(pb::StreamFrame { frame: Some(frame) }))
+        },
+    );
+    let engine: std::pin::Pin<
+        Box<dyn Stream<Item = Result<pb::StreamFrame, tonic::Status>> + Send>,
+    > = Box::pin(engine);
+    let permission: std::pin::Pin<
+        Box<dyn Stream<Item = Result<pb::StreamFrame, tonic::Status>> + Send>,
+    > = Box::pin(permission);
+    let question: std::pin::Pin<
+        Box<dyn Stream<Item = Result<pb::StreamFrame, tonic::Status>> + Send>,
+    > = Box::pin(question);
+    futures::stream::select_all([engine, permission, question])
+}
+
+/// Map one pending-plane broadcast value onto a live frame, honoring the
+/// session filter for session-scoped streams.
+fn interaction_frame(
+    value: &serde_json::Value,
+    session: Option<SessionId>,
+) -> Option<pb::stream_frame::Frame> {
+    let kind = value
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let properties = value.get("properties")?;
+    let frame_session = field_str(properties, "sessionID");
+    if let Some(session) = session
+        && !frame_session.is_empty()
+        && frame_session != session.to_string()
+    {
+        return None;
+    }
+    let event = match kind {
+        "permission.asked" => {
+            let interaction = pb::Interaction {
+                id: field_str(properties, "id"),
+                session: frame_session.clone(),
+                r#type: pb::InteractionType::Permission as i32,
+                title: format!(
+                    "{} {}",
+                    field_str(properties, "permission"),
+                    properties
+                        .get("patterns")
+                        .and_then(Value::as_array)
+                        .map(|rows| {
+                            rows.iter()
+                                .filter_map(Value::as_str)
+                                .collect::<Vec<_>>()
+                                .join(" ")
+                        })
+                        .unwrap_or_default()
+                )
+                .trim()
+                .to_owned(),
+                detail: String::new(),
+                options: Vec::new(),
+                payload: None,
+                time_created: None,
+            };
+            pb::stream_event::Payload::PermissionRequested(pb::PermissionRequested {
+                request: interaction.id.clone(),
+                interaction: Some(interaction),
+            })
         }
-    })
+        "question.asked" => {
+            let first = properties
+                .pointer("/questions/0")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            let options: Vec<String> = first
+                .get("options")
+                .and_then(Value::as_array)
+                .map(|rows| {
+                    rows.iter()
+                        .filter_map(|row| {
+                            row.get("label").and_then(Value::as_str).map(str::to_owned)
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let interaction = pb::Interaction {
+                id: field_str(properties, "id"),
+                session: frame_session.clone(),
+                r#type: pb::InteractionType::Question as i32,
+                title: field_str(&first, "question"),
+                detail: field_str(&first, "header"),
+                options,
+                payload: None,
+                time_created: None,
+            };
+            pb::stream_event::Payload::QuestionRequested(pb::QuestionRequested {
+                request: interaction.id.clone(),
+                interaction: Some(interaction),
+            })
+        }
+        "permission.replied" | "question.replied" | "question.rejected" => {
+            pb::stream_event::Payload::InteractionResolved(pb::InteractionResolved {
+                request: field_str(properties, "requestID"),
+            })
+        }
+        _ => return None,
+    };
+    Some(pb::stream_frame::Frame::Event(pb::StreamEvent {
+        seq: 0,
+        session: frame_session.clone(),
+        time_recorded: super::convert::timestamp(now_millis()),
+        payload: Some(event),
+    }))
+}
+
+fn field_str(value: &serde_json::Value, name: &str) -> String {
+    value
+        .get(name)
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .unwrap_or_default()
+}
+
+fn now_millis() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as i64)
+        .unwrap_or(0)
 }

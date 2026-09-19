@@ -302,20 +302,20 @@ Store API:
 | `list_saved_permissions(project_id: Option<&str>)` | Filter by project or list all |
 | `remove_saved_permission(id)` | Delete by id |
 
-Compat HTTP:
+v1 HTTP (see [Server and Client](server-client.md)):
 
-- `GET /api/permission/saved` (optional `projectID` query)
-- `DELETE /api/permission/saved/:id`
+- `GET /v1/permissions/rules` (saved-rule list, feeds the bootstrap snapshot)
+- `DELETE /v1/permissions/rules/{rule}`
 
 Rows survive server restart because they live in the session SQLite file.
 **That does not make the grant survive restart.** An `always` answer updates the
 **in-process** `PermissionPlane` (`persistent` rules / `native_grants`) for the
 current process only; that plane is empty at startup. Nothing outside
 `hya-server/src/pending/` reads these rows into the plane — `list_saved_permissions`
-feeds the Compat list/delete APIs and store tests, not turn-time authorization.
-After restart the user is asked again for the same action until they answer
-`always` in the new process (which both re-grants in memory and may insert
-another row via `INSERT OR IGNORE`).
+feeds the v1 saved-rule list/delete APIs and store tests, not turn-time
+authorization. After restart the user is asked again for the same action until
+they answer `always` in the new process (which both re-grants in memory and may
+insert another row via `INSERT OR IGNORE`).
 
 ## Sync store API
 
@@ -415,7 +415,8 @@ migrations live under
 The same store replay powers:
 
 - `SessionEngine::replay`
-- `GET /sessions/:id/events`
+- `GET /v1/sessions/{session}/events` (curated replay; `include_raw` returns
+  the raw envelope lines)
 - `hya-backend tail-session`
 - `read_projection`
 

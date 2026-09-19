@@ -52,7 +52,9 @@ dialog, and transcript layouts on narrow terminals.
 
 - Do not reintroduce a Rust TUI or place shipped interactive behavior outside
   `packages/hya-tui-ts`.
-- Do not bypass `@opencode-ai/sdk/v2` with a second HTTP client.
+- Do not bypass the backend SDK with a second HTTP client (new integration
+  code uses `hya-sdk-v1`; the vendored package's `@opencode-ai/sdk/v2` client
+  targeted the deleted Compat surface — see the index status note).
 - Do not duplicate synchronized server state in component-local stores.
 - Do not import excluded OpenCode server, worker, updater, web, or desktop code.
 - Do not edit generated logo or epilogue data by hand; use the existing asset
@@ -202,10 +204,11 @@ dialog, and transcript layouts on narrow terminals.
   Edit diff mode/layout, per-file Grep titles/match labels, Bash command-only
   highlighting, readable status text, and `captureSpans()` syntax colors rather
   than a brittle whole-screen snapshot.
-- `test/coding-tool-sync.test.tsx` hydrates one SDK part, applies one
-  `message.part.updated` replacement, and asserts the rendered part changes
-  once. Instrumentation must prove no presentation-specific HTTP request,
-  timer, Event replay, or second state owner.
+- ~~`test/coding-tool-sync.test.tsx`~~ (retired with the deleted Compat
+  surface): the equivalent single-part hydration/replacement coverage
+  returns with the new TUI on `hya-sdk-v1`'s `V1SessionMirror`. The
+  invariant it enforced still stands — no presentation-specific HTTP
+  request, timer, Event replay, or second state owner.
 - The real-backend PTY scenario creates Read, Edit, Write, Grep, and Bash
   results at 140 columns, reopens the same Session, and asserts equivalent
   completed semantic blocks. Repeat at 80 columns and assert readable prompt,
@@ -255,6 +258,13 @@ malformed or unsupported data remains safe through the existing fallback.
 ---
 
 ## Scenario: Synchronized Agent Model Configuration
+
+> **Retired integration.** The backend preference mutation this scenario drove
+> (`PUT /tui/agent-models/:agent_id`) was deleted with the legacy routes, and
+> `hya.v1` exposes no agent-model-preference rpc today, so this flow cannot
+> run against a current backend. The contracts below remain the reference for
+> rebuilding the flow once a v1 rpc exists (see the matching note in
+> [backend database guidelines](../backend/database-guidelines.md)).
 
 ### 1. Scope / Trigger
 

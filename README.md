@@ -9,9 +9,10 @@ hya is an event-sourced, terminal-first multi-agent coding agent. Rust owns the
 runtime and launcher binaries; `hya` delegates to `hya-ts`, which supervises
 `hya-backend` and the TypeScript/OpenTUI frontend in `packages/hya-tui-ts`. The
 runtime normalizes OpenAI Chat/Responses/Codex, Grok Build, Anthropic, and Google
-provider routes into one canonical event stream, executes tools behind a
-permission plane, and exposes interactive, headless, HTTP/SSE, and
-Compat-compatible surfaces.
+provider routes into one canonical event stream and executes tools behind a
+permission plane. Every client-facing surface speaks one consolidated contract —
+`hya.v1` — served identically over HTTP/JSON+SSE+WebSocket (`/v1`) and gRPC
+(`HYA_GRPC_BIND`); the legacy Compat and native HTTP routes are gone.
 
 
 If no provider is configured, hya still runs: it falls back to an offline
@@ -20,9 +21,9 @@ keys while you set things up.
 
 ## Status
 
-hya is under active development (workspace version `0.36.39`,
+hya is under active development (workspace version `0.36.50`,
 `MIT OR Apache-2.0`). The latest public binary release is `v0.35.1`; the
-checked-out `0.36.38` workspace is newer and is not published to crates.io. Build
+checked-out `0.36.49` workspace is newer and is not published to crates.io. Build
 this checkout from source as described below. APIs, config, and command surfaces
 may still change between versions.
 
@@ -89,11 +90,16 @@ sample config.
 ## What hya Can Do
 
 - Interactive TUI with slash commands, model/agent selection, permission
-  prompts, transcript export, and session resume.
+  prompts, transcript export, and session resume. (The vendored frontend's
+  backend integration targeted the deleted Compat surface and is mid-replacement
+  by a TUI built on `hya-sdk-v1`; see
+  [docs/architecture/tui.md](docs/architecture/tui.md).)
 - Headless single-turn execution (`hya-backend exec` / `hya-backend run`) and iterative goal
   mode (`hya-backend -p "<goal>"`).
-- HTTP/SSE server (`hya-backend serve`) exposing native `/sessions/*` routes plus
-  Compat-compatible route groups.
+- HTTP/SSE/WebSocket server (`hya-backend serve`) exposing the consolidated
+  `hya.v1` contract under `/v1`, plus optional gRPC via `HYA_GRPC_BIND`; see the
+  [protocol guide](docs/protocol/README.md) and generated
+  [API reference](docs/protocol/api-reference.md).
 - MCP servers, plugins (including a Compat plugin adapter), and a formatter
   plane, all driven from the same config.
 
@@ -125,9 +131,9 @@ inspected and installed with `hya bundle info -f example.hyabundle` and
 | [docs/troubleshooting.md](docs/troubleshooting.md) | Common local, provider, terminal, permission, and server issues. |
 | [docs/project-structure.md](docs/project-structure.md) | Repository layout, crates, and data flow. |
 | [docs/architecture/](docs/architecture) | Engine, event model, providers, tools/permissions, storage, server/client, and TUI internals. |
-| [docs/compat-parity.md](docs/compat-parity.md) | Compat compatibility status. |
+| [docs/compat-parity.md](docs/compat-parity.md) | Historical record of the pre-v1 Compat HTTP parity work (that surface is deleted; CLI aliases and the Compat plugin adapter remain). |
 | [docs/hya-pi-compat-comparison.md](docs/hya-pi-compat-comparison.md) | Feature comparison across hya, upstream stock Pi, and current Compat. |
-| [packages/hya-tui-ts/README.md](packages/hya-tui-ts/README.md) | TypeScript TUI package (requires a running backend + `--url`). |
+| [packages/hya-tui-ts/README.md](packages/hya-tui-ts/README.md) | Legacy TypeScript TUI package (frontend-only; its Compat-era backend integration is broken pending a `hya-sdk-v1` rewrite). |
 
 The Rust workspace is licensed under either MIT or Apache-2.0 at your option.
 The TypeScript TUI carries its own MIT/upstream license, and the checked-out

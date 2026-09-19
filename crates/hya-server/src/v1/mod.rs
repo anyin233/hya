@@ -6,6 +6,7 @@
 //! the same engine/app state as the legacy surface. The gRPC binding
 //! (phase P3) wraps the same handler logic.
 
+mod agent_models;
 mod auth;
 mod catalog;
 mod convert;
@@ -42,6 +43,7 @@ pub(crate) fn router() -> Router<ServerState> {
     Router::new()
         .merge(process::router())
         .merge(catalog::router())
+        .merge(agent_models::router())
         .merge(auth::router())
         .merge(logs::router())
         .merge(session::router())
@@ -175,7 +177,14 @@ pub(crate) fn query_request<T: DeserializeOwned>(
         if value.is_empty() {
             continue;
         }
-        map.insert(key.clone(), Value::String(value.clone()));
+        // Query strings carry every value as text; protojson bools need
+        // real JSON booleans, so coerce the canonical literals.
+        let json = match value.as_str() {
+            "true" => Value::Bool(true),
+            "false" => Value::Bool(false),
+            _ => Value::String(value.clone()),
+        };
+        map.insert(key.clone(), json);
     }
     for (key, value) in path_vars {
         map.insert((*key).to_owned(), Value::String((*value).to_owned()));

@@ -85,17 +85,17 @@ fails to render or tests fail to compile.
 **Test suites** under `packages/hya-tui-ts/test/`:
 
 The package's own [`test/README.md`](../packages/hya-tui-ts/test/README.md)
-is the inventory of Bun test files and which suites need a built backend
-or a PTY. The Workflow suites are `workflow-presentation`,
-`workflow-sidebar`, and `workflow-pty`; the first two are focused
-presentation tests and the PTY suite requires built backend and TUI
-binaries.
+is the inventory of Bun test files. The retained suites are pure presentation
+and package-contract coverage (for example the focused `workflow-presentation`
+and `workflow-sidebar` tests); the old real-backend/PTY suites tested the
+deleted Compat surface and were removed with it.
 
-Focused real-backend runs (after `cargo build -p hya-backend --bin hya-backend`):
+Frontend package checks:
 
 ```sh
 cd packages/hya-tui-ts
-bun test test/real-backend.test.ts test/task-presentation.test.ts test/real-backend-agents.test.ts
+bun run typecheck
+bun test
 ```
 
 **Scripts:**
@@ -115,13 +115,14 @@ There is **no** Cargo alias named `xtask` in this workspace: invoke it as
 `cargo run -p xtask -- <task> …`. The binary uses a hand-rolled positional
 dispatcher (not clap): the first positional argument selects the task and every
 remaining argument is forwarded verbatim. The currently supported tasks are
-`sync-compat`, `migrate`, `startup-bench`, `matrix-check`, `package-bundle`, and
+`sync-compat`, `migrate`, `startup-bench`, `matrix-check`, `package-bundle`, `gen-api`, and
 `release-rehearsal`.
 
 | Task | Role |
 | --- | --- |
 | `sync-compat` | Import supported MCP servers and skills from an OpenCode/Compat config into hya config / skill roots. Does not import providers or models — use `hya --import compat` for those. |
 | `migrate` | Alias that dispatches to the same implementation as `sync-compat`. |
+| `gen-api` | Regenerate the `hya.v1` contract from `proto/hya/v1`: Rust types (prost/tonic/pbjson), the API reference, and OpenAPI. Uses a vendored protoc; output is committed, and the task fails when any rpc lacks its `// hya.http:` mapping or two rpcs collide. |
 | `startup-bench` | Startup latency benchmark. Honours `HYA_BACKEND_BIN` to select the binary under test. |
 | `matrix-check` | Validates `crates/hya-e2e/matrix.toml`. See [agent-matrix.md](testing/agent-matrix.md). |
 | `package-bundle` | Validates a source directory and atomically writes the canonical deterministic public `.hyabundle` package. |
@@ -147,7 +148,8 @@ Use this guide when deciding where a change belongs:
 | Persistence, replay, migrations, usage ledger | `hya-store` |
 | Turn-loop behavior, goal/loop/team/worktree runtime logic | `hya-core` |
 | HTTP route or SSE behavior | `hya-server` |
-| Typed HTTP integration | `hya-client` |
+| `hya.v1` contract change (proto message/rpc, error code, HTTP binding) | `hya-api` — edit `proto/hya/v1/*.proto`, then regenerate with `cargo run -p xtask -- gen-api` |
+| Typed HTTP integration | `hya-client`; new frontend integrations use `hya-sdk-v1` |
 | Terminal UI rendering and interaction | `packages/hya-tui-ts` |
 | Frontend entrypoint and process supervision | `hya`, `hya-ts` |
 | User-facing backend CLI command, config loading, server launch | `hya-backend` |
@@ -171,7 +173,7 @@ Layer product paths on top of crate-local suites:
 | --- | --- | --- |
 | I (in-process) | Each crate's `tests/` | Deep engine/API contracts (index authority for nested spawn, resident, etc.) |
 | P (process) | `crates/hya-e2e` | Real binary + FakeLlm: tools, permissions, skills, MCP, subagents, hyabundle |
-| T (TUI/SDK) | `packages/hya-tui-ts/test` | Real-backend permission/question, roster, multi-agent presentation |
+| T (TUI) | `packages/hya-tui-ts/test` | Frontend presentation helpers and package smoke; the old TUI's real-backend SDK suite verified the deleted Compat surface and is retired with it |
 
 Do not weaken Track P oracles to request counts or tool-call argument substrings
 alone — require disk effects, tree depth, follow-up FakeLlm tool **results**, or
@@ -191,7 +193,7 @@ When changing a boundary, update the nearest docs page:
 | Providers | [Providers](architecture/providers.md) |
 | Tools/permissions | [Tools and Permissions](architecture/tools-and-permissions.md) |
 | Store/schema | [Storage](architecture/storage.md) |
-| Server/client API | [Server and Client](architecture/server-client.md) |
+| Server/client API | [Server and Client](architecture/server-client.md), [Protocol guide](protocol/README.md) |
 | TUI behavior | [TUI](architecture/tui.md), [TUI Reference](tui-reference.md), [TUI Keybindings](tui-keybindings.md) |
 | Agent process E2E / matrix | [Testing](testing/README.md), [Agent matrix](testing/agent-matrix.md) |
 

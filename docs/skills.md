@@ -6,7 +6,7 @@ built from directory discovery plus three compiled-in fallback skills.
 
 Sources:
 [`crates/hya-tool/src/skill_catalog.rs`](../crates/hya-tool/src/skill_catalog.rs),
-[`crates/hya-server/src/compat/skill_catalog.rs`](../crates/hya-server/src/compat/skill_catalog.rs).
+[`crates/hya-server/src/support/skill_catalog.rs`](../crates/hya-server/src/support/skill_catalog.rs).
 
 Bundle-local skill resources (`resources.skills`) are separate: they live inside
 an AgentBundle package. See [AgentBundle authoring](agent-bundle-authoring.md).

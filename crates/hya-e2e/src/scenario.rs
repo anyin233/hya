@@ -3,9 +3,9 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+use hya_api::v1 as pb;
 use hya_client::Client;
 use hya_proto::SessionId;
-use hya_proto::api::{CreateSessionRequest, PromptRequest};
 use serde_json::Value;
 
 use crate::backend::{
@@ -229,26 +229,28 @@ impl E2eEnv {
     pub async fn create_session_with_agent(&self, agent: &str) -> Result<SessionId, E2eError> {
         let resp = self
             .client
-            .create_session(&CreateSessionRequest {
+            .create_session(&pb::CreateSessionRequest {
                 agent: agent.to_string(),
                 model: self.model.clone(),
                 workdir: self.backend.workdir_str(),
-                parent: None,
+                ..Default::default()
             })
             .await?;
-        Ok(resp.session)
+        let id = resp
+            .session
+            .and_then(|session| session.id.parse().ok())
+            .ok_or_else(|| E2eError::Other("create session response missing id".into()))?;
+        Ok(id)
     }
 
-    /// Send a user prompt on the native API and return the admit response.
+    /// Send a user prompt through the v1 event-driven API (admit + wait)
+    /// and return the terminal turn state.
     pub async fn prompt(
         &self,
         session: SessionId,
         text: impl Into<String>,
-    ) -> Result<hya_proto::api::PromptResponse, E2eError> {
-        Ok(self
-            .client
-            .prompt(session, &PromptRequest { text: text.into() })
-            .await?)
+    ) -> Result<pb::TurnInfo, E2eError> {
+        Ok(self.client.prompt(session, text).await?)
     }
 
     /// Reopen the production backend on the same durable store and project.
@@ -315,66 +317,199 @@ impl E2eEnv {
         Ok(serde_json::from_str(&text)?)
     }
 
-    /// List pending permission requests (Compat).
+    /// PUT JSON to a backend path; empty bodies become `null`.
+    pub async fn put_json(&self, path: &str, body: &Value) -> Result<Value, E2eError> {
+        let url = format!("{}{path}", self.backend.url);
+        let resp = self.http.put(url).json(body).send().await?;
+        let status = resp.status();
+        let text = resp.text().await?;
+        if !status.is_success() {
+            return Err(E2eError::Http(format!("PUT {path} -> {status}: {text}")));
+        }
+        if text.trim().is_empty() {
+            return Ok(Value::Null);
+        }
+        Ok(serde_json::from_str(&text)?)
+    }
+
+    /// List pending permission requests (v1 interaction plane), as an array.
     pub async fn list_permissions(&self) -> Result<Value, E2eError> {
-        self.get_json("/permission").await
+        let body = self
+            .get_json("/v1/interactions?type=INTERACTION_TYPE_PERMISSION")
+            .await?;
+        Ok(body
+            .get("interactions")
+            .cloned()
+            .unwrap_or_else(|| Value::Array(Vec::new())))
     }
 
-    /// Reply to a pending permission request (`allow` / `deny` style string).
+    /// Reply to a pending permission request (`once` / `always` / other = deny).
     pub async fn reply_permission(&self, request_id: &str, reply: &str) -> Result<(), E2eError> {
-        let body = serde_json::json!({ "reply": reply });
+        let (allowed, persist) = match reply {
+            "once" => (true, false),
+            "always" => (true, true),
+            _ => (false, false),
+        };
+        let body = serde_json::json!({ "permission": { "allowed": allowed, "persist": persist } });
         let _ = self
-            .post_json(&format!("/permission/{request_id}/reply"), &body)
+            .post_json(&format!("/v1/interactions/{request_id}/respond"), &body)
             .await?;
         Ok(())
     }
 
-    /// List pending interactive question requests (Compat).
+    /// List pending interactive question requests (v1), as an array.
     pub async fn list_questions(&self) -> Result<Value, E2eError> {
-        self.get_json("/question").await
+        let body = self
+            .get_json("/v1/interactions?type=INTERACTION_TYPE_QUESTION")
+            .await?;
+        Ok(body
+            .get("interactions")
+            .cloned()
+            .unwrap_or_else(|| Value::Array(Vec::new())))
     }
 
-    /// Answer a pending question request with a JSON `answers` payload.
+    /// Answer a pending question request; `answers` maps to the first
+    /// selected option (v1 carries one answer per interaction).
     pub async fn reply_question(&self, request_id: &str, answers: Value) -> Result<(), E2eError> {
-        let body = serde_json::json!({ "answers": answers });
+        let answer = first_answer(&answers);
+        let body = serde_json::json!({ "question": { "answer": answer } });
         let _ = self
-            .post_json(&format!("/question/{request_id}/reply"), &body)
+            .post_json(&format!("/v1/interactions/{request_id}/respond"), &body)
             .await?;
         Ok(())
     }
 
-    /// List sessions via the Compat `/session` surface.
+    /// List sessions via the v1 surface.
     pub async fn list_sessions_compat(&self) -> Result<Value, E2eError> {
-        self.get_json("/session").await
+        self.get_json("/v1/sessions").await
     }
 
-    /// List configured agents via the native `/api/agent` surface.
+    /// List configured agents via the v1 surface.
     pub async fn list_agents(&self) -> Result<Value, E2eError> {
-        self.get_json("/api/agent").await
+        self.get_json("/v1/agents").await
     }
 
-    /// Fetch the session tree (parent/children) for multi-agent layouts.
+    /// Fetch the session tree (parent/children) for multi-agent layouts,
+    /// assembled from v1 parent-filtered listings.
     pub async fn session_tree(&self, session: &SessionId) -> Result<Value, E2eError> {
-        self.get_json(&format!("/session/{session}/tree")).await
+        self.build_tree(session, 8).await
     }
 
-    /// Compat v2 session context (projected messages for the session).
+    /// Compat-shaped session context (projected messages for the session).
     pub async fn session_context(&self, session: &SessionId) -> Result<Value, E2eError> {
-        self.get_json(&format!("/api/session/{session}/context"))
-            .await
+        let messages = self
+            .get_json(&format!("/v1/sessions/{session}/messages"))
+            .await?;
+        Ok(
+            serde_json::json!({ "data": messages.get("messages").cloned().unwrap_or(Value::Array(Vec::new())) }),
+        )
     }
 
-    /// Compat session todo list.
+    /// Session todo list (v1).
     pub async fn session_todos(&self, session: &SessionId) -> Result<Value, E2eError> {
-        self.get_json(&format!("/session/{session}/todo")).await
+        self.get_json(&format!("/v1/sessions/{session}/todo")).await
     }
 
-    /// Compat run statuses map (`session_id` → `{type: "busy"}` while running).
+    /// Run statuses map (`session_id` → `{type: "busy"}` while running),
+    /// derived from the v1 session listing.
     pub async fn session_statuses(&self) -> Result<Value, E2eError> {
-        self.get_json("/session/status").await
+        let listed = self.get_json("/v1/sessions").await?;
+        let mut map = serde_json::Map::new();
+        if let Some(sessions) = listed.get("sessions").and_then(Value::as_array) {
+            for session in sessions {
+                let id = session
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let busy = session
+                    .get("busy")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                map.insert(
+                    id.to_string(),
+                    if busy {
+                        serde_json::json!({ "type": "busy" })
+                    } else {
+                        serde_json::json!({ "type": "idle" })
+                    },
+                );
+            }
+        }
+        Ok(Value::Object(map))
     }
 
-    /// Wait until the session is not listed as busy under `/session/status`.
+    /// Recursively build the legacy-shaped tree from v1 parent listings,
+    /// enriched with team roster handles folded from raw envelopes.
+    async fn build_tree(&self, session: &SessionId, depth: usize) -> Result<Value, E2eError> {
+        Box::pin(self.build_tree_inner(session, depth)).await
+    }
+
+    /// Build the spawn tree from per-session member lists, mirroring the
+    /// projection run-tree semantics: each session's own `members` rows name
+    /// its spawned children, so nesting follows spawn causality even when the
+    /// resident substrate flattens projection parenting to the team root.
+    /// Iterative BFS on `&self` (no recursion), nested JSON assembled at the
+    /// end from the collected edges.
+    async fn build_tree_inner(
+        &self,
+        session: &SessionId,
+        depth_limit: usize,
+    ) -> Result<Value, E2eError> {
+        // session -> (agent, [(child, subagent_type)])
+        let mut nodes: std::collections::BTreeMap<String, Vec<(String, String)>> =
+            std::collections::BTreeMap::new();
+        let mut roster: std::collections::BTreeMap<String, hya_proto::projection::RosterEntry> =
+            std::collections::BTreeMap::new();
+        let mut queue: Vec<(hya_proto::SessionId, usize)> = vec![(*session, 0)];
+        let mut seen: std::collections::BTreeSet<String> =
+            std::collections::BTreeSet::from([session.to_string()]);
+        while let Some((current, depth)) = queue.pop() {
+            let envelopes = self.events(current, None).await?;
+            let projection = hya_proto::Projection::from_events(&envelopes);
+            if depth == 0 {
+                for entry in projection.team.roster.into_values() {
+                    roster.insert(entry.session.to_string(), entry);
+                }
+            }
+            if depth >= depth_limit {
+                continue;
+            }
+            for member in &projection.session.members {
+                let Some(child) = member.child else {
+                    continue;
+                };
+                let child_key = child.to_string();
+                nodes
+                    .entry(current.to_string())
+                    .or_default()
+                    .push((child_key.clone(), member.subagent_type.to_string()));
+                if seen.insert(child_key) {
+                    queue.push((child, depth + 1));
+                }
+            }
+        }
+        fn assemble(
+            key: &str,
+            nodes: &std::collections::BTreeMap<String, Vec<(String, String)>>,
+            roster: &mut std::collections::BTreeMap<String, hya_proto::projection::RosterEntry>,
+        ) -> Value {
+            let mut children = Vec::new();
+            if let Some(spawns) = nodes.get(key) {
+                for (child, subagent_type) in spawns {
+                    let mut node = assemble(child, nodes, roster);
+                    node["member"] = serde_json::json!({ "subagent_type": subagent_type });
+                    if let Some(entry) = roster.remove(child) {
+                        node["roster"] = serde_json::to_value(entry).unwrap_or(Value::Null);
+                    }
+                    children.push(node);
+                }
+            }
+            serde_json::json!({ "session": key, "children": children })
+        }
+        Ok(assemble(&session.to_string(), &nodes, &mut roster))
+    }
+    /// Fold the root session's raw envelopes and index team roster rows by
+    /// Wait until the session is not listed as busy (v1 session listing).
     pub async fn wait_session_idle(
         &self,
         session: &SessionId,
@@ -393,27 +528,23 @@ impl E2eEnv {
         .await
     }
 
-    /// Create a session via Compat v2 (`/api/session`) so workdir/location is explicit.
+    /// Create a session via v1 so workdir is explicit.
     pub async fn compat_create_session(&self) -> Result<SessionId, E2eError> {
         let body = serde_json::json!({
             "agent": self.agent,
-            "location": { "directory": self.backend.workdir_str() },
-            "model": {
-                "providerID": "fake",
-                "id": "model"
-            }
+            "model": self.model,
+            "workdir": self.backend.workdir_str(),
         });
-        let created = self.post_json("/api/session", &body).await?;
+        let created = self.post_json("/v1/sessions", &body).await?;
         let id = created
-            .pointer("/data/id")
+            .pointer("/session/id")
             .and_then(|v| v.as_str())
-            .or_else(|| created.get("id").and_then(|v| v.as_str()))
-            .ok_or_else(|| E2eError::Other(format!("compat create missing id: {created}")))?;
+            .ok_or_else(|| E2eError::Other(format!("v1 create missing id: {created}")))?;
         id.parse()
             .map_err(|e| E2eError::Other(format!("parse session id {id}: {e}")))
     }
 
-    /// Async Compat v2 prompt (spawns turn with AGENTS/reference guidance), then wait idle.
+    /// v1 event-driven prompt (admit + wait terminal) with FakeLlm pacing.
     pub async fn compat_prompt_and_wait(
         &self,
         session: SessionId,
@@ -422,42 +553,47 @@ impl E2eEnv {
     ) -> Result<Value, E2eError> {
         let before = self.fake.requests().map(|r| r.len()).unwrap_or(0);
         let body = serde_json::json!({
-            "prompt": { "text": text.into() },
-            "resume": true
+            "prompt": { "text": text.into() }
         });
         let admitted = self
-            .post_json(&format!("/api/session/{session}/prompt"), &body)
+            .post_json(&format!("/v1/sessions/{session}/turns"), &body)
             .await?;
         // Wait for at least one new FakeLlm hit and the run registry to clear.
-        wait_until("compat turn FakeLlm", timeout, || async {
+        let wait_result = wait_until("v1 turn FakeLlm", timeout, || async {
             let n = self.fake.requests().map(|r| r.len()).unwrap_or(0);
             Ok(n > before)
         })
-        .await?;
+        .await;
+        if wait_result.is_err() {
+            let events = self.client.events(session, None).await;
+            eprintln!("V1TURN STALL admitted={admitted} events={events:?}");
+        }
+        wait_result?;
         self.wait_session_idle(&session, timeout).await?;
         Ok(admitted)
     }
 
-    /// POST `/api/session/{id}/compact` (sync summarize + inject system message).
+    /// POST `/v1/sessions/{id}/compact` (sync summarize + inject system message).
     pub async fn compact_session(&self, session: &SessionId) -> Result<(), E2eError> {
-        let url = format!("{}/api/session/{session}/compact", self.backend.url);
-        let resp = self.http.post(url).send().await?;
+        let url = format!("{}/v1/sessions/{session}/compact", self.backend.url);
+        let resp = self
+            .http
+            .post(url)
+            .header("content-type", "application/json")
+            .body("{}")
+            .send()
+            .await?;
         let status = resp.status();
         let text = resp.text().await?;
-        if !(status.is_success() || status.as_u16() == 204) {
+        if !status.is_success() {
             return Err(E2eError::Http(format!("POST compact -> {status}: {text}")));
         }
         Ok(())
     }
 
-    /// POST legacy `/session/{id}/summarize` with provider/model metadata.
+    /// POST `/v1/sessions/{id}/summarize`.
     pub async fn summarize_session_legacy(&self, session: &SessionId) -> Result<Value, E2eError> {
-        let body = serde_json::json!({
-            "providerID": "fake",
-            "modelID": "model",
-            "auto": false
-        });
-        self.post_json(&format!("/session/{session}/summarize"), &body)
+        self.post_json(&format!("/v1/sessions/{session}/summarize"), &Value::Null)
             .await
     }
 
@@ -492,7 +628,7 @@ impl E2eEnv {
         text: impl Into<String>,
         reply: &str,
         timeout: Duration,
-    ) -> Result<hya_proto::api::PromptResponse, E2eError> {
+    ) -> Result<pb::TurnInfo, E2eError> {
         let http = self.http.clone();
         let base = self.backend.url.clone();
         let reply = reply.to_string();
@@ -521,7 +657,7 @@ impl E2eEnv {
         text: impl Into<String>,
         answers: Value,
         timeout: Duration,
-    ) -> Result<hya_proto::api::PromptResponse, E2eError> {
+    ) -> Result<pb::TurnInfo, E2eError> {
         let http = self.http.clone();
         let base = self.backend.url.clone();
         let replier =
@@ -612,22 +748,27 @@ impl E2eEnv {
         .await
     }
 
-    /// Wait until `/mcp` reports `name` with status `connected`.
+    /// Wait until `/v1/mcp` reports `name` with status `connected`.
     pub async fn wait_mcp_connected(
         &self,
         name: &str,
         timeout: Duration,
     ) -> Result<Value, E2eError> {
         wait_until(&format!("mcp {name} connected"), timeout, || async {
-            let status = self.get_json("/mcp").await.unwrap_or(Value::Null);
+            let status = self.get_json("/v1/mcp").await.unwrap_or(Value::Null);
             Ok(status
-                .get(name)
-                .and_then(|s| s.get("status"))
-                .and_then(|s| s.as_str())
-                == Some("connected"))
+                .get("servers")
+                .and_then(Value::as_array)
+                .is_some_and(|rows| {
+                    rows.iter().any(|row| {
+                        row.get("name").and_then(Value::as_str) == Some(name)
+                            && row.get("state").and_then(Value::as_str)
+                                == Some("MCP_SERVER_STATE_CONNECTED")
+                    })
+                }))
         })
         .await?;
-        self.get_json("/mcp").await
+        self.get_json("/v1/mcp").await
     }
 }
 
@@ -643,7 +784,9 @@ async fn auto_reply_permission(
             return Err(E2eError::Timeout("permission auto-reply".into()));
         }
         let resp = http
-            .get(format!("{base}/permission"))
+            .get(format!(
+                "{base}/v1/interactions?type=INTERACTION_TYPE_PERMISSION"
+            ))
             .send()
             .await
             .map_err(|e| E2eError::Http(e.to_string()))?;
@@ -654,15 +797,25 @@ async fn auto_reply_permission(
             .map_err(|e| E2eError::Http(e.to_string()))?;
         if status.is_success()
             && let Ok(body) = serde_json::from_str::<Value>(&text)
-            && let Some(id) = extract_request_id(&body)
+            && let Some(id) = body
+                .get("interactions")
+                .and_then(Value::as_array)
+                .and_then(|rows| rows.first())
+                .and_then(|row| row.get("id"))
+                .and_then(Value::as_str)
         {
+            let (allowed, persist) = match reply {
+                "once" => (true, false),
+                "always" => (true, true),
+                _ => (false, false),
+            };
             let reply_resp = http
-                .post(format!("{base}/permission/{id}/reply"))
-                .json(&serde_json::json!({ "reply": reply }))
+                .post(format!("{base}/v1/interactions/{id}/respond"))
+                .json(&serde_json::json!({ "permission": { "allowed": allowed, "persist": persist } }))
                 .send()
                 .await
                 .map_err(|e| E2eError::Http(e.to_string()))?;
-            if reply_resp.status().is_success() || reply_resp.status().as_u16() == 204 {
+            if reply_resp.status().is_success() {
                 return Ok(());
             }
         }
@@ -682,7 +835,9 @@ async fn auto_reply_question(
             return Err(E2eError::Timeout("question auto-reply".into()));
         }
         let resp = http
-            .get(format!("{base}/question"))
+            .get(format!(
+                "{base}/v1/interactions?type=INTERACTION_TYPE_QUESTION"
+            ))
             .send()
             .await
             .map_err(|e| E2eError::Http(e.to_string()))?;
@@ -693,20 +848,46 @@ async fn auto_reply_question(
             .map_err(|e| E2eError::Http(e.to_string()))?;
         if status.is_success()
             && let Ok(body) = serde_json::from_str::<Value>(&text)
-            && let Some(id) = extract_request_id(&body)
+            && let Some(id) = body
+                .get("interactions")
+                .and_then(Value::as_array)
+                .and_then(|rows| rows.first())
+                .and_then(|row| row.get("id"))
+                .and_then(Value::as_str)
         {
+            let answer = first_answer(&answers);
             let reply_resp = http
-                .post(format!("{base}/question/{id}/reply"))
-                .json(&serde_json::json!({ "answers": answers }))
+                .post(format!("{base}/v1/interactions/{id}/respond"))
+                .json(&serde_json::json!({ "question": { "answer": answer } }))
                 .send()
                 .await
                 .map_err(|e| E2eError::Http(e.to_string()))?;
-            if reply_resp.status().is_success() || reply_resp.status().as_u16() == 204 {
+            if reply_resp.status().is_success() {
                 return Ok(());
             }
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+}
+
+/// Extract the first selected answer from a legacy answers payload.
+fn first_answer(answers: &Value) -> String {
+    if let Some(text) = answers.as_str() {
+        return text.to_string();
+    }
+    if let Some(rows) = answers.as_array()
+        && let Some(first) = rows.first()
+    {
+        if let Some(text) = first.as_str() {
+            return text.to_string();
+        }
+        if let Some(inner) = first.as_array()
+            && let Some(text) = inner.first().and_then(Value::as_str)
+        {
+            return text.to_string();
+        }
+    }
+    String::new()
 }
 
 fn extract_request_id(body: &Value) -> Option<String> {

@@ -18,11 +18,11 @@ boundary; do not replace them with generic checklist prose.
 ### 1. Scope / Trigger
 
 - Trigger: any HTTP/API route that admits a prompt or shell turn and starts optional model-side work such as auto-title, summarization, compaction, or background metadata generation.
-- Applies to Compat-compatible prompt routes, native prompt routes, and future admission-style routes that must acknowledge work before the provider stream completes.
+- Applies to the `hya.v1` turn admission rpc (`POST /v1/sessions/{session}/turns` with a `prompt`/`command`/`shell` body) and future admission-style routes that must acknowledge work before the provider stream completes.
 
 ### 2. Signatures
 
-- Route shape: `POST /api/session/{session_id}/prompt` and equivalent prompt-admission endpoints.
+- Route shape: `POST /v1/sessions/{session}/turns` (Turn `CreateTurn` with a `prompt`/`command`/`shell` oneof body) and equivalent admission endpoints.
 - Core sequence: parse session ID, validate/load session, durably admit the user request, schedule optional follow-up work, return the admission response.
 
 ### 3. Contracts
@@ -41,7 +41,7 @@ boundary; do not replace them with generic checklist prose.
 
 ### 5. Good/Base/Bad Cases
 
-- Good: a pending title provider cannot block `POST /api/session/{id}/prompt`; session context can still show the admitted unfinished assistant state.
+- Good: a pending title provider cannot block `POST /v1/sessions/{session}/turns`; transcript reads can still show the admitted unfinished assistant state.
 - Base: title generation eventually writes `SessionTitled` after the prompt response when the provider completes.
 - Bad: awaiting `auto_title_session(...)` or another optional provider call inside the prompt handler before sending the HTTP response.
 
@@ -74,83 +74,84 @@ Ok(Json(response))
 
 ---
 
-## Scenario: Root Compat permission and question lifecycle
+## Scenario: v1 permission and question interactions
 
 ### 1. Scope / Trigger
 
-- Trigger: changes to the root OpenCode-compatible permission/question routes,
-  pending interaction storage, or `/global/event` serialization.
-- The root routes implement the pinned SDK contract. `/api/*` routes retain
-  their separate V2 wrappers and field names.
+- Trigger: changes to the v1 interaction routes, pending interaction storage,
+  or interaction event serialization on the streams.
+- The v1 surface unifies permissions and questions into one Interactions
+  service (`crates/hya-server/src/v1/interaction.rs`); there are no separate
+  root permission/question queues anymore.
 
 ### 2. Signatures
 
-- `GET /permission` -> `LegacyPermissionRequestView[]` with `id`, `sessionID`,
-  `permission`, `patterns`, `metadata`, `always`, and
-  `tool.{messageID,callID}`.
-- `POST /permission/:request/reply` with
-  `{ "reply": "once" | "always" | "reject", "message"?: string }`.
-- `GET /question` -> entries with `id`, `sessionID`, and `questions`.
-- `POST /question/:request/reply` with `{ "answers": string[][] }`.
-- `POST /question/:request/reject` with no required body.
-- `GET /global/event` -> SSE data shaped as
-  `{ "directory": string, "payload": { "id", "type", "properties" } }`.
+- `GET /v1/interactions` (optional `type=INTERACTION_TYPE_PERMISSION` /
+  `INTERACTION_TYPE_QUESTION` and `session` filters) -> `Interaction` rows
+  with `id`, `session`, `type`, `title` (`"<action> <resource>"` for
+  permissions, the question text for questions).
+- `POST /v1/interactions/{request}/respond` with one of
+  `{ "permission": { "allowed": bool, "persist": bool } }`,
+  `{ "question": { "answer": "..." } }`, or
+  `{ "question": { "rejected": true } }`; the response is
+  `{ "applied": bool }`.
+- Stream events: `permissionRequested` / `questionRequested` (each carrying
+  the request id plus an `Interaction` summary) and `interactionResolved`,
+  delivered on `GET /v1/sessions/{session}/events/stream` and
+  `GET /v1/events/stream` as `StreamFrame`s.
 
 ### 3. Contracts
 
-- `permission.asked.properties` uses the same legacy view as `GET /permission`;
-  do not substitute the `/api/*` `action/resources/save` view.
-- `question.replied.properties` includes `sessionID`, `requestID`, and the
-  submitted `answers`; `question.rejected.properties` includes `sessionID` and
-  `requestID`.
-- Every `/global/event` item, including connected, engine, permission,
-  question, and heartbeat events, carries the requested project `directory`.
-- Pending insertion precedes the asked event. Pending removal plus successful
-  reply-channel completion precedes the completion event. This makes duplicate
-  replies return not-found without publishing a second completion.
+- Pending insertion precedes the requested event. Pending removal plus
+  successful reply-channel completion precedes `interactionResolved`.
+- A respond call for an already-resolved request returns `applied: false`
+  (idempotent replay) instead of an error; an unknown request id returns
+  `not_found`.
+- `persist: true` on an allowed permission additionally saves a durable
+  saved-rule row (listed by `GET /v1/permissions/rules`); the in-process
+  permission plane grant is what authorizes the current process.
+- Question answers submit per-question option selections; rejected questions
+  surface the rejection to the awaiting tool call.
 
 ### 4. Validation & Error Matrix
 
-- Invalid root permission/question request ID -> `400 Bad Request`.
-- Missing, wrong-session, or duplicate request -> `404 Not Found`; no
-  completion event.
-- Invalid permission reply or non-`string[][]` question answers ->
-  `400 Bad Request`.
-- Successful root reply/reject -> JSON `true`; exactly one completion event;
-  request absent from the next list response.
-- Dropped reply channel -> no successful response claim and no completion
-  event.
+- Unknown or already-removed request id -> `not_found` (404/`NotFound`).
+- Invalid session filter -> `invalid_argument`.
+- Missing response oneof -> `invalid_argument` before any side effect.
+- Successful respond -> `applied: true`, exactly one `interactionResolved`
+  event, request absent from the next list response.
 
 ### 5. Good/Base/Bad Cases
 
-- Good: the pinned SDK receives a live request, replies once, observes one
-  completion event, and a duplicate reply returns `404`.
-- Base: an empty pending set returns `[]` and the global stream still emits a
-  directory-bearing connected/heartbeat envelope.
-- Bad: publishing `question.replied` before the reply channel succeeds, or
-  emitting a root permission view with only `action/resources/save`.
+- Good: a client lists pending permissions, responds
+  `{permission:{allowed:true}}`, observes one `interactionResolved`, and a
+  duplicate respond returns `applied: false`.
+- Base: an empty pending set returns `[]` on both type filters.
+- Bad: publishing `interactionResolved` before the reply channel succeeds,
+  or answering a permission through the question oneof.
 
 ### 6. Tests Required
 
-- Route tests assert the complete root permission/question field sets and
-  duplicate `404` behavior.
-- `/global/event` tests assert `directory` on connected and interaction events,
-  and assert question reply `answers`.
-- A real pinned-SDK test must cover permission once/reject and question
-  reply/reject, side effects, exactly-once events, and final empty pending lists.
+- Route tests (`crates/hya-server/tests/v1_api.rs`) assert the Interaction
+  field sets, type/session filters, duplicate `applied: false`, and
+  unknown-id `not_found`.
+- Stream tests assert `permissionRequested`/`questionRequested`/
+  `interactionResolved` ordering relative to pending insertion/removal.
+- Process E2E (Track P `p03_permissions`, `p04_questions`) covers the
+  once/reject and reply flows through the real binary.
 
 ### 7. Wrong vs Correct
 
 #### Wrong
 
 ```json
-{"payload":{"type":"question.replied","properties":{"requestID":"q_1"}}}
+{"question":{"answers":"Yes"}}
 ```
 
 #### Correct
 
 ```json
-{"directory":"/project","payload":{"type":"question.replied","properties":{"sessionID":"hysec_...","requestID":"q_1","answers":[["Yes"]]}}}
+{"question":{"answer":"Yes"}}
 ```
 
 ---
@@ -159,8 +160,8 @@ Ok(Json(response))
 
 ### 1. Scope / Trigger
 
-- Trigger: any API route, client URL builder, sync/projector path, TUI/control route, or test fixture that accepts or emits a session ID.
-- Applies to Compat-compatible `sessionID` payload fields, native path parameters, experimental routes, sync replay/history routes, and test helpers that create sessions.
+- Trigger: any v1 route, client URL builder, sync/projector path, or test fixture that accepts or emits a session ID.
+- Applies to v1 path parameters (`{session}`) and body fields, client helpers, and test helpers that create sessions.
 
 ### 2. Contracts
 
@@ -348,7 +349,7 @@ engine.refresh_runtime(|candidate| {
 
 ### 1. Scope / Trigger
 
-- Trigger: startup/deferred/Compat MCP changes, startup plugin tool
+- Trigger: startup/deferred/v1 MCP control changes, startup plugin tool
   declarations, or plugin crash/respawn declaration validation.
 - Applies to the app-owned reconciler, `RuntimeRegistry` source manifests,
   MCP preparation, plugin initialize validation, and the server's narrow MCP
@@ -389,7 +390,7 @@ engine.refresh_runtime(|candidate| {
 - Duplicate source/export/canonical/alias and plugin handshake-ID mismatch fail
   before publication and consume no generation.
 - Mixed MCP/plugin startup publishes one complete snapshot exactly once.
-- Compat MCP add/remove changes callability through the same registry.
+- v1 MCP add/connect/disconnect changes callability through the same registry.
 - Reordered equivalent plugin initialize declarations compare equal; changing
   tool, command/permission hook, or workspace declarations detects drift.
 - Cargo manifests and `Cargo.lock` add no dependency for declaration hashing.
@@ -667,17 +668,20 @@ let body = protocol.encode(&request)?;
 
 ---
 
-## Scenario: Legacy Prompt Variants And Agent Lifecycle Presentation
+## Scenario: Model Variant Selection And Agent Lifecycle Presentation
 
 ### 1. Scope / Trigger
 
-- Trigger: changes to the legacy Compat message route, projected model variant,
-  TypeScript subagent observation lifetime, or lifecycle status rendering.
+- Trigger: changes to model-variant parsing on turn admission, projected
+  model variant, TypeScript subagent observation lifetime, or lifecycle
+  status rendering.
 
 ### 2. Signatures
 
-- `POST /session/{session_id}/message` accepts object-form `model` plus optional
-  top-level `variant: string`.
+- The v1 turn surface carries model selection as a
+  `provider/model[#variant]` reference string: `CommandTurn.model` overrides
+  the turn model, and `PATCH /v1/sessions/{session}` / `UpdateSession`
+  switches the session's `model`.
 - `resolveLifecyclePresentation(node)` returns a visible lifecycle `label` and
   a `working` flag from the existing member/roster projection.
 - Observation panes close only through the workspace `close` action or
@@ -685,10 +689,11 @@ let body = protocol.encode(&request)?;
 
 ### 3. Contracts
 
-- A trimmed, non-empty top-level variant overrides an object model's nested
-  variant before the existing model decoder and session switch run.
-- Missing or empty top-level variants preserve nested variants. String-form
-  models retain their existing behavior and ignore the separate variant.
+- Variant parsing follows the shared `ModelRef` decoder; a trimmed non-empty
+  `#variant` segment overrides category/effort resolution before the provider
+  request is built.
+- Missing or empty variant segments preserve the configured/category variant.
+  Unparseable model refs are rejected at admission, not silently defaulted.
 - Lifecycle presentation prefers transient member status over roster status.
   `spawning`, `running`, and `busy` map to `Working`; `done` maps to `Finished`;
   `failed`, `cancelled`, and true idle remain distinct.
@@ -699,27 +704,26 @@ let body = protocol.encode(&request)?;
 
 ### 4. Validation & Error Matrix
 
-- Non-string top-level variant -> request deserialization error before prompt admission.
-- Whitespace-only top-level variant -> preserve the nested object variant.
-- Top-level variant with string-form model -> keep string-form compatibility;
-  do not attach the separate variant.
+- Non-string or unparseable model ref -> admission-time invalid-argument
+  before the turn starts.
+- Whitespace-only variant segment -> preserve the configured variant.
 - Member status present with stale roster `idle` -> render the member state.
 - Session absent from successful reconciliation -> remove its observation pane.
 
 ### 5. Good/Base/Bad Cases
 
-- Good: nested `low` plus top-level `high` records `high` on both the response
-  user message and session model, then the TUI preserves and labels the finished
+- Good: a `provider/model#high` command-turn override records `high` effort on
+  the turn's provider request; the TUI preserves and labels the finished
   observation.
-- Base: nested-only and string-form models behave as before; an idle roster-only
+- Base: category-configured models behave as before; an idle roster-only
   row displays `Idle` without a spinner.
-- Bad: letting a missing response variant clear effort, preferring roster `idle`
+- Bad: letting a missing variant clear effort, preferring roster `idle`
   over member `running`, or removing a pane solely because a child completed.
 
 ### 6. Tests Required
 
-- Route integration tests assert top-level precedence, nested/empty compatibility,
-  string-form behavior, response projection, and session model state.
+- Route integration tests assert model-ref parsing, variant precedence,
+  invalid-ref rejection, response projection, and session model state.
 - Workspace tests assert terminal observations survive completion and focus
   changes while explicit close and stale-session reconciliation still remove them.
 - Lifecycle tests assert member precedence, every label, and each working flag;
@@ -769,9 +773,10 @@ const lifecycle = resolveLifecyclePresentation(node)
 - A record-only variant must not change reduced state. It still advances
   `last_seq`; assert on `projection.session` / `.team`, not the whole `Projection`.
 - Compile-driven site list (the build enumerates these; do not hand-maintain):
-  `hya-core/src/engine/text_complete.rs`, and in `hya-server/src/compat/`:
-  `event.rs` (SSE payload passthrough), `message_parts.rs` (x2),
-  `session_context_messages.rs` (x2), `session_prompt.rs`.
+  `hya-core/src/engine/text_complete.rs` and the v1 curated-stream mapping in
+  `hya-server/src/v1/convert.rs` (`stream_event`). A new variant that should
+  reach clients also needs a `StreamEvent` payload mapping plus a reducer
+  decision there.
 
 ### 4. Validation & Error Matrix
 
@@ -1072,9 +1077,10 @@ let metadata = tokio::fs::metadata(&root).await?;
   `limit.output` and reasoning variants/default) and queue background refresh.
 - Cache miss still performs one bounded optional-auth discovery sequence during
   `config::load`, then writes `models.yml.cache`.
-- Background refresh (`refresh_pending_catalogs`) rewrites the cache, swaps the
-  live engine router/catalog, and emits Compat SSE `catalog.updated` so the TUI
-  re-fetches `/config/providers`.
+- Background refresh (`refresh_pending_catalogs`) rewrites the cache and swaps the
+  live engine router/catalog; frontends pick up the swap on their next
+  bootstrap/catalog fetch (the old Compat `catalog.updated` SSE nudge is
+  deleted).
 - Explicit `providers.*.models` in config always wins over cache.
 - Router, engine, CLI, HTTP/bootstrap, SDK, and TUI consume one shared snapshot;
   the snapshot may be replaced after background refresh.
@@ -1125,8 +1131,9 @@ let models = snapshot.models();
   the OpenTUI completed-tool presentation.
 - Applies across `crates/hya-tool` (schema, permission, execution, and native
   hashline runtime), `hya-core` (dispatch and event commit), `hya-proto`
-  (projection), `hya-provider` (tool-result text reconstruction), Compat SDK
-  DTOs, and `packages/hya-tui-ts` (the sole interactive renderer).
+  (projection), `hya-provider` (tool-result text reconstruction), the v1
+  curated event mapping (`hya-server/src/v1/convert.rs`), and
+  `packages/hya-tui-ts` (the sole interactive renderer).
 - Hashline behavior is pinned to `pi-hashline-edit` 0.8.3, npm `gitHead`
   `ba7db9943d0f58499b24c1f6bd64722580f772a5` and tarball SHA-1
   `8985f24c3493be375cc225a5522ed54de8daabc9`. Host Write/Bash behavior is
@@ -1364,6 +1371,7 @@ let output = cap_tool_output(tool.execute(&ctx, input).await?);
 ```
 
 ```typescript
+// WRONG: fetching a per-tool surface that no longer exists
 createEffect(async () => {
   const result = await fetch(`/session/${sessionID}/tool/${part.id}`)
   setLocalTool(result)

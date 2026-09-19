@@ -6,7 +6,20 @@
 
 ## Overview
 
-This directory contains guidelines for frontend development. Fill in each file with your project's specific conventions.
+This directory contains guidelines for frontend development.
+
+> **Status (v1 API consolidation).** The current `packages/hya-tui-ts`
+> frontend is the vendored legacy TUI: its backend integration was built on
+> `@opencode-ai/sdk/v2` against the deleted Compat HTTP surface, so it is
+> deliberately broken at runtime and will be replaced by a new TUI built on
+> [`hya-sdk-v1`](../../../crates/hya-sdk-v1) and the `hya.v1` contract
+> ([protocol guide](../../protocol/README.md)). Until that replacement lands,
+> treat the guides below as the design reference for the retained package's
+> rendering/interaction contracts; any guideline that pins `@opencode-ai/sdk`
+> imports or names deleted endpoints (`/tui/*`, `/permission`, `/question`,
+> `/config/providers`, `/session/{id}/tree`) documents the retired integration,
+> not a working target. New backend integration code must go through
+> `hya-sdk-v1`.
 
 ---
 

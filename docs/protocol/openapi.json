@@ -6,6 +6,28 @@
     "version": "1.0.0"
   },
   "paths": {
+    "/v1/agent-models": {
+      "get": {
+        "operationId": "AgentModels.ListAgentModels",
+        "summary": "Effective model state for every catalog agent under one binding.",
+        "tags": [
+          "AgentModels"
+        ],
+        "x-grpc-method": "hya.v1.AgentModels.ListAgentModels",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/agent-models/{agent_id}": {
+      "put": {
+        "operationId": "AgentModels.SetAgentModel",
+        "summary": "Set or clear one agent's remembered preference; returns the",
+        "tags": [
+          "AgentModels"
+        ],
+        "x-grpc-method": "hya.v1.AgentModels.SetAgentModel",
+        "x-server-streaming": false
+      }
+    },
     "/v1/agents": {
       "get": {
         "operationId": "Catalog.ListAgents",
@@ -834,6 +856,102 @@
   },
   "components": {
     "schemas": {
+      "AgentModelSelection": {
+        "type": "object",
+        "description": "A concrete provider/model selection.",
+        "properties": {
+          "provider_id": {
+            "type": "string"
+          },
+          "model_id": {
+            "type": "string"
+          }
+        }
+      },
+      "AgentModelState": {
+        "type": "object",
+        "description": "Effective model state for one catalog agent.",
+        "properties": {
+          "agent_id": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string"
+          },
+          "hidden": {
+            "type": "boolean"
+          },
+          "configured": {
+            "type": "boolean"
+          },
+          "settable": {
+            "type": "boolean"
+          },
+          "preference": {
+            "$ref": "#/components/schemas/AgentModelSelection"
+          },
+          "preference_available": {
+            "type": "boolean"
+          },
+          "effective": {
+            "$ref": "#/components/schemas/AgentModelSelection"
+          },
+          "source": {
+            "$ref": "#/components/schemas/AgentModelSource"
+          },
+          "configuration": {
+            "$ref": "#/components/schemas/AgentModelSelection"
+          },
+          "session_override": {
+            "$ref": "#/components/schemas/AgentModelSelection"
+          }
+        }
+      },
+      "ListAgentModelsRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "directory": {
+            "type": "string"
+          },
+          "session": {
+            "type": "string"
+          }
+        }
+      },
+      "ListAgentModelsResponse": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "agents": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AgentModelState"
+            }
+          }
+        }
+      },
+      "SetAgentModelRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "directory": {
+            "type": "string"
+          },
+          "session": {
+            "type": "string"
+          },
+          "agent_id": {
+            "type": "string"
+          },
+          "preference": {
+            "$ref": "#/components/schemas/AgentModelSelection"
+          }
+        }
+      },
       "OauthTokens": {
         "type": "object",
         "description": "OAuth tokens captured from a completed provider flow.",
@@ -1081,6 +1199,9 @@
           },
           "website": {
             "type": "string"
+          },
+          "result": {
+            "type": "string"
           }
         }
       },
@@ -1156,6 +1277,27 @@
           },
           "argument_hint": {
             "type": "string"
+          },
+          "hints": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "source": {
+            "type": "string"
+          },
+          "template": {
+            "type": "string"
+          },
+          "agent": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "subtask": {
+            "type": "boolean"
           }
         }
       },
@@ -1197,6 +1339,12 @@
             "type": "string"
           },
           "source": {
+            "type": "string"
+          },
+          "content": {
+            "type": "string"
+          },
+          "location": {
             "type": "string"
           }
         }
@@ -1312,6 +1460,9 @@
           "limit": {
             "type": "integer",
             "format": "int64"
+          },
+          "include_raw": {
+            "type": "boolean"
           }
         }
       },
@@ -1331,6 +1482,12 @@
           "next_seq": {
             "type": "integer",
             "format": "int64"
+          },
+          "raw_envelopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         }
       },
@@ -2277,6 +2434,12 @@
           },
           "state": {
             "$ref": "#/components/schemas/ToolExecutionState"
+          },
+          "error_code": {
+            "type": "string"
+          },
+          "error_message": {
+            "type": "string"
           }
         }
       },
@@ -3030,6 +3193,9 @@
           "last_seq": {
             "type": "integer",
             "format": "int64"
+          },
+          "busy": {
+            "type": "boolean"
           }
         }
       },
@@ -3456,6 +3622,9 @@
           },
           "error_code": {
             "type": "string"
+          },
+          "raw_json": {
+            "type": "string"
           }
         }
       },
@@ -3482,8 +3651,11 @@
       },
       "WorkflowRunCommand": {
         "type": "object",
-        "description": "`run` command: start the selected workflow.",
+        "description": "`run` command: start the selected or named workflow.",
         "properties": {
+          "name": {
+            "type": "string"
+          },
           "inputs": {
             "type": "object"
           }
@@ -3510,6 +3682,36 @@
           }
         }
       },
+      "WorkflowModelCandidate": {
+        "type": "object",
+        "description": "One authored fallback candidate.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "reasoning": {
+            "type": "string"
+          }
+        }
+      },
+      "WorkflowModelAssignment": {
+        "type": "object",
+        "description": "Authored worker model assignment for a stage.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "reasoning": {
+            "type": "string"
+          },
+          "fallback": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowModelCandidate"
+            }
+          }
+        }
+      },
       "WorkflowInfoResult": {
         "type": "object",
         "description": "Result payload of the `info` command.",
@@ -3525,6 +3727,34 @@
             "items": {
               "type": "string"
             }
+          },
+          "stages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowStageInfo"
+            }
+          }
+        }
+      },
+      "WorkflowStageInfo": {
+        "type": "object",
+        "description": "Compiled stage metadata from the `info` result.",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "agent": {
+            "type": "string"
+          },
+          "level": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "worker_model": {
+            "$ref": "#/components/schemas/WorkflowModelAssignment"
+          },
+          "verifier_model": {
+            "$ref": "#/components/schemas/WorkflowModelAssignment"
           }
         }
       },
@@ -3620,6 +3850,17 @@
             "type": "string"
           }
         }
+      },
+      "AgentModelSource": {
+        "type": "string",
+        "description": "Which tier resolved an agent's effective base model.",
+        "enum": [
+          "AGENT_MODEL_SOURCE_UNSPECIFIED",
+          "AGENT_MODEL_SOURCE_SESSION",
+          "AGENT_MODEL_SOURCE_CONFIGURED",
+          "AGENT_MODEL_SOURCE_REMEMBERED",
+          "AGENT_MODEL_SOURCE_DEFAULT"
+        ]
       },
       "AuthStatus": {
         "type": "string",

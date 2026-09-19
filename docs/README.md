@@ -3,11 +3,18 @@
 hya is an event-sourced, terminal-first coding agent. Rust owns the runtime,
 launcher, server, and persistence boundaries; `packages/hya-tui-ts` owns the
 interactive TypeScript/OpenTUI frontend. Workflow compilation, durable
-execution, package models, and the HTTP/SSE/Compat surfaces are documented
-separately below.
+execution, package models, and the consolidated `hya.v1` HTTP/gRPC contract
+are documented separately below.
 
 This documentation is split into user-facing guides and maintainer-facing
 architecture notes.
+
+## The v1 API contract
+
+- [Protocol guide](protocol/README.md) — how any TUI/GUI/WebUI integrates
+  over HTTP/SSE/WebSocket or gRPC (identical semantics on both).
+- [API reference](protocol/api-reference.md) — generated per-rpc reference.
+- [OpenAPI](protocol/openapi.json) — generated HTTP schema.
 
 ## Reading Paths
 
@@ -94,10 +101,10 @@ If you want to understand the codebase:
 | [Tools and Permissions](architecture/tools-and-permissions.md) | Explain builtin tools, permission rules, ask flows, and output limits. |
 | [Agent tool surface](architecture/agent-tool-surface.md) | Canonical tool registry surface, aliases, resource views, and agent-facing tool contracts. |
 | [Subagent Orchestration](architecture/subagent-orchestration.md) | Unified resident lifecycle (episodes, report/handoff/archive, revive), channel communication plane, depth policy, and workflow on the unified substrate ([ADR-0015](adr/0015-unified-resident-subagent-lifecycle.md), [ADR-0016](adr/0016-channel-communication-plane.md), [ADR-0017](adr/0017-workflow-on-unified-substrate.md)). |
-| [Compat parity](compat-parity.md) | Feature-by-feature Compat baseline status for tools, APIs, CLI, and remaining gaps. |
+| [Compat parity](compat-parity.md) | Historical record of the pre-v1 Compat HTTP parity work; that surface is deleted, and only CLI aliases and the Compat plugin adapter remain living. |
 | [Storage](architecture/storage.md) | Explain SQLite persistence, replay, projections, and token ledger behavior. |
-| [Server and Client](architecture/server-client.md) | Explain native HTTP/SSE, Compat-compatible route groups, and the typed client crate. |
-| [TUI](architecture/tui.md) | Explain the canonical launcher, Bun/OpenTUI frontend, and backend SDK boundary. |
+| [Server and Client](architecture/server-client.md) | The consolidated hya.v1 contract over HTTP/SSE/WebSocket and gRPC, state, semantics, and clients. |
+| [TUI](architecture/tui.md) | Explain the canonical launcher, Bun/OpenTUI frontend, process/package boundaries, and the old-TUI breakage pending the `hya-sdk-v1` rewrite. |
 | [TypeScript TUI package](../packages/hya-tui-ts/README.md) | Frontend-only package: launch with `--url`, layout, env flags, and re-sync rules. See also [scripts](../packages/hya-tui-ts/scripts/README.md) and [tests](../packages/hya-tui-ts/test/README.md). |
 | [hya, Pi, and Compat Feature Comparison](hya-pi-compat-comparison.md) | Compare hya with upstream stock Pi and current Compat across tools, providers, agents, TUI, plugins, skills, and MCP. |
 | [Development](development.md) | Explain build, lint, test, crate-change, and doc-update workflow. |
@@ -124,8 +131,10 @@ If you want to understand the codebase:
 - Compat adapter: [`../crates/hya-plugin-compat/README.md`](../crates/hya-plugin-compat/README.md)
 - Store: [`../crates/hya-store/src/lib.rs`](../crates/hya-store/src/lib.rs)
 - Server/routes: [`../crates/hya-server/src/lib.rs`](../crates/hya-server/src/lib.rs)
-- Native in-process transport: [`../crates/hya-native/src/transport.rs`](../crates/hya-native/src/transport.rs)
-- SDK/client bridge: [`../crates/hya-sdk/src/lib.rs`](../crates/hya-sdk/src/lib.rs)
+- v1 contract crate: [`../crates/hya-api/src/lib.rs`](../crates/hya-api/src/lib.rs)
+- v1 frontend SDK: [`../crates/hya-sdk-v1/src/lib.rs`](../crates/hya-sdk-v1/src/lib.rs)
+- Legacy in-process transport (retired Compat surface): [`../crates/hya-native/src/transport.rs`](../crates/hya-native/src/transport.rs)
+- Legacy SDK (retired Compat surface; `ServerHandle` still supervises backends): [`../crates/hya-sdk/src/lib.rs`](../crates/hya-sdk/src/lib.rs)
 - Self-update TCB: [`../crates/hya-updater`](../crates/hya-updater)
 - TUI application: [`../packages/hya-tui-ts/src/main.tsx`](../packages/hya-tui-ts/src/main.tsx)
 - TUI package docs: [`../packages/hya-tui-ts/README.md`](../packages/hya-tui-ts/README.md)

@@ -172,9 +172,13 @@ The server prints the address it bound to:
 hya server listening on http://127.0.0.1:8080
 ```
 
-The same server exposes native `/sessions/*` routes and Compat-compatible
-legacy/v2 route groups for sessions, events, files, providers/models,
-permissions/questions, MCP, PTY, VCS, projects/worktrees, TUI control, and sync.
+The server serves the consolidated `hya.v1` contract under `/v1`
+(HTTP/JSON + SSE + WebSocket): process/catalog/auth, sessions and event-driven
+turns, messages/todo, event replay and streams, unified
+permission/question interactions, Workflow, files, project/VCS/worktrees, MCP,
+PTY, and logs. Setting `HYA_GRPC_BIND=<host:port>` additionally serves the same
+contract over gRPC. See the [Protocol guide](protocol/README.md) and the
+generated [API reference](protocol/api-reference.md).
 
 ## Replay a Session
 

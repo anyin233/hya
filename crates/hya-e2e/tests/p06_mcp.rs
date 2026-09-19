@@ -4,7 +4,7 @@
 use std::time::Duration;
 
 use hya_e2e::{E2eEnvBuilder, fake_requests_from, text_step, tool_step};
-use serde_json::json;
+use serde_json::{Value, json};
 
 #[tokio::test]
 async fn t1_10_mcp_echo_ping_tool_roundtrip() {
@@ -22,12 +22,15 @@ async fn t1_10_mcp_echo_ping_tool_roundtrip() {
         .wait_mcp_connected("echo", Duration::from_secs(20))
         .await
         .expect("mcp echo connected");
-    assert_eq!(
+    assert!(
         status
-            .get("echo")
-            .and_then(|s| s.get("status"))
-            .and_then(|s| s.as_str()),
-        Some("connected"),
+            .get("servers")
+            .and_then(Value::as_array)
+            .is_some_and(|rows| {
+                rows.iter().any(|row| {
+                    row["name"] == "echo" && row["state"] == "MCP_SERVER_STATE_CONNECTED"
+                })
+            }),
         "mcp status={status}; {}",
         env.diagnostics()
     );

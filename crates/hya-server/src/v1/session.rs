@@ -55,7 +55,7 @@ async fn create_session(
     if request.workdir.trim().is_empty() {
         return Err(V1Error::invalid_argument("workdir is required"));
     }
-    let agent = crate::compat::bound_agent_metadata::resolve_session_agent(
+    let agent = crate::support::bound_agent_metadata::resolve_session_agent(
         &st,
         std::path::Path::new(&request.workdir),
         Some(request.agent.as_str()),
@@ -89,7 +89,9 @@ async fn projection_info(st: &ServerState, session: SessionId) -> Result<pb::Ses
         .find(|row| row.session == session)
         .map(|row| (row.started_millis, row.updated_millis))
         .unwrap_or((0, 0));
-    Ok(session_info(&projection, started, updated))
+    let mut info = session_info(&projection, started, updated);
+    info.busy = st.is_busy(session);
+    Ok(info)
 }
 
 async fn get_session(

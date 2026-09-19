@@ -50,10 +50,12 @@ hya-backend / hya-server
 | `hya-store` | [`../crates/hya-store/src/lib.rs`](../crates/hya-store/src/lib.rs) | SQLite event log, replay, projection reads, token ledger, admission journal, mailbox, resident claims, saved permissions, and installed-bundle registry. |
 | `hya-core` | [`../crates/hya-core/src/lib.rs`](../crates/hya-core/src/lib.rs) | Session engine, event bus, turn loop, compaction, durable Workflow execution/replay, hooks, goal/loop drivers, resident teams, orchestrator budgets, worktrees. |
 | `hya-workflow` | [`../crates/hya-workflow/src/lib.rs`](../crates/hya-workflow/src/lib.rs) | Workflow source compilation, validation, immutable normalized plans, revisions, model assignments, and rendering inputs. |
-| `hya-server` | [`../crates/hya-server/src/lib.rs`](../crates/hya-server/src/lib.rs) | Native HTTP/SSE API, `/sessions/:id/workflow`, and Compat-compatible routes over `SessionEngine`. |
-| `hya-client` | [`../crates/hya-client/src/lib.rs`](../crates/hya-client/src/lib.rs) | Typed reqwest client for the server API. |
-| `hya-sdk` | [`../crates/hya-sdk/src/lib.rs`](../crates/hya-sdk/src/lib.rs) | Integration SDK: `Client` + HTTP/native transport, `DIRECTORY_HEADER`, `ServerHandle`, live `MessageStore`, team projection, V2Event reducer. |
-| `hya-native` | [`../crates/hya-native/src/transport.rs`](../crates/hya-native/src/transport.rs) | In-process axum `Router` transport via tower `oneshot` (no TCP) and `spawn_event_bridge` for `/global/event`. |
+| `hya-server` | [`../crates/hya-server/src/lib.rs`](../crates/hya-server/src/lib.rs) | The `hya.v1` contract over `SessionEngine`: `/v1` HTTP/JSON+SSE+WebSocket routes plus the tonic `V1Grpc` dispatch through the same router. |
+| `hya-api` | [`../crates/hya-api/src/lib.rs`](../crates/hya-api/src/lib.rs) | The v1 dual-protocol contract crate: generated proto types, stable error-code table (HTTP status + gRPC code), cursor helpers. |
+| `hya-client` | [`../crates/hya-client/src/lib.rs`](../crates/hya-client/src/lib.rs) | Typed reqwest client for the v1 API. |
+| `hya-sdk-v1` | [`../crates/hya-sdk-v1/src/lib.rs`](../crates/hya-sdk-v1/src/lib.rs) | Typed SDK for new frontends on the v1 API: bootstrap, event-driven turns, transcript reads, interactions, SSE subscription, `V1SessionMirror`. |
+| `hya-sdk` | [`../crates/hya-sdk/src/lib.rs`](../crates/hya-sdk/src/lib.rs) | Legacy SDK for the retired Compat surface (old TUI only). Its `ServerHandle` still supervises `hya-backend serve` for the launcher. |
+| `hya-native` | [`../crates/hya-native/src/transport.rs`](../crates/hya-native/src/transport.rs) | Legacy in-process axum `Router` transport for the retired Compat surface (old TUI only). |
 | `hya-updater` | [`../crates/hya-updater`](../crates/hya-updater) | Independent self-update TCB; see [self-update.md](self-update.md). |
 | `hya` | [`../crates/hya/src/main.rs`](../crates/hya/src/main.rs) | Canonical Unix entrypoint. Replaces itself with the adjacent `hya-ts` launcher. |
 | `hya-ts` | [`../crates/hya-ts/src/main.rs`](../crates/hya-ts/src/main.rs) | TypeScript TUI supervisor: CLI parsing, backend/runtime discovery, process-group handoff, and cleanup. |
@@ -248,43 +250,45 @@ The projection reducer applies `seq == 0` as live-only (does not advance
 `last_seq`); durable envelopes with `seq <= last_seq` are ignored; otherwise the
 event folds and `last_seq` advances.
 
-## `hya-server` and `hya-client`
+## `hya-server`, `hya-api`, and `hya-client`
 
-`hya-server` exposes the engine over HTTP. The native hya routes are:
+`hya-server` exposes the engine over exactly one contract — `hya.v1` — served
+over HTTP/JSON+SSE+WebSocket under `/v1` and, with `HYA_GRPC_BIND`, over gRPC
+through `V1Grpc`. Representative routes:
 
 | Route | Behavior |
 | --- | --- |
-| `POST /sessions` | Create a session. |
-| `POST /sessions/:id/prompt` | Admit a user prompt and run one turn. |
-| `POST /sessions/:id/command` | Run a command/template turn. |
-| `POST /sessions/:id/shell` | Run a shell tool turn. |
-| `GET /sessions/:id/workflow` | Return projected Workflow state through `WorkflowControl`. |
-| `POST /sessions/:id/workflow` | Select, run, or query governed Workflow state through `WorkflowControl`. |
-| `GET /sessions/:id/events` | Replay envelopes, optionally after `since_seq`. |
-| `GET /sessions/:id/stream` | Stream live envelopes as SSE. |
+| `POST /v1/sessions` | Create a session. |
+| `POST /v1/sessions/{session}/turns` | Admit a prompt, slash-command, or shell turn (event-driven; returns a turn handle). |
+| `GET /v1/sessions/{session}/workflow` | Return projected Workflow state through `WorkflowControl`. |
+| `POST /v1/sessions/{session}/workflow` | Select, run, or query governed Workflow state through `WorkflowControl`. |
+| `GET /v1/sessions/{session}/events` | Replay events after `sinceSeq` (`includeRaw` for raw envelopes). |
+| `GET /v1/sessions/{session}/events/stream` | Stream live frames as SSE. |
+| `GET /v1/events/stream` | Global live stream across a directory scope. |
 
-Keep the detailed native and Compat route inventory in
-[`architecture/server-client.md`](architecture/server-client.md); this page
-only records the ownership boundary and the native Workflow route.
+The full 77-rpc inventory lives in
+[`architecture/server-client.md`](architecture/server-client.md) and the
+generated [API reference](protocol/api-reference.md); this page only records
+the ownership boundary. The legacy Compat and native `/sessions/*` route
+groups are deleted.
 
-It also mounts Compat-compatible route groups for legacy/v2 sessions, event
-SSE, files/search/symbols, providers/models, permission/question queues, MCP,
-PTY, VCS, project/worktree, TUI control, sync, global/config, and metadata
-catalogs. Those routes translate between hya's event log/projection and
-Compat-shaped HTTP bodies; exact parity is tracked in
-[`compat-parity.md`](compat-parity.md).
-
-`hya-client` is the small native typed wrapper for create-session, prompt, and
-events calls. The frozen Compat `hya-sdk::Client` is a separate integration
-surface, and `hya-native` is its in-process Axum transport. See [`architecture/server-client.md`](architecture/server-client.md)
-for route details.
+`hya-client` is the small typed wrapper over the v1 API (create session,
+event-driven prompt admit+wait, curated and raw-envelope event replay,
+pending-interaction list/respond). New frontends use `hya-sdk-v1` (typed SDK
+with SSE `StreamFrame` subscription and `V1SessionMirror`). See
+[`architecture/server-client.md`](architecture/server-client.md) for details.
 
 ## `hya-sdk`, `hya-native`, and `hya-updater`
 
+> `hya-sdk` and `hya-native` are **legacy**: they target the retired Compat
+> HTTP/SSE surface and only the old TUI consumed them. They remain in-tree
+> until the new-TUI cutover (the launcher still uses `ServerHandle` for
+> process supervision). New integrations use `hya-sdk-v1` / `hya-client` on
+> the v1 contract.
+
 ### `hya-sdk`
 
-Integration SDK for TUI and embedders talking to **`hya-server`** (or the
-in-process `hya-native` transport) over the Compat-compatible HTTP/SSE surface.
+Legacy integration SDK for the retired Compat HTTP/SSE surface (old TUI only).
 
 | Module | Purpose |
 | --- | --- |
@@ -297,16 +301,16 @@ in-process `hya-native` transport) over the Compat-compatible HTTP/SSE surface.
 | [`types.rs`](../crates/hya-sdk/src/types.rs) | Shared SDK wire types. |
 | [`error.rs`](../crates/hya-sdk/src/error.rs) | SDK errors and `Result` alias. |
 
-Wire constant: `DIRECTORY_HEADER` = `x-opencode-directory` (working-directory
-scope on every request).
+Wire constant: `DIRECTORY_HEADER` = `x-opencode-directory` (the Compat
+surface's working-directory scope header; the v1 contract uses
+`x-hya-directory` / the `hya-directory` gRPC metadata key instead).
 
 ### `hya-native`
 
-In-process embedding: [`HyaNativeTransport`](../crates/hya-native/src/transport.rs)
+Legacy in-process embedding for the retired Compat surface:
+[`HyaNativeTransport`](../crates/hya-native/src/transport.rs)
 drives the hya axum `Router` with tower `oneshot` — **no TCP, no reqwest** —
-injecting the directory header on every request. This is the Rust analogue of
-the Compat adapter’s in-process `app.fetch` and the supported way to embed hya
-inside another Rust process.
+injecting the directory header on every request.
 
 Callers use the exported type alias
 [`HyaNativeClient`](../crates/hya-native/src/transport.rs)
@@ -314,11 +318,13 @@ Callers use the exported type alias
 `hya_native`. That is the same typed `Client` surface as the HTTP SDK client,
 backed by the in-process transport instead of reqwest.
 
-[`spawn_event_bridge`](../crates/hya-native/src/events.rs) subscribes to
-in-process `GET /global/event` SSE, decodes frames into
-`hya_sdk::GlobalEvent`, and forwards them on an `mpsc` channel. Undecodable
-frames are **skipped** (not fatal); on stream loss it re-subscribes after a
-**50 ms** backoff; the task stops when the receiver is dropped.
+[`spawn_event_bridge`](../crates/hya-native/src/events.rs) subscribed to the
+in-process `GET /global/event` SSE route — a deleted Compat-surface endpoint,
+so the bridge is dormant until it is re-pointed at `GET /v1/events/stream`. It
+decoded frames into `hya_sdk::GlobalEvent` and forwarded them on an `mpsc`
+channel; undecodable frames were **skipped** (not fatal); on stream loss it
+re-subscribed after a **50 ms** backoff; the task stops when the receiver is
+dropped.
 
 ### `hya-updater`
 
@@ -334,7 +340,7 @@ The shipped frontend spans four colocated components:
 | --- | --- |
 | [`crates/hya/src/main.rs`](../crates/hya/src/main.rs) | Replace the canonical `hya` process with adjacent `hya-ts`. |
 | [`crates/hya-ts`](../crates/hya-ts) | Parse launcher/auth/import arguments, start or attach to the backend, and supervise Bun. |
-| [`packages/hya-tui-ts`](../packages/hya-tui-ts) | SolidJS/OpenTUI rendering, interaction, routes, and HTTP/SSE synchronization through `@opencode-ai/sdk/v2`. |
+| [`packages/hya-tui-ts`](../packages/hya-tui-ts) | SolidJS/OpenTUI rendering, interaction, routes, and HTTP/SSE synchronization. Its backend integration targeted the deleted Compat surface, so the shipped TUI is broken at runtime until the `hya-sdk-v1` rewrite lands. |
 | [`crates/hya-backend`](../crates/hya-backend) | Runtime composition, local server ownership, headless commands, and bare interactive startup through `hya`. |
 
 `packages/hya-tui-ts` is the sole interactive frontend implementation. New
@@ -361,12 +367,12 @@ process E2E is layered on top (Track P/T); see [Testing](testing/README.md).
 | [`../crates/hya-provider/tests`](../crates/hya-provider/tests) | OpenAI/Anthropic conformance, provider preflight, canonical event shape. |
 | [`../crates/hya-store/tests`](../crates/hya-store/tests) | Migration, projection, session scoping, persistence, token ledger. |
 | [`../crates/hya-tool/tests`](../crates/hya-tool/tests) | Permission evaluation and builtin tools. |
-| [`../crates/hya-server/tests`](../crates/hya-server/tests) | Native API and Compat-compatible route behavior. |
+| [`../crates/hya-server/tests`](../crates/hya-server/tests) | v1 HTTP contract behavior and HTTP/gRPC parity. |
 | [`../crates/hya-plugin/tests`](../crates/hya-plugin/tests) | Plugin host protocol, hooks, and tool bridge behavior. |
 | [`../crates/hya-plugin-compat/adapter/test`](../crates/hya-plugin-compat/adapter/test) | Compat adapter discovery, hooks, SDK shims, tools, events, lifecycle. |
 | [`../crates/hya-backend/tests`](../crates/hya-backend/tests) | Bundle CLI, backend command integration. |
 | [`../crates/hya/tests`](../crates/hya/tests), [`../crates/hya-ts/tests`](../crates/hya-ts/tests) | Canonical launcher delegation, process supervision, argument forwarding, and native transport integration. |
-| [`../packages/hya-tui-ts/test`](../packages/hya-tui-ts/test) | TypeScript frontend state, SDK integration, real-backend permission/roster, multi-agent presentation, PTY smoke. |
+| [`../packages/hya-tui-ts/test`](../packages/hya-tui-ts/test) | TypeScript frontend presentation helpers, keybind/branding contracts, and package smoke. |
 | [`../crates/hya-e2e`](../crates/hya-e2e) | Track P process agent suite (FakeLlm + real backend). Matrix: [`../crates/hya-e2e/matrix.toml`](../crates/hya-e2e/matrix.toml). |
 | [`testing/`](testing/) | Human docs for tracks, oracles, and optional CI snippet. |
 
