@@ -34,7 +34,7 @@ pub(crate) fn router() -> Router<ServerState> {
         .route("/v1/pty/:id/connect", get(connect))
 }
 
-fn pty_session(info: &crate::compat::pty_state::PtyInfo) -> pb::PtySession {
+fn pty_session(info: &crate::support::pty_state::PtyInfo) -> pb::PtySession {
     let value = serde_json::to_value(info).unwrap_or(serde_json::Value::Null);
     let field = |name: &str| {
         value
@@ -53,7 +53,7 @@ fn pty_session(info: &crate::compat::pty_state::PtyInfo) -> pb::PtySession {
 }
 
 async fn list_shells() -> Result<Json<pb::ListShellsResponse>, V1Error> {
-    let shells = crate::compat::pty_shell::shell_paths()
+    let shells = crate::support::pty_shell::shell_paths()
         .into_iter()
         .map(|path| path.to_string_lossy().into_owned())
         .collect();
@@ -74,7 +74,7 @@ async fn create_pty(
     } else {
         request.cwd.clone()
     };
-    let payload = crate::compat::pty_state::CreatePayload {
+    let payload = crate::support::pty_state::CreatePayload {
         command: if request.shell.is_empty() {
             default_shell()
         } else {
@@ -113,7 +113,7 @@ async fn update_pty(
     // The runtime supports title updates; terminal resize is applied by the
     // shell itself through the stream (SIGWINCH) and is a documented no-op
     // here until PtyState grows a resize API.
-    let payload = crate::compat::pty_state::UpdatePayload { title: None };
+    let payload = crate::support::pty_state::UpdatePayload { title: None };
     match st.pty.update(&id, payload).await {
         Some(info) => Ok(Json(pty_session(&info))),
         None => Err(V1Error::new(
@@ -165,7 +165,7 @@ async fn connect(
     Query(query): Query<BTreeMap<String, String>>,
     ws: Result<WebSocketUpgrade, WebSocketUpgradeRejection>,
 ) -> Response {
-    use crate::compat::pty_state::TicketStatus;
+    use crate::support::pty_state::TicketStatus;
     let Some(ticket) = query.get("ticket") else {
         if st.pty.get(&id).await.is_none() {
             return not_found(&id);
@@ -196,7 +196,7 @@ fn not_found(id: &str) -> Response {
 
 /// WebSocket bridge speaking protojson `PtyServerFrame` / `PtyClientFrame`.
 async fn stream(st: ServerState, id: String, cursor: Option<i64>, socket: WebSocket) {
-    use crate::compat::pty_state::PtyEvent;
+    use crate::support::pty_state::PtyEvent;
     let Some(mut attachment) = st.pty.attach(&id, cursor).await else {
         return;
     };

@@ -18,10 +18,12 @@ pub(crate) struct SavedPermissionInfo {
 
 impl SavedPermissions {
     #[must_use]
+    #[allow(dead_code)]
     pub(crate) fn new(store: SessionStore) -> Self {
         Self { store }
     }
 
+    #[allow(dead_code)]
     pub(crate) async fn list(
         &self,
         project_id: Option<&str>,
@@ -30,10 +32,12 @@ impl SavedPermissions {
         Ok(saved.into_iter().map(SavedPermissionInfo::from).collect())
     }
 
+    #[allow(dead_code)]
     pub(crate) async fn remove(&self, id: &str) -> Result<(), StoreError> {
         self.store.remove_saved_permission(id).await
     }
 
+    #[allow(dead_code)]
     pub(crate) async fn remember(
         &self,
         request_id: &str,

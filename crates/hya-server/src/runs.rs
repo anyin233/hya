@@ -30,12 +30,14 @@ pub(crate) struct RunGuard {
 }
 
 #[derive(Clone, Debug, Serialize)]
+#[allow(dead_code)]
 pub(crate) struct RunStatus {
     #[serde(rename = "type")]
     status_type: &'static str,
 }
 
 impl RunRegistry {
+    #[allow(dead_code)]
     pub(crate) fn start(&self, session: SessionId) -> Option<RunGuard> {
         let mut runs = self.lock_runs();
         if runs.contains_key(&session) {
@@ -58,6 +60,7 @@ impl RunRegistry {
         })
     }
 
+    #[allow(dead_code)]
     pub(crate) fn cancel(&self, session: SessionId) -> bool {
         let token = {
             let runs = self.lock_runs();
@@ -71,10 +74,12 @@ impl RunRegistry {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn is_busy(&self, session: SessionId) -> bool {
         self.lock_runs().contains_key(&session)
     }
 
+    #[allow(dead_code)]
     pub(crate) fn statuses(&self) -> BTreeMap<String, RunStatus> {
         self.lock_runs()
             .keys()
@@ -98,6 +103,7 @@ impl RunRegistry {
 }
 
 impl RunGuard {
+    #[allow(dead_code)]
     pub(crate) fn token(&self) -> CancellationToken {
         self.token.clone()
     }

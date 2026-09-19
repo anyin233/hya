@@ -723,15 +723,20 @@ impl E2eEnv {
         timeout: Duration,
     ) -> Result<Value, E2eError> {
         wait_until(&format!("mcp {name} connected"), timeout, || async {
-            let status = self.get_json("/mcp").await.unwrap_or(Value::Null);
+            let status = self.get_json("/v1/mcp").await.unwrap_or(Value::Null);
             Ok(status
-                .get(name)
-                .and_then(|s| s.get("status"))
-                .and_then(|s| s.as_str())
-                == Some("connected"))
+                .get("servers")
+                .and_then(Value::as_array)
+                .is_some_and(|rows| {
+                    rows.iter().any(|row| {
+                        row.get("name").and_then(Value::as_str) == Some(name)
+                            && row.get("state").and_then(Value::as_str)
+                                == Some("MCP_SERVER_STATE_CONNECTED")
+                    })
+                }))
         })
         .await?;
-        self.get_json("/mcp").await
+        self.get_json("/v1/mcp").await
     }
 }
 

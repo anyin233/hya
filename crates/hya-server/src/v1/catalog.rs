@@ -43,7 +43,7 @@ pub(crate) async fn agent_rows(
     st: &ServerState,
     workdir: &Path,
 ) -> Result<Vec<pb::AgentSummary>, V1Error> {
-    let rows = crate::compat::bound_agent_metadata::list(st, workdir)
+    let rows = crate::support::bound_agent_metadata::list(st, workdir)
         .await
         .map_err(|error| V1Error::new(hya_api::error::Code::Internal, error.text().to_owned()))?;
     Ok(rows
@@ -269,7 +269,7 @@ async fn list_commands(
 
 /// Command rows shared with the bootstrap snapshot.
 pub(crate) fn command_rows(workdir: &Path) -> Vec<pb::CommandSummary> {
-    crate::compat::command_catalog::list(workdir)
+    crate::support::command_catalog::list(workdir)
         .into_iter()
         .map(|row| pb::CommandSummary {
             name: row.name.clone(),
@@ -302,7 +302,7 @@ async fn list_skills(
 
 /// Skill rows shared with the bootstrap snapshot.
 pub(crate) fn skill_rows(workdir: &Path) -> Vec<pb::SkillSummary> {
-    crate::compat::skill_catalog::list(workdir)
+    crate::support::skill_catalog::list(workdir)
         .into_iter()
         .map(|row| pb::SkillSummary {
             name: row.name.clone(),

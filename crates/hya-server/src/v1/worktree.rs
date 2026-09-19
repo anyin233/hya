@@ -35,7 +35,7 @@ async fn list_worktrees(
 ) -> Result<Json<pb::ListWorktreesResponse>, V1Error> {
     let request: pb::ListWorktreesRequest = super::query_request(&[], &query)?;
     let source = scope_directory(&headers, &request.directory);
-    let infos = crate::compat::worktree_git::infos(&source)
+    let infos = crate::support::worktree_git::infos(&source)
         .await
         .map_err(V1Error::internal)?;
     let worktrees = infos
@@ -59,7 +59,7 @@ async fn create_worktree(
     } else {
         Some(request.name.as_str())
     };
-    let info = crate::compat::worktree_git::create(&source, requested)
+    let info = crate::support::worktree_git::create(&source, requested)
         .await
         .map_err(V1Error::internal)?;
     Ok(Json(worktree_info(
@@ -75,7 +75,7 @@ async fn delete_worktree(
 ) -> Result<Json<pb::DeleteWorktreeResponse>, V1Error> {
     let scope: pb::ListWorktreesRequest = super::query_request(&[], &query)?;
     let source = scope_directory(&headers, &scope.directory);
-    let removed = crate::compat::worktree_git::remove(&source, &id)
+    let removed = crate::support::worktree_git::remove(&source, &id)
         .await
         .map_err(V1Error::internal)?;
     if !removed {
@@ -95,7 +95,7 @@ async fn reset_worktree(
 ) -> Result<Json<pb::Worktree>, V1Error> {
     let scope: pb::ListWorktreesRequest = super::query_request(&[], &query)?;
     let source = scope_directory(&headers, &scope.directory);
-    let reset = crate::compat::worktree_git::reset(&source, &id)
+    let reset = crate::support::worktree_git::reset(&source, &id)
         .await
         .map_err(V1Error::internal)?;
     if !reset {

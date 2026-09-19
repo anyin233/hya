@@ -24,13 +24,16 @@ async fn t1_9_skill_tool_loads_project_skill_body() {
         .expect("e2e env");
 
     let skills = env
-        .get_json(&format!("/skill?directory={}", env.backend.workdir_str()))
+        .get_json(&format!(
+            "/v1/skills?directory={}",
+            env.backend.workdir_str()
+        ))
         .await
         .expect("skill list");
     let listed = skills
-        .as_array()
+        .get("skills")
+        .and_then(|d| d.as_array())
         .cloned()
-        .or_else(|| skills.get("data").and_then(|d| d.as_array()).cloned())
         .unwrap_or_default();
     assert!(
         listed

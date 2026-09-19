@@ -112,9 +112,9 @@ async fn create_turn(
             let run = st.start_run(session).ok_or_else(V1Error::session_busy)?;
             let message = st.engine.admit_user_prompt(session, prompt.text).await?;
             let engine = st.engine.clone();
-            let turn = crate::compat::reference::session_agent_with_guidance(&st, session).await;
+            let turn = crate::support::reference::session_agent_with_guidance(&st, session).await;
             let external_dirs =
-                crate::compat::reference::external_directories_at(&st, &turn.agent.workdir).await;
+                crate::support::reference::external_directories_at(&st, &turn.agent.workdir).await;
             let agent = turn.agent.clone();
             let guidance = turn.guidance.clone();
             tokio::spawn(async move {
@@ -183,7 +183,7 @@ async fn create_turn(
                         .ok()
                         .and_then(|projection| projection.session.workdir.clone())
                         .map_or_else(|| st.agent.workdir.clone(), std::path::PathBuf::from);
-                    crate::compat::command_catalog::expand_prompt(
+                    crate::support::command_catalog::expand_prompt(
                         &workdir,
                         &command.command,
                         &command.arguments,
@@ -207,9 +207,9 @@ async fn create_turn(
                 )
                 .await?;
             let engine = st.engine.clone();
-            let turn = crate::compat::reference::session_agent_with_guidance(&st, session).await;
+            let turn = crate::support::reference::session_agent_with_guidance(&st, session).await;
             let external_dirs =
-                crate::compat::reference::external_directories_at(&st, &turn.agent.workdir).await;
+                crate::support::reference::external_directories_at(&st, &turn.agent.workdir).await;
             let agent = turn.agent.clone();
             let guidance = turn.guidance.clone();
             tokio::spawn(async move {
@@ -240,7 +240,7 @@ async fn create_turn(
                     model_id: model.model_id.clone(),
                 }),
             };
-            let agent = crate::compat::shell_agent(&st, session, &native_request)
+            let agent = crate::support::reference::shell_agent(&st, session, &native_request)
                 .await
                 .map_err(|error| {
                     V1Error::new(hya_api::error::Code::Internal, error.text().to_owned())

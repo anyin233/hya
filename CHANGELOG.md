@@ -1,26 +1,25 @@
-# 0.36.42
+# 0.36.43
 
-## The process e2e matrix runs entirely on the v1 API (e2e, server)
+## The Compat surface is gone: `/v1` is the only HTTP contract (server)
 
-- Track P (p01–p20) no longer touches any legacy route: permission and
-  question repliers, session listings, trees, contexts, todos, busy
-  polling, compaction, summarize, workflow info/run/state, catalogs, and
-  every custom-slash probe now drive `/v1`. The legacy/v2/native
-  triple-surface probes in p18 collapse to the unified v1 behavior, and
-  p19's workflow model-routing deep assertions read the new
-  `WorkflowState.raw_json` opaque projection.
-- The v1 surface gained the semantics the matrix demanded: `SessionInfo
-  .busy` (run-registry derived), catalog `result` per provider with real
-  auth states from the catalog snapshot, command rows carrying
-  `hints/source/template/agent/model/subtask`, skill rows carrying
-  `content/location`, tool-call parts carrying structured
-  `error_code/error_message` from the projection, workflow `run` taking
-  an explicit `name`, and prompt/command turns composing the same
-  AGENTS/reference guidance the best legacy path provided.
-- e2e harness: v1 trees are assembled from parent-filtered listings
-  enriched with roster handles folded client-side from raw envelopes;
-  stderr/stdout from backend processes now drain to the test log.
-- Gates: 43/43 matrix tests green against real backends
-  (`model_catalog_is_fresh…` excluded — verified failing at commits
-  predating this branch, i.e. broken on main already, in the concurrent
-  work's provider-discovery domain).
+- Deleted the entire legacy route surface: all Compat route groups
+  (~63 modules), the three `/session`-family mirrors, the legacy
+  `/tui` control plane, `/doc`+`/openapi.json`, the old native
+  `/sessions/*` routes, and the legacy `/event`-family SSE endpoints.
+  The server now serves exactly one contract: `hya.v1` over
+  HTTP/JSON+SSE+WebSocket (and gRPC via `V1Grpc` through the same
+  router). 86 legacy integration-test files were removed with it.
+- The shared machinery those routes used survives re-homed under
+  `hya-server::support` (unchanged logic, route handlers stripped):
+  command/skill catalogs with template expansion, bound-agent
+  resolution and AGENTS/reference guidance, PTY runtime, worktree git
+  helpers, the VCS git module, the config bag, and the JSONC/model-ref
+  utilities. Pending permission/question planes keep their full
+  bridges for the interaction stream.
+- v1 fixes surfaced by the deletion sweep: MCP duplicate-tool
+  collisions map to `unavailable` (503) instead of `internal`; MCP
+  add/connect bodies use the inlined oneof (`command: {...}`); skill
+  listings and MCP status reads in the e2e harness moved to `/v1`.
+- Gates: server suite 26/26 green; the full process e2e matrix (p01–
+  p20, minus the pre-existing main-broken catalog test) 43/43 green
+  against real backends running the v1-only surface.
