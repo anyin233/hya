@@ -1880,9 +1880,19 @@ Client-to-server terminal frame.
 
 | Field | Type | Description |
 |---|---|---|
-| `input` (1) | `oneof `frame`: bytes` | Frame payload; exactly one kind is set. Terminal input bytes (keystrokes, paste). |
+| `attach` (4) | `oneof `frame`: PtyAttach` | Frame payload; exactly one kind is set. First frame on the gRPC `StreamPty` rpc: which session to attach to. |
+| `input` (1) | `oneof `frame`: bytes` | Terminal input bytes (keystrokes, paste). |
 | `resize` (2) | `oneof `frame`: PtyResize` | Terminal resize. |
 | `ping` (3) | `oneof `frame`: bool` | Liveness ping. |
+
+### `PtyAttach`
+
+Session attachment envelope for the gRPC terminal stream.
+
+| Field | Type | Description |
+|---|---|---|
+| `id` (1) | `string` | PTY session identifier to attach. |
+| `token` (2) | `string` | Optional one-time connect token. |
 
 ### `PtyResize`
 

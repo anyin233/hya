@@ -9128,7 +9128,7 @@ pub struct CreateConnectTokenResponse {
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PtyClientFrame {
     /// Frame payload; exactly one kind is set.
-    #[prost(oneof = "pty_client_frame::Frame", tags = "1, 2, 3")]
+    #[prost(oneof = "pty_client_frame::Frame", tags = "4, 1, 2, 3")]
     pub frame: ::core::option::Option<pty_client_frame::Frame>,
 }
 /// Nested message and enum types in `PtyClientFrame`.
@@ -9136,6 +9136,9 @@ pub mod pty_client_frame {
     /// Frame payload; exactly one kind is set.
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum Frame {
+        /// First frame on the gRPC `StreamPty` rpc: which session to attach to.
+        #[prost(message, tag = "4")]
+        Attach(super::PtyAttach),
         /// Terminal input bytes (keystrokes, paste).
         #[prost(bytes, tag = "1")]
         Input(::prost::alloc::vec::Vec<u8>),
@@ -9146,6 +9149,16 @@ pub mod pty_client_frame {
         #[prost(bool, tag = "3")]
         Ping(bool),
     }
+}
+/// Session attachment envelope for the gRPC terminal stream.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PtyAttach {
+    /// PTY session identifier to attach.
+    #[prost(string, tag = "1")]
+    pub id: ::prost::alloc::string::String,
+    /// Optional one-time connect token.
+    #[prost(string, tag = "2")]
+    pub token: ::prost::alloc::string::String,
 }
 /// Terminal resize request.
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]

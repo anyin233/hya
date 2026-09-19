@@ -50,6 +50,7 @@ pub use hya_tool::FormatterStatus;
 pub use mcp_control::McpControl;
 pub use state::AppState;
 pub(crate) use state::ServerState;
+pub use v1::V1Grpc;
 pub use workflow_control::{
     WorkflowControl, WorkflowControlError, WorkflowControlFuture, WorkflowDecorationFuture,
 };

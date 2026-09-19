@@ -11,6 +11,7 @@ mod catalog;
 mod convert;
 mod events;
 mod fs;
+mod grpc;
 mod interaction;
 mod logs;
 mod mcp;
@@ -182,3 +183,5 @@ pub(crate) fn query_request<T: DeserializeOwned>(
     serde_json::from_value(Value::Object(map))
         .map_err(|error| V1Error::invalid_argument(format!("invalid request fields: {error}")))
 }
+
+pub use grpc::V1Grpc;

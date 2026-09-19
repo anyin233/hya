@@ -14364,6 +14364,114 @@ impl<'de> serde::Deserialize<'de> for ProviderSummary {
         deserializer.deserialize_struct("hya.v1.ProviderSummary", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for PtyAttach {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.id.is_empty() {
+            len += 1;
+        }
+        if !self.token.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("hya.v1.PtyAttach", len)?;
+        if !self.id.is_empty() {
+            struct_ser.serialize_field("id", &self.id)?;
+        }
+        if !self.token.is_empty() {
+            struct_ser.serialize_field("token", &self.token)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for PtyAttach {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "id",
+            "token",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Id,
+            Token,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "id" => Ok(GeneratedField::Id),
+                            "token" => Ok(GeneratedField::Token),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = PtyAttach;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct hya.v1.PtyAttach")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<PtyAttach, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut id__ = None;
+                let mut token__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Id => {
+                            if id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("id"));
+                            }
+                            id__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Token => {
+                            if token__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("token"));
+                            }
+                            token__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(PtyAttach {
+                    id: id__.unwrap_or_default(),
+                    token: token__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("hya.v1.PtyAttach", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for PtyClientFrame {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -14378,6 +14486,9 @@ impl serde::Serialize for PtyClientFrame {
         let mut struct_ser = serializer.serialize_struct("hya.v1.PtyClientFrame", len)?;
         if let Some(v) = self.frame.as_ref() {
             match v {
+                pty_client_frame::Frame::Attach(v) => {
+                    struct_ser.serialize_field("attach", v)?;
+                }
                 pty_client_frame::Frame::Input(v) => {
                     #[allow(clippy::needless_borrow)]
                     #[allow(clippy::needless_borrows_for_generic_args)]
@@ -14401,6 +14512,7 @@ impl<'de> serde::Deserialize<'de> for PtyClientFrame {
         D: serde::Deserializer<'de>,
     {
         const FIELDS: &[&str] = &[
+            "attach",
             "input",
             "resize",
             "ping",
@@ -14408,6 +14520,7 @@ impl<'de> serde::Deserialize<'de> for PtyClientFrame {
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
+            Attach,
             Input,
             Resize,
             Ping,
@@ -14432,6 +14545,7 @@ impl<'de> serde::Deserialize<'de> for PtyClientFrame {
                         E: serde::de::Error,
                     {
                         match value {
+                            "attach" => Ok(GeneratedField::Attach),
                             "input" => Ok(GeneratedField::Input),
                             "resize" => Ok(GeneratedField::Resize),
                             "ping" => Ok(GeneratedField::Ping),
@@ -14457,6 +14571,13 @@ impl<'de> serde::Deserialize<'de> for PtyClientFrame {
                 let mut frame__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
+                        GeneratedField::Attach => {
+                            if frame__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("attach"));
+                            }
+                            frame__ = map_.next_value::<::std::option::Option<_>>()?.map(pty_client_frame::Frame::Attach)
+;
+                        }
                         GeneratedField::Input => {
                             if frame__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("input"));
