@@ -33,7 +33,8 @@ advertised.
 | Local discovery | `ls`, `glob`, `find`, `grep`, `lsp` | List directories, match paths, search text, or query language servers. |
 | Commands | `bash` | Run a command with bounded capture; hidden runtime name `shell` is not advertised. |
 | Human/session interaction | `question`, `ask_user`, `todowrite`, `plan_exit`, `invalid` | Ask structured or simple questions, update session todos, request a plan-mode transition, or represent invalid tool arguments. |
-| Agents and teams | `skill`, `list_agents`, `task`, `workflow`, `send`, `announce`, `roster`, `channels`, `join`, `leave` | Load skills, discover/spawn agents, execute governed Workflow commands, and use unit mail/channels ([ADR-0011](../adr/0011-hierarchy-scoped-mailbox.md)). |
+| Agents and teams | `skill`, `list_agents`, `task`, `workflow`, `search_agent` | Load skills, discover/spawn agents, execute governed Workflow commands, and search archived subagents. The orchestration plane is hidden at depth 2 ([ADR-0015](../adr/0015-unified-resident-subagent-lifecycle.md)). |
+| `dm`, `broadcast`, `list_channel`, `report`, `kill` | Channel-plane communication: vertical DMs (with archive revival), unit broadcast, channel listing, terminal reports, and parent force-kill ([ADR-0016](../adr/0016-channel-communication-plane.md)). |
 | Network | `webfetch`, `websearch` | Fetch a URL or run provider-backed web search. |
 
 ### Question and ask_user
@@ -128,56 +129,36 @@ result echoes the list back with a title carrying the count of still-open items
 (status other than `"completed"`). Alias: `todo`.
 ([crates/hya-tool/src/todo.rs:75-136](../../crates/hya-tool/src/todo.rs#L75-L136))
 
-### Mailbox tools
+### Communication tools (ADR-0016 channel plane)
 
-All mailbox tools report that they are available only inside a running team when
-the mailbox plane is disconnected
-([`MailboxError::Unavailable`](../../crates/hya-tool/src/mailbox.rs) / [`map_err`](../../crates/hya-tool/src/mailbox.rs)).
+All communication tools report that they are available only inside a running
+team when the mailbox plane is disconnected.
 
-**`send`**: required `to` (teammate handle such as `reviewer-3`, or a channel with
-a leading `#` such as `#build`) and `body`; optional `kind` =
-`message` (default) | `announcement`. An empty/whitespace body is an input error.
-Channel mail reaches every current subscriber. Result metadata returns the
-resolved sender handle (`from`), the normalized recipient address (`to`), and the
-`recipients` count.
-([crates/hya-tool/src/mailbox.rs:250-312](../../crates/hya-tool/src/mailbox.rs#L250-L312))
+**`dm`**: private mail over the acting agent's DM channel with one vertical
+peer. Required `body`; optional `to` (a direct child's handle — leaders only;
+omitted, it addresses the parent). Subordinates have exactly one peer upward.
+Mail to an archived direct child **revives** it with its saved handoff state
+(ADR-0015). Siblings are not addressable; out-of-scope targets are
+indistinguishable from unknown.
 
-**`roster`**: no parameters; returns the acting agent's `self` path plus rows
-grouped by relation — `parent`, `peers` (same parent), and `reports` (agents it
-leads). Nobody outside the agent's unit is listed, because it cannot message
-them ([ADR-0011](../adr/0011-hierarchy-scoped-mailbox.md)). Each row carries
-`handle` (canonical path), `name` (the short name used to address it),
-`relation`, agent type, session id, scheduling mode, `status` (`idle` | `busy` |
-`done` | `failed`, folded in from `AgentActivityChanged` by the resident
-supervisor), and `current_task`. Empty groups are omitted. Registered
-`ToolPermission::ReadOnly`, so it allows without prompting under `default`.
+**`broadcast`**: required `body`; posts a one-way announcement on the acting
+agent's unit group channel (`announce-{8}`). Only the unit leader may post;
+members hear it and answer with ordinary `dm` mail. Group channels never
+expose a member list. Archived members are no longer members: broadcast never
+reaches them.
 
-**`announce`**: takes `body`; posts a one-way announcement to the agents the
-caller **directly** leads, and no further. Rejected when the caller leads nobody.
-Subordinates do not reply on this path — they answer with ordinary `send` mail to
-their parent.
-([crates/hya-tool/src/mailbox.rs:314-390](../../crates/hya-tool/src/mailbox.rs#L314-L390))
+**`list_channel`**: no parameters; lists the caller's channels — group pipes
+with a can-post flag and DM channels with peer identity and unread counts.
+Archived peers' DM channels are excluded (use `search_agent`).
 
-**`channels`**: no parameters; lists the channels the acting agent can use — its
-home unit's, plus its own unit's when it leads one — with the owning `unit`,
-member list, and message count. A channel belongs to exactly one unit, so the
-same name in another unit is a different channel. The reserved `#announce`
-channels are hidden. Registered `ToolPermission::ReadOnly`.
-([crates/hya-tool/src/mailbox.rs:393-437](../../crates/hya-tool/src/mailbox.rs#L393-L437))
+**`search_agent`**: optional `query` (free text over the goal/pending digests
+of archived agents' final handoffs); lists the caller's own archived direct
+children with handle, agent type, digests, and a degraded flag. `dm` the
+returned handle to revive.
 
-**`join`**: takes a channel name; the leading `#` is optional (`#build` and
-`build` are the same channel). It subscribes the acting agent **within its own
-unit** and **creates** the channel if it does not exist — there is no separate
-create-channel tool. An agent that leads a unit resolves a bare name to the unit
-it leads, and `^name` to its parent's unit; for an agent that leads nobody a bare
-name is its home unit and `^` is an error.
-Registered `ToolPermission::Tool`, so it asks under `default`.
-([crates/hya-tool/src/mailbox.rs:439-473](../../crates/hya-tool/src/mailbox.rs#L439-L473))
-
-**`leave`**: takes a channel name (leading `#` optional) and unsubscribes the
-acting agent. After leaving, channel posts no longer reach the agent but direct
-handle mail still does. Registered `ToolPermission::Tool`.
-([crates/hya-tool/src/mailbox.rs:475-504](../../crates/hya-tool/src/mailbox.rs#L475-L504))
+Removed tools: `roster`, `channels`, `join`, `leave` — their information folds
+into `list_channel`/`search_agent`; named user-created channels no longer
+exist.
 
 `list_agents` enumerates definitions usable by `task`.
 ([crates/hya-tool/src/agents.rs:22-84](../../crates/hya-tool/src/agents.rs#L22-L84))
