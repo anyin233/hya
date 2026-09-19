@@ -433,3 +433,65 @@ async fn stop_still_terminates_a_resident_without_report() {
     let entry = projection.team.roster.get(&handle).unwrap();
     assert_eq!(entry.status, RosterStatus::Failed);
 }
+
+#[tokio::test]
+async fn submit_report_archives_an_idle_agent_after_the_turn() {
+    let engine = engine().await;
+    let root = root_team(&engine).await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    ensure_main(&supervisor, &engine, root).await;
+    let (_child, handle) = spawn_idle_resident(&supervisor, &engine, root, "explore").await;
+
+    // The tool-shaped entry: gate feedback now, archive once the actor is at
+    // rest (here: immediately, since the resident is idle).
+    supervisor
+        .submit_report(root, &handle, ReportOutcome::Done, "shipped".to_string())
+        .await
+        .unwrap();
+
+    for _ in 0..300 {
+        let projection = engine.read_projection(root).await.unwrap();
+        if !projection.team.roster.contains_key(&handle) {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    panic!("submit_report never archived the idle resident");
+}
+
+#[tokio::test]
+async fn kill_archives_with_a_synthesized_failure_report() {
+    let engine = engine().await;
+    let root = root_team(&engine).await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    ensure_main(&supervisor, &engine, root).await;
+    let (child, handle) = spawn_idle_resident(&supervisor, &engine, root, "work").await;
+
+    supervisor
+        .kill_and_archive(root, &handle, "stuck")
+        .await
+        .unwrap();
+
+    let projection = engine.read_projection(root).await.unwrap();
+    assert!(
+        !projection.team.roster.contains_key(&handle),
+        "kill archives"
+    );
+    let archived = projection.team.archived.get(&handle).unwrap();
+    assert_eq!(archived.reason, ArchiveReason::Killed);
+    let inbox = projection.team.inboxes.get("main").unwrap();
+    assert!(
+        inbox.iter().any(|message| message.body.contains("stuck")),
+        "the killer receives the synthesized failure report: {:?}",
+        inbox
+    );
+    let child_projection = engine.read_projection(child).await.unwrap();
+    assert!(
+        child_projection
+            .session
+            .handoff
+            .as_ref()
+            .is_some_and(|handoff| handoff.degraded),
+        "kill synthesizes a degraded handoff"
+    );
+}
