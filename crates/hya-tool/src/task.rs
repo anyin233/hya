@@ -23,6 +23,8 @@ struct InlineAgentInput {
     category: Option<String>,
     #[serde(default)]
     model: Option<String>,
+    #[serde(default)]
+    resident: Option<bool>,
 }
 
 impl InlineAgentInput {
@@ -40,6 +42,7 @@ impl InlineAgentInput {
             description: self.description.filter(|value| !value.trim().is_empty()),
             category: self.category,
             model: self.model,
+            resident: self.resident,
         }
     }
 }
@@ -55,6 +58,8 @@ struct TaskMemberInput {
     category: Option<String>,
     #[serde(default)]
     model: Option<String>,
+    #[serde(default)]
+    resident: bool,
     #[serde(default)]
     inline_agent: Option<InlineAgentInput>,
 }
@@ -72,7 +77,13 @@ struct TaskInput {
     #[serde(default)]
     model: Option<String>,
     #[serde(default)]
+    task_id: Option<String>,
+    #[serde(default)]
     command: Option<String>,
+    #[serde(default)]
+    background: bool,
+    #[serde(default)]
+    resident: bool,
     #[serde(default)]
     inline_agent: Option<InlineAgentInput>,
     #[serde(default)]
@@ -87,6 +98,7 @@ struct TaskResult {
     status: String,
     summary: String,
     command: Option<String>,
+    background: bool,
 }
 
 #[async_trait]
@@ -98,7 +110,7 @@ impl Tool for TaskTool {
     fn schema(&self) -> ToolSchema {
         obj_schema(
             "task",
-            "Launch a specialized subagent (ADR-0015 episodic actor). Non-blocking: returns immediately with the agent's handle; results arrive later as its `report` mail. Continue the conversation, then check mail or wait for the report. Follow up on a finished agent by sending mail to its handle; archived agents are revived by that mail.",
+            "Launch a specialized subagent for a complex task. Use task_id to resume a prior subagent session; background launches are accepted by schema but currently require foreground execution in hya.",
             json!({
                 "description": {
                     "type": "string",
@@ -120,9 +132,21 @@ impl Tool for TaskTool {
                     "type": "string",
                     "description": "Override the concrete provider/model for this spawn; wins over category and the agent's own model"
                 },
+                "task_id": {
+                    "type": "string",
+                    "description": "Resume a previous subagent session (hysec_… / ses_…). Omit, leave empty, or pass a sentinel (new/null/none) to create a fresh subagent."
+                },
                 "command": {
                     "type": "string",
                     "description": "The command that triggered this task"
+                },
+                "background": {
+                    "type": "boolean",
+                    "description": "Run the agent in the background"
+                },
+                "resident": {
+                    "type": "boolean",
+                    "description": "Spawn as a long-lived resident actor: it stays addressable, is idle at zero token cost, and is woken by inbound mail to run one turn at a time. The spawn returns immediately (non-blocking) with the resident's handle. Default false (transient: run one turn, summarize, and die while you wait)."
                 },
                 "inline_agent": {
                     "type": "object",
@@ -146,6 +170,7 @@ impl Tool for TaskTool {
                             "subagent_type": { "type": "string" },
                             "category": { "type": "string" },
                             "model": { "type": "string" },
+                            "resident": { "type": "boolean", "description": "Spawn this member as a resident actor (non-blocking)" },
                             "inline_agent": {
                                 "type": "object",
                                 "description": "Request-scoped agent overlay for this member spawn only. Supplies its own system prompt and name for the child and folds into the same model/category precedence chain; not retained for later reuse as an agent definition.",
@@ -173,10 +198,13 @@ impl Tool for TaskTool {
         // there is no hard one-level cap here.
         let input: TaskInput =
             serde_json::from_value(input).map_err(|e| ToolError::Input(e.to_string()))?;
+        let background = input.background;
         let parent_session = ctx
             .session
             .ok_or_else(|| ToolError::Other("task tool requires a session".to_string()))?
             .to_string();
+        // Models often send "" / "new" for "create fresh"; treat those as unset.
+        let task_id = normalize_task_id(input.task_id);
 
         let mut members: Vec<SpawnMember> = input
             .members
@@ -190,13 +218,22 @@ impl Tool for TaskTool {
                     description: m.description,
                     prompt: m.prompt,
                     subagent_type,
+                    task_id: None,
                     model: m.model,
                     category: m.category,
                     inline_agent,
+                    resident: m.resident,
                 }
             })
             .collect();
         if members.is_empty() {
+            if let Some(task_id) = task_id.as_deref() {
+                task_id.parse::<SessionId>().map_err(|e| {
+                    ToolError::Input(format!(
+                        "invalid task_id: {e}; omit task_id (or leave empty) to create a new subagent"
+                    ))
+                })?;
+            }
             if input.description.trim().is_empty() || input.prompt.trim().is_empty() {
                 return Err(ToolError::Input(
                     "provide description and prompt".to_string(),
@@ -210,10 +247,17 @@ impl Tool for TaskTool {
                 description: input.description,
                 prompt: input.prompt,
                 subagent_type,
+                task_id,
                 model: input.model,
                 category: input.category,
                 inline_agent,
+                resident: input.resident,
             });
+        }
+        if background && members.len() != 1 {
+            return Err(ToolError::Input(
+                "background task execution requires a single task member".to_string(),
+            ));
         }
 
         for member in &members {
@@ -225,24 +269,29 @@ impl Tool for TaskTool {
                 .await?;
         }
 
-        let outcomes = ctx
-            .spawner
-            .spawn(ctx.operation, members.clone(), ctx.cancel.clone())
-            .await
-            .map_err(|error| match error {
-                SpawnError::Overloaded => ToolError::Overloaded(error.to_string()),
-                SpawnError::Unavailable => ToolError::Other(error.to_string()),
-                SpawnError::Cancelled => ToolError::Other(error.to_string()),
-                SpawnError::OperationIdConflict => ToolError::OperationIdConflict,
-                SpawnError::OperationAlreadyHandled => ToolError::OperationAlreadyHandled,
-                SpawnError::UnknownAgentId { agent_id } => ToolError::UnknownAgentId { agent_id },
-                SpawnError::AgentSpawnNotAllowed { caller, agent_id } => {
-                    ToolError::AgentSpawnNotAllowed { caller, agent_id }
-                }
-                SpawnError::UnsupportedInlineAgentField { field } => {
-                    ToolError::UnsupportedInlineAgentField { field }
-                }
-            })?;
+        let outcomes = if background {
+            ctx.spawner
+                .spawn_background(ctx.operation, members.clone(), ctx.cancel.clone())
+                .await
+        } else {
+            ctx.spawner
+                .spawn(ctx.operation, members.clone(), ctx.cancel.clone())
+                .await
+        }
+        .map_err(|error| match error {
+            SpawnError::Overloaded => ToolError::Overloaded(error.to_string()),
+            SpawnError::Unavailable => ToolError::Other(error.to_string()),
+            SpawnError::Cancelled => ToolError::Other(error.to_string()),
+            SpawnError::OperationIdConflict => ToolError::OperationIdConflict,
+            SpawnError::OperationAlreadyHandled => ToolError::OperationAlreadyHandled,
+            SpawnError::UnknownAgentId { agent_id } => ToolError::UnknownAgentId { agent_id },
+            SpawnError::AgentSpawnNotAllowed { caller, agent_id } => {
+                ToolError::AgentSpawnNotAllowed { caller, agent_id }
+            }
+            SpawnError::UnsupportedInlineAgentField { field } => {
+                ToolError::UnsupportedInlineAgentField { field }
+            }
+        })?;
         if members.len() == 1 && outcomes.len() == 1 {
             let member = members.remove(0);
             let Some(outcome) = outcomes.into_iter().next() else {
@@ -258,6 +307,7 @@ impl Tool for TaskTool {
                 status: outcome.status,
                 summary: outcome.summary,
                 command: input.command,
+                background,
             }));
         }
 
@@ -312,9 +362,6 @@ fn normalized_agent_target(value: &str) -> String {
 ///
 /// Empty / whitespace and common sentinels (`new`, `null`, `none`, `undefined`)
 /// become `None`. Non-empty real session ids are kept for resume validation.
-// Pending re-wiring in the in-flight task tool refactor; kept for the
-// follow-up commit that consumes it.
-#[allow(dead_code)]
 fn normalize_task_id(raw: Option<String>) -> Option<String> {
     let s = raw?.trim().to_string();
     if s.is_empty() {
@@ -354,12 +401,21 @@ fn render_single(result: TaskResult) -> Value {
     if let Some(command) = result.command {
         metadata.insert("command".to_string(), json!(command));
     }
+    if result.background {
+        metadata.insert("background".to_string(), json!(true));
+        metadata.insert("jobId".to_string(), json!(result.session.clone()));
+    }
+    let summary = if result.background && state == "running" {
+        "<summary>Background task started</summary>\n"
+    } else {
+        ""
+    };
     json!({
         "title": result.title,
         "metadata": metadata,
         "output": format!(
-            "<task id=\"{}\" state=\"{}\">\n<{}>\n{}\n</{}>\n</task>",
-            result.session, state, tag, result.summary, tag
+            "<task id=\"{}\" state=\"{}\">\n{}<{}>\n{}\n</{}>\n</task>",
+            result.session, state, summary, tag, result.summary, tag
         ),
     })
 }
