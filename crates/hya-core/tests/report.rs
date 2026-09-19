@@ -571,3 +571,24 @@ async fn registration_mints_the_unit_group_and_pair_dm_channels() {
     assert_eq!(dm.members.len(), 2);
     assert!(dm.unit.is_none());
 }
+
+#[tokio::test]
+async fn deleting_the_root_session_force_archives_descendants() {
+    let engine = engine().await;
+    let root = root_team(&engine).await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    ensure_main(&supervisor, &engine, root).await;
+    let (lead, _lead_handle) = spawn_idle_resident(&supervisor, &engine, root, "lead").await;
+    let (_worker, _worker_handle) = spawn_idle_resident(&supervisor, &engine, lead, "work").await;
+
+    // Claims release is observable across the deletion: after teardown both
+    // residents' actor claims are gone from the store.
+    let active_before: Vec<_> = engine.store().active_actor_ids().await.unwrap();
+    assert!(active_before.contains(&lead));
+    engine.delete_session(root).await.unwrap();
+    let active_after = engine.store().active_actor_ids().await.unwrap();
+    assert!(
+        !active_after.contains(&lead),
+        "delete-driven teardown must release descendant claims: {active_after:?}"
+    );
+}

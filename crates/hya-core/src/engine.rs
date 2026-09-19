@@ -1099,6 +1099,12 @@ impl SessionEngine {
     /// # Errors
     /// Returns store failures.
     pub async fn delete_session(&self, session: SessionId) -> Result<bool, CoreError> {
+        // Root-turn teardown (ADR-0015 §1): deleting a team root force-archives
+        // every live descendant (claims release, roster exits) before the log
+        // goes away. Best-effort — the store delete proceeds regardless.
+        if let Ok((root, 0)) = self.session_lineage(session).await {
+            let _ = self.force_archive_team(root).await;
+        }
         Ok(self.store.delete_session(session).await?)
     }
 }
