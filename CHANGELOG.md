@@ -1,22 +1,21 @@
-# 0.36.51
+# 0.36.52
 
-## Tool namespaces: `namespace__local` registration for tool groups
+## ask_user merges question: one canonical batch question tool
 
-Introduces the tool-namespace mechanism in `hya-tool`. Provider
-tool-name charsets only allow `[a-zA-Z0-9_-]`, so namespaces ride on a
-double-underscore separator — the same convention MCP tools already use
-(`mcp__server__tool`). This lets different tool groups contribute
-same-named local tools (`todo__read`, `pluginx__read`) while full names
-stay globally unique in a registry.
+The two overlapping question tools collapse into one. `ask_user` is now
+the canonical batch tool (previously `question`'s shape): a
+`questions[]` array where each item carries `question`, `header`,
+`options: [{label, description}]` (empty list = free text, with
+optional `default`), `multiple`, and `allow_custom` (legacy `custom`
+spelling still parses).
 
-- `namespaced_name(namespace, local)` composes a canonical name after
-  validating both tokens (non-empty, `[a-zA-Z0-9_-]`, no `__`);
-  `namespace_of(name)` parses the namespace segment back out under a
-  first-segment rule (MCP-compatible).
-- `ToolRegistry::register_namespaced` /
-  `register_namespaced_with_permission` register a tool under
-  `namespace__local`, enforce that the tool's own name matches the
-  composed canonical name, and reject duplicates with the typed
-  `NamespacedRegisterError`.
-- No builtin tool names change in this release; the first namespaced
-  builtin group (`todo__*`) lands next.
+- Results carry structured per-question entries in `metadata.answers`
+  (`{question, answer: [chosen values], cancelled}`) alongside the
+  human-readable answer line; unanswered questions render as
+  `Unanswered`.
+- Plane failures now surface as tool errors instead of being silently
+  swallowed as empty answers.
+- The old single-shot `ask_user` schema (`kind`/`options`/`default`
+  top-level) is removed. The `question` spelling remains dispatchable
+  as a hidden non-advertised alias with identical batch semantics.
+- Canonical advertised tool count: 27 → 26.

@@ -9,9 +9,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use async_trait::async_trait;
 use hya_proto::{ToolName, ToolSchema};
 use hya_tool::{
-    Action, Decision, InteractionPlane, LspPlane, Mode, PermissionPlane, PermissionRules,
-    QuestionAnswer, Resource, Rule, SkillPlane, SpawnerPlane, TodoPlane, Tool, ToolCtx, ToolError,
-    ToolPermission, ToolRegistry, WebSearchPlane, handle::ArtifactPlane,
+    Action, Decision, InteractionPlane, LspPlane, Mode, PermissionPlane, PermissionRules, Resource,
+    Rule, SkillPlane, SpawnerPlane, TodoPlane, Tool, ToolCtx, ToolError, ToolPermission,
+    ToolRegistry, WebSearchPlane, handle::ArtifactPlane,
 };
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
@@ -556,48 +556,6 @@ async fn task_tool_is_lead_only() {
         .execute(&ctx, json!({ "prompt": "x", "subagent_type": "quick" }))
         .await;
     assert!(matches!(err, Err(hya_tool::ToolError::Other(_))));
-}
-
-#[tokio::test]
-async fn ask_user_select_returns_index_and_answer() {
-    let dir = tempdir();
-    let (permission, _prx) = PermissionPlane::new(PermissionRules::default());
-    let (interaction, mut irx) = InteractionPlane::new();
-    let (spawner, _srx) = SpawnerPlane::new();
-    let ctx = ToolCtx {
-        workflows: hya_tool::WorkflowPlane::disconnected(),
-        permission,
-        interaction,
-        spawner,
-        operation: hya_tool::ToolOperation::from_tool_call(hya_proto::ToolCallId::new()),
-        mailbox: hya_tool::MailboxPlane::disconnected(),
-        lifecycle: hya_tool::LifecyclePlane::disconnected(),
-        session: None,
-        parent_session: None,
-        todo: TodoPlane::default(),
-        skills: SkillPlane::default(),
-        artifacts: ArtifactPlane::default(),
-        websearch: WebSearchPlane::default(),
-        lsp: LspPlane::default(),
-        formatter: hya_tool::FormatterPlane::default(),
-        agents: Default::default(),
-        workdir: dir,
-        cancel: CancellationToken::new(),
-    };
-    let reg = ToolRegistry::builtins();
-    let tool = reg.get("ask_user").unwrap();
-    let handle = tokio::spawn(async move {
-        tool.execute(
-            &ctx,
-            json!({ "question": "pick", "kind": "select", "options": ["red", "green"] }),
-        )
-        .await
-    });
-    let req = irx.recv().await.unwrap();
-    req.reply.send(QuestionAnswer::Selected(1)).unwrap();
-    let out = handle.await.unwrap().unwrap();
-    assert_eq!(out["answer"], "green");
-    assert_eq!(out["selected_index"], 1);
 }
 
 #[tokio::test]

@@ -32,37 +32,29 @@ advertised.
 | File access | `read`, `write`, `edit`, `apply_patch` | Read or mutate workspace files. `read`, `write`, and `edit` are native coding tools; `apply_patch` remains the separate patch envelope. |
 | Local discovery | `ls`, `glob`, `find`, `grep`, `lsp` | List directories, match paths, search text, or query language servers. |
 | Commands | `bash` | Run a command with bounded capture; hidden runtime name `shell` is not advertised. |
-| Human/session interaction | `question`, `ask_user`, `todowrite`, `plan_exit`, `invalid` | Ask structured or simple questions, update session todos, request a plan-mode transition, or represent invalid tool arguments. |
+| Human/session interaction | `ask_user`, `todowrite`, `plan_exit`, `invalid` | Ask batched structured questions, update session todos, request a plan-mode transition, or represent invalid tool arguments. |
 | Agents and teams | `skill`, `list_agents`, `task`, `workflow`, `search_agent` | Load skills, discover/spawn agents, execute governed Workflow commands, and search archived subagents. The orchestration plane is hidden at depth 2 ([ADR-0015](../adr/0015-unified-resident-subagent-lifecycle.md)). |
 | `dm`, `broadcast`, `list_channel`, `report`, `kill` | Channel-plane communication: vertical DMs (with archive revival), unit broadcast, channel listing, terminal reports, and parent force-kill ([ADR-0016](../adr/0016-channel-communication-plane.md)). |
 | Network | `webfetch`, `websearch` | Fetch a URL or run provider-backed web search. |
 
-### Question and ask_user
+### ask_user
 
-`question` accepts a batch of structured questions under a top-level `questions`
-array. Each item requires `question`, `header`, and `options` (each option is
-`{label, description}`). Optional fields are `multiple` (allow several
-selections) and `custom` (allow a free-text answer outside the option list;
-defaults to true when omitted). The tool routes through the InteractionPlane and
-returns chosen option labels; a question the user did not answer renders as
-`Unanswered` rather than failing the call.
-([crates/hya-tool/src/question.rs:11-16](../../crates/hya-tool/src/question.rs#L11-L16))
+`ask_user` is the single canonical question tool: a batch of structured
+questions under a top-level `questions` array, routed through the
+InteractionPlane. Each item requires `question`, `header`, and `options`
+(each option is `{label, description}`; an empty list makes the question
+free text). Optional fields are `multiple` (allow several selections),
+`allow_custom` (allow a write-in answer outside the option list; defaults
+to true when omitted; legacy `question` calls may spell it `custom`), and
+`default` (default free-text answer).
 
-`ask_user` is a single free-text/select interaction. Parameters:
-
-| Field | Role |
-| --- | --- |
-| `question` | Required prompt text. |
-| `kind` | `"text"` (default path) or `"select"`. |
-| `options` | Required non-empty list when `kind` is `"select"`. |
-| `allow_custom` | With select, allow an answer outside the options. |
-| `default` | Optional default for free-text. |
-
-A cancelled or failed ask does **not** produce a tool error — it returns
-`{"answer": "", "cancelled": true}`. Callers must inspect `cancelled` rather
-than relying on an error. Contrast this with `question`, which renders
-unanswered entries as `Unanswered`.
-([`AskUserTool`](../../crates/hya-tool/src/tool.rs))
+The result carries structured per-question entries in
+`metadata.answers` — `{question, answer: [chosen values], cancelled}` —
+plus a human-readable `output` line where an unanswered question renders
+as `Unanswered`. Cancellation is reported per question, not as an error.
+Plane failures (no host attached) surface as a tool error instead of a
+silent empty answer.
+([crates/hya-tool/src/ask_user.rs](../../crates/hya-tool/src/ask_user.rs))
 
 ### Task
 
@@ -241,6 +233,7 @@ Six legacy aliases resolve during execution but do not appear in
 | `todowrite` | `todo` |
 | `apply_patch` | `patch` |
 | `plan_exit` | `plan` |
+| `ask_user` | `question` |
 
 The `shell` entry is the only compatibility spelling for the command tool; it
 uses the canonical Bash schema and permission path. The other aliases are
