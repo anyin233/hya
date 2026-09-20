@@ -15,6 +15,7 @@ use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader
 use tokio::process::{Child, Command};
 use tokio::sync::{Mutex, oneshot};
 
+use crate::http::{ClassicSseTransport, StreamableHttpTransport};
 use crate::protocol::{JsonRpcRequest, JsonRpcResponse};
 
 /// Default timeout for ordinary MCP method calls (`tools/list`, `tools/call`, …).
@@ -23,7 +24,7 @@ pub const DEFAULT_CALL_TIMEOUT: Duration = Duration::from_secs(30);
 pub const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_LINE_BYTES: usize = 1024 * 1024;
 
-type Pending = Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value, McpError>>>>>;
+pub(crate) type Pending = Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value, McpError>>>>>;
 
 /// Failures from spawning, framing, timing out, or decoding MCP traffic.
 #[derive(Error, Debug, Clone)]
@@ -60,12 +61,29 @@ pub enum McpError {
     /// A single stdout line exceeded the 1 MiB hard limit.
     #[error("mcp line exceeded 1048576 bytes")]
     OversizedLine,
+    /// HTTP transport answered with a non-success status.
+    #[error("mcp http status {status}: {detail}")]
+    Http {
+        /// HTTP status code returned by the server.
+        status: u16,
+        /// Bounded response-body text for operators.
+        detail: String,
+    },
 }
 
-/// Cloneable JSON-RPC client over an async reader/writer pair (usually child stdio).
+/// Cloneable JSON-RPC client over one MCP transport (child stdio, Streamable
+/// HTTP, or classic HTTP+SSE). Method behavior (initialize, call, notify) is
+/// transport-independent.
 #[derive(Clone)]
 pub struct McpClient {
-    inner: Arc<ClientInner>,
+    transport: Transport,
+}
+
+#[derive(Clone)]
+enum Transport {
+    Stdio(Arc<ClientInner>),
+    StreamableHttp(Arc<StreamableHttpTransport>),
+    ClassicSse(Arc<ClassicSseTransport>),
 }
 
 struct ClientInner {
@@ -118,7 +136,7 @@ async fn terminate_child(child: &mut Child) {
 }
 
 impl McpClient {
-    /// Build a client from existing async pipes and start the stdout demux task.
+    /// Build a stdio client from existing async pipes and start the stdout demux task.
     ///
     /// Used by tests and by [`Self::spawn`] after taking the child stdio handles.
     pub fn new<R, W>(reader: R, writer: W) -> Self
@@ -129,12 +147,27 @@ impl McpClient {
         let pending = Arc::new(Mutex::new(HashMap::new()));
         spawn_reader(reader, Arc::clone(&pending));
         Self {
-            inner: Arc::new(ClientInner {
+            transport: Transport::Stdio(Arc::new(ClientInner {
                 writer: Mutex::new(Box::new(writer)),
                 next_id: AtomicU64::new(1),
                 pending,
-            }),
+            })),
         }
+    }
+
+    /// Build a Streamable HTTP client pointed at `url` (session header is
+    /// captured from the `initialize` response).
+    pub fn connect_streamable_http(url: String) -> Result<Self, McpError> {
+        Ok(Self {
+            transport: Transport::StreamableHttp(Arc::new(StreamableHttpTransport::new(url)?)),
+        })
+    }
+
+    /// Open a classic HTTP+SSE channel and wait for its `endpoint` event.
+    pub async fn connect_classic_sse(url: &str) -> Result<Self, McpError> {
+        Ok(Self {
+            transport: Transport::ClassicSse(Arc::new(ClassicSseTransport::connect(url).await?)),
+        })
     }
 
     /// Spawn `command[0]` with `command[1..]` as args, optional env, piped stdio.
@@ -185,22 +218,29 @@ impl McpClient {
     /// spec-required `notifications/initialized` handshake and other client → server
     /// notifications.
     pub async fn notify(&self, method: &str, params: Value) -> Result<(), McpError> {
-        let message = json!({ "jsonrpc": "2.0", "method": method, "params": params });
-        let line = serde_json::to_vec(&message).map_err(|e| McpError::Json(e.to_string()))?;
-        let mut writer = self.inner.writer.lock().await;
-        writer
-            .write_all(&line)
-            .await
-            .map_err(|e| McpError::Io(e.to_string()))?;
-        writer
-            .write_all(b"\n")
-            .await
-            .map_err(|e| McpError::Io(e.to_string()))?;
-        writer
-            .flush()
-            .await
-            .map_err(|e| McpError::Io(e.to_string()))?;
-        Ok(())
+        match &self.transport {
+            Transport::Stdio(inner) => {
+                let message = json!({ "jsonrpc": "2.0", "method": method, "params": params });
+                let line =
+                    serde_json::to_vec(&message).map_err(|e| McpError::Json(e.to_string()))?;
+                let mut writer = inner.writer.lock().await;
+                writer
+                    .write_all(&line)
+                    .await
+                    .map_err(|e| McpError::Io(e.to_string()))?;
+                writer
+                    .write_all(b"\n")
+                    .await
+                    .map_err(|e| McpError::Io(e.to_string()))?;
+                writer
+                    .flush()
+                    .await
+                    .map_err(|e| McpError::Io(e.to_string()))?;
+                Ok(())
+            }
+            Transport::StreamableHttp(transport) => transport.notify(method, params).await,
+            Transport::ClassicSse(transport) => transport.notify(method, params).await,
+        }
     }
 
     /// Send a JSON-RPC request and await the matching response within `timeout`.
@@ -212,40 +252,47 @@ impl McpClient {
         params: Value,
         timeout: Duration,
     ) -> Result<Value, McpError> {
-        let id = self.inner.next_id.fetch_add(1, Ordering::SeqCst);
-        let request = JsonRpcRequest {
-            jsonrpc: "2.0".to_string(),
-            id,
-            method: method.to_string(),
-            params,
-        };
-        let line = serde_json::to_vec(&request).map_err(|e| McpError::Json(e.to_string()))?;
-        let (tx, rx) = oneshot::channel();
-        self.inner.pending.lock().await.insert(id, tx);
-        {
-            let mut writer = self.inner.writer.lock().await;
-            writer
-                .write_all(&line)
-                .await
-                .map_err(|e| McpError::Io(e.to_string()))?;
-            writer
-                .write_all(b"\n")
-                .await
-                .map_err(|e| McpError::Io(e.to_string()))?;
-            writer
-                .flush()
-                .await
-                .map_err(|e| McpError::Io(e.to_string()))?;
-        }
-        match tokio::time::timeout(timeout, rx).await {
-            Ok(Ok(result)) => result,
-            Ok(Err(_)) => Err(McpError::Closed),
-            Err(_) => {
-                self.inner.pending.lock().await.remove(&id);
-                Err(McpError::Timeout {
+        match &self.transport {
+            Transport::Stdio(inner) => {
+                let id = inner.next_id.fetch_add(1, Ordering::SeqCst);
+                let request = JsonRpcRequest {
+                    jsonrpc: "2.0".to_string(),
+                    id,
                     method: method.to_string(),
-                })
+                    params,
+                };
+                let line =
+                    serde_json::to_vec(&request).map_err(|e| McpError::Json(e.to_string()))?;
+                let (tx, rx) = oneshot::channel();
+                inner.pending.lock().await.insert(id, tx);
+                {
+                    let mut writer = inner.writer.lock().await;
+                    writer
+                        .write_all(&line)
+                        .await
+                        .map_err(|e| McpError::Io(e.to_string()))?;
+                    writer
+                        .write_all(b"\n")
+                        .await
+                        .map_err(|e| McpError::Io(e.to_string()))?;
+                    writer
+                        .flush()
+                        .await
+                        .map_err(|e| McpError::Io(e.to_string()))?;
+                }
+                match tokio::time::timeout(timeout, rx).await {
+                    Ok(Ok(result)) => result,
+                    Ok(Err(_)) => Err(McpError::Closed),
+                    Err(_) => {
+                        inner.pending.lock().await.remove(&id);
+                        Err(McpError::Timeout {
+                            method: method.to_string(),
+                        })
+                    }
+                }
             }
+            Transport::StreamableHttp(transport) => transport.call(method, params, timeout).await,
+            Transport::ClassicSse(transport) => transport.call(method, params, timeout).await,
         }
     }
 }
@@ -296,7 +343,7 @@ where
     });
 }
 
-async fn close_pending(pending: &Pending, error: McpError) {
+pub(crate) async fn close_pending(pending: &Pending, error: McpError) {
     let mut guard = pending.lock().await;
     let drained: Vec<_> = guard.drain().map(|(_, tx)| tx).collect();
     drop(guard);

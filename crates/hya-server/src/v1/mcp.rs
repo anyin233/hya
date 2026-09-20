@@ -72,14 +72,21 @@ async fn add_server(
             } else {
                 Some(command.env.into_iter().collect())
             },
+            url: None,
+            transport: None,
             enabled: request.enabled,
             timeout_ms: None,
         },
-        Some(Transport::Url(_)) => {
-            return Err(V1Error::unavailable(
-                "remote url transports are not wired for the mcp control handle",
-            ));
-        }
+        Some(Transport::Url(url)) => McpServerConfig {
+            command: Vec::new(),
+            env: None,
+            url: Some(url.url),
+            // Streamable HTTP is the default remote transport; classic SSE
+            // stays configurable through the config file `transport:` field.
+            transport: None,
+            enabled: request.enabled,
+            timeout_ms: None,
+        },
         None => return Err(V1Error::invalid_argument("missing mcp transport")),
     };
     st.mcp_control

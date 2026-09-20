@@ -947,6 +947,26 @@ fn imported_compat_mcp_servers(config: &CompatModelConfig) -> ImportedMcpServers
     let mut servers = BTreeMap::new();
     let mut skipped = 0;
     for (name, server) in &config.mcp {
+        let url = server
+            .url
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+        if let Some(url) = url {
+            servers.insert(
+                name.clone(),
+                McpServerConfig {
+                    command: Vec::new(),
+                    env: None,
+                    url: Some(url),
+                    transport: None,
+                    enabled: server.enabled,
+                    timeout_ms: server.timeout,
+                },
+            );
+            continue;
+        }
         if !is_importable_local_mcp(server) {
             skipped += 1;
             continue;
@@ -957,6 +977,8 @@ fn imported_compat_mcp_servers(config: &CompatModelConfig) -> ImportedMcpServers
             McpServerConfig {
                 command: server.command.clone(),
                 env,
+                url: None,
+                transport: None,
                 enabled: server.enabled,
                 timeout_ms: server.timeout,
             },
@@ -1083,13 +1105,30 @@ fn render_imported_mcp_config(lines: &mut Vec<String>, mcp: &BTreeMap<String, Mc
     lines.push("mcp:".to_string());
     for (name, server) in mcp {
         lines.push(format!("  {}:", quote_yaml_key(name)));
-        let command = server
-            .command
-            .iter()
-            .map(|part| quote_yaml_scalar(part))
-            .collect::<Vec<_>>()
-            .join(", ");
-        lines.push(format!("    command: [{command}]"));
+        if let Some(url) = server
+            .url
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            lines.push(format!("    url: {}", quote_yaml_scalar(url)));
+            if let Some(transport) = server
+                .transport
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                lines.push(format!("    transport: {}", quote_yaml_scalar(transport)));
+            }
+        } else {
+            let command = server
+                .command
+                .iter()
+                .map(|part| quote_yaml_scalar(part))
+                .collect::<Vec<_>>()
+                .join(", ");
+            lines.push(format!("    command: [{command}]"));
+        }
         if let Some(env) = server.env.as_ref().filter(|env| !env.is_empty()) {
             lines.push("    env:".to_string());
             for (key, value) in env {
@@ -1331,6 +1370,8 @@ fn resolve_mcp(file: &FileConfig) -> anyhow::Result<BTreeMap<String, McpServerCo
             McpServerConfig {
                 command: server.command.clone(),
                 env,
+                url: None,
+                transport: None,
                 enabled: server.enabled,
                 timeout_ms: server.timeout_ms,
             },
@@ -2993,8 +3034,8 @@ plugins:
 
         assert_eq!(summary.providers, 0);
         assert_eq!(summary.models, 0);
-        assert_eq!(summary.mcp_servers, 1);
-        assert_eq!(summary.mcp_skipped, 1);
+        assert_eq!(summary.mcp_servers, 2);
+        assert_eq!(summary.mcp_skipped, 0);
         let text = std::fs::read_to_string(&hya_config).unwrap();
         let file = parse_config(&text).unwrap();
         assert_eq!(file.default_model.as_deref(), Some("hya/offline"));
@@ -3043,7 +3084,62 @@ plugins:
         );
         assert_eq!(local.enabled, Some(false));
         assert_eq!(local.timeout_ms, Some(2500));
-        assert!(!file.mcp.contains_key("remote"));
+        assert_eq!(
+            file.mcp
+                .get("remote")
+                .and_then(|remote| remote.url.as_deref()),
+            Some("https://example.invalid/mcp")
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn import_compat_maps_remote_mcp_url_to_url_transport() {
+        let dir = std::env::temp_dir().join(format!(
+            "hya-compat-mcp-remote-import-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let compat = dir.join("opencode.json");
+        let hya_config = dir.join("hya/config.yaml");
+
+        std::fs::write(
+            &compat,
+            r#"{
+  "mcp": {
+    "remote": {
+      "type": "remote",
+      "url": "https://example.invalid/mcp",
+      "enabled": true,
+      "timeout": 4000
+    },
+    "empty-url": {
+      "type": "remote",
+      "url": "  "
+    }
+  }
+}"#,
+        )
+        .unwrap();
+
+        let summary = import_compat_models_into_config(&compat, &hya_config).unwrap();
+
+        assert_eq!(summary.mcp_servers, 1, "only the url entry imports");
+        assert_eq!(summary.mcp_skipped, 1, "blank url is not importable");
+        let text = std::fs::read_to_string(&hya_config).unwrap();
+        assert!(
+            text.contains("url: \"https://example.invalid/mcp\"")
+                || text.contains("url: https://example.invalid/mcp"),
+            "got: {text}"
+        );
+        let file = parse_config(&text).unwrap();
+        let remote = file.mcp.get("remote").unwrap();
+        assert_eq!(remote.url.as_deref(), Some("https://example.invalid/mcp"));
+        assert!(remote.command.is_empty());
+        assert_eq!(remote.enabled, Some(true));
+        assert_eq!(remote.timeout_ms, Some(4000));
 
         let _ = std::fs::remove_dir_all(&dir);
     }

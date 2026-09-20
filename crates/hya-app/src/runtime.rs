@@ -4803,6 +4803,8 @@ You are the installed resident agent.
             hya_mcp::McpServerConfig {
                 command: vec!["echo".to_string()],
                 env: None,
+                url: None,
+                transport: None,
                 enabled: None,
                 timeout_ms: None,
             },

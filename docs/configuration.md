@@ -919,12 +919,13 @@ the TUI discovery code.
 
 ## MCP Servers
 
-hya supports **stdio/local MCP servers only**. `mcp.<name>.command` is an argv
-array. There is **no** `url` / remote transport key on the hya config shape. When
-importing a Compat/OpenCode config, only entries with `type: local` (and a
-non-empty command, no remote URL) are kept — `type: remote` / URL entries are
-**dropped silently**, not converted and not warned about in the import path
-beyond skip counts. For a remote server, run a local stdio proxy.
+hya supports **stdio/local** and **remote HTTP** MCP servers. `mcp.<name>.command`
+is an argv array for a local stdio server; `mcp.<name>.url` connects to a remote
+server over **Streamable HTTP** (the 2025-06-18 default) or, with
+`transport: sse`, the classic HTTP+SSE transport. When importing a
+Compat/OpenCode config, entries with a non-empty `url` are imported as remote
+`url:` servers; entries with `type: local` and a non-empty command are imported
+as stdio servers; anything else is skipped.
 
 ```yaml
 mcp:
@@ -933,6 +934,11 @@ mcp:
     env:
       TOKEN: "{env:MCP_TOKEN}"   # {env:}/{file:} templating applies here
     timeout_ms: 1000             # milliseconds; omit → 30s per subsequent call
+  remote:
+    url: https://mcp.example.com/mcp   # Streamable HTTP
+  legacy-remote:
+    url: https://old.example.com/sse
+    transport: sse                      # classic HTTP+SSE (2024-11-05)
   disabled-example:
     enabled: false
     command: [node, server.js]
@@ -940,12 +946,19 @@ mcp:
 
 `timeout_ms` is milliseconds. When omitted, the per-call timeout is **30 s**
 (`DEFAULT_CALL_TIMEOUT` in [`crates/hya-mcp/src/client.rs`](../crates/hya-mcp/src/client.rs)).
+When both `url` and `command` are set, `url` wins. Unknown `transport` values
+fail the connection; the v1 `AddMcpServer` route with a `Url` transport always
+selects Streamable HTTP.
 
 ### Connection handshake
 
 When connecting an enabled server, hya:
 
-1. Spawns `command` over stdio.
+1. Opens the transport: spawns `command` over stdio, POSTs to `url`
+   (Streamable HTTP), or opens the SSE event stream and its POST endpoint
+   (classic SSE). For Streamable HTTP the `Mcp-Session-Id` response header of
+   `initialize` is replayed on every later request; stateless servers that
+   never issue one work unchanged.
 2. Sends `initialize` with `protocolVersion: "2025-06-18"` and `clientInfo`
    naming `hya`, under a **5-second** initialize timeout.
 3. Sends the required `notifications/initialized` notification.

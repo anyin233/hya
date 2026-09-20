@@ -21,6 +21,14 @@ pub struct McpServerConfig {
     /// Extra environment variables for the child process.
     #[serde(default)]
     pub env: Option<BTreeMap<String, String>>,
+    /// HTTP(S) endpoint for remote servers. When set, `command` is ignored and
+    /// the transport is Streamable HTTP unless `transport` says otherwise.
+    #[serde(default)]
+    pub url: Option<String>,
+    /// Transport selection for `url` servers: `"http"` (Streamable HTTP,
+    /// default), `"sse"` (classic HTTP+SSE), or `"stdio"` (default with `command`).
+    #[serde(default)]
+    pub transport: Option<String>,
     /// When `Some(false)`, the server is marked disabled and never spawned.
     #[serde(default)]
     pub enabled: Option<bool>,
@@ -66,13 +74,15 @@ struct McpInner {
     status: BTreeMap<String, McpStatus>,
 }
 
-/// One connected MCP server: live child, namespaced tools, and best-effort resources.
+/// One connected MCP server: live client (stdio child or HTTP), namespaced
+/// tools, and best-effort resources.
 ///
-/// Holds the `ChildGuard` so the process stays up while tools are in use.
+/// Holds the `ChildGuard` (stdio only) so the process stays up while tools are
+/// in use.
 pub struct PreparedMcpServer {
     name: String,
     _client: McpClient,
-    _guard: ChildGuard,
+    _guard: Option<ChildGuard>,
     tools: Vec<Arc<dyn Tool>>,
     resources: ResourceMap,
 }
@@ -211,7 +221,26 @@ async fn connect_server(
         .timeout_ms
         .map(Duration::from_millis)
         .unwrap_or(DEFAULT_CALL_TIMEOUT);
-    let (client, guard) = McpClient::spawn(&config.command, config.env.as_ref())?;
+    let (client, guard) = match config.url.clone() {
+        Some(url) => {
+            let client = match config.transport.as_deref() {
+                Some("sse") => McpClient::connect_classic_sse(&url).await?,
+                Some("http") | Some("streamable_http") | None => {
+                    McpClient::connect_streamable_http(url)?
+                }
+                Some(other) => {
+                    return Err(McpError::Io(format!(
+                        "unknown mcp transport: {other} (expected http, sse, or stdio)"
+                    )));
+                }
+            };
+            (client, None)
+        }
+        None => {
+            let (client, guard) = McpClient::spawn(&config.command, config.env.as_ref())?;
+            (client, Some(guard))
+        }
+    };
     client.initialize().await?;
     // Spec-required post-initialize handshake before issuing further requests.
     client
