@@ -12,6 +12,7 @@ mod agent_cmd;
 mod auth_cmd;
 mod bundle_cmd;
 mod cli_args;
+mod exec_stream;
 mod models_cmd;
 mod rpc;
 mod serve;
@@ -113,28 +114,56 @@ async fn cmd_exec(
         })
         .await
         .context("create session")?;
+    // `--json` streams durable envelopes live from the event bus (db
+    // persistence is unchanged and per-event): an abnormally terminated run
+    // still leaves a usable partial trajectory on stdout.
+    let mut json_printer = json.then(|| {
+        let rx = engine.bus().subscribe();
+        let engine_for_stream = engine.clone();
+        let (done_tx, done_rx) = tokio::sync::oneshot::channel::<()>();
+        let task = tokio::spawn(exec_stream::stream_until_done(
+            rx,
+            session,
+            done_rx,
+            move || {
+                let engine = engine_for_stream.clone();
+                async move { engine.replay(session).await.map_err(anyhow::Error::from) }
+            },
+            std::io::stdout(),
+        ));
+        (task, done_tx)
+    });
     engine
         .admit_user_prompt(session, prompt)
         .await
         .context("admit prompt")?;
-    engine
+    let turn = engine
         .run_turn(session, &agent, CancellationToken::new())
-        .await
-        .context("run turn")?;
-    if json {
+        .await;
+    if let Some((task, done_tx)) = json_printer.take() {
+        let _ = done_tx.send(());
+        let printer = task
+            .await
+            .map_err(|e| anyhow::anyhow!("json stream task failed: {e}"))?
+            .context("stream json envelopes")?;
+        // Authoritative tail flush: anything the bus dropped or that was
+        // appended between the last broadcast and turn completion comes from
+        // the durable log, keeping stdout exactly equal to `tail-session`.
         let envelopes = engine.replay(session).await.context("replay session")?;
-        let mut out = std::io::stdout().lock();
+        let mut printer = printer;
         for env in &envelopes {
-            let line = serde_json::to_string(env).context("serialize envelope")?;
-            writeln!(out, "{line}").context("write envelope")?;
+            printer.print(env, session).context("write json envelope")?;
         }
-    } else {
+        printer.flush().context("flush json stream")?;
+    } else if turn.is_ok() {
         let projection = engine
             .read_projection(session)
             .await
             .context("read projection")?;
         print!("{}", render_transcript(&projection));
     }
+    // Surface the turn error only after the stdout trajectory is complete.
+    turn.context("run turn")?;
     built
         .shutdown()
         .await

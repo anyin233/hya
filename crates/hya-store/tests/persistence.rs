@@ -25,6 +25,29 @@ fn temp_db() -> String {
         .into_owned()
 }
 
+#[tokio::test]
+async fn append_event_returns_the_persisted_timestamp() {
+    let store = SessionStore::connect_memory().await.unwrap();
+    let session = SessionId::new();
+    let (seq, ts) = store
+        .append_event(
+            session,
+            &Event::SessionTitled {
+                session,
+                title: "t".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let envelopes = store.replay(session).await.unwrap();
+    assert_eq!(envelopes.len(), 1);
+    assert_eq!(envelopes[0].seq, seq);
+    assert_eq!(
+        envelopes[0].ts_millis, ts,
+        "the bus-published envelope must carry the durable timestamp"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_appends_do_not_lock() {
     let store = Arc::new(SessionStore::connect(&temp_db()).await.unwrap());

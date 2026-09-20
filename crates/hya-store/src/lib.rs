@@ -271,11 +271,11 @@ impl SessionStore {
         &self,
         session: SessionId,
         event: &Event,
-    ) -> Result<EventSeq, StoreError> {
+    ) -> Result<(EventSeq, i64), StoreError> {
         let payload = serde_json::to_string(event)?;
         let key = session.storage_key();
         let row = sqlx::query(
-            "INSERT INTO event_log (session_id, payload, ts) VALUES (?, ?, ?) RETURNING seq",
+            "INSERT INTO event_log (session_id, payload, ts) VALUES (?, ?, ?) RETURNING seq, ts",
         )
         .bind(key)
         .bind(payload)
@@ -283,7 +283,8 @@ impl SessionStore {
         .fetch_one(&self.pool)
         .await?;
         let seq: i64 = row.try_get("seq")?;
-        Ok(EventSeq(seq.max(0) as u64))
+        let ts: i64 = row.try_get("ts")?;
+        Ok((EventSeq(seq.max(0) as u64), ts))
     }
 
     /// Load all envelopes for a session in sequence order (payload JSON decoded to `Event`).

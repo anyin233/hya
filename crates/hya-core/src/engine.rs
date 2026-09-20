@@ -965,10 +965,10 @@ impl SessionEngine {
     }
 
     async fn emit(&self, session: SessionId, event: Event) -> Result<(), CoreError> {
-        let seq = self.store.append_event(session, &event).await?;
+        let (seq, ts_millis) = self.store.append_event(session, &event).await?;
         self.publish_envelope(Envelope {
             seq,
-            ts_millis: now_millis(),
+            ts_millis,
             event,
         });
         Ok(())
