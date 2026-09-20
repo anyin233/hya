@@ -143,7 +143,9 @@ result echoes the list back with a title carrying the count of still-open items
 ### Communication tools (ADR-0016 channel plane)
 
 All communication tools report that they are available only inside a running
-team when the mailbox plane is disconnected.
+team when the mailbox plane is disconnected. The system-prompt team quick
+reference mirrors this contract and is guarded by a registry-alignment test
+(every tool-named token it teaches must resolve in the builtin registry).
 
 **`send`**: required `body`; optional `channel` (the legacy `to` spelling
 still parses). One tool, channel-decided delivery:
