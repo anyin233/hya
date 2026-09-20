@@ -22,6 +22,7 @@
 
 mod agents;
 mod apply_patch;
+mod ask_user;
 mod edit;
 mod file_diff;
 mod formatter;
@@ -49,7 +50,6 @@ mod output_cap;
 /// Allow/ask/deny permission plane: invocation policy, resource rules, and asks.
 pub mod permission;
 mod plan;
-mod question;
 mod read;
 mod read_media;
 mod shell;

@@ -13,7 +13,7 @@ after permission checks pass.
   formatter/`WorkflowPlane` planes, session ids, workdir, cancellation token.
 - `ToolRegistry`: name-to-tool map, aliases, and model-facing schemas.
 
-`ToolRegistry::builtins()` installs **27** canonical schema names before model
+`ToolRegistry::builtins()` installs **26** canonical schema names before model
 filtering ([`tool.rs`](../../crates/hya-tool/src/tool.rs)). The table below is
 the complete inventory. Advertised fields are the model-facing JSON schema
 `required`/`properties` keys; a schema marked **closed** rejects unknown keys.
@@ -55,8 +55,7 @@ stay globally unique inside a registry. `hya-tool` exposes the mechanism in
 | `bash` | `{ "command": string, "env"?: object<string,string>, "timeout"?: number, "cwd"?: string, "pty"?: boolean }` (closed) | Structured command/output result with exit, timeout, truncation, and artifact metadata. |
 | `webfetch` (`fetch`) | `{ "url": string, "format"?: "text"\|"markdown"\|"html", "timeout"?: number }` | Fetched web content or image attachment. |
 | `websearch` (`search`) | `{ "query": string, "numResults"?: number, "livecrawl"?: string, "type"?: string, "contextMaxCharacters"?: number }` | Search results from the configured `WebSearchPlane`. |
-| `question` | `{ "questions": [{ "question", "header", "options", "multiple"?, "custom"? }] }` | Chosen option labels (unanswered → `Unanswered`). |
-| `ask_user` | `{ "question": string, "kind"?: "text"\|"select", "options"?, "allow_custom"?, "default"? }` | Answer object; cancellation returns `{ "answer": "", "cancelled": true }`. |
+| `ask_user` (`question`) | `{ "questions": [{ "question", "header", "options": [{ "label", "description" }], "multiple"?, "allow_custom"?, "default"? }] }` (alias `question`) | Structured per-question answers `{question, answer, cancelled}`; unanswered renders as `Unanswered`; plane failures error. |
 | `lsp` | `{ "operation", "filePath", "line", "character", "query"? }` | LSP provider response. |
 | `skill` | `{ "name": string }` (name only; a path is not accepted) | `<skill_content>` envelope with body, `file://` base dir, and sampled files (cap 10). See also [`docs/skills.md`](../skills.md). |
 | `list_agents` | (none) | Agent definitions usable by `task`. |

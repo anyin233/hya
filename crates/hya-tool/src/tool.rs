@@ -12,12 +12,13 @@ use tokio_util::sync::CancellationToken;
 
 use crate::agents::{AgentDef, ListAgentsTool};
 use crate::apply_patch::ApplyPatchTool;
+use crate::ask_user::AskUserTool;
 use crate::edit::EditTool;
 use crate::formatter::FormatterPlane;
 pub use crate::grep::GrepTool;
 use crate::handle::{ArtifactPlane, HandleRouter};
 use crate::hashline::HashlineRuntime;
-use crate::interaction::{InteractionPlane, QuestionAnswer, QuestionKind};
+use crate::interaction::InteractionPlane;
 use crate::invalid::InvalidTool;
 use crate::lsp::{LspPlane, LspTool};
 use crate::lsp_path::{absolutize, display_path, normalize, resolve_file};
@@ -26,7 +27,6 @@ use crate::permission::{
     Action, Invocation, Mode, PermissionError, PermissionPlane, Resource, glob_match,
 };
 use crate::plan::PlanExitTool;
-use crate::question::QuestionTool;
 use crate::read::ReadTool;
 use crate::shell::ShellTool;
 use crate::skill::{SkillPlane, SkillTool};
@@ -455,11 +455,9 @@ impl ToolRegistry {
             Arc::new(GlobTool),
             Arc::new(FindTool),
             Arc::new(GrepTool::with_runtime(Arc::clone(&hashline_runtime))),
-            Arc::new(QuestionTool),
             Arc::new(LspTool),
             Arc::new(SkillTool),
             Arc::new(ListAgentsTool),
-            Arc::new(AskUserTool),
             Arc::new(TaskTool),
             Arc::new(WorkflowTool),
             Arc::new(DmTool),
@@ -471,6 +469,7 @@ impl ToolRegistry {
         ] {
             registry.insert_builtin(tool);
         }
+        registry.insert_aliased_builtin("ask_user", "question", Arc::new(AskUserTool));
         registry.insert_aliased_builtin("bash", "shell", Arc::new(ShellTool));
         registry.insert_aliased_builtin("apply_patch", "patch", Arc::new(ApplyPatchTool));
         registry.insert_aliased_builtin("webfetch", "fetch", Arc::new(WebFetchTool));
@@ -1141,78 +1140,5 @@ impl Tool for FindTool {
             .map(|(path, size)| json!({ "path": path, "size": size }))
             .collect();
         Ok(json!({ "results": results }))
-    }
-}
-
-/// Single free-text or select prompt via [`InteractionPlane`] (cancellation is soft).
-pub struct AskUserTool;
-
-#[derive(Deserialize)]
-struct AskUserInput {
-    question: String,
-    #[serde(default)]
-    kind: String,
-    #[serde(default)]
-    options: Vec<String>,
-    #[serde(default)]
-    allow_custom: bool,
-    #[serde(default)]
-    default: Option<String>,
-}
-
-#[async_trait]
-impl Tool for AskUserTool {
-    fn name(&self) -> &str {
-        "ask_user"
-    }
-    fn schema(&self) -> ToolSchema {
-        obj_schema(
-            "ask_user",
-            "Ask the human operator a question and wait for their answer. Use kind=\"select\" with options for a choice, or kind=\"text\" for free-form input.",
-            json!({
-                "question": { "type": "string" },
-                "kind": { "type": "string", "enum": ["text", "select"] },
-                "options": { "type": "array", "items": { "type": "string" } },
-                "allow_custom": { "type": "boolean" },
-                "default": { "type": "string" }
-            }),
-            &["question"],
-        )
-    }
-    async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError> {
-        let input: AskUserInput =
-            serde_json::from_value(input).map_err(|e| ToolError::Input(e.to_string()))?;
-        let kind = if input.kind == "select" {
-            if input.options.is_empty() {
-                return Err(ToolError::Input(
-                    "kind=select requires a non-empty options list".to_string(),
-                ));
-            }
-            QuestionKind::Select {
-                options: input.options.clone(),
-                allow_custom: input.allow_custom,
-            }
-        } else {
-            QuestionKind::FreeText {
-                default: input.default.clone(),
-            }
-        };
-        match ctx.interaction.ask(input.question, kind).await {
-            Ok(QuestionAnswer::Selected(i)) => Ok(json!({
-                "answer": input.options.get(i).cloned().unwrap_or_default(),
-                "selected_index": i,
-            })),
-            Ok(QuestionAnswer::SelectedMany(indices)) => Ok(json!({
-                "answer": indices
-                    .iter()
-                    .filter_map(|index| input.options.get(*index).cloned())
-                    .collect::<Vec<_>>(),
-                "selected_indices": indices,
-            })),
-            Ok(QuestionAnswer::FreeText(text)) => Ok(json!({ "answer": text })),
-            Ok(QuestionAnswer::Cancelled) | Err(_) => {
-                Ok(json!({ "answer": "", "cancelled": true }))
-            }
-        }
     }
 }
