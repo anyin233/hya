@@ -1884,6 +1884,9 @@ pub async fn load() -> anyhow::Result<Option<ResolvedConfig>> {
     let mut tasks = tokio::task::JoinSet::new();
     let mut plans = Vec::new();
     let mut pending_discovery = Vec::new();
+    // Providers whose catalog rows are discovery-sourced; the durable cache is
+    // keyed off this list, not the (shorter) refresh queue.
+    let mut discovered_ids = Vec::new();
     for provider in parsed {
         let credential = resolve_provider_credential(&provider);
         if !provider.models.is_empty() {
@@ -1898,6 +1901,7 @@ pub async fn load() -> anyhow::Result<Option<ResolvedConfig>> {
                 .cloned()
                 .collect::<Vec<_>>();
             if !cleaned.is_empty() {
+                discovered_ids.push(provider.id.clone());
                 pending_discovery.push(PendingCatalogDiscovery {
                     provider_id: provider.id.clone(),
                     kind: provider.kind,
@@ -1909,11 +1913,14 @@ pub async fn load() -> anyhow::Result<Option<ResolvedConfig>> {
                 continue;
             }
         }
-        // Cache miss: keep today's blocking discovery for correctness, then
-        // still queue a refresh so later startups hit the warm path.
+        // Cache miss: keep today's blocking discovery for correctness. A
+        // queued refresh is only useful when the blocking attempt failed —
+        // re-fetching a just-discovered catalog would double the request on
+        // every cold `models` run.
         let timeout_provider_id = provider.id.clone();
         let timeout_kind = provider.kind;
         let timeout_auth = status_auth(&credential);
+        discovered_ids.push(provider.id.clone());
         pending_discovery.push(PendingCatalogDiscovery {
             provider_id: provider.id.clone(),
             kind: provider.kind,
@@ -1948,7 +1955,13 @@ pub async fn load() -> anyhow::Result<Option<ResolvedConfig>> {
         });
     }
     while let Some(result) = tasks.join_next().await {
-        plans.push(result.map_err(|error| anyhow::anyhow!("catalog discovery task: {error}"))??);
+        let plan = result.map_err(|error| anyhow::anyhow!("catalog discovery task: {error}"))??;
+        // A successful blocking discovery already covers its queued refresh;
+        // keep the queue entry only for providers that still need a fetch.
+        if plan.route.is_some() && !plan.models.is_empty() {
+            pending_discovery.retain(|entry| entry.provider_id != plan.state.provider_id);
+        }
+        plans.push(plan);
     }
     plans.sort_by(|left, right| left.state.provider_id.cmp(&right.state.provider_id));
     let mut router = ProviderRouter::new();
@@ -1977,7 +1990,7 @@ pub async fn load() -> anyhow::Result<Option<ResolvedConfig>> {
         .tools
         .map_or_else(WebSearchConfig::default, |tools| tools.websearch);
     // Persist any newly discovered rows so the next cold start can skip HTTP.
-    write_discovered_models_cache(&pending_discovery, &catalog);
+    write_discovered_models_cache(&discovered_ids, &catalog);
     Ok(Some(ResolvedConfig {
         router,
         default_model: catalog.default_model().to_string(),
@@ -2043,25 +2056,21 @@ fn plan_from_cached_models(
     })
 }
 
-fn write_discovered_models_cache(
-    pending: &[PendingCatalogDiscovery],
-    catalog: &ProviderCatalogSnapshot,
-) {
-    if pending.is_empty() {
+fn write_discovered_models_cache(discovered_ids: &[String], catalog: &ProviderCatalogSnapshot) {
+    if discovered_ids.is_empty() {
         return;
     }
     let mut file = crate::models_cache::read_models_cache().unwrap_or_default();
-    for pending in pending {
+    for provider_id in discovered_ids {
         let models = catalog
             .models()
             .iter()
             .filter(|model| {
-                model.provider_id == pending.provider_id
-                    && model.source == ModelCatalogSource::Discovered
+                model.provider_id == *provider_id && model.source == ModelCatalogSource::Discovered
             })
             .cloned()
             .collect::<Vec<_>>();
-        crate::models_cache::upsert_provider_models(&mut file, &pending.provider_id, &models);
+        crate::models_cache::upsert_provider_models(&mut file, provider_id, &models);
     }
     let _ = crate::models_cache::write_models_cache_file(&file);
 }
