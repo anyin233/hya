@@ -256,6 +256,28 @@ rendering on the same `hya_proto::Projection` reducer. The store, server, and
 native Rust clients share that reducer; remote clients consume the curated v1
 stream/read shapes over HTTP+SSE.
 
+## Materialized team tables
+
+The event log remains the single source of truth; `session`, `team_run`,
+`team_member`, `mail`, and `task_board` are queryable write-through
+projections maintained inside the same transaction as the event append
+(`SessionStore::append_event`, `append_event_in_transaction`, and the
+resident-mutation batch):
+
+| Event | Materialized rows |
+| --- | --- |
+| `session_created` | `session` (authoritative row; `INSERT OR IGNORE`) |
+| `agent_registered` | `team_run` ensure (the orchestration root's log session is the run) + `team_member` |
+| `mail_sent` | `mail` (`from_ep`/`to_ep`/`kind`/`body_json`, `delivered_at` = append time; `acked_at` stays NULL) |
+| `member_spawned` | `task_board` row (`status: pending`) |
+| `subagent_reported` | `task_board` status → `done`/`failed` |
+
+FK anchors are self-healing: when a registration arrives on a log whose
+`session` row does not exist (synthetic or migrated sequences), a placeholder
+`session` row is anchored first and a later authoritative `session_created`
+keeps its own values. Reads never consult these tables — replaying
+`event_log` through the shared projection stays the only derivation path.
+
 ## Token Ledger
 
 The engine records one row per finished assistant message — every turn, every

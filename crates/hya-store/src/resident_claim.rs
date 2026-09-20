@@ -225,6 +225,8 @@ impl SessionStore {
             .fetch_one(&mut *tx)
             .await?;
             let seq: i64 = row.try_get("seq")?;
+            crate::materialize::materialize_event_side_tables(&mut tx, session, event, ts_millis)
+                .await?;
             envelopes.push(Envelope {
                 seq: EventSeq(seq.max(0) as u64),
                 ts_millis,

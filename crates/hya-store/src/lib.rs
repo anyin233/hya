@@ -11,6 +11,7 @@ mod bundle_registry;
 /// Typed store errors shared by session and bundle registry APIs.
 pub mod error;
 mod mailbox;
+mod materialize;
 mod permission;
 mod resident_claim;
 mod sync;
@@ -278,14 +279,18 @@ impl SessionStore {
     ) -> Result<(EventSeq, i64), StoreError> {
         let payload = serde_json::to_string(event)?;
         let key = session.storage_key();
+        let ts_millis = now_millis();
+        let mut tx = self.pool.begin().await?;
         let row = sqlx::query(
             "INSERT INTO event_log (session_id, payload, ts) VALUES (?, ?, ?) RETURNING seq, ts",
         )
-        .bind(key)
+        .bind(&key)
         .bind(payload)
-        .bind(now_millis())
-        .fetch_one(&self.pool)
+        .bind(ts_millis)
+        .fetch_one(&mut *tx)
         .await?;
+        materialize::materialize_event_side_tables(&mut tx, session, event, ts_millis).await?;
+        tx.commit().await?;
         let seq: i64 = row.try_get("seq")?;
         let ts: i64 = row.try_get("ts")?;
         Ok((EventSeq(seq.max(0) as u64), ts))
@@ -445,6 +450,7 @@ pub(crate) async fn append_event_in_transaction(
     .fetch_one(&mut **tx)
     .await?;
     let seq: i64 = row.try_get("seq")?;
+    materialize::materialize_event_side_tables(tx, session, &event, ts_millis).await?;
     Ok(Envelope {
         seq: EventSeq(seq.max(0) as u64),
         ts_millis,
