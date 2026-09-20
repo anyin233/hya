@@ -1250,7 +1250,7 @@ checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
 
 [[package]]
 name = "hya"
-version = "0.36.61"
+version = "0.36.62"
 dependencies = [
  "axum 0.7.9",
  "http-body-util",
@@ -1262,7 +1262,7 @@ dependencies = [
 
 [[package]]
 name = "hya-api"
-version = "0.36.61"
+version = "0.36.62"
 dependencies = [
  "base64 0.22.1",
  "pbjson",
@@ -1274,7 +1274,7 @@ dependencies = [
 
 [[package]]
 name = "hya-app"
-version = "0.36.61"
+version = "0.36.62"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1309,7 +1309,7 @@ dependencies = [
 
 [[package]]
 name = "hya-backend"
-version = "0.36.61"
+version = "0.36.62"
 dependencies = [
  "anyhow",
  "axum 0.7.9",
@@ -1334,7 +1334,7 @@ dependencies = [
 
 [[package]]
 name = "hya-bundle"
-version = "0.36.61"
+version = "0.36.62"
 dependencies = [
  "hya-proto",
  "hya-workflow",
@@ -1348,7 +1348,7 @@ dependencies = [
 
 [[package]]
 name = "hya-client"
-version = "0.36.61"
+version = "0.36.62"
 dependencies = [
  "hya-api",
  "hya-proto",
@@ -1360,7 +1360,7 @@ dependencies = [
 
 [[package]]
 name = "hya-core"
-version = "0.36.61"
+version = "0.36.62"
 dependencies = [
  "async-trait",
  "futures",
@@ -1386,7 +1386,7 @@ dependencies = [
 
 [[package]]
 name = "hya-e2e"
-version = "0.36.61"
+version = "0.36.62"
 dependencies = [
  "axum 0.7.9",
  "hya-api",
@@ -1403,7 +1403,7 @@ dependencies = [
 
 [[package]]
 name = "hya-mcp"
-version = "0.36.61"
+version = "0.36.62"
 dependencies = [
  "async-trait",
  "hya-proto",
@@ -1418,7 +1418,7 @@ dependencies = [
 
 [[package]]
 name = "hya-native"
-version = "0.36.61"
+version = "0.36.62"
 dependencies = [
  "async-trait",
  "axum 0.7.9",
@@ -1432,7 +1432,7 @@ dependencies = [
 
 [[package]]
 name = "hya-plugin"
-version = "0.36.61"
+version = "0.36.62"
 dependencies = [
  "async-trait",
  "hya-core",
@@ -1452,15 +1452,15 @@ dependencies = [
 
 [[package]]
 name = "hya-plugin-compat"
-version = "0.36.61"
+version = "0.36.62"
 
 [[package]]
 name = "hya-plugin-example"
-version = "0.36.61"
+version = "0.36.62"
 
 [[package]]
 name = "hya-proto"
-version = "0.36.61"
+version = "0.36.62"
 dependencies = [
  "rand_core 0.9.5",
  "serde",
@@ -1470,7 +1470,7 @@ dependencies = [
 
 [[package]]
 name = "hya-provider"
-version = "0.36.61"
+version = "0.36.62"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -1488,7 +1488,7 @@ dependencies = [
 
 [[package]]
 name = "hya-sdk"
-version = "0.36.61"
+version = "0.36.62"
 dependencies = [
  "async-trait",
  "eventsource-stream",
@@ -1504,7 +1504,7 @@ dependencies = [
 
 [[package]]
 name = "hya-sdk-v1"
-version = "0.36.61"
+version = "0.36.62"
 dependencies = [
  "async-trait",
  "axum 0.7.9",
@@ -1529,7 +1529,7 @@ dependencies = [
 
 [[package]]
 name = "hya-server"
-version = "0.36.61"
+version = "0.36.62"
 dependencies = [
  "async-trait",
  "axum 0.7.9",
@@ -1564,7 +1564,7 @@ dependencies = [
 
 [[package]]
 name = "hya-store"
-version = "0.36.61"
+version = "0.36.62"
 dependencies = [
  "hya-bundle",
  "hya-proto",
@@ -1578,7 +1578,7 @@ dependencies = [
 
 [[package]]
 name = "hya-tool"
-version = "0.36.61"
+version = "0.36.62"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -1601,7 +1601,7 @@ dependencies = [
 
 [[package]]
 name = "hya-ts"
-version = "0.36.61"
+version = "0.36.62"
 dependencies = [
  "clap",
  "hya-app",
@@ -1613,7 +1613,7 @@ dependencies = [
 
 [[package]]
 name = "hya-updater"
-version = "0.36.61"
+version = "0.36.62"
 dependencies = [
  "clap",
  "ed25519-dalek",
@@ -1625,7 +1625,7 @@ dependencies = [
 
 [[package]]
 name = "hya-workflow"
-version = "0.36.61"
+version = "0.36.62"
 dependencies = [
  "serde",
  "serde_norway",
@@ -1657,9 +1657,9 @@ dependencies = [
 
 [[package]]
 name = "hyper-rustls"
-version = "0.27.9"
+version = "0.27.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "33ca68d021ef39cf6463ab54c1d0f5daf03377b70561305bb89a8f83aab66e0f"
+checksum = "dfa8e654703247911e29c23fbeaa261834bd9bb74efba2f9acddc37bfb127f53"
 dependencies = [
  "http",
  "hyper",
@@ -4642,7 +4642,7 @@ checksum = "3ad82d2a33cdc9674dc7465672f271e096168fcdbe0f799d9e6db8c5892679dc"
 
 [[package]]
 name = "xtask"
-version = "0.36.61"
+version = "0.36.62"
 dependencies = [
  "anyhow",
  "hya-bundle",
