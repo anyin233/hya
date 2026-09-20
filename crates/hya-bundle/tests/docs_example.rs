@@ -271,7 +271,7 @@ fn bundle_cli_docs_distinguish_catalog_publication_from_activation_closure() {
 /// Ensure the user guide and generated architecture wiki explain the durable
 /// Workflow product surface instead of only the compiler internals.
 #[test]
-fn workflow_docs_cover_control_replay_and_tui_state() {
+fn workflow_docs_cover_control_replay_and_client_state() {
     let paths = [
         repository_root().join("docs/workflows.md"),
         repository_root().join(".autors/hya/wiki/pages/architecture/workflow-composition.md"),
@@ -282,7 +282,7 @@ fn workflow_docs_cover_control_replay_and_tui_state() {
         "interrupted",
         "unavailable",
         "stale",
-        "TUI",
+        "client",
         "sidebar",
         "WorkflowControl",
     ];
@@ -339,7 +339,7 @@ fn workflow_docs_cover_stage_model_routing_and_route_outcomes() {
             "#variant",
             "WorkflowStageRouteOutcome",
             "one route outcome per explicit-route provider stream group",
-            "does not render model routes",
+            "do not render model routes",
         ] {
             assert!(
                 normalized.contains(marker),

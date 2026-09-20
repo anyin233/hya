@@ -32,26 +32,11 @@ pub(crate) struct Cli {
     #[arg(long, global = true)]
     pub(crate) pure: bool,
     /// SQLite database path. Empty string uses an in-memory store. Applies to
-    /// the interactive TUI, headless exec/run persistence, serve, sessions, and replay.
+    /// headless exec/run persistence, serve, sessions, and replay.
     #[arg(long, global = true, default_value = "")]
     pub(crate) db: String,
-    /// Resume an existing session id in the interactive TUI.
-    #[arg(long)]
-    pub(crate) resume: Option<String>,
     #[command(subcommand)]
     pub(crate) command: Option<Command>,
-}
-
-impl Cli {
-    pub(crate) fn validate(&self) -> Result<(), &'static str> {
-        if self.resume.is_some() && self.prompt.is_some() {
-            return Err("--resume must be used only for interactive startup");
-        }
-        if self.resume.is_some() && self.command.is_some() {
-            return Err("--resume must be used without a subcommand");
-        }
-        Ok(())
-    }
 }
 
 #[derive(Subcommand)]
@@ -230,35 +215,15 @@ mod tests {
     }
 
     #[test]
-    fn rejects_resume_with_subcommand() {
-        let cli = parse([
-            "hya-backend",
-            "--resume",
-            "hysec_abcdefghijklmnopqrst",
-            "exec",
-            "hello",
-        ]);
+    fn rejects_resume_as_unknown_argument() {
+        let err =
+            match Cli::try_parse_from(["hya-backend", "--resume", "hysec_abcdefghijklmnopqrst"]) {
+                Ok(_) => panic!("--resume should be rejected once the interactive TUI is removed"),
+                Err(err) => err,
+            };
 
-        assert_eq!(
-            cli.validate(),
-            Err("--resume must be used without a subcommand")
-        );
-    }
-
-    #[test]
-    fn rejects_resume_with_prompt_goal_mode() {
-        let cli = parse([
-            "hya-backend",
-            "--resume",
-            "hysec_abcdefghijklmnopqrst",
-            "--prompt",
-            "finish the task",
-        ]);
-
-        assert_eq!(
-            cli.validate(),
-            Err("--resume must be used only for interactive startup")
-        );
+        assert_eq!(err.kind(), clap::error::ErrorKind::UnknownArgument);
+        assert!(err.to_string().contains("--resume"));
     }
 
     #[test]

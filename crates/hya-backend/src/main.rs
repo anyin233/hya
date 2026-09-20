@@ -1,6 +1,7 @@
-//! `hya-backend` — backend umbrella binary. Bare `hya-backend` launches the `hya` frontend TUI;
-//! subcommands cover headless `exec`, `-p` goal mode, HTTP/SSE
-//! `serve`, and `tail-session`.
+//! `hya-backend` — backend umbrella binary and the workspace's only shipped binary.
+//! Bare `hya-backend` prints a guidance banner (no interactive frontend is bundled);
+//! subcommands cover headless `exec`, `-p` goal mode, HTTP/SSE `serve`, and
+//! `tail-session`.
 //!
 //! Models come from Hya's provider declarations. Explicit model lists or bounded
 //! startup discovery build authenticated or anonymous routes. With no resolved
