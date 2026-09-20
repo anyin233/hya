@@ -21,26 +21,10 @@ const WORKFLOW_TARGET: &str = "x86_64-unknown-linux-gnu";
 const BINARY_NAME: &str = "hya";
 const RELEASE_JOB: &str = "release";
 const BUILD_JOB: &str = "build";
-const TUI_PACKAGE: &str = "packages/hya-tui-ts";
 const COMPAT_ADAPTER: &str = "crates/hya-plugin-compat/adapter";
 const ARGUS_PACKAGE_SCRIPT: &str = "scripts/package-argus-example.sh";
-const WORKFLOW_TUI_SOURCE_COPY: &str = "cp -R packages/hya-tui-ts/src/. \"$runtime/src/\"";
-const WORKFLOW_TUI_SOURCE_SMOKE: &str = "test -f \"$runtime/src/hya/coding-tool-presentation.tsx\"";
-const WORKFLOW_TUI_SOURCE_ARCHIVE: &str = "grep -Fx \"$package_dir/lib/hya/hya-tui-ts/src/hya/coding-tool-presentation.tsx\" \"$scratch/archive.txt\"";
-const WORKFLOW_TUI_NOTICE_COPY: &str = "cp packages/hya-tui-ts/NOTICE \"$runtime/NOTICE\"";
-const WORKFLOW_TUI_NOTICE_SMOKE: &str = "test -f \"$runtime/NOTICE\"";
-const WORKFLOW_TUI_NOTICE_COMPARE: &str = "cmp packages/hya-tui-ts/NOTICE \"$runtime/NOTICE\"";
-const WORKFLOW_TUI_NOTICE_ARCHIVE: &str =
-    "grep -Fx \"$package_dir/lib/hya/hya-tui-ts/NOTICE\" \"$scratch/archive.txt\"";
-const WORKFLOW_ROOT_NOTICE_COPY: &str = "cp THIRD_PARTY_NOTICES \"$runtime/THIRD_PARTY_NOTICES\"";
-const WORKFLOW_ROOT_NOTICE_SMOKE: &str = "test -f \"$runtime/THIRD_PARTY_NOTICES\"";
-const WORKFLOW_ROOT_NOTICE_COMPARE: &str =
-    "cmp THIRD_PARTY_NOTICES \"$runtime/THIRD_PARTY_NOTICES\"";
-const WORKFLOW_ROOT_NOTICE_ARCHIVE: &str =
-    "grep -Fx \"$package_dir/lib/hya/hya-tui-ts/THIRD_PARTY_NOTICES\" \"$scratch/archive.txt\"";
-const WORKFLOW_TUI_NODE_MODULES_SMOKE: &str = "test -d \"$runtime/node_modules\"";
-const WORKFLOW_TUI_NODE_MODULES_ARCHIVE: &str =
-    "grep -F \"$package_dir/lib/hya/hya-tui-ts/node_modules/\" \"$scratch/archive.txt\" >/dev/null";
+const WORKFLOW_COMPAT_SOURCE_COPY: &str =
+    "cp -R crates/hya-plugin-compat/adapter/src/. \"$compat_adapter/src/\"";
 
 /// Command-line options for one non-publishing rehearsal.
 #[derive(Debug)]
@@ -270,10 +254,10 @@ fn validate_workflow(workflow: &Value, target: &str) -> Result<Vec<String>> {
     let mut run_blocks = Vec::new();
     collect_step_contracts(workflow, "workflow", &mut run_blocks)?;
     ensure!(
-        run_blocks.iter().any(|run| run.contains(
-            "cargo build --release --locked -p hya -p hya-backend -p hya-ts --bins --target"
-        )),
-        "release workflow must keep the locked hya target build command"
+        run_blocks.iter().any(
+            |run| run.contains("cargo build --release --locked -p hya-backend --bins --target")
+        ),
+        "release workflow must keep the locked hya-backend target build command"
     );
     ensure!(
         run_blocks.iter().any(|run| run.contains("sha256sum")),
@@ -285,76 +269,10 @@ fn validate_workflow(workflow: &Value, target: &str) -> Result<Vec<String>> {
             .any(|run| run.contains(ARGUS_PACKAGE_SCRIPT)),
         "release workflow must keep the existing example package script"
     );
-    ensure!(
-        run_blocks
-            .iter()
-            .any(|run| { run.contains("runtime=\"dist/$package_dir/lib/hya/hya-tui-ts\"") }),
-        "release workflow must package the TUI runtime at dist/$package_dir/lib/hya/hya-tui-ts"
-    );
     ensure_workflow_run_contract(
         &run_blocks,
-        WORKFLOW_TUI_SOURCE_COPY,
-        "recursively copy the complete TUI source tree",
-    )?;
-    ensure_workflow_run_contract(
-        &run_blocks,
-        WORKFLOW_TUI_SOURCE_SMOKE,
-        "smoke-test a nested TUI source file",
-    )?;
-    ensure_workflow_run_contract(
-        &run_blocks,
-        WORKFLOW_TUI_SOURCE_ARCHIVE,
-        "list the nested TUI source file in the release archive",
-    )?;
-    ensure_workflow_run_contract(
-        &run_blocks,
-        WORKFLOW_TUI_NOTICE_COPY,
-        "copy the package TUI NOTICE",
-    )?;
-    ensure_workflow_run_contract(
-        &run_blocks,
-        WORKFLOW_TUI_NOTICE_SMOKE,
-        "smoke-test the packaged TUI NOTICE",
-    )?;
-    ensure_workflow_run_contract(
-        &run_blocks,
-        WORKFLOW_TUI_NOTICE_COMPARE,
-        "byte-compare the packaged TUI NOTICE",
-    )?;
-    ensure_workflow_run_contract(
-        &run_blocks,
-        WORKFLOW_TUI_NOTICE_ARCHIVE,
-        "list the packaged TUI NOTICE in the release archive",
-    )?;
-    ensure_workflow_run_contract(
-        &run_blocks,
-        WORKFLOW_ROOT_NOTICE_COPY,
-        "copy root THIRD_PARTY_NOTICES into the TUI runtime",
-    )?;
-    ensure_workflow_run_contract(
-        &run_blocks,
-        WORKFLOW_ROOT_NOTICE_SMOKE,
-        "smoke-test packaged THIRD_PARTY_NOTICES",
-    )?;
-    ensure_workflow_run_contract(
-        &run_blocks,
-        WORKFLOW_ROOT_NOTICE_COMPARE,
-        "byte-compare packaged THIRD_PARTY_NOTICES",
-    )?;
-    ensure_workflow_run_contract(
-        &run_blocks,
-        WORKFLOW_ROOT_NOTICE_ARCHIVE,
-        "list packaged THIRD_PARTY_NOTICES in the release archive",
-    )?;
-    ensure_workflow_run_contract(
-        &run_blocks,
-        WORKFLOW_TUI_NODE_MODULES_SMOKE,
-        "smoke-test the packaged TUI dependency tree",
-    )?;
-    ensure_workflow_run_contract(
-        &run_blocks,
-        WORKFLOW_TUI_NODE_MODULES_ARCHIVE,
-        "list the packaged TUI dependency tree in the release archive",
+        WORKFLOW_COMPAT_SOURCE_COPY,
+        "recursively copy the complete compatibility adapter source tree",
     )?;
     Ok(run_blocks)
 }
@@ -581,23 +499,6 @@ fn validate_release_metadata(
         readme.contains(&format!("workspace version `{version}`")),
         "README.md does not report workspace version `{version}`"
     );
-    let tui_manifest = read_text(root, "packages/hya-tui-ts/package.json")?;
-    let tui: serde_json::Value =
-        serde_json::from_str(&tui_manifest).context("parse packages/hya-tui-ts/package.json")?;
-    let tui_version = tui
-        .get("version")
-        .and_then(serde_json::Value::as_str)
-        .context("packages/hya-tui-ts/package.json version is missing")?;
-    ensure!(
-        tui_version == version,
-        "packages/hya-tui-ts/package.json version `{tui_version}` does not match `{version}`"
-    );
-
-    let version_test = read_text(root, "crates/hya/tests/version_metadata.rs")?;
-    ensure!(
-        version_test.contains(&format!("const EXPECTED_RELEASE: &str = \"{version}\";")),
-        "crates/hya/tests/version_metadata.rs does not expect `{version}`"
-    );
 
     let lockfile = read_text(root, "Cargo.lock")?;
     validate_lockfile_versions(&lockfile, version)?;
@@ -743,47 +644,27 @@ fn is_safe_target(target: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
 }
 
-/// Prepare the pinned TUI and run the exact locked target release build.
+/// Check the pinned Bun (still used by the compat adapter packaging) and run the
+/// exact locked target release build.
 fn prepare_and_build(root: &Path, target: &str) -> Result<()> {
-    let tui = root.join(TUI_PACKAGE);
-    let bun_version = run_checked(OsStr::new("bun"), &arg_list(&["--version"]), &tui, &[], &[])?;
+    let bun_version = run_checked(OsStr::new("bun"), &arg_list(&["--version"]), root, &[], &[])?;
     ensure!(
         String::from_utf8_lossy(&bun_version.stdout).trim() == BUN_VERSION,
         "Bun from PATH must report version {BUN_VERSION}"
     );
-    run_checked(
-        OsStr::new("bun"),
-        &arg_list(&["install", "--frozen-lockfile"]),
-        &tui,
-        &[],
-        &[],
-    )
-    .context("prepare hya-tui-ts dependencies")?;
-    run_checked(
-        OsStr::new("bun"),
-        &arg_list(&["run", "build"]),
-        &tui,
-        &[],
-        &[],
-    )
-    .context("build hya-tui-ts runtime")?;
 
     let args = vec![
         "build".to_owned(),
         "--release".to_owned(),
         "--locked".to_owned(),
         "-p".to_owned(),
-        "hya".to_owned(),
-        "-p".to_owned(),
         "hya-backend".to_owned(),
-        "-p".to_owned(),
-        "hya-ts".to_owned(),
         "--bins".to_owned(),
         "--target".to_owned(),
         target.to_owned(),
     ];
     run_checked(OsStr::new("cargo"), &args, root, &[], &[])
-        .context("run locked release build for hya binaries")?;
+        .context("run locked release build for hya-backend")?;
     Ok(())
 }
 
@@ -797,34 +678,19 @@ fn rehearse_package(root: &Path, version: &str, target: &str) -> Result<()> {
     let bin = package_root.join("bin");
     fs::create_dir_all(&bin).with_context(|| format!("create {}", bin.display()))?;
 
-    for binary in ["hya", "hya-backend", "hya-ts"] {
-        let source = root
-            .join("target")
-            .join(target)
-            .join("release")
-            .join(binary);
-        let destination = bin.join(binary);
-        copy_file(&source, &destination)?;
-        set_executable(&destination)?;
-    }
+    let backend_source = root
+        .join("target")
+        .join(target)
+        .join("release")
+        .join("hya-backend");
+    let backend_destination = bin.join("hya-backend");
+    copy_file(&backend_source, &backend_destination)?;
+    set_executable(&backend_destination)?;
     copy_file(&root.join("README.md"), &package_root.join("README.md"))?;
 
-    let runtime = package_root.join("lib/hya/hya-tui-ts");
     let compat = package_root.join("lib/hya/compat-adapter");
-    copy_tui_runtime(root, &runtime)?;
-    assert_same_file(
-        &root.join("THIRD_PARTY_NOTICES"),
-        &runtime.join("THIRD_PARTY_NOTICES"),
-        "packaged TUI THIRD_PARTY_NOTICES",
-    )?;
-    assert_same_file(
-        &root.join(TUI_PACKAGE).join("NOTICE"),
-        &runtime.join("NOTICE"),
-        "packaged TUI NOTICE",
-    )?;
     copy_compat_runtime(root, &compat)?;
-    install_runtime_dependencies(&runtime, &compat)?;
-    run_tui_prune(root, &runtime)?;
+    install_runtime_dependencies(&compat)?;
 
     let example = package_root.join("examples/hya-argus-example.hyabundle");
     fs::create_dir_all(example.parent().context("example archive has no parent")?)
@@ -891,31 +757,8 @@ fn rehearse_package(root: &Path, version: &str, target: &str) -> Result<()> {
     let extracted = extract_root.join(&package_name);
     verify_package_layout(&extracted)?;
     verify_archive_listing(root, &archive, &package_name, &scratch)?;
-    smoke_packaged_release(&extracted, &runtime, &compat, &scratch, version)?;
+    smoke_packaged_release(&extracted, &scratch, version)?;
     Ok(())
-}
-
-/// Copy the release TUI files and source tree into the package runtime.
-fn copy_tui_runtime(root: &Path, runtime: &Path) -> Result<()> {
-    let source = root.join(TUI_PACKAGE);
-    fs::create_dir_all(runtime.join("src"))
-        .with_context(|| format!("create TUI runtime {}", runtime.display()))?;
-    for file in [
-        "package.json",
-        "bun.lock",
-        "bunfig.toml",
-        "tsconfig.json",
-        "LICENSE",
-        "UPSTREAM.md",
-        "NOTICE",
-    ] {
-        copy_file(&source.join(file), &runtime.join(file))?;
-    }
-    copy_file(
-        &root.join("THIRD_PARTY_NOTICES"),
-        &runtime.join("THIRD_PARTY_NOTICES"),
-    )?;
-    copy_directory_contents(&source.join("src"), &runtime.join("src"))
 }
 
 /// Copy the compatibility adapter manifest and source tree into the package.
@@ -929,27 +772,16 @@ fn copy_compat_runtime(root: &Path, compat: &Path) -> Result<()> {
     copy_directory_contents(&source.join("src"), &compat.join("src"))
 }
 
-/// Install production dependencies in the two packaged JavaScript runtimes.
-fn install_runtime_dependencies(runtime: &Path, compat: &Path) -> Result<()> {
-    for (label, directory) in [("TUI", runtime), ("compatibility adapter", compat)] {
-        run_checked(
-            OsStr::new("bun"),
-            &arg_list(&["install", "--frozen-lockfile", "--production"]),
-            directory,
-            &[],
-            &[],
-        )
-        .with_context(|| format!("install {label} runtime dependencies"))?;
-    }
-    Ok(())
-}
-
-/// Run the existing SDK-pruning script against the copied TUI runtime.
-fn run_tui_prune(root: &Path, runtime: &Path) -> Result<()> {
-    let script = root.join(TUI_PACKAGE).join("scripts/prune-sdk-server.ts");
-    let args = vec![script.display().to_string(), runtime.display().to_string()];
-    run_checked(OsStr::new("bun"), &args, root, &[], &[])
-        .context("prune server-only SDK files from packaged TUI runtime")?;
+/// Install production dependencies in the packaged JavaScript runtime.
+fn install_runtime_dependencies(compat: &Path) -> Result<()> {
+    run_checked(
+        OsStr::new("bun"),
+        &arg_list(&["install", "--frozen-lockfile", "--production"]),
+        compat,
+        &[],
+        &[],
+    )
+    .context("install compatibility adapter runtime dependencies")?;
     Ok(())
 }
 
@@ -1005,30 +837,12 @@ fn verify_example_listing(listing: &str) -> Result<()> {
     Ok(())
 }
 
-/// Verify required runtime files and server-only SDK files before archiving.
+/// Verify required runtime files before archiving.
 fn verify_package_layout(package_root: &Path) -> Result<()> {
-    for binary in ["hya", "hya-backend", "hya-ts"] {
-        require_file(&package_root.join("bin").join(binary), "packaged binary")?;
-    }
-    let runtime = package_root.join("lib/hya/hya-tui-ts");
-    for path in [
-        "package.json",
-        "bun.lock",
-        "bunfig.toml",
-        "tsconfig.json",
-        "LICENSE",
-        "UPSTREAM.md",
-        "NOTICE",
-        "THIRD_PARTY_NOTICES",
-        "src/main.tsx",
-        "src/hya/coding-tool-presentation.tsx",
-        "node_modules/@opencode-ai/plugin/package.json",
-        "node_modules/@opencode-ai/sdk/package.json",
-        "node_modules/@opencode-ai/sdk/dist/v2/client.js",
-    ] {
-        require_file(&runtime.join(path), "packaged TUI runtime file")?;
-    }
-    verify_sdk_server_absence(&runtime)?;
+    require_file(
+        &package_root.join("bin").join("hya-backend"),
+        "packaged binary",
+    )?;
 
     let compat = package_root.join("lib/hya/compat-adapter");
     for path in [
@@ -1039,41 +853,6 @@ fn verify_package_layout(package_root: &Path) -> Result<()> {
         "node_modules/@opencode-ai/sdk/package.json",
     ] {
         require_file(&compat.join(path), "packaged compatibility adapter file")?;
-    }
-    Ok(())
-}
-
-/// Assert that the packaged SDK contains its client but no server entry points.
-fn verify_sdk_server_absence(runtime: &Path) -> Result<()> {
-    let sdk = runtime.join("node_modules/@opencode-ai/sdk");
-    for path in [
-        "dist/index.js",
-        "dist/index.d.ts",
-        "dist/server.js",
-        "dist/server.d.ts",
-        "dist/v2/index.js",
-        "dist/v2/index.d.ts",
-        "dist/v2/server.js",
-        "dist/v2/server.d.ts",
-        "dist/process.js",
-        "dist/process.d.ts",
-    ] {
-        require_absent(&sdk.join(path), "server-only SDK file")?;
-    }
-    let manifest_path = sdk.join("package.json");
-    let manifest_source = fs::read_to_string(&manifest_path)
-        .with_context(|| format!("read packaged SDK manifest {}", manifest_path.display()))?;
-    let manifest: serde_json::Value =
-        serde_json::from_str(&manifest_source).context("parse packaged SDK manifest")?;
-    let exports = manifest
-        .get("exports")
-        .and_then(serde_json::Value::as_object)
-        .context("packaged SDK manifest has no exports map")?;
-    for key in [".", "./server", "./v2/server"] {
-        ensure!(
-            !exports.contains_key(key),
-            "packaged SDK still exports server entry `{key}`"
-        );
     }
     Ok(())
 }
@@ -1098,17 +877,7 @@ fn verify_archive_listing(
     fs::write(&listing_path, listing.as_bytes())
         .with_context(|| format!("write archive listing {}", listing_path.display()))?;
     for path in [
-        "bin/hya",
         "bin/hya-backend",
-        "bin/hya-ts",
-        "lib/hya/hya-tui-ts/LICENSE",
-        "lib/hya/hya-tui-ts/UPSTREAM.md",
-        "lib/hya/hya-tui-ts/NOTICE",
-        "lib/hya/hya-tui-ts/THIRD_PARTY_NOTICES",
-        "lib/hya/hya-tui-ts/src/main.tsx",
-        "lib/hya/hya-tui-ts/src/hya/coding-tool-presentation.tsx",
-        "lib/hya/hya-tui-ts/bunfig.toml",
-        "lib/hya/hya-tui-ts/tsconfig.json",
         "lib/hya/compat-adapter/package.json",
         "lib/hya/compat-adapter/bun.lock",
         "lib/hya/compat-adapter/src/main.ts",
@@ -1120,10 +889,6 @@ fn verify_archive_listing(
             "release tar listing",
         )?;
     }
-    ensure!(
-        listing.contains(&format!("{package_name}/lib/hya/hya-tui-ts/node_modules/")),
-        "release tar listing has no packaged TUI node_modules"
-    );
     ensure!(
         listing.contains(&format!(
             "{package_name}/lib/hya/compat-adapter/node_modules/"
@@ -1137,17 +902,15 @@ fn verify_archive_listing(
     Ok(())
 }
 
-/// Smoke packaged binaries, the TUI launcher contract, and the pure adapter.
+/// Smoke packaged binaries and the pure adapter.
 fn smoke_packaged_release(
     package_root: &Path,
-    source_runtime: &Path,
-    _source_compat: &Path,
     scratch: &ScratchDirectory,
     version: &str,
 ) -> Result<()> {
-    let hya = package_root.join("bin/hya");
+    let backend = package_root.join("bin/hya-backend");
     let version_output = run_checked(
-        hya.as_os_str(),
+        backend.as_os_str(),
         &arg_list(&["--version"]),
         scratch.path(),
         &[],
@@ -1155,94 +918,18 @@ fn smoke_packaged_release(
     )?;
     ensure!(
         combined_output(&version_output).contains(version),
-        "packaged hya --version did not report {version}"
+        "packaged hya-backend --version did not report {version}"
     );
     run_checked(
-        hya.as_os_str(),
+        backend.as_os_str(),
         &arg_list(&["--help"]),
         scratch.path(),
         &[],
         &[],
     )
-    .context("smoke packaged hya --help")?;
-    for binary in ["hya-backend", "hya-ts"] {
-        run_checked(
-            package_root.join("bin").join(binary).as_os_str(),
-            &arg_list(&["--help"]),
-            scratch.path(),
-            &[],
-            &[],
-        )
-        .with_context(|| format!("smoke packaged {binary} --help"))?;
-    }
+    .context("smoke packaged hya-backend --help")?;
 
-    let runtime = package_root.join("lib/hya/hya-tui-ts");
-    assert_same_file(
-        &source_runtime.join("LICENSE"),
-        &runtime.join("LICENSE"),
-        "packaged TUI LICENSE",
-    )?;
-    assert_same_file(
-        &source_runtime.join("UPSTREAM.md"),
-        &runtime.join("UPSTREAM.md"),
-        "packaged TUI UPSTREAM.md",
-    )?;
-    assert_same_file(
-        &source_runtime.join("NOTICE"),
-        &runtime.join("NOTICE"),
-        "archived TUI NOTICE",
-    )?;
-    assert_same_file(
-        &source_runtime.join("THIRD_PARTY_NOTICES"),
-        &runtime.join("THIRD_PARTY_NOTICES"),
-        "archived TUI THIRD_PARTY_NOTICES",
-    )?;
-    smoke_tui_launcher(&hya, &runtime, scratch)?;
     smoke_compat_adapter(&package_root.join("lib/hya/compat-adapter"), scratch)?;
-    Ok(())
-}
-
-/// Exercise the packaged hya launcher with a Bun stub and no server traffic.
-fn smoke_tui_launcher(hya: &Path, runtime: &Path, scratch: &ScratchDirectory) -> Result<()> {
-    let project = scratch.path().join("project");
-    fs::create_dir_all(&project).with_context(|| format!("create {}", project.display()))?;
-    let mock_bun = scratch.path().join("mock-bun");
-    let invocation = scratch.path().join("bun-invocation");
-    fs::write(
-        &mock_bun,
-        "#!/usr/bin/env bash\nset -euo pipefail\nprintf 'cwd=%s\\n' \"$PWD\" >\"${HYA_RELEASE_BUN_INVOCATION:?}\"\nprintf 'arg=%s\\n' \"$@\" >>\"$HYA_RELEASE_BUN_INVOCATION\"\nexit 23\n",
-    )
-    .with_context(|| format!("write {}", mock_bun.display()))?;
-    set_executable(&mock_bun)?;
-    let args = vec![
-        project.display().to_string(),
-        "--server".to_owned(),
-        "http://127.0.0.1:54321".to_owned(),
-        "--bun".to_owned(),
-        mock_bun.display().to_string(),
-    ];
-    let envs = [(
-        "HYA_RELEASE_BUN_INVOCATION",
-        invocation.as_os_str().to_os_string(),
-    )];
-    let output = run_process(hya.as_os_str(), &args, scratch.path(), &envs, &[])
-        .context("run packaged hya with the Bun launcher stub")?;
-    ensure!(
-        output.status.code() == Some(23),
-        "packaged hya did not return the Bun stub status 23"
-    );
-    let invocation_text = fs::read_to_string(&invocation)
-        .with_context(|| format!("read Bun invocation {}", invocation.display()))?;
-    for line in [
-        format!("cwd={}", runtime.display()),
-        "arg=src/main.tsx".to_owned(),
-        "arg=--url".to_owned(),
-        "arg=http://127.0.0.1:54321".to_owned(),
-        "arg=--project".to_owned(),
-        format!("arg={}", project.display()),
-    ] {
-        require_listing_line(&invocation_text, &line, "Bun launcher invocation")?;
-    }
     Ok(())
 }
 
@@ -1353,28 +1040,6 @@ fn set_executable(_path: &Path) -> Result<()> {
 /// Require a regular file at one release path.
 fn require_file(path: &Path, label: &str) -> Result<()> {
     ensure!(path.is_file(), "{label} is missing at {}", path.display());
-    Ok(())
-}
-
-/// Require that one release path is absent.
-fn require_absent(path: &Path, label: &str) -> Result<()> {
-    ensure!(
-        !path.exists(),
-        "{label} unexpectedly exists at {}",
-        path.display()
-    );
-    Ok(())
-}
-
-/// Compare two release files byte-for-byte.
-fn assert_same_file(source: &Path, destination: &Path, label: &str) -> Result<()> {
-    let source_bytes = fs::read(source).with_context(|| format!("read {}", source.display()))?;
-    let destination_bytes =
-        fs::read(destination).with_context(|| format!("read {}", destination.display()))?;
-    ensure!(
-        source_bytes == destination_bytes,
-        "{label} differs from its source"
-    );
     Ok(())
 }
 
@@ -1491,32 +1156,13 @@ fn combined_output(output: &Output) -> String {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, dead_code)]
+    #![allow(clippy::expect_used)]
 
     use super::*;
-    use anyhow::{Result, bail, ensure};
-    use std::env;
-    use std::sync::{LazyLock, Mutex, MutexGuard};
+    use anyhow::{Context, Result};
 
-    const TEST_PACKAGE: &str = "hya-0.36.9-x86_64-unknown-linux-gnu";
-
-    static PROCESS_ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
-
-    const WORKFLOW_CONTRACTS: &[&str] = &[
-        WORKFLOW_TUI_SOURCE_COPY,
-        WORKFLOW_TUI_SOURCE_SMOKE,
-        WORKFLOW_TUI_SOURCE_ARCHIVE,
-        WORKFLOW_TUI_NOTICE_COPY,
-        WORKFLOW_TUI_NOTICE_SMOKE,
-        WORKFLOW_TUI_NOTICE_COMPARE,
-        WORKFLOW_TUI_NOTICE_ARCHIVE,
-        WORKFLOW_ROOT_NOTICE_COPY,
-        WORKFLOW_ROOT_NOTICE_SMOKE,
-        WORKFLOW_ROOT_NOTICE_COMPARE,
-        WORKFLOW_ROOT_NOTICE_ARCHIVE,
-        WORKFLOW_TUI_NODE_MODULES_SMOKE,
-        WORKFLOW_TUI_NODE_MODULES_ARCHIVE,
-    ];
+    /// Exact-line packaging contracts that must stay in the checked-in workflow.
+    const WORKFLOW_CONTRACTS: &[&str] = &[WORKFLOW_COMPAT_SOURCE_COPY];
 
     /// Require the checked-in workflow to satisfy every release package contract.
     #[test]
@@ -1560,333 +1206,5 @@ mod tests {
             );
         }
         Ok(source)
-    }
-
-    /// Require the rehearsal-owned TUI copy to preserve both notice files and nested sources.
-    #[test]
-    fn copy_tui_runtime_copies_both_notices_and_recursive_sources() -> Result<()> {
-        let scratch = ScratchDirectory::create()?;
-        let root = scratch.path().join("source");
-        let tui = root.join(TUI_PACKAGE);
-        for file in [
-            "package.json",
-            "bun.lock",
-            "bunfig.toml",
-            "tsconfig.json",
-            "LICENSE",
-            "UPSTREAM.md",
-            "NOTICE",
-        ] {
-            write_fixture_file(&tui.join(file), b"fixture\n")?;
-        }
-        write_fixture_file(&root.join("THIRD_PARTY_NOTICES"), b"root notice\n")?;
-        write_fixture_file(&tui.join("src/components/Marker.tsx"), b"nested source\n")?;
-
-        let runtime = scratch.path().join("runtime");
-        copy_tui_runtime(&root, &runtime)?;
-        assert_same_file(
-            &tui.join("NOTICE"),
-            &runtime.join("NOTICE"),
-            "rehearsal TUI NOTICE",
-        )?;
-        assert_same_file(
-            &root.join("THIRD_PARTY_NOTICES"),
-            &runtime.join("THIRD_PARTY_NOTICES"),
-            "rehearsal root THIRD_PARTY_NOTICES",
-        )?;
-        assert_same_file(
-            &tui.join("src/components/Marker.tsx"),
-            &runtime.join("src/components/Marker.tsx"),
-            "rehearsal nested TUI source",
-        )?;
-        Ok(())
-    }
-
-    /// Require package layout validation to check the TUI notice independently of the root notice.
-    #[test]
-    fn verify_package_layout_requires_tui_notice() -> Result<()> {
-        let scratch = ScratchDirectory::create()?;
-        let package_root = write_package_fixture(&scratch, false)?;
-        let error = verify_package_layout(&package_root)
-            .expect_err("package layout passed with only the root notice present");
-        assert!(
-            error.to_string().contains("hya-tui-ts/NOTICE"),
-            "unexpected layout error: {error:#}"
-        );
-        Ok(())
-    }
-
-    /// Require package layout validation to check root notices independently.
-    #[test]
-    fn verify_package_layout_requires_root_notice() -> Result<()> {
-        let scratch = ScratchDirectory::create()?;
-        let package_root = write_package_fixture(&scratch, true)?;
-        fs::remove_file(package_root.join("lib/hya/hya-tui-ts/THIRD_PARTY_NOTICES"))
-            .context("remove root notice fixture")?;
-        let error = verify_package_layout(&package_root)
-            .expect_err("package layout passed without root THIRD_PARTY_NOTICES");
-        assert!(
-            error.to_string().contains("THIRD_PARTY_NOTICES"),
-            "unexpected layout error: {error:#}"
-        );
-        Ok(())
-    }
-
-    /// Require archive validation to list the TUI notice independently of the root notice.
-    #[test]
-    fn verify_archive_listing_requires_tui_notice() -> Result<()> {
-        let scratch = ScratchDirectory::create()?;
-        let package_root = write_package_fixture(&scratch, false)?;
-        let archive = scratch.path().join("release.tar.gz");
-        let args = vec![
-            "-czf".to_owned(),
-            archive.display().to_string(),
-            "-C".to_owned(),
-            scratch.path().display().to_string(),
-            TEST_PACKAGE.to_owned(),
-        ];
-        run_checked(OsStr::new("tar"), &args, scratch.path(), &[], &[])?;
-
-        let error = verify_archive_listing(scratch.path(), &archive, TEST_PACKAGE, &scratch)
-            .expect_err("archive listing passed without the packaged TUI notice");
-        assert!(
-            error.to_string().contains("hya-tui-ts/NOTICE"),
-            "unexpected archive error: {error:#}"
-        );
-        assert!(package_root.is_dir());
-        Ok(())
-    }
-
-    /// Require archive validation to list root notices independently.
-    #[test]
-    fn verify_archive_listing_requires_root_notice() -> Result<()> {
-        let scratch = ScratchDirectory::create()?;
-        let package_root = write_package_fixture(&scratch, true)?;
-        fs::remove_file(package_root.join("lib/hya/hya-tui-ts/THIRD_PARTY_NOTICES"))
-            .context("remove root notice fixture")?;
-        let archive = scratch.path().join("release.tar.gz");
-        let args = vec![
-            "-czf".to_owned(),
-            archive.display().to_string(),
-            "-C".to_owned(),
-            scratch.path().display().to_string(),
-            TEST_PACKAGE.to_owned(),
-        ];
-        run_checked(OsStr::new("tar"), &args, scratch.path(), &[], &[])?;
-        let error = verify_archive_listing(scratch.path(), &archive, TEST_PACKAGE, &scratch)
-            .expect_err("archive listing passed without root THIRD_PARTY_NOTICES");
-        assert!(
-            error.to_string().contains("THIRD_PARTY_NOTICES"),
-            "unexpected archive error: {error:#}"
-        );
-        Ok(())
-    }
-
-    /// Require the packaged smoke comparison to compare the TUI notice bytes, not only its presence.
-    #[test]
-    fn smoke_packaged_release_requires_tui_notice_byte_match() -> Result<()> {
-        let scratch = ScratchDirectory::create()?;
-        let (package_root, source_runtime, fake_bin) = write_smoke_fixture(&scratch)?;
-        let _environment_lock = process_environment_lock();
-        let _path_guard = PathGuard::prepend(&fake_bin)?;
-        let result = smoke_packaged_release(
-            &package_root,
-            &source_runtime,
-            &package_root,
-            &scratch,
-            "0.36.9",
-        );
-        let error = match result {
-            Ok(()) => bail!("packaged smoke passed with mismatched TUI NOTICE bytes"),
-            Err(error) => error,
-        };
-        assert!(
-            error
-                .to_string()
-                .contains("archived TUI NOTICE differs from its source"),
-            "unexpected smoke error: {error:#}"
-        );
-        Ok(())
-    }
-
-    /// Require the packaged smoke comparison to byte-compare the root notice independently.
-    #[test]
-    fn smoke_packaged_release_requires_root_notice_byte_match() -> Result<()> {
-        let scratch = ScratchDirectory::create()?;
-        let (package_root, source_runtime, fake_bin) = write_smoke_fixture(&scratch)?;
-        let runtime = package_root.join("lib/hya/hya-tui-ts");
-        copy_file(&source_runtime.join("NOTICE"), &runtime.join("NOTICE"))?;
-        write_fixture_file(
-            &runtime.join("THIRD_PARTY_NOTICES"),
-            b"mismatched root notice\n",
-        )?;
-        let _environment_lock = process_environment_lock();
-        let _path_guard = PathGuard::prepend(&fake_bin)?;
-        let result = smoke_packaged_release(
-            &package_root,
-            &source_runtime,
-            &package_root,
-            &scratch,
-            "0.36.9",
-        );
-        let error = match result {
-            Ok(()) => bail!("packaged smoke passed with mismatched root notice bytes"),
-            Err(error) => error,
-        };
-        assert!(
-            error
-                .to_string()
-                .contains("archived TUI THIRD_PARTY_NOTICES differs from its source"),
-            "unexpected smoke error: {error:#}"
-        );
-        Ok(())
-    }
-
-    /// Write one fixture file and create its parent directory when needed.
-    fn write_fixture_file(path: &Path, contents: &[u8]) -> Result<()> {
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("create fixture parent {}", parent.display()))?;
-        }
-        fs::write(path, contents).with_context(|| format!("write fixture {}", path.display()))?;
-        Ok(())
-    }
-
-    /// Build a complete package tree with an optional TUI-specific notice.
-    fn write_package_fixture(scratch: &ScratchDirectory, tui_notice: bool) -> Result<PathBuf> {
-        let package_root = scratch.path().join(TEST_PACKAGE);
-        for binary in ["hya", "hya-backend", "hya-ts"] {
-            write_fixture_file(&package_root.join("bin").join(binary), b"fixture\n")?;
-        }
-
-        let runtime = package_root.join("lib/hya/hya-tui-ts");
-        for path in [
-            "package.json",
-            "bun.lock",
-            "bunfig.toml",
-            "tsconfig.json",
-            "LICENSE",
-            "UPSTREAM.md",
-            "src/main.tsx",
-            "src/hya/coding-tool-presentation.tsx",
-            "node_modules/@opencode-ai/plugin/package.json",
-            "node_modules/@opencode-ai/sdk/package.json",
-            "node_modules/@opencode-ai/sdk/dist/v2/client.js",
-        ] {
-            write_fixture_file(&runtime.join(path), b"fixture\n")?;
-        }
-        write_fixture_file(&runtime.join("THIRD_PARTY_NOTICES"), b"root notice\n")?;
-        if tui_notice {
-            write_fixture_file(&runtime.join("NOTICE"), b"tui notice\n")?;
-        }
-        write_fixture_file(
-            &runtime.join("node_modules/@opencode-ai/sdk/package.json"),
-            br#"{"exports":{"./v2/client":"./dist/v2/client.js"}}"#,
-        )?;
-
-        let compat = package_root.join("lib/hya/compat-adapter");
-        for path in [
-            "package.json",
-            "bun.lock",
-            "src/main.ts",
-            "node_modules/@opencode-ai/plugin/package.json",
-            "node_modules/@opencode-ai/sdk/package.json",
-        ] {
-            write_fixture_file(&compat.join(path), b"fixture\n")?;
-        }
-        write_fixture_file(
-            &package_root.join("examples/hya-argus-example.hyabundle"),
-            b"example\n",
-        )?;
-        Ok(package_root)
-    }
-
-    /// Build binaries, runtimes, and a fake Bun executable for the smoke contract test.
-    fn write_smoke_fixture(scratch: &ScratchDirectory) -> Result<(PathBuf, PathBuf, PathBuf)> {
-        let package_root = write_package_fixture(scratch, true)?;
-        let source_runtime = scratch.path().join("source-runtime");
-        for path in ["LICENSE", "UPSTREAM.md"] {
-            write_fixture_file(&source_runtime.join(path), b"fixture\n")?;
-        }
-        write_fixture_file(
-            &source_runtime.join("THIRD_PARTY_NOTICES"),
-            b"root notice\n",
-        )?;
-        write_fixture_file(&source_runtime.join("NOTICE"), b"source TUI notice\n")?;
-        write_fixture_file(
-            &package_root.join("lib/hya/hya-tui-ts/NOTICE"),
-            b"packaged TUI notice\n",
-        )?;
-
-        write_executable(
-            &package_root.join("bin/hya"),
-            b"#!/usr/bin/env bash\nset -euo pipefail\ncase \"${1:-}\" in\n  --version) printf '%s\\n' 'hya 0.36.9'; exit 0 ;;\n  --help) exit 0 ;;\nesac\nproject=\"${1:?}\"\nshift\nserver=\"\"\nbun=\"\"\nwhile [[ $# -gt 0 ]]; do\n  case \"$1\" in\n    --server) server=$2; shift 2 ;;\n    --bun) bun=$2; shift 2 ;;\n    *) shift ;;\n  esac\ndone\nruntime=\"$(cd \"$(dirname \"$0\")/../lib/hya/hya-tui-ts\" && pwd -P)\"\nproject=\"$(cd \"$project\" && pwd -P)\"\ncd \"$runtime\"\nexec \"$bun\" src/main.tsx --url \"$server\" --project \"$project\"\n",
-        )?;
-        write_executable(
-            &package_root.join("bin/hya-backend"),
-            b"#!/usr/bin/env bash\nset -euo pipefail\ntest \"${1:-}\" = --help\n",
-        )?;
-        write_executable(
-            &package_root.join("bin/hya-ts"),
-            b"#!/usr/bin/env bash\nset -euo pipefail\ntest \"${1:-}\" = --help\n",
-        )?;
-
-        let fake_bin = scratch.path().join("fake-bin");
-        write_executable(
-            &fake_bin.join("bun"),
-            b"#!/usr/bin/env bash\nset -euo pipefail\nif [[ \"${1:-}\" == run ]]; then\n  printf '%s\\n' '{\"protocol_version\":1,\"hooks\":[],\"tools\":[]}' '{\"id\":2,\"result\":{}}'\nfi\n",
-        )?;
-        Ok((package_root, source_runtime, fake_bin))
-    }
-
-    /// Write an executable fixture script with Unix user-execute permissions.
-    fn write_executable(path: &Path, contents: &[u8]) -> Result<()> {
-        write_fixture_file(path, contents)?;
-        set_executable(path)
-    }
-
-    /// Serialize tests that temporarily replace the process PATH.
-    fn process_environment_lock() -> MutexGuard<'static, ()> {
-        match PROCESS_ENV_LOCK.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        }
-    }
-
-    /// Restore PATH after one test that prepends a fixture executable directory.
-    struct PathGuard {
-        previous: Option<OsString>,
-    }
-
-    impl PathGuard {
-        /// Prepend one directory to PATH and retain the prior value for restoration.
-        fn prepend(directory: &Path) -> Result<Self> {
-            let previous = env::var_os("PATH");
-            let path = match previous.as_ref() {
-                Some(previous) => {
-                    let mut path = directory.as_os_str().to_os_string();
-                    path.push(":");
-                    path.push(previous);
-                    path
-                }
-                None => directory.as_os_str().to_os_string(),
-            };
-            // SAFETY: the process-environment lock serializes this test's PATH mutation.
-            unsafe { env::set_var("PATH", path) };
-            Ok(Self { previous })
-        }
-    }
-
-    impl Drop for PathGuard {
-        /// Restore PATH to its value before the fixture was installed.
-        fn drop(&mut self) {
-            // SAFETY: the guard remains held until after PATH restoration.
-            unsafe {
-                match &self.previous {
-                    Some(previous) => env::set_var("PATH", previous),
-                    None => env::remove_var("PATH"),
-                }
-            }
-        }
     }
 }

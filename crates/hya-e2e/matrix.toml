@@ -297,14 +297,6 @@ tags = ["pr", "providers", "catalog", "offline"]
 timeout_secs = 180
 
 [[scenario]]
-id = "T3.2"
-title = "TUI multi-agent task presentation"
-track = "T"
-path = "packages/hya-tui-ts/test/task-presentation.test.ts"
-tags = ["pr", "tui", "multi-agent"]
-timeout_secs = 30
-
-[[scenario]]
 id = "T2.16"
 title = "agent model preference steers spawned subagent model"
 track = "P"
@@ -384,6 +376,10 @@ timeout_secs = 0
 [[retired]]
 id = "T3.1"
 reason = "verified the old TUI against the deleted Compat surface; retired with the surface (test file removed)"
+
+[[retired]]
+id = "T3.2"
+reason = "the legacy TypeScript TUI was dropped from the repository; the whole packages/hya-tui-ts suite was removed with it (Track T returns with the future hya-sdk-v1 TUI)"
 
 [[retired]]
 id = "T3.3"

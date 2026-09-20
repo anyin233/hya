@@ -27,6 +27,13 @@ even when a test fails.
 
 ## Workspace totals (Track I + unit tests; `hya-e2e` excluded)
 
+> Baseline note (added later): the legacy TypeScript TUI was removed from the
+> repository after this measurement, and Track T was retired with it. Four
+> crates that existed at measurement time (the launcher shim/supervisor pair,
+> the legacy Compat SDK, and the legacy in-process transport) were deleted in
+> that cleanup; their rows are no longer listed below, but the original
+> totals include them.
+
 | Metric | Total | Missed | Covered |
 | --- | ---: | ---: | ---: |
 | Lines | 63,386 | 9,155 | **85.56%** |
@@ -42,12 +49,8 @@ even when a test fails.
 | 51.8% | 1,461 | 704 | hya-backend |
 | 61.7% | 940 | 360 | hya-updater |
 | 64.3% | 709 | 253 | xtask |
-| 67.9% | 2,195 | 705 | hya-sdk |
-| 76.9% | 13 | 3 | hya |
-| 79.6% | 530 | 108 | hya-ts |
 | 82.3% | 1,986 | 351 | hya-bundle |
 | 83.9% | 1,615 | 260 | hya-plugin |
-| 84.8% | 191 | 29 | hya-native |
 | 85.3% | 2,672 | 393 | hya-store |
 | 87.2% | 18,169 | 2,324 | hya-app |
 | 87.2% | 10,908 | 1,391 | hya-core |
