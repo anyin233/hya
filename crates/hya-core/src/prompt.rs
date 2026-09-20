@@ -154,8 +154,8 @@ const TEAM_QUICK_REFERENCE: &str = "## Team quick reference\n\
 - New mail arrives automatically appended to tool results (`[NEW MAIL]`) — do NOT poll `list_channel` or sleep waiting for mail; children's live status is in `list_channel`'s team section (busy + last-heartbeat age).\n\
 - `report` is ONLY for subagents to end their own task. As the main agent NEVER call `report` — deliver your final answer as normal text.\n\
 - Read mail history with `read channel://<id>` (latest) or `channel://<id>?last=N`; `list_channel` shows channels + unread counts. A `#id` is never a file path.\n\
-- `dm`: omit `to` to reach your parent; name a child handle to message (or revive an archived child with its saved state). `broadcast`: one-way to all your direct children.\n\
-- `kill` only works on LIVE agents. Archived agents are gone from the roster — check `list_channel`/`search_agent` first; to reach one again, `dm` its handle.";
+- `send` covers all mail: `#channel` posts on that channel (a group channel broadcasts to your unit — leader-only); a bare handle DMs that vertical peer (`^parent` reaches your parent; an archived child revives with its saved state). Omit the channel to use your default: the unit you lead, else your parent.\n\
+- `kill` only works on LIVE agents. Archived agents are gone from the roster — check `list_channel`/`search_agent` first; to reach one again, `send` its handle.";
 
 /// Compose agent base + Environment + discovered project context files.
 #[must_use]
@@ -254,6 +254,34 @@ mod tests {
                 !prompt.contains("NEVER call `report`"),
                 "subagent prompt `{}` must not forbid report",
                 agent.id
+            );
+        }
+    }
+
+    /// Every tool-shaped backtick token in the team quick reference must
+    /// resolve in the CURRENT builtin registry (canonical or hidden alias).
+    /// Non-tool spellings (channel URLs, sentinels, notices) are exempt.
+    #[test]
+    fn quick_reference_tool_tokens_resolve_in_the_registry() {
+        let registry = hya_tool::ToolRegistry::builtins();
+        let out = build_system_prompt("", &env(), &[]);
+        let reference = out
+            .split("## Team quick reference")
+            .nth(1)
+            .unwrap_or_default();
+        for token in reference.split('`').skip(1).step_by(2) {
+            let token = token.trim();
+            let is_non_tool_spelling = token.is_empty()
+                || token.contains("://")
+                || token.starts_with('#')
+                || token.starts_with('[')
+                || token.starts_with('^');
+            if is_non_tool_spelling {
+                continue;
+            }
+            assert!(
+                registry.get(token).is_some(),
+                "quick reference names `{token}` but no such tool exists"
             );
         }
     }
