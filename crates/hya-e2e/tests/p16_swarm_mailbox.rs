@@ -31,15 +31,15 @@ fn resident_member(marker: &str, directive: &str) -> Value {
     })
 }
 
-/// T2.5 (vertical DM): a child's dm to its parent (handle omitted → parent)
-/// is delivered into the parent's next model request.
+/// T2.5 (vertical DM): a child's send with no channel defaults to the
+/// parent DM and is delivered into the parent's next model request.
 #[tokio::test]
-async fn t2_5_dm_to_parent_is_delivered_into_the_parents_next_turn() {
+async fn t2_5_send_default_to_parent_is_delivered_into_the_parents_next_turn() {
     let env = E2eEnvBuilder::new()
         .route(
             SYS_CHILD,
             vec![
-                tool_step("dm", json!({ "body": "CHILD_HELLO_PARENT" })),
+                tool_step("send", json!({ "body": "CHILD_HELLO_PARENT" })),
                 text_step("CHILD_DONE"),
             ],
         )
@@ -77,9 +77,10 @@ async fn t2_5_dm_to_parent_is_delivered_into_the_parents_next_turn() {
         });
 }
 
-/// T2.6 (broadcast): the root's broadcast reaches its direct child.
+/// T2.6 (broadcast): the root's send with no channel defaults to its unit
+/// group channel and reaches its direct child.
 #[tokio::test]
-async fn t2_6_broadcast_reaches_the_direct_child() {
+async fn t2_6_send_default_broadcast_reaches_the_direct_child() {
     let env = E2eEnvBuilder::new()
         .route(
             SYS_CHILD,
@@ -95,7 +96,7 @@ async fn t2_6_broadcast_reaches_the_direct_child() {
                     ]}),
                 ),
                 text_step("ROOT_SPAWNED"),
-                tool_step("broadcast", json!({ "body": "ALL_HANDS_BROADCAST" })),
+                tool_step("send", json!({ "body": "ALL_HANDS_BROADCAST" })),
                 text_step("ROOT_DONE"),
             ],
         )

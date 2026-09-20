@@ -69,13 +69,14 @@ pub enum MailboxRequest {
         /// Host reply with receipt or rejection.
         reply: oneshot::Sender<Result<MailReceipt, String>>,
     },
-    /// Post a one-way announcement on the unit's group channel.
-    Announce {
+    /// Send on the acting agent's default channel: the unit group pipe the
+    /// sender leads (broadcast), else the parent DM pair. Routed engine-side.
+    SendDefault {
         /// Sending session.
         from: SessionId,
         /// Optional actor claim for the send.
         actor_claim: Option<ActorClaim>,
-        /// Announcement body.
+        /// Body text.
         body: String,
         /// Host reply with receipt or rejection.
         reply: oneshot::Sender<Result<MailReceipt, String>>,
@@ -258,15 +259,11 @@ impl MailboxPlane {
         .map_err(MailboxError::Rejected)
     }
 
-    /// Send private mail to a vertical peer (ADR-0016 dm).
-    pub async fn dm(&self, to: MailEndpoint, body: String) -> Result<MailReceipt, MailboxError> {
-        self.send(to, MailKind::Message, body).await
-    }
-
-    /// Post a one-way announcement on the unit's group channel.
-    pub async fn announce(&self, body: String) -> Result<MailReceipt, MailboxError> {
+    /// Send on the acting agent's default channel (unit group pipe when the
+    /// sender leads one, else the parent DM pair).
+    pub async fn send_default(&self, body: String) -> Result<MailReceipt, MailboxError> {
         let from = self.session.ok_or(MailboxError::Unavailable)?;
-        self.request(|reply| MailboxRequest::Announce {
+        self.request(|reply| MailboxRequest::SendDefault {
             from,
             actor_claim: self.actor_claim,
             body,
@@ -333,30 +330,61 @@ fn map_err(err: MailboxError) -> ToolError {
     }
 }
 
-pub(crate) struct DmTool;
+pub(crate) struct SendTool;
 
 #[derive(Deserialize)]
-struct DmInput {
-    #[serde(default)]
-    to: String,
+struct SendInput {
+    /// Channel address: `#channel`, a bare channel id (`DM-…`/`announce-…`),
+    /// a vertical peer handle, or `^parent`. Omit to use the default channel.
+    #[serde(default, alias = "to")]
+    channel: String,
     body: String,
 }
 
+/// Resolve the input's channel spelling to an endpoint; `None` means the
+/// sender's role-default channel.
+fn send_endpoint(raw: &str) -> Option<MailEndpoint> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    if raw == "^parent" || raw == "^" {
+        return Some(MailEndpoint::Handle("^parent".to_string()));
+    }
+    if let Some(channel) = raw.strip_prefix('#') {
+        return Some(MailEndpoint::Channel(channel.to_string()));
+    }
+    if raw.starts_with("DM-") || raw.starts_with("announce-") {
+        return Some(MailEndpoint::Channel(raw.to_string()));
+    }
+    Some(MailEndpoint::Handle(raw.to_string()))
+}
+
+fn send_address(endpoint: &MailEndpoint) -> String {
+    match endpoint {
+        MailEndpoint::Handle(handle) => handle.clone(),
+        MailEndpoint::Channel(channel) => format!("#{channel}"),
+    }
+}
+
 #[async_trait]
-impl Tool for DmTool {
+impl Tool for SendTool {
     fn name(&self) -> &str {
-        "dm"
+        "send"
     }
 
     fn schema(&self) -> ToolSchema {
         obj_schema(
-            "dm",
-            "Send a private message over your DM channel with one vertical peer. \
-             As a subordinate this reaches your parent (the only peer you have); \
-             as a leader name one of your direct children. Mail to an archived \
-             child revives it with its saved state. Siblings are not addressable.",
+            "send",
+            "Send a message on one channel; the channel's own nature decides the \
+             delivery. `#channel` (or a bare `DM-…`/`announce-…` id from \
+             `list_channel`) posts on that channel: group channels broadcast to \
+             the unit (leader-only), DM channels stay private. A bare handle \
+             sends private mail to that vertical peer (`^parent` for your \
+             parent; mail to an archived child revives it). Omit `channel` to \
+             use your default: the unit you lead, or your parent.",
             json!({
-                "to": {"type": "string", "description": "A direct child's handle (leaders); omit to reach your parent"},
+                "channel": {"type": "string", "description": "`#channel`, a channel id, a peer handle, or `^parent`; omit for the default"},
                 "body": {"type": "string", "description": "The message body"}
             }),
             &["body"],
@@ -364,22 +392,21 @@ impl Tool for DmTool {
     }
 
     async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError> {
-        let input: DmInput =
+        let input: SendInput =
             serde_json::from_value(input).map_err(|e| ToolError::Input(e.to_string()))?;
         if input.body.trim().is_empty() {
             return Err(ToolError::Input("message body is empty".to_string()));
         }
-        let to = if input.to.trim().is_empty() {
-            // Subordinate default: the parent — the only vertical peer upward.
-            MailEndpoint::Handle("^parent".to_string())
-        } else {
-            MailEndpoint::Handle(input.to.trim().to_string())
-        };
-        let receipt = ctx.mailbox.dm(to, input.body).await.map_err(map_err)?;
-        let address = match &receipt.to {
-            MailEndpoint::Handle(handle) => handle.clone(),
-            MailEndpoint::Channel(channel) => format!("#{channel}"),
-        };
+        let receipt = match send_endpoint(&input.channel) {
+            Some(endpoint) => {
+                ctx.mailbox
+                    .send(endpoint, MailKind::Message, input.body)
+                    .await
+            }
+            None => ctx.mailbox.send_default(input.body).await,
+        }
+        .map_err(map_err)?;
+        let address = send_address(&receipt.to);
         Ok(json!({
             "title": format!("Sent to {address}"),
             "output": format!(
@@ -392,55 +419,6 @@ impl Tool for DmTool {
             "metadata": {
                 "from": receipt.from,
                 "to": address,
-                "recipients": receipt.recipients,
-            },
-        }))
-    }
-}
-
-pub(crate) struct BroadcastTool;
-
-#[derive(Deserialize)]
-struct BroadcastInput {
-    body: String,
-}
-
-#[async_trait]
-impl Tool for BroadcastTool {
-    fn name(&self) -> &str {
-        "broadcast"
-    }
-
-    fn schema(&self) -> ToolSchema {
-        obj_schema(
-            "broadcast",
-            "Post a one-way announcement on your unit's group channel: every \
-             agent you directly lead hears it, and nobody further down. Your \
-             reports answer with ordinary `dm` mail to you.",
-            json!({
-                "body": {"type": "string", "description": "The announcement body"}
-            }),
-            &["body"],
-        )
-    }
-
-    async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError> {
-        let input: BroadcastInput =
-            serde_json::from_value(input).map_err(|e| ToolError::Input(e.to_string()))?;
-        if input.body.trim().is_empty() {
-            return Err(ToolError::Input("announcement body is empty".to_string()));
-        }
-        let receipt = ctx.mailbox.announce(input.body).await.map_err(map_err)?;
-        Ok(json!({
-            "title": format!("Announced to {} report(s)", receipt.recipients),
-            "output": format!(
-                "Announced from {} to {} direct report{}.",
-                receipt.from,
-                receipt.recipients,
-                if receipt.recipients == 1 { "" } else { "s" }
-            ),
-            "metadata": {
-                "from": receipt.from,
                 "recipients": receipt.recipients,
             },
         }))

@@ -22,7 +22,7 @@ use crate::interaction::InteractionPlane;
 use crate::invalid::InvalidTool;
 use crate::lsp::{LspPlane, LspTool};
 use crate::lsp_path::{absolutize, display_path, normalize, resolve_file};
-use crate::mailbox::{BroadcastTool, DmTool, ListChannelTool, MailboxPlane, SearchAgentTool};
+use crate::mailbox::{ListChannelTool, MailboxPlane, SearchAgentTool, SendTool};
 use crate::permission::{
     Action, Invocation, Mode, PermissionError, PermissionPlane, Resource, glob_match,
 };
@@ -460,8 +460,7 @@ impl ToolRegistry {
             Arc::new(ListAgentsTool),
             Arc::new(TaskTool),
             Arc::new(WorkflowTool),
-            Arc::new(DmTool),
-            Arc::new(BroadcastTool),
+            Arc::new(SendTool),
             Arc::new(ListChannelTool),
             Arc::new(SearchAgentTool),
             Arc::new(crate::lifecycle::ReportTool),
