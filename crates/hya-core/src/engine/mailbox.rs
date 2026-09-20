@@ -199,8 +199,7 @@ impl SessionEngine {
                     .await
                     .ok()
                     .and_then(|projection| {
-                        dm_channel_between(&projection, &from, &parent)
-                            .map(MailEndpoint::Channel)
+                        dm_channel_between(&projection, &from, &parent).map(MailEndpoint::Channel)
                     });
                 dm_channel.unwrap_or(MailEndpoint::Handle(parent))
             }
