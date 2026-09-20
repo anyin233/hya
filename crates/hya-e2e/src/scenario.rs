@@ -50,6 +50,7 @@ pub struct E2eEnvBuilder {
     project_files: Vec<(String, Vec<u8>)>,
     preinstall_bundles: Vec<PathBuf>,
     additional_models: Vec<String>,
+    extra_env: Vec<(String, String)>,
 }
 
 impl Default for E2eEnvBuilder {
@@ -66,6 +67,7 @@ impl Default for E2eEnvBuilder {
             project_files: Vec::new(),
             preinstall_bundles: Vec::new(),
             additional_models: Vec::new(),
+            extra_env: Vec::new(),
         }
     }
 }
@@ -120,6 +122,13 @@ impl E2eEnvBuilder {
     #[must_use]
     pub fn binary(mut self, path: PathBuf) -> Self {
         self.binary = Some(path);
+        self
+    }
+
+    /// Pass an extra environment variable to the backend process.
+    #[must_use]
+    pub fn backend_env(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
+        self.extra_env.push((name.into(), value.into()));
         self
     }
 
@@ -187,6 +196,7 @@ impl E2eEnvBuilder {
         spec.skill_files = self.skill_files;
         spec.project_files = self.project_files;
         spec.preinstall_bundles = self.preinstall_bundles;
+        spec.env = self.extra_env;
         let backend = tokio::task::spawn_blocking(move || BackendProcess::start(&spec))
             .await
             .map_err(|e| E2eError::Other(format!("join backend spawn: {e}")))??;
