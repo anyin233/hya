@@ -1,79 +1,39 @@
 # Troubleshooting
 
-## The TUI Does Not Start
+## There Is No Interactive Command
 
-Bare `hya` starts the TypeScript/OpenTUI frontend. Use a real terminal for the
-interactive UI, or run a headless command:
+There is currently no interactive TUI: the legacy TypeScript TUI was removed,
+and bare `hya-backend` (no subcommand) prints a version banner plus guidance
+and exits. Drive the backend headlessly or over the API instead:
 
 ```sh
 hya-backend exec "summarize this repo"
+hya-backend serve --bind 127.0.0.1:8080
 ```
 
-If startup reports that adjacent `hya-ts` is missing or the TUI runtime cannot
-be located, reinstall with `./install.sh` (see [Getting Started](getting-started.md)
-for flags such as `--bin-dir` and permission preflight); installing only the
-`hya` Cargo package is unsupported. If it reports `failed to launch Bun`,
-install Bun or pass its path with `hya --bun <PATH>`.
-
-### Startup loading overlay
-
-When the shell is not yet ready, after **500 ms** a bottom-centered spinner
-appears: first `Loading plugins...`, then `Finishing startup...` once plugins
-are ready. The overlay stays on screen for at least **3 s** after it first
-appears so the flash is readable
-([`startup-loading.tsx`](../packages/hya-tui-ts/src/upstream/component/startup-loading.tsx)).
-
-Set `HYA_FAST_BOOT` to any non-empty value to suppress the overlay entirely
-(useful when measuring startup). See [Diagnosing Slow Startup](#diagnosing-slow-startup).
-
-### Error boundary (crash screen)
-
-An unhandled render error replaces the UI with a full-screen crash view
-([`error-component.tsx`](../packages/hya-tui-ts/src/upstream/component/error-component.tsx)):
-message and stack, themed for the detected light/dark mode, plus a clickable
-**Reset TUI** control and **Exit**. Reset re-mounts the app without restarting
-the process, so the backend session can survive. Ctrl+C on that screen exits.
+See the [CLI Reference](cli.md) and the [Protocol guide](protocol/README.md).
 
 ## Diagnosing Slow Startup
 
 Set `HYA_STARTUP_TRACE=1` (the only truthy values are exactly `1` or `true`,
-case-insensitive) to emit structured startup marks on **stderr** from the Rust
-launcher, the backend serve path, and the TypeScript TUI.
+case-insensitive) to have `hya-backend serve` emit a structured startup mark on
+**stderr** after the listen line:
 
 ```sh
-HYA_STARTUP_TRACE=1 hya . 2>trace.log
+HYA_STARTUP_TRACE=1 hya-backend serve --bind 127.0.0.1:0 2>trace.log
 ```
 
-Each mark is one JSON line with wall-clock (and on the TS side, monotonic)
-timestamps. Useful marks, roughly in emission order:
+Each mark is one JSON line with a wall-clock timestamp:
 
 | Mark | Source | Notes |
 | --- | --- | --- |
-| `hya_ts_start` | `hya-ts` | Launcher entry. |
-| `backend_spawn` | `hya-ts` | Only when the launcher auto-spawns `hya-backend`. |
-| `backend_listen` | `hya-ts` / `hya-backend` | Backend announced its listen URL. |
-| `bun_entry` | TS TUI | Bun entrypoint started. |
-| `theme_resolved` | TS TUI | Terminal theme mode resolved. |
-| `shell_paint` | TS TUI | Detail `immediate` by default; `routes_ready` when `HYA_SYNC_PLUGIN_START` gates shell routes. |
-| `plugin_host_done` | TS TUI | Builtin plugin host finished start. |
-| `sync_partial` | TS TUI | First partial sync. |
-| `sync_complete` | TS TUI | Sync complete. |
+| `backend_listen` | `hya-backend` | Backend announced its listen URL. |
 
-Related comparison flags:
+For repeatable startup measurements use the benchmark task:
 
-- `HYA_SHOW_TTFD` — on-screen time-to-first-draw overlay when set to `1`/`true`.
-- `HYA_FAST_BOOT` — any non-empty value skips the loading overlay.
-
-## Copy/Paste Does Not Work
-
-Clipboard behaviour
-([`clipboard.ts`](../packages/hya-tui-ts/src/upstream/clipboard.ts)):
-
-- When `TMUX` or `STY` is set, OSC-52 clipboard sequences are wrapped in a
-  tmux/screen passthrough. A **stale** `TMUX` variable outside a real tmux
-  session can break that passthrough.
-- When `WAYLAND_DISPLAY` is set, hya prefers `wl-copy` / `wl-paste` over X11
-  tools (`xclip` / `xsel`). Install `wl-clipboard` on Wayland desktops.
+```sh
+cargo run -p xtask -- startup-bench
+```
 
 ## Provider Call Fails with `http: <status>: ...`
 

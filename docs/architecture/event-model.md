@@ -6,9 +6,9 @@ It is shared by the engine, store, provider layer, and server, which fold
 this projection directly either: `hya-sdk-v1`'s `V1SessionMirror` folds the
 curated v1 `StreamFrame`/read shapes into an equivalent client-side view, and
 server-side reads (`ListMessages`, `GetSessionTodo`, …) are produced by folding
-this same projection before serialization. The legacy TypeScript TUI consumed
-the deleted Compat SDK/SyncProvider surface and is broken at runtime pending
-its `hya-sdk-v1` rewrite.
+this same projection before serialization. The legacy TypeScript TUI (now
+removed) consumed the deleted Compat SDK/SyncProvider surface; a replacement
+frontend built on `hya-sdk-v1` may be built later.
 
 ## Strong Ids
 
@@ -198,8 +198,8 @@ string `output` field and falls back to serialized JSON only when that field is
 absent.
 
 The projected `ToolPartState::Completed` value is therefore sufficient for a
-TUI to render a completed coding block after live delivery or Session replay.
-The hya-owned presentation layer reads projected SDK state only; it does not
+client to render a completed coding block after live delivery or Session replay.
+The presentation layer reads projected SDK state only; it does not
 read or fold raw Events. A malformed or compacted result remains a typed
 completed/error value for the projection and uses the presentation fallback,
 not arbitrary input-key rendering. `env` values and ANSI terminal control data

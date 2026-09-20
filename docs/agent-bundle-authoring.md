@@ -176,7 +176,7 @@ Filesystem `SKILL.md` discovery (outside bundles) is documented in
 | --- | --- | --- |
 | `id` | yes | Stable agent id: the public `AgentName` bytes (events, projection, resume) and the selector name. Also addressable as `bundle:<bundle_id>/agent/<id>`. |
 | `description` | no | Human/model-facing text in selectors and spawn menus; omitting it leaves the agent unlabeled in pickers. |
-| `role` | yes | `main` (TUI-selectable) or `subagent` (hidden from direct selector). Selector only — spawn uses `can_spawn`. |
+| `role` | yes | `main` (selectable in client selectors) or `subagent` (hidden from direct selector). Selector only — spawn uses `can_spawn`. |
 | `color` | no | Optional display color on the prepared agent. |
 | `prompt` | conditional | Path to prompt file, or omitted when `bundle.hya.md` body supplies the prompt. |
 | `model_policy` | no | Optional `{ model, category, reasoning }` (all optional sub-fields; `deny_unknown_fields`). Per-agent model preference. |
@@ -331,8 +331,8 @@ agent:
 
 `stable_id` is the public `AgentName`; preserve its bytes for events, projection, replay, fork, and resume. `local_id` is not a replacement public identity.
 
-- `role: main` is selectable in the TUI direct selector.
-- `role: subagent` is hidden from direct TUI selection.
+- `role: main` is selectable in a client's direct selector.
+- `role: subagent` is hidden from direct client selection.
 - `role` controls selector visibility only. Agent-facing roster and ordinary spawn derive from the caller's `can_spawn` reachability, never from `role`.
 - `spawn_lifecycle` is orthogonal to `role`.
 - Empty or omitted `subagent_type` on the `task` tool normalizes to `general` before authorization.

@@ -143,7 +143,8 @@ Each mechanism records what it did on the event log:
 - `ContextStatus` — emitted once per streaming round after the ladder, with
   the occupancy the request actually carries, its source
   (provider-reported or estimated), the accounting mode, and the resolved
-  threshold. The TUI sidebar's Context panel renders this report.
+  threshold. Clients surface this report, for example in a context-usage
+  panel.
 
 ## Differences from oh-my-pi
 

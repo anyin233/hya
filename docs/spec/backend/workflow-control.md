@@ -102,7 +102,10 @@ A governed Stage failure is a successful transport response with a terminal fail
 - `hya-app`: all five commands share one catalog; exact source/revision fencing; normal Agent model/category precedence before an explicit Stage override; operation-derived idempotency including historical route outcomes; Started/Finished behavior; availability decoration.
 - `hya-tool` and backend CLI: all commands map to shared DTOs, retain `ToolOperation`, and use Finished delivery.
 - `hya-server`: native/legacy/v2 typed and slash parity; zero parent-provider calls; shared admission race tests; hydration availability; structured error mapping; dual Event delivery.
-- `hya-sdk` and `hya-native`: mirror conformance, canonical activity join, and structured non-2xx status/code/message/body preservation.
+- Client-side mirror conformance, canonical activity join, and structured
+  non-2xx status/code/message/body preservation were covered by the removed
+  legacy SDK/transport suites; that coverage returns with a `hya-sdk-v1`
+  frontend.
 
 Run the focused gate listed in
 `docs/development-history/tasks/archive/2026-08/08-28-durable-workflow-control/implement.md`

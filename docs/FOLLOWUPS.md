@@ -18,14 +18,15 @@ Reference for work intentionally left for a future pass. The pi-parity waves
   threshold) + SKILL.md skills.
 - Wave 5 — native Google (Gemini) provider + auth token store + `hya-backend login`.
 - Wave 6 — session list / branch / resume (`list_sessions`, `hya-backend sessions`,
-  `--db` / `--resume`, TUI session picker).
+  `--db`; the interactive `--resume` flag and TUI session picker shipped here were
+  removed later with the legacy TUI).
 - Wave 7 — `exec --json` and `hya-backend rpc` (stdin/stdout JSONL) integration modes.
 - Hardening — path-containment resolves symlinks on existing ancestors.
 - TUI typed-deny feedback — the permission overlay captures optional rejection
   text and sends it through `Decision::Reject { feedback }`.
 - **OAuth interactive login** — full Rust flow in `crates/hya-app/src/oauth/`
   (device-code and loopback/PKCE for `openai-codex`, Grok Build, browser open,
-  poll/refresh). CLI: `hya oauth login --provider … --type openai-codex|grok-build`
+  poll/refresh). CLI: `hya-backend oauth login --provider … --type openai-codex|grok-build`
   with `--device` / `--loopback` / `--browser` flags; see `docs/cli.md` and
   `docs/configuration.md`.
 - **`find` workdir scoping fix** — resolved against the confirmed defect below:
@@ -73,16 +74,16 @@ confirmed against the source directly.
   backpressure to the engine, so a slow plugin loses events rather than slowing
   the producer.
 - **`session.page.up` / `.down` scroll half a page.** The keybinding descriptions
-  say "one page"; the handlers use `height / 2`
-  ([`packages/hya-tui-ts/src/upstream/routes/session/index.tsx:889`](../packages/hya-tui-ts/src/upstream/routes/session/index.tsx)).
-- **`NO_MODELS_TIP` is unreachable.** Defined at
-  `packages/hya-tui-ts/src/upstream/feature-plugins/home/tips-view.tsx:31` but only
-  used as an array-index fallback that a random index into a non-empty `TIPS`
-  never triggers, so the "Configure a model to start coding" path never shows.
+  say "one page"; the handlers use `height / 2` (observed in the legacy TUI
+  package's session route, removed with that package).
+- **`NO_MODELS_TIP` is unreachable.** Defined in the legacy TUI package's home
+  tips view but only used as an array-index fallback that a random index into a
+  non-empty `TIPS` never triggers, so the "Configure a model to start coding"
+  path never shows.
 - **ADR-0006 described `/new` behaviour that was never implemented.** It claimed
-  `/new` aborts the active turn and clears prompt bookkeeping; the handler at
-  `packages/hya-tui-ts/src/upstream/app.tsx:545` only navigates home and clears
-  dialogs. The ADR now records this as a historical note.
+  `/new` aborts the active turn and clears prompt bookkeeping; the handler in
+  the legacy TUI package's app root only navigates home and clears dialogs.
+  The ADR now records this as a historical note.
 
 ### Reported by a writer, not independently confirmed
 

@@ -25,9 +25,9 @@ CLI session-store selection
 | --- | --- | --- |
 | Goal mode (`-p` / `--prompt`), `rpc` | Always in-memory (`connect_memory`) | N/A (no file path used) |
 | `exec`, `run`, `serve` | In-memory via `open_store("")` | File-backed at that path |
-| Interactive TUI (bare `hya-backend` / launcher), `sessions`, `tail-session` | **Not** in-memory: `resolve_interactive_db` remaps empty to `$XDG_STATE_HOME/hya/sessions.db` (fallback `$HOME/.local/state/hya/sessions.db`, then `./.local/state/hya/sessions.db`) and creates the directory | File-backed at the given path |
+| `sessions`, `tail-session` | **Not** in-memory: `resolve_interactive_db` remaps empty to `$XDG_STATE_HOME/hya/sessions.db` (fallback `$HOME/.local/state/hya/sessions.db`, then `./.local/state/hya/sessions.db`) and creates the directory | File-backed at the given path |
 
-So default interactive resume (`hya --continue` / `-s`) uses the durable XDG
+So the session-backed subcommands default to the durable XDG
 state database, not a fresh memory store.
 
 File-backed stores are plain SQLite. They are not encrypted and file permissions

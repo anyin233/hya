@@ -66,47 +66,9 @@ See [Testing](testing/README.md), [Process E2E](testing/process-e2e.md), and the
 [agent feature matrix](testing/agent-matrix.md). Optional CI wiring is sketched
 in [ci-agent-e2e-snippet.yml](testing/ci-agent-e2e-snippet.yml).
 
-### TypeScript frontend (Track T)
-
-From `packages/hya-tui-ts`:
-
-| Command | What it does |
-| --- | --- |
-| `bun run build` | `bun scripts/build-bundled.mjs` — emits under `dist/` (OpenTUI Solid plugin; native OpenTUI platform packages stay external). |
-| `bun run build:external` | `bun build src/main.tsx --outdir dist --target bun --packages external` — emits under `dist/` (Bun resolves `with { type: "file" }` audio imports used by attention sounds). |
-| `bun run typecheck` | `tsgo --noEmit` over `src` and `test` (`jsx: preserve`, `jsxImportSource: @opentui/solid`). |
-| `bun test` | Full package test suite (`bun test`; file list in `test/README.md`). |
-
-**Preload prerequisite.** Both the runtime and the test runner must preload
-`@opentui/solid/preload` via [`bunfig.toml`](../packages/hya-tui-ts/bunfig.toml).
-Without it, TUI JSX does not resolve — check this first when a fresh checkout
-fails to render or tests fail to compile.
-
-**Test suites** under `packages/hya-tui-ts/test/`:
-
-The package's own [`test/README.md`](../packages/hya-tui-ts/test/README.md)
-is the inventory of Bun test files. The retained suites are pure presentation
-and package-contract coverage (for example the focused `workflow-presentation`
-and `workflow-sidebar` tests); the old real-backend/PTY suites tested the
-deleted Compat surface and were removed with it.
-
-Frontend package checks:
-
-```sh
-cd packages/hya-tui-ts
-bun run typecheck
-bun test
-```
-
-**Scripts:**
-
-- `scripts/prune-sdk-server.ts` — post-install step that rewrites the installed
-  `@opencode-ai/sdk` export map down to the v2 client, deletes server/process
-  bundles, and probes that `createOpencodeClient` still imports. Re-run after any
-  SDK dependency bump (the installer runs it automatically).
-- `scripts/generate-logo-art.py` — regenerates `component/logo-art.data.ts` and
-  `util/epilogue-art.data.ts` from the 8-bit Hya wordmark PNG. Only needed when
-  the wordmark asset changes (see script header for `uv run` invocation).
+There is currently no interactive TUI (the legacy TypeScript TUI was removed;
+a replacement built on `hya-sdk-v1` may be built later), so no frontend
+TypeScript gate exists.
 
 ## Dev tasks (`xtask` package)
 
@@ -120,7 +82,7 @@ remaining argument is forwarded verbatim. The currently supported tasks are
 
 | Task | Role |
 | --- | --- |
-| `sync-compat` | Import supported MCP servers and skills from an OpenCode/Compat config into hya config / skill roots. Does not import providers or models — use `hya --import compat` for those. |
+| `sync-compat` | Import supported MCP servers and skills from an OpenCode/Compat config into hya config / skill roots. Does not import providers or models. |
 | `migrate` | Alias that dispatches to the same implementation as `sync-compat`. |
 | `gen-api` | Regenerate the `hya.v1` contract from `proto/hya/v1`: Rust types (prost/tonic/pbjson), the API reference, and OpenAPI. Uses a vendored protoc; output is committed, and the task fails when any rpc lacks its `// hya.http:` mapping or two rpcs collide. |
 | `startup-bench` | Startup latency benchmark. Honours `HYA_BACKEND_BIN` to select the binary under test. |
@@ -150,8 +112,6 @@ Use this guide when deciding where a change belongs:
 | HTTP route or SSE behavior | `hya-server` |
 | `hya.v1` contract change (proto message/rpc, error code, HTTP binding) | `hya-api` — edit `proto/hya/v1/*.proto`, then regenerate with `cargo run -p xtask -- gen-api` |
 | Typed HTTP integration | `hya-client`; new frontend integrations use `hya-sdk-v1` |
-| Terminal UI rendering and interaction | `packages/hya-tui-ts` |
-| Frontend entrypoint and process supervision | `hya`, `hya-ts` |
 | User-facing backend CLI command, config loading, server launch | `hya-backend` |
 | Process-level agent scenario (real backend + FakeLlm) | `hya-e2e` (+ matrix docs under `docs/testing/`) |
 | Dev tooling (`sync-compat`, matrix check, startup bench) | `xtask` |
@@ -164,7 +124,6 @@ Prefer crate-local tests that assert boundary behavior:
 - Store tests should replay and fold projections.
 - Core tests should exercise turn loops and stop conditions with fake providers.
 - Tool tests should cover permission behavior and output limits.
-- TUI tests should render states without requiring a live terminal.
 - Server tests should verify route behavior through the Axum router.
 
 Layer product paths on top of crate-local suites:
@@ -173,7 +132,6 @@ Layer product paths on top of crate-local suites:
 | --- | --- | --- |
 | I (in-process) | Each crate's `tests/` | Deep engine/API contracts (index authority for nested spawn, resident, etc.) |
 | P (process) | `crates/hya-e2e` | Real binary + FakeLlm: tools, permissions, skills, MCP, subagents, hyabundle |
-| T (TUI) | `packages/hya-tui-ts/test` | Frontend presentation helpers and package smoke; the old TUI's real-backend SDK suite verified the deleted Compat surface and is retired with it |
 
 Do not weaken Track P oracles to request counts or tool-call argument substrings
 alone — require disk effects, tree depth, follow-up FakeLlm tool **results**, or
@@ -194,7 +152,6 @@ When changing a boundary, update the nearest docs page:
 | Tools/permissions | [Tools and Permissions](architecture/tools-and-permissions.md) |
 | Store/schema | [Storage](architecture/storage.md) |
 | Server/client API | [Server and Client](architecture/server-client.md), [Protocol guide](protocol/README.md) |
-| TUI behavior | [TUI](architecture/tui.md), [TUI Reference](tui-reference.md), [TUI Keybindings](tui-keybindings.md) |
 | Agent process E2E / matrix | [Testing](testing/README.md), [Agent matrix](testing/agent-matrix.md) |
 
 Every new or modified feature ships with its documentation in the same change.

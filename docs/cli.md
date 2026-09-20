@@ -35,13 +35,12 @@ Empty `--db` is **not** always in-memory:
 | Command path | Empty `--db` means |
 | --- | --- |
 | `exec`, `run`, `serve` | In-memory store (`open_store("")` → `SessionStore::connect_memory`). |
-| Bare interactive startup, `sessions`, `tail-session` | Remapped to `$XDG_STATE_HOME/hya/sessions.db`, falling back to `$HOME/.local/state/hya/sessions.db` (or `./.local/state/hya/sessions.db` when neither is set). The directory is created if missing. |
+| `sessions`, `tail-session` | Remapped to `$XDG_STATE_HOME/hya/sessions.db`, falling back to `$HOME/.local/state/hya/sessions.db` (or `./.local/state/hya/sessions.db` when neither is set). The directory is created if missing. |
 
-`resolve_interactive_db` performs that remap so `hya --continue` / `hya -s` can
-resume across restarts. An explicit `--db ""` is **not** distinguishable from
-the clap default on those remapped commands, so it still lands on the durable
-path. To force an in-memory store for interactive work, use the `hya` frontend's
-`HYA_DB=` empty override (see below) rather than `--db ""` on `hya-backend`.
+`resolve_interactive_db` performs that remap so the session-backed subcommands
+see the same durable store across restarts. An explicit `--db ""` is **not**
+distinguishable from the clap default on those remapped commands, so it still
+lands on the durable path. Pass a real `--db <PATH>` for intentional locations.
 
 When `--db <PATH>` is a non-empty path, hya persists the canonical event log, not
 just the rendered transcript. The SQLite file can contain prompts, tool
@@ -51,119 +50,19 @@ permissions are the caller’s responsibility and file mode follows the process
 umask, so place it in a private directory.
 
 The same database also stores backend-owned per-Agent model preferences. The
-default interactive database therefore remembers TUI selections across
+default durable database therefore remembers per-Agent model selections across
 restarts; separate explicit `--db` paths have independent preferences, and an
 in-memory store is intentionally non-durable.
 
-`--resume` is interactive-only and cannot be combined with `--prompt` or a
-subcommand. Bare `hya-backend --resume <ID>` launches `hya --session <ID>`.
 When `--prompt` is present, it takes precedence over subcommand dispatch.
 
-## `hya` frontend
+## Backend Command Catalog
 
-```sh
-hya [OPTIONS] [PROJECT] [COMMAND]
-```
-
-`hya` is the canonical Unix entrypoint. It delegates to the adjacent `hya-ts`
-launcher, which starts the TypeScript/OpenTUI frontend and an owned local
-`hya-backend`. Use `--server` to attach to an existing backend instead.
-
-| Option | Meaning |
-| --- | --- |
-| `PROJECT` | Project directory. Defaults to the current directory. |
-| `--server <URL>` | Attach to an existing backend. |
-| `--backend-bin <PATH>` | Override the backend executable. |
-| `--bun <PATH>` | Override the Bun executable. |
-| `--import <SOURCE>` | Import configuration. The supported source is `compat`. |
-| `-c, --continue` | Continue the most recently updated root session from the persisted store. |
-| `-s, --session <ID>` | Resume an exact session id (`hysec_…` / `ses_…`). |
-| `--fork` | Fork the continued or selected session. |
-| `--prompt <TEXT>` | Submit an initial prompt. |
-| `--agent <NAME>` | Select the initial agent. |
-| `--model <PROVIDER/MODEL>` | Select the initial model. |
-
-### Validation rules
-
-- `--import` cannot be combined with any subcommand (`bundle`, `oauth`, `login`,
-  `auth`, …). Doing so prints
-  `<invocation>: --import cannot be used with a subcommand` to stderr and exits
-  with code 1.
-- `--fork` requires `--continue` or `--session`. Without one of those, the
-  launcher prints
-  `<invocation>: --fork requires --continue or --session` and exits 1.
-
-Examples:
-
-```sh
-hya .
-hya -c
-hya --continue
-hya -s hysec_...
-hya --session hysec_...
-hya --server http://127.0.0.1:8787
-hya --import compat
-```
-
-Owned backends started by `hya` persist sessions to
-`$XDG_STATE_HOME/hya/sessions.db` (or `~/.local/state/hya/sessions.db`). Override
-with `HYA_DB=/path/to.db`, or set `HYA_DB=` empty for an in-memory store. This
-empty override is the intentional way to force in-memory interactive runs when
-`hya-backend`'s remapped empty `--db` would otherwise open the durable path.
-
-`hya-ts` exposes the same launcher surface for diagnostics. Normal use should
-invoke `hya` so help and errors retain canonical branding. In the TUI, press
-`Ctrl-P` for the authoritative command list and `Ctrl-X` for leader-key actions.
-
-## TUI Slash Commands
-
-The TypeScript TUI registers built-in slash commands and keybinds. The full
-command / keybind / alias table lives in
-[TUI Keybindings](tui-keybindings.md) (including which-key and every default
-chord). This section is the CLI-facing summary so readers of this reference can
-find and use the commands without leaving the CLI docs entirely.
-
-Common slash commands (aliases in parentheses):
-
-| Command | Aliases | Effect (summary) |
-| --- | --- | --- |
-| `/sessions` | `/resume`, `/continue` | Open the session-list dialog |
-| `/new` | `/clear` | Start a new session (home route) |
-| `/models` | `/mo`, `/model` | Open the model picker (`/mo` biases fuzzy match away from `/move`) |
-| `/agents` | | Open the agent picker |
-| `/agent-models` | | Choose any catalog Agent. Ordinary selection remembers unconfigured defaults or sets a configured Agent's Session override; Ctrl+S saves the owning configuration file |
-| `/mcps` | | MCP enable/disable dialog |
-| `/variants` | `/think` | Model variant picker (hidden when the model has none) |
-| `/status` | | Status dialog |
-| `/themes` | | Theme list |
-| `/help` | | Help dialog |
-| `/exit` | `/quit`, `/q` | Exit the app |
-| `/rename` | | Rename the current session |
-| `/timeline` | | Jump-to-message dialog |
-| `/fork` | | Fork from a selected message |
-| `/compact` | `/summarize` | Compact / summarize the session |
-| `/undo` | | Abort an in-flight turn if the session is not idle, then revert at the last user message before the current revert point (repeatable walks backwards). **Overwrites the prompt buffer** with that message’s text parts and re-attaches its file parts (any draft text already typed is lost). |
-| `/redo` | | Redo after a revert |
-| `/timestamps` | `/toggle-timestamps` | Toggle message timestamps |
-| `/thinking` | `/toggle-thinking` | Cycle thinking-block visibility |
-| `/copy` | | Copy the full transcript to the clipboard |
-| `/export` | | Export options dialog; default filename `session-<id8>.md` |
-| `/editor` | | Open `$VISUAL` or `$EDITOR` on the prompt buffer |
-| `/skills` | | Skill selector; inserts `/<skill> ` into the prompt |
-| `/diff` | | Open the git diff viewer |
-
-The **leader** key defaults to `ctrl+x`. Leader chords are written as
-`<leader>…` (for example `<leader>n` for new session). `ctrl+p` opens the full
-command palette. See [TUI Keybindings](tui-keybindings.md) for every command id
-and default binding.
-
-### Backend-provided commands
-
-In addition to the frontend-registered slash commands above, the backend serves
-a built-in command catalog from
+The backend serves a built-in command catalog from
 [`command_catalog.rs`](../crates/hya-server/src/support/command_catalog.rs) over
 `GET /v1/commands` (Catalog `ListCommands` on the `hya.v1` contract; the former
-Compat `/api/command` surface is deleted).
+Compat `/api/command` surface is deleted). Clients surface these entries as
+slash commands in their prompt UIs.
 
 **Expandability.** Every built-in is constructed with `expandable: false`.
 Server-side `expand_prompt` only expands entries with `expandable: true`
@@ -193,50 +92,6 @@ frontmatter / inline maps have no `expandable` field — writing `expandable` in
 `opencode.json` or markdown frontmatter is ignored. Server-side `expand_prompt`
 therefore expands those templates.
 
-### Keybindings
-
-The frontend ships a named keybind registry in
-[`packages/hya-tui-ts/src/upstream/config/keybind.ts`](../packages/hya-tui-ts/src/upstream/config/keybind.ts)
-(`Definitions`: **175** named entries including `leader` and chord defaults).
-Each registry entry is `{ default, description }`.
-
-- The special entry `leader` defaults to `ctrl+x`. Bindings written as
-  `<leader>x` are leader chords.
-- Major namespaces include app, session, pane, model, agent, messages, prompt,
-  input, diff, theme, terminal, and which-key.
-- The binding schema accepts per-definition overrides under a `keybinds` map
-  (Definition names from `keybind.ts`), and `false` or `"none"` unbind a name —
-  see [Configuration → TUI Configuration](configuration.md#tui-configuration).
-  **Shipped launcher caveat:** the current entrypoint applies defaults only via
-  `resolve({}, { terminalSuspend: … })` and loads **no** on-disk TUI config file;
-  `config.yaml` has no `tui` / `keybinds` key. Until a host supplies a non-empty
-  config object, users cannot override or unbind factory chords from disk.
-
-**Command palette.** The `command.palette.show` command (default `ctrl+p`,
-keybind id `command_list`) lists every reachable non-hidden command together
-with its currently bound keys, grouped by category, with a **Suggested** group
-first. Commands marked hidden (for example `/variants` when the active model has
-no variants) are omitted from the palette. Use the palette as the authoritative
-live list of bound keys; the static tables in
-[TUI Keybindings](tui-keybindings.md) document factory defaults.
-
-### Prompt autocomplete
-
-In the prompt input:
-
-- Typing **`@`** opens completion over workspace files, subagents (offered as
-  `@<name>`), and reference aliases (also `@<name>`).
-- Typing **`/`** as the **first character** of the prompt (column 0 of the
-  buffer, with no whitespace before the cursor) opens slash-command completion.
-  The `/` trigger is position-sensitive; it does not open mid-line.
-
-The `/` list also includes server-provided commands from the backend catalog:
-
-- Entries whose `source` is `mcp` render with a trailing **`:mcp`** label so they
-  are distinguishable from local commands.
-- Entries whose `source` is `skill` are **hidden** from the `/` list; open them
-  through `/skills` instead.
-
 ## Workflow Commands
 
 ```sh
@@ -260,23 +115,17 @@ the first `=`. `--revision` (alias `--expected-revision`) fences selection/run
 against a canonical compiler revision, and `--json` emits the shared typed
 command result.
 
-Inside the TUI, `/workflow list|info|use|run|state` uses the same app control
-path and bypasses parent-model admission. Progress arrives through normal
-Session Events and `session.updated` synchronization.
-
 ## Bundle Commands
 
 ```sh
-hya bundle info -f example.hyabundle
-hya bundle install example.hyabundle
-hya bundle list
-hya bundle info hya/docs-example
-hya bundle uninstall hya/docs-example
+hya-backend bundle info -f example.hyabundle
+hya-backend bundle install example.hyabundle
+hya-backend bundle list
+hya-backend bundle info hya/docs-example
+hya-backend bundle uninstall hya/docs-example
 ```
 
-These are the canonical bundle commands. `hya` delegates once to `hya-ts`,
-which forwards the bundle subcommand once to `hya-backend`; invoking
-`hya-backend bundle ...` directly exposes the same backend implementation.
+These are the canonical bundle commands, implemented by `hya-backend` directly.
 
 `install` reports whether the package was installed, replaced, or unchanged,
 along with bundle identity, version, closed payload kind, and registry generation.
@@ -300,7 +149,7 @@ hand while an install is running.
 The separate registry is
 `$XDG_DATA_HOME/hya/bundles/registry.sqlite3`, falling back to
 `~/.local/share/hya/bundles/registry.sqlite3`. A successful generation change
-is loaded lazily before a new root turn binds and when the TUI/catalog is
+is loaded lazily before a new root turn binds and when the catalog is
 refreshed. In-flight and child turns remain pinned to their existing catalog;
 a failed candidate leaves the previous snapshot active. There is no filesystem
 watcher or per-round/tool-call registry query.
@@ -429,12 +278,9 @@ Starts the HTTP/SSE API from [`../crates/hya-server`](../crates/hya-server).
 hya server listening on <url>
 ```
 
-That string is a stability contract: `hya-sdk`'s `ServerHandle` parses this exact
-line from merged stdout/stderr to discover the base URL (`hya-sdk` is the legacy
-crate, but the launcher's owned-backend supervision still uses its
-`ServerHandle`; its Compat HTTP client side is retired). Do not change its
-wording. Source: [`serve.rs`](../crates/hya-backend/src/serve.rs),
-[`hya-sdk` server](../crates/hya-sdk/src/server.rs).
+That string is a stability contract: harnesses, supervisors, and client SDKs
+parse this exact line from merged stdout/stderr to discover the base URL. Do not
+change its wording. Source: [`serve.rs`](../crates/hya-backend/src/serve.rs).
 
 **Signal handling.** SIGTERM, SIGINT, and SIGHUP handlers are installed
 **before** the listen line is printed (an e2e-harness ordering requirement: a
@@ -517,7 +363,7 @@ OAuth credentials it also prints a ready-to-copy re-login line
 (`hya-backend oauth login --provider … --type …`). No token material is printed.
 
 **`models [provider]`.** Prints the sorted `provider/model` rows from the same
-immutable startup snapshot used by the server, SDK, and TUI. With `--verbose`,
+immutable startup snapshot used by the server and its clients. With `--verbose`,
 each id is followed by a JSON line containing `id`, `provider`, and
 `source= configured|discovered|offline`. Unfiltered offline output is exactly
 `hya/offline`; a filter with no rows exits with `Provider not found: <id>`.
@@ -531,17 +377,6 @@ inspects on-disk agent files under `.hya/`, `.claude/`, or `.opencode/`, nor
 config-declared agents — it reflects the embedded catalog only. System agents
 (compaction / title / summary) are excluded because they are not ordinarily
 spawnable via catalog `can_spawn` reachability.
-
-The same auth/oauth commands are available on canonical `hya` (forwarded to
-`hya-backend`, using the same credential store):
-
-```sh
-hya oauth login --provider codex --type openai-codex
-hya oauth login --provider grok --type grok-build --no-browser
-hya oauth status
-hya login anthropic "$ANTHROPIC_API_KEY"
-hya auth list
-```
 
 ## Session and RPC Commands
 
@@ -608,7 +443,5 @@ flag list is in [Secure self-update](self-update.md).
 
 | Binary | Success | Failure / notes |
 | --- | --- | --- |
-| `hya` (shim) | On success, `exec()`s `hya-ts` and replaces the process image, so **`hya-ts` owns the final exit code**. | Prints `hya: failed to resolve current executable: …` or `hya: failed to launch \`<path>\`: …` to stderr and exits **1**. |
-| `hya-ts` | Propagates the Bun child's exit code truncated to `u8`. | Uses **1** when the child has no code (for example it died by signal). The termination-signal path returns **1** after killing the child process group. Any launcher error returns **1** after printing `<invocation-name>: <error>` to stderr. Forwarded backend subcommands (`bundle` / `oauth` / `login` / `auth`) propagate `hya-backend`'s exit code verbatim. |
-| `hya-backend` | **0** on success (including non-TTY bare banner, `serve` graceful signal shutdown, and `tail-session` broken-pipe). | **1** with the full `anyhow` error chain printed to stderr on any error — CLI validation failures use the same path. |
+| `hya-backend` | **0** on success (including the bare guidance banner, `serve` graceful signal shutdown, and `tail-session` broken-pipe). | **1** with the full `anyhow` error chain printed to stderr on any error — CLI validation failures use the same path. |
 | `hya-updater` | **0** on success. | **1** after printing `hya-updater: <error>` to stderr. |

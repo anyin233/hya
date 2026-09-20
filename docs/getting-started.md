@@ -1,14 +1,15 @@
 # Getting Started
 
-This guide runs hya from the workspace. The frontend TUI binary is `hya`; the
-backend CLI/API binary is `hya-backend`.
+This guide runs hya from the workspace. The only shipped binary is the backend
+CLI/API binary `hya-backend`; there is currently no interactive TUI (a
+replacement built on `hya-sdk-v1` may be built later). Clients drive the
+backend over the `hya.v1` HTTP/SSE/WebSocket or gRPC contract.
 
 ## Prerequisites
 
 - Rust 1.91 or later.
-- Bun 1.3.x.
+- Bun 1.3.x (used by the Compat plugin sidecar).
 - Git.
-- A terminal that supports alternate-screen TUI programs.
 - Optional: a hya provider config if you want live model calls. Without
   one, hya uses an offline development provider that echoes prompts.
 
@@ -19,11 +20,11 @@ cargo build --workspace
 ```
 
 Building does not create `~/.config/hya`; the starter config is created on the
-first `hya` or `hya-backend` startup that needs runtime config.
+first `hya-backend` startup that needs runtime config.
 
 ### Install from source (`./install.sh`)
 
-Build and install the complete frontend/runtime layout:
+Build and install the backend runtime layout:
 
 ```sh
 ./install.sh --prefix "$HOME/.local"
@@ -35,7 +36,7 @@ export PATH="$HOME/.local/bin:$PATH"
 | Option | Meaning |
 | --- | --- |
 | `--prefix DIR` | Install into `DIR/bin` (default `/usr/local`). |
-| `--bin-dir DIR` | Install binaries directly into `DIR` (overrides `--prefix`). Relative paths resolve against the script directory. Runtime assets go under `DIR/../lib/hya/hya-tui-ts`. |
+| `--bin-dir DIR` | Install binaries directly into `DIR` (overrides `--prefix`). Relative paths resolve against the script directory. The Compat adapter goes under `DIR/../lib/hya/compat-adapter`. |
 | `--profile release\|dev\|debug` | Cargo build profile and matching target dir (honours `CARGO_TARGET_DIR`). Any other value exits 2. |
 | `--dry-run` | Print every action; skip building and installing; print verification commands instead of running them. |
 | `-h` / `--help` | Print usage and exit 0. |
@@ -50,73 +51,28 @@ Failures are easiest to diagnose if you know the order of operations
    prints remedies (`sudo ./install.sh` or
    `./install.sh --bin-dir "$HOME/.local/bin"`) and exits 1.
 2. **Bun preflight.** `bun --version` must succeed or the install aborts.
-3. **Cargo build.** Builds locked binaries for `hya`, `hya-backend`, and
-   `hya-ts` for the selected profile.
-4. **Stage runtimes.** Recursively copies the complete TUI package source into a
-   temporary tree, copies its `NOTICE` plus the root `THIRD_PARTY_NOTICES`, runs
-   `bun install --frozen-lockfile --production`, and prunes the SDK. Before any
-   installed path moves, the script requires a nested TUI source file,
-   `node_modules`, the OpenTUI runtime manifest, and the SDK v2 client entry.
-   The Compat adapter is staged separately at `lib/hya/compat-adapter` with its
-   pinned lockfile.
-5. **Atomic swap.** Only a complete staged runtime reaches the swap. The script
+3. **Cargo build.** Builds the locked `hya-backend` binaries for the selected
+   profile.
+4. **Stage runtimes.** Stages the `hya-backend` binary and stages the Compat
+   adapter separately at `lib/hya/compat-adapter` with its pinned lockfile by
+   running `bun install --frozen-lockfile --production`.
+5. **Atomic swap.** Only complete staged artifacts reach the swap. The script
    uses `.tmp.$$` paths, moves any existing install to `.bak.$$`, then renames
    into place. An `ERR`/`INT`/`TERM` trap calls `restore_install` so an
    interrupted install restores previous binaries/runtimes and cleans
-   leftovers; it does not leave a half-installed `hya`.
+   leftovers; it does not leave a half-installed `hya-backend`.
 6. **Post-install verification** (skipped under `--dry-run`, which only
    prints the checks):
-   - Runs the `hya` shim against a dead server with `--bun /bin/true`.
-   - Runs `hya --version`, `hya-backend --help`, `hya-ts --help`.
-   - Asserts the recursive TUI source tree (including a nested hya-owned source),
-     `bunfig.toml`, package `NOTICE`, root `THIRD_PARTY_NOTICES`, and required
-     production dependency entries exist under `lib/hya/hya-tui-ts`; both
-     installed notices must be byte-identical to their sources.
+   - Runs `hya-backend --version` and `hya-backend --help`.
    - Asserts the Compat adapter payload and its production dependencies exist
      under `lib/hya/compat-adapter`.
-   - **Fails** if `command -v hya` does not resolve to the install path (usual
-     cause: an older `hya` earlier on `PATH`).
+   - **Fails** if `command -v hya-backend` does not resolve to the install path
+     (usual cause: an older `hya-backend` earlier on `PATH`).
 
-The installer colocates `hya`, `hya-ts`, and `hya-backend`, prepares the TUI
-runtime under `lib/hya/hya-tui-ts`, and prepares the Compat adapter under
-`lib/hya/compat-adapter`. Installing only the `hya` Cargo package is unsupported
-because that executable delegates to the adjacent launcher and runtime.
-
-## Run the TUI
-
-```sh
-# Installed layout
-hya .
-
-# Uninstalled checkout (after `cargo build --workspace`)
-./target/debug/hya .
-```
-
-`hya` delegates to the TypeScript/OpenTUI frontend. The launcher starts an owned
-local `hya-backend`, or attaches to an existing server when `--server <URL>` is
-provided. It streams assistant events into the chat view and prompts for
-permission when a tool requests a mutating action.
-
-Key controls (defaults; leader is `Ctrl-X`):
-
-| Key | Action |
-| --- | --- |
-| `Enter` | Send the current input when no turn is running. |
-| `Ctrl-P` | List available commands (command palette). |
-| `Ctrl-X` | Leader key — arms a timed chord for `<leader>…` bindings. |
-| `Escape` | Dismiss a dialog, hide autocomplete, clear a pending leader sequence, exit shell mode, return an observation pane to Main, or interrupt a non-idle turn with one Escape. |
-| `Ctrl-C` | Copy the selection if one is active (when explicit copy is required), clear the prompt if it has text, otherwise exit when the prompt is unfocused or empty. |
-| `Ctrl-D` | Exit when the prompt is unfocused **or** empty; deletes forward inside the prompt; deletes the highlighted entry in the Sessions and Stash dialogs. |
-| `<leader>l` | List sessions. |
-| `<leader>m` | List models. |
-| `<leader>a` | List agents. |
-| `<leader>o` | Open the subagent roster. |
-| `<leader>b` | Toggle the sidebar. |
-
-For the full keybinding tables and built-in slash commands (`/sessions`,
-`/models`, `/agents`, `/export`, `/compact`, and the rest), see
-[TUI Keybindings](tui-keybindings.md). Screens and dialogs are covered in
-[TUI Reference](tui-reference.md).
+The installer colocates the `hya-backend` binary and prepares the Compat
+adapter under `lib/hya/compat-adapter`. Bare `hya-backend` (no subcommand)
+prints a guidance banner; see the
+[CLI Reference](cli.md#bare-hya-backend).
 
 ## Run One Headless Turn
 
@@ -201,18 +157,16 @@ intentional, not an error — see
 
 hya creates a starter `~/.config/hya/config.yaml` (or
 `$XDG_CONFIG_HOME/hya/config.yaml`) the first time a command needs runtime
-config. Canonical `hya` imports Compat configuration only when requested
-explicitly:
+config. To import supported MCP servers and skills from an existing
+OpenCode/Compat config instead of starting from the starter file, run:
 
 ```sh
-hya --import compat
+cargo run -p xtask -- sync-compat --help
 ```
 
-This imports providers, models, and supported local MCP servers. Skills import
-is not implemented yet. First run creates the starter Hya config without an
-import offer.
+Provider and model credentials are not imported; configure them directly.
 
-To switch to a live model manually, edit the starter file:
+To switch to a live model, edit the starter file:
 
 ```yaml
 default_model: claude-sonnet-4-6
@@ -230,15 +184,11 @@ Then provide the key and confirm the catalog resolved:
 export ANTHROPIC_API_KEY=sk-...                # or use `hya-backend login` instead of {env:...}
 hya-backend login anthropic "$ANTHROPIC_API_KEY"   # optional; takes precedence over api_key
 hya-backend models                            # should list claude-sonnet-4-6, not be empty
-hya                                    # TUI now runs against the live provider
 ```
 
 `hya-backend login <provider> <token>` stores an auth token that takes precedence over
 inline `api_key`. For a fully-commented sample config, documented environment
 variables, and MCP/plugin setup, see [Configuration](configuration.md). Note that
-the configuration page lists selected `HYA_*` variables used by common workflows;
-additional process-local flags (for example TUI startup and automation hooks)
-appear in [Troubleshooting](troubleshooting.md) and
-[TUI Architecture](architecture/tui.md). For CLI commands, see the
-[CLI Reference](cli.md). For TUI slash commands and keybindings, see
-[TUI Keybindings](tui-keybindings.md).
+the configuration page lists selected `HYA_*` variables used by common workflows.
+For CLI commands, see the [CLI Reference](cli.md). To integrate a client over the
+API, see the [Protocol guide](protocol/README.md).

@@ -172,9 +172,10 @@ optional Hya auth. The app then publishes one immutable
 `ProviderCatalogSnapshot`. It contains model rows, provider source/auth/result
 states, the row-backed default, and the canonical offline notice when needed.
 
-`ProviderRouter`, `SessionEngine`, `hya-backend models`, server catalog and TUI
-bootstrap routes, the Rust SDK, and the TypeScript TUI all consume that snapshot
-or a direct wire projection of it. They do not re-fetch, re-flatten config, or
+`ProviderRouter`, `SessionEngine`, `hya-backend models`, server catalog and
+bootstrap routes, and Rust clients (`hya-client` / `hya-sdk-v1`) all consume
+that snapshot or a direct wire projection of it. They do not re-fetch, re-flatten
+config, or
 synthesize active/default/session rows. When there are no live rows the snapshot
 adds exactly `hya/offline` with `DevProvider`; it never appears beside live rows.
 

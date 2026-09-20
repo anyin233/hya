@@ -276,7 +276,7 @@ is not part of `Projection`, keeping the live projection bounded.
 | --- | --- |
 | Agent | its DM peers: parent (always live, §1 invariant) and live direct children; group channels as pipes without member lists. No siblings, no grandchildren, no archive. |
 | Agent (via `search_agent`) | its own archived direct children as handoff digests. |
-| User (TUI) | the complete agent tree at every depth, live status, and archived entries as history. |
+| User (client UI) | the complete agent tree at every depth, live status, and archived entries as history. |
 | Event log / `Projection` | everything, globally — the single replay truth. |
 
 The agent-side narrowing is a **read filter** over tools; the projection and
@@ -366,7 +366,7 @@ process gate for agent-surface phases
   reshape, report tool).
 - **Phase 2 — channel plane.** Channel minting/kinds, write gates, `dm`/
   `broadcast`/`list_channel`, `search_agent` + archive index, tool deletions,
-  depth advertisement filter, TUI/SDK presentation (full tree + archive
+  depth advertisement filter, client/SDK presentation (full tree + archive
   history).
 - **Phase 3 — workflow migration.** `SubagentReported` consumption, retry =
   revive, deletion of the transient workflow path; matrix update.
@@ -380,9 +380,9 @@ process gate for agent-surface phases
   path only; journal-finalizes-at-registration.
 - `crates/hya-proto`: projection fold tests for the new events; legacy
   flat-mailbox fixture retired (breaking mandate).
-- `crates/hya-sdk/tests/team_mirror_conformance.rs`: mirror updated for
-  channel kinds + archive rows; conformance maintained, not relaxed.
 - `crates/hya-e2e` p08/p09: rewritten for non-blocking task + report-driven
   completion; new cases: revive-via-DM, depth-2 tool absence, kill, budget
   refund ledger.
-- `packages/hya-tui-ts`: team/channel presentation tests.
+- Client-side team/channel presentation tests return with the future
+  `hya-sdk-v1` frontend (the legacy `hya-sdk` mirror conformance suite and the
+  removed TUI's presentation tests retired with those components).
