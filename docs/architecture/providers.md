@@ -269,15 +269,27 @@ Five auth styles: **Bearer**, **CodexSession**, **GrokSession**, **Anthropic**,
 - **Connect timeout: 10 seconds.**
 - **Response-header timeout: 60 seconds per attempt.** A route that accepts the
   connection but does not return headers fails as a retryable transport error.
-- **Pre-stream retries:** at most three request attempts for transport errors,
-  HTTP 429, and HTTP 5xx. Backoff is exponential with jitter; a valid
-  `Retry-After` value takes precedence and is capped at 30 seconds. Reading a
-  non-success response body for diagnostics is capped at 2 seconds so an error
-  body cannot prevent the next retry.
+- **Pre-stream retries:** at most `max_attempts` request attempts (default
+  three) for transport errors, HTTP 429, and HTTP 5xx. Backoff is exponential
+  with jitter from `backoff_base` (default 100 ms) up to `backoff_max`
+  (default 30 s); a valid `Retry-After` value takes precedence and is capped
+  at 30 seconds. Reading a non-success response body for diagnostics is capped
+  at 2 seconds so an error body cannot prevent the next retry. The budget is
+  configurable per route — see the `provider_retry:` block in the
+  [configuration reference](../configuration.md).
+- **Zero-event replay window:** a response that dies before delivering any
+  event to the consumer is treated as if no stream existed, and the whole
+  request is re-issued inside the same shared attempt budget. Only link-level
+  failures qualify (byte-stream decode errors such as truncated bodies,
+  connection resets, and idle stalls before the first frame);
+  provider-decided failures — 200-with-error-body frames, malformed payloads,
+  missing terminal frames — surface immediately even at zero events. The first
+  delivered event closes the window permanently.
 - **SSE frame-idle timeout: five minutes.** The window starts when response
-  headers arrive and resets after every frame. Missing the deadline ends the
-  established stream once; it is never retried or failed over because stream
-  ownership has already crossed the no-replay boundary.
+  headers arrive and resets after every frame. Missing the deadline before the
+  first frame joins the zero-event replay window; after any delivered frame it
+  ends the established stream once and is never retried or failed over because
+  stream ownership has already crossed the no-replay boundary.
 - **No total completion lifetime timeout.** A completion that keeps delivering
   frames may run indefinitely.
 - Auth header values are marked **sensitive** on `HeaderValue` so reqwest/tracing

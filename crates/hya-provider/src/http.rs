@@ -35,6 +35,63 @@ const BASE_RETRY_DELAY: Duration = Duration::from_millis(100);
 const MAX_RETRY_AFTER: Duration = Duration::from_secs(30);
 const ERROR_BODY_TIMEOUT: Duration = Duration::from_secs(2);
 
+/// Bounded replay budget for one streamed completion.
+///
+/// The budget is shared by the pre-stream attempt loop (transport errors,
+/// 429/5xx statuses, auth refresh) and the zero-event replay window: if an
+/// established stream dies before delivering any event to the consumer, the
+/// whole request is re-issued transparently while budget remains. Once any
+/// event has been delivered the strict no-replay boundary holds and errors
+/// surface exactly once.
+///
+/// Retry tuning is deliberately excluded from `configured_identity_v1`: like
+/// the timeout overrides it tunes liveness, not what the route serves.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RetryConfig {
+    /// Total request attempts per streamed completion, including the first.
+    /// Clamped to at least 1.
+    pub max_attempts: usize,
+    /// Exponential backoff seed for the first retry (`2^attempt` growth).
+    pub backoff_base: Duration,
+    /// Ceiling for the exponential backoff and `Retry-After` waits.
+    pub backoff_max: Duration,
+}
+
+impl Default for RetryConfig {
+    fn default() -> Self {
+        Self {
+            max_attempts: MAX_REQUEST_ATTEMPTS,
+            backoff_base: BASE_RETRY_DELAY,
+            backoff_max: MAX_RETRY_AFTER,
+        }
+    }
+}
+
+impl RetryConfig {
+    /// Clamp caller-supplied values onto a usable budget.
+    #[must_use]
+    pub fn normalized(self) -> Self {
+        Self {
+            max_attempts: self.max_attempts.max(1),
+            backoff_base: self.backoff_base,
+            backoff_max: self.backoff_max.max(self.backoff_base),
+        }
+    }
+}
+
+/// Clonable per-route request state: everything needed to re-issue a streamed
+/// completion from inside the pump task when the zero-event replay window
+/// applies.
+#[derive(Clone)]
+struct RouteCore {
+    client: reqwest::Client,
+    auth: AuthStyle,
+    bearer_resolver: Option<BearerResolver>,
+    auth_refresher: Option<AuthRefresher>,
+    response_header_timeout: Duration,
+    retry: RetryConfig,
+}
+
 /// Bounded wait for response headers on each streamed-completion attempt.
 ///
 /// Reasoning endpoints behind large prompt contexts can legitimately take tens
@@ -114,6 +171,7 @@ pub type BearerResolver = Arc<dyn Fn() -> Result<String, ProviderError> + Send +
 /// the credential unchanged, the original status error surfaces unchanged.
 pub type AuthRefresher = Arc<dyn Fn(&str) -> Result<(), ProviderError> + Send + Sync>;
 
+#[derive(Clone)]
 enum AuthStyle {
     Bearer(Option<SecretString>),
     /// ChatGPT Codex OAuth: optional Bearer JWT plus optional account id header.
@@ -140,13 +198,10 @@ enum AuthStyle {
 /// disabled so auth headers are never followed cross-origin.
 pub struct HttpProvider {
     id: String,
-    protocol: Box<dyn Protocol>,
-    client: reqwest::Client,
+    protocol: Arc<dyn Protocol>,
+    core: RouteCore,
     endpoint: String,
     google_base: Option<String>,
-    auth: AuthStyle,
-    bearer_resolver: Option<BearerResolver>,
-    auth_refresher: Option<AuthRefresher>,
     models: HashSet<String>,
     model_reasoning_variants: BTreeMap<String, Vec<String>>,
     model_reasoning_defaults: BTreeMap<String, ReasoningEffort>,
@@ -155,7 +210,6 @@ pub struct HttpProvider {
     caps: Capabilities,
     kind: ProviderKind,
     catalog_source: ModelCatalogSource,
-    response_header_timeout: Duration,
     stream_idle_timeout: Duration,
 }
 
@@ -197,8 +251,9 @@ impl HttpProvider {
         // would abort long streaming completions. Liveness comes from the much
         // narrower RESPONSE_HEADER_TIMEOUT (per attempt) and STREAM_IDLE_TIMEOUT
         // (between SSE frames) instead.
-        // Timeout overrides are not part of `configured_identity_v1`: they tune
-        // liveness, not what the route serves, like the fixed connect timeout.
+        // Timeout and retry overrides are not part of `configured_identity_v1`:
+        // they tune liveness, not what the route serves, like the fixed connect
+        // timeout.
         let client = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(Duration::from_secs(10))
@@ -208,24 +263,24 @@ impl HttpProvider {
         let key = api_key
             .filter(|value| !value.is_empty())
             .map(SecretString::new);
-        let (protocol, endpoint, auth): (Box<dyn Protocol>, String, AuthStyle) = match kind {
+        let (protocol, endpoint, auth): (Arc<dyn Protocol>, String, AuthStyle) = match kind {
             ProviderKind::OpenAiCompatible => (
-                Box::new(OpenAiChatProtocol),
+                Arc::new(OpenAiChatProtocol),
                 format!("{base}/chat/completions"),
                 AuthStyle::Bearer(key),
             ),
             ProviderKind::OpenAiResponse | ProviderKind::OpenAiCodex => (
-                Box::new(OpenAiResponsesProtocol),
+                Arc::new(OpenAiResponsesProtocol),
                 format!("{base}/responses"),
                 AuthStyle::Bearer(key),
             ),
             ProviderKind::GrokBuild => (
-                Box::new(GrokBuildProtocol),
+                Arc::new(GrokBuildProtocol),
                 format!("{base}/responses"),
                 AuthStyle::Bearer(key),
             ),
             ProviderKind::Anthropic => (
-                Box::new(AnthropicMessagesProtocol),
+                Arc::new(AnthropicMessagesProtocol),
                 format!("{base}/messages"),
                 AuthStyle::Anthropic {
                     key,
@@ -233,7 +288,7 @@ impl HttpProvider {
                 },
             ),
             ProviderKind::Google => (
-                Box::new(GoogleProtocol),
+                Arc::new(GoogleProtocol),
                 String::new(),
                 AuthStyle::Google(key),
             ),
@@ -246,12 +301,16 @@ impl HttpProvider {
         Ok(Self {
             id: id.into(),
             protocol,
-            client,
+            core: RouteCore {
+                client,
+                auth,
+                bearer_resolver: None,
+                auth_refresher: None,
+                response_header_timeout: RESPONSE_HEADER_TIMEOUT,
+                retry: RetryConfig::default(),
+            },
             endpoint,
             google_base,
-            auth,
-            bearer_resolver: None,
-            auth_refresher: None,
             models: models.into_iter().collect(),
             model_reasoning_variants: BTreeMap::new(),
             model_reasoning_defaults: BTreeMap::new(),
@@ -267,7 +326,6 @@ impl HttpProvider {
                 max_output: 0,
                 ..Capabilities::default()
             },
-            response_header_timeout: RESPONSE_HEADER_TIMEOUT,
             stream_idle_timeout: STREAM_IDLE_TIMEOUT,
         })
     }
@@ -280,13 +338,13 @@ impl HttpProvider {
         if self.kind != ProviderKind::OpenAiCodex {
             return self;
         }
-        let token = match &self.auth {
+        let token = match &self.core.auth {
             AuthStyle::Bearer(key)
             | AuthStyle::CodexSession { token: key, .. }
             | AuthStyle::GrokSession { token: key, .. } => key.clone(),
             AuthStyle::Anthropic { key, .. } | AuthStyle::Google(key) => key.clone(),
         };
-        self.auth = AuthStyle::CodexSession { token, account_id };
+        self.core.auth = AuthStyle::CodexSession { token, account_id };
         self
     }
 
@@ -302,13 +360,13 @@ impl HttpProvider {
         if self.kind != ProviderKind::GrokBuild {
             return self;
         }
-        let token = match &self.auth {
+        let token = match &self.core.auth {
             AuthStyle::Bearer(key)
             | AuthStyle::CodexSession { token: key, .. }
             | AuthStyle::GrokSession { token: key, .. } => key.clone(),
             AuthStyle::Anthropic { key, .. } | AuthStyle::Google(key) => key.clone(),
         };
-        self.auth = AuthStyle::GrokSession {
+        self.core.auth = AuthStyle::GrokSession {
             token,
             client_version: client_version.into(),
             client_identifier: client_identifier.into(),
@@ -319,7 +377,7 @@ impl HttpProvider {
     /// Re-resolve the bearer token on each stream (hot-reload for Grok OAuth).
     #[must_use]
     pub fn with_bearer_resolver(mut self, resolver: BearerResolver) -> Self {
-        self.bearer_resolver = Some(resolver);
+        self.core.bearer_resolver = Some(resolver);
         self
     }
 
@@ -329,7 +387,7 @@ impl HttpProvider {
     /// event stream is established nothing is refreshed or replayed.
     #[must_use]
     pub fn with_auth_refresher(mut self, refresher: AuthRefresher) -> Self {
-        self.auth_refresher = Some(refresher);
+        self.core.auth_refresher = Some(refresher);
         self
     }
 
@@ -381,7 +439,7 @@ impl HttpProvider {
     /// for tests exercising the deadline.
     #[must_use]
     pub fn with_response_header_timeout(mut self, duration: Duration) -> Self {
-        self.response_header_timeout = duration;
+        self.core.response_header_timeout = duration;
         self
     }
 
@@ -394,6 +452,18 @@ impl HttpProvider {
         self
     }
 
+    /// Override the replay budget (attempts + backoff shape) for this route.
+    ///
+    /// The budget governs both the pre-stream attempt loop and the zero-event
+    /// replay window; see [`RetryConfig`].
+    #[must_use]
+    pub fn with_retry(mut self, retry: RetryConfig) -> Self {
+        self.core.retry = retry.normalized();
+        self
+    }
+}
+
+impl RouteCore {
     fn resolve_bearer(
         &self,
         fallback: Option<&SecretString>,
@@ -522,20 +592,28 @@ impl HttpProvider {
         Ok((headers, refresh_credential))
     }
 
+    /// Issue one streamed-completion request, retrying retryable pre-stream
+    /// failures (transport, 429/5xx) with jittered exponential backoff.
+    ///
+    /// `max_attempts` bounds this call's attempt loop; the returned count is
+    /// the attempts actually consumed so callers can share one
+    /// [`RetryConfig`] budget with the zero-event replay window.
     async fn send_stream_request(
         &self,
         url: &str,
         body: &Value,
         extra_headers: &BTreeMap<String, String>,
         model_override: Option<&str>,
-    ) -> Result<reqwest::Response, ProviderError> {
+        max_attempts: usize,
+    ) -> Result<(reqwest::Response, usize), ProviderError> {
+        let max_attempts = max_attempts.max(1);
         // Auth-recovery level: the forced-refresh retry fires at most once per
-        // request and always occupies one of the MAX_REQUEST_ATTEMPTS slots
-        // below — it never extends the budget, so broken credentials cannot
-        // degrade into a refresh/retry loop. Once a response succeeds, no
-        // refresh or retry exists anymore (no-replay boundary above us).
+        // request and always occupies one of the attempt slots below — it never
+        // extends the budget, so broken credentials cannot degrade into a
+        // refresh/retry loop. Once a response succeeds, no refresh or retry
+        // exists anymore (no-replay boundary above us).
         let mut auth_recovered = false;
-        for attempt in 0..MAX_REQUEST_ATTEMPTS {
+        for attempt in 0..max_attempts {
             // Resolve auth exactly once per attempt. The captured value is the
             // credential this request sent, even if another concurrent request
             // rotates storage before this response is handled.
@@ -547,7 +625,9 @@ impl HttpProvider {
             )
             .await;
             let error = match result {
-                Ok(Ok(response)) if response.status().is_success() => return Ok(response),
+                Ok(Ok(response)) if response.status().is_success() => {
+                    return Ok((response, attempt + 1));
+                }
                 Ok(Ok(response)) => {
                     let status = response.status().as_u16();
                     let try_refresh = !auth_recovered
@@ -555,7 +635,7 @@ impl HttpProvider {
                         && (status == 401 || status == 403)
                         // Budget integrity: only fire while the retried
                         // request still fits inside the attempt cap.
-                        && attempt + 1 < MAX_REQUEST_ATTEMPTS;
+                        && attempt + 1 < max_attempts;
                     if try_refresh && let Some(refresher) = &self.auth_refresher {
                         let original = response_error(response).await;
                         let stale = attempted_credential;
@@ -587,16 +667,18 @@ impl HttpProvider {
                     self.response_header_timeout
                 )),
             };
-            if attempt + 1 == MAX_REQUEST_ATTEMPTS || !error.is_retryable_before_stream() {
+            if attempt + 1 == max_attempts || !error.is_retryable_before_stream() {
                 return Err(error);
             }
-            sleep(retry_delay(&error, attempt)).await;
+            sleep(retry_delay(&error, attempt, &self.retry)).await;
         }
         Err(ProviderError::Transport(
             "provider request exhausted without a response".to_string(),
         ))
     }
+}
 
+impl HttpProvider {
     /// Whether this route speaks the Responses wire and has `/responses/compact`.
     fn supports_responses_compact(&self) -> bool {
         matches!(
@@ -698,9 +780,9 @@ impl HttpProvider {
         }
 
         append_capabilities_identity(&mut identity, &self.caps)?;
-        append_auth_identity(&mut identity, &self.auth)?;
+        append_auth_identity(&mut identity, &self.core.auth)?;
         append_identity_bytes(&mut identity, b"bearer-resolver-slot")?;
-        match &self.bearer_resolver {
+        match &self.core.bearer_resolver {
             Some(_) => {
                 identity.push(1);
                 append_identity_bytes(&mut identity, self.id.as_bytes())?;
@@ -708,7 +790,7 @@ impl HttpProvider {
             None => identity.push(0),
         }
         append_identity_bytes(&mut identity, b"auth-refresher-slot")?;
-        match &self.auth_refresher {
+        match &self.core.auth_refresher {
             Some(_) => {
                 identity.push(1);
                 append_identity_bytes(&mut identity, self.id.as_bytes())?;
@@ -814,12 +896,15 @@ fn parse_retry_after(value: &str) -> Option<Duration> {
     )
 }
 
-fn retry_delay(error: &ProviderError, attempt: usize) -> Duration {
+fn retry_delay(error: &ProviderError, attempt: usize, retry: &RetryConfig) -> Duration {
     if let Some(delay) = error.retry_after() {
-        return delay.min(MAX_RETRY_AFTER);
+        return delay.min(MAX_RETRY_AFTER).min(retry.backoff_max);
     }
     let exponent = u32::try_from(attempt).unwrap_or(u32::MAX).min(8);
-    let base = BASE_RETRY_DELAY.saturating_mul(2_u32.saturating_pow(exponent));
+    let base = retry
+        .backoff_base
+        .saturating_mul(2_u32.saturating_pow(exponent))
+        .min(retry.backoff_max);
     let jitter_percent = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(100, |elapsed| 75 + elapsed.subsec_nanos() % 51);
@@ -902,7 +987,6 @@ impl Provider for HttpProvider {
             req.model = ModelRef::new(model_id);
         }
         let body = self.protocol.encode(&req)?;
-        let decoder = self.protocol.decoder(session, message, req.reasoning);
         let url = match &self.google_base {
             Some(base) => format!(
                 "{base}/v1beta/models/{}:streamGenerateContent?alt=sse",
@@ -911,12 +995,36 @@ impl Provider for HttpProvider {
             None => self.endpoint.clone(),
         };
         let model_override =
-            matches!(self.auth, AuthStyle::GrokSession { .. }).then_some(req.model.as_str());
-        let resp = self
-            .send_stream_request(&url, &body, &req.headers, model_override)
+            matches!(self.core.auth, AuthStyle::GrokSession { .. }).then_some(req.model.as_str());
+        let (resp, attempts_used) = self
+            .core
+            .send_stream_request(
+                &url,
+                &body,
+                &req.headers,
+                model_override,
+                self.core.retry.max_attempts,
+            )
             .await?;
+        let plan = stream::ReissuePlan {
+            core: self.core.clone(),
+            protocol: Arc::clone(&self.protocol),
+            url,
+            body,
+            extra_headers: req.headers,
+            model_override: model_override.map(str::to_owned),
+            idle_timeout: self.stream_idle_timeout,
+            attempts_used,
+        };
         let (tx, rx) = mpsc::channel::<Result<Event, ProviderError>>(64);
-        tokio::spawn(stream::pump(resp, decoder, tx, self.stream_idle_timeout));
+        tokio::spawn(stream::pump_with_reissue(
+            plan,
+            resp,
+            session,
+            message,
+            req.reasoning,
+            tx,
+        ));
         Ok(Box::pin(ReceiverStream::new(rx)))
     }
 
@@ -944,9 +1052,12 @@ impl Provider for HttpProvider {
             "input": input,
         });
         let model_override =
-            matches!(self.auth, AuthStyle::GrokSession { .. }).then_some(model_id.as_str());
-        let (headers, _) = self.request_headers(&BTreeMap::new(), model_override)?;
+            matches!(self.core.auth, AuthStyle::GrokSession { .. }).then_some(model_id.as_str());
+        let (headers, _) = self
+            .core
+            .request_headers(&BTreeMap::new(), model_override)?;
         let resp = self
+            .core
             .client
             .post(&url)
             .headers(headers)
@@ -989,7 +1100,10 @@ mod tests {
             ["gpt-5".to_string()],
         )
         .unwrap();
-        let (headers, _) = provider.request_headers(&BTreeMap::new(), None).unwrap();
+        let (headers, _) = provider
+            .core
+            .request_headers(&BTreeMap::new(), None)
+            .unwrap();
         assert!(!headers.contains_key(AUTHORIZATION));
     }
     #[test]
@@ -1020,7 +1134,10 @@ mod tests {
             let provider = HttpProvider::new("provider", kind, base, key, ["model".to_string()])
                 .unwrap()
                 .with_codex_session_auth(account.map(str::to_string));
-            let (headers, _) = provider.request_headers(&BTreeMap::new(), None).unwrap();
+            let (headers, _) = provider
+                .core
+                .request_headers(&BTreeMap::new(), None)
+                .unwrap();
             assert!(!headers.contains_key(AUTHORIZATION));
             assert!(!headers.contains_key(HeaderName::from_static("x-api-key")));
             assert!(!headers.contains_key(HeaderName::from_static("x-goog-api-key")));
@@ -1036,7 +1153,7 @@ mod tests {
         )
         .unwrap()
         .with_grok_session_auth("client-v1", "grok-cli");
-        let (headers, _) = grok.request_headers(&BTreeMap::new(), None).unwrap();
+        let (headers, _) = grok.core.request_headers(&BTreeMap::new(), None).unwrap();
         assert!(!headers.contains_key(AUTHORIZATION));
         assert!(!headers.contains_key(HeaderName::from_static("x-xai-token-auth")));
         assert_eq!(

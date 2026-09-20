@@ -332,6 +332,43 @@ Supported `kind` values:
   rewritten into `config.yaml`. Explicit `providers.*.models` still wins.
   Authentication headers are sent only when Hya has a credential.
 
+### Provider retry
+
+Transient route failures replay inside one shared budget per streamed
+completion. A top-level `provider_retry:` block sets the default for every
+route; a provider's `retry:` block overrides individual fields (unset fields
+inherit the global value); `HYA_PROVIDER_RETRY_*` environment variables win
+over both:
+
+```yaml
+provider_retry:
+  max_attempts: 5        # total request attempts per completion (default 3)
+  backoff_base_ms: 250   # exponential backoff seed (default 100)
+  backoff_max_ms: 60000  # backoff / Retry-After ceiling (default 30000)
+
+providers:
+  flaky-gateway:
+    kind: openai
+    base_url: https://gw.example/v1
+    api_key: "{env:GW_KEY}"
+    models: [gpt-5.5]
+    retry:
+      max_attempts: 8    # inherits backoff fields from provider_retry
+```
+
+| Field | Env override | Default | Meaning |
+| --- | --- | --- | --- |
+| `max_attempts` | `HYA_PROVIDER_RETRY_MAX_ATTEMPTS` | `3` | Total request attempts per streamed completion, shared by pre-stream retries (transport, 429, 5xx) and the zero-event replay window. Clamped to at least 1. |
+| `backoff_base_ms` | `HYA_PROVIDER_RETRY_BACKOFF_BASE_MS` | `100` | Exponential backoff seed; grows `2^attempt` with jitter (75–125%). |
+| `backoff_max_ms` | `HYA_PROVIDER_RETRY_BACKOFF_MAX_MS` | `30000` | Ceiling for the exponential backoff and `Retry-After` waits (the latter is additionally hard-capped at 30 s). |
+
+The budget covers both recovery layers: the pre-stream attempt loop, and the
+zero-event replay window — when an established response dies before delivering
+any event to the consumer (truncated body, connection reset, idle stall before
+the first frame), the whole request is re-issued while budget remains. Once a
+single event has been delivered the strict no-replay boundary applies and
+errors surface exactly once.
+
 Discovery uses the declared provider kind and base URL: OpenAI-compatible and
 Responses use `/models`; Anthropic uses `/models` with bounded cursor pages;
 Google uses `/models`, keeps `generateContent` rows, and strips `models/`;
