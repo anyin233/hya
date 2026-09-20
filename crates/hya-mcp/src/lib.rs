@@ -12,8 +12,10 @@
 
 /// Tool bridge: MCP tool → [`hya_tool::Tool`] with namespacing and output shaping.
 pub mod bridge;
-/// JSON-RPC stdio client, child process guard, and client errors.
+/// JSON-RPC client over stdio/HTTP transports, child process guard, and errors.
 pub mod client;
+/// Streamable HTTP and classic HTTP+SSE transports.
+mod http;
 /// Multi-server manager, config, prepare entry, and status snapshots.
 pub mod manager;
 /// Wire types for JSON-RPC and MCP tools/list / tools/call payloads.
