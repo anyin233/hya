@@ -62,7 +62,7 @@ impl SessionStore {
             return Err(StoreError::MailboxRejected(format!(
                 "`{address}` is not a teammate you can message; you may message \
                  your parent, your same-parent teammates, and the agents you \
-                 lead — run `roster` to see them"
+                 lead — run `list_channel` to see them"
             )));
         };
         // resolve_in_scope only returns roster keys, so this cannot miss.

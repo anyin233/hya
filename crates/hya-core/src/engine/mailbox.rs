@@ -181,6 +181,10 @@ impl SessionEngine {
         let from = self.resolve_handle(root, from_session).await?;
         // ADR-0016 `dm` default: a subordinate omits `to` (or writes the
         // parent sentinel) and the engine resolves its one upward peer.
+        // The sentinel prefers the DM channel minted at registration time:
+        // it exists regardless of whether the parent handle is in the roster
+        // yet (a lazily registered root) and carries the same scope
+        // guarantees; the handle fallback keeps older projections working.
         let to = match to {
             MailEndpoint::Handle(target)
                 if target.trim().is_empty()
@@ -190,7 +194,15 @@ impl SessionEngine {
                 let parent = hya_proto::scope::parent_path(&from)
                     .map(str::to_string)
                     .unwrap_or_else(|| hya_proto::scope::ROOT_HANDLE.to_string());
-                MailEndpoint::Handle(parent)
+                let dm_channel = self
+                    .read_projection(root)
+                    .await
+                    .ok()
+                    .and_then(|projection| {
+                        dm_channel_between(&projection, &from, &parent)
+                            .map(MailEndpoint::Channel)
+                    });
+                dm_channel.unwrap_or(MailEndpoint::Handle(parent))
             }
             other => other,
         };
@@ -633,6 +645,27 @@ fn handoff_section(doc: &str, heading: &str) -> String {
         }
     }
     out.trim().chars().take(200).collect()
+}
+
+/// The DM channel registration minted between `from` and `parent`, if any.
+///
+/// Channel ids are their own keys (`DM-<8>`), members carry canonical paths,
+/// and the first minted pair wins — the same rule steer's `dm_by_peer` uses.
+fn dm_channel_between(
+    projection: &hya_proto::Projection,
+    from: &str,
+    parent: &str,
+) -> Option<String> {
+    projection
+        .team
+        .channels
+        .iter()
+        .find(|(_, channel)| {
+            channel.kind == hya_proto::ChannelKind::Dm
+                && channel.members.iter().any(|member| member == from)
+                && channel.members.iter().any(|member| member == parent)
+        })
+        .map(|(channel, _)| channel.clone())
 }
 
 #[cfg(test)]
@@ -1119,6 +1152,87 @@ mod tests {
             )
             .await;
         assert!(down.is_err(), "the root must not reach a grandchild");
+    }
+
+    /// Mint the DM channel the resident supervisor creates at registration
+    /// time: one direct line between `parent_path` and `child_path`.
+    async fn mint_dm(engine: &SessionEngine, root: SessionId, parent_path: &str, child_path: &str) {
+        let channel = hya_proto::mint_channel_id(hya_proto::ChannelKind::Dm);
+        engine
+            .emit_for_actor(
+                None,
+                root,
+                Event::ChannelCreated {
+                    session: root,
+                    channel: channel.clone(),
+                    kind: hya_proto::ChannelKind::Dm,
+                    unit: None,
+                    members: vec![parent_path.to_string(), child_path.to_string()],
+                },
+            )
+            .await
+            .unwrap();
+    }
+
+    /// The `^parent` sentinel resolves the DM channel with the direct parent
+    /// instead of the parent *handle*, so a lazily registered root (the run-2
+    /// bounce: "main is not a teammate you can message") still receives the
+    /// mail through the channel that exists since registration time.
+    #[tokio::test]
+    async fn parent_sentinel_routes_through_the_dm_channel_when_root_is_lazy() {
+        let engine = engine().await;
+        // Deliberately NO ensure_root_registered here: the roster has no `main`.
+        let root = root_team(&engine).await;
+        let child = register_child(&engine, root, root, "main", "general-1").await;
+        mint_dm(&engine, root, "main", &child.path).await;
+
+        let receipt = engine
+            .mail_send(
+                child.session,
+                MailEndpoint::Handle("^parent".to_string()),
+                MailKind::Message,
+                "report from the field".to_string(),
+            )
+            .await
+            .expect("the DM channel with the parent must absorb the sentinel");
+
+        assert!(
+            matches!(receipt.to, MailEndpoint::Channel(ref channel) if channel.starts_with("DM-")),
+            "the sentinel resolved to the DM channel, got {:?}",
+            receipt.to
+        );
+        assert_eq!(
+            inbox(&engine, root, "main").await,
+            vec!["report from the field".to_string()],
+            "the parent's inbox receives the mail"
+        );
+    }
+
+    /// At depth ≥ 2 the sentinel addresses the DIRECT parent's DM — never the
+    /// root — and still succeeds even though the root is registered.
+    #[tokio::test]
+    async fn parent_sentinel_at_depth_two_targets_the_direct_parent_dm() {
+        let engine = engine().await;
+        let org = org(&engine).await;
+        mint_dm(&engine, org.root, &org.lead_1.path, &org.worker_1.path).await;
+
+        let receipt = engine
+            .mail_send(
+                org.worker_1.session,
+                MailEndpoint::Handle("^".to_string()),
+                MailKind::Message,
+                "status up".to_string(),
+            )
+            .await
+            .expect("depth-two sentinel delivery reaches the direct parent");
+
+        assert!(matches!(receipt.to, MailEndpoint::Channel(_)));
+        assert_eq!(
+            inbox(&engine, org.root, &org.lead_1.path).await,
+            vec!["status up".to_string()],
+            "lead-1 (the direct parent) receives it; main does not"
+        );
+        assert!(inbox(&engine, org.root, "main").await.is_empty());
     }
 
     /// A relative leaf and the full canonical path name the same agent (AC2).    /// A relative leaf resolves inside the sender's own unit even when another
