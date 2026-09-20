@@ -58,7 +58,7 @@ mod skill_catalog;
 /// Subagent spawn plane and request types used by the `task` tool.
 pub mod spawn;
 mod task;
-/// In-memory per-session todo list plane and the `todowrite` tool types.
+/// In-memory per-session todo list plane and the `todo__` tool group.
 pub mod todo;
 /// Tool trait, registry, permission class metadata, and local search builtins.
 pub mod tool;
@@ -111,7 +111,7 @@ pub use spawn::{
     InlineAgent, MemberOutcome, SpawnError, SpawnMember, SpawnRequest, SpawnRequestSendError,
     SpawnRequestSink, SpawnerPlane,
 };
-pub use todo::{TodoItem, TodoPlane, TodoPriority, TodoStatus};
+pub use todo::{SessionTodos, TodoItem, TodoPlane, TodoStatus};
 pub use tool::{
     DuplicateName, ResolvedTool, Tool, ToolCtx, ToolError, ToolOperation, ToolPermission,
     ToolRegistry, ToolRegistrySnapshot, ToolResultPolicy,

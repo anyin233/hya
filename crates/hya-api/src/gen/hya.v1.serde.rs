@@ -21808,6 +21808,7 @@ impl serde::Serialize for TodoStatus {
             Self::Pending => "TODO_STATUS_PENDING",
             Self::InProgress => "TODO_STATUS_IN_PROGRESS",
             Self::Completed => "TODO_STATUS_COMPLETED",
+            Self::Blocked => "TODO_STATUS_BLOCKED",
         };
         serializer.serialize_str(variant)
     }
@@ -21823,6 +21824,7 @@ impl<'de> serde::Deserialize<'de> for TodoStatus {
             "TODO_STATUS_PENDING",
             "TODO_STATUS_IN_PROGRESS",
             "TODO_STATUS_COMPLETED",
+            "TODO_STATUS_BLOCKED",
         ];
 
         struct GeneratedVisitor;
@@ -21867,6 +21869,7 @@ impl<'de> serde::Deserialize<'de> for TodoStatus {
                     "TODO_STATUS_PENDING" => Ok(TodoStatus::Pending),
                     "TODO_STATUS_IN_PROGRESS" => Ok(TodoStatus::InProgress),
                     "TODO_STATUS_COMPLETED" => Ok(TodoStatus::Completed),
+                    "TODO_STATUS_BLOCKED" => Ok(TodoStatus::Blocked),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }

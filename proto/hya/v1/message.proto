@@ -238,6 +238,8 @@ enum TodoStatus {
   TODO_STATUS_IN_PROGRESS = 2;
   // Done.
   TODO_STATUS_COMPLETED = 3;
+  // Waiting on an external unblock (dependency, user input, review).
+  TODO_STATUS_BLOCKED = 4;
 }
 
 message GetSessionTodoRequest {

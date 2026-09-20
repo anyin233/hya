@@ -32,7 +32,7 @@ use crate::shell::ShellTool;
 use crate::skill::{SkillPlane, SkillTool};
 use crate::spawn::SpawnerPlane;
 use crate::task::TaskTool;
-use crate::todo::{TodoPlane, TodoWriteTool};
+use crate::todo::TodoPlane;
 use crate::webfetch::WebFetchTool;
 use crate::websearch::{WebSearchPlane, WebSearchTool};
 use crate::workflow_plane::{WorkflowPlane, WorkflowTool};
@@ -474,8 +474,14 @@ impl ToolRegistry {
         registry.insert_aliased_builtin("apply_patch", "patch", Arc::new(ApplyPatchTool));
         registry.insert_aliased_builtin("webfetch", "fetch", Arc::new(WebFetchTool));
         registry.insert_aliased_builtin("websearch", "search", Arc::new(WebSearchTool));
-        registry.insert_aliased_builtin("todowrite", "todo", Arc::new(TodoWriteTool));
         registry.insert_aliased_builtin("plan_exit", "plan", Arc::new(PlanExitTool));
+        for tool in [
+            Arc::new(crate::todo::TodoReadTool) as Arc<dyn Tool>,
+            Arc::new(crate::todo::TodoUpdateStatusTool),
+            Arc::new(crate::todo::TodoUpdateContentTool),
+        ] {
+            registry.insert_builtin(tool);
+        }
         registry
     }
 
@@ -742,7 +748,7 @@ impl ToolRegistrySnapshot {
 fn builtin_permission(name: &str) -> ToolPermission {
     match name {
         "read" | "ls" | "glob" | "find" | "grep" | "lsp" | "skill" | "list_agents"
-        | "list_channel" | "search_agent" => ToolPermission::ReadOnly,
+        | "list_channel" | "search_agent" | "todo__read" => ToolPermission::ReadOnly,
         "task" | "kill" => ToolPermission::Task,
         "shell" | "bash" => ToolPermission::Command,
         _ => ToolPermission::Tool,

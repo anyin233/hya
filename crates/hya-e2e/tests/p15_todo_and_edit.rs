@@ -1,24 +1,25 @@
-//! T1.15 — todowrite plane + edit tool side effects (basic agent tools beyond shell/fs write).
+//! T1.15 — todo__ tool group + edit tool side effects (basic agent tools beyond shell/fs write).
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use hya_e2e::{E2eEnvBuilder, text_step, tool_step};
 use serde_json::json;
 
 #[tokio::test]
-async fn t1_15_todowrite_visible_on_session_todo_route() {
+async fn t1_15_todo_group_visible_on_session_todo_route() {
     let env = E2eEnvBuilder::new()
         .scripts(vec![
             tool_step(
-                "todowrite",
+                "todo__update_content",
                 json!({
-                    "todos": [
-                        {
-                            "content": "E2E_TODO_ITEM",
-                            "status": "pending",
-                            "priority": "high"
-                        }
+                    "operations": [
+                        { "op": "add", "content": "E2E_TODO_ITEM" },
+                        { "op": "add", "content": "E2E_SECOND_ITEM" }
                     ]
                 }),
+            ),
+            tool_step(
+                "todo__update_status",
+                json!({ "updates": [{ "id": "1", "status": "in_progress" }] }),
             ),
             text_step("TODO_WRITTEN"),
         ])
@@ -35,8 +36,18 @@ async fn t1_15_todowrite_visible_on_session_todo_route() {
     let todos = env.session_todos(&session).await.expect("todo list");
     let blob = todos.to_string();
     assert!(
-        blob.contains("E2E_TODO_ITEM"),
-        "GET /session/{{id}}/todo must list written item; todos={todos}; {}",
+        blob.contains("E2E_TODO_ITEM") && blob.contains("E2E_SECOND_ITEM"),
+        "GET /session/{{id}}/todo must list written items; todos={todos}; {}",
+        env.diagnostics()
+    );
+    assert!(
+        blob.contains("IN_PROGRESS") || blob.contains("in_progress"),
+        "status update must reach the todo projection; todos={todos}; {}",
+        env.diagnostics()
+    );
+    assert!(
+        blob.contains("\"id\":\"1\"") || blob.contains("\"id\": \"1\""),
+        "stable plane ids must reach the wire; todos={todos}; {}",
         env.diagnostics()
     );
 }

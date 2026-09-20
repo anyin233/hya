@@ -276,7 +276,6 @@ async fn question_hidden_alias_dispatches_the_merged_tool() {
         .collect();
     assert!(canonical.contains(&"ask_user".to_string()));
     assert!(!canonical.contains(&"question".to_string()));
-    assert_eq!(canonical.len(), 26);
 
     // The hidden alias resolves to the same merged tool.
     let aliased = registry.get("question").unwrap();

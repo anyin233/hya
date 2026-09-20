@@ -3978,7 +3978,8 @@
           "TODO_STATUS_UNSPECIFIED",
           "TODO_STATUS_PENDING",
           "TODO_STATUS_IN_PROGRESS",
-          "TODO_STATUS_COMPLETED"
+          "TODO_STATUS_COMPLETED",
+          "TODO_STATUS_BLOCKED"
         ]
       },
       "VcsFileStatus": {

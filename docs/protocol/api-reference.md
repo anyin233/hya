@@ -2577,6 +2577,7 @@ Lifecycle status of a todo item.
 | `TODO_STATUS_PENDING` | 1 | Not started. |
 | `TODO_STATUS_IN_PROGRESS` | 2 | Currently being worked on. |
 | `TODO_STATUS_COMPLETED` | 3 | Done. |
+| `TODO_STATUS_BLOCKED` | 4 | Waiting on an external unblock (dependency, user input, review). |
 
 ### `VcsFileStatus`
 
