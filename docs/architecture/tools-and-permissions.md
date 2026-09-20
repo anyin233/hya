@@ -65,7 +65,7 @@ stay globally unique inside a registry. `hya-tool` exposes the mechanism in
 | `todo__update_status` | `{ "updates": [{ "id", "status": "pending"\|"in_progress"\|"blocked"\|"completed" }] }` | Full snapshot after batch status updates. |
 | `todo__update_content` | `{ "operations": [{ "op": "add", "content" } \| { "op": "remove", "id" } \| { "op": "edit", "id", "content" }] }` | Full snapshot after batch content edits (atomic; adds report assigned ids). |
 | `plan_exit` (`plan`) | plan status input | Plan-mode completion signal. |
-| `send` | `{ "channel"?: string, "body": string }` — `#channel`/channel id/handle/`^parent`; omitted = role default | Delivery receipt: group channel = broadcast announcement, DM channel/handle = private mail (archived child revives), default = led unit or parent. |
+| `send` | `{ "channel"?: string, "body": string }` — `#channel`/channel id/handle/`^parent`; omitted = role default | Delivery receipt: group channel = broadcast announcement, DM channel/handle = private mail (archived child revives), default = led unit or parent. `^parent` auto-infers the DM channel minted with the direct parent at registration time (works even when the parent handle is not yet in the roster, and at any depth — it never targets the root); without a DM channel it falls back to the parent handle. |
 | `list_channel` | (none) | The caller's channels: group pipes with can-post flag, DM channels with peer + unread. |
 | `search_agent` | `{ "query"?: string }` | The caller's archived direct children (handle, digests, degraded flag). |
 

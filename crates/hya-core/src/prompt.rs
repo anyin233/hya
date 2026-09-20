@@ -154,7 +154,7 @@ const TEAM_QUICK_REFERENCE: &str = "## Team quick reference\n\
 - New mail arrives automatically appended to tool results (`[NEW MAIL]`) — do NOT poll `list_channel` or sleep waiting for mail; children's live status is in `list_channel`'s team section (busy + last-heartbeat age).\n\
 - `report` is ONLY for subagents to end their own task. As the main agent NEVER call `report` — deliver your final answer as normal text.\n\
 - Read mail history with `read channel://<id>` (latest) or `channel://<id>?last=N`; `list_channel` shows channels + unread counts. A `#id` is never a file path.\n\
-- `send` covers all mail: `#channel` posts on that channel (a group channel broadcasts to your unit — leader-only); a bare handle DMs that vertical peer (`^parent` reaches your parent; an archived child revives with its saved state). Omit the channel to use your default: the unit you lead, else your parent.\n\
+- `send` covers all mail: `#channel` posts on that channel (a group channel broadcasts to your unit — leader-only); a bare handle DMs that vertical peer (`^parent` DMs your parent through your registration DM channel; an archived child revives with its saved state). Omit the channel to use your default: the unit you lead, else your parent.\n\
 - `kill` only works on LIVE agents. Archived agents are gone from the roster — check `list_channel`/`search_agent` first; to reach one again, `send` its handle.";
 
 /// Compose agent base + Environment + discovered project context files.
