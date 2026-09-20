@@ -141,7 +141,7 @@ generic string cap.
   complete raw output in a private mode-0600 hya artifact and retains only the
   bounded inline view. An armed owner removes every unpublished artifact on
   error or cancellation. `env` values are never copied into titles,
-  diagnostics, results, or the TUI.
+  diagnostics, results, or any client surface.
 - **`glob`**: caller patterns stop at 4,096 bytes; returned rows remain capped
   at `SEARCH_LIMIT = 100`. `find` keeps its existing compatibility behavior.
 
@@ -319,9 +319,9 @@ When an action evaluates to `Ask`:
 7. `Reject` returns a permission error, optionally carrying user feedback.
 
 Pending asks coalesce using the same remember scope: native asks group only an
-identical subject, while legacy asks retain action-wide grouping. The CLI TUI
-and server receive ask requests through their existing surfaces. Headless
-`exec`, RPC, and goal flows answer residual asks with `Reject`.
+identical subject, while legacy asks retain action-wide grouping. The server
+surfaces pending asks to connected clients through its interaction endpoints.
+Headless `exec`, RPC, and goal flows answer residual asks with `Reject`.
 
 ### Plugin permission bridge
 

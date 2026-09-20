@@ -23,9 +23,9 @@ plugins, permissions, subagent limits, model categories, and formatter status.
 On startup, hya tries to load `config.yaml` (see
 [`../crates/hya-app/src/config.rs`](../crates/hya-app/src/config.rs) `load()`
 and `config_path()`). `cargo build` only compiles the workspace and does not
-write user config. When the `hya` frontend or a `hya-backend` command starts
-and no file exists, hya creates the config directory and writes a starter
-`config.yaml` before resolving runtime config:
+write user config. When a `hya-backend` command starts and no file exists, hya
+creates the config directory and writes a starter `config.yaml` before
+resolving runtime config:
 
 ```yaml
 default_model: hya/offline
@@ -62,17 +62,11 @@ is printed — so a malformed `categories:` / `subagents:` block looks like the
 keys being ignored.
 
 Normal startup never searches, opens, or imports Compat/OpenCode, Claude, Codex
-CLI, Grok CLI, or another product's configuration. Compat migration is available
-only through the explicit command:
-
-```sh
-hya --import compat
-```
-
-That command imports provider base URLs, model IDs, API-key templates, and
-supported local MCP servers into Hya's own `config.yaml`. Later startup reads
-only that Hya-owned result. First run creates the starter Hya config without an
-import offer.
+CLI, Grok CLI, or another product's configuration. Offline import of supported
+MCP servers and skills from a Compat config is available only through the dev
+task `cargo run -p xtask -- sync-compat`; providers, models, and API keys are
+not imported. Later startup reads only the Hya-owned result. First run creates
+the starter Hya config without an import offer.
 
 How to tell you are offline:
 
@@ -82,11 +76,11 @@ How to tell you are offline:
 
 ## Remembered Agent Models
 
-The `Agent models` TUI flow covers primary Agents, ordinary subagents, and hidden
+Agent model selection covers primary Agents, ordinary subagents, and hidden
 `title`, `summary`, and `compaction` Agents. Defaults and temporary choices have
 separate owners: user configuration files, remembered defaults in the backend
 Session database, and temporary overrides in the root Session event stream.
-Attached and remote TUIs update the backend's state, not the client's files.
+Attached and remote clients update the backend's state, not the client's files.
 
 Model precedence is:
 
@@ -99,17 +93,17 @@ Model precedence is:
 
 Ordinary selection for an unconfigured Agent remembers its base model. For an
 Agent with file or authored configuration, ordinary selection changes only the
-active root Session and its descendants. A Home-screen choice remains a draft
-until the first Session is created. Temporary overrides survive resuming that
-Session but do not affect another root; already captured work remains pinned.
-Clearing an override reveals the configured default again. Unavailable retained
-temporary and remembered identities are not used.
+active root Session and its descendants. Temporary overrides survive resuming
+that Session but do not affect another root; already captured work remains
+pinned. Clearing an override reveals the configured default again. Unavailable
+retained temporary and remembered identities are not used.
 
-Press **Ctrl+S** in either model picker to **Save configured default** for the
-highlighted model. This creates or updates the owning file; it does not erase a
-distinct Session override. The picker shows the destination. Failed saves keep
-the prior effective state and report an error. Old backends without the
+Saving a **configured default** for an Agent creates or updates the owning
+file; it does not erase a distinct Session override. Failed saves keep the
+prior effective state and report an error. Old backends without the
 `agentModelConfiguration` capability retain their original selection behavior.
+(The interactive save flow shipped with the removed legacy TUI; a v1 rpc for
+reading/writing per-Agent preferences has not been re-added yet — see below.)
 
 Built-in Agents use the active Hya `config.yaml` (XDG path with the existing HOME
 fallback). Bundle Agents use `agents/<encoded-bundle-id>/config.yml` beside it.
@@ -138,16 +132,16 @@ surface; the durable preference files above are still read by runtime
 composition (`PersistentAgentModelControl`), and a v1 rpc for reading/writing
 per-Agent preferences has not been re-added yet.
 
-The default interactive database is
+The default durable database is
 `$XDG_STATE_HOME/hya/sessions.db` (with the documented HOME fallback). An
 explicit `--db <PATH>` has an independent preference set. In-memory execution
-does not survive restart. TUI recents, favorites, and variants remain separate
-client presentation state in `<state>/model.json`.
+does not survive restart. Client presentation state such as recents, favorites,
+and variants lives separately in `<state>/model.json`.
 
-On a fresh TUI launch, the backend's effective Agent model is authoritative;
-legacy Agent metadata is used only when no effective model row is available.
-This keeps the displayed model and the next request aligned after restarting
-both the client and the backend against the same database.
+On a fresh client connection, the backend's effective Agent model is
+authoritative; legacy Agent metadata is used only when no effective model row
+is available. This keeps the displayed model and the next request aligned after
+restarting both the client and the backend against the same database.
 
 Non-interactive commands create the starter file without prompting and keep
 machine-readable stdout clean. The only runtime config message they print is
@@ -813,8 +807,8 @@ Network reads (`webfetch` and `websearch`), writes, plugins, MCP tools, and shel
 commands ask by default under `default`/`strict`. Under `allow`, those resource
 checks auto-approve unless a snapshot rule explicitly denies them.
 
-Interactive TUI and server modes forward asks to their existing permission UI
-or endpoint. Headless `exec`, RPC, and goal modes reject unresolved asks.
+Server mode forwards asks to the pending-interaction API for connected clients.
+Headless `exec`, RPC, and goal modes reject unresolved asks.
 `--yolo` replaces the effective model with `danger` before engine construction.
 
 Omitting `permission` is equivalent to `model: default` with no rules. A
@@ -852,27 +846,8 @@ hya honors `HOME` and `XDG_CONFIG_HOME` / `XDG_DATA_HOME` / `XDG_STATE_HOME` /
 | `HYA_DEFER_SIDEPLANES` | When deferred (default), MCP connect runs after the engine is built so the HTTP listener comes up without waiting on MCP handshakes — MCP tools may not be registered for the very first prompt. Set to `0`, `false`, `off`, or `no` (case-insensitive, trimmed) for await-MCP-before-listen. Any other value, empty, or unset means deferred. | deferred (on) | `crates/hya-app/src/runtime.rs` |
 | `HYA_MCP_BACKGROUND_AFTER_MS` | Foreground budget in milliseconds for `mcp__` tool calls. A call still running past the budget moves to the background: the turn gets a `[backgrounded]` tool result immediately, the real result is delivered later as a steered `[background job …]` user prompt, and `hya-backend serve` runs the reclaim turn when the session is idle. Unset, `0`, or unparsable disables backgrounding (every call stays synchronous). | unset | `crates/hya-app/src/runtime.rs`, `crates/hya-core/src/engine/turn.rs` |
 | `HYA_COMPAT_ADAPTER_DIR` | Path to an alternate Compat plugin adapter checkout (`kind: compat` plugins). | Resolution order: this env override, executable-adjacent `../lib/hya/compat-adapter`, then workspace `crates/hya-plugin-compat/adapter`. | `crates/hya-app/src/plugins.rs` |
-| `HYA_FRONTEND_BIN` | Path to the `hya` binary spawned by `hya-backend` frontend integrations. | Newest sibling build, else `hya` on `PATH` | `crates/hya-backend/src/serve.rs` |
-| `HYA_BACKEND_BIN` | Path to the `hya-backend` binary the `hya` / `hya-ts` launcher spawns. After CLI `--backend-bin`, before sibling and `target/{release,debug}` fallbacks. | sibling / workspace target | `crates/hya-ts/src/lib.rs` |
-| `HYA_TUI_TS_DIR` | Highest-priority override for the TypeScript TUI runtime directory. Order: (1) this env, (2) `<exe_dir>/../lib/hya/hya-tui-ts`, (3) `<workspace>/packages/hya-tui-ts`. | installed or workspace path | `crates/hya-ts/src/lib.rs` |
-| `HYA_DB` | Used only when the `hya` / `hya-ts` launcher spawns an **owned** `hya-backend serve` (`hya_sdk::default_session_db_path`): non-empty value becomes the `--db` path on that child; empty string omits `--db` (in-memory). **Not** read by a directly invoked `hya-backend` (use CLI `--db` / `resolve_interactive_db`). | unset → `$XDG_STATE_HOME/hya/sessions.db` (see `docs/cli.md`) | `crates/hya-sdk/src/server.rs` |
-| `HYA_STARTUP_TRACE` | When `1` or `true` (case-insensitive; any other value off), emit newline-delimited JSON startup marks to stderr. Rust emitters (`hya-ts`, `hya-backend`): `{"hya_startup":true,"mark":"<mark>","wall_ms":…,"detail":…}` (`detail` omitted when none). TUI emitter (`startup-trace.ts`) **always** also includes `mono_ms` (monotonic ms from `performance.now()`). Marks include `hya_ts_start`, `backend_spawn`, `backend_listen`, plus backend and TUI marks. | off | `crates/hya-ts/src/main.rs`, `crates/hya-backend/src/serve.rs`, `packages/hya-tui-ts/src/hya/startup-trace.ts` |
-
-### TUI environment variables
-
-| Variable | Effect | Default | Source |
-| --- | --- | --- | --- |
-| `HYA_DISABLE_MOUSE` | Truthy `1`/`true` disables OpenTUI mouse capture regardless of the `mouse` config key. | off | `packages/hya-tui-ts/src/hya/platform.ts` |
-| `HYA_DISABLE_TERMINAL_TITLE` | Suppresses all terminal-title writes even when `terminal.title.toggle` is on. | off | same |
-| `HYA_DISABLE_COPY_ON_SELECT` | Disables copy-on-mouse-selection (`onMouseUp` auto-copy). **Always true on win32.** Does **not** disable the selection key intercept — when this flag is true the TUI *registers* that intercept so keys can still operate on a selection. | off (except win32) | same |
-| `HYA_SHOW_TTFD` | Renders OpenTUI’s first-paint overlay. | off | same |
-| `HYA_WAIT_THEME` | Classic mode: block first paint up to 1s waiting for OS light/dark. Default is instant dark with async correction. | off | same |
-| `HYA_SYNC_PLUGIN_START` | Classic mode: gate shell routes on sequential builtin plugin-host start. Default paints shell chrome immediately. | off | same |
-| `HYA_VERSION` | Version string in sidebar/home footer. | `local` | same |
-| `HYA_CHANNEL` | Release channel string. A channel other than `latest` also reveals the raw session id in the sidebar title. | `local` | same |
-| `HYA_STARTUP_TRACE` | (Also listed above.) TUI emits its own marks when enabled. | off | `packages/hya-tui-ts/src/hya/startup-trace.ts` |
-| `HYA_ROUTE` | JSON picking the initial route (`home` / `session`+sessionID / `plugin`+id). | unset | `packages/hya-tui-ts/src/upstream/app.tsx` |
-| `HYA_FAST_BOOT` | When set, skips the initial loading overlay. | unset | same |
+| `HYA_BACKEND_BIN` | Binary under test for the `startup-bench` xtask; overrides the default `hya-backend serve` target. | workspace `target/{profile}` binary | `crates/xtask/src/startup_bench.rs` |
+| `HYA_STARTUP_TRACE` | When `1` or `true` (case-insensitive; any other value off), `hya-backend serve` emits a newline-delimited JSON startup mark to stderr after the listen line: `{"hya_startup":true,"mark":"backend_listen","wall_ms":…,"detail":"<url>"}`. | off | `crates/hya-backend/src/serve.rs` |
 
 ### Compat adapter (`HYA_*` / `COMPAT_*`)
 
@@ -897,26 +872,9 @@ Read by the bundled Compat plugin adapter
 | Variable | Effect | Source |
 | --- | --- | --- |
 | `BUN` | Bun binary used to run the bundled Compat adapter. | `crates/hya-app/src/plugins.rs` |
-| `EDITOR` / `VISUAL` | External editor for the TUI (`openEditor`): `/editor` (`<leader>e`) **and** session export (`/export`, `<leader>x`). On the saving export path the editor output is written back over the exported `.md`. `$VISUAL` is preferred when set. | `packages/hya-tui-ts/src/upstream/editor.ts` |
 | `SHELL` | Shell program for PTY sessions on the v1 PTY routes; also listed among shell candidates. Defaults to `/bin/sh` when **unset**. A variable that is set but empty is **not** replaced — PTY create may receive an empty command. | `crates/hya-server/src/support/pty_shell.rs` |
 | `COMPAT_REPO_CLONE_GITHUB_BASE_URL` | Overrides the GitHub base URL when cloning reference repositories (Enterprise / internal mirror). Trailing slashes trimmed. Default remote is `https://github.com/<path>.git`. Store under `$XDG_DATA_HOME/compat/repos` (else `~/.local/share/compat/repos`). | `crates/hya-server/src/support/reference_repository.rs` |
 | `COMPAT_TERMINAL` | **Output only:** set to `1` in every PTY child environment so programs can detect the hya terminal. hya never reads it. | `crates/hya-server/src/support/pty_state.rs` |
-
-**Editor integration probes** (see also [Editor context integration](#editor-context-integration)
-and [TUI architecture](architecture/tui.md)): `OPENCODE_EDITOR_SSE_PORT` /
-`CLAUDE_CODE_SSE_PORT` (live editor SSE), `OPENCODE_ZED_DB` (Zed selection DB
-path), `ZED_TERM` / `TERM_PROGRAM` (Zed detection). These are not hya-owned
-settings; accepted values and precedence are defined by the host environment and
-the TUI discovery code.
-
-**Terminal / clipboard probes** (not editor integration):
-
-| Variable | Effect |
-| --- | --- |
-| `TMUX` | When set, OSC-52 copy uses the tmux DCS passthrough wrap; terminal environment reports `multiplexer: "tmux"`. |
-| `STY` | When set (and not already tmux), multiplexer reports `"screen"`. |
-| `WAYLAND_DISPLAY` | Selects Wayland display-server labeling and prefers `wl-copy` for native clipboard write when present. |
-| `DISPLAY` | Used with other probes to classify the display server (e.g. X11) when Wayland is absent. |
 
 ## MCP Servers
 
@@ -1442,8 +1400,8 @@ the default command is not on PATH. Custom servers require `command` and
 `extensions`. Configuration changes take effect after restarting the backend.
 Servers are shared per language/workspace root; requests use advertised server
 capabilities. Connection starts and failures refresh the LSP plane's internal
-status (the former Compat `/lsp` status route and its TUI refresh events are
-deleted; the v1 surface does not yet expose an LSP status rpc).
+status (the former Compat `/lsp` status route is deleted; the v1 surface does
+not yet expose an LSP status rpc).
 
 Write/Edit/Patch diagnostics are limited to the requesting workdir and explicitly
 authorized target files. Versioned publications or pull diagnostics track the
@@ -1481,9 +1439,9 @@ The same four paths may also declare inline slash commands (see
 
 ## Custom Commands
 
-Built-in slash commands (`/sessions`, `/models`, `/help`, …) are documented in
-[TUI Keybindings](tui-keybindings.md). This section covers **user-defined**
-prompt commands.
+Built-in slash commands are served by the backend command catalog over
+`GET /v1/commands` (see [CLI Reference](cli.md#backend-command-catalog)). This
+section covers **user-defined** prompt commands.
 
 ### Disk markdown commands
 
@@ -1648,124 +1606,3 @@ Example bag fragment:
 }
 ```
 
-## TUI Configuration
-
-The TypeScript TUI validates a config object through
-[`packages/hya-tui-ts/src/upstream/config/index.tsx`](../packages/hya-tui-ts/src/upstream/config/index.tsx).
-The current launcher entrypoint applies **defaults only** via
-`resolve({}, { terminalSuspend: … })` and does **not** load a separate on-disk
-TUI config file. The schema below is the validated shape and its defaults when a
-host supplies a non-empty object (or when defaults apply).
-
-| Key | Default / range | Meaning |
-| --- | --- | --- |
-| `theme` | `hya` | Theme name. |
-| `keybinds` | factory defaults | Overrides keyed by **Definition names** from `keybind.ts` (e.g. `app_exit`, `session_new`, `command_list`, `editor_open`, `status_view`, plus dotted keys such as `dialog.select.*` and `prompt.autocomplete.*`). **Not** the dotted command names from the palette (`session.new`, `app.exit` — those throw `Unrecognized keybind(s): …`). Each value is a **`BindingValue`** (see shapes below). Default **bindings** (keys users press) are listed in [TUI Keybindings](tui-keybindings.md); that table’s Command column is not the override vocabulary. |
-| `leader_timeout` | `2000` (positive int, ms) | Leader chord timeout. |
-| `attention.enabled` | `false` | Master switch for notifications/sounds. |
-| `attention.notifications` | `true` | Desktop notifications when attention is enabled. |
-| `attention.sound` | `true` | Sound when attention is enabled. |
-| `attention.volume` | `0.4` (0–1) | Playback volume. |
-| `attention.sound_pack` | `hya.default` | Active sound pack id. |
-| `attention.sounds` | `{}` | Per-slot file overrides: `default`, `question`, `permission`, `error`, `done`, `subagent_done`. |
-| `prompt.max_height` | ⅓ of terminal height, min 6 | Caps the prompt textarea. |
-| `prompt.max_width` | `75`, or `"auto"` = max(75, 70% width) | Home prompt max width. |
-| `scroll_speed` | ≥ `0.001` | Scroll multiplier. |
-| `scroll_acceleration` | `{ enabled }` | Applied to every scrollbox including the sidebar and observation panes. |
-| `diff_style` | `auto` | `auto` = split above 120 columns; `stacked` = always unified. |
-| `mouse` | `true` | ANDed with `HYA_DISABLE_MOUSE`. |
-
-#### `keybinds` value shapes
-
-Schema:
-[`packages/hya-tui-ts/src/upstream/config/keybind.ts`](../packages/hya-tui-ts/src/upstream/config/keybind.ts)
-(`KeyStroke`, `BindingObject`, `BindingItem`, `BindingValueSchema`).
-
-Top-level **`BindingValue`** for one definition name:
-
-| Shape | Role |
-| --- | --- |
-| `false` or `"none"` | Disable that binding (**top-level only** — not valid inside an array) |
-| **`BindingItem`** | Single binding (see below) |
-| **array of `BindingItem`** | Multiple alternate chords for the same command |
-
-A **`BindingItem`** is one of:
-
-1. **Key string** — e.g. `"ctrl+c"`, `"ctrl+c,ctrl+d,<leader>q"` (comma-separated chords in one string are a single default encoding used by factory defaults).
-2. **`KeyStroke` object** — `{ "name": string, "ctrl"?: bool, "shift"?: bool, "meta"?: bool, "super"?: bool, "hyper"?: bool }`. Separate union member; not the same as `BindingObject`.
-3. **`BindingObject`** — **requires** `key` (`string` **or** nested `KeyStroke`). Optional: `event` (`"press"` \| `"release"`), `preventDefault`, `fallthrough`. Writing `{ "event": "press" }` without `key` fails schema decode.
-
-Examples:
-
-```json
-{
-  "keybinds": {
-    "app_exit": false,
-    "app_debug": "none",
-    "session_new": "ctrl+n",
-    "command_list": { "name": "p", "ctrl": true },
-    "editor_open": {
-      "key": "ctrl+e",
-      "event": "press",
-      "preventDefault": true
-    },
-    "status_view": [
-      "ctrl+s",
-      { "key": { "name": "s", "meta": true }, "fallthrough": false }
-    ]
-  }
-}
-```
-
-`false` / `"none"` **inside** an array is rejected; only top-level values may use those disable literals.
-
-Example object (when a host loads it):
-
-```json
-{
-  "theme": "catppuccin",
-  "leader_timeout": 2000,
-  "attention": {
-    "enabled": true,
-    "volume": 0.4,
-    "sound_pack": "hya.default"
-  },
-  "prompt": { "max_width": "auto" },
-  "diff_style": "auto",
-  "mouse": true
-}
-```
-
-### Where the TUI stores state
-
-Paths come from `HyaPaths` (`packages/hya-tui-ts/src/hya/platform.ts`): each is
-`…/hya` under the XDG base (or home-relative fallback).
-
-| XDG base | Directory | Contents |
-| --- | --- | --- |
-| `XDG_DATA_HOME` | `…/hya` (fallback `~/.local/share/hya`) | Data root; TUI worktree root is **`$XDG_DATA_HOME/hya/worktree`** (`HyaPaths.data + "/worktree"`) |
-| `XDG_CACHE_HOME` | `…/hya` (fallback `~/.cache/hya`) | Cache |
-| `XDG_CONFIG_HOME` | `…/hya` (fallback `~/.config/hya`) | Config dir (shared naming with backend; launcher does not load a separate TUI config file from here) |
-| `XDG_STATE_HOME` | `…/hya` (fallback `~/.local/state/hya`) | See files below |
-
-**State files under `$XDG_STATE_HOME/hya/`:**
-
-| File | Role |
-| --- | --- |
-| `model.json` | Recent + favorite models (`context/local.tsx`) |
-| `session.json` | Session pin list for nine quick-switch slots (`pinned: string[]`) |
-| `kv.json` | All other TUI KV flags (`context/kv.tsx`) — e.g. `thinking_mode`, `tips_hidden`, `diff_wrap_mode`, `terminal_title_enabled`, `paste_summary_enabled`, `sidebar`, `timestamps`, `scrollbar_visible`, `tool_details_visibility`, `generic_tool_output_visibility`, `which_key_layout`, `which_key_pending_preview`, `diff_viewer_show_file_tree`, `diff_viewer_single_patch`, `diff_viewer_view`, `attention_sound_pack` |
-
-Invalid or unreadable `model.json` content is discarded on load (no startup
-toast). Warnings appear only when a **selected** model is not served by any
-configured provider. Stale pins whose session no longer exists are filtered out
-on read.
-
-### Editor context integration
-
-The TUI discovers a live editor connection via `OPENCODE_EDITOR_SSE_PORT` or
-`CLAUDE_CODE_SSE_PORT`, and reads Zed’s selection database at `OPENCODE_ZED_DB`
-(Zed detected via `ZED_TERM` / `TERM_PROGRAM`) to attach the current file and
-selection to the prompt. The attached label appears in the prompt footer;
-`prompt.editor_context.clear` dismisses it
-([`packages/hya-tui-ts/src/upstream/context/editor.ts`](../packages/hya-tui-ts/src/upstream/context/editor.ts)).

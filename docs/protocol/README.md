@@ -1,7 +1,7 @@
 # hya Protocol Guide (v1)
 
-This guide explains how to integrate any client — TUI, GUI, WebUI, CLI, or
-service — with the hya backend over the v1 API. The same contract is served
+This guide explains how to integrate any client — GUI, WebUI, CLI, service, or
+a future TUI — with the hya backend over the v1 API. The same contract is served
 over two transports with identical functionality:
 
 - **HTTP/JSON + SSE + WebSocket** (documented here; see

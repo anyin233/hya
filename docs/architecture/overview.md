@@ -22,7 +22,7 @@ SessionEngine
 Projection reducer
    |
    v
-TUI / API clients / transcript renderers
+API clients / transcript renderers
 ```
 
 ## Layer Boundaries
@@ -36,7 +36,7 @@ TUI / API clients / transcript renderers
 | Persistence | [`hya-store`](../../crates/hya-store) | Append and replay events from SQLite; fold projections on read. |
 | Runtime | [`hya-core`](../../crates/hya-core) | Own sessions, turn execution, durable Workflow execution/replay, event publication, hooks, compaction, goal/loop/team primitives. |
 | Composition/control | [`hya-app`](../../crates/hya-app), [`hya-bundle`](../../crates/hya-bundle) | Build runtime bindings, admit Workflow commands, and model AgentBundle/WorkflowBundle packages. |
-| Surfaces/transports | [`hya`](../../crates/hya), [`hya-ts`](../../crates/hya-ts), [`hya-backend`](../../crates/hya-backend), [`hya-server`](../../crates/hya-server), [`hya-api`](../../crates/hya-api), [`hya-client`](../../crates/hya-client), [`hya-sdk-v1`](../../crates/hya-sdk-v1), [`hya-plugin-compat`](../../crates/hya-plugin-compat), [`hya-tui-ts`](../../packages/hya-tui-ts) | Expose the launcher, CLI, the `hya.v1` HTTP/SSE/WebSocket + gRPC contract, typed clients, the Compat plugin adapter, and the TypeScript/OpenTUI frontend. The legacy `hya-sdk`/`hya-native` Compat transport serves no live surface. |
+| Surfaces/transports | [`hya-backend`](../../crates/hya-backend), [`hya-server`](../../crates/hya-server), [`hya-api`](../../crates/hya-api), [`hya-client`](../../crates/hya-client), [`hya-sdk-v1`](../../crates/hya-sdk-v1), [`hya-plugin-compat`](../../crates/hya-plugin-compat) | Expose the CLI, the `hya.v1` HTTP/SSE/WebSocket + gRPC contract, typed clients, and the Compat plugin adapter. The legacy Compat transport crates and the TypeScript TUI were removed; there is no interactive frontend today. |
 
 ## Turn Flow
 
@@ -72,8 +72,8 @@ The event log is the source of truth. This gives hya a few useful properties:
 
 ## Current Runtime Surfaces
 
-- The default `hya` command delegates to `hya-ts`, which starts the
-  TypeScript/OpenTUI frontend and an owned local backend.
+- Bare `hya-backend` prints a version banner plus guidance (serve / exec / -p);
+  no interactive frontend is bundled.
 - `hya-backend exec` runs one turn and prints a transcript.
 - `hya-backend run` is a Compat-compatible alias for headless prompt execution.
 - `hya-backend -p` runs goal mode with an independent model-backed evaluator.

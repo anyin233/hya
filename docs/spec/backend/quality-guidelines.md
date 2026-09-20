@@ -406,8 +406,8 @@ engine.refresh_runtime(|candidate| {
 
 ### 2. Signatures
 
-- Release tag: `vX.Y.Z`, where `X.Y.Z` must match Cargo's `hya` package version.
-- Cargo command: `cargo build --release --locked -p hya -p hya-backend -p hya-ts --bins --target x86_64-unknown-linux-gnu`.
+- Release tag: `vX.Y.Z`, where `X.Y.Z` must match Cargo's `hya-backend` package version.
+- Cargo command: `cargo build --release --locked -p hya-backend --bins --target x86_64-unknown-linux-gnu`.
 - Release archive: `hya-<version>-x86_64-unknown-linux-gnu.tar.gz`.
 - Checksum file: `SHA256SUMS` generated beside the release archive.
 - Non-publishing rehearsal (requires Bun `1.3.14` and `actionlint` `1.7.12` on
@@ -430,23 +430,11 @@ cargo run -p xtask -- release-rehearsal \
 - Build provenance attestations are generated for the archive and checksum.
 - Third-party release actions are pinned to immutable commit SHAs.
 - The publishing job uses the `release` environment so repository settings can require manual approval.
-- Within the release archive, the payload includes the three shipped Rust
-  binaries, the prepared `lib/hya/hya-tui-ts` runtime, the production
-  `lib/hya/compat-adapter`, and the generated member
+- Within the release archive, the payload includes the shipped `hya-backend`
+  binary, the production `lib/hya/compat-adapter`, and the generated member
   `examples/hya-argus-example.hyabundle`; it does not add `hya-updater`.
-- The TUI payload is a recursive copy of `packages/hya-tui-ts/src`, not a
-  maintained source allowlist. Package-layout smoke and archive inspection must
-  require at least one nested hya-owned source path in addition to
-  `src/main.tsx`.
-- Copy `packages/hya-tui-ts/NOTICE` and root `THIRD_PARTY_NOTICES` to distinct
-  runtime destinations. The workflow and rehearsal must independently require
-  each copy, packaged presence, byte comparison with its source, and archive
-  member. A check for one notice cannot satisfy the other.
-- The packaged TUI `node_modules` tree is release content. Workflow smoke and
-  archive inspection require it. The source installer validates the staged
-  directory plus required OpenTUI and SDK client entries before moving any
-  installed path; a staging failure leaves the previous install untouched, and
-  a post-placement failure uses the existing backup rollback.
+  (The legacy frontend launcher/runtime payload was removed with the legacy
+  TUI.)
 - `scripts/package-argus-example.sh` generates that member from tracked source
   `bundles/examples/argus-example`; no root `examples/` artifact is an input.
 - The rehearsal requires the explicit `--no-publish` guard, builds and packages
@@ -458,7 +446,7 @@ cargo run -p xtask -- release-rehearsal \
 
 - Missing `v` tag prefix -> fail before build.
 - Tag version is not semver-shaped -> fail before build.
-- Tag version differs from `cargo metadata` package version for `hya` -> fail before build.
+- Tag version differs from `cargo metadata` package version for `hya-backend` -> fail before build.
 - Missing or empty `CHANGELOG.md` -> fail before publishing.
 - `CHANGELOG.md` first heading differs from the tag version -> fail before build.
 - Build, archive, checksum, or packaged-binary smoke failure -> skip release publishing.
@@ -468,10 +456,9 @@ cargo run -p xtask -- release-rehearsal \
   rehearsal fails its pinned prerequisite check.
 - Missing Compat adapter runtime, Argus package, locked production dependency,
   or archive member -> package/rehearsal smoke fails before publication.
-- Missing recursive source copy, nested source smoke/archive marker, either
-  notice copy/presence/byte comparison/archive marker, or TUI `node_modules`
-  smoke/archive marker -> workflow validation fails closed and names the exact
-  missing command before prerequisites or build.
+- Missing adapter payload, locked production dependency, or archive member in
+  the staged/extracted tree -> workflow validation fails closed and names the
+  exact missing command before prerequisites or build.
 - Installer staging lacks `node_modules` or a required runtime dependency ->
   fail before backups/swaps with the missing relative path; clean temporary
   staging and retain the previous install.
@@ -482,14 +469,13 @@ cargo run -p xtask -- release-rehearsal \
 - Base: first release has no historical changelog; keep `docs/changes/.gitkeep` and root `CHANGELOG.md` for the current version.
 - Bad: appending old release notes to root `CHANGELOG.md`; this publishes stale history as the GitHub Release body.
 - Good: the no-publish rehearsal validates the real workflow, exact payload,
-  launcher handoff, Compat adapter handshake, Argus package closure, and
+  Compat adapter handshake, Argus package closure, and
   checksum without publishing.
 - Base: a rehearsal uses temporary package/extract roots and leaves the source
   checkout and release provider untouched.
-- Bad: validating only the three binaries and TUI runtime while omitting the
+- Bad: validating only the binary while omitting the
   adapter or Argus archive from assertions.
-- Bad: repairing an incomplete checked-in workflow inside a test fixture,
-  checking only `src/main.tsx`, treating one notice as proof for both sources,
+- Bad: repairing an incomplete checked-in workflow inside a test fixture
   or accepting an empty `node_modules` directory.
 
 ### 6. Tests Required
@@ -499,20 +485,10 @@ cargo run -p xtask -- release-rehearsal \
 - Run the tag/version/changelog validation logic with a representative tag and
   require the explicit `--no-publish` rehearsal guard.
 - Run the release build command for the configured target.
-- Package all three binaries plus the prepared `hya-tui-ts` runtime and
-  production Compat adapter; verify `SHA256SUMS`, extract the archive, and run
+- Package the `hya-backend` binary and the production Compat adapter; verify
+  `SHA256SUMS`, extract the archive, and run
   each binary smoke.
-- Assert the TUI legal/client-present/server-absent runtime files and the Compat
-  adapter's locked files and initialize/shutdown handshake.
-- Assert recursive TUI copying with a nested source fixture. Require exact,
-  independently removable workflow markers for nested source smoke/archive,
-  both notice copy/presence/byte-compare/archive paths, and TUI `node_modules`
-  smoke/archive; every single omission must fail with the removed marker in the
-  bounded diagnostic.
-- Installer tests must prove the installed nested source, byte-identical
-  notices, and required dependency files; a missing or incomplete staged
-  dependency tree must fail before swap, while a later smoke failure restores
-  every previous binary/runtime and removes temporary/backup paths.
+- Assert the Compat adapter's locked files and initialize/shutdown handshake.
 - Generate `examples/hya-argus-example.hyabundle` inside the temporary package
   from `bundles/examples/argus-example`, then assert its canonical root closure.
 - Confirm third-party actions are pinned to commit SHAs and release publication
@@ -657,7 +633,7 @@ let body = protocol.encode(&request)?;
 - Registry metadata explicitly classifies canonical tools as read-only, task, standard tool, command, or MCP. Never infer MCP classification from a name prefix.
 - Dispatch order is before-hook, successful registry lookup, post-hook input validation, one native authorization, then execution with the returned call-scoped plane. Unknown or malformed calls do not prompt.
 - Native `AllowAlways` remembers one exact target/value subject; legacy `AllowAlways` remains action-wide. Effective denies and external-directory checks are not bypassed by a call grant.
-- Interactive TUI/server asks keep their existing channels. Headless `exec`, RPC, and goal modes reject residual asks; `--yolo` sets the effective invocation model to `danger` before engine construction.
+- Server asks keep their existing interaction endpoints. Headless `exec`, RPC, and goal modes reject residual asks; `--yolo` sets the effective invocation model to `danger` before engine construction.
 
 ### 3. Tests Required
 
@@ -713,7 +689,7 @@ let body = protocol.encode(&request)?;
 ### 5. Good/Base/Bad Cases
 
 - Good: a `provider/model#high` command-turn override records `high` effort on
-  the turn's provider request; the TUI preserves and labels the finished
+  the turn's provider request; clients preserve and label the finished
   observation.
 - Base: category-configured models behave as before; an idle roster-only
   row displays `Idle` without a spinner.
@@ -809,8 +785,6 @@ const lifecycle = resolveLifecyclePresentation(node)
 ### 1. Scope / Trigger
 
 - Trigger: any fix or feature change, per the root `AGENTS.md` release rule.
-- Enforced by `crates/hya/tests/version_metadata.rs`, which fails the workspace
-  suite when any file below disagrees.
 
 ### 2. Contracts
 
@@ -820,9 +794,7 @@ Bumping the version means updating **all** of these together:
 | --- | --- |
 | `Cargo.toml` | `[workspace.package].version` |
 | `Cargo.lock` | every `hya` / `hya-*` package version (a build refreshes it) |
-| `crates/hya/tests/version_metadata.rs` | the `EXPECTED_RELEASE` constant |
 | `README.md` | the `workspace version \`X.Y.Z\`` string |
-| `packages/hya-tui-ts/package.json` | `"version"` |
 | `CHANGELOG.md` | first heading is exactly `# X.Y.Z` |
 | `docs/changes/CHANGELOG_<prev>.md` | move the previous root changelog here first |
 
@@ -921,8 +893,16 @@ Bumping the version means updating **all** of these together:
 - Recovery is allowed only before an `EventStream` exists. A returned stream is
   the strict no-replay boundary for request retries, route failover, model
   failover, and auth refresh.
-- One HTTP route uses at most three request attempts for transport errors, 429,
-  and 5xx. A valid bounded `Retry-After` overrides exponential jittered backoff.
+- Zero-event replay window: a response that dies before delivering any event to
+  the consumer is treated as if no stream existed — the whole request is
+  re-issued inside the shared attempt budget. Link-level failures only (byte
+  stream decode errors, connection resets, pre-first-frame idle stalls);
+  provider-decided failures (200-with-error-body frames, malformed payloads,
+  missing terminal frames) surface immediately even at zero events. The first
+  delivered event closes the window permanently.
+- One HTTP route uses at most `max_attempts` request attempts (default three)
+  for transport errors, 429, and 5xx. A valid bounded `Retry-After` overrides
+  exponential jittered backoff.
 - A pre-stream 401/403 may force-refresh once, only while an attempt slot remains.
   Header resolution runs again and the token must differ from the failed value.
 - Router failover preserves model identity and advances to the next matching
@@ -1100,7 +1080,8 @@ let metadata = tokio::fs::metadata(&root).await?;
   bootstrap/catalog fetch (the old Compat `catalog.updated` SSE nudge is
   deleted).
 - Explicit `providers.*.models` in config always wins over cache.
-- Router, engine, CLI, HTTP/bootstrap, SDK, and TUI consume one shared snapshot;
+- Router, engine, CLI, HTTP/bootstrap, and SDK clients consume one shared
+  snapshot;
   the snapshot may be replaced after background refresh.
 - Discovery never mutates `config.yaml` or reads foreign product configuration.
 
@@ -1146,12 +1127,14 @@ let models = snapshot.models();
 
 - Trigger: changing a built-in Read, Edit, Grep, Write, Bash, or Task schema or
   executor; the tool-result cap; provider tool replay; durable tool events; or
-  the OpenTUI completed-tool presentation.
+  the client completed-tool presentation contract.
 - Applies across `crates/hya-tool` (schema, permission, execution, and native
   hashline runtime), `hya-core` (dispatch and event commit), `hya-proto`
-  (projection), `hya-provider` (tool-result text reconstruction), the v1
-  curated event mapping (`hya-server/src/v1/convert.rs`), and
-  `packages/hya-tui-ts` (the sole interactive renderer).
+  (projection), `hya-provider` (tool-result text reconstruction), and the v1
+  curated event mapping (`hya-server/src/v1/convert.rs`). The presentation
+  boundary below is the contract any client renderer follows; the legacy
+  TypeScript TUI renderer that implemented it was removed (a future TUI on
+  `hya-sdk-v1` keeps the same boundary).
 - Hashline behavior is pinned to `pi-hashline-edit` 0.8.3, npm `gitHead`
   `ba7db9943d0f58499b24c1f6bd64722580f772a5` and tarball SHA-1
   `8985f24c3493be375cc225a5522ed54de8daabc9`. Host Write/Bash behavior is
@@ -1262,7 +1245,7 @@ let models = snapshot.models();
   publishes `outputPath`. Timeout/clamp notices are applied before the spill
   decision. Nonzero exit and timeout are completed structured results, while
   explicit cancellation is typed cancellation. Environment values never appear
-  in titles, output summaries, diagnostics, or the TUI.
+  in titles, output summaries, diagnostics, or any client surface.
 - Results preserve `{ "title": string, "output": value, "metadata": object }`.
   Unrelated built-in/MCP/plugin results retain the 5,000-character default;
   coding tools use their declared bounded output policy and independently
@@ -1278,7 +1261,7 @@ let models = snapshot.models();
   `UnsupportedInlineAgentField { field: "description" }` before child/session
   side effects. Authorization, model/category precedence, resident behavior,
   admission ownership, and run-tree projection do not change.
-- The TUI consumes only projected SDK `ToolPart` state through SyncProvider. It
+- The client consumes only projected SDK `ToolPart` state through the SDK. It
   does not fetch, poll, replay Events, hydrate a second message store, schedule
   a presentation timer, or create another result owner. Completed Read/Write
   render titled, file-grammar-aware numbered text; Edit uses the semantic diff
@@ -1316,7 +1299,7 @@ let models = snapshot.models();
 | PTY requested but unavailable | Explicit input/runtime error; never run non-PTY as an implicit fallback |
 | PTY leader exits while a descendant retains the slave | Continue deadline/cancellation observation; kill and reap the process group on either signal |
 | A post-tool hook expands a coding result | Reapply the shape-aware cap before Event publication; keep a structured envelope within the hard bound |
-| TUI unknown keys, malformed metadata, syntax parser failure, or pending/error state | Omit specialized view and use existing fallback; syntax failure becomes readable plain text; no secret/unknown field is rendered |
+| Client sees unknown keys, malformed metadata, syntax parser failure, or pending/error state | Omit specialized view and use existing fallback; syntax failure becomes readable plain text; no secret/unknown field is rendered |
 | Replayed historical Event or old backend process | Do not rewrite the Event; restart the old process before issuing new 0.36.9 calls |
 
 Hashline failures use the private `{ code, message, hints }` envelope and retain
@@ -1329,7 +1312,7 @@ They must not collapse into generic I/O, permission, or success results.
   limit}` resolves one path, returns a correlated `ToolResult`, and produces a
   titled numbered SDK part; a later formatter changes an Edit, and its preview,
   diff, anchors, and snapshot all describe the formatted bytes.
-- Good: a completed Grep result has bounded per-file groups, the TUI displays
+- Good: a completed Grep result has bounded per-file groups, the client displays
   matches at both 80 and 140 columns, and reopening the Session renders the same
   projected blocks without a presentation request.
 - Base: a raw Read, directory, attachment, hidden `shell` call, two no-op edits,
@@ -1338,7 +1321,7 @@ They must not collapse into generic I/O, permission, or success results.
 - Bad: aliasing `filePath` onto the canonical Read field, restoring fuzzy Edit,
   storing snapshots by process-global path, retaining unbounded output, or
   treating a post-commit formatter failure as if no write occurred.
-- Bad: making the TUI fetch tool results, render arbitrary metadata keys, expose
+- Bad: making a client fetch tool results, render arbitrary metadata keys, expose
   `env`, sort Grep groups differently from backend order, or replace historical
   errors during replay.
 
@@ -1364,13 +1347,12 @@ They must not collapse into generic I/O, permission, or success results.
   non-empty direct value has no child/session/event side effect.
 - Core/server tests assert permission ordering, `ToolCallRequested` correlation,
   unchanged historical Events, projection replay, and no second result store.
-- Frontend tests at `test/coding-tool-presentation.test.ts`,
-  `test/coding-tool-render.test.tsx`, and `test/coding-tool-sync.test.tsx`
-  assert allowlisted semantic views, malformed fallback, titles, syntax spans,
-  offset/line numbers, diff mode, per-file Grep, bash/shell normalization,
-  ANSI-safe output, secret exclusion, live part replacement, and no network or
-  timer from presentation. OpenTUI rendering is tested at 80 and 140 columns;
-  a real backend PTY scenario reopens the Session and compares completed blocks.
+  (The frontend presentation tests listed by earlier revisions of this section
+  asserted allowlisted semantic views, malformed fallback, titles, syntax
+  spans, offset/line numbers, diff mode, per-file Grep, bash/shell
+  normalization, ANSI-safe output, secret exclusion, live part replacement, and
+  no network or timer from presentation, at 80 and 140 columns; they were
+  removed with the legacy TUI and return with a future `hya-sdk-v1` frontend.)
 
 ### 7. Wrong vs Correct
 

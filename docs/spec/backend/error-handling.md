@@ -78,11 +78,12 @@
 ### 1. Scope / Trigger
 
 - Trigger: changing native hashline Read/Edit/Grep, host Write/Bash, Task inline
-  parsing, tool-result capping, event/projection replay, or the SDK/TUI boundary.
+  parsing, tool-result capping, event/projection replay, or the SDK/client
+  presentation boundary.
 - Applies to the error handoff from `hya-tool` through `hya-core` and
-  `hya-proto`, projected SDK tool parts (the shape the legacy Compat-era TUI
-  consumed; new frontends read it through `hya-sdk-v1`), provider replay, and
-  the hya-owned OpenTUI presentation. This scenario supplements the execution
+  `hya-proto`, projected SDK tool parts (the shape clients read through
+  `hya-sdk-v1`), provider replay, and the client presentation layer. This
+  scenario supplements the execution
   contract in `backend/quality-guidelines.md`; it does not introduce a second
   error store.
 - Source-derived hashline diagnostics follow `pi-hashline-edit` 0.8.3 at npm
@@ -179,7 +180,7 @@
   replay reads an object's string `output` first and JSON-falls back only when
   that field is absent. No cap may turn a structured coding result into an
   uncorrelated scalar.
-- The TUI parser validates projected SDK `ToolPart` state once. Unknown keys,
+- The client presentation validates projected SDK `ToolPart` state once. Unknown keys,
   malformed metadata, pending/streaming state, permission/denied state, and
   unsupported completed shapes take the existing inline/error fallback. Syntax
   parser failure is readable plain text, not a render exception. This fallback
@@ -208,7 +209,7 @@
 | Spawn overload/conflict/already handled | Preserve `Overloaded`, `OperationIdConflict`, or `OperationAlreadyHandled`; never retry by minting a new operation |
 | Bash zero/finite invalid timeout, nonzero exit, timeout, cancel, PTY unavailable | Zero disables; finite values clamp to `1..=3600`; nonzero/timeout are completed structured results; cancel is `Cancelled`; PTY unavailability is explicit |
 | Oversized result or metadata | Bounded truncation/artifact with explicit marker; never unbounded memory or secret-bearing diagnostics |
-| Malformed replayed ToolPart or syntax parser failure | TUI fallback/plain text; no second request and no historical Event rewrite |
+| Malformed replayed ToolPart or syntax parser failure | Client fallback/plain text; no second request and no historical Event rewrite |
 
 ### 5. Good / Base / Bad Cases
 
@@ -218,8 +219,8 @@
   final snapshot rather than stale pre-format bytes.
 - Base: an invalid anchor returns `[E_BAD_REF]`, an outside path returns a
   permission error, and a completed Bash timeout carries structured status;
-  each remains distinguishable after projection, provider replay, and TUI
-  fallback.
+  each remains distinguishable after projection, provider replay, and client
+  presentation fallback.
 - Base: an empty Task nested description creates the child and lets its parent
   resume; a historical 0.36.8 duplicate-field error is still visible after
   replay and is not repaired in storage.
@@ -228,7 +229,7 @@
   with a fuzzy nearest anchor.
 - Bad: converting every result to a capped string, treating `shell` as a
   separately advertised tool, allowing non-empty Task descriptions to reach
-  spawn, or making the TUI retry malformed metadata over HTTP.
+  spawn, or making a client retry malformed metadata over HTTP.
 
 ### 6. Tests Required
 
@@ -253,11 +254,12 @@
 - Provider conformance tests assert object `output` replay, JSON fallback, and
   preservation of `ToolError` type/message; core/server replay tests assert
   historical Events and projected error values are unchanged.
-- TUI presentation tests assert malformed/unknown/denied/attachment/directory/
-  truncation states use fallback, ANSI is stripped from Bash output, syntax
-  failure remains plain text, and no transport call or Event replay is made.
-  Render at 80 and 140 columns; a real backend PTY test closes/reopens the same
-  Session and asserts the same completed error/success blocks.
+- Client presentation coverage (removed with the legacy TUI; returns with a
+  future `hya-sdk-v1` frontend) asserted malformed/unknown/denied/attachment/
+  directory/truncation states use fallback, ANSI is stripped from Bash output,
+  syntax failure remains plain text, and no transport call or Event replay is
+  made, at 80 and 140 columns, with a real backend PTY test that closes/reopens
+  the same Session and asserts the same completed error/success blocks.
 
 ### 7. Wrong vs Correct
 
@@ -294,5 +296,5 @@ let write = match mutation.commit(&prepared.desired).await {
 The adapter keeps the lock through final reload/formatter/LSP/preview work,
 records final bytes on every committed failure, and maps private hashline codes
 to `ToolError::Input` without exposing file contents. The projected SDK part and
-TUI then preserve that typed outcome or use the bounded fallback without making
-their own error state.
+the client then preserve that typed outcome or use the bounded fallback without
+making their own error state.

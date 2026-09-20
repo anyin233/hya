@@ -207,7 +207,7 @@ mode-0600 hya artifact; an armed owner removes partial/unpublished artifacts on
 every other exit. Nonzero exits and timeouts are completed structured results
 with status metadata, while explicit cancellation is typed `cancelled`.
 Environment values are never echoed in titles, output, diagnostics, metadata,
-or the TUI.
+or any client surface.
 
 The old `shell` name remains only as a hidden runtime alias for stale callers;
 it is not an advertised schema and uses the same implementation. This is
@@ -375,8 +375,8 @@ sentinel is excluded from rendered rows. The default line limit is 2,000 and
 the aggregate text budget is 50 KiB; long lines and aggregate truncation carry
 bounded notices and a continuation `nextOffset`. Every output also carries
 bounded display metadata (`type`, `path`, `text`, `lineStart`, `lineEnd`,
-`totalLines`, and `truncated`) for the TUI. Invalid UTF-8 is replaced with
-U+FFFD and reported as a warning rather than silently omitted.
+`totalLines`, and `truncated`) for client rendering. Invalid UTF-8 is replaced
+with U+FFFD and reported as a warning rather than silently omitted.
 
 ([crates/hya-tool/src/read.rs](../../crates/hya-tool/src/read.rs),
 [crates/hya-tool/src/hashline/mod.rs](../../crates/hya-tool/src/hashline/mod.rs))
@@ -494,7 +494,7 @@ successfully rendered text.
 The result keeps the bounded model summary and adds
 `metadata.display.groups[]`, where each group is `{path, rows[]}` and each row
 contains `{line, text, isMatch}`. Per-file rows are numbered and carry enough
-metadata for syntax-aware TUI rendering without changing the durable Event
+metadata for syntax-aware client rendering without changing the durable Event
 model. Grep snapshots enable the same exact stale-anchor recovery path as Read
 and Edit.
 
@@ -624,7 +624,7 @@ Edit, enabling exact stale-anchor recovery.
 The result contains a bounded summary plus
 `metadata.display.groups[]`. Each group has a file `path` and bounded `rows`
 with `{line, text, isMatch}`. This metadata is a presentation hint, not a new
-event or read-model store. It lets the TUI render a titled block per file with
+event or read-model store. It lets a client render a titled block per file with
 file-derived syntax highlighting while keeping match identity visible.
 
 ([crates/hya-tool/src/grep.rs](../../crates/hya-tool/src/grep.rs),
@@ -643,10 +643,11 @@ durable publication, so neither metadata nor a hook bypasses the final bound.
 Provider replay prefers the string `output` member; an object without that
 member falls back to serialized JSON.
 
-The hya TypeScript UI consumes projected SDK `ToolPart` state only. SyncProvider
-owns initial hydration and live replacement; presentation does not fetch, poll,
-replay Events, hydrate a second message store, or schedule a timer. Completed
-parts use one allowlisted presentation boundary:
+Clients consume projected `ToolPart` state through the SDK only. (The legacy
+TypeScript TUI that implemented this presentation was removed; a future TUI
+built on `hya-sdk-v1` should keep the same boundary.) Presentation does not
+fetch, poll, replay Events, hydrate a second message store, or schedule a
+timer. Completed parts use one allowlisted presentation boundary:
 
 | Tool | Completed presentation |
 | --- | --- |
@@ -664,8 +665,6 @@ state and is not persisted as a new Event. At 80 columns Edit uses unified
 layout and keeps removed/added rows separate; wide terminals may use split
 layout above 120 columns. Replaying a Session through the same SDK projection
 produces the same completed blocks.
-
-([packages/hya-tui-ts/src/hya/coding-tool-presentation.tsx](../../packages/hya-tui-ts/src/hya/coding-tool-presentation.tsx))
 
 ## Permissions and execution
 
@@ -819,8 +818,6 @@ The focused contracts are owned by these seams:
   [`crates/hya-tool/src/permission.rs`](../../crates/hya-tool/src/permission.rs)
   and [`crates/hya-core/src/engine/tool_error.rs`](../../crates/hya-core/src/engine/tool_error.rs).
 - Durable result projection and provider replay: [`docs/architecture/event-model.md`](event-model.md).
-- Hya-owned completed coding-tool views:
-  [`packages/hya-tui-ts/src/hya/coding-tool-presentation.tsx`](../../packages/hya-tui-ts/src/hya/coding-tool-presentation.tsx).
 
 These boundaries describe shipped behavior, not a promise of full Compat
 superset behavior. Historical 0.36.8 `ToolError` Events remain immutable and

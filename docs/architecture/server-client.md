@@ -82,9 +82,11 @@ methods `Any`.
   frontends (HTTP + SSE + `V1SessionMirror`).
 - [`../../crates/hya-client`](../../crates/hya-client) — lean typed
   `reqwest` client (tooling, e2e harness).
-- `crates/hya-sdk` / `crates/hya-native` — legacy SDK/transport for the
-  retired Compat surface (old TUI only; slated for deletion at the
-  new-TUI cutover).
+- gRPC through `V1Grpc` — same contract over tonic when `HYA_GRPC_BIND` is
+  set.
+
+The legacy Compat-era SDK and in-process transport that served the old TUI were
+removed.
 
 ## Testing
 

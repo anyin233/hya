@@ -219,9 +219,9 @@ does not add route fields or route-outcome Events.
 Prepared WorkflowBundles remain prepared format v2 because they already retain
 the complete source and compiler revision. A route-bearing v2 source still
 requires a runtime with the model-routing compiler; unchanged no-assignment v2
-sources retain their existing revision. The Session sidebar does not render
+sources retain their existing revision. Client session sidebars do not render
 model routes; typed CLI, API, SDK, and state results expose the durable route
-data while the compact TUI presentation remains unchanged.
+data while the compact presentation remains unchanged.
 
 ## Resident actors
 
@@ -269,14 +269,14 @@ same-name source for the selected identity.
 for CLI, Agent tool, native command, HTTP, SDK, and in-process transports. Only
 the core executor runs the compiled plan.
 
-## TUI and native Session commands
+## Native Session commands
 
-The Session sidebar reads the typed Workflow Projection from normal bootstrap
-and `session.updated` synchronization. It shows selection/revision availability,
-run status, graph level, declaration-ordered active Stages, active/total Agent
-instances, Stage progress, and bounded current work. It does not poll, create a
-second SDK client, fold raw Workflow Events, or replace the existing run-tree
-roster used to navigate child Agents.
+Clients render Workflow state from the typed Workflow Projection delivered
+through normal bootstrap and `session.updated` synchronization: selection and
+revision availability, run status, graph level, declaration-ordered active
+Stages, active/total Agent instances, Stage progress, and bounded current work.
+A client should not poll, create a second SDK client, fold raw Workflow
+Events, or replace the existing run-tree roster used to navigate child Agents.
 
 Use the native command in the current Session:
 

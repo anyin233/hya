@@ -1,8 +1,9 @@
 # hya Documentation
 
-hya is an event-sourced, terminal-first coding agent. Rust owns the runtime,
-launcher, server, and persistence boundaries; `packages/hya-tui-ts` owns the
-interactive TypeScript/OpenTUI frontend. Workflow compilation, durable
+hya is an event-sourced coding agent. Rust owns the runtime, server, and
+persistence boundaries. There is currently no interactive TUI; clients drive the
+backend through the `hya.v1` HTTP/SSE/WebSocket or gRPC contract (a replacement
+TUI built on `hya-sdk-v1` may be built later). Workflow compilation, durable
 execution, package models, and the consolidated `hya.v1` HTTP/gRPC contract
 are documented separately below.
 
@@ -11,8 +12,9 @@ architecture notes.
 
 ## The v1 API contract
 
-- [Protocol guide](protocol/README.md) — how any TUI/GUI/WebUI integrates
-  over HTTP/SSE/WebSocket or gRPC (identical semantics on both).
+- [Protocol guide](protocol/README.md) — how any client (GUI, WebUI, CLI, or a
+  future TUI) integrates over HTTP/SSE/WebSocket or gRPC (identical semantics
+  on both).
 - [API reference](protocol/api-reference.md) — generated per-rpc reference.
 - [OpenAPI](protocol/openapi.json) — generated HTTP schema.
 
@@ -24,11 +26,9 @@ If you want to run hya:
 2. [Configuration](configuration.md)
 3. [Compaction](compaction.md) — the five context-reduction mechanisms and their configurable order
 4. [CLI Reference](cli.md)
-5. [TUI Keybindings](tui-keybindings.md) — slash commands, leader chords, and the command palette
-6. [TUI Reference](tui-reference.md) — screens, transcript, dialogs, and prompt behavior
-7. [Skills](skills.md) — discovery, skill tool, and authoring
-8. [Workflows](workflows.md) — user-authored stage DAGs over subagent teams
-9. [Troubleshooting](troubleshooting.md)
+5. [Skills](skills.md) — discovery, skill tool, and authoring
+6. [Workflows](workflows.md) — user-authored stage DAGs over subagent teams
+7. [Troubleshooting](troubleshooting.md)
 
 If you want to compare hya with adjacent coding agents:
 
@@ -36,8 +36,8 @@ If you want to compare hya with adjacent coding agents:
 
 If you want to package a public AgentBundle or WorkflowBundle:
 
-1. Run `hya bundle info -f example.hyabundle`, then
-   `hya bundle install example.hyabundle`.
+1. Run `hya-backend bundle info -f example.hyabundle`, then
+   `hya-backend bundle install example.hyabundle`.
 2. Read [AgentBundle Authoring](agent-bundle-authoring.md) for singular Agent
    payloads, or [Workflows](workflows.md#packaging-a-workflowbundle) for one
    Workflow plus its exact reachable Agent closure. Sources use exactly one
@@ -72,20 +72,17 @@ If you want to understand the codebase:
 10. [Storage](architecture/storage.md)
 11. [Server and Client](architecture/server-client.md)
 12. [Plugin protocol](plugin-protocol.md)
-13. [TUI](architecture/tui.md)
-14. [Development](development.md)
-15. [Testing](testing/README.md) (process E2E, agent matrix, CI snippet)
+13. [Development](development.md)
+14. [Testing](testing/README.md) (process E2E, agent matrix, CI snippet)
 
 ## Docs Map
 
 | Page | Purpose |
 | --- | --- |
-| [Getting Started](getting-started.md) | Build and run the TUI, a headless prompt, a goal run, and the server. |
+| [Getting Started](getting-started.md) | Build and run a headless prompt, a goal run, and the server. |
 | [Configuration](configuration.md) | Explain hya config, provider/auth resolution, MCP, plugins, formatter, and prompt-command discovery. |
 | [Compaction](compaction.md) | The five built-in context-reduction mechanisms (oh-my-pi parity), the configurable firing order, thresholds, and wire records. |
-| [CLI Reference](cli.md) | Document shipped `hya` / `hya-backend` commands, flags, exit codes, and a TUI slash-command overview. |
-| [TUI Keybindings](tui-keybindings.md) | Full keyboard shortcuts, slash commands, leader chords, and which-key. |
-| [TUI Reference](tui-reference.md) | User-facing screens, transcript, dialogs, prompt, and overlays. |
+| [CLI Reference](cli.md) | Document the shipped `hya-backend` commands, flags, and exit codes. |
 | [Skills](skills.md) | Skill discovery paths, skill tool, and authoring. |
 | [Workflows](workflows.md) | Workflow DAGs, governance, discovery, CLI/tool execution, and WorkflowBundle packaging. |
 | [Plugin protocol](plugin-protocol.md) | Native stdio JSON-RPC ABI for out-of-process plugins. |
@@ -104,20 +101,16 @@ If you want to understand the codebase:
 | [Compat parity](compat-parity.md) | Historical record of the pre-v1 Compat HTTP parity work; that surface is deleted, and only CLI aliases and the Compat plugin adapter remain living. |
 | [Storage](architecture/storage.md) | Explain SQLite persistence, replay, projections, and token ledger behavior. |
 | [Server and Client](architecture/server-client.md) | The consolidated hya.v1 contract over HTTP/SSE/WebSocket and gRPC, state, semantics, and clients. |
-| [TUI](architecture/tui.md) | Explain the canonical launcher, Bun/OpenTUI frontend, process/package boundaries, and the old-TUI breakage pending the `hya-sdk-v1` rewrite. |
-| [TypeScript TUI package](../packages/hya-tui-ts/README.md) | Frontend-only package: launch with `--url`, layout, env flags, and re-sync rules. See also [scripts](../packages/hya-tui-ts/scripts/README.md) and [tests](../packages/hya-tui-ts/test/README.md). |
 | [hya, Pi, and Compat Feature Comparison](hya-pi-compat-comparison.md) | Compare hya with upstream stock Pi and current Compat across tools, providers, agents, TUI, plugins, skills, and MCP. |
 | [Development](development.md) | Explain build, lint, test, crate-change, and doc-update workflow. |
-| [Testing](testing/README.md) | Track I/P/T testing model, process E2E harness, agent matrix, CI snippet. Package-level TUI tests: [hya-tui-ts test README](../packages/hya-tui-ts/test/README.md). |
-| [Agent feature matrix](testing/agent-matrix.md) | PR-matrix scenario IDs for tools, permissions, MCP, subagents, hyabundle, TUI. |
+| [Testing](testing/README.md) | Track I/P testing model, process E2E harness, agent matrix, CI snippet. |
+| [Agent feature matrix](testing/agent-matrix.md) | PR-matrix scenario IDs for tools, permissions, MCP, subagents, hyabundle. |
 | [Process E2E harness](testing/process-e2e.md) | How `crates/hya-e2e` scripts FakeLlm and asserts product outcomes. |
 | [Troubleshooting](troubleshooting.md) | Collect common local, provider, terminal, permission, and server issues. |
 
 ## Source Entrypoints
 
 - Workspace manifest: [`../Cargo.toml`](../Cargo.toml)
-- Exec shim: [`../crates/hya/src/main.rs`](../crates/hya/src/main.rs)
-- Frontend supervisor: [`../crates/hya-ts/src/main.rs`](../crates/hya-ts/src/main.rs)
 - Backend CLI/runtime: [`../crates/hya-backend/src/main.rs`](../crates/hya-backend/src/main.rs)
 - Workflow compiler and normalized plans: [`../crates/hya-workflow/src/lib.rs`](../crates/hya-workflow/src/lib.rs)
 - Core Workflow execution: [`../crates/hya-core/src/workflow/mod.rs`](../crates/hya-core/src/workflow/mod.rs)
@@ -133,8 +126,4 @@ If you want to understand the codebase:
 - Server/routes: [`../crates/hya-server/src/lib.rs`](../crates/hya-server/src/lib.rs)
 - v1 contract crate: [`../crates/hya-api/src/lib.rs`](../crates/hya-api/src/lib.rs)
 - v1 frontend SDK: [`../crates/hya-sdk-v1/src/lib.rs`](../crates/hya-sdk-v1/src/lib.rs)
-- Legacy in-process transport (retired Compat surface): [`../crates/hya-native/src/transport.rs`](../crates/hya-native/src/transport.rs)
-- Legacy SDK (retired Compat surface; `ServerHandle` still supervises backends): [`../crates/hya-sdk/src/lib.rs`](../crates/hya-sdk/src/lib.rs)
 - Self-update TCB: [`../crates/hya-updater`](../crates/hya-updater)
-- TUI application: [`../packages/hya-tui-ts/src/main.tsx`](../packages/hya-tui-ts/src/main.tsx)
-- TUI package docs: [`../packages/hya-tui-ts/README.md`](../packages/hya-tui-ts/README.md)

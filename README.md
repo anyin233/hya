@@ -5,14 +5,14 @@
 
 ---
 
-hya is an event-sourced, terminal-first multi-agent coding agent. Rust owns the
-runtime and launcher binaries; `hya` delegates to `hya-ts`, which supervises
-`hya-backend` and the TypeScript/OpenTUI frontend in `packages/hya-tui-ts`. The
-runtime normalizes OpenAI Chat/Responses/Codex, Grok Build, Anthropic, and Google
-provider routes into one canonical event stream and executes tools behind a
-permission plane. Every client-facing surface speaks one consolidated contract —
-`hya.v1` — served identically over HTTP/JSON+SSE+WebSocket (`/v1`) and gRPC
-(`HYA_GRPC_BIND`); the legacy Compat and native HTTP routes are gone.
+hya is an event-sourced, multi-agent coding agent. `hya-backend` owns the
+runtime: it normalizes OpenAI Chat/Responses/Codex, Grok Build, Anthropic, and
+Google provider routes into one canonical event stream and executes tools behind
+a permission plane. Every client-facing surface speaks one consolidated contract
+— `hya.v1` — served identically over HTTP/JSON+SSE+WebSocket (`/v1`) and gRPC
+(`HYA_GRPC_BIND`); the legacy Compat and native HTTP routes are gone. There is
+currently no bundled interactive TUI; clients drive the backend through
+`hya-sdk-v1`, `hya-client`, or any `hya.v1` client.
 
 
 If no provider is configured, hya still runs: it falls back to an offline
@@ -32,25 +32,23 @@ may still change between versions.
 
 Requires a Rust toolchain matching the workspace manifest
 ([`Cargo.toml`](Cargo.toml); currently edition 2024, Rust `1.91`), Git, and Bun
-(pinned at 1.3.14 for development).
+(pinned at 1.3.14 for the Compat adapter runtime).
 
 ```sh
 git clone <this-repo> hya
 cd hya
 ./install.sh --prefix "$HOME/.local"
 export PATH="$HOME/.local/bin:$PATH"
-hya
+hya-backend serve
 ```
 
-The installer places adjacent `hya`, `hya-ts`, and `hya-backend` binaries plus
-the prepared TypeScript TUI runtime and `lib/hya/compat-adapter/` with its
-production dependencies. Installing `crates/hya` alone is unsupported because
-`hya` delegates to those adjacent files.
+The installer places the `hya-backend` binary plus `lib/hya/compat-adapter/`
+with its production dependencies.
 
 
 ## Configure a Provider and Log In
 
-By default `hya` starts offline. To use a live model, create
+By default `hya-backend` starts offline. To use a live model, create
 `~/.config/hya/config.yaml` (or `$XDG_CONFIG_HOME/hya/config.yaml`):
 
 ```yaml
@@ -69,18 +67,15 @@ or store it with `hya-backend login`, which takes precedence over an inline `api
 ```sh
 hya-backend login anthropic "$ANTHROPIC_API_KEY"
 hya-backend models  # inspect the resolved catalog
-hya                 # start the TUI against the live provider
+hya-backend serve   # start the HTTP/SSE server against the live provider
 ```
 
 For ChatGPT Codex or Grok Build subscription OAuth (no API key):
 
 ```sh
-hya oauth login --provider codex --type openai-codex
-hya oauth login --provider grok --type grok-build
-hya oauth status
-# same surface on the hya-ts binary (diagnostics / non-canonical branding):
-hya-ts oauth login --provider codex --type openai-codex
-hya-ts oauth status
+hya-backend oauth login --provider codex --type openai-codex
+hya-backend oauth login --provider grok --type grok-build
+hya-backend oauth status
 ```
 
 See [docs/configuration.md](docs/configuration.md) for first-run behavior,
@@ -89,25 +84,21 @@ sample config.
 
 ## What hya Can Do
 
-- Interactive TUI with slash commands, model/agent selection, permission
-  prompts, transcript export, and session resume. (The vendored frontend's
-  backend integration targeted the deleted Compat surface and is mid-replacement
-  by a TUI built on `hya-sdk-v1`; see
-  [docs/architecture/tui.md](docs/architecture/tui.md).)
 - Headless single-turn execution (`hya-backend exec` / `hya-backend run`) and iterative goal
   mode (`hya-backend -p "<goal>"`).
 - HTTP/SSE/WebSocket server (`hya-backend serve`) exposing the consolidated
   `hya.v1` contract under `/v1`, plus optional gRPC via `HYA_GRPC_BIND`; see the
   [protocol guide](docs/protocol/README.md) and generated
-  [API reference](docs/protocol/api-reference.md).
+  [API reference](docs/protocol/api-reference.md). Typed clients:
+  `hya-sdk-v1` and `hya-client` (crates), or any generated `hya.v1` stub.
 - MCP servers, plugins (including a Compat plugin adapter), and a formatter
   plane, all driven from the same config.
 
 Public AgentBundles may remain static/process-free or supply selected
 Bundle-local Bun sidecar capabilities. Public WorkflowBundles package one
 compiled Workflow with its exact reachable Agent closure. Both kinds can be
-inspected and installed with `hya bundle info -f example.hyabundle` and
-`hya bundle install example.hyabundle`. See the
+inspected and installed with `hya-backend bundle info -f example.hyabundle` and
+`hya-backend bundle install example.hyabundle`. See the
 [AgentBundle authoring guide](docs/agent-bundle-authoring.md),
 [Workflow and WorkflowBundle guide](docs/workflows.md),
 [static example](docs/examples/bundle.hya.md),
@@ -122,21 +113,16 @@ inspected and installed with `hya bundle info -f example.hyabundle` and
 | Page | Purpose |
 | --- | --- |
 | [docs/README.md](docs/README.md) | Documentation index and reading paths. |
-| [docs/getting-started.md](docs/getting-started.md) | Zero-to-running: build, run the TUI, headless turns, goal mode, server, and a first live provider. |
+| [docs/getting-started.md](docs/getting-started.md) | Zero-to-running: build, headless turns, goal mode, server, and a first live provider. |
 | [docs/configuration.md](docs/configuration.md) | Config file, first-run/offline behavior, `HYA_*` env vars, providers/auth, MCP, plugins, formatter, custom commands. |
-| [docs/cli.md](docs/cli.md) | `hya` / `hya-backend` commands, flags, exit codes, and a TUI slash-command overview. |
+| [docs/cli.md](docs/cli.md) | `hya-backend` commands, flags, and exit codes. |
 | [docs/workflows.md](docs/workflows.md) | Workflow document format, governance, CLI/tool execution, and WorkflowBundle packaging. |
-| [docs/tui-keybindings.md](docs/tui-keybindings.md) | Full TUI keybinds, slash commands, leader chords, and which-key. |
-| [docs/tui-reference.md](docs/tui-reference.md) | TUI screens, transcript, dialogs, and prompt behavior. |
-| [docs/troubleshooting.md](docs/troubleshooting.md) | Common local, provider, terminal, permission, and server issues. |
+| [docs/troubleshooting.md](docs/troubleshooting.md) | Common local, provider, permission, and server issues. |
 | [docs/project-structure.md](docs/project-structure.md) | Repository layout, crates, and data flow. |
-| [docs/architecture/](docs/architecture) | Engine, event model, providers, tools/permissions, storage, server/client, and TUI internals. |
+| [docs/architecture/](docs/architecture) | Engine, event model, providers, tools/permissions, storage, and server/client internals. |
 | [docs/compat-parity.md](docs/compat-parity.md) | Historical record of the pre-v1 Compat HTTP parity work (that surface is deleted; CLI aliases and the Compat plugin adapter remain). |
 | [docs/hya-pi-compat-comparison.md](docs/hya-pi-compat-comparison.md) | Feature comparison across hya, upstream stock Pi, and current Compat. |
-| [packages/hya-tui-ts/README.md](packages/hya-tui-ts/README.md) | Legacy TypeScript TUI package (frontend-only; its Compat-era backend integration is broken pending a `hya-sdk-v1` rewrite). |
 
 The Rust workspace is licensed under either MIT or Apache-2.0 at your option.
-The TypeScript TUI carries its own MIT/upstream license, and the checked-out
-Compat adapter has no separate license file. Release payloads currently copy the
-TUI `LICENSE`; consult the repository license files for the complete applicable
-terms.
+The checked-out Compat adapter has no separate license file; consult the
+repository license files for the complete applicable terms.

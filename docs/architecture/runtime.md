@@ -404,7 +404,7 @@ closed.
 
 `RuntimeSnapshot` owns exactly one `BundleCatalog`. For installed bundles,
 `hya-app` reads the bundle registry generation before binding each new root turn
-and before TUI/catalog refresh, merges installed payloads with the build-prepared
+and before catalog refresh, merges installed payloads with the build-prepared
 read-only first-party WorkflowBundle, adapts prepared static Skills through the
 shared contribution seam, and publishes the catalog and Bundle sources
 atomically. An unchanged generation is a no-op; validation or load failure
@@ -820,9 +820,9 @@ lead session.
 `WorktreeManager` allocates git worktrees under `.hya/worktrees` and only cleans
 up paths it recorded as owned.
 
-These primitives are present in `hya-core`; the shipped CLI exposes the main
-TUI, single-turn/run aliases, goal, server, replay, sessions, catalog/auth, and
-JSONL RPC surfaces.
+These primitives are present in `hya-core`; the shipped CLI exposes
+single-turn/run aliases, goal, server, replay, sessions, catalog/auth, and
+JSONL RPC surfaces (bare startup prints a guidance banner).
 
 ## Errors
 

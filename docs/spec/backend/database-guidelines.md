@@ -131,10 +131,10 @@
 - `TurnBinding` captures one immutable `Arc` map. Existing admissions and
   residents retain it; only later bindings observe a successful mutation.
 - Publishing a preference never rewrites the model recorded by an existing
-  Session or mutates its replay. A deliberate TUI change affects an open
-  Session's next turn by sending the backend-committed effective identity as
-  request-local prompt state; the preference PUT alone is not a Session
-  mutation.
+  Session or mutates its replay. A deliberate client selection change affects
+  an open Session's next turn by sending the backend-committed effective
+  identity as request-local prompt state; a preference write alone is not a
+  Session mutation.
 - Effective order is base < valid remembered < configured category/direct <
   inline/request/spawn/Workflow Stage category/direct. Direct/category
   presence suppresses memory even when the configured route does not resolve.

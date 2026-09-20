@@ -1,6 +1,6 @@
 # hya, Pi, and Compat Feature Comparison
 
-Last researched: 2026-06-30. Tool-name correction: 2026-09-11 (`shell` is a hidden runtime alias of canonical `bash`; other comparison claims were not re-verified). HTTP-surface correction: 2026-09-19 (hya now serves only the `hya.v1` contract over `/v1` HTTP/SSE/WebSocket and gRPC; the Compat HTTP surface referenced by older research below is deleted — see [compat-parity.md](compat-parity.md)).
+Last researched: 2026-06-30. Tool-name correction: 2026-09-11 (`shell` is a hidden runtime alias of canonical `bash`; other comparison claims were not re-verified). HTTP-surface correction: 2026-09-19 (hya now serves only the `hya.v1` contract over `/v1` HTTP/SSE/WebSocket and gRPC; the Compat HTTP surface referenced by older research below is deleted — see [compat-parity.md](compat-parity.md)). TUI correction: 2026-09-20 (the legacy TypeScript TUI described by older research below was removed; hya currently ships no interactive frontend — a replacement on `hya-sdk-v1` may be built later).
 
 This page compares hya with upstream stock Pi (`earendil-works/pi`) and current
 Compat (`anomalyco/compat` plus `compat.ai`). It intentionally does not
@@ -24,7 +24,7 @@ archived `compat-ai/compat` repository as the Compat baseline.
   [Runtime](architecture/runtime.md),
   [Providers](architecture/providers.md),
   [Tools and Permissions](architecture/tools-and-permissions.md),
-  [TUI](architecture/tui.md), [Configuration](configuration.md), the
+  [Configuration](configuration.md), the
   [protocol guide](protocol/README.md), and the historical
   [Compat Parity Matrix](compat-parity.md).
 - **Pi baseline:** upstream stock Pi, primarily
@@ -48,9 +48,9 @@ archived `compat-ai/compat` repository as the Compat baseline.
   reviewed `packages/compat/src/agent/agent.ts` source confirmed `build`,
   `plan`, `general`, `explore`, plus hidden system agents. Treat `scout` as a
   docs/source drift note unless the upstream source changes.
-- **hya TUI:** the canonical `hya` entrypoint delegates through `hya-ts` to
-  `packages/hya-tui-ts`. That TypeScript package is the sole interactive
-  frontend implementation in the repository.
+- **hya TUI:** the legacy TypeScript TUI described by the older research below
+  was removed from the repository; hya currently ships no interactive
+  frontend.
 
 ## 1. Tool Calling, MCP, and Skills
 
@@ -230,8 +230,9 @@ concurrency, and per-team turn/message budgets; depth-0 vs nested turns take
 different stream-permit paths; `AdmissionMemberIdentity` attributes nested
 spawns to the parent member. Background `task` is limited to a single member;
 multi-member background is rejected. Resident spawns are non-blocking and wake
-only on mail. The shipped CLI surfaces the main TUI, headless runs, goal mode,
-server, replay, session, auth/catalog, and JSONL RPC; the underlying team
+only on mail. The shipped CLI surfaces headless runs, goal mode,
+server, replay, session, auth/catalog, and JSONL RPC (there is no interactive
+frontend since the legacy TUI was removed); the underlying team
 machinery is more developed than the end-user team UI.
 
 Evidence: [Runtime](architecture/runtime.md),
@@ -287,12 +288,12 @@ Evidence: Compat [agents](https://compat.ai/docs/agents),
 
 ### hya
 
-hya is terminal-first. The canonical `hya` entrypoint delegates to the `hya-ts`
-supervisor, which starts the SolidJS/OpenTUI frontend under
-`packages/hya-tui-ts` and connects it to `hya-backend` over the `hya.v1`
-HTTP/SSE contract (the vendored frontend previously used `@opencode-ai/sdk/v2`
-against the deleted Compat surface and is deliberately broken until the new
-TUI — built on `hya-sdk-v1` — replaces it). The frontend retains the upstream
+At the time of the original research (2026-06-30) hya was terminal-first: the
+canonical `hya` entrypoint delegated to the TypeScript supervisor, which started
+the SolidJS/OpenTUI frontend and connected it to `hya-backend` over the
+`hya.v1` HTTP/SSE contract. **That TUI has since been removed**, and hya
+currently ships no interactive frontend; a replacement built on `hya-sdk-v1`
+may be built later. The research below records what that TUI offered: a
 command palette, leader-key actions, themes, prompt and transcript rendering,
 session/model/agent dialogs, permission and question flows, status surfaces,
 and subagent views.
@@ -301,10 +302,9 @@ Compat parity tracking is a historical record now; the backend exposes one
 contract (`hya.v1` over HTTP/SSE/WebSocket and gRPC) rather than a separate
 Rust renderer or a Compat-shaped HTTP surface.
 
-Evidence: [TUI](architecture/tui.md),
-[Compat Parity Matrix](compat-parity.md),
-[`crates/hya/src/main.rs`](../crates/hya/src/main.rs), and
-[`packages/hya-tui-ts/src/main.tsx`](../packages/hya-tui-ts/src/main.tsx).
+Evidence: [Compat Parity Matrix](compat-parity.md); the TUI architecture,
+reference, and keybindings pages plus the removed frontend package no longer
+exist.
 
 ### Pi coding agent
 
