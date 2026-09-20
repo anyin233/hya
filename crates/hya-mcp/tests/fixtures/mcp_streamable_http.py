@@ -89,6 +89,8 @@ def dispatch_tool(name, args):
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     stateless = False
+    malformed = False
+    fail5xx = False
     sessions = set()
     lock = threading.Lock()
 
@@ -211,6 +213,17 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if method == "tools/list":
+            if self.fail5xx:
+                self._send_json(500, {"error": "deliberate server failure"})
+                return
+            if self.malformed:
+                body = b"{this is not json"
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
             self._send_json(200, self._respond(req_id, {"tools": TOOLS}))
             return
 
@@ -238,10 +251,16 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("port", type=int)
     parser.add_argument("--stateless", action="store_true")
+    parser.add_argument("--malformed", action="store_true",
+                        help="tools/list answers 200 with a non-JSON body")
+    parser.add_argument("--fail5xx", action="store_true",
+                        help="tools/list answers 500")
     args = parser.parse_args()
 
     handler = Handler
     handler.stateless = args.stateless
+    handler.malformed = args.malformed
+    handler.fail5xx = args.fail5xx
     server = ThreadingHTTPServer(("127.0.0.1", args.port), handler)
     server.daemon_threads = True
     print("ready", flush=True)

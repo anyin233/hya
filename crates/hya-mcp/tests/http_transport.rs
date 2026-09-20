@@ -107,14 +107,22 @@ async fn call_tool(
     tool_suffix: &str,
     input: serde_json::Value,
 ) -> serde_json::Value {
+    call_tool_result(server, tool_suffix, input)
+        .await
+        .expect("tool call succeeds")
+}
+
+async fn call_tool_result(
+    server: &hya_mcp::PreparedMcpServer,
+    tool_suffix: &str,
+    input: serde_json::Value,
+) -> Result<serde_json::Value, hya_tool::ToolError> {
     let tool = server
         .tools()
         .into_iter()
         .find(|tool| tool.name().ends_with(tool_suffix))
         .unwrap_or_else(|| panic!("tool {tool_suffix} not registered"));
-    tool.execute(&ctx_allowing_mcp(), input)
-        .await
-        .expect("tool call succeeds")
+    tool.execute(&ctx_allowing_mcp(), input).await
 }
 
 #[tokio::test]
@@ -212,4 +220,149 @@ async fn classic_http_sse_connects_and_calls_tool() {
     );
     let out = call_tool(&prepared, "__ping", json!({ "msg": "sse" })).await;
     assert_eq!(out["output"], "pong:sse");
+}
+
+// --- error handling across transports ---
+
+#[tokio::test]
+async fn streamable_http_connection_refused_fails_prepare() {
+    let port = free_port();
+    let error = match hya_mcp::prepare("http".into(), url_config(port)).await {
+        Err(error) => error,
+        Ok(_) => panic!("no listener on port, prepare must fail"),
+    };
+    assert!(error.to_string().contains("io"), "got: {error}");
+}
+
+#[tokio::test]
+async fn classic_sse_connection_refused_fails_connect() {
+    let port = free_port();
+    let error = match hya_mcp::McpClient::connect_classic_sse(&format!(
+        "http://127.0.0.1:{port}/sse"
+    ))
+    .await
+    {
+        Err(error) => error,
+        Ok(_) => panic!("no listener on port, connect must fail"),
+    };
+    assert!(error.to_string().contains("io"), "got: {error}");
+}
+
+#[tokio::test]
+async fn streamable_http_without_initialize_session_surfaces_404() {
+    let (port, _server) = spawn_fixture(STREAMABLE_FIXTURE, &[]);
+    // A raw client that skips initialize has no Mcp-Session-Id; the server
+    // must reject it with 404 and the client must surface a typed error.
+    let client =
+        hya_mcp::McpClient::connect_streamable_http(format!("http://127.0.0.1:{port}/mcp"))
+            .expect("client builds");
+    let error = client
+        .call("tools/list", json!({}), Duration::from_secs(5))
+        .await
+        .expect_err("session-less call must fail");
+    assert!(error.to_string().contains("404"), "got: {error}");
+}
+
+#[tokio::test]
+async fn streamable_http_surfaces_http_500_from_tools_list() {
+    let (port, _server) = spawn_fixture(STREAMABLE_FIXTURE, &["--fail5xx"]);
+    let error = match hya_mcp::prepare("http".into(), url_config(port)).await {
+        Err(error) => error,
+        Ok(_) => panic!("tools/list 500 must fail prepare"),
+    };
+    assert!(
+        error.to_string().contains("500") && error.to_string().contains("deliberate"),
+        "got: {error}"
+    );
+}
+
+#[tokio::test]
+async fn streamable_http_surfaces_malformed_json_body() {
+    let (port, _server) = spawn_fixture(STREAMABLE_FIXTURE, &["--malformed"]);
+    let error = match hya_mcp::prepare("http".into(), url_config(port)).await {
+        Err(error) => error,
+        Ok(_) => panic!("malformed tools/list body must fail prepare"),
+    };
+    assert!(error.to_string().contains("json"), "got: {error}");
+}
+
+#[tokio::test]
+async fn streamable_http_call_timeout_is_typed() {
+    let (port, _server) = spawn_fixture(STREAMABLE_FIXTURE, &[]);
+    let config = McpServerConfig {
+        timeout_ms: Some(200),
+        ..url_config(port)
+    };
+    let prepared = hya_mcp::prepare("http".into(), config)
+        .await
+        .expect("connects");
+    let error = call_tool_result(&prepared, "__slow", json!({ "seconds": 5 }))
+        .await
+        .expect_err("5s sleep inside a 200ms budget times out");
+    assert!(error.to_string().contains("timed out"), "got: {error}");
+}
+
+#[tokio::test]
+async fn classic_sse_surfaces_tool_error_paths() {
+    let (port, _server) = spawn_fixture(SSE_FIXTURE, &[]);
+    let config = McpServerConfig {
+        url: Some(format!("http://127.0.0.1:{port}/sse")),
+        transport: Some("sse".into()),
+        timeout_ms: Some(5000),
+        ..McpServerConfig::default()
+    };
+    let prepared = hya_mcp::prepare("sse".into(), config)
+        .await
+        .expect("connects");
+    let ctx = ctx_allowing_mcp();
+
+    let fail = prepared
+        .tools()
+        .into_iter()
+        .find(|tool| tool.name().ends_with("__fail_tool"))
+        .expect("fail_tool registered");
+    let err = fail
+        .execute(&ctx, json!({}))
+        .await
+        .expect_err("isError becomes a tool error");
+    assert!(err.to_string().contains("deliberate tool failure"));
+
+    let rpc = prepared
+        .tools()
+        .into_iter()
+        .find(|tool| tool.name().ends_with("__rpc_error"))
+        .expect("rpc_error registered");
+    let err = rpc
+        .execute(&ctx, json!({}))
+        .await
+        .expect_err("json-rpc error becomes a tool error");
+    assert!(err.to_string().contains("deliberate failure"));
+}
+
+#[tokio::test]
+async fn stdio_server_exit_mid_call_surfaces_closed() {
+    use hya_mcp::McpClient;
+    use std::process::Stdio;
+    use tokio::process::Command as AsyncCommand;
+
+    // The child exits without answering: the reader sees EOF while a request
+    // is pending, so the call resolves as Closed rather than hanging.
+    let mut child = AsyncCommand::new("python3")
+        .arg("-c")
+        .arg("import sys; sys.stdin.readline(); sys.exit(0)")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn exiting child");
+    let stdout = child.stdout.take().expect("stdout");
+    let stdin = child.stdin.take().expect("stdin");
+    let client = McpClient::new(stdout, stdin);
+    let error = client
+        .call("tools/list", json!({}), Duration::from_secs(5))
+        .await
+        .expect_err("child exits without answering");
+    assert!(error.to_string().contains("closed"), "got: {error}");
+    let _ = child.kill().await;
+    let _ = child.wait().await;
 }
