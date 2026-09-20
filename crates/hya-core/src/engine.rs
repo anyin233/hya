@@ -1,7 +1,9 @@
 use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, RwLock};
+use std::time::Duration;
 
 use async_trait::async_trait;
 use hya_proto::{
@@ -338,6 +340,9 @@ impl hya_tool::WorkflowRequestSink for BoundWorkflowSink {
 /// Construct with [`SessionEngine::new`], then chain `with_*` builders for
 /// interaction, spawn, mailbox, hooks, compaction, and governors. Turns append
 /// events to the store and publish on the bus; observers never write the log.
+///
+/// Clone is cheap: every field is a handle or shared state, so detached tasks
+/// (backgrounded MCP watchers) can carry their own engine handle.
 pub struct SessionEngine {
     store: SessionStore,
     providers: RwLock<Arc<ProviderRouter>>,
@@ -377,8 +382,66 @@ pub struct SessionEngine {
     /// [`ResidentSupervisor::start`](crate::resident::ResidentSupervisor::start)
     /// wires it.
     reviver: RwLock<Option<Arc<dyn ArchiveReviver>>>,
+    /// Foreground budget for `mcp__` tool calls; `None` (default) keeps every
+    /// call synchronous.
+    mcp_background_after: Option<Duration>,
+    /// Monotonic `mcpbg-N` job ids for backgrounded MCP calls.
+    background_job_seq: Arc<AtomicU64>,
     #[cfg(test)]
     direct_mail_pre_append_gate: Option<Arc<DirectMailPreAppendGate>>,
+}
+
+impl Clone for SessionEngine {
+    fn clone(&self) -> Self {
+        Self {
+            store: self.store.clone(),
+            providers: RwLock::new(
+                self.providers
+                    .read()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clone(),
+            ),
+            catalog: RwLock::new(
+                self.catalog
+                    .read()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clone(),
+            ),
+            model_fallbacks: self.model_fallbacks.clone(),
+            model_categories: self.model_categories.clone(),
+            runtime: self.runtime.clone(),
+            catalog_refresh: self.catalog_refresh.clone(),
+            permission: self.permission.clone(),
+            interaction: self.interaction.clone(),
+            spawner: self.spawner.clone(),
+            workflows: self.workflows.clone(),
+            mailbox: self.mailbox.clone(),
+            lifecycle: self.lifecycle.clone(),
+            todo: self.todo.clone(),
+            websearch: self.websearch.clone(),
+            artifacts: self.artifacts.clone(),
+            formatter: self.formatter.clone(),
+            lsp: self.lsp.clone(),
+            bus: self.bus.clone(),
+            summarizer: self.summarizer.clone(),
+            compaction: self.compaction,
+            token_accounting: self.token_accounting.clone(),
+            usage_tokenizers: self.usage_tokenizers.clone(),
+            hooks: self.hooks.clone(),
+            governor: self.governor.clone(),
+            sidecar_environment: self.sidecar_environment.clone(),
+            reviver: RwLock::new(
+                self.reviver
+                    .read()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clone(),
+            ),
+            mcp_background_after: self.mcp_background_after,
+            background_job_seq: self.background_job_seq.clone(),
+            #[cfg(test)]
+            direct_mail_pre_append_gate: self.direct_mail_pre_append_gate.clone(),
+        }
+    }
 }
 
 /// Revival seam for archived direct children (ADR-0015).
@@ -466,9 +529,21 @@ impl SessionEngine {
             governor: None,
             sidecar_environment: None,
             reviver: RwLock::new(None),
+            mcp_background_after: None,
+            background_job_seq: Arc::new(AtomicU64::new(1)),
             #[cfg(test)]
             direct_mail_pre_append_gate: None,
         }
+    }
+
+    /// Move `mcp__`-namespaced tool calls still running after `budget` to the
+    /// background: the turn receives an early "backgrounded" tool result and
+    /// the real result is later delivered as a steered user prompt. Disabled
+    /// (the default) when unset.
+    #[must_use]
+    pub fn with_mcp_background_after(mut self, budget: Duration) -> Self {
+        self.mcp_background_after = Some(budget);
+        self
     }
 
     #[cfg(test)]

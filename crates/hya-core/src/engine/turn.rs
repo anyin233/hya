@@ -2,12 +2,13 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use hya_proto::{
-    CompactionStrategy, Event, FinishReason, Message, MessageId, ModelRef, Role, SessionId,
+    CompactionStrategy, Event, FinishReason, Message, MessageId, ModelRef, PartId, Role, SessionId,
     TokenUsage, ToolCallId,
 };
 use hya_provider::{CompletionRequest, EventStream, ProviderError};
 use hya_store::ActorClaim;
 use hya_tool::{Action, AgentDef, Mode, PermissionPlane, ResolvedTool, Rule, ToolCtx, ToolError};
+use std::sync::atomic::Ordering;
 use tokio_util::sync::CancellationToken;
 
 use super::shell::BashArtifactGuard;
@@ -1386,7 +1387,19 @@ impl SessionEngine {
                                 // actual dispatch boundary so takeover cannot turn a
                                 // previously valid resident into an unfenced launch.
                                 self.validate_actor_claim(actor_claim).await?;
-                                resolved.tool.execute(&ctx, tc.input).await
+                                self.execute_tool_maybe_backgrounded(
+                                    Arc::clone(&resolved.tool),
+                                    ctx,
+                                    tc.input,
+                                    &tc.name,
+                                    ToolCallSite {
+                                        session,
+                                        message,
+                                        part: tc.part,
+                                        call: tc.call,
+                                    },
+                                )
+                                .await
                             }
                             Err(error) => Err(error),
                         };
@@ -1554,4 +1567,184 @@ fn append_steer_notice(output: &mut serde_json::Value, notice: &str) {
             serde_json::Value::String(notice.trim_start().to_string()),
         );
     }
+}
+
+/// Execute one tool call, moving long-running `mcp__` calls to the background
+/// when a budget is configured.
+///
+/// Past the budget the turn receives an early "backgrounded" result marker and
+/// the abandoned future is detached into a watcher; when the call eventually
+/// settles, [`SessionEngine::finish_background_mcp`] records the real outcome
+/// and steers a reclaim prompt into the session.
+///
+/// Where a tool call lives in the transcript: used by the background watcher
+/// to write the real outcome back onto the originating tool part.
+struct ToolCallSite {
+    session: SessionId,
+    message: MessageId,
+    part: PartId,
+    call: ToolCallId,
+}
+
+/// Identity of one backgrounded MCP call, detached from the turn loop.
+struct BackgroundCall {
+    site: ToolCallSite,
+    job: String,
+    tool_name: String,
+    started: std::time::Instant,
+}
+
+impl SessionEngine {
+    async fn execute_tool_maybe_backgrounded(
+        &self,
+        tool: Arc<dyn hya_tool::Tool>,
+        ctx: ToolCtx,
+        input: serde_json::Value,
+        tool_name: &str,
+        site: ToolCallSite,
+    ) -> Result<serde_json::Value, ToolError> {
+        let budget = self
+            .mcp_background_after
+            .filter(|_| tool_name.starts_with("mcp__"));
+        let Some(budget) = budget else {
+            return tool.execute(&ctx, input).await;
+        };
+        let mut fut = Box::pin(async move { tool.execute(&ctx, input).await });
+        let mut deadline = std::pin::pin!(tokio::time::sleep(budget));
+        tokio::select! {
+            result = &mut fut => result,
+            _ = &mut deadline => {
+                let job = format!(
+                    "mcpbg-{}",
+                    self.background_job_seq.fetch_add(1, Ordering::SeqCst),
+                );
+                let marker = backgrounded_marker(tool_name, &job, budget);
+                let engine = self.clone();
+                let finished = BackgroundCall {
+                    site,
+                    job,
+                    tool_name: tool_name.to_string(),
+                    started: std::time::Instant::now(),
+                };
+                tracing::info!(session=%finished.site.session, tool=%finished.tool_name, job=%finished.job, "mcp call backgrounded");
+                tokio::spawn(async move {
+                    let outcome = fut.await;
+                    engine.finish_background_mcp(finished, outcome).await;
+                });
+                Ok(marker)
+            }
+        }
+    }
+
+    async fn finish_background_mcp(
+        self,
+        finished: BackgroundCall,
+        outcome: Result<serde_json::Value, ToolError>,
+    ) {
+        let BackgroundCall {
+            site,
+            job,
+            tool_name,
+            started,
+        } = finished;
+        let ToolCallSite {
+            session,
+            message,
+            part,
+            call,
+        } = site;
+        let time_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let committed: Result<(), crate::error::CoreError> = match outcome {
+            Ok(mut output) => {
+                let text = output
+                    .get("output")
+                    .and_then(serde_json::Value::as_str)
+                    .map_or_else(|| output.to_string(), str::to_owned);
+                if let Some(object) = output.as_object_mut() {
+                    let mut metadata = object
+                        .get("metadata")
+                        .and_then(serde_json::Value::as_object)
+                        .cloned()
+                        .unwrap_or_default();
+                    metadata.insert("background_result".to_string(), serde_json::json!(job));
+                    object.insert("metadata".to_string(), serde_json::Value::Object(metadata));
+                }
+                let prompt = format!(
+                    "[background job {job} completed: {tool_name}]\n{text}\n\
+                     Reclaim this result: incorporate it into your work and continue from it."
+                );
+                // Admission lands before the marker event so an observer that
+                // drives a reclaim turn on the marker always sees the prompt.
+                async {
+                    self.admit_user_prompt(session, prompt).await?;
+                    self.emit(
+                        session,
+                        Event::ToolResult {
+                            session,
+                            message,
+                            part,
+                            call,
+                            output,
+                            time_ms,
+                        },
+                    )
+                    .await?;
+                    Ok(())
+                }
+                .await
+            }
+            Err(ToolError::Cancelled) => {
+                tracing::info!(session=%session, tool=%tool_name, %job, "backgrounded mcp call cancelled");
+                return;
+            }
+            Err(error) => {
+                let prompt = format!(
+                    "[background job {job} failed: {tool_name}] {error}\n\
+                     Continue without this result, or retry the tool."
+                );
+                let mut value = tool_error_value(&error);
+                if let Some(object) = value.as_object_mut() {
+                    object.insert("background_failed".to_string(), serde_json::json!(job));
+                }
+                async {
+                    self.admit_user_prompt(session, prompt).await?;
+                    self.emit(
+                        session,
+                        Event::ToolError {
+                            session,
+                            message,
+                            part,
+                            call,
+                            value: Some(value),
+                            message_text: error.to_string(),
+                        },
+                    )
+                    .await?;
+                    Ok(())
+                }
+                .await
+            }
+        };
+        if let Err(error) = committed {
+            tracing::warn!(session=%session, tool=%tool_name, %job, %error, "mcp background completion failed to commit");
+        }
+    }
+}
+
+/// Model-facing marker returned in place of a backgrounded call's result.
+fn backgrounded_marker(
+    tool_name: &str,
+    job: &str,
+    budget: std::time::Duration,
+) -> serde_json::Value {
+    serde_json::json!({
+        "title": "",
+        "output": format!(
+            "[backgrounded] {tool_name} is still running and has moved to the background as \
+             job {job} (foreground budget {}ms exceeded). Continue with other work now; when \
+             the job completes, its result will arrive as a new user prompt - reclaim it there.",
+            budget.as_millis()
+        ),
+        "metadata": { "backgrounded": true, "job": job, "tool": tool_name },
+    })
 }

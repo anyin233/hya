@@ -2227,6 +2227,18 @@ fn defer_sideplanes() -> bool {
     }
 }
 
+/// Foreground budget for `mcp__` tool calls (`HYA_MCP_BACKGROUND_AFTER_MS`).
+/// Unset, unparsable, or `0` keeps every MCP call synchronous; a positive
+/// value moves calls still running past the budget to the background, where
+/// completion is delivered as a steered reclaim prompt.
+fn mcp_background_after_from_env() -> Option<std::time::Duration> {
+    std::env::var("HYA_MCP_BACKGROUND_AFTER_MS")
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .filter(|millis| *millis > 0)
+        .map(std::time::Duration::from_millis)
+}
+
 #[derive(Clone, Copy)]
 struct EngineBuildOptions {
     defer_mcp: bool,
@@ -2461,6 +2473,9 @@ async fn build_session_engine_with_mcp_defer(
         .with_mailbox(mailbox)
         .with_lifecycle(lifecycle)
         .with_governor(governor);
+    if let Some(budget) = mcp_background_after_from_env() {
+        engine_builder = engine_builder.with_mcp_background_after(budget);
+    }
     if !plugin_host.is_empty() {
         engine_builder = engine_builder.with_hooks(plugin_host.clone());
     }

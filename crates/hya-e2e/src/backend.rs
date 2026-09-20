@@ -50,6 +50,8 @@ pub struct BackendSpec {
     pub project_files: Vec<(String, Vec<u8>)>,
     /// Hyabundle package paths to install into XDG_DATA_HOME before serve.
     pub preinstall_bundles: Vec<PathBuf>,
+    /// Extra environment variables passed to the backend process.
+    pub env: Vec<(String, String)>,
 }
 
 impl BackendSpec {
@@ -67,6 +69,7 @@ impl BackendSpec {
             skill_files: Vec::new(),
             project_files: Vec::new(),
             preinstall_bundles: Vec::new(),
+            env: Vec::new(),
         }
     }
 }
@@ -93,6 +96,8 @@ pub struct BackendProcess {
     yolo: bool,
     /// Whether startup must eagerly connect configured sideplanes.
     has_mcp: bool,
+    /// Extra environment variables reapplied on reopen.
+    env: Vec<(String, String)>,
     /// Set once the child has been signalled and reaped, so `Drop` does not signal a pid
     /// that the OS may already have handed to an unrelated process.
     stopped: bool,
@@ -214,6 +219,7 @@ permission:
             .env("XDG_STATE_HOME", &xdg_state)
             .env("XDG_CACHE_HOME", &xdg_cache)
             .env_remove("HYA_MODEL")
+            .envs(spec.env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
             // Lead its own process group so teardown can signal the whole tree (the backend
             // spawns MCP/plugin children). A group signal without this would hit the test
             // runner itself; a single-pid signal would orphan the grandchildren.
@@ -285,6 +291,7 @@ permission:
             model_ref,
             yolo: spec.yolo,
             has_mcp: !mcp.is_empty(),
+            env: spec.env.clone(),
             stopped: false,
         })
     }
@@ -317,6 +324,7 @@ permission:
             .env("XDG_STATE_HOME", &state)
             .env("XDG_CACHE_HOME", &cache)
             .env_remove("HYA_MODEL")
+            .envs(self.env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
             .process_group(0)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -587,16 +595,33 @@ for line in sys.stdin:
                         "type": "object",
                         "properties": {"msg": {"type": "string"}},
                     },
-                }
+                },
+                {
+                    "name": "slow",
+                    "description": "Sleep N seconds",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {"seconds": {"type": "number"}},
+                    },
+                },
             ]
         }
     elif method == "tools/call":
         args = (req.get("params") or {}).get("arguments") or {}
         msg = args.get("msg", "pong")
-        result = {
-            "content": [{"type": "text", "text": f"echo:{msg}"}],
-            "isError": False,
-        }
+        if req["params"].get("name") == "slow":
+            import time
+
+            time.sleep(float(args.get("seconds", 1)))
+            result = {
+                "content": [{"type": "text", "text": f"slept:{args.get('seconds', 1)}"}],
+                "isError": False,
+            }
+        else:
+            result = {
+                "content": [{"type": "text", "text": f"echo:{msg}"}],
+                "isError": False,
+            }
     else:
         result = {}
     print(json.dumps({"jsonrpc": "2.0", "id": req["id"], "result": result}), flush=True)
