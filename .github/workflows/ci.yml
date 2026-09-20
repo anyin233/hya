@@ -23,42 +23,6 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
-      - name: Install Bun 1.3.14
-        if: ${{ !cancelled() }}
-        shell: bash
-        run: |
-          curl -fsSL https://bun.sh/install | bash -s "bun-v1.3.14"
-          test "$("$HOME/.bun/bin/bun" --version)" = "1.3.14"
-          echo "$HOME/.bun/bin" >> "$GITHUB_PATH"
-      # `bun run typecheck` is a gate in its own right, not just setup — it must not
-      # be able to skip the Rust gate below.
-      - name: Prepare TypeScript TUI
-        if: ${{ !cancelled() }}
-        working-directory: packages/hya-tui-ts
-        run: |
-          "$HOME/.bun/bin/bun" install --frozen-lockfile
-          "$HOME/.bun/bin/bun" run typecheck
-          "$HOME/.bun/bin/bun" run build
-      - name: Build TypeScript TUI test binaries
-        if: ${{ !cancelled() }}
-        run: cargo build --locked -p hya -p hya-backend -p hya-ts --bins
-      # Track T gate: the registered suite (crates/hya-e2e/matrix.toml T3.2).
-      # The old TUI's real-backend trio retired with the deleted Compat surface;
-      # frontend-on-hya-sdk-v1 coverage returns with the new TUI.
-      - name: Test TypeScript TUI (Track T)
-        if: ${{ !cancelled() }}
-        working-directory: packages/hya-tui-ts
-        run: |
-          "$HOME/.bun/bin/bun" test test/task-presentation.test.ts
-      # Everything else in the bun suite. Presentation smoke reports but must
-      # never gate: it is flaky under CI load and has already blocked the entire
-      # Rust gate once (run 31053432077).
-      - name: TUI smoke (non-gating)
-        if: ${{ !cancelled() }}
-        continue-on-error: true
-        working-directory: packages/hya-tui-ts
-        run: |
-          "$HOME/.bun/bin/bun" test
       # Every gate step below carries `if: ${{ !cancelled() }}` so that one failure
       # reports on its own instead of skipping the rest. A red `fmt` used to skip the
       # test step entirely, which hid six failing tests for weeks — see
@@ -92,9 +56,3 @@ jobs:
       - name: agent process e2e (Track P)
         if: ${{ !cancelled() }}
         run: cargo test -p hya-e2e -- --test-threads=1
-      - name: install strace
-        if: ${{ !cancelled() }}
-        run: sudo apt-get update && sudo apt-get install -y strace
-      - name: verify-no-http (native transport opens zero inet sockets)
-        if: ${{ !cancelled() }}
-        run: bash scripts/verify-no-http.sh

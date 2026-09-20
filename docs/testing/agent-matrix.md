@@ -3,8 +3,8 @@
 Process E2E lives in `crates/hya-e2e` (**Track P**): real `hya-backend` +
 scripted OpenAI-compatible FakeLlm, driven entirely through the `hya.v1`
 contract. Existing in-process tests remain the authority for deep engine
-semantics (**Track I**); they are indexed, not duplicated. TUI coverage is
-**Track T**.
+semantics (**Track I**); they are indexed, not duplicated. There is no TUI
+today; former Track T is retired (see below).
 
 | Resource | Path |
 | --- | --- |
@@ -18,11 +18,6 @@ semantics (**Track I**); they are indexed, not duplicated. TUI coverage is
 # Track P — process agent suite
 cargo build -p hya-backend --bin hya-backend
 cargo test -p hya-e2e -- --test-threads=1
-
-# Track T — frontend package checks (presentation coverage)
-cd packages/hya-tui-ts
-bun run typecheck
-bun test
 ```
 
 ## Track P scenarios (implemented)
@@ -96,22 +91,15 @@ prompts). The recipient's own next model request is therefore the only honest
 delivery oracle — see the module docs of `tests/p16_swarm_mailbox.rs` for the
 ordering rules that keep those scenarios deterministic.
 
-## Track T scenarios
+## Track T scenarios (retired)
 
-The old TUI's real-backend Track T scenarios (T3.1 permission reply, T3.2
-multi-agent task presentation, T3.3 agent roster — the
-`real-backend*`/`task-presentation` test trio — plus T3.4 PTY smoke,
-`pty-smoke.test.ts`) verified the deleted Compat HTTP surface and are
-**retired with it**; the tests were removed alongside the old TUI's backend
-integration.
-
-Track T today is the frontend package's own checks (`bun run typecheck`,
-`bun test`): presentation helpers and package smoke (for example
-`workflow-presentation.test.ts`, `workflow-sidebar.test.ts`,
-`subagent-workspace.test.ts`, branding/boundary guards).
-Frontend-on-`hya-sdk-v1` scenarios return to the matrix with the new TUI;
-register them under the T3 series when they land, following the ID allocation
-rule below.
+Track T has no live scenarios. The whole T3 series is retired in
+`matrix.toml` (T3.1 permission reply, T3.2 multi-agent task presentation,
+T3.3 agent roster, T3.4 PTY smoke): the real-backend trio verified the deleted
+Compat HTTP surface, and the legacy TypeScript TUI package was then removed
+from the repository entirely. Frontend-on-`hya-sdk-v1` scenarios return to the
+matrix only when a future TUI is built; register them under the T3 series then,
+following the ID allocation rule below.
 
 ### PTY policy and recorded timeout
 
@@ -183,9 +171,9 @@ for the `hya.v1` contract.
   unregistered scenario is as much a registry failure as a phantom row);
 - a numbering hole in a `T<major>` series that is neither used nor retired.
 
-Bidirectional drift is enforced for Track P only. Track T is TypeScript, and
-Track I rows are index pointers into other crates that are deliberately not
-one-to-one with registry rows; checking those would generate false failures.
+Bidirectional drift is enforced for Track P only. Track I rows are index
+pointers into other crates that are deliberately not one-to-one with registry
+rows; checking those would generate false failures.
 
 Correspondence is **file-level**: `p01` carries two ids in one function, `p02`
 carries three, `p03` has one id and two functions.

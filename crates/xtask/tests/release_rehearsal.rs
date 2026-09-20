@@ -9,21 +9,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 const TARGET: &str = "x86_64-unknown-linux-gnu";
-const WORKFLOW_CONTRACTS: &[&str] = &[
-    "cp -R packages/hya-tui-ts/src/. \"$runtime/src/\"",
-    "test -f \"$runtime/src/hya/coding-tool-presentation.tsx\"",
-    "grep -Fx \"$package_dir/lib/hya/hya-tui-ts/src/hya/coding-tool-presentation.tsx\" \"$scratch/archive.txt\"",
-    "cp packages/hya-tui-ts/NOTICE \"$runtime/NOTICE\"",
-    "test -f \"$runtime/NOTICE\"",
-    "cmp packages/hya-tui-ts/NOTICE \"$runtime/NOTICE\"",
-    "grep -Fx \"$package_dir/lib/hya/hya-tui-ts/NOTICE\" \"$scratch/archive.txt\"",
-    "cp THIRD_PARTY_NOTICES \"$runtime/THIRD_PARTY_NOTICES\"",
-    "test -f \"$runtime/THIRD_PARTY_NOTICES\"",
-    "cmp THIRD_PARTY_NOTICES \"$runtime/THIRD_PARTY_NOTICES\"",
-    "grep -Fx \"$package_dir/lib/hya/hya-tui-ts/THIRD_PARTY_NOTICES\" \"$scratch/archive.txt\"",
-    "test -d \"$runtime/node_modules\"",
-    "grep -F \"$package_dir/lib/hya/hya-tui-ts/node_modules/\" \"$scratch/archive.txt\" >/dev/null",
-];
+const WORKFLOW_CONTRACTS: &[&str] =
+    &["cp -R crates/hya-plugin-compat/adapter/src/. \"$compat_adapter/src/\""];
 
 /// Require an explicit no-publish guard before a rehearsal can run.
 #[test]

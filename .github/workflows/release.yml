@@ -41,12 +41,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y p7zip-full
 
-      - name: Prepare TypeScript TUI
-        working-directory: packages/hya-tui-ts
-        run: |
-          "$HOME/.bun/bin/bun" install --frozen-lockfile
-          "$HOME/.bun/bin/bun" run build
-
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
         with:
           targets: x86_64-unknown-linux-gnu
@@ -71,9 +65,9 @@ jobs:
             exit 1
           fi
 
-          cargo_version="$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json, sys; metadata = json.load(sys.stdin); print(next(package["version"] for package in metadata["packages"] if package["name"] == "hya"))')"
+          cargo_version="$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json, sys; metadata = json.load(sys.stdin); print(next(package["version"] for package in metadata["packages"] if package["name"] == "hya-backend"))')"
           if [[ "$cargo_version" != "$version" ]]; then
-            echo "tag version $version does not match hya version $cargo_version" >&2
+            echo "tag version $version does not match hya-backend version $cargo_version" >&2
             exit 1
           fi
 
@@ -91,7 +85,7 @@ jobs:
 
       - name: Build release binaries
         shell: bash
-        run: cargo build --release --locked -p hya -p hya-backend -p hya-ts --bins --target "$TARGET"
+        run: cargo build --release --locked -p hya-backend --bins --target "$TARGET"
 
       - name: Package release asset
         id: package
@@ -106,26 +100,15 @@ jobs:
           archive="${package_dir}.tar.gz"
 
           rm -rf dist
-          runtime="dist/$package_dir/lib/hya/hya-tui-ts"
           compat_adapter="dist/$package_dir/lib/hya/compat-adapter"
-          mkdir -p "dist/$package_dir/bin" "$runtime/src" "$compat_adapter/src"
-          cp "target/$TARGET/release/hya" "target/$TARGET/release/hya-backend" \
-            "target/$TARGET/release/hya-ts" "dist/$package_dir/bin/"
+          mkdir -p "dist/$package_dir/bin" "$compat_adapter/src"
+          cp "target/$TARGET/release/hya-backend" "dist/$package_dir/bin/"
           cp README.md "dist/$package_dir/"
-          chmod 755 "dist/$package_dir/bin/hya" "dist/$package_dir/bin/hya-backend" \
-            "dist/$package_dir/bin/hya-ts"
-          cp packages/hya-tui-ts/package.json packages/hya-tui-ts/bun.lock \
-            packages/hya-tui-ts/bunfig.toml packages/hya-tui-ts/tsconfig.json \
-            packages/hya-tui-ts/LICENSE packages/hya-tui-ts/UPSTREAM.md "$runtime/"
-          cp packages/hya-tui-ts/NOTICE "$runtime/NOTICE"
-          cp THIRD_PARTY_NOTICES "$runtime/THIRD_PARTY_NOTICES"
-          cp -R packages/hya-tui-ts/src/. "$runtime/src/"
+          chmod 755 "dist/$package_dir/bin/hya-backend"
           cp crates/hya-plugin-compat/adapter/package.json \
             crates/hya-plugin-compat/adapter/bun.lock "$compat_adapter/"
           cp -R crates/hya-plugin-compat/adapter/src/. "$compat_adapter/src/"
-          (cd "$runtime" && "$HOME/.bun/bin/bun" install --frozen-lockfile --production)
           (cd "$compat_adapter" && "$HOME/.bun/bin/bun" install --frozen-lockfile --production)
-          "$HOME/.bun/bin/bun" packages/hya-tui-ts/scripts/prune-sdk-server.ts "$runtime"
           scripts/package-argus-example.sh bundles/examples/argus-example \
             "dist/$package_dir/examples/hya-argus-example.hyabundle"
 
@@ -148,21 +131,10 @@ jobs:
           trap 'rm -rf "$scratch"' EXIT
 
           tar -xzf "dist/$ARCHIVE" -C "$scratch"
-          packaged_binary="$scratch/$package_dir/bin/hya"
+          packaged_binary="$scratch/$package_dir/bin/hya-backend"
           "$packaged_binary" --version | tee "$scratch/version.txt"
           grep -F "$version" "$scratch/version.txt"
           "$packaged_binary" --help >/dev/null
-          "$scratch/$package_dir/bin/hya-backend" --help >/dev/null
-          "$scratch/$package_dir/bin/hya-ts" --help >/dev/null
-          runtime="$scratch/$package_dir/lib/hya/hya-tui-ts"
-          test -f "$runtime/package.json"
-          test -f "$runtime/bun.lock"
-          test -f "$runtime/bunfig.toml"
-          test -f "$runtime/tsconfig.json"
-          test -f "$runtime/src/main.tsx"
-          test -f "$runtime/src/hya/coding-tool-presentation.tsx"
-          test -f "$runtime/NOTICE"
-          test -f "$runtime/THIRD_PARTY_NOTICES"
           compat_adapter="$scratch/$package_dir/lib/hya/compat-adapter"
           for path in package.json bun.lock src/main.ts node_modules/@opencode-ai/plugin/package.json node_modules/@opencode-ai/sdk/package.json; do
             test -e "$compat_adapter/$path"
@@ -192,64 +164,8 @@ jobs:
             echo "Argus archive must not contain its source-tree prefix" >&2
             exit 1
           fi
-          project="$scratch/project"
-          mock_bun="$scratch/mock-bun"
-          bun_invocation="$scratch/bun-invocation"
-          mkdir -p "$project"
-          cat >"$mock_bun" <<'MOCK_BUN'
-          #!/usr/bin/env bash
-          set -euo pipefail
-          printf 'cwd=%s\n' "$PWD" >"${HYA_RELEASE_BUN_INVOCATION:?}"
-          printf 'arg=%s\n' "$@" >>"$HYA_RELEASE_BUN_INVOCATION"
-          exit 23
-          MOCK_BUN
-          chmod +x "$mock_bun"
-          set +e
-          HYA_RELEASE_BUN_INVOCATION="$bun_invocation" "$packaged_binary" "$project" --server http://127.0.0.1:54321 --bun "$mock_bun" >/dev/null 2>&1
-          status=$?
-          set -e
-          test "$status" -eq 23
-          grep -Fx "cwd=$runtime" "$bun_invocation"
-          grep -Fx "arg=src/main.tsx" "$bun_invocation"
-          grep -Fx "arg=--url" "$bun_invocation"
-          grep -Fx "arg=http://127.0.0.1:54321" "$bun_invocation"
-          grep -Fx "arg=--project" "$bun_invocation"
-          grep -Fx "arg=$project" "$bun_invocation"
-          cmp packages/hya-tui-ts/UPSTREAM.md "$runtime/UPSTREAM.md"
-          cmp packages/hya-tui-ts/NOTICE "$runtime/NOTICE"
-          cmp THIRD_PARTY_NOTICES "$runtime/THIRD_PARTY_NOTICES"
-          test -d "$runtime/node_modules"
-          sdk="$runtime/node_modules/@opencode-ai/sdk"
-          (cd "$runtime" && "$HOME/.bun/bin/bun" -e 'import { createOpencodeClient } from "@opencode-ai/sdk/v2"; if (typeof createOpencodeClient !== "function") process.exit(1)')
-          test -f "$sdk/dist/v2/client.js"
-          for path in dist/index.js dist/index.d.ts dist/server.js dist/server.d.ts dist/v2/index.js dist/v2/index.d.ts dist/v2/server.js dist/v2/server.d.ts dist/process.js dist/process.d.ts; do
-            test ! -e "$sdk/$path"
-          done
-          if grep -F '"."' "$sdk/package.json"; then
-            echo "packaged SDK must not export the server root" >&2
-            exit 1
-          fi
-          if grep -F '"./server"' "$sdk/package.json"; then
-            echo "packaged SDK must not export the server entry" >&2
-            exit 1
-          fi
-          if grep -F '"./v2/server"' "$sdk/package.json"; then
-            echo "packaged SDK must not export the v2 server entry" >&2
-            exit 1
-          fi
           tar -tzf "dist/$ARCHIVE" > "$scratch/archive.txt"
-          grep -Fx "$package_dir/bin/hya" "$scratch/archive.txt"
           grep -Fx "$package_dir/bin/hya-backend" "$scratch/archive.txt"
-          grep -Fx "$package_dir/bin/hya-ts" "$scratch/archive.txt"
-          grep -Fx "$package_dir/lib/hya/hya-tui-ts/LICENSE" "$scratch/archive.txt"
-          grep -Fx "$package_dir/lib/hya/hya-tui-ts/UPSTREAM.md" "$scratch/archive.txt"
-          grep -Fx "$package_dir/lib/hya/hya-tui-ts/NOTICE" "$scratch/archive.txt"
-          grep -Fx "$package_dir/lib/hya/hya-tui-ts/THIRD_PARTY_NOTICES" "$scratch/archive.txt"
-          grep -Fx "$package_dir/lib/hya/hya-tui-ts/src/main.tsx" "$scratch/archive.txt"
-          grep -Fx "$package_dir/lib/hya/hya-tui-ts/src/hya/coding-tool-presentation.tsx" "$scratch/archive.txt"
-          grep -Fx "$package_dir/lib/hya/hya-tui-ts/bunfig.toml" "$scratch/archive.txt"
-          grep -Fx "$package_dir/lib/hya/hya-tui-ts/tsconfig.json" "$scratch/archive.txt"
-          grep -F "$package_dir/lib/hya/hya-tui-ts/node_modules/" "$scratch/archive.txt" >/dev/null
           grep -Fx "$package_dir/lib/hya/compat-adapter/package.json" "$scratch/archive.txt"
           grep -Fx "$package_dir/lib/hya/compat-adapter/bun.lock" "$scratch/archive.txt"
           grep -Fx "$package_dir/lib/hya/compat-adapter/src/main.ts" "$scratch/archive.txt"
