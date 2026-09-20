@@ -149,19 +149,35 @@ mod tests {
 
     #[test]
     fn captures_code_and_state_from_callback() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = listener.local_addr().unwrap().port();
-        drop(listener);
+        // The probe port is released before `wait_for_callback` re-binds it,
+        // so under parallel test execution a sibling can briefly claim it;
+        // retry with a fresh port instead of failing the run on that race.
+        for _ in 0..10 {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = listener.local_addr().unwrap().port();
+            drop(listener);
 
-        let handle = thread::spawn(move || {
-            wait_for_callback("127.0.0.1", port, "/auth/callback", Duration::from_secs(5)).unwrap()
-        });
-        thread::sleep(Duration::from_millis(50));
-        let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
-        let req = "GET /auth/callback?code=abc%20123&state=xyz HTTP/1.1\r\nHost: localhost\r\n\r\n";
-        stream.write_all(req.as_bytes()).unwrap();
-        let params = handle.join().unwrap();
-        assert_eq!(params.get("code").map(String::as_str), Some("abc 123"));
-        assert_eq!(params.get("state").map(String::as_str), Some("xyz"));
+            let handle = thread::spawn(move || {
+                wait_for_callback("127.0.0.1", port, "/auth/callback", Duration::from_secs(5)).ok()
+            });
+            thread::sleep(Duration::from_millis(50));
+            let Ok(mut stream) = TcpStream::connect(("127.0.0.1", port)) else {
+                continue;
+            };
+            let req =
+                "GET /auth/callback?code=abc%20123&state=xyz HTTP/1.1\r\nHost: localhost\r\n\r\n";
+            if stream.write_all(req.as_bytes()).is_err() {
+                continue;
+            }
+            match handle.join().unwrap() {
+                Some(params) => {
+                    assert_eq!(params.get("code").map(String::as_str), Some("abc 123"));
+                    assert_eq!(params.get("state").map(String::as_str), Some("xyz"));
+                    return;
+                }
+                None => continue,
+            }
+        }
+        panic!("oauth callback listener never claimed an ephemeral port");
     }
 }
