@@ -136,6 +136,8 @@ async fn token_ledger_records_and_reads_by_role() {
                 prompt_tokens: 100,
                 completion_tokens: 50,
                 confidence: "actual".to_string(),
+                provider: Some("12th".to_string()),
+                model: Some("12th/glm-5.3".to_string()),
             })
             .await
             .unwrap();
@@ -143,6 +145,13 @@ async fn token_ledger_records_and_reads_by_role() {
     let entries = store.read_usage(session).await.unwrap();
     assert_eq!(entries.len(), 3);
     assert!(entries.iter().any(|e| e.role == "worker"));
+    assert!(
+        entries
+            .iter()
+            .all(|e| e.provider.as_deref() == Some("12th")
+                && e.model.as_deref() == Some("12th/glm-5.3")),
+        "provider and model columns round-trip"
+    );
     assert!(
         entries
             .iter()
@@ -165,6 +174,8 @@ async fn hysec_token_ledger_resumes_after_reconnect() {
                 prompt_tokens: 100,
                 completion_tokens: 50,
                 confidence: "actual".to_string(),
+                provider: Some("12th".to_string()),
+                model: Some("12th/glm-5.3".to_string()),
             })
             .await
             .unwrap();

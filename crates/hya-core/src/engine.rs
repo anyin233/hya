@@ -5,8 +5,8 @@ use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
 use hya_proto::{
-    AgentName, Envelope, Event, EventSeq, MessageId, ModelRef, OperationId, Projection, SessionId,
-    ToolCallId, ToolSchema, now_millis,
+    AgentName, Envelope, Event, EventSeq, MessageId, ModelRef, OperationId, Projection, Role,
+    SessionId, ToolCallId, ToolSchema, now_millis,
 };
 use hya_provider::{ProviderCatalogSnapshot, ProviderModel, ProviderRouter, ReasoningEffort};
 use hya_store::{ActorClaim, SessionStore};
@@ -366,6 +366,8 @@ pub struct SessionEngine {
     summarizer: Option<Arc<dyn Summarizer>>,
     compaction: CompactionConfig,
     token_accounting: TokenAccounting,
+    /// Family tokenizers backing the usage-ledger fallback estimate.
+    usage_tokenizers: Arc<crate::model_tokenizers::ModelTokenizerSource>,
     hooks: Option<Arc<dyn HookDispatcher>>,
     governor: Option<crate::orchestrator::SubagentGovernor>,
     sidecar_environment: Option<Arc<dyn SidecarEnvironment>>,
@@ -459,6 +461,7 @@ impl SessionEngine {
             summarizer: None,
             compaction: CompactionConfig::default(),
             token_accounting: TokenAccounting::default(),
+            usage_tokenizers: Arc::new(crate::model_tokenizers::ModelTokenizerSource::default()),
             hooks: None,
             governor: None,
             sidecar_environment: None,
@@ -684,6 +687,17 @@ impl SessionEngine {
     #[must_use]
     pub fn with_token_accounting(mut self, accounting: TokenAccounting) -> Self {
         self.token_accounting = accounting;
+        self
+    }
+
+    /// Override the family-tokenizer source backing the usage-ledger fallback
+    /// estimate (tests inject fixture tokenizers so CI never downloads).
+    #[must_use]
+    pub fn with_usage_tokenizers(
+        mut self,
+        source: Arc<crate::model_tokenizers::ModelTokenizerSource>,
+    ) -> Self {
+        self.usage_tokenizers = source;
         self
     }
 
@@ -965,12 +979,119 @@ impl SessionEngine {
     }
 
     async fn emit(&self, session: SessionId, event: Event) -> Result<(), CoreError> {
+        let record_usage = matches!(
+            &event,
+            Event::MessageFinished {
+                role: Role::Assistant,
+                ..
+            }
+        );
         let (seq, ts_millis) = self.store.append_event(session, &event).await?;
         self.publish_envelope(Envelope {
             seq,
             ts_millis,
             event,
         });
+        if record_usage {
+            // The ledger is best-effort: a recording failure must never fail
+            // the turn that already finished.
+            if let Err(error) = self.record_session_usage(session).await {
+                tracing::warn!("usage ledger recording failed: {error:#}");
+            }
+        }
+        Ok(())
+    }
+
+    /// Record one token-ledger row for the just-finished assistant message.
+    ///
+    /// Provider-reported usage wins (`confidence: provider`); otherwise the
+    /// turn's texts are counted with the model family's real tokenizer when
+    /// one resolves (`confidence: hf:<repo>`) or the calibrated estimator
+    /// (`confidence: estimated`). Always records — never skips.
+    async fn record_session_usage(&self, session: SessionId) -> Result<(), CoreError> {
+        use hya_proto::{MessageProjection, PartProjection};
+
+        let projection = self.store.read_projection(session).await?;
+        let Some(message) = projection
+            .session
+            .messages
+            .iter()
+            .rev()
+            .find(|message| message.role == Role::Assistant)
+        else {
+            return Ok(());
+        };
+        let part_text = |message: &MessageProjection| {
+            message
+                .parts
+                .iter()
+                .map(|part| match part {
+                    PartProjection::Text { text, .. } => text.as_str(),
+                    _ => "",
+                })
+                .collect::<String>()
+        };
+        let completion_text = part_text(message);
+        let prompt_text = projection
+            .session
+            .messages
+            .iter()
+            .take_while(|candidate| candidate.id != message.id)
+            .map(part_text)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let model = projection
+            .session
+            .model
+            .as_ref()
+            .map(|model| model.as_str().to_string())
+            .unwrap_or_default();
+        let provider = model
+            .split('/')
+            .next()
+            .map(str::to_string)
+            .filter(|part| !model.is_empty() && part != model.as_str());
+        let role = projection
+            .session
+            .agent
+            .as_ref()
+            .map(|agent| agent.as_str().to_string())
+            .unwrap_or_else(|| "assistant".to_string());
+
+        let entry = match message.tokens.as_ref() {
+            Some(usage) => hya_store::LedgerEntry {
+                session,
+                role,
+                iteration: None,
+                completion_run_id: None,
+                prompt_tokens: (usage.input.saturating_add(usage.cache_read)) as i64,
+                completion_tokens: usage.output as i64,
+                confidence: "provider".to_string(),
+                provider,
+                model: (!model.is_empty()).then_some(model),
+            },
+            None => {
+                let tokenizer = self.usage_tokenizers.tokenizer_for_model(&model);
+                let name = tokenizer.name().to_string();
+                hya_store::LedgerEntry {
+                    session,
+                    role,
+                    iteration: None,
+                    completion_run_id: None,
+                    prompt_tokens: tokenizer.count_text(&prompt_text) as i64,
+                    completion_tokens: tokenizer.count_text(&completion_text) as i64,
+                    confidence: if name == "calibrated" {
+                        "estimated".to_string()
+                    } else {
+                        format!("hf:{name}")
+                    },
+                    provider,
+                    model: (!model.is_empty()).then_some(model),
+                }
+            }
+        };
+        self.store.record_usage(&entry).await?;
         Ok(())
     }
 
@@ -1008,12 +1129,24 @@ impl SessionEngine {
         session: SessionId,
         events: Vec<Event>,
     ) -> Result<(), CoreError> {
+        let finished_assistant = events.iter().any(|event| {
+            matches!(
+                event,
+                Event::MessageFinished {
+                    role: Role::Assistant,
+                    ..
+                }
+            )
+        });
         let envelopes = self
             .store
             .commit_resident_mutation(claim, session, &events)
             .await?;
         for envelope in envelopes {
             self.publish_envelope(envelope);
+        }
+        if finished_assistant && let Err(error) = self.record_session_usage(session).await {
+            tracing::warn!("usage ledger recording failed: {error:#}");
         }
         Ok(())
     }
