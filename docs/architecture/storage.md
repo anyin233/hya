@@ -253,30 +253,40 @@ replay(session) -> Projection::from_events(envelopes)
 
 This keeps store replay, HTTP event reads, SSE recovery, and transcript
 rendering on the same `hya_proto::Projection` reducer. The store, server, and
-native Rust client share that reducer; the TypeScript TUI renders from the
-Compat SDK/sync layer over HTTP+SSE.
+native Rust clients share that reducer; remote clients consume the curated v1
+stream/read shapes over HTTP+SSE.
 
 ## Token Ledger
+
+The engine records one row per finished assistant message — every turn, every
+session kind (root, subagent, resident actor): `SessionEngine::emit` hooks the
+assistant `MessageFinished` event, and resident mutations get the same hook in
+`commit_resident_mutation`. Recording is best-effort: a ledger failure is
+logged and never fails the finished turn.
 
 `record_usage` inserts into `token_ledger` with:
 
 - `session_id` (storage key)
 - `iteration`
 - `completion_run_id`
-- `role`
-- `prompt_tokens`
-- `completion_tokens`
-- `confidence`
+- `role` (the session's agent name)
+- `prompt_tokens`, `completion_tokens`
+- `confidence` — how the numbers were obtained (below)
+- `provider`, `model` (when the session records a model ref)
 - `ts` (now)
 
 `read_usage` returns those fields for a session ordered by timestamp.
 
-The table also has optional columns (`turn`, `provider`, `model`, `team_id`,
-`category`) that the current `record_usage` path does not populate.
+### Confidence levels
 
-Provider HTTP routes advertise `usage_reporting: true` in default
-`Capabilities` and extract usage from protocol streams when present. Ledger
-writes still depend on callers invoking `record_usage`.
+| `confidence` | Meaning |
+| --- | --- |
+| `provider` | The provider reported usage on the wire; `prompt_tokens` is `input + cache_read`, `completion_tokens` is `output`. |
+| `hf:<repo>` | The provider reported nothing; the turn's texts were counted with the model family's real `tokenizer.json` (GPT, Claude, DeepSeek, GLM, Kimi, Qwen initially adapted; resolved lazily from the hya cache → local HF cache → one-time download, then cached per process). |
+| `estimated` | No family matched or no tokenizer resolved; the structure-aware `CalibratedTokenizer` estimate was used. |
+
+The remaining optional columns (`turn`, `team_id`, `category`) are still not
+populated by this path.
 
 ## Saved permissions
 

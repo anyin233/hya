@@ -207,6 +207,10 @@ pub struct LedgerEntry {
     pub completion_tokens: i64,
     /// Confidence or estimation quality label stored with the row.
     pub confidence: String,
+    /// Provider id the completion ran on (e.g. `12th` in `12th/glm-5.3`).
+    pub provider: Option<String>,
+    /// Full model ref the completion ran on.
+    pub model: Option<String>,
 }
 
 impl SessionStore {
@@ -377,8 +381,8 @@ impl SessionStore {
         let session = entry.session.storage_key();
         sqlx::query(
             "INSERT INTO token_ledger \
-             (id, session_id, iteration, completion_run_id, role, prompt_tokens, completion_tokens, confidence, ts) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             (id, session_id, iteration, completion_run_id, role, prompt_tokens, completion_tokens, confidence, provider, model, ts) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(id)
         .bind(session)
@@ -388,6 +392,8 @@ impl SessionStore {
         .bind(entry.prompt_tokens)
         .bind(entry.completion_tokens)
         .bind(entry.confidence.clone())
+        .bind(entry.provider.clone())
+        .bind(entry.model.clone())
         .bind(now_millis())
         .execute(&self.pool)
         .await?;
@@ -398,7 +404,7 @@ impl SessionStore {
     pub async fn read_usage(&self, session: SessionId) -> Result<Vec<LedgerEntry>, StoreError> {
         let key = session.storage_key();
         let rows = sqlx::query(
-            "SELECT iteration, completion_run_id, role, prompt_tokens, completion_tokens, confidence \
+            "SELECT iteration, completion_run_id, role, prompt_tokens, completion_tokens, confidence, provider, model \
              FROM token_ledger WHERE session_id = ? ORDER BY ts",
         )
         .bind(key)
@@ -414,6 +420,8 @@ impl SessionStore {
                 prompt_tokens: r.try_get("prompt_tokens")?,
                 completion_tokens: r.try_get("completion_tokens")?,
                 confidence: r.try_get("confidence")?,
+                provider: r.try_get("provider")?,
+                model: r.try_get("model")?,
             });
         }
         Ok(out)

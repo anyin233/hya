@@ -42,6 +42,8 @@ pub mod lifecycle;
 /// Loop-mode verifier/planner traits and drive helpers.
 pub mod loop_mode;
 pub mod mailbox;
+/// Real per-family tokenizers backing the usage-ledger fallback estimate.
+pub mod model_tokenizers;
 /// Subagent concurrency governor and team budgets.
 pub mod orchestrator;
 /// System prompt construction and context file discovery.
