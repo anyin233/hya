@@ -53,7 +53,9 @@ pub use catalog_discovery::{
 pub use dev::DevProvider;
 pub use fake::{FakeProvider, FakeStep};
 pub use google::{GoogleDecoder, GoogleProtocol};
-pub use http::{AuthRefresher, BearerResolver, HttpProvider, ModelLimitOverride, ProviderKind};
+pub use http::{
+    AuthRefresher, BearerResolver, HttpProvider, ModelLimitOverride, ProviderKind, RetryConfig,
+};
 pub use openai::{
     COMPACT_CONTEXT_MARKER, OpenAiChatDecoder, OpenAiChatProtocol, OpenAiResponsesDecoder,
     OpenAiResponsesProtocol, RESPONSES_COMPACT_ITEMS_MARKER, encode_input_items,

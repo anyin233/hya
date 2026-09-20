@@ -1,46 +1,102 @@
 use eventsource_stream::Eventsource as _;
 use futures::StreamExt as _;
-use hya_proto::Event;
+use hya_proto::{Event, MessageId, SessionId};
 use serde_json::Value;
 use tokio::{sync::mpsc, time::timeout};
 
-use crate::{Decoder, ProviderError};
+use crate::{Decoder, Protocol, ProviderError, ReasoningEffort};
 
+use super::RouteCore;
+
+/// Everything the zero-event replay window needs to re-issue a streamed
+/// completion from inside the pump task: the clonable route state, a shared
+/// protocol (fresh decoder per attempt), and the request payload.
+pub(super) struct ReissuePlan {
+    pub(super) core: RouteCore,
+    pub(super) protocol: std::sync::Arc<dyn Protocol>,
+    pub(super) url: String,
+    pub(super) body: Value,
+    pub(super) extra_headers: std::collections::BTreeMap<String, String>,
+    pub(super) model_override: Option<String>,
+    pub(super) idle_timeout: std::time::Duration,
+    /// Attempts already consumed by the pre-stream loop in `stream()`.
+    pub(super) attempts_used: usize,
+}
+
+/// A stream's terminal failure plus whether it is a *link-level* failure.
+///
+/// Link-level failures (SSE byte-stream decode errors, connection resets,
+/// idle stalls before any frame) hit before the provider's semantics are
+/// involved, so replaying the whole request while nothing was consumed is
+/// safe. Provider-decided failures — 200-with-error-body frames, malformed
+/// payloads, missing terminal frames — are surfaced immediately: replaying a
+/// deterministic provider error would only burn the budget.
+pub(super) struct TerminalError {
+    pub(super) error: ProviderError,
+    pub(super) link_level: bool,
+}
+
+/// How one pump run over an established response ended.
+pub(super) struct PumpOutcome {
+    /// Whether any event reached the consumer from this response.
+    pub(super) delivered_any: bool,
+    /// The consumer dropped the stream; stop silently and abort the body.
+    pub(super) consumer_gone: bool,
+    /// The terminal error, if the stream ended in failure. The pump itself
+    /// never sends errors: the caller decides whether the zero-event replay
+    /// window applies or the error is forwarded to the consumer.
+    pub(super) terminal: Option<TerminalError>,
+}
+
+/// Drive one established SSE response into `tx`, returning how it ended.
 pub(super) async fn pump(
     resp: reqwest::Response,
     mut decoder: Box<dyn Decoder>,
     tx: mpsc::Sender<Result<Event, ProviderError>>,
     idle_timeout: std::time::Duration,
-) {
+) -> PumpOutcome {
+    let mut outcome = PumpOutcome {
+        delivered_any: false,
+        consumer_gone: false,
+        terminal: None,
+    };
     let mut sse = resp.bytes_stream().eventsource();
     loop {
         // The window opens at headers (first event) and resets on every frame
-        // (inter-event silence). A miss is post-stream under the no-replay
-        // boundary: it surfaces once here and is never retried or failed over.
+        // (inter-event silence). A miss is a terminal error under the
+        // no-replay boundary: the caller surfaces it exactly once and never
+        // replays once events have been delivered.
         // Cancel/drop of the EventStream must abort this HTTP body immediately;
         // otherwise keepalive comments keep `sse.next()` pending until idle.
         let next = tokio::select! {
             biased;
-            () = tx.closed() => return,
+            () = tx.closed() => {
+                outcome.consumer_gone = true;
+                return outcome;
+            }
             next = timeout(idle_timeout, sse.next()) => next,
         };
         let next = match next {
             Ok(Some(frame)) => frame,
             Ok(None) => break,
             Err(_elapsed) => {
-                let _ = tx
-                    .send(Err(ProviderError::Http(format!(
+                outcome.terminal = Some(TerminalError {
+                    error: ProviderError::Http(format!(
                         "stalled stream: no SSE frame within {idle_timeout:#?}"
-                    ))))
-                    .await;
-                return;
+                    )),
+                    link_level: true,
+                });
+                return outcome;
             }
         };
         let frame = match next {
             Ok(f) => f,
             Err(e) => {
-                let _ = tx.send(Err(ProviderError::Http(e.to_string()))).await;
-                return;
+                outcome.terminal = Some(TerminalError {
+                    error: ProviderError::Http(e.to_string()),
+                    link_level: true,
+                });
+                return outcome;
             }
         };
         if frame.data.contains("\"error\"")
@@ -51,20 +107,28 @@ pub(super) async fn pump(
                 .get("message")
                 .and_then(Value::as_str)
                 .unwrap_or("provider returned an error");
-            let _ = tx.send(Err(ProviderError::Http(msg.to_string()))).await;
-            return;
+            outcome.terminal = Some(TerminalError {
+                error: ProviderError::Http(msg.to_string()),
+                link_level: false,
+            });
+            return outcome;
         }
         match decoder.push(&frame.data) {
             Ok(events) => {
                 for event in events {
                     if tx.send(Ok(event)).await.is_err() {
-                        return;
+                        outcome.consumer_gone = true;
+                        return outcome;
                     }
+                    outcome.delivered_any = true;
                 }
             }
             Err(e) => {
-                let _ = tx.send(Err(e)).await;
-                return;
+                outcome.terminal = Some(TerminalError {
+                    error: e,
+                    link_level: false,
+                });
+                return outcome;
             }
         }
     }
@@ -72,12 +136,84 @@ pub(super) async fn pump(
         Ok(events) => {
             for event in events {
                 if tx.send(Ok(event)).await.is_err() {
-                    return;
+                    outcome.consumer_gone = true;
+                    return outcome;
                 }
+                outcome.delivered_any = true;
             }
         }
         Err(e) => {
-            let _ = tx.send(Err(e)).await;
+            outcome.terminal = Some(TerminalError {
+                error: e,
+                link_level: false,
+            });
+        }
+    }
+    outcome
+}
+
+/// Pump the first response, then — while the consumer has seen no events at
+/// all — transparently re-issue the whole request inside the remaining
+/// [`super::RetryConfig`] budget.
+///
+/// The moment a single event is delivered the strict no-replay boundary holds:
+/// later errors are forwarded to the consumer exactly once and never replayed
+/// or failed over. `stream()` has already returned by then, so this task owns
+/// the lifecycle.
+pub(super) async fn pump_with_reissue(
+    mut plan: ReissuePlan,
+    mut resp: reqwest::Response,
+    session: SessionId,
+    message: MessageId,
+    reasoning: Option<ReasoningEffort>,
+    tx: mpsc::Sender<Result<Event, ProviderError>>,
+) {
+    loop {
+        let decoder = plan.protocol.decoder(session, message, reasoning);
+        let outcome = pump(resp, decoder, tx.clone(), plan.idle_timeout).await;
+        if outcome.consumer_gone {
+            return;
+        }
+        let Some(terminal) = outcome.terminal else {
+            return;
+        };
+        if outcome.delivered_any
+            || plan.attempts_used >= plan.core.retry.max_attempts
+            || !terminal.link_level
+        {
+            let _ = tx.send(Err(terminal.error)).await;
+            return;
+        }
+        let remaining = plan.core.retry.max_attempts - plan.attempts_used;
+        tokio::time::sleep(super::retry_delay(
+            &terminal.error,
+            plan.attempts_used,
+            &plan.core.retry,
+        ))
+        .await;
+        match plan
+            .core
+            .send_stream_request(
+                &plan.url,
+                &plan.body,
+                &plan.extra_headers,
+                plan.model_override.as_deref(),
+                remaining,
+            )
+            .await
+        {
+            Ok((next_resp, used)) => {
+                plan.attempts_used += used;
+                resp = next_resp;
+            }
+            Err(pre_stream) => {
+                // The replay itself died before headers (statuses already
+                // retried inside their own budget). Surface it as the stream's
+                // terminal item: the consumer context is identical to a
+                // mid-stream failure.
+                let _ = tx.send(Err(pre_stream)).await;
+                return;
+            }
         }
     }
 }

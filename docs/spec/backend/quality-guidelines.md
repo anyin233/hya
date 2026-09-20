@@ -908,6 +908,11 @@ Bumping the version means updating **all** of these together:
   per-attempt header deadline; the default is 60 seconds.
 - `HttpProvider::with_idle_timeout(Duration)` overrides the established SSE
   frame-idle deadline; the default is five minutes.
+- `HttpProvider::with_retry(RetryConfig)` overrides the replay budget
+  (`max_attempts`, `backoff_base`, `backoff_max`); the default is 3 attempts,
+  100 ms backoff seed, 30 s cap. The `provider_retry:` config block sets the
+  global default, per-provider `retry:` blocks override fields, and
+  `HYA_PROVIDER_RETRY_*` env vars win over both.
 - `SessionEngine::with_model_fallbacks(HashMap<ModelRef, Vec<ModelRef>>)` installs
   ordered category chains whose first candidate must equal the map key.
 
@@ -926,8 +931,9 @@ Bumping the version means updating **all** of these together:
   retryable pre-stream error or `UnknownModel`; it never consumes non-retryable
   protocol, compatibility, decode, or human-action auth errors.
 - The header deadline is a retryable transport failure. The SSE idle deadline is
-  delivered once on the established stream and is not retryable. A stream that
-  keeps producing frames has no total lifetime deadline.
+  delivered once on the established stream; before the first frame it joins the
+  zero-event replay window, after any frame it is terminal and not retryable. A
+  stream that keeps producing frames has no total lifetime deadline.
 
 ### 4. Validation & Error Matrix
 
@@ -935,11 +941,19 @@ Bumping the version means updating **all** of these together:
   single-model behavior instead of partially honoring an unsafe order.
 - Transport/header timeout, 429, or 5xx before stream -> bounded same-route
   retry, then matching-route/model-chain failover when available.
+- Zero delivered events + link-level body failure or pre-first-frame idle ->
+  transparent re-issue inside the remaining shared budget; exhaustion surfaces
+  the last error once on the stream.
+- Zero delivered events + provider-decided failure (error frame, decode,
+  missing terminal) -> surface immediately without consuming replay budget.
+- One or more delivered events + any failure -> surface exactly once; zero
+  replay or failover.
 - 401/403 with no refresher, failed refresh, unchanged token, or no remaining
   attempt -> original status error; no synthetic auth success.
 - `AuthExpired`, incompatible request, decode error, or other non-retryable
   failure -> surface immediately without advancing a route/model chain.
-- SSE idle after headers -> one stream error; zero replay or failover.
+- SSE idle after the first delivered frame -> one stream error; zero replay or
+  failover.
 
 ### 5. Good/Base/Bad Cases
 
@@ -954,6 +968,10 @@ Bumping the version means updating **all** of these together:
 
 - Paused-time HTTP tests cover attempt count, backoff, bounded `Retry-After`,
   response-body deadline, header timeout, and one forced refresh inside budget.
+- Zero-event tests cover: a truncated body before any frame replays within the
+  budget and succeeds; `max_attempts: 1` fails fast; a failure after a
+  delivered event is never replayed; pre-first-frame idle stalls replay within
+  the budget; provider error frames never replay.
 - Router tests cover matching-route order, retryable/non-retryable classification,
   and zero failover after stream construction.
 - Core tests cover configured chain order, forward suffixes, `UnknownModel`,

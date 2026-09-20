@@ -108,7 +108,7 @@ async fn http_provider_retries_a_route_that_never_sends_response_headers() {
 }
 
 #[tokio::test]
-async fn http_provider_idle_stall_yields_one_error_without_second_request() {
+async fn http_provider_idle_stall_before_any_frame_replays_within_the_attempt_budget() {
     let (base_url, connections) = start_stalled_mid_stream_server().await;
     let provider = HttpProvider::new(
         "openai",
@@ -141,10 +141,13 @@ async fn http_provider_idle_stall_yields_one_error_without_second_request() {
     .await
     .expect("post-header idle stall should end the stream within the guard");
 
+    // A stall before any frame has delivered nothing to the consumer, so the
+    // zero-event replay window applies: the full default budget is spent
+    // re-issuing before the error surfaces exactly once.
     assert_eq!(
         connections.load(Ordering::SeqCst),
-        1,
-        "post-stream failures sit behind the no-replay boundary"
+        3,
+        "zero-event stalls replay within the default attempt budget"
     );
     assert_eq!(events.len(), 1);
     match &events[0] {
@@ -156,6 +159,154 @@ async fn http_provider_idle_stall_yields_one_error_without_second_request() {
         }
         other => panic!("expected a single idle-stall error, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn zero_event_body_failure_replays_within_budget_and_succeeds() {
+    // Attempt one: 200 headers, a body shorter than content-length (reqwest
+    // decode failure), zero SSE frames delivered. Attempt two: a valid stream.
+    let truncated = "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: 500\r\nconnection: close\r\n\r\n";
+    let ok = "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\ndata: [DONE]\n\n";
+    let (base_url, connections, _requests) =
+        start_scripted_server(vec![truncated.to_string(), ok.to_string()]).await;
+    let provider = HttpProvider::new(
+        "openai",
+        ProviderKind::OpenAiCompatible,
+        &base_url,
+        Some("test-token".to_string()),
+        ["gpt-5".to_string()],
+    )
+    .unwrap();
+    let req = CompletionRequest {
+        model: ModelRef::new("gpt-5"),
+        system: None,
+        messages: Vec::new(),
+        tools: Vec::new(),
+        temperature: None,
+        max_output_tokens: None,
+        reasoning: None,
+        headers: Default::default(),
+    };
+
+    let events = timeout(Duration::from_secs(15), async {
+        provider
+            .stream(req, SessionId::new(), MessageId::new())
+            .await
+            .unwrap()
+            .collect::<Vec<_>>()
+            .await
+    })
+    .await
+    .expect("zero-event decode failure should replay within the guard");
+
+    assert!(events.iter().all(Result::is_ok), "events: {events:?}");
+    assert_eq!(
+        connections.load(Ordering::SeqCst),
+        2,
+        "the truncated body must be replayed once and then succeed"
+    );
+}
+
+#[tokio::test]
+async fn retry_config_limits_total_attempts_to_one() {
+    let busy =
+        "HTTP/1.1 503 Service Unavailable\r\ncontent-length: 4\r\nretry-after: 0\r\nconnection: close\r\n\r\nbusy".to_string();
+    let ok = "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\ndata: [DONE]\n\n".to_string();
+    let (base_url, connections, _requests) = start_scripted_server(vec![busy, ok]).await;
+    let provider = HttpProvider::new(
+        "openai",
+        ProviderKind::OpenAiCompatible,
+        &base_url,
+        Some("test-token".to_string()),
+        ["gpt-5".to_string()],
+    )
+    .unwrap()
+    .with_retry(hya_provider::RetryConfig {
+        max_attempts: 1,
+        ..hya_provider::RetryConfig::default()
+    });
+    let req = CompletionRequest {
+        model: ModelRef::new("gpt-5"),
+        system: None,
+        messages: Vec::new(),
+        tools: Vec::new(),
+        temperature: None,
+        max_output_tokens: None,
+        reasoning: None,
+        headers: Default::default(),
+    };
+
+    let error = match provider
+        .stream(req, SessionId::new(), MessageId::new())
+        .await
+    {
+        Err(error) => error,
+        Ok(_) => panic!("max_attempts=1 must fail fast instead of returning a stream"),
+    };
+    assert!(
+        matches!(error, ProviderError::HttpStatus { status: 503, .. }),
+        "unexpected error: {error:?}"
+    );
+    assert_eq!(
+        connections.load(Ordering::SeqCst),
+        1,
+        "max_attempts=1 must fail fast without a second request"
+    );
+}
+
+#[tokio::test]
+async fn post_event_body_failure_is_never_replayed() {
+    // One valid frame is delivered before the body truncates: the consumer has
+    // now seen an event, so the no-replay boundary holds and the decode error
+    // surfaces exactly once on the same connection.
+    let chunk = r#"data: {"id":"1","object":"chat.completion.chunk","created":0,"model":"gpt-5","choices":[{"index":0,"delta":{"role":"assistant","content":"Hi"},"finish_reason":null}]}"#;
+    let partial = format!(
+        "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: 900\r\nconnection: close\r\n\r\n{chunk}\n\n"
+    );
+    let (base_url, connections, _requests) = start_scripted_server(vec![partial]).await;
+    let provider = HttpProvider::new(
+        "openai",
+        ProviderKind::OpenAiCompatible,
+        &base_url,
+        Some("test-token".to_string()),
+        ["gpt-5".to_string()],
+    )
+    .unwrap();
+    let req = CompletionRequest {
+        model: ModelRef::new("gpt-5"),
+        system: None,
+        messages: Vec::new(),
+        tools: Vec::new(),
+        temperature: None,
+        max_output_tokens: None,
+        reasoning: None,
+        headers: Default::default(),
+    };
+
+    let events = timeout(Duration::from_secs(15), async {
+        provider
+            .stream(req, SessionId::new(), MessageId::new())
+            .await
+            .unwrap()
+            .collect::<Vec<_>>()
+            .await
+    })
+    .await
+    .expect("truncated stream should surface within the guard");
+
+    assert_eq!(
+        connections.load(Ordering::SeqCst),
+        1,
+        "failures after a delivered event sit behind the no-replay boundary"
+    );
+    // TextStart + TextDelta arrive from the single delivered chunk, then the
+    // body-decode error surfaces exactly once.
+    assert_eq!(events.len(), 3, "events: {events:?}");
+    assert!(events[0].is_ok() && events[1].is_ok());
+    assert!(
+        matches!(&events[2], Err(ProviderError::Http(_))),
+        "expected exactly one terminal error, got {events:?}"
+    );
 }
 
 #[tokio::test]

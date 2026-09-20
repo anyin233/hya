@@ -110,6 +110,11 @@ struct FileConfig {
     /// overrides win over file values.
     #[serde(default)]
     pub(crate) compaction: Option<CompactionFile>,
+    /// Default replay budget for every provider route. Per-provider `retry:`
+    /// blocks override individual fields; `HYA_PROVIDER_RETRY_*` env vars win
+    /// over both. Absent → [`hya_provider::RetryConfig`] defaults.
+    #[serde(default)]
+    provider_retry: Option<ProviderRetryFile>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -212,6 +217,74 @@ struct ProviderConfig {
     api_key: Option<String>,
     #[serde(default)]
     models: Vec<ModelConfig>,
+    /// Per-provider overrides on top of the global `provider_retry:` block.
+    /// Unset fields inherit the global value.
+    #[serde(default)]
+    retry: Option<ProviderRetryFile>,
+}
+
+/// File shape of a retry policy block (`provider_retry:` global default or a
+/// provider's `retry:` override). Every field is optional; unset fields fall
+/// back to the enclosing layer and finally the engine defaults.
+#[derive(Debug, Default, Deserialize)]
+struct ProviderRetryFile {
+    #[serde(default)]
+    max_attempts: Option<usize>,
+    #[serde(default)]
+    backoff_base_ms: Option<u64>,
+    #[serde(default)]
+    backoff_max_ms: Option<u64>,
+}
+
+/// Resolve one route's replay budget: engine defaults ← global block ←
+/// per-provider block ← `HYA_PROVIDER_RETRY_*` env overrides.
+fn resolve_provider_retry(
+    global: Option<&ProviderRetryFile>,
+    per_provider: Option<&ProviderRetryFile>,
+) -> hya_provider::RetryConfig {
+    let defaults = hya_provider::RetryConfig::default();
+    let mut retry = hya_provider::RetryConfig {
+        max_attempts: global
+            .and_then(|block| block.max_attempts)
+            .unwrap_or(defaults.max_attempts),
+        backoff_base: global
+            .and_then(|block| block.backoff_base_ms)
+            .filter(|ms| *ms > 0)
+            .map_or(defaults.backoff_base, std::time::Duration::from_millis),
+        backoff_max: global
+            .and_then(|block| block.backoff_max_ms)
+            .filter(|ms| *ms > 0)
+            .map_or(defaults.backoff_max, std::time::Duration::from_millis),
+    };
+    if let Some(block) = per_provider {
+        if let Some(max_attempts) = block.max_attempts {
+            retry.max_attempts = max_attempts;
+        }
+        if let Some(ms) = block.backoff_base_ms.filter(|ms| *ms > 0) {
+            retry.backoff_base = std::time::Duration::from_millis(ms);
+        }
+        if let Some(ms) = block.backoff_max_ms.filter(|ms| *ms > 0) {
+            retry.backoff_max = std::time::Duration::from_millis(ms);
+        }
+    }
+    if let Ok(value) = std::env::var("HYA_PROVIDER_RETRY_MAX_ATTEMPTS")
+        && let Ok(parsed) = value.trim().parse::<usize>()
+    {
+        retry.max_attempts = parsed;
+    }
+    if let Ok(value) = std::env::var("HYA_PROVIDER_RETRY_BACKOFF_BASE_MS")
+        && let Ok(parsed) = value.trim().parse::<u64>()
+        && parsed > 0
+    {
+        retry.backoff_base = std::time::Duration::from_millis(parsed);
+    }
+    if let Ok(value) = std::env::var("HYA_PROVIDER_RETRY_BACKOFF_MAX_MS")
+        && let Ok(parsed) = value.trim().parse::<u64>()
+        && parsed > 0
+    {
+        retry.backoff_max = std::time::Duration::from_millis(parsed);
+    }
+    retry.normalized()
 }
 
 #[derive(Debug, Deserialize)]
@@ -282,6 +355,7 @@ pub(crate) struct ParsedProvider {
     base_url: String,
     api_key: Option<String>,
     models: Vec<ParsedModel>,
+    retry: hya_provider::RetryConfig,
 }
 
 /// Resolved optional authentication material for one configured provider.
@@ -1229,6 +1303,7 @@ fn resolve_providers(file: &FileConfig) -> anyhow::Result<Vec<ParsedProvider>> {
             base_url: provider.base_url.clone(),
             api_key,
             models,
+            retry: resolve_provider_retry(file.provider_retry.as_ref(), provider.retry.as_ref()),
         });
     }
     Ok(out)
@@ -1570,6 +1645,7 @@ fn route_for_plan(
         models.iter().cloned(),
     )?
     .with_catalog_source(source)
+    .with_retry(provider.retry)
     .with_model_reasoning_variants(
         provider
             .models
@@ -2329,6 +2405,58 @@ providers:
         assert_eq!(anth.kind, ProviderKind::Anthropic);
         let goog = parsed.iter().find(|p| p.id == "gw-google").unwrap();
         assert_eq!(goog.kind, ProviderKind::Google);
+    }
+
+    #[test]
+    fn provider_retry_defaults_without_config() {
+        let parsed = parse_providers(FIXTURE).unwrap();
+        for provider in &parsed {
+            assert_eq!(provider.retry, hya_provider::RetryConfig::default());
+        }
+    }
+
+    #[test]
+    fn global_provider_retry_overrides_defaults() {
+        let parsed = parse_providers(
+            "provider_retry:\n  max_attempts: 5\n  backoff_base_ms: 250\n  backoff_max_ms: 60000\nproviders:\n  gw:\n    kind: openai\n    base_url: https://gw.example/v1\n    api_key: sk-test-literal\n    models: [gpt-5.5]\n",
+        )
+        .unwrap();
+        let retry = &parsed.first().unwrap().retry;
+        assert_eq!(retry.max_attempts, 5);
+        assert_eq!(retry.backoff_base, std::time::Duration::from_millis(250));
+        assert_eq!(retry.backoff_max, std::time::Duration::from_millis(60_000));
+    }
+
+    #[test]
+    fn per_provider_retry_overrides_global_fields() {
+        let parsed = parse_providers(
+            "provider_retry:\n  max_attempts: 5\n  backoff_base_ms: 250\nproviders:\n  tuned:\n    kind: openai\n    base_url: https://a/v1\n    api_key: x\n    models: [m1]\n    retry:\n      max_attempts: 2\n  stock:\n    kind: openai\n    base_url: https://b/v1\n    api_key: x\n    models: [m2]\n",
+        )
+        .unwrap();
+        let tuned = parsed.iter().find(|p| p.id == "tuned").unwrap();
+        assert_eq!(tuned.retry.max_attempts, 2);
+        assert_eq!(
+            tuned.retry.backoff_base,
+            std::time::Duration::from_millis(250),
+            "unset fields inherit the global value"
+        );
+        let stock = parsed.iter().find(|p| p.id == "stock").unwrap();
+        assert_eq!(stock.retry.max_attempts, 5);
+    }
+
+    #[test]
+    fn provider_retry_env_overrides_file_values() {
+        unsafe {
+            std::env::set_var("HYA_PROVIDER_RETRY_MAX_ATTEMPTS", "7");
+        }
+        let parsed = parse_providers(
+            "provider_retry:\n  max_attempts: 2\nproviders:\n  gw:\n    kind: openai\n    base_url: https://gw.example/v1\n    api_key: x\n    models: [m1]\n    retry:\n      max_attempts: 3\n",
+        )
+        .unwrap();
+        unsafe {
+            std::env::remove_var("HYA_PROVIDER_RETRY_MAX_ATTEMPTS");
+        }
+        assert_eq!(parsed.first().unwrap().retry.max_attempts, 7);
     }
 
     #[test]
