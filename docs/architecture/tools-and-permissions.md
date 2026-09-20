@@ -18,6 +18,29 @@ filtering ([`tool.rs`](../../crates/hya-tool/src/tool.rs)). The table below is
 the complete inventory. Advertised fields are the model-facing JSON schema
 `required`/`properties` keys; a schema marked **closed** rejects unknown keys.
 
+### Tool namespaces
+
+Provider tool-name charsets (OpenAI/Anthropic function names) allow only
+`[a-zA-Z0-9_-]`, so `:`/`/` can never reach a provider. Namespaces therefore
+use a **double-underscore separator**: `namespace__local` — the same
+convention MCP tools already use model-facing (`mcp__server__tool`). A
+namespace groups the tools of one functionality provider; local names may
+repeat across namespaces (`todo__read` vs `pluginx__read`) while full names
+stay globally unique inside a registry. `hya-tool` exposes the mechanism in
+[`namespace.rs`](../../crates/hya-tool/src/namespace.rs):
+
+- `namespaced_name(namespace, local)` composes the canonical name; both
+  tokens must be non-empty, use only `[a-zA-Z0-9_-]`, and contain no `__`.
+  Invalid tokens return `InvalidNamespacedName`.
+- `namespace_of(name)` returns the namespace segment under a first-segment
+  rule (`mcp__server__tool` → `mcp`); plain names and degenerate spellings
+  (`__x`, `x__`) return `None`.
+- `ToolRegistry::register_namespaced(namespace, local, tool)` (or
+  `..._with_permission`) validates the tokens, requires the tool's own
+  `name()` to equal the composed canonical name (so the advertised schema
+  and the registry key cannot drift apart), and rejects duplicate full
+  names via `NamespacedRegisterError`.
+
 | Tool | Input (advertised) | Output |
 | --- | --- | --- |
 | `invalid` | unknown call payload | Structured invalid-tool response. |
