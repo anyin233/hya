@@ -115,7 +115,7 @@ fn merge_objects(base: Value, patch: Value) -> Value {
 
 async fn dispose() -> Result<Json<pb::DisposeProcessResponse>, V1Error> {
     Err(V1Error::unavailable(
-        "process disposal is supervised by the hya-ts launcher; HTTP dispose is not wired",
+        "process disposal is owned by the host process supervisor; HTTP dispose is not wired",
     ))
 }
 
