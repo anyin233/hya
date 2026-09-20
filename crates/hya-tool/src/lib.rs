@@ -43,6 +43,8 @@ mod lsp_path;
 mod lsp_plane;
 mod lsp_post_edit;
 pub mod mailbox;
+/// Namespaced tool names (`namespace__local`) and namespaced registration.
+pub mod namespace;
 mod output_cap;
 /// Allow/ask/deny permission plane: invocation policy, resource rules, and asks.
 pub mod permission;
@@ -86,6 +88,10 @@ pub use lsp_plane::{LspError, LspOperation, LspPlane, LspProvider, LspRequest};
 pub use mailbox::{
     ArchivedAgentRow, ChannelInfo, ChannelRow, MailReceipt, MailboxError, MailboxPlane,
     MailboxRequest, MemberStatusRow,
+};
+pub use namespace::{
+    InvalidNamespacedName, NAMESPACE_SEPARATOR, NamespacedRegisterError, namespace_of,
+    namespaced_name,
 };
 pub use output_cap::{
     MAX_TOOL_OUTPUT_CHARS, cap_tool_output, cap_tool_output_spilling, cap_tool_output_with_policy,
