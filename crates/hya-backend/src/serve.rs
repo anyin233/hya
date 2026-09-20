@@ -3,31 +3,50 @@ use std::sync::Arc;
 use anyhow::Context as _;
 use hya_server::{AppState, router as server_router};
 
-use super::{agent_base_with_model, build_session_engine, open_store, resolve_runtime};
+use super::{
+    agent_base_with_model, build_session_engine, build_session_engine_pure, open_store,
+    resolve_runtime,
+};
 
 pub(crate) async fn cmd_serve(
     bind: String,
     db: String,
     model_override: Option<String>,
     yolo: bool,
+    pure: bool,
 ) -> anyhow::Result<()> {
     super::first_run_config_bootstrap(false)?;
     let store = open_store(&db).await?;
-    let mut runtime = resolve_runtime(model_override).await.with_yolo(yolo);
+    let mut runtime = resolve_runtime(model_override)
+        .await
+        .with_yolo(yolo)
+        .with_pure(pure);
     let pending_discovery = std::mem::take(&mut runtime.pending_discovery);
     // Server AppState: base-only agent slot. Environment + AGENTS + references
     // are discovered per turn so Bundle Some does not drop project AGENTS and
     // Bundle None does not duplicate startup-baked AGENTS.
     let agent = Arc::new(agent_base_with_model(&runtime.model, runtime.reasoning));
-    let mut built = build_session_engine(
-        store,
-        runtime.router,
-        agent.as_ref(),
-        runtime.mcp,
-        runtime.plugins,
-        (runtime.websearch, runtime.permission),
-    )
-    .await?;
+    let mut built = if pure {
+        build_session_engine_pure(
+            store,
+            runtime.router,
+            agent.as_ref(),
+            runtime.mcp,
+            runtime.plugins,
+            (runtime.websearch, runtime.permission),
+        )
+        .await?
+    } else {
+        build_session_engine(
+            store,
+            runtime.router,
+            agent.as_ref(),
+            runtime.mcp,
+            runtime.plugins,
+            (runtime.websearch, runtime.permission),
+        )
+        .await?
+    };
     let engine = built.engine();
     let asks = built
         .take_asks()
@@ -45,7 +64,8 @@ pub(crate) async fn cmd_serve(
         .with_workflow_control(workflow_control)
         .with_agent_model_control(agent_model_control)
         .with_workspace_adapters(plugin_host.workspace_adapters())
-        .with_default_agent(runtime.default_agent.clone());
+        .with_default_agent(runtime.default_agent.clone())
+        .with_pure_guidance(pure);
     if yolo {
         eprintln!("hya: --yolo on serve auto-approves ALL tool actions for any client (RCE risk)");
     }

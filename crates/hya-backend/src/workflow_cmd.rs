@@ -87,23 +87,43 @@ impl WorkflowRuntime {
         model_override: Option<String>,
         db: &str,
         yolo: bool,
+        pure: bool,
         session: Option<SessionId>,
     ) -> anyhow::Result<Self> {
         let workdir = std::env::current_dir().context("resolve current directory")?;
         let has_explicit_model = model_override.is_some();
         crate::first_run_config_bootstrap(false)?;
         let store = open_store(db).await?;
-        let runtime = resolve_runtime(model_override).await.with_yolo(yolo);
-        let agent = agent_with_model(&runtime.model, runtime.reasoning);
-        let mut built = build_session_engine(
-            store,
-            runtime.router,
-            &agent,
-            runtime.mcp,
-            runtime.plugins,
-            (runtime.websearch, runtime.permission),
-        )
-        .await?;
+        let runtime = resolve_runtime(model_override)
+            .await
+            .with_yolo(yolo)
+            .with_pure(pure);
+        let agent = if pure {
+            crate::agent_with_model_pure(&runtime.model, runtime.reasoning)
+        } else {
+            agent_with_model(&runtime.model, runtime.reasoning)
+        };
+        let mut built = if pure {
+            crate::build_session_engine_pure(
+                store,
+                runtime.router,
+                &agent,
+                runtime.mcp,
+                runtime.plugins,
+                (runtime.websearch, runtime.permission),
+            )
+            .await?
+        } else {
+            build_session_engine(
+                store,
+                runtime.router,
+                &agent,
+                runtime.mcp,
+                runtime.plugins,
+                (runtime.websearch, runtime.permission),
+            )
+            .await?
+        };
         let engine = built.engine();
         let asks = built
             .take_asks()
@@ -175,6 +195,7 @@ pub(crate) async fn run(
     model_override: Option<String>,
     db: &str,
     yolo: bool,
+    pure: bool,
 ) -> anyhow::Result<()> {
     let read_only = matches!(
         &command,
@@ -231,6 +252,7 @@ pub(crate) async fn run(
         model_override,
         if read_only { "" } else { db },
         yolo,
+        pure,
         session,
     )
     .await?;

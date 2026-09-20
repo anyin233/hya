@@ -944,6 +944,27 @@ pub fn agent_with_model(model: &str, reasoning: Option<ReasoningEffort>) -> Agen
     }
 }
 
+/// `--pure` variant of [`agent_with_model`]: same Environment block, but no
+/// external AGENTS/context files are discovered or baked into the prompt.
+pub fn agent_with_model_pure(model: &str, reasoning: Option<ReasoningEffort>) -> AgentSpec {
+    let workdir = PathBuf::from(".");
+    let env = PromptEnv {
+        cwd: std::env::current_dir()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| ".".to_string()),
+        platform: std::env::consts::OS.to_string(),
+        date: today(),
+    };
+    let system_prompt = build_system_prompt(HARNESS_AGENT_BASE, &env, &[]);
+    AgentSpec {
+        name: AgentName::new("build"),
+        model: ModelRef::new(model),
+        system_prompt,
+        workdir,
+        reasoning,
+    }
+}
+
 /// First-run guidance produced when no usable config is found and hya falls
 /// back to the offline echo provider.
 ///
@@ -1004,6 +1025,10 @@ pub struct RuntimeConfig {
     pub websearch: WebSearchConfig,
     /// Empty-`models` providers awaiting background discovery refresh.
     pub pending_discovery: Vec<crate::config::PendingCatalogDiscovery>,
+    /// `--pure`: load no external AGENTS.md context, MCP servers, or plugins.
+    /// Websearch keeps its own configuration; builtin tools and the embedded
+    /// skill catalog are unaffected.
+    pub pure: bool,
 }
 
 impl RuntimeConfig {
@@ -1013,6 +1038,20 @@ impl RuntimeConfig {
         if yolo {
             self.permission = self.permission.with_model(PermissionModel::Danger);
         }
+        self
+    }
+
+    /// `--pure` mode: load no external MCP servers or plugins (config is
+    /// cleared), and mark the runtime so engine builds and per-turn guidance
+    /// skip external context. Websearch keeps its own configuration; builtin
+    /// tools and the embedded skill catalog are unaffected.
+    #[must_use]
+    pub fn with_pure(mut self, pure: bool) -> Self {
+        if pure {
+            self.mcp.clear();
+            self.plugins.clear();
+        }
+        self.pure = pure;
         self
     }
 }
@@ -1043,6 +1082,7 @@ fn offline_runtime(model_override: Option<String>, strict: bool) -> RuntimeConfi
         },
         websearch: WebSearchConfig::default(),
         pending_discovery: Vec::new(),
+        pure: false,
     }
 }
 
@@ -1085,6 +1125,7 @@ pub async fn resolve_runtime(model_override: Option<String>) -> RuntimeConfig {
                 permission: cfg.permission,
                 websearch: cfg.websearch,
                 pending_discovery: cfg.pending_discovery,
+                pure: false,
             }
         }
         Ok(None) => offline_runtime(model_override, false),
@@ -2189,6 +2230,9 @@ fn defer_sideplanes() -> bool {
 #[derive(Clone, Copy)]
 struct EngineBuildOptions {
     defer_mcp: bool,
+    /// `--pure`: the runtime registry serves builtin skills only and never
+    /// reads external skill directories.
+    pure: bool,
 }
 
 /// Build a fully wired [`SessionEngine`] plus plugin host, MCP, and ask/question channels.
@@ -2213,6 +2257,33 @@ pub async fn build_session_engine(
         tool_config,
         EngineBuildOptions {
             defer_mcp: defer_sideplanes(),
+            pure: false,
+        },
+    )
+    .await
+}
+
+/// [`build_session_engine`] in `--pure` mode: identical wiring except the
+/// runtime registry never discovers external skill directories (the builtin
+/// embedded catalog is the whole skill surface).
+pub async fn build_session_engine_pure(
+    store: SessionStore,
+    router: ProviderRouter,
+    agent: &AgentSpec,
+    mcp: BTreeMap<String, McpServerConfig>,
+    plugins: Vec<PluginSpec>,
+    tool_config: (WebSearchConfig, InvocationPolicy),
+) -> anyhow::Result<BuiltSessionEngine> {
+    build_session_engine_with_mcp_defer(
+        store,
+        router,
+        agent,
+        mcp,
+        plugins,
+        tool_config,
+        EngineBuildOptions {
+            defer_mcp: defer_sideplanes(),
+            pure: true,
         },
     )
     .await
@@ -2295,7 +2366,7 @@ async fn build_session_engine_with_mcp_defer(
     let catalog = builtin_agent_catalog()?;
     let static_sources =
         crate::installed_bundle_refresh::static_bundle_skill_sources(catalog.bundles().as_ref())?;
-    let runtime = Arc::new(RuntimeRegistry::new(registry, catalog));
+    let runtime = Arc::new(RuntimeRegistry::new(registry, catalog).with_pure_skills(options.pure));
     if !static_sources.is_empty() {
         runtime.refresh(|candidate| {
             candidate.replace_sources_of_kind(RuntimeSourceKind::Bundle, static_sources)
@@ -4508,7 +4579,10 @@ You are the installed resident agent.
             mcp,
             Vec::new(),
             (WebSearchConfig::default(), InvocationPolicy::default()),
-            EngineBuildOptions { defer_mcp: true },
+            EngineBuildOptions {
+                defer_mcp: true,
+                pure: false,
+            },
         )
         .await;
         let mut built = result.unwrap();
@@ -4557,7 +4631,10 @@ You are the installed resident agent.
             mcp,
             plugins,
             (WebSearchConfig::default(), InvocationPolicy::default()),
-            EngineBuildOptions { defer_mcp: false },
+            EngineBuildOptions {
+                defer_mcp: false,
+                pure: false,
+            },
         )
         .await;
         let mut built = result.unwrap();
@@ -4691,6 +4768,58 @@ You are the installed resident agent.
     }
 
     /// Direct exec/RPC/goal construction still bakes Environment + AGENTS.
+    #[test]
+    fn agent_with_model_pure_keeps_environment_but_drops_agents_context() {
+        let home = tempdir();
+        let workdir = tempdir();
+        let _env = EnvGuard::set(&home, &workdir);
+        let agents_marker = "PURE_MODE_MUST_NOT_SEE_THIS";
+        std::fs::write(workdir.join("AGENTS.md"), agents_marker).unwrap();
+
+        let agent = agent_with_model_pure("fake", None);
+
+        assert!(
+            agent.system_prompt.contains(HARNESS_AGENT_BASE),
+            "pure agent must keep the harness base: {}",
+            agent.system_prompt
+        );
+        assert!(
+            agent.system_prompt.contains("## Environment"),
+            "pure agent must keep Environment: {}",
+            agent.system_prompt
+        );
+        assert!(
+            !agent.system_prompt.contains(agents_marker),
+            "pure agent must not bake process-cwd AGENTS: {}",
+            agent.system_prompt
+        );
+    }
+
+    #[test]
+    fn with_pure_clears_mcp_marks_runtime_and_keeps_websearch() {
+        let mut runtime = offline_runtime(None, false);
+        runtime.mcp.insert(
+            "external".to_string(),
+            hya_mcp::McpServerConfig {
+                command: vec!["echo".to_string()],
+                env: None,
+                enabled: None,
+                timeout_ms: None,
+            },
+        );
+        let websearch = runtime.websearch.clone();
+
+        let runtime = runtime.with_pure(true);
+
+        assert!(runtime.pure);
+        assert!(runtime.mcp.is_empty(), "pure clears configured MCP servers");
+        assert!(runtime.plugins.is_empty(), "pure clears configured plugins");
+        assert_eq!(
+            runtime.websearch.endpoint, websearch.endpoint,
+            "websearch keeps its own configuration in pure mode"
+        );
+    }
+
     #[test]
     fn agent_with_model_retains_environment_and_agents_context() {
         let home = tempdir();

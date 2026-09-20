@@ -36,20 +36,21 @@ use cli_args::{Cli, Command};
 
 pub use hya_app::{
     InvocationPolicy, RuntimeConfig, WebSearchConfig, agent_base_with_model, agent_with_model,
-    build_session_engine, compaction_config, discover_context_files, host_info, offline_router,
-    open_store, resolve_runtime, spawn_team_supervisor, today,
+    agent_with_model_pure, build_session_engine, build_session_engine_pure, compaction_config,
+    discover_context_files, host_info, offline_router, open_store, resolve_runtime,
+    spawn_team_supervisor, today,
 };
 
 pub(crate) fn first_run_config_bootstrap(interactive: bool) -> anyhow::Result<()> {
     config::first_run_config_bootstrap(interactive)
 }
 
-/// Resolve the SQLite path for bare interactive `hya-backend` startup.
+/// Resolve the SQLite path for session-backed subcommands (`tail-session`, `sessions`).
 ///
 /// Empty `--db` (CLI default) maps to `$XDG_STATE_HOME/hya/sessions.db` so
-/// `hya --continue` / `hya -s` can resume after restarts. Explicit `--db ""`
-/// is not distinguishable from the clap default here; use a real path or the
-/// `hya` frontend's `HYA_DB=` empty override for intentional in-memory runs.
+/// those subcommands see the same durable store across restarts. Explicit
+/// `--db ""` is not distinguishable from the clap default here; use a real
+/// path or `HYA_DB=` empty override for intentional in-memory runs.
 fn resolve_interactive_db(cli_db: &str) -> String {
     if !cli_db.is_empty() {
         return cli_db.to_string();
@@ -74,21 +75,41 @@ async fn cmd_exec(
     db: &str,
     yolo: bool,
     json: bool,
+    pure: bool,
 ) -> anyhow::Result<()> {
     first_run_config_bootstrap(false)?;
     let has_explicit_model = model_override.is_some();
     let store = open_store(db).await?;
-    let runtime = resolve_runtime(model_override).await.with_yolo(yolo);
-    let agent = agent_with_model(&runtime.model, runtime.reasoning);
-    let mut built = build_session_engine(
-        store,
-        runtime.router,
-        &agent,
-        runtime.mcp,
-        runtime.plugins,
-        (runtime.websearch, runtime.permission),
-    )
-    .await?;
+    let runtime = resolve_runtime(model_override)
+        .await
+        .with_yolo(yolo)
+        .with_pure(pure);
+    let agent = if pure {
+        agent_with_model_pure(&runtime.model, runtime.reasoning)
+    } else {
+        agent_with_model(&runtime.model, runtime.reasoning)
+    };
+    let mut built = if pure {
+        build_session_engine_pure(
+            store,
+            runtime.router,
+            &agent,
+            runtime.mcp,
+            runtime.plugins,
+            (runtime.websearch, runtime.permission),
+        )
+        .await?
+    } else {
+        build_session_engine(
+            store,
+            runtime.router,
+            &agent,
+            runtime.mcp,
+            runtime.plugins,
+            (runtime.websearch, runtime.permission),
+        )
+        .await?
+    };
     let session_model = if has_explicit_model {
         agent.model.clone()
     } else {
@@ -171,24 +192,43 @@ async fn cmd_exec(
     Ok(())
 }
 
-async fn cmd_rpc(model_override: Option<String>, yolo: bool) -> anyhow::Result<()> {
+async fn cmd_rpc(model_override: Option<String>, yolo: bool, pure: bool) -> anyhow::Result<()> {
     use std::io::BufRead as _;
     first_run_config_bootstrap(false)?;
     let has_explicit_model = model_override.is_some();
     let store = SessionStore::connect_memory()
         .await
         .context("open in-memory store")?;
-    let runtime = resolve_runtime(model_override).await.with_yolo(yolo);
-    let agent = agent_with_model(&runtime.model, runtime.reasoning);
-    let mut built = build_session_engine(
-        store,
-        runtime.router,
-        &agent,
-        runtime.mcp,
-        runtime.plugins,
-        (runtime.websearch, runtime.permission),
-    )
-    .await?;
+    let runtime = resolve_runtime(model_override)
+        .await
+        .with_yolo(yolo)
+        .with_pure(pure);
+    let agent = if pure {
+        agent_with_model_pure(&runtime.model, runtime.reasoning)
+    } else {
+        agent_with_model(&runtime.model, runtime.reasoning)
+    };
+    let mut built = if pure {
+        build_session_engine_pure(
+            store,
+            runtime.router,
+            &agent,
+            runtime.mcp,
+            runtime.plugins,
+            (runtime.websearch, runtime.permission),
+        )
+        .await?
+    } else {
+        build_session_engine(
+            store,
+            runtime.router,
+            &agent,
+            runtime.mcp,
+            runtime.plugins,
+            (runtime.websearch, runtime.permission),
+        )
+        .await?
+    };
     let session_model = if has_explicit_model {
         agent.model.clone()
     } else {
@@ -254,24 +294,44 @@ async fn cmd_goal(
     max_iterations: u32,
     model_override: Option<String>,
     yolo: bool,
+    pure: bool,
 ) -> anyhow::Result<()> {
     first_run_config_bootstrap(false)?;
     let has_explicit_model = model_override.is_some();
     let store = SessionStore::connect_memory()
         .await
         .context("open in-memory store")?;
-    let runtime = resolve_runtime(model_override).await.with_yolo(yolo);
+    let runtime = resolve_runtime(model_override)
+        .await
+        .with_yolo(yolo)
+        .with_pure(pure);
     let evaluator_router = runtime.router.clone();
-    let agent = agent_with_model(&runtime.model, runtime.reasoning);
-    let mut built = build_session_engine(
-        store,
-        runtime.router,
-        &agent,
-        runtime.mcp,
-        runtime.plugins,
-        (runtime.websearch, runtime.permission),
-    )
-    .await?;
+    let agent = if pure {
+        agent_with_model_pure(&runtime.model, runtime.reasoning)
+    } else {
+        agent_with_model(&runtime.model, runtime.reasoning)
+    };
+    let mut built = if pure {
+        build_session_engine_pure(
+            store,
+            runtime.router,
+            &agent,
+            runtime.mcp,
+            runtime.plugins,
+            (runtime.websearch, runtime.permission),
+        )
+        .await?
+    } else {
+        build_session_engine(
+            store,
+            runtime.router,
+            &agent,
+            runtime.mcp,
+            runtime.plugins,
+            (runtime.websearch, runtime.permission),
+        )
+        .await?
+    };
     let session_model = if has_explicit_model {
         agent.model.clone()
     } else {
@@ -362,19 +422,26 @@ async fn cmd_sessions(db: String) -> anyhow::Result<()> {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
-    cli.validate().map_err(anyhow::Error::msg)?;
     let model = cli.model.clone();
     let yolo = cli.yolo;
+    let pure = cli.pure;
     let db = cli.db.clone();
-    let resume = cli.resume.clone();
     if let Some(goal) = cli.prompt {
-        return cmd_goal(goal, cli.max_iterations, model, yolo).await;
+        return cmd_goal(goal, cli.max_iterations, model, yolo, pure).await;
     }
     match cli.command {
-        // Interactive TUI: default to a durable SQLite path so sessions survive restarts.
+        // No interactive frontend is bundled anymore: bare startup only points
+        // at the headless and server surfaces.
         None => {
-            let db = resolve_interactive_db(&db);
-            serve::cmd_tui_hya(model, db, yolo, resume).await
+            println!(
+                "hya {} — a multi-agent coding agent",
+                env!("CARGO_PKG_VERSION")
+            );
+            println!(
+                "No interactive frontend is bundled. Try `hya-backend serve`, \
+                 `hya-backend exec \"<prompt>\"`, `hya-backend -p \"<goal>\"`, or `hya-backend --help`."
+            );
+            Ok(())
         }
         Some(Command::Run {
             message,
@@ -387,10 +454,13 @@ async fn main() -> anyhow::Result<()> {
                 &db,
                 yolo,
                 json || format == "json",
+                pure,
             )
             .await
         }
-        Some(Command::Exec { prompt, json }) => cmd_exec(prompt, model, &db, yolo, json).await,
+        Some(Command::Exec { prompt, json }) => {
+            cmd_exec(prompt, model, &db, yolo, json, pure).await
+        }
         Some(Command::Serve {
             bind,
             hostname,
@@ -404,6 +474,7 @@ async fn main() -> anyhow::Result<()> {
                 command_db.unwrap_or_else(|| db.clone()),
                 model,
                 yolo,
+                pure,
             )
             .await
         }
@@ -416,7 +487,9 @@ async fn main() -> anyhow::Result<()> {
         Some(Command::Auth { command }) => auth_cmd::run(command).await,
         Some(Command::Agent { command }) => agent_cmd::run(command),
         Some(Command::Bundle { command }) => bundle_cmd::run(command).await,
-        Some(Command::Workflow { command }) => workflow_cmd::run(command, model, &db, yolo).await,
+        Some(Command::Workflow { command }) => {
+            workflow_cmd::run(command, model, &db, yolo, pure).await
+        }
         Some(Command::Models { provider, verbose }) => {
             first_run_config_bootstrap(false)?;
             let mut runtime = resolve_runtime(model).await;
@@ -438,6 +511,6 @@ async fn main() -> anyhow::Result<()> {
             let path = command_db.unwrap_or_else(|| db.clone());
             cmd_sessions(resolve_interactive_db(&path)).await
         }
-        Some(Command::Rpc) => cmd_rpc(model, yolo).await,
+        Some(Command::Rpc) => cmd_rpc(model, yolo, pure).await,
     }
 }

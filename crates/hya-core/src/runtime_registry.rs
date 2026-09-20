@@ -57,6 +57,9 @@ pub struct RuntimeRegistry {
     active: RwLock<Arc<RuntimeSnapshot>>,
     agent_model_preferences: AgentModelPreferences,
     agent_model_configuration: AgentModelConfigurations,
+    /// `--pure`: bind_turn keeps the embedded builtin skills only and never
+    /// reads external skill directories.
+    pure_skills: bool,
 }
 
 /// Offline mutable candidate. Its contents cannot become effective except
@@ -295,6 +298,13 @@ impl RuntimeRegistry {
         Self::from_snapshot(tools.snapshot(), catalog)
     }
 
+    /// `--pure` mode: builtin skills only, no external skill directories.
+    #[must_use]
+    pub fn with_pure_skills(mut self, pure: bool) -> Self {
+        self.pure_skills = pure;
+        self
+    }
+
     /// Start a registry from a frozen tool snapshot.
     #[must_use]
     pub fn from_snapshot(tools: ToolRegistrySnapshot, catalog: Arc<AgentCatalog>) -> Self {
@@ -312,6 +322,7 @@ impl RuntimeRegistry {
             agent_model_configuration: watch::Sender::new(Arc::new(
                 AgentModelConfiguration::default(),
             )),
+            pure_skills: false,
         }
     }
 
@@ -325,7 +336,11 @@ impl RuntimeRegistry {
         let current = self.active();
         let agent_model_preferences = self.agent_model_preferences.borrow().clone();
         let agent_model_configuration = self.agent_model_configuration.borrow().clone();
-        let discovered = discover_skills_with_builtins(workdir);
+        let discovered = if self.pure_skills {
+            hya_tool::merge_skill_catalog(Vec::new())
+        } else {
+            discover_skills_with_builtins(workdir)
+        };
         let existing = current
             .skills
             .get(workdir)
@@ -3064,6 +3079,52 @@ mod tests {
             can_spawn: Vec::new(),
             hook_refs: Vec::new(),
         }
+    }
+
+    #[test]
+    fn pure_registry_serves_builtin_skills_only() {
+        let dir = std::env::temp_dir().join(format!("hya-pure-skills-{}", std::process::id()));
+        let skill_dir = dir.join(".hya/skills/external-skill");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: external-skill\ndescription: must not appear in pure mode\n---\nbody\n",
+        )
+        .unwrap();
+
+        let catalog = Arc::new(TestCatalog::from_prepared(&[]).unwrap());
+        let plain = test_runtime_registry(ToolRegistry::builtins(), catalog.clone());
+        let pure = test_runtime_registry(ToolRegistry::builtins(), catalog).with_pure_skills(true);
+
+        let plain_binding = plain.bind_turn(&dir).unwrap();
+        let plain_names: Vec<String> = plain_binding
+            .snapshot
+            .skills
+            .get(&dir)
+            .map(|skills| skills.iter().map(|skill| skill.name.clone()).collect())
+            .unwrap_or_default();
+        assert!(
+            plain_names.iter().any(|name| name == "external-skill"),
+            "default registry discovers the project skill: {plain_names:?}"
+        );
+
+        let pure_binding = pure.bind_turn(&dir).unwrap();
+        let pure_names: Vec<String> = pure_binding
+            .snapshot
+            .skills
+            .get(&dir)
+            .map(|skills| skills.iter().map(|skill| skill.name.clone()).collect())
+            .unwrap_or_default();
+        assert!(
+            !pure_names.iter().any(|name| name == "external-skill"),
+            "pure registry never reads external skill dirs: {pure_names:?}"
+        );
+        assert!(
+            !pure_names.is_empty(),
+            "pure registry still serves the embedded builtin catalog"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
