@@ -4,53 +4,59 @@
 //! streams the same durable envelopes to stdout as they are broadcast, so an
 //! abnormally terminated run still leaves a usable partial trajectory on
 //! stdout (the run2 lesson). Envelopes are filtered to the exec session and
-//! to durable seqs (`seq == 0` frames are live-only and never persisted), and
-//! a final replay delta guarantees the stdout set is exactly the durable log
-//! even when the bus lagged mid-turn.
+//! to durable seqs (`seq == 0` frames are live-only and never persisted),
+//! deduplicated by seq — concurrent writers (turn loop, resident batches,
+//! mailbox) can publish out of seq order, so arrival order is usually but not
+//! strictly ascending — and a final replay flush guarantees the stdout set is
+//! exactly the durable log even when the bus lagged mid-turn.
+
+use std::collections::HashSet;
 
 use hya_proto::{Envelope, SessionId};
 use tokio::sync::{broadcast, oneshot};
 
-/// Whether `envelope` belongs on the exec JSONL stream for `session` beyond
-/// `watermark`: same session, durable seq, strictly ascending.
+/// Whether `envelope` belongs on the exec JSONL stream for `session`: same
+/// session and a durable seq (`0` is live-only).
 #[must_use]
-pub(crate) fn eligible(envelope: &Envelope, session: SessionId, watermark: u64) -> bool {
-    envelope.event.session() == Some(session) && envelope.seq.0 > watermark
+pub(crate) fn eligible(envelope: &Envelope, session: SessionId) -> bool {
+    envelope.event.session() == Some(session) && envelope.seq.0 != 0
 }
 
-/// Incremental JSONL writer with a durable-seq watermark.
+/// Incremental JSONL writer deduplicating by durable seq.
 pub(crate) struct JsonStreamPrinter<W: std::io::Write> {
     out: W,
-    watermark: u64,
+    printed: HashSet<u64>,
 }
 
 impl<W: std::io::Write> JsonStreamPrinter<W> {
-    /// Start at seq 0 (nothing printed yet; live-only frames stay excluded
-    /// because their seq is also 0).
+    /// Start with nothing printed; live-only frames stay excluded by the
+    /// durable-seq rule.
     pub(crate) fn new(out: W) -> Self {
-        Self { out, watermark: 0 }
+        Self {
+            out,
+            printed: HashSet::new(),
+        }
     }
 
-    /// Highest durable seq printed so far.
+    /// Number of durable envelopes printed so far.
     #[cfg(test)]
-    pub(crate) fn watermark(&self) -> u64 {
-        self.watermark
+    pub(crate) fn printed_count(&self) -> usize {
+        self.printed.len()
     }
 
-    /// Print `envelope` when eligible; advance the watermark. Returns whether
+    /// Print `envelope` when eligible and not yet printed. Returns whether
     /// the envelope was printed.
     pub(crate) fn print(
         &mut self,
         envelope: &Envelope,
         session: SessionId,
     ) -> std::io::Result<bool> {
-        if !eligible(envelope, session, self.watermark) {
+        if !eligible(envelope, session) || !self.printed.insert(envelope.seq.0) {
             return Ok(false);
         }
         let line =
             serde_json::to_string(envelope).map_err(|e| std::io::Error::other(e.to_string()))?;
         writeln!(self.out, "{line}")?;
-        self.watermark = envelope.seq.0;
         Ok(true)
     }
 
@@ -144,7 +150,7 @@ mod tests {
     }
 
     #[test]
-    fn printer_filters_session_durable_seq_and_advances_watermark() {
+    fn printer_filters_session_durable_seq_and_deduplicates() {
         let session = SessionId::new();
         let other = SessionId::new();
         let mut printer = JsonStreamPrinter::new(Vec::new());
@@ -152,8 +158,8 @@ mod tests {
         assert!(!printer.print(&envelope(0, session), session).unwrap());
         assert!(!printer.print(&envelope(1, other), session).unwrap());
         assert!(printer.print(&envelope(1, session), session).unwrap());
-        assert_eq!(printer.watermark(), 1);
-        // Ascending-only: replays of old seqs are dropped.
+        assert_eq!(printer.printed_count(), 1);
+        // Duplicates are dropped regardless of arrival order.
         assert!(!printer.print(&envelope(1, session), session).unwrap());
         assert!(printer.print(&envelope(3, session), session).unwrap());
 
@@ -166,6 +172,19 @@ mod tests {
         }
         assert!(lines[0].contains("\"seq\":1"));
         assert!(lines[1].contains("\"seq\":3"));
+    }
+
+    #[test]
+    fn printer_handles_out_of_order_arrival_from_concurrent_writers() {
+        let session = SessionId::new();
+        let mut printer = JsonStreamPrinter::new(Vec::new());
+        // Concurrent writers (turn loop, resident batches, mailbox) can
+        // publish a higher seq before a lower one; both must print.
+        assert!(printer.print(&envelope(3, session), session).unwrap());
+        assert!(printer.print(&envelope(2, session), session).unwrap());
+        assert!(!printer.print(&envelope(3, session), session).unwrap());
+        let written = String::from_utf8(printer.out).unwrap();
+        assert_eq!(written.lines().count(), 2);
     }
 
     #[tokio::test]
