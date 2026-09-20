@@ -33,6 +33,7 @@ pub struct AppState {
     formatter_status: Vec<FormatterStatus>,
     default_agent: Option<String>,
     catalog_updates: broadcast::Sender<Value>,
+    pure_guidance: bool,
 }
 
 impl AppState {
@@ -53,7 +54,15 @@ impl AppState {
             formatter_status: Vec::new(),
             default_agent: None,
             catalog_updates,
+            pure_guidance: false,
         }
+    }
+
+    /// `--pure`: per-turn guidance skips AGENTS/context discovery entirely.
+    #[must_use]
+    pub fn with_pure_guidance(mut self, pure: bool) -> Self {
+        self.pure_guidance = pure;
+        self
     }
 
     /// Set the agent selected by default when a workdir does not configure one.
@@ -159,6 +168,7 @@ pub(crate) struct ServerState {
     pub(crate) formatter_status: Vec<FormatterStatus>,
     pub(crate) default_agent: Option<String>,
     pub(crate) catalog_updates: broadcast::Sender<Value>,
+    pub(crate) pure_guidance: bool,
 }
 
 impl ServerState {
@@ -179,6 +189,7 @@ impl ServerState {
             formatter_status: app.formatter_status,
             default_agent: app.default_agent,
             catalog_updates: app.catalog_updates,
+            pure_guidance: app.pure_guidance,
         }
     }
 

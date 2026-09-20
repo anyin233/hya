@@ -124,6 +124,10 @@ pub(crate) async fn external_directories_at(st: &ServerState, workdir: &Path) ->
 /// reference guidance. Result is immutable for the turn — core receives only
 /// this text, never paths/parser/raw files.
 async fn guidance_at(st: &ServerState, workdir: &Path) -> Option<Arc<str>> {
+    if st.pure_guidance {
+        // `--pure`: no external AGENTS/context or reference discovery at all.
+        return None;
+    }
     let env = PromptEnv {
         cwd: workdir.to_string_lossy().into_owned(),
         platform: std::env::consts::OS.to_string(),

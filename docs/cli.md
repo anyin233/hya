@@ -7,17 +7,16 @@ The backend CLI/API binary is `hya-backend`, defined in
 
 ```text
 hya-backend [--model <MODEL>] [--prompt <GOAL>] [--max-iterations <N>]
-     [--yolo] [--db <PATH>] [--resume <SESSION>] [COMMAND]
+     [--yolo] [--db <PATH>] [COMMAND]
 ```
 
 | Option | Meaning |
 | --- | --- |
 | `--model <MODEL>` | Override `default_model` from hya config and `HYA_MODEL`. |
-| `-p, --prompt <GOAL>` | Run headless goal mode instead of the TUI or a subcommand. |
+| `-p, --prompt <GOAL>` | Run headless goal mode instead of a subcommand. |
 | `--max-iterations <N>` | Iteration cap for goal mode. Defaults to `6` in the CLI. |
-| `--yolo` | Auto-approve every tool action. This applies to TUI, headless, and server composition. |
+| `--yolo` | Auto-approve every tool action. This applies to headless and server composition. |
 | `--db <PATH>` | SQLite database path. Semantics of an empty value depend on the command (see below). |
-| `--resume <SESSION>` | Resume a session in the interactive TUI. Accepts any valid `SessionId` form: `hysec_...`, `ses_...`, or legacy raw UUID. |
 | `--print-logs` | Compat-compatible global flag. Parsed, then ignored (no-op). |
 | `--log-level <LEVEL>` | Compat-compatible global flag. `LEVEL` must be one of `DEBUG`, `INFO`, `WARN`, `ERROR` (clap rejects any other value). The value is discarded after parsing — it does not enable logging. |
 | `--pure` | Compat-compatible global flag. Parsed, then ignored (no-op). |
@@ -334,24 +333,27 @@ does not run an agent loop or add a permission plane.
 
 ## Bare `hya-backend`
 
-With no subcommand (and no `--prompt`), `hya-backend` is the interactive path.
-
-**On a TTY:** starts an in-process HTTP/SSE backend bound to an ephemeral
-loopback port (`127.0.0.1:0`) and hands the terminal to the `hya` frontend.
-Frontend resolution order: `HYA_FRONTEND_BIN`, else the newest of
-`target/release/hya` and `target/debug/hya` under the workspace, else `hya` on
-`PATH`. For this path the empty default `--db` is remapped to
-`$XDG_STATE_HOME/hya/sessions.db` (see [Global Options](#--db-empty-string-semantics)).
-
-**On a non-TTY stdout:** does **not** start a backend or frontend. It prints
+With no subcommand (and no `--prompt`), `hya-backend` prints a guidance banner
+and exits. No interactive frontend is bundled:
 
 ```text
 hya <version> — a multi-agent coding agent
-The hya frontend needs a terminal. Try `hya-backend exec "<prompt>"`, `hya-backend -p "<goal>"`, or `hya-backend --help`.
+No interactive frontend is bundled. Try `hya-backend serve`, `hya-backend exec "<prompt>"`, `hya-backend -p "<goal>"`, or `hya-backend --help`.
 ```
 
-then exits **0**. Scripts that pipe `hya-backend` with no arguments hit this
-branch and must not treat exit 0 as “interactive session ready.”
+It exits **0** on both a TTY and a non-TTY stdout. Scripts that pipe
+`hya-backend` with no arguments hit this branch and must not treat exit 0 as
+“interactive session ready.”
+
+## `--pure`
+
+Global flag for `exec`, `run`, `rpc`, `-p` goal mode, `workflow`, and `serve`:
+load no external project or user context — no `AGENTS.md`/context-file
+discovery (startup-baked in direct modes, per-turn guidance on `serve`), no
+MCP servers, no plugins, and no external skill directories (the embedded
+builtin skill catalog is the whole skill surface). Websearch keeps its own
+configuration, and builtin tools are unaffected. Use it for reproducible
+runs whose prompt context is exactly what you passed.
 
 ## `hya-backend exec`
 
