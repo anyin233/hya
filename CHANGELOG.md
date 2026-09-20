@@ -1,21 +1,26 @@
-# 0.36.52
+# 0.36.53
 
-## ask_user merges question: one canonical batch question tool
+## todo__ namespaced tool group replaces todowrite
 
-The two overlapping question tools collapse into one. `ask_user` is now
-the canonical batch tool (previously `question`'s shape): a
-`questions[]` array where each item carries `question`, `header`,
-`options: [{label, description}]` (empty list = free text, with
-optional `default`), `multiple`, and `allow_custom` (legacy `custom`
-spelling still parses).
+The single full-replace `todowrite` tool is replaced by a three-tool
+group under the first builtin `todo` namespace:
 
-- Results carry structured per-question entries in `metadata.answers`
-  (`{question, answer: [chosen values], cancelled}`) alongside the
-  human-readable answer line; unanswered questions render as
-  `Unanswered`.
-- Plane failures now surface as tool errors instead of being silently
-  swallowed as empty answers.
-- The old single-shot `ask_user` schema (`kind`/`options`/`default`
-  top-level) is removed. The `question` spelling remains dispatchable
-  as a hidden non-advertised alias with identical batch semantics.
-- Canonical advertised tool count: 27 → 26.
+- `todo__read` — the session's current items as `{id, content, status}`
+  with stable plane-assigned ids ("1", "2", …) that are never reused.
+- `todo__update_status` — batch `{id, status}` updates.
+- `todo__update_content` — batch `add` / `remove` / `edit` operations,
+  validated whole before anything is applied; a bad id fails the batch
+  with the current ids listed and leaves the list untouched.
+
+Statuses are now a typed set — `pending`, `in_progress`, `blocked`,
+`completed` — replacing opaque strings; the v1 wire enum gains
+`TODO_STATUS_BLOCKED`, and `GET /v1/sessions/{id}/todo` returns the
+plane's stable ids (replayed pre-0.36.53 rows keep synthesized
+`todo-{index}` ids via a lenient fold). The optional `priority` field
+is dropped (the wire never carried it). `todowrite` and its `todo`
+alias are removed from dispatch; canonical advertised tool count is
+28.
+
+Also fixes a pre-existing flaky hya-app `workflow_control` fixture:
+parallel tests could collide on a nanosecond temp-dir nonce and delete
+each other's catalog roots (now unique via an atomic counter).

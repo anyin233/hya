@@ -32,7 +32,7 @@ advertised.
 | File access | `read`, `write`, `edit`, `apply_patch` | Read or mutate workspace files. `read`, `write`, and `edit` are native coding tools; `apply_patch` remains the separate patch envelope. |
 | Local discovery | `ls`, `glob`, `find`, `grep`, `lsp` | List directories, match paths, search text, or query language servers. |
 | Commands | `bash` | Run a command with bounded capture; hidden runtime name `shell` is not advertised. |
-| Human/session interaction | `ask_user`, `todowrite`, `plan_exit`, `invalid` | Ask batched structured questions, update session todos, request a plan-mode transition, or represent invalid tool arguments. |
+| Human/session interaction | `ask_user`, `todo__read`, `todo__update_status`, `todo__update_content`, `plan_exit`, `invalid` | Ask batched structured questions, read/update session todos, request a plan-mode transition, or represent invalid tool arguments. |
 | Agents and teams | `skill`, `list_agents`, `task`, `workflow`, `search_agent` | Load skills, discover/spawn agents, execute governed Workflow commands, and search archived subagents. The orchestration plane is hidden at depth 2 ([ADR-0015](../adr/0015-unified-resident-subagent-lifecycle.md)). |
 | `dm`, `broadcast`, `list_channel`, `report`, `kill` | Channel-plane communication: vertical DMs (with archive revival), unit broadcast, channel listing, terminal reports, and parent force-kill ([ADR-0016](../adr/0016-channel-communication-plane.md)). |
 | Network | `webfetch`, `websearch` | Fetch a URL or run provider-backed web search. |
@@ -55,6 +55,25 @@ as `Unanswered`. Cancellation is reported per question, not as an error.
 Plane failures (no host attached) surface as a tool error instead of a
 silent empty answer.
 ([crates/hya-tool/src/ask_user.rs](../../crates/hya-tool/src/ask_user.rs))
+
+### The `todo__` namespace
+
+Session todos live behind three namespaced tools sharing one plane
+([crates/hya-tool/src/todo.rs](../../crates/hya-tool/src/todo.rs)):
+
+- `todo__read` — the current list; items are `{id, content, status}` with
+  stable plane-assigned ids ("1", "2", …) that are never reused.
+- `todo__update_status` — batch `{id, status}` updates; statuses are
+  `pending`, `in_progress`, `blocked`, `completed`.
+- `todo__update_content` — batch `add` / `remove` / `edit` operations,
+  validated as a whole before anything is applied (a bad id fails the
+  batch with the current ids listed, leaving the list untouched).
+
+Every write returns the full snapshot in `metadata.todos`, which is what
+the engine's replay fold consumes; the pre-0.36.53 `todowrite` spelling
+is removed from dispatch, but historical sessions still replay (their
+rows get synthesized `todo-{index}` ids and lenient status mapping).
+The wire enum gained `TODO_STATUS_BLOCKED`.
 
 ### Task
 
@@ -230,7 +249,6 @@ Six legacy aliases resolve during execution but do not appear in
 | `bash` | `shell` |
 | `webfetch` | `fetch` |
 | `websearch` | `search` |
-| `todowrite` | `todo` |
 | `apply_patch` | `patch` |
 | `plan_exit` | `plan` |
 | `ask_user` | `question` |

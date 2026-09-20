@@ -3438,6 +3438,8 @@ pub enum TodoStatus {
     InProgress = 2,
     /// Done.
     Completed = 3,
+    /// Waiting on an external unblock (dependency, user input, review).
+    Blocked = 4,
 }
 impl TodoStatus {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -3450,6 +3452,7 @@ impl TodoStatus {
             Self::Pending => "TODO_STATUS_PENDING",
             Self::InProgress => "TODO_STATUS_IN_PROGRESS",
             Self::Completed => "TODO_STATUS_COMPLETED",
+            Self::Blocked => "TODO_STATUS_BLOCKED",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -3459,6 +3462,7 @@ impl TodoStatus {
             "TODO_STATUS_PENDING" => Some(Self::Pending),
             "TODO_STATUS_IN_PROGRESS" => Some(Self::InProgress),
             "TODO_STATUS_COMPLETED" => Some(Self::Completed),
+            "TODO_STATUS_BLOCKED" => Some(Self::Blocked),
             _ => None,
         }
     }

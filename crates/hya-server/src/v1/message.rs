@@ -109,19 +109,21 @@ async fn get_session_todo(
     Ok(Json(todo_list(&items)))
 }
 
-/// Map the engine's todo rows onto the wire list.
+/// Map the engine's todo rows onto the wire list. Item ids are the plane's
+/// stable ids; replayed pre-0.36.53 rows carry synthesized `todo-{index}`
+/// ids from the engine fold.
 pub(crate) fn todo_list(items: &[hya_tool::TodoItem]) -> pb::TodoList {
     pb::TodoList {
         items: items
             .iter()
-            .enumerate()
-            .map(|(index, item)| pb::TodoItem {
-                id: format!("todo-{index}"),
+            .map(|item| pb::TodoItem {
+                id: item.id.clone(),
                 content: item.content.clone(),
-                status: match item.status.as_str() {
-                    "in_progress" => pb::TodoStatus::InProgress as i32,
-                    "completed" => pb::TodoStatus::Completed as i32,
-                    _ => pb::TodoStatus::Pending as i32,
+                status: match item.status {
+                    hya_tool::TodoStatus::Pending => pb::TodoStatus::Pending as i32,
+                    hya_tool::TodoStatus::InProgress => pb::TodoStatus::InProgress as i32,
+                    hya_tool::TodoStatus::Blocked => pb::TodoStatus::Blocked as i32,
+                    hya_tool::TodoStatus::Completed => pb::TodoStatus::Completed as i32,
                 },
             })
             .collect(),

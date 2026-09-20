@@ -5,6 +5,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use hya_app::{
@@ -24,22 +25,26 @@ use tokio_util::sync::CancellationToken;
 
 /// Create one process-unique project root.
 fn project_root() -> PathBuf {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |duration| duration.as_nanos());
+    let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
     std::env::temp_dir().join(format!(
-        "hya-workflow-control-{}-{nonce}",
+        "hya-workflow-control-{}-{nonce}-{seq}",
         std::process::id()
     ))
 }
 
 /// Create one process-unique temporary path for catalog fixtures.
 fn temp_path(suffix: &str) -> PathBuf {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |duration| duration.as_nanos());
+    let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
     std::env::temp_dir().join(format!(
-        "hya-workflow-catalog-{}-{nonce}-{suffix}",
+        "hya-workflow-catalog-{}-{nonce}-{seq}-{suffix}",
         std::process::id()
     ))
 }

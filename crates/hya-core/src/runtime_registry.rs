@@ -4700,7 +4700,7 @@ agent:
             .into_iter()
             .map(|schema| schema.name.as_str().to_string())
             .collect::<BTreeSet<_>>();
-        assert_eq!(expected.len(), 26);
+        assert_eq!(expected.len(), 28);
         for (agent_id, plane, workdir) in [
             (
                 "full-alias",
@@ -4731,9 +4731,7 @@ agent:
                 compiled.resolve_tool("apply_patch").is_some(),
                 "{agent_id}: canonical apply_patch must remain public"
             );
-            for alias in [
-                "fetch", "search", "todo", "patch", "plan", "shell", "question",
-            ] {
+            for alias in ["fetch", "search", "patch", "plan", "shell", "question"] {
                 assert!(
                     compiled.resolve_tool(alias).is_some(),
                     "{agent_id}: hidden alias `{alias}` must remain dispatchable"

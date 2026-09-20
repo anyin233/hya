@@ -118,9 +118,13 @@ async fn register_namespaced_rejects_name_mismatch_and_invalid_tokens() {
 }
 
 #[test]
-fn builtin_registry_untouched_by_namespace_mechanism() {
+fn builtin_registry_pairs_namespaced_names_with_their_namespace() {
     let registry = ToolRegistry::builtins();
     assert!(registry.get("read").is_some());
-    assert!(registry.get("todo__read").is_none());
     assert_eq!(namespace_of("read"), None);
+    // The todo namespace is a real builtin group (Feature: todo__ tools).
+    assert!(registry.get("todo__read").is_some());
+    assert_eq!(namespace_of("todo__read"), Some("todo"));
+    // Namespaces no builtin uses stay absent.
+    assert!(registry.get("alpha__read").is_none());
 }

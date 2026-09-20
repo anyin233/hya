@@ -6,6 +6,7 @@ mod support;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use hya_core::{
@@ -43,12 +44,14 @@ impl Drop for TempDirGuard {
 }
 
 fn tempdir() -> PathBuf {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
+    let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
     let dir = std::env::temp_dir().join(format!(
-        "hya-core-shell-test-{nanos}-{}",
+        "hya-core-shell-test-{nanos}-{seq}-{}",
         std::process::id()
     ));
     std::fs::create_dir_all(&dir).unwrap();

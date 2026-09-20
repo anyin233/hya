@@ -142,7 +142,7 @@ fn builtins_expose_compat_names_and_keep_short_aliases_hidden() {
     for (canonical, alias) in [
         ("webfetch", "fetch"),
         ("websearch", "search"),
-        ("todowrite", "todo"),
+        ("ask_user", "question"),
         ("apply_patch", "patch"),
         ("plan_exit", "plan"),
     ] {

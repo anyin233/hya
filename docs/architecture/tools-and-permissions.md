@@ -13,7 +13,7 @@ after permission checks pass.
   formatter/`WorkflowPlane` planes, session ids, workdir, cancellation token.
 - `ToolRegistry`: name-to-tool map, aliases, and model-facing schemas.
 
-`ToolRegistry::builtins()` installs **26** canonical schema names before model
+`ToolRegistry::builtins()` installs **28** canonical schema names before model
 filtering ([`tool.rs`](../../crates/hya-tool/src/tool.rs)). The table below is
 the complete inventory. Advertised fields are the model-facing JSON schema
 `required`/`properties` keys; a schema marked **closed** rejects unknown keys.
@@ -62,7 +62,9 @@ stay globally unique inside a registry. `hya-tool` exposes the mechanism in
 | `task` | `{ "description", "prompt", "subagent_type"?, "category"?, "model"?, "task_id"?, "command"?, "background"?, "resident"?, "inline_agent"?, "members"?: [...] }` | Foreground/background subagent outcomes. |
 | `workflow` | `{ "action"?: "list"\|"info"\|"select"\|"run"\|"state", "name"?: string, "expected_revision"?: string, "inputs"?: object, "run"?: string }` | Shared app-owned Workflow control. |
 | `announce` | `{ "body": string }` | One-way announcement to the caller's direct reports; recipients reply with ordinary mail. |
-| `todowrite` (`todo`) | `{ "todos": [{ "content", "status", "priority" }] }` | Latest todo snapshot for the session (replace, not append). |
+| `todo__read` | `{}` | Current items with stable ids and statuses. |
+| `todo__update_status` | `{ "updates": [{ "id", "status": "pending"\|"in_progress"\|"blocked"\|"completed" }] }` | Full snapshot after batch status updates. |
+| `todo__update_content` | `{ "operations": [{ "op": "add", "content" } \| { "op": "remove", "id" } \| { "op": "edit", "id", "content" }] }` | Full snapshot after batch content edits (atomic; adds report assigned ids). |
 | `plan_exit` (`plan`) | plan status input | Plan-mode completion signal. |
 | `send` | `{ "to": string, "body": string, "kind"?: "message"\|"announcement" }` | Mail delivery receipt. |
 | `roster` | (none) | Live teammates with handle, type, status, task. |
