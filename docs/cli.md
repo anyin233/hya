@@ -366,6 +366,14 @@ store. With `--db`, the database stores the full canonical event log for replay,
 which can contain more sensitive data than the rendered transcript. `--json`
 prints the canonical event stream as JSONL.
 
+`--json` streams live: envelopes print as the engine broadcasts them (the
+database is written per-event regardless), with an initial catch-up pass for
+anything persisted before the stream attached and a final tail flush from the
+durable log. The printed stream is exactly what `tail-session` replays for the
+session — sequence numbers and timestamps included — so an abnormally
+terminated run still leaves a usable partial trajectory on stdout before the
+nonzero exit surfaces.
+
 When no command-line model override is present, a new headless root Session
 uses the selected Agent's effective default from that database. Direct/category
 Agent configuration remains higher precedence. A command-line model override

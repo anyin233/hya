@@ -169,7 +169,7 @@ async fn hysec_session_round_trips_through_replay_list_and_delete() {
         workdir: "/tmp".into(),
     };
 
-    let seq = store.append_event(session, &event).await.unwrap();
+    let (seq, ts) = store.append_event(session, &event).await.unwrap();
     let envelopes = store.replay(session).await.unwrap();
     let sessions = store.list_sessions().await.unwrap();
     let listed = sessions
@@ -180,6 +180,7 @@ async fn hysec_session_round_trips_through_replay_list_and_delete() {
     assert_eq!(seq, EventSeq(1));
     assert_eq!(envelopes.len(), 1);
     assert_eq!(envelopes[0].event, event);
+    assert_eq!(envelopes[0].ts_millis, ts);
     assert_eq!(listed.events, 1);
     assert!(store.delete_session(session).await.unwrap());
     assert!(store.replay(session).await.unwrap().is_empty());
