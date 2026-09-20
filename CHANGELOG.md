@@ -1,26 +1,24 @@
-# 0.36.53
+# 0.36.54
 
-## todo__ namespaced tool group replaces todowrite
+## send unifies dm and broadcast into one channel-addressed tool
 
-The single full-replace `todowrite` tool is replaced by a three-tool
-group under the first builtin `todo` namespace:
+`dm` and `broadcast` collapse into a single `send` tool: send a message
+on one channel, and the channel's own nature decides the delivery.
 
-- `todo__read` — the session's current items as `{id, content, status}`
-  with stable plane-assigned ids ("1", "2", …) that are never reused.
-- `todo__update_status` — batch `{id, status}` updates.
-- `todo__update_content` — batch `add` / `remove` / `edit` operations,
-  validated whole before anything is applied; a bad id fails the batch
-  with the current ids listed and leaves the list untouched.
-
-Statuses are now a typed set — `pending`, `in_progress`, `blocked`,
-`completed` — replacing opaque strings; the v1 wire enum gains
-`TODO_STATUS_BLOCKED`, and `GET /v1/sessions/{id}/todo` returns the
-plane's stable ids (replayed pre-0.36.53 rows keep synthesized
-`todo-{index}` ids via a lenient fold). The optional `priority` field
-is dropped (the wire never carried it). `todowrite` and its `todo`
-alias are removed from dispatch; canonical advertised tool count is
-28.
-
-Also fixes a pre-existing flaky hya-app `workflow_control` fixture:
-parallel tests could collide on a nanosecond temp-dir nonce and delete
-each other's catalog roots (now unique via an atomic counter).
+- `{ "channel"?, "body" }` — `#channel` (or a bare `DM-…`/`announce-…`
+  id from `list_channel`) posts on that channel; a bare handle sends
+  private vertical mail (`^parent` for the upward peer; archived
+  children still revive); the legacy `to` field spelling still parses.
+- Omitted `channel` routes by role: the unit group channel when the
+  sender leads one (broadcast), else the parent DM pair, else a typed
+  error.
+- Delivery kind is derived engine-side from the channel: group posts
+  are stamped as announcements, everything else stays 1:1 chatter.
+  The group-channel write gate (leader-only) is unchanged.
+- `dm` and `broadcast` are removed from dispatch; canonical advertised
+  tool count is 27. The mailbox plane loses the tool-only `dm()`/
+  `announce()` helpers and the `Announce` request variant (replaced by
+  `SendDefault`); engine `mail_send`/`mail_announce*` are unchanged.
+- Docs realigned: the tools-and-permissions inventory drops the
+  long-drifted `roster`/`channels`/`join`/`leave`/`announce` rows in
+  favor of the real `send`/`list_channel`/`search_agent` contract.

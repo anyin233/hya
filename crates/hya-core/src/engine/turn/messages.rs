@@ -236,7 +236,7 @@ mod tests {
             );
         }
         // …while communication and coding tools stay.
-        assert!(advertise_tool_at_depth("dm", crate::MAX_SUBAGENT_DEPTH));
+        assert!(advertise_tool_at_depth("send", crate::MAX_SUBAGENT_DEPTH));
         assert!(advertise_tool_at_depth("bash", crate::MAX_SUBAGENT_DEPTH));
         // report belongs to subagents only: hidden at depth 0, present at
         // every subagent depth including the cap.
@@ -258,14 +258,14 @@ mod tests {
             .into_iter()
             .map(|schema| schema.name.as_str().to_string())
             .collect::<BTreeSet<_>>();
-        assert_eq!(builtins.len(), 28);
+        assert_eq!(builtins.len(), 27);
 
         let advertised = builtins
             .iter()
             .filter(|name| advertise_tool(name))
             .cloned()
             .collect::<BTreeSet<_>>();
-        assert_eq!(advertised.len(), 27);
+        assert_eq!(advertised.len(), 26);
         assert!(advertised.contains("write"));
         assert!(advertised.contains("edit"));
         assert!(!advertised.contains("apply_patch"));

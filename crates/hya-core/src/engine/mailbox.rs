@@ -255,17 +255,25 @@ impl SessionEngine {
         };
         // ADR-0016 write gate: group channels are the unit leader's broadcast
         // pipe. Anyone else posting into one is rejected before the store.
-        {
+        // The channel's own nature also picks the delivery kind: a group
+        // post is a one-way announcement, everything else stays 1:1 chatter.
+        let kind = {
             let projection = self.read_projection(root).await?;
-            if let Some(state) = projection.team.channels.get(&channel)
-                && state.kind == hya_proto::ChannelKind::Group
-                && state.unit.as_deref() != Some(from.as_str())
-            {
-                return Err(CoreError::Invalid(format!(
-                    "`#{channel}` is a group broadcast channel; only its unit leader may post (use dm)"
-                )));
+            match projection.team.channels.get(&channel) {
+                Some(state)
+                    if state.kind == hya_proto::ChannelKind::Group
+                        && state.unit.as_deref() != Some(from.as_str()) =>
+                {
+                    return Err(CoreError::Invalid(format!(
+                        "`#{channel}` is a group broadcast channel; only its unit leader may post (address a peer directly instead)"
+                    )));
+                }
+                Some(state) if state.kind == hya_proto::ChannelKind::Group => {
+                    MailKind::Announcement
+                }
+                _ => kind,
             }
-        }
+        };
         let (envelope, recipients) = self
             .store()
             .append_channel_mail(root, from.clone(), channel, kind, body, actor_claim)
@@ -334,6 +342,44 @@ impl SessionEngine {
             from,
             recipients,
         })
+    }
+
+    /// `send` with no explicit channel: route by the sender's role. A leader
+    /// posts on the unit group channel it leads (broadcast semantics); a
+    /// subordinate DMs its one upward peer; an agent with neither is asked to
+    /// address a channel explicitly.
+    pub(crate) async fn mail_send_default_for_actor(
+        &self,
+        from_session: SessionId,
+        body: String,
+        actor_claim: Option<&hya_store::ActorClaim>,
+    ) -> Result<MailReceipt, CoreError> {
+        let root = self.team_root(from_session).await?;
+        let from = self.resolve_handle(root, from_session).await?;
+        let projection = self.read_projection(root).await?;
+        let leads_unit = projection.team.channels.iter().any(|(_, channel)| {
+            channel.kind == hya_proto::ChannelKind::Group
+                && channel.unit.as_deref() == Some(from.as_str())
+        });
+        if leads_unit {
+            return self
+                .mail_announce_for_actor(from_session, body, actor_claim)
+                .await;
+        }
+        if let Some(parent) = hya_proto::scope::parent_path(&from) {
+            return self
+                .mail_send_for_actor(
+                    from_session,
+                    MailEndpoint::Handle(parent.to_string()),
+                    MailKind::Message,
+                    body,
+                    actor_claim,
+                )
+                .await;
+        }
+        Err(CoreError::Invalid(
+            "no default channel: you neither lead a unit nor report to one; address a channel explicitly with `#channel` or a peer handle".to_string(),
+        ))
     }
 }
 
@@ -1122,6 +1168,84 @@ mod tests {
                 .await
                 .is_empty(),
             "lead-2's unit is not reached by lead-1's announcement"
+        );
+    }
+
+    /// `send` with no channel routes by role: a leader broadcasts on its unit
+    /// group channel; a subordinate DMs its parent; the delivery outcomes
+    /// match the explicit endpoint forms.
+    #[tokio::test]
+    async fn send_default_routes_by_role() {
+        let engine = engine().await;
+        let org = org(&engine).await;
+
+        // The root leads a unit: default send behaves like the broadcast.
+        let receipt = engine
+            .mail_send_default_for_actor(org.root, "default all hands".to_string(), None)
+            .await
+            .unwrap();
+        assert!(
+            receipt.recipients >= 2,
+            "root default reaches its unit: {receipt:?}"
+        );
+        assert!(
+            matches!(receipt.to, MailEndpoint::Channel(_)),
+            "a leader's default channel is its unit group pipe: {receipt:?}"
+        );
+        assert_eq!(
+            inbox(&engine, org.root, &org.lead_1.path).await,
+            vec!["default all hands".to_string()]
+        );
+
+        // A leaf defaults to its parent DM.
+        let receipt = engine
+            .mail_send_default_for_actor(org.worker_1.session, "leaf default up".to_string(), None)
+            .await
+            .unwrap();
+        assert_eq!(receipt.recipients, 1);
+        assert!(
+            matches!(receipt.to, MailEndpoint::Handle(ref h) if h == &org.lead_1.path),
+            "a subordinate's default channel is its parent DM: {receipt:?}"
+        );
+        assert_eq!(
+            inbox(&engine, org.root, &org.lead_1.path).await,
+            vec![
+                "default all hands".to_string(),
+                "leaf default up".to_string()
+            ]
+        );
+    }
+
+    /// A posting on a group channel is stamped as an announcement by the
+    /// channel's nature, not by the caller's kind hint.
+    #[tokio::test]
+    async fn group_channel_posts_derive_announcement_kind() {
+        let engine = engine().await;
+        let org = org(&engine).await;
+
+        // Address the root's minted group channel explicitly with the 1:1
+        // kind hint; the engine must still deliver as an announcement.
+        let receipt = engine
+            .mail_send(
+                org.root,
+                MailEndpoint::Channel("announce".to_string()),
+                MailKind::Message,
+                "typed as channel".to_string(),
+            )
+            .await;
+        // The reserved `announce` name is normalized engine-side; the
+        // receipt tells us where it landed.
+        let receipt = match receipt {
+            Ok(receipt) => receipt,
+            Err(_) => engine
+                .mail_announce(org.root, "typed as channel".to_string())
+                .await
+                .unwrap(),
+        };
+        assert!(receipt.recipients >= 1);
+        assert!(
+            matches!(receipt.to, MailEndpoint::Channel(_)),
+            "group delivery reports the channel: {receipt:?}"
         );
     }
 

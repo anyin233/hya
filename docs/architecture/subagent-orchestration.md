@@ -181,8 +181,8 @@ branch 1 delivers the mail normally.
 
 | Kind | Id | Members | Posting | Lifetime |
 | --- | --- | --- | --- | --- |
-| Group | `#announce-{8}` | leader + direct reports | leader only (`broadcast`) | per unit; membership ends at archive |
-| DM | `#DM-{8}` | exactly two (vertical pair) | both (`dm`) | created at spawn (top-down); **persists across archive/revive** |
+| Group | `#announce-{8}` | leader + direct reports | leader only (`send #…`) | per unit; membership ends at archive |
+| DM | `#DM-{8}` | exactly two (vertical pair) | both (`send`) | created at spawn (top-down); **persists across archive/revive** |
 
 - 8 random `[a-zA-Z0-9]` chars, collision-checked within the team root's
   channel table, re-minted on collision; minted ids are event facts
@@ -192,19 +192,16 @@ branch 1 delivers the mail normally.
 - Group channels expose **no member list** through any tool. DM channels
   always expose the peer identity (derived from membership, not from input).
 
-### 5.2 Write gate (dm / broadcast / report delivery)
+### 5.2 Write gate (send / report delivery)
 
 ```
-dm(to?, body):
+send(channel?, body):
   acting identity from session context (never model input)
-  child ⇒ to is the parent DM channel (parameter optional/ignored)
-  leader ⇒ to must name a direct child (live ⇒ deliver; archived ⇒ revive §4)
-  ⇒ MailSent{Channel(#DM-…)}; recipient wake (sender excluded)
-
-broadcast(body):
-  caller must lead a unit ⇒ MailSent{Channel(#announce-…)} to live members
+  handle/DM channel ⇒ private mail (child default: parent DM; archived child ⇒ revive §4)
+  group channel ⇒ MailSent{Channel(#announce-…)} to live members; leader-only
   archived members are not members; nothing is queued for them
-  caller leads nobody ⇒ typed error (advertised at L2, errors at runtime)
+  channel omitted ⇒ role default: led unit group channel, else parent DM
+  neither exists ⇒ typed error (advertised at L2, errors at runtime)
 
 report(result):
   gate §3.1 ⇒ handoff §3.2 ⇒ archive txn §3.3 ⇒ report mail on the DM channel
@@ -226,7 +223,7 @@ recipient is archived routes to the revive path before wake.
 | Plane | Tools | Depth 0/1 (main, L1) | Depth 2 (L2) |
 | --- | --- | --- | --- |
 | Orchestration | `task`, `list_agents`, `workflow`, `search_agent`, `kill` | advertised | **not advertised** |
-| Communication | `dm`, `broadcast`, `list_channel`, `report` | advertised | advertised (`broadcast` errors: leads nobody) |
+| Communication | `send`, `list_channel`, `report` | advertised | advertised (group-default send errors: leads nobody) |
 | Coding/etc. | read/write/edit/bash/… | advertised | advertised |
 
 Enforcement is two-layer, engine-owned:

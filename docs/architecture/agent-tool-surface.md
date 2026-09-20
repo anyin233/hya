@@ -34,7 +34,7 @@ advertised.
 | Commands | `bash` | Run a command with bounded capture; hidden runtime name `shell` is not advertised. |
 | Human/session interaction | `ask_user`, `todo__read`, `todo__update_status`, `todo__update_content`, `plan_exit`, `invalid` | Ask batched structured questions, read/update session todos, request a plan-mode transition, or represent invalid tool arguments. |
 | Agents and teams | `skill`, `list_agents`, `task`, `workflow`, `search_agent` | Load skills, discover/spawn agents, execute governed Workflow commands, and search archived subagents. The orchestration plane is hidden at depth 2 ([ADR-0015](../adr/0015-unified-resident-subagent-lifecycle.md)). |
-| `dm`, `broadcast`, `list_channel`, `report`, `kill` | Channel-plane communication: vertical DMs (with archive revival), unit broadcast, channel listing, terminal reports, and parent force-kill ([ADR-0016](../adr/0016-channel-communication-plane.md)). |
+| `send`, `list_channel`, `report`, `kill` | Channel-plane communication: one channel-addressed send (the channel's nature picks DM vs broadcast, with archive revival), channel listing, terminal reports, and parent force-kill ([ADR-0016](../adr/0016-channel-communication-plane.md)). |
 | Network | `webfetch`, `websearch` | Fetch a URL or run provider-backed web search. |
 
 ### ask_user
@@ -145,18 +145,22 @@ result echoes the list back with a title carrying the count of still-open items
 All communication tools report that they are available only inside a running
 team when the mailbox plane is disconnected.
 
-**`dm`**: private mail over the acting agent's DM channel with one vertical
-peer. Required `body`; optional `to` (a direct child's handle — leaders only;
-omitted, it addresses the parent). Subordinates have exactly one peer upward.
-Mail to an archived direct child **revives** it with its saved handoff state
-(ADR-0015). Siblings are not addressable; out-of-scope targets are
-indistinguishable from unknown.
+**`send`**: required `body`; optional `channel` (the legacy `to` spelling
+still parses). One tool, channel-decided delivery:
 
-**`broadcast`**: required `body`; posts a one-way announcement on the acting
-agent's unit group channel (`announce-{8}`). Only the unit leader may post;
-members hear it and answer with ordinary `dm` mail. Group channels never
-expose a member list. Archived members are no longer members: broadcast never
-reaches them.
+- `#channel` (or a bare `DM-…`/`announce-…` id from `list_channel`) posts on
+  that channel. Group channels are the unit leader's broadcast pipe — a
+  one-way announcement every live member hears; posting is leader-only. DM
+  channels stay private 1:1 chatter.
+- A bare handle sends private mail to that vertical peer. Subordinates name
+  their one upward peer with `^parent`; mail to an archived direct child
+  **revives** it with its saved handoff state (ADR-0015). Siblings are not
+  addressable; out-of-scope targets are indistinguishable from unknown.
+- Omitted, `send` uses the sender's default channel: the unit group pipe
+  when the sender leads one, else the parent DM pair.
+
+Group channels never expose a member list. Archived members are no longer
+members: a group post never reaches them.
 
 **`list_channel`**: no parameters; lists the caller's channels — group pipes
 with a can-post flag and DM channels with peer identity and unread counts.
@@ -164,8 +168,8 @@ Archived peers' DM channels are excluded (use `search_agent`).
 
 **`search_agent`**: optional `query` (free text over the goal/pending digests
 of archived agents' final handoffs); lists the caller's own archived direct
-children with handle, agent type, digests, and a degraded flag. `dm` the
-returned handle to revive.
+children with handle, agent type, digests, and a degraded flag. `send` to
+the returned handle to revive.
 
 Removed tools: `roster`, `channels`, `join`, `leave` — their information folds
 into `list_channel`/`search_agent`; named user-created channels no longer
