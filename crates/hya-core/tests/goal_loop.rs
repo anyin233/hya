@@ -147,7 +147,7 @@ async fn malformed_eval_counts_toward_cap() {
 
     assert_eq!(
         outcome,
-        RunOutcome::Capped {
+        RunOutcome::BudgetLimited {
             iterations: 2,
             which: "max_iterations",
         }
@@ -317,9 +317,110 @@ async fn dispatcher_evaluator_malformed_counts_toward_cap() {
 
     assert_eq!(
         outcome,
-        RunOutcome::Capped {
+        RunOutcome::BudgetLimited {
             iterations: 2,
             which: "max_iterations",
         }
     );
+}
+
+#[tokio::test]
+async fn budget_limit_runs_wrap_up_pass_and_reports_budget_limited() {
+    let provider = FakeProvider::scripted_turns(vec![vec![
+        FakeStep::Text("working".to_string()),
+        FakeStep::Finish(FinishReason::Stop),
+    ]]);
+    let (engine, agent) = engine_with(provider).await;
+    let session = new_session(&engine).await;
+    let evaluator: Arc<dyn GoalEvaluator> = Arc::new(ScriptedEvaluator {
+        mets: vec![false, false, false],
+        idx: AtomicUsize::new(0),
+    });
+
+    let caps = SafetyCaps {
+        max_iterations: 2,
+        ..SafetyCaps::default()
+    };
+    let outcome = run_goal(
+        engine.clone(),
+        session,
+        agent,
+        "do the thing".to_string(),
+        evaluator,
+        caps,
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+
+    assert!(matches!(
+        outcome,
+        RunOutcome::BudgetLimited {
+            iterations: 2,
+            which: "max_iterations",
+        }
+    ));
+    // The wrap-up pass admitted a budget-reached directive.
+    let projection = engine.read_projection(session).await.unwrap();
+    let last_user = projection
+        .session
+        .messages
+        .iter()
+        .rev()
+        .filter(|message| message.role == hya_proto::Role::User)
+        .find_map(|message| {
+            message.parts.iter().find_map(|part| match part {
+                hya_proto::PartProjection::Text { text, .. } => Some(text.clone()),
+                _ => None,
+            })
+        })
+        .unwrap_or_default();
+    assert!(
+        last_user.contains("BUDGET LIMIT REACHED"),
+        "wrap-up directive must be admitted: {last_user}"
+    );
+}
+
+#[tokio::test]
+async fn stalled_iterations_stop_the_goal_run() {
+    // Constant evaluator reason -> constant wrap-up directive -> identical
+    // per-iteration activity; the stall guard stops the run instead of
+    // burning the budget.
+    struct ConstantEvaluator;
+
+    #[async_trait]
+    impl GoalEvaluator for ConstantEvaluator {
+        async fn evaluate(
+            &self,
+            _condition: &str,
+            _transcript: &str,
+        ) -> Result<Verdict, CoreError> {
+            Ok(Verdict {
+                met: false,
+                reason: "not yet".to_string(),
+            })
+        }
+    }
+
+    let provider = FakeProvider::scripted_turns(vec![vec![
+        FakeStep::Text("working".to_string()),
+        FakeStep::Finish(FinishReason::Stop),
+    ]]);
+    let (engine, agent) = engine_with(provider).await;
+    let session = new_session(&engine).await;
+    let evaluator: Arc<dyn GoalEvaluator> = Arc::new(ConstantEvaluator);
+
+    let outcome = run_goal(
+        engine,
+        session,
+        agent,
+        "do the thing".to_string(),
+        evaluator,
+        SafetyCaps::default(),
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(outcome, RunOutcome::Stalled { iterations: 3 });
 }

@@ -1,5 +1,6 @@
 //! Goal-mode iteration: independent evaluator, safety caps, and lead-turn executor.
 
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -54,6 +55,20 @@ pub enum RunOutcome {
         /// Which cap fired (`max_iterations`, `max_wall_clock`, …).
         which: &'static str,
     },
+    /// Hit a safety cap, ran one wrap-up iteration, and stopped. Budget
+    /// exhaustion is never forged into [`RunOutcome::Achieved`].
+    BudgetLimited {
+        /// Iterations completed before the wrap-up pass.
+        iterations: u32,
+        /// Which cap fired (`max_iterations`, `max_wall_clock`, …).
+        which: &'static str,
+    },
+    /// Two consecutive iterations produced identical activity (stall guard):
+    /// the run stopped itself instead of burning the remaining budget.
+    Stalled {
+        /// Iterations completed including the repeated one.
+        iterations: u32,
+    },
     /// Cancellation token tripped.
     Cancelled,
 }
@@ -106,13 +121,27 @@ pub trait IterationExecutor: Send + Sync {
 pub struct IterationDriver {
     /// Caps applied each loop.
     pub caps: SafetyCaps,
+    /// Behavioral stall guard: stop (as [`RunOutcome::Stalled`]) when two
+    /// consecutive iterations render identical activity. Enabled for goal
+    /// mode; loop mode keeps its own no-progress detection instead.
+    stall_guard: bool,
 }
 
 impl IterationDriver {
     /// Create a driver with the given caps.
     #[must_use]
     pub fn new(caps: SafetyCaps) -> Self {
-        Self { caps }
+        Self {
+            caps,
+            stall_guard: false,
+        }
+    }
+
+    /// Enable the behavioral stall guard (goal mode).
+    #[must_use]
+    pub fn with_stall_guard(mut self) -> Self {
+        self.stall_guard = true;
+        self
     }
 
     /// Run until the gate stops, a cap trips, or cancel fires.
@@ -129,24 +158,50 @@ impl IterationDriver {
         let start = Instant::now();
         let mut directive = initial_directive;
         let mut iterations = 0u32;
+        let mut previous_transcript: Option<String> = None;
+        let mut previous_activity: Option<u64> = None;
         loop {
             if cancel.is_cancelled() {
                 return Ok(RunOutcome::Cancelled);
             }
-            if iterations >= self.caps.max_iterations {
-                return Ok(RunOutcome::Capped {
-                    iterations,
-                    which: "max_iterations",
-                });
-            }
-            if start.elapsed() >= self.caps.max_wall_clock {
-                return Ok(RunOutcome::Capped {
-                    iterations,
-                    which: "max_wall_clock",
-                });
+            let which = if iterations >= self.caps.max_iterations {
+                Some("max_iterations")
+            } else if start.elapsed() >= self.caps.max_wall_clock {
+                Some("max_wall_clock")
+            } else {
+                None
+            };
+            if let Some(which) = which {
+                if iterations == 0 {
+                    return Ok(RunOutcome::Capped { iterations, which });
+                }
+                // Budget exhaustion is not completion: run exactly one
+                // wrap-up pass that demands a handoff summary, then report
+                // `BudgetLimited` instead of forging an `Achieved`.
+                let _ = executor
+                    .run_iteration(&wrap_up_directive(which), &cancel)
+                    .await;
+                return Ok(RunOutcome::BudgetLimited { iterations, which });
             }
             iterations += 1;
             let transcript = executor.run_iteration(&directive, &cancel).await?;
+            // Stall guard (behavioral tripwire): fingerprint this iteration's
+            // own activity — the transcript suffix appended over the previous
+            // one. Two identical consecutive contributions mean the run is
+            // repeating itself; stop instead of burning the budget.
+            let activity = previous_transcript
+                .as_ref()
+                .and_then(|previous| transcript.strip_prefix(previous.as_str()))
+                .map(str::to_string)
+                .unwrap_or_else(|| transcript.clone());
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            activity.hash(&mut hasher);
+            let activity_fp = hasher.finish();
+            if self.stall_guard && previous_activity == Some(activity_fp) {
+                return Ok(RunOutcome::Stalled { iterations });
+            }
+            previous_activity = Some(activity_fp);
+            previous_transcript = Some(transcript.clone());
             match gate.judge(&transcript).await? {
                 GateOutcome::Stop { reason } => {
                     return Ok(RunOutcome::Achieved { iterations, reason });
@@ -155,6 +210,17 @@ impl IterationDriver {
             }
         }
     }
+}
+
+/// Wrap-up directive for the [`RunOutcome::BudgetLimited`] pass: no new
+/// substantive work, hand off state instead.
+#[must_use]
+pub fn wrap_up_directive(which: &str) -> String {
+    format!(
+        "BUDGET LIMIT REACHED ({which}). Do not start any new substantive work. \
+         Wrap up now: report what was completed, the current verifiable state, \
+         and the remaining work as a handoff. Budget exhaustion is not completion."
+    )
 }
 
 /// Result of an independent goal evaluation.
@@ -237,8 +303,15 @@ pub fn render_transcript(projection: &Projection) -> String {
     for m in &projection.session.messages {
         let mut text = String::new();
         for p in &m.parts {
-            if let PartProjection::Text { text: t, .. } = p {
-                text.push_str(t);
+            match p {
+                PartProjection::Text { text: t, .. } => text.push_str(t),
+                // Tool activity is part of the iteration fingerprint: two
+                // rounds running the identical tools with identical inputs
+                // must render identical transcripts (stall guard).
+                PartProjection::Tool { name, state, .. } => {
+                    text.push_str(&format!("[tool:{name}:{state:?}]"));
+                }
+                PartProjection::Reasoning { .. } => {}
             }
         }
         s.push_str(&format!("[{:?}] {}\n", m.role, text));
@@ -267,6 +340,7 @@ pub async fn run_goal(
         evaluator,
     };
     IterationDriver::new(caps)
+        .with_stall_guard()
         .run(&executor, &gate, condition, cancel)
         .await
 }
