@@ -66,9 +66,9 @@ fn with_hook_instructions(
 }
 
 struct TurnExecution<'a> {
-    binding: &'a TurnBinding,
-    resources: &'a CompiledResourceView,
-    agents: &'a Arc<[AgentDef]>,
+    binding: TurnBinding,
+    resources: Arc<CompiledResourceView>,
+    agents: Arc<[AgentDef]>,
     cancel: &'a CancellationToken,
     external_dirs: &'a [PathBuf],
     actor_claim: Option<&'a ActorClaim>,
@@ -83,6 +83,19 @@ struct TurnExecution<'a> {
     apply_default_overlays: bool,
     /// Request-local Workflow route, absent for ordinary Agent turns.
     workflow_route: Option<&'a WorkflowTurnRoute>,
+    /// Round-boundary rebind inputs, present for Root activations only.
+    rebind: Option<TurnRebindInputs<'a>>,
+}
+
+/// What a Root activation retains so a round-boundary rebind can recompile.
+struct TurnRebindInputs<'a> {
+    /// The uncomposed base spec. Prompt heat re-materializes from this so the
+    /// agent_base, guidance, and skill layers are appended once, not stacked
+    /// per round.
+    base_agent: &'a AgentSpec,
+    /// Sidecar tools captured at activation; recompiled into every fresh
+    /// resource view so a rebind never drops them.
+    sidecar_tools: Arc<[ResolvedTool]>,
 }
 
 /// Request-local context shared by one governed turn activation.
@@ -545,6 +558,9 @@ impl SessionEngine {
         self.validate_actor_claim(actor_claim).await?;
         let projection = self.store.read_projection(session).await?;
         let workdir = session_workdir(agent, &projection);
+        // Uncomposed base spec, captured before the prepared agent shadows it
+        // below; round-boundary rebinds re-materialize from this.
+        let base_agent = agent;
         let (binding, resolved, root_sidecar_tools, mut sidecar_handle, apply_default_overlays) =
             match activation {
                 TurnActivation::Root => {
@@ -646,9 +662,9 @@ impl SessionEngine {
             .await?;
 
             let execution = TurnExecution {
-                binding: &binding,
-                resources: &resources,
-                agents: &agents,
+                binding,
+                resources,
+                agents,
                 cancel: &cancel,
                 external_dirs,
                 actor_claim,
@@ -657,6 +673,10 @@ impl SessionEngine {
                 apply_default_overlays,
                 workflow_route: workflow_route.as_ref(),
                 explicit_model: explicit_model.as_ref(),
+                rebind: apply_default_overlays.then_some(TurnRebindInputs {
+                    base_agent,
+                    sidecar_tools: Arc::clone(&root_sidecar_tools),
+                }),
             };
             let outcome = match sidecar_loss {
                 Some(loss_token) => {
@@ -803,6 +823,20 @@ impl SessionEngine {
         Ok((projection, messages, tokens))
     }
 
+    /// Drive the streaming rounds of one turn activation.
+    ///
+    /// Round-boundary dynamic rebinding (Root turns only): at the top of every
+    /// round after the first, a Root activation re-runs
+    /// `bind_session_runtime`. When the fresh binding carries a different
+    /// runtime generation, the round swaps in the fresh binding, a freshly
+    /// compiled resource view (retaining the activation's sidecar tools), a
+    /// refreshed agent roster, and a re-materialized agent prompt — so tools,
+    /// hooks, skills, and prompts published mid-turn take effect at the next
+    /// model call without rebuilding the transcript context. Any rebind or
+    /// recompilation failure is logged and ignored: the turn keeps the current
+    /// generation and never dies from a rebind failure (fail-open). Bound and
+    /// Resolved activations (subagents, Workflow members) pin their
+    /// activation-time binding for the whole turn and never rebind.
     async fn run_turn_rounds(
         &self,
         session: SessionId,
@@ -821,7 +855,22 @@ impl SessionEngine {
             guidance,
             workflow_route,
             explicit_model,
+            rebind,
         } = execution;
+        // Owned rebind state. The loop reads it through shared locals so an
+        // activation-time generation and a round-swapped generation behave
+        // identically; a successful rebind republishes the owned state and
+        // re-points the shared locals at it.
+        let mut live_binding = binding;
+        let mut live_resources = resources;
+        let mut live_agents = agents;
+        // Active agent spec for the current round. Root rounds swap it at a
+        // round boundary (prompt heat); Bound/Resolved rounds keep the
+        // activation-time composition.
+        let mut live_agent = agent.clone();
+        let mut binding = &live_binding;
+        let mut resources = &*live_resources;
+        let mut agents = &live_agents;
         let mut rounds: u32 = 0;
         let mut total_tokens = None;
         // Depth in the subagent tree, derived from the parent chain. Subagents use
@@ -862,12 +911,74 @@ impl SessionEngine {
             }
 
             let mut projection = self.store.read_projection(session).await?;
+            // Owned so the round rebind below can swap the active agent spec
+            // while the id stays valid.
             let stable_id = projection
                 .session
                 .agent
                 .as_ref()
-                .unwrap_or(&agent.name)
-                .as_str();
+                .unwrap_or(&live_agent.name)
+                .as_str()
+                .to_string();
+            // Round-boundary dynamic rebind (Root turns only, never the first
+            // round). The bind already short-circuits on an unchanged registry
+            // generation, so the generation comparison here decides whether the
+            // round swaps in a new runtime at all.
+            if rounds > 0
+                && apply_default_overlays
+                && let Some(inputs) = rebind.as_ref()
+            {
+                let workdir = session_workdir(&live_agent, &projection);
+                match self.bind_session_runtime(session, &workdir).await {
+                    Ok(fresh) if fresh.generation() != binding.generation() => {
+                        // Mirror the Root activation compile path: agent_base
+                        // resolution, guidance layer, skills prompt, sidecar
+                        // tools retained, plus a fresh spawn roster.
+                        let rematerialized = effective_agent_for_binding_with_sidecar_tools(
+                            inputs.base_agent,
+                            stable_id.as_str(),
+                            &fresh,
+                            guidance.as_deref(),
+                            &inputs.sidecar_tools,
+                        )
+                        .and_then(|(materialized, compiled)| {
+                            agent_roster(&fresh, stable_id.as_str())
+                                .map(|roster| (materialized, compiled, roster))
+                        });
+                        match rematerialized {
+                            Ok((materialized, compiled, roster)) => {
+                                tracing::info!(
+                                    session = %session,
+                                    generation = ?fresh.generation(),
+                                    "round rebind applied a new runtime generation"
+                                );
+                                live_binding = fresh;
+                                live_agent = materialized;
+                                live_resources = compiled;
+                                live_agents = roster;
+                                binding = &live_binding;
+                                resources = &live_resources;
+                                agents = &live_agents;
+                            }
+                            Err(error) => {
+                                tracing::warn!(
+                                    session = %session,
+                                    %error,
+                                    "round rebind failed to recompile resources; keeping the current runtime generation"
+                                );
+                            }
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(error) => {
+                        tracing::warn!(
+                            session = %session,
+                            %error,
+                            "round rebind failed; keeping the current runtime generation"
+                        );
+                    }
+                }
+            }
             // One explicit request wins for this turn only. Fresh root
             // activations then use the captured Session override, user-file
             // model, and authored direct/category policy before falling back
@@ -875,16 +986,16 @@ impl SessionEngine {
             // its already-resolved AgentSpec model and never reapplies root
             // defaults over an inline or Workflow choice.
             let session_model = apply_default_overlays
-                .then(|| binding.session_agent_model(stable_id).cloned())
+                .then(|| binding.session_agent_model(&stable_id).cloned())
                 .flatten();
             let configured_model = apply_default_overlays
-                .then(|| binding.configured_agent_model(stable_id).cloned())
+                .then(|| binding.configured_agent_model(&stable_id).cloned())
                 .flatten();
             let authored_model = apply_default_overlays
                 .then(|| {
                     binding
                         .agent_catalog()
-                        .resolve(stable_id)
+                        .resolve(&stable_id)
                         .and_then(|definition| {
                             crate::category::resolve_configured_agent_model(
                                 &definition.model_policy,
@@ -901,7 +1012,7 @@ impl SessionEngine {
                 .or(authored_model)
                 .or_else(|| projection.session.model.clone())
                 .unwrap_or_else(|| agent.model.clone());
-            let mut messages = projection_to_messages(agent, &projection, &model);
+            let mut messages = projection_to_messages(&live_agent, &projection, &model);
             // Active route for this turn. Its advertised context window scales
             // the compaction threshold, so resolve it before deciding.
             let capabilities = self.provider_router().capabilities(&model);
@@ -935,7 +1046,7 @@ impl SessionEngine {
             // that succeeded but left the transcript over threshold used to end
             // the sequence, sending the request out still over the window it
             // was trying to fit.
-            let spill = ArtifactEvictionSink::new(&session_workdir(agent, &projection));
+            let spill = ArtifactEvictionSink::new(&session_workdir(&live_agent, &projection));
             // Resolved on first use, so a turn that an earlier rung rescued
             // never requires the fixed Compaction agent to exist.
             let mut compaction_agent: Option<AgentDefinition<'_>> = None;
@@ -1065,8 +1176,9 @@ impl SessionEngine {
                             )
                             .await?;
                         }
-                        (projection, messages, tokens) =
-                            self.reload_after_compaction(session, agent, &model).await?;
+                        (projection, messages, tokens) = self
+                            .reload_after_compaction(session, &live_agent, &model)
+                            .await?;
                     }
                     crate::compaction::CompactionRung::SnapCompact => {
                         // Local and deterministic: no model call, no capability
@@ -1109,8 +1221,9 @@ impl SessionEngine {
                             },
                         )
                         .await?;
-                        (projection, messages, tokens) =
-                            self.reload_after_compaction(session, agent, &model).await?;
+                        (projection, messages, tokens) = self
+                            .reload_after_compaction(session, &live_agent, &model)
+                            .await?;
                     }
                     crate::compaction::CompactionRung::Handoff => {
                         let Some(summarizer) = &self.summarizer else {
@@ -1167,8 +1280,9 @@ impl SessionEngine {
                             },
                         )
                         .await?;
-                        (projection, messages, tokens) =
-                            self.reload_after_compaction(session, agent, &model).await?;
+                        (projection, messages, tokens) = self
+                            .reload_after_compaction(session, &live_agent, &model)
+                            .await?;
                     }
                     crate::compaction::CompactionRung::Summarize => {
                         let Some(summarizer) = &self.summarizer else {
@@ -1229,8 +1343,9 @@ impl SessionEngine {
                             },
                         )
                         .await?;
-                        (projection, messages, tokens) =
-                            self.reload_after_compaction(session, agent, &model).await?;
+                        (projection, messages, tokens) = self
+                            .reload_after_compaction(session, &live_agent, &model)
+                            .await?;
                     }
                 }
             }
@@ -1259,7 +1374,7 @@ impl SessionEngine {
                 },
             )
             .await?;
-            let request = request_from_messages(agent, messages, resources, &model, depth);
+            let request = request_from_messages(&live_agent, messages, resources, &model, depth);
             let request = if let Some(hooks) = &self.hooks {
                 match hooks
                     .chat_params(ChatParamsInput {
