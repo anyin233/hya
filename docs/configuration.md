@@ -1035,7 +1035,8 @@ name is unambiguous:
 | Built-in tools | bare names (`read`, `bash`, …) — reserved |
 | Plugins (`plugins:` / `plugin.toml`) | `{plugin_id}__{local}` — composed by the host from the declared local name |
 | MCP servers | `mcp__{server}__{local}` — composed from the server key and the server-declared tool name |
-| Bundles | `{namespace}__{local}` (see [AgentBundle authoring](agent-bundle-authoring.md)) |
+| Bundle tools | view-scoped (sidecar activation) — the bundle-local resource id and its `bundle:<bundle_id>/<kind>/<local>` stable id are the dispatch and permission spellings (see [AgentBundle authoring](agent-bundle-authoring.md)) |
+| Bundle schema claims | the scheme's `canonicalTool` is the owning tool's `bundle:<bundle_id>/tool/<local>` stable id |
 
 Rules enforced at configuration load and at runtime publication:
 
@@ -1048,6 +1049,27 @@ Rules enforced at configuration load and at runtime publication:
   resolved by scope — sources beat built-ins, and among sources the
   lexicographically greater source id wins. The built-in `read` is protected
   and can never be masked.
+- External URI-scheme claims follow the same masking order across sources and
+  are dispatched view-scoped: an agent's `read` serves `scheme://…` handles
+  only when its compiled view also resolves the owning bundle tool.
+
+## Bundle Schemas
+
+Bundles may declare external URI-scheme extensions (`schemas:` in the bundle
+manifest; see [Schema extensions](agent-bundle-authoring.md#schema-extensions-schemas)).
+Two read-only surfaces report what is registered:
+
+- **`hya-backend bundle schemas`** — one `BUNDLE SCHEME TOOL WRITABLE` row per
+  declared schema across the first-party and installed bundles.
+- **`GET /v1/runtime/schemas`** — the live published scheme table with its
+  config `generation`, each row carrying `scheme`, `owner` (the winning source
+  id, e.g. `bundle:hya/schema-demo`), `canonicalTool` (the owning tool's
+  `bundle:<bundle_id>/tool/<local>` stable id), `writable`, and the full
+  `chain` of claimants in ascending source order.
+
+The table publishes with the installed-catalog generation: a freshly installed
+bundle's schemes appear after the next bound turn, exactly like the rest of its
+resources.
 
 ## Plugins
 

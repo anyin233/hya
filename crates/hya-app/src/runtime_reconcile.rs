@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use hya_bundle::PreparedResource;
-use hya_core::runtime_registry::RuntimeSourceSkill;
+use hya_bundle::{PreparedResource, PreparedSchema};
+use hya_core::runtime_registry::{RuntimeSourceSkill, SourceSchema};
 use hya_core::{
     RuntimeRefreshError, RuntimeRegistry, RuntimeSource, RuntimeSourceExport, RuntimeSourceId,
     RuntimeSourceKind, RuntimeSourceOwner,
@@ -126,6 +126,7 @@ pub(crate) struct PreparedSource {
     exports: Vec<PreparedExport>,
     skills: Vec<RuntimeSourceSkill>,
     resources: BTreeMap<String, Value>,
+    schemas: Vec<SourceSchema>,
 }
 
 pub(crate) struct PreparedFailure {
@@ -242,6 +243,7 @@ impl PreparedSource {
             exports,
             skills: Vec::new(),
             resources: BTreeMap::new(),
+            schemas: Vec::new(),
         }
     }
     /// Attach parsed Skill contributions to this prepared runtime source.
@@ -255,6 +257,13 @@ impl PreparedSource {
     #[must_use]
     pub(crate) fn with_resources(mut self, resources: BTreeMap<String, Value>) -> Self {
         self.resources = resources;
+        self
+    }
+
+    /// Attach external URI-scheme claims to this prepared runtime source.
+    #[must_use]
+    pub(crate) fn with_schemas(mut self, schemas: Vec<SourceSchema>) -> Self {
+        self.schemas = schemas;
         self
     }
 
@@ -277,6 +286,7 @@ impl PreparedSource {
         RuntimeSource::new(self.id, self.declaration_digest, self.owner, exports)
             .with_skills(self.skills)
             .with_resources(self.resources)
+            .with_schemas(self.schemas)
     }
 }
 
@@ -319,6 +329,35 @@ pub(crate) fn prepared_static_bundle_source(
         Vec::new(),
     )
     .with_skills(skills))
+}
+
+/// Resolve one prepared bundle's declared schema extensions into runtime
+/// scheme claims.
+///
+/// Bundle tools are view-scoped (sidecar activation), so the claim names the
+/// owning tool by its `bundle:{id}/tool/{local}` stable id — the spelling a
+/// bundle agent's compiled view resolves the sidecar tool under — rather than
+/// a registry export.
+pub(crate) fn bundle_schema_claims(
+    bundle_id: &str,
+    schemas: &[PreparedSchema],
+    tools: &[PreparedResource],
+) -> Result<Vec<SourceSchema>, ReconcileError> {
+    let mut claims = Vec::with_capacity(schemas.len());
+    for schema in schemas {
+        let Some(tool) = tools.iter().find(|tool| tool.local_id == schema.tool) else {
+            return Err(ReconcileError::InvalidPrepared(format!(
+                "bundle `{bundle_id}` schema `{}` references unknown tool `{}`",
+                schema.scheme, schema.tool
+            )));
+        };
+        claims.push(SourceSchema {
+            scheme: schema.scheme.clone(),
+            canonical_tool: tool.stable_id.clone(),
+            writable: schema.writable,
+        });
+    }
+    Ok(claims)
 }
 
 /// Validate and parse every prepared bundle Skill exactly once at the contribution seam.

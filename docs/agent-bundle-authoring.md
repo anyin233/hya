@@ -108,8 +108,10 @@ kind: AgentBundle
 | --- | --- | --- |
 | `kind` | yes | Must be `AgentBundle`. |
 | `identity` | yes | Bundle identity block (see below). |
+| `namespace` | no | Provider-facing namespace for the bundle's tools and schemas; defaults to the identity name segment (the part after `/`). Token rules: `[a-zA-Z0-9_-]`, no `__`, and the reserved tokens `mcp`, `harness`, `builtin`, `plugin` are rejected. |
+| `schemas` | no | External URI-scheme extensions this bundle provides (see [Schema extensions (`schemas:`)](#schema-extensions-schemas)). |
 | `resources` | no | `tools`, `skills`, `mcp`, `hooks` resource lists. |
-| `extensions` | no | `js`, `rust` extension lists. |
+| `extensions` | no | `js`, `rust` extension lists plus the optional `process` declaration. |
 | `agent` | yes | The single agent this bundle defines. |
 
 **Removed AgentBundle keys.** `api_version` and per-agent `harness_access` no longer exist,
@@ -118,7 +120,9 @@ WorkflowBundle uses `agents:` under its separate closed schema. An AgentBundle
 manifest that carries a removed key is rejected by name with `RemovedManifestKey`.
 
 **Unsupported in the current release** (declared but rejected at prepare):
-`resources.mcp`, `extensions.rust`, and per-agent `resource_profile`.
+`extensions.rust` and per-agent `resource_profile`. `resources.mcp` is
+**declarable** (validated and shipped in the prepared catalog; runtime spawning
+of bundle-declared MCP servers lands in a later phase).
 
 ### `identity`
 
@@ -147,6 +151,14 @@ On prepare, each resource gets:
 
 An alias that collides with an existing tool/skill **id** or another alias is an **`AliasCollision`** error.
 
+**MCP declarations (`resources.mcp`).** Each entry's `path` names a JSON file
+that must parse into hya's `McpServerConfig` shape — a stdio server
+`{"command": [...], "env": {...}, "timeout_ms": N}` or a remote server
+`{"url": "...", "transport": "http" | "sse" | "stdio"}` (unknown fields, blank
+command arguments, and files declaring neither a command nor a url are
+rejected). The declaration is validated and shipped in the prepared catalog;
+the runtime does **not** spawn bundle-declared MCP servers yet.
+
 **Skills example** (no shipped example currently includes one):
 
 ```yaml
@@ -169,6 +181,36 @@ Filesystem `SKILL.md` discovery (outside bundles) is documented in
 | --- | --- |
 | `js` | JavaScript extension resources (same `{id, path, aliases}` shape). |
 | `rust` | **Unsupported** — non-empty list fails prepare. |
+| `process` | The one optional out-of-process extension declaration: `{ kind, command }` where `kind` is `rust`, `bun`, or `claude` and `command` is the argv to spawn (non-empty, no blank arguments). Declared and validated this phase; the unified spawn path lands in a later phase. |
+
+### Schema extensions (`schemas:`)
+
+An AgentBundle or WorkflowBundle may declare external URI-scheme extensions —
+`scheme://…` handles served by one of the bundle's own tools through the
+harness `read` (and, when `writable: true`, `write`) tools:
+
+```yaml
+schemas:
+  - scheme: db
+    tool: query        # bundle-local id of the owning tool (resources.tools)
+    writable: false    # omit for read-only schemes (the default)
+```
+
+Rules enforced at prepare:
+
+- `scheme` is a `[a-zA-Z0-9_-]` token of at least two characters without the
+  `__` separator; the internal families `artifact`, `skill`, and `local` are
+  reserved and can never be declared.
+- `tool` must name a tool the bundle actually declares; a scheme may be
+  declared at most once per bundle.
+- Declarations are emitted sorted by scheme in the prepared catalog document.
+
+At runtime the published scheme table resolves cross-source contention the way
+bare-name masking does (the lexicographically greater source id wins), the
+chain of claimants stays queryable via `bundle schemas` and
+`GET /v1/runtime/schemas` (see [configuration](configuration.md#bundle-schemas)),
+and dispatch stays **view-scoped**: an agent's `read` dispatches `scheme://…`
+only when that agent's compiled view also resolves the owning bundle tool.
 
 ### Per-agent fields
 
@@ -474,8 +516,14 @@ Prepared catalogs use **`PREPARED_FORMAT_VERSION = 2`** and a closed payload
 union in the document shape:
 
 ```text
-{ format_version, bundles: [AgentBundle | WorkflowBundle], index[] }
+{ format_version, bundles: [AgentBundle | WorkflowBundle], index[],
+  schemas?, extensions_process? }
 ```
+
+`schemas` (per-bundle rows of `{bundle_id, schemas[]}` sorted by bundle id) and
+`extensions_process` (per-bundle rows of `{bundle_id, process}`) are document-
+level sections skipped entirely when no bundle declares any, so documents
+written before those sections keep their exact byte layout and stay decodable.
 
 **Canonical ordering** (non-canonical catalogs are rejected on decode):
 
@@ -512,10 +560,11 @@ hya bundle info -f bun.hyabundle
 hya bundle install bun.hyabundle
 hya bundle list
 hya bundle info <bundle-id>
+hya bundle schemas
 hya bundle uninstall <bundle-id>
 ```
 
-`hya bundle info -f` inspects without mutating the registry or publication. Content magic, not the suffix, selects public/private parsing after the exact lowercase command suffix check. Installed generations publish atomically, and new root turns bind the new catalog while existing turns and children retain their pinned binding.
+`hya bundle info -f` inspects without mutating the registry or publication. Content magic, not the suffix, selects public/private parsing after the exact lowercase command suffix check. Installed generations publish atomically, and new root turns bind the new catalog while existing turns and children retain their pinned binding. `bundle info` prints each bundle's declared schema extensions (`schema=… tool=… writable=…`), its `extensions.process` declaration (`process=<kind> command=…`), and its mcp entries when non-empty; `bundle schemas` lists every declared scheme across the first-party and installed bundles.
 
 A bundle installed by an older binary cannot decode. Such a row is **skipped with a named warning** rather than wedging the runtime, and `hya bundle list` marks it `unreadable (reinstall)`. Reinstall it to restore the agent.
 
@@ -523,4 +572,4 @@ A bundle installed by an older binary cannot decode. Such a row is **skipped wit
 
 ## Trust and unsupported combinations
 
-Only public Bundles are supported for activation. Private inspection reports `authentication=unverified` and `payload=opaque`; private activation is unsupported and generation-preserving. Raw Rust extensions, Bundle-declared MCP, and resource profiles without an enforceable current host mapping are unsupported. Structural and declared-digest checks do not establish publisher authenticity. There is no sandbox and no permission expansion. Do not add decryption, signatures, a marketplace, compilation on activation, native commands, arbitrary environment access, a second permission plane, or legacy agent-file discovery. Legacy definitions are not parsed, migrated, or used as a fallback.
+Only public Bundles are supported for activation. Private inspection reports `authentication=unverified` and `payload=opaque`; private activation is unsupported and generation-preserving. Raw Rust extension **lists** (`extensions.rust`), and resource profiles without an enforceable current host mapping are unsupported; the declared `extensions.process` form (kind + argv) is accepted and shipped, while runtime spawn-unification lands in a later phase. Bundle-declared MCP servers are validated declarations only — they are not spawned yet. Structural and declared-digest checks do not establish publisher authenticity. There is no sandbox and no permission expansion. Do not add decryption, signatures, a marketplace, compilation on activation, native commands, arbitrary environment access, a second permission plane, or legacy agent-file discovery. Legacy definitions are not parsed, migrated, or used as a fallback.

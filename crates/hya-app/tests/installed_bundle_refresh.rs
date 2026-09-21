@@ -295,3 +295,112 @@ async fn installed_workflow_refresh_publishes_workflow_and_agent_atomically_and_
         .expect("read root projection");
     assert!(projection.session.workflow.is_none());
 }
+
+fn schema_bundle_source() -> BundleSource {
+    BundleSource::new(
+        "schema-refresh",
+        vec![
+            SourceFile::new(
+                "bundle.yaml",
+                br#"kind: AgentBundle
+identity:
+  id: hya/schema-refresh
+  version: 1.0.0
+  publisher: hya
+schemas:
+  - scheme: db
+    tool: query
+    writable: true
+resources:
+  tools:
+    - id: query
+      path: extensions/runtime.js
+extensions:
+  js:
+    - id: runtime
+      path: extensions/runtime.js
+agent:
+  id: schema-lead
+  role: main
+  spawn_lifecycle: transient
+  resource_view:
+    allow:
+      - query
+"#,
+            ),
+            SourceFile::new("extensions/runtime.js", b"export default {}".to_vec()),
+        ],
+    )
+}
+
+/// Installed bundle `schemas:` declarations publish as Bundle runtime-source
+/// scheme claims: the winning binding names the bundle and the owning tool by
+/// its view-scoped `bundle:{id}/tool/{local}` stable id.
+#[tokio::test]
+async fn installed_bundle_schema_declarations_publish_scheme_claims() {
+    let runtime = Arc::new(RuntimeRegistry::new(
+        ToolRegistry::builtins(),
+        hya_app::builtin_agent_catalog().expect("builtin agent catalog"),
+    ));
+    let registry_path = temp_path("schema-registry.db");
+    let registry =
+        BundleRegistry::connect(registry_path.to_str().expect("registry path must be UTF-8"))
+            .await
+            .expect("connect bundle registry");
+    let refresh = Arc::new(hya_app::InstalledBundleRefresh::new(registry_path));
+    assert!(
+        !refresh
+            .refresh_if_changed(&runtime)
+            .await
+            .expect("empty refresh"),
+        "an empty registry publishes nothing"
+    );
+
+    let installed = prepare_package(schema_bundle_source()).expect("prepare schema bundle");
+    registry
+        .install(
+            &[],
+            hya_store::NamespaceInstallPolicy::DenyConflicts,
+            BundleInstallCandidate {
+                source_digest: [0x44; 32],
+                prepared_digest: installed.digest().to_owned(),
+                prepared_bytes: installed.bytes().to_vec(),
+                installed_at: 1_725_000_012,
+            },
+        )
+        .await
+        .expect("install schema bundle");
+
+    assert!(
+        refresh
+            .refresh_if_changed(&runtime)
+            .await
+            .expect("schema refresh"),
+        "an installed schema bundle advances the generation"
+    );
+    let effective = runtime.effective_schemes();
+    let binding = effective.schemes.get("db").expect("db scheme must publish");
+    assert_eq!(binding.owner(), "bundle:hya/schema-refresh");
+    assert_eq!(
+        binding.canonical_tool(),
+        "bundle:hya/schema-refresh/tool/query"
+    );
+    assert!(binding.writable());
+    assert_eq!(
+        runtime.scheme_chain("db"),
+        vec![(
+            "bundle:hya/schema-refresh".to_string(),
+            "bundle:hya/schema-refresh/tool/query".to_string(),
+        )],
+        "the scheme chain records the bundle claimant"
+    );
+
+    // Republishing an unchanged registry is a no-op.
+    assert!(
+        !refresh
+            .refresh_if_changed(&runtime)
+            .await
+            .expect("steady refresh"),
+        "an unchanged registry must not republish"
+    );
+}

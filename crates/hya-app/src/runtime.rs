@@ -2376,8 +2376,15 @@ async fn build_session_engine_with_mcp_defer(
         .collect::<BTreeMap<_, _>>();
     let defer_mcp = options.defer_mcp && !mcp.is_empty();
     let catalog = builtin_agent_catalog()?;
-    let static_sources =
-        crate::installed_bundle_refresh::static_bundle_skill_sources(catalog.bundles().as_ref())?;
+    // The startup catalog holds only the first-party bundle, so its schema
+    // rows come straight from the same prepared document.
+    let schema_rows = crate::installed_bundle_refresh::first_party_catalog()?
+        .schemas()
+        .to_vec();
+    let static_sources = crate::installed_bundle_refresh::static_bundle_skill_sources(
+        catalog.bundles().as_ref(),
+        &schema_rows,
+    )?;
     let runtime = Arc::new(RuntimeRegistry::new(registry, catalog).with_pure_skills(options.pure));
     if !static_sources.is_empty() {
         runtime.refresh(|candidate| {

@@ -139,11 +139,14 @@ pub struct RuntimeSource {
 
 /// One external URI-scheme claim a runtime source makes.
 ///
-/// `canonical_tool` must be a canonical export of the *same* source, and
-/// `scheme` a publishable token; both are enforced at publication. Claims are
-/// adjudicated across sources the way bare-name aliases are: the
-/// lexicographically greater source id wins and the table records only the
-/// winner, with the full claim chain still derivable through
+/// `canonical_tool` must be a canonical export of the *same* source — except
+/// for `Bundle` sources, whose tools are view-scoped (sidecar activation)
+/// rather than registry exports, so a bundle claims its tool by the
+/// `bundle:{id}/tool/{local}` stable id even though it exports no registry
+/// tools. `scheme` must be a publishable token; both rules are enforced at
+/// publication. Claims are adjudicated across sources the way bare-name
+/// aliases are: the lexicographically greater source id wins and the table
+/// records only the winner, with the full claim chain still derivable through
 /// [`TurnBinding::scheme_chain`].
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SourceSchema {
@@ -903,7 +906,10 @@ impl RuntimeCandidate {
     ///   never be registered (hard error);
     /// - the claimed `canonical_tool` must be a canonical export of the *same*
     ///   source (hard error), so a source can only bind schemes to tools it
-    ///   actually ships;
+    ///   actually ships. `Bundle` sources are exempt: their tools are
+    ///   view-scoped (sidecar activation) rather than registry exports, so a
+    ///   bundle claims its owning tool by its `bundle:{id}/tool/{local}`
+    ///   stable id instead;
     /// - a scheme claimed twice by one source is a declaration bug (hard
     ///   error);
     /// - a scheme claimed by two different sources resolves by the masking
@@ -961,10 +967,15 @@ impl RuntimeCandidate {
                         ));
                         continue;
                     }
-                    if source
-                        .exports
-                        .iter()
-                        .all(|export| export.canonical_name != schema.canonical_tool)
+                    // Bundle sources keep their tools view-scoped (sidecar
+                    // activation), so their schema claims name the owning
+                    // tool by its `bundle:{id}/tool/{local}` stable id rather
+                    // than a registry export.
+                    if source.id.kind() != RuntimeSourceKind::Bundle
+                        && source
+                            .exports
+                            .iter()
+                            .all(|export| export.canonical_name != schema.canonical_tool)
                     {
                         conflicts.push(format!(
                             "source {label}: schema `{scheme}` claims tool `{}` which it does \
@@ -7060,6 +7071,125 @@ agent:
         assert!(
             owner.references().is_empty(),
             "the owner tool must never be invoked from a view it is not in"
+        );
+    }
+
+    fn bundle_scheme_source(bundle_id: &str, scheme: &str, canonical_tool: &str) -> RuntimeSource {
+        RuntimeSource::new(
+            RuntimeSourceId::bundle(bundle_id),
+            [7; 32],
+            Arc::new(()),
+            Vec::new(),
+        )
+        .with_schemas(vec![SourceSchema {
+            scheme: scheme.to_string(),
+            canonical_tool: canonical_tool.to_string(),
+            writable: false,
+        }])
+    }
+
+    /// A Bundle source exports no registry tools, so its schema claim names the
+    /// owning tool by its view-scoped stable id; publication must still admit it.
+    #[test]
+    fn bundle_source_schema_claim_publishes_without_registry_exports() {
+        let catalog = Arc::new(
+            TestCatalog::from_prepared(&[bundle_with_agent(
+                "hya/vecdb",
+                agent("vecdb-lead", ResourceView::default()),
+                Vec::new(),
+            )])
+            .unwrap(),
+        );
+        let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
+        registry
+            .refresh(|candidate| {
+                candidate.replace_sources_of_kind(
+                    RuntimeSourceKind::Bundle,
+                    vec![bundle_scheme_source(
+                        "hya/vecdb",
+                        "db",
+                        "bundle:hya/vecdb/tool/query",
+                    )],
+                )
+            })
+            .expect("a bundle schema claim on its own stable-id tool must publish");
+
+        let binding = registry
+            .bind_turn(&PathBuf::from("/tmp/hya-bundle-scheme"))
+            .unwrap();
+        let winner = binding.schemes().get("db").expect("scheme must resolve");
+        assert_eq!(winner.owner(), "bundle:hya/vecdb");
+        assert_eq!(winner.canonical_tool(), "bundle:hya/vecdb/tool/query");
+        assert_eq!(
+            binding.scheme_chain("db"),
+            vec![(
+                "bundle:hya/vecdb".to_string(),
+                "bundle:hya/vecdb/tool/query".to_string(),
+            )],
+            "the chain lists the bundle claimant with its stable-id tool"
+        );
+    }
+
+    /// A bundle agent whose view selects both the owner tool and the scheme
+    /// reads `scheme://` handles through the view's own sidecar tool.
+    #[test]
+    fn bundle_agent_view_with_sidecar_owner_reads_registered_scheme() {
+        let view = ResourceView {
+            allow: vec!["query".to_string(), "harness:tool/read".to_string()],
+            deny: Vec::new(),
+            aliases: BTreeMap::new(),
+            namespace: None,
+        };
+        let mut bundle = bundle_with_agent("hya/vecdb", agent("vecdb-lead", view), Vec::new());
+        bundle.tools.push(PreparedResource {
+            local_id: "query".to_string(),
+            stable_id: "bundle:hya/vecdb/tool/query".to_string(),
+            source_path: "extensions/runtime.js".to_string(),
+            digest: "test-only".to_string(),
+            content: "export default {}".to_string(),
+            aliases: Vec::new(),
+        });
+        let catalog = Arc::new(TestCatalog::from_prepared(&[bundle]).unwrap());
+        let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
+        registry
+            .refresh(|candidate| {
+                candidate.replace_sources_of_kind(
+                    RuntimeSourceKind::Bundle,
+                    vec![bundle_scheme_source(
+                        "hya/vecdb",
+                        "db",
+                        "bundle:hya/vecdb/tool/query",
+                    )],
+                )
+            })
+            .expect("the bundle claim must publish");
+
+        let workdir = PathBuf::from("/tmp/hya-bundle-scheme-dispatch");
+        let binding = registry.bind_turn(&workdir).unwrap();
+        let policy = binding.agent_resource_policy("vecdb-lead").unwrap();
+        let owner = ReferenceRecordingTool::new("bundle:hya/vecdb/tool/query");
+        let sidecar = ResolvedTool {
+            tool: owner.clone(),
+            permission: ToolPermission::Tool,
+        };
+        let compiled = binding
+            .compile_agent_resources_with_sidecar_tools(&policy, &[sidecar])
+            .unwrap();
+
+        let ctx = dispatch_ctx(&workdir);
+        let read = compiled.resolve_tool("read").unwrap();
+        let result =
+            futures::executor::block_on(read.tool.execute(&ctx, json!({ "path": "db://rows/42" })))
+                .unwrap();
+        assert_eq!(
+            result.get("output").and_then(Value::as_str),
+            Some("owner body"),
+            "read over the registered scheme dispatches the view's sidecar tool"
+        );
+        assert_eq!(
+            owner.references(),
+            vec!["db://rows/42".to_string()],
+            "the owner receives the full handle text as its reference"
         );
     }
 }

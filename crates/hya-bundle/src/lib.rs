@@ -14,8 +14,10 @@ pub use catalog::{BundleCatalog, ExportKind};
 pub use error::BundleError;
 pub use model::{
     AgentRole, BundleIdentity, ModelPolicy, PreparedAgent, PreparedAgentBundle,
-    PreparedBundleIndex, PreparedBundleKind, PreparedCatalog, PreparedInstallableBundle,
-    PreparedResource, PreparedWorkflow, PreparedWorkflowBundle, ResourceView, SpawnLifecycle,
+    PreparedBundleIndex, PreparedBundleKind, PreparedBundleProcess, PreparedBundleSchemas,
+    PreparedCatalog, PreparedInstallableBundle, PreparedProcessExtension, PreparedProcessKind,
+    PreparedResource, PreparedSchema, PreparedWorkflow, PreparedWorkflowBundle, ResourceView,
+    SpawnLifecycle,
 };
 pub use package::{
     PackageFormat, PackageInspection, PrivatePackageAuthentication, PrivatePackageInspection,
