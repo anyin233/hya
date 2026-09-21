@@ -424,3 +424,23 @@ async fn stalled_iterations_stop_the_goal_run() {
 
     assert_eq!(outcome, RunOutcome::Stalled { iterations: 3 });
 }
+
+#[test]
+fn goal_contract_validation_accepts_freeform_and_rejects_partial_structure() {
+    use hya_core::validate_goal_condition;
+
+    // Free-form conditions stay allowed.
+    assert!(validate_goal_condition("make the tests pass").is_ok());
+
+    // A structured condition missing most sections is rejected.
+    let partial = "## Objective\nShip it.\n## Boundaries\nrepo only.\n";
+    assert!(validate_goal_condition(partial).is_err());
+
+    // Full contract without an executable verification signal is rejected.
+    let no_signal = "## Objective\nShip it.\n## Success criteria\nall green.\n## Verification\nrun the suite somehow.\n## Boundaries\nrepo only.\n## Stop conditions\ntwo failures.\n";
+    assert!(validate_goal_condition(no_signal).is_err());
+
+    // Full contract with a command passes.
+    let good = "## Objective\nShip it.\n## Success criteria\nall green.\n## Verification\n`cargo test`\n## Boundaries\nrepo only.\n## Stop conditions\ntwo failures.\n";
+    assert!(validate_goal_condition(good).is_ok());
+}

@@ -212,6 +212,77 @@ impl IterationDriver {
     }
 }
 
+/// Goal-condition contract sections (oh-my-pi `/guided-goal` shape): when an
+/// author structures a goal at all, these are the expected `##` sections.
+const GOAL_CONTRACT_SECTIONS: [&str; 5] = [
+    "objective",
+    "success criteria",
+    "verification",
+    "boundaries",
+    "stop conditions",
+];
+
+/// Validate the structural goal-condition contract (design §4.5, adoption ④).
+///
+/// Free-form conditions stay allowed — the checks apply only when the author
+/// already uses `##` section structure:
+/// - at least four of the five contract sections must be present (a condition
+///   that starts the structure but omits most of it is a typo, not a contract);
+/// - the `verification` section, when present, must contain an executable
+///   signal: a fenced code block, a backtick-quoted command, or a `$ ` line.
+///
+/// # Errors
+/// Returns [`CoreError::Invalid`] with the missing sections / missing
+/// verification signal.
+pub fn validate_goal_condition(condition: &str) -> Result<(), CoreError> {
+    let section_line = |section: &str| {
+        condition.lines().any(|line| {
+            let trimmed = line.trim_start();
+            trimmed.starts_with("## ")
+                && trimmed[3..]
+                    .trim()
+                    .to_ascii_lowercase()
+                    .starts_with(section)
+        })
+    };
+    let present = GOAL_CONTRACT_SECTIONS
+        .iter()
+        .filter(|section| section_line(section))
+        .count();
+    if present == 0 {
+        return Ok(());
+    }
+    if present < 4 {
+        return Err(CoreError::Invalid(format!(
+            "structured goal condition carries only {present}/5 contract sections              (objective, success criteria, verification, boundaries, stop conditions);              either complete the structure or drop the `##` headers"
+        )));
+    }
+    let verification = condition
+        .lines()
+        .skip_while(|line| {
+            !line
+                .trim_start()
+                .to_ascii_lowercase()
+                .starts_with("## verification")
+        })
+        .skip(1)
+        .take_while(|line| !line.trim_start().starts_with("## "))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let has_executable_signal = verification.contains("```")
+        || verification.contains('`')
+        || verification
+            .lines()
+            .any(|line| line.trim_start().starts_with("$ "));
+    if !has_executable_signal {
+        return Err(CoreError::Invalid(
+            "structured goal condition has a `## Verification` section without an              executable signal; add the exact command (fenced block, backticks, or a              `$ ` line)"
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
 /// Wrap-up directive for the [`RunOutcome::BudgetLimited`] pass: no new
 /// substantive work, hand off state instead.
 #[must_use]
