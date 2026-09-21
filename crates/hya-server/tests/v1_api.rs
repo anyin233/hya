@@ -595,3 +595,19 @@ async fn v1_pty_lifecycle_creates_lists_tokens_and_deletes() {
     assert_eq!(status, StatusCode::NOT_FOUND);
     assert_eq!(body["error"]["code"], json!("not_found"));
 }
+
+#[tokio::test]
+async fn runtime_schemas_lists_the_snapshot_scheme_table() {
+    let app = router(state().await);
+    let (status, body) = send(app, Method::GET, "/v1/runtime/schemas", Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["schemas"],
+        json!([]),
+        "a runtime without scheme sources publishes an empty table: {body}"
+    );
+    assert!(
+        body["generation"].is_u64(),
+        "the response is generation-tagged: {body}"
+    );
+}

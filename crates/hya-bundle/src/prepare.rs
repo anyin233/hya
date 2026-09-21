@@ -6,9 +6,9 @@ use sha2::{Digest, Sha256};
 
 use crate::error::BundleError;
 use crate::model::{
-    BundleIdentity, PreparedAgent, PreparedAgentBundle, PreparedBundleIndex, PreparedCatalog,
-    PreparedDocument, PreparedDocumentOwned, PreparedInstallableBundle, PreparedResource,
-    PreparedWorkflow, PreparedWorkflowBundle,
+    BundleIdentity, PreparedAgent, PreparedAgentBundle, PreparedBundleIndex, PreparedBundleSchemas,
+    PreparedCatalog, PreparedDocument, PreparedDocumentOwned, PreparedInstallableBundle,
+    PreparedResource, PreparedSchema, PreparedWorkflow, PreparedWorkflowBundle,
 };
 use crate::source::{
     BundleSource, ParsedSource, SourceAgent, SourceAgentManifest, SourceExtensions, SourceFile,
@@ -47,12 +47,20 @@ fn prepare_sources(sources: Vec<BundleSource>) -> Result<PreparedCatalog, Bundle
     let mut bundle_ids = BTreeSet::new();
     let mut stable_agent_ids = BTreeSet::new();
     let mut bundles = Vec::with_capacity(parsed.len());
+    let mut schemas = Vec::new();
     for source in parsed {
         let bundle_id = manifest_identity(&source.manifest).id.clone();
         if !bundle_ids.insert(bundle_id.clone()) {
             return Err(BundleError::DuplicateBundleId { bundle_id });
         }
-        bundles.push(prepare_bundle(source, &mut stable_agent_ids)?);
+        let (bundle, bundle_schemas) = prepare_bundle(source, &mut stable_agent_ids)?;
+        if !bundle_schemas.is_empty() {
+            schemas.push(PreparedBundleSchemas {
+                bundle_id: bundle.identity().id.clone(),
+                schemas: bundle_schemas,
+            });
+        }
+        bundles.push(bundle);
     }
     resolve_catalog_references(&mut bundles)?;
     validate_prepared_references(&bundles)?;
@@ -62,6 +70,7 @@ fn prepare_sources(sources: Vec<BundleSource>) -> Result<PreparedCatalog, Bundle
         format_version: PREPARED_FORMAT_VERSION,
         bundles: &bundles,
         index: &index,
+        schemas: schemas.clone(),
     })
     .map_err(|error| BundleError::PreparedEncode {
         detail: error.to_string(),
@@ -70,6 +79,7 @@ fn prepare_sources(sources: Vec<BundleSource>) -> Result<PreparedCatalog, Bundle
     Ok(PreparedCatalog {
         bundles,
         index,
+        schemas,
         bytes,
         digest,
     })
@@ -118,6 +128,7 @@ impl PreparedCatalog {
             }
         }
         validate_prepared_references(&document.bundles)?;
+        validate_prepared_schema_rows(&document.bundles, &document.schemas)?;
         let expected_index = build_index(&document.bundles);
         if expected_index != document.index {
             return Err(BundleError::PreparedIndexMismatch);
@@ -125,6 +136,7 @@ impl PreparedCatalog {
         Ok(Self {
             bundles: document.bundles,
             index: document.index,
+            schemas: document.schemas,
             bytes: bytes.to_vec(),
             digest: expected_digest.to_string(),
         })
@@ -292,6 +304,112 @@ fn validate_prepared_resource_reference(
         kind: "resource".to_string(),
         reference: reference.to_string(),
     })
+}
+
+/// Reserved internal handle schemes a manifest can never claim.
+const INTERNAL_SCHEMES: [&str; 3] = ["artifact", "skill", "local"];
+
+/// Validate one declared schema extension against the bundle's prepared tools.
+///
+/// The scheme must be a `[a-zA-Z0-9_-]` token of at least two characters
+/// without the `__` separator and must not name an internal handle family; the
+/// tool reference must be a tool the bundle actually declares. Sorting is
+/// enforced so the prepared document is deterministic.
+fn validate_declared_schemas(
+    bundle_id: &str,
+    schemas: &[crate::source::SourceSchema],
+    tools: &[PreparedResource],
+) -> Result<Vec<PreparedSchema>, BundleError> {
+    let invalid = |detail: String| BundleError::InvalidManifest {
+        source_name: bundle_id.to_string(),
+        detail,
+    };
+    let tool_ids: BTreeSet<&str> = tools.iter().map(|tool| tool.local_id.as_str()).collect();
+    let mut seen = BTreeSet::new();
+    let mut prepared = Vec::with_capacity(schemas.len());
+    for schema in schemas {
+        if INTERNAL_SCHEMES.contains(&schema.scheme.as_str()) {
+            return Err(invalid(format!(
+                "schemas: scheme `{}` is reserved for internal handles and cannot be declared",
+                schema.scheme
+            )));
+        }
+        if !is_valid_scheme_token(&schema.scheme) {
+            return Err(invalid(format!(
+                "schemas: scheme `{}` must be a `[a-zA-Z0-9_-]` token of at least two \
+                 characters without `__`",
+                schema.scheme
+            )));
+        }
+        if !seen.insert(schema.scheme.as_str()) {
+            return Err(invalid(format!(
+                "schemas: scheme `{}` is declared more than once",
+                schema.scheme
+            )));
+        }
+        if !tool_ids.contains(schema.tool.as_str()) {
+            return Err(invalid(format!(
+                "schemas: scheme `{}` references tool `{}` which the bundle does not declare",
+                schema.scheme, schema.tool
+            )));
+        }
+        prepared.push(PreparedSchema {
+            scheme: schema.scheme.clone(),
+            tool: schema.tool.clone(),
+            writable: schema.writable,
+        });
+    }
+    prepared.sort_by(|left, right| left.scheme.cmp(&right.scheme));
+    Ok(prepared)
+}
+
+/// Whether `scheme` is a publishable token: at least two characters of
+/// `[a-zA-Z0-9_-]` and no `__` separator.
+fn is_valid_scheme_token(scheme: &str) -> bool {
+    scheme.len() >= 2
+        && !scheme.contains("__")
+        && scheme
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+}
+
+/// Validate the document-level schema section of a decoded prepared catalog:
+/// rows strictly sorted by bundle id, every row naming a bundle in the
+/// document, and every row's declarations valid against that bundle's tools.
+fn validate_prepared_schema_rows(
+    bundles: &[PreparedInstallableBundle],
+    rows: &[PreparedBundleSchemas],
+) -> Result<(), BundleError> {
+    if !is_strictly_sorted(rows.iter().map(|row| row.bundle_id.as_str())) {
+        return Err(BundleError::NonCanonicalPreparedCatalog);
+    }
+    for row in rows {
+        let Some(bundle) = bundles
+            .iter()
+            .find(|bundle| bundle.identity().id == row.bundle_id)
+        else {
+            return Err(BundleError::NonCanonicalPreparedCatalog);
+        };
+        if !is_strictly_sorted(row.schemas.iter().map(|schema| schema.scheme.as_str())) {
+            return Err(BundleError::NonCanonicalPreparedCatalog);
+        }
+        let prepared = validate_declared_schemas(
+            &row.bundle_id,
+            &row.schemas
+                .iter()
+                .map(|schema| crate::source::SourceSchema {
+                    scheme: schema.scheme.clone(),
+                    tool: schema.tool.clone(),
+                    writable: schema.writable,
+                })
+                .collect::<Vec<_>>(),
+            bundle.tools(),
+        )?;
+        if prepared != row.schemas {
+            return Err(BundleError::NonCanonicalPreparedCatalog);
+        }
+    }
+    Ok(())
 }
 
 fn resources_are_canonical(
@@ -766,7 +884,7 @@ fn split_markdown(content: &str) -> Option<(&str, &str)> {
 fn prepare_bundle(
     source: ParsedSource,
     stable_agent_ids: &mut BTreeSet<String>,
-) -> Result<PreparedInstallableBundle, BundleError> {
+) -> Result<(PreparedInstallableBundle, Vec<PreparedSchema>), BundleError> {
     match source.manifest {
         SourceManifest::Agent(manifest) => prepare_agent_bundle(
             source.files,
@@ -853,13 +971,14 @@ fn prepare_agent_bundle(
     markdown_prompt: Option<String>,
     manifest: SourceAgentManifest,
     stable_agent_ids: &mut BTreeSet<String>,
-) -> Result<PreparedInstallableBundle, BundleError> {
+) -> Result<(PreparedInstallableBundle, Vec<PreparedSchema>), BundleError> {
     let bundle_id = manifest.identity.id.clone();
     validate_identity(&bundle_id, &manifest.identity.version)?;
     let namespace = resolve_namespace(&bundle_id, &manifest.identity, &manifest.namespace)?;
     validate_unsupported(&bundle_id, &manifest.resources, &manifest.extensions)?;
     let (tools, skills, hooks, extensions) =
         prepare_resource_sets(&bundle_id, &files, manifest.resources, manifest.extensions)?;
+    let schemas = validate_declared_schemas(&bundle_id, &manifest.schemas, &tools)?;
     let agent = prepare_agent(
         &bundle_id,
         &files,
@@ -881,14 +1000,14 @@ fn prepare_agent_bundle(
         extensions,
     }));
     set_bundle_digest(&mut bundle)?;
-    Ok(bundle)
+    Ok((bundle, schemas))
 }
 
 fn prepare_workflow_bundle(
     files: BTreeMap<String, Vec<u8>>,
     manifest: SourceWorkflowManifest,
     stable_agent_ids: &mut BTreeSet<String>,
-) -> Result<PreparedInstallableBundle, BundleError> {
+) -> Result<(PreparedInstallableBundle, Vec<PreparedSchema>), BundleError> {
     let bundle_id = manifest.identity.id.clone();
     validate_identity(&bundle_id, &manifest.identity.version)?;
     let namespace = resolve_namespace(&bundle_id, &manifest.identity, &manifest.namespace)?;
@@ -933,6 +1052,7 @@ fn prepare_workflow_bundle(
         manifest.resources,
         manifest.extensions,
     )?;
+    let schemas = validate_declared_schemas(&manifest.identity.id, &manifest.schemas, &tools)?;
     let mut source_agents = manifest.agents;
     for source_agent in &source_agents {
         if let Some(prompt) = &source_agent.prompt {
@@ -989,7 +1109,7 @@ fn prepare_workflow_bundle(
         extensions,
     }));
     set_bundle_digest(&mut bundle)?;
-    Ok(bundle)
+    Ok((bundle, schemas))
 }
 
 /// Prepared resource vectors in tool, Skill, hook, and extension order.

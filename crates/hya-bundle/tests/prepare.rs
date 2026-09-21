@@ -858,3 +858,172 @@ fn workflow_bundle_packages_stage_verifier_and_transitive_helper_agents() {
         Some("closure")
     );
 }
+
+/// Build one AgentBundle source declaring one JS tool and optional schemas.
+fn schema_bundle_source(schemas_block: Option<&str>, tools: bool) -> BundleSource {
+    let manifest = format!(
+        r#"kind: AgentBundle
+identity:
+  id: hya/schema-demo
+  version: 1.0.0
+  publisher: hya
+{schemas_block}resources:
+  tools:
+    - id: query
+      path: extensions/runtime.js
+extensions:
+  js:
+    - id: runtime
+      path: extensions/runtime.js
+agent:
+  id: lead
+  role: main
+  spawn_lifecycle: transient
+  resource_view:
+    allow:
+      - query
+      - runtime
+"#,
+        schemas_block = schemas_block.unwrap_or_default(),
+    );
+    let mut files = vec![
+        SourceFile::new("bundle.yaml", manifest.into_bytes()),
+        SourceFile::new("extensions/runtime.js", b"export default {}".to_vec()),
+    ];
+    if !tools {
+        files.pop();
+    }
+    BundleSource::new("schema-demo", files)
+}
+
+fn panic_on_prepare_error(error: BundleError) -> ! {
+    panic!("valid schemas must prepare: {error:?}");
+}
+
+#[test]
+fn manifest_schemas_prepare_emit_and_round_trip() {
+    let prepared = match prepare_package(schema_bundle_source(
+        Some(
+            "schemas:\n  - scheme: db\n    tool: query\n    writable: false\n  - scheme: kv\n    tool: query\n    writable: true\n",
+        ),
+        true,
+    )) {
+        Ok(prepared) => prepared,
+        Err(error) => panic_on_prepare_error(error),
+    };
+
+    let [bundle] = prepared.bundles() else {
+        panic!("one bundle expected");
+    };
+    assert_eq!(bundle.identity().id, "hya/schema-demo");
+    let rows = prepared.schemas();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].bundle_id, "hya/schema-demo");
+    assert_eq!(
+        rows[0]
+            .schemas
+            .iter()
+            .map(|schema| (
+                schema.scheme.as_str(),
+                schema.tool.as_str(),
+                schema.writable
+            ))
+            .collect::<Vec<_>>(),
+        [("db", "query", false), ("kv", "query", true)],
+        "declared schemas are emitted sorted by scheme with their writable flags"
+    );
+    assert_eq!(prepared.bundle_schemas("hya/schema-demo").len(), 2);
+    assert!(prepared.bundle_schemas("hya/other").is_empty());
+
+    // The section round-trips through the canonical document bytes.
+    let decoded = match PreparedCatalog::decode(prepared.bytes(), prepared.digest()) {
+        Ok(decoded) => decoded,
+        Err(error) => panic!("schema declarations must survive decode: {error:?}"),
+    };
+    assert_eq!(decoded.schemas(), rows);
+
+    // A bundle without schemas keeps the document section absent entirely.
+    let plain = match prepare_package(schema_bundle_source(None, true)) {
+        Ok(plain) => plain,
+        Err(error) => panic_on_prepare_error(error),
+    };
+    assert!(plain.schemas().is_empty());
+    let document = match serde_json::from_slice::<serde_json::Value>(plain.bytes()) {
+        Ok(document) => document,
+        Err(error) => panic!("prepared bytes must be JSON: {error}"),
+    };
+    assert!(
+        document.get("schemas").is_none(),
+        "the schemas section must be skipped when empty (v2-compatible bytes)"
+    );
+    match PreparedCatalog::decode(plain.bytes(), plain.digest()) {
+        Ok(_) => {}
+        Err(error) => panic!("plain doc stays decodable: {error:?}"),
+    }
+}
+
+#[test]
+fn manifest_schemas_missing_tool_reference_is_rejected() {
+    let error = match prepare_package(schema_bundle_source(
+        Some("schemas:\n  - scheme: db\n    tool: nosuch\n    writable: false\n"),
+        true,
+    )) {
+        Err(error) => error,
+        Ok(_) => panic!("schemas must reference declared tools"),
+    };
+    let BundleError::InvalidManifest {
+        source_name,
+        detail,
+    } = error
+    else {
+        panic!("expected an invalid-manifest error: {error:?}");
+    };
+    assert_eq!(source_name, "hya/schema-demo");
+    assert!(
+        detail.contains("nosuch") && detail.contains("does not declare"),
+        "the diagnostic must name the missing tool: {detail}"
+    );
+}
+
+#[test]
+fn manifest_schemas_invalid_and_internal_scheme_tokens_are_rejected() {
+    for scheme in ["local", "artifact", "d", "has__sep", "no.dot"] {
+        let block = format!("schemas:\n  - scheme: {scheme}\n    tool: query\n");
+        let error = match prepare_package(schema_bundle_source(Some(&block), true)) {
+            Err(error) => error,
+            Ok(_) => panic!("invalid scheme tokens must be rejected: {scheme}"),
+        };
+        let BundleError::InvalidManifest {
+            source_name,
+            detail,
+        } = error
+        else {
+            panic!("expected an invalid-manifest error for {scheme}: {error:?}");
+        };
+        assert_eq!(source_name, "hya/schema-demo");
+        assert!(
+            detail.contains(scheme),
+            "the diagnostic must name the scheme: {detail}"
+        );
+    }
+}
+
+#[test]
+fn manifest_schemas_duplicate_scheme_is_rejected() {
+    let error = match prepare_package(schema_bundle_source(
+        Some(
+            "schemas:\n  - scheme: db\n    tool: query\n  - scheme: db\n    tool: query\n    writable: true\n",
+        ),
+        true,
+    )) {
+        Err(error) => error,
+        Ok(_) => panic!("one scheme may be declared once per bundle"),
+    };
+    let BundleError::InvalidManifest { detail, .. } = error else {
+        panic!("expected an invalid-manifest error: {error:?}");
+    };
+    assert!(
+        detail.contains("more than once"),
+        "the diagnostic must name the duplicate: {detail}"
+    );
+}

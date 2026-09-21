@@ -15,11 +15,16 @@
 mod artifact;
 mod plane;
 mod reference;
+mod registry;
 mod router;
 
 pub use artifact::{ArtifactHook, ArtifactId, ArtifactMeta, ArtifactStore};
 pub use plane::ArtifactPlane;
 pub use reference::{HandleRef, HandleScheme, Projection};
+pub use registry::{
+    SchemeBinding, SchemeDispatch, SchemeHandler, SchemeReadTool, SchemeRegistry,
+    SchemeRegistryError, SchemeWriteTool,
+};
 pub use router::{HandleContent, HandleRouter};
 
 /// Why a handle could not be parsed or resolved.
@@ -65,6 +70,13 @@ pub enum HandleError {
     /// as unknown would send a caller looking for a typo.
     #[error("{0}:// is read-only")]
     NotWritable(HandleScheme),
+    /// A registered external scheme has not declared write access.
+    ///
+    /// The string form mirrors [`HandleError::NotWritable`]; the payload is the
+    /// scheme token itself because external schemes are not part of the closed
+    /// [`HandleScheme`] set.
+    #[error("{0}:// is read-only")]
+    SchemeNotWritable(String),
     /// Storage or retrieval I/O failure.
     #[error("handle io: {0}")]
     Io(#[from] std::io::Error),

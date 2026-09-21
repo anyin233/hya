@@ -9,6 +9,10 @@ use hya_proto::{ConfigGeneration, ModelRef, ToolName, ToolSchema};
 use hya_tool::{
     DuplicateName, NamedTool, PermissionPlane, ResolvedTool, SkillCatalogEntry, SkillPlane, Tool,
     ToolPermission, ToolRegistry, ToolRegistrySnapshot, discover_skills_with_builtins,
+    handle::{
+        SchemeBinding, SchemeDispatch, SchemeHandler, SchemeReadTool, SchemeRegistry,
+        SchemeWriteTool,
+    },
 };
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -41,6 +45,11 @@ type AgentModelConfigurations = watch::Sender<AgentModelConfigurationSnapshot>;
 /// publication time and immutable per snapshot.
 type SnapshotMasks = Arc<BTreeMap<String, String>>;
 
+/// The published scheme table: registered external URI scheme → the winning
+/// source's binding. Mirrors [`SnapshotMasks`]: derived from the published
+/// source claims at publication time and immutable per snapshot.
+type SnapshotSchemes = Arc<BTreeMap<String, SchemeBinding>>;
+
 /// A complete immutable configuration view. Turns retain its `Arc` for their
 /// whole lifetime, so publication cannot alter an in-flight lookup.
 struct RuntimeSnapshot {
@@ -51,6 +60,7 @@ struct RuntimeSnapshot {
     skills: BTreeMap<PathBuf, Arc<Vec<SkillCatalogEntry>>>,
     sources: BTreeMap<RuntimeSourceId, RuntimeSource>,
     masks: SnapshotMasks,
+    schemes: SnapshotSchemes,
 }
 
 /// The sole owner and publisher of the effective tool/skill/MCP runtime view.
@@ -76,6 +86,7 @@ pub struct RuntimeCandidate {
     skills: BTreeMap<PathBuf, Arc<Vec<SkillCatalogEntry>>>,
     sources: BTreeMap<RuntimeSourceId, RuntimeSource>,
     masks: BTreeMap<String, String>,
+    schemes: BTreeMap<String, SchemeBinding>,
 }
 
 /// Kind of runtime contribution source.
@@ -123,6 +134,25 @@ pub struct RuntimeSource {
     exports: Vec<RuntimeSourceExport>,
     skills: Vec<RuntimeSourceSkill>,
     resources: Arc<BTreeMap<String, Value>>,
+    schemas: Vec<SourceSchema>,
+}
+
+/// One external URI-scheme claim a runtime source makes.
+///
+/// `canonical_tool` must be a canonical export of the *same* source, and
+/// `scheme` a publishable token; both are enforced at publication. Claims are
+/// adjudicated across sources the way bare-name aliases are: the
+/// lexicographically greater source id wins and the table records only the
+/// winner, with the full claim chain still derivable through
+/// [`TurnBinding::scheme_chain`].
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SourceSchema {
+    /// The external URI scheme (e.g. `db` for `db://x/y`).
+    pub scheme: String,
+    /// Canonical name of this source's tool that serves the scheme.
+    pub canonical_tool: String,
+    /// Whether the scheme accepts write dispatch in addition to reads.
+    pub writable: bool,
 }
 
 /// One Skill contribution materialized for a published runtime source.
@@ -164,6 +194,15 @@ pub struct RuntimeEffectiveManifest {
     pub generation: ConfigGeneration,
     /// Sources keyed by id.
     pub sources: BTreeMap<RuntimeSourceId, RuntimeSourceManifest>,
+}
+
+/// Generation-tagged view of the published scheme table.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RuntimeEffectiveSchemes {
+    /// Config generation of the active snapshot.
+    pub generation: ConfigGeneration,
+    /// Registered external URI scheme → the winning source's binding.
+    pub schemes: BTreeMap<String, SchemeBinding>,
 }
 
 /// One admitted turn's immutable runtime binding.
@@ -295,6 +334,11 @@ pub enum RuntimeRefreshError {
     /// attempt surfaces all of them.
     #[error("contributed source names rejected:\n{0}")]
     NamingConflicts(String),
+    /// One or more contributed source schema claims are invalid; the report
+    /// lists every violation grouped by source so a single publication attempt
+    /// surfaces all of them.
+    #[error("contributed source schemas rejected:\n{0}")]
+    SchemaConflicts(String),
     /// Config generation counter overflowed.
     #[error("configuration generation exhausted")]
     GenerationExhausted,
@@ -330,6 +374,7 @@ impl RuntimeRegistry {
                 skills: BTreeMap::new(),
                 sources: BTreeMap::new(),
                 masks: Arc::new(BTreeMap::new()),
+                schemes: Arc::new(BTreeMap::new()),
             })),
             agent_model_preferences: watch::Sender::new(Arc::new(BTreeMap::new())),
             agent_model_configuration: watch::Sender::new(Arc::new(
@@ -455,6 +500,7 @@ impl RuntimeRegistry {
             skills: current.skills.clone(),
             sources: current.sources.clone(),
             masks: Arc::clone(&current.masks),
+            schemes: Arc::clone(&current.schemes),
         });
         *self
             .active
@@ -514,6 +560,31 @@ impl RuntimeRegistry {
             .clone()
     }
 
+    #[must_use]
+    /// Generation-tagged scheme table for diagnostics/UI.
+    pub fn effective_schemes(&self) -> RuntimeEffectiveSchemes {
+        let active = self.active();
+        RuntimeEffectiveSchemes {
+            generation: active.generation,
+            schemes: active.schemes.as_ref().clone(),
+        }
+    }
+
+    /// Every claimant of `scheme` in the active snapshot, ordered by ascending
+    /// source id with the active provider last. See
+    /// [`TurnBinding::scheme_chain`] for the binding-level accessor.
+    #[must_use]
+    pub fn scheme_chain(&self, scheme: &str) -> Vec<(String, String)> {
+        self.active()
+            .sources
+            .values()
+            .filter_map(|source| {
+                let claim = source.schemas.iter().find(|claim| claim.scheme == scheme)?;
+                Some((source.id.to_string(), claim.canonical_tool.clone()))
+            })
+            .collect()
+    }
+
     fn publish_candidate(
         &self,
         current: Arc<RuntimeSnapshot>,
@@ -525,6 +596,7 @@ impl RuntimeRegistry {
             skills,
             sources,
             masks,
+            schemes,
         } = candidate;
         let tools = tools.snapshot();
         let generation = current
@@ -539,6 +611,7 @@ impl RuntimeRegistry {
             skills,
             sources,
             masks: Arc::new(masks),
+            schemes: Arc::new(schemes),
         });
         *self
             .active
@@ -556,6 +629,7 @@ impl RuntimeCandidate {
             skills: snapshot.skills.clone(),
             sources: snapshot.sources.clone(),
             masks: snapshot.masks.as_ref().clone(),
+            schemes: snapshot.schemes.as_ref().clone(),
         }
     }
 
@@ -812,6 +886,132 @@ impl RuntimeCandidate {
         self.masks = masks;
     }
 
+    /// Recompute the scheme table for the candidate's retained sources after a
+    /// removal. Retained sources are pre-validated, so this cannot produce
+    /// hard conflicts.
+    fn recompute_schemes_after_removal(&mut self) {
+        let (_, schemes) = self.adjudicate_source_scheme_claims(&[]);
+        self.schemes = schemes;
+    }
+
+    /// Validate every contributed source schema claim before any mutation
+    /// happens, and derive the published scheme table:
+    ///
+    /// - the scheme must be a `[a-zA-Z0-9_-]` token of at least two characters
+    ///   without the `__` separator (hard error);
+    /// - the internal families `artifact`/`skill`/`local` are reserved and can
+    ///   never be registered (hard error);
+    /// - the claimed `canonical_tool` must be a canonical export of the *same*
+    ///   source (hard error), so a source can only bind schemes to tools it
+    ///   actually ships;
+    /// - a scheme claimed twice by one source is a declaration bug (hard
+    ///   error);
+    /// - a scheme claimed by two different sources resolves by the masking
+    ///   total order: the lexicographically GREATER source id string wins,
+    ///   approximating "the newer install wins". The table records only the
+    ///   winner; the full claim chain stays derivable through
+    ///   [`TurnBinding::scheme_chain`].
+    ///
+    /// All hard violations are reported in one grouped diagnostic.
+    fn validate_candidate_source_schemes(
+        &self,
+        sources: &[RuntimeSource],
+    ) -> Result<BTreeMap<String, SchemeBinding>, RuntimeRefreshError> {
+        let (conflicts, schemes) = self.adjudicate_source_scheme_claims(sources);
+        if conflicts.is_empty() {
+            Ok(schemes)
+        } else {
+            Err(RuntimeRefreshError::SchemaConflicts(conflicts.join("\n")))
+        }
+    }
+
+    /// Collect and adjudicate every scheme claim from the candidate sources
+    /// and the retained (non-replaced) sources. See
+    /// [`RuntimeCandidate::validate_candidate_source_schemes`] for the contract.
+    fn adjudicate_source_scheme_claims(
+        &self,
+        sources: &[RuntimeSource],
+    ) -> (Vec<String>, BTreeMap<String, SchemeBinding>) {
+        let replaced: BTreeSet<String> = sources.iter().map(|s| s.id.to_string()).collect();
+        let mut conflicts: Vec<String> = Vec::new();
+        // Scheme → claimants ordered by publication; the winner is the
+        // lexicographically greatest source id (no built-in plane exists for
+        // schemes: internal families are reserved outright).
+        let mut claims: BTreeMap<String, Vec<(String, SchemeBinding)>> = BTreeMap::new();
+
+        let record_claim =
+            |source: &RuntimeSource,
+             conflicts: &mut Vec<String>,
+             claims: &mut BTreeMap<String, Vec<(String, SchemeBinding)>>| {
+                let label = source.id.to_string();
+                let mut declared: BTreeSet<&str> = BTreeSet::new();
+                for schema in &source.schemas {
+                    let scheme = schema.scheme.as_str();
+                    if SchemeRegistry::is_internal_scheme(scheme) {
+                        conflicts.push(format!(
+                            "source {label}: internal scheme `{scheme}` is reserved and cannot \
+                         be registered"
+                        ));
+                        continue;
+                    }
+                    if !SchemeRegistry::is_valid_scheme_token(scheme) {
+                        conflicts.push(format!(
+                            "source {label}: scheme `{scheme}` must be a `[a-zA-Z0-9_-]` token \
+                         of at least two characters without `__`"
+                        ));
+                        continue;
+                    }
+                    if source
+                        .exports
+                        .iter()
+                        .all(|export| export.canonical_name != schema.canonical_tool)
+                    {
+                        conflicts.push(format!(
+                            "source {label}: schema `{scheme}` claims tool `{}` which it does \
+                         not export",
+                            schema.canonical_tool
+                        ));
+                        continue;
+                    }
+                    if !declared.insert(scheme) {
+                        conflicts.push(format!(
+                            "source {label}: scheme `{scheme}` is declared more than once"
+                        ));
+                        continue;
+                    }
+                    claims.entry(scheme.to_string()).or_default().push((
+                        label.clone(),
+                        SchemeBinding::new(
+                            label.clone(),
+                            schema.canonical_tool.clone(),
+                            schema.writable,
+                        ),
+                    ));
+                }
+            };
+
+        for (id, source) in &self.sources {
+            if replaced.contains(&id.to_string()) {
+                continue;
+            }
+            record_claim(source, &mut conflicts, &mut claims);
+        }
+        for source in sources {
+            record_claim(source, &mut conflicts, &mut claims);
+        }
+
+        // Adjudication: between two sources the lexicographically greater
+        // source id string wins, mirroring the bare-name mask order.
+        let schemes = claims
+            .into_iter()
+            .filter_map(|(scheme, mut claimants)| {
+                claimants.sort_by(|left, right| left.0.cmp(&right.0));
+                claimants.pop().map(|(_, binding)| (scheme, binding))
+            })
+            .collect();
+        (conflicts, schemes)
+    }
+
     /// Insert or replace MCP/plugin sources on this candidate.
     pub fn upsert_sources(
         &mut self,
@@ -830,6 +1030,7 @@ impl RuntimeCandidate {
             .map(|masks| {
                 self.masks = masks;
             })?;
+        self.schemes = self.validate_candidate_source_schemes(&sources)?;
 
         for source in &sources {
             if let Some(previous) = self.sources.remove(&source.id) {
@@ -957,6 +1158,7 @@ impl RuntimeCandidate {
             }
         }
         self.recompute_masks_after_removal();
+        self.recompute_schemes_after_removal();
     }
 
     fn replace_skills(&mut self, workdir: &Path, skills: Vec<SkillCatalogEntry>) {
@@ -1121,6 +1323,7 @@ impl RuntimeSource {
             exports,
             skills: Vec::new(),
             resources: Arc::new(BTreeMap::new()),
+            schemas: Vec::new(),
         }
     }
 
@@ -1128,6 +1331,13 @@ impl RuntimeSource {
     #[must_use]
     pub fn with_skills(mut self, skills: Vec<RuntimeSourceSkill>) -> Self {
         self.skills = skills;
+        self
+    }
+
+    /// Attach external URI-scheme claims to the source.
+    #[must_use]
+    pub fn with_schemas(mut self, schemas: Vec<SourceSchema>) -> Self {
+        self.schemas = schemas;
         self
     }
 
@@ -1143,6 +1353,12 @@ impl RuntimeSource {
     pub fn id(&self) -> &RuntimeSourceId {
         &self.id
     }
+
+    #[must_use]
+    /// The external URI-scheme claims this source makes.
+    pub fn schemas(&self) -> &[SourceSchema] {
+        &self.schemas
+    }
 }
 
 fn sources_match(
@@ -1155,6 +1371,7 @@ fn sources_match(
                 left.declaration_digest == right.declaration_digest
                     && Arc::ptr_eq(&left.owner, &right.owner)
                     && left.resources == right.resources
+                    && left.schemas == right.schemas
                     && left.skills.len() == right.skills.len()
                     && left.skills.iter().zip(&right.skills).all(|(left, right)| {
                         left.stable_id == right.stable_id
@@ -1382,6 +1599,31 @@ impl TurnBinding {
         }
         claims.sort_by_key(|(label, _)| rank(label));
         claims
+    }
+
+    #[must_use]
+    /// Published scheme table: registered external URI scheme → the binding of
+    /// the winning source. Mirrors [`TurnBinding::masks`]. View compilation
+    /// exposes a scheme for dispatch only when this view also contains the
+    /// binding's owning tool.
+    pub fn schemes(&self) -> &BTreeMap<String, SchemeBinding> {
+        &self.snapshot.schemes
+    }
+
+    /// Every claimant of `scheme` ordered by ascending source id, with the
+    /// active provider (the lexicographically greatest source id) last. Each
+    /// entry is `(owner source label, canonical tool name)`. Unclaimed schemes
+    /// yield an empty chain.
+    #[must_use]
+    pub fn scheme_chain(&self, scheme: &str) -> Vec<(String, String)> {
+        self.snapshot
+            .sources
+            .values()
+            .filter_map(|source| {
+                let claim = source.schemas.iter().find(|claim| claim.scheme == scheme)?;
+                Some((source.id.to_string(), claim.canonical_tool.clone()))
+            })
+            .collect()
     }
 
     #[must_use]
@@ -1860,6 +2102,8 @@ impl TurnBinding {
             })
             .collect::<Result<Vec<_>, BundleError>>()?;
 
+        let tools = self.with_scheme_dispatch(tools);
+
         let compiled = Arc::new(CompiledResourceView {
             tools,
             schemas,
@@ -1869,6 +2113,62 @@ impl TurnBinding {
         });
         debug_assert_eq!(compiled.canonical_hook_ids(), policy.canonical_hook_ids());
         Ok(compiled)
+    }
+
+    /// Install the view's external-scheme dispatch on its read and write tools.
+    ///
+    /// Only schemes whose owning tool this view actually resolves become
+    /// dispatchable — the binding table is intersected with the view's own tool
+    /// set, and there is deliberately no registry-wide fallback. A view that
+    /// resolves no schemes keeps its tools byte-for-byte unwrapped.
+    fn with_scheme_dispatch(
+        &self,
+        mut tools: BTreeMap<String, ResolvedTool>,
+    ) -> BTreeMap<String, ResolvedTool> {
+        if self.snapshot.schemes.is_empty() {
+            return tools;
+        }
+        let mut handlers = BTreeMap::new();
+        for (scheme, binding) in self.snapshot.schemes.iter() {
+            if let Some(resolved) = tools
+                .values()
+                .find(|resolved| resolved.tool.name() == binding.canonical_tool())
+            {
+                handlers.insert(
+                    scheme.clone(),
+                    SchemeHandler::new(binding.clone(), Arc::clone(&resolved.tool)),
+                );
+            }
+        }
+        if handlers.is_empty() {
+            return tools;
+        }
+        let dispatch = SchemeDispatch::new(handlers);
+        let wrapped = tools
+            .into_iter()
+            .map(|(public_name, resolved)| {
+                let tool: Arc<dyn Tool> = match resolved.tool.name() {
+                    "read" => Arc::new(SchemeReadTool::new(
+                        Arc::clone(&resolved.tool),
+                        dispatch.clone(),
+                    )),
+                    "write" => Arc::new(SchemeWriteTool::new(
+                        Arc::clone(&resolved.tool),
+                        dispatch.clone(),
+                    )),
+                    _ => resolved.tool,
+                };
+                (
+                    public_name,
+                    ResolvedTool {
+                        tool,
+                        permission: resolved.permission,
+                    },
+                )
+            })
+            .collect();
+        tools = wrapped;
+        tools
     }
 
     #[must_use]
@@ -4038,6 +4338,7 @@ agent:
                 skills: BTreeMap::new(),
                 sources: BTreeMap::new(),
                 masks: Arc::new(BTreeMap::new()),
+                schemes: Arc::new(BTreeMap::new()),
             };
             (
                 TurnBinding {
@@ -4218,6 +4519,7 @@ agent:
                 skills,
                 sources: BTreeMap::new(),
                 masks: Arc::new(BTreeMap::new()),
+                schemes: Arc::new(BTreeMap::new()),
             };
             let (permission, _asks) = PermissionPlane::new_with_policy(
                 PermissionRules::default(),
@@ -6403,5 +6705,361 @@ agent:
         std::fs::create_dir_all(&skill_dir).unwrap();
         std::fs::write(skill_dir.join("SKILL.md"), skill_md(name, body)).unwrap();
         path
+    }
+
+    /// A tool that records every reference argument it is dispatched with, so
+    /// scheme-dispatch tests can observe exactly what the owner received.
+    struct ReferenceRecordingTool {
+        name: String,
+        seen: Mutex<Vec<String>>,
+    }
+
+    impl ReferenceRecordingTool {
+        fn new(name: impl Into<String>) -> Arc<Self> {
+            Arc::new(Self {
+                name: name.into(),
+                seen: Mutex::new(Vec::new()),
+            })
+        }
+
+        fn references(&self) -> Vec<String> {
+            self.seen.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait]
+    impl Tool for ReferenceRecordingTool {
+        fn name(&self) -> &str {
+            &self.name
+        }
+
+        fn schema(&self) -> ToolSchema {
+            ToolSchema {
+                name: ToolName::new(self.name.clone()),
+                description: "records dispatch references".to_string(),
+                input_schema: json!({ "type": "object" }),
+                output_schema: None,
+            }
+        }
+
+        async fn execute(&self, _ctx: &ToolCtx, input: Value) -> Result<Value, ToolError> {
+            if let Some(reference) = input.get("reference").and_then(Value::as_str) {
+                self.seen.lock().unwrap().push(reference.to_string());
+            }
+            Ok(json!({ "output": "owner body" }))
+        }
+    }
+
+    fn scheme_source(
+        id: &str,
+        exports: Vec<RuntimeSourceExport>,
+        schemas: Vec<SourceSchema>,
+    ) -> RuntimeSource {
+        RuntimeSource::new(RuntimeSourceId::plugin(id), [0; 32], Arc::new(()), exports)
+            .with_schemas(schemas)
+    }
+
+    fn dispatch_ctx(workdir: &Path) -> ToolCtx {
+        let (permission, _rx) = PermissionPlane::new(PermissionRules::new(vec![Rule::new(
+            Action::Read,
+            "*",
+            Mode::Allow,
+        )]));
+        ToolCtx {
+            workflows: hya_tool::WorkflowPlane::disconnected(),
+            permission,
+            interaction: hya_tool::InteractionPlane::new().0,
+            spawner: hya_tool::SpawnerPlane::new().0,
+            operation: hya_tool::ToolOperation::from_tool_call(hya_proto::ToolCallId::new()),
+            mailbox: hya_tool::MailboxPlane::disconnected(),
+            lifecycle: hya_tool::LifecyclePlane::disconnected(),
+            session: None,
+            parent_session: None,
+            todo: hya_tool::TodoPlane::default(),
+            skills: SkillPlane::default(),
+            artifacts: hya_tool::handle::ArtifactPlane::default(),
+            agents: Default::default(),
+            websearch: hya_tool::WebSearchPlane::default(),
+            lsp: hya_tool::LspPlane::default(),
+            formatter: hya_tool::FormatterPlane::default(),
+            workdir: workdir.to_path_buf(),
+            cancel: tokio_util::sync::CancellationToken::new(),
+        }
+    }
+
+    #[test]
+    fn source_schema_claims_publish_and_dispatch_through_compiled_views() {
+        let catalog = Arc::new(
+            TestCatalog::from_prepared(&[bundle_with_agent(
+                "hya/scheme",
+                agent("scheme-agent", ResourceView::default()),
+                Vec::new(),
+            )])
+            .unwrap(),
+        );
+        let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
+        let owner = ReferenceRecordingTool::new("scheme__query");
+        registry
+            .refresh(|candidate| {
+                candidate.upsert_sources(vec![scheme_source(
+                    "scheme-src",
+                    vec![RuntimeSourceExport::tool(
+                        "scheme__query",
+                        "scheme__query",
+                        Vec::new(),
+                        owner.clone(),
+                        ToolPermission::ReadOnly,
+                    )],
+                    vec![SourceSchema {
+                        scheme: "db".to_string(),
+                        canonical_tool: "scheme__query".to_string(),
+                        writable: false,
+                    }],
+                )])
+            })
+            .expect("a source claiming its own export's scheme must publish");
+
+        let workdir = PathBuf::from("/tmp/hya-scheme-dispatch");
+        let binding = registry.bind_turn(&workdir).unwrap();
+        let binding_binding = &binding;
+        let schemes = binding_binding.schemes();
+        assert_eq!(
+            schemes.get("db").map(SchemeBinding::canonical_tool),
+            Some("scheme__query"),
+            "the winning binding must be published on the snapshot"
+        );
+        assert_eq!(
+            binding.scheme_chain("db"),
+            vec![("plugin:scheme-src".to_string(), "scheme__query".to_string())],
+            "the chain lists the sole claimant"
+        );
+        let effective = registry.effective_schemes();
+        assert_eq!(effective.schemes.len(), 1);
+
+        let policy = binding
+            .agent_resource_policy_on_plane("scheme-agent", AgentToolPlane::Full)
+            .unwrap();
+        let compiled = binding.compile_agent_resources(&policy).unwrap();
+
+        let ctx = dispatch_ctx(&workdir);
+        let read = compiled.resolve_tool("read").unwrap();
+        let result = futures::executor::block_on(
+            read.tool
+                .execute(&ctx, json!({ "path": "db://x/y?head=2" })),
+        )
+        .unwrap();
+        assert_eq!(
+            result.get("output").and_then(Value::as_str),
+            Some("owner body"),
+            "read over a registered scheme dispatches the owner tool"
+        );
+        assert_eq!(
+            owner.references(),
+            vec!["db://x/y?head=2".to_string()],
+            "the owner receives the full handle text as its reference"
+        );
+
+        let write = compiled.resolve_tool("write").unwrap();
+        let error = futures::executor::block_on(
+            write
+                .tool
+                .execute(&ctx, json!({ "path": "db://x/y", "content": "row" })),
+        )
+        .expect_err("a read-only scheme must reject write dispatch");
+        assert!(
+            error.to_string().contains("db:// is read-only"),
+            "write dispatch must fail with the NotWritable-style error: {error}"
+        );
+        assert!(
+            owner.references().len() == 1,
+            "the rejected write must not reach the owner"
+        );
+    }
+
+    #[test]
+    fn two_sources_claiming_one_scheme_mask_by_greater_source_id() {
+        let catalog = Arc::new(
+            TestCatalog::from_prepared(&[bundle_with_agent(
+                "hya/scheme-mask",
+                agent("scheme-mask-agent", ResourceView::default()),
+                Vec::new(),
+            )])
+            .unwrap(),
+        );
+        let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
+        let exports = |name: &str| {
+            vec![RuntimeSourceExport::tool(
+                name,
+                name,
+                Vec::new(),
+                Arc::new(NoopTool::new(name)),
+                ToolPermission::ReadOnly,
+            )]
+        };
+        registry
+            .refresh(|candidate| {
+                candidate.upsert_sources(vec![
+                    scheme_source(
+                        "aaa-src",
+                        exports("aaa__query"),
+                        vec![SourceSchema {
+                            scheme: "db".to_string(),
+                            canonical_tool: "aaa__query".to_string(),
+                            writable: false,
+                        }],
+                    ),
+                    scheme_source(
+                        "zzz-src",
+                        exports("zzz__query"),
+                        vec![SourceSchema {
+                            scheme: "db".to_string(),
+                            canonical_tool: "zzz__query".to_string(),
+                            writable: true,
+                        }],
+                    ),
+                ])
+            })
+            .expect("two sources may contest one scheme");
+
+        let binding = registry
+            .bind_turn(&PathBuf::from("/tmp/hya-scheme-mask"))
+            .unwrap();
+        let winner = binding.schemes().get("db").expect("scheme must resolve");
+        assert_eq!(winner.owner(), "plugin:zzz-src");
+        assert_eq!(winner.canonical_tool(), "zzz__query");
+        assert!(winner.writable());
+        assert_eq!(
+            binding.scheme_chain("db"),
+            vec![
+                ("plugin:aaa-src".to_string(), "aaa__query".to_string()),
+                ("plugin:zzz-src".to_string(), "zzz__query".to_string()),
+            ],
+            "the chain lists every claimant in ascending source id order"
+        );
+    }
+
+    #[test]
+    fn foreign_tool_and_protected_scheme_claims_are_one_grouped_error() {
+        let catalog = Arc::new(
+            TestCatalog::from_prepared(&[bundle_with_agent(
+                "hya/scheme-bad",
+                agent("scheme-bad-agent", ResourceView::default()),
+                Vec::new(),
+            )])
+            .unwrap(),
+        );
+        let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
+        let error = registry
+            .refresh(|candidate| {
+                candidate.upsert_sources(vec![
+                    scheme_source(
+                        "bad-a",
+                        vec![RuntimeSourceExport::tool(
+                            "bad-a__query",
+                            "bad-a__query",
+                            Vec::new(),
+                            Arc::new(NoopTool::new("bad-a__query")),
+                            ToolPermission::ReadOnly,
+                        )],
+                        vec![SourceSchema {
+                            scheme: "db".to_string(),
+                            canonical_tool: "not-exported__tool".to_string(),
+                            writable: false,
+                        }],
+                    ),
+                    scheme_source(
+                        "bad-b",
+                        Vec::new(),
+                        vec![
+                            SourceSchema {
+                                scheme: "local".to_string(),
+                                canonical_tool: "bad-b__put".to_string(),
+                                writable: true,
+                            },
+                            SourceSchema {
+                                scheme: "d".to_string(),
+                                canonical_tool: "bad-b__put".to_string(),
+                                writable: true,
+                            },
+                        ],
+                    ),
+                ])
+            })
+            .expect_err("invalid scheme claims must be rejected");
+        let RuntimeRefreshError::SchemaConflicts(report) = error else {
+            panic!("expected a grouped schema conflict report");
+        };
+        for fragment in [
+            "plugin:bad-a",
+            "not-exported__tool",
+            "plugin:bad-b",
+            "internal scheme `local`",
+            "scheme `d`",
+        ] {
+            assert!(
+                report.contains(fragment),
+                "grouped report must contain {fragment:?}:\n{report}"
+            );
+        }
+    }
+
+    #[test]
+    fn scheme_dispatch_stays_absent_when_the_view_lacks_the_owner() {
+        let catalog = Arc::new(
+            TestCatalog::from_prepared(&[bundle_with_agent(
+                "hya/scheme-scope",
+                agent("scheme-scope-agent", ResourceView::default()),
+                Vec::new(),
+            )])
+            .unwrap(),
+        );
+        let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
+        let owner = ReferenceRecordingTool::new("scheme__query");
+        registry
+            .refresh(|candidate| {
+                candidate.upsert_sources(vec![scheme_source(
+                    "scheme-src",
+                    vec![RuntimeSourceExport::tool(
+                        "scheme__query",
+                        "scheme__query",
+                        Vec::new(),
+                        owner.clone(),
+                        ToolPermission::ReadOnly,
+                    )],
+                    vec![SourceSchema {
+                        scheme: "db".to_string(),
+                        canonical_tool: "scheme__query".to_string(),
+                        writable: false,
+                    }],
+                )])
+            })
+            .expect("a valid scheme claim must publish");
+
+        let workdir = PathBuf::from("/tmp/hya-scheme-scope");
+        let binding = registry.bind_turn(&workdir).unwrap();
+        // The bundle agent's InternalPublic plane never contains plugin tools,
+        // so the owning tool is absent from this view.
+        let policy = binding
+            .agent_resource_policy_on_plane("scheme-scope-agent", AgentToolPlane::InternalPublic)
+            .unwrap();
+        let compiled = binding.compile_agent_resources(&policy).unwrap();
+        assert!(
+            compiled.resolve_tool("scheme__query").is_none(),
+            "the owner tool must be absent from the restricted view"
+        );
+
+        let ctx = dispatch_ctx(&workdir);
+        let read = compiled.resolve_tool("read").unwrap();
+        let error =
+            futures::executor::block_on(read.tool.execute(&ctx, json!({ "path": "db://x/y" })))
+                .expect_err("a view without the owner keeps the historical unknown-scheme error");
+        assert!(
+            error.to_string().contains("unknown handle scheme"),
+            "no global fallback may dispatch outside the view: {error}"
+        );
+        assert!(
+            owner.references().is_empty(),
+            "the owner tool must never be invoked from a view it is not in"
+        );
     }
 }

@@ -39,6 +39,8 @@ pub(crate) enum BundleCommand {
         )]
         file: Option<PathBuf>,
     },
+    /// List URI-scheme extensions declared by installed bundles.
+    Schemas,
 }
 
 pub(crate) async fn run(command: BundleCommand) -> anyhow::Result<()> {
@@ -55,6 +57,7 @@ pub(crate) async fn run(command: BundleCommand) -> anyhow::Result<()> {
             ..
         } => info_file(&package),
         BundleCommand::Info { .. } => anyhow::bail!("bundle info requires a bundle name"),
+        BundleCommand::Schemas => schemas().await,
     }
 }
 
@@ -301,6 +304,77 @@ async fn uninstall(bundle_id: &str) -> anyhow::Result<()> {
     let BundleUninstallOutcome::Removed { generation } = registry.uninstall(bundle_id).await?;
     println!("uninstalled {bundle_id} generation={generation}");
     Ok(())
+}
+
+/// List URI-scheme extensions across the first-party and installed bundles:
+/// one `BUNDLE SCHEME TOOL WRITABLE` row per declared schema.
+async fn schemas() -> anyhow::Result<()> {
+    let first_party =
+        hya_app::first_party_catalog().context("decode embedded first-party WorkflowBundle")?;
+    let mut rows = catalog_schema_rows(&first_party);
+    for record in installed_records_if_exists().await? {
+        match decode_installed_catalog(&record) {
+            Ok(prepared) => rows.extend(catalog_schema_rows(&prepared)),
+            // Written by a different binary version: name the bundle rather
+            // than failing the whole listing, matching `bundle list`.
+            Err(_) => rows.push((
+                record.bundle_id.clone(),
+                "-".to_string(),
+                "-".to_string(),
+                "-".to_string(),
+            )),
+        }
+    }
+    rows.sort_by(|left, right| {
+        (left.0.as_bytes(), left.1.as_bytes()).cmp(&(right.0.as_bytes(), right.1.as_bytes()))
+    });
+
+    println!("BUNDLE SCHEME TOOL WRITABLE");
+    for (bundle_id, scheme, tool, writable) in rows {
+        println!("{bundle_id} {scheme} {tool} {writable}");
+    }
+    Ok(())
+}
+
+/// Schema rows contributed by one decoded prepared catalog.
+fn catalog_schema_rows(prepared: &PreparedCatalog) -> Vec<(String, String, String, String)> {
+    prepared
+        .schemas()
+        .iter()
+        .flat_map(|row| {
+            row.schemas
+                .iter()
+                .map(|schema| {
+                    (
+                        row.bundle_id.clone(),
+                        schema.scheme.clone(),
+                        schema.tool.clone(),
+                        schema.writable.to_string(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+/// Decode one installed record's full prepared catalog, verifying identity.
+fn decode_installed_catalog(record: &BundleRegistryRecord) -> anyhow::Result<PreparedCatalog> {
+    let corrupt = || StoreError::BundleRegistryCorrupt {
+        bundle_id: record.bundle_id.clone(),
+    };
+    let prepared = PreparedCatalog::decode(&record.prepared_bytes, &record.prepared_digest)
+        .map_err(|_| corrupt())?;
+    let [bundle] = prepared.bundles() else {
+        return Err(corrupt().into());
+    };
+    let identity = bundle.identity();
+    if identity.id.as_str() != record.bundle_id.as_str()
+        || identity.version.as_str() != record.version.as_str()
+        || identity.publisher.as_str() != record.publisher.as_str()
+    {
+        return Err(corrupt().into());
+    }
+    Ok(prepared)
 }
 
 fn inspect_package(package: &Path) -> anyhow::Result<PackageInspection> {
