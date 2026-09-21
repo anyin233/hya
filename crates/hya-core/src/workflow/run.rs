@@ -1294,6 +1294,18 @@ async fn drive_loop_stage(
         crate::completion::RunOutcome::Achieved { reason, .. } => {
             format!("{}\n\n[verified: {reason}]", clamp(executor.latest().await))
         }
+        crate::completion::RunOutcome::BudgetLimited { iterations, .. } => {
+            format!(
+                "{}\n\n[loop budget limited after {iterations} iterations without verification]",
+                clamp(executor.latest().await)
+            )
+        }
+        crate::completion::RunOutcome::Stalled { iterations } => {
+            format!(
+                "{}\n\n[loop stalled after {iterations} identical iterations]",
+                clamp(executor.latest().await)
+            )
+        }
         crate::completion::RunOutcome::Capped { iterations, .. } => {
             format!(
                 "{}\n\n[loop capped after {iterations} iterations without verification]",
