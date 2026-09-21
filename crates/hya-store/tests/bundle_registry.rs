@@ -787,14 +787,17 @@ fn namespaced_candidate(
 
 #[tokio::test]
 async fn same_bundle_upgrade_installs_but_downgrade_requires_overwrite() {
-    let registry = BundleRegistry::connect(&temp_db()).await.expect("connect");
+    let Ok(registry) = BundleRegistry::connect(&temp_db()).await else {
+        panic!("bundle registry connection failed");
+    };
     let newer = namespaced_candidate("hya/acme", None, "1.1.0", [1_u8; 32]);
     let older = namespaced_candidate("hya/acme", None, "1.0.0", [2_u8; 32]);
 
-    registry
+    let outcome = registry
         .install(&[], NamespaceInstallPolicy::DenyConflicts, newer)
         .await
-        .expect("upgrade installs");
+        .unwrap_or_else(|error| panic!("upgrade installs: {error:?}"));
+    assert!(matches!(outcome, BundleInstallOutcome::Installed { .. }));
     let result = registry
         .install(&[], NamespaceInstallPolicy::DenyConflicts, older)
         .await;
@@ -817,20 +820,23 @@ async fn same_bundle_upgrade_installs_but_downgrade_requires_overwrite() {
     let outcome = registry
         .install(&[], NamespaceInstallPolicy::OverwriteConflicts, older)
         .await
-        .expect("overwrite accepts downgrade");
+        .unwrap_or_else(|error| panic!("overwrite accepts downgrade: {error:?}"));
     assert!(matches!(outcome, BundleInstallOutcome::Replaced { .. }));
 }
 
 #[tokio::test]
 async fn cross_bundle_namespace_conflict_requires_explicit_overwrite() {
-    let registry = BundleRegistry::connect(&temp_db()).await.expect("connect");
+    let Ok(registry) = BundleRegistry::connect(&temp_db()).await else {
+        panic!("bundle registry connection failed");
+    };
     let first = namespaced_candidate("hya/acme-tools", Some("acme"), "1.0.0", [3_u8; 32]);
     let second = namespaced_candidate("hya/other", Some("acme"), "1.0.0", [4_u8; 32]);
 
-    registry
+    let outcome = registry
         .install(&[], NamespaceInstallPolicy::DenyConflicts, first)
         .await
-        .expect("first installs");
+        .unwrap_or_else(|error| panic!("first installs: {error:?}"));
+    assert!(matches!(outcome, BundleInstallOutcome::Installed { .. }));
     let result = registry
         .install(&[], NamespaceInstallPolicy::DenyConflicts, second)
         .await;
@@ -853,10 +859,13 @@ async fn cross_bundle_namespace_conflict_requires_explicit_overwrite() {
     let outcome = registry
         .install(&[], NamespaceInstallPolicy::OverwriteConflicts, second)
         .await
-        .expect("overwrite resolves the conflict");
+        .unwrap_or_else(|error| panic!("overwrite resolves the conflict: {error:?}"));
     assert!(matches!(outcome, BundleInstallOutcome::Installed { .. }));
 
-    let snapshot = registry.snapshot().await.expect("snapshot");
+    let snapshot = registry
+        .snapshot()
+        .await
+        .unwrap_or_else(|error| panic!("snapshot: {error:?}"));
     let ids: Vec<&str> = snapshot
         .bundles
         .iter()
@@ -871,17 +880,22 @@ async fn cross_bundle_namespace_conflict_requires_explicit_overwrite() {
 
 #[tokio::test]
 async fn distinct_namespaces_install_independently() {
-    let registry = BundleRegistry::connect(&temp_db()).await.expect("connect");
+    let Ok(registry) = BundleRegistry::connect(&temp_db()).await else {
+        panic!("bundle registry connection failed");
+    };
     let one = namespaced_candidate("hya/one", Some("one"), "1.0.0", [5_u8; 32]);
     let two = namespaced_candidate("hya/two", Some("two"), "1.0.0", [6_u8; 32]);
     registry
         .install(&[], NamespaceInstallPolicy::DenyConflicts, one)
         .await
-        .expect("one installs");
+        .unwrap_or_else(|error| panic!("one installs: {error:?}"));
     registry
         .install(&[], NamespaceInstallPolicy::DenyConflicts, two)
         .await
-        .expect("two installs");
-    let snapshot = registry.snapshot().await.expect("snapshot");
+        .unwrap_or_else(|error| panic!("two installs: {error:?}"));
+    let snapshot = registry
+        .snapshot()
+        .await
+        .unwrap_or_else(|error| panic!("snapshot: {error:?}"));
     assert_eq!(snapshot.bundles.len(), 2);
 }
