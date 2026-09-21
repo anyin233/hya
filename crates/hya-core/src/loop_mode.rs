@@ -3,6 +3,7 @@
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use hya_proto::SessionId;
@@ -93,7 +94,7 @@ pub trait LoopPlanner: Send + Sync {
 }
 
 /// Tunables for loop satisfaction and no-progress detection.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct LoopConfig {
     /// Maximum iterations (also bounded by hard ceiling in preflight).
     pub budget: u32,
@@ -103,6 +104,10 @@ pub struct LoopConfig {
     pub satisfaction_threshold: u8,
     /// Consecutive no-progress iterations before giving up.
     pub max_no_progress: u32,
+    /// Deterministic exit predicate. When present it outranks the model
+    /// verifier's satisfied verdict: the predicate alone decides stop-vs-
+    /// continue, and the verifier only feeds the planner.
+    pub predicate: Option<LoopPredicate>,
 }
 
 impl Default for LoopConfig {
@@ -112,6 +117,140 @@ impl Default for LoopConfig {
             stop_when_satisfied: true,
             satisfaction_threshold: 90,
             max_no_progress: 3,
+            predicate: None,
+        }
+    }
+}
+
+/// Which direction a [`LoopPredicate`] reads in.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PredicateMode {
+    /// Exit 0 continues the loop; exit 1 stops it.
+    While,
+    /// Exit 0 stops the loop; exit 1 continues it.
+    Until,
+}
+
+impl PredicateMode {
+    /// Wire/config spelling.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::While => "while",
+            Self::Until => "until",
+        }
+    }
+}
+
+/// The result of one deterministic predicate evaluation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum LoopPredicateOutcome {
+    /// The stop condition is met (exit code matched the mode's stop answer).
+    Satisfied {
+        /// Human-readable stop reason for the run outcome.
+        reason: String,
+    },
+    /// Keep iterating.
+    Continue,
+    /// The condition itself is broken (non-answer exit code or timeout).
+    /// Stopping here is a failure, never a success: a typo'd condition must
+    /// not look like finished work.
+    Broken {
+        /// What made the condition unusable.
+        detail: String,
+    },
+}
+
+/// Deterministic loop-exit predicate: `--while '<cmd>'` / `--until '<cmd>'`.
+///
+/// The exit code is the only signal — stdout is ignored. Exit 0/1 are the
+/// condition's answer (inverted between [`PredicateMode::While`] and
+/// [`PredicateMode::Until`]); any other exit code or a timeout means the
+/// condition itself is broken, which stops the loop as a failure rather than
+/// silently looking like finished work.
+#[derive(Clone, Debug)]
+pub struct LoopPredicate {
+    /// Shell command text, run as `sh -c <command>` in `workdir`.
+    pub command: String,
+    /// Answer direction.
+    pub mode: PredicateMode,
+    /// Evaluation timeout; a timed-out condition is broken, not false.
+    pub timeout: Duration,
+    /// Working directory for the command.
+    pub workdir: std::path::PathBuf,
+}
+
+impl LoopPredicate {
+    /// Evaluate the condition once, synchronously, with the configured
+    /// timeout. Blocking by design: loop gates run between iterations.
+    #[must_use]
+    pub fn evaluate(&self) -> LoopPredicateOutcome {
+        let Ok(mut child) = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(&self.command)
+            .current_dir(&self.workdir)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        else {
+            return LoopPredicateOutcome::Broken {
+                detail: format!("failed to spawn condition command `{}`", self.command),
+            };
+        };
+        let deadline = std::time::Instant::now() + self.timeout;
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break Some(status),
+                Ok(None) => {
+                    if std::time::Instant::now() >= deadline {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        break None;
+                    }
+                    std::thread::sleep(Duration::from_millis(25));
+                }
+                Err(error) => {
+                    let _ = child.kill();
+                    return LoopPredicateOutcome::Broken {
+                        detail: format!("condition wait failed: {error}"),
+                    };
+                }
+            }
+        };
+        let Some(status) = status else {
+            return LoopPredicateOutcome::Broken {
+                detail: format!(
+                    "condition `{}` timed out after {:?}",
+                    self.command, self.timeout
+                ),
+            };
+        };
+        let Some(code) = status.code() else {
+            return LoopPredicateOutcome::Broken {
+                detail: format!(
+                    "condition `{}` terminated by signal; the condition itself is broken",
+                    self.command
+                ),
+            };
+        };
+        match (self.mode, code) {
+            (PredicateMode::Until, 0) | (PredicateMode::While, 1) => {
+                LoopPredicateOutcome::Satisfied {
+                    reason: format!(
+                        "{} `{}` answered with exit {code}",
+                        self.mode.as_str(),
+                        self.command
+                    ),
+                }
+            }
+            (PredicateMode::Until, 1) | (PredicateMode::While, 0) => LoopPredicateOutcome::Continue,
+            _ => LoopPredicateOutcome::Broken {
+                detail: format!(
+                    "condition `{}` exited {code}; the condition itself is broken",
+                    self.command
+                ),
+            },
         }
     }
 }
@@ -153,6 +292,7 @@ pub struct LoopGate {
     planner: Arc<dyn LoopPlanner>,
     config: LoopConfig,
     state: Mutex<LoopState>,
+    broken_condition: std::sync::Mutex<Option<String>>,
 }
 
 impl LoopGate {
@@ -170,19 +310,59 @@ impl LoopGate {
             planner,
             config,
             state: Mutex::new(LoopState::default()),
+            broken_condition: std::sync::Mutex::new(None),
         }
+    }
+
+    /// The broken-condition detail when the last judgment stopped because the
+    /// deterministic predicate itself failed (bad exit code or timeout).
+    /// Entry points must surface this as a failure, never as success.
+    #[must_use]
+    pub fn broken_condition(&self) -> Option<String> {
+        self.broken_condition
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 }
 
 #[async_trait]
 impl IterationGate for LoopGate {
     async fn judge(&self, transcript: &str) -> Result<GateOutcome, CoreError> {
+        // The deterministic predicate outranks the model verdict: it alone
+        // decides stop-vs-continue, and a broken condition stops as a failure.
+        if let Some(predicate) = &self.config.predicate {
+            match predicate.evaluate() {
+                LoopPredicateOutcome::Satisfied { reason } => {
+                    return Ok(GateOutcome::Stop {
+                        reason: format!(
+                            "{} condition {reason}",
+                            self.config
+                                .predicate
+                                .as_ref()
+                                .map_or(String::new(), |_| String::new())
+                        ),
+                    });
+                }
+                LoopPredicateOutcome::Broken { detail } => {
+                    *self
+                        .broken_condition
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(detail.clone());
+                    return Ok(GateOutcome::Stop {
+                        reason: format!("broken condition: {detail}"),
+                    });
+                }
+                LoopPredicateOutcome::Continue => {}
+            }
+        }
         let mut st = self.state.lock().await;
         let verdict = self.verifier.grade(&self.target, transcript).await?;
         st.history.push(verdict.iteration_summary.clone());
 
         // Engine authority: only the verifier (not the planner) can declare success.
-        if self.config.stop_when_satisfied
+        if self.config.predicate.is_none()
+            && self.config.stop_when_satisfied
             && verdict.satisfied
             && verdict.score >= self.config.satisfaction_threshold
             && verdict.critical_gaps.is_empty()
@@ -282,7 +462,7 @@ pub async fn drive_loop(
     config: LoopConfig,
     cancel: CancellationToken,
 ) -> Result<RunOutcome, CoreError> {
-    let gate = LoopGate::new(target.clone(), verifier, planner, config);
+    let gate = LoopGate::new(target.clone(), verifier, planner, config.clone());
     let caps = SafetyCaps {
         max_iterations: config.budget,
         ..SafetyCaps::default()
