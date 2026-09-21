@@ -85,7 +85,7 @@ fn duplicate_source_and_canonical_alias_collisions_reject_before_generation() {
                 Vec::new(),
             )])
         },
-        "duplicate tool name: read",
+        "must be qualified as `namespace__local`",
     );
 
     assert_rejected_without_generation(
@@ -96,10 +96,10 @@ fn duplicate_source_and_canonical_alias_collisions_reject_before_generation() {
                 RuntimeSourceId::plugin("alias"),
                 4,
                 "unique",
-                "unique_source_tool",
+                "alias__unique_source_tool",
                 vec!["read".to_string()],
             )])
         },
-        "duplicate tool name: read",
+        "protected tool `read` cannot be masked",
     );
 }

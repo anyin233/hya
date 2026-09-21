@@ -20,7 +20,7 @@ const SKILL_PATH: &str = ".hya/skills/user-playbook/SKILL.md";
 const SKILL_BODY: &str = "SKILL_BODY_USER_PLAYBOOK $ARGUMENTS\n";
 const USE_SKILL_COMMAND: &str = "Call builtin skill with name=\"user-playbook\", then return SKILL_BODY_USER_PLAYBOOK and the nonce $ARGUMENTS.";
 const USE_PLUGIN_COMMAND: &str =
-    "Call plugin Tool remember with value=$ARGUMENTS, then return the plugin result.";
+    "Call plugin Tool toolbox__remember with value=$ARGUMENTS, then return the plugin result.";
 const USE_MCP_COMMAND: &str =
     "Call mcp__echo__ping with msg=$ARGUMENTS, then return echo:$ARGUMENTS.";
 
@@ -1306,17 +1306,17 @@ async fn custom_command_invokes_builtin_skill_tool() {
 #[tokio::test]
 async fn custom_command_invokes_plugin_tool() {
     let env = plugin_builder(vec![
-        tool_step("remember", json!({"value": "PLUGIN_NONCE"})),
+        tool_step("toolbox__remember", json!({"value": "PLUGIN_NONCE"})),
         text_step("PLUGIN_FINAL"),
-        tool_step("remember", json!({"value": 42})),
+        tool_step("toolbox__remember", json!({"value": 42})),
         text_step("MALFORMED_INPUT_RECOVERED"),
-        tool_step("remember", json!({"value": "KILL"})),
+        tool_step("toolbox__remember", json!({"value": "KILL"})),
         text_step("PLUGIN_DEATH_RECOVERED"),
-        tool_step("remember", json!({"value": "RESPAWN"})),
+        tool_step("toolbox__remember", json!({"value": "RESPAWN"})),
         text_step("PLUGIN_RESPAWNED"),
-        tool_step("remember", json!({"value": "KILL"})),
+        tool_step("toolbox__remember", json!({"value": "KILL"})),
         text_step("PLUGIN_DRIFT_KILL_RECOVERED"),
-        tool_step("remember", json!({"value": "DRIFT"})),
+        tool_step("toolbox__remember", json!({"value": "DRIFT"})),
         text_step("PLUGIN_DRIFT_ERROR"),
         text_step("SESSION_AFTER_DRIFT"),
     ])
@@ -1334,10 +1334,10 @@ async fn custom_command_invokes_plugin_tool() {
     .await;
     assert_eq!(
         response_text(&success),
-        "Call plugin Tool remember with value=PLUGIN_NONCE, then return the plugin result."
+        "Call plugin Tool toolbox__remember with value=PLUGIN_NONCE, then return the plugin result."
     );
     let success_events = env.events(session, None).await.expect("plugin events");
-    assert_one_tool_terminal(&success_events, "remember");
+    assert_one_tool_terminal(&success_events, "toolbox__remember");
     let plugin_output = success_events
         .iter()
         .find_map(|envelope| match &envelope.event {
@@ -1352,7 +1352,7 @@ async fn custom_command_invokes_plugin_tool() {
     assert!(
         tool_names(&requests[0])
             .iter()
-            .any(|name| name == "remember")
+            .any(|name| name == "toolbox__remember")
     );
     assert!(fake_requests_from(&requests, 1).contains("PLUGIN_NONCE"));
     let context = env.session_context(&session).await.expect("plugin context");
@@ -1403,7 +1403,7 @@ async fn custom_command_invokes_plugin_tool() {
     .await;
     assert_eq!(
         response_text(&malformed),
-        "Call plugin Tool remember with value=MALFORMED_NONCE, then return the plugin result."
+        "Call plugin Tool toolbox__remember with value=MALFORMED_NONCE, then return the plugin result."
     );
     let malformed_events = env
         .events(session, None)
@@ -1420,7 +1420,7 @@ async fn custom_command_invokes_plugin_tool() {
     let killed = command_turn(&env, session, command_request("use-plugin", "KILL", None)).await;
     assert_eq!(
         response_text(&killed),
-        "Call plugin Tool remember with value=KILL, then return the plugin result."
+        "Call plugin Tool toolbox__remember with value=KILL, then return the plugin result."
     );
     let after_kill = command_turn(
         &env,
@@ -1430,7 +1430,7 @@ async fn custom_command_invokes_plugin_tool() {
     .await;
     assert_eq!(
         response_text(&after_kill),
-        "Call plugin Tool remember with value=RESPAWN, then return the plugin result."
+        "Call plugin Tool toolbox__remember with value=RESPAWN, then return the plugin result."
     );
     let respawn_events = env.events(session, None).await.expect("respawn events");
     assert!(
@@ -1453,13 +1453,13 @@ async fn custom_command_invokes_plugin_tool() {
     let drift_kill = command_turn(&env, session, command_request("use-plugin", "KILL", None)).await;
     assert_eq!(
         response_text(&drift_kill),
-        "Call plugin Tool remember with value=KILL, then return the plugin result."
+        "Call plugin Tool toolbox__remember with value=KILL, then return the plugin result."
     );
     let drift_error =
         command_turn(&env, session, command_request("use-plugin", "DRIFT", None)).await;
     assert_eq!(
         response_text(&drift_error),
-        "Call plugin Tool remember with value=DRIFT, then return the plugin result."
+        "Call plugin Tool toolbox__remember with value=DRIFT, then return the plugin result."
     );
     let drift_events = env.events(session, None).await.expect("drift events");
     assert!(
@@ -1489,7 +1489,7 @@ async fn custom_command_invokes_plugin_tool() {
     assert!(
         tool_names(&env.fake_requests().expect("old plugin requests")[0])
             .iter()
-            .any(|name| name == "remember"),
+            .any(|name| name == "toolbox__remember"),
         "running backend keeps old plugin declaration"
     );
 
@@ -1897,9 +1897,23 @@ async fn resource_name_conflicts_fail_closed() {
         .prompt(duplicate_session, "inspect duplicate plugins")
         .await
         .expect("duplicate prompt");
+    // With host-composed qualified names, two plugins may declare the same
+    // local tool name: they coexist as `toolbox__remember` / `otherbox__remember`.
     let duplicate_names = tool_names(&duplicate.fake_requests().expect("duplicate requests")[0]);
-    assert!(!duplicate_names.iter().any(|name| name == "remember"));
-    assert!(duplicate_names.iter().any(|name| name == "read"));
+    assert!(
+        duplicate_names
+            .iter()
+            .any(|name| name == "toolbox__remember")
+    );
+    assert!(
+        duplicate_names
+            .iter()
+            .any(|name| name == "otherbox__remember")
+    );
+    assert!(
+        !duplicate_names.iter().any(|name| name == "remember"),
+        "bare contributed names must never reach the model"
+    );
 
     // A plugin-versus-builtin collision rejects only the candidate plugin
     // generation; the builtin `read` remains exactly once.
@@ -1931,12 +1945,17 @@ async fn resource_name_conflicts_fail_closed() {
     );
     assert_eq!(
         builtin_names.iter().filter(|name| *name == "read").count(),
-        1
+        1,
+        "the protected built-in `read` stays bare and unique"
+    );
+    assert!(
+        builtin_names.iter().any(|name| *name == "toolbox__read"),
+        "a plugin tool named `read` is qualified, not merged with the built-in"
     );
 
-    // Distinct MCP server names can still collide after namespacing:
-    // mcp__a__b__c from (a__b,c) and (a,b__c).  The second candidate cannot
-    // partially publish a duplicate.
+    // Ambiguous MCP compositions fail closed at the door: a server key or
+    // tool name containing `__` can no longer publish (the old
+    // `mcp__a__b__c` collision from (a__b,c) vs (a,b__c) is unconstructable).
     let mcp = mcp_builder(vec![
         text_step("MCP_NAMESPACE_FIRST"),
         text_step("MCP_NAMESPACE_SECOND"),
@@ -1948,10 +1967,7 @@ async fn resource_name_conflicts_fail_closed() {
     .build()
     .await
     .expect("MCP collision env");
-    for (name, tool, expected_status) in [
-        ("a__b", "c", StatusCode::OK),
-        ("a", "b__c", StatusCode::SERVICE_UNAVAILABLE),
-    ] {
+    for (name, tool) in [("a__b", "c"), ("a", "b__c")] {
         let (status, body) = request_json(
             &mcp,
             Method::POST,
@@ -1962,13 +1978,15 @@ async fn resource_name_conflicts_fail_closed() {
             })),
         )
         .await;
-        assert_eq!(status, expected_status, "MCP collision add {name}: {body}");
-        if status == StatusCode::SERVICE_UNAVAILABLE {
-            assert!(
-                body.to_string()
-                    .contains("duplicate tool name: mcp__a__b__c")
-            );
-        }
+        assert_eq!(
+            status,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "ambiguous MCP add {name}/{tool} must fail closed: {body}"
+        );
+        assert!(
+            body.to_string().contains("must be"),
+            "rejection must name the composition rule: {body}"
+        );
     }
     let mcp_session = mcp.create_session().await.expect("MCP collision session");
     mcp.prompt(mcp_session, "inspect MCP namespace collision")
@@ -1980,8 +1998,8 @@ async fn resource_name_conflicts_fail_closed() {
             .iter()
             .filter(|name| *name == "mcp__a__b__c")
             .count(),
-        1,
-        "one prior publication may remain, but no duplicate candidate: {mcp_names:?}"
+        0,
+        "no ambiguous name may reach the model: {mcp_names:?}"
     );
 
     // Command/Skill collisions are metadata precedence, not runtime resource
@@ -2188,9 +2206,9 @@ async fn dynamic_resource_snapshots_and_reload() {
 #[tokio::test]
 async fn structured_custom_tool_errors_replay_and_session_recovers() {
     let env = plugin_builder(vec![
-        tool_step("remember", json!({"value": "ERR_ONCE"})),
+        tool_step("toolbox__remember", json!({"value": "ERR_ONCE"})),
         text_step("AFTER_PLUGIN_ERROR"),
-        tool_step("remember", json!({"value": "VALID_AFTER_ERROR"})),
+        tool_step("toolbox__remember", json!({"value": "VALID_AFTER_ERROR"})),
         text_step("VALID_PLUGIN_FINAL"),
     ])
     .build()
@@ -2211,7 +2229,7 @@ async fn structured_custom_tool_errors_replay_and_session_recovers() {
         .await
         .expect("idle after custom error");
     let canonical = env.events(session, None).await.expect("canonical replay");
-    assert_one_tool_terminal(&canonical, "remember");
+    assert_one_tool_terminal(&canonical, "toolbox__remember");
     let error = canonical
         .iter()
         .find_map(|envelope| match &envelope.event {

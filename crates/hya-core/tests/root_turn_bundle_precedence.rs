@@ -642,6 +642,7 @@ fn catalog(agents: &[AgentFixture]) -> Arc<AgentCatalog> {
                     version: "0.0.0".to_string(),
                     publisher: "hya-tests".to_string(),
                 },
+                namespace: None,
                 digest: format!("test-only-{}", agent.stable_id),
                 agent: PreparedAgent {
                     id: AgentName::new(&agent.stable_id),

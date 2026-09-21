@@ -2054,6 +2054,7 @@ fn nested_root_divergence_runtime(tools: Arc<ToolRegistry>) -> Arc<RuntimeRegist
                 version: "0.0.0".to_string(),
                 publisher: "hya-tests".to_string(),
             },
+            namespace: None,
             digest: format!("test-only-{stable_id}"),
             agent: PreparedAgent {
                 id: AgentName::new(stable_id),
@@ -2353,6 +2354,7 @@ async fn missing_root_definition_fails_before_admission_for_resident_batch() {
                     version: "0.0.0".to_string(),
                     publisher: "hya-tests".to_string(),
                 },
+                namespace: None,
                 digest: format!("test-only-{stable_id}"),
                 agent: agent(stable_id, role, can_spawn),
                 tools: Vec::new(),

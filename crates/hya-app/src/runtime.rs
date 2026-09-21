@@ -4676,7 +4676,7 @@ You are the installed resident agent.
             .map(|schema| schema.name.as_str().to_string())
             .collect::<Vec<_>>();
         assert!(names.contains(&"mcp__mixed__ping".to_string()));
-        assert!(names.contains(&"plugin_ping".to_string()));
+        assert!(names.contains(&"mixed-plugin__plugin_ping".to_string()));
     }
 
     #[tokio::test]
@@ -4922,6 +4922,7 @@ You are the installed resident agent.
                         version: "0.0.0".to_string(),
                         publisher: "hya-tests".to_string(),
                     },
+                    namespace: None,
                     digest: format!("test-only-{stable_id}"),
                     agent: PreparedAgent {
                         id: AgentName::new(*stable_id),
@@ -5092,6 +5093,7 @@ You are the installed resident agent.
                     version: "0.0.0".to_string(),
                     publisher: "hya-tests".to_string(),
                 },
+                namespace: None,
                 digest: format!("test-only-{stable_id}"),
                 agent,
                 tools: Vec::new(),
@@ -7912,6 +7914,7 @@ for line in sys.stdin:
                 version: "0.0.0".to_string(),
                 publisher: "hya-tests".to_string(),
             },
+            namespace: None,
             digest: format!("{marker}-bundle-digest"),
             agent: PreparedAgent {
                 id: AgentName::new("worker"),
@@ -8013,6 +8016,7 @@ for line in sys.stdin:
                 version: "0.0.0".to_string(),
                 publisher: "hya-tests".to_string(),
             },
+            namespace: None,
             digest: format!("{marker}-disjoint-bundle-digest"),
             // One agent per bundle: `alpha` selects only its own closure, while
             // the bundle still ships both extensions so selection can be

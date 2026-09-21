@@ -23,6 +23,7 @@ fn installed(bundle_id: &str, agent_id: &str, can_spawn: &[&str]) -> PreparedIns
             version: "1.0.0".to_string(),
             publisher: "tests".to_string(),
         },
+        namespace: None,
         digest: format!("digest-{bundle_id}"),
         agent: PreparedAgent {
             id: AgentName::new(agent_id),

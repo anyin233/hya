@@ -45,6 +45,7 @@ pub fn test_catalog_with_lifecycles(
                     version: "0.0.0".to_string(),
                     publisher: "hya-tests".to_string(),
                 },
+                namespace: None,
                 digest: format!("test-only-{stable_id}"),
                 agent: PreparedAgent {
                     id: AgentName::new(*stable_id),

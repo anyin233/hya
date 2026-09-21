@@ -175,6 +175,7 @@ fn catalog() -> (Arc<AgentCatalog>, Vec<RuntimeSource>) {
                 version: "0.0.0".to_string(),
                 publisher: "hya-tests".to_string(),
             },
+            namespace: None,
             digest: format!("test-only-{bundle_slug}"),
             agent: PreparedAgent {
                 id: AgentName::new(stable_id),
@@ -417,6 +418,7 @@ async fn canonical_allow_deny_and_alias_share_schema_and_dispatch() {
             version: "0.0.0".to_string(),
             publisher: "hya-tests".to_string(),
         },
+        namespace: None,
         digest: "test-only".to_string(),
         agent: PreparedAgent {
             id: AgentName::new("alias-agent"),
@@ -688,6 +690,7 @@ async fn a_bundle_agent_cannot_select_a_harness_mcp_export_or_skill() {
                 version: "0.0.0".to_string(),
                 publisher: "hya-tests".to_string(),
             },
+            namespace: None,
             digest: format!("test-only-{slug}"),
             agent: PreparedAgent {
                 id: AgentName::new(format!("plane-refusal-{slug}")),

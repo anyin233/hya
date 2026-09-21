@@ -471,6 +471,7 @@ fn sidecar_permission_bundle(spawn_lifecycle: SpawnLifecycle) -> PreparedAgentBu
             version: "0.0.0".to_string(),
             publisher: "hya-tests".to_string(),
         },
+        namespace: None,
         digest: "test-only".to_string(),
         agent: PreparedAgent {
             id: AgentName::new("sidecar-agent"),

@@ -25,11 +25,14 @@ pub struct McpTool {
 }
 
 impl McpTool {
-    /// Build a tool if `info.input_schema` is a JSON Schema object type.
+    /// Build a tool if `info.input_schema` is a JSON Schema object type and
+    /// its composed name is a valid `mcp__{server}__{tool}` spelling.
     ///
-    /// Returns `None` when the schema is not `type: "object"` so non-object tools
-    /// never enter the model registry. `server` is the config key used for
-    /// namespacing; `timeout` bounds each `tools/call`.
+    /// Returns `None` when the schema is not `type: "object"` or the tool name
+    /// cannot combine with the server token into an unambiguous qualified name,
+    /// so unusable tools never enter the model registry. `server` is the
+    /// config key (namespace) used for namespacing; `timeout` bounds each
+    /// `tools/call`.
     pub fn try_new(
         server: &str,
         info: ToolInfo,
@@ -39,7 +42,7 @@ impl McpTool {
         if info.input_schema.get("type").and_then(Value::as_str) != Some("object") {
             return None;
         }
-        let namespaced = namespaced_tool_name(server, &info.name);
+        let namespaced = namespaced_tool_name(server, &info.name)?;
         Some(Arc::new(Self {
             client,
             tool: info.name,
@@ -54,10 +57,23 @@ impl McpTool {
     }
 }
 
-/// Model-facing tool name: `mcp__{server}__{tool}` (server is the config id).
+/// Model-facing tool name: `mcp__{server}__{tool}` (server is the namespace).
+///
+/// Returns `None` when either token is not a valid namespace segment
+/// (`[a-zA-Z0-9_-]`, non-empty) so a malformed server key or tool name can
+/// never compose an ambiguous qualified spelling.
 #[must_use]
-pub fn namespaced_tool_name(server: &str, tool: &str) -> String {
-    format!("mcp__{server}__{tool}")
+pub fn namespaced_tool_name(server: &str, tool: &str) -> Option<String> {
+    let valid = |token: &str| {
+        !token.is_empty()
+            && token
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+    };
+    if !valid(server) || !valid(tool) {
+        return None;
+    }
+    Some(format!("mcp__{server}__{tool}"))
 }
 
 #[async_trait]
