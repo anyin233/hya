@@ -42,7 +42,7 @@ pub use admission::{
 pub use agent_model_preference::AgentModelPreference;
 pub use bundle_registry::{
     BundleInstallCandidate, BundleInstallOutcome, BundleRegistry, BundleRegistryRecord,
-    BundleRegistrySnapshot, BundleUninstallOutcome,
+    BundleRegistrySnapshot, BundleUninstallOutcome, NamespaceInstallPolicy,
 };
 pub use error::StoreError;
 pub use hya_proto::{ActorClaim, OwnerRunId};

@@ -56,6 +56,17 @@ pub enum BundleError {
         /// What the author should do instead.
         guidance: String,
     },
+    /// A `namespace` declaration (or its identity-derived default) is not a
+    /// valid namespace token or collides with a reserved namespace.
+    #[error("invalid bundle namespace `{namespace}` in `{source_name}`: {guidance}")]
+    InvalidNamespace {
+        /// Source root or bundle id for diagnostics.
+        source_name: String,
+        /// The offending namespace value.
+        namespace: String,
+        /// What the author should do instead.
+        guidance: String,
+    },
     /// `kind` is not `AgentBundle`.
     #[error("unsupported bundle kind `{found}` in `{source_name}`")]
     WrongKind {

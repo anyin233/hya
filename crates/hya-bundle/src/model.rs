@@ -165,6 +165,10 @@ pub struct PreparedAgentBundle {
     pub format_version: u32,
     /// Bundle identity block.
     pub identity: BundleIdentity,
+    /// Provider-facing namespace (declared or identity-derived). Skipped when
+    /// absent so prepared documents written before namespaces stay decodable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
     /// Digest of this bundle's canonical content for integrity checks.
     pub digest: String,
     /// The single Agent this bundle defines.
@@ -205,6 +209,10 @@ pub struct PreparedWorkflowBundle {
     pub format_version: u32,
     /// Bundle identity block.
     pub identity: BundleIdentity,
+    /// Provider-facing namespace (declared or identity-derived). Skipped when
+    /// absent so prepared documents written before namespaces stay decodable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
     /// Digest of this bundle's canonical content for integrity checks.
     pub digest: String,
     /// The one compiled Workflow this bundle defines.
@@ -230,6 +238,19 @@ pub enum PreparedInstallableBundle {
     Agent(Box<PreparedAgentBundle>),
     /// WorkflowBundle payload with one Workflow and Agent closure.
     Workflow(Box<PreparedWorkflowBundle>),
+}
+
+impl PreparedInstallableBundle {
+    /// Resolved provider-facing namespace: the declared value, or the
+    /// identity name segment when the prepared document predates namespaces.
+    #[must_use]
+    pub fn namespace(&self) -> &str {
+        let (declared, id) = match self {
+            Self::Agent(bundle) => (bundle.namespace.as_deref(), bundle.identity.id.as_str()),
+            Self::Workflow(bundle) => (bundle.namespace.as_deref(), bundle.identity.id.as_str()),
+        };
+        declared.unwrap_or_else(|| id.rsplit('/').next().unwrap_or_default())
+    }
 }
 
 impl Serialize for PreparedInstallableBundle {

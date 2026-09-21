@@ -4089,6 +4089,7 @@ You are the runtime-installed agent.
         let outcome = registry
             .install(
                 &[],
+                hya_store::NamespaceInstallPolicy::DenyConflicts,
                 BundleInstallCandidate {
                     source_digest: [0x52; 32],
                     prepared_digest: installed.digest().to_string(),
@@ -4448,6 +4449,7 @@ You are the installed resident agent.
         let outcome = registry
             .install(
                 &[],
+                hya_store::NamespaceInstallPolicy::DenyConflicts,
                 BundleInstallCandidate {
                     source_digest: [0x53; 32],
                     prepared_digest: installed.digest().to_string(),

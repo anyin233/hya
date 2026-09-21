@@ -8,13 +8,20 @@ use hya_bundle::{
     PrivatePackageAuthentication, PrivatePackagePayload, cleanup_orphaned_staging, stage_package,
 };
 use hya_store::{
-    BundleInstallOutcome, BundleRegistry, BundleRegistryRecord, BundleUninstallOutcome, StoreError,
+    BundleInstallOutcome, BundleRegistry, BundleRegistryRecord, BundleUninstallOutcome,
+    NamespaceInstallPolicy, StoreError,
 };
 
 #[derive(Subcommand)]
 pub(crate) enum BundleCommand {
     /// Install a bundle package.
-    Install { package: PathBuf },
+    Install {
+        package: PathBuf,
+        /// Accept a namespace conflict (replacing the incumbent bundle) and
+        /// same-bundle downgrades instead of failing.
+        #[arg(long)]
+        overwrite: bool,
+    },
     /// List available bundles.
     List,
     /// Uninstall an installed bundle.
@@ -36,7 +43,7 @@ pub(crate) enum BundleCommand {
 
 pub(crate) async fn run(command: BundleCommand) -> anyhow::Result<()> {
     match command {
-        BundleCommand::Install { package } => install(package).await,
+        BundleCommand::Install { package, overwrite } => install(package, overwrite).await,
         BundleCommand::List => list().await,
         BundleCommand::Uninstall { name } => uninstall(&name).await,
         BundleCommand::Info {
@@ -51,7 +58,7 @@ pub(crate) async fn run(command: BundleCommand) -> anyhow::Result<()> {
     }
 }
 
-async fn install(package: PathBuf) -> anyhow::Result<()> {
+async fn install(package: PathBuf, overwrite: bool) -> anyhow::Result<()> {
     validate_package_path(&package)?;
     let inspection = inspect_package(&package)?;
     if let PackageInspection::Public(public) = &inspection {
@@ -72,10 +79,44 @@ async fn install(package: PathBuf) -> anyhow::Result<()> {
             return Err(StoreError::PrivateActivationUnsupported.into());
         }
     };
+    let policy = if overwrite {
+        NamespaceInstallPolicy::OverwriteConflicts
+    } else {
+        NamespaceInstallPolicy::DenyConflicts
+    };
     let registry = open_registry().await?;
-    let outcome = registry
-        .install_inspection(&reserved_agent_ids(), inspection, hya_proto::now_millis())
-        .await?;
+    let outcome = match registry
+        .install_inspection(
+            &reserved_agent_ids(),
+            policy,
+            inspection,
+            hya_proto::now_millis(),
+        )
+        .await
+    {
+        Ok(outcome) => outcome,
+        Err(StoreError::NamespaceConflict {
+            namespace,
+            existing_bundle_id,
+            incoming_bundle_id,
+        }) => {
+            anyhow::bail!(
+                "NAMESPACE_CONFLICT: namespace {namespace} is owned by {existing_bundle_id}; \
+                 rerun with --overwrite to replace it with {incoming_bundle_id}"
+            );
+        }
+        Err(StoreError::BundleDowngradeRequired {
+            bundle_id,
+            installed_version,
+            incoming_version,
+        }) => {
+            anyhow::bail!(
+                "BUNDLE_DOWNGRADE_REQUIRED: {bundle_id} is installed at {installed_version}; \
+                 rerun with --overwrite to install {incoming_version}"
+            );
+        }
+        Err(error) => return Err(error.into()),
+    };
     let (action, generation) = match outcome {
         BundleInstallOutcome::Installed { generation } => ("installed", generation),
         BundleInstallOutcome::Replaced { generation } => ("replaced", generation),

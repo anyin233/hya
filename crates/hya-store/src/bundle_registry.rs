@@ -68,6 +68,16 @@ impl LoadedBundleRegistrySnapshot {
     }
 }
 
+/// How an install reacts when the incoming bundle's namespace is contested.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NamespaceInstallPolicy {
+    /// Refuse the install on any namespace or downgrade conflict.
+    DenyConflicts,
+    /// Resolve a cross-bundle namespace conflict by replacing the incumbent
+    /// bundle, and accept downgrades of the same bundle id.
+    OverwriteConflicts,
+}
+
 /// Payload required to install or replace a public package in the registry.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BundleInstallCandidate {
@@ -111,6 +121,20 @@ pub enum BundleUninstallOutcome {
     },
 }
 
+/// Semver-aware downgrade check: `Some(true)` when `incoming` is strictly
+/// lower than `installed`, `Some(false)` otherwise, and `None` when either
+/// version is not semver-shaped (non-semver versions keep the legacy
+/// replace-always behavior).
+fn is_downgrade(incoming: &str, installed: &str) -> bool {
+    match (
+        semver::Version::parse(incoming),
+        semver::Version::parse(installed),
+    ) {
+        (Ok(incoming), Ok(installed)) => incoming < installed,
+        _ => false,
+    }
+}
+
 impl BundleRegistry {
     /// Open or create the registry database at `path` and run migrations (synchronous=Full).
     pub async fn connect(path: &str) -> Result<Self, StoreError> {
@@ -150,6 +174,7 @@ impl BundleRegistry {
     pub async fn install_inspection(
         &self,
         reserved_agent_ids: &[&str],
+        policy: NamespaceInstallPolicy,
         inspection: hya_bundle::PackageInspection,
         installed_at: i64,
     ) -> Result<BundleInstallOutcome, StoreError> {
@@ -160,6 +185,7 @@ impl BundleRegistry {
             hya_bundle::PackageInspection::Public(public) => {
                 self.install(
                     reserved_agent_ids,
+                    policy,
                     BundleInstallCandidate {
                         source_digest: public.source_digest,
                         prepared_digest: public.prepared.digest().to_owned(),
@@ -181,6 +207,7 @@ impl BundleRegistry {
     pub async fn install(
         &self,
         reserved_agent_ids: &[&str],
+        policy: NamespaceInstallPolicy,
         candidate: BundleInstallCandidate,
     ) -> Result<BundleInstallOutcome, StoreError> {
         let BundleInstallCandidate {
@@ -221,25 +248,69 @@ impl BundleRegistry {
                 }
             })?;
         let snapshot = Self::snapshot_from_transaction(&mut transaction).await?;
+        let incoming_namespace = incoming.namespace().to_string();
         let existing = snapshot
             .bundles
             .iter()
             .find(|loaded| loaded.record.bundle_id == bundle_id);
+
+        // Same bundle id: refuse downgrades unless the policy allows them.
+        if let Some(loaded) = existing
+            && loaded.record.source_digest != source_digest
+            && loaded.record.version != version
+            && is_downgrade(&version, &loaded.record.version)
+        {
+            if policy == NamespaceInstallPolicy::DenyConflicts {
+                return Err(StoreError::BundleDowngradeRequired {
+                    bundle_id,
+                    installed_version: loaded.record.version.clone(),
+                    incoming_version: version,
+                });
+            }
+        }
+
+        // Cross-bundle namespace conflicts: refuse or replace the incumbent.
+        let namespace_losers: Vec<String> = snapshot
+            .bundles
+            .iter()
+            .filter(|loaded| {
+                loaded.record.bundle_id != bundle_id
+                    && loaded.prepared.namespace() == incoming_namespace
+            })
+            .map(|loaded| loaded.record.bundle_id.clone())
+            .collect();
+        if !namespace_losers.is_empty() && policy == NamespaceInstallPolicy::DenyConflicts {
+            return Err(StoreError::NamespaceConflict {
+                namespace: incoming_namespace,
+                existing_bundle_id: namespace_losers[0].clone(),
+                incoming_bundle_id: bundle_id,
+            });
+        }
+
         let replaces = existing.is_some_and(|loaded| {
             loaded.record.source_digest != source_digest && loaded.record.version != version
         });
 
         let mut complete = Vec::new();
         for loaded in &snapshot.bundles {
-            if replaces && loaded.record.bundle_id == bundle_id {
+            if (replaces && loaded.record.bundle_id == bundle_id)
+                || namespace_losers.contains(&loaded.record.bundle_id)
+            {
                 continue;
             }
             complete.push(loaded.prepared.clone());
         }
-        if existing.is_none() || replaces {
+        if existing.is_none() || replaces || !namespace_losers.is_empty() {
             complete.push(incoming);
         }
         BundleCatalog::from_prepared(&complete)?;
+
+        for loser in &namespace_losers {
+            sqlx::query("DELETE FROM installed_bundle WHERE bundle_id = ?")
+                .bind(loser)
+                .execute(&mut *transaction)
+                .await?;
+        }
 
         if let Some(existing) = existing {
             if existing.record.source_digest == source_digest {

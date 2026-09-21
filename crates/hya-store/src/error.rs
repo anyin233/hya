@@ -48,6 +48,32 @@ pub enum StoreError {
         /// Version that already exists with different bytes.
         version: String,
     },
+    /// Another installed bundle already owns the incoming namespace.
+    #[error(
+        "NAMESPACE_CONFLICT: namespace {namespace} is owned by {existing_bundle_id}; \
+         incoming bundle {incoming_bundle_id} requires an explicit overwrite"
+    )]
+    NamespaceConflict {
+        /// Contested namespace.
+        namespace: String,
+        /// Bundle id that currently owns the namespace.
+        existing_bundle_id: String,
+        /// Bundle id that tried to claim it.
+        incoming_bundle_id: String,
+    },
+    /// The incoming bundle version is lower than the installed one.
+    #[error(
+        "BUNDLE_DOWNGRADE_REQUIRED: bundle {bundle_id} is installed at {installed_version}; \
+         installing {incoming_version} requires an explicit overwrite"
+    )]
+    BundleDowngradeRequired {
+        /// Bundle id.
+        bundle_id: String,
+        /// Currently installed version.
+        installed_version: String,
+        /// Lower incoming version.
+        incoming_version: String,
+    },
     /// Private package inspection cannot be activated through the registry.
     #[error("PRIVATE_ACTIVATION_UNSUPPORTED")]
     PrivateActivationUnsupported,

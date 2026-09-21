@@ -132,6 +132,10 @@ pub(crate) struct SourceKind {
 pub(crate) struct SourceAgentManifest {
     pub kind: String,
     pub identity: BundleIdentity,
+    /// Provider-facing namespace for this bundle's tools and schemas; the
+    /// identity name segment is the default.
+    #[serde(default)]
+    pub namespace: Option<String>,
     #[serde(default)]
     pub resources: SourceResources,
     #[serde(default)]
@@ -152,6 +156,10 @@ pub(crate) struct SourceAgentManifest {
 pub(crate) struct SourceWorkflowManifest {
     pub kind: String,
     pub identity: BundleIdentity,
+    /// Provider-facing namespace for this bundle's tools and schemas; the
+    /// identity name segment is the default.
+    #[serde(default)]
+    pub namespace: Option<String>,
     /// The one Workflow source declaration owned by this bundle.
     pub workflow: SourceWorkflow,
     /// Candidate Agent set from which the exact compiled closure is selected.
