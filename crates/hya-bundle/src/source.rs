@@ -136,6 +136,9 @@ pub(crate) struct SourceAgentManifest {
     /// identity name segment is the default.
     #[serde(default)]
     pub namespace: Option<String>,
+    /// External URI-scheme extensions this bundle provides.
+    #[serde(default)]
+    pub schemas: Vec<SourceSchema>,
     #[serde(default)]
     pub resources: SourceResources,
     #[serde(default)]
@@ -164,10 +167,26 @@ pub(crate) struct SourceWorkflowManifest {
     pub workflow: SourceWorkflow,
     /// Candidate Agent set from which the exact compiled closure is selected.
     pub agents: Vec<SourceAgent>,
+    /// External URI-scheme extensions this bundle provides.
+    #[serde(default)]
+    pub schemas: Vec<SourceSchema>,
     #[serde(default)]
     pub resources: SourceResources,
     #[serde(default)]
     pub extensions: SourceExtensions,
+}
+
+/// One `schemas:` entry: an external URI scheme served by a bundle-local tool.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SourceSchema {
+    /// Scheme text as it appears before `://` (e.g. `db`).
+    pub scheme: String,
+    /// Bundle-local id of the tool that serves the scheme.
+    pub tool: String,
+    /// Whether the scheme accepts writes in addition to reads.
+    #[serde(default)]
+    pub writable: bool,
 }
 
 /// Workflow source declaration in a WorkflowBundle manifest.

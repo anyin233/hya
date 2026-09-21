@@ -736,3 +736,96 @@ fn private_v1_envelope() -> Vec<u8> {
     assert_eq!(bytes.len(), 113);
     bytes
 }
+
+/// Build one AgentBundle package declaring one JS tool and a `db` schema.
+fn schema_bundle_package(
+    data_root: &std::path::Path,
+) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let source = hya_bundle::BundleSource::new(
+        "schema-cli",
+        vec![
+            hya_bundle::SourceFile::new(
+                "bundle.yaml",
+                br#"kind: AgentBundle
+identity:
+  id: hya/schema-cli
+  version: 1.0.0
+  publisher: hya
+schemas:
+  - scheme: db
+    tool: query
+    writable: false
+resources:
+  tools:
+    - id: query
+      path: extensions/runtime.js
+extensions:
+  js:
+    - id: runtime
+      path: extensions/runtime.js
+agent:
+  id: lead
+  role: main
+  spawn_lifecycle: transient
+  resource_view:
+    allow:
+      - query
+      - runtime
+"#,
+            ),
+            hya_bundle::SourceFile::new("extensions/runtime.js", b"export default {}".to_vec()),
+        ],
+    );
+    let package = data_root.join("schema-cli.hyabundle");
+    fs::write(&package, hya_bundle::write_public_package(&source)?)?;
+    Ok(package)
+}
+
+#[test]
+fn bundle_schemas_lists_declared_scheme_extensions() -> Result<(), Box<dyn std::error::Error>> {
+    let data_root = unique_data_root()?;
+    let package = schema_bundle_package(&data_root)?;
+
+    let install = bundle_command(&data_root)
+        .args(["bundle", "install"])
+        .arg(&package)
+        .output()?;
+    assert_success("install", &install);
+
+    let schemas = bundle_command(&data_root)
+        .args(["bundle", "schemas"])
+        .output()?;
+    assert_success("schemas", &schemas);
+    let schemas_stdout = String::from_utf8(schemas.stdout)?;
+    let mut lines = schemas_stdout.lines();
+    assert_eq!(
+        lines.next(),
+        Some("BUNDLE SCHEME TOOL WRITABLE"),
+        "unexpected schemas header:\n{schemas_stdout}"
+    );
+    let row = lines
+        .find(|line| line.split_whitespace().next() == Some("hya/schema-cli"))
+        .ok_or("installed bundle must be listed in bundle schemas output")?;
+    assert_eq!(
+        row.split_whitespace().collect::<Vec<_>>(),
+        ["hya/schema-cli", "db", "query", "false"],
+        "the schema row must carry scheme, owner tool, and writable flag:\n{schemas_stdout}"
+    );
+
+    let uninstall = bundle_command(&data_root)
+        .args(["bundle", "uninstall", "hya/schema-cli"])
+        .output()?;
+    assert_success("uninstall", &uninstall);
+    let after = bundle_command(&data_root)
+        .args(["bundle", "schemas"])
+        .output()?;
+    assert_success("schemas after uninstall", &after);
+    let after_stdout = String::from_utf8(after.stdout)?;
+    assert!(
+        !after_stdout.contains("hya/schema-cli"),
+        "uninstalled bundle remained listed:\n{after_stdout}"
+    );
+
+    fs::remove_dir_all(&data_root)?;
+    Ok(())
+}

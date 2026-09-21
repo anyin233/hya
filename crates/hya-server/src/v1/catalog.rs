@@ -11,6 +11,7 @@ use axum::{Json, Router};
 
 use crate::ServerState;
 use hya_api::v1 as pb;
+use serde_json::{Value, json};
 
 use super::{V1Error, scope_directory};
 
@@ -23,6 +24,7 @@ pub(crate) fn router() -> Router<ServerState> {
         .route("/v1/commands", get(list_commands))
         .route("/v1/skills", get(list_skills))
         .route("/v1/tools", get(list_tools))
+        .route("/v1/runtime/schemas", get(list_runtime_schemas))
         .route("/v1/permissions/rules", get(list_saved_rules))
         .route("/v1/permissions/rules/:rule", delete(delete_saved_rule))
 }
@@ -341,6 +343,41 @@ pub(crate) fn tool_rows(st: &ServerState) -> Vec<pb::ToolSummary> {
             hidden: false,
         })
         .collect()
+}
+
+/// The runtime snapshot's published scheme table: registered external URI
+/// schemes with their winning source binding and masking chain.
+///
+/// Rendered as plain protojson-shaped data until the `hya.v1` IDL grows the
+/// matching message; the route exists so clients can already observe the table.
+async fn list_runtime_schemas(State(st): State<ServerState>) -> Json<Value> {
+    let registry = st.engine.runtime_registry();
+    let effective = registry.effective_schemes();
+    let schemas = effective
+        .schemes
+        .keys()
+        .map(|scheme| {
+            let binding = &effective.schemes[scheme];
+            json!({
+                "scheme": scheme,
+                "owner": binding.owner(),
+                "canonicalTool": binding.canonical_tool(),
+                "writable": binding.writable(),
+                "chain": registry
+                    .scheme_chain(scheme)
+                    .into_iter()
+                    .map(|(owner, canonical_tool)| json!({
+                        "owner": owner,
+                        "canonicalTool": canonical_tool,
+                    }))
+                    .collect::<Vec<_>>(),
+            })
+        })
+        .collect::<Vec<_>>();
+    Json(json!({
+        "generation": effective.generation.get(),
+        "schemas": schemas,
+    }))
 }
 
 async fn list_saved_rules(

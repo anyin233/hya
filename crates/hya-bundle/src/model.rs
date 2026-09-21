@@ -429,6 +429,37 @@ impl PreparedInstallableBundle {
     }
 }
 
+/// One prepared external URI-scheme extension declared by a bundle.
+///
+/// `tool` is the bundle-local tool id (e.g. `query` for `bundle:<id>/tool/query`)
+/// that serves the scheme; the runtime resolves it to that tool's canonical
+/// qualified name when the source publishes.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PreparedSchema {
+    /// Scheme text as it appears before `://` (e.g. `db`).
+    pub scheme: String,
+    /// Bundle-local id of the tool that serves the scheme.
+    pub tool: String,
+    /// Whether the scheme accepts writes in addition to reads.
+    pub writable: bool,
+}
+
+/// Per-bundle schema list in a prepared catalog document.
+///
+/// Prepared bundles carry their `schemas:` declarations as a document-level
+/// section parallel to the index (skipped entirely when no bundle declares
+/// any), so documents written before the section stay byte-identical and
+/// decodable.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PreparedBundleSchemas {
+    /// Bundle identity id the schemas belong to.
+    pub bundle_id: String,
+    /// Declared schema extensions, sorted by scheme.
+    pub schemas: Vec<PreparedSchema>,
+}
+
 /// Compact index row for one bundle in a prepared catalog.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -450,6 +481,7 @@ pub struct PreparedBundleIndex {
 pub struct PreparedCatalog {
     pub(crate) bundles: Vec<PreparedInstallableBundle>,
     pub(crate) index: Vec<PreparedBundleIndex>,
+    pub(crate) schemas: Vec<PreparedBundleSchemas>,
     pub(crate) bytes: Vec<u8>,
     pub(crate) digest: String,
 }
@@ -465,6 +497,22 @@ impl PreparedCatalog {
     #[must_use]
     pub fn index(&self) -> &[PreparedBundleIndex] {
         &self.index
+    }
+
+    /// Per-bundle schema-extension declarations, sorted by bundle id.
+    #[must_use]
+    pub fn schemas(&self) -> &[PreparedBundleSchemas] {
+        &self.schemas
+    }
+
+    /// The schema extensions one bundle declares, or an empty slice.
+    #[must_use]
+    pub fn bundle_schemas(&self, bundle_id: &str) -> &[PreparedSchema] {
+        self.schemas
+            .iter()
+            .find(|row| row.bundle_id == bundle_id)
+            .map(|row| row.schemas.as_slice())
+            .unwrap_or(&[])
     }
 
     /// Canonical JSON bytes of the prepared document (what the registry stores).
@@ -485,6 +533,10 @@ pub(crate) struct PreparedDocument<'a> {
     pub format_version: u32,
     pub bundles: &'a [PreparedInstallableBundle],
     pub index: &'a [PreparedBundleIndex],
+    /// Per-bundle schema declarations; skipped when no bundle declares any so
+    /// documents written before the section keep their exact byte layout.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub schemas: Vec<PreparedBundleSchemas>,
 }
 
 #[derive(Deserialize)]
@@ -493,4 +545,6 @@ pub(crate) struct PreparedDocumentOwned {
     pub format_version: u32,
     pub bundles: Vec<PreparedInstallableBundle>,
     pub index: Vec<PreparedBundleIndex>,
+    #[serde(default)]
+    pub schemas: Vec<PreparedBundleSchemas>,
 }
