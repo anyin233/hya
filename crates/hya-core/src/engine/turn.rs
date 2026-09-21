@@ -929,6 +929,20 @@ impl SessionEngine {
                 && let Some(inputs) = rebind.as_ref()
             {
                 let workdir = session_workdir(&live_agent, &projection);
+                // Skills are discovered into the registry explicitly (they are
+                // not part of the bind itself), so a workdir skill change must
+                // refresh them before the bind for the new generation to
+                // carry it. Fail-open like every other rebind step.
+                if let Err(error) = self.refresh_runtime(|candidate| {
+                    candidate.refresh_skills(&workdir);
+                    Ok(())
+                }) {
+                    tracing::warn!(
+                        session = %session,
+                        error = %error,
+                        "round rebind could not refresh skills; keeping current skills"
+                    );
+                }
                 match self.bind_session_runtime(session, &workdir).await {
                     Ok(fresh) if fresh.generation() != binding.generation() => {
                         // Mirror the Root activation compile path: agent_base
