@@ -93,6 +93,7 @@ If you want to understand the codebase:
 | [Runtime](architecture/runtime.md) | Explain `SessionEngine`, turn execution, goal mode, loop mode, teams, and worktrees. |
 | [Admission and Governor](architecture/admission-and-governor.md) | Spawn admission journal, subagent governor budgets, and depth limits. |
 | [Event Model](architecture/event-model.md) | Explain canonical events, envelopes, messages, parts, ids, and projections. |
+| [Goal/loop authoring](goal-loop-authoring.md) | Independent evaluators for goal mode and loop mode: plugin hooks, model wiring, deterministic predicates, and the engine-owned caps. |
 | [Providers](architecture/providers.md) | Explain provider routing, OpenAI-compatible, Anthropic, Responses, and Google protocols, SSE decoding, and fallback providers. |
 | [Tools and Permissions](architecture/tools-and-permissions.md) | Explain builtin tools, permission rules, ask flows, and output limits. |
 | [Agent tool surface](architecture/agent-tool-surface.md) | Canonical tool registry surface, aliases, resource views, and agent-facing tool contracts. |

@@ -280,21 +280,22 @@ and the failure is logged.
 | `session.end` | `{session}` | notification |
 | `agent.spawn` | `{parent, child}` | notification |
 
-### Registered-only hooks (parsed but never dispatched)
+### Evaluator hooks (dispatched)
 
-These names parse from `plugin.toml` and from the initialize reply and can be
-stored on the connection, but
-[`dispatcher.rs`](../crates/hya-plugin/src/dispatcher.rs) has **no** dispatch
-arm for them yet (they are slated to become bundle-provided goal/loop
-evaluators):
+Three hooks turn a plugin into the independent judge for goal/loop mode. All
+default to posture **Open**; the engine's iteration caps and no-progress
+detection stay engine-authority and cannot be overridden by a plugin.
 
-| Wire name |
-| --- |
-| `goal.evaluate` |
-| `loop.verifier` |
-| `loop.planner` |
+| Wire name | Params | Outcome |
+| --- | --- | --- |
+| `goal.evaluate` | `{condition, transcript}` | `GoalEvaluateReply`: `verdict{met, reason}` or `malformed` — a malformed or failing reply degrades to not-met so a broken evaluator only consumes one iteration of the cap |
+| `loop.verifier` | `{target, transcript}` | structured verifier verdict (score/satisfied/evidence/critical gaps) |
+| `loop.planner` | `{target, history, last_verdict, planner_notes}` | next directive + continuity brief |
 
-Do not build a plugin that depends on these hooks.
+Selection (goal mode): when any registered plugin provides `goal.evaluate`, the
+engine uses it as the goal evaluator; otherwise it falls back to the built-in
+model evaluator (`--evaluator-model` selects the model, default the worker's
+model). See [Goal/loop authoring](goal-loop-authoring.md).
 
 ---
 
