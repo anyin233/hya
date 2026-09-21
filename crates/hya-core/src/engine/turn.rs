@@ -20,9 +20,10 @@ use super::{
 };
 use crate::error::CoreError;
 use crate::hooks::{
-    ChatParamsInput, ChatParamsOutcome, HookDispatcher, ToolExecuteAfterInput,
+    ChatParamsInput, ChatParamsOutcome, CompactionAfterInput, CompactionBeforeInput,
+    CompactionResolution, CompactionTrigger, HookDispatcher, ToolExecuteAfterInput,
     ToolExecuteAfterOutcome, ToolExecuteBeforeInput, ToolExecuteBeforeOutcome, ToolOutcomeNative,
-    activation_hook_for, scope_activation_hooks,
+    activation_hook_for, resolve_compaction_decision, scope_activation_hooks,
 };
 use crate::runtime_registry::CompiledResourceView;
 use crate::sidecar::{SidecarEnvironment, SidecarHandle, SidecarStart};
@@ -49,6 +50,19 @@ fn whole_window_range(messages: &[Message]) -> Option<(MessageId, MessageId, u32
         last.id(),
         u32::try_from(messages.len()).unwrap_or(u32::MAX),
     ))
+}
+
+/// Override the summarizer system prompt when a `compaction.before` hook
+/// returned `Replace` instructions for this walk; otherwise keep the options
+/// the definition and transcript imply.
+fn with_hook_instructions(
+    mut options: crate::compaction::SummarizeOptions,
+    instructions: &Option<String>,
+) -> crate::compaction::SummarizeOptions {
+    if let Some(text) = instructions {
+        options.system = Some(text.clone());
+    }
+    options
 }
 
 struct TurnExecution<'a> {
@@ -926,6 +940,39 @@ impl SessionEngine {
             // never requires the fixed Compaction agent to exist.
             let mut compaction_agent: Option<AgentDefinition<'_>> = None;
 
+            // Consult `compaction.before` once per ladder walk, only when the
+            // walk will actually run (over threshold). The engine's only
+            // trigger is Overflow: the request cannot go out un-compacted, so
+            // `resolve_compaction_decision` demotes any Skip to a warning and
+            // a Replace only rewrites the summarizer instructions below.
+            let summarizer_instructions = if over_threshold(tokens, &messages) {
+                match &self.hooks {
+                    Some(hooks) => {
+                        let decision = hooks
+                            .compaction_before(CompactionBeforeInput {
+                                session,
+                                trigger: CompactionTrigger::Overflow,
+                                messages_token_estimate: tokens,
+                            })
+                            .await;
+                        match resolve_compaction_decision(decision, CompactionTrigger::Overflow) {
+                            CompactionResolution::Replace { instructions } => Some(instructions),
+                            // Overflow-triggered skips are demoted by the
+                            // resolver; nothing to carry into the ladder.
+                            CompactionResolution::Proceed | CompactionResolution::Skip { .. } => {
+                                None
+                            }
+                        }
+                    }
+                    None => None,
+                }
+            } else {
+                None
+            };
+            // Estimated size of the last summary this walk committed, reported
+            // to `compaction.after` once the ladder is done.
+            let mut committed_summary_tokens: Option<usize> = None;
+
             for rung in self.compaction.method_order {
                 if !over_threshold(tokens, &messages) {
                     break;
@@ -988,6 +1035,7 @@ impl SessionEngine {
                         let body = hya_provider::format_responses_compact_system(&window.items);
                         // Native compact folds the whole input window it was given.
                         let folded = whole_window_range(&messages);
+                        committed_summary_tokens = Some(body.len() / 4);
                         // Persist so subsequent rounds re-inject the compact window
                         // and drop pre-marker history via HYA_COMPACTED_CONTEXT.
                         let injected = match actor_claim {
@@ -1035,6 +1083,7 @@ impl SessionEngine {
                         };
                         let archive = crate::compaction::snapcompact_archive(&messages[..split]);
                         let body = format!("{}\n{}", hya_provider::COMPACT_CONTEXT_MARKER, archive);
+                        committed_summary_tokens = Some(body.len() / 4);
                         let injected = match actor_claim {
                             Some(claim) => {
                                 self.inject_system_message_for_actor(claim, session, body)
@@ -1074,11 +1123,17 @@ impl SessionEngine {
                         };
                         // The handoff call sees the whole transcript verbatim;
                         // the fold range still leaves the recent tail in place.
+                        // A `compaction.before` Replace decision steers the
+                        // summarizer prompt for this walk.
+                        let options = with_hook_instructions(
+                            self.folding_options(definition, binding, &messages),
+                            &summarizer_instructions,
+                        );
                         let Ok(Some(plan)) = crate::compaction::plan_handoff(
                             &messages,
                             &self.compaction,
                             summarizer.as_ref(),
-                            self.folding_options(definition, binding, &messages),
+                            options,
                         )
                         .await
                         else {
@@ -1086,6 +1141,7 @@ impl SessionEngine {
                         };
                         let body =
                             format!("{}\n{}", hya_provider::COMPACT_CONTEXT_MARKER, plan.summary);
+                        committed_summary_tokens = Some(body.len() / 4);
                         let injected = match actor_claim {
                             Some(claim) => {
                                 self.inject_system_message_for_actor(claim, session, body)
@@ -1124,12 +1180,18 @@ impl SessionEngine {
                                 .insert(fixed_system_agent(binding, FixedSystemAgent::Compaction)?),
                         };
                         // Provider failures stay soft; a missing definition has
-                        // already failed closed by the time we are here.
+                        // already failed closed by the time we are here. A
+                        // `compaction.before` Replace decision steers the
+                        // summarizer prompt for this walk.
+                        let options = with_hook_instructions(
+                            self.folding_options(definition, binding, &messages),
+                            &summarizer_instructions,
+                        );
                         let Ok(Some(plan)) = crate::compaction::fold_prefix(
                             &messages,
                             &self.compaction,
                             summarizer.as_ref(),
-                            self.folding_options(definition, binding, &messages),
+                            options,
                         )
                         .await
                         else {
@@ -1141,6 +1203,7 @@ impl SessionEngine {
                         // history.
                         let body =
                             format!("{}\n{}", hya_provider::COMPACT_CONTEXT_MARKER, plan.summary);
+                        committed_summary_tokens = Some(body.len() / 4);
                         let injected = match actor_claim {
                             Some(claim) => {
                                 self.inject_system_message_for_actor(claim, session, body)
@@ -1170,6 +1233,16 @@ impl SessionEngine {
                             self.reload_after_compaction(session, agent, &model).await?;
                     }
                 }
+            }
+            // Notify `compaction.after` best-effort: an enrichment point, so a
+            // failure inside the host is logged there and never surfaced here.
+            if let (Some(hooks), Some(summary_tokens)) = (&self.hooks, committed_summary_tokens) {
+                hooks
+                    .compaction_after(CompactionAfterInput {
+                        session,
+                        summary_tokens,
+                    })
+                    .await;
             }
             // The wire surface of token accounting: one report per round,
             // recorded after the ladder so the figure is the occupancy this

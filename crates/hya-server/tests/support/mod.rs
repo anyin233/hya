@@ -91,6 +91,7 @@ pub fn runtime_with_catalog(
                 version: "0.0.0".to_string(),
                 publisher: "hya-tests".to_string(),
             },
+            namespace: None,
             digest: format!("test-only-{}", agent.stable_id),
             skills: agent
                 .bundle_skill

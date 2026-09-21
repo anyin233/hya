@@ -27,7 +27,7 @@ use crate::agent_catalog::AgentDefinition;
 use crate::bus::EventBus;
 use crate::compaction::{CompactionConfig, SummarizeOptions, Summarizer};
 use crate::error::CoreError;
-use crate::hooks::{HookDispatcher, dispatch_activation_event};
+use crate::hooks::{HookDispatcher, SessionLifecycleInput, dispatch_activation_event};
 use crate::runtime_registry::CompiledResourceView;
 use crate::sidecar::SidecarEnvironment;
 use crate::tokens::TokenAccounting;
@@ -1273,6 +1273,7 @@ impl SessionEngine {
             }],
         )
         .await?;
+        self.notify_session_lifecycle(id, true).await;
         Ok(id)
     }
 
@@ -1300,7 +1301,27 @@ impl SessionEngine {
             },
         )
         .await?;
+        self.notify_session_lifecycle(id, true).await;
         Ok(id)
+    }
+
+    /// Notify session lifecycle hooks. Best-effort by contract: implementors
+    /// log their own failures, and the engine never propagates them.
+    async fn notify_session_lifecycle(&self, session: SessionId, start: bool) {
+        if let Some(hooks) = &self.hooks {
+            let input = SessionLifecycleInput { session };
+            if start {
+                hooks.session_start(input).await;
+            } else {
+                hooks.session_end(input).await;
+            }
+        }
+    }
+
+    /// The plugin/host hook dispatcher, for engine-adjacent modules (subagent
+    /// registration, resident supervisors) that must notify observation hooks.
+    pub(crate) fn hook_dispatcher(&self) -> Option<Arc<dyn HookDispatcher>> {
+        self.hooks.clone()
     }
 
     /// Delete a session log from the store.
@@ -1314,7 +1335,11 @@ impl SessionEngine {
         if let Ok((root, 0)) = self.session_lineage(session).await {
             let _ = self.force_archive_team(root).await;
         }
-        Ok(self.store.delete_session(session).await?)
+        let deleted = self.store.delete_session(session).await?;
+        if deleted {
+            self.notify_session_lifecycle(session, false).await;
+        }
+        Ok(deleted)
     }
 }
 

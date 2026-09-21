@@ -16,7 +16,7 @@ use crate::engine::{
     scope_admission_member,
 };
 use crate::error::CoreError;
-use crate::hooks::scope_activation_hooks;
+use crate::hooks::{AgentSpawnInput, scope_activation_hooks};
 use crate::sidecar::{BoundSidecarFactory, SidecarHandle, SidecarStart};
 use crate::workflow::WorkflowTurnRoute;
 use crate::{AgentResourcePolicy, TurnBinding};
@@ -347,6 +347,16 @@ async fn run_member(
             },
         )
         .await?;
+    // Notify `agent.spawn` (best-effort observation point): the team root owns
+    // the roster, and the child session is the freshly registered agent.
+    if let Some(hooks) = engine.hook_dispatcher() {
+        hooks
+            .agent_spawn(AgentSpawnInput {
+                parent: root,
+                child,
+            })
+            .await;
+    }
     // Auto-join the unit's reserved announce channel. This is what makes
     // `announce` reach exactly the leader's DIRECT reports (task 08-07, R6):
     // the membership set IS the unit, so the existing channel fan-out delivers

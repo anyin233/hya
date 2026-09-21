@@ -265,12 +265,28 @@ the wire method, params, outcomes, and default posture.
   (`GUARD_FAILED_SAFE` in
   [`dispatcher.rs`](../crates/hya-plugin/src/dispatcher.rs)).
 
-### Dead hooks (registered but never dispatched)
+### Injection-point hooks (dispatched, fail-open)
+
+Five observation/enrichment hooks round out the injection surface. All default
+to posture **Open** and are **fail-open**: a hook error, timeout, or a plugin
+that fails to answer never blocks the engine — the built-in behavior proceeds
+and the failure is logged.
+
+| Wire name | Params (camelCase) | Outcome |
+| --- | --- | --- |
+| `compaction.before` | `{session, trigger, messagesTokenEstimate}`; `trigger` is `"overflow"` or `"proactive"` | `proceed` \| `skip{reason}` \| `replace{instructions}` — `replace` swaps the summarizer instructions; `skip` is honored only for proactive compaction and is demoted to `proceed` when compaction is overflow-forced |
+| `compaction.after` | `{session, summaryTokens}` | notification |
+| `session.start` | `{session}` | notification |
+| `session.end` | `{session}` | notification |
+| `agent.spawn` | `{parent, child}` | notification |
+
+### Registered-only hooks (parsed but never dispatched)
 
 These names parse from `plugin.toml` and from the initialize reply and can be
 stored on the connection, but
 [`dispatcher.rs`](../crates/hya-plugin/src/dispatcher.rs) has **no** dispatch
-arm for them. They are **never** called:
+arm for them yet (they are slated to become bundle-provided goal/loop
+evaluators):
 
 | Wire name |
 | --- |

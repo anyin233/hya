@@ -71,6 +71,22 @@ pub enum HookName {
     /// Loop-mode planner hook.
     #[serde(rename = "loop.planner")]
     LoopPlanner,
+    /// Consulted before the engine compacts context; may skip or replace the
+    /// summarizer instructions.
+    #[serde(rename = "compaction.before")]
+    CompactionBefore,
+    /// Notified after a compaction committed its summary (no decisive reply).
+    #[serde(rename = "compaction.after")]
+    CompactionAfter,
+    /// Notified when a session is created.
+    #[serde(rename = "session.start")]
+    SessionStart,
+    /// Notified when a session is closed (archived or deleted).
+    #[serde(rename = "session.end")]
+    SessionEnd,
+    /// Notified when a subagent is registered under its parent.
+    #[serde(rename = "agent.spawn")]
+    AgentSpawn,
 }
 
 impl HookName {
@@ -89,6 +105,11 @@ impl HookName {
             HookName::GoalEvaluate => "goal.evaluate",
             HookName::LoopVerifier => "loop.verifier",
             HookName::LoopPlanner => "loop.planner",
+            HookName::CompactionBefore => "compaction.before",
+            HookName::CompactionAfter => "compaction.after",
+            HookName::SessionStart => "session.start",
+            HookName::SessionEnd => "session.end",
+            HookName::AgentSpawn => "agent.spawn",
         }
     }
 
@@ -113,6 +134,11 @@ impl HookName {
             "goal.evaluate" => HookName::GoalEvaluate,
             "loop.verifier" => HookName::LoopVerifier,
             "loop.planner" => HookName::LoopPlanner,
+            "compaction.before" => HookName::CompactionBefore,
+            "compaction.after" => HookName::CompactionAfter,
+            "session.start" => HookName::SessionStart,
+            "session.end" => HookName::SessionEnd,
+            "agent.spawn" => HookName::AgentSpawn,
             _ => return None,
         })
     }
@@ -120,7 +146,12 @@ impl HookName {
     /// Default failure policy when the registration omits posture.
     ///
     /// `permission.ask` and `tool.execute.before` default to [`HookPosture::Safe`];
-    /// all other hooks default to [`HookPosture::Open`].
+    /// all other hooks default to [`HookPosture::Open`]. The five injection-point
+    /// hooks added for bundles (`compaction.before`/`compaction.after`,
+    /// `session.start`/`session.end`, `agent.spawn`) are enrichment/observation
+    /// points, not guards, so they default Open — and `compaction.before` is
+    /// additionally fail-open in the dispatcher even under a `safe` override,
+    /// because blocking overflow compaction risks context overflow.
     #[must_use]
     pub fn default_posture(self) -> HookPosture {
         match self {
@@ -802,4 +833,74 @@ pub enum PermissionOutcomeWire {
     },
     /// Let the next plugin or the user-ask path decide.
     Defer,
+}
+
+/// Why the engine is about to compact context (`hook/compaction.before`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompactionTriggerWire {
+    /// The transcript is over its resolved window threshold; the request cannot
+    /// go out un-compacted, so a skip is advisory only.
+    Overflow,
+    /// Pre-emptive compaction while still under the threshold; a skip may be
+    /// honored.
+    Proactive,
+}
+
+/// Params for `hook/compaction.before`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompactionBeforeParams {
+    /// Session whose context is about to be folded.
+    pub session: SessionId,
+    /// Why compaction is running.
+    pub trigger: CompactionTriggerWire,
+    /// Estimated token occupancy of the transcript about to be compacted.
+    pub messages_token_estimate: u64,
+}
+
+/// Outcome for `compaction.before`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "outcome", rename_all = "snake_case")]
+pub enum CompactionBeforeOutcomeWire {
+    /// Run the built-in compaction ladder unchanged.
+    Proceed,
+    /// Request that compaction be skipped; only ever honored for proactive
+    /// triggers (the host ignores skips on overflow-forced compaction).
+    Skip {
+        /// Human-visible reason, recorded when the skip is honored or dropped.
+        reason: String,
+    },
+    /// Run the ladder, but have summarizer calls use these instructions
+    /// instead of the built-in summary template.
+    Replace {
+        /// Instructions for the summarizer prompt.
+        instructions: String,
+    },
+}
+
+/// Params for `hook/compaction.after`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompactionAfterParams {
+    /// Session whose context was folded.
+    pub session: SessionId,
+    /// Estimated token size of the summary that was committed.
+    pub summary_tokens: u64,
+}
+
+/// Params for `hook/session.start` and `hook/session.end`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SessionLifecycleParams {
+    /// Session that was created or closed.
+    pub session: SessionId,
+}
+
+/// Params for `hook/agent.spawn`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AgentSpawnParams {
+    /// Session of the parent (the roster-owning team root).
+    pub parent: SessionId,
+    /// Session of the freshly registered child.
+    pub child: SessionId,
 }

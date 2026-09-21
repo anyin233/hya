@@ -47,6 +47,33 @@ pub trait HookDispatcher: Send + Sync {
     async fn tool_execute_before(&self, input: ToolExecuteBeforeInput) -> ToolExecuteBeforeOutcome;
     /// Rewrite tool results or error messages after execution.
     async fn tool_execute_after(&self, input: ToolExecuteAfterInput) -> ToolExecuteAfterOutcome;
+    /// Consulted before the engine compacts context.
+    ///
+    /// Implementors should be fail-open by construction: the engine additionally
+    /// ignores a [`CompactionDecision::Skip`] on an overflow-forced trigger (see
+    /// [`resolve_compaction_decision`]), so a skip can never push a request out
+    /// over its window.
+    async fn compaction_before(&self, input: CompactionBeforeInput) -> CompactionDecision {
+        let _ = input;
+        CompactionDecision::Proceed
+    }
+    /// Notified after a compaction committed its summary. Best-effort; failures
+    /// are the implementor's to log.
+    async fn compaction_after(&self, input: CompactionAfterInput) {
+        let _ = input;
+    }
+    /// Notified when a session is created. Best-effort; never fatal.
+    async fn session_start(&self, input: SessionLifecycleInput) {
+        let _ = input;
+    }
+    /// Notified when a session is closed (archived or deleted). Best-effort.
+    async fn session_end(&self, input: SessionLifecycleInput) {
+        let _ = input;
+    }
+    /// Notified when a subagent is registered under its parent. Best-effort.
+    async fn agent_spawn(&self, input: AgentSpawnInput) {
+        let _ = input;
+    }
 }
 
 #[derive(Clone)]
@@ -234,6 +261,120 @@ pub enum ToolExecuteAfterOutcome {
     },
 }
 
+/// Why the engine is about to compact context (input to `compaction_before`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CompactionTrigger {
+    /// The transcript is over its resolved window threshold. Compaction must
+    /// not be blocked: sending the request un-compacted risks context
+    /// overflow, so a `Skip` is demoted to a warning (see
+    /// [`resolve_compaction_decision`]).
+    Overflow,
+    /// Pre-emptive compaction while still under the threshold. A `Skip` may be
+    /// honored.
+    Proactive,
+}
+
+/// Engine-facing outcome of `compaction_before`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CompactionDecision {
+    /// Run the built-in compaction unchanged.
+    Proceed,
+    /// Request that compaction be skipped, with a reason for the warning.
+    Skip {
+        /// Human-visible reason the hook asked to skip.
+        reason: String,
+    },
+    /// Run compaction, with summarizer calls using these instructions instead
+    /// of the built-in summary template.
+    Replace {
+        /// Instructions for the summarizer prompt.
+        instructions: String,
+    },
+}
+
+/// Input to `compaction_before`.
+pub struct CompactionBeforeInput {
+    /// Session whose context is about to be folded.
+    pub session: SessionId,
+    /// Why compaction is running.
+    pub trigger: CompactionTrigger,
+    /// Estimated token occupancy of the transcript about to be compacted.
+    pub messages_token_estimate: usize,
+}
+
+/// Input to `compaction_after`.
+pub struct CompactionAfterInput {
+    /// Session whose context was folded.
+    pub session: SessionId,
+    /// Estimated token size of the summary that was committed.
+    pub summary_tokens: usize,
+}
+
+/// Input to `session_start` and `session_end`.
+pub struct SessionLifecycleInput {
+    /// Session that was created or closed.
+    pub session: SessionId,
+}
+
+/// Input to `agent_spawn`.
+pub struct AgentSpawnInput {
+    /// Session of the parent (the roster-owning team root).
+    pub parent: SessionId,
+    /// Session of the freshly registered child.
+    pub child: SessionId,
+}
+
+/// A `compaction_before` decision resolved against its trigger: what the engine
+/// should actually do.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CompactionResolution {
+    /// Run the built-in compaction ladder.
+    Proceed,
+    /// Run the ladder; summarizer calls use these instructions.
+    Replace {
+        /// Instructions for the summarizer prompt.
+        instructions: String,
+    },
+    /// Do not compact at all. Only ever produced for proactive triggers.
+    Skip {
+        /// Human-visible reason, for the audit log.
+        reason: String,
+    },
+}
+
+/// Fold a hook's [`CompactionDecision`] into an executable resolution.
+///
+/// Fail-open rule: a [`CompactionDecision::Skip`] is honored for
+/// [`CompactionTrigger::Proactive`] but demoted to
+/// [`CompactionResolution::Proceed`] (with a warning) for
+/// [`CompactionTrigger::Overflow`] — an overflow-forced compaction that is
+/// skipped would send the request out over the very window it was trying to
+/// fit, so no hook may block it. `Proceed` and `Replace` pass through for both
+/// triggers.
+#[must_use]
+pub fn resolve_compaction_decision(
+    decision: CompactionDecision,
+    trigger: CompactionTrigger,
+) -> CompactionResolution {
+    match (decision, trigger) {
+        (CompactionDecision::Proceed, _) => CompactionResolution::Proceed,
+        (CompactionDecision::Replace { instructions }, _) => {
+            CompactionResolution::Replace { instructions }
+        }
+        (CompactionDecision::Skip { reason }, CompactionTrigger::Proactive) => {
+            CompactionResolution::Skip { reason }
+        }
+        (CompactionDecision::Skip { reason }, CompactionTrigger::Overflow) => {
+            tracing::warn!(
+                %reason,
+                "compaction.before skip ignored on overflow-forced compaction; \
+                 proceeding with built-in compaction"
+            );
+            CompactionResolution::Proceed
+        }
+    }
+}
+
 /// Hook host that leaves all payloads unchanged.
 pub struct NoopHookHost;
 
@@ -269,6 +410,88 @@ impl HookDispatcher for NoopHookHost {
     async fn tool_execute_after(&self, input: ToolExecuteAfterInput) -> ToolExecuteAfterOutcome {
         ToolExecuteAfterOutcome::Continue {
             result: input.result,
+        }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    /// Default trait impls must keep existing implementors compiling and
+    /// behave as no-ops: a `NoopHookHost` answers the new injection points
+    /// without overriding them.
+    #[tokio::test]
+    async fn default_hook_impls_are_noops() {
+        let session = SessionId::new();
+        let host = NoopHookHost;
+        assert_eq!(
+            host.compaction_before(CompactionBeforeInput {
+                session,
+                trigger: CompactionTrigger::Overflow,
+                messages_token_estimate: 10,
+            })
+            .await,
+            CompactionDecision::Proceed
+        );
+        host.compaction_after(CompactionAfterInput {
+            session,
+            summary_tokens: 1,
+        })
+        .await;
+        host.session_start(SessionLifecycleInput { session }).await;
+        host.session_end(SessionLifecycleInput { session }).await;
+        host.agent_spawn(AgentSpawnInput {
+            parent: session,
+            child: SessionId::new(),
+        })
+        .await;
+    }
+
+    /// A `Skip` is only ever honored for proactive compaction. On an
+    /// overflow-forced trigger it is demoted to `Proceed` (plus a warning),
+    /// because skipping a compaction the request depends on risks context
+    /// overflow.
+    #[test]
+    fn skip_is_honored_proactively_but_ignored_on_overflow() {
+        let skip = || CompactionDecision::Skip {
+            reason: "still fits".to_string(),
+        };
+        assert_eq!(
+            resolve_compaction_decision(skip(), CompactionTrigger::Proactive),
+            CompactionResolution::Skip {
+                reason: "still fits".to_string()
+            }
+        );
+        assert_eq!(
+            resolve_compaction_decision(skip(), CompactionTrigger::Overflow),
+            CompactionResolution::Proceed,
+            "overflow-forced compaction must never be skipped"
+        );
+    }
+
+    /// `Proceed` and `Replace` pass through unchanged for both triggers: a
+    /// replacement of the summarizer instructions is not a safety decision and
+    /// needs no trigger gating.
+    #[test]
+    fn proceed_and_replace_pass_through_both_triggers() {
+        for trigger in [CompactionTrigger::Overflow, CompactionTrigger::Proactive] {
+            assert_eq!(
+                resolve_compaction_decision(CompactionDecision::Proceed, trigger),
+                CompactionResolution::Proceed
+            );
+            assert_eq!(
+                resolve_compaction_decision(
+                    CompactionDecision::Replace {
+                        instructions: "summarize as bullets".to_string(),
+                    },
+                    trigger
+                ),
+                CompactionResolution::Replace {
+                    instructions: "summarize as bullets".to_string(),
+                }
+            );
         }
     }
 }
