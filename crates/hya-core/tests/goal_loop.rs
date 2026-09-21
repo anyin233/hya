@@ -9,6 +9,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_trait::async_trait;
+use hya_core::completion::PluginGoalEvaluator;
+use hya_core::hooks::{
+    ChatParamsInput, ChatParamsOutcome, CommandExecuteBeforeInput, CommandExecuteBeforeOutcome,
+    GoalEvaluateReply, HookDispatcher, MessageUserBeforeInput, MessageUserBeforeOutcome,
+    TextCompleteInput, TextCompleteOutcome, ToolExecuteAfterInput, ToolExecuteAfterOutcome,
+    ToolExecuteBeforeInput, ToolExecuteBeforeOutcome,
+};
 use hya_core::{
     AgentSpec, CoreError, CreateSession, EventBus, GoalEvaluator, ModelGoalEvaluator, RunOutcome,
     SafetyCaps, SessionEngine, Verdict, run_goal,
@@ -172,4 +179,147 @@ async fn pre_cancelled_goal_returns_cancelled() {
     .unwrap();
 
     assert_eq!(outcome, RunOutcome::Cancelled);
+}
+
+/// Hook dispatcher that scripts `goal.evaluate` replies, standing in for a
+/// plugin host so the adapter contract is exercised end to end through
+/// `run_goal`.
+struct ScriptedHookDispatcher {
+    replies: Vec<GoalEvaluateReply>,
+    idx: AtomicUsize,
+}
+
+#[async_trait]
+impl HookDispatcher for ScriptedHookDispatcher {
+    fn dispatch_event(&self, _envelope: &hya_proto::Envelope) {}
+
+    async fn command_execute_before(
+        &self,
+        input: CommandExecuteBeforeInput,
+    ) -> CommandExecuteBeforeOutcome {
+        CommandExecuteBeforeOutcome::Continue { text: input.text }
+    }
+
+    async fn text_complete(&self, input: TextCompleteInput) -> TextCompleteOutcome {
+        TextCompleteOutcome::Continue { text: input.text }
+    }
+
+    async fn message_user_before(&self, input: MessageUserBeforeInput) -> MessageUserBeforeOutcome {
+        MessageUserBeforeOutcome::Continue { text: input.text }
+    }
+
+    async fn chat_params(&self, input: ChatParamsInput) -> ChatParamsOutcome {
+        ChatParamsOutcome::Continue {
+            request: input.request,
+        }
+    }
+
+    async fn tool_execute_before(&self, input: ToolExecuteBeforeInput) -> ToolExecuteBeforeOutcome {
+        ToolExecuteBeforeOutcome::Continue { input: input.input }
+    }
+
+    async fn tool_execute_after(&self, input: ToolExecuteAfterInput) -> ToolExecuteAfterOutcome {
+        ToolExecuteAfterOutcome::Continue {
+            result: input.result,
+        }
+    }
+
+    async fn goal_evaluate(
+        &self,
+        _condition: &str,
+        _transcript: &str,
+    ) -> Result<GoalEvaluateReply, CoreError> {
+        let i = self.idx.fetch_add(1, Ordering::Relaxed);
+        Ok(self
+            .replies
+            .get(i)
+            .cloned()
+            .unwrap_or(GoalEvaluateReply::Verdict {
+                met: true,
+                reason: "scripted default".to_string(),
+            }))
+    }
+}
+
+/// A scripted dispatcher evaluator reporting met=true stops the run after the
+/// first iteration: the plugin verdict flows through `PluginGoalEvaluator`
+/// into the same gate the built-in evaluator drives.
+#[tokio::test]
+async fn dispatcher_evaluator_met_stops_goal_early() {
+    let provider = FakeProvider::scripted_turns(vec![vec![
+        FakeStep::Text("working".to_string()),
+        FakeStep::Finish(FinishReason::Stop),
+    ]]);
+    let (engine, agent) = engine_with(provider).await;
+    let session = new_session(&engine).await;
+    let dispatcher = Arc::new(ScriptedHookDispatcher {
+        replies: vec![GoalEvaluateReply::Verdict {
+            met: true,
+            reason: "done by hook".to_string(),
+        }],
+        idx: AtomicUsize::new(0),
+    });
+    let evaluator: Arc<dyn GoalEvaluator> = Arc::new(PluginGoalEvaluator::new(dispatcher));
+
+    let outcome = run_goal(
+        engine.clone(),
+        session,
+        agent,
+        "tests pass".to_string(),
+        evaluator,
+        SafetyCaps::default(),
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        outcome,
+        RunOutcome::Achieved {
+            iterations: 1,
+            reason: "done by hook".to_string(),
+        }
+    );
+}
+
+/// A malformed dispatcher reply degrades to not-met and counts toward the
+/// iteration cap — the adapter contract keeps bad verdicts from looping
+/// forever or erroring the run.
+#[tokio::test]
+async fn dispatcher_evaluator_malformed_counts_toward_cap() {
+    let provider = FakeProvider::scripted_turns(vec![vec![
+        FakeStep::Text("working".to_string()),
+        FakeStep::Finish(FinishReason::Stop),
+    ]]);
+    let (engine, agent) = engine_with(provider).await;
+    let session = new_session(&engine).await;
+    let dispatcher = Arc::new(ScriptedHookDispatcher {
+        replies: vec![GoalEvaluateReply::Malformed, GoalEvaluateReply::Malformed],
+        idx: AtomicUsize::new(0),
+    });
+    let evaluator: Arc<dyn GoalEvaluator> = Arc::new(PluginGoalEvaluator::new(dispatcher));
+
+    let caps = SafetyCaps {
+        max_iterations: 2,
+        ..SafetyCaps::default()
+    };
+    let outcome = run_goal(
+        engine.clone(),
+        session,
+        agent,
+        "do the thing".to_string(),
+        evaluator,
+        caps,
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        outcome,
+        RunOutcome::Capped {
+            iterations: 2,
+            which: "max_iterations",
+        }
+    );
 }

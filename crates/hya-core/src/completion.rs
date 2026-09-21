@@ -14,6 +14,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::engine::{AgentSpec, SessionEngine};
 use crate::error::CoreError;
+use crate::hooks::{GoalEvaluateReply, HookDispatcher};
 
 /// Hard stops for goal/loop iteration drivers.
 #[derive(Clone, Copy, Debug)]
@@ -336,6 +337,56 @@ impl GoalEvaluator for ModelGoalEvaluator {
                 met: false,
                 reason: "evaluator returned malformed output".to_string(),
             }),
+        }
+    }
+}
+
+/// Reason recorded when a `goal.evaluate` provider replies with a non-verdict
+/// object (same wording as [`ModelGoalEvaluator`], so callers see one shape).
+const PLUGIN_MALFORMED_REASON: &str = "evaluator returned malformed output";
+
+/// Reason recorded when the `goal.evaluate` provider chain fails outright.
+const PLUGIN_HOOK_ERROR_REASON: &str = "goal.evaluate hook error";
+
+/// Goal evaluator dispatched through the engine's hook providers: the plugins
+/// registered for `goal.evaluate` judge the transcript (design §4.5).
+///
+/// Mirrors [`ModelGoalEvaluator`]'s tolerance: a malformed provider reply or a
+/// failing provider chain degrades to a not-met [`Verdict`], so a broken
+/// evaluator only consumes an iteration of the cap — it never aborts the run
+/// and never loops it forever.
+pub struct PluginGoalEvaluator {
+    dispatcher: Arc<dyn HookDispatcher>,
+}
+
+impl PluginGoalEvaluator {
+    /// Build an evaluator that dispatches to the registered `goal.evaluate`
+    /// provider chain on `dispatcher`.
+    #[must_use]
+    pub fn new(dispatcher: Arc<dyn HookDispatcher>) -> Self {
+        Self { dispatcher }
+    }
+}
+
+#[async_trait]
+impl GoalEvaluator for PluginGoalEvaluator {
+    async fn evaluate(&self, condition: &str, transcript: &str) -> Result<Verdict, CoreError> {
+        match self.dispatcher.goal_evaluate(condition, transcript).await {
+            Ok(GoalEvaluateReply::Verdict { met, reason }) => Ok(Verdict { met, reason }),
+            Ok(GoalEvaluateReply::Malformed) => Ok(Verdict {
+                met: false,
+                reason: PLUGIN_MALFORMED_REASON.to_string(),
+            }),
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    "goal.evaluate hook failed; degrading to not-met so the run stays cappable"
+                );
+                Ok(Verdict {
+                    met: false,
+                    reason: PLUGIN_HOOK_ERROR_REASON.to_string(),
+                })
+            }
         }
     }
 }

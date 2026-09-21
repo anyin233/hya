@@ -110,6 +110,10 @@ struct FileConfig {
     /// overrides win over file values.
     #[serde(default)]
     pub(crate) compaction: Option<CompactionFile>,
+    /// Goal-mode settings (`goal:` block). Absent → the worker's current model
+    /// judges; the `--evaluator-model` CLI flag outranks this value.
+    #[serde(default)]
+    goal: Option<GoalFile>,
     /// Default replay budget for every provider route. Per-provider `retry:`
     /// blocks override individual fields; `HYA_PROVIDER_RETRY_*` env vars win
     /// over both. Absent → [`hya_provider::RetryConfig`] defaults.
@@ -1564,6 +1568,62 @@ fn resolve_context_settings(file: Option<&CompactionFile>) -> ContextSettings {
     settings
 }
 
+/// File shape of the `goal:` block of `~/.config/hya/config.yaml`.
+#[derive(Debug, Default, Deserialize)]
+struct GoalFile {
+    /// `provider/model` ref that judges goal mode when no `--evaluator-model`
+    /// flag is given. Absent/blank → the worker's current model.
+    #[serde(default)]
+    evaluator_model: Option<String>,
+}
+
+/// Goal-mode settings resolved from config. There are no env overrides for
+/// this block by design: the CLI flag is the only layer above it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct GoalSettings {
+    /// Evaluator model from `goal.evaluator_model` (trimmed); `None` → the
+    /// worker's current model judges.
+    pub evaluator_model: Option<String>,
+}
+
+impl GoalSettings {
+    fn from_block(block: Option<GoalFile>) -> Self {
+        Self {
+            evaluator_model: block
+                .and_then(|goal| goal.evaluator_model)
+                .map(|model| model.trim().to_string())
+                .filter(|model| !model.is_empty()),
+        }
+    }
+}
+
+/// Resolve the goal evaluator model: the CLI flag wins over the config
+/// `goal.evaluator_model`; without either, the worker's current model judges.
+/// Blank/whitespace values count as unset at every layer, so an accidentally
+/// empty setting can never shadow a lower layer or break resolution.
+#[must_use]
+pub fn resolve_evaluator_model<'a>(
+    cli_flag: Option<&'a str>,
+    config_value: Option<&'a str>,
+    worker_current: &'a str,
+) -> &'a str {
+    let non_empty = |value: Option<&'a str>| value.map(str::trim).filter(|model| !model.is_empty());
+    non_empty(cli_flag)
+        .or_else(|| non_empty(config_value))
+        .unwrap_or(worker_current)
+}
+
+/// Goal-mode settings from `config.yaml`.
+#[must_use]
+pub fn load_goal_settings() -> GoalSettings {
+    let file_block = config_path()
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .filter(|yaml| !yaml.trim().is_empty())
+        .and_then(|yaml| parse_config(&yaml).ok())
+        .and_then(|file| file.goal);
+    GoalSettings::from_block(file_block)
+}
+
 /// Context settings from `config.yaml`, with env overrides applied.
 #[must_use]
 pub fn load_context_settings() -> ContextSettings {
@@ -2297,6 +2357,53 @@ permission:
         env.set("HYA_TOKEN_ACCOUNTING", "banana");
         let bogus = resolve_context_settings(file.compaction.as_ref());
         assert_eq!(bogus.token_accounting, TokenAccountingMode::Estimate);
+    }
+
+    #[test]
+    fn goal_evaluator_model_parses_and_precedence_is_cli_over_config_over_worker() {
+        // The `goal:` block parses; absent blocks stay absent.
+        let file =
+            parse_config("default_model: x\ngoal:\n  evaluator_model: deep/o3-mini\n").unwrap();
+        assert_eq!(
+            file.goal.as_ref().unwrap().evaluator_model.as_deref(),
+            Some("deep/o3-mini")
+        );
+        let absent = parse_config("default_model: x\n").unwrap();
+        assert!(absent.goal.is_none());
+        assert_eq!(
+            GoalSettings::from_block(absent.goal),
+            GoalSettings::default(),
+            "no goal block means the worker's current model judges"
+        );
+
+        // Precedence (D7): CLI flag > config `goal.evaluator_model` > worker
+        // current model.
+        assert_eq!(
+            resolve_evaluator_model(Some("cli/model"), Some("cfg/model"), "worker/model"),
+            "cli/model"
+        );
+        assert_eq!(
+            resolve_evaluator_model(None, Some("cfg/model"), "worker/model"),
+            "cfg/model"
+        );
+        assert_eq!(
+            resolve_evaluator_model(None, None, "worker/model"),
+            "worker/model"
+        );
+        // Blank layers count as unset and fall through instead of shadowing.
+        assert_eq!(
+            resolve_evaluator_model(Some("   "), Some("cfg/model"), "worker/model"),
+            "cfg/model"
+        );
+        assert_eq!(
+            resolve_evaluator_model(None, Some(""), "worker/model"),
+            "worker/model"
+        );
+        // Config values are used verbatim after trimming.
+        assert_eq!(
+            resolve_evaluator_model(None, Some("  cfg/model "), "worker/model"),
+            "cfg/model"
+        );
     }
 
     #[test]

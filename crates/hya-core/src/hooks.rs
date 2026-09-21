@@ -9,6 +9,9 @@ use hya_proto::{Envelope, MessageId, PartId, SessionId, ToolCallId};
 use hya_provider::CompletionRequest;
 use serde_json::Value;
 
+use crate::error::CoreError;
+use crate::loop_mode::{PlannerOutput, VerifierVerdict};
+
 /// Host-implemented hooks the turn loop awaits around chat and tools.
 ///
 /// **Contract for implementors:**
@@ -73,6 +76,72 @@ pub trait HookDispatcher: Send + Sync {
     /// Notified when a subagent is registered under its parent. Best-effort.
     async fn agent_spawn(&self, input: AgentSpawnInput) {
         let _ = input;
+    }
+    /// Whether any hook provider is registered for `goal.evaluate`.
+    ///
+    /// Capability probe for goal-mode evaluator selection: callers build a
+    /// plugin-backed [`crate::completion::PluginGoalEvaluator`] only when this
+    /// returns true, and otherwise fail open to the built-in model evaluator.
+    /// Default false.
+    fn has_goal_evaluate(&self) -> bool {
+        false
+    }
+    /// Evaluate a goal condition against a transcript through the registered
+    /// `goal.evaluate` provider.
+    ///
+    /// **Contract:** evaluators, not guards — implementors fail open by
+    /// trying the next registered provider when one errors, and report a
+    /// reply that is not a parseable verdict as
+    /// [`GoalEvaluateReply::Malformed`] instead of an error, so the driver
+    /// counts it as not-met against the iteration cap.
+    ///
+    /// # Errors
+    /// The default impl reports the hook as not registered. Implementors
+    /// return an error only when no registered provider produced any verdict.
+    async fn goal_evaluate(
+        &self,
+        condition: &str,
+        transcript: &str,
+    ) -> Result<GoalEvaluateReply, CoreError> {
+        let _ = (condition, transcript);
+        Err(CoreError::Invalid(
+            "goal.evaluate hook not registered".to_string(),
+        ))
+    }
+    /// Grade a loop target against a transcript through the registered
+    /// `loop.verifier` provider.
+    ///
+    /// Like [`Self::goal_evaluate`], this is an evaluator hook: implementors
+    /// chain providers in load order and fail open on transport errors.
+    ///
+    /// # Errors
+    /// The default impl reports the hook as not registered.
+    async fn loop_verify(
+        &self,
+        target: &str,
+        transcript: &str,
+    ) -> Result<VerifierVerdict, CoreError> {
+        let _ = (target, transcript);
+        Err(CoreError::Invalid(
+            "loop.verifier hook not registered".to_string(),
+        ))
+    }
+    /// Plan the next loop directive through the registered `loop.planner`
+    /// provider.
+    ///
+    /// # Errors
+    /// The default impl reports the hook as not registered.
+    async fn loop_plan(
+        &self,
+        target: &str,
+        history: &[String],
+        last: &VerifierVerdict,
+        planner_notes: &str,
+    ) -> Result<PlannerOutput, CoreError> {
+        let _ = (target, history, last, planner_notes);
+        Err(CoreError::Invalid(
+            "loop.planner hook not registered".to_string(),
+        ))
     }
 }
 
@@ -324,6 +393,22 @@ pub struct AgentSpawnInput {
     pub child: SessionId,
 }
 
+/// Engine-facing outcome of dispatching `goal.evaluate` to a plugin provider.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GoalEvaluateReply {
+    /// A provider returned a well-formed verdict object.
+    Verdict {
+        /// Whether the goal condition is satisfied by the transcript.
+        met: bool,
+        /// Short reason for logs and the next directive.
+        reason: String,
+    },
+    /// A provider replied, but the verdict object was malformed. Drivers must
+    /// count this as not-met so a broken evaluator still consumes an
+    /// iteration of the cap instead of erroring the run or looping forever.
+    Malformed,
+}
+
 /// A `compaction_before` decision resolved against its trigger: what the engine
 /// should actually do.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -419,6 +504,17 @@ impl HookDispatcher for NoopHookHost {
 mod tests {
     use super::*;
 
+    fn last_verdict() -> VerifierVerdict {
+        VerifierVerdict {
+            score: 50,
+            satisfied: false,
+            evidence_quality: crate::loop_mode::EvidenceQuality::ClaimOnly,
+            critical_gaps: Vec::new(),
+            iteration_summary: String::new(),
+            reason: String::new(),
+        }
+    }
+
     /// Default trait impls must keep existing implementors compiling and
     /// behave as no-ops: a `NoopHookHost` answers the new injection points
     /// without overriding them.
@@ -447,6 +543,26 @@ mod tests {
             child: SessionId::new(),
         })
         .await;
+        // Goal/loop evaluator hooks default to unregistered and unprobed, so
+        // existing implementors stay fail-open to the built-in evaluators.
+        assert!(
+            !host.has_goal_evaluate(),
+            "default capability probe must be false"
+        );
+        assert!(
+            host.goal_evaluate("condition", "transcript").await.is_err(),
+            "default goal_evaluate hook must be unregistered"
+        );
+        assert!(
+            host.loop_verify("target", "transcript").await.is_err(),
+            "default loop_verify hook must be unregistered"
+        );
+        assert!(
+            host.loop_plan("target", &[], &last_verdict(), "")
+                .await
+                .is_err(),
+            "default loop_plan hook must be unregistered"
+        );
     }
 
     /// A `Skip` is only ever honored for proactive compaction. On an

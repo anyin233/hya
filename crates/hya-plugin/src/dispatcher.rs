@@ -4,17 +4,20 @@
 //! fails open).
 
 use async_trait::async_trait;
+use hya_core::CoreError;
 use hya_core::hooks::{
     AgentSpawnInput, ChatParamsInput, ChatParamsOutcome, CommandExecuteBeforeInput,
     CommandExecuteBeforeOutcome, CompactionAfterInput, CompactionBeforeInput, CompactionDecision,
-    CompactionTrigger, HookDispatcher, MessageUserBeforeInput, MessageUserBeforeOutcome,
-    SessionLifecycleInput, TextCompleteInput, TextCompleteOutcome, ToolExecuteAfterInput,
-    ToolExecuteAfterOutcome, ToolExecuteBeforeInput, ToolExecuteBeforeOutcome, ToolOutcomeNative,
+    CompactionTrigger, GoalEvaluateReply, HookDispatcher, MessageUserBeforeInput,
+    MessageUserBeforeOutcome, SessionLifecycleInput, TextCompleteInput, TextCompleteOutcome,
+    ToolExecuteAfterInput, ToolExecuteAfterOutcome, ToolExecuteBeforeInput,
+    ToolExecuteBeforeOutcome, ToolOutcomeNative,
 };
+use hya_core::loop_mode::{EvidenceQuality, PlannerOutput, VerifierVerdict};
 use hya_proto::Envelope;
 use hya_provider::{CompletionRequest, ReasoningEffort};
-use serde::Serialize;
 use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 
 use crate::host::{PluginConn, PluginHost};
 use crate::messages::{
@@ -266,6 +269,239 @@ impl HookDispatcher for PluginHost {
                 continue;
             }
             notify(conn, HookName::AgentSpawn, &params).await;
+        }
+    }
+
+    fn has_goal_evaluate(&self) -> bool {
+        self.plugins()
+            .iter()
+            .any(|conn| conn.posture(HookName::GoalEvaluate).is_some())
+    }
+
+    async fn goal_evaluate(
+        &self,
+        condition: &str,
+        transcript: &str,
+    ) -> Result<GoalEvaluateReply, CoreError> {
+        let value = serde_json::to_value(GoalEvaluateParams {
+            condition,
+            transcript,
+        })
+        .map_err(|error| CoreError::Invalid(error.to_string()))?;
+        let mut last_failure: Option<String> = None;
+        for conn in self.plugins() {
+            if conn.posture(HookName::GoalEvaluate).is_none() {
+                continue;
+            }
+            match conn.call_hook(HookName::GoalEvaluate, value.clone()).await {
+                Ok(reply) => {
+                    return match serde_json::from_value::<GoalVerdictWire>(reply) {
+                        Ok(verdict) => Ok(GoalEvaluateReply::Verdict {
+                            met: verdict.met,
+                            reason: verdict.reason,
+                        }),
+                        // A reply that is not a parseable verdict is decisive:
+                        // report `Malformed` so the driver counts not-met
+                        // against the iteration cap instead of shopping for
+                        // another opinion.
+                        Err(_) => Ok(GoalEvaluateReply::Malformed),
+                    };
+                }
+                Err(failed) => {
+                    // Evaluators fail open: a broken provider never decides the
+                    // run; the next registered one gets the call.
+                    tracing::warn!(
+                        plugin = %conn.id,
+                        hook = HookName::GoalEvaluate.as_str(),
+                        "goal.evaluate provider failed; trying next in load order: {failed}"
+                    );
+                    last_failure = Some(failed.to_string());
+                }
+            }
+        }
+        Err(CoreError::Invalid(last_failure.unwrap_or_else(|| {
+            "goal.evaluate hook not registered".to_string()
+        })))
+    }
+
+    async fn loop_verify(
+        &self,
+        target: &str,
+        transcript: &str,
+    ) -> Result<VerifierVerdict, CoreError> {
+        let params = LoopVerifyParams { target, transcript };
+        let mut last_failure: Option<String> = None;
+        for conn in self.plugins() {
+            if conn.posture(HookName::LoopVerifier).is_none() {
+                continue;
+            }
+            match call_outcome::<VerifierVerdictWire>(conn, HookName::LoopVerifier, &params).await {
+                Ok(wire) => return Ok(wire.into()),
+                Err(failed) => {
+                    tracing::warn!(
+                        plugin = %conn.id,
+                        hook = HookName::LoopVerifier.as_str(),
+                        "loop.verifier provider failed; trying next in load order: {failed}"
+                    );
+                    last_failure = Some(failed);
+                }
+            }
+        }
+        Err(CoreError::Invalid(last_failure.unwrap_or_else(|| {
+            "loop.verifier hook not registered".to_string()
+        })))
+    }
+
+    async fn loop_plan(
+        &self,
+        target: &str,
+        history: &[String],
+        last: &VerifierVerdict,
+        planner_notes: &str,
+    ) -> Result<PlannerOutput, CoreError> {
+        let params = LoopPlanParams {
+            target,
+            history,
+            last: last.into(),
+            planner_notes,
+        };
+        let mut last_failure: Option<String> = None;
+        for conn in self.plugins() {
+            if conn.posture(HookName::LoopPlanner).is_none() {
+                continue;
+            }
+            match call_outcome::<PlannerOutputWire>(conn, HookName::LoopPlanner, &params).await {
+                Ok(wire) => return Ok(wire.into()),
+                Err(failed) => {
+                    tracing::warn!(
+                        plugin = %conn.id,
+                        hook = HookName::LoopPlanner.as_str(),
+                        "loop.planner provider failed; trying next in load order: {failed}"
+                    );
+                    last_failure = Some(failed);
+                }
+            }
+        }
+        Err(CoreError::Invalid(last_failure.unwrap_or_else(|| {
+            "loop.planner hook not registered".to_string()
+        })))
+    }
+}
+
+/// Wire params for `goal.evaluate`.
+#[derive(Serialize)]
+struct GoalEvaluateParams<'a> {
+    condition: &'a str,
+    transcript: &'a str,
+}
+
+/// Wire verdict for `goal.evaluate`: tolerant `{"met": bool, "reason": str}` —
+/// `reason` may be omitted, anything else is a malformed reply.
+#[derive(Deserialize)]
+struct GoalVerdictWire {
+    met: bool,
+    #[serde(default)]
+    reason: String,
+}
+
+/// Wire params for `loop.verifier`.
+#[derive(Serialize)]
+struct LoopVerifyParams<'a> {
+    target: &'a str,
+    transcript: &'a str,
+}
+
+/// Wire params for `loop.planner`.
+#[derive(Serialize)]
+struct LoopPlanParams<'a> {
+    target: &'a str,
+    history: &'a [String],
+    last: VerifierVerdictWire,
+    planner_notes: &'a str,
+}
+
+/// Wire mirror of [`EvidenceQuality`] (`missing`/`claim_only`/`supported`/`verified`).
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum EvidenceQualityWire {
+    Missing,
+    ClaimOnly,
+    Supported,
+    Verified,
+}
+
+/// Wire mirror of [`VerifierVerdict`]. Free-text fields may be omitted.
+#[derive(Serialize, Deserialize)]
+struct VerifierVerdictWire {
+    score: u8,
+    satisfied: bool,
+    evidence_quality: EvidenceQualityWire,
+    #[serde(default)]
+    critical_gaps: Vec<String>,
+    #[serde(default)]
+    iteration_summary: String,
+    #[serde(default)]
+    reason: String,
+}
+
+/// Wire mirror of [`PlannerOutput`]. Only `directive` is required.
+#[derive(Serialize, Deserialize)]
+struct PlannerOutputWire {
+    directive: String,
+    #[serde(default)]
+    continuity_brief: String,
+    #[serde(default)]
+    planner_notes: String,
+    #[serde(default)]
+    strategy_change: bool,
+    #[serde(default)]
+    change_note: String,
+}
+
+impl From<&VerifierVerdict> for VerifierVerdictWire {
+    fn from(verdict: &VerifierVerdict) -> Self {
+        Self {
+            score: verdict.score,
+            satisfied: verdict.satisfied,
+            evidence_quality: match verdict.evidence_quality {
+                EvidenceQuality::Missing => EvidenceQualityWire::Missing,
+                EvidenceQuality::ClaimOnly => EvidenceQualityWire::ClaimOnly,
+                EvidenceQuality::Supported => EvidenceQualityWire::Supported,
+                EvidenceQuality::Verified => EvidenceQualityWire::Verified,
+            },
+            critical_gaps: verdict.critical_gaps.clone(),
+            iteration_summary: verdict.iteration_summary.clone(),
+            reason: verdict.reason.clone(),
+        }
+    }
+}
+
+impl From<VerifierVerdictWire> for VerifierVerdict {
+    fn from(wire: VerifierVerdictWire) -> Self {
+        Self {
+            score: wire.score,
+            satisfied: wire.satisfied,
+            evidence_quality: match wire.evidence_quality {
+                EvidenceQualityWire::Missing => EvidenceQuality::Missing,
+                EvidenceQualityWire::ClaimOnly => EvidenceQuality::ClaimOnly,
+                EvidenceQualityWire::Supported => EvidenceQuality::Supported,
+                EvidenceQualityWire::Verified => EvidenceQuality::Verified,
+            },
+            critical_gaps: wire.critical_gaps,
+            iteration_summary: wire.iteration_summary,
+            reason: wire.reason,
+        }
+    }
+}
+
+impl From<PlannerOutputWire> for PlannerOutput {
+    fn from(wire: PlannerOutputWire) -> Self {
+        Self {
+            directive: wire.directive,
+            continuity_brief: wire.continuity_brief,
+            planner_notes: wire.planner_notes,
+            strategy_change: wire.strategy_change,
+            change_note: wire.change_note,
         }
     }
 }
