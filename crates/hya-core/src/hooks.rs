@@ -143,6 +143,23 @@ pub trait HookDispatcher: Send + Sync {
             "loop.planner hook not registered".to_string(),
         ))
     }
+    /// Consult the registered `loop.should_stop` provider chain after one
+    /// loop iteration: `Some(reason)` forces the loop to stop with that
+    /// reason (surfaced as `GateOutcome::Stop { reason:
+    /// "loop.should_stop: <reason>" }`), `None` lets the gate continue to
+    /// the verifier.
+    ///
+    /// **Contract:** fail-open by construction — implementors treat transport
+    /// errors and malformed replies as `None` (with a warning), so a broken
+    /// hook can never decide the loop by itself. A stop forced here is a
+    /// **legitimate stop**: v1 records it as
+    /// [`crate::completion::RunOutcome::Achieved`] with the prefixed reason,
+    /// exactly like a satisfied deterministic predicate; it is *not* modeled
+    /// as an engine-suppressed success.
+    async fn loop_should_stop(&self, target: &str, transcript: &str) -> Option<String> {
+        let _ = (target, transcript);
+        None
+    }
 }
 
 #[derive(Clone)]
@@ -562,6 +579,11 @@ mod tests {
                 .await
                 .is_err(),
             "default loop_plan hook must be unregistered"
+        );
+        assert_eq!(
+            host.loop_should_stop("target", "transcript").await,
+            None,
+            "default loop_should_stop consult must be a no-op"
         );
     }
 

@@ -63,10 +63,11 @@ use crate::{InstalledBundleRefresh, bundle_registry_path, formatter_config, plug
 /// are published together. Installed rows are merged later by the root refresh.
 /// The first-party payload is decoded and verified before the runtime starts.
 pub fn builtin_agent_catalog() -> anyhow::Result<Arc<AgentCatalog>> {
-    let first_party = crate::installed_bundle_refresh::first_party_catalog()
-        .context("decode embedded first-party WorkflowBundle")?;
-    let bundles = BundleCatalog::from_verified_catalogs(&[&first_party])
-        .context("build first-party WorkflowBundle catalog")?;
+    let first_party = crate::installed_bundle_refresh::first_party_catalogs()
+        .context("decode embedded first-party bundles")?;
+    let first_party_refs = first_party.iter().collect::<Vec<_>>();
+    let bundles = BundleCatalog::from_verified_catalogs(&first_party_refs)
+        .context("build first-party bundle catalog")?;
     let catalog =
         AgentCatalog::new(Arc::new(bundles)).context("build agent catalog over built-ins")?;
     Ok(Arc::new(catalog))
@@ -2378,9 +2379,11 @@ async fn build_session_engine_with_mcp_defer(
     let catalog = builtin_agent_catalog()?;
     // The startup catalog holds only the first-party bundle, so its schema
     // rows come straight from the same prepared document.
-    let schema_rows = crate::installed_bundle_refresh::first_party_catalog()?
-        .schemas()
-        .to_vec();
+    let first_party = crate::installed_bundle_refresh::first_party_catalogs()?;
+    let schema_rows = first_party
+        .iter()
+        .flat_map(|catalog| catalog.schemas().to_vec())
+        .collect::<Vec<_>>();
     let static_sources = crate::installed_bundle_refresh::static_bundle_skill_sources(
         catalog.bundles().as_ref(),
         &schema_rows,
@@ -3009,8 +3012,8 @@ mod tests {
         let catalog = builtin_agent_catalog().expect("builtin agent catalog must build");
         assert_eq!(
             catalog.bundles().bundles().len(),
-            1,
-            "fresh process includes the immutable first-party WorkflowBundle"
+            2,
+            "fresh process includes the immutable first-party bundles"
         );
         assert!(
             catalog
@@ -4670,9 +4673,11 @@ You are the installed resident agent.
         let _ = built.take_questions();
         let _built = built;
         let manifest = engine.runtime_registry().effective_manifest();
+        // +1 for the goal-loop first-party bundle's skills, +1 for the
+        // eager MCP server + plugin (published together in one revision).
         assert_eq!(
             manifest.generation.get(),
-            hya_proto::ConfigGeneration::INITIAL.get() + 1
+            hya_proto::ConfigGeneration::INITIAL.get() + 2
         );
         assert!(manifest.sources.contains_key(&SourceId::mcp("mixed")));
         assert!(

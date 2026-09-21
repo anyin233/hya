@@ -1,0 +1,17 @@
+kind: AgentBundle
+identity:
+  id: hya/goal-loop
+  version: 1.0.0
+  publisher: hya
+resources:
+  skills:
+    - id: goal-contract
+      path: resources/skills/goal-contract/SKILL.md
+    - id: guided-goal
+      path: resources/skills/guided-goal/SKILL.md
+agent:
+  id: goal-loop-guide
+  description: Guides authors through the goal-condition contract and the evaluator rubric.
+  role: subagent
+  spawn_lifecycle: transient
+  prompt: prompts/goal-loop-guide.md
