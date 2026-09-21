@@ -780,6 +780,74 @@ fn prepare_bundle(
     }
 }
 
+/// Reserved namespace tokens that contributed sources may not claim.
+const RESERVED_NAMESPACES: [&str; 4] = ["mcp", "harness", "builtin", "plugin"];
+
+/// Validate a namespace token: the same charset as tool-plane tokens
+/// (`[a-zA-Z0-9_-]`, non-empty, no `__` separator) and not reserved.
+fn validate_namespace_token(namespace: &str) -> Result<(), String> {
+    if namespace.is_empty() {
+        return Err("namespace must not be empty".to_string());
+    }
+    if namespace.contains("__") {
+        return Err("namespace must not contain the `__` separator".to_string());
+    }
+    if !namespace
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+    {
+        return Err("namespace may only contain ASCII letters, digits, `_`, and `-`".to_string());
+    }
+    if RESERVED_NAMESPACES.contains(&namespace) {
+        return Err(format!(
+            "namespace `{namespace}` is reserved; pick another namespace"
+        ));
+    }
+    Ok(())
+}
+
+/// Resolve the bundle's provider-facing namespace: the declared value, or the
+/// identity name segment (the part after the sole `/`). Fails with
+/// [`BundleError::InvalidNamespace`] when the result is not a valid token.
+fn resolve_namespace(
+    source_name: &str,
+    identity: &crate::model::BundleIdentity,
+    declared: &Option<String>,
+) -> Result<Option<String>, BundleError> {
+    let invalid = |namespace: &str, guidance: String| {
+        Err(BundleError::InvalidNamespace {
+            source_name: source_name.to_string(),
+            namespace: namespace.to_string(),
+            guidance,
+        })
+    };
+    let namespace = match declared {
+        // An explicit empty declaration means "use the identity default".
+        Some(value) if value.is_empty() => identity
+            .id
+            .rsplit('/')
+            .next()
+            .unwrap_or_default()
+            .to_string(),
+        Some(value) => value.clone(),
+        None => identity
+            .id
+            .rsplit('/')
+            .next()
+            .unwrap_or_default()
+            .to_string(),
+    };
+    if let Err(detail) = validate_namespace_token(&namespace) {
+        let guidance = if declared.as_deref().is_none_or(str::is_empty) {
+            format!("{detail}; declare an explicit `namespace:` in the manifest")
+        } else {
+            detail
+        };
+        return invalid(&namespace, guidance);
+    }
+    Ok(Some(namespace))
+}
+
 fn prepare_agent_bundle(
     files: BTreeMap<String, Vec<u8>>,
     markdown_prompt: Option<String>,
@@ -788,6 +856,7 @@ fn prepare_agent_bundle(
 ) -> Result<PreparedInstallableBundle, BundleError> {
     let bundle_id = manifest.identity.id.clone();
     validate_identity(&bundle_id, &manifest.identity.version)?;
+    let namespace = resolve_namespace(&bundle_id, &manifest.identity, &manifest.namespace)?;
     validate_unsupported(&bundle_id, &manifest.resources, &manifest.extensions)?;
     let (tools, skills, hooks, extensions) =
         prepare_resource_sets(&bundle_id, &files, manifest.resources, manifest.extensions)?;
@@ -802,6 +871,7 @@ fn prepare_agent_bundle(
     let mut bundle = PreparedInstallableBundle::Agent(Box::new(PreparedAgentBundle {
         format_version: PREPARED_FORMAT_VERSION,
         identity: manifest.identity,
+        namespace,
         digest: String::new(),
         agent,
         tools,
@@ -821,6 +891,7 @@ fn prepare_workflow_bundle(
 ) -> Result<PreparedInstallableBundle, BundleError> {
     let bundle_id = manifest.identity.id.clone();
     validate_identity(&bundle_id, &manifest.identity.version)?;
+    let namespace = resolve_namespace(&bundle_id, &manifest.identity, &manifest.namespace)?;
     validate_unsupported(&bundle_id, &manifest.resources, &manifest.extensions)?;
     let workflow_path = normalize_source_path(&bundle_id, &manifest.workflow.path)?;
     if !is_canonical_workflow_path(&workflow_path) {
@@ -901,6 +972,7 @@ fn prepare_workflow_bundle(
     let mut bundle = PreparedInstallableBundle::Workflow(Box::new(PreparedWorkflowBundle {
         format_version: PREPARED_FORMAT_VERSION,
         identity: manifest.identity,
+        namespace,
         digest: String::new(),
         workflow: PreparedWorkflow {
             id: compiled.definition().name().to_string(),

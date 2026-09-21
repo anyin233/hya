@@ -9,7 +9,7 @@ use hya_bundle::{
 };
 use hya_store::{
     BundleInstallCandidate, BundleInstallOutcome, BundleRegistry, BundleUninstallOutcome,
-    StoreError,
+    NamespaceInstallPolicy, StoreError,
 };
 use sqlx::{Connection, SqliteConnection};
 
@@ -128,7 +128,13 @@ async fn workflow_bundle_installs_as_one_row_and_one_generation() {
         panic!("bundle registry connection failed: {registry:?}");
     };
 
-    let installed = registry.install(&[], workflow_candidate([0x91; 32])).await;
+    let installed = registry
+        .install(
+            &[],
+            NamespaceInstallPolicy::DenyConflicts,
+            workflow_candidate([0x91; 32]),
+        )
+        .await;
     let Ok(installed) = installed else {
         panic!("WorkflowBundle install failed: {installed:?}");
     };
@@ -164,7 +170,11 @@ async fn workflow_bundle_reserved_agent_preserves_empty_registry() {
     };
 
     let rejected = registry
-        .install(&["workflow-reviewer"], workflow_candidate([0x92; 32]))
+        .install(
+            &["workflow-reviewer"],
+            NamespaceInstallPolicy::DenyConflicts,
+            workflow_candidate([0x92; 32]),
+        )
         .await;
     assert!(matches!(
         rejected,
@@ -213,7 +223,12 @@ async fn private_package_install_is_unsupported_without_registry_mutation() {
     });
 
     let install = registry
-        .install_inspection(&[], inspection, 1_725_000_009)
+        .install_inspection(
+            &[],
+            NamespaceInstallPolicy::DenyConflicts,
+            inspection,
+            1_725_000_009,
+        )
         .await;
     assert!(matches!(
         install,
@@ -238,6 +253,7 @@ async fn corrupted_prepared_blob_is_rejected_by_snapshot() {
     let install = registry
         .install(
             &[],
+            NamespaceInstallPolicy::DenyConflicts,
             installed_candidate(
                 "1.0.0",
                 "installed package",
@@ -320,13 +336,25 @@ You are the installed package lead.
         panic!("bundle registry connection failed: {registry:?}");
     };
 
-    let first = registry.install(&[], candidate.clone()).await;
+    let first = registry
+        .install(
+            &[],
+            NamespaceInstallPolicy::DenyConflicts,
+            candidate.clone(),
+        )
+        .await;
     let Ok(first) = first else {
         panic!("first bundle install failed: {first:?}");
     };
     assert_eq!(first, BundleInstallOutcome::Installed { generation: 1 });
 
-    let second = registry.install(&[], candidate.clone()).await;
+    let second = registry
+        .install(
+            &[],
+            NamespaceInstallPolicy::DenyConflicts,
+            candidate.clone(),
+        )
+        .await;
     let Ok(second) = second else {
         panic!("second bundle install failed: {second:?}");
     };
@@ -366,7 +394,9 @@ async fn same_version_different_source_digest_is_content_conflict_without_mutati
         panic!("bundle registry connection failed: {registry:?}");
     };
 
-    let first = registry.install(&[], first_candidate).await;
+    let first = registry
+        .install(&[], NamespaceInstallPolicy::DenyConflicts, first_candidate)
+        .await;
     let Ok(first) = first else {
         panic!("first bundle install failed: {first:?}");
     };
@@ -379,7 +409,9 @@ async fn same_version_different_source_digest_is_content_conflict_without_mutati
         [0x22; 32],
         1_725_000_001,
     );
-    let second = registry.install(&[], second_candidate).await;
+    let second = registry
+        .install(&[], NamespaceInstallPolicy::DenyConflicts, second_candidate)
+        .await;
     assert!(matches!(
         second,
         Err(StoreError::BundleContentConflict {
@@ -419,7 +451,9 @@ async fn different_version_replaces_atomically_and_advances_generation_once() {
         panic!("bundle registry connection failed: {registry:?}");
     };
 
-    let first = registry.install(&[], version_one).await;
+    let first = registry
+        .install(&[], NamespaceInstallPolicy::DenyConflicts, version_one)
+        .await;
     let Ok(first) = first else {
         panic!("first bundle install failed: {first:?}");
     };
@@ -434,7 +468,9 @@ async fn different_version_replaces_atomically_and_advances_generation_once() {
     );
     let replacement_digest = version_two.prepared_digest.clone();
     let replacement_bytes = version_two.prepared_bytes.clone();
-    let second = registry.install(&[], version_two).await;
+    let second = registry
+        .install(&[], NamespaceInstallPolicy::DenyConflicts, version_two)
+        .await;
     let Ok(second) = second else {
         panic!("replacement bundle install failed: {second:?}");
     };
@@ -477,7 +513,9 @@ async fn conflicting_agent_id_install_preserves_old_row_and_generation() {
         panic!("bundle registry connection failed: {registry:?}");
     };
 
-    let first = registry.install(&[], old_candidate).await;
+    let first = registry
+        .install(&[], NamespaceInstallPolicy::DenyConflicts, old_candidate)
+        .await;
     let Ok(first) = first else {
         panic!("first bundle install failed: {first:?}");
     };
@@ -510,6 +548,7 @@ You are the conflicting lead.
     let replacement = registry
         .install(
             &[],
+            NamespaceInstallPolicy::DenyConflicts,
             BundleInstallCandidate {
                 source_digest: [0x77; 32],
                 prepared_digest: conflicting.digest().to_owned(),
@@ -559,7 +598,11 @@ async fn reserved_builtin_agent_id_is_rejected_and_registry_is_unchanged() {
     };
 
     let install = registry
-        .install(&["installed-package-lead"], candidate)
+        .install(
+            &["installed-package-lead"],
+            NamespaceInstallPolicy::DenyConflicts,
+            candidate,
+        )
         .await;
     assert!(matches!(
         install,
@@ -594,6 +637,7 @@ async fn writer_busy_fails_immediately_without_registry_mutation() {
     let install = registry
         .install(
             &[],
+            NamespaceInstallPolicy::DenyConflicts,
             installed_candidate(
                 "1.0.0",
                 "installed package",
@@ -628,6 +672,7 @@ async fn uninstall_removes_active_bundle_and_advances_generation_once() {
     let installed = registry
         .install(
             &[],
+            NamespaceInstallPolicy::DenyConflicts,
             installed_candidate(
                 "1.0.0",
                 "installed package",
@@ -707,4 +752,136 @@ async fn uninstall_of_a_never_installed_bundle_is_typed_not_found() {
     };
     assert_eq!(snapshot.generation, 0);
     assert!(snapshot.bundles.is_empty());
+}
+
+/// Build one AgentBundle candidate with explicit identity and namespace.
+fn namespaced_candidate(
+    bundle_id: &str,
+    namespace: Option<&str>,
+    version: &str,
+    source_digest: [u8; 32],
+) -> BundleInstallCandidate {
+    let namespace_line = namespace
+        .map(|value| format!("namespace: {value}\n"))
+        .unwrap_or_default();
+    let manifest = format!(
+        "kind: AgentBundle\nidentity:\n  id: {bundle_id}\n  version: {version}\n  publisher: hya\n{namespace_line}agent:\n  id: {bundle_id}-lead\n  role: main\n  prompt: prompts/lead.md\n  spawn_lifecycle: transient\n"
+    );
+    let prepared = prepare_package(BundleSource::new(
+        bundle_id,
+        vec![
+            SourceFile::new("bundle.yaml", manifest.into_bytes()),
+            SourceFile::new("prompts/lead.md", b"Lead.\n".to_vec()),
+        ],
+    ));
+    let Ok(prepared) = prepared else {
+        panic!("namespaced package preparation failed: {prepared:?}");
+    };
+    BundleInstallCandidate {
+        source_digest,
+        prepared_digest: prepared.digest().to_owned(),
+        prepared_bytes: prepared.bytes().to_vec(),
+        installed_at: 1_725_000_020,
+    }
+}
+
+#[tokio::test]
+async fn same_bundle_upgrade_installs_but_downgrade_requires_overwrite() {
+    let registry = BundleRegistry::connect(&temp_db()).await.expect("connect");
+    let newer = namespaced_candidate("hya/acme", None, "1.1.0", [1_u8; 32]);
+    let older = namespaced_candidate("hya/acme", None, "1.0.0", [2_u8; 32]);
+
+    registry
+        .install(&[], NamespaceInstallPolicy::DenyConflicts, newer)
+        .await
+        .expect("upgrade installs");
+    let result = registry
+        .install(&[], NamespaceInstallPolicy::DenyConflicts, older)
+        .await;
+    let Err(err) = result else {
+        panic!("downgrade must require explicit overwrite");
+    };
+    let StoreError::BundleDowngradeRequired {
+        bundle_id,
+        installed_version,
+        incoming_version,
+    } = err
+    else {
+        panic!("downgrade must require explicit overwrite");
+    };
+    assert_eq!(bundle_id, "hya/acme");
+    assert_eq!(installed_version, "1.1.0");
+    assert_eq!(incoming_version, "1.0.0");
+
+    let older = namespaced_candidate("hya/acme", None, "1.0.0", [2_u8; 32]);
+    let outcome = registry
+        .install(&[], NamespaceInstallPolicy::OverwriteConflicts, older)
+        .await
+        .expect("overwrite accepts downgrade");
+    assert!(matches!(outcome, BundleInstallOutcome::Replaced { .. }));
+}
+
+#[tokio::test]
+async fn cross_bundle_namespace_conflict_requires_explicit_overwrite() {
+    let registry = BundleRegistry::connect(&temp_db()).await.expect("connect");
+    let first = namespaced_candidate("hya/acme-tools", Some("acme"), "1.0.0", [3_u8; 32]);
+    let second = namespaced_candidate("hya/other", Some("acme"), "1.0.0", [4_u8; 32]);
+
+    registry
+        .install(&[], NamespaceInstallPolicy::DenyConflicts, first)
+        .await
+        .expect("first installs");
+    let result = registry
+        .install(&[], NamespaceInstallPolicy::DenyConflicts, second)
+        .await;
+    let Err(err) = result else {
+        panic!("namespace conflict must be reported");
+    };
+    let StoreError::NamespaceConflict {
+        namespace,
+        existing_bundle_id,
+        incoming_bundle_id,
+    } = err
+    else {
+        panic!("namespace conflict must be reported");
+    };
+    assert_eq!(namespace, "acme");
+    assert_eq!(existing_bundle_id, "hya/acme-tools");
+    assert_eq!(incoming_bundle_id, "hya/other");
+
+    let second = namespaced_candidate("hya/other", Some("acme"), "1.0.0", [4_u8; 32]);
+    let outcome = registry
+        .install(&[], NamespaceInstallPolicy::OverwriteConflicts, second)
+        .await
+        .expect("overwrite resolves the conflict");
+    assert!(matches!(outcome, BundleInstallOutcome::Installed { .. }));
+
+    let snapshot = registry.snapshot().await.expect("snapshot");
+    let ids: Vec<&str> = snapshot
+        .bundles
+        .iter()
+        .map(|record| record.bundle_id.as_str())
+        .collect();
+    assert!(ids.contains(&"hya/other"));
+    assert!(
+        !ids.contains(&"hya/acme-tools"),
+        "incumbent namespace owner is replaced: {ids:?}"
+    );
+}
+
+#[tokio::test]
+async fn distinct_namespaces_install_independently() {
+    let registry = BundleRegistry::connect(&temp_db()).await.expect("connect");
+    let one = namespaced_candidate("hya/one", Some("one"), "1.0.0", [5_u8; 32]);
+    let two = namespaced_candidate("hya/two", Some("two"), "1.0.0", [6_u8; 32]);
+    registry
+        .install(&[], NamespaceInstallPolicy::DenyConflicts, one)
+        .await
+        .expect("one installs");
+    registry
+        .install(&[], NamespaceInstallPolicy::DenyConflicts, two)
+        .await
+        .expect("two installs");
+    let snapshot = registry.snapshot().await.expect("snapshot");
+    assert_eq!(snapshot.bundles.len(), 2);
 }

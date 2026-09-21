@@ -9,6 +9,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+semver = "1"
 hya-bundle = { workspace = true }
 hya-proto = { workspace = true }
 libc = { workspace = true }

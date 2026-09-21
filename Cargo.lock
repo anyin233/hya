@@ -1530,6 +1530,7 @@ dependencies = [
  "hya-bundle",
  "hya-proto",
  "libc",
+ "semver",
  "serde_json",
  "sqlx",
  "thiserror 1.0.69",
