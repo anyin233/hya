@@ -14,11 +14,33 @@ use tokio::sync::{Mutex, OnceCell};
 use crate::project_bundles::load_project_bundles;
 use crate::runtime_reconcile::{bundle_schema_claims, prepared_static_bundle_source};
 
-/// Decode the build-prepared first-party WorkflowBundle.
-pub fn first_party_catalog() -> Result<PreparedCatalog, CoreError> {
-    let bytes = include_bytes!(concat!(env!("OUT_DIR"), "/first-party.prepared.json"));
-    let digest = include_str!(concat!(env!("OUT_DIR"), "/first-party.prepared.digest")).trim();
-    Ok(PreparedCatalog::decode(bytes, digest)?)
+/// One embedded first-party bundle entry emitted by the build script.
+#[derive(serde::Deserialize)]
+struct FirstPartyEntry {
+    name: String,
+    digest: String,
+    bytes: String,
+}
+
+/// Decode every build-prepared first-party bundle, in deterministic order.
+pub fn first_party_catalogs() -> Result<Vec<PreparedCatalog>, CoreError> {
+    let raw = include_str!(concat!(env!("OUT_DIR"), "/first-party.json"));
+    let entries: Vec<FirstPartyEntry> = serde_json::from_str(raw).map_err(|error| {
+        CoreError::Invalid(format!(
+            "embedded first-party catalog list is malformed: {error}"
+        ))
+    })?;
+    entries
+        .iter()
+        .map(|entry| {
+            PreparedCatalog::decode(entry.bytes.as_bytes(), &entry.digest).map_err(|error| {
+                CoreError::Invalid(format!(
+                    "embedded first-party bundle `{}` failed decode: {error}",
+                    entry.name
+                ))
+            })
+        })
+        .collect()
 }
 
 /// Default path of the installed Bundle registry SQLite file.
@@ -181,10 +203,10 @@ impl InstalledBundleRefresh {
                 prepared_catalogs.push(prepared);
             }
         }
-        let first_party = first_party_catalog()?;
+        let first_party = first_party_catalogs()?;
         let mut prepared_catalog_refs = prepared_catalogs.iter().collect::<Vec<_>>();
         prepared_catalog_refs.extend(project_catalogs.iter());
-        prepared_catalog_refs.push(&first_party);
+        prepared_catalog_refs.extend(first_party.iter());
         let bundles = Arc::new(BundleCatalog::from_verified_catalogs(
             &prepared_catalog_refs,
         )?);

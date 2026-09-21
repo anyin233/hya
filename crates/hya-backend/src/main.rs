@@ -28,7 +28,10 @@ use anyhow::Context as _;
 use clap::Parser;
 use hya_core::completion::{PluginGoalEvaluator, render_transcript};
 use hya_core::hooks::HookDispatcher;
-use hya_core::{CreateSession, GoalEvaluator, ModelGoalEvaluator, SafetyCaps, run_goal};
+use hya_core::loop_mode::{LoopConfig, ModelLoopPlanner, ModelLoopVerifier, run_loop};
+use hya_core::{
+    CreateSession, GoalEvaluator, ModelGoalEvaluator, RunOutcome, SafetyCaps, run_goal,
+};
 use hya_proto::{ModelRef, SessionId};
 use hya_store::SessionStore;
 use tokio_util::sync::CancellationToken;
@@ -405,6 +408,141 @@ async fn cmd_goal(
     Ok(())
 }
 
+/// Loop-mode CLI entry (dev_plan 6.11): drive the lead session with an
+/// independent model verifier/planner until the deterministic condition, the
+/// `loop.should_stop` hook, or the verifier stops the run. In-memory store,
+/// mirroring `cmd_goal`'s setup.
+#[allow(clippy::too_many_arguments)]
+async fn cmd_loop(
+    target: String,
+    budget: Option<u32>,
+    max_iterations: Option<u32>,
+    while_command: Option<String>,
+    until_command: Option<String>,
+    evaluator_model_flag: Option<String>,
+    model_override: Option<String>,
+    yolo: bool,
+    pure: bool,
+) -> anyhow::Result<()> {
+    first_run_config_bootstrap(false)?;
+    let has_explicit_model = model_override.is_some();
+    let store = SessionStore::connect_memory()
+        .await
+        .context("open in-memory store")?;
+    let runtime = resolve_runtime(model_override)
+        .await
+        .with_yolo(yolo)
+        .with_pure(pure);
+    let evaluator_router = runtime.router.clone();
+    // D7 evaluator model plumbing, shared with goal mode: CLI flag outranks
+    // config `goal.evaluator_model`; with neither, the worker's model judges.
+    let evaluator_model = config::resolve_evaluator_model(
+        evaluator_model_flag.as_deref(),
+        config::load_goal_settings().evaluator_model.as_deref(),
+        &runtime.model,
+    )
+    .to_string();
+    let agent = if pure {
+        agent_with_model_pure(&runtime.model, runtime.reasoning)
+    } else {
+        agent_with_model(&runtime.model, runtime.reasoning)
+    };
+    let mut built = if pure {
+        build_session_engine_pure(
+            store,
+            runtime.router,
+            &agent,
+            runtime.mcp,
+            runtime.plugins,
+            (runtime.websearch, runtime.permission),
+        )
+        .await?
+    } else {
+        build_session_engine(
+            store,
+            runtime.router,
+            &agent,
+            runtime.mcp,
+            runtime.plugins,
+            (runtime.websearch, runtime.permission),
+        )
+        .await?
+    };
+    let session_model = if has_explicit_model {
+        agent.model.clone()
+    } else {
+        built
+            .effective_root_model(&agent, &agent.workdir)
+            .await
+            .context("resolve loop root Agent model")?
+    };
+    let engine = built.engine();
+    let asks = built
+        .take_asks()
+        .ok_or_else(|| anyhow::anyhow!("asks receiver missing"))?;
+    let _ = built.take_questions();
+    let _mcp_manager = built.mcp_control();
+    let _plugin_host = built.plugin_host();
+    let _responder = spawn_reject_responder(asks);
+    let session = engine
+        .create(CreateSession {
+            parent: None,
+            agent: agent.name.clone(),
+            model: session_model,
+            workdir: agent.workdir.to_string_lossy().into_owned(),
+        })
+        .await
+        .context("create session")?;
+    let predicate = cli_args::build_loop_predicate(while_command, until_command, &agent.workdir)
+        .map_err(anyhow::Error::msg)
+        .context("resolve loop condition")?;
+    let loop_config = LoopConfig {
+        budget: cli_args::loop_budget(budget, max_iterations),
+        predicate,
+        ..LoopConfig::default()
+    };
+    // The engine-supplied `loop.should_stop` consult: registered plugin
+    // providers may force a legitimate stop; without registrations the
+    // dispatcher answers `None` and the gate falls through untouched.
+    let should_stop: Arc<dyn HookDispatcher> = built.plugin_host();
+    let outcome = run_loop(
+        engine.clone(),
+        session,
+        agent,
+        target,
+        Arc::new(ModelLoopVerifier::new(
+            Arc::new(evaluator_router.clone()),
+            ModelRef::new(&evaluator_model),
+        )),
+        Arc::new(ModelLoopPlanner::new(
+            Arc::new(evaluator_router),
+            ModelRef::new(&evaluator_model),
+        )),
+        loop_config,
+        CancellationToken::new(),
+        Some(should_stop),
+    )
+    .await
+    .context("run loop")?;
+    println!("loop outcome: {outcome:?}");
+    // A broken deterministic condition stops with a "broken condition"
+    // reason: surface it as a failure, never as a finished loop.
+    if let RunOutcome::Achieved { reason, .. } = &outcome
+        && reason.starts_with("broken condition")
+    {
+        eprintln!(
+            "warning: the loop condition itself is broken, so this is NOT a success: {reason}"
+        );
+        let _ = built.shutdown().await;
+        anyhow::bail!("loop ended on a broken condition; not a success");
+    }
+    built
+        .shutdown()
+        .await
+        .context("shutdown spawn supervisor")?;
+    Ok(())
+}
+
 async fn cmd_tail_session(id: String, db: String) -> anyhow::Result<()> {
     let session: SessionId = id.parse().context("parse session id")?;
     let store = open_store(&db).await?;
@@ -541,5 +679,26 @@ async fn main() -> anyhow::Result<()> {
             cmd_sessions(resolve_interactive_db(&path)).await
         }
         Some(Command::Rpc) => cmd_rpc(model, yolo, pure).await,
+        Some(Command::Loop {
+            target,
+            budget,
+            max_iterations,
+            while_command,
+            until_command,
+            evaluator_model,
+        }) => {
+            cmd_loop(
+                target,
+                budget,
+                max_iterations,
+                while_command,
+                until_command,
+                evaluator_model,
+                model,
+                yolo,
+                pure,
+            )
+            .await
+        }
     }
 }

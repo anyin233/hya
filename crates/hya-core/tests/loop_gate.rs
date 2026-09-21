@@ -125,6 +125,7 @@ async fn loops_until_verifier_satisfied() {
         "target".to_string(),
         LoopConfig::default(),
         CancellationToken::new(),
+        None,
     )
     .await
     .unwrap();
@@ -155,6 +156,7 @@ async fn planner_skipped_on_terminal_success() {
         "t".to_string(),
         LoopConfig::default(),
         CancellationToken::new(),
+        None,
     )
     .await
     .unwrap();
@@ -192,6 +194,7 @@ async fn budget_exhaustion_wins_when_never_satisfied() {
         "t".to_string(),
         config,
         CancellationToken::new(),
+        None,
     )
     .await
     .unwrap();
@@ -232,6 +235,7 @@ async fn exact_budget_mode_runs_all_iterations() {
         "t".to_string(),
         config,
         CancellationToken::new(),
+        None,
     )
     .await
     .unwrap();
@@ -264,6 +268,7 @@ async fn no_progress_detection_stops_early() {
         "t".to_string(),
         LoopConfig::default(),
         CancellationToken::new(),
+        None,
     )
     .await
     .unwrap();
@@ -299,6 +304,7 @@ async fn repeated_directive_without_strategy_change_stops() {
         "t".to_string(),
         config,
         CancellationToken::new(),
+        None,
     )
     .await
     .unwrap();

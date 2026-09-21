@@ -66,8 +66,10 @@ async fn install(package: PathBuf, overwrite: bool) -> anyhow::Result<()> {
     let inspection = inspect_package(&package)?;
     if let PackageInspection::Public(public) = &inspection {
         let first_party =
-            hya_app::first_party_catalog().context("decode embedded first-party WorkflowBundle")?;
-        BundleCatalog::from_verified_catalogs(&[&first_party, &public.prepared])
+            hya_app::first_party_catalogs().context("decode embedded first-party bundles")?;
+        let mut catalogs = first_party.iter().collect::<Vec<_>>();
+        catalogs.push(&public.prepared);
+        BundleCatalog::from_verified_catalogs(&catalogs)
             .context("validate package against immutable first-party catalog")?;
     }
     let identity = match &inspection {
@@ -201,12 +203,14 @@ fn reserved_agent_ids() -> Vec<&'static str> {
 
 async fn list() -> anyhow::Result<()> {
     let first_party =
-        hya_app::first_party_catalog().context("decode embedded first-party WorkflowBundle")?;
-    let [first_party_bundle] = first_party.bundles() else {
-        anyhow::bail!("first-party catalog must contain exactly one bundle")
-    };
+        hya_app::first_party_catalogs().context("decode embedded first-party bundles")?;
     let installed = installed_records_if_exists().await?;
-    let mut rows = vec![bundle_list_row(first_party_bundle, "active")];
+    let mut rows = Vec::new();
+    for catalog in &first_party {
+        for bundle in catalog.bundles() {
+            rows.push(bundle_list_row(bundle, "active"));
+        }
+    }
     rows.extend(installed.iter().map(|record| {
         match decode_installed_bundle(record) {
             Ok(bundle) => bundle_list_row(&bundle, "active"),
@@ -288,28 +292,30 @@ async fn info(bundle_id: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Print metadata for the immutable first-party WorkflowBundle.
+/// Print metadata for the immutable first-party bundles.
 fn info_first_party() -> anyhow::Result<()> {
-    let prepared =
-        hya_app::first_party_catalog().context("decode embedded first-party WorkflowBundle")?;
-    let [bundle] = prepared.bundles() else {
-        anyhow::bail!("first-party catalog must contain exactly one bundle")
-    };
-    let identity = bundle.identity();
-    println!("name={}", identity.id);
-    println!("version={}", identity.version);
-    println!("publisher={}", identity.publisher);
-    println!("origin=first-party");
-    println!("format=prepared-v2");
-    println!("state=active");
-    println!("immutable=true");
-    println!("prepared_digest={}", prepared.digest());
-    print_static_info(
-        bundle,
-        "=",
-        prepared.bundle_schemas(&identity.id),
-        prepared.bundle_process(&identity.id),
-    );
+    let catalogs =
+        hya_app::first_party_catalogs().context("decode embedded first-party bundles")?;
+    for prepared in &catalogs {
+        let [bundle] = prepared.bundles() else {
+            anyhow::bail!("first-party catalog must contain exactly one bundle")
+        };
+        let identity = bundle.identity();
+        println!("name={}", identity.id);
+        println!("version={}", identity.version);
+        println!("publisher={}", identity.publisher);
+        println!("origin=first-party");
+        println!("format=prepared-v2");
+        println!("state=active");
+        println!("immutable=true");
+        println!("prepared_digest={}", prepared.digest());
+        print_static_info(
+            bundle,
+            "=",
+            prepared.bundle_schemas(&identity.id),
+            prepared.bundle_process(&identity.id),
+        );
+    }
     Ok(())
 }
 
@@ -328,8 +334,11 @@ async fn uninstall(bundle_id: &str) -> anyhow::Result<()> {
 /// one `BUNDLE SCHEME TOOL WRITABLE` row per declared schema.
 async fn schemas() -> anyhow::Result<()> {
     let first_party =
-        hya_app::first_party_catalog().context("decode embedded first-party WorkflowBundle")?;
-    let mut rows = catalog_schema_rows(&first_party);
+        hya_app::first_party_catalogs().context("decode embedded first-party bundles")?;
+    let mut rows = Vec::new();
+    for catalog in &first_party {
+        rows.extend(catalog_schema_rows(catalog));
+    }
     for record in installed_records_if_exists().await? {
         match decode_installed_catalog(&record) {
             Ok(prepared) => rows.extend(catalog_schema_rows(&prepared)),

@@ -71,6 +71,10 @@ pub enum HookName {
     /// Loop-mode planner hook.
     #[serde(rename = "loop.planner")]
     LoopPlanner,
+    /// Post-turn loop stop consult: `{"stop": true, "reason": …}` forces the
+    /// loop to stop with that reason before the verifier judges.
+    #[serde(rename = "loop.should_stop")]
+    LoopShouldStop,
     /// Consulted before the engine compacts context; may skip or replace the
     /// summarizer instructions.
     #[serde(rename = "compaction.before")]
@@ -105,6 +109,7 @@ impl HookName {
             HookName::GoalEvaluate => "goal.evaluate",
             HookName::LoopVerifier => "loop.verifier",
             HookName::LoopPlanner => "loop.planner",
+            HookName::LoopShouldStop => "loop.should_stop",
             HookName::CompactionBefore => "compaction.before",
             HookName::CompactionAfter => "compaction.after",
             HookName::SessionStart => "session.start",
@@ -134,6 +139,7 @@ impl HookName {
             "goal.evaluate" => HookName::GoalEvaluate,
             "loop.verifier" => HookName::LoopVerifier,
             "loop.planner" => HookName::LoopPlanner,
+            "loop.should_stop" => HookName::LoopShouldStop,
             "compaction.before" => HookName::CompactionBefore,
             "compaction.after" => HookName::CompactionAfter,
             "session.start" => HookName::SessionStart,

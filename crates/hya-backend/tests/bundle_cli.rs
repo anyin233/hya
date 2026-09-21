@@ -308,6 +308,7 @@ fn bundle_list_and_info_include_first_party_without_creating_registry()
         list_stdout.lines().collect::<Vec<_>>(),
         vec![
             LIST_HEADER,
+            "hya/goal-loop 1.0.0 goal-loop-guide active AgentBundle -",
             "hya/plan-impl-review 1.0.0 plan-impl-review-implementer,plan-impl-review-planner,plan-impl-review-reviewer active WorkflowBundle plan-impl-review",
         ],
         "unexpected bundle list:\n{list_stdout}"
@@ -599,6 +600,7 @@ async fn workflow_bundle_list_and_info_show_kind_workflow_and_agents()
         list_stdout.lines().collect::<Vec<_>>(),
         vec![
             "NAME VERSION AGENT STATE KIND WORKFLOW",
+            "hya/goal-loop 1.0.0 goal-loop-guide active AgentBundle -",
             "hya/plan-impl-review 1.0.0 plan-impl-review-implementer,plan-impl-review-planner,plan-impl-review-reviewer active WorkflowBundle plan-impl-review",
             "hya/workflow-info 1.0.0 demo-worker active WorkflowBundle demo",
         ],

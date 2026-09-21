@@ -42,7 +42,7 @@ pub use hya_proto::{
 };
 pub use hya_tool::{InvocationPolicy, WebSearchConfig};
 pub use installed_bundle_refresh::{
-    InstalledBundleRefresh, bundle_registry_path, first_party_catalog,
+    InstalledBundleRefresh, bundle_registry_path, first_party_catalogs,
 };
 pub use runtime::{
     BuiltSessionEngine, HARNESS_AGENT_BASE, HyaRuntime, OfflineNotice, RuntimeConfig,

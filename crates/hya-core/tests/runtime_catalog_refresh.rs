@@ -306,6 +306,7 @@ async fn loop_children_reuse_one_root_catalog_binding() {
             ..LoopConfig::default()
         },
         CancellationToken::new(),
+        None,
     )
     .await
     .expect("loop should complete two iterations with one root binding");

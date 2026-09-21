@@ -386,6 +386,40 @@ impl HookDispatcher for PluginHost {
             "loop.planner hook not registered".to_string()
         })))
     }
+
+    async fn loop_should_stop(&self, target: &str, transcript: &str) -> Option<String> {
+        let params = LoopShouldStopParams { target, transcript };
+        for conn in self.plugins() {
+            if conn.posture(HookName::LoopShouldStop).is_none() {
+                continue;
+            }
+            match call_outcome::<LoopShouldStopWire>(conn, HookName::LoopShouldStop, &params).await
+            {
+                Ok(wire) if wire.stop => {
+                    let reason = if wire.reason.is_empty() {
+                        "no reason given".to_string()
+                    } else {
+                        wire.reason
+                    };
+                    return Some(reason);
+                }
+                // `stop: false` keeps the chain going: a later registered
+                // provider may still force the stop.
+                Ok(_) => {}
+                Err(failed) => {
+                    // Open posture: the consult never decides by failing. A
+                    // broken hook logs and yields to the next provider (and
+                    // ultimately to the verifier).
+                    tracing::warn!(
+                        plugin = %conn.id,
+                        hook = HookName::LoopShouldStop.as_str(),
+                        "loop.should_stop provider failed; continuing the loop: {failed}"
+                    );
+                }
+            }
+        }
+        None
+    }
 }
 
 /// Wire params for `goal.evaluate`.
@@ -418,6 +452,23 @@ struct LoopPlanParams<'a> {
     history: &'a [String],
     last: VerifierVerdictWire,
     planner_notes: &'a str,
+}
+
+/// Wire params for `loop.should_stop`.
+#[derive(Serialize)]
+struct LoopShouldStopParams<'a> {
+    target: &'a str,
+    transcript: &'a str,
+}
+
+/// Wire reply for `loop.should_stop`: `{"stop": bool, "reason": str}` —
+/// `reason` may be omitted (it reads as "no reason given"), anything else is
+/// a malformed reply and fails open to "keep going".
+#[derive(Deserialize)]
+struct LoopShouldStopWire {
+    stop: bool,
+    #[serde(default)]
+    reason: String,
 }
 
 /// Wire mirror of [`EvidenceQuality`] (`missing`/`claim_only`/`supported`/`verified`).

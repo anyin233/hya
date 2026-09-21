@@ -145,6 +145,72 @@ pub(crate) enum Command {
     },
     /// JSONL RPC over stdin/stdout: read {"type":"prompt","text":...} lines, emit event JSONL.
     Rpc,
+    /// Loop mode: iterate the agent toward `--target` until the deterministic
+    /// `--while`/`--until` condition, the `loop.should_stop` hook, or the
+    /// independent verifier stops the run.
+    Loop {
+        /// The loop target: what "done" means, judged independently.
+        #[arg(long)]
+        target: String,
+        /// Iteration budget (clamped to 1..=100 by the engine's hard ceiling).
+        #[arg(long)]
+        budget: Option<u32>,
+        /// Alias for `--budget` (mirrors `-p` goal mode's flag); `--budget`
+        /// wins when both are given.
+        #[arg(long)]
+        max_iterations: Option<u32>,
+        /// Keep looping while this shell command exits 0; exit 1 stops the
+        /// loop; any other exit code or a timeout is a broken condition
+        /// (a failure, never a success).
+        #[arg(long = "while", value_name = "CMD")]
+        while_command: Option<String>,
+        /// Stop when this shell command exits 0; exit 1 keeps looping; any
+        /// other exit code or a timeout is a broken condition. Mutually
+        /// exclusive with `--while`.
+        #[arg(long = "until", value_name = "CMD")]
+        until_command: Option<String>,
+        /// Verifier/planner model as `provider/model`. Overrides the config
+        /// `goal.evaluator_model`; without either, the worker's current model
+        /// judges.
+        #[arg(long, value_name = "PROVIDER/MODEL")]
+        evaluator_model: Option<String>,
+    },
+}
+
+/// Resolve the effective loop budget from the parsed flags: `--budget`
+/// outranks the `--max-iterations` alias, the default mirrors
+/// [`hya_core::LoopConfig::default`], and every request is clamped into the
+/// range `cost_preflight` enforces.
+#[must_use]
+pub(crate) fn loop_budget(budget: Option<u32>, max_iterations: Option<u32>) -> u32 {
+    let default = hya_core::LoopConfig::default().budget;
+    hya_core::loop_mode::clamp_budget(budget.or(max_iterations).unwrap_or(default))
+}
+
+/// Build the deterministic loop predicate from `--while`/`--until`: exactly
+/// one may be set, evaluated in the session workdir.
+pub(crate) fn build_loop_predicate(
+    while_command: Option<String>,
+    until_command: Option<String>,
+    workdir: &std::path::Path,
+) -> Result<Option<hya_core::loop_mode::LoopPredicate>, String> {
+    match (while_command, until_command) {
+        (Some(_), Some(_)) => Err(
+            "--while and --until are mutually exclusive; give exactly one loop condition"
+                .to_string(),
+        ),
+        (Some(command), None) => Ok(Some(hya_core::loop_mode::LoopPredicate::new(
+            command,
+            hya_core::loop_mode::PredicateMode::While,
+            workdir.to_path_buf(),
+        ))),
+        (None, Some(command)) => Ok(Some(hya_core::loop_mode::LoopPredicate::new(
+            command,
+            hya_core::loop_mode::PredicateMode::Until,
+            workdir.to_path_buf(),
+        ))),
+        (None, None) => Ok(None),
+    }
 }
 
 pub(crate) fn serve_bind(
@@ -166,6 +232,7 @@ pub(crate) fn serve_bind(
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use clap::CommandFactory as _;
     use clap::Parser as _;
@@ -246,6 +313,147 @@ mod tests {
             cli.evaluator_model.is_none(),
             "the flag must stay optional so config/worker fallback applies"
         );
+    }
+
+    #[test]
+    fn parses_loop_command_flags() {
+        let cli = parse([
+            "hya-backend",
+            "loop",
+            "--target",
+            "tests are green",
+            "--budget",
+            "5",
+            "--while",
+            "cargo test --quiet",
+            "--evaluator-model",
+            "deep/o3-mini",
+        ]);
+        match cli.command {
+            Some(super::Command::Loop {
+                target,
+                budget,
+                max_iterations,
+                while_command,
+                until_command,
+                evaluator_model,
+            }) => {
+                assert_eq!(target, "tests are green");
+                assert_eq!(budget, Some(5));
+                assert_eq!(max_iterations, None);
+                assert_eq!(while_command.as_deref(), Some("cargo test --quiet"));
+                assert_eq!(until_command, None);
+                assert_eq!(evaluator_model.as_deref(), Some("deep/o3-mini"));
+            }
+            _ => panic!("expected loop command"),
+        }
+    }
+
+    #[test]
+    fn parses_loop_until_and_max_iterations_alias() {
+        let cli = parse([
+            "hya-backend",
+            "loop",
+            "--target",
+            "docs rebuilt",
+            "--until",
+            "test -f done",
+            "--max-iterations",
+            "3",
+        ]);
+        match cli.command {
+            Some(super::Command::Loop {
+                budget,
+                max_iterations,
+                while_command,
+                until_command,
+                ..
+            }) => {
+                assert_eq!(budget, None);
+                assert_eq!(max_iterations, Some(3));
+                assert_eq!(while_command, None);
+                assert_eq!(until_command.as_deref(), Some("test -f done"));
+            }
+            _ => panic!("expected loop command"),
+        }
+    }
+
+    #[test]
+    fn loop_command_requires_target_and_defaults_flags() {
+        let cli = parse(["hya-backend", "loop", "--target", "ship it"]);
+        match cli.command {
+            Some(super::Command::Loop {
+                target,
+                budget,
+                max_iterations,
+                while_command,
+                until_command,
+                evaluator_model,
+            }) => {
+                assert_eq!(target, "ship it");
+                assert_eq!(budget, None);
+                assert_eq!(max_iterations, None);
+                assert_eq!(while_command, None);
+                assert_eq!(until_command, None);
+                assert_eq!(evaluator_model, None);
+            }
+            _ => panic!("expected loop command"),
+        }
+    }
+
+    #[test]
+    fn loop_budget_resolves_alias_default_and_clamps() {
+        use hya_core::loop_mode::{LoopConfig, cost_preflight};
+        // Default mirrors `LoopConfig::default().budget`.
+        assert_eq!(super::loop_budget(None, None), LoopConfig::default().budget);
+        // `--budget` outranks the `--max-iterations` alias.
+        assert_eq!(super::loop_budget(Some(5), Some(9)), 5);
+        assert_eq!(super::loop_budget(None, Some(9)), 9);
+        // Any request is clamped into the range `cost_preflight` enforces
+        // (HARD_MAX_ITERATIONS / minimum 1), so the resolved value preflights.
+        let clamped = super::loop_budget(None, Some(500));
+        assert!(
+            cost_preflight(&LoopConfig {
+                budget: clamped,
+                ..LoopConfig::default()
+            })
+            .is_ok(),
+            "clamped budget {clamped} must pass cost_preflight"
+        );
+        assert_eq!(super::loop_budget(Some(0), None), 1);
+    }
+
+    #[test]
+    fn build_loop_predicate_maps_flags_to_modes() {
+        let workdir = std::env::temp_dir();
+        let while_only =
+            super::build_loop_predicate(Some("test -f x".to_string()), None, &workdir).unwrap();
+        assert!(while_only.is_some(), "--while builds a predicate");
+        let predicate = while_only.unwrap();
+        assert_eq!(predicate.mode, hya_core::loop_mode::PredicateMode::While);
+        assert_eq!(predicate.command, "test -f x");
+        assert_eq!(predicate.workdir, workdir);
+
+        let until_only =
+            super::build_loop_predicate(None, Some("false".to_string()), &workdir).unwrap();
+        assert_eq!(
+            until_only.unwrap().mode,
+            hya_core::loop_mode::PredicateMode::Until
+        );
+
+        assert!(
+            super::build_loop_predicate(None, None, &workdir)
+                .unwrap()
+                .is_none(),
+            "no flags means no predicate (verifier decides)"
+        );
+
+        let both = super::build_loop_predicate(
+            Some("true".to_string()),
+            Some("false".to_string()),
+            &workdir,
+        );
+        assert!(both.is_err(), "--while and --until are mutually exclusive");
     }
 
     #[test]
