@@ -259,14 +259,13 @@ impl BundleRegistry {
             && loaded.record.source_digest != source_digest
             && loaded.record.version != version
             && is_downgrade(&version, &loaded.record.version)
+            && policy == NamespaceInstallPolicy::DenyConflicts
         {
-            if policy == NamespaceInstallPolicy::DenyConflicts {
-                return Err(StoreError::BundleDowngradeRequired {
-                    bundle_id,
-                    installed_version: loaded.record.version.clone(),
-                    incoming_version: version,
-                });
-            }
+            return Err(StoreError::BundleDowngradeRequired {
+                bundle_id,
+                installed_version: loaded.record.version.clone(),
+                incoming_version: version,
+            });
         }
 
         // Cross-bundle namespace conflicts: refuse or replace the incumbent.

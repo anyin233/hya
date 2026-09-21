@@ -1,5 +1,7 @@
 //! Namespace declaration and validation for prepared bundles.
 
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use hya_bundle::{
     BundleError, BundleSource, PreparedInstallableBundle, SourceFile, prepare_package,
 };
