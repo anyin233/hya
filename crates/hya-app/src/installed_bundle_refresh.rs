@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use hya_bundle::{BundleCatalog, PreparedCatalog};
+use hya_bundle::{BundleCatalog, PreparedBundleSchemas, PreparedCatalog};
 use hya_core::{
     AgentCatalog, CoreError, RuntimeCatalogRefresh, RuntimeRegistry, RuntimeSource,
     RuntimeSourceKind,
@@ -12,7 +12,7 @@ use hya_store::{BundleRegistry, BundleRegistryRecord};
 use tokio::sync::{Mutex, OnceCell};
 
 use crate::project_bundles::load_project_bundles;
-use crate::runtime_reconcile::prepared_static_bundle_source;
+use crate::runtime_reconcile::{bundle_schema_claims, prepared_static_bundle_source};
 
 /// Decode the build-prepared first-party WorkflowBundle.
 pub fn first_party_catalog() -> Result<PreparedCatalog, CoreError> {
@@ -188,7 +188,11 @@ impl InstalledBundleRefresh {
         let bundles = Arc::new(BundleCatalog::from_verified_catalogs(
             &prepared_catalog_refs,
         )?);
-        let static_sources = static_bundle_skill_sources(&bundles)?;
+        let mut schema_rows = Vec::new();
+        for catalog in &prepared_catalog_refs {
+            schema_rows.extend(catalog.schemas().iter().cloned());
+        }
+        let static_sources = static_bundle_skill_sources(&bundles, &schema_rows)?;
         let agent_catalog = Arc::new(AgentCatalog::new(Arc::clone(&bundles))?);
         runtime.refresh(|candidate| {
             candidate.replace_catalog(Arc::clone(&agent_catalog));
@@ -221,14 +225,22 @@ impl InstalledBundleRefresh {
     }
 }
 
-/// Adapt every prepared bundle Skill through the shared contribution seam.
+/// Adapt every prepared bundle Skill through the shared contribution seam and
+/// attach the bundle's declared schema extensions as scheme claims.
 pub(crate) fn static_bundle_skill_sources(
     catalog: &BundleCatalog,
+    schema_rows: &[PreparedBundleSchemas],
 ) -> Result<Vec<RuntimeSource>, CoreError> {
     let mut sources = Vec::new();
     for bundle in catalog.bundles() {
         let resources = bundle.skills();
-        if resources.is_empty() {
+        let bundle_id = bundle.identity().id.as_str();
+        let schemas = schema_rows
+            .iter()
+            .find(|row| row.bundle_id == bundle_id)
+            .map(|row| row.schemas.as_slice())
+            .unwrap_or_default();
+        if resources.is_empty() && schemas.is_empty() {
             continue;
         }
         let contributions = PluginContributionSet {
@@ -242,15 +254,20 @@ pub(crate) fn static_bundle_skill_sources(
                 .collect(),
             ..PluginContributionSet::default()
         };
-        let source =
-            prepared_static_bundle_source(&bundle.identity().id, resources, &contributions)
-                .map_err(|error| {
-                    CoreError::Invalid(format!(
-                        "prepare static Skills for bundle `{}`: {error}",
-                        bundle.identity().id
-                    ))
-                })?;
-        sources.push(source.into_runtime_source());
+        let claims = bundle_schema_claims(bundle_id, schemas, bundle.tools()).map_err(|error| {
+            CoreError::Invalid(format!(
+                "resolve scheme claims for bundle `{bundle_id}`: {error}"
+            ))
+        })?;
+        let source = prepared_static_bundle_source(bundle_id, resources, &contributions).map_err(
+            |error| {
+                CoreError::Invalid(format!(
+                    "prepare static Skills for bundle `{}`: {error}",
+                    bundle.identity().id
+                ))
+            },
+        )?;
+        sources.push(source.with_schemas(claims).into_runtime_source());
     }
     Ok(sources)
 }

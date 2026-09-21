@@ -172,7 +172,7 @@ fn verified_catalog_merge_matches_flat_verified_construction() {
 }
 
 #[test]
-fn catalog_rejects_bundle_mcp_even_from_prepared_data() {
+fn catalog_indexes_declared_bundle_mcp_from_prepared_data() {
     let prepared = prepare_package(source(
         "catalog-mcp",
         "hya/catalog-mcp",
@@ -186,7 +186,7 @@ fn catalog_rejects_bundle_mcp_even_from_prepared_data() {
         panic!("fixture must prepare exactly one AgentBundle");
     };
     let mut bundle = prepared_bundle.clone();
-    let content = "{}";
+    let content = r#"{"command": ["python3", "docs.py"]}"#;
     bundle.mcp.push(PreparedResource {
         local_id: "docs".to_string(),
         stable_id: "bundle:hya/catalog-mcp/mcp/docs".to_string(),
@@ -196,12 +196,16 @@ fn catalog_rejects_bundle_mcp_even_from_prepared_data() {
         aliases: Vec::new(),
     });
 
+    let catalog = BundleCatalog::from_prepared(&[PreparedInstallableBundle::Agent(bundle)]);
+    let Ok(catalog) = catalog else {
+        panic!("declared MCP resources must index: {catalog:?}");
+    };
     assert_eq!(
-        BundleCatalog::from_prepared(&[PreparedInstallableBundle::Agent(bundle)]).err(),
-        Some(BundleError::UnsupportedBundleFeature {
-            bundle_id: "hya/catalog-mcp".to_string(),
-            feature: "resources.mcp".to_string(),
-        })
+        catalog
+            .bundle_resources("hya/catalog-mcp", ExportKind::Mcp)
+            .map(<[PreparedResource]>::len),
+        Some(1),
+        "the mcp declaration is resolvable through the catalog"
     );
 }
 

@@ -829,3 +829,108 @@ fn bundle_schemas_lists_declared_scheme_extensions() -> Result<(), Box<dyn std::
     fs::remove_dir_all(&data_root)?;
     Ok(())
 }
+
+/// Build one packaged AgentBundle declaring schemas, `extensions.process`, and
+/// `resources.mcp` for the `bundle info` declaration surface.
+fn declaration_bundle_package(
+    data_root: &std::path::Path,
+) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let source = hya_bundle::BundleSource::new(
+        "decl-demo",
+        vec![
+            hya_bundle::SourceFile::new(
+                "bundle.yaml",
+                br#"kind: AgentBundle
+identity:
+  id: hya/decl-demo
+  version: 1.0.0
+  publisher: hya
+schemas:
+  - scheme: db
+    tool: query
+    writable: false
+resources:
+  tools:
+    - id: query
+      path: extensions/runtime.js
+  mcp:
+    - id: vecdb
+      path: mcp/vecdb.json
+extensions:
+  js:
+    - id: runtime
+      path: extensions/runtime.js
+  process:
+    kind: bun
+    command: [bun, run, extensions/runtime.ts]
+agent:
+  id: decl-lead
+  role: main
+  spawn_lifecycle: transient
+  resource_view:
+    allow:
+      - query
+      - runtime
+"#,
+            ),
+            hya_bundle::SourceFile::new("extensions/runtime.js", b"export default {}".to_vec()),
+            hya_bundle::SourceFile::new(
+                "mcp/vecdb.json",
+                br#"{"command": ["python3", "vecdb.py"]}"#.to_vec(),
+            ),
+        ],
+    );
+    let package = data_root.join("decl-demo.hyabundle");
+    fs::write(&package, hya_bundle::write_public_package(&source)?)?;
+    Ok(package)
+}
+
+/// `bundle info` reports declared schemas, the process extension, and mcp
+/// entries — and prints none of those lines when the bundle declares none.
+#[test]
+fn bundle_info_reports_schema_process_and_mcp_declarations()
+-> Result<(), Box<dyn std::error::Error>> {
+    let data_root = unique_data_root()?;
+    let package = declaration_bundle_package(&data_root)?;
+
+    let install = bundle_command(&data_root)
+        .args(["bundle", "install"])
+        .arg(&package)
+        .output()?;
+    assert_success("install", &install);
+
+    let info = bundle_command(&data_root)
+        .args(["bundle", "info", "hya/decl-demo"])
+        .output()?;
+    assert_success("info", &info);
+    let stdout = String::from_utf8(info.stdout)?;
+    let lines = stdout.lines().collect::<Vec<_>>();
+    for expected in [
+        "schema=db tool=query writable=false",
+        "process=bun command=bun run extensions/runtime.ts",
+        "mcp=bundle:hya/decl-demo/mcp/vecdb",
+    ] {
+        assert!(
+            lines.contains(&expected),
+            "bundle info omitted {expected:?}:\n{stdout}"
+        );
+    }
+
+    // A bundle with no declarations prints none of the new lines.
+    let plain = bundle_command(&data_root)
+        .args(["bundle", "info", "hya/valid-public"])
+        .output()?;
+    let plain_ok = plain.status.success();
+    if plain_ok {
+        let plain_stdout = String::from_utf8(plain.stdout)?;
+        for fragment in ["schema=", "process=", "mcp="] {
+            assert!(
+                !plain_stdout.lines().any(|line| line.starts_with(fragment)),
+                "plain bundle info must not print {fragment:?} lines:\n{plain_stdout}"
+            );
+        }
+    }
+
+    fs::remove_dir_all(&data_root)?;
+    Ok(())
+}

@@ -149,7 +149,12 @@ fn info_file(package: &Path) -> anyhow::Result<()> {
             println!("immutable: false");
             println!("source_digest: {}", hex_digest(&inspection.source_digest));
             println!("prepared_digest: {}", inspection.prepared.digest());
-            print_static_info(bundle, ": ");
+            print_static_info(
+                bundle,
+                ": ",
+                inspection.prepared.bundle_schemas(&identity.id),
+                inspection.prepared.bundle_process(&identity.id),
+            );
             Ok(())
         }
         PackageInspection::Private(inspection) => {
@@ -259,7 +264,10 @@ async fn info(bundle_id: &str) -> anyhow::Result<()> {
         .ok_or_else(|| StoreError::BundleNotFound {
             bundle_id: bundle_id.to_string(),
         })?;
-    let bundle = decode_installed_bundle(&record)?;
+    let prepared = decode_installed_catalog(&record)?;
+    let [bundle] = prepared.bundles() else {
+        anyhow::bail!("installed catalog must contain exactly one bundle")
+    };
 
     let identity = bundle.identity();
     println!("name={}", identity.id);
@@ -271,7 +279,12 @@ async fn info(bundle_id: &str) -> anyhow::Result<()> {
     println!("immutable=false");
     println!("source_digest={}", hex_digest(&record.source_digest));
     println!("prepared_digest={}", record.prepared_digest);
-    print_static_info(&bundle, "=");
+    print_static_info(
+        bundle,
+        "=",
+        prepared.bundle_schemas(bundle_id),
+        prepared.bundle_process(bundle_id),
+    );
     Ok(())
 }
 
@@ -291,7 +304,12 @@ fn info_first_party() -> anyhow::Result<()> {
     println!("state=active");
     println!("immutable=true");
     println!("prepared_digest={}", prepared.digest());
-    print_static_info(bundle, "=");
+    print_static_info(
+        bundle,
+        "=",
+        prepared.bundle_schemas(&identity.id),
+        prepared.bundle_process(&identity.id),
+    );
     Ok(())
 }
 
@@ -424,7 +442,15 @@ async fn installed_records_if_exists() -> anyhow::Result<Vec<BundleRegistryRecor
     Ok(registry.snapshot().await?.bundles)
 }
 
-fn print_static_info(bundle: &PreparedInstallableBundle, separator: &str) {
+/// Print the static metadata of one prepared bundle, including its declared
+/// schemas, optional `extensions.process` declaration, and mcp entries. The
+/// declaration lines print only when non-empty.
+fn print_static_info(
+    bundle: &PreparedInstallableBundle,
+    separator: &str,
+    schemas: &[hya_bundle::PreparedSchema],
+    process: Option<&hya_bundle::PreparedProcessExtension>,
+) {
     println!("kind{separator}{}", bundle.kind().as_str());
     if let Some(workflow) = bundle.workflow() {
         println!("workflow{separator}{}", workflow.id);
@@ -446,6 +472,21 @@ fn print_static_info(bundle: &PreparedInstallableBundle, separator: &str) {
     }
     for extension in bundle.extensions() {
         println!("extension{separator}{}", extension.stable_id);
+    }
+    for schema in schemas {
+        println!(
+            "schema{separator}{scheme} tool={tool} writable={writable}",
+            scheme = schema.scheme,
+            tool = schema.tool,
+            writable = schema.writable
+        );
+    }
+    if let Some(process) = process {
+        println!(
+            "process{separator}{kind} command={command}",
+            kind = process.kind.as_str(),
+            command = process.command.join(" ")
+        );
     }
 }
 

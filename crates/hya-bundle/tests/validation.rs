@@ -294,29 +294,21 @@ fn invalid_schema_references_and_executable_features_fail_typed() {
     let Ok(base_manifest) = base_manifest else {
         panic!("fixture is not UTF-8");
     };
-    for (declaration, feature) in [
-        (
-            "resources:\n  mcp:\n    - id: docs\n      path: resources/mcp/docs.json\n",
-            "resources.mcp",
-        ),
-        (
-            "extensions:\n  rust:\n    - id: runtime\n      path: extensions/runtime\n",
-            "extensions.rust",
-        ),
-    ] {
-        let manifest = base_manifest.replace("agent:\n", &format!("{declaration}agent:\n"));
-        let result = prepare_package(BundleSource::new(
-            feature,
-            vec![SourceFile::new("bundle.yaml", manifest.into_bytes())],
-        ));
-        assert_eq!(
-            result.err(),
-            Some(BundleError::UnsupportedBundleFeature {
-                bundle_id: "hya/minimal".to_string(),
-                feature: feature.to_string(),
-            })
-        );
-    }
+    // `resources.mcp` is now declarable (each entry validated against the
+    // `McpServerConfig` shape); `extensions.rust` stays reserved.
+    let declaration = "extensions:\n  rust:\n    - id: runtime\n      path: extensions/runtime\n";
+    let manifest = base_manifest.replace("agent:\n", &format!("{declaration}agent:\n"));
+    let result = prepare_package(BundleSource::new(
+        "extensions.rust",
+        vec![SourceFile::new("bundle.yaml", manifest.into_bytes())],
+    ));
+    assert_eq!(
+        result.err(),
+        Some(BundleError::UnsupportedBundleFeature {
+            bundle_id: "hya/minimal".to_string(),
+            feature: "extensions.rust".to_string(),
+        })
+    );
 }
 
 #[test]

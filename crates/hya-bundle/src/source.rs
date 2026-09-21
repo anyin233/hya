@@ -257,6 +257,53 @@ pub(crate) struct SourceResource {
 pub(crate) struct SourceExtensions {
     pub js: Vec<SourceResource>,
     pub rust: Vec<SourceResource>,
+    /// The one optional out-of-process extension (`rust` | `bun` | `claude`).
+    pub process: Option<SourceProcessExtension>,
+}
+
+/// The declared process extension: which runtime kind executes the bundle and
+/// with what argv. Declared this phase; the unified spawn path lands later.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SourceProcessExtension {
+    pub kind: SourceProcessKind,
+    pub command: Vec<String>,
+}
+
+/// Supported process-extension runtime kinds.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum SourceProcessKind {
+    Rust,
+    Bun,
+    Claude,
+}
+
+/// Connection shape of one `resources.mcp` declaration file: the same fields
+/// as hya's `McpServerConfig` (stdio `command` argv or remote `url`).
+///
+/// The fields beyond `command`/`url` exist to pin the accepted shape under
+/// `deny_unknown_fields`; the runtime spawn path consumes them in a later
+/// phase, so they are unread here.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SourceMcpServer {
+    #[serde(default)]
+    pub command: Vec<String>,
+    #[allow(dead_code)]
+    #[serde(default)]
+    pub env: Option<std::collections::BTreeMap<String, String>>,
+    #[serde(default)]
+    pub url: Option<String>,
+    #[allow(dead_code)]
+    #[serde(default)]
+    pub transport: Option<String>,
+    #[allow(dead_code)]
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    #[allow(dead_code)]
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
 }
 
 pub(crate) struct ParsedSource {

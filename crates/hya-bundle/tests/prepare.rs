@@ -1027,3 +1027,223 @@ fn manifest_schemas_duplicate_scheme_is_rejected() {
         "the diagnostic must name the duplicate: {detail}"
     );
 }
+
+/// Build one AgentBundle source with an optional `extensions.process` block.
+fn process_bundle_source(process_block: Option<&str>) -> BundleSource {
+    let process = process_block.map_or_else(String::new, |block| format!("  process:\n{block}"));
+    let manifest = format!(
+        r#"kind: AgentBundle
+identity:
+  id: hya/process-demo
+  version: 1.0.0
+  publisher: hya
+extensions:
+{process}agent:
+  id: process-lead
+  role: main
+  spawn_lifecycle: transient
+"#,
+    );
+    BundleSource::new(
+        "process-demo",
+        vec![SourceFile::new("bundle.yaml", manifest.into_bytes())],
+    )
+}
+
+#[test]
+fn manifest_extensions_process_declares_and_round_trips() {
+    let prepared = match prepare_package(process_bundle_source(Some(
+        "    kind: bun\n    command: [bun, run, extensions/runtime.ts]\n",
+    ))) {
+        Ok(prepared) => prepared,
+        Err(error) => panic!("valid extensions.process must prepare: {error:?}"),
+    };
+
+    let Some(process) = prepared.bundle_process("hya/process-demo") else {
+        panic!("the declared process extension must be emitted");
+    };
+    assert_eq!(process.kind.as_str(), "bun");
+    assert_eq!(
+        process.command,
+        ["bun", "run", "extensions/runtime.ts"],
+        "the declared argv is preserved verbatim"
+    );
+    assert!(prepared.bundle_process("hya/other").is_none());
+
+    // The declaration round-trips through the canonical document bytes.
+    let decoded = match PreparedCatalog::decode(prepared.bytes(), prepared.digest()) {
+        Ok(decoded) => decoded,
+        Err(error) => panic!("process declarations must survive decode: {error:?}"),
+    };
+    assert_eq!(decoded.bundle_process("hya/process-demo"), Some(process));
+
+    // A bundle without `extensions.process` keeps the document section absent.
+    let plain = match prepare_package(process_bundle_source(None)) {
+        Ok(plain) => plain,
+        Err(error) => panic!("plain bundle must prepare: {error:?}"),
+    };
+    assert!(plain.bundle_process("hya/process-demo").is_none());
+    let document = match serde_json::from_slice::<serde_json::Value>(plain.bytes()) {
+        Ok(document) => document,
+        Err(error) => panic!("prepared bytes must be JSON: {error}"),
+    };
+    assert!(
+        document.get("extensions_process").is_none(),
+        "the extensions_process section must be skipped when empty (v2-compatible bytes)"
+    );
+    match PreparedCatalog::decode(plain.bytes(), plain.digest()) {
+        Ok(_) => {}
+        Err(error) => panic!("plain doc stays decodable: {error:?}"),
+    }
+}
+
+#[test]
+fn manifest_extensions_process_empty_command_is_rejected() {
+    for command in ["[]", "[\"\"]", "[\"bun\", \"\"]"] {
+        let manifest = format!("    kind: bun\n    command: {command}\n");
+        let error = match prepare_package(process_bundle_source(Some(&manifest))) {
+            Err(error) => error,
+            Ok(_) => panic!("empty process command must be rejected: {command}"),
+        };
+        let BundleError::InvalidManifest { detail, .. } = error else {
+            panic!("expected an invalid-manifest error for {command}: {error:?}");
+        };
+        assert!(
+            detail.contains("command"),
+            "the diagnostic must name the command: {detail}"
+        );
+    }
+}
+
+#[test]
+fn manifest_extensions_process_unknown_kind_is_rejected() {
+    let error = match prepare_package(process_bundle_source(Some(
+        "    kind: python\n    command: [python3, server.py]\n",
+    ))) {
+        Err(error) => error,
+        Ok(_) => panic!("unknown process kinds must be rejected"),
+    };
+    assert!(
+        matches!(error, BundleError::InvalidManifest { .. }),
+        "expected an invalid-manifest error: {error:?}"
+    );
+}
+
+/// Build one AgentBundle source declaring `resources.mcp` plus MCP config files.
+fn mcp_bundle_source(mcp_list: &str, files: &[(&str, &str)]) -> BundleSource {
+    let manifest = format!(
+        r#"kind: AgentBundle
+identity:
+  id: hya/mcp-demo
+  version: 1.0.0
+  publisher: hya
+resources:
+  mcp:
+{mcp_list}agent:
+  id: mcp-lead
+  role: main
+  spawn_lifecycle: transient
+"#,
+    );
+    let mut sources = vec![SourceFile::new("bundle.yaml", manifest.into_bytes())];
+    for (path, content) in files {
+        sources.push(SourceFile::new(*path, content.as_bytes().to_vec()));
+    }
+    BundleSource::new("mcp-demo", sources)
+}
+
+#[test]
+fn manifest_mcp_resources_prepare_emit_and_round_trip() {
+    let prepared = match prepare_package(mcp_bundle_source(
+        "    - id: vecdb\n      path: mcp/vecdb.json\n    - id: remote\n      path: mcp/remote.json\n",
+        &[
+            ("mcp/vecdb.json", r#"{"command": ["python3", "vecdb.py"]}"#),
+            (
+                "mcp/remote.json",
+                r#"{"url": "https://mcp.example/sse", "timeout_ms": 250}"#,
+            ),
+        ],
+    )) {
+        Ok(prepared) => prepared,
+        Err(error) => panic!("valid resources.mcp must prepare: {error:?}"),
+    };
+
+    let [bundle] = prepared.bundles() else {
+        panic!("one bundle expected");
+    };
+    let rows = bundle
+        .mcp()
+        .iter()
+        .map(|resource| {
+            (
+                resource.local_id.as_str(),
+                resource.stable_id.as_str(),
+                resource.source_path.as_str(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        rows,
+        [
+            (
+                "remote",
+                "bundle:hya/mcp-demo/mcp/remote",
+                "mcp/remote.json"
+            ),
+            ("vecdb", "bundle:hya/mcp-demo/mcp/vecdb", "mcp/vecdb.json"),
+        ],
+        "mcp declarations emit as stable prepared resources sorted by local id"
+    );
+    let vecdb = &bundle.mcp()[1];
+    assert_eq!(
+        vecdb.content, r#"{"command": ["python3", "vecdb.py"]}"#,
+        "the declaration file bytes are retained verbatim"
+    );
+
+    // The declarations round-trip through the canonical document bytes.
+    let decoded = match PreparedCatalog::decode(prepared.bytes(), prepared.digest()) {
+        Ok(decoded) => decoded,
+        Err(error) => panic!("mcp declarations must survive decode: {error:?}"),
+    };
+    assert_eq!(decoded.bundles()[0].mcp(), bundle.mcp());
+}
+
+#[test]
+fn manifest_mcp_resource_files_are_shape_validated() {
+    let missing = prepare_package(mcp_bundle_source(
+        "    - id: vecdb\n      path: mcp/vecdb.json\n",
+        &[],
+    ));
+    assert_eq!(
+        missing.err(),
+        Some(BundleError::MissingReference {
+            bundle_id: "hya/mcp-demo".to_string(),
+            path: "mcp/vecdb.json".to_string(),
+        }),
+        "the declaration file must exist"
+    );
+
+    for (label, content) in [
+        ("not-json", "command: python3"),
+        ("neither-command-nor-url", r#"{"env": {}}"#),
+        ("empty-command", r#"{"command": []}"#),
+        ("blank-command-arg", r#"{"command": ["python3", ""]}"#),
+        ("unknown-field", r#"{"command": ["x"], "args": [1]}"#),
+        ("wrong-type", r#"{"command": "python3"}"#),
+    ] {
+        let error = match prepare_package(mcp_bundle_source(
+            "    - id: vecdb\n      path: mcp/vecdb.json\n",
+            &[("mcp/vecdb.json", content)],
+        )) {
+            Err(error) => error,
+            Ok(_) => panic!("invalid mcp file must be rejected: {label}"),
+        };
+        let BundleError::InvalidManifest { detail, .. } = error else {
+            panic!("expected an invalid-manifest error for {label}: {error:?}");
+        };
+        assert!(
+            detail.contains("mcp/vecdb.json"),
+            "the diagnostic must name the file: {detail}"
+        );
+    }
+}

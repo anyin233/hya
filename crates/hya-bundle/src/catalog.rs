@@ -14,7 +14,8 @@ pub enum ExportKind {
     Tool,
     /// Bundle-local skill resource.
     Skill,
-    /// Bundle-local MCP declaration (catalog construction may still reject non-empty).
+    /// Bundle-local MCP declaration (each entry's content is a validated
+    /// `McpServerConfig`-shaped JSON file; runtime spawning lands later).
     Mcp,
     /// Bundle-local hook resource.
     Hook,
@@ -51,7 +52,7 @@ impl BundleCatalog {
     /// Build a catalog by indexing already-prepared installable payloads.
     ///
     /// Rejects duplicate bundle/Agent ids, namespace/alias collisions, and
-    /// unsupported MCP or hook declarations. Empty input is valid.
+    /// unsupported hook declarations. Empty input is valid.
     pub fn from_prepared(bundles: &[PreparedInstallableBundle]) -> Result<Self, BundleError> {
         let mut catalog = Self {
             bundles: bundles.to_vec(),
@@ -66,12 +67,6 @@ impl BundleCatalog {
         let mut bundle_ids = BTreeSet::new();
         let mut stable_agent_ids = BTreeSet::new();
         for (bundle_index, bundle) in catalog.bundles.iter().enumerate() {
-            if !bundle.mcp().is_empty() {
-                return Err(BundleError::UnsupportedBundleFeature {
-                    bundle_id: bundle.identity().id.clone(),
-                    feature: "resources.mcp".to_string(),
-                });
-            }
             if !bundle_ids.insert(bundle.identity().id.as_str()) {
                 return Err(BundleError::DuplicateBundleId {
                     bundle_id: bundle.identity().id.clone(),

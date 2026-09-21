@@ -63,6 +63,8 @@ cargo test -p hya-e2e -- --test-threads=1
 | T2.15 | model catalog discovery and offline fallback | `tests/p20_model_catalog_discovery.rs` | Explicit lists stay network-free and unwritten; empty lists rediscover anonymously each run without mutating config or a foreign OpenCode file; 401 and credentialed-forbidden catalogs surface `hya/offline` (exec prints the configuration explanation); mixed provider failure keeps the valid rows identical across CLI, `/v1/models`, `/v1/providers`, and `GET /v1/bootstrap` |
 | T2.16 | [p21_agent_model_preference.rs](../../crates/hya-e2e/tests/p21_agent_model_preference.rs) | v1 agent-model preference set -> spawned `general` runs on the preferred model; listing reports `REMEMBERED` source | e2e (Track P) |
 | T2.17 | [p22_dispatch_model_resolution.rs](../../crates/hya-e2e/tests/p22_dispatch_model_resolution.rs) | exact id override; substring fallback (bare vendor ids defer); user-config tier | e2e (Track P) |
+| T2.18 | [p23_mcp_background.rs](../../crates/hya-e2e/tests/p23_mcp_background.rs) | long MCP call auto-backgrounds and steers reclaim | e2e (Track P) |
+| T2.19 | [p24_bundle_schemas.rs](../../crates/hya-e2e/tests/p24_bundle_schemas.rs) | installed bundle `schemas:` / `extensions.process` / `resources.mcp` declarations surface through `bundle install`, `bundle schemas`, `bundle info`, and — after the first bound turn — `GET /v1/runtime/schemas` (owner = bundle source, canonical tool = the owning tool's stable id) | e2e (Track P) |
 
 ### Built-in tool coverage
 

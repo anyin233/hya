@@ -320,6 +320,14 @@ path = "crates/hya-e2e/tests/p23_mcp_background.rs"
 tags = ["pr", "mcp", "background"]
 timeout_secs = 120
 
+[[scenario]]
+id = "T2.19"
+title = "installed bundle schemas surface through CLI and runtime API"
+track = "P"
+path = "crates/hya-e2e/tests/p24_bundle_schemas.rs"
+tags = ["pr", "hyabundle", "schemas"]
+timeout_secs = 120
+
 # Index-only deep engine coverage (not duplicated in Track P).
 [[scenario]]
 id = "I.nested"

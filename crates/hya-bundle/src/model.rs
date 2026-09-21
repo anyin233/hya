@@ -177,7 +177,9 @@ pub struct PreparedAgentBundle {
     pub tools: Vec<PreparedResource>,
     /// Prepared Skill resources.
     pub skills: Vec<PreparedResource>,
-    /// Prepared MCP resource declarations (catalog may still reject non-empty).
+    /// Prepared MCP declarations (`resources.mcp`); each entry's content is a
+    /// validated `McpServerConfig`-shaped JSON file. Runtime spawning of these
+    /// servers lands in a later phase.
     pub mcp: Vec<PreparedResource>,
     /// Prepared hook resources.
     pub hooks: Vec<PreparedResource>,
@@ -223,7 +225,9 @@ pub struct PreparedWorkflowBundle {
     pub tools: Vec<PreparedResource>,
     /// Prepared Skill resources.
     pub skills: Vec<PreparedResource>,
-    /// Prepared MCP resource declarations (catalog may still reject non-empty).
+    /// Prepared MCP declarations (`resources.mcp`); each entry's content is a
+    /// validated `McpServerConfig`-shaped JSON file. Runtime spawning of these
+    /// servers lands in a later phase.
     pub mcp: Vec<PreparedResource>,
     /// Prepared hook resources.
     pub hooks: Vec<PreparedResource>,
@@ -460,6 +464,56 @@ pub struct PreparedBundleSchemas {
     pub schemas: Vec<PreparedSchema>,
 }
 
+/// Runtime kind that executes a bundle's declared process extension.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PreparedProcessKind {
+    /// Native Rust plugin process.
+    Rust,
+    /// Bun/JavaScript sidecar process.
+    Bun,
+    /// Claude Code compatible adapter process.
+    Claude,
+}
+
+impl PreparedProcessKind {
+    /// Exact manifest spelling of this kind.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Rust => "rust",
+            Self::Bun => "bun",
+            Self::Claude => "claude",
+        }
+    }
+}
+
+/// One declared out-of-process extension: the runtime kind and the argv that
+/// starts it. Declared and validated at prepare time; spawning is wired in a
+/// later phase.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PreparedProcessExtension {
+    /// Runtime kind that executes the command.
+    pub kind: PreparedProcessKind,
+    /// Argv to spawn (`command[0]` is the program).
+    pub command: Vec<String>,
+}
+
+/// Per-bundle process-extension row in a prepared catalog document.
+///
+/// Like the `schemas:` section this is a document-level list parallel to the
+/// index (skipped entirely when no bundle declares one) so documents written
+/// before the section stay byte-identical and decodable.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PreparedBundleProcess {
+    /// Bundle identity id the declaration belongs to.
+    pub bundle_id: String,
+    /// The declared process extension.
+    pub process: PreparedProcessExtension,
+}
+
 /// Compact index row for one bundle in a prepared catalog.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -482,6 +536,7 @@ pub struct PreparedCatalog {
     pub(crate) bundles: Vec<PreparedInstallableBundle>,
     pub(crate) index: Vec<PreparedBundleIndex>,
     pub(crate) schemas: Vec<PreparedBundleSchemas>,
+    pub(crate) process_extensions: Vec<PreparedBundleProcess>,
     pub(crate) bytes: Vec<u8>,
     pub(crate) digest: String,
 }
@@ -515,6 +570,21 @@ impl PreparedCatalog {
             .unwrap_or(&[])
     }
 
+    /// Per-bundle process-extension declarations, sorted by bundle id.
+    #[must_use]
+    pub fn process_extensions(&self) -> &[PreparedBundleProcess] {
+        &self.process_extensions
+    }
+
+    /// The process extension one bundle declares, if any.
+    #[must_use]
+    pub fn bundle_process(&self, bundle_id: &str) -> Option<&PreparedProcessExtension> {
+        self.process_extensions
+            .iter()
+            .find(|row| row.bundle_id == bundle_id)
+            .map(|row| &row.process)
+    }
+
     /// Canonical JSON bytes of the prepared document (what the registry stores).
     #[must_use]
     pub fn bytes(&self) -> &[u8] {
@@ -537,6 +607,10 @@ pub(crate) struct PreparedDocument<'a> {
     /// documents written before the section keep their exact byte layout.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub schemas: Vec<PreparedBundleSchemas>,
+    /// Per-bundle `extensions.process` declarations; skipped when no bundle
+    /// declares any, for the same byte-layout reason.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub extensions_process: Vec<PreparedBundleProcess>,
 }
 
 #[derive(Deserialize)]
@@ -547,4 +621,6 @@ pub(crate) struct PreparedDocumentOwned {
     pub index: Vec<PreparedBundleIndex>,
     #[serde(default)]
     pub schemas: Vec<PreparedBundleSchemas>,
+    #[serde(default)]
+    pub extensions_process: Vec<PreparedBundleProcess>,
 }

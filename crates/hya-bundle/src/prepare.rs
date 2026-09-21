@@ -6,13 +6,14 @@ use sha2::{Digest, Sha256};
 
 use crate::error::BundleError;
 use crate::model::{
-    BundleIdentity, PreparedAgent, PreparedAgentBundle, PreparedBundleIndex, PreparedBundleSchemas,
-    PreparedCatalog, PreparedDocument, PreparedDocumentOwned, PreparedInstallableBundle,
-    PreparedResource, PreparedSchema, PreparedWorkflow, PreparedWorkflowBundle,
+    BundleIdentity, PreparedAgent, PreparedAgentBundle, PreparedBundleIndex, PreparedBundleProcess,
+    PreparedBundleSchemas, PreparedCatalog, PreparedDocument, PreparedDocumentOwned,
+    PreparedInstallableBundle, PreparedProcessExtension, PreparedResource, PreparedSchema,
+    PreparedWorkflow, PreparedWorkflowBundle,
 };
 use crate::source::{
     BundleSource, ParsedSource, SourceAgent, SourceAgentManifest, SourceExtensions, SourceFile,
-    SourceManifest, SourceResource, SourceResources, SourceWorkflowManifest,
+    SourceManifest, SourceMcpServer, SourceResource, SourceResources, SourceWorkflowManifest,
 };
 
 const AGENT_SOURCE_KIND: &str = "AgentBundle";
@@ -48,16 +49,23 @@ fn prepare_sources(sources: Vec<BundleSource>) -> Result<PreparedCatalog, Bundle
     let mut stable_agent_ids = BTreeSet::new();
     let mut bundles = Vec::with_capacity(parsed.len());
     let mut schemas = Vec::new();
+    let mut process_extensions = Vec::new();
     for source in parsed {
         let bundle_id = manifest_identity(&source.manifest).id.clone();
         if !bundle_ids.insert(bundle_id.clone()) {
             return Err(BundleError::DuplicateBundleId { bundle_id });
         }
-        let (bundle, bundle_schemas) = prepare_bundle(source, &mut stable_agent_ids)?;
+        let (bundle, bundle_schemas, process) = prepare_bundle(source, &mut stable_agent_ids)?;
         if !bundle_schemas.is_empty() {
             schemas.push(PreparedBundleSchemas {
                 bundle_id: bundle.identity().id.clone(),
                 schemas: bundle_schemas,
+            });
+        }
+        if let Some(process) = process {
+            process_extensions.push(PreparedBundleProcess {
+                bundle_id: bundle.identity().id.clone(),
+                process,
             });
         }
         bundles.push(bundle);
@@ -71,6 +79,7 @@ fn prepare_sources(sources: Vec<BundleSource>) -> Result<PreparedCatalog, Bundle
         bundles: &bundles,
         index: &index,
         schemas: schemas.clone(),
+        extensions_process: process_extensions.clone(),
     })
     .map_err(|error| BundleError::PreparedEncode {
         detail: error.to_string(),
@@ -80,6 +89,7 @@ fn prepare_sources(sources: Vec<BundleSource>) -> Result<PreparedCatalog, Bundle
         bundles,
         index,
         schemas,
+        process_extensions,
         bytes,
         digest,
     })
@@ -129,6 +139,7 @@ impl PreparedCatalog {
         }
         validate_prepared_references(&document.bundles)?;
         validate_prepared_schema_rows(&document.bundles, &document.schemas)?;
+        validate_prepared_process_rows(&document.bundles, &document.extensions_process)?;
         let expected_index = build_index(&document.bundles);
         if expected_index != document.index {
             return Err(BundleError::PreparedIndexMismatch);
@@ -137,6 +148,7 @@ impl PreparedCatalog {
             bundles: document.bundles,
             index: document.index,
             schemas: document.schemas,
+            process_extensions: document.extensions_process,
             bytes: bytes.to_vec(),
             digest: expected_digest.to_string(),
         })
@@ -157,7 +169,6 @@ fn prepared_bundle_is_canonical(bundle: &PreparedInstallableBundle) -> bool {
         && resources_are_canonical(bundle, "mcp", bundle.mcp())
         && resources_are_canonical(bundle, "hook", bundle.hooks())
         && resources_are_canonical(bundle, "extension", bundle.extensions())
-        && bundle.mcp().is_empty()
         && bundle.agents().iter().all(agent_is_canonical);
     if !common {
         return false;
@@ -193,12 +204,6 @@ fn validate_prepared_references(bundles: &[PreparedInstallableBundle]) -> Result
         if !bundle_ids.insert(bundle.identity().id.as_str()) {
             return Err(BundleError::DuplicateBundleId {
                 bundle_id: bundle.identity().id.clone(),
-            });
-        }
-        if !bundle.mcp().is_empty() {
-            return Err(BundleError::UnsupportedBundleFeature {
-                bundle_id: bundle.identity().id.clone(),
-                feature: "resources.mcp".to_string(),
             });
         }
         for agent in bundle.agents() {
@@ -408,6 +413,41 @@ fn validate_prepared_schema_rows(
         if prepared != row.schemas {
             return Err(BundleError::NonCanonicalPreparedCatalog);
         }
+    }
+    Ok(())
+}
+
+/// Validate the document-level `extensions.process` section of a decoded
+/// prepared catalog: rows strictly sorted by bundle id, every row naming a
+/// bundle in the document, and every declaration carrying a usable command.
+fn validate_prepared_process_rows(
+    bundles: &[PreparedInstallableBundle],
+    rows: &[PreparedBundleProcess],
+) -> Result<(), BundleError> {
+    if !is_strictly_sorted(rows.iter().map(|row| row.bundle_id.as_str())) {
+        return Err(BundleError::NonCanonicalPreparedCatalog);
+    }
+    for row in rows {
+        if !bundles
+            .iter()
+            .any(|bundle| bundle.identity().id == row.bundle_id)
+            || validate_process_command(&row.process.command).is_err()
+        {
+            return Err(BundleError::NonCanonicalPreparedCatalog);
+        }
+    }
+    Ok(())
+}
+
+/// Whether `command` is a usable argv: non-empty with no blank arguments.
+fn validate_process_command(command: &[String]) -> Result<(), String> {
+    if command.is_empty() {
+        return Err("extensions.process: command must not be empty".to_string());
+    }
+    if let Some(arg) = command.iter().find(|arg| arg.trim().is_empty()) {
+        return Err(format!(
+            "extensions.process: command arguments must not be blank (got {arg:?})"
+        ));
     }
     Ok(())
 }
@@ -884,7 +924,14 @@ fn split_markdown(content: &str) -> Option<(&str, &str)> {
 fn prepare_bundle(
     source: ParsedSource,
     stable_agent_ids: &mut BTreeSet<String>,
-) -> Result<(PreparedInstallableBundle, Vec<PreparedSchema>), BundleError> {
+) -> Result<
+    (
+        PreparedInstallableBundle,
+        Vec<PreparedSchema>,
+        Option<PreparedProcessExtension>,
+    ),
+    BundleError,
+> {
     match source.manifest {
         SourceManifest::Agent(manifest) => prepare_agent_bundle(
             source.files,
@@ -971,12 +1018,20 @@ fn prepare_agent_bundle(
     markdown_prompt: Option<String>,
     manifest: SourceAgentManifest,
     stable_agent_ids: &mut BTreeSet<String>,
-) -> Result<(PreparedInstallableBundle, Vec<PreparedSchema>), BundleError> {
+) -> Result<
+    (
+        PreparedInstallableBundle,
+        Vec<PreparedSchema>,
+        Option<PreparedProcessExtension>,
+    ),
+    BundleError,
+> {
     let bundle_id = manifest.identity.id.clone();
     validate_identity(&bundle_id, &manifest.identity.version)?;
     let namespace = resolve_namespace(&bundle_id, &manifest.identity, &manifest.namespace)?;
-    validate_unsupported(&bundle_id, &manifest.resources, &manifest.extensions)?;
-    let (tools, skills, hooks, extensions) =
+    validate_unsupported(&bundle_id, &manifest.extensions)?;
+    let process = declared_process_extension(&bundle_id, &manifest.extensions)?;
+    let (tools, skills, mcp, hooks, extensions) =
         prepare_resource_sets(&bundle_id, &files, manifest.resources, manifest.extensions)?;
     let schemas = validate_declared_schemas(&bundle_id, &manifest.schemas, &tools)?;
     let agent = prepare_agent(
@@ -995,23 +1050,31 @@ fn prepare_agent_bundle(
         agent,
         tools,
         skills,
-        mcp: Vec::new(),
+        mcp,
         hooks,
         extensions,
     }));
     set_bundle_digest(&mut bundle)?;
-    Ok((bundle, schemas))
+    Ok((bundle, schemas, process))
 }
 
 fn prepare_workflow_bundle(
     files: BTreeMap<String, Vec<u8>>,
     manifest: SourceWorkflowManifest,
     stable_agent_ids: &mut BTreeSet<String>,
-) -> Result<(PreparedInstallableBundle, Vec<PreparedSchema>), BundleError> {
+) -> Result<
+    (
+        PreparedInstallableBundle,
+        Vec<PreparedSchema>,
+        Option<PreparedProcessExtension>,
+    ),
+    BundleError,
+> {
     let bundle_id = manifest.identity.id.clone();
     validate_identity(&bundle_id, &manifest.identity.version)?;
     let namespace = resolve_namespace(&bundle_id, &manifest.identity, &manifest.namespace)?;
-    validate_unsupported(&bundle_id, &manifest.resources, &manifest.extensions)?;
+    validate_unsupported(&bundle_id, &manifest.extensions)?;
+    let process = declared_process_extension(&bundle_id, &manifest.extensions)?;
     let workflow_path = normalize_source_path(&bundle_id, &manifest.workflow.path)?;
     if !is_canonical_workflow_path(&workflow_path) {
         return Err(BundleError::InvalidManifest {
@@ -1046,7 +1109,7 @@ fn prepare_workflow_bundle(
             compiled_id: compiled.definition().name().to_string(),
         });
     }
-    let (tools, skills, hooks, extensions) = prepare_resource_sets(
+    let (tools, skills, mcp, hooks, extensions) = prepare_resource_sets(
         &manifest.identity.id,
         &files,
         manifest.resources,
@@ -1104,16 +1167,17 @@ fn prepare_workflow_bundle(
         agents,
         tools,
         skills,
-        mcp: Vec::new(),
+        mcp,
         hooks,
         extensions,
     }));
     set_bundle_digest(&mut bundle)?;
-    Ok((bundle, schemas))
+    Ok((bundle, schemas, process))
 }
 
-/// Prepared resource vectors in tool, Skill, hook, and extension order.
+/// Prepared resource vectors in tool, Skill, MCP, hook, and extension order.
 type PreparedResourceSets = (
+    Vec<PreparedResource>,
     Vec<PreparedResource>,
     Vec<PreparedResource>,
     Vec<PreparedResource>,
@@ -1128,6 +1192,7 @@ fn prepare_resource_sets(
 ) -> Result<PreparedResourceSets, BundleError> {
     let tools = prepare_resources(bundle_id, "tool", files, resources.tools)?;
     let skills = prepare_resources(bundle_id, "skill", files, resources.skills)?;
+    let mcp = prepare_mcp_resources(bundle_id, files, resources.mcp)?;
     let hooks = prepare_resources(bundle_id, "hook", files, resources.hooks)?;
     for hook in &hooks {
         validate_hook_local_id(bundle_id, &hook.local_id)?;
@@ -1173,7 +1238,52 @@ fn prepare_resource_sets(
             });
         }
     }
-    Ok((tools, skills, hooks, extensions))
+    Ok((tools, skills, mcp, hooks, extensions))
+}
+
+/// Prepare `resources.mcp` declarations: each entry names a JSON file that
+/// must parse into hya's `McpServerConfig` shape (stdio command or remote
+/// url). The bytes are retained verbatim; runtime spawning lands later.
+fn prepare_mcp_resources(
+    bundle_id: &str,
+    files: &BTreeMap<String, Vec<u8>>,
+    resources: Vec<SourceResource>,
+) -> Result<Vec<PreparedResource>, BundleError> {
+    let prepared = prepare_resources(bundle_id, "mcp", files, resources)?;
+    for resource in &prepared {
+        let server: SourceMcpServer =
+            serde_json::from_str(resource.content.as_str()).map_err(|error| {
+                BundleError::InvalidManifest {
+                    source_name: bundle_id.to_string(),
+                    detail: format!(
+                        "MCP declaration `{}` must be a JSON object with `command`/`env`/`url`/\
+                         `transport`/`enabled`/`timeout_ms` fields: {error}",
+                        resource.source_path
+                    ),
+                }
+            })?;
+        let has_command = !server.command.is_empty();
+        let has_url = server.url.as_deref().is_some_and(|url| !url.is_empty());
+        if !has_command && !has_url {
+            return Err(BundleError::InvalidManifest {
+                source_name: bundle_id.to_string(),
+                detail: format!(
+                    "MCP declaration `{}` must declare a non-empty `command` argv or `url`",
+                    resource.source_path
+                ),
+            });
+        }
+        if has_command && server.command.iter().any(|arg| arg.trim().is_empty()) {
+            return Err(BundleError::InvalidManifest {
+                source_name: bundle_id.to_string(),
+                detail: format!(
+                    "MCP declaration `{}` command arguments must not be blank",
+                    resource.source_path
+                ),
+            });
+        }
+    }
+    Ok(prepared)
 }
 
 fn validate_workflow_agent_closure(
@@ -1354,22 +1464,40 @@ fn validate_identity(bundle_id: &str, version: &str) -> Result<(), BundleError> 
     Ok(())
 }
 
-fn validate_unsupported(
-    bundle_id: &str,
-    resources: &SourceResources,
-    extensions: &SourceExtensions,
-) -> Result<(), BundleError> {
-    let unsupported = [
-        (!resources.mcp.is_empty(), "resources.mcp"),
-        (!extensions.rust.is_empty(), "extensions.rust"),
-    ];
-    if let Some((_, feature)) = unsupported.into_iter().find(|(present, _)| *present) {
+/// Reserved feature: native Rust extension lists remain rejected while the
+/// unified process-extension path (`extensions.process`) lands.
+fn validate_unsupported(bundle_id: &str, extensions: &SourceExtensions) -> Result<(), BundleError> {
+    if !extensions.rust.is_empty() {
         return Err(BundleError::UnsupportedBundleFeature {
             bundle_id: bundle_id.to_string(),
-            feature: feature.to_string(),
+            feature: "extensions.rust".to_string(),
         });
     }
     Ok(())
+}
+
+/// Validate and lift the manifest's optional `extensions.process` declaration.
+fn declared_process_extension(
+    bundle_id: &str,
+    extensions: &SourceExtensions,
+) -> Result<Option<PreparedProcessExtension>, BundleError> {
+    let Some(process) = &extensions.process else {
+        return Ok(None);
+    };
+    if let Err(detail) = validate_process_command(&process.command) {
+        return Err(BundleError::InvalidManifest {
+            source_name: bundle_id.to_string(),
+            detail,
+        });
+    }
+    Ok(Some(PreparedProcessExtension {
+        kind: match process.kind {
+            crate::source::SourceProcessKind::Rust => crate::model::PreparedProcessKind::Rust,
+            crate::source::SourceProcessKind::Bun => crate::model::PreparedProcessKind::Bun,
+            crate::source::SourceProcessKind::Claude => crate::model::PreparedProcessKind::Claude,
+        },
+        command: process.command.clone(),
+    }))
 }
 
 pub(crate) fn validate_hook_local_id(bundle_id: &str, local_id: &str) -> Result<(), BundleError> {
