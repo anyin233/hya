@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "vecdb": {
+      "command": ["python3", "vecdb.py"]
+    }
+  }
+}

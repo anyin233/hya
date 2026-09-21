@@ -113,6 +113,49 @@ fn bundle_command(data_root: &Path) -> Command {
     command
 }
 
+/// Fixture Claude Code plugin source directory (`fixtures/claude-plugin/`).
+fn claude_fixture_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/claude-plugin")
+}
+
+/// The `--claude` path shells out to Bun for the offline translation; when
+/// Bun is unavailable (restricted environments) the CLI tests self-skip.
+fn bun_available() -> bool {
+    Command::new("bun")
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success())
+}
+
+/// A package that claims the `demo` namespace under a different bundle id, so
+/// a subsequent `--claude` install must hit the namespace conflict policy.
+fn namespace_napper_package(data_root: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let source = hya_bundle::BundleSource::new(
+        "namespace-napper",
+        vec![
+            hya_bundle::SourceFile::new(
+                "bundle.yaml",
+                br#"kind: AgentBundle
+identity:
+  id: hya/demo-napper
+  version: 1.0.0
+  publisher: hya
+namespace: demo
+agent:
+  id: napper
+  role: main
+  spawn_lifecycle: transient
+  prompt: prompts/nap.md
+"#,
+            ),
+            hya_bundle::SourceFile::new("prompts/nap.md", b"Take a nap.\n"),
+        ],
+    );
+    let package = data_root.join("demo-napper.hyabundle");
+    fs::write(&package, hya_bundle::write_public_package(&source)?)?;
+    Ok(package)
+}
+
 fn assert_success(action: &str, output: &Output) {
     assert!(
         output.status.success(),
@@ -935,4 +978,147 @@ fn bundle_info_reports_schema_process_and_mcp_declarations()
 
     fs::remove_dir_all(&data_root)?;
     Ok(())
+}
+
+/// `bundle install --claude <dir>` translates the fixture plugin offline and
+/// installs it as `claude/demo`; `bundle list` and `bundle info` show the
+/// translated AgentBundle with its skills and MCP declarations.
+#[test]
+fn bundle_install_claude_translates_and_installs_fixture() -> Result<(), Box<dyn std::error::Error>>
+{
+    if !bun_available() {
+        eprintln!("skipping: bun is not available");
+        return Ok(());
+    }
+    let data_root = unique_data_root()?;
+
+    let install = bundle_command(&data_root)
+        .args(["bundle", "install", "--claude"])
+        .arg(claude_fixture_dir())
+        .output()?;
+    assert_success("claude install", &install);
+    let install_stdout = String::from_utf8(install.stdout)?;
+    for expected in ["installed claude/demo 1.0.0", "generation=1"] {
+        assert!(
+            install_stdout.contains(expected),
+            "claude install stdout omitted {expected:?}:\n{install_stdout}"
+        );
+    }
+
+    let list = bundle_command(&data_root)
+        .args(["bundle", "list"])
+        .output()?;
+    assert_success("list", &list);
+    let list_stdout = String::from_utf8(list.stdout)?;
+    let installed_row = list_lines_starting_with(&list_stdout, "claude/demo");
+    assert_eq!(
+        installed_row, "claude/demo 1.0.0 reviewer active AgentBundle -",
+        "bundle list omitted the claude/demo row:\n{list_stdout}"
+    );
+
+    let info = bundle_command(&data_root)
+        .args(["bundle", "info", "claude/demo"])
+        .output()?;
+    assert_success("info", &info);
+    let info_stdout = String::from_utf8(info.stdout)?;
+    for expected in [
+        "name=claude/demo",
+        "version=1.0.0",
+        "publisher=claude",
+        "kind=AgentBundle",
+        "agent=reviewer",
+        "skill=bundle:claude/demo/skill/audit",
+        "skill=bundle:claude/demo/skill/review",
+        "skill=bundle:claude/demo/skill/reviewer",
+        "mcp=bundle:claude/demo/mcp/vecdb",
+    ] {
+        assert!(
+            info_stdout.lines().any(|line| line == expected),
+            "bundle info omitted {expected:?}:\n{info_stdout}"
+        );
+    }
+
+    fs::remove_dir_all(&data_root)?;
+    Ok(())
+}
+
+/// Reinstalling the same claude source is a no-op; a foreign bundle owning
+/// the `demo` namespace triggers NAMESPACE_CONFLICT guidance, and
+/// `--overwrite` replaces the incumbent.
+#[test]
+fn bundle_install_claude_conflicts_follow_namespace_policy()
+-> Result<(), Box<dyn std::error::Error>> {
+    if !bun_available() {
+        eprintln!("skipping: bun is not available");
+        return Ok(());
+    }
+    let data_root = unique_data_root()?;
+
+    // Same source twice: the registry dedupes to `unchanged`.
+    let first = bundle_command(&data_root)
+        .args(["bundle", "install", "--claude"])
+        .arg(claude_fixture_dir())
+        .output()?;
+    assert_success("first claude install", &first);
+    let second = bundle_command(&data_root)
+        .args(["bundle", "install", "--claude"])
+        .arg(claude_fixture_dir())
+        .output()?;
+    assert_success("second claude install", &second);
+    assert!(
+        String::from_utf8(second.stdout)?.contains("unchanged claude/demo"),
+        "identical claude reinstall must be unchanged"
+    );
+
+    // Uninstall, then let a foreign bundle claim the `demo` namespace.
+    let uninstall = bundle_command(&data_root)
+        .args(["bundle", "uninstall", "claude/demo"])
+        .output()?;
+    assert_success("uninstall", &uninstall);
+    let napper = namespace_napper_package(&data_root)?;
+    let napper_install = bundle_command(&data_root)
+        .args(["bundle", "install"])
+        .arg(&napper)
+        .output()?;
+    assert_success("napper install", &napper_install);
+
+    let denied = bundle_command(&data_root)
+        .args(["bundle", "install", "--claude"])
+        .arg(claude_fixture_dir())
+        .output()?;
+    assert!(
+        !denied.status.success(),
+        "namespace conflict install unexpectedly succeeded\nstdout:\n{}",
+        String::from_utf8_lossy(&denied.stdout)
+    );
+    let denied_stderr = String::from_utf8(denied.stderr)?;
+    assert!(
+        denied_stderr.contains("NAMESPACE_CONFLICT") && denied_stderr.contains("--overwrite"),
+        "conflict install omitted NAMESPACE_CONFLICT guidance:\n{denied_stderr}"
+    );
+
+    let replaced = bundle_command(&data_root)
+        .args(["bundle", "install", "--overwrite", "--claude"])
+        .arg(claude_fixture_dir())
+        .output()?;
+    assert_success("overwrite claude install", &replaced);
+    let replaced_stdout = String::from_utf8(replaced.stdout)?;
+    assert!(
+        replaced_stdout.contains("installed claude/demo")
+            || replaced_stdout.contains("replaced claude/demo"),
+        "overwrite install stdout unexpected:\n{replaced_stdout}"
+    );
+
+    fs::remove_dir_all(&data_root)?;
+    Ok(())
+}
+
+fn list_lines_starting_with(stdout: &str, prefix: &str) -> String {
+    stdout
+        .lines()
+        .find(|line| line.starts_with(prefix))
+        .unwrap_or_default()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }

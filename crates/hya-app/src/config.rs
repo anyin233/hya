@@ -2985,9 +2985,12 @@ plugins:
     command: [nope]
   ext:
     kind: bun
+  cc:
+    kind: claude
+    plugin_dir: /plugins/cc-demo
 ";
         let file = parse_config(yaml).unwrap();
-        assert_eq!(file.plugins.len(), 3);
+        assert_eq!(file.plugins.len(), 4);
         let memory = file.plugins.get("memory").unwrap();
         assert_eq!(
             memory.command,
@@ -3000,6 +3003,12 @@ plugins:
         assert_eq!(
             file.plugins.get("ext").unwrap().kind,
             hya_plugin::messages::PluginKindWire::Bun
+        );
+        let cc = file.plugins.get("cc").unwrap();
+        assert_eq!(cc.kind, hya_plugin::messages::PluginKindWire::Claude);
+        assert_eq!(
+            cc.plugin_dir,
+            Some(std::path::PathBuf::from("/plugins/cc-demo"))
         );
     }
 

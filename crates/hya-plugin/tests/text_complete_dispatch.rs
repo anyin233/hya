@@ -47,6 +47,7 @@ async fn text_complete_dispatches_through_plugin_host() {
         timeout_ms: Some(3000),
         env: BTreeMap::new(),
         posture_overrides: BTreeMap::new(),
+        plugin_dir: None,
     };
     let host = PluginHost::connect_all(
         vec![spec],

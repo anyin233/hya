@@ -120,6 +120,7 @@ command result.
 ```sh
 hya-backend bundle info -f example.hyabundle
 hya-backend bundle install example.hyabundle
+hya-backend bundle install --claude ./my-claude-plugin
 hya-backend bundle list
 hya-backend bundle info hya/docs-example
 hya-backend bundle uninstall hya/docs-example
@@ -129,6 +130,12 @@ These are the canonical bundle commands, implemented by `hya-backend` directly.
 
 `install` reports whether the package was installed, replaced, or unchanged,
 along with bundle identity, version, closed payload kind, and registry generation.
+With `--claude <source>`, `install` accepts a local Claude Code plugin directory:
+the bundled Claude adapter translates it offline into an `AgentBundle`
+(identity `claude/<name>`, namespace = sanitized name, skills from
+`agents/`, `skills/`, and `commands/`, MCP from `.mcp.json`), which installs
+through the same namespace-conflict policy (`DenyConflicts` by default;
+`--overwrite` replaces the incumbent).
 `list` reports name, version, packaged Agents, state, package kind, and Workflow
 id for the merged immutable first-party and installed catalog. `info` also
 reports publisher, origin, format, immutability, digests, and packaged resource

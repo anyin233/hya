@@ -1,6 +1,7 @@
 //! `plugins:` config entries and the merged `PluginSpec` the host consumes.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::PathBuf;
 
 use serde::Deserialize;
 
@@ -29,6 +30,10 @@ pub struct PluginEntry {
     /// Extra environment variables for the child process.
     #[serde(default)]
     pub env: BTreeMap<String, String>,
+    /// Claude Code plugin source directory (required for `kind: claude`
+    /// entries without an explicit command; ignored by other kinds).
+    #[serde(default)]
+    pub plugin_dir: Option<PathBuf>,
 }
 
 /// Fully resolved plugin to spawn: config entry or scanned manifest, after merge.
@@ -46,6 +51,8 @@ pub struct PluginSpec {
     pub env: BTreeMap<String, String>,
     /// Hook posture overrides from the manifest (empty for pure config entries).
     pub posture_overrides: BTreeMap<HookName, HookPosture>,
+    /// Claude Code plugin source directory (`kind: claude` only).
+    pub plugin_dir: Option<PathBuf>,
 }
 
 /// Merge config `plugins:` entries with directory-scanned manifests into host specs.
@@ -70,6 +77,7 @@ pub fn merge(config: BTreeMap<String, PluginEntry>, manifests: Vec<Manifest>) ->
             timeout_ms: entry.timeout_ms,
             env: entry.env,
             posture_overrides: BTreeMap::new(),
+            plugin_dir: entry.plugin_dir,
         });
     }
 
@@ -89,6 +97,7 @@ pub fn merge(config: BTreeMap<String, PluginEntry>, manifests: Vec<Manifest>) ->
             timeout_ms: manifest.timeout_ms,
             env: BTreeMap::new(),
             posture_overrides,
+            plugin_dir: None,
         });
     }
 

@@ -21,6 +21,7 @@ hya-store = { workspace = true }
 hya-server = { workspace = true }
 hya-proto = { workspace = true }
 hya-app = { workspace = true }
+hya-plugin-claude = { workspace = true }
 tokio-stream = { workspace = true }
 tokio = { workspace = true }
 tonic = { workspace = true }

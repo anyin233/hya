@@ -120,7 +120,7 @@ After `initialize`, the plugin must reply with an `InitializeResult`:
 | `protocol_version` | Must be `1` (`PROTOCOL_VERSION`) or the host aborts with protocol mismatch. |
 | `plugin.id` | **Must** equal the configured / manifest id or the host aborts with `IdentityMismatch`. |
 | `plugin.version` | Free-form version string. |
-| `plugin.kind` | **Required** on the initialize reply (no `#[serde(default)]` on `PluginInfo.kind`). Wire snake_case: `rust`, `bun`, `other`. Omitting `kind` fails deserialization and aborts the handshake. (`#[default] Rust` on `PluginKindWire` applies to YAML config / `plugin.toml` entries that do have `#[serde(default)]`, not to this wire field.) |
+| `plugin.kind` | **Required** on the initialize reply (no `#[serde(default)]` on `PluginInfo.kind`). Wire snake_case: `rust`, `bun`, `claude`, `other`. Omitting `kind` fails deserialization and aborts the handshake. (`#[default] Rust` on `PluginKindWire` applies to YAML config / `plugin.toml` entries that do have `#[serde(default)]`, not to this wire field.) |
 | `hooks` | Only hooks listed here are ever dispatched to this plugin. Optional per-hook `posture`. |
 | `tools` | Each entry becomes a first-class hya `Tool`. Field name is camelCase **`inputSchema`**. |
 | `workspaceAdapters` | Aggregated across all loaded plugins and served verbatim at `GET /experimental/workspace/adapter`. Shape: `{ type, name, description }`. |

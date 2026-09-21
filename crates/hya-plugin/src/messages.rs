@@ -507,6 +507,10 @@ pub enum PluginKindWire {
     /// Bun/TypeScript extension adapter (`hya-plugin-bun`); also the bundle
     /// sidecar kind (`--bundle-extension` activations must acknowledge it).
     Bun,
+    /// Claude Code plugin adapter (`hya-plugin-claude`): the Bun-hosted
+    /// adapter that discovers and translates Claude Code plugin sources
+    /// (`plugin.json`, agents, skills, commands, hooks, `.mcp.json`).
+    Claude,
     /// Any other declared kind.
     Other,
 }

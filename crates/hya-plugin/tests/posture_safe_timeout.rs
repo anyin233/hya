@@ -47,6 +47,7 @@ async fn tool_before_safe_timeout_vetoes() {
         timeout_ms: Some(200),
         env: BTreeMap::new(),
         posture_overrides: BTreeMap::new(),
+        plugin_dir: None,
     };
     let host = PluginHost::connect_all(
         vec![spec],

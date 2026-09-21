@@ -77,6 +77,7 @@ async fn before_hook_mutates_input_and_event_reaches_plugin() {
         timeout_ms: Some(3000),
         env,
         posture_overrides: BTreeMap::new(),
+        plugin_dir: None,
     };
 
     let host = PluginHost::connect_all(vec![spec], host_info()).await;

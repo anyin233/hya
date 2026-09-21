@@ -4651,6 +4651,7 @@ You are the installed resident agent.
             timeout_ms: Some(1_000),
             env: BTreeMap::new(),
             posture_overrides: BTreeMap::new(),
+            plugin_dir: None,
         }];
         let (router, model) = offline_router(None);
         let agent = agent_with_model(&model, None);
