@@ -2399,7 +2399,10 @@ async fn build_session_engine_with_mcp_defer(
     ))
     .await
     .context("load Agent model configuration before engine readiness")?;
-    let catalog_refresh = Arc::new(InstalledBundleRefresh::new(bundle_registry_path()));
+    let catalog_refresh = Arc::new(
+        InstalledBundleRefresh::new(bundle_registry_path())
+            .with_project_dir(crate::project_bundles::project_bundles_dir()),
+    );
 
     let rules = PermissionRules::new(vec![
         Rule::new(Action::Read, "*", Mode::Allow),

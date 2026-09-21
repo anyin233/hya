@@ -26,6 +26,7 @@ pub mod oauth;
 pub mod permission;
 /// Resolve plugin specs from config and `.hya/plugins` manifests.
 pub mod plugins;
+pub mod project_bundles;
 /// Runtime assembly: store, engine, team supervisor, and [`HyaRuntime`].
 pub mod runtime;
 mod runtime_reconcile;

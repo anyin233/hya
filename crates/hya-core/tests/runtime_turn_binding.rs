@@ -108,7 +108,7 @@ fn schema_names(request: &CompletionRequest) -> Vec<String> {
 }
 
 #[tokio::test]
-async fn admitted_turn_uses_one_binding_for_prompt_schema_skill_and_dispatch() {
+async fn admitted_turn_rebinds_at_round_boundaries_for_prompt_schema_skill_and_dispatch() {
     let workdir = TestDir::new("turn-binding");
     workdir.write_skill("skill_n");
     let old_calls = Arc::new(AtomicUsize::new(0));
@@ -172,7 +172,7 @@ async fn admitted_turn_uses_one_binding_for_prompt_schema_skill_and_dispatch() {
     assert_eq!(call, 0);
 
     workdir.remove_skill("skill_n");
-    workdir.write_skill("skill_n_plus_1");
+    workdir.write_skill("skill_fresh");
     let published = engine
         .refresh_runtime(|candidate| {
             candidate.remove_tool("generation_n");
@@ -192,14 +192,22 @@ async fn admitted_turn_uses_one_binding_for_prompt_schema_skill_and_dispatch() {
     let (call, second_round_request) = request_rx.recv().await.expect("second provider request");
     assert_eq!(call, 1);
 
-    for request in [&first_request, &second_round_request] {
-        let schemas = schema_names(request);
-        assert!(schemas.contains(&"generation_n".to_string()));
-        assert!(!schemas.contains(&"generation_n_plus_1".to_string()));
-        let system = request.system.as_deref().unwrap_or_default();
-        assert!(system.contains("skill_n"));
-        assert!(!system.contains("skill_n_plus_1"));
-    }
+    // Round 1 is bound to the admitting generation...
+    let first_schemas = schema_names(&first_request);
+    assert!(first_schemas.contains(&"generation_n".to_string()));
+    assert!(!first_schemas.contains(&"generation_n_plus_1".to_string()));
+    let first_system = first_request.system.as_deref().unwrap_or_default();
+    assert!(first_system.contains("skill_n"));
+    assert!(!first_system.contains("skill_fresh"));
+    // ...and the mid-turn publication becomes visible at the round boundary
+    // (dynamic injection, D3): round 2 sees the new tool and skill.
+    let second_schemas = schema_names(&second_round_request);
+    assert!(second_schemas.contains(&"generation_n_plus_1".to_string()));
+    assert!(!second_schemas.contains(&"generation_n".to_string()));
+    let second_system = second_round_request.system.as_deref().unwrap_or_default();
+
+    assert!(second_system.contains("skill_fresh"));
+    assert!(!second_system.contains("skill_n"));
     assert_eq!(old_calls.load(Ordering::Relaxed), 1);
     assert_eq!(new_calls.load(Ordering::Relaxed), 0);
 
@@ -248,7 +256,7 @@ async fn admitted_turn_uses_one_binding_for_prompt_schema_skill_and_dispatch() {
     assert!(schemas.contains(&"generation_n_plus_1".to_string()));
     let system = next_turn_request.system.as_deref().unwrap_or_default();
     assert!(!system.contains("skill_n\n"));
-    assert!(system.contains("skill_n_plus_1"));
+    assert!(system.contains("skill_fresh"));
 
     let bindings = engine
         .replay(session)
