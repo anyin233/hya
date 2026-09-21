@@ -7,8 +7,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use hya_core::loop_mode::{
-    LoopConfig, LoopGate, LoopPlanner, LoopPredicate, LoopPredicateOutcome, LoopVerifier,
-    PlannerOutput, PredicateMode, VerifierVerdict,
+    LoopConfig, LoopGate, LoopPlanner, LoopPredicate, LoopVerifier, PlannerOutput, PredicateMode,
+    VerifierVerdict,
 };
 use hya_core::{CoreError, GateOutcome, IterationGate};
 
