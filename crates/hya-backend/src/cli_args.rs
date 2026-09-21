@@ -19,6 +19,11 @@ pub(crate) struct Cli {
     /// Iteration cap for `-p` goal mode.
     #[arg(long, default_value_t = 6)]
     pub(crate) max_iterations: u32,
+    /// Evaluator model for `-p` goal mode as `provider/model`. Overrides the
+    /// config `goal.evaluator_model`; without either, the worker's current
+    /// model judges (unless a plugin registers `goal.evaluate`).
+    #[arg(long, value_name = "PROVIDER/MODEL")]
+    pub(crate) evaluator_model: Option<String>,
     /// Model id to use (overrides config `default_model` + `HYA_MODEL`).
     #[arg(long, global = true, value_name = "MODEL")]
     pub(crate) model: Option<String>,
@@ -224,6 +229,23 @@ mod tests {
 
         assert_eq!(err.kind(), clap::error::ErrorKind::UnknownArgument);
         assert!(err.to_string().contains("--resume"));
+    }
+
+    #[test]
+    fn parses_evaluator_model_flag_for_goal_mode() {
+        let cli = parse([
+            "hya-backend",
+            "-p",
+            "ship it",
+            "--evaluator-model",
+            "deep/o3-mini",
+        ]);
+        assert_eq!(cli.evaluator_model.as_deref(), Some("deep/o3-mini"));
+        let cli = parse(["hya-backend", "-p", "ship it"]);
+        assert!(
+            cli.evaluator_model.is_none(),
+            "the flag must stay optional so config/worker fallback applies"
+        );
     }
 
     #[test]

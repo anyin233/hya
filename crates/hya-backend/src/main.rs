@@ -26,7 +26,8 @@ use std::sync::Arc;
 
 use anyhow::Context as _;
 use clap::Parser;
-use hya_core::completion::render_transcript;
+use hya_core::completion::{PluginGoalEvaluator, render_transcript};
+use hya_core::hooks::HookDispatcher;
 use hya_core::{CreateSession, GoalEvaluator, ModelGoalEvaluator, SafetyCaps, run_goal};
 use hya_proto::{ModelRef, SessionId};
 use hya_store::SessionStore;
@@ -293,6 +294,7 @@ async fn cmd_rpc(model_override: Option<String>, yolo: bool, pure: bool) -> anyh
 async fn cmd_goal(
     goal: String,
     max_iterations: u32,
+    evaluator_model_flag: Option<String>,
     model_override: Option<String>,
     yolo: bool,
     pure: bool,
@@ -307,6 +309,14 @@ async fn cmd_goal(
         .with_yolo(yolo)
         .with_pure(pure);
     let evaluator_router = runtime.router.clone();
+    // D7 evaluator model: the CLI flag outranks config `goal.evaluator_model`;
+    // with neither, the worker's current model judges.
+    let evaluator_model = config::resolve_evaluator_model(
+        evaluator_model_flag.as_deref(),
+        config::load_goal_settings().evaluator_model.as_deref(),
+        &runtime.model,
+    )
+    .to_string();
     let agent = if pure {
         agent_with_model_pure(&runtime.model, runtime.reasoning)
     } else {
@@ -358,10 +368,20 @@ async fn cmd_goal(
         })
         .await
         .context("create session")?;
-    let evaluator: Arc<dyn GoalEvaluator> = Arc::new(ModelGoalEvaluator::new(
-        Arc::new(evaluator_router),
-        ModelRef::new(&runtime.model),
-    ));
+    // Selection point (design §4.5): a registered `goal.evaluate` hook
+    // provider outranks the built-in evaluator. The probe is the trait
+    // capability probe (default false), so any dispatcher without the hook —
+    // or a selection that cannot confirm registration — fails open to the D7
+    // model evaluator instead of erroring startup.
+    let dispatcher: Arc<dyn HookDispatcher> = built.plugin_host();
+    let evaluator: Arc<dyn GoalEvaluator> = if dispatcher.has_goal_evaluate() {
+        Arc::new(PluginGoalEvaluator::new(dispatcher))
+    } else {
+        Arc::new(ModelGoalEvaluator::new(
+            Arc::new(evaluator_router),
+            ModelRef::new(&evaluator_model),
+        ))
+    };
     let caps = SafetyCaps {
         max_iterations,
         ..SafetyCaps::default()
@@ -428,7 +448,15 @@ async fn main() -> anyhow::Result<()> {
     let pure = cli.pure;
     let db = cli.db.clone();
     if let Some(goal) = cli.prompt {
-        return cmd_goal(goal, cli.max_iterations, model, yolo, pure).await;
+        return cmd_goal(
+            goal,
+            cli.max_iterations,
+            cli.evaluator_model.clone(),
+            model,
+            yolo,
+            pure,
+        )
+        .await;
     }
     match cli.command {
         // No interactive frontend is bundled anymore: bare startup only points
