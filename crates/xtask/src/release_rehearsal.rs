@@ -21,10 +21,10 @@ const WORKFLOW_TARGET: &str = "x86_64-unknown-linux-gnu";
 const BINARY_NAME: &str = "hya";
 const RELEASE_JOB: &str = "release";
 const BUILD_JOB: &str = "build";
-const COMPAT_ADAPTER: &str = "crates/hya-plugin-compat/adapter";
+const BUN_ADAPTER: &str = "crates/hya-plugin-bun/adapter";
 const ARGUS_PACKAGE_SCRIPT: &str = "scripts/package-argus-example.sh";
-const WORKFLOW_COMPAT_SOURCE_COPY: &str =
-    "cp -R crates/hya-plugin-compat/adapter/src/. \"$compat_adapter/src/\"";
+const WORKFLOW_BUN_SOURCE_COPY: &str =
+    "cp -R crates/hya-plugin-bun/adapter/src/. \"$bun_adapter/src/\"";
 
 /// Command-line options for one non-publishing rehearsal.
 #[derive(Debug)]
@@ -271,8 +271,8 @@ fn validate_workflow(workflow: &Value, target: &str) -> Result<Vec<String>> {
     );
     ensure_workflow_run_contract(
         &run_blocks,
-        WORKFLOW_COMPAT_SOURCE_COPY,
-        "recursively copy the complete compatibility adapter source tree",
+        WORKFLOW_BUN_SOURCE_COPY,
+        "recursively copy the complete Bun adapter source tree",
     )?;
     Ok(run_blocks)
 }
@@ -644,7 +644,7 @@ fn is_safe_target(target: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
 }
 
-/// Check the pinned Bun (still used by the compat adapter packaging) and run the
+/// Check the pinned Bun (used by the Bun adapter packaging) and run the
 /// exact locked target release build.
 fn prepare_and_build(root: &Path, target: &str) -> Result<()> {
     let bun_version = run_checked(OsStr::new("bun"), &arg_list(&["--version"]), root, &[], &[])?;
@@ -688,9 +688,9 @@ fn rehearse_package(root: &Path, version: &str, target: &str) -> Result<()> {
     set_executable(&backend_destination)?;
     copy_file(&root.join("README.md"), &package_root.join("README.md"))?;
 
-    let compat = package_root.join("lib/hya/compat-adapter");
-    copy_compat_runtime(root, &compat)?;
-    install_runtime_dependencies(&compat)?;
+    let bun_adapter = package_root.join("lib/hya/bun-adapter");
+    copy_bun_runtime(root, &bun_adapter)?;
+    install_runtime_dependencies(&bun_adapter)?;
 
     let example = package_root.join("examples/hya-argus-example.hyabundle");
     fs::create_dir_all(example.parent().context("example archive has no parent")?)
@@ -761,27 +761,27 @@ fn rehearse_package(root: &Path, version: &str, target: &str) -> Result<()> {
     Ok(())
 }
 
-/// Copy the compatibility adapter manifest and source tree into the package.
-fn copy_compat_runtime(root: &Path, compat: &Path) -> Result<()> {
-    let source = root.join(COMPAT_ADAPTER);
-    fs::create_dir_all(compat.join("src"))
-        .with_context(|| format!("create compat runtime {}", compat.display()))?;
+/// Copy the Bun adapter manifest and source tree into the package.
+fn copy_bun_runtime(root: &Path, bun_adapter: &Path) -> Result<()> {
+    let source = root.join(BUN_ADAPTER);
+    fs::create_dir_all(bun_adapter.join("src"))
+        .with_context(|| format!("create Bun adapter runtime {}", bun_adapter.display()))?;
     for file in ["package.json", "bun.lock"] {
-        copy_file(&source.join(file), &compat.join(file))?;
+        copy_file(&source.join(file), &bun_adapter.join(file))?;
     }
-    copy_directory_contents(&source.join("src"), &compat.join("src"))
+    copy_directory_contents(&source.join("src"), &bun_adapter.join("src"))
 }
 
 /// Install production dependencies in the packaged JavaScript runtime.
-fn install_runtime_dependencies(compat: &Path) -> Result<()> {
+fn install_runtime_dependencies(bun_adapter: &Path) -> Result<()> {
     run_checked(
         OsStr::new("bun"),
         &arg_list(&["install", "--frozen-lockfile", "--production"]),
-        compat,
+        bun_adapter,
         &[],
         &[],
     )
-    .context("install compatibility adapter runtime dependencies")?;
+    .context("install Bun adapter runtime dependencies")?;
     Ok(())
 }
 
@@ -844,15 +844,9 @@ fn verify_package_layout(package_root: &Path) -> Result<()> {
         "packaged binary",
     )?;
 
-    let compat = package_root.join("lib/hya/compat-adapter");
-    for path in [
-        "package.json",
-        "bun.lock",
-        "src/main.ts",
-        "node_modules/@opencode-ai/plugin/package.json",
-        "node_modules/@opencode-ai/sdk/package.json",
-    ] {
-        require_file(&compat.join(path), "packaged compatibility adapter file")?;
+    let bun_adapter = package_root.join("lib/hya/bun-adapter");
+    for path in ["package.json", "bun.lock", "src/main.ts"] {
+        require_file(&bun_adapter.join(path), "packaged Bun adapter file")?;
     }
     Ok(())
 }
@@ -878,9 +872,9 @@ fn verify_archive_listing(
         .with_context(|| format!("write archive listing {}", listing_path.display()))?;
     for path in [
         "bin/hya-backend",
-        "lib/hya/compat-adapter/package.json",
-        "lib/hya/compat-adapter/bun.lock",
-        "lib/hya/compat-adapter/src/main.ts",
+        "lib/hya/bun-adapter/package.json",
+        "lib/hya/bun-adapter/bun.lock",
+        "lib/hya/bun-adapter/src/main.ts",
         "examples/hya-argus-example.hyabundle",
     ] {
         require_listing_line(
@@ -889,12 +883,6 @@ fn verify_archive_listing(
             "release tar listing",
         )?;
     }
-    ensure!(
-        listing.contains(&format!(
-            "{package_name}/lib/hya/compat-adapter/node_modules/"
-        )),
-        "release tar listing has no packaged adapter node_modules"
-    );
     ensure!(
         !listing.contains(&format!("{package_name}/bundles/examples/argus-example")),
         "release tar contains the example source-tree prefix"
@@ -929,19 +917,18 @@ fn smoke_packaged_release(
     )
     .context("smoke packaged hya-backend --help")?;
 
-    smoke_compat_adapter(&package_root.join("lib/hya/compat-adapter"), scratch)?;
+    smoke_bun_adapter(&package_root.join("lib/hya/bun-adapter"), scratch)?;
     Ok(())
 }
 
-/// Run the pure compatibility adapter handshake and verify its bounded output.
-fn smoke_compat_adapter(compat: &Path, scratch: &ScratchDirectory) -> Result<()> {
-    let probe = scratch.path().join("compat-probe");
-    let output_path = scratch.path().join("compat-output");
+/// Run the Bun adapter initialize/shutdown handshake and verify its bounded output.
+fn smoke_bun_adapter(bun_adapter: &Path, scratch: &ScratchDirectory) -> Result<()> {
+    let probe = scratch.path().join("bun-adapter-probe");
+    let output_path = scratch.path().join("bun-adapter-output");
     fs::create_dir_all(&probe).with_context(|| format!("create {}", probe.display()))?;
-    let script = compat.join("src/main.ts");
+    let script = bun_adapter.join("src/main.ts");
     let args = vec!["run".to_owned(), script.display().to_string()];
     let envs = [
-        ("COMPAT_PURE", OsString::from("1")),
         ("HYA_DIRECTORY", probe.as_os_str().to_os_string()),
         ("HYA_WORKTREE", probe.as_os_str().to_os_string()),
     ];
@@ -951,17 +938,17 @@ fn smoke_compat_adapter(compat: &Path, scratch: &ScratchDirectory) -> Result<()>
         &args,
         &probe,
         &envs,
-        &["HYA_COMPAT_ADAPTER_DIR"],
+        &["HYA_BUN_ADAPTER_DIR"],
         input,
     )
-    .context("run pure compatibility adapter handshake")?;
+    .context("run Bun adapter handshake")?;
     ensure!(
         output.status.success(),
-        "compatibility adapter handshake failed with status {}",
+        "Bun adapter handshake failed with status {}",
         status_label(&output)
     );
     fs::write(&output_path, &output.stdout)
-        .with_context(|| format!("write compatibility output {}", output_path.display()))?;
+        .with_context(|| format!("write adapter output {}", output_path.display()))?;
     let body = String::from_utf8_lossy(&output.stdout);
     for marker in [
         "\"protocol_version\":1",
@@ -969,10 +956,7 @@ fn smoke_compat_adapter(compat: &Path, scratch: &ScratchDirectory) -> Result<()>
         "\"tools\":[]",
         "\"id\":2,\"result\":{}",
     ] {
-        ensure!(
-            body.contains(marker),
-            "compatibility output lacks `{marker}`"
-        );
+        ensure!(body.contains(marker), "adapter output lacks `{marker}`");
     }
     Ok(())
 }
@@ -1162,7 +1146,7 @@ mod tests {
     use anyhow::{Context, Result};
 
     /// Exact-line packaging contracts that must stay in the checked-in workflow.
-    const WORKFLOW_CONTRACTS: &[&str] = &[WORKFLOW_COMPAT_SOURCE_COPY];
+    const WORKFLOW_CONTRACTS: &[&str] = &[WORKFLOW_BUN_SOURCE_COPY];
 
     /// Require the checked-in workflow to satisfy every release package contract.
     #[test]

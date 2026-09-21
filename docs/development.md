@@ -77,13 +77,11 @@ There is **no** Cargo alias named `xtask` in this workspace: invoke it as
 `cargo run -p xtask -- <task> …`. The binary uses a hand-rolled positional
 dispatcher (not clap): the first positional argument selects the task and every
 remaining argument is forwarded verbatim. The currently supported tasks are
-`sync-compat`, `migrate`, `startup-bench`, `matrix-check`, `package-bundle`, `gen-api`, and
+`startup-bench`, `matrix-check`, `package-bundle`, `gen-api`, and
 `release-rehearsal`.
 
 | Task | Role |
 | --- | --- |
-| `sync-compat` | Import supported MCP servers and skills from an OpenCode/Compat config into hya config / skill roots. Does not import providers or models. |
-| `migrate` | Alias that dispatches to the same implementation as `sync-compat`. |
 | `gen-api` | Regenerate the `hya.v1` contract from `proto/hya/v1`: Rust types (prost/tonic/pbjson), the API reference, and OpenAPI. Uses a vendored protoc; output is committed, and the task fails when any rpc lacks its `// hya.http:` mapping or two rpcs collide. |
 | `startup-bench` | Startup latency benchmark. Honours `HYA_BACKEND_BIN` to select the binary under test. |
 | `matrix-check` | Validates `crates/hya-e2e/matrix.toml`. See [agent-matrix.md](testing/agent-matrix.md). |
@@ -91,7 +89,6 @@ remaining argument is forwarded verbatim. The currently supported tasks are
 | `release-rehearsal` | Runs the pinned, non-publishing release build/package/smoke rehearsal, including archive, adapter, Argus, and runtime-prune checks. |
 
 ```sh
-cargo run -p xtask -- sync-compat --help   # args after the task name are forwarded
 cargo run -p xtask -- matrix-check
 cargo run -p xtask -- startup-bench
 cargo run -p xtask -- package-bundle <source-dir> <output.hyabundle>
@@ -114,7 +111,7 @@ Use this guide when deciding where a change belongs:
 | Typed HTTP integration | `hya-client`; new frontend integrations use `hya-sdk-v1` |
 | User-facing backend CLI command, config loading, server launch | `hya-backend` |
 | Process-level agent scenario (real backend + FakeLlm) | `hya-e2e` (+ matrix docs under `docs/testing/`) |
-| Dev tooling (`sync-compat`, matrix check, startup bench) | `xtask` |
+| Dev tooling (matrix check, startup bench) | `xtask` |
 
 ## Testing Strategy
 

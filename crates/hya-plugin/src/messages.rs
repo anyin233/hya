@@ -467,11 +467,9 @@ pub enum PluginKindWire {
     /// Native Rust (or other) stdio binary speaking this ABI.
     #[default]
     Rust,
-    // Back-compat: existing configs may still declare `kind: opencode` for the
-    // external JS-plugin adapter; keep accepting that literal (external contract).
-    /// Compat/OpenCode JS plugin via the Bun adapter (`opencode` alias accepted).
-    #[serde(alias = "opencode")]
-    Compat,
+    /// Bun/TypeScript extension adapter (`hya-plugin-bun`); also the bundle
+    /// sidecar kind (`--bundle-extension` activations must acknowledge it).
+    Bun,
     /// Any other declared kind.
     Other,
 }

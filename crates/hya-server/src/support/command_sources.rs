@@ -1,4 +1,10 @@
-use std::collections::BTreeMap;
+//! Workdir-scoped custom slash-command discovery from hya-native directories.
+//!
+//! Commands are markdown files under `{workdir}/.hya/command` and
+//! `{workdir}/.hya/commands` (recursive); optional YAML frontmatter carries
+//! `description`, `agent`, `model`, and `subtask`. Inline config-file command
+//! tables are not a source.
+
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
@@ -13,42 +19,9 @@ struct CommandFrontmatter {
     subtask: Option<bool>,
 }
 
-#[derive(Default, Deserialize)]
-struct CommandConfig {
-    command: Option<BTreeMap<String, InlineCommand>>,
-    commands: Option<BTreeMap<String, InlineCommand>>,
-}
-
-#[derive(Deserialize)]
-struct InlineCommand {
-    template: String,
-    description: Option<String>,
-    agent: Option<String>,
-    model: Option<String>,
-    subtask: Option<bool>,
-}
-
-pub(super) fn config_commands(workdir: &Path) -> Vec<CommandInfo> {
-    let mut commands = Vec::new();
-    for path in config_paths(workdir) {
-        let Ok(content) = std::fs::read_to_string(path) else {
-            continue;
-        };
-        let Some(config) = parse_config(&content) else {
-            continue;
-        };
-        append_inline_commands(config.command, &mut commands);
-        append_inline_commands(config.commands, &mut commands);
-    }
-    commands
-}
-
 pub(super) fn disk_commands(workdir: &Path) -> Vec<CommandInfo> {
     let mut files = Vec::new();
-    for root in [
-        workdir.join(".opencode/command"),
-        workdir.join(".opencode/commands"),
-    ] {
+    for root in [workdir.join(".hya/command"), workdir.join(".hya/commands")] {
         collect_markdown_files(&root, &root, &mut files);
     }
     files.sort_by(|left, right| left.path.cmp(&right.path));
@@ -71,63 +44,6 @@ pub(super) fn disk_commands(workdir: &Path) -> Vec<CommandInfo> {
         ));
     }
     commands
-}
-
-pub(super) fn command_hints(template: &str) -> Vec<String> {
-    let mut numbered = Vec::new();
-    let bytes = template.as_bytes();
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] == b'$' {
-            let start = index;
-            index += 1;
-            while index < bytes.len() && bytes[index].is_ascii_digit() {
-                index += 1;
-            }
-            if index > start + 1 {
-                let hint = &template[start..index];
-                if !numbered.iter().any(|existing| existing == hint) {
-                    numbered.push(hint.to_string());
-                }
-                continue;
-            }
-        }
-        index += 1;
-    }
-    numbered.sort();
-    if template.contains("$ARGUMENTS") {
-        numbered.push("$ARGUMENTS".to_string());
-    }
-    numbered
-}
-
-fn config_paths(workdir: &Path) -> [PathBuf; 4] {
-    [
-        workdir.join(crate::support::external_protocol::CONFIG_FILE_JSON),
-        workdir.join(crate::support::external_protocol::CONFIG_FILE_JSONC),
-        workdir.join(".opencode/opencode.json"),
-        workdir.join(".opencode/opencode.jsonc"),
-    ]
-}
-
-fn parse_config(content: &str) -> Option<CommandConfig> {
-    crate::support::jsonc::from_str(content).ok()
-}
-
-fn append_inline_commands(
-    map: Option<BTreeMap<String, InlineCommand>>,
-    commands: &mut Vec<CommandInfo>,
-) {
-    for (name, command) in map.unwrap_or_default() {
-        commands.push(CommandInfo::command(
-            name,
-            command.description,
-            command.agent,
-            command.model,
-            command.template,
-            command.subtask,
-        ));
-    }
 }
 
 struct CommandFile {

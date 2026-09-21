@@ -512,7 +512,7 @@ impl BoundSidecarFactory for BundleSidecarFactory {
             }
         };
         if initialized.protocol_version != hya_plugin::messages::PROTOCOL_VERSION
-            || initialized.plugin.kind != PluginKindWire::Compat
+            || initialized.plugin.kind != PluginKindWire::Bun
         {
             let _ = guard.terminate().await;
             return Err(CoreError::Invalid(
@@ -5429,7 +5429,7 @@ for line in sys.stdin:
     if method == "initialize":
         result = {
             "protocol_version": 1,
-            "plugin": {"id": "bundle-sidecar", "version": "0.1.0", "kind": "compat"},
+            "plugin": {"id": "bundle-sidecar", "version": "0.1.0", "kind": "bun"},
             "hooks": __HOOKS__,
             "tools": [{"name": "echo", "description": "sidecar echo", "inputSchema": {"type": "object"}}],
             "workspaceAdapters": []
@@ -5692,7 +5692,7 @@ for line in sys.stdin:
     if method == "initialize":
         result = {
             "protocol_version": 1,
-            "plugin": {"id": "bundle-sidecar", "version": "0.1.0", "kind": "compat"},
+            "plugin": {"id": "bundle-sidecar", "version": "0.1.0", "kind": "bun"},
             "hooks": [],
             "tools": [{"name": "echo", "description": "sidecar echo", "inputSchema": {"type": "object"}}],
             "workspaceAdapters": []
@@ -7088,7 +7088,7 @@ for line in sys.stdin:
     if method == "initialize":
         result = {
             "protocol_version": 1,
-            "plugin": {"id": "bundle-sidecar", "version": "0.1.0", "kind": "compat"},
+            "plugin": {"id": "bundle-sidecar", "version": "0.1.0", "kind": "bun"},
             "hooks": [],
             "tools": [{"name": "echo", "description": "sidecar echo", "inputSchema": {"type": "object"}}],
             "workspaceAdapters": []
@@ -7443,7 +7443,7 @@ for line in sys.stdin:
     if method == "initialize":
         result = {
             "protocol_version": 1,
-            "plugin": {"id": "bundle-sidecar", "version": "0.1.0", "kind": "compat"},
+            "plugin": {"id": "bundle-sidecar", "version": "0.1.0", "kind": "bun"},
             "hooks": [],
             "tools": [{"name": "echo", "description": "sidecar echo", "inputSchema": {"type": "object"}}],
             "workspaceAdapters": []

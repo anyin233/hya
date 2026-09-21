@@ -11,8 +11,9 @@
 > product surface: the Compat-compatible CLI aliases and no-op flags
 > (`run`, `--print-logs`, `--log-level`, `--pure`, `serve --hostname/--port`,
 > `--cors`, `--mdns`), the Compat plugin adapter
-> ([compat-plugins.md](compat-plugins.md)), and the dev-task Compat config
-> import (`xtask sync-compat`; MCP servers and skills only).
+)
+> The OpenCode plugin adapter and the `xtask sync-compat` migration task have
+> also been deleted; no living compat surface remains beyond CLI aliases.
 
 Last refreshed: 2026-09-02.
 

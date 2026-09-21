@@ -10,7 +10,7 @@ use std::process::{Command, Output};
 
 const TARGET: &str = "x86_64-unknown-linux-gnu";
 const WORKFLOW_CONTRACTS: &[&str] =
-    &["cp -R crates/hya-plugin-compat/adapter/src/. \"$compat_adapter/src/\""];
+    &["cp -R crates/hya-plugin-bun/adapter/src/. \"$bun_adapter/src/\""];
 
 /// Require an explicit no-publish guard before a rehearsal can run.
 #[test]

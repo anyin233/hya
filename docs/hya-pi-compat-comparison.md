@@ -368,14 +368,13 @@ agent communicate with MCP means adding an MCP server under `mcp:` in
 `config.yaml`; hya starts the server, calls `tools/list`, wraps each tool as
 `mcp__<server>__<tool>`, and later calls `tools/call` when the model invokes it.
 
-hya also ships `crates/hya-plugin-compat`, a Bun/TypeScript adapter for
-Compat plugins. That path gives hya compatibility with much of Compat's
-plugin ecosystem while still feeding the Rust runtime's event, permission, and
-tool planes.
+hya previously shipped `crates/hya-plugin-compat`, a Bun/TypeScript adapter
+for Compat plugins; that layer has been deleted and replaced by the
+hya-native Bun extension adapter (`crates/hya-plugin-bun`) for bundle JS
+extensions.
 
 Evidence: [Configuration](configuration.md),
 [Tools and Permissions](architecture/tools-and-permissions.md),
-[Compat adapter README](../crates/hya-plugin-compat/README.md),
 [`crates/hya-plugin/src/host.rs`](../crates/hya-plugin/src/host.rs),
 [`crates/hya-plugin/src/messages.rs`](../crates/hya-plugin/src/messages.rs),
 [`crates/hya-plugin/src/permission_bridge.rs`](../crates/hya-plugin/src/permission_bridge.rs),

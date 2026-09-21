@@ -1,4 +1,4 @@
-//! Resolve native and Compat plugin specs for the plugin host.
+//! Resolve native and Bun extension plugin specs for the plugin host.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -15,14 +15,14 @@ pub fn plugins_dir() -> Option<PathBuf> {
 
 /// Merge config plugin entries with optional on-disk manifests into host specs.
 ///
-/// Compat entries without a command are rewritten to the bundled Bun adapter
+/// Bun entries without a command are rewritten to the bundled Bun adapter
 /// when Bun is on `PATH` (or `BUN`); otherwise they are skipped with a notice.
 pub fn resolve(config: BTreeMap<String, PluginEntry>, dir: Option<&Path>) -> Vec<PluginSpec> {
     resolve_with_bun(config, dir, find_bun)
 }
 
 pub(crate) fn bundle_sidecar_command() -> Option<Vec<String>> {
-    find_bun().map(|bun| bundled_compat_adapter_command(&bun))
+    find_bun().map(|bun| bundled_bun_adapter_command(&bun))
 }
 
 fn resolve_with_bun(
@@ -31,7 +31,7 @@ fn resolve_with_bun(
     find_bun: impl Fn() -> Option<PathBuf>,
 ) -> Vec<PluginSpec> {
     let specs = raw_specs(config, dir);
-    resolve_compat_specs(specs, find_bun)
+    resolve_bun_specs(specs, find_bun)
 }
 
 fn raw_specs(config: BTreeMap<String, PluginEntry>, dir: Option<&Path>) -> Vec<PluginSpec> {
@@ -42,58 +42,58 @@ fn raw_specs(config: BTreeMap<String, PluginEntry>, dir: Option<&Path>) -> Vec<P
     hya_plugin::config::merge(config, manifests)
 }
 
-fn resolve_compat_specs(
+fn resolve_bun_specs(
     specs: Vec<PluginSpec>,
     find_bun: impl Fn() -> Option<PathBuf>,
 ) -> Vec<PluginSpec> {
     specs
         .into_iter()
         .filter_map(|mut spec| {
-            if spec.kind != PluginKindWire::Compat || !spec.command.is_empty() {
+            if spec.kind != PluginKindWire::Bun || !spec.command.is_empty() {
                 return Some(spec);
             }
             let Some(bun) = find_bun() else {
-                // Bun is an OPTIONAL dependency, needed only to run Compat JS
+                // Bun is an OPTIONAL dependency, needed only to run JS extension
                 // plugins. The core and native Rust plugins never require it, so a
                 // missing Bun is a skip (with notice), not an error.
                 eprintln!(
-                    "hya: skipping optional compat plugin '{}' — Bun not found in PATH \
-                     (Bun is only needed for Compat JS plugins; native Rust plugins work without it)",
+                    "hya: skipping optional bun plugin '{}' — Bun not found in PATH \
+                     (Bun is only needed for JS extension plugins; native Rust plugins work without it)",
                     spec.id
                 );
                 return None;
             };
-            spec.command = bundled_compat_adapter_command(&bun);
+            spec.command = bundled_bun_adapter_command(&bun);
             Some(spec)
         })
         .collect()
 }
 
-fn bundled_compat_adapter_command(bun: &Path) -> Vec<String> {
+fn bundled_bun_adapter_command(bun: &Path) -> Vec<String> {
     vec![
         path_to_arg(bun),
         "run".to_string(),
-        path_to_arg(&bundled_compat_adapter_dir().join("src/main.ts")),
+        path_to_arg(&bundled_bun_adapter_dir().join("src/main.ts")),
     ]
 }
 
-/// Resolve the production Compat adapter for configured plugins and bundle sidecars.
-fn bundled_compat_adapter_dir() -> PathBuf {
+/// Resolve the production Bun adapter for configured plugins and bundle sidecars.
+fn bundled_bun_adapter_dir() -> PathBuf {
     let executable = std::env::current_exe().unwrap_or_default();
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let workspace_root = manifest_dir
         .parent()
         .and_then(Path::parent)
         .unwrap_or_else(|| Path::new("."));
-    resolve_compat_adapter_dir(
-        non_empty_env_path("HYA_COMPAT_ADAPTER_DIR"),
+    resolve_bun_adapter_dir(
+        non_empty_env_path("HYA_BUN_ADAPTER_DIR"),
         &executable,
         workspace_root,
     )
 }
 
-/// Resolve the Compat adapter in override, installed-adjacent, then workspace order.
-fn resolve_compat_adapter_dir(
+/// Resolve the Bun adapter in override, installed-adjacent, then workspace order.
+fn resolve_bun_adapter_dir(
     override_dir: Option<PathBuf>,
     executable: &Path,
     workspace_root: &Path,
@@ -104,11 +104,11 @@ fn resolve_compat_adapter_dir(
     let installed = executable
         .parent()
         .unwrap_or_else(|| Path::new("."))
-        .join("../lib/hya/compat-adapter");
+        .join("../lib/hya/bun-adapter");
     if installed.join("src/main.ts").is_file() {
         return installed;
     }
-    workspace_root.join("crates/hya-plugin-compat/adapter")
+    workspace_root.join("crates/hya-plugin-bun/adapter")
 }
 
 fn find_bun() -> Option<PathBuf> {
@@ -207,12 +207,12 @@ mod tests {
     }
 
     #[test]
-    fn compat_entry_without_command_resolves_to_bundled_adapter() {
+    fn bun_entry_without_command_resolves_to_bundled_adapter() {
         let mut config = BTreeMap::new();
         config.insert(
-            "compat".to_string(),
+            "ext".to_string(),
             PluginEntry {
-                kind: PluginKindWire::Compat,
+                kind: PluginKindWire::Bun,
                 command: Vec::new(),
                 enabled: true,
                 timeout_ms: Some(1000),
@@ -225,8 +225,8 @@ mod tests {
 
         assert_eq!(specs.len(), 1);
         let spec = &specs[0];
-        assert_eq!(spec.id, "compat");
-        assert_eq!(spec.kind, PluginKindWire::Compat);
+        assert_eq!(spec.id, "ext");
+        assert_eq!(spec.kind, PluginKindWire::Bun);
         assert_eq!(
             spec.command.first().map(String::as_str),
             Some("/usr/local/bin/bun")
@@ -242,14 +242,12 @@ mod tests {
 
     /// Installed binaries resolve the adjacent production adapter before workspace source.
     #[test]
-    fn compat_adapter_resolution_prefers_override_then_installed_then_workspace()
+    fn bun_adapter_resolution_prefers_override_then_installed_then_workspace()
     -> Result<(), Box<dyn std::error::Error>> {
-        let root = std::env::temp_dir().join(format!(
-            "hya-compat-adapter-resolution-{}",
-            std::process::id()
-        ));
+        let root =
+            std::env::temp_dir().join(format!("hya-bun-adapter-resolution-{}", std::process::id()));
         let executable = root.join("prefix/bin/hya-backend");
-        let installed = root.join("prefix/lib/hya/compat-adapter");
+        let installed = root.join("prefix/lib/hya/bun-adapter");
         let workspace = root.join("workspace");
         let executable_parent = executable
             .parent()
@@ -259,12 +257,12 @@ mod tests {
         std::fs::write(installed.join("src/main.ts"), "export {}\n")?;
 
         assert_eq!(
-            super::resolve_compat_adapter_dir(None, &executable, &workspace),
-            executable_parent.join("../lib/hya/compat-adapter")
+            super::resolve_bun_adapter_dir(None, &executable, &workspace),
+            executable_parent.join("../lib/hya/bun-adapter")
         );
         let explicit = root.join("explicit");
         assert_eq!(
-            super::resolve_compat_adapter_dir(Some(explicit.clone()), &executable, &workspace),
+            super::resolve_bun_adapter_dir(Some(explicit.clone()), &executable, &workspace),
             explicit
         );
 
@@ -273,12 +271,12 @@ mod tests {
     }
 
     #[test]
-    fn compat_entry_without_bun_is_skipped() {
+    fn bun_entry_without_bun_is_skipped() {
         let mut config = BTreeMap::new();
         config.insert(
-            "compat".to_string(),
+            "ext".to_string(),
             PluginEntry {
-                kind: PluginKindWire::Compat,
+                kind: PluginKindWire::Bun,
                 command: Vec::new(),
                 enabled: true,
                 timeout_ms: None,
@@ -312,12 +310,12 @@ mod tests {
     }
 
     #[test]
-    fn compat_entry_with_explicit_command_is_preserved() {
+    fn bun_entry_with_explicit_command_is_preserved() {
         let mut config = BTreeMap::new();
         config.insert(
-            "compat".to_string(),
+            "ext".to_string(),
             PluginEntry {
-                kind: PluginKindWire::Compat,
+                kind: PluginKindWire::Bun,
                 command: vec!["custom-adapter".to_string(), "--stdio".to_string()],
                 enabled: true,
                 timeout_ms: None,

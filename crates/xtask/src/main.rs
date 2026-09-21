@@ -3,8 +3,6 @@
 //! These are maintenance tasks that need the workspace checked out, so they live
 //! here rather than in CI config or a shell script:
 //!
-//! - `sync-compat` (alias `migrate`) — re-sync the vendored Compat/OpenCode
-//!   adapter sources against their upstream pins.
 //! - `startup-bench` — measure backend startup latency.
 //! - `matrix-check` — verify the agent test matrix in `docs/testing/` still
 //!   matches the scenarios the suites actually declare.
@@ -23,7 +21,6 @@ mod matrix_check;
 mod package_bundle;
 mod release_rehearsal;
 mod startup_bench;
-mod sync_compat;
 
 fn main() {
     let mut args = std::env::args();
@@ -31,8 +28,6 @@ fn main() {
     let task = args.next();
 
     let result = match task.as_deref() {
-        Some("sync-compat") => sync_compat::run(args.collect()),
-        Some("migrate") => sync_compat::run(args.collect()),
         Some("package-bundle") => package_bundle::run(args.collect()),
         Some("release-rehearsal") => release_rehearsal::run(args.collect()),
         Some("startup-bench") => startup_bench::run(args.collect()),
@@ -40,7 +35,7 @@ fn main() {
         Some("gen-api") => gen_api::run(args.collect()),
         _ => {
             eprintln!(
-                "usage: cargo xtask <sync-compat|migrate|startup-bench|matrix-check|package-bundle|release-rehearsal|gen-api>"
+                "usage: cargo xtask <startup-bench|matrix-check|package-bundle|release-rehearsal|gen-api>"
             );
             Ok(())
         }

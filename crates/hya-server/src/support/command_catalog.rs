@@ -88,10 +88,6 @@ pub(crate) fn list(workdir: &Path) -> Vec<CommandInfo> {
     ];
     upsert_commands(
         &mut commands,
-        crate::support::command_sources::config_commands(Path::new(workdir.as_ref())),
-    );
-    upsert_commands(
-        &mut commands,
         crate::support::command_sources::disk_commands(Path::new(workdir.as_ref())),
     );
     add_skill_commands(&mut commands, Path::new(workdir.as_ref()));
@@ -215,7 +211,7 @@ impl CommandInfo {
             model,
             source: "command",
             expandable: true,
-            hints: crate::support::command_sources::command_hints(&template),
+            hints: command_hints(&template),
             template,
             subtask,
         }
@@ -244,6 +240,34 @@ fn upsert_commands(commands: &mut Vec<CommandInfo>, incoming: Vec<CommandInfo>) 
             commands.push(command);
         }
     }
+}
+
+fn command_hints(template: &str) -> Vec<String> {
+    let mut numbered = Vec::new();
+    let bytes = template.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'$' {
+            let start = index;
+            index += 1;
+            while index < bytes.len() && bytes[index].is_ascii_digit() {
+                index += 1;
+            }
+            if index > start + 1 {
+                let hint = &template[start..index];
+                if !numbered.iter().any(|existing| existing == hint) {
+                    numbered.push(hint.to_string());
+                }
+                continue;
+            }
+        }
+        index += 1;
+    }
+    numbered.sort();
+    if template.contains("$ARGUMENTS") {
+        numbered.push("$ARGUMENTS".to_string());
+    }
+    numbered
 }
 
 fn add_skill_commands(commands: &mut Vec<CommandInfo>, workdir: &Path) {

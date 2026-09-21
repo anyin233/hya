@@ -100,15 +100,15 @@ jobs:
           archive="${package_dir}.tar.gz"
 
           rm -rf dist
-          compat_adapter="dist/$package_dir/lib/hya/compat-adapter"
-          mkdir -p "dist/$package_dir/bin" "$compat_adapter/src"
+          bun_adapter="dist/$package_dir/lib/hya/bun-adapter"
+          mkdir -p "dist/$package_dir/bin" "$bun_adapter/src"
           cp "target/$TARGET/release/hya-backend" "dist/$package_dir/bin/"
           cp README.md "dist/$package_dir/"
           chmod 755 "dist/$package_dir/bin/hya-backend"
-          cp crates/hya-plugin-compat/adapter/package.json \
-            crates/hya-plugin-compat/adapter/bun.lock "$compat_adapter/"
-          cp -R crates/hya-plugin-compat/adapter/src/. "$compat_adapter/src/"
-          (cd "$compat_adapter" && "$HOME/.bun/bin/bun" install --frozen-lockfile --production)
+          cp crates/hya-plugin-bun/adapter/package.json \
+            crates/hya-plugin-bun/adapter/bun.lock "$bun_adapter/"
+          cp -R crates/hya-plugin-bun/adapter/src/. "$bun_adapter/src/"
+          (cd "$bun_adapter" && "$HOME/.bun/bin/bun" install --frozen-lockfile --production)
           scripts/package-argus-example.sh bundles/examples/argus-example \
             "dist/$package_dir/examples/hya-argus-example.hyabundle"
 
@@ -135,25 +135,25 @@ jobs:
           "$packaged_binary" --version | tee "$scratch/version.txt"
           grep -F "$version" "$scratch/version.txt"
           "$packaged_binary" --help >/dev/null
-          compat_adapter="$scratch/$package_dir/lib/hya/compat-adapter"
-          for path in package.json bun.lock src/main.ts node_modules/@opencode-ai/plugin/package.json node_modules/@opencode-ai/sdk/package.json; do
-            test -e "$compat_adapter/$path"
+          bun_adapter="$scratch/$package_dir/lib/hya/bun-adapter"
+          for path in package.json bun.lock src/main.ts; do
+            test -e "$bun_adapter/$path"
           done
-          compat_probe="$scratch/compat-probe"
-          compat_output="$scratch/compat-output"
-          mkdir -p "$compat_probe"
+          bun_probe="$scratch/bun-adapter-probe"
+          bun_output="$scratch/bun-adapter-output"
+          mkdir -p "$bun_probe"
           (
-            cd "$compat_probe"
-            env -u HYA_COMPAT_ADAPTER_DIR COMPAT_PURE=1 HYA_DIRECTORY="$compat_probe" HYA_WORKTREE="$compat_probe" \
-              "$HOME/.bun/bin/bun" run "$compat_adapter/src/main.ts" >"$compat_output" <<'COMPAT_REQUESTS'
+            cd "$bun_probe"
+            env -u HYA_BUN_ADAPTER_DIR HYA_DIRECTORY="$bun_probe" HYA_WORKTREE="$bun_probe" \
+              "$HOME/.bun/bin/bun" run "$bun_adapter/src/main.ts" >"$bun_output" <<'BUN_REQUESTS'
           {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":1,"host":{"name":"hya","version":"release"}}}
           {"jsonrpc":"2.0","id":2,"method":"shutdown","params":{}}
-          COMPAT_REQUESTS
+          BUN_REQUESTS
           )
-          grep -F '"protocol_version":1' "$compat_output"
-          grep -F '"hooks":[]' "$compat_output"
-          grep -F '"tools":[]' "$compat_output"
-          grep -F '"id":2,"result":{}' "$compat_output"
+          grep -F '"protocol_version":1' "$bun_output"
+          grep -F '"hooks":[]' "$bun_output"
+          grep -F '"tools":[]' "$bun_output"
+          grep -F '"id":2,"result":{}' "$bun_output"
           example_archive="$scratch/$package_dir/examples/hya-argus-example.hyabundle"
           test -f "$example_archive"
           7z t "$example_archive" >/dev/null

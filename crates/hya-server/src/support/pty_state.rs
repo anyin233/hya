@@ -103,7 +103,7 @@ impl PtyState {
             .args(&payload.args)
             .current_dir(&payload.cwd)
             .env("TERM", "xterm-256color")
-            .env("COMPAT_TERMINAL", "1")
+            .env("HYA_TERMINAL", "1")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

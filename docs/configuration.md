@@ -61,12 +61,9 @@ even when hya is running on the offline provider because `load()` returned
 is printed — so a malformed `categories:` / `subagents:` block looks like the
 keys being ignored.
 
-Normal startup never searches, opens, or imports Compat/OpenCode, Claude, Codex
-CLI, Grok CLI, or another product's configuration. Offline import of supported
-MCP servers and skills from a Compat config is available only through the dev
-task `cargo run -p xtask -- sync-compat`; providers, models, and API keys are
-not imported. Later startup reads only the Hya-owned result. First run creates
-the starter Hya config without an import offer.
+Normal startup never searches, opens, or imports Claude, Codex CLI, Grok CLI,
+OpenCode, or another product's configuration. First run creates the starter
+Hya config without an import offer.
 
 How to tell you are offline:
 
@@ -265,8 +262,8 @@ plugins:
     timeout_ms: 500
     env:
       TOKEN: literal-token               # NOT templated — see Plugins
-  compat:
-    kind: compat                       # rust (default) | compat | other
+  ext:
+    kind: bun                          # rust (default) | bun | other
 ```
 
 ## Providers
@@ -845,46 +842,38 @@ hya honors `HOME` and `XDG_CONFIG_HOME` / `XDG_DATA_HOME` / `XDG_STATE_HOME` /
 | `HYA_EVENT_BUS_CAPACITY` | Live EventBus broadcast ring capacity. Must parse as `usize` **> 0** or ignored. **Env-only** (no config.yaml key). Raising it trades memory for tolerance of slow SSE consumers. | `8192` (`DEFAULT_BUS_CAPACITY`) | `crates/hya-app/src/config.rs`, `crates/hya-core/src/bus.rs` |
 | `HYA_DEFER_SIDEPLANES` | When deferred (default), MCP connect runs after the engine is built so the HTTP listener comes up without waiting on MCP handshakes — MCP tools may not be registered for the very first prompt. Set to `0`, `false`, `off`, or `no` (case-insensitive, trimmed) for await-MCP-before-listen. Any other value, empty, or unset means deferred. | deferred (on) | `crates/hya-app/src/runtime.rs` |
 | `HYA_MCP_BACKGROUND_AFTER_MS` | Foreground budget in milliseconds for `mcp__` tool calls. A call still running past the budget moves to the background: the turn gets a `[backgrounded]` tool result immediately, the real result is delivered later as a steered `[background job …]` user prompt, and `hya-backend serve` runs the reclaim turn when the session is idle. Unset, `0`, or unparsable disables backgrounding (every call stays synchronous). | unset | `crates/hya-app/src/runtime.rs`, `crates/hya-core/src/engine/turn.rs` |
-| `HYA_COMPAT_ADAPTER_DIR` | Path to an alternate Compat plugin adapter checkout (`kind: compat` plugins). | Resolution order: this env override, executable-adjacent `../lib/hya/compat-adapter`, then workspace `crates/hya-plugin-compat/adapter`. | `crates/hya-app/src/plugins.rs` |
+| `HYA_BUN_ADAPTER_DIR` | Path to an alternate Bun extension adapter checkout (`kind: bun` plugins). | Resolution order: this env override, executable-adjacent `../lib/hya/bun-adapter`, then workspace `crates/hya-plugin-bun/adapter`. | `crates/hya-app/src/plugins.rs` |
 | `HYA_BACKEND_BIN` | Binary under test for the `startup-bench` xtask; overrides the default `hya-backend serve` target. | workspace `target/{profile}` binary | `crates/xtask/src/startup_bench.rs` |
 | `HYA_STARTUP_TRACE` | When `1` or `true` (case-insensitive; any other value off), `hya-backend serve` emits a newline-delimited JSON startup mark to stderr after the listen line: `{"hya_startup":true,"mark":"backend_listen","wall_ms":…,"detail":"<url>"}`. | off | `crates/hya-backend/src/serve.rs` |
 
-### Compat adapter (`HYA_*` / `COMPAT_*`)
+### Bun adapter (`HYA_*`)
 
-Read by the bundled Compat plugin adapter
-([`crates/hya-plugin-compat/adapter`](../crates/hya-plugin-compat/adapter)):
+Read by the bundled Bun extension adapter
+([`crates/hya-plugin-bun/adapter`](../crates/hya-plugin-bun/adapter)):
 
 | Variable | Effect | Default / notes | Source |
 | --- | --- | --- | --- |
-| `HYA_COMPAT_OPTIONS_JSON` | JSON blob with a `plugin: [spec \| [spec, options]]` array **appended** after discovered specs. Malformed JSON becomes an `INVALID_PARAMS` initialize error. | empty → no extra plugins | `loader/discovery.ts` |
-| `HYA_DIRECTORY` | Adapter working directory. | `process.cwd()` | `initialize.ts` |
-| `HYA_WORKTREE` | Stop boundary for the ancestor config walk. | same as directory | same |
-| `HYA_SERVER_URL` | `serverUrl` handed to plugins. | `http://127.0.0.1:0` | same |
-| `HYA_PROJECT_ID` | Compat project id. | worktree path | `client_adapter.ts` |
-| `COMPAT_CONFIG` | Explicit Compat config file path. | unset | `initialize.ts` |
-| `COMPAT_CONFIG_DIR` | Extra config directory. | unset | same |
-| `COMPAT_CONFIG_CONTENT` | Inline JSON config. | unset | same |
-| `COMPAT_DISABLE_PROJECT_CONFIG` | Skip the project-config ancestor walk. | off | same |
-| `COMPAT_PURE` | When `true` or `1`, load **zero** plugins (escape hatch when a plugin breaks startup). | off | same |
+| `HYA_BUNDLE_CONFIG_DIR` / `HYA_BUNDLE_CONFIG_FILE` | Visible to loaded extensions via `process.env`; the factory argument itself is always a frozen empty object. | unset | `initialize.ts` |
+| `HYA_DIRECTORY` | Extension working directory context. | `process.cwd()` | `initialize.ts` |
+| `HYA_WORKTREE` | Worktree root context. | same as directory | same |
+| `HYA_SERVER_URL` | `serverUrl` context for extensions that call back into the v1 API. | `http://127.0.0.1:0` | same |
+| `HYA_PROJECT_ID` | Project id context. | worktree path | same |
 
 ### Related non-`HYA_` variables
 
 | Variable | Effect | Source |
 | --- | --- | --- |
-| `BUN` | Bun binary used to run the bundled Compat adapter. | `crates/hya-app/src/plugins.rs` |
+| `BUN` | Bun binary used to run the bundled Bun adapter. | `crates/hya-app/src/plugins.rs` |
 | `SHELL` | Shell program for PTY sessions on the v1 PTY routes; also listed among shell candidates. Defaults to `/bin/sh` when **unset**. A variable that is set but empty is **not** replaced — PTY create may receive an empty command. | `crates/hya-server/src/support/pty_shell.rs` |
-| `COMPAT_REPO_CLONE_GITHUB_BASE_URL` | Overrides the GitHub base URL when cloning reference repositories (Enterprise / internal mirror). Trailing slashes trimmed. Default remote is `https://github.com/<path>.git`. Store under `$XDG_DATA_HOME/compat/repos` (else `~/.local/share/compat/repos`). | `crates/hya-server/src/support/reference_repository.rs` |
-| `COMPAT_TERMINAL` | **Output only:** set to `1` in every PTY child environment so programs can detect the hya terminal. hya never reads it. | `crates/hya-server/src/support/pty_state.rs` |
+| `HYA_REPO_CLONE_GITHUB_BASE_URL` | Overrides the GitHub base URL when cloning reference repositories (Enterprise / internal mirror). Trailing slashes trimmed. Default remote is `https://github.com/<path>.git`. Store under `$XDG_DATA_HOME/hya/repos` (else `~/.local/share/hya/repos`). | `crates/hya-server/src/support/reference_repository.rs` |
+| `HYA_TERMINAL` | **Output only:** set to `1` in every PTY child environment so programs can detect the hya terminal. hya never reads it. | `crates/hya-server/src/support/pty_state.rs` |
 
 ## MCP Servers
 
 hya supports **stdio/local** and **remote HTTP** MCP servers. `mcp.<name>.command`
 is an argv array for a local stdio server; `mcp.<name>.url` connects to a remote
 server over **Streamable HTTP** (the 2025-06-18 default) or, with
-`transport: sse`, the classic HTTP+SSE transport. When importing a
-Compat/OpenCode config, entries with a non-empty `url` are imported as remote
-`url:` servers; entries with `type: local` and a non-empty command are imported
-as stdio servers; anything else is skipped.
+`transport: sse`, the classic HTTP+SSE transport.
 
 ```yaml
 mcp:
@@ -1036,95 +1025,6 @@ curl -sS -X POST http://127.0.0.1:8080/v1/mcp/live-demo/connect
 general MCP config-delete route, and dynamic changes are not written back to
 `config.yaml`.
 
-### Compat migration into hya
-
-Compat provider/model and local MCP configuration enters Hya only through the
-explicit import command:
-
-```sh
-hya --import compat
-```
-
-The discovered Compat config is parsed as **strict JSON first**; if that fails,
-`//` and `/* */` comments and trailing commas are stripped and it is re-parsed as
-JSONC. This applies to any candidate filename, so a commented `opencode.json`
-also imports.
-
-The explicit import supports Compat provider/model config and local stdio MCP
-entries. It replaces `default_model` and `providers` in `config.yaml`, merges
-imported MCP servers by name, and preserves Hya-only MCP entries plus non-model
-sections such as `plugins` and `default_agent`. Compat `type: "local"`,
-`command`, `environment`, `enabled`, and `timeout` map to Hya `command`, `env`,
-`enabled`, and `timeout_ms`. Remote/OAuth MCP entries are skipped and counted;
-skills are not imported. Automatic startup never reads these foreign paths.
-
-**Provider `kind` inference:** hya lowercases the Compat provider id plus its npm
-package and display name and guesses `kind` — containing `anthropic` →
-`anthropic`; containing `google` or `gemini` → `google`; anything else →
-`openai-compatible`. Review and fix `kind` by hand after import for providers
-that need `openai-response`, `openai-codex`, or `grok-build`.
-
-**Filtering:** disabled providers are skipped, as is any provider without a
-`base_url` or without at least one model; when the Compat default model belongs
-to a provider, its id is folded into that provider’s model list.
-
-To mirror Compat-owned MCP and skill surfaces into the default hya runtime,
-use the workspace xtask migration entrypoint:
-
-```sh
-cargo run -p xtask -- sync-compat --help
-```
-
-The first-pass migration contract is intentionally narrow:
-
-- Compat remains the canonical source of truth.
-- The migration supports Compat local stdio MCP entries that map to hya's
-  `McpServerConfig` shape. The Compat `command`, `enabled`, and `environment`
-  fields are migrated; `environment` becomes the hya `env` map and any
-  `{env:VAR}` / `{file:path}` templates are preserved verbatim. Compat
-  remote MCP entries are skipped in this first pass.
-- The migration materializes skills into the hya skill root as managed symlinks.
-- The migration writes a managed-state lock file at
-  `~/.config/hya/compat-sync-lock.json` so rerun and prune operations can be
-  safe and idempotent.
-- Compat provider/model sections are handled by explicit `hya --import compat`,
-  not this xtask. The xtask focuses on MCP and skills.
-
-Typical workflow:
-
-```sh
-cargo run -p xtask -- sync-compat \
-  --dry-run \
-  --compat-config "$HOME/.config/opencode/opencode.json" \
-  --compat-skill-root .opencode/skills \
-  --hya-config "$HOME/.config/hya/config.yaml" \
-  --hya-skills-root "$HOME/.config/hya/skills"
-
-cargo run -p xtask -- sync-compat \
-  --compat-config "$HOME/.config/opencode/opencode.json" \
-  --compat-skill-root .opencode/skills \
-  --hya-config "$HOME/.config/hya/config.yaml" \
-  --hya-skills-root "$HOME/.config/hya/skills"
-```
-
-Repeat `--compat-skill-root <PATH>` for each additional Compat-managed skill
-root you want to migrate. External skill paths configured through Compat, such
-as a superpowers install, are also discovered from the Compat config's
-`skills.paths` list.
-
-To remove only lockfile-managed migrated state:
-
-```sh
-cargo run -p xtask -- sync-compat \
-  --prune \
-  --hya-config "$HOME/.config/hya/config.yaml" \
-  --hya-skills-root "$HOME/.config/hya/skills"
-```
-
-The prune path removes only migration-owned MCP entries and migration-owned
-skill symlinks. It must not delete unrelated user-authored hya config or
-skills.
-
 ## Plugins
 
 Plugins may be declared directly in config or discovered from
@@ -1142,15 +1042,15 @@ plugins:
     timeout_ms: 500
     env:
       TOKEN: literal-token
-  compat:
-    kind: compat
+  ext:
+    kind: bun
 ```
 
 Config entries support:
 
 | Field | Meaning |
 | --- | --- |
-| `kind` | `rust`, `compat`, or `other`; default is `rust`. |
+| `kind` | `rust`, `bun`, or `other`; default is `rust`. |
 | `command` | Process command for stdio JSON-RPC. |
 | `enabled` | Defaults to `true`; disabled entries are skipped. |
 | `timeout_ms` | Optional per-call timeout in **milliseconds**. When omitted: **30 s**. Fixed non-configurable timeouts: initialize **5 s**, shutdown **1 s**. |
@@ -1171,7 +1071,7 @@ Example:
 
 ```toml
 id = "memory"
-kind = "rust"           # rust | compat (alias: opencode) | other; default rust
+kind = "rust"           # rust | bun | other; default rust
 command = ["python3", "memory.py"]
 enabled = true
 timeout_ms = 500
@@ -1187,7 +1087,7 @@ name = "event"
 | Field | Meaning |
 | --- | --- |
 | `id` | Required; must match the plugin’s handshake id. |
-| `kind` | `rust` (default), `compat` (alias `opencode`), or `other`. |
+| `kind` | `rust` (default), `bun`, or `other`. |
 | `command` | Required argv array. |
 | `enabled` | Default `true`. |
 | `timeout_ms` | Optional per-call override (ms). |
@@ -1211,10 +1111,10 @@ Consequences: config always beats a same-id manifest; config `plugins` is a
 (not YAML source order); setting `enabled: false` in config does **not** re-open
 the id for a manifest to claim — the plugin is simply absent.
 
-For `kind: compat` entries without `command`, hya resolves the adapter in this
-order: (1) `HYA_COMPAT_ADAPTER_DIR` when set, (2) the installed adapter adjacent
-to the executable at `../lib/hya/compat-adapter`, and (3) the workspace adapter
-at `crates/hya-plugin-compat/adapter`. Set `BUN` to choose the Bun binary. If
+For `kind: bun` entries without `command`, hya resolves the adapter in this
+order: (1) `HYA_BUN_ADAPTER_DIR` when set, (2) the installed adapter adjacent
+to the executable at `../lib/hya/bun-adapter`, and (3) the workspace adapter
+at `crates/hya-plugin-bun/adapter`. Set `BUN` to choose the Bun binary. If
 Bun is not available, that plugin is skipped.
 
 ### Hook name vocabulary
@@ -1412,31 +1312,6 @@ publication within that window is reported as unavailable analysis, not a clean
 bill of health. Transport errors, interrupted framed writes, and shutdown close
 owned server processes; Unix teardown also terminates their process groups.
 
-## Project Config (`opencode.json`)
-
-At runtime hya reads, in this order:
-
-1. `{workdir}/opencode.json`
-2. `{workdir}/opencode.jsonc`
-3. `{workdir}/.opencode/opencode.json`
-4. `{workdir}/.opencode/opencode.jsonc`
-
-A **later** file that sets a key overrides an earlier one
-([`bound_agent_metadata.rs`](../crates/hya-server/src/support/bound_agent_metadata.rs)).
-Only **`default_agent`** is honoured for agent selection — inline `agent`,
-`permission`, `model`, and `options` fields present in an OpenCode project
-config are deliberately **not** read. Unreadable or invalid files are skipped
-silently with no error.
-
-```json
-{
-  "default_agent": "build"
-}
-```
-
-The same four paths may also declare inline slash commands (see
-[Custom Commands](#custom-commands)).
-
 ## Custom Commands
 
 Built-in slash commands are served by the backend command catalog over
@@ -1449,14 +1324,14 @@ hya scans exactly two project-local roots
 ([`command_sources.rs`](../crates/hya-server/src/support/command_sources.rs)
 `disk_commands`):
 
-1. `<workdir>/.opencode/command/**/*.md`
-2. `<workdir>/.opencode/commands/**/*.md`
+1. `<workdir>/.hya/command/**/*.md`
+2. `<workdir>/.hya/commands/**/*.md`
 
 Files are collected **recursively** and sorted by path. The slash-command name is
 the path **relative to the discovery root**, with path segments joined by `/` and
-the `.md` suffix stripped — e.g. `.opencode/command/git/commit.md` becomes
+the `.md` suffix stripped — e.g. `.hya/command/git/commit.md` becomes
 `/git/commit`, not `/commit`. There is **no** user/home tier and no
-`.hya/prompts` path.
+inline-config command table.
 
 Optional YAML frontmatter:
 
@@ -1568,10 +1443,10 @@ are **silently dropped** (`valid_alias`).
 
 ### Git cache
 
-Clones land under `$XDG_DATA_HOME/compat/repos` (fallback
-`~/.local/share/compat/repos`), keyed by host/path segments. Materialization is
+Clones land under `$XDG_DATA_HOME/hya/repos` (fallback
+`~/.local/share/hya/repos`), keyed by host/path segments. Materialization is
 background (`reference_cache`). Override GitHub remotes with
-`COMPAT_REPO_CLONE_GITHUB_BASE_URL` (see environment table above).
+`HYA_REPO_CLONE_GITHUB_BASE_URL` (see environment table above).
 
 ### Permission and prompt effects (security)
 

@@ -623,43 +623,9 @@ pub fn first_run_config_bootstrap(interactive: bool) -> anyhow::Result<()> {
     };
     if interactive {
         eprintln!("hya: created default config at {}", created.path.display());
-        eprintln!(
-            "hya: edit the starter config to add a provider; automatic Compat/OpenCode import is disabled"
-        );
+        eprintln!("hya: edit the starter config to add a provider");
     }
     Ok(())
-}
-
-/// First existing Compat/OpenCode config path among the usual candidates, if any.
-///
-/// Checks `COMPAT_CONFIG`, then XDG/home OpenCode config locations.
-#[must_use]
-pub fn default_compat_config_path() -> Option<PathBuf> {
-    compat_config_candidates()
-        .into_iter()
-        .find(|path| path.is_file())
-}
-
-fn compat_config_candidates() -> Vec<PathBuf> {
-    let mut candidates = Vec::new();
-    if let Ok(path) = std::env::var("COMPAT_CONFIG") {
-        candidates.push(PathBuf::from(path));
-    }
-    if let Ok(dir) = std::env::var("XDG_CONFIG_HOME") {
-        push_compat_dir_candidates(&mut candidates, PathBuf::from(dir).join("compat"));
-    }
-    if let Ok(home) = std::env::var("HOME") {
-        let home = PathBuf::from(home);
-        push_compat_dir_candidates(&mut candidates, home.join(".config/opencode"));
-        push_compat_dir_candidates(&mut candidates, home.join(".opencode"));
-    }
-    candidates
-}
-
-fn push_compat_dir_candidates(candidates: &mut Vec<PathBuf>, dir: PathBuf) {
-    candidates.push(dir.join("opencode.json"));
-    candidates.push(dir.join("config.json"));
-    candidates.push(dir.join("opencode.jsonc"));
 }
 
 fn resolve_secret(raw: &str) -> anyhow::Result<String> {
@@ -2261,9 +2227,10 @@ permission:
         assert_eq!(defaults.per_run_budget, 1024);
 
         // The new per-team budgets honor their env overrides too.
-        unsafe { std::env::set_var("HYA_SUBAGENT_MESSAGE_BUDGET", "5") };
+        let mut env = EnvGuard::new();
+        env.set("HYA_SUBAGENT_MESSAGE_BUDGET", "5");
         let msg = resolve_subagent_limits(file.subagents.as_ref());
-        unsafe { std::env::remove_var("HYA_SUBAGENT_MESSAGE_BUDGET") };
+        env.remove("HYA_SUBAGENT_MESSAGE_BUDGET");
         assert_eq!(
             msg.per_team_message_budget, 5,
             "env wins for message budget"
@@ -2271,9 +2238,9 @@ permission:
         assert_eq!(msg.per_team_turn_budget, 700, "untouched field stays file");
 
         // Env override wins over the file value.
-        unsafe { std::env::set_var("HYA_SUBAGENT_MAX_CONCURRENCY", "64") };
+        env.set("HYA_SUBAGENT_MAX_CONCURRENCY", "64");
         let overridden = resolve_subagent_limits(file.subagents.as_ref());
-        unsafe { std::env::remove_var("HYA_SUBAGENT_MAX_CONCURRENCY") };
+        env.remove("HYA_SUBAGENT_MAX_CONCURRENCY");
         assert_eq!(overridden.max_concurrency, 64, "env must win over file");
         assert_eq!(
             overridden.per_run_budget, 1000,
@@ -2301,11 +2268,12 @@ permission:
         assert_eq!(defaults.token_accounting, TokenAccountingMode::Auto);
 
         // Env wins over the file value.
-        unsafe { std::env::set_var("HYA_COMPACTION_RESERVE_TOKENS", "4096") };
-        unsafe { std::env::set_var("HYA_TOKEN_ACCOUNTING", "provider") };
+        let mut env = EnvGuard::new();
+        env.set("HYA_COMPACTION_RESERVE_TOKENS", "4096");
+        env.set("HYA_TOKEN_ACCOUNTING", "provider");
         let overridden = resolve_context_settings(file.compaction.as_ref());
-        unsafe { std::env::remove_var("HYA_COMPACTION_RESERVE_TOKENS") };
-        unsafe { std::env::remove_var("HYA_TOKEN_ACCOUNTING") };
+        env.remove("HYA_COMPACTION_RESERVE_TOKENS");
+        env.remove("HYA_TOKEN_ACCOUNTING");
         assert_eq!(overridden.compaction.reserve_tokens, 4_096, "env must win");
         assert_eq!(overridden.token_accounting, TokenAccountingMode::Provider);
         assert_eq!(
@@ -2314,9 +2282,8 @@ permission:
         );
 
         // An unparseable accounting mode is ignored rather than guessed at.
-        unsafe { std::env::set_var("HYA_TOKEN_ACCOUNTING", "banana") };
+        env.set("HYA_TOKEN_ACCOUNTING", "banana");
         let bogus = resolve_context_settings(file.compaction.as_ref());
-        unsafe { std::env::remove_var("HYA_TOKEN_ACCOUNTING") };
         assert_eq!(bogus.token_accounting, TokenAccountingMode::Estimate);
     }
 
@@ -2338,9 +2305,9 @@ permission:
         // Env wins over the file order; a partial list is completed with the
         // unmentioned methods in default order (omp filter-and-drop, but the
         // ladder never loses a mechanism).
-        unsafe { std::env::set_var("HYA_COMPACTION_METHOD_ORDER", "handoff, soft, shake") };
+        let mut env = EnvGuard::new();
+        env.set("HYA_COMPACTION_METHOD_ORDER", "handoff, soft, shake");
         let overridden = resolve_context_settings(file.compaction.as_ref());
-        unsafe { std::env::remove_var("HYA_COMPACTION_METHOD_ORDER") };
         assert_eq!(
             overridden.compaction.method_order,
             hya_core::parse_method_order(&["handoff", "soft", "shake", "remote", "snapcompact"])
@@ -2350,9 +2317,8 @@ permission:
 
         // An unknown method name invalidates the env value, which keeps the
         // file order — matching how unparseable numbers keep the file value.
-        unsafe { std::env::set_var("HYA_COMPACTION_METHOD_ORDER", "shake, banana") };
+        env.set("HYA_COMPACTION_METHOD_ORDER", "shake, banana");
         let bogus_env = resolve_context_settings(file.compaction.as_ref());
-        unsafe { std::env::remove_var("HYA_COMPACTION_METHOD_ORDER") };
         assert_eq!(
             bogus_env.compaction.method_order, from_file.compaction.method_order,
             "an invalid env order keeps the file order"
@@ -2459,6 +2425,9 @@ providers:
 
     #[test]
     fn provider_retry_defaults_without_config() {
+        // Env-sensitive assertions take the same gate as env writers, so a
+        // concurrent override test can never leak a value into this read.
+        let _env = EnvGuard::new();
         let parsed = parse_providers(FIXTURE).unwrap();
         for provider in &parsed {
             assert_eq!(provider.retry, hya_provider::RetryConfig::default());
@@ -2467,6 +2436,7 @@ providers:
 
     #[test]
     fn global_provider_retry_overrides_defaults() {
+        let _env = EnvGuard::new();
         let parsed = parse_providers(
             "provider_retry:\n  max_attempts: 5\n  backoff_base_ms: 250\n  backoff_max_ms: 60000\nproviders:\n  gw:\n    kind: openai\n    base_url: https://gw.example/v1\n    api_key: sk-test-literal\n    models: [gpt-5.5]\n",
         )
@@ -2479,6 +2449,7 @@ providers:
 
     #[test]
     fn per_provider_retry_overrides_global_fields() {
+        let _env = EnvGuard::new();
         let parsed = parse_providers(
             "provider_retry:\n  max_attempts: 5\n  backoff_base_ms: 250\nproviders:\n  tuned:\n    kind: openai\n    base_url: https://a/v1\n    api_key: x\n    models: [m1]\n    retry:\n      max_attempts: 2\n  stock:\n    kind: openai\n    base_url: https://b/v1\n    api_key: x\n    models: [m2]\n",
         )
@@ -2496,16 +2467,12 @@ providers:
 
     #[test]
     fn provider_retry_env_overrides_file_values() {
-        unsafe {
-            std::env::set_var("HYA_PROVIDER_RETRY_MAX_ATTEMPTS", "7");
-        }
+        let mut env = EnvGuard::new();
+        env.set("HYA_PROVIDER_RETRY_MAX_ATTEMPTS", "7");
         let parsed = parse_providers(
             "provider_retry:\n  max_attempts: 2\nproviders:\n  gw:\n    kind: openai\n    base_url: https://gw.example/v1\n    api_key: x\n    models: [m1]\n    retry:\n      max_attempts: 3\n",
         )
         .unwrap();
-        unsafe {
-            std::env::remove_var("HYA_PROVIDER_RETRY_MAX_ATTEMPTS");
-        }
         assert_eq!(parsed.first().unwrap().retry.max_attempts, 7);
     }
 
@@ -2764,7 +2731,8 @@ providers:
     #[test]
     fn resolves_env_template_key() {
         // SAFETY: single-threaded test; sets then reads a unique env var.
-        unsafe { std::env::set_var("HYA_TEST_KEY_XYZ", "resolved-secret") };
+        let mut env = EnvGuard::new();
+        env.set("HYA_TEST_KEY_XYZ", "resolved-secret");
         assert_eq!(
             resolve_secret("{env:HYA_TEST_KEY_XYZ}").unwrap(),
             "resolved-secret"
@@ -2815,6 +2783,56 @@ mcp:
         assert_eq!(echo.timeout_ms, Some(250));
     }
 
+    /// Serialize tests that mutate process-global environment variables and
+    /// restore the previous values on drop, so concurrent tests never observe
+    /// leaked `HYA_*` state (a race that otherwise fires as flaky failures).
+    ///
+    static ENV_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    struct EnvGuard {
+        _lock: std::sync::MutexGuard<'static, ()>,
+        saved: Vec<(String, Option<std::ffi::OsString>)>,
+    }
+
+    impl EnvGuard {
+        /// Take the env gate. A test must call this **once** — re-entering
+        /// while an earlier guard is still alive would wait on itself.
+        fn new() -> Self {
+            let lock = ENV_TEST_LOCK
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            Self {
+                _lock: lock,
+                saved: Vec::new(),
+            }
+        }
+
+        fn set(&mut self, name: &str, value: &str) {
+            if !self.saved.iter().any(|(n, _)| n == name) {
+                self.saved.push((name.to_string(), std::env::var_os(name)));
+            }
+            unsafe { std::env::set_var(name, value) };
+        }
+
+        fn remove(&mut self, name: &str) {
+            if !self.saved.iter().any(|(n, _)| n == name) {
+                self.saved.push((name.to_string(), std::env::var_os(name)));
+            }
+            unsafe { std::env::remove_var(name) };
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            for (name, previous) in self.saved.iter().rev() {
+                match previous {
+                    Some(value) => unsafe { std::env::set_var(name, value) },
+                    None => unsafe { std::env::remove_var(name) },
+                }
+            }
+        }
+    }
+
     #[test]
     fn parses_plugins_section() {
         let yaml = "
@@ -2827,8 +2845,8 @@ plugins:
   disabled-one:
     enabled: false
     command: [nope]
-  compat:
-    kind: compat
+  ext:
+    kind: bun
 ";
         let file = parse_config(yaml).unwrap();
         assert_eq!(file.plugins.len(), 3);
@@ -2842,8 +2860,8 @@ plugins:
         assert_eq!(memory.env.get("TOKEN").map(String::as_str), Some("literal"));
         assert!(!file.plugins.get("disabled-one").unwrap().enabled);
         assert_eq!(
-            file.plugins.get("compat").unwrap().kind,
-            hya_plugin::messages::PluginKindWire::Compat
+            file.plugins.get("ext").unwrap().kind,
+            hya_plugin::messages::PluginKindWire::Bun
         );
     }
 
