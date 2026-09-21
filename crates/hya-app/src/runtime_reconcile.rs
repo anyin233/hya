@@ -1278,6 +1278,7 @@ mod tests {
                 timeout_ms: None,
                 env: BTreeMap::new(),
                 posture_overrides: BTreeMap::new(),
+                plugin_dir: None,
             },
         )
     }

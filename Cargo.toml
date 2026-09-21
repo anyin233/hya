@@ -6,7 +6,7 @@ members = ["crates/*"]
 exclude = ["vendor/sevenz-rust2-0.20.2"]
 
 [workspace.package]
-version = "0.37.3"
+version = "0.37.4"
 edition = "2024"
 rust-version = "1.91"
 license = "MIT OR Apache-2.0"
@@ -24,6 +24,7 @@ hya-workflow = { path = "crates/hya-workflow" }
 hya-server = { path = "crates/hya-server" }
 hya-mcp = { path = "crates/hya-mcp" }
 hya-plugin = { path = "crates/hya-plugin" }
+hya-plugin-claude = { path = "crates/hya-plugin-claude" }
 hya-app = { path = "crates/hya-app" }
 # --- external (pinned intent; each crate opts in per phase via `{ workspace = true }`) ---
 tokio = { version = "1", features = ["full", "test-util"] }

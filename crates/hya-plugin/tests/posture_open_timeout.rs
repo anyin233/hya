@@ -48,6 +48,7 @@ async fn chat_params_open_timeout_keeps_original_request() {
         timeout_ms: Some(200),
         env: BTreeMap::new(),
         posture_overrides: BTreeMap::new(),
+        plugin_dir: None,
     };
     let host = PluginHost::connect_all(
         vec![spec],

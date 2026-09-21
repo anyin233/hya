@@ -843,6 +843,7 @@ hya honors `HOME` and `XDG_CONFIG_HOME` / `XDG_DATA_HOME` / `XDG_STATE_HOME` /
 | `HYA_DEFER_SIDEPLANES` | When deferred (default), MCP connect runs after the engine is built so the HTTP listener comes up without waiting on MCP handshakes — MCP tools may not be registered for the very first prompt. Set to `0`, `false`, `off`, or `no` (case-insensitive, trimmed) for await-MCP-before-listen. Any other value, empty, or unset means deferred. | deferred (on) | `crates/hya-app/src/runtime.rs` |
 | `HYA_MCP_BACKGROUND_AFTER_MS` | Foreground budget in milliseconds for `mcp__` tool calls. A call still running past the budget moves to the background: the turn gets a `[backgrounded]` tool result immediately, the real result is delivered later as a steered `[background job …]` user prompt, and `hya-backend serve` runs the reclaim turn when the session is idle. Unset, `0`, or unparsable disables backgrounding (every call stays synchronous). | unset | `crates/hya-app/src/runtime.rs`, `crates/hya-core/src/engine/turn.rs` |
 | `HYA_BUN_ADAPTER_DIR` | Path to an alternate Bun extension adapter checkout (`kind: bun` plugins). | Resolution order: this env override, executable-adjacent `../lib/hya/bun-adapter`, then workspace `crates/hya-plugin-bun/adapter`. | `crates/hya-app/src/plugins.rs` |
+| `HYA_CLAUDE_ADAPTER_DIR` | Path to an alternate Claude Code adapter checkout (`kind: claude` plugins and `bundle install --claude`). | Resolution order: this env override, executable-adjacent `../lib/hya/claude-adapter`, then workspace `crates/hya-plugin-claude/adapter`. | `crates/hya-app/src/plugins.rs` |
 | `HYA_BACKEND_BIN` | Binary under test for the `startup-bench` xtask; overrides the default `hya-backend serve` target. | workspace `target/{profile}` binary | `crates/xtask/src/startup_bench.rs` |
 | `HYA_STARTUP_TRACE` | When `1` or `true` (case-insensitive; any other value off), `hya-backend serve` emits a newline-delimited JSON startup mark to stderr after the listen line: `{"hya_startup":true,"mark":"backend_listen","wall_ms":…,"detail":"<url>"}`. | off | `crates/hya-backend/src/serve.rs` |
 
@@ -1090,14 +1091,18 @@ plugins:
       TOKEN: literal-token
   ext:
     kind: bun
+  cc:
+    kind: claude
+    plugin_dir: /path/to/claude-plugin   # Claude Code plugin source dir
 ```
 
 Config entries support:
 
 | Field | Meaning |
 | --- | --- |
-| `kind` | `rust`, `bun`, or `other`; default is `rust`. |
+| `kind` | `rust`, `bun`, `claude`, or `other`; default is `rust`. |
 | `command` | Process command for stdio JSON-RPC. |
+| `plugin_dir` | Claude Code plugin source directory; required by `kind: claude` entries without an explicit `command`, ignored by other kinds. Entries without it are skipped with a notice. |
 | `enabled` | Defaults to `true`; disabled entries are skipped. |
 | `timeout_ms` | Optional per-call timeout in **milliseconds**. When omitted: **30 s**. Fixed non-configurable timeouts: initialize **5 s**, shutdown **1 s**. |
 | `env` | Environment variables passed **verbatim** to the child. The `{env:VAR}` / `{file:/path}` secret templating supported by `providers.<id>.api_key` and `mcp.<name>.env` is **not** applied here. Export the variable in the parent shell instead. |
@@ -1162,6 +1167,22 @@ order: (1) `HYA_BUN_ADAPTER_DIR` when set, (2) the installed adapter adjacent
 to the executable at `../lib/hya/bun-adapter`, and (3) the workspace adapter
 at `crates/hya-plugin-bun/adapter`. Set `BUN` to choose the Bun binary. If
 Bun is not available, that plugin is skipped.
+
+`kind: claude` entries run the Claude Code adapter
+([`crates/hya-plugin-claude/adapter`](../crates/hya-plugin-claude/adapter))
+the same way: the adapter is spawned as
+`bun run <adapter>/src/main.ts --plugin-dir <plugin_dir> --plugin-id <id>`
+with the adapter resolved from (1) `HYA_CLAUDE_ADAPTER_DIR` when set, (2) the
+installed adapter adjacent to the executable at `../lib/hya/claude-adapter`,
+and (3) the workspace `crates/hya-plugin-claude/adapter`. The adapter
+discovers the plugin source (`plugin.json`, flat or `.claude-plugin/` layout),
+declares translated skills and `hooks/hooks.json` hook registrations on the
+initialize handshake, translates Claude Code hook decisions (e.g. PreToolUse
+`decision: "block"`) into hya veto/allow replies, and maps `.mcp.json`
+servers to MCP declarations.
+
+To install a Claude Code plugin permanently as a hya bundle, use
+`bundle install --claude <dir>`; see [CLI](cli.md#bundle-commands).
 
 ### Hook name vocabulary
 

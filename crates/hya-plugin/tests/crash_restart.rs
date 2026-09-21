@@ -58,6 +58,7 @@ async fn crash_marks_dead_then_respawns_then_disables() {
         timeout_ms: Some(2000),
         env: BTreeMap::new(),
         posture_overrides: BTreeMap::new(),
+        plugin_dir: None,
     };
     let host = PluginHost::connect_all(
         vec![spec],

@@ -14,9 +14,16 @@ use hya_store::{
 
 #[derive(Subcommand)]
 pub(crate) enum BundleCommand {
-    /// Install a bundle package.
+    /// Install a bundle package or a Claude Code plugin source.
     Install {
-        package: PathBuf,
+        /// Bundle package (`.hyabundle`); conflicts with `--claude`.
+        #[arg(value_name = "PACKAGE")]
+        package: Option<PathBuf>,
+        /// Claude Code plugin source: a local plugin directory translated
+        /// offline by the bundled Claude adapter into an AgentBundle before
+        /// installation (marketplace refs are a later milestone).
+        #[arg(long, value_name = "SOURCE")]
+        claude: Option<PathBuf>,
         /// Accept a namespace conflict (replacing the incumbent bundle) and
         /// same-bundle downgrades instead of failing.
         #[arg(long)]
@@ -45,7 +52,11 @@ pub(crate) enum BundleCommand {
 
 pub(crate) async fn run(command: BundleCommand) -> anyhow::Result<()> {
     match command {
-        BundleCommand::Install { package, overwrite } => install(package, overwrite).await,
+        BundleCommand::Install {
+            package,
+            claude,
+            overwrite,
+        } => install_dispatch(package, claude, overwrite).await,
         BundleCommand::List => list().await,
         BundleCommand::Uninstall { name } => uninstall(&name).await,
         BundleCommand::Info {
@@ -59,6 +70,116 @@ pub(crate) async fn run(command: BundleCommand) -> anyhow::Result<()> {
         BundleCommand::Info { .. } => anyhow::bail!("bundle info requires a bundle name"),
         BundleCommand::Schemas => schemas().await,
     }
+}
+
+/// Route `bundle install` to the package or Claude plugin source path.
+async fn install_dispatch(
+    package: Option<PathBuf>,
+    claude: Option<PathBuf>,
+    overwrite: bool,
+) -> anyhow::Result<()> {
+    match (package, claude) {
+        (Some(package), None) => install(package, overwrite).await,
+        (None, Some(source)) => {
+            let staged = stage_claude_source(&source).await?;
+            let result = install(staged.clone(), overwrite).await;
+            if let Err(error) = fs::remove_file(&staged) {
+                eprintln!(
+                    "hya: could not remove staged claude package {} ({error})",
+                    staged.display()
+                );
+            }
+            result
+        }
+        (Some(_), Some(_)) => anyhow::bail!(
+            "bundle install accepts either a package or `--claude <source>`, not both"
+        ),
+        (None, None) => {
+            anyhow::bail!("bundle install requires a bundle package or `--claude <source>`")
+        }
+    }
+}
+
+/// Translate a local Claude Code plugin directory offline into a staged
+/// `.hyabundle` package via the bundled Claude adapter.
+///
+/// The adapter prints one JSON envelope (`hya-plugin-claude::emit`) with the
+/// `AgentBundle` manifest and its translated files; they are prepared through
+/// the canonical `hya_bundle` pipeline, so namespace and digest validation is
+/// shared with every other install path.
+async fn stage_claude_source(source: &Path) -> anyhow::Result<PathBuf> {
+    anyhow::ensure!(
+        source.is_dir(),
+        "--claude source must be a local plugin directory: {}",
+        source.display()
+    );
+    let Some(bun) = hya_app::plugins::find_bun() else {
+        anyhow::bail!(
+            "BUN_REQUIRED: installing `{}` needs Bun on PATH (or `BUN`) to run the Claude adapter",
+            source.display()
+        );
+    };
+    let adapter_main = hya_app::plugins::claude_adapter_dir().join("src/main.ts");
+    anyhow::ensure!(
+        adapter_main.is_file(),
+        "claude adapter not found at {} (set HYA_CLAUDE_ADAPTER_DIR)",
+        adapter_main.display()
+    );
+    let output = tokio::process::Command::new(&bun)
+        .arg("run")
+        .arg(&adapter_main)
+        .arg("--emit-bundle-manifest")
+        .arg("--plugin-dir")
+        .arg(source)
+        .output()
+        .await
+        .with_context(|| format!("run Claude adapter for {}", source.display()))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!(
+            "claude adapter failed for {} ({}): {}",
+            source.display(),
+            output.status,
+            stderr.trim()
+        );
+    }
+    let emit =
+        hya_plugin_claude::emit::parse_manifest_emit(&String::from_utf8_lossy(&output.stdout))
+            .map_err(|error| anyhow::anyhow!("parse claude adapter manifest envelope: {error}"))?;
+    let mut files = Vec::with_capacity(emit.files.len() + 1);
+    files.push(hya_bundle::SourceFile::new(
+        "bundle.yaml",
+        emit.manifest.clone().into_bytes(),
+    ));
+    for file in &emit.files {
+        files.push(hya_bundle::SourceFile::new(
+            file.path.clone(),
+            file.content.clone().into_bytes(),
+        ));
+    }
+    let bundle_source = hya_bundle::BundleSource::new(source.display().to_string(), files);
+    // `write_public_package` runs the canonical prepare pipeline, so namespace,
+    // digest, and identity validation is shared with every other install path.
+    let bytes =
+        hya_bundle::write_public_package(&bundle_source).context("prepare claude plugin bundle")?;
+
+    let registry_path = hya_app::bundle_registry_path();
+    let registry_parent = registry_path
+        .parent()
+        .context("bundle registry path has no parent")?;
+    let staging_root = registry_parent.join("staging");
+    fs::create_dir_all(&staging_root)
+        .with_context(|| format!("create staging directory {}", staging_root.display()))?;
+    let staged = staging_root.join(format!(
+        "claude-install-{}.hyabundle",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or_default()
+    ));
+    fs::write(&staged, bytes)
+        .with_context(|| format!("write staged package {}", staged.display()))?;
+    Ok(staged)
 }
 
 async fn install(package: PathBuf, overwrite: bool) -> anyhow::Result<()> {

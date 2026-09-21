@@ -56,6 +56,7 @@ fn spec(id: &str, tag: &str, delay_secs: &str) -> PluginSpec {
         timeout_ms: Some(5000),
         env: BTreeMap::new(),
         posture_overrides: BTreeMap::new(),
+        plugin_dir: None,
     }
 }
 

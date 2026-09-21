@@ -15,6 +15,7 @@ fn entry(command: &str, enabled: bool) -> PluginEntry {
         enabled,
         timeout_ms: None,
         env: BTreeMap::new(),
+        plugin_dir: None,
     }
 }
 
