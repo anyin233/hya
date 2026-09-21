@@ -86,7 +86,6 @@ If you want to understand the codebase:
 | [Skills](skills.md) | Skill discovery paths, skill tool, and authoring. |
 | [Workflows](workflows.md) | Workflow DAGs, governance, discovery, CLI/tool execution, and WorkflowBundle packaging. |
 | [Plugin protocol](plugin-protocol.md) | Native stdio JSON-RPC ABI for out-of-process plugins. |
-| [Compat plugins](compat-plugins.md) | Bun adapter for OpenCode/Compat JS plugins over the native host. |
 | [AgentBundle Authoring](agent-bundle-authoring.md) | Package, inspect, install, list, describe, and uninstall singular public AgentBundles, including static and Bun-sidecar forms. |
 | [Secure self-update](self-update.md) | Independent `hya-updater` TCB: signed metadata, local package stage, smoke, owner-gated activation, break-glass installer. |
 | [Project Structure](project-structure.md) | Map repository paths, crates, modules, tests, and data flow. |
@@ -98,7 +97,7 @@ If you want to understand the codebase:
 | [Tools and Permissions](architecture/tools-and-permissions.md) | Explain builtin tools, permission rules, ask flows, and output limits. |
 | [Agent tool surface](architecture/agent-tool-surface.md) | Canonical tool registry surface, aliases, resource views, and agent-facing tool contracts. |
 | [Subagent Orchestration](architecture/subagent-orchestration.md) | Unified resident lifecycle (episodes, report/handoff/archive, revive), channel communication plane, depth policy, and workflow on the unified substrate ([ADR-0015](adr/0015-unified-resident-subagent-lifecycle.md), [ADR-0016](adr/0016-channel-communication-plane.md), [ADR-0017](adr/0017-workflow-on-unified-substrate.md)). |
-| [Compat parity](compat-parity.md) | Historical record of the pre-v1 Compat HTTP parity work; that surface is deleted, and only CLI aliases and the Compat plugin adapter remain living. |
+| [Compat parity](compat-parity.md) | Historical record of the pre-v1 Compat HTTP parity work; that surface is deleted. |
 | [Storage](architecture/storage.md) | Explain SQLite persistence, replay, projections, and token ledger behavior. |
 | [Server and Client](architecture/server-client.md) | The consolidated hya.v1 contract over HTTP/SSE/WebSocket and gRPC, state, semantics, and clients. |
 | [hya, Pi, and Compat Feature Comparison](hya-pi-compat-comparison.md) | Compare hya with upstream stock Pi and current Compat across tools, providers, agents, TUI, plugins, skills, and MCP. |
@@ -121,7 +120,6 @@ If you want to understand the codebase:
 - Tools: [`../crates/hya-tool/src/lib.rs`](../crates/hya-tool/src/lib.rs)
 - MCP: [`../crates/hya-mcp/src/lib.rs`](../crates/hya-mcp/src/lib.rs)
 - Plugin host: [`../crates/hya-plugin/src/lib.rs`](../crates/hya-plugin/src/lib.rs)
-- Compat adapter: [`../crates/hya-plugin-compat/README.md`](../crates/hya-plugin-compat/README.md)
 - Store: [`../crates/hya-store/src/lib.rs`](../crates/hya-store/src/lib.rs)
 - Server/routes: [`../crates/hya-server/src/lib.rs`](../crates/hya-server/src/lib.rs)
 - v1 contract crate: [`../crates/hya-api/src/lib.rs`](../crates/hya-api/src/lib.rs)

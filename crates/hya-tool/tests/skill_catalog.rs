@@ -76,13 +76,16 @@ fn skill_dirs_start_with_hya_project_then_hya_config_then_external_fallbacks() {
     assert_eq!(dirs[0], workdir.join(".hya/skills"));
     assert_eq!(dirs[1], home.join(".config/hya/skills"));
     assert_eq!(dirs[2], home.join(".claude/skills"));
-    assert_eq!(dirs[3], home.join(".config/opencode/skills"));
-    assert_eq!(dirs[4], home.join(".config/opencode/skill"));
-    assert_eq!(dirs[5], workdir.join(".opencode/skills"));
-    assert_eq!(dirs[6], workdir.join(".opencode/skill"));
-    assert_eq!(dirs[7], workdir.join(".agents/skills"));
-    assert_eq!(dirs[8], home.join(".codex/skills"));
-    assert_eq!(dirs[9], home.join(".agents/skills"));
+    assert_eq!(dirs[3], workdir.join(".agents/skills"));
+    assert_eq!(dirs[4], home.join(".codex/skills"));
+    assert_eq!(dirs[5], home.join(".agents/skills"));
+    assert!(
+        !dirs.iter().any(|dir| {
+            let text = dir.to_string_lossy();
+            text.contains("opencode") || text.contains(".opencode")
+        }),
+        "opencode discovery roots are retired: {dirs:?}"
+    );
 }
 
 #[test]

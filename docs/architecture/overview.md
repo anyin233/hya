@@ -75,7 +75,7 @@ The event log is the source of truth. This gives hya a few useful properties:
 - Bare `hya-backend` prints a version banner plus guidance (serve / exec / -p);
   no interactive frontend is bundled.
 - `hya-backend exec` runs one turn and prints a transcript.
-- `hya-backend run` is a Compat-compatible alias for headless prompt execution.
+- `hya-backend run` is the headless prompt entry point.
 - `hya-backend -p` runs goal mode with an independent model-backed evaluator.
 - `hya-backend serve` exposes the `hya.v1` contract over HTTP/JSON+SSE+WebSocket
   on `/v1` and, with `HYA_GRPC_BIND`, over gRPC (see

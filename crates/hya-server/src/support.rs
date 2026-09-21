@@ -10,11 +10,7 @@ pub(crate) mod command_catalog;
 #[allow(dead_code)]
 pub(crate) mod command_sources;
 #[allow(dead_code)]
-pub(crate) mod external_protocol;
-#[allow(dead_code)]
 pub(crate) mod git;
-#[allow(dead_code)]
-pub(crate) mod jsonc;
 #[allow(dead_code)]
 pub(crate) mod location;
 #[allow(dead_code)]

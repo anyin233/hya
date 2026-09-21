@@ -69,18 +69,14 @@ struct SkillFrontmatter {
     license: Option<String>,
 }
 
-/// Default skill search roots for a project workdir (project + user + compat paths).
+/// Default skill search roots for a project workdir (project + user paths).
 #[must_use]
 pub fn skill_dirs_for_workdir(workdir: &Path) -> Vec<PathBuf> {
     let mut dirs = vec![workdir.join(".hya/skills")];
     if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
         dirs.push(home.join(".config/hya/skills"));
         dirs.push(home.join(".claude/skills"));
-        dirs.push(home.join(".config/opencode/skills"));
-        dirs.push(home.join(".config/opencode/skill"));
     }
-    dirs.push(workdir.join(".opencode/skills"));
-    dirs.push(workdir.join(".opencode/skill"));
     dirs.push(workdir.join(".agents/skills"));
     if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
         dirs.push(home.join(".codex/skills"));
@@ -119,11 +115,9 @@ pub fn merge_skill_catalog(mut native: Vec<SkillCatalogEntry>) -> Vec<SkillCatal
     native
 }
 
-const CUSTOMIZE_COMPAT_DESCRIPTION: &str = "Use ONLY when the user is editing or creating compat's own configuration: opencode.json, opencode.jsonc, files under .opencode/, or files under ~/.config/opencode/. Also use when creating or fixing compat skills, plugins, MCP servers, or permission rules. Do not use for native agent authoring (see agent-bundle-authoring), the user's own application code, or any project that is not configuring compat itself.";
-const AGENT_BUNDLE_AUTHORING_DESCRIPTION: &str = "Use when authoring and packaging public AgentBundles (one agent per bundle): static process-free bundles or activation-scoped Bun Compat sidecars, exact bundle.hya.md closure, install/info commands, stable AgentName bytes, role/can_spawn/lifecycle, harness resource views, and private/unsupported boundaries. Do not use for compat opencode.json customization, external model loops, raw Rust activation, or Bundle-declared MCP.";
+const AGENT_BUNDLE_AUTHORING_DESCRIPTION: &str = "Use when authoring and packaging public AgentBundles (one agent per bundle): static process-free bundles or activation-scoped Bun extension sidecars, exact bundle.hya.md closure, install/info commands, stable AgentName bytes, role/can_spawn/lifecycle, harness resource views, and private/unsupported boundaries. Do not use for external model loops, raw Rust activation, or Bundle-declared MCP.";
 const SECURE_SELF_UPDATE_DESCRIPTION: &str = "Use when verifying, staging, recovering, or owner-activating an independent hya release with hya-updater: signed metadata, local package fetch, immutable staging, smoke subprocess, activation journal/selector, anti-rollback floor, and install.sh break-glass. Do not use for bundle install, plugin load, or to skip the owner activation gate.";
 
-const CUSTOMIZE_COMPAT_BODY: &str = include_str!("skill_templates/customize-compat.md");
 const AGENT_BUNDLE_AUTHORING_BODY: &str = include_str!("skill_templates/agent-bundle-authoring.md");
 const SECURE_SELF_UPDATE_BODY: &str = include_str!("skill_templates/secure-self-update.md");
 
@@ -131,11 +125,6 @@ const SECURE_SELF_UPDATE_BODY: &str = include_str!("skill_templates/secure-self-
 #[must_use]
 pub fn builtin_skills() -> Vec<SkillCatalogEntry> {
     [
-        (
-            "customize-compat",
-            CUSTOMIZE_COMPAT_DESCRIPTION,
-            CUSTOMIZE_COMPAT_BODY,
-        ),
         (
             "agent-bundle-authoring",
             AGENT_BUNDLE_AUTHORING_DESCRIPTION,

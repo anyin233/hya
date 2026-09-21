@@ -65,6 +65,24 @@ fn manifest_rejects_missing_required_fields() {
 }
 
 #[test]
+fn wire_kind_bun_parses_and_serializes() {
+    let kind: PluginKindWire = serde_json::from_str("\"bun\"").unwrap();
+    assert_eq!(kind, PluginKindWire::Bun);
+    assert_eq!(
+        serde_json::to_string(&PluginKindWire::Bun).unwrap(),
+        "\"bun\""
+    );
+}
+
+#[test]
+fn wire_kind_rejects_retired_compat_spellings() {
+    for retired in ["\"compat\"", "\"opencode\""] {
+        let parsed: Result<PluginKindWire, _> = serde_json::from_str(retired);
+        assert!(parsed.is_err(), "{retired} must be rejected");
+    }
+}
+
+#[test]
 fn config_entry_parses_from_yaml() {
     let yaml = r#"
 kind: rust

@@ -31,7 +31,7 @@ hya-backend / hya-server
 | [`../rustfmt.toml`](../rustfmt.toml) | Workspace formatting configuration. |
 | [`../README.md`](../README.md) | Short public overview and quick command examples. |
 | [`../crates`](../crates) | Production crates. |
-| [`../crates/xtask`](../crates/xtask) | Developer tooling: `sync-compat`, `migrate`, `startup-bench`, `matrix-check`, deterministic `package-bundle`, and non-publishing `release-rehearsal`. |
+| [`../crates/xtask`](../crates/xtask) | Developer tooling: `startup-bench`, `matrix-check`, deterministic `package-bundle`, and non-publishing `release-rehearsal`. |
 | [`../docs`](../docs) | Project documentation. |
 
 ## Crate Responsibilities
@@ -43,7 +43,7 @@ hya-backend / hya-server
 | `hya-tool` | [`../crates/hya-tool/src/lib.rs`](../crates/hya-tool/src/lib.rs) | Tool trait, builtin tools, permission rules, ask/decision channel. |
 | `hya-mcp` | [`../crates/hya-mcp/src/lib.rs`](../crates/hya-mcp/src/lib.rs) | MCP stdio client/manager, resource discovery, and tool bridge. |
 | `hya-plugin` | [`../crates/hya-plugin/src/lib.rs`](../crates/hya-plugin/src/lib.rs) | Stdio JSON-RPC plugin host, manifest/config merge, hook dispatch, tool and permission bridge. |
-| `hya-plugin-compat` | [`../crates/hya-plugin-compat`](../crates/hya-plugin-compat) | Bundled Bun adapter for Compat plugin SDK compatibility. |
+| `hya-plugin-bun` | [`../crates/hya-plugin-bun`](../crates/hya-plugin-bun) | Bundled Bun extension adapter (`kind: bun`) for JS bundle sidecars and process extensions. |
 | `hya-plugin-example` | [`../crates/hya-plugin-example/src/main.rs`](../crates/hya-plugin-example/src/main.rs) | Placeholder stub (`fn main() {}`); does **not** speak the plugin protocol. Future native-plugin QA fixture. Real ABI: [plugin-protocol.md](plugin-protocol.md). |
 | `hya-store` | [`../crates/hya-store/src/lib.rs`](../crates/hya-store/src/lib.rs) | SQLite event log, replay, projection reads, token ledger, admission journal, mailbox, resident claims, saved permissions, and installed-bundle registry. |
 | `hya-core` | [`../crates/hya-core/src/lib.rs`](../crates/hya-core/src/lib.rs) | Session engine, event bus, turn loop, compaction, durable Workflow execution/replay, hooks, goal/loop drivers, resident teams, orchestrator budgets, worktrees. |
@@ -297,7 +297,7 @@ process E2E is layered on top (Track P); see [Testing](testing/README.md).
 | [`../crates/hya-tool/tests`](../crates/hya-tool/tests) | Permission evaluation and builtin tools. |
 | [`../crates/hya-server/tests`](../crates/hya-server/tests) | v1 HTTP contract behavior and HTTP/gRPC parity. |
 | [`../crates/hya-plugin/tests`](../crates/hya-plugin/tests) | Plugin host protocol, hooks, and tool bridge behavior. |
-| [`../crates/hya-plugin-compat/adapter/test`](../crates/hya-plugin-compat/adapter/test) | Compat adapter discovery, hooks, SDK shims, tools, events, lifecycle. |
+| [`../crates/hya-plugin-bun/adapter/test`](../crates/hya-plugin-bun/adapter/test) | Bun adapter wire protocol, tools, hooks, activation lifecycle. |
 | [`../crates/hya-backend/tests`](../crates/hya-backend/tests) | Bundle CLI, backend command integration. |
 | [`../crates/hya-e2e`](../crates/hya-e2e) | Track P process agent suite (FakeLlm + real backend). Matrix: [`../crates/hya-e2e/matrix.toml`](../crates/hya-e2e/matrix.toml). |
 | [`testing/`](testing/) | Human docs for tracks, oracles, and optional CI snippet. |

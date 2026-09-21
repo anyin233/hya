@@ -33,21 +33,16 @@ pub(super) struct LocationRef {
 }
 
 impl LocationRef {
-    pub(super) fn from_request(query: &BTreeMap<String, String>, headers: &HeaderMap) -> Self {
+    pub(super) fn from_request(query: &BTreeMap<String, String>, _headers: &HeaderMap) -> Self {
         let directory = query
             .get("directory")
             .or_else(|| query.get("location[directory]"))
             .cloned()
-            .or_else(|| {
-                header_text(headers, crate::support::external_protocol::DIRECTORY_HEADER)
-                    .map(|value| decode(&value))
-            })
             .map(PathBuf::from);
         let workspace_id = query
             .get("workspace")
             .or_else(|| query.get("location[workspace]"))
-            .cloned()
-            .or_else(|| header_text(headers, crate::support::external_protocol::WORKSPACE_HEADER));
+            .cloned();
         Self {
             directory,
             workspace_id,
@@ -115,41 +110,6 @@ fn absolute_path(path: &Path) -> PathBuf {
         |_| PathBuf::from(std::path::MAIN_SEPARATOR.to_string()).join(path),
         |cwd| cwd.join(path),
     )
-}
-
-fn header_text(headers: &HeaderMap, name: &str) -> Option<String> {
-    headers
-        .get(name)
-        .and_then(|value| value.to_str().ok())
-        .map(str::to_string)
-}
-
-fn decode(input: &str) -> String {
-    let bytes = input.as_bytes();
-    let mut output = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] == b'%'
-            && index + 2 < bytes.len()
-            && let (Some(high), Some(low)) = (hex(bytes[index + 1]), hex(bytes[index + 2]))
-        {
-            output.push(high * 16 + low);
-            index += 3;
-        } else {
-            output.push(bytes[index]);
-            index += 1;
-        }
-    }
-    String::from_utf8(output).unwrap_or_else(|_| input.to_string())
-}
-
-fn hex(byte: u8) -> Option<u8> {
-    match byte {
-        b'0'..=b'9' => Some(byte - b'0'),
-        b'a'..=b'f' => Some(byte - b'a' + 10),
-        b'A'..=b'F' => Some(byte - b'A' + 10),
-        _ => None,
-    }
 }
 
 #[cfg(test)]

@@ -142,11 +142,11 @@ fn host_like(input: &str) -> bool {
 
 fn repos_root() -> PathBuf {
     if let Some(data) = std::env::var_os("XDG_DATA_HOME") {
-        return PathBuf::from(data).join("compat").join("repos");
+        return PathBuf::from(data).join("hya").join("repos");
     }
     home_dir()
-        .map(|home| home.join(".local/share/compat/repos"))
-        .unwrap_or_else(|| PathBuf::from(".local/share/compat/repos"))
+        .map(|home| home.join(".local/share/hya/repos"))
+        .unwrap_or_else(|| PathBuf::from(".local/share/hya/repos"))
 }
 
 fn default_remote(host: &str, path: &str) -> String {
@@ -157,7 +157,7 @@ fn default_remote(host: &str, path: &str) -> String {
 }
 
 fn github_remote(path: &str) -> String {
-    std::env::var("COMPAT_REPO_CLONE_GITHUB_BASE_URL").map_or_else(
+    std::env::var("HYA_REPO_CLONE_GITHUB_BASE_URL").map_or_else(
         |_| format!("https://github.com/{path}.git"),
         |base| format!("{}/{}.git", base.trim_end_matches('/'), path),
     )

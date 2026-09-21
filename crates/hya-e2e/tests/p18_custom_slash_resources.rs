@@ -643,7 +643,7 @@ fn plugin_builder(scripts: Vec<hya_e2e::ScriptStep>) -> E2eEnvBuilder {
             PLUGIN_SCRIPT.as_bytes().to_vec(),
         )
         .project_file(
-            ".opencode/commands/use-plugin.md",
+            ".hya/commands/use-plugin.md",
             format!("---\ndescription: use plugin\n---\n{USE_PLUGIN_COMMAND}\n").into_bytes(),
         )
         .scripts(scripts)
@@ -656,7 +656,7 @@ fn mcp_builder(scripts: Vec<hya_e2e::ScriptStep>) -> E2eEnvBuilder {
     E2eEnvBuilder::new()
         .with_mcp_echo()
         .project_file(
-            ".opencode/commands/use-mcp.md",
+            ".hya/commands/use-mcp.md",
             format!("---\ndescription: use MCP\n---\n{USE_MCP_COMMAND}\n").into_bytes(),
         )
         .scripts(scripts)
@@ -675,102 +675,60 @@ async fn custom_slash_catalog_and_routes_expand_all_supported_sources() {
     let env = E2eEnvBuilder::new()
         .skill_file(SKILL_PATH, skill_markdown("user-playbook", "User playbook", SKILL_BODY))
         .project_file(
-            "opencode.json",
-            br#"{
-  "command": {
-    "inline-root-singular": {
-      "description": "root singular",
-      "agent": "build",
-      "model": "fake/model",
-      "subtask": true,
-      "template": "ROOT_SINGULAR $1 $ARGUMENTS"
-    },
-    "help": {"description": "old help", "template": "OLD_HELP $ARGUMENTS"}
-  }
-}"#
-            .to_vec(),
-        )
-        .project_file(
-            "opencode.jsonc",
-            br#"{
-  // plural root JSONC key
-  "commands": {
-    "inline-root-plural": {"template": "ROOT_PLURAL $2/$1", "description": "root plural"},
-    "user-playbook": {"template": "COMMAND_WINS $ARGUMENTS", "description": "command beats Skill"},
-    "ignored-disable": {"template": "DISABLE_IGNORED", "disable": true}
-  }
-}"#
-            .to_vec(),
-        )
-        .project_file(
-            ".opencode/opencode.json",
-            br#"{
-  "command": {"inline-dot-singular": {"template": "DOT_SINGULAR $ARGUMENTS"}}
-}"#
-            .to_vec(),
-        )
-        .project_file(
-            ".opencode/opencode.jsonc",
-            br#"{
-  "commands": {"inline-dot-plural": {"template": "DOT_PLURAL $10 $1 $ARGUMENTS"}}
-}"#
-            .to_vec(),
-        )
-        .project_file(
-            ".opencode/command/markdown-root.md",
+            ".hya/command/markdown-root.md",
             b"---\ndescription: markdown root\nagent: reviewer\nmodel: fake/reviewer\nsubtask: true\n---\nMARKDOWN_ROOT $1 $ARGUMENTS\n"
                 .to_vec(),
         )
         .project_file(
-            ".opencode/commands/help.md",
+            ".hya/commands/help.md",
             b"---\ndescription: later project help\n---\nLATER_HELP $ARGUMENTS\n".to_vec(),
         )
         .project_file(
-            ".opencode/commands/nested/inspect.md",
+            ".hya/commands/user-playbook.md",
+            b"---\ndescription: command beats Skill\n---\nCOMMAND_WINS $ARGUMENTS\n".to_vec(),
+        )
+        .project_file(
+            ".hya/commands/nested/inspect.md",
             b"NESTED_INSPECT $ARGUMENTS\n".to_vec(),
         )
         .project_file(
-            ".opencode/commands/quotes.md",
+            ".hya/commands/quotes.md",
             b"---\ndescription: quote handling\n---\nQUOTES=$ARGUMENTS|$1|$2\n".to_vec(),
         )
         .project_file(
-            ".opencode/commands/unclosed.md",
+            ".hya/commands/unclosed.md",
             b"---\ndescription: unclosed quote\n---\nUNCLOSED=$1|$ARGUMENTS\n".to_vec(),
         )
         .project_file(
-            ".opencode/commands/empty.md",
+            ".hya/commands/empty.md",
             b"EMPTY=$1|$2|$ARGUMENTS\n".to_vec(),
         )
         .project_file(
-            ".opencode/commands/positions.md",
+            ".hya/commands/positions.md",
             b"POSITION=$1|$10|$2|$11|$ARGUMENTS\n".to_vec(),
         )
         .project_file(
-            ".opencode/commands/multiline.md",
+            ".hya/commands/multiline.md",
             b"MULTILINE-BEGIN\n$ARGUMENTS\nMULTILINE-END\n".to_vec(),
         )
         .project_file(
-            ".opencode/commands/plain-fence.md",
+            ".hya/commands/plain-fence.md",
             b"---\nthis is not closed frontmatter\n".to_vec(),
         )
         .project_file(
-            ".opencode/commands/bad.md",
+            ".hya/commands/bad.md",
             b"---\ndescription: [broken\n---\nOMITTED\n".to_vec(),
         )
         .project_file(
-            ".opencode/commands/ignored.txt",
+            ".hya/commands/ignored.txt",
             b"not a Markdown command".to_vec(),
-        )
-        .project_file(
-            ".hya/commands/unsupported.md",
-            b"UNSUPPORTED_HYA_COMMAND".to_vec(),
         )
         .scripts((0..32).map(|n| text_step(format!("ROUTE_{n}"))).collect())
         .build()
         .await
         .expect("e2e env");
 
-    // Home/global command roots are intentionally unsupported.  The process
+    // Legacy external command roots are intentionally unsupported. The process
     // HOME is private, so this assertion cannot accidentally inspect a user's
     // real command files.
     write_command(
@@ -783,14 +741,16 @@ async fn custom_slash_catalog_and_routes_expand_all_supported_sources() {
         ".config/opencode/commands/global-plural.md",
         "GLOBAL_PLURAL_IGNORED",
     );
+    write_command(
+        &env.project_path("."),
+        ".opencode/commands/legacy.md",
+        "LEGACY_IGNORED",
+    );
+    std::fs::write(env.project_path("opencode.json"), "{}").expect("legacy config");
 
     let catalog = command_catalog(&env).await;
     let names = unique_names(&catalog);
     for name in [
-        "inline-root-singular",
-        "inline-root-plural",
-        "inline-dot-singular",
-        "inline-dot-plural",
         "markdown-root",
         "nested/inspect",
         "quotes",
@@ -799,53 +759,27 @@ async fn custom_slash_catalog_and_routes_expand_all_supported_sources() {
         "positions",
         "multiline",
         "plain-fence",
-        "ignored-disable",
+        "user-playbook",
     ] {
         assert!(
             names.iter().any(|candidate| candidate == name),
             "missing {name}: {catalog}"
         );
     }
-    for ignored in [
-        "bad",
-        "ignored.txt",
-        "unsupported",
-        "global",
-        "global-plural",
-    ] {
+    for ignored in ["bad", "ignored.txt", "global", "global-plural", "legacy"] {
         assert!(
             !names.iter().any(|candidate| candidate == ignored),
             "ignored {ignored} leaked: {catalog}"
         );
     }
 
-    let root_singular = catalog_entry(&catalog, "inline-root-singular");
-    assert_eq!(root_singular["source"], "command");
-    assert_eq!(root_singular["template"], "ROOT_SINGULAR $1 $ARGUMENTS");
-    assert_eq!(root_singular["hints"], json!(["$1", "$ARGUMENTS"]));
-    assert_eq!(root_singular["agent"], "build");
-    assert_eq!(root_singular["model"], "fake/model");
-    assert_eq!(root_singular["subtask"], true);
-    assert_eq!(
-        catalog_entry(&catalog, "inline-root-plural")["template"],
-        "ROOT_PLURAL $2/$1"
-    );
-    assert_eq!(
-        catalog_entry(&catalog, "inline-dot-singular")["template"],
-        "DOT_SINGULAR $ARGUMENTS"
-    );
-    assert_eq!(
-        catalog_entry(&catalog, "inline-dot-plural")["template"],
-        "DOT_PLURAL $10 $1 $ARGUMENTS"
-    );
-    assert_eq!(
-        catalog_entry(&catalog, "markdown-root")["template"],
-        "MARKDOWN_ROOT $1 $ARGUMENTS"
-    );
-    assert_eq!(
-        catalog_entry(&catalog, "markdown-root")["hints"],
-        json!(["$1", "$ARGUMENTS"])
-    );
+    let markdown_root = catalog_entry(&catalog, "markdown-root");
+    assert_eq!(markdown_root["source"], "command");
+    assert_eq!(markdown_root["template"], "MARKDOWN_ROOT $1 $ARGUMENTS");
+    assert_eq!(markdown_root["hints"], json!(["$1", "$ARGUMENTS"]));
+    assert_eq!(markdown_root["agent"], "reviewer");
+    assert_eq!(markdown_root["model"], "fake/reviewer");
+    assert_eq!(markdown_root["subtask"], true);
     assert_eq!(
         catalog_entry(&catalog, "nested/inspect")["template"],
         "NESTED_INSPECT $ARGUMENTS"
@@ -858,6 +792,7 @@ async fn custom_slash_catalog_and_routes_expand_all_supported_sources() {
         catalog_entry(&catalog, "help")["template"],
         "LATER_HELP $ARGUMENTS"
     );
+    // A command overrides a skill of the same name.
     assert_eq!(
         catalog_entry(&catalog, "user-playbook")["template"],
         "COMMAND_WINS $ARGUMENTS"
@@ -865,10 +800,6 @@ async fn custom_slash_catalog_and_routes_expand_all_supported_sources() {
     assert_eq!(
         catalog_entry(&catalog, "user-playbook")["source"],
         "command"
-    );
-    assert_eq!(
-        catalog_entry(&catalog, "ignored-disable")["template"],
-        "DISABLE_IGNORED"
     );
     assert_eq!(
         catalog_entry(&catalog, "plain-fence")["template"],
@@ -890,15 +821,15 @@ async fn custom_slash_catalog_and_routes_expand_all_supported_sources() {
     let legacy = command_turn(
         &env,
         legacy_session,
-        command_request("inline-root-singular", "alpha beta", None),
+        command_request("markdown-root", "alpha beta", None),
     )
     .await;
-    assert_eq!(response_text(&legacy), "ROOT_SINGULAR alpha alpha beta");
+    assert_eq!(response_text(&legacy), "MARKDOWN_ROOT alpha alpha beta");
     assert_command_event(
         &env.events(legacy_session, None)
             .await
             .expect("legacy events"),
-        "inline-root-singular",
+        "markdown-root",
         "alpha beta",
     );
 
@@ -906,21 +837,14 @@ async fn custom_slash_catalog_and_routes_expand_all_supported_sources() {
     let v2 = command_turn(
         &env,
         v2_session,
-        command_request(
-            "inline-dot-plural",
-            "one two three four five six seven eight nine ten",
-            None,
-        ),
+        command_request("nested/inspect", "inspect-target", None),
     )
     .await;
-    assert_eq!(
-        response_text(&v2),
-        "DOT_PLURAL ten one one two three four five six seven eight nine ten"
-    );
+    assert_eq!(response_text(&v2), "NESTED_INSPECT inspect-target");
     assert_command_event(
         &env.events(v2_session, None).await.expect("v2 events"),
-        "inline-dot-plural",
-        "one two three four five six seven eight nine ten",
+        "nested/inspect",
+        "inspect-target",
     );
 
     // v1 unifies the surfaces: every command turn expands through the
@@ -963,25 +887,6 @@ async fn custom_slash_catalog_and_routes_expand_all_supported_sources() {
     )
     .await;
     assert_eq!(response_text(&explicit), "EXPLICIT_TEXT");
-
-    // Replacing one recognized config file with malformed JSONC omits that
-    // source without crashing the remaining catalog.
-    std::fs::write(
-        env.project_path(".opencode/opencode.jsonc"),
-        "{ commands: [\n",
-    )
-    .expect("malformed JSONC");
-    let malformed_catalog = command_catalog(&env).await;
-    assert!(
-        !unique_names(&malformed_catalog)
-            .iter()
-            .any(|name| name == "inline-dot-plural")
-    );
-    assert!(
-        unique_names(&malformed_catalog)
-            .iter()
-            .any(|name| name == "inline-root-singular")
-    );
 }
 
 #[tokio::test]
@@ -1011,10 +916,6 @@ async fn skill_backed_slash_expands_without_skill_tool_call() {
         env.backend.project.join(".hya/skills"),
         home.join(".config/hya/skills"),
         home.join(".claude/skills"),
-        home.join(".config/opencode/skills"),
-        home.join(".config/opencode/skill"),
-        env.backend.project.join(".opencode/skills"),
-        env.backend.project.join(".opencode/skill"),
         env.backend.project.join(".agents/skills"),
         home.join(".codex/skills"),
         home.join(".agents/skills"),
@@ -1066,11 +967,7 @@ async fn skill_backed_slash_expands_without_skill_tool_call() {
     );
     let duplicate = catalog_entry(&skills, "duplicate-playbook");
     assert_eq!(duplicate["content"], "DUPLICATE_0");
-    for builtin in [
-        "customize-compat",
-        "agent-bundle-authoring",
-        "secure-self-update",
-    ] {
+    for builtin in ["agent-bundle-authoring", "secure-self-update"] {
         let entry = catalog_entry(&skills, builtin);
         assert_eq!(entry["location"], "<built-in>");
     }
@@ -1193,7 +1090,7 @@ async fn custom_command_invokes_builtin_skill_tool() {
             skill_markdown("user-playbook", "User playbook", SKILL_BODY),
         )
         .project_file(
-            ".opencode/commands/use-skill.md",
+            ".hya/commands/use-skill.md",
             format!("---\ndescription: use builtin Skill\n---\n{USE_SKILL_COMMAND}\n").into_bytes(),
         )
         .scripts(vec![
@@ -1247,7 +1144,7 @@ async fn custom_command_invokes_builtin_skill_tool() {
             skill_markdown("user-playbook", "User playbook", SKILL_BODY),
         )
         .project_file(
-            ".opencode/commands/use-skill.md",
+            ".hya/commands/use-skill.md",
             format!("---\ndescription: use builtin Skill\n---\n{USE_SKILL_COMMAND}\n").into_bytes(),
         )
         .scripts(vec![
@@ -1393,8 +1290,7 @@ async fn custom_command_invokes_builtin_skill_tool() {
 
     // A stale command name is not a catalog error.  Removing the command file
     // causes command transport to store literal slash text.
-    std::fs::remove_file(env.project_path(".opencode/commands/use-skill.md"))
-        .expect("remove command");
+    std::fs::remove_file(env.project_path(".hya/commands/use-skill.md")).expect("remove command");
     let stale = command_turn(
         &env,
         session,
@@ -2096,7 +1992,7 @@ async fn resource_name_conflicts_fail_closed() {
             skill_markdown("same-name", "Skill", "SKILL_SHOULD_LOSE"),
         )
         .project_file(
-            ".opencode/commands/same-name.md",
+            ".hya/commands/same-name.md",
             b"---\ndescription: command wins\n---\nCOMMAND_WINS\n".to_vec(),
         )
         .scripts(vec![text_step("COMMAND_SKILL_COLLISION")])
@@ -2126,7 +2022,7 @@ async fn dynamic_resource_snapshots_and_reload() {
         ),
     )
     .project_file(
-        ".opencode/commands/new-known.md",
+        ".hya/commands/new-known.md",
         b"---\ndescription: known\n---\nKNOWN_OLD $ARGUMENTS\n".to_vec(),
     )
     .build()
@@ -2264,7 +2160,7 @@ async fn dynamic_resource_snapshots_and_reload() {
     let bootstrap = command_catalog(&env).await;
     write_command(
         &env.backend.project,
-        ".opencode/commands/added-after-bootstrap.md",
+        ".hya/commands/added-after-bootstrap.md",
         "ADDED_AFTER_BOOTSTRAP",
     );
     write_skill(

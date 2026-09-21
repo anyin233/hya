@@ -157,16 +157,7 @@ intentional, not an error — see
 
 hya creates a starter `~/.config/hya/config.yaml` (or
 `$XDG_CONFIG_HOME/hya/config.yaml`) the first time a command needs runtime
-config. To import supported MCP servers and skills from an existing
-OpenCode/Compat config instead of starting from the starter file, run:
-
-```sh
-cargo run -p xtask -- sync-compat --help
-```
-
-Provider and model credentials are not imported; configure them directly.
-
-To switch to a live model, edit the starter file:
+config. To switch to a live model, edit the starter file:
 
 ```yaml
 default_model: claude-sonnet-4-6

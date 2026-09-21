@@ -101,9 +101,9 @@ or verifiers; workers do not decide that their own objective is done.
 | `crates/hya-updater` | Independent self-update TCB (verify signed metadata, stage generations, smoke, owner-gated activation). See `docs/self-update.md`. |
 | `crates/hya-mcp` | MCP support. Implements the MCP protocol/client/manager and bridges MCP tools into `hya-tool` with namespaced `mcp__server__tool` names and permission checks. |
 | `crates/hya-plugin` | Out-of-process plugin host. Owns the JSON-RPC stdio protocol, plugin client/host, manifest/config loading, command/tool dispatch, hook dispatcher bridge, permission bridge, and plugin-backed tool adapter. |
-| `crates/hya-plugin-compat` | Compat plugin compatibility. The Rust crate exports shared `COMPAT_PLUGIN_VERSION` and `COMPAT_SDK_VERSION` constants; it does not resolve npm dependencies. The Bun adapter's `package.json` and `bun.lock` resolve and pin the supported Compat packages, discover Compat plugin config, load plugins, translate hook/tool/event methods, and expose the adapter runtime over JSON-RPC. |
+| `crates/hya-plugin-bun` | Bun extension adapter (`kind: bun`). The Rust crate exports `BUN_ADAPTER_VERSION`; the Bun adapter under `adapter/` loads bundle JS extensions (`--bundle-extension`/`--extension`), translates hya wire hooks/tools/events, and exposes the runtime over NDJSON JSON-RPC stdio. The OpenCode compat layer is deleted. |
 | `crates/hya-plugin-example` | Placeholder stub binary (`fn main() {}`); does **not** speak the plugin protocol. Reserved for a future deterministic native-plugin QA fixture. For a real ABI reference, see `docs/plugin-protocol.md`. |
-| `crates/xtask` | Dev-tooling entry point with working tasks: `sync-compat`, `migrate`, `startup-bench`, `matrix-check`, `package-bundle`, and `release-rehearsal`. |
+| `crates/xtask` | Dev-tooling entry point with working tasks: `startup-bench`, `matrix-check`, `package-bundle`, and `release-rehearsal`. |
 | `crates/hya-e2e` | Process-level agent E2E harness (Track P): real `hya-backend` + FakeLlm. Matrix in `matrix.toml`; docs under `docs/testing/`. |
 | `.planning` | Local task plans, findings, and progress using `planning-with-files`; existing tasks remain separate. |
 | `docs/spec` | Project coding guidelines. Read the relevant layer's `index.md` before changing code. |
@@ -127,7 +127,7 @@ or verifiers; workers do not decide that their own objective is done.
   `TodoPlane`, `SkillPlane`, `WebSearchPlane`, `LspPlane`) over adding another
   cross-cutting runtime channel.
 - For TypeScript adapter work, keep it under
-  `crates/hya-plugin-compat/adapter` and use the existing Bun/TypeScript
+  `crates/hya-plugin-bun/adapter` and use the existing Bun/TypeScript
   scripts instead of adding another JS toolchain.
 
 ## Verification
@@ -156,8 +156,8 @@ cargo test -p hya-e2e -- --test-threads=1
 Matrix and harness docs: `docs/testing/README.md`, `docs/testing/agent-matrix.md`,
 `docs/testing/process-e2e.md`, `crates/hya-e2e/matrix.toml`.
 
-For Compat adapter changes, also run from
-`crates/hya-plugin-compat/adapter`:
+For Bun adapter changes, also run from
+`crates/hya-plugin-bun/adapter`:
 
 ```sh
 bun run typecheck
