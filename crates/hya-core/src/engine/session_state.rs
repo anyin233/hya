@@ -73,13 +73,26 @@ impl SessionEngine {
     }
 
     /// Mark the session archived or active.
+    ///
+    /// Archiving (a nonzero flag) is the session-close signal, so it notifies
+    /// the `session.end` hook best-effort.
     pub async fn set_archived(
         &self,
         session: SessionId,
         archived: serde_json::Number,
     ) -> Result<(), CoreError> {
         self.emit(session, Event::SessionArchived { session, archived })
+            .await?;
+        if self
+            .read_projection(session)
             .await
+            .ok()
+            .and_then(|projection| projection.session.archived)
+            .is_some_and(|stamp| stamp != serde_json::Number::from(0))
+        {
+            self.notify_session_lifecycle(session, false).await;
+        }
+        Ok(())
     }
 
     /// Record a share URL for the session.

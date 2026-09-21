@@ -45,7 +45,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::engine::{AgentSpec, ArchiveReviver, CreateSession, SessionEngine, TurnRequestContext};
 use crate::error::CoreError;
-use crate::hooks::{HookDispatcher, scope_activation_hooks};
+use crate::hooks::{AgentSpawnInput, HookDispatcher, scope_activation_hooks};
 use crate::orchestrator::TeamBudget;
 use crate::sidecar::{BoundSidecarFactory, SidecarHandle, SidecarStart};
 use crate::workflow::WorkflowTurnRoute;
@@ -2917,6 +2917,16 @@ impl ResidentSupervisor {
                 )));
             }
             return Err(registration_error);
+        }
+        // Notify `agent.spawn` (best-effort observation point) for the
+        // resident member that was just registered under its parent.
+        if let Some(hooks) = self.engine.hook_dispatcher() {
+            hooks
+                .agent_spawn(AgentSpawnInput {
+                    parent: root,
+                    child: session,
+                })
+                .await;
         }
         let team = self.team_for(root);
         let notify = Arc::new(Notify::new());

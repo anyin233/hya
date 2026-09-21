@@ -5,10 +5,11 @@
 
 use async_trait::async_trait;
 use hya_core::hooks::{
-    ChatParamsInput, ChatParamsOutcome, CommandExecuteBeforeInput, CommandExecuteBeforeOutcome,
-    HookDispatcher, MessageUserBeforeInput, MessageUserBeforeOutcome, TextCompleteInput,
-    TextCompleteOutcome, ToolExecuteAfterInput, ToolExecuteAfterOutcome, ToolExecuteBeforeInput,
-    ToolExecuteBeforeOutcome, ToolOutcomeNative,
+    AgentSpawnInput, ChatParamsInput, ChatParamsOutcome, CommandExecuteBeforeInput,
+    CommandExecuteBeforeOutcome, CompactionAfterInput, CompactionBeforeInput, CompactionDecision,
+    CompactionTrigger, HookDispatcher, MessageUserBeforeInput, MessageUserBeforeOutcome,
+    SessionLifecycleInput, TextCompleteInput, TextCompleteOutcome, ToolExecuteAfterInput,
+    ToolExecuteAfterOutcome, ToolExecuteBeforeInput, ToolExecuteBeforeOutcome, ToolOutcomeNative,
 };
 use hya_proto::Envelope;
 use hya_provider::{CompletionRequest, ReasoningEffort};
@@ -17,10 +18,12 @@ use serde::de::DeserializeOwned;
 
 use crate::host::{PluginConn, PluginHost};
 use crate::messages::{
-    ChatParamsOutcomeWire, ChatParamsParams, CommandBeforeOutcomeWire, CommandExecuteBeforeParams,
-    HookName, HookPosture, MessageUserBeforeOutcomeWire, MessageUserBeforeParams,
-    TextCompleteOutcomeWire, TextCompleteParams, ToolAfterOutcomeWire, ToolBeforeOutcomeWire,
-    ToolExecuteAfterParams, ToolExecuteBeforeParams, WireCompletionRequest, WireToolResult,
+    AgentSpawnParams, ChatParamsOutcomeWire, ChatParamsParams, CommandBeforeOutcomeWire,
+    CommandExecuteBeforeParams, CompactionAfterParams, CompactionBeforeOutcomeWire,
+    CompactionBeforeParams, HookName, HookPosture, MessageUserBeforeOutcomeWire,
+    MessageUserBeforeParams, SessionLifecycleParams, TextCompleteOutcomeWire, TextCompleteParams,
+    ToolAfterOutcomeWire, ToolBeforeOutcomeWire, ToolExecuteAfterParams, ToolExecuteBeforeParams,
+    WireCompletionRequest, WireToolResult,
 };
 
 const GUARD_FAILED_SAFE: &str = "guard failed safe";
@@ -171,6 +174,100 @@ impl HookDispatcher for PluginHost {
             result: wire_to_outcome(result),
         }
     }
+
+    async fn compaction_before(&self, input: CompactionBeforeInput) -> CompactionDecision {
+        let trigger = match input.trigger {
+            CompactionTrigger::Overflow => crate::messages::CompactionTriggerWire::Overflow,
+            CompactionTrigger::Proactive => crate::messages::CompactionTriggerWire::Proactive,
+        };
+        for conn in self.plugins() {
+            if conn.posture(HookName::CompactionBefore).is_none() {
+                continue;
+            }
+            let params = CompactionBeforeParams {
+                session: input.session,
+                trigger,
+                messages_token_estimate: u64::try_from(input.messages_token_estimate)
+                    .unwrap_or(u64::MAX),
+            };
+            match call_outcome::<CompactionBeforeOutcomeWire>(
+                conn,
+                HookName::CompactionBefore,
+                &params,
+            )
+            .await
+            {
+                Ok(CompactionBeforeOutcomeWire::Proceed) => {}
+                Ok(CompactionBeforeOutcomeWire::Skip { reason }) => {
+                    return CompactionDecision::Skip { reason };
+                }
+                Ok(CompactionBeforeOutcomeWire::Replace { instructions }) => {
+                    return CompactionDecision::Replace { instructions };
+                }
+                Err(failed) => {
+                    // Unconditionally fail-open, posture notwithstanding:
+                    // compaction guards against context overflow, so a broken
+                    // hook must never block it.
+                    tracing::warn!(
+                        plugin = %conn.id,
+                        hook = HookName::CompactionBefore.as_str(),
+                        "compaction.before hook failed; proceeding with built-in compaction: {failed}"
+                    );
+                }
+            }
+        }
+        CompactionDecision::Proceed
+    }
+
+    async fn compaction_after(&self, input: CompactionAfterInput) {
+        for conn in self.plugins() {
+            if conn.posture(HookName::CompactionAfter).is_none() {
+                continue;
+            }
+            let params = CompactionAfterParams {
+                session: input.session,
+                summary_tokens: u64::try_from(input.summary_tokens).unwrap_or(u64::MAX),
+            };
+            notify(conn, HookName::CompactionAfter, &params).await;
+        }
+    }
+
+    async fn session_start(&self, input: SessionLifecycleInput) {
+        let params = SessionLifecycleParams {
+            session: input.session,
+        };
+        for conn in self.plugins() {
+            if conn.posture(HookName::SessionStart).is_none() {
+                continue;
+            }
+            notify(conn, HookName::SessionStart, &params).await;
+        }
+    }
+
+    async fn session_end(&self, input: SessionLifecycleInput) {
+        let params = SessionLifecycleParams {
+            session: input.session,
+        };
+        for conn in self.plugins() {
+            if conn.posture(HookName::SessionEnd).is_none() {
+                continue;
+            }
+            notify(conn, HookName::SessionEnd, &params).await;
+        }
+    }
+
+    async fn agent_spawn(&self, input: AgentSpawnInput) {
+        let params = AgentSpawnParams {
+            parent: input.parent,
+            child: input.child,
+        };
+        for conn in self.plugins() {
+            if conn.posture(HookName::AgentSpawn).is_none() {
+                continue;
+            }
+            notify(conn, HookName::AgentSpawn, &params).await;
+        }
+    }
 }
 
 async fn enrich<P, O>(conn: &PluginConn, hook: HookName, params: &P) -> Option<O>
@@ -178,7 +275,44 @@ where
     P: Serialize,
     O: DeserializeOwned,
 {
-    call_outcome(conn, hook, params).await.ok()
+    match call_outcome(conn, hook, params).await {
+        Ok(outcome) => Some(outcome),
+        Err(failed) => {
+            // Enrichment hooks fail open, but never silently: the pipeline
+            // continues with the prior payload and the failure is logged.
+            tracing::warn!(
+                plugin = %conn.id,
+                hook = hook.as_str(),
+                "hook failed; continuing with prior payload: {failed}"
+            );
+            None
+        }
+    }
+}
+
+/// Fire a notification-style hook (no decisive reply) and log any failure.
+///
+/// Used by the observation points (`compaction.after`, `session.start`,
+/// `session.end`, `agent.spawn`), which must never affect the main flow.
+async fn notify<P: Serialize>(conn: &PluginConn, hook: HookName, params: &P) {
+    let value = match serde_json::to_value(params) {
+        Ok(value) => value,
+        Err(failed) => {
+            tracing::warn!(
+                plugin = %conn.id,
+                hook = hook.as_str(),
+                "hook params failed to serialize: {failed}"
+            );
+            return;
+        }
+    };
+    if let Err(failed) = conn.call_hook(hook, value).await {
+        tracing::warn!(
+            plugin = %conn.id,
+            hook = hook.as_str(),
+            "notification hook failed: {failed}"
+        );
+    }
 }
 
 async fn call_outcome<O>(

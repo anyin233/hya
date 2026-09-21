@@ -92,10 +92,12 @@ pub use engine::{
 };
 pub use error::CoreError;
 pub use hooks::{
-    ChatParamsInput, ChatParamsOutcome, CommandExecuteBeforeInput, CommandExecuteBeforeOutcome,
-    HookDispatcher, MessageUserBeforeInput, MessageUserBeforeOutcome, NoopHookHost,
-    TextCompleteInput, TextCompleteOutcome, ToolExecuteAfterInput, ToolExecuteAfterOutcome,
-    ToolExecuteBeforeInput, ToolExecuteBeforeOutcome, ToolOutcomeNative,
+    AgentSpawnInput, ChatParamsInput, ChatParamsOutcome, CommandExecuteBeforeInput,
+    CommandExecuteBeforeOutcome, CompactionAfterInput, CompactionBeforeInput, CompactionDecision,
+    CompactionResolution, CompactionTrigger, HookDispatcher, MessageUserBeforeInput,
+    MessageUserBeforeOutcome, NoopHookHost, SessionLifecycleInput, TextCompleteInput,
+    TextCompleteOutcome, ToolExecuteAfterInput, ToolExecuteAfterOutcome, ToolExecuteBeforeInput,
+    ToolExecuteBeforeOutcome, ToolOutcomeNative, resolve_compaction_decision,
 };
 pub use lifecycle::run_lifecycle_service;
 pub use loop_mode::{
