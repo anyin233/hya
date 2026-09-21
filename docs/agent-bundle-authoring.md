@@ -183,6 +183,7 @@ Filesystem `SKILL.md` discovery (outside bundles) is documented in
 | `workdir` | no | Optional working-directory string on the prepared agent. **Parsed and stored** on `PreparedAgent` and serialized into the prepared catalog. **Not applied** by the runtime today — no reader uses `PreparedAgent::workdir` to set session or tool workdirs; authors who set `workdir: subdir` get silent no-op behavior. |
 | `spawn_lifecycle` | no | `transient` (default) or `resident`. |
 | `resource_profile` | no | **Unsupported** if present — prepare fails. |
+| `namespace` | no | Provider-facing namespace for the bundle's tools; defaults to the identity name segment (the part after `/`). Token rules: `[a-zA-Z0-9_-]`, no `__`, and the reserved tokens `mcp`, `harness`, `builtin`, `plugin` are rejected. |
 | `resource_view` | no | `allow`, `deny`, `aliases`, `namespace` (see below). |
 | `can_spawn` | no | Allowlist of stable agent ids this agent may spawn. Targets are **not** resolved at prepare time — a bundle may name an agent from a bundle that is not installed yet. |
 | `hook_refs` | no | Bundle-local hook resource references only (not `harness:hook/*`). |

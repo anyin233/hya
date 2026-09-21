@@ -256,9 +256,23 @@ pub trait Tool: Send + Sync {
     async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError>;
 }
 
-struct NamedTool {
+/// A tool exposed under a different provider-facing name than its inner
+/// implementation. Used for qualified contributed names
+/// (`{namespace}__{local}`) and legacy alias spellings; `execute` always
+/// delegates to the inner tool.
+pub struct NamedTool {
     name: String,
     inner: Arc<dyn Tool>,
+}
+
+impl NamedTool {
+    /// Wrap `inner` so it is registered and advertised as `name`.
+    pub fn new(name: impl Into<String>, inner: Arc<dyn Tool>) -> Self {
+        Self {
+            name: name.into(),
+            inner,
+        }
+    }
 }
 
 #[async_trait]
@@ -627,25 +641,35 @@ impl ToolRegistry {
             .collect()
     }
 
+    /// Install one built-in tool, failing loudly when the fixed builtin list
+    /// ever carries a duplicate name: a silent overwrite would shadow an
+    /// earlier tool with no diagnostic, so the registry treats it as an
+    /// invariant violation instead.
     fn insert_builtin(&self, tool: Arc<dyn Tool>) {
         let name = tool.name().to_string();
         let mut inner = self.write();
-        inner.tools.insert(
+        let replaced = inner.tools.insert(
             name.clone(),
             ResolvedTool {
                 tool,
                 permission: builtin_permission(&name),
             },
         );
+        assert!(
+            replaced.is_none(),
+            "duplicate built-in tool name `{name}` in the fixed builtin list"
+        );
         if let Some(identity) = builtin_dispatch_identity(&name) {
             inner.dispatch_identities.insert(name.clone(), identity);
         }
     }
 
+    /// Install one built-in tool under its canonical name plus a legacy alias
+    /// spelling, with the same duplicate-name invariant as [`Self::insert_builtin`].
     fn insert_aliased_builtin(&self, canonical: &str, legacy: &str, tool: Arc<dyn Tool>) {
         let permission = builtin_permission(canonical);
         let mut inner = self.write();
-        inner.tools.insert(
+        let replaced_canonical = inner.tools.insert(
             canonical.to_string(),
             ResolvedTool {
                 tool: Arc::new(NamedTool {
@@ -655,9 +679,13 @@ impl ToolRegistry {
                 permission,
             },
         );
-        inner
+        let replaced_alias = inner
             .aliases
             .insert(legacy.to_string(), ResolvedTool { tool, permission });
+        assert!(
+            replaced_canonical.is_none() && replaced_alias.is_none(),
+            "duplicate built-in tool name `{canonical}` or legacy alias `{legacy}`              in the fixed builtin list"
+        );
         if let Some(identity) = builtin_dispatch_identity(canonical) {
             inner
                 .dispatch_identities

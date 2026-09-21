@@ -113,7 +113,7 @@ pub use spawn::{
 };
 pub use todo::{SessionTodos, TodoItem, TodoPlane, TodoStatus};
 pub use tool::{
-    DuplicateName, ResolvedTool, Tool, ToolCtx, ToolError, ToolOperation, ToolPermission,
-    ToolRegistry, ToolRegistrySnapshot, ToolResultPolicy,
+    DuplicateName, NamedTool, ResolvedTool, Tool, ToolCtx, ToolError, ToolOperation,
+    ToolPermission, ToolRegistry, ToolRegistrySnapshot, ToolResultPolicy,
 };
 pub use websearch::{WebSearchConfig, WebSearchPlane, WebSearchProvider};

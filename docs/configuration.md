@@ -1025,6 +1025,30 @@ curl -sS -X POST http://127.0.0.1:8080/v1/mcp/live-demo/connect
 general MCP config-delete route, and dynamic changes are not written back to
 `config.yaml`.
 
+## Tool Naming Contract
+
+Contributed tool names follow one composition rule so every provider-facing
+name is unambiguous:
+
+| Source | Provider-facing name |
+| --- | --- |
+| Built-in tools | bare names (`read`, `bash`, …) — reserved |
+| Plugins (`plugins:` / `plugin.toml`) | `{plugin_id}__{local}` — composed by the host from the declared local name |
+| MCP servers | `mcp__{server}__{local}` — composed from the server key and the server-declared tool name |
+| Bundles | `{namespace}__{local}` (see [AgentBundle authoring](agent-bundle-authoring.md)) |
+
+Rules enforced at configuration load and at runtime publication:
+
+- The `mcp.<server-key>` key must contain only ASCII letters, digits, `-`, and
+  `_` (no `__`); malformed keys are rejected at startup.
+- A plugin/MCP tool whose name cannot compose into its qualified spelling
+  (invalid tokens, or an `mcp`/`harness`/`builtin` head from a non-MCP source)
+  is rejected in one grouped publication error listing every conflict.
+- Aliases may shadow built-in or cross-source names (masking): a mask is
+  resolved by scope — sources beat built-ins, and among sources the
+  lexicographically greater source id wins. The built-in `read` is protected
+  and can never be masked.
+
 ## Plugins
 
 Plugins may be declared directly in config or discovered from

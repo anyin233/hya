@@ -180,7 +180,7 @@ fn bundle_install_list_info_uninstall_workflow() -> Result<(), Box<dyn std::erro
         "state=active",
         "immutable=false",
         "source_digest=df26abcab48d8f192f7f6af59fedc3445a5254d3f4b9e765b2676143b8ce5592",
-        "prepared_digest=ef6480288e32417cb69674816ecad637ce8a5b74dcebf9f4a056d26a1e6a4aba",
+        "prepared_digest=dcfeeea231160edc585189c7568f7234b4136d095ffd97c8db99cdff2e802a92",
         "kind=AgentBundle",
         "agent=valid-public-lead",
     ] {
@@ -421,7 +421,7 @@ fn public_info_file_prepares_without_registry_mutation() -> Result<(), Box<dyn s
             "state: inspected",
             "immutable: false",
             "source_digest: df26abcab48d8f192f7f6af59fedc3445a5254d3f4b9e765b2676143b8ce5592",
-            "prepared_digest: ef6480288e32417cb69674816ecad637ce8a5b74dcebf9f4a056d26a1e6a4aba",
+            "prepared_digest: dcfeeea231160edc585189c7568f7234b4136d095ffd97c8db99cdff2e802a92",
             "kind: AgentBundle",
             "agent: valid-public-lead",
         ],
@@ -528,6 +528,7 @@ You are the resource info lead.
     let installed = registry
         .install(
             &[],
+            hya_store::NamespaceInstallPolicy::DenyConflicts,
             hya_store::BundleInstallCandidate {
                 source_digest: [0x52; 32],
                 prepared_digest: prepared.digest().to_owned(),
@@ -578,6 +579,7 @@ async fn workflow_bundle_list_and_info_show_kind_workflow_and_agents()
     registry
         .install(
             &[],
+            hya_store::NamespaceInstallPolicy::DenyConflicts,
             hya_store::BundleInstallCandidate {
                 source_digest: [0x63; 32],
                 prepared_digest: prepared.digest().to_owned(),

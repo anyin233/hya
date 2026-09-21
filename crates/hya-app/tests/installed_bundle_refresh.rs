@@ -138,6 +138,7 @@ async fn installed_generation_refresh_publishes_only_for_new_root_bindings() {
     let outcome = registry
         .install(
             &[],
+            hya_store::NamespaceInstallPolicy::DenyConflicts,
             BundleInstallCandidate {
                 source_digest: [0x42; 32],
                 prepared_digest: installed.digest().to_owned(),
@@ -243,6 +244,7 @@ async fn installed_workflow_refresh_publishes_workflow_and_agent_atomically_and_
     registry
         .install(
             &[],
+            hya_store::NamespaceInstallPolicy::DenyConflicts,
             BundleInstallCandidate {
                 source_digest: [0x43; 32],
                 prepared_digest: installed.digest().to_owned(),

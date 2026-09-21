@@ -1320,6 +1320,18 @@ fn resolve_mcp(file: &FileConfig) -> anyhow::Result<BTreeMap<String, McpServerCo
         if server.enabled == Some(false) {
             continue;
         }
+        // The server key is the namespace segment of `mcp__{server}__{tool}`;
+        // a malformed key would compose ambiguous or unusable tool names.
+        let key_valid = !id.is_empty()
+            && !id.contains("__")
+            && id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_');
+        if !key_valid {
+            anyhow::bail!(
+                "mcp server name `{id}` must contain only ASCII letters, digits, `-`, and `_`"
+            );
+        }
         let env = server
             .env
             .as_ref()
@@ -2831,6 +2843,25 @@ mcp:
                 }
             }
         }
+    }
+
+    #[test]
+    fn mcp_server_keys_must_be_valid_namespace_tokens() {
+        let yaml = "mcp:\n  bad__key:\n    command: [echo]\n";
+        let file = parse_config(yaml).unwrap();
+        assert!(
+            resolve_mcp(&file).is_err(),
+            "nested `__` keys must be rejected"
+        );
+
+        let yaml = "mcp:\n  has.dot:\n    command: [echo]\n";
+        let file = parse_config(yaml).unwrap();
+        assert!(resolve_mcp(&file).is_err(), "dots must be rejected");
+
+        let yaml = "mcp:\n  good-key_1:\n    command: [echo]\n";
+        let file = parse_config(yaml).unwrap();
+        let resolved = resolve_mcp(&file).unwrap();
+        assert!(resolved.contains_key("good-key_1"));
     }
 
     #[test]

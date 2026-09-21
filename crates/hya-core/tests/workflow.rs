@@ -1920,6 +1920,7 @@ fn sidecar_probe_catalog() -> Arc<hya_core::AgentCatalog> {
                         version: "0.0.0".to_string(),
                         publisher: "hya-tests".to_string(),
                     },
+                    namespace: None,
                     digest: format!("test-only-{stable_id}"),
                     agent: hya_bundle::PreparedAgent {
                         id: AgentName::new(*stable_id),

@@ -7,7 +7,7 @@ use hya_bundle::{BundleCatalog, BundleError, ExportKind, ResourceView};
 use crate::agent_catalog::{AgentCatalog, AgentDefinition, AgentOrigin};
 use hya_proto::{ConfigGeneration, ModelRef, ToolName, ToolSchema};
 use hya_tool::{
-    DuplicateName, PermissionPlane, ResolvedTool, SkillCatalogEntry, SkillPlane, Tool,
+    DuplicateName, NamedTool, PermissionPlane, ResolvedTool, SkillCatalogEntry, SkillPlane, Tool,
     ToolPermission, ToolRegistry, ToolRegistrySnapshot, discover_skills_with_builtins,
 };
 use serde_json::Value;
@@ -36,6 +36,11 @@ type AgentModelConfigurationSnapshot = Arc<AgentModelConfiguration>;
 type AgentModelPreferences = watch::Sender<AgentModelPreferenceSnapshot>;
 type AgentModelConfigurations = watch::Sender<AgentModelConfigurationSnapshot>;
 
+/// The published bare-name mask table: contested bare name → the canonical
+/// name of the winning tool. Derived from the published source claims at
+/// publication time and immutable per snapshot.
+type SnapshotMasks = Arc<BTreeMap<String, String>>;
+
 /// A complete immutable configuration view. Turns retain its `Arc` for their
 /// whole lifetime, so publication cannot alter an in-flight lookup.
 struct RuntimeSnapshot {
@@ -45,6 +50,7 @@ struct RuntimeSnapshot {
     tools: ToolRegistrySnapshot,
     skills: BTreeMap<PathBuf, Arc<Vec<SkillCatalogEntry>>>,
     sources: BTreeMap<RuntimeSourceId, RuntimeSource>,
+    masks: SnapshotMasks,
 }
 
 /// The sole owner and publisher of the effective tool/skill/MCP runtime view.
@@ -69,6 +75,7 @@ pub struct RuntimeCandidate {
     tools: ToolRegistry,
     skills: BTreeMap<PathBuf, Arc<Vec<SkillCatalogEntry>>>,
     sources: BTreeMap<RuntimeSourceId, RuntimeSource>,
+    masks: BTreeMap<String, String>,
 }
 
 /// Kind of runtime contribution source.
@@ -283,6 +290,11 @@ pub enum RuntimeRefreshError {
     /// Tool or alias name collision.
     #[error(transparent)]
     DuplicateTool(#[from] DuplicateName),
+    /// One or more contributed source names violate the naming rules; the
+    /// report lists every conflict grouped by source so a single publication
+    /// attempt surfaces all of them.
+    #[error("contributed source names rejected:\n{0}")]
+    NamingConflicts(String),
     /// Config generation counter overflowed.
     #[error("configuration generation exhausted")]
     GenerationExhausted,
@@ -317,6 +329,7 @@ impl RuntimeRegistry {
                 tools,
                 skills: BTreeMap::new(),
                 sources: BTreeMap::new(),
+                masks: Arc::new(BTreeMap::new()),
             })),
             agent_model_preferences: watch::Sender::new(Arc::new(BTreeMap::new())),
             agent_model_configuration: watch::Sender::new(Arc::new(
@@ -441,6 +454,7 @@ impl RuntimeRegistry {
             tools: current.tools.clone(),
             skills: current.skills.clone(),
             sources: current.sources.clone(),
+            masks: Arc::clone(&current.masks),
         });
         *self
             .active
@@ -510,6 +524,7 @@ impl RuntimeRegistry {
             tools,
             skills,
             sources,
+            masks,
         } = candidate;
         let tools = tools.snapshot();
         let generation = current
@@ -523,6 +538,7 @@ impl RuntimeRegistry {
             tools,
             skills,
             sources,
+            masks: Arc::new(masks),
         });
         *self
             .active
@@ -539,6 +555,7 @@ impl RuntimeCandidate {
             tools: ToolRegistry::from_snapshot(&snapshot.tools),
             skills: snapshot.skills.clone(),
             sources: snapshot.sources.clone(),
+            masks: snapshot.masks.as_ref().clone(),
         }
     }
 
@@ -574,6 +591,227 @@ impl RuntimeCandidate {
         self.replace_skills(workdir, discover_skills_with_builtins(workdir));
     }
 
+    /// Validate every contributed source export name against the naming rules
+    /// before any mutation happens, and derive the bare-name mask table:
+    ///
+    /// - plugin sources must publish qualified `namespace__local` tool names
+    ///   (bare names are reserved for built-in tools) whose namespace head is
+    ///   not one of the reserved `mcp`/`harness`/`builtin` planes;
+    /// - MCP sources must publish exactly `mcp__<server>__<local>` with valid
+    ///   tokens;
+    /// - canonical names must be unique across sources (hard error);
+    /// - the protected bare name `read` can never be claimed or masked by a
+    ///   contributed alias (hard error);
+    /// - any other alias collision — with a built-in canonical name, another
+    ///   source's canonical name, or another source's alias — becomes an
+    ///   explicit mask instead of an error. A source always beats a built-in
+    ///   (user scope over the built-in plane), and between two sources the
+    ///   lexicographically GREATER source id string wins, which approximates
+    ///   "the newer install wins". The winner's tool provides the contested
+    ///   name; the loser keeps its qualified canonical spelling as the escape
+    ///   hatch.
+    ///
+    /// All hard conflicts are reported in one grouped diagnostic. The returned
+    /// map is the published mask table (contested bare name → winning
+    /// canonical name); contested aliases are deliberately not registered as
+    /// registry aliases, so the bare plane resolves through compiled views.
+    fn validate_candidate_source_names(
+        &self,
+        sources: &[RuntimeSource],
+    ) -> Result<BTreeMap<String, String>, RuntimeRefreshError> {
+        let (conflicts, masks) = self.adjudicate_source_name_claims(sources);
+        if conflicts.is_empty() {
+            Ok(masks)
+        } else {
+            Err(RuntimeRefreshError::NamingConflicts(conflicts.join("\n")))
+        }
+    }
+
+    /// One claim on a name in the global bare-name plane: `label` is the
+    /// source id string (or `built-in`), `canonical` the claimant's canonical
+    /// tool name.
+    fn record_claim(
+        claims: &mut BTreeMap<String, Vec<(String, String)>>,
+        name: &str,
+        label: &str,
+        canonical: &str,
+    ) {
+        claims
+            .entry(name.to_string())
+            .or_default()
+            .push((label.to_string(), canonical.to_string()));
+    }
+
+    /// Validate the candidate source names and adjudicate every bare-name
+    /// contest into the mask table. See
+    /// [`RuntimeCandidate::validate_candidate_source_names`] for the contract.
+    fn adjudicate_source_name_claims(
+        &self,
+        sources: &[RuntimeSource],
+    ) -> (Vec<String>, BTreeMap<String, String>) {
+        const RESERVED_HEADS: [&str; 3] = ["mcp", "harness", "builtin"];
+        const PROTECTED_BARE_NAMES: [&str; 1] = ["read"];
+        const BUILTIN_LABEL: &str = "built-in";
+        let valid_segment = |token: &str| {
+            !token.is_empty()
+                && token
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+        };
+        let claim_rank = |(label, _): &(String, String)| {
+            let source_rank = u8::from(label != BUILTIN_LABEL);
+            (source_rank, label.clone())
+        };
+
+        let replaced: BTreeSet<String> = sources.iter().map(|s| s.id.to_string()).collect();
+        let mut conflicts: Vec<String> = Vec::new();
+        // Canonical name → owning source label, for hard duplicate detection
+        // and for identifying the built-in remainder of the bare-name plane.
+        let mut canonical_owner: BTreeMap<String, String> = BTreeMap::new();
+        // Contested-name claims from contributed aliases: alias → claimants.
+        let mut alias_claims: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
+
+        for (id, source) in &self.sources {
+            if replaced.contains(&id.to_string()) {
+                continue;
+            }
+            let label = id.to_string();
+            for export in &source.exports {
+                canonical_owner.insert(export.canonical_name.clone(), label.clone());
+            }
+        }
+
+        for source in sources {
+            let label = source.id.to_string();
+            for export in &source.exports {
+                let name = export.canonical_name.as_str();
+                match source.id.kind {
+                    RuntimeSourceKind::Plugin | RuntimeSourceKind::Bundle => {
+                        let segments: Vec<&str> = name.split("__").collect();
+                        let shaped = segments.len() >= 2
+                            && segments.iter().all(|segment| valid_segment(segment))
+                            && !RESERVED_HEADS.contains(&segments[0]);
+                        if !shaped {
+                            conflicts.push(format!(
+                                "source {label}: tool name `{name}` must be qualified as \
+                                 `namespace__local` with a non-reserved namespace token"
+                            ));
+                            continue;
+                        }
+                    }
+                    RuntimeSourceKind::Mcp => {
+                        let parts: Vec<&str> = name.split("__").collect();
+                        let shaped = parts.len() == 3
+                            && parts[0] == "mcp"
+                            && valid_segment(parts[1])
+                            && valid_segment(parts[2]);
+                        if !shaped {
+                            conflicts.push(format!(
+                                "source {label}: MCP tool name `{name}` must be \
+                                 `mcp__<server>__<local>` with valid tokens"
+                            ));
+                            continue;
+                        }
+                    }
+                }
+                if let Some(owner) = canonical_owner.get(name) {
+                    conflicts.push(format!(
+                        "source {label}: canonical name `{name}` is already provided by {owner}"
+                    ));
+                    continue;
+                }
+                canonical_owner.insert(name.to_string(), label.clone());
+                for alias in &export.aliases {
+                    if PROTECTED_BARE_NAMES.contains(&alias.as_str()) {
+                        conflicts.push(format!(
+                            "source {label}: protected tool `{alias}` cannot be masked; \
+                             the alias is rejected"
+                        ));
+                        continue;
+                    }
+                    if canonical_owner
+                        .get(alias)
+                        .is_some_and(|owner| owner == &label)
+                    {
+                        conflicts.push(format!(
+                            "source {label}: alias `{alias}` collides with its own canonical name"
+                        ));
+                        continue;
+                    }
+                    let claimants = alias_claims.entry(alias.clone()).or_default();
+                    if claimants.iter().any(|(owner, _)| owner == &label) {
+                        conflicts.push(format!(
+                            "source {label}: alias `{alias}` is declared more than once"
+                        ));
+                        continue;
+                    }
+                    claimants.push((label.clone(), export.canonical_name.clone()));
+                }
+            }
+        }
+        for (id, source) in &self.sources {
+            if replaced.contains(&id.to_string()) {
+                continue;
+            }
+            let label = id.to_string();
+            for export in &source.exports {
+                for alias in &export.aliases {
+                    Self::record_claim(&mut alias_claims, alias, &label, &export.canonical_name);
+                }
+            }
+        }
+
+        // Adjudication: a name contested by more than one claimant resolves by
+        // the masking total order — sources beat built-ins, and between two
+        // sources the lexicographically greater source id string wins.
+        // Canonical names owned by replaced sources still sit in the tool
+        // snapshot during validation; they are about to be removed, so they
+        // must not pose as built-in claims.
+        let replaced_canonicals: BTreeSet<String> = self
+            .sources
+            .iter()
+            .filter(|(id, _)| replaced.contains(&id.to_string()))
+            .flat_map(|(_, source)| {
+                source
+                    .exports
+                    .iter()
+                    .map(|export| export.canonical_name.clone())
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        let tool_canonicals: BTreeSet<String> = self
+            .tools
+            .snapshot()
+            .canonical_tools()
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect();
+        let mut masks = BTreeMap::new();
+        for (name, mut claimants) in alias_claims {
+            if let Some(owner) = canonical_owner.get(&name) {
+                claimants.push((owner.clone(), name.clone()));
+            } else if !replaced_canonicals.contains(&name) && tool_canonicals.contains(&name) {
+                claimants.push((BUILTIN_LABEL.to_string(), name.clone()));
+            }
+            if claimants.len() < 2 {
+                continue;
+            }
+            claimants.sort_by_key(claim_rank);
+            if let Some((_, winner)) = claimants.last() {
+                masks.insert(name, winner.clone());
+            }
+        }
+        (conflicts, masks)
+    }
+
+    /// Recompute the mask table for the candidate's retained sources after a
+    /// removal. Retained sources are pre-validated, so this cannot produce
+    /// hard conflicts.
+    fn recompute_masks_after_removal(&mut self) {
+        let (_, masks) = self.adjudicate_source_name_claims(&[]);
+        self.masks = masks;
+    }
+
     /// Insert or replace MCP/plugin sources on this candidate.
     pub fn upsert_sources(
         &mut self,
@@ -588,6 +826,10 @@ impl RuntimeCandidate {
                 )));
             }
         }
+        self.validate_candidate_source_names(&sources)
+            .map(|masks| {
+                self.masks = masks;
+            })?;
 
         for source in &sources {
             if let Some(previous) = self.sources.remove(&source.id) {
@@ -613,12 +855,21 @@ impl RuntimeCandidate {
                         export.tool.name()
                     )));
                 }
+                // Contested aliases are never registered on the tool plane;
+                // the bare name resolves through the snapshot mask table and
+                // compiled views instead.
+                let registered_aliases = export
+                    .aliases
+                    .iter()
+                    .filter(|alias| !self.masks.contains_key(alias.as_str()))
+                    .cloned()
+                    .collect::<Vec<_>>();
                 let identity = runtime_source_dispatch_identity(&source, export)?;
                 self.tools
                     .register_with_permission_and_aliases_and_dispatch_identity(
                         export.tool.clone(),
                         export.permission,
-                        &export.aliases,
+                        &registered_aliases,
                         identity,
                     )?;
             }
@@ -691,6 +942,12 @@ impl RuntimeCandidate {
     }
 
     /// Remove sources by id from this candidate.
+    ///
+    /// The mask table is re-derived from the retained sources, so masks whose
+    /// winner was removed dissolve. Note that a losing source's contested
+    /// alias was never registered on the tool plane; it becomes resolvable
+    /// again through the bare plane only after that source re-publishes, while
+    /// its qualified canonical spelling always stays available.
     pub fn remove_sources(&mut self, removed: &BTreeSet<RuntimeSourceId>) {
         for id in removed {
             if let Some(source) = self.sources.remove(id) {
@@ -699,6 +956,7 @@ impl RuntimeCandidate {
                 }
             }
         }
+        self.recompute_masks_after_removal();
     }
 
     fn replace_skills(&mut self, workdir: &Path, skills: Vec<SkillCatalogEntry>) {
@@ -1083,6 +1341,50 @@ impl TurnBinding {
     }
 
     #[must_use]
+    /// Published bare-name mask table: contested bare name → the canonical
+    /// name of the winning tool. View compilation resolves every contested
+    /// name to its winner; qualified canonical spellings always work.
+    pub fn masks(&self) -> &BTreeMap<String, String> {
+        &self.snapshot.masks
+    }
+
+    /// Every claimant of `bare` ordered by the masking total order: built-ins
+    /// first, then contributed sources by ascending source id, with the active
+    /// provider last. Each entry is `(owner source label, canonical name)`.
+    /// Uncontested names yield zero or one claim.
+    #[must_use]
+    pub fn mask_chain(&self, bare: &str) -> Vec<(String, String)> {
+        let rank = |label: &str| (u8::from(label != "built-in"), label.to_string());
+        let mut claims: Vec<(String, String)> = Vec::new();
+        for source in self.snapshot.sources.values() {
+            let label = source.id.to_string();
+            for export in &source.exports {
+                let canonical_claim = export.canonical_name.as_str() == bare;
+                let alias_claim = export.aliases.iter().any(|alias| alias == bare);
+                if canonical_claim || alias_claim {
+                    let entry = (label.clone(), export.canonical_name.clone());
+                    if !claims.contains(&entry) {
+                        claims.push(entry);
+                    }
+                }
+            }
+        }
+        let source_canonical = claims.iter().any(|(_, canonical)| canonical == bare);
+        if !source_canonical
+            && self
+                .snapshot
+                .tools
+                .canonical_tools()
+                .iter()
+                .any(|(name, _)| name == bare)
+        {
+            claims.push(("built-in".to_string(), bare.to_string()));
+        }
+        claims.sort_by_key(|(label, _)| rank(label));
+        claims
+    }
+
+    #[must_use]
     /// Look up an agent by stable id, whatever its origin.
     pub fn resolve_agent(&self, stable_id: &str) -> Option<AgentDefinition<'_>> {
         self.snapshot
@@ -1295,6 +1597,7 @@ impl TurnBinding {
             &self.snapshot.basic_tools,
             &self.snapshot.tools,
             &self.snapshot.sources,
+            &self.snapshot.masks,
             &mut tool_candidates,
         );
         collect_harness_skill_candidates(
@@ -1303,7 +1606,12 @@ impl TurnBinding {
             &self.snapshot.sources,
             &mut skill_candidates,
         );
-        collect_harness_mcp_candidates(policy.plane, &self.snapshot.sources, &mut mcp_candidates);
+        collect_harness_mcp_candidates(
+            policy.plane,
+            &self.snapshot.sources,
+            &self.snapshot.masks,
+            &mut mcp_candidates,
+        );
 
         Ok(CandidatePartitions {
             tool: tool_candidates,
@@ -2127,6 +2435,7 @@ fn collect_harness_tool_candidates(
     basic_tools: &ToolRegistrySnapshot,
     full_tools: &ToolRegistrySnapshot,
     sources: &BTreeMap<RuntimeSourceId, RuntimeSource>,
+    masks: &BTreeMap<String, String>,
     out: &mut BTreeMap<String, ResourceCandidate>,
 ) {
     // `basic_tools` is the snapshot captured when the registry was built, before
@@ -2148,23 +2457,57 @@ fn collect_harness_tool_candidates(
         .collect::<BTreeSet<_>>();
     let mut entries = selected.canonical_tools();
     entries.sort_by(|left, right| left.0.cmp(&right.0));
+    let pool: BTreeSet<String> = entries.iter().map(|(name, _)| name.clone()).collect();
     for (name, resolved) in entries {
         // MCP is an independent resource kind; do not re-home it under tool.
         if mcp_canonical_names.contains(name.as_str()) {
             continue;
         }
-        let aliases = selected.aliases_for_canonical(&name);
+        // A masked tool is excluded from the view: the mask winner provides
+        // the bare name instead. Masks only bite when the winner is visible
+        // in this plane's pool, so a plane without the winner keeps the
+        // built-in rather than losing the bare name entirely.
+        if let Some(winner) = masks.get(name.as_str())
+            && winner.as_str() != name.as_str()
+            && pool.contains(winner)
+        {
+            continue;
+        }
+        // A mask winner is advertised under the bare name it won — wrapped so
+        // the schema name is the bare spelling — and that spelling appears
+        // exactly once (the qualified spelling is not also advertised).
+        let promoted_bare = winner_bare_name(masks, name.as_str());
+        let (short_name, resolved) = match promoted_bare {
+            Some(bare) => (
+                bare.clone(),
+                ResolvedTool {
+                    tool: Arc::new(NamedTool::new(bare.clone(), resolved.tool)),
+                    permission: resolved.permission,
+                },
+            ),
+            None => (name.clone(), resolved),
+        };
         let qualified = harness_id("tool", &name);
         out.insert(
             qualified.clone(),
             ResourceCandidate::HarnessTool {
-                short_name: name,
+                short_name,
                 qualified_name: qualified,
                 resolved,
-                aliases,
+                aliases: selected.aliases_for_canonical(&name),
             },
         );
     }
+}
+
+/// The bare name `canonical` won through masking, when that differs from the
+/// canonical spelling itself. Deterministic: the lexicographically smallest
+/// contested name wins the primary spelling when one tool won several.
+fn winner_bare_name(masks: &BTreeMap<String, String>, canonical: &str) -> Option<String> {
+    masks
+        .iter()
+        .find(|(bare, winner)| winner.as_str() == canonical && bare.as_str() != canonical)
+        .map(|(bare, _)| bare.clone())
 }
 
 fn collect_bundle_skill_candidates(
@@ -2305,6 +2648,7 @@ fn collect_bundle_mcp_candidates(
 fn collect_harness_mcp_candidates(
     plane: AgentToolPlane,
     sources: &BTreeMap<RuntimeSourceId, RuntimeSource>,
+    masks: &BTreeMap<String, String>,
     out: &mut BTreeMap<String, ResourceCandidate>,
 ) {
     // MCP servers are configured at the Harness level. A bundle agent gets only
@@ -2319,17 +2663,46 @@ fn collect_harness_mcp_candidates(
         .collect::<Vec<_>>();
     exports.sort_by(|left, right| left.canonical_name.cmp(&right.canonical_name));
     for export in exports {
+        // Contested aliases this export lost are dropped; its qualified
+        // canonical spelling remains the escape hatch.
+        let mut aliases = export
+            .aliases
+            .iter()
+            .filter(|alias| {
+                masks
+                    .get(alias.as_str())
+                    .is_none_or(|winner| winner.as_str() == export.canonical_name.as_str())
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        // A mask winner is advertised under the bare name it won, exactly once.
+        let (short_name, resolved) = match winner_bare_name(masks, &export.canonical_name) {
+            Some(bare) => {
+                aliases.retain(|alias| alias != &bare);
+                (
+                    bare.clone(),
+                    ResolvedTool {
+                        tool: Arc::new(NamedTool::new(bare.clone(), export.tool.clone())),
+                        permission: export.permission,
+                    },
+                )
+            }
+            None => (
+                export.canonical_name.clone(),
+                ResolvedTool {
+                    tool: export.tool.clone(),
+                    permission: export.permission,
+                },
+            ),
+        };
         let qualified = harness_id("mcp", &export.canonical_name);
         out.insert(
             qualified.clone(),
             ResourceCandidate::HarnessMcp {
-                short_name: export.canonical_name.clone(),
+                short_name,
                 qualified_name: qualified,
-                resolved: ResolvedTool {
-                    tool: export.tool.clone(),
-                    permission: export.permission,
-                },
-                aliases: export.aliases.clone(),
+                resolved,
+                aliases,
             },
         );
     }
@@ -3053,6 +3426,7 @@ mod tests {
                 version: "0.0.0".to_string(),
                 publisher: "hya-tests".to_string(),
             },
+            namespace: None,
             digest: "test-only".to_string(),
             agent,
             tools: Vec::new(),
@@ -3160,6 +3534,358 @@ mod tests {
             before.public_tool_names(),
             after.public_tool_names(),
             "pinned binding must compile an identical public tool set"
+        );
+    }
+
+    #[test]
+    fn source_name_registry_rejects_bare_plugin_tool_names() {
+        let catalog = Arc::new(
+            TestCatalog::from_prepared(&[bundle_with_agent(
+                "hya/name-registry",
+                agent("name-registry", ResourceView::default()),
+                Vec::new(),
+            )])
+            .unwrap(),
+        );
+        let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
+        let error = registry
+            .refresh(|candidate| {
+                candidate.upsert_sources(vec![RuntimeSource::new(
+                    RuntimeSourceId::plugin("bare-tools"),
+                    [9; 32],
+                    Arc::new(()),
+                    vec![RuntimeSourceExport::tool(
+                        "read",
+                        "read",
+                        Vec::new(),
+                        Arc::new(NoopTool::new("read")),
+                        ToolPermission::Tool,
+                    )],
+                )])
+            })
+            .expect_err("bare plugin tool names must be rejected");
+        let RuntimeRefreshError::NamingConflicts(report) = error else {
+            panic!("expected a naming conflict report: {error:?}");
+        };
+        assert!(
+            report.contains("plugin:bare-tools") && report.contains("`read`"),
+            "report must name the source and the bare name: {report}"
+        );
+    }
+
+    #[test]
+    fn source_name_registry_groups_cross_source_duplicates() {
+        let catalog = Arc::new(
+            TestCatalog::from_prepared(&[bundle_with_agent(
+                "hya/name-registry",
+                agent("name-registry", ResourceView::default()),
+                Vec::new(),
+            )])
+            .unwrap(),
+        );
+        let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
+        let error = registry
+            .refresh(|candidate| {
+                candidate.upsert_sources(vec![
+                    RuntimeSource::new(
+                        RuntimeSourceId::plugin("dup-a"),
+                        [10; 32],
+                        Arc::new(()),
+                        vec![RuntimeSourceExport::tool(
+                            "dup__tool",
+                            "dup__tool",
+                            Vec::new(),
+                            Arc::new(NoopTool::new("dup__tool")),
+                            ToolPermission::Tool,
+                        )],
+                    ),
+                    RuntimeSource::new(
+                        RuntimeSourceId::plugin("dup-b"),
+                        [11; 32],
+                        Arc::new(()),
+                        vec![RuntimeSourceExport::tool(
+                            "dup__tool",
+                            "dup__tool",
+                            Vec::new(),
+                            Arc::new(NoopTool::new("dup__tool")),
+                            ToolPermission::Tool,
+                        )],
+                    ),
+                ])
+            })
+            .expect_err("cross-source duplicates must be rejected");
+        let RuntimeRefreshError::NamingConflicts(report) = error else {
+            panic!("expected a naming conflict report: {error:?}");
+        };
+        assert!(
+            report.contains("plugin:dup-a") && report.contains("plugin:dup-b"),
+            "report must list every conflicting source: {report}"
+        );
+    }
+
+    #[test]
+    fn alias_masking_publishes_and_compiles_bare_name_to_winner() {
+        let catalog = Arc::new(
+            TestCatalog::from_prepared(&[bundle_with_agent(
+                "hya/mask",
+                agent("mask-agent", ResourceView::default()),
+                Vec::new(),
+            )])
+            .unwrap(),
+        );
+        let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
+        registry
+            .refresh(|candidate| {
+                candidate.upsert_sources(vec![RuntimeSource::new(
+                    RuntimeSourceId::plugin("mask-src"),
+                    [14; 32],
+                    Arc::new(()),
+                    vec![RuntimeSourceExport::tool(
+                        "fast",
+                        "mask__fast",
+                        vec!["bash".to_string()],
+                        Arc::new(NoopTool::new("mask__fast")),
+                        ToolPermission::Tool,
+                    )],
+                )])
+            })
+            .expect("alias masking a built-in must publish");
+
+        let workdir = PathBuf::from("/tmp/hya-alias-mask-builtin");
+        let binding = registry.bind_turn(&workdir).unwrap();
+        assert_eq!(
+            binding.masks().get("bash").map(String::as_str),
+            Some("mask__fast"),
+            "the contributed alias must win the bare name from the built-in"
+        );
+        let chain = binding.mask_chain("bash");
+        assert_eq!(
+            chain.first().map(|(owner, _)| owner.as_str()),
+            Some("built-in")
+        );
+        assert_eq!(
+            chain.last(),
+            Some(&("plugin:mask-src".to_string(), "mask__fast".to_string())),
+            "the mask chain must end at the winning source claim"
+        );
+
+        let policy = binding
+            .agent_resource_policy_on_plane("mask-agent", AgentToolPlane::Full)
+            .unwrap();
+        let compiled = binding.compile_agent_resources(&policy).unwrap();
+        let names = compiled.public_tool_names();
+        assert!(
+            names.contains("bash") && !names.contains("harness:tool/bash"),
+            "the masked built-in must be excluded while the bare name stays: {names:?}"
+        );
+        assert!(
+            names.contains("harness:tool/mask__fast"),
+            "the winning contributed tool must stay in the view: {names:?}"
+        );
+        let bash_schemas = compiled
+            .tool_schemas()
+            .into_iter()
+            .filter(|schema| schema.name.as_str() == "bash")
+            .collect::<Vec<_>>();
+        assert_eq!(
+            bash_schemas.len(),
+            1,
+            "the bare name must appear exactly once"
+        );
+        assert_eq!(
+            bash_schemas[0].input_schema,
+            json!({ "type": "object" }),
+            "the advertised bash schema must be the contributed winner, not the built-in"
+        );
+        assert!(compiled.resolve_tool("bash").is_some());
+
+        let mut removed = BTreeSet::new();
+        removed.insert(RuntimeSourceId::plugin("mask-src"));
+        registry
+            .refresh(|candidate| {
+                candidate.remove_sources(&removed);
+                Ok(())
+            })
+            .expect("source removal must publish");
+
+        let binding = registry.bind_turn(&workdir).unwrap();
+        assert!(
+            binding.masks().is_empty(),
+            "removing the winner must dissolve the mask"
+        );
+        let policy = binding
+            .agent_resource_policy_on_plane("mask-agent", AgentToolPlane::Full)
+            .unwrap();
+        let compiled = binding.compile_agent_resources(&policy).unwrap();
+        let names = compiled.public_tool_names();
+        assert!(
+            names.contains("harness:tool/bash"),
+            "the built-in must be resolvable again after the masking source is removed: {names:?}"
+        );
+    }
+
+    #[test]
+    fn protected_read_alias_is_a_hard_error() {
+        let catalog = Arc::new(
+            TestCatalog::from_prepared(&[bundle_with_agent(
+                "hya/name-registry",
+                agent("name-registry", ResourceView::default()),
+                Vec::new(),
+            )])
+            .unwrap(),
+        );
+        let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
+        let error = registry
+            .refresh(|candidate| {
+                candidate.upsert_sources(vec![RuntimeSource::new(
+                    RuntimeSourceId::plugin("read-masker"),
+                    [15; 32],
+                    Arc::new(()),
+                    vec![RuntimeSourceExport::tool(
+                        "reader",
+                        "read_masker__reader",
+                        vec!["read".to_string()],
+                        Arc::new(NoopTool::new("read_masker__reader")),
+                        ToolPermission::Tool,
+                    )],
+                )])
+            })
+            .expect_err("no source may mask the protected `read` tool");
+        let RuntimeRefreshError::NamingConflicts(report) = error else {
+            panic!("expected a naming conflict report: {error:?}");
+        };
+        assert!(
+            report.contains("protected tool `read` cannot be masked"),
+            "report must name the read protection: {report}"
+        );
+    }
+
+    #[test]
+    fn cross_source_alias_mask_goes_to_greater_source_id() {
+        let catalog = Arc::new(
+            TestCatalog::from_prepared(&[bundle_with_agent(
+                "hya/mask",
+                agent("mask-agent", ResourceView::default()),
+                Vec::new(),
+            )])
+            .unwrap(),
+        );
+        let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
+        let contender = |configured_id: &str, digest: [u8; 32], canonical: &str| {
+            RuntimeSource::new(
+                RuntimeSourceId::plugin(configured_id),
+                digest,
+                Arc::new(()),
+                vec![RuntimeSourceExport::tool(
+                    "lookup",
+                    canonical,
+                    vec!["lookup".to_string()],
+                    Arc::new(NoopTool::new(canonical)),
+                    ToolPermission::Tool,
+                )],
+            )
+        };
+        registry
+            .refresh(|candidate| {
+                candidate.upsert_sources(vec![
+                    contender("alpha", [16; 32], "alpha__lookup"),
+                    contender("beta", [17; 32], "beta__lookup"),
+                ])
+            })
+            .expect("cross-source alias collisions must mask instead of rejecting");
+
+        let workdir = PathBuf::from("/tmp/hya-alias-mask-cross-source");
+        let binding = registry.bind_turn(&workdir).unwrap();
+        assert_eq!(
+            binding.masks().get("lookup").map(String::as_str),
+            Some("beta__lookup"),
+            "the lexicographically greater source id must win the bare name"
+        );
+        let policy = binding
+            .agent_resource_policy_on_plane("mask-agent", AgentToolPlane::Full)
+            .unwrap();
+        let compiled = binding.compile_agent_resources(&policy).unwrap();
+        let names = compiled.public_tool_names();
+        assert!(
+            names.contains("lookup"),
+            "the contested bare name must resolve in the view: {names:?}"
+        );
+        assert!(
+            names.contains("harness:tool/beta__lookup"),
+            "the winner keeps its qualified identity: {names:?}"
+        );
+        assert!(
+            names.contains("alpha__lookup"),
+            "the loser must stay resolvable via its qualified canonical: {names:?}"
+        );
+        assert!(
+            compiled.resolve_tool("alpha__lookup").is_some(),
+            "the loser's qualified canonical is the escape hatch"
+        );
+        let lookup_schemas = compiled
+            .tool_schemas()
+            .into_iter()
+            .filter(|schema| schema.name.as_str() == "lookup")
+            .collect::<Vec<_>>();
+        assert_eq!(
+            lookup_schemas.len(),
+            1,
+            "the bare name must appear exactly once"
+        );
+        assert_eq!(
+            lookup_schemas[0].input_schema,
+            json!({ "type": "object" }),
+            "the advertised lookup schema must be the winner's tool"
+        );
+        assert!(
+            !compiled
+                .tool_schemas()
+                .iter()
+                .any(|schema| schema.name.as_str() == "beta__lookup"),
+            "a masked-in winner must not also advertise its qualified spelling"
+        );
+    }
+
+    #[test]
+    fn masks_accessor_reports_only_contested_bare_names() {
+        let catalog = Arc::new(
+            TestCatalog::from_prepared(&[bundle_with_agent(
+                "hya/mask",
+                agent("mask-agent", ResourceView::default()),
+                Vec::new(),
+            )])
+            .unwrap(),
+        );
+        let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
+        registry
+            .refresh(|candidate| {
+                candidate.upsert_sources(vec![RuntimeSource::new(
+                    RuntimeSourceId::plugin("acc-src"),
+                    [18; 32],
+                    Arc::new(()),
+                    vec![RuntimeSourceExport::tool(
+                        "acc",
+                        "acc__tool",
+                        vec!["solo".to_string(), "grep".to_string()],
+                        Arc::new(NoopTool::new("acc__tool")),
+                        ToolPermission::Tool,
+                    )],
+                )])
+            })
+            .expect("mixed contested and uncontested aliases must publish");
+
+        let workdir = PathBuf::from("/tmp/hya-mask-table");
+        let binding = registry.bind_turn(&workdir).unwrap();
+        let mut expected = BTreeMap::new();
+        expected.insert("grep".to_string(), "acc__tool".to_string());
+        assert_eq!(
+            binding.masks(),
+            &expected,
+            "only the built-in contest belongs in the mask table"
+        );
+        assert!(
+            binding.resolve_tool("solo").is_some(),
+            "an uncontested alias keeps working through the registry"
         );
     }
 
@@ -3311,6 +4037,7 @@ agent:
                 tools,
                 skills: BTreeMap::new(),
                 sources: BTreeMap::new(),
+                masks: Arc::new(BTreeMap::new()),
             };
             (
                 TurnBinding {
@@ -3490,6 +4217,7 @@ agent:
                 tools,
                 skills,
                 sources: BTreeMap::new(),
+                masks: Arc::new(BTreeMap::new()),
             };
             let (permission, _asks) = PermissionPlane::new_with_policy(
                 PermissionRules::default(),
@@ -3668,15 +4396,19 @@ agent:
                 "config".to_string(),
                 nested_value(plugin_resource_marker, reverse_resources),
             );
+            let probe_name = match plugin_kind {
+                RuntimeSourceKind::Mcp => format!("mcp__{plugin_id}__probe"),
+                _ => format!("plugin__{plugin_id}__probe"),
+            };
             let plugin = RuntimeSource::new(
                 RuntimeSourceId::new(plugin_kind, plugin_id),
                 plugin_digest,
                 Arc::new(()),
                 vec![RuntimeSourceExport::tool(
                     "probe",
-                    "plugin__fixture__probe",
+                    probe_name.clone(),
                     vec!["plugin_probe".to_string()],
-                    Arc::new(NoopTool::new("plugin__fixture__probe")),
+                    Arc::new(NoopTool::new(&probe_name)),
                     ToolPermission::Tool,
                 )],
             )

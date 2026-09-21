@@ -15,7 +15,7 @@ use hya_plugin::PreparedPlugin;
 use hya_plugin::config::PluginSpec;
 use hya_plugin::messages::{PluginContributionSet, SkillContribution};
 use hya_proto::ConfigGeneration;
-use hya_tool::{SkillCatalogEntry, Tool, ToolPermission, parse_skill};
+use hya_tool::{NamedTool, SkillCatalogEntry, Tool, ToolPermission, parse_skill};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -474,12 +474,19 @@ pub(crate) fn prepared_plugin_source(
     digest.update(b"hya:plugin-declaration:v1\0");
     update_bytes(&mut digest, plugin.canonical_declaration());
     let declaration_digest = digest.finalize().into();
+    // Contributed tools are composed into their qualified provider-facing
+    // name by the host: `{plugin_id}__{declared local name}`. The inner tool
+    // keeps the declared name for its `tool/call` wire requests; the
+    // `NamedTool` wrapper exposes only the qualified spelling to the
+    // registry, schemas, and permission plane.
     let exports = plugin
         .tools()
         .into_iter()
         .map(|tool| {
-            let declared_id = tool.name().to_string();
-            PreparedExport::tool(declared_id, Vec::new(), tool, ToolPermission::Tool)
+            let local_name = tool.name().to_string();
+            let qualified = format!("{}__{local_name}", plugin.id());
+            let exposed: Arc<dyn Tool> = Arc::new(NamedTool::new(qualified, tool));
+            PreparedExport::tool(local_name, Vec::new(), exposed, ToolPermission::Tool)
         })
         .collect();
     Ok(PreparedSource::new(id, declaration_digest, Arc::new(plugin), exports).with_skills(skills))
@@ -1288,7 +1295,7 @@ mod tests {
             vec![prepared(
                 source.clone(),
                 [2; 32],
-                "new_tool",
+                "mcp__alpha__new_tool",
                 new_closes.clone(),
             )],
         )?;
@@ -1297,7 +1304,12 @@ mod tests {
         let stale_closes = Arc::new(AtomicUsize::new(0));
         let stale = reconciler.finish_revision(
             &old_plan,
-            vec![prepared(source, [1; 32], "old_tool", stale_closes.clone())],
+            vec![prepared(
+                source,
+                [1; 32],
+                "mcp__alpha__old_tool",
+                stale_closes.clone(),
+            )],
         );
         assert!(matches!(stale, Err(ReconcileError::StaleAttempt { .. })));
         assert_eq!(stale_closes.load(Ordering::SeqCst), 1);
@@ -1308,8 +1320,8 @@ mod tests {
             .into_iter()
             .map(|schema| schema.name.as_str().to_string())
             .collect::<Vec<_>>();
-        assert!(names.contains(&"new_tool".to_string()));
-        assert!(!names.contains(&"old_tool".to_string()));
+        assert!(names.contains(&"mcp__alpha__new_tool".to_string()));
+        assert!(!names.contains(&"mcp__alpha__old_tool".to_string()));
         Ok(())
     }
 
@@ -1329,19 +1341,19 @@ mod tests {
             vec![prepared(
                 removed_source,
                 [3; 32],
-                "removed_tool",
+                "mcp__removed__tool",
                 retained_closes.clone(),
             )],
         )?;
 
         let workdir = std::env::temp_dir().join("hya-reconcile-removal-binding");
         let old_binding = registry.bind_turn(&workdir)?;
-        assert!(old_binding.resolve_tool("removed_tool").is_some());
+        assert!(old_binding.resolve_tool("mcp__removed__tool").is_some());
 
         let failing_source = SourceId::mcp("failing");
         let replacement = reconciler.replace_desired(vec![desired(&failing_source, "fails")])?;
         let after_removal_generation = registry.effective_manifest().generation;
-        assert!(old_binding.resolve_tool("removed_tool").is_some());
+        assert!(old_binding.resolve_tool("mcp__removed__tool").is_some());
         assert_eq!(retained_closes.load(Ordering::SeqCst), 0);
 
         let failed = reconciler.finish_revision(
@@ -1355,8 +1367,8 @@ mod tests {
         let after_failure_generation = registry.effective_manifest().generation;
         assert_eq!(after_failure_generation, after_removal_generation);
         let after_failure = registry.bind_turn(&workdir)?;
-        assert!(after_failure.resolve_tool("removed_tool").is_none());
-        assert!(old_binding.resolve_tool("removed_tool").is_some());
+        assert!(after_failure.resolve_tool("mcp__removed__tool").is_none());
+        assert!(old_binding.resolve_tool("mcp__removed__tool").is_some());
         drop(old_binding);
         assert_eq!(retained_closes.load(Ordering::SeqCst), 1);
         Ok(())
@@ -1433,7 +1445,7 @@ mod tests {
             vec![prepared_with_permission(
                 source.clone(),
                 [20; 32],
-                "read",
+                "mcp__reserved__tool",
                 first_closes.clone(),
                 ToolPermission::Tool,
             )],
@@ -1449,7 +1461,7 @@ mod tests {
             observed
                 .typed_error
                 .as_deref()
-                .is_some_and(|error| error.contains("duplicate tool name: read"))
+                .is_some_and(|error| error.contains("mcp__reserved__tool"))
         );
 
         let retry_closes = Arc::new(AtomicUsize::new(0));
@@ -1496,7 +1508,7 @@ mod tests {
                 prepared_with_permission(
                     plugin.clone(),
                     [11; 32],
-                    "plugin_lookup",
+                    "mixed-plugin__plugin_lookup",
                     old_plugin_closes.clone(),
                     ToolPermission::Tool,
                 ),
@@ -1543,7 +1555,7 @@ mod tests {
                 prepared_with_permission(
                     plugin.clone(),
                     [13; 32],
-                    "plugin_lookup",
+                    "mixed-plugin__plugin_lookup",
                     new_plugin_closes.clone(),
                     ToolPermission::Tool,
                 ),
@@ -1561,7 +1573,7 @@ mod tests {
             .map(|schema| schema.name.as_str().to_string())
             .collect::<Vec<_>>();
         assert!(names.contains(&"mcp__mixed__lookup".to_string()));
-        assert!(names.contains(&"plugin_lookup".to_string()));
+        assert!(names.contains(&"mixed-plugin__plugin_lookup".to_string()));
         assert_eq!(old_mcp_closes.load(Ordering::SeqCst), 0);
         assert_eq!(old_plugin_closes.load(Ordering::SeqCst), 0);
         assert_eq!(new_mcp_closes.load(Ordering::SeqCst), 0);
@@ -1732,6 +1744,7 @@ mod tests {
                 version: "1.0.0".to_string(),
                 publisher: "hya-tests".to_string(),
             },
+            namespace: None,
             digest: "test-only".to_string(),
             agent,
             tools: Vec::new(),

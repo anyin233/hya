@@ -700,6 +700,7 @@ mod tests {
                     version: "0.0.0".to_string(),
                     publisher: "hya-tests".to_string(),
                 },
+                namespace: None,
                 digest: "test-only-resident".to_string(),
                 agent: hya_bundle::PreparedAgent {
                     id: AgentName::new("resident"),
