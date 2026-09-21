@@ -197,7 +197,7 @@ async fn budget_exhaustion_wins_when_never_satisfied() {
     .unwrap();
     assert_eq!(
         outcome,
-        RunOutcome::Capped {
+        RunOutcome::BudgetLimited {
             iterations: 3,
             which: "max_iterations",
         }
@@ -235,8 +235,15 @@ async fn exact_budget_mode_runs_all_iterations() {
     )
     .await
     .unwrap();
-    assert!(matches!(outcome, RunOutcome::Capped { iterations: 3, .. }));
-    assert_eq!(ec.load(Ordering::Relaxed), 3);
+    assert!(matches!(
+        outcome,
+        RunOutcome::BudgetLimited {
+            iterations: 3,
+            which: "max_iterations",
+        }
+    ));
+    // 3 budgeted iterations + one wrap-up pass.
+    assert_eq!(ec.load(Ordering::Relaxed), 4);
 }
 
 #[tokio::test]
