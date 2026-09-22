@@ -39,6 +39,7 @@ identity:
 fn first_namespace(catalog: &hya_bundle::PreparedCatalog) -> Option<&str> {
     match &catalog.bundles()[0] {
         PreparedInstallableBundle::Agent(bundle) => bundle.namespace.as_deref(),
+        PreparedInstallableBundle::AgentSet(bundle) => bundle.namespace.as_deref(),
         PreparedInstallableBundle::Workflow(bundle) => bundle.namespace.as_deref(),
     }
 }

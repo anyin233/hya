@@ -1277,3 +1277,58 @@ fn bundle_search_without_a_metadata_match_lists_the_catalog()
     fs::remove_dir_all(&data_root)?;
     Ok(())
 }
+
+#[test]
+fn agent_set_installs_lists_searches_and_uninstalls_as_one_package()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root = unique_data_root()?;
+    let source = hya_bundle::BundleSource::new(
+        "agent-set-cli",
+        vec![hya_bundle::SourceFile::new(
+            "bundle.yaml",
+            br#"kind: AgentSetBundle
+identity: { id: acme/set-cli, version: 1.0.0, publisher: acme }
+agents:
+  - { id: set-cli-lead, role: main }
+  - { id: set-cli-reviewer, role: subagent }
+"#,
+        )],
+    );
+    let package = root.join("team.hyabundle");
+    fs::write(&package, hya_bundle::write_public_package(&source)?)?;
+    let path = package.to_str().ok_or("non-UTF8 package path")?;
+    for args in [
+        vec!["bundle", "info", "-f", path],
+        vec!["bundle", "install", path],
+        vec!["bundle", "info", "acme/set-cli"],
+        vec!["bundle", "list"],
+        vec!["bundle", "search", "set-cli-reviewer"],
+    ] {
+        let output = bundle_command(&root).args(&args).output()?;
+        assert!(
+            output.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains("acme/set-cli"), "{args:?}: {stdout}");
+        if args[1] != "install" {
+            assert!(stdout.contains("AgentSetBundle"), "{args:?}: {stdout}");
+            assert!(
+                stdout.contains("set-cli-lead") && stdout.contains("set-cli-reviewer"),
+                "{args:?}: {stdout}"
+            );
+        }
+    }
+    assert!(
+        bundle_command(&root)
+            .args(["bundle", "uninstall", "acme/set-cli"])
+            .output()?
+            .status
+            .success()
+    );
+    let list = bundle_command(&root).args(["bundle", "list"]).output()?;
+    assert!(!String::from_utf8_lossy(&list.stdout).contains("acme/set-cli"));
+    fs::remove_dir_all(root)?;
+    Ok(())
+}

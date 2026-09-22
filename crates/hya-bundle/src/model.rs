@@ -48,6 +48,8 @@ pub enum SpawnLifecycle {
 pub enum PreparedBundleKind {
     /// A singular AgentBundle payload.
     AgentBundle,
+    /// A closed set of Agents without a Workflow.
+    AgentSetBundle,
     /// A WorkflowBundle payload containing one Workflow and its Agent closure.
     WorkflowBundle,
 }
@@ -58,6 +60,7 @@ impl PreparedBundleKind {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::AgentBundle => "AgentBundle",
+            Self::AgentSetBundle => "AgentSetBundle",
             Self::WorkflowBundle => "WorkflowBundle",
         }
     }
@@ -187,6 +190,33 @@ pub struct PreparedAgentBundle {
     pub extensions: Vec<PreparedResource>,
 }
 
+/// Fully prepared AgentSetBundle: multiple Agents sharing one resource plane.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PreparedAgentSetBundle {
+    /// Prepared-document format version (currently `2`).
+    pub format_version: u32,
+    /// Bundle identity block.
+    pub identity: BundleIdentity,
+    /// Provider-facing namespace (declared or identity-derived).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
+    /// Digest of this bundle's canonical content for integrity checks.
+    pub digest: String,
+    /// All Agents this bundle defines.
+    pub agents: Vec<PreparedAgent>,
+    /// Prepared tool resources.
+    pub tools: Vec<PreparedResource>,
+    /// Prepared Skill resources.
+    pub skills: Vec<PreparedResource>,
+    /// Prepared MCP declarations.
+    pub mcp: Vec<PreparedResource>,
+    /// Prepared hook resources.
+    pub hooks: Vec<PreparedResource>,
+    /// Prepared JS/Rust extension entrypoints.
+    pub extensions: Vec<PreparedResource>,
+}
+
 /// One compiled Workflow source retained in a prepared WorkflowBundle.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -240,6 +270,8 @@ pub struct PreparedWorkflowBundle {
 pub enum PreparedInstallableBundle {
     /// Singular AgentBundle payload.
     Agent(Box<PreparedAgentBundle>),
+    /// AgentSetBundle payload with multiple Agents and no Workflow.
+    AgentSet(Box<PreparedAgentSetBundle>),
     /// WorkflowBundle payload with one Workflow and Agent closure.
     Workflow(Box<PreparedWorkflowBundle>),
 }
@@ -251,6 +283,7 @@ impl PreparedInstallableBundle {
     pub fn namespace(&self) -> &str {
         let (declared, id) = match self {
             Self::Agent(bundle) => (bundle.namespace.as_deref(), bundle.identity.id.as_str()),
+            Self::AgentSet(bundle) => (bundle.namespace.as_deref(), bundle.identity.id.as_str()),
             Self::Workflow(bundle) => (bundle.namespace.as_deref(), bundle.identity.id.as_str()),
         };
         declared.unwrap_or_else(|| id.rsplit('/').next().unwrap_or_default())
@@ -272,6 +305,11 @@ impl Serialize for PreparedInstallableBundle {
         match self {
             Self::Agent(bundle) => Tagged {
                 kind: PreparedBundleKind::AgentBundle.as_str(),
+                bundle,
+            }
+            .serialize(serializer),
+            Self::AgentSet(bundle) => Tagged {
+                kind: PreparedBundleKind::AgentSetBundle.as_str(),
                 bundle,
             }
             .serialize(serializer),
@@ -300,6 +338,10 @@ impl<'de> Deserialize<'de> for PreparedInstallableBundle {
                 .map(Box::new)
                 .map(Self::Agent)
                 .map_err(de::Error::custom),
+            "AgentSetBundle" => serde_json::from_value::<PreparedAgentSetBundle>(value)
+                .map(Box::new)
+                .map(Self::AgentSet)
+                .map_err(de::Error::custom),
             "WorkflowBundle" => serde_json::from_value::<PreparedWorkflowBundle>(value)
                 .map(Box::new)
                 .map(Self::Workflow)
@@ -317,6 +359,7 @@ impl PreparedInstallableBundle {
     pub const fn kind(&self) -> PreparedBundleKind {
         match self {
             Self::Agent(_) => PreparedBundleKind::AgentBundle,
+            Self::AgentSet(_) => PreparedBundleKind::AgentSetBundle,
             Self::Workflow(_) => PreparedBundleKind::WorkflowBundle,
         }
     }
@@ -326,6 +369,7 @@ impl PreparedInstallableBundle {
     pub fn identity(&self) -> &BundleIdentity {
         match self {
             Self::Agent(bundle) => &bundle.identity,
+            Self::AgentSet(bundle) => &bundle.identity,
             Self::Workflow(bundle) => &bundle.identity,
         }
     }
@@ -335,6 +379,7 @@ impl PreparedInstallableBundle {
     pub fn digest(&self) -> &str {
         match self {
             Self::Agent(bundle) => &bundle.digest,
+            Self::AgentSet(bundle) => &bundle.digest,
             Self::Workflow(bundle) => &bundle.digest,
         }
     }
@@ -344,6 +389,7 @@ impl PreparedInstallableBundle {
     pub fn agents(&self) -> &[PreparedAgent] {
         match self {
             Self::Agent(bundle) => std::slice::from_ref(&bundle.agent),
+            Self::AgentSet(bundle) => &bundle.agents,
             Self::Workflow(bundle) => &bundle.agents,
         }
     }
@@ -365,6 +411,7 @@ impl PreparedInstallableBundle {
     pub fn tools(&self) -> &[PreparedResource] {
         match self {
             Self::Agent(bundle) => &bundle.tools,
+            Self::AgentSet(bundle) => &bundle.tools,
             Self::Workflow(bundle) => &bundle.tools,
         }
     }
@@ -374,6 +421,7 @@ impl PreparedInstallableBundle {
     pub fn skills(&self) -> &[PreparedResource] {
         match self {
             Self::Agent(bundle) => &bundle.skills,
+            Self::AgentSet(bundle) => &bundle.skills,
             Self::Workflow(bundle) => &bundle.skills,
         }
     }
@@ -383,6 +431,7 @@ impl PreparedInstallableBundle {
     pub fn mcp(&self) -> &[PreparedResource] {
         match self {
             Self::Agent(bundle) => &bundle.mcp,
+            Self::AgentSet(bundle) => &bundle.mcp,
             Self::Workflow(bundle) => &bundle.mcp,
         }
     }
@@ -392,6 +441,7 @@ impl PreparedInstallableBundle {
     pub fn hooks(&self) -> &[PreparedResource] {
         match self {
             Self::Agent(bundle) => &bundle.hooks,
+            Self::AgentSet(bundle) => &bundle.hooks,
             Self::Workflow(bundle) => &bundle.hooks,
         }
     }
@@ -401,6 +451,7 @@ impl PreparedInstallableBundle {
     pub fn extensions(&self) -> &[PreparedResource] {
         match self {
             Self::Agent(bundle) => &bundle.extensions,
+            Self::AgentSet(bundle) => &bundle.extensions,
             Self::Workflow(bundle) => &bundle.extensions,
         }
     }
@@ -409,7 +460,7 @@ impl PreparedInstallableBundle {
     #[must_use]
     pub fn workflow(&self) -> Option<&PreparedWorkflow> {
         match self {
-            Self::Agent(_) => None,
+            Self::Agent(_) | Self::AgentSet(_) => None,
             Self::Workflow(bundle) => Some(&bundle.workflow),
         }
     }
@@ -419,7 +470,16 @@ impl PreparedInstallableBundle {
     pub fn agent_bundle(&self) -> Option<&PreparedAgentBundle> {
         match self {
             Self::Agent(bundle) => Some(bundle),
-            Self::Workflow(_) => None,
+            Self::AgentSet(_) | Self::Workflow(_) => None,
+        }
+    }
+
+    /// Return the AgentSetBundle payload, if this is one.
+    #[must_use]
+    pub fn agent_set_bundle(&self) -> Option<&PreparedAgentSetBundle> {
+        match self {
+            Self::AgentSet(bundle) => Some(bundle),
+            Self::Agent(_) | Self::Workflow(_) => None,
         }
     }
 
@@ -427,7 +487,7 @@ impl PreparedInstallableBundle {
     #[must_use]
     pub fn workflow_bundle(&self) -> Option<&PreparedWorkflowBundle> {
         match self {
-            Self::Agent(_) => None,
+            Self::Agent(_) | Self::AgentSet(_) => None,
             Self::Workflow(bundle) => Some(bundle),
         }
     }

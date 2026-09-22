@@ -250,3 +250,40 @@ fn the_builtin_digest_is_stable_across_catalogs() {
         "installed bundles must not perturb the builtin roster digest"
     );
 }
+
+#[test]
+fn agent_set_members_use_bundle_origin_and_existing_spawn_authorization() {
+    let prepared = hya_bundle::prepare_package(hya_bundle::BundleSource::new(
+        "set-runtime",
+        vec![hya_bundle::SourceFile::new(
+            "bundle.yaml",
+            br#"kind: AgentSetBundle
+identity: { id: acme/team, version: 1.0.0, publisher: acme }
+agents:
+  - { id: team-lead, role: main, can_spawn: [team-worker] }
+  - { id: team-worker, role: subagent }
+"#,
+        )],
+    ))
+    .expect("prepare");
+    let bundles = BundleCatalog::from_verified_catalogs(&[&prepared]).expect("verified catalog");
+    let catalog = AgentCatalog::new(Arc::new(bundles)).expect("runtime catalog");
+    let worker = catalog
+        .resolve_spawn("team-lead", "team-worker")
+        .expect("allowed spawn");
+    assert_eq!(
+        worker.origin,
+        AgentOrigin::Bundle {
+            bundle_id: "acme/team"
+        }
+    );
+    assert!(matches!(
+        catalog.resolve_spawn("team-worker", "team-lead"),
+        Err(BundleError::AgentSpawnNotAllowed { .. })
+    ));
+    assert!(
+        catalog
+            .resolve("bundle:acme/team/agent/team-worker")
+            .is_some()
+    );
+}
