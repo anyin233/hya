@@ -15,9 +15,9 @@ pub use error::BundleError;
 pub use model::{
     AgentRole, BundleIdentity, ModelPolicy, PreparedAgent, PreparedAgentBundle,
     PreparedAgentSetBundle, PreparedBundleIndex, PreparedBundleKind, PreparedBundleProcess,
-    PreparedBundleSchemas, PreparedCatalog, PreparedInstallableBundle, PreparedProcessExtension,
-    PreparedProcessKind, PreparedResource, PreparedSchema, PreparedWorkflow,
-    PreparedWorkflowBundle, ResourceView, SpawnLifecycle,
+    PreparedBundleSchemas, PreparedCatalog, PreparedInstallableBundle, PreparedPluginBundle,
+    PreparedProcessExtension, PreparedProcessKind, PreparedResource, PreparedSchema,
+    PreparedWorkflow, PreparedWorkflowBundle, ResourceView, SpawnLifecycle,
 };
 pub use package::{
     PackageFormat, PackageInspection, PrivatePackageAuthentication, PrivatePackageInspection,

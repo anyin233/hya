@@ -1332,3 +1332,65 @@ agents:
     fs::remove_dir_all(root)?;
     Ok(())
 }
+
+#[test]
+fn plugin_installs_lists_searches_and_uninstalls_without_an_agent()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root = unique_data_root()?;
+    let source = hya_bundle::BundleSource::new(
+        "plugin-cli",
+        vec![
+            hya_bundle::SourceFile::new(
+                "bundle.yaml",
+                br#"kind: Plugin
+identity: { id: acme/plugin-cli, version: 1.0.0, publisher: acme }
+resources:
+  skills:
+    - id: plugin-help
+      path: resources/skills/plugin-help.md
+"#,
+            ),
+            hya_bundle::SourceFile::new(
+                "resources/skills/plugin-help.md",
+                b"---\nname: plugin-help\ndescription: Plugin CLI fixture.\n---\n# Plugin Help\nPlugin-only searchable skill.\n",
+            ),
+        ],
+    );
+    let package = root.join("plugin.hyabundle");
+    fs::write(&package, hya_bundle::write_public_package(&source)?)?;
+    let path = package.to_str().ok_or("non-UTF8 package path")?;
+
+    for args in [
+        vec!["bundle", "info", "-f", path],
+        vec!["bundle", "install", path],
+        vec!["bundle", "info", "acme/plugin-cli"],
+        vec!["bundle", "list"],
+        vec!["bundle", "search", "plugin-help"],
+    ] {
+        let output = bundle_command(&root).args(&args).output()?;
+        assert!(
+            output.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains("acme/plugin-cli"), "{args:?}: {stdout}");
+        if args[1] != "install" {
+            assert!(stdout.contains("Plugin"), "{args:?}: {stdout}");
+            if args[1] == "info" {
+                assert!(stdout.contains("plugin-help"), "{args:?}: {stdout}");
+            }
+        }
+    }
+    assert!(
+        bundle_command(&root)
+            .args(["bundle", "uninstall", "acme/plugin-cli"])
+            .output()?
+            .status
+            .success()
+    );
+    let list = bundle_command(&root).args(["bundle", "list"]).output()?;
+    assert!(!String::from_utf8_lossy(&list.stdout).contains("acme/plugin-cli"));
+    fs::remove_dir_all(root)?;
+    Ok(())
+}

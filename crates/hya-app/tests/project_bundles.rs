@@ -45,6 +45,21 @@ fn write_project_bundle(root: &Path, name: &str, bundle_id: &str, prompt: &str) 
     .expect("write project skill");
 }
 
+fn write_project_plugin(root: &Path, name: &str, bundle_id: &str, body: &str) {
+    let dir = root.join(".hya/bundles").join(name);
+    std::fs::create_dir_all(dir.join("resources/skills")).expect("create project plugin dir");
+    let manifest = format!(
+        "kind: Plugin\nidentity:\n  id: {bundle_id}\n  version: 1.0.0\n  publisher: hya\nresources:\n  skills:\n    - id: {name}-skill\n      path: resources/skills/{name}-skill.md\n"
+    );
+    std::fs::write(dir.join("bundle.yaml"), manifest).expect("write project plugin manifest");
+    std::fs::write(
+        dir.join("resources/skills")
+            .join(format!("{name}-skill.md")),
+        format!("---\nname: {name}-skill\ndescription: Project plugin fixture.\n---\n{body}\n"),
+    )
+    .expect("write project plugin skill");
+}
+
 async fn build_engine(registry_path: &Path, project_dir: Option<PathBuf>) -> Arc<SessionEngine> {
     let runtime = Arc::new(RuntimeRegistry::new(
         ToolRegistry::builtins(),
@@ -265,5 +280,45 @@ async fn project_bundle_content_change_republishes() {
         second_agent
             .prompt
             .is_some_and(|p| p.contains("Version two"))
+    );
+}
+
+#[tokio::test]
+async fn project_plugin_publishes_static_skills_without_an_agent() {
+    let root = temp_path("project-plugin");
+    write_project_plugin(
+        &root,
+        "local-plugin",
+        "hya/local-plugin",
+        "PLUGIN_SKILL_BODY",
+    );
+    let registry_path = root.join("registry.db");
+    let engine = build_engine(&registry_path, Some(root.join(".hya/bundles"))).await;
+    let workdir = temp_path("workdir-plugin");
+    std::fs::create_dir_all(&workdir).expect("create workdir");
+
+    let binding = engine
+        .bind_root_runtime(&workdir)
+        .await
+        .expect("bind project plugin catalog");
+    assert!(binding.resolve_agent("local-plugin-agent").is_none());
+    assert!(
+        binding
+            .bundle_catalog()
+            .bundles()
+            .iter()
+            .any(|bundle| bundle.identity().id == "hya/local-plugin" && bundle.agents().is_empty())
+    );
+    let manifest = engine.runtime_registry().effective_manifest();
+    let source = manifest
+        .sources
+        .get(&hya_core::RuntimeSourceId::bundle("hya/local-plugin"))
+        .expect("plugin skill source must publish at root bind");
+    assert!(
+        source
+            .skill_entries
+            .iter()
+            .any(|skill| skill.name == "local-plugin-skill"
+                && skill.content.contains("PLUGIN_SKILL_BODY"))
     );
 }

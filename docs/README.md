@@ -34,11 +34,11 @@ If you want to compare hya with adjacent coding agents:
 
 1. [hya, Pi, and Compat Feature Comparison](hya-pi-compat-comparison.md)
 
-If you want to package a public AgentBundle, AgentSetBundle, or WorkflowBundle:
+If you want to package a public Plugin, AgentBundle, AgentSetBundle, or WorkflowBundle:
 
 1. Run `hya-backend bundle info -f example.hyabundle`, then
    `hya-backend bundle install example.hyabundle`.
-2. Read [AgentBundle Authoring](agent-bundle-authoring.md) for singular or
+2. Read [AgentBundle Authoring](agent-bundle-authoring.md) for agentless Plugin, singular or
    multi-agent (`AgentSetBundle`) payloads, or [Workflows](workflows.md#packaging-a-workflowbundle) for one
    Workflow plus its exact reachable Agent closure. Sources use exactly one
    root form: `bundle.yaml` for all three kinds, or `bundle.hya.md` only for an
@@ -86,7 +86,7 @@ If you want to understand the codebase:
 | [Skills](skills.md) | Skill discovery paths, skill tool, and authoring. |
 | [Workflows](workflows.md) | Workflow DAGs, governance, discovery, CLI/tool execution, and WorkflowBundle packaging. |
 | [Plugin protocol](plugin-protocol.md) | Native stdio JSON-RPC ABI for out-of-process plugins. |
-| [AgentBundle Authoring](agent-bundle-authoring.md) | Package, inspect, install, list, describe, and uninstall public AgentBundle and AgentSetBundle payloads, including static and Bun-sidecar forms. |
+| [AgentBundle Authoring](agent-bundle-authoring.md) | Package, inspect, install, list, describe, and uninstall public Plugin, AgentBundle, and AgentSetBundle payloads, including static and Bun-sidecar forms. |
 | [Secure self-update](self-update.md) | Independent `hya-updater` TCB: signed metadata, local package stage, smoke, owner-gated activation, break-glass installer. |
 | [Project Structure](project-structure.md) | Map repository paths, crates, modules, tests, and data flow. |
 | [Architecture Overview](architecture/overview.md) | Explain the crate boundary model and end-to-end request path. |

@@ -25,3 +25,4 @@ tokio-util = { workspace = true }
 
 [dev-dependencies]
 # integration tests may use unwrap
+hya-bundle = { path = "../hya-bundle" }

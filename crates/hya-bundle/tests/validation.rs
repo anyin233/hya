@@ -993,7 +993,7 @@ fn duplicate_stable_ids_wrong_kind_and_parent_paths_are_rejected() {
     );
 
     let wrong_kind = String::from_utf8(minimal_manifest(""))
-        .map(|manifest| manifest.replace("kind: AgentBundle", "kind: Plugin"));
+        .map(|manifest| manifest.replace("kind: AgentBundle", "kind: UnsupportedBundle"));
     let Ok(wrong_kind) = wrong_kind else {
         panic!("fixture is not UTF-8");
     };

@@ -59,6 +59,28 @@ You are the installed agent.
     )
 }
 
+fn installed_plugin_source() -> BundleSource {
+    BundleSource::new(
+        "installed-plugin",
+        vec![
+            SourceFile::new(
+                "bundle.yaml",
+                br#"kind: Plugin
+identity: { id: hya/installed-plugin, version: 1.0.0, publisher: hya }
+resources:
+  skills:
+    - id: plugin-skill
+      path: resources/skills/plugin-skill.md
+"#,
+            ),
+            SourceFile::new(
+                "resources/skills/plugin-skill.md",
+                b"---\nname: plugin-skill\ndescription: Installed Plugin fixture.\n---\nPLUGIN_SKILL_BODY\n",
+            ),
+        ],
+    )
+}
+
 /// Build a minimal WorkflowBundle with one directly referenced Agent.
 fn installed_workflow_source() -> BundleSource {
     BundleSource::new(
@@ -195,6 +217,91 @@ async fn installed_generation_refresh_publishes_only_for_new_root_bindings() {
         .await
         .expect("bind unchanged catalog");
     assert_eq!(unchanged_binding.generation(), fresh_binding.generation());
+}
+
+#[tokio::test]
+async fn installed_plugin_refresh_and_uninstall_preserve_old_binding_snapshot() {
+    let runtime = Arc::new(RuntimeRegistry::new(
+        ToolRegistry::builtins(),
+        hya_app::builtin_agent_catalog().expect("builtin agent catalog"),
+    ));
+    let registry_path = temp_path("plugin-registry.db");
+    let registry = BundleRegistry::connect(registry_path.to_str().expect("registry path UTF-8"))
+        .await
+        .expect("connect registry");
+    let refresh = Arc::new(hya_app::InstalledBundleRefresh::new(registry_path));
+    let (permission, _rx) = PermissionPlane::new(PermissionRules::default());
+    let engine = SessionEngine::new(
+        SessionStore::connect_memory().await.expect("connect store"),
+        Arc::new(ProviderRouter::new()),
+        Arc::clone(&runtime),
+        permission,
+        EventBus::default(),
+    )
+    .with_catalog_refresh(refresh);
+    let workdir = temp_path("plugin-workdir");
+    std::fs::create_dir_all(&workdir).expect("create workdir");
+    let old_binding = engine.bind_runtime(&workdir).expect("bind old catalog");
+
+    let prepared = prepare_package(installed_plugin_source()).expect("prepare plugin");
+    registry
+        .install(
+            &[],
+            hya_store::NamespaceInstallPolicy::DenyConflicts,
+            BundleInstallCandidate {
+                source_digest: [0x53; 32],
+                prepared_digest: prepared.digest().to_owned(),
+                prepared_bytes: prepared.bytes().to_vec(),
+                installed_at: 1_725_000_020,
+            },
+        )
+        .await
+        .expect("install plugin");
+    let installed_binding = engine
+        .bind_root_runtime(&workdir)
+        .await
+        .expect("refresh plugin");
+    assert!(installed_binding.resolve_agent("plugin-agent").is_none());
+    assert!(
+        runtime
+            .effective_manifest()
+            .sources
+            .get(&RuntimeSourceId::bundle("hya/installed-plugin"))
+            .is_some_and(|source| source
+                .skill_entries
+                .iter()
+                .any(|skill| skill.name == "plugin-skill"))
+    );
+
+    registry
+        .uninstall("hya/installed-plugin")
+        .await
+        .expect("uninstall plugin");
+    let after_uninstall = engine
+        .bind_root_runtime(&workdir)
+        .await
+        .expect("refresh uninstall");
+    assert!(
+        after_uninstall
+            .bundle_catalog()
+            .bundles()
+            .iter()
+            .all(|bundle| bundle.identity().id != "hya/installed-plugin")
+    );
+    assert!(
+        old_binding
+            .bundle_catalog()
+            .bundles()
+            .iter()
+            .all(|bundle| bundle.identity().id != "hya/installed-plugin")
+    );
+    assert!(
+        installed_binding
+            .bundle_catalog()
+            .bundles()
+            .iter()
+            .any(|bundle| bundle.identity().id == "hya/installed-plugin")
+    );
 }
 
 #[tokio::test]

@@ -45,3 +45,9 @@
 
 - `Cargo.toml` workspace version 当前为 `0.37.4`，root `CHANGELOG.md` 仍以 `0.37.0` 为最新文本；进入新功能实现必须先按 AGENTS.md 的 release/changelog 规则处理版本策略。
 - 本次上下文读取没有修改 Rust/TypeScript/docs 产品文件，也没有运行完整验证门；下一次功能提交必须先写一个失败测试，再运行 touched-area gate，最后运行仓库要求的 fmt/clippy/workspace tests/backend build。
+
+## Plugin integration boundary
+
+Existing catalog generation refresh supports agentless prepared payloads, but Full-plane Skill candidate collection previously excluded every bundle Skill. A Plugin-specific visibility rule is needed for builtin agents to consume its published static Skills. Agent-bearing and unrecognized bundle sources must remain excluded from that exception. Process/MCP declarations remain metadata in this wave.
+
+Plugin final boundary: runtime source kind is Bundle, distinct from process Plugin; the Full-plane exception checks both Bundle source identity and catalog-confirmed Plugin payload. Regression tests exclude AgentBundle/private and unknown bundle sources. Plugin preparation also runs validate_unsupported, preserving static extensions.rust rejection while retaining process declarations.

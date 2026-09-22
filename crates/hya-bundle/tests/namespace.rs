@@ -41,6 +41,7 @@ fn first_namespace(catalog: &hya_bundle::PreparedCatalog) -> Option<&str> {
         PreparedInstallableBundle::Agent(bundle) => bundle.namespace.as_deref(),
         PreparedInstallableBundle::AgentSet(bundle) => bundle.namespace.as_deref(),
         PreparedInstallableBundle::Workflow(bundle) => bundle.namespace.as_deref(),
+        PreparedInstallableBundle::Plugin(bundle) => bundle.namespace.as_deref(),
     }
 }
 

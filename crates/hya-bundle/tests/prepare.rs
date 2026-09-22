@@ -89,6 +89,107 @@ agents:
 
 #[test]
 #[allow(clippy::expect_used)]
+fn plugin_bundle_prepares_without_agents() {
+    let source = BundleSource::new(
+        "plugin",
+        vec![SourceFile::new(
+            "bundle.yaml",
+            br#"kind: Plugin
+identity: { id: hya/plugins-demo, version: 1.0.0, publisher: hya }
+"#,
+        )],
+    );
+    let prepared = prepare_package(source).expect("Plugin should prepare");
+    assert_eq!(prepared.bundles()[0].kind().as_str(), "Plugin");
+    assert!(prepared.bundles()[0].agents().is_empty());
+}
+
+#[test]
+#[allow(clippy::expect_used)]
+fn plugin_bundle_round_trips_static_skill_and_rejects_agent_fields() {
+    let manifest = br#"kind: Plugin
+identity: { id: hya/plugins-demo, version: 1.0.0, publisher: hya }
+resources:
+  skills:
+    - id: guide
+      path: skills/guide.md
+"#;
+    let prepared = prepare_package(BundleSource::new(
+        "plugin-skill",
+        vec![
+            SourceFile::new("bundle.yaml", manifest.as_slice()),
+            SourceFile::new("skills/guide.md", b"Use the guide.\n".as_slice()),
+        ],
+    ))
+    .expect("Plugin skill should prepare");
+    let decoded = PreparedCatalog::decode(prepared.bytes(), prepared.digest())
+        .expect("Plugin prepared bytes should decode");
+    let plugin = decoded.bundles()[0]
+        .plugin_bundle()
+        .expect("decoded payload should be Plugin");
+    assert_eq!(plugin.skills.len(), 1);
+    assert_eq!(plugin.skills[0].local_id, "guide");
+
+    for key in ["agent", "agents", "workflow", "channels"] {
+        let text = format!(
+            "kind: Plugin\nidentity: {{ id: hya/plugins-demo, version: 1.0.0, publisher: hya }}\n{key}: {{}}\n"
+        );
+        let result = prepare_package(BundleSource::new(
+            "plugin-invalid",
+            vec![SourceFile::new("bundle.yaml", text.into_bytes())],
+        ));
+        assert!(result.is_err(), "Plugin must reject `{key}`");
+    }
+}
+
+#[test]
+#[allow(clippy::expect_used)]
+fn plugin_and_agent_bundles_coexist_in_one_catalog() {
+    let plugin = prepare_package(BundleSource::new(
+        "plugin",
+        vec![SourceFile::new(
+            "bundle.yaml",
+            b"kind: Plugin\nidentity: { id: hya/plugin-pack, version: 1.0.0, publisher: hya }\n",
+        )],
+    ))
+    .expect("Plugin should prepare");
+    let agent = prepare_package(BundleSource::new(
+        "agent",
+        vec![SourceFile::new(
+            "bundle.yaml",
+            b"kind: AgentBundle\nidentity: { id: hya/agent-pack, version: 1.0.0, publisher: hya }\nagent: { id: lead, role: main }\n",
+        )],
+    ))
+    .expect("Agent should prepare");
+    let mut bundles = plugin.bundles().to_vec();
+    bundles.extend(agent.bundles().iter().cloned());
+    let catalog = BundleCatalog::from_prepared(&bundles).expect("mixed catalog should prepare");
+    assert_eq!(catalog.bundles().len(), 2);
+}
+
+#[test]
+fn plugin_rejects_static_rust_extensions() {
+    let source = BundleSource::new(
+        "plugin-rust",
+        vec![SourceFile::new(
+            "bundle.yaml",
+            br#"kind: Plugin
+identity: { id: hya/plugins-rust, version: 1.0.0, publisher: hya }
+extensions:
+  rust:
+    - id: runtime
+      path: runtime.rs
+"#,
+        )],
+    );
+    assert!(matches!(
+        prepare_package(source),
+        Err(BundleError::UnsupportedBundleFeature { feature, .. }) if feature == "extensions.rust"
+    ));
+}
+
+#[test]
+#[allow(clippy::expect_used)]
 fn agent_set_prepared_decode_rejects_an_empty_roster_with_valid_digests() {
     let source = BundleSource::new(
         "empty-roster",
