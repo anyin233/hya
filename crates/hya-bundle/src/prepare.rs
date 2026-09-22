@@ -6,17 +6,19 @@ use sha2::{Digest, Sha256};
 
 use crate::error::BundleError;
 use crate::model::{
-    BundleIdentity, PreparedAgent, PreparedAgentBundle, PreparedBundleIndex, PreparedBundleProcess,
-    PreparedBundleSchemas, PreparedCatalog, PreparedDocument, PreparedDocumentOwned,
-    PreparedInstallableBundle, PreparedProcessExtension, PreparedResource, PreparedSchema,
-    PreparedWorkflow, PreparedWorkflowBundle,
+    BundleIdentity, PreparedAgent, PreparedAgentBundle, PreparedAgentSetBundle,
+    PreparedBundleIndex, PreparedBundleProcess, PreparedBundleSchemas, PreparedCatalog,
+    PreparedDocument, PreparedDocumentOwned, PreparedInstallableBundle, PreparedProcessExtension,
+    PreparedResource, PreparedSchema, PreparedWorkflow, PreparedWorkflowBundle,
 };
 use crate::source::{
-    BundleSource, ParsedSource, SourceAgent, SourceAgentManifest, SourceExtensions, SourceFile,
-    SourceManifest, SourceMcpServer, SourceResource, SourceResources, SourceWorkflowManifest,
+    BundleSource, ParsedSource, SourceAgent, SourceAgentManifest, SourceAgentSetManifest,
+    SourceExtensions, SourceFile, SourceManifest, SourceMcpServer, SourceResource, SourceResources,
+    SourceWorkflowManifest,
 };
 
 const AGENT_SOURCE_KIND: &str = "AgentBundle";
+const AGENT_SET_SOURCE_KIND: &str = "AgentSetBundle";
 const WORKFLOW_SOURCE_KIND: &str = "WorkflowBundle";
 const PREPARED_FORMAT_VERSION: u32 = 2;
 
@@ -158,6 +160,7 @@ impl PreparedCatalog {
 fn manifest_identity(manifest: &SourceManifest) -> &BundleIdentity {
     match manifest {
         SourceManifest::Agent(manifest) => &manifest.identity,
+        SourceManifest::AgentSet(manifest) => &manifest.identity,
         SourceManifest::Workflow(manifest) => &manifest.identity,
     }
 }
@@ -176,6 +179,11 @@ fn prepared_bundle_is_canonical(bundle: &PreparedInstallableBundle) -> bool {
     match bundle {
         PreparedInstallableBundle::Agent(bundle) => {
             bundle.format_version == PREPARED_FORMAT_VERSION
+        }
+        PreparedInstallableBundle::AgentSet(bundle) => {
+            bundle.format_version == PREPARED_FORMAT_VERSION
+                && !bundle.agents.is_empty()
+                && is_strictly_sorted(bundle.agents.iter().map(|agent| agent.id.as_str()))
         }
         PreparedInstallableBundle::Workflow(bundle) => {
             bundle.format_version == PREPARED_FORMAT_VERSION
@@ -588,6 +596,13 @@ fn resolve_catalog_references(
                 &local_resources,
                 &hook_resources,
             )?,
+            PreparedInstallableBundle::AgentSet(bundle) => resolve_agents(
+                &bundle_id,
+                &mut bundle.agents,
+                &resources,
+                &local_resources,
+                &hook_resources,
+            )?,
             PreparedInstallableBundle::Workflow(bundle) => resolve_agents(
                 &bundle_id,
                 &mut bundle.agents,
@@ -749,7 +764,7 @@ fn parse_source(source: BundleSource) -> Result<ParsedSource, BundleError> {
                 if kind.kind != AGENT_SOURCE_KIND {
                     return Err(BundleError::InvalidManifest {
                         source_name: name,
-                        detail: "WorkflowBundle sources must use explicit bundle.yaml".to_string(),
+                        detail: format!("{} sources must use explicit bundle.yaml", kind.kind),
                     });
                 }
                 let manifest = serde_norway::from_str::<SourceAgentManifest>(frontmatter).map_err(
@@ -800,13 +815,22 @@ fn parse_source(source: BundleSource) -> Result<ParsedSource, BundleError> {
                 found: manifest.kind.clone(),
             });
         }
-    } else if let SourceManifest::Workflow(manifest) = &manifest
-        && manifest.kind != WORKFLOW_SOURCE_KIND
-    {
-        return Err(BundleError::WrongKind {
-            source_name: name,
-            found: manifest.kind.clone(),
-        });
+    } else {
+        match &manifest {
+            SourceManifest::AgentSet(manifest) if manifest.kind != AGENT_SET_SOURCE_KIND => {
+                return Err(BundleError::WrongKind {
+                    source_name: name,
+                    found: manifest.kind.clone(),
+                });
+            }
+            SourceManifest::Workflow(manifest) if manifest.kind != WORKFLOW_SOURCE_KIND => {
+                return Err(BundleError::WrongKind {
+                    source_name: name,
+                    found: manifest.kind.clone(),
+                });
+            }
+            _ => {}
+        }
     }
 
     let markdown_prompt = match (&manifest, markdown_prompt) {
@@ -843,6 +867,13 @@ fn parse_yaml_manifest(name: &str, bytes: &[u8]) -> Result<SourceManifest, Bundl
         AGENT_SOURCE_KIND => serde_norway::from_slice::<SourceAgentManifest>(bytes)
             .map(Box::new)
             .map(SourceManifest::Agent)
+            .map_err(|error| BundleError::InvalidManifest {
+                source_name: name.to_string(),
+                detail: error.to_string(),
+            }),
+        AGENT_SET_SOURCE_KIND => serde_norway::from_slice::<SourceAgentSetManifest>(bytes)
+            .map(Box::new)
+            .map(SourceManifest::AgentSet)
             .map_err(|error| BundleError::InvalidManifest {
                 source_name: name.to_string(),
                 detail: error.to_string(),
@@ -939,6 +970,9 @@ fn prepare_bundle(
             *manifest,
             stable_agent_ids,
         ),
+        SourceManifest::AgentSet(manifest) => {
+            prepare_agent_set_bundle(source.files, *manifest, stable_agent_ids)
+        }
         SourceManifest::Workflow(manifest) => {
             prepare_workflow_bundle(source.files, *manifest, stable_agent_ids)
         }
@@ -1048,6 +1082,78 @@ fn prepare_agent_bundle(
         namespace,
         digest: String::new(),
         agent,
+        tools,
+        skills,
+        mcp,
+        hooks,
+        extensions,
+    }));
+    set_bundle_digest(&mut bundle)?;
+    Ok((bundle, schemas, process))
+}
+
+fn prepare_agent_set_bundle(
+    files: BTreeMap<String, Vec<u8>>,
+    manifest: SourceAgentSetManifest,
+    stable_agent_ids: &mut BTreeSet<String>,
+) -> Result<
+    (
+        PreparedInstallableBundle,
+        Vec<PreparedSchema>,
+        Option<PreparedProcessExtension>,
+    ),
+    BundleError,
+> {
+    let bundle_id = manifest.identity.id.clone();
+    validate_identity(&bundle_id, &manifest.identity.version)?;
+    let namespace = resolve_namespace(&bundle_id, &manifest.identity, &manifest.namespace)?;
+    validate_unsupported(&bundle_id, &manifest.extensions)?;
+    let process = declared_process_extension(&bundle_id, &manifest.extensions)?;
+    let (tools, skills, mcp, hooks, extensions) =
+        prepare_resource_sets(&bundle_id, &files, manifest.resources, manifest.extensions)?;
+    let schemas = validate_declared_schemas(&bundle_id, &manifest.schemas, &tools)?;
+    if manifest.agents.is_empty() {
+        return Err(BundleError::InvalidManifest {
+            source_name: bundle_id,
+            detail: "AgentSetBundle must declare at least one agent".to_string(),
+        });
+    }
+    let mut source_agents = manifest.agents;
+    source_agents.sort_by(|left, right| left.id.cmp(&right.id));
+    let mut agents = Vec::with_capacity(source_agents.len());
+    let mut local_agent_ids = BTreeSet::new();
+    for source_agent in source_agents {
+        if source_agent.harness_access.is_some() {
+            return Err(BundleError::RemovedManifestKey {
+                source_name: bundle_id.clone(),
+                key: "harness_access".to_string(),
+                guidance: "the tool plane is host-controlled".to_string(),
+            });
+        }
+        if !local_agent_ids.insert(source_agent.id.clone()) {
+            return Err(BundleError::NamespaceCollision {
+                bundle_id: bundle_id.clone(),
+                name: source_agent.id,
+            });
+        }
+        agents.push(prepare_agent(
+            &bundle_id,
+            &files,
+            None,
+            source_agent,
+            stable_agent_ids,
+        )?);
+    }
+    agents.sort_by(|left, right| left.id.as_str().cmp(right.id.as_str()));
+    for agent in &agents {
+        validate_resource_views(&bundle_id, agent, &tools, &skills)?;
+    }
+    let mut bundle = PreparedInstallableBundle::AgentSet(Box::new(PreparedAgentSetBundle {
+        format_version: PREPARED_FORMAT_VERSION,
+        identity: manifest.identity,
+        namespace,
+        digest: String::new(),
+        agents,
         tools,
         skills,
         mcp,
@@ -1690,6 +1796,7 @@ fn set_bundle_digest(bundle: &mut PreparedInstallableBundle) -> Result<(), Bundl
     let digest = prepared_bundle_digest(bundle)?;
     match bundle {
         PreparedInstallableBundle::Agent(bundle) => bundle.digest = digest,
+        PreparedInstallableBundle::AgentSet(bundle) => bundle.digest = digest,
         PreparedInstallableBundle::Workflow(bundle) => bundle.digest = digest,
     }
     Ok(())

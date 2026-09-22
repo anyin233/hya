@@ -178,8 +178,8 @@ watcher or per-round/tool-call registry query.
 `info -f` strictly inspects a package without mutating the registry or runtime
 publication. Package paths require the exact lowercase `.hyabundle` suffix;
 the bytes magic is still authoritative for public/private format detection.
-Public packages are a closed `AgentBundle | WorkflowBundle` payload. An
-AgentBundle carries one Agent. A WorkflowBundle carries one compiled Workflow
+Public packages are a closed `AgentBundle | AgentSetBundle | WorkflowBundle` payload. An
+AgentBundle carries one Agent; an AgentSetBundle carries one or more Agents without a Workflow. A WorkflowBundle carries one compiled Workflow
 and its exact reachable Agent closure. Either kind may remain process-free or
 include only its declared prompt/resource/Extension closure for
 self-contained selected JavaScript entrypoints in an activation-scoped Bun

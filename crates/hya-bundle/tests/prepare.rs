@@ -1,6 +1,8 @@
 //! Source preparation, digesting, and rehashing of bundles.
 
-use hya_bundle::{BundleError, BundleSource, PreparedCatalog, SourceFile, prepare_package};
+use hya_bundle::{
+    BundleCatalog, BundleError, BundleSource, PreparedCatalog, SourceFile, prepare_package,
+};
 use sha2::{Digest, Sha256};
 
 fn source(root: &str, bundle_id: &str, stable_id: &str, reverse_files: bool) -> BundleSource {
@@ -28,6 +30,85 @@ agent:
         files.reverse();
     }
     BundleSource::new(root, files)
+}
+
+#[test]
+#[allow(clippy::expect_used)]
+fn agent_set_bundle_prepares_multiple_agents_as_one_closed_payload() {
+    let manifest = br#"kind: AgentSetBundle
+identity:
+  id: hya/agent-set
+  version: 1.0.0
+  publisher: hya
+agents:
+  - id: alpha
+    role: main
+    prompt: prompts/alpha.md
+    spawn_lifecycle: transient
+  - id: beta
+    role: subagent
+    prompt: prompts/beta.md
+    spawn_lifecycle: transient
+"#;
+    let prepared = prepare_package(BundleSource::new(
+        "agent-set",
+        vec![
+            SourceFile::new("bundle.yaml", manifest.as_slice()),
+            SourceFile::new("prompts/alpha.md", b"Alpha agent.\n".as_slice()),
+            SourceFile::new("prompts/beta.md", b"Beta agent.\n".as_slice()),
+        ],
+    ))
+    .expect("AgentSetBundle should prepare");
+
+    let document: serde_json::Value =
+        serde_json::from_slice(prepared.bytes()).expect("prepared catalog must be JSON");
+    assert_eq!(document["bundles"][0]["kind"], "AgentSetBundle");
+    assert_eq!(
+        document["bundles"][0]["agents"]
+            .as_array()
+            .expect("AgentSetBundle must carry an agents array")
+            .len(),
+        2
+    );
+
+    let decoded = PreparedCatalog::decode(prepared.bytes(), prepared.digest())
+        .expect("AgentSetBundle prepared bytes must round-trip");
+    let catalog = BundleCatalog::from_prepared(decoded.bundles())
+        .expect("AgentSetBundle must publish all agents to the catalog");
+    assert_eq!(
+        catalog
+            .resolve_agent("alpha")
+            .map(|agent| agent.id.as_str()),
+        Some("alpha")
+    );
+    assert_eq!(
+        catalog.resolve_agent("beta").map(|agent| agent.id.as_str()),
+        Some("beta")
+    );
+}
+
+#[test]
+#[allow(clippy::expect_used)]
+fn agent_set_prepared_decode_rejects_an_empty_roster_with_valid_digests() {
+    let source = BundleSource::new(
+        "empty-roster",
+        vec![SourceFile::new(
+            "bundle.yaml",
+            br#"kind: AgentSetBundle
+identity: { id: hya/set, version: 1.0.0, publisher: hya }
+agents: [{ id: member, role: main }]
+"#,
+        )],
+    );
+    let prepared = prepare_package(source).expect("prepare agent set");
+    let mut document: serde_json::Value = serde_json::from_slice(prepared.bytes()).expect("JSON");
+    document["bundles"][0]["agents"] = serde_json::json!([]);
+    document["index"][0]["agent_ids"] = serde_json::json!([]);
+    let bytes = rehash_first_bundle(&mut document);
+    assert!(matches!(
+        PreparedCatalog::decode(&bytes, &digest(&bytes)),
+        Err(BundleError::NonCanonicalPreparedCatalog)
+    ));
 }
 
 /// Build one minimal WorkflowBundle source with an optional unreachable Agent.

@@ -1,6 +1,6 @@
-# AgentBundle Authoring
+# AgentBundle and AgentSetBundle Authoring
 
-Author and install a public `AgentBundle`. **An AgentBundle defines exactly one agent.** Install one AgentBundle per independent specialist agent. A packaged Workflow and its exact multi-Agent closure use the distinct `WorkflowBundle` payload documented in [Workflows](workflows.md#packaging-a-workflowbundle). Static-only AgentBundles remain process-free. A public executable AgentBundle may add one activation-scoped Bun Compat sidecar for Bundle-local tools, hooks, and event handlers; Harness remains the agent runtime.
+Author and install a public `AgentBundle` or `AgentSetBundle`. **An AgentBundle defines exactly one agent.** An `AgentSetBundle` defines one or more agents that share one bundle resource plane; it supports distributing several specialists without a Workflow graph. Install one AgentBundle per independent specialist agent, or use an AgentSetBundle when several agents must be distributed as one immutable unit. A packaged Workflow and its exact multi-Agent closure use the distinct `WorkflowBundle` payload documented in [Workflows](workflows.md#packaging-a-workflowbundle). Static-only bundles remain process-free. A public executable bundle may add one activation-scoped Bun sidecar for bundle-local tools, hooks, and event handlers; Harness remains the agent runtime.
 
 Examples:
 
@@ -9,7 +9,55 @@ Examples:
 - Resident Bun example: [`examples/bun-resident/`](examples/bun-resident/)
 - Working split-entrypoint example: [`docs/examples/bun-disjoint`](examples/bun-disjoint/) (`bun-disjoint`)
 
-Built-in agents (`build`, `plan`, `explore`, `general`, the reserved `compaction` / `summary` / `title`, and the `hya-*` development agents) are **not** bundles. They are compiled into the binary in [`crates/hya-core/src/builtin_agents/`](../crates/hya-core/src/builtin_agents/) and run on the full Harness tool plane. Everything below describes installed bundles only.
+Built-in agents (`build`, `plan`, `explore`, `general`, the reserved `compaction` / `summary` / `title`, and the `hya-*` development agents) are still compiled into the binary in [`crates/hya-core/src/builtin_agents/`](../crates/hya-core/src/builtin_agents/) and run on the full Harness tool plane. Everything below describes public bundle payloads.
+
+## AgentSetBundle
+
+`AgentSetBundle` is the multi-agent payload with no Workflow graph. It exists so a
+set of agents can be installed, cataloged, versioned, and replaced as one
+immutable bundle while retaining the same prompt, resource, namespace, and
+digest rules as the existing payload kinds. The current contract accepts an
+explicit `bundle.yaml`; markdown-body sources remain limited to singular
+`AgentBundle`.
+
+Minimal source:
+
+```yaml
+kind: AgentSetBundle
+identity:
+  id: acme/review-team
+  version: 1.0.0
+  publisher: acme
+agents:
+  - id: reviewer
+    role: main
+    prompt: prompts/reviewer.md
+    spawn_lifecycle: transient
+  - id: verifier
+    role: subagent
+    prompt: prompts/verifier.md
+    spawn_lifecycle: transient
+```
+
+`agents` must contain at least one entry; ids are sorted and must be unique
+within the bundle and across the merged catalog. `can_spawn` keeps the existing late-bound allowlist semantics and may reference agents from other bundles; this payload does not require a Workflow reachability closure. Each entry uses the same
+`PreparedAgent` fields as a WorkflowBundle agent (`description`, `role`,
+`color`, `prompt`, `model_policy`, `workdir`, `spawn_lifecycle`,
+`resource_view`, `can_spawn`, and `hook_refs`). Resources and extensions use
+the same `resources`, `extensions`, and `schemas` sections as AgentBundle.
+`workflow` and `channels` are not accepted, and unknown manifest fields fail preparation. Channel declarations and preset migration are separate follow-up work; runtime channels continue to be created from spawn events.
+
+The prepared interface is the `AgentSetBundle` member of
+`PreparedInstallableBundle`: `{ format_version, identity, namespace, digest,
+agents, tools, skills, mcp, hooks, extensions }`. The catalog exposes each
+agent by its stable id and `bundle:<bundle-id>/agent/<agent-id>`; no Workflow id
+is emitted for this payload. Build and install it with the existing commands:
+
+```sh
+cargo run -p xtask -- package-bundle path/to/review-team review-team.hyabundle
+hya-backend bundle info -f review-team.hyabundle
+hya-backend bundle install review-team.hyabundle
+```
 
 ## Runtime boundary
 
@@ -27,7 +75,7 @@ A public bundle source directory must contain exactly one of:
 
 | File | Form |
 | --- | --- |
-| `bundle.yaml` | Plain YAML manifest (no embedded prompt body). Required for `WorkflowBundle`; also supported by `AgentBundle`. |
+| `bundle.yaml` | Plain YAML manifest (no embedded prompt body). Required for `AgentSetBundle` and `WorkflowBundle`; also supported by `AgentBundle`. |
 | `bundle.hya.md` | YAML frontmatter fenced by `---` plus a Markdown body. Supported only by `AgentBundle`. |
 
 Rules ([`prepare.rs` `parse_source`](../crates/hya-bundle/src/prepare.rs)):
@@ -516,7 +564,7 @@ Prepared catalogs use **`PREPARED_FORMAT_VERSION = 2`** and a closed payload
 union in the document shape:
 
 ```text
-{ format_version, bundles: [AgentBundle | WorkflowBundle], index[],
+{ format_version, bundles: [AgentBundle | AgentSetBundle | WorkflowBundle], index[],
   schemas?, extensions_process? }
 ```
 
