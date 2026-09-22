@@ -1,6 +1,6 @@
-# 0.37.11
+# 0.37.12
 
-## Trusted core Skill bundle
+## Native tool context bridge
 
-- Move the two built-in Skill files and their metadata into the build-prepared `hya/core-skills` Plugin bundle.
-- Expose the immutable bundle in the trusted inventory while preserving native Skill override precedence and existing Skill bodies.
+- Bind Rust bundle tool calls to their active `ToolCtx` through call-scoped host capabilities.
+- Expose call identity and workdir metadata plus host-enforced resource permission checks to native processes.

@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use hya_proto::{Envelope, SessionId, ToolCallId, WorkspaceAdapterInfo};
-use hya_tool::Tool;
+use hya_tool::{Tool, ToolCtx};
 use serde_json::Value;
 use tokio::sync::{Mutex, mpsc};
 
@@ -22,6 +22,7 @@ use crate::messages::{
     ToolCallReply, ToolInfo,
 };
 
+use crate::native_capability::NativeToolCapability;
 use crate::plugin_tool::PluginTool;
 
 mod connection;
@@ -98,6 +99,7 @@ pub(crate) struct PluginConn {
     canonical_declaration: Arc<[u8]>,
     pub(crate) timeout: Duration,
     command: Vec<String>,
+    kind: crate::messages::PluginKindWire,
     bundle_root: Option<std::path::PathBuf>,
     env: BTreeMap<String, String>,
     host_info: HostInfo,
@@ -133,16 +135,31 @@ impl PluginConn {
 
     pub(crate) async fn call_tool(
         &self,
+        ctx: &ToolCtx,
         tool: &str,
         session: SessionId,
         call: ToolCallId,
         input: Value,
     ) -> Result<ToolCallReply, PluginError> {
         let client = self.ensure_client().await?;
-        match client
-            .call_tool_with_timeout(tool, session, call, input, self.timeout)
-            .await
-        {
+        let reply =
+            if self.bundle_root.is_some() && self.kind == crate::messages::PluginKindWire::Rust {
+                client
+                    .call_tool_with_capability_timeout(
+                        tool,
+                        session,
+                        call,
+                        input,
+                        Arc::new(NativeToolCapability::new(ctx)),
+                        self.timeout,
+                    )
+                    .await
+            } else {
+                client
+                    .call_tool_with_timeout(tool, session, call, input, self.timeout)
+                    .await
+            };
+        match reply {
             Ok(reply) => Ok(reply),
             Err(error) => {
                 if matches!(error, PluginError::Closed | PluginError::OversizedLine(_)) {

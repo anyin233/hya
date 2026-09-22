@@ -579,6 +579,26 @@ impl PluginClient {
         input: Value,
         handler: Arc<dyn HostCapabilityHandler>,
     ) -> Result<ToolCallReply, PluginError> {
+        self.call_tool_with_capability_timeout(
+            tool,
+            session,
+            call,
+            input,
+            handler,
+            DEFAULT_CALL_TIMEOUT,
+        )
+        .await
+    }
+
+    pub(crate) async fn call_tool_with_capability_timeout(
+        &self,
+        tool: &str,
+        session: SessionId,
+        call: ToolCallId,
+        input: Value,
+        handler: Arc<dyn HostCapabilityHandler>,
+        timeout: Duration,
+    ) -> Result<ToolCallReply, PluginError> {
         let lease = self.register_capability(session, call, handler)?;
         let result = self
             .call_tool_with_timeout_and_capability(
@@ -586,7 +606,7 @@ impl PluginClient {
                 session,
                 call,
                 input,
-                DEFAULT_CALL_TIMEOUT,
+                timeout,
                 Some(lease.token.clone()),
             )
             .await;

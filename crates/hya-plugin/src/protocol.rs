@@ -19,6 +19,8 @@ pub mod codes {
     pub const VETO: i64 = 1;
     /// Host refused an absent, expired, or cross-call capability.
     pub const CAPABILITY_DENIED: i64 = -32001;
+    /// Host permission plane denied a native tool's resource operation.
+    pub const PERMISSION_DENIED: i64 = -32002;
 }
 
 /// Host→plugin (or plugin→host) JSON-RPC request expecting a response.

@@ -26,6 +26,7 @@ pub mod host;
 pub mod manifest;
 /// Handshake, hook, and tool wire types plus method/protocol constants.
 pub mod messages;
+mod native_capability;
 /// `permission.ask` bridge onto `hya_tool::PermissionInterceptor`.
 pub mod permission_bridge;
 mod plugin_tool;
