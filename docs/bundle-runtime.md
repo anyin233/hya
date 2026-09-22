@@ -6,6 +6,8 @@ A running round retains its captured tools, hooks, resources, and process owners
 Root turns adopt successfully prepared updates at subsequent model-round
 boundaries; bound child/Workflow activations retain their inherited snapshot.
 Installation, replacement, and removal also affect subsequent root admissions.
+Raw native executables are carried by `extensions.rust` and started through the
+existing out-of-process plugin protocol.
 
 ## Usage
 
@@ -25,6 +27,30 @@ resources:
 It must initialize with plugin id `search`, kind `rust`, and exactly the declared
 `lookup` tool. The `rust` process kind selects the native ABI; it does not compile
 source code. Interpreters and executable dependencies must already be available.
+
+To ship the executable itself, place the compiled binary at `bin/provider` and
+declare it in the same bundle:
+
+```yaml
+kind: Plugin
+identity: { id: acme/search-native, version: 1.0.0, publisher: acme }
+extensions:
+  rust: [{ id: provider, path: bin/provider }]
+  process: { kind: rust, command: ['${BUNDLE_ROOT}/bin/provider'] }
+resources:
+  tools: [{ id: lookup, path: lookup.json }]
+```
+
+Build the binary for the target operating system and architecture before
+packaging. `extensions.rust` accepts raw bytes; preparation stores canonical
+Base64 in the prepared catalog, verifies the SHA-256 digest of the original
+bytes, and includes the executable in the exact archive closure. Runtime
+materialization writes those bytes into a private directory with executable
+permission. The first process command argument must refer to one declared
+native executable. A failed launch rejects the new generation while old
+bindings retain their previous process and files. The executable must speak
+the [native plugin protocol](plugin-protocol.md); declaring a binary alone
+does not register any tools or grant extra host capabilities.
 
 ```sh
 cargo run -p xtask -- package-bundle ./search ./search.hyabundle

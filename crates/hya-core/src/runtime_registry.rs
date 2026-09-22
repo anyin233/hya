@@ -5530,6 +5530,7 @@ agent:
             source_path: "resources/skills/shared.md".to_string(),
             digest: "test-only".to_string(),
             content: skill_md("shared", "LOCAL"),
+            binary_base64: None,
             aliases: Vec::new(),
         };
         let catalog = Arc::new(
@@ -5582,6 +5583,7 @@ agent:
                     source_path: "resources/skills/shared.md".to_string(),
                     digest: "test-only".to_string(),
                     content: skill_md("shared", "LOCAL"),
+                    binary_base64: None,
                     aliases: Vec::new(),
                 }],
             )])
@@ -5672,6 +5674,7 @@ agent:
             source_path: "resources/skills/bundle-skill.md".to_string(),
             digest: "test-only".to_string(),
             content: skill_md("bundle-skill", "INLINE_BODY_MARKER"),
+            binary_base64: None,
             aliases: Vec::new(),
         };
         let catalog = Arc::new(
@@ -5763,6 +5766,7 @@ agent:
             source_path: "resources/skills/probe.md".to_string(),
             digest: "test-only".to_string(),
             content: skill_md("probe", "LOCAL_PROBE"),
+            binary_base64: None,
             aliases: Vec::new(),
         };
         let catalog = Arc::new(
@@ -5991,6 +5995,7 @@ agent:
             source_path: "resources/skills/shared.md".to_string(),
             digest: "test-only".to_string(),
             content: skill_md("shared", "LOCAL"),
+            binary_base64: None,
             aliases: Vec::new(),
         };
         let wrong_kind = Arc::new(
@@ -6105,6 +6110,7 @@ agent:
             source_path: "resources/skills/read.md".to_string(),
             digest: "test-only".to_string(),
             content: skill_md("read", "SKILL_READ_BODY"),
+            binary_base64: None,
             aliases: Vec::new(),
         };
         let catalog = Arc::new(
@@ -6215,6 +6221,7 @@ agent:
             source_path: "resources/skills/shared.md".to_string(),
             digest: "test-only".to_string(),
             content: skill_md("shared", "LOCAL"),
+            binary_base64: None,
             aliases: Vec::new(),
         };
         let catalog = Arc::new(
@@ -6480,6 +6487,7 @@ agent:
             source_path: "resources/skills/pingy.md".to_string(),
             digest: "test-only".to_string(),
             content: skill_md("pingy", "SKILL_PINGY_BODY"),
+            binary_base64: None,
             aliases: Vec::new(),
         };
         let catalog = Arc::new(
@@ -6605,6 +6613,7 @@ agent:
             source_path: "resources/skills/docs.md".to_string(),
             digest: "test-only".to_string(),
             content: skill_md("docs", "DOCS_BODY"),
+            binary_base64: None,
             aliases: vec!["handbook".to_string()],
         };
         let catalog = Arc::new(
@@ -6734,6 +6743,7 @@ agent:
             source_path: "resources/skills/bundle-skill.md".to_string(),
             digest: "test-only".to_string(),
             content: skill_md("bundle-skill", "SHOULD_NOT_INLINE"),
+            binary_base64: None,
             aliases: Vec::new(),
         };
         let catalog = Arc::new(
@@ -6795,6 +6805,7 @@ agent:
             source_path: "resources/skills/probe.md".to_string(),
             digest: "test-only".to_string(),
             content: skill_md("probe", "PROBE_BODY"),
+            binary_base64: None,
             aliases: vec!["probe-alias".to_string()],
         };
         let catalog = Arc::new(
@@ -6887,6 +6898,7 @@ agent:
             source_path: "resources/skills/docs.md".to_string(),
             digest: "test-only".to_string(),
             content: skill_md("docs", "NESTED_BUNDLE_BODY"),
+            binary_base64: None,
             aliases: Vec::new(),
         };
         let catalog = Arc::new(
@@ -6940,6 +6952,7 @@ agent:
             source_path: "tools/echo.js".to_string(),
             digest: "test-only-digest".to_string(),
             content: "export default {}".to_string(),
+            binary_base64: None,
             aliases: Vec::new(),
         });
         let catalog = Arc::new(TestCatalog::from_prepared(&[bundle]).unwrap());
@@ -7047,6 +7060,7 @@ agent:
             source_path: "extensions/alpha.js".to_string(),
             digest: "alpha-tool".to_string(),
             content: "export default {}".to_string(),
+            binary_base64: None,
             aliases: Vec::new(),
         }];
         alpha_bundle.hooks = vec![PreparedResource {
@@ -7055,6 +7069,7 @@ agent:
             source_path: "extensions/event.js".to_string(),
             digest: "alpha-hook".to_string(),
             content: "export default {}".to_string(),
+            binary_base64: None,
             aliases: Vec::new(),
         }];
 
@@ -7065,6 +7080,7 @@ agent:
             source_path: "extensions/beta.js".to_string(),
             digest: "beta-tool".to_string(),
             content: "export default {}".to_string(),
+            binary_base64: None,
             aliases: Vec::new(),
         }];
         beta_bundle.hooks = vec![PreparedResource {
@@ -7073,6 +7089,7 @@ agent:
             source_path: "extensions/before.js".to_string(),
             digest: "beta-hook".to_string(),
             content: "export default {}".to_string(),
+            binary_base64: None,
             aliases: Vec::new(),
         }];
 
@@ -7600,6 +7617,7 @@ agent:
             source_path: "extensions/runtime.js".to_string(),
             digest: "test-only".to_string(),
             content: "export default {}".to_string(),
+            binary_base64: None,
             aliases: Vec::new(),
         });
         let catalog = Arc::new(TestCatalog::from_prepared(&[bundle]).unwrap());

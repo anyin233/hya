@@ -300,6 +300,7 @@ pub(crate) struct SourceResource {
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct SourceExtensions {
     pub js: Vec<SourceResource>,
+    /// Raw native executables for a `kind: rust` process extension.
     pub rust: Vec<SourceResource>,
     /// Text assets materialized for process extensions or bundle MCP servers.
     pub files: Vec<SourceResource>,

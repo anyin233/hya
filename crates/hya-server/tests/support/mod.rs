@@ -107,6 +107,7 @@ pub fn runtime_with_catalog(
                         content: format!(
                             "---\nname: {name}\ndescription: bundle skill {name}\n---\n{name} body\n"
                         ),
+                        binary_base64: None,
                         aliases: Vec::new(),
                     }]
                 })

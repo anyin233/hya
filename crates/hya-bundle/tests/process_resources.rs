@@ -1,7 +1,8 @@
 //! Process-backed resource closure and hook contracts.
 #![allow(clippy::expect_used)]
 use hya_bundle::{
-    BundleSource, PreparedCatalog, SourceFile, prepare_package, write_public_package,
+    BundleSource, PreparedCatalog, SourceFile, inspect_public_package, prepare_package,
+    write_public_package,
 };
 
 #[test]
@@ -59,4 +60,40 @@ extensions:
         prepared.bundles()[0].extensions()[0].source_path,
         "orphan.py"
     );
+}
+
+#[test]
+fn native_process_bundle_packages_non_utf8_executable_bytes() {
+    let executable = vec![0x7f, b'E', b'L', b'F', 0, 0xff, 0x80];
+    let source = BundleSource::new(
+        "native-executable",
+        vec![
+            SourceFile::new(
+                "bundle.yaml",
+                br#"kind: Plugin
+identity: { id: acme/native, version: 1.0.0, publisher: acme }
+extensions:
+  rust: [{ id: provider, path: bin/provider }]
+  process: { kind: rust, command: ['${BUNDLE_ROOT}/bin/provider'] }
+resources:
+  tools: [{ id: echo, path: declarations.json }]
+"#,
+            ),
+            SourceFile::new("bin/provider", executable.clone()),
+            SourceFile::new("declarations.json", b"{}"),
+        ],
+    );
+
+    let prepared = prepare_package(source.clone()).expect("prepare native executable");
+    assert_eq!(prepared.bundles()[0].extensions().len(), 1);
+    assert_eq!(
+        prepared.bundles()[0].extensions()[0]
+            .source_bytes()
+            .expect("decode executable"),
+        executable
+    );
+    PreparedCatalog::decode(prepared.bytes(), prepared.digest()).expect("decode native executable");
+    let package = write_public_package(&source).expect("package native executable");
+    let inspected = inspect_public_package(&package).expect("inspect native executable package");
+    assert_eq!(inspected.bytes(), prepared.bytes());
 }

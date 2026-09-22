@@ -193,6 +193,7 @@ fn catalog_indexes_declared_bundle_mcp_from_prepared_data() {
         source_path: "resources/mcp/docs.json".to_string(),
         digest: digest(content.as_bytes()),
         content: content.to_string(),
+        binary_base64: None,
         aliases: Vec::new(),
     });
 
