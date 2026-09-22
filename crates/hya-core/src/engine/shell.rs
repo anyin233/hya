@@ -1,5 +1,6 @@
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
@@ -16,7 +17,10 @@ use super::{
 };
 use crate::TurnBinding;
 use crate::error::CoreError;
-use crate::hooks::{ToolExecuteBeforeInput, ToolExecuteBeforeOutcome};
+use crate::hooks::{
+    HookChain, HookDispatcher, ToolExecuteBeforeInput, ToolExecuteBeforeOutcome,
+    activation_hook_for, scope_activation_hooks,
+};
 use crate::runtime_registry::CompiledResourceView;
 
 mod admission;
@@ -201,69 +205,80 @@ impl SessionEngine {
         // Shell turns do not attach project/reference guidance.
         let (agent, resources) = effective_agent_for_binding(agent, stable_id, &binding, None)?;
 
-        let message = MessageId::new();
-        self.emit(
-            session,
-            Event::MessageStarted {
+        self.capture_session_bundle_hooks(session, &binding, stable_id)
+            .await;
+        let bound_hooks = binding.bundle_hooks_for_agent(stable_id);
+        let operation = async {
+            let message = MessageId::new();
+            self.emit(
                 session,
-                message,
-                role: Role::Assistant,
-            },
-        )
-        .await?;
-        self.emit(
-            session,
-            Event::TurnBindingRecorded {
+                Event::MessageStarted {
+                    session,
+                    message,
+                    role: Role::Assistant,
+                },
+            )
+            .await?;
+            self.emit(
                 session,
-                message,
-                generation: binding.generation(),
-            },
-        )
-        .await?;
+                Event::TurnBindingRecorded {
+                    session,
+                    message,
+                    generation: binding.generation(),
+                },
+            )
+            .await?;
 
-        let part = PartId::new();
-        let call = ToolCallId::new();
-        let name = ToolName::new("bash");
-        self.emit(
-            session,
-            Event::ToolInputStart {
+            let part = PartId::new();
+            let call = ToolCallId::new();
+            let name = ToolName::new("bash");
+            self.emit(
                 session,
-                message,
-                part,
-                call,
-                name: name.clone(),
-            },
-        )
-        .await?;
-
-        let finish = self
-            .execute_shell_part(
-                ShellPart {
+                Event::ToolInputStart {
                     session,
                     message,
                     part,
                     call,
-                    name,
+                    name: name.clone(),
                 },
-                command,
-                &binding,
-                &agent,
-                &resources,
-                cancel,
             )
             .await?;
-        self.emit(
-            session,
-            Event::MessageFinished {
+
+            let finish = self
+                .execute_shell_part(
+                    ShellPart {
+                        session,
+                        message,
+                        part,
+                        call,
+                        name,
+                    },
+                    command,
+                    &binding,
+                    &agent,
+                    &resources,
+                    cancel,
+                )
+                .await?;
+            self.emit(
                 session,
-                message,
-                role: Role::Assistant,
-                finish,
-                tokens: None,
-            },
-        )
-        .await?;
-        Ok((message, finish))
+                Event::MessageFinished {
+                    session,
+                    message,
+                    role: Role::Assistant,
+                    finish,
+                    tokens: None,
+                },
+            )
+            .await?;
+            Ok((message, finish))
+        };
+        if bound_hooks.is_empty() {
+            operation.await
+        } else {
+            let hooks = Arc::new(HookChain::new(bound_hooks)) as Arc<dyn HookDispatcher>;
+            scope_activation_hooks(session, hooks, operation).await
+        }
     }
 
     async fn execute_shell_part(
@@ -278,7 +293,8 @@ impl SessionEngine {
         let session = shell_part.session;
         let tool = shell_part.name.to_string();
         let mut input = json!({ "command": command });
-        if let Some(hooks) = &self.hooks {
+        let active_hooks = self.active_hook_dispatcher(session);
+        if let Some(hooks) = &active_hooks {
             let current = std::mem::take(&mut input);
             match hooks
                 .tool_execute_before(ToolExecuteBeforeInput {
@@ -324,46 +340,62 @@ impl SessionEngine {
         .await?;
 
         let projection = self.store.read_projection(session).await?;
-        let input_for_after = self.hooks.as_ref().map(|_| input.clone());
+        let input_for_after = active_hooks.as_ref().map(|_| input.clone());
         let started = std::time::Instant::now();
         let result = match resources.resolve_tool(&tool) {
-            Some(resolved) => match authorize_tool_call(
-                &resolved,
-                &input,
-                self.permission.for_session(session),
-                shell_part.message,
-                shell_part.call,
-            )
-            .await
-            {
-                Ok(permission) => {
-                    let ctx = ToolCtx {
-                        workflows: hya_tool::WorkflowPlane::disconnected(),
-                        permission,
-                        interaction: self.interaction.for_session(session),
-                        spawner: self.spawner.for_binding(binding).for_session_with_agents(
-                            session,
-                            agent_roster(binding, agent.name.as_str())?,
-                        ),
-                        operation: hya_tool::ToolOperation::from_tool_call(shell_part.call),
-                        mailbox: self.mailbox.for_session(session),
-                        lifecycle: self.lifecycle.for_session(session),
-                        session: Some(session),
-                        parent_session: projection.session.parent,
-                        todo: self.todo.clone(),
-                        skills: resources.skill_plane(),
-                        artifacts: self.artifacts.clone(),
-                        agents: agent_roster(binding, agent.name.as_str())?,
-                        websearch: self.websearch.clone(),
-                        lsp: self.lsp.clone(),
-                        formatter: self.formatter.clone(),
-                        workdir: binding.workdir().to_path_buf(),
-                        cancel,
-                    };
-                    resolved.tool.execute(&ctx, input).await
+            Some(resolved) => {
+                let mut permission = self.permission.for_session(session);
+                if let Some(hooks) = activation_hook_for(session) {
+                    permission = permission.prepend_interceptor(Arc::new(
+                        crate::bundle_hooks::BundlePermissionInterceptor::new(hooks),
+                    ));
                 }
-                Err(error) => Err(error),
-            },
+                match authorize_tool_call(
+                    &resolved,
+                    &input,
+                    permission,
+                    shell_part.message,
+                    shell_part.call,
+                )
+                .await
+                {
+                    Ok(permission) => {
+                        let channel_policy = crate::ChannelPolicy::from_binding(binding)?
+                            .snapshot_for(agent.name.as_str());
+                        let ctx = ToolCtx {
+                            workflows: hya_tool::WorkflowPlane::disconnected(),
+                            permission,
+                            interaction: self.interaction.for_session(session),
+                            spawner: self.spawner.for_binding(binding).for_session_with_agents(
+                                session,
+                                agent_roster(binding, agent.name.as_str())?,
+                            ),
+                            operation: hya_tool::ToolOperation::from_tool_call(shell_part.call),
+                            mailbox: self
+                                .mailbox
+                                .for_session(session)
+                                .with_channel_policy(channel_policy),
+                            lifecycle: self
+                                .lifecycle
+                                .for_session(session)
+                                .with_channel_policy(channel_policy),
+                            session: Some(session),
+                            parent_session: projection.session.parent,
+                            todo: self.todo.clone(),
+                            skills: resources.skill_plane(),
+                            artifacts: self.artifacts.clone(),
+                            agents: agent_roster(binding, agent.name.as_str())?,
+                            websearch: self.websearch.clone(),
+                            lsp: self.lsp.clone(),
+                            formatter: self.formatter.clone(),
+                            workdir: binding.workdir().to_path_buf(),
+                            cancel,
+                        };
+                        resolved.tool.execute(&ctx, input).await
+                    }
+                    Err(error) => Err(error),
+                }
+            }
             None => Err(ToolError::Other("unknown tool: bash".to_string())),
         };
         let mut artifact_guard =

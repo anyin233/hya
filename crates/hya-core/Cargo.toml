@@ -31,3 +31,8 @@ hf-hub = { workspace = true }
 
 [dev-dependencies]
 sqlx = { workspace = true }
+
+[build-dependencies]
+hya-bundle = { workspace = true }
+serde = { workspace = true }
+serde_norway = { workspace = true }

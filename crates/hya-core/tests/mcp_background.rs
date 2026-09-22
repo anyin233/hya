@@ -8,10 +8,14 @@ mod support;
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use hya_core::{AgentSpec, CreateSession, EventBus, SessionEngine};
+use hya_core::{
+    AgentSpec, CoreError, CreateSession, EventBus, RuntimeCatalogRefresh, RuntimeRegistry,
+    SessionEngine,
+};
 use hya_proto::{AgentName, FinishReason, ModelRef, Role};
 use hya_provider::{FakeProvider, FakeStep, ProviderRouter};
 use hya_store::SessionStore;
@@ -24,17 +28,18 @@ use tokio_util::sync::CancellationToken;
 
 struct SlowMcpTool {
     sleep: Duration,
+    name: &'static str,
 }
 
 #[async_trait]
 impl Tool for SlowMcpTool {
     fn name(&self) -> &str {
-        "mcp__slow__slow"
+        self.name
     }
 
     fn schema(&self) -> hya_proto::ToolSchema {
         hya_proto::ToolSchema {
-            name: hya_proto::ToolName::new("mcp__slow__slow"),
+            name: hya_proto::ToolName::new(self.name),
             description: "Sleep then return".to_string(),
             input_schema: json!({"type": "object"}),
             output_schema: None,
@@ -51,10 +56,15 @@ impl Tool for SlowMcpTool {
     }
 }
 
-async fn engine_with_background(provider: FakeProvider, budget: Duration) -> Arc<SessionEngine> {
+async fn engine_with_background(
+    provider: FakeProvider,
+    budget: Duration,
+    name: &'static str,
+) -> Arc<SessionEngine> {
     let tools = Arc::new(ToolRegistry::builtins());
     let tool = Arc::new(SlowMcpTool {
         sleep: Duration::from_millis(400),
+        name,
     });
     tools
         .register_with_permission(tool, ToolPermission::Mcp)
@@ -76,6 +86,16 @@ async fn engine_with_background(provider: FakeProvider, budget: Duration) -> Arc
         )
         .with_mcp_background_after(budget),
     )
+}
+
+struct CountingRefresh(AtomicUsize);
+
+#[async_trait]
+impl RuntimeCatalogRefresh for CountingRefresh {
+    async fn refresh_if_changed(&self, _runtime: &RuntimeRegistry) -> Result<bool, CoreError> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Ok(false)
+    }
 }
 
 fn agent() -> AgentSpec {
@@ -135,8 +155,16 @@ async fn long_mcp_call_backgrounds_and_steers_completion() {
             FakeStep::Finish(FinishReason::Stop),
         ],
     ]);
-    let engine = engine_with_background(provider, Duration::from_millis(50)).await;
+    let engine =
+        engine_with_background(provider, Duration::from_millis(50), "mcp__slow__slow").await;
     let session = new_session(&engine).await;
+    let refresh = Arc::new(CountingRefresh(AtomicUsize::new(0)));
+    let engine = Arc::new(
+        engine
+            .as_ref()
+            .clone()
+            .with_catalog_refresh(refresh.clone()),
+    );
 
     let finish = engine
         .run_turn(session, &agent(), CancellationToken::new())
@@ -191,6 +219,45 @@ async fn long_mcp_call_backgrounds_and_steers_completion() {
         reclaim.to_lowercase().contains("reclaim"),
         "completion prompt must steer the agent to reclaim the result: {reclaim}"
     );
+    assert_eq!(
+        refresh.0.load(Ordering::SeqCst),
+        2,
+        "background completion admission must reuse the originating binding"
+    );
+}
+
+#[tokio::test]
+async fn bundled_namespaced_mcp_permission_class_still_backgrounds() {
+    let name = "bundle__mcp__slow";
+    let provider = FakeProvider::scripted_turns(vec![vec![
+        FakeStep::ToolCall {
+            name: name.to_string(),
+            input: json!({}),
+        },
+        FakeStep::Finish(FinishReason::Stop),
+    ]]);
+    let engine = engine_with_background(provider, Duration::from_millis(20), name).await;
+    let session = new_session(&engine).await;
+    engine
+        .run_turn(session, &agent(), CancellationToken::new())
+        .await
+        .unwrap();
+    let projection = engine.read_projection(session).await.unwrap();
+    let output = projection
+        .session
+        .messages
+        .iter()
+        .flat_map(|message| &message.parts)
+        .find_map(|part| match part {
+            hya_proto::PartProjection::Tool {
+                name: tool_name,
+                state: hya_proto::ToolPartState::Completed { output, .. },
+                ..
+            } if tool_name.as_str() == name => Some(output.to_string()),
+            _ => None,
+        })
+        .expect("bundled MCP tool result");
+    assert!(output.contains("backgrounded"));
 }
 
 #[tokio::test]
@@ -200,6 +267,7 @@ async fn fast_mcp_call_stays_in_foreground() {
     let tools = Arc::new(ToolRegistry::builtins());
     let tool = Arc::new(SlowMcpTool {
         sleep: Duration::ZERO,
+        name: "mcp__slow__slow",
     });
     tools
         .register_with_permission(tool, ToolPermission::Mcp)

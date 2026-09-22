@@ -19,6 +19,19 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::tool::{Tool, ToolCtx, ToolError, obj_schema};
 
+/// Actor-specific channel capability snapshot captured from an admitted turn binding.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ChannelPolicySnapshot {
+    /// Unit leader capability bits.
+    pub unit_leader: u8,
+    /// Unit direct-report capability bits.
+    pub unit_member: u8,
+    /// Parent endpoint capability bits.
+    pub dm_parent: u8,
+    /// Child endpoint capability bits.
+    pub dm_child: u8,
+}
+
 /// Outcome of a delivered send: the resolved sender handle, the address, and how
 /// many inboxes it reached (1 for a handle, the subscriber count for a channel).
 #[derive(Clone, Debug)]
@@ -60,6 +73,8 @@ pub enum MailboxRequest {
         from: SessionId,
         /// Optional actor claim for the send.
         actor_claim: Option<ActorClaim>,
+        /// Channel policy captured by the admitted turn.
+        channel_policy: Option<ChannelPolicySnapshot>,
         /// Recipient endpoint.
         to: MailEndpoint,
         /// Message vs announcement.
@@ -76,6 +91,8 @@ pub enum MailboxRequest {
         from: SessionId,
         /// Optional actor claim for the send.
         actor_claim: Option<ActorClaim>,
+        /// Channel policy captured by the admitted turn.
+        channel_policy: Option<ChannelPolicySnapshot>,
         /// Body text.
         body: String,
         /// Host reply with receipt or rejection.
@@ -186,6 +203,7 @@ pub struct MailboxPlane {
     tx: Option<mpsc::UnboundedSender<MailboxRequest>>,
     session: Option<SessionId>,
     actor_claim: Option<ActorClaim>,
+    channel_policy: Option<ChannelPolicySnapshot>,
 }
 
 impl MailboxPlane {
@@ -198,6 +216,7 @@ impl MailboxPlane {
                 tx: Some(tx),
                 session: None,
                 actor_claim: None,
+                channel_policy: None,
             },
             rx,
         )
@@ -228,6 +247,13 @@ impl MailboxPlane {
         plane
     }
 
+    /// Attach the channel policy captured by the same admitted turn.
+    #[must_use]
+    pub fn with_channel_policy(mut self, policy: ChannelPolicySnapshot) -> Self {
+        self.channel_policy = Some(policy);
+        self
+    }
+
     async fn request<T>(
         &self,
         make: impl FnOnce(oneshot::Sender<T>) -> MailboxRequest,
@@ -250,6 +276,7 @@ impl MailboxPlane {
         self.request(|reply| MailboxRequest::Send {
             from,
             actor_claim: self.actor_claim,
+            channel_policy: self.channel_policy,
             to,
             kind,
             body,
@@ -266,6 +293,7 @@ impl MailboxPlane {
         self.request(|reply| MailboxRequest::SendDefault {
             from,
             actor_claim: self.actor_claim,
+            channel_policy: self.channel_policy,
             body,
             reply,
         })

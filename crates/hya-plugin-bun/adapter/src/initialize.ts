@@ -14,7 +14,6 @@ import { isNonEmptyString, isRecord, ok, type ValidationResult } from "./validat
 
 export const PROTOCOL_VERSION = 1
 
-const PLUGIN_ID = "bun"
 const PLUGIN_KIND = "bun"
 
 export async function handleInitialize(
@@ -35,10 +34,11 @@ export async function handleInitialize(
           lifecycle: params.value.lifecycle,
         }
       : undefined
-  // Extensions load only through the explicit bundle activation path; a bare
-  // initialize declares an empty contribution set.
+  // Only explicit startup extension paths are loadable. Agent activations and
+  // generation-owned shared Plugins use the same closed declaration path;
+  // a startup with no paths still declares an empty contribution set.
   const loaded =
-    activation === undefined
+    context.extensions.length === 0
       ? { hooks: [], skills: [], workspaceAdapters: [], errors: [] as readonly ExtensionLoadError[] }
       : await loadExtensionContributions(context.extensions, context.env)
   if (loaded.errors.length > 0) {
@@ -81,7 +81,7 @@ export async function handleInitialize(
     response: okResponse(request.id, {
       protocol_version: PROTOCOL_VERSION,
       plugin: {
-        id: PLUGIN_ID,
+        id: context.pluginId,
         version: context.version,
         kind: PLUGIN_KIND,
       },

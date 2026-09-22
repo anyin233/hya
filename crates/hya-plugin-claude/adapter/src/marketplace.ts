@@ -8,6 +8,8 @@
  */
 
 import fs from "node:fs"
+import { mkdtemp, rm } from "node:fs/promises"
+import os from "node:os"
 import path from "node:path"
 
 import { MARKETPLACE_MANIFEST_FILE } from "./manifest_paths"
@@ -18,6 +20,8 @@ export type MarketplaceEntry = {
   readonly name: string
   /** Local path relative to the marketplace root, when declared local. */
   readonly localPath?: string
+  /** Git URL cloned shallowly for this install. */
+  readonly gitUrl?: string
   /** Set for git/remote sources; v1 cannot install these. */
   readonly unsupportedReason?: string
 }
@@ -81,6 +85,9 @@ export function resolveMarketplaceEntry(
   marketplace: Marketplace,
   entry: MarketplaceEntry,
 ): string {
+  if (entry.gitUrl !== undefined) {
+    throw new MarketplaceError(`marketplace entry ${entry.name} requires shallow-clone resolution`)
+  }
   if (entry.unsupportedReason !== undefined) {
     throw new MarketplaceError(
       `marketplace entry ${entry.name} is not installable: ${entry.unsupportedReason}`,
@@ -95,6 +102,36 @@ export function resolveMarketplaceEntry(
     )
   }
   return target
+}
+
+/** Resolve a local entry or shallow-clone a git entry for one bounded action. */
+export async function withResolvedMarketplaceEntry<T>(
+  marketplace: Marketplace,
+  entry: MarketplaceEntry,
+  action: (pluginDir: string) => Promise<T>,
+): Promise<T> {
+  if (entry.gitUrl === undefined) {
+    return action(resolveMarketplaceEntry(marketplace, entry))
+  }
+  if (entry.gitUrl.startsWith("-")) {
+    throw new MarketplaceError(`marketplace entry ${entry.name} has an invalid git URL`)
+  }
+  const temporary = await mkdtemp(path.join(os.tmpdir(), "hya-claude-marketplace-"))
+  const checkout = path.join(temporary, "plugin")
+  try {
+    const clone = Bun.spawn(["git", "clone", "--depth", "1", "--", entry.gitUrl, checkout], {
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+    const stderr = await new Response(clone.stderr).text()
+    const status = await clone.exited
+    if (status !== 0) {
+      throw new MarketplaceError(`cannot clone marketplace entry ${entry.name}: ${stderr.trim()}`)
+    }
+    return await action(checkout)
+  } finally {
+    await rm(temporary, { recursive: true, force: true })
+  }
 }
 
 function entryFrom(name: string, source: unknown): MarketplaceEntry {
@@ -121,6 +158,12 @@ function entryFrom(name: string, source: unknown): MarketplaceEntry {
       const rawPath = source["path"]
       if (typeof rawPath === "string" && rawPath.length > 0) {
         return { name, localPath: rawPath }
+      }
+    }
+    if (kind === "git") {
+      const repo = source["repo"] ?? source["url"]
+      if (typeof repo === "string" && repo.length > 0) {
+        return { name, gitUrl: repo }
       }
     }
     return {

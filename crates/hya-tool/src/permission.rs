@@ -549,6 +549,34 @@ pub struct PermissionPlane {
     interceptor: Option<Arc<dyn PermissionInterceptor>>,
 }
 
+struct PrependInterceptor {
+    first: Arc<dyn PermissionInterceptor>,
+    next: Arc<dyn PermissionInterceptor>,
+}
+
+#[async_trait::async_trait]
+impl PermissionInterceptor for PrependInterceptor {
+    fn semantic_identity_v1(&self) -> Option<[u8; 32]> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"hya.permission.interceptor-chain/v1");
+        append_bytes(&mut bytes, &self.first.semantic_identity_v1()?)?;
+        append_bytes(&mut bytes, &self.next.semantic_identity_v1()?)?;
+        Some(Sha256::digest(bytes).into())
+    }
+
+    async fn intercept(
+        &self,
+        session: Option<SessionId>,
+        action: Action,
+        resource: &Resource,
+    ) -> Option<Decision> {
+        match self.first.intercept(session, action, resource).await {
+            Some(decision) => Some(decision),
+            None => self.next.intercept(session, action, resource).await,
+        }
+    }
+}
+
 impl PermissionPlane {
     /// Create a plane with resource rules only (no invocation policy).
     #[must_use]
@@ -624,6 +652,19 @@ impl PermissionPlane {
     #[must_use]
     pub fn with_interceptor(mut self, interceptor: Arc<dyn PermissionInterceptor>) -> Self {
         self.interceptor = Some(interceptor);
+        self
+    }
+
+    /// Prepend an interceptor while retaining the existing startup interceptor.
+    #[must_use]
+    pub fn prepend_interceptor(mut self, interceptor: Arc<dyn PermissionInterceptor>) -> Self {
+        self.interceptor = Some(match self.interceptor.take() {
+            Some(next) => Arc::new(PrependInterceptor {
+                first: interceptor,
+                next,
+            }),
+            None => interceptor,
+        });
         self
     }
 
@@ -1143,5 +1184,32 @@ mod tests {
         let req = rx.recv().await.expect("ask request after defer");
         req.reply.send(Decision::AllowOnce).expect("send reply");
         task.await.expect("join").expect("assert ok");
+    }
+
+    #[tokio::test]
+    async fn prepended_interceptor_defers_to_existing_interceptor() {
+        let (plane, mut rx) = PermissionPlane::new(PermissionRules::default());
+        let plane = plane
+            .with_interceptor(Arc::new(AlwaysInterceptor(Some(Decision::AllowOnce))))
+            .prepend_interceptor(Arc::new(AlwaysInterceptor(None)));
+        plane
+            .assert(Action::Bash, Resource::Command("ls".to_string()))
+            .await
+            .expect("existing interceptor decides after bundle defer");
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn explicit_deny_precedes_a_prepended_allow_interceptor() {
+        let rules = PermissionRules::new(vec![Rule::new(Action::Bash, "*", Mode::Deny)]);
+        let (plane, _rx) = PermissionPlane::new(rules);
+        let plane =
+            plane.prepend_interceptor(Arc::new(AlwaysInterceptor(Some(Decision::AllowAlways))));
+        assert!(matches!(
+            plane
+                .assert(Action::Bash, Resource::Command("rm file".to_string()))
+                .await,
+            Err(PermissionError::Denied { .. })
+        ));
     }
 }

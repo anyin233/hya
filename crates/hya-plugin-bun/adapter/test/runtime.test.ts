@@ -40,6 +40,16 @@ test("initialize returns hya bun plugin identity", async () => {
   })
 })
 
+test("--plugin-id publishes the synthetic bundle plugin identity", async () => {
+  const responses = await runAdapterProcess(
+    [initializeRequest(13), shutdownRequest(14)],
+    { argv: ["--plugin-id", "bundle/example"] },
+  )
+  expect(responses[0]?.result).toMatchObject({
+    plugin: { id: "bundle/example", version: "1.0.0", kind: "bun" },
+  })
+})
+
 test("bundle activation accepts exact operational metadata", async () => {
   const responses = await runAdapterProcess([
     initializeRequest(13, {
@@ -134,6 +144,41 @@ test("bundle activation loads only explicit materialized extension", async () =>
   expect(responses[1]?.result).toMatchObject({
     ok: true,
     output: { output: "bundle-echo" },
+  })
+})
+
+test("generation-owned plugin loads an explicit extension without activation metadata", async () => {
+  const root = await makeTempDir()
+  const extensionFile = await writeExtension(
+    root,
+    "shared-plugin.ts",
+    "export default { id: 'shared', server: async () => ({ tool: { echo: { description: 'Shared echo', execute: async () => 'shared-echo' } } }) }",
+  )
+  const responses = await runAdapterProcess(
+    [
+      initializeRequest(54),
+      {
+        jsonrpc: "2.0",
+        id: 55,
+        method: "tool/call",
+        params: {
+          tool: "echo",
+          session: "session-shared",
+          call: "call-shared",
+          input: {},
+        },
+      },
+      shutdownRequest(56),
+    ],
+    { argv: ["--plugin-id", "shared-plugin", "--bundle-extension", extensionFile] },
+  )
+  expect(responses[0]?.result).toMatchObject({
+    plugin: { id: "shared-plugin", kind: "bun" },
+    tools: [{ name: "echo", description: "Shared echo" }],
+  })
+  expect(responses[1]?.result).toMatchObject({
+    ok: true,
+    output: { output: "shared-echo" },
   })
 })
 

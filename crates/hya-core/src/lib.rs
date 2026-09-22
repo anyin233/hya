@@ -23,10 +23,13 @@ pub const MAX_SUBAGENT_DEPTH: u32 = 2;
 pub mod agent_catalog;
 /// Compiled-in agent definitions (not AgentBundles).
 pub mod builtin_agents;
+mod bundle_hooks;
 /// Live envelope broadcast for observers (SSE, TUI, plugins).
 pub mod bus;
 /// Model category resolution and member-agent construction.
 pub mod category;
+/// Trusted defaults and restrictive bundle policy for runtime channels.
+pub mod channel_policy;
 /// Context compaction thresholds, token estimates, and summarizer trait.
 pub mod compaction;
 /// Goal-mode iteration driver, safety caps, and independent evaluators.
@@ -69,13 +72,17 @@ pub mod workspace;
 mod test_support;
 
 pub use agent_catalog::{AgentCatalog, AgentDefinition, AgentOrigin};
-pub use builtin_agents::{BUILTIN_AGENTS, BuiltinAgent, SpawnScope, builtin_agent, is_builtin_id};
+pub use builtin_agents::{
+    BUILTIN_AGENTS, BuiltinAgent, CORE_AGENTS_PRESET_ID, CoreAgentsPreset, SpawnScope,
+    builtin_agent, core_agents_preset, is_builtin_id,
+};
 pub use bus::EventBus;
 pub use category::{
     CategoryEntry, CategoryRegistry, ResolvedCategory, apply_agent_model_preference,
     apply_spawn_model_policy, build_member_agent, eligible_agent_model_preference, inject_skills,
     resolve_configured_agent_model, resolve_dispatch_model,
 };
+pub use channel_policy::{AGENT_CHANNELS_PRESET_ID, ChannelPolicy};
 pub use compaction::{
     CompactionConfig, CompactionPlan, CompactionRung, MIN_RESOLVED_THRESHOLD, ModelSummarizer,
     SummarizeOptions, Summarizer, compact_with, estimate_tokens, handoff_request_messages,
@@ -95,16 +102,16 @@ pub use error::CoreError;
 pub use hooks::{
     AgentSpawnInput, ChatParamsInput, ChatParamsOutcome, CommandExecuteBeforeInput,
     CommandExecuteBeforeOutcome, CompactionAfterInput, CompactionBeforeInput, CompactionDecision,
-    CompactionResolution, CompactionTrigger, HookDispatcher, MessageUserBeforeInput,
+    CompactionResolution, CompactionTrigger, HookChain, HookDispatcher, MessageUserBeforeInput,
     MessageUserBeforeOutcome, NoopHookHost, SessionLifecycleInput, TextCompleteInput,
     TextCompleteOutcome, ToolExecuteAfterInput, ToolExecuteAfterOutcome, ToolExecuteBeforeInput,
     ToolExecuteBeforeOutcome, ToolOutcomeNative, resolve_compaction_decision,
 };
 pub use lifecycle::run_lifecycle_service;
 pub use loop_mode::{
-    EvidenceQuality, LoopConfig, LoopGate, LoopPlanner, LoopPredicate, LoopPredicateOutcome,
-    LoopVerifier, PlannerOutput, PredicateMode, VerifierVerdict, cost_preflight, drive_loop,
-    run_loop,
+    EvidenceQuality, HookLoopPlanner, HookLoopVerifier, LoopConfig, LoopGate, LoopPlanner,
+    LoopPredicate, LoopPredicateOutcome, LoopVerifier, PlannerOutput, PredicateMode,
+    VerifierVerdict, cost_preflight, drive_loop, run_loop,
 };
 pub use mailbox::run_mailbox_service;
 pub use orchestrator::{OperationReservation, SubagentGovernor, SubagentLimits, TeamBudget};

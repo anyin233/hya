@@ -1,5 +1,7 @@
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use async_trait::async_trait;
 use hya_bundle::{BundleCatalog, PreparedBundleSchemas, PreparedCatalog};
@@ -65,6 +67,8 @@ pub struct InstalledBundleRefresh {
     applied_generation: Mutex<u64>,
     applied_project_fingerprint: Mutex<u64>,
     project_dir: Option<PathBuf>,
+    initialized: AtomicBool,
+    sources: Mutex<BTreeMap<String, crate::bundle_runtime::CachedBundleSource>>,
 }
 
 impl InstalledBundleRefresh {
@@ -77,6 +81,8 @@ impl InstalledBundleRefresh {
             applied_generation: Mutex::new(0),
             applied_project_fingerprint: Mutex::new(0),
             project_dir: None,
+            initialized: AtomicBool::new(false),
+            sources: Mutex::new(BTreeMap::new()),
         }
     }
 
@@ -97,14 +103,6 @@ impl InstalledBundleRefresh {
             None => (Vec::new(), 0),
         };
         let mut applied_project_fingerprint = self.applied_project_fingerprint.lock().await;
-        if self.registry.get().is_none()
-            && !self.registry_path.try_exists().map_err(|error| {
-                CoreError::Invalid(format!("inspect installed Bundle registry path: {error}"))
-            })?
-            && project_catalogs.is_empty()
-        {
-            return Ok(false);
-        }
         let registry_generation = if self.registry.get().is_none()
             && !self.registry_path.try_exists().map_err(|error| {
                 CoreError::Invalid(format!("inspect installed Bundle registry path: {error}"))
@@ -121,8 +119,8 @@ impl InstalledBundleRefresh {
             Some(registry.generation().await?)
         };
         let mut applied_generation = self.applied_generation.lock().await;
-        let registry_changed =
-            registry_generation.is_none_or(|generation| generation != *applied_generation);
+        let registry_changed = !self.initialized.load(Ordering::Acquire)
+            || registry_generation.unwrap_or(0) != *applied_generation;
         let project_changed = project_fingerprint != *applied_project_fingerprint;
         if !registry_changed && !project_changed {
             return Ok(false);
@@ -203,7 +201,25 @@ impl InstalledBundleRefresh {
                 prepared_catalogs.push(prepared);
             }
         }
-        let first_party = first_party_catalogs()?;
+        let mut first_party = first_party_catalogs()?;
+        let higher_ids = prepared_catalogs
+            .iter()
+            .chain(project_catalogs.iter())
+            .filter_map(|catalog| catalog.bundles().first())
+            .map(|bundle| bundle.identity().id.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        let higher_namespaces = prepared_catalogs
+            .iter()
+            .chain(project_catalogs.iter())
+            .filter_map(|catalog| catalog.bundles().first())
+            .map(|bundle| bundle.namespace())
+            .collect::<std::collections::BTreeSet<_>>();
+        first_party.retain(|catalog| {
+            catalog.bundles().first().is_some_and(|bundle| {
+                !higher_ids.contains(bundle.identity().id.as_str())
+                    && !higher_namespaces.contains(bundle.namespace())
+            })
+        });
         let mut prepared_catalog_refs = prepared_catalogs.iter().collect::<Vec<_>>();
         prepared_catalog_refs.extend(project_catalogs.iter());
         prepared_catalog_refs.extend(first_party.iter());
@@ -214,12 +230,35 @@ impl InstalledBundleRefresh {
         for catalog in &prepared_catalog_refs {
             schema_rows.extend(catalog.schemas().iter().cloned());
         }
-        let static_sources = static_bundle_skill_sources(&bundles, &schema_rows)?;
+        let mut source_cache = self.sources.lock().await;
+        let mut next_sources = BTreeMap::new();
+        for bundle in bundles.bundles() {
+            let id = &bundle.identity().id;
+            let process = prepared_catalog_refs
+                .iter()
+                .find_map(|catalog| catalog.bundle_process(id));
+            let schemas = schema_rows
+                .iter()
+                .find(|row| &row.bundle_id == id)
+                .map_or(&[][..], |row| row.schemas.as_slice());
+            let fingerprint = crate::bundle_runtime::fingerprint(bundle, process, schemas)?;
+            let prepared = match source_cache.get(id) {
+                Some(cached) if cached.fingerprint == fingerprint => cached.clone(),
+                _ => crate::bundle_runtime::prepare_source(bundle, process, schemas).await?,
+            };
+            next_sources.insert(id.clone(), prepared);
+        }
+        let static_sources = next_sources
+            .values()
+            .map(|entry| entry.source.clone())
+            .collect::<Vec<_>>();
         let agent_catalog = Arc::new(AgentCatalog::new(Arc::clone(&bundles))?);
         runtime.refresh(|candidate| {
             candidate.replace_catalog(Arc::clone(&agent_catalog));
             candidate.replace_sources_of_kind(RuntimeSourceKind::Bundle, static_sources.clone())
         })?;
+        *source_cache = next_sources;
+        self.initialized.store(true, Ordering::Release);
         // Advance even when rows were skipped, so the warning is reported once
         // per generation instead of on every root binding.
         if let Some(generation) = registry_generation {

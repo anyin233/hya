@@ -94,6 +94,15 @@ export function discoverPluginSources(options: DiscoveryOptions = {}): readonly 
   const userRoot = path.join(home, ".claude/plugins")
   const roots = userRoot === projectRoot ? [projectRoot] : [projectRoot, userRoot]
   const found: PluginSource[] = []
+  // A project may itself be a plugin source with `.claude-plugin/plugin.json`.
+  try {
+    const projectSource = readPluginJson(cwd)
+    if (projectSource !== undefined) {
+      found.push(projectSource)
+    }
+  } catch {
+    // Discovery skips malformed candidates; direct import surfaces the error.
+  }
   for (const root of roots) {
     if (!fs.existsSync(root)) {
       continue

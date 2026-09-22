@@ -1,0 +1,2 @@
+reserved_ids: [compaction, summary, title]
+ordinary_spawn_scope: all_ordinary

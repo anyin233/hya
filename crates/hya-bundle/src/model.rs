@@ -145,6 +145,99 @@ pub struct PreparedAgent {
     pub hook_refs: Vec<String>,
 }
 
+/// Runtime channel topology represented by a declarative template.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChannelTemplateKind {
+    /// One leader and its direct reports on the existing group broadcast pipe.
+    Unit,
+    /// The existing vertical direct-message pair between parent and child.
+    ParentDm,
+}
+
+/// Participant topology role used by a channel template.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChannelParticipantRole {
+    /// Leader of the unit that owns a group channel.
+    UnitLeader,
+    /// Direct reports in the unit that owns a group channel.
+    DirectReports,
+    /// Parent endpoint of a vertical DM.
+    Parent,
+    /// Child endpoint of a vertical DM.
+    Child,
+}
+
+/// A local Agent definition or topology role selected by a channel template.
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum PreparedChannelParticipant {
+    /// One Agent declared in the same AgentSetBundle.
+    Agent {
+        /// Manifest-local Agent id.
+        agent: String,
+    },
+    /// A runtime topology role.
+    Role {
+        /// Role resolved when the engine creates a concrete channel.
+        role: ChannelParticipantRole,
+    },
+}
+
+/// Capability ceiling declared by a channel template.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChannelCapability {
+    /// Send ordinary mail through the channel.
+    Send,
+    /// Submit a terminal child report through the parent-child DM.
+    Report,
+    /// Surface unread channel mail as an in-turn steer.
+    Steer,
+    /// Deliver follow-up work after a member turn.
+    FollowUp,
+    /// Wake or deliver mail to resident members.
+    ResidentMail,
+}
+
+/// Runtime hierarchy fence for a channel template.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChannelScope {
+    /// A leader and its direct reports.
+    Unit,
+    /// One parent-child edge.
+    Vertical,
+}
+
+/// Durable lifetime supported by the current event-sourced mailbox.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChannelRetention {
+    /// Retain events for the lifetime of the team session, including archive/revival.
+    TeamSession,
+}
+
+/// Prepared policy/template used to mint runtime channels later.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PreparedChannelTemplate {
+    /// Stable bundle-local template id; never a runtime channel id.
+    pub id: String,
+    /// Supported runtime topology.
+    pub kind: ChannelTemplateKind,
+    /// Local Agent or topology-role selectors.
+    pub participants: Vec<PreparedChannelParticipant>,
+    /// Restrictive capability ceiling. Empty denies every optional capability.
+    #[serde(default)]
+    pub capabilities: Vec<ChannelCapability>,
+    /// Hierarchy boundary enforced by the runtime.
+    pub scope: ChannelScope,
+    /// Event retention contract.
+    pub retention: ChannelRetention,
+}
+
 /// One tool/skill/mcp/hook/extension resource with embedded content and digests.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -208,6 +301,9 @@ pub struct PreparedAgentSetBundle {
     pub digest: String,
     /// All Agents this bundle defines.
     pub agents: Vec<PreparedAgent>,
+    /// Declarative channel templates; concrete ids remain runtime-minted event facts.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub channels: Vec<PreparedChannelTemplate>,
     /// Prepared tool resources.
     pub tools: Vec<PreparedResource>,
     /// Prepared Skill resources.
@@ -438,6 +534,15 @@ impl PreparedInstallableBundle {
         }
     }
 
+    /// Return declarative channel templates for an AgentSetBundle.
+    #[must_use]
+    pub fn channels(&self) -> &[PreparedChannelTemplate] {
+        match self {
+            Self::AgentSet(bundle) => &bundle.channels,
+            Self::Agent(_) | Self::Workflow(_) | Self::Plugin(_) => &[],
+        }
+    }
+
     /// Return this payload's resources of one exported kind.
     #[must_use]
     pub fn resources(&self, kind: crate::ExportKind) -> &[PreparedResource] {
@@ -609,8 +714,8 @@ impl PreparedProcessKind {
 }
 
 /// One declared out-of-process extension: the runtime kind and the argv that
-/// starts it. Declared and validated at prepare time; spawning is wired in a
-/// later phase.
+/// starts it. Validated at prepare time; the application starts it before
+/// publishing a new immutable runtime generation.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct PreparedProcessExtension {

@@ -1,0 +1,50 @@
+schema_version: 1
+identity: hya/base-tools
+protected_names: [read]
+schemes: []
+tools:
+  - { name: invalid, schema_version: 1, permission: tool }
+  - { name: read, schema_version: 1, permission: read_only }
+  - { name: write, schema_version: 1, permission: tool }
+  - { name: edit, schema_version: 1, permission: tool }
+  - { name: ls, schema_version: 1, permission: read_only }
+  - { name: glob, schema_version: 1, permission: read_only }
+  - { name: find, schema_version: 1, permission: read_only }
+  - { name: grep, schema_version: 1, permission: read_only }
+  - { name: lsp, schema_version: 1, permission: read_only }
+  - { name: skill, schema_version: 1, permission: read_only }
+  - { name: list_agents, schema_version: 1, permission: read_only }
+  - { name: task, schema_version: 1, permission: task }
+  - { name: workflow, schema_version: 1, permission: tool }
+  - { name: send, schema_version: 1, permission: tool }
+  - { name: list_channel, schema_version: 1, permission: read_only }
+  - { name: search_agent, schema_version: 1, permission: read_only }
+  - { name: report, schema_version: 1, permission: tool }
+  - { name: kill, schema_version: 1, permission: task }
+  - name: ask_user
+    schema_version: 1
+    permission: tool
+    aliases: [{ name: question, visibility: hidden }]
+  - name: bash
+    schema_version: 1
+    permission: command
+    aliases: [{ name: shell, visibility: hidden }]
+  - name: apply_patch
+    schema_version: 1
+    permission: tool
+    aliases: [{ name: patch, visibility: hidden }]
+  - name: webfetch
+    schema_version: 1
+    permission: tool
+    aliases: [{ name: fetch, visibility: hidden }]
+  - name: websearch
+    schema_version: 1
+    permission: tool
+    aliases: [{ name: search, visibility: hidden }]
+  - name: plan_exit
+    schema_version: 1
+    permission: tool
+    aliases: [{ name: plan, visibility: hidden }]
+  - { name: todo__read, schema_version: 1, permission: read_only }
+  - { name: todo__update_status, schema_version: 1, permission: tool }
+  - { name: todo__update_content, schema_version: 1, permission: tool }

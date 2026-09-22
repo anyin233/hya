@@ -11,7 +11,9 @@ use serde::de::IgnoredAny;
 use serde_json::Value;
 
 use crate::BundleError;
-use crate::model::{AgentRole, BundleIdentity, ModelPolicy, ResourceView, SpawnLifecycle};
+use crate::model::{
+    AgentRole, BundleIdentity, ModelPolicy, PreparedChannelTemplate, ResourceView, SpawnLifecycle,
+};
 
 /// One logical file in a bundle source: relative path plus raw bytes.
 #[derive(Clone, Debug)]
@@ -170,7 +172,11 @@ pub(crate) struct SourceAgentSetManifest {
     #[serde(default)]
     pub extensions: SourceExtensions,
     /// The complete Agent set this bundle defines.
+    #[serde(default)]
     pub agents: Vec<SourceAgent>,
+    /// Channel policies/templates. Concrete channel ids are minted by the runtime.
+    #[serde(default)]
+    pub channels: Vec<PreparedChannelTemplate>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -295,6 +301,8 @@ pub(crate) struct SourceResource {
 pub(crate) struct SourceExtensions {
     pub js: Vec<SourceResource>,
     pub rust: Vec<SourceResource>,
+    /// Text assets materialized for process extensions or bundle MCP servers.
+    pub files: Vec<SourceResource>,
     /// The one optional out-of-process extension (`rust` | `bun` | `claude`).
     pub process: Option<SourceProcessExtension>,
 }

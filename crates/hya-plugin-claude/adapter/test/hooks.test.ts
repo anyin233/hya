@@ -3,6 +3,7 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { cleanupTempDirs } from "./helpers"
 import {
   claudeHookPayload,
+  claudeToolName,
   firstJsonObject,
   hookRegistrationsFrom,
   matcherMatches,
@@ -31,11 +32,21 @@ describe("parseClaudeHooks", () => {
   test("maps CC events to hya hook names and drops non-command entries", () => {
     const hooks = parseClaudeHooks(HOOKS_JSON)
     const registrations = hookRegistrationsFrom(hooks).map((entry) => entry.name)
-    expect(registrations).toEqual(["event", "tool.execute.after", "tool.execute.before"])
+    expect(registrations).toEqual(["session.start", "tool.execute.after", "tool.execute.before"])
     expect(hooks.groups["tool.execute.before"]).toHaveLength(2)
     expect(hooks.groups["tool.execute.before"]?.[0]?.commands[0]?.timeoutSeconds).toBe(5)
     expect(hooks.groups["message.user.before"]).toHaveLength(0)
-    expect(hooks.groups["event"]).toHaveLength(1)
+    expect(hooks.groups["session.start"]).toHaveLength(1)
+  })
+
+  test("accepts the documented top-level hooks wrapper", () => {
+    const hooks = parseClaudeHooks({
+      hooks: {
+        PreToolUse: [{ matcher: "Read", hooks: [{ type: "command", command: "true" }] }],
+      },
+    })
+    expect(hookRegistrationsFrom(hooks)).toEqual([{ name: "tool.execute.before" }])
+    expect(hooks.groups["tool.execute.before"]?.[0]?.matcher).toBe("Read")
   })
 
   test("tolerates malformed documents", () => {
@@ -53,6 +64,13 @@ describe("matcherMatches", () => {
     expect(matcherMatches("Bash|Edit", "Read")).toBe(false)
     expect(matcherMatches("Read", "Read")).toBe(true)
   })
+})
+
+test("claudeToolName maps only canonical builtins", () => {
+  expect(claudeToolName("read")).toBe("Read")
+  expect(claudeToolName("bash")).toBe("Bash")
+  expect(claudeToolName("mcp__db__read")).toBe("mcp__db__read")
+  expect(claudeToolName("customTool")).toBe("customTool")
 })
 
 describe("claudeHookPayload", () => {

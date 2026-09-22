@@ -7,8 +7,7 @@
  * | ---------------------- | ----------------------------------------------- |
  * | `plugin.json`          | bundle identity (`claude/<name>`, publisher     |
  * |                        | `claude`), namespace = sanitized name           |
- * | `agents/*.md`          | skill resources + the bundle Agent prompt       |
- * |                        | (first entry)                                   |
+ * | `agents/*.md`          | AgentSetBundle agents (one per file)             |
  * | per-skill `SKILL.md`   | skill resources                                 |
  * | `commands/*.md`        | skill resources (prompt-template bodies)        |
  * | `.mcp.json`            | `resources.mcp` JSON files                      |
@@ -65,17 +64,19 @@ export type Translation = {
   readonly namespace: string
   /** Bundle identity: `claude/<namespace>`, plugin version, publisher `claude`. */
   readonly identity: { readonly id: string; readonly version: string; readonly publisher: string }
-  /** Skill resources derived from `agents/`, `skills/`, and `commands/`. */
+  /** Skill resources derived from `skills/` and `commands/`. */
   readonly skills: readonly TranslatedSkill[]
   /** MCP declaration files derived from `.mcp.json`. */
   readonly mcp: readonly TranslatedMcp[]
-  /** The single bundle Agent (first `agents/*.md`, else synthesized). */
-  readonly agent: {
+  /** Claude agent files, preserved one-for-one as bundle Agents. */
+  readonly agents: readonly {
     readonly id: string
     readonly description: string
     readonly promptPath: string
     readonly prompt: string
-  }
+    readonly tools: readonly string[]
+    readonly model?: string
+  }[]
   /** All translated files referenced by the emitted manifest. */
   readonly files: readonly { readonly path: string; readonly content: string }[]
   /** The complete `bundle.yaml` manifest text. */
@@ -107,19 +108,27 @@ export function translatePlugin(dir: string): Translation {
 
   const skills: TranslatedSkill[] = []
   const usedIds = new Set<string>(["mcp", "harness", "builtin", "plugin"])
-  collectAgentSkills(dir, skills, usedIds)
   collectSkills(dir, skills, usedIds)
   collectCommandSkills(dir, skills, usedIds)
 
   const mcp = collectMcpFiles(dir)
-  const agent = buildAgent(source, dir)
+  const agents = collectAgents(source, dir)
   const hookGroups = parseClaudeHooks(readHooksDocument(dir)).groups
+  const runtimePath = "runtime/claude-plugin.json"
+  const supportFiles = collectSupportFiles(dir)
+  const runtime = `${JSON.stringify({ format_version: 1, identity: {
+    id: `claude/${namespace}`,
+    version: source.manifest.version,
+    publisher: "claude",
+  }, namespace, skills, hookGroups }, null, 2)}\n`
   const files = [
     ...skills.map((skill) => ({ path: skill.path, content: skill.content })),
     ...mcp.map((entry) => ({ path: entry.path, content: entry.content })),
-    { path: agent.promptPath, content: agent.prompt },
+    ...agents.map((agent) => ({ path: agent.promptPath, content: agent.prompt })),
+    ...supportFiles,
+    { path: runtimePath, content: runtime },
   ]
-  const manifestYaml = renderManifest(source, namespace, skills, mcp, agent)
+  const manifestYaml = renderManifest(source, namespace, skills, mcp, agents, hookGroups, runtimePath, supportFiles)
   return {
     source,
     namespace,
@@ -130,7 +139,7 @@ export function translatePlugin(dir: string): Translation {
     },
     skills,
     mcp,
-    agent,
+    agents,
     files,
     manifestYaml,
     hookGroups,
@@ -156,26 +165,6 @@ export function sha256Hex(content: string): string {
   const hasher = new Bun.CryptoHasher("sha256")
   hasher.update(content)
   return hasher.digest("hex")
-}
-
-function collectAgentSkills(
-  dir: string,
-  skills: TranslatedSkill[],
-  usedIds: Set<string>,
-): void {
-  const agentsDir = path.join(dir, "agents")
-  for (const filePath of listMarkdown(agentsDir)) {
-    const content = readBounded(filePath)
-    const stem = path.basename(filePath, ".md")
-    const meta = agentMetaFrom(content, stem)
-    const id = uniqueId(sanitizeToken(meta.name) || sanitizeToken(stem), usedIds)
-    skills.push({
-      id,
-      path: `skills/${id}.md`,
-      content,
-      digest: sha256Hex(content),
-    })
-  }
 }
 
 function collectSkills(
@@ -221,9 +210,43 @@ function readHooksDocument(dir: string): unknown {
     return undefined
   }
   try {
-    return JSON.parse(fs.readFileSync(hooksFile, "utf8"))
-  } catch {
-    return undefined
+    const document: unknown = JSON.parse(fs.readFileSync(hooksFile, "utf8"))
+    validateSupportedHooks(document)
+    return document
+  } catch (error) {
+    if (error instanceof TranslateError) {
+      throw error
+    }
+    throw new TranslateError(`hooks/hooks.json is not valid JSON: ${String(error)}`)
+  }
+}
+
+function validateSupportedHooks(document: unknown): void {
+  if (!isRecord(document)) {
+    throw new TranslateError("hooks/hooks.json must contain an object")
+  }
+  const eventDocument = isRecord(document["hooks"]) ? document["hooks"] : document
+  const supported = new Set([
+    "PreToolUse", "PostToolUse", "PreCompact",
+    "SessionStart", "SessionEnd", "SubagentStart",
+  ])
+  for (const [event, groups] of Object.entries(eventDocument)) {
+    if (!supported.has(event)) {
+      throw new TranslateError(`hooks/hooks.json event ${JSON.stringify(event)} is not supported by the hya Claude adapter`)
+    }
+    if (!Array.isArray(groups)) {
+      throw new TranslateError(`hooks/hooks.json event ${JSON.stringify(event)} must contain matcher groups`)
+    }
+    for (const group of groups) {
+      if (!isRecord(group) || !Array.isArray(group["hooks"])) {
+        throw new TranslateError(`hooks/hooks.json event ${JSON.stringify(event)} contains an invalid matcher group`)
+      }
+      for (const hook of group["hooks"]) {
+        if (!isRecord(hook) || hook["type"] !== "command") {
+          throw new TranslateError(`hooks/hooks.json event ${JSON.stringify(event)} uses an unsupported non-command hook`)
+        }
+      }
+    }
   }
 }
 
@@ -271,41 +294,30 @@ function renderMcpConfig(value: unknown): string {
   return `${JSON.stringify(config, null, 2)}\n`
 }
 
-function buildAgent(
+function collectAgents(
   source: PluginSource,
   dir: string,
-): Translation["agent"] {
+): Translation["agents"] {
   const agentsDir = path.join(dir, "agents")
   const markdown = listMarkdown(agentsDir)
-  if (markdown.length > 0) {
-    const first = markdown[0]
-    if (first === undefined) {
-      return synthesizedAgent(source)
-    }
-    const content = readBounded(first)
-    const stem = path.basename(first, ".md")
+  const used = new Set<string>()
+  return markdown.map((filePath) => {
+    const content = readBounded(filePath)
+    const stem = path.basename(filePath, ".md")
     const meta = agentMetaFrom(content, stem)
     const body = parseFrontmatter(content).body.trim()
-    const id = sanitizeToken(meta.name) || sanitizeToken(stem) || sanitizeToken(source.manifest.name)
+    const seed = sanitizeToken(meta.name) || sanitizeToken(stem) || sanitizeToken(source.manifest.name)
+    const id = uniqueId(seed, used)
     const prompt = body.length > 0 ? `${body}\n` : `You operate the ${source.manifest.name} plugin.\n`
     return {
       id,
       description: meta.description || source.manifest.description,
       promptPath: `prompts/${id}.md`,
       prompt,
+      tools: meta.tools.map((tool) => `harness:tool/${sanitizeToken(tool)}`),
+      ...(meta.model === "inherit" ? {} : { model: meta.model }),
     }
-  }
-  return synthesizedAgent(source)
-}
-
-function synthesizedAgent(source: PluginSource): Translation["agent"] {
-  const id = sanitizeToken(source.manifest.name)
-  return {
-    id: id.length > 0 ? id : "claude-plugin",
-    description: source.manifest.description,
-    promptPath: "prompts/claude-plugin.md",
-    prompt: `You operate the ${source.manifest.name} Claude Code plugin inside hya. Use its skills to answer and act.\n`,
-  }
+  })
 }
 
 function renderManifest(
@@ -313,7 +325,10 @@ function renderManifest(
   namespace: string,
   skills: readonly TranslatedSkill[],
   mcp: readonly TranslatedMcp[],
-  agent: Translation["agent"],
+  agents: Translation["agents"],
+  hookGroups: Translation["hookGroups"],
+  runtimePath: string,
+  supportFiles: readonly { readonly path: string; readonly content: string }[],
 ): string {
   const lines: string[] = []
   lines.push("kind: AgentBundle")
@@ -341,15 +356,90 @@ function renderManifest(
       lines.push(`      path: ${yamlString(entry.path)}`)
     }
   }
-  lines.push("agent:")
-  lines.push(`  id: ${yamlString(agent.id)}`)
-  if (agent.description.length > 0) {
-    lines.push(`  description: ${yamlString(agent.description)}`)
+  const hookNames = (Object.keys(hookGroups) as HookName[])
+    .filter((name) => hookGroups[name].length > 0)
+    .sort()
+  lines.push("  hooks:")
+  if (hookNames.length === 0) {
+    lines.push("    []")
+  } else {
+    for (const name of hookNames) {
+      lines.push(`    - id: ${yamlString(name)}`)
+      lines.push(`      path: ${yamlString(runtimePath)}`)
+    }
   }
-  lines.push("  role: main")
-  lines.push("  spawn_lifecycle: transient")
-  lines.push(`  prompt: ${yamlString(agent.promptPath)}`)
+  lines.push("extensions:")
+  lines.push("  files:")
+  lines.push(`    - id: ${yamlString("claude-runtime")}`)
+  lines.push(`      path: ${yamlString(runtimePath)}`)
+  const usedFileIds = new Set<string>(["claude-runtime"])
+  for (const file of supportFiles) {
+    const relative = file.path.replace(/^claude-plugin\//, "")
+    const id = uniqueId(sanitizeToken(relative) || "source", usedFileIds)
+    lines.push(`    - id: ${yamlString(id)}`)
+    lines.push(`      path: ${yamlString(file.path)}`)
+  }
+  lines.push("  process:")
+  lines.push("    kind: claude")
+  lines.push(`    command: [${yamlString("--bundle-runtime")}, ${yamlString(runtimePath)}]`)
+  if (agents.length > 0) {
+    lines.push("agents:")
+    for (const agent of agents) {
+      lines.push(`  - id: ${yamlString(agent.id)}`)
+      if (agent.description.length > 0) {
+        lines.push(`    description: ${yamlString(agent.description)}`)
+      }
+      lines.push("    role: subagent")
+      lines.push("    spawn_lifecycle: transient")
+      lines.push(`    prompt: ${yamlString(agent.promptPath)}`)
+      if (agent.model !== undefined) {
+        lines.push("    model_policy:")
+        lines.push(`      model: ${yamlString(agent.model)}`)
+      }
+      if (agent.tools.length > 0) {
+        lines.push("    resource_view:")
+        lines.push("      allow:")
+        for (const tool of [...agent.tools].sort()) {
+          lines.push(`        - ${yamlString(tool)}`)
+        }
+      }
+      if (hookNames.length > 0) {
+        lines.push("    hook_refs:")
+        for (const name of hookNames) {
+          lines.push(`      - ${yamlString(name)}`)
+        }
+      }
+    }
+  }
+  lines[0] = agents.length > 0 ? "kind: AgentSetBundle" : "kind: Plugin"
   return `${lines.join("\n")}\n`
+}
+
+function collectSupportFiles(root: string): readonly { readonly path: string; readonly content: string }[] {
+  const files: { path: string; content: string }[] = []
+  const visit = (dir: string): void => {
+    for (const entry of sortedEntries(dir)) {
+      if (entry === ".git" || entry === "node_modules") {
+        continue
+      }
+      const absolute = path.join(dir, entry)
+      const stat = fs.lstatSync(absolute)
+      if (stat.isSymbolicLink()) {
+        throw new TranslateError(`${absolute} is a symlink; Claude bundle imports require closed regular-file sources`)
+      }
+      if (stat.isDirectory()) {
+        visit(absolute)
+      } else if (stat.isFile()) {
+        const relative = path.relative(root, absolute).split(path.sep).join("/")
+        files.push({
+          path: `claude-plugin/${relative}`,
+          content: fs.readFileSync(absolute, "utf8"),
+        })
+      }
+    }
+  }
+  visit(root)
+  return files
 }
 
 /** YAML double-quoted scalar; JSON escaping is valid YAML 1.2. */

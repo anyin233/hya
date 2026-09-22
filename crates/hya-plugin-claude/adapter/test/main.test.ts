@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test"
+import fs from "node:fs"
+import path from "node:path"
 
-import { cleanupTempDirs, makePluginDir, runCli } from "./helpers"
+import { cleanupTempDirs, makePluginDir, makeTempDir, runCli, writePluginDir } from "./helpers"
 
 afterEach(cleanupTempDirs)
 
@@ -33,5 +35,19 @@ describe("CLI argument handling", () => {
     const dir = await makePluginDir({ name: "relative" })
     const emit = await runCli(["--emit-bundle-manifest", "--plugin-dir", dir])
     expect(emit.exitCode).toBe(0)
+  })
+
+  test("emit mode resolves a local marketplace entry", async () => {
+    const root = await makeTempDir()
+    const plugin = path.join(root, "plugins/demo")
+    fs.mkdirSync(plugin, { recursive: true })
+    await writePluginDir(plugin, { name: "market-demo" })
+    fs.writeFileSync(path.join(root, "marketplace.json"), JSON.stringify({
+      name: "fixture",
+      plugins: [{ name: "demo", source: "./plugins/demo" }],
+    }))
+    const emit = await runCli(["--emit-bundle-manifest", "--marketplace", root, "--entry", "demo"])
+    expect(emit.exitCode).toBe(0)
+    expect((JSON.parse(emit.stdout) as { manifest: string }).manifest).toContain('id: "claude/market-demo"')
   })
 })

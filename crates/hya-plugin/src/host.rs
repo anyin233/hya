@@ -98,6 +98,7 @@ pub(crate) struct PluginConn {
     canonical_declaration: Arc<[u8]>,
     pub(crate) timeout: Duration,
     command: Vec<String>,
+    bundle_root: Option<std::path::PathBuf>,
     env: BTreeMap<String, String>,
     host_info: HostInfo,
     live: Mutex<Option<LiveClient>>,
@@ -183,7 +184,10 @@ impl PluginConn {
             return Err(PluginError::Disabled);
         }
         let env = (!self.env.is_empty()).then_some(&self.env);
-        let (client, guard) = PluginClient::spawn(&self.command, env)?;
+        let (client, guard) = match self.bundle_root.as_deref() {
+            Some(root) => PluginClient::spawn_bundle(&self.command, root, env)?,
+            None => PluginClient::spawn(&self.command, env)?,
+        };
         let init = client.initialize(self.host_info.clone()).await?;
         validate_initialize(&self.id, &init)?;
         if canonical_initialize(&init)?.as_slice() != self.canonical_declaration.as_ref() {
@@ -318,6 +322,19 @@ fn canonical_json(value: &Value) -> Value {
 }
 
 impl PluginHost {
+    /// Connect one bundle process in its private materialized directory.
+    /// The directory and explicitly supplied environment are retained on restart.
+    pub async fn connect_bundle(
+        spec: PluginSpec,
+        host: HostInfo,
+        root: std::path::PathBuf,
+    ) -> Result<Self, PluginError> {
+        let conn = connection::connect_one_at(spec, host, Some(root)).await?;
+        Ok(Self {
+            plugins: vec![conn],
+        })
+    }
+
     /// Connect every spec in parallel; failed plugins are logged and omitted.
     pub async fn connect_all(specs: Vec<PluginSpec>, host: HostInfo) -> Self {
         Self::connect_all_observed(specs, host).await.0

@@ -10,6 +10,7 @@
 //! reducer. Resident supervisors (and other bus subscribers) wake idle actors on
 //! mail; this module itself only persists and publishes.
 
+use hya_bundle::{ChannelParticipantRole, ChannelTemplateKind};
 use hya_proto::{
     AgentName, Event, MailEndpoint, MailKind, RosterStatus, SessionId, SubagentMode, scope,
 };
@@ -165,7 +166,10 @@ impl SessionEngine {
         kind: MailKind,
         body: String,
     ) -> Result<MailReceipt, CoreError> {
-        self.mail_send_for_actor(from_session, to, kind, body, None)
+        let policy = self.session_channel_policy(from_session).ok_or_else(|| {
+            CoreError::Invalid("channel policy snapshot missing for session send".to_string())
+        })?;
+        self.mail_send_for_actor_with_policy(from_session, to, kind, body, None, Some(policy))
             .await
     }
 
@@ -176,6 +180,19 @@ impl SessionEngine {
         kind: MailKind,
         body: String,
         actor_claim: Option<&hya_store::ActorClaim>,
+    ) -> Result<MailReceipt, CoreError> {
+        self.mail_send_for_actor_with_policy(from_session, to, kind, body, actor_claim, None)
+            .await
+    }
+
+    pub(crate) async fn mail_send_for_actor_with_policy(
+        &self,
+        from_session: SessionId,
+        to: MailEndpoint,
+        kind: MailKind,
+        body: String,
+        actor_claim: Option<&hya_store::ActorClaim>,
+        channel_policy: Option<hya_tool::ChannelPolicySnapshot>,
     ) -> Result<MailReceipt, CoreError> {
         let root = self.team_root(from_session).await?;
         let from = self.resolve_handle(root, from_session).await?;
@@ -205,6 +222,34 @@ impl SessionEngine {
             }
             other => other,
         };
+        let policy_projection = self.read_projection(root).await?;
+        let (policy_kind, policy_role) = match &to {
+            MailEndpoint::Handle(target) => (
+                ChannelTemplateKind::ParentDm,
+                if scope::parent_path(&from) == Some(target.as_str()) {
+                    ChannelParticipantRole::Child
+                } else {
+                    ChannelParticipantRole::Parent
+                },
+            ),
+            MailEndpoint::Channel(channel) => match policy_projection.team.channels.get(channel) {
+                Some(state) if state.kind == hya_proto::ChannelKind::Group => (
+                    ChannelTemplateKind::Unit,
+                    ChannelParticipantRole::UnitLeader,
+                ),
+                _ => (
+                    ChannelTemplateKind::ParentDm,
+                    dm_role_for(&policy_projection, channel, &from),
+                ),
+            },
+        };
+        if channel_policy
+            .is_some_and(|policy| !snapshot_allows(policy, policy_kind, policy_role, 0))
+        {
+            return Err(CoreError::Invalid(
+                "channel policy denies send for this agent and topology role".to_string(),
+            ));
+        }
         #[cfg(test)]
         if matches!(&to, MailEndpoint::Handle(_))
             && let Some(gate) = self.direct_mail_pre_append_gate.as_ref()
@@ -306,14 +351,19 @@ impl SessionEngine {
         from_session: SessionId,
         body: String,
     ) -> Result<MailReceipt, CoreError> {
-        self.mail_announce_for_actor(from_session, body, None).await
+        let policy = self.session_channel_policy(from_session).ok_or_else(|| {
+            CoreError::Invalid("channel policy snapshot missing for session broadcast".to_string())
+        })?;
+        self.mail_announce_for_actor_with_policy(from_session, body, None, Some(policy))
+            .await
     }
 
-    pub(crate) async fn mail_announce_for_actor(
+    async fn mail_announce_for_actor_with_policy(
         &self,
         from_session: SessionId,
         body: String,
         actor_claim: Option<&hya_store::ActorClaim>,
+        channel_policy: Option<hya_tool::ChannelPolicySnapshot>,
     ) -> Result<MailReceipt, CoreError> {
         let root = self.team_root(from_session).await?;
         let from = self.resolve_handle(root, from_session).await?;
@@ -321,6 +371,18 @@ impl SessionEngine {
         // (`announce-{8}`, leader-only posting). Fall back to the legacy
         // reserved channel when no minted channel exists yet (pre-mint logs).
         let projection = self.read_projection(root).await?;
+        if channel_policy.is_some_and(|policy| {
+            !snapshot_allows(
+                policy,
+                ChannelTemplateKind::Unit,
+                ChannelParticipantRole::UnitLeader,
+                0,
+            )
+        }) {
+            return Err(CoreError::Invalid(
+                "channel policy denies unit broadcast for this agent".to_string(),
+            ));
+        }
         let Some(group) = projection
             .team
             .channels
@@ -359,11 +421,23 @@ impl SessionEngine {
     /// posts on the unit group channel it leads (broadcast semantics); a
     /// subordinate DMs its one upward peer; an agent with neither is asked to
     /// address a channel explicitly.
+    #[cfg(test)]
     pub(crate) async fn mail_send_default_for_actor(
         &self,
         from_session: SessionId,
         body: String,
         actor_claim: Option<&hya_store::ActorClaim>,
+    ) -> Result<MailReceipt, CoreError> {
+        self.mail_send_default_for_actor_with_policy(from_session, body, actor_claim, None)
+            .await
+    }
+
+    pub(crate) async fn mail_send_default_for_actor_with_policy(
+        &self,
+        from_session: SessionId,
+        body: String,
+        actor_claim: Option<&hya_store::ActorClaim>,
+        channel_policy: Option<hya_tool::ChannelPolicySnapshot>,
     ) -> Result<MailReceipt, CoreError> {
         let root = self.team_root(from_session).await?;
         let from = self.resolve_handle(root, from_session).await?;
@@ -374,17 +448,23 @@ impl SessionEngine {
         });
         if leads_unit {
             return self
-                .mail_announce_for_actor(from_session, body, actor_claim)
+                .mail_announce_for_actor_with_policy(
+                    from_session,
+                    body,
+                    actor_claim,
+                    channel_policy,
+                )
                 .await;
         }
         if let Some(parent) = hya_proto::scope::parent_path(&from) {
             return self
-                .mail_send_for_actor(
+                .mail_send_for_actor_with_policy(
                     from_session,
                     MailEndpoint::Handle(parent.to_string()),
                     MailKind::Message,
                     body,
                     actor_claim,
+                    channel_policy,
                 )
                 .await;
         }
@@ -392,6 +472,40 @@ impl SessionEngine {
             "no default channel: you neither lead a unit nor report to one; address a channel explicitly with `#channel` or a peer handle".to_string(),
         ))
     }
+}
+
+fn dm_role_for(
+    projection: &hya_proto::Projection,
+    channel: &str,
+    actor: &str,
+) -> ChannelParticipantRole {
+    projection
+        .team
+        .channels
+        .get(channel)
+        .and_then(|state| state.members.iter().find(|member| member.as_str() != actor))
+        .map_or(ChannelParticipantRole::Child, |peer| {
+            if scope::parent_path(peer) == Some(actor) {
+                ChannelParticipantRole::Parent
+            } else {
+                ChannelParticipantRole::Child
+            }
+        })
+}
+
+fn snapshot_allows(
+    policy: hya_tool::ChannelPolicySnapshot,
+    kind: ChannelTemplateKind,
+    role: ChannelParticipantRole,
+    bit: u8,
+) -> bool {
+    let bits = match (kind, role) {
+        (ChannelTemplateKind::Unit, ChannelParticipantRole::UnitLeader) => policy.unit_leader,
+        (ChannelTemplateKind::Unit, _) => policy.unit_member,
+        (ChannelTemplateKind::ParentDm, ChannelParticipantRole::Parent) => policy.dm_parent,
+        (ChannelTemplateKind::ParentDm, _) => policy.dm_child,
+    };
+    bits & (1 << bit) != 0
 }
 
 impl SessionEngine {
@@ -693,6 +807,28 @@ mod tests {
         use super::*;
 
         pub(super) fn runtime_with_resident() -> Arc<crate::RuntimeRegistry> {
+            runtime_with_extra(Vec::new())
+        }
+
+        pub(super) fn runtime_with_channel_restriction(
+            channels: &str,
+        ) -> Arc<crate::RuntimeRegistry> {
+            let source = hya_bundle::BundleSource::new(
+                "channel-restriction",
+                vec![hya_bundle::SourceFile::new(
+                    "bundle.yaml",
+                    format!(
+                        "kind: AgentSetBundle\nidentity: {{ id: acme/channel-restriction, version: 1.0.0, publisher: acme }}\nchannels:\n{channels}\n"
+                    ),
+                )],
+            );
+            let prepared = hya_bundle::prepare_package(source).expect("channel restriction");
+            runtime_with_extra(prepared.bundles().to_vec())
+        }
+
+        fn runtime_with_extra(
+            mut extra: Vec<hya_bundle::PreparedInstallableBundle>,
+        ) -> Arc<crate::RuntimeRegistry> {
             let bundle = hya_bundle::PreparedAgentBundle {
                 format_version: 2,
                 identity: hya_bundle::BundleIdentity {
@@ -723,10 +859,10 @@ mod tests {
                 hooks: Vec::new(),
                 extensions: Vec::new(),
             };
-            let catalog = hya_bundle::BundleCatalog::from_prepared(&[
-                hya_bundle::PreparedInstallableBundle::Agent(Box::new(bundle)),
-            ])
-            .expect("catalog valid");
+            extra.push(hya_bundle::PreparedInstallableBundle::Agent(Box::new(
+                bundle,
+            )));
+            let catalog = hya_bundle::BundleCatalog::from_prepared(&extra).expect("catalog valid");
             let catalog = crate::AgentCatalog::new(Arc::new(catalog)).expect("agent catalog valid");
             Arc::new(crate::RuntimeRegistry::new(
                 ToolRegistry::builtins(),
@@ -739,6 +875,13 @@ mod tests {
         let store = SessionStore::connect_memory().await.unwrap();
         let router = Arc::new(ProviderRouter::new());
         let runtime = local_test_runtime();
+        let (permission, _rx) = PermissionPlane::new(PermissionRules::new(Vec::new()));
+        SessionEngine::new(store, router, runtime, permission, EventBus::default())
+    }
+
+    async fn engine_with_runtime(runtime: Arc<crate::RuntimeRegistry>) -> SessionEngine {
+        let store = SessionStore::connect_memory().await.unwrap();
+        let router = Arc::new(ProviderRouter::new());
         let (permission, _rx) = PermissionPlane::new(PermissionRules::new(Vec::new()));
         SessionEngine::new(store, router, runtime, permission, EventBus::default())
     }
@@ -777,7 +920,36 @@ mod tests {
                 "hi".to_string(),
             )
             .await;
-        assert!(matches!(result, Err(CoreError::Invalid(_))));
+        assert!(
+            matches!(result, Err(CoreError::Invalid(ref message)) if message.contains("channel policy snapshot missing")),
+            "a session without an admitted binding must fail closed: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn bundle_channel_policy_can_restrict_real_send_without_granting() {
+        let runtime = tests_support::runtime_with_channel_restriction(
+            "  - { id: dm, kind: parent_dm, participants: [{kind: role, role: child}], capabilities: [], scope: vertical, retention: team_session }",
+        );
+        let engine = engine_with_runtime(runtime).await;
+        let org = org(&engine).await;
+        let binding = engine.bind_runtime(std::path::Path::new(".")).unwrap();
+        let policy = crate::ChannelPolicy::from_binding(&binding)
+            .unwrap()
+            .snapshot_for("reviewer");
+        let result = engine
+            .mail_send_for_actor_with_policy(
+                org.worker_1.session,
+                MailEndpoint::Handle(org.lead_1.path),
+                MailKind::Message,
+                "blocked".to_string(),
+                None,
+                Some(policy),
+            )
+            .await;
+        assert!(
+            matches!(result, Err(CoreError::Invalid(message)) if message.contains("channel policy denies send"))
+        );
     }
 
     #[tokio::test]
@@ -907,6 +1079,10 @@ mod tests {
                 release.clone(),
             )),
         );
+        let sender_binding = sender.bind_runtime(std::path::Path::new(".")).unwrap();
+        sender
+            .capture_session_bundle_hooks(root, &sender_binding, "build")
+            .await;
         let sender_handle = handle.clone();
         let send = tokio::spawn(async move {
             sender
@@ -978,6 +1154,10 @@ mod tests {
             })
             .await
             .unwrap();
+        let binding = engine.bind_runtime(std::path::Path::new(".")).unwrap();
+        engine
+            .capture_session_bundle_hooks(session, &binding, "worker")
+            .await;
         // Mirror the supervisor's registration-time minting: one group channel
         // per unit (leader + children), reused across siblings.
         let existing_group = engine

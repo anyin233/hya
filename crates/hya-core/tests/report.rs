@@ -21,13 +21,14 @@ use hya_provider::{
     ProviderRouter,
 };
 use hya_store::SessionStore;
-use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
+use hya_tool::{ChannelPolicySnapshot, PermissionPlane, PermissionRules, ToolRegistry};
 use tokio_util::sync::CancellationToken;
 
 use hya_core::CoreError;
 use hya_core::bus::EventBus;
 use hya_core::engine::{AgentSpec, CreateSession, SessionEngine};
 use hya_core::resident::ResidentSupervisor;
+use hya_core::run_lifecycle_service;
 
 /// Minimal fake route: one text part, then stop — enough to drive a turn.
 struct StubProvider;
@@ -76,6 +77,35 @@ async fn engine() -> Arc<SessionEngine> {
         store,
         router,
         support::test_runtime(Arc::new(ToolRegistry::builtins())),
+        permission,
+        EventBus::default(),
+    ))
+}
+
+async fn engine_with_channel_restriction(channels: &str) -> Arc<SessionEngine> {
+    let source = hya_bundle::BundleSource::new(
+        "channel-restriction",
+        vec![hya_bundle::SourceFile::new(
+            "bundle.yaml",
+            format!(
+                "kind: AgentSetBundle\nidentity: {{ id: acme/channel-restriction, version: 1.0.0, publisher: acme }}\nchannels:\n{channels}\n"
+            ),
+        )],
+    );
+    let prepared = hya_bundle::prepare_package(source).unwrap();
+    let bundles = hya_bundle::BundleCatalog::from_prepared(prepared.bundles()).unwrap();
+    let agents = hya_core::AgentCatalog::new(Arc::new(bundles)).unwrap();
+    let runtime = Arc::new(hya_core::RuntimeRegistry::new(
+        ToolRegistry::builtins(),
+        Arc::new(agents),
+    ));
+    let store = SessionStore::connect_memory().await.unwrap();
+    let router = Arc::new(ProviderRouter::new().with(Arc::new(StubProvider)));
+    let (permission, _rx) = PermissionPlane::new(PermissionRules::new(Vec::new()));
+    Arc::new(SessionEngine::new(
+        store,
+        router,
+        runtime,
         permission,
         EventBus::default(),
     ))
@@ -991,5 +1021,232 @@ async fn steer_notice_carries_the_channel_id_for_handle_mail() {
     assert!(
         notice.contains("handle-addressed status update"),
         "notice still carries the body"
+    );
+}
+
+#[tokio::test]
+async fn steer_policy_denial_keeps_real_mail_out_of_the_turn_notice() {
+    let engine = engine().await;
+    let root = root_team(&engine).await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    ensure_main(&supervisor, &engine, root).await;
+    let (child, _) = spawn_idle_resident(&supervisor, &engine, root, "explore").await;
+    engine
+        .mail_send(
+            child,
+            MailEndpoint::Handle("main".to_string()),
+            MailKind::Message,
+            "must stay hidden".to_string(),
+        )
+        .await
+        .unwrap();
+
+    let mut steer = engine
+        .steer_mailbox_snapshot_with_policy(root, Some(ChannelPolicySnapshot::default()))
+        .await;
+    assert!(steer.drain(&engine).await.unwrap().is_none());
+    let projection = engine.read_projection(root).await.unwrap();
+    assert_eq!(
+        projection.team.roster["main"].resident_cursor,
+        projection.team.inboxes["main"].len() as u64,
+        "denied delivery must be consumed so it cannot block report or replay"
+    );
+}
+
+#[tokio::test]
+async fn report_policy_denial_rejects_the_real_lifecycle_request() {
+    let engine = engine().await;
+    let root = root_team(&engine).await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    ensure_main(&supervisor, &engine, root).await;
+    let (child, _) = spawn_idle_resident(&supervisor, &engine, root, "explore").await;
+    let (plane, rx) = hya_tool::LifecyclePlane::new();
+    tokio::spawn(run_lifecycle_service(engine, supervisor, rx));
+
+    let result = plane
+        .for_session(child)
+        .with_channel_policy(ChannelPolicySnapshot::default())
+        .report(ReportOutcome::Done, "blocked".to_string())
+        .await;
+    assert!(
+        matches!(result, Err(hya_tool::ToolError::Input(message)) if message.contains("channel policy denies report"))
+    );
+}
+
+#[tokio::test]
+async fn resident_mail_policy_denial_does_not_wake_an_idle_resident() {
+    let engine = engine_with_channel_restriction(
+        "  - { id: dm, kind: parent_dm, participants: [{kind: role, role: child}], capabilities: [send, report, steer, follow_up], scope: vertical, retention: team_session }",
+    )
+    .await;
+    let root = root_team(&engine).await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    ensure_main(&supervisor, &engine, root).await;
+    let (child, handle) = spawn_idle_resident(&supervisor, &engine, root, "explore").await;
+    let before = engine
+        .read_projection(child)
+        .await
+        .unwrap()
+        .session
+        .messages
+        .len();
+
+    engine
+        .mail_send(
+            root,
+            MailEndpoint::Handle(handle.clone()),
+            MailKind::Message,
+            "do not wake".to_string(),
+        )
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    assert_eq!(
+        engine
+            .read_projection(child)
+            .await
+            .unwrap()
+            .session
+            .messages
+            .len(),
+        before
+    );
+    let team = engine.read_projection(root).await.unwrap();
+    assert_eq!(
+        team.team.roster[&handle].resident_cursor,
+        team.team.inboxes[&handle].len() as u64,
+        "mail denied for idle delivery must be consumed and cannot block report"
+    );
+}
+
+#[tokio::test]
+async fn public_mail_send_uses_the_session_captured_channel_policy() {
+    let engine = engine_with_channel_restriction(
+        "  - { id: dm, kind: parent_dm, participants: [{kind: role, role: parent}], capabilities: [], scope: vertical, retention: team_session }",
+    )
+    .await;
+    let root = root_team(&engine).await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    ensure_main(&supervisor, &engine, root).await;
+    let (_, handle) = spawn_idle_resident(&supervisor, &engine, root, "explore").await;
+
+    let result = engine
+        .mail_send(
+            root,
+            MailEndpoint::Handle(handle),
+            MailKind::Message,
+            "must be denied".to_string(),
+        )
+        .await;
+    assert!(
+        matches!(result, Err(CoreError::Invalid(message)) if message.contains("channel policy denies send"))
+    );
+}
+
+#[tokio::test]
+async fn follow_up_policy_denial_does_not_queue_a_second_resident_turn() {
+    let engine = engine_with_channel_restriction(
+        "  - { id: dm, kind: parent_dm, participants: [{kind: role, role: child}], capabilities: [send, report, steer, resident_mail], scope: vertical, retention: team_session }",
+    )
+    .await;
+    let root = root_team(&engine).await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    ensure_main(&supervisor, &engine, root).await;
+    let agent = agent_spec();
+    let binding = engine.bind_runtime(&agent.workdir).unwrap();
+    let resources = binding.agent_resource_policy(agent.name.as_str()).unwrap();
+    let (child, handle) = supervisor
+        .spawn_resident(
+            root,
+            agent,
+            (binding, Arc::from([]), resources, None),
+            "initial".to_string(),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    for _ in 0..100 {
+        if engine
+            .read_projection(root)
+            .await
+            .unwrap()
+            .team
+            .roster
+            .get(&handle)
+            .is_some_and(|entry| entry.status == RosterStatus::Busy)
+        {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    engine
+        .mail_send(
+            root,
+            MailEndpoint::Handle(handle.clone()),
+            MailKind::Message,
+            "denied follow-up".to_string(),
+        )
+        .await
+        .unwrap();
+    wait_idle(&engine, root, &handle, child).await;
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    let assistants = engine
+        .read_projection(child)
+        .await
+        .unwrap()
+        .session
+        .messages
+        .iter()
+        .filter(|message| message.role == hya_proto::Role::Assistant)
+        .count();
+    assert_eq!(assistants, 1);
+}
+
+#[tokio::test]
+async fn resident_mail_without_follow_up_is_not_delivered_after_idle_recovery() {
+    let engine = engine_with_channel_restriction(
+        "  - { id: dm, kind: parent_dm, participants: [{kind: role, role: child}], capabilities: [send, report, steer, resident_mail], scope: vertical, retention: team_session }",
+    )
+    .await;
+    let root = root_team(&engine).await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    ensure_main(&supervisor, &engine, root).await;
+    let (child, handle) = spawn_idle_resident(&supervisor, &engine, root, "explore").await;
+    let before = engine
+        .read_projection(child)
+        .await
+        .unwrap()
+        .session
+        .messages
+        .len();
+
+    engine
+        .mail_send(
+            root,
+            MailEndpoint::Handle(handle.clone()),
+            MailKind::Message,
+            "resident-only must stay hidden".to_string(),
+        )
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    assert_eq!(
+        engine
+            .read_projection(child)
+            .await
+            .unwrap()
+            .session
+            .messages
+            .len(),
+        before
+    );
+    let team = engine.read_projection(root).await.unwrap();
+    assert_eq!(
+        team.team.roster[&handle].resident_cursor,
+        team.team.inboxes[&handle].len() as u64
     );
 }

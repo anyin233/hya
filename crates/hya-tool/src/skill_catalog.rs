@@ -115,7 +115,7 @@ pub fn merge_skill_catalog(mut native: Vec<SkillCatalogEntry>) -> Vec<SkillCatal
     native
 }
 
-const AGENT_BUNDLE_AUTHORING_DESCRIPTION: &str = "Use when authoring and packaging public AgentBundles (one agent per bundle): static process-free bundles or activation-scoped Bun extension sidecars, exact bundle.hya.md closure, install/info commands, stable AgentName bytes, role/can_spawn/lifecycle, harness resource views, and private/unsupported boundaries. Do not use for external model loops, raw Rust activation, or Bundle-declared MCP.";
+const AGENT_BUNDLE_AUTHORING_DESCRIPTION: &str = "Use when authoring, packaging, importing, or installing public Plugin, AgentBundle, AgentSetBundle, or WorkflowBundle payloads: resources, process/MCP providers, scoped hooks, channel policies, trusted presets, immutable bindings, and permission boundaries. Harness remains the agent runtime.";
 const SECURE_SELF_UPDATE_DESCRIPTION: &str = "Use when verifying, staging, recovering, or owner-activating an independent hya release with hya-updater: signed metadata, local package fetch, immutable staging, smoke subprocess, activation journal/selector, anti-rollback floor, and install.sh break-glass. Do not use for bundle install, plugin load, or to skip the owner activation gate.";
 
 const AGENT_BUNDLE_AUTHORING_BODY: &str = include_str!("skill_templates/agent-bundle-authoring.md");

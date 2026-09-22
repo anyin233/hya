@@ -422,13 +422,25 @@ pub async fn run_goal(
 pub struct ModelGoalEvaluator {
     providers: Arc<ProviderRouter>,
     model: ModelRef,
+    system_prompt: String,
 }
 
 impl ModelGoalEvaluator {
     /// Build an evaluator that routes to `model` through `providers`.
     #[must_use]
     pub fn new(providers: Arc<ProviderRouter>, model: ModelRef) -> Self {
-        Self { providers, model }
+        Self {
+            providers,
+            model,
+            system_prompt: "You are an independent goal verifier. No tools.".to_string(),
+        }
+    }
+
+    /// Replace the built-in verifier instructions with a bundle-owned prompt.
+    #[must_use]
+    pub fn with_system_prompt(mut self, prompt: impl Into<String>) -> Self {
+        self.system_prompt = prompt.into();
+        self
     }
 }
 
@@ -449,7 +461,7 @@ impl GoalEvaluator for ModelGoalEvaluator {
         );
         let request = CompletionRequest {
             model: self.model.clone(),
-            system: Some("You are an independent goal verifier. No tools.".to_string()),
+            system: Some(self.system_prompt.clone()),
             messages: vec![Message::User {
                 id: MessageId::new(),
                 parts: vec![Part::Text {
@@ -502,6 +514,7 @@ const PLUGIN_HOOK_ERROR_REASON: &str = "goal.evaluate hook error";
 /// and never loops it forever.
 pub struct PluginGoalEvaluator {
     dispatcher: Arc<dyn HookDispatcher>,
+    fallback: Option<Arc<dyn GoalEvaluator>>,
 }
 
 impl PluginGoalEvaluator {
@@ -509,7 +522,17 @@ impl PluginGoalEvaluator {
     /// provider chain on `dispatcher`.
     #[must_use]
     pub fn new(dispatcher: Arc<dyn HookDispatcher>) -> Self {
-        Self { dispatcher }
+        Self {
+            dispatcher,
+            fallback: None,
+        }
+    }
+
+    /// Fall back to a model evaluator when the process hook fails or is malformed.
+    #[must_use]
+    pub fn with_fallback(mut self, fallback: Arc<dyn GoalEvaluator>) -> Self {
+        self.fallback = Some(fallback);
+        self
     }
 }
 
@@ -518,19 +541,25 @@ impl GoalEvaluator for PluginGoalEvaluator {
     async fn evaluate(&self, condition: &str, transcript: &str) -> Result<Verdict, CoreError> {
         match self.dispatcher.goal_evaluate(condition, transcript).await {
             Ok(GoalEvaluateReply::Verdict { met, reason }) => Ok(Verdict { met, reason }),
-            Ok(GoalEvaluateReply::Malformed) => Ok(Verdict {
-                met: false,
-                reason: PLUGIN_MALFORMED_REASON.to_string(),
-            }),
+            Ok(GoalEvaluateReply::Malformed) => match &self.fallback {
+                Some(fallback) => fallback.evaluate(condition, transcript).await,
+                None => Ok(Verdict {
+                    met: false,
+                    reason: PLUGIN_MALFORMED_REASON.to_string(),
+                }),
+            },
             Err(error) => {
                 tracing::warn!(
                     %error,
                     "goal.evaluate hook failed; degrading to not-met so the run stays cappable"
                 );
-                Ok(Verdict {
-                    met: false,
-                    reason: PLUGIN_HOOK_ERROR_REASON.to_string(),
-                })
+                match &self.fallback {
+                    Some(fallback) => fallback.evaluate(condition, transcript).await,
+                    None => Ok(Verdict {
+                        met: false,
+                        reason: PLUGIN_HOOK_ERROR_REASON.to_string(),
+                    }),
+                }
             }
         }
     }

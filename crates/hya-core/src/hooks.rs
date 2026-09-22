@@ -3,10 +3,11 @@
 
 use async_trait::async_trait;
 use std::future::Future;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use hya_proto::{Envelope, MessageId, PartId, SessionId, ToolCallId};
 use hya_provider::CompletionRequest;
+use hya_tool::{Action, Decision, Resource};
 use serde_json::Value;
 
 use crate::error::CoreError;
@@ -34,6 +35,20 @@ pub trait HookDispatcher: Send + Sync {
     /// Whether the host is still healthy enough to continue the turn.
     fn is_healthy(&self) -> bool {
         true
+    }
+    /// Stable permission-hook identity for permission-plane pinning.
+    fn permission_semantic_identity_v1(&self) -> Option<[u8; 32]> {
+        None
+    }
+    /// Decide an ask-mode permission or defer to the next hook/user prompt.
+    async fn permission_ask(
+        &self,
+        session: Option<SessionId>,
+        action: Action,
+        resource: &Resource,
+    ) -> Option<Decision> {
+        let _ = (session, action, resource);
+        None
     }
     /// Rewrite shell/command text before execution.
     async fn command_execute_before(
@@ -162,10 +177,317 @@ pub trait HookDispatcher: Send + Sync {
     }
 }
 
+/// Ordered composition of hook dispatchers captured for one runtime binding.
+///
+/// Rewrite hooks feed each output into the next dispatcher. Guard vetoes and
+/// compaction skips stop the chain immediately; observation hooks fan out to
+/// every dispatcher. Evaluator hooks try capable dispatchers in order and only
+/// fail after every provider failed.
+pub struct HookChain {
+    dispatchers: Vec<Arc<dyn HookDispatcher>>,
+}
+
+impl HookChain {
+    /// Create a chain in deterministic dispatch order.
+    #[must_use]
+    pub fn new(dispatchers: Vec<Arc<dyn HookDispatcher>>) -> Self {
+        Self { dispatchers }
+    }
+
+    /// Whether the chain contains no dispatchers.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.dispatchers.is_empty()
+    }
+}
+
+#[async_trait]
+impl HookDispatcher for HookChain {
+    fn dispatch_event(&self, envelope: &Envelope) {
+        for dispatcher in &self.dispatchers {
+            dispatcher.dispatch_event(envelope);
+        }
+    }
+
+    fn is_healthy(&self) -> bool {
+        self.dispatchers
+            .iter()
+            .all(|dispatcher| dispatcher.is_healthy())
+    }
+
+    fn permission_semantic_identity_v1(&self) -> Option<[u8; 32]> {
+        use sha2::{Digest, Sha256};
+        let mut bytes = b"hya.hook.permission-chain/v1".to_vec();
+        for dispatcher in &self.dispatchers {
+            bytes.extend_from_slice(&dispatcher.permission_semantic_identity_v1()?);
+        }
+        Some(Sha256::digest(bytes).into())
+    }
+
+    async fn permission_ask(
+        &self,
+        session: Option<SessionId>,
+        action: Action,
+        resource: &Resource,
+    ) -> Option<Decision> {
+        for dispatcher in &self.dispatchers {
+            if let Some(decision) = dispatcher.permission_ask(session, action, resource).await {
+                return Some(decision);
+            }
+        }
+        None
+    }
+
+    async fn command_execute_before(
+        &self,
+        mut input: CommandExecuteBeforeInput,
+    ) -> CommandExecuteBeforeOutcome {
+        for dispatcher in &self.dispatchers {
+            let CommandExecuteBeforeOutcome::Continue { text } = dispatcher
+                .command_execute_before(CommandExecuteBeforeInput {
+                    session: input.session,
+                    command: input.command.clone(),
+                    arguments: input.arguments.clone(),
+                    text: input.text,
+                })
+                .await;
+            input.text = text;
+        }
+        CommandExecuteBeforeOutcome::Continue { text: input.text }
+    }
+
+    async fn text_complete(&self, mut input: TextCompleteInput) -> TextCompleteOutcome {
+        for dispatcher in &self.dispatchers {
+            let TextCompleteOutcome::Continue { text } = dispatcher
+                .text_complete(TextCompleteInput {
+                    session: input.session,
+                    message: input.message,
+                    part: input.part,
+                    text: input.text,
+                })
+                .await;
+            input.text = text;
+        }
+        TextCompleteOutcome::Continue { text: input.text }
+    }
+
+    async fn message_user_before(
+        &self,
+        mut input: MessageUserBeforeInput,
+    ) -> MessageUserBeforeOutcome {
+        for dispatcher in &self.dispatchers {
+            let MessageUserBeforeOutcome::Continue { text } = dispatcher
+                .message_user_before(MessageUserBeforeInput {
+                    session: input.session,
+                    text: input.text,
+                })
+                .await;
+            input.text = text;
+        }
+        MessageUserBeforeOutcome::Continue { text: input.text }
+    }
+
+    async fn chat_params(&self, mut input: ChatParamsInput) -> ChatParamsOutcome {
+        for dispatcher in &self.dispatchers {
+            let ChatParamsOutcome::Continue { request } = dispatcher
+                .chat_params(ChatParamsInput {
+                    session: input.session,
+                    message: input.message,
+                    request: input.request,
+                })
+                .await;
+            input.request = request;
+        }
+        ChatParamsOutcome::Continue {
+            request: input.request,
+        }
+    }
+
+    async fn tool_execute_before(
+        &self,
+        mut input: ToolExecuteBeforeInput,
+    ) -> ToolExecuteBeforeOutcome {
+        for dispatcher in &self.dispatchers {
+            match dispatcher
+                .tool_execute_before(ToolExecuteBeforeInput {
+                    session: input.session,
+                    message: input.message,
+                    call: input.call,
+                    tool: input.tool.clone(),
+                    input: input.input,
+                })
+                .await
+            {
+                ToolExecuteBeforeOutcome::Continue { input: next } => input.input = next,
+                veto @ ToolExecuteBeforeOutcome::Veto { .. } => return veto,
+            }
+        }
+        ToolExecuteBeforeOutcome::Continue { input: input.input }
+    }
+
+    async fn tool_execute_after(
+        &self,
+        mut input: ToolExecuteAfterInput,
+    ) -> ToolExecuteAfterOutcome {
+        for dispatcher in &self.dispatchers {
+            let ToolExecuteAfterOutcome::Continue { result } = dispatcher
+                .tool_execute_after(ToolExecuteAfterInput {
+                    session: input.session,
+                    message: input.message,
+                    call: input.call,
+                    tool: input.tool.clone(),
+                    input: input.input.clone(),
+                    result: input.result,
+                })
+                .await;
+            input.result = result;
+        }
+        ToolExecuteAfterOutcome::Continue {
+            result: input.result,
+        }
+    }
+
+    async fn compaction_before(&self, input: CompactionBeforeInput) -> CompactionDecision {
+        let mut replacement = None;
+        for dispatcher in &self.dispatchers {
+            match dispatcher
+                .compaction_before(CompactionBeforeInput {
+                    session: input.session,
+                    trigger: input.trigger,
+                    messages_token_estimate: input.messages_token_estimate,
+                })
+                .await
+            {
+                CompactionDecision::Proceed => {}
+                CompactionDecision::Replace { instructions } => replacement = Some(instructions),
+                skip @ CompactionDecision::Skip { .. } => return skip,
+            }
+        }
+        replacement.map_or(CompactionDecision::Proceed, |instructions| {
+            CompactionDecision::Replace { instructions }
+        })
+    }
+
+    async fn compaction_after(&self, input: CompactionAfterInput) {
+        for dispatcher in &self.dispatchers {
+            dispatcher
+                .compaction_after(CompactionAfterInput {
+                    session: input.session,
+                    summary_tokens: input.summary_tokens,
+                })
+                .await;
+        }
+    }
+
+    async fn session_start(&self, input: SessionLifecycleInput) {
+        for dispatcher in &self.dispatchers {
+            dispatcher
+                .session_start(SessionLifecycleInput {
+                    session: input.session,
+                })
+                .await;
+        }
+    }
+
+    async fn session_end(&self, input: SessionLifecycleInput) {
+        for dispatcher in &self.dispatchers {
+            dispatcher
+                .session_end(SessionLifecycleInput {
+                    session: input.session,
+                })
+                .await;
+        }
+    }
+
+    async fn agent_spawn(&self, input: AgentSpawnInput) {
+        for dispatcher in &self.dispatchers {
+            dispatcher
+                .agent_spawn(AgentSpawnInput {
+                    parent: input.parent,
+                    child: input.child,
+                })
+                .await;
+        }
+    }
+
+    fn has_goal_evaluate(&self) -> bool {
+        self.dispatchers
+            .iter()
+            .any(|dispatcher| dispatcher.has_goal_evaluate())
+    }
+
+    async fn goal_evaluate(
+        &self,
+        condition: &str,
+        transcript: &str,
+    ) -> Result<GoalEvaluateReply, CoreError> {
+        let mut last_error = None;
+        for dispatcher in self
+            .dispatchers
+            .iter()
+            .rev()
+            .filter(|dispatcher| dispatcher.has_goal_evaluate())
+        {
+            match dispatcher.goal_evaluate(condition, transcript).await {
+                Ok(reply) => return Ok(reply),
+                Err(error) => last_error = Some(error),
+            }
+        }
+        Err(last_error
+            .unwrap_or_else(|| CoreError::Invalid("goal.evaluate hook not registered".to_string())))
+    }
+
+    async fn loop_verify(
+        &self,
+        target: &str,
+        transcript: &str,
+    ) -> Result<VerifierVerdict, CoreError> {
+        let mut last_error = None;
+        for dispatcher in self.dispatchers.iter().rev() {
+            match dispatcher.loop_verify(target, transcript).await {
+                Ok(reply) => return Ok(reply),
+                Err(error) => last_error = Some(error),
+            }
+        }
+        Err(last_error
+            .unwrap_or_else(|| CoreError::Invalid("loop.verifier hook not registered".to_string())))
+    }
+
+    async fn loop_plan(
+        &self,
+        target: &str,
+        history: &[String],
+        last: &VerifierVerdict,
+        planner_notes: &str,
+    ) -> Result<PlannerOutput, CoreError> {
+        let mut last_error = None;
+        for dispatcher in self.dispatchers.iter().rev() {
+            match dispatcher
+                .loop_plan(target, history, last, planner_notes)
+                .await
+            {
+                Ok(reply) => return Ok(reply),
+                Err(error) => last_error = Some(error),
+            }
+        }
+        Err(last_error
+            .unwrap_or_else(|| CoreError::Invalid("loop.planner hook not registered".to_string())))
+    }
+
+    async fn loop_should_stop(&self, target: &str, transcript: &str) -> Option<String> {
+        for dispatcher in self.dispatchers.iter().rev() {
+            if let Some(reason) = dispatcher.loop_should_stop(target, transcript).await {
+                return Some(reason);
+            }
+        }
+        None
+    }
+}
+
 #[derive(Clone)]
 struct ActivationHookContext {
     session: SessionId,
-    hooks: Arc<dyn HookDispatcher>,
+    hooks: Arc<RwLock<Option<Arc<dyn HookDispatcher>>>>,
 }
 
 tokio::task_local! {
@@ -181,23 +503,60 @@ where
     F: Future<Output = T>,
 {
     ACTIVATION_HOOK_CONTEXT
-        .scope(ActivationHookContext { session, hooks }, future)
+        .scope(
+            ActivationHookContext {
+                session,
+                hooks: Arc::new(RwLock::new(Some(hooks))),
+            },
+            Box::pin(future),
+        )
+        .await
+}
+
+pub(crate) async fn scope_optional_activation_hooks<F, T>(
+    session: SessionId,
+    hooks: Option<Arc<dyn HookDispatcher>>,
+    future: F,
+) -> T
+where
+    F: Future<Output = T>,
+{
+    ACTIVATION_HOOK_CONTEXT
+        .scope(
+            ActivationHookContext {
+                session,
+                hooks: Arc::new(RwLock::new(hooks)),
+            },
+            Box::pin(future),
+        )
         .await
 }
 
 pub(crate) fn activation_hook_for(session: SessionId) -> Option<Arc<dyn HookDispatcher>> {
     ACTIVATION_HOOK_CONTEXT
-        .try_with(|context| (context.session == session).then(|| Arc::clone(&context.hooks)))
+        .try_with(|context| {
+            (context.session == session).then(|| {
+                context
+                    .hooks
+                    .read()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clone()
+            })
+        })
         .ok()
+        .flatten()
         .flatten()
 }
 
-pub(crate) fn dispatch_activation_event(envelope: &Envelope) {
-    if let Some(session) = envelope.event.session()
-        && let Some(hooks) = activation_hook_for(session)
-    {
-        hooks.dispatch_event(envelope);
-    }
+pub(crate) fn replace_activation_hooks(session: SessionId, hooks: Option<Arc<dyn HookDispatcher>>) {
+    let _ = ACTIVATION_HOOK_CONTEXT.try_with(|context| {
+        if context.session == session {
+            *context
+                .hooks
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = hooks;
+        }
+    });
 }
 
 /// Input to `command_execute_before`.
@@ -307,6 +666,7 @@ pub enum ToolExecuteBeforeOutcome {
 }
 
 /// Native tool result shape passed through after-hooks.
+#[derive(Clone, Debug, PartialEq)]
 pub enum ToolOutcomeNative {
     /// Successful tool JSON and elapsed milliseconds.
     Ok {
@@ -521,6 +881,19 @@ impl HookDispatcher for NoopHookHost {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn replaceable_activation_hooks_support_none_some_none() {
+        let session = SessionId::new();
+        scope_optional_activation_hooks(session, None, async {
+            assert!(activation_hook_for(session).is_none());
+            replace_activation_hooks(session, Some(Arc::new(NoopHookHost)));
+            assert!(activation_hook_for(session).is_some());
+            replace_activation_hooks(session, None);
+            assert!(activation_hook_for(session).is_none());
+        })
+        .await;
+    }
+
     fn last_verdict() -> VerifierVerdict {
         VerifierVerdict {
             score: 50,
@@ -530,6 +903,69 @@ mod tests {
             iteration_summary: String::new(),
             reason: String::new(),
         }
+    }
+
+    struct PrefixHook(&'static str);
+
+    #[async_trait]
+    impl HookDispatcher for PrefixHook {
+        fn dispatch_event(&self, _envelope: &Envelope) {}
+
+        async fn command_execute_before(
+            &self,
+            mut input: CommandExecuteBeforeInput,
+        ) -> CommandExecuteBeforeOutcome {
+            input.text.insert_str(0, self.0);
+            CommandExecuteBeforeOutcome::Continue { text: input.text }
+        }
+
+        async fn text_complete(&self, mut input: TextCompleteInput) -> TextCompleteOutcome {
+            input.text.insert_str(0, self.0);
+            TextCompleteOutcome::Continue { text: input.text }
+        }
+
+        async fn message_user_before(
+            &self,
+            mut input: MessageUserBeforeInput,
+        ) -> MessageUserBeforeOutcome {
+            input.text.insert_str(0, self.0);
+            MessageUserBeforeOutcome::Continue { text: input.text }
+        }
+
+        async fn chat_params(&self, input: ChatParamsInput) -> ChatParamsOutcome {
+            ChatParamsOutcome::Continue {
+                request: input.request,
+            }
+        }
+
+        async fn tool_execute_before(
+            &self,
+            input: ToolExecuteBeforeInput,
+        ) -> ToolExecuteBeforeOutcome {
+            ToolExecuteBeforeOutcome::Continue { input: input.input }
+        }
+
+        async fn tool_execute_after(
+            &self,
+            input: ToolExecuteAfterInput,
+        ) -> ToolExecuteAfterOutcome {
+            ToolExecuteAfterOutcome::Continue {
+                result: input.result,
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn hook_chain_applies_rewrites_in_registration_order() {
+        let chain = HookChain::new(vec![Arc::new(PrefixHook("a")), Arc::new(PrefixHook("b"))]);
+        let outcome = chain
+            .message_user_before(MessageUserBeforeInput {
+                session: SessionId::new(),
+                text: "body".to_string(),
+            })
+            .await;
+        let MessageUserBeforeOutcome::Continue { text } = outcome;
+        assert_eq!(text, "babody");
     }
 
     /// Default trait impls must keep existing implementors compiling and

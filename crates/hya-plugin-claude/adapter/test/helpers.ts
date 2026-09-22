@@ -29,7 +29,7 @@ export type PluginFixture = {
   readonly version?: string
   readonly description?: string
   readonly nested?: boolean
-  readonly agents?: readonly { readonly name: string; readonly body: string }[]
+  readonly agents?: readonly { readonly name: string; readonly body: string; readonly tools?: readonly string[]; readonly model?: string }[]
   readonly skills?: readonly { readonly name: string; readonly body: string }[]
   readonly commands?: readonly { readonly name: string; readonly body: string }[]
   readonly mcpServers?: Record<string, unknown>
@@ -62,7 +62,7 @@ export async function writePluginDir(dir: string, fixture: PluginFixture): Promi
     for (const agent of fixture.agents) {
       await writeFile(
         path.join(dir, "agents", `${agent.name}.md`),
-        `---\nname: ${agent.name}\ndescription: ${agent.name} agent\n---\n${agent.body}\n`,
+        `---\nname: ${agent.name}\ndescription: ${agent.name} agent\n${agent.tools === undefined ? "" : `tools: [${agent.tools.join(", ")}]\n`}${agent.model === undefined ? "" : `model: ${agent.model}\n`}---\n${agent.body}\n`,
       )
     }
   }

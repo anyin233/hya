@@ -11,10 +11,12 @@
 
 use std::collections::HashMap;
 
+use hya_bundle::{ChannelParticipantRole, ChannelTemplateKind};
 use hya_proto::{Envelope, Event, MailEndpoint, SessionId};
 
 use super::SessionEngine;
 use crate::error::CoreError;
+use hya_tool::ChannelPolicySnapshot;
 
 /// One steered message: sender, body, and the channel it arrived through.
 #[derive(Clone, Debug)]
@@ -35,6 +37,8 @@ pub struct SteerMailbox {
     queue: Vec<SteeredMail>,
     /// Durable cursor covered so far; `MailConsumed.through` values.
     through: u64,
+    /// Cursor already committed before this snapshot began scanning.
+    committed_through: u64,
     /// Bus subscription for live deliveries.
     bus: tokio::sync::broadcast::Receiver<Envelope>,
     /// Channels the acting handle is a member of (for channel fan-out).
@@ -43,6 +47,8 @@ pub struct SteerMailbox {
     /// minted pair wins). Maps `to`-endpoints to the channel a reader can
     /// `read channel://<id>` for the full conversation.
     dm_by_peer: HashMap<String, String>,
+    policy: Option<ChannelPolicySnapshot>,
+    channel_roles: HashMap<String, (ChannelTemplateKind, ChannelParticipantRole)>,
 }
 
 impl SessionEngine {
@@ -51,6 +57,19 @@ impl SessionEngine {
     /// Never fails the turn: a session outside a team gets an empty, inert
     /// mailbox (every drain returns nothing).
     pub async fn steer_mailbox_snapshot(&self, session: SessionId) -> SteerMailbox {
+        let policy = self.session_channel_policy(session);
+        self.steer_mailbox_snapshot_with_policy(session, policy)
+            .await
+    }
+
+    /// Snapshot mail using the channel policy captured by this turn's admission binding.
+    /// This is the turn-admission path; callers must pass the immutable snapshot
+    /// derived from the turn's [`crate::TurnBinding`]. `None` denies delivery.
+    pub async fn steer_mailbox_snapshot_with_policy(
+        &self,
+        session: SessionId,
+        policy: Option<ChannelPolicySnapshot>,
+    ) -> SteerMailbox {
         let bus = self.bus().subscribe();
         let Ok(root) = self.team_root(session).await else {
             return SteerMailbox {
@@ -58,9 +77,12 @@ impl SessionEngine {
                 handle: String::new(),
                 queue: Vec::new(),
                 through: 0,
+                committed_through: 0,
                 bus,
                 channels: Vec::new(),
                 dm_by_peer: HashMap::new(),
+                policy,
+                channel_roles: HashMap::new(),
             };
         };
         let Ok(handle) = self.resolve_handle(root, session).await else {
@@ -69,9 +91,12 @@ impl SessionEngine {
                 handle: String::new(),
                 queue: Vec::new(),
                 through: 0,
+                committed_through: 0,
                 bus,
                 channels: Vec::new(),
                 dm_by_peer: HashMap::new(),
+                policy,
+                channel_roles: HashMap::new(),
             };
         };
         let Ok(projection) = self.read_projection(root).await else {
@@ -80,9 +105,12 @@ impl SessionEngine {
                 handle: handle.clone(),
                 queue: Vec::new(),
                 through: 0,
+                committed_through: 0,
                 bus,
                 channels: Vec::new(),
                 dm_by_peer: HashMap::new(),
+                policy,
+                channel_roles: HashMap::new(),
             };
         };
         // Baseline: mail already claimed by THIS turn's wake. A resident wake
@@ -106,7 +134,36 @@ impl SessionEngine {
         // by each member so a `to` handle maps to the pair's channel (the
         // first minted pair wins when several exist).
         let mut dm_by_peer: HashMap<String, String> = HashMap::new();
+        let mut channel_roles = HashMap::new();
         for (id, channel) in &projection.team.channels {
+            if channel.members.contains(&handle) {
+                let topology = if channel.kind == hya_proto::ChannelKind::Group {
+                    (
+                        ChannelTemplateKind::Unit,
+                        if channel.unit.as_deref() == Some(handle.as_str()) {
+                            ChannelParticipantRole::UnitLeader
+                        } else {
+                            ChannelParticipantRole::DirectReports
+                        },
+                    )
+                } else {
+                    (
+                        ChannelTemplateKind::ParentDm,
+                        channel
+                            .members
+                            .iter()
+                            .find(|member| member.as_str() != handle)
+                            .map_or(ChannelParticipantRole::Child, |peer| {
+                                if hya_proto::scope::parent_path(peer) == Some(handle.as_str()) {
+                                    ChannelParticipantRole::Parent
+                                } else {
+                                    ChannelParticipantRole::Child
+                                }
+                            }),
+                    )
+                };
+                channel_roles.insert(id.clone(), topology);
+            }
             if channel.kind != hya_proto::ChannelKind::Dm || !channel.members.contains(&handle) {
                 continue;
             }
@@ -116,31 +173,41 @@ impl SessionEngine {
                     .or_insert_with(|| id.clone());
             }
         }
-        let queue: Vec<SteeredMail> = projection
+        let mut mailbox = SteerMailbox {
+            root,
+            handle,
+            queue: Vec::new(),
+            through: cursor,
+            committed_through: cursor,
+            bus,
+            channels,
+            dm_by_peer,
+            policy,
+            channel_roles,
+        };
+        mailbox.queue = projection
             .team
             .inboxes
-            .get(&handle)
+            .get(&mailbox.handle)
             .map(|inbox| {
                 inbox
                     .iter()
                     .skip(usize::try_from(cursor).unwrap_or(usize::MAX))
+                    .filter(|message| mailbox.allows_steer(&message.from, &message.to))
                     .map(|message| SteeredMail {
                         from: message.from.clone(),
                         body: message.body.clone(),
-                        channel: delivered_channel(&message.to, &dm_by_peer),
+                        channel: delivered_channel(&message.to, &mailbox.dm_by_peer),
                     })
                     .collect()
             })
             .unwrap_or_default();
-        SteerMailbox {
-            root,
-            handle,
-            queue,
-            through: cursor,
-            bus,
-            channels,
-            dm_by_peer,
-        }
+        mailbox.through = projection
+            .team
+            .inboxes
+            .get(&mailbox.handle)
+            .map_or(cursor, |inbox| inbox.len() as u64);
+        mailbox
     }
 }
 
@@ -158,6 +225,12 @@ fn delivered_channel(to: &MailEndpoint, dm_by_peer: &HashMap<String, String>) ->
 }
 
 impl SteerMailbox {
+    /// Replace only the admission policy at a successful Root round rebind.
+    /// Mail cursor, queued messages, channel topology, and bus subscription stay intact.
+    pub(crate) fn set_policy(&mut self, policy: ChannelPolicySnapshot) {
+        self.policy = Some(policy);
+    }
+
     /// Pull live `MailSent` deliveries that reach the acting handle.
     pub(crate) fn poll_live(&mut self) {
         if self.handle.is_empty() {
@@ -172,11 +245,14 @@ impl SteerMailbox {
                         && from != &self.handle
                         && self.reaches(to)
                     {
-                        self.queue.push(SteeredMail {
-                            from: from.clone(),
-                            body: body.clone(),
-                            channel: delivered_channel(to, &self.dm_by_peer),
-                        });
+                        self.through = self.through.saturating_add(1);
+                        if self.allows_steer(from, to) {
+                            self.queue.push(SteeredMail {
+                                from: from.clone(),
+                                body: body.clone(),
+                                channel: delivered_channel(to, &self.dm_by_peer),
+                            });
+                        }
                     }
                 }
                 Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => continue,
@@ -192,15 +268,39 @@ impl SteerMailbox {
         }
     }
 
+    fn allows_steer(&self, from: &str, to: &MailEndpoint) -> bool {
+        let Some(policy) = self.policy else {
+            return false;
+        };
+        let topology = delivered_channel(to, &self.dm_by_peer)
+            .and_then(|channel| self.channel_roles.get(&channel).copied())
+            .unwrap_or_else(|| {
+                (
+                    ChannelTemplateKind::ParentDm,
+                    if hya_proto::scope::parent_path(from) == Some(self.handle.as_str()) {
+                        ChannelParticipantRole::Parent
+                    } else {
+                        ChannelParticipantRole::Child
+                    },
+                )
+            });
+        match topology.0 {
+            ChannelTemplateKind::Unit => snapshot_allows(policy, topology.1, true),
+            ChannelTemplateKind::ParentDm => snapshot_allows(policy, topology.1, false),
+        }
+    }
+
     /// Drain pending mail into a notice appended to a tool result, advancing
     /// the durable cursor via `MailConsumed`. `None` when nothing is pending.
     pub async fn drain(&mut self, engine: &SessionEngine) -> Result<Option<String>, CoreError> {
         self.poll_live();
-        if self.handle.is_empty() || self.queue.is_empty() {
+        if self.handle.is_empty() {
             return Ok(None);
         }
         let shown: Vec<SteeredMail> = std::mem::take(&mut self.queue);
-        self.through = self.through.saturating_add(shown.len() as u64);
+        if shown.is_empty() && self.through == self.committed_through {
+            return Ok(None);
+        }
         let root = self.root;
         let handle = self.handle.clone();
         let through = self.through;
@@ -215,6 +315,10 @@ impl SteerMailbox {
                 },
             )
             .await?;
+        self.committed_through = through;
+        if shown.is_empty() {
+            return Ok(None);
+        }
         let mut notice = String::from("\n\n--- [NEW MAIL · answer or acknowledge via dm] ---");
         for mail in shown {
             // Truncate on a char boundary — bodies are UTF-8 and a raw byte
@@ -239,4 +343,19 @@ impl SteerMailbox {
         notice.push_str("\n(history: read channel://<id>?last=N · unread overview: list_channel)");
         Ok(Some(notice))
     }
+}
+
+fn snapshot_allows(
+    policy: ChannelPolicySnapshot,
+    role: ChannelParticipantRole,
+    unit: bool,
+) -> bool {
+    let bits = match (unit, role) {
+        (true, ChannelParticipantRole::UnitLeader) => policy.unit_leader,
+        (true, ChannelParticipantRole::DirectReports) => policy.unit_member,
+        (false, ChannelParticipantRole::Parent) => policy.dm_parent,
+        (false, ChannelParticipantRole::Child) => policy.dm_child,
+        _ => 0,
+    };
+    bits & (1 << 2) != 0
 }

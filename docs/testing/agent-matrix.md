@@ -65,7 +65,12 @@ cargo test -p hya-e2e -- --test-threads=1
 | T2.17 | [p22_dispatch_model_resolution.rs](../../crates/hya-e2e/tests/p22_dispatch_model_resolution.rs) | exact id override; substring fallback (bare vendor ids defer); user-config tier | e2e (Track P) |
 | T2.18 | [p23_mcp_background.rs](../../crates/hya-e2e/tests/p23_mcp_background.rs) | long MCP call auto-backgrounds and steers reclaim | e2e (Track P) |
 | T2.19 | [p24_bundle_schemas.rs](../../crates/hya-e2e/tests/p24_bundle_schemas.rs) | installed bundle `schemas:` / `extensions.process` / `resources.mcp` declarations surface through `bundle install`, `bundle schemas`, `bundle info`, and — after the first bound turn — `GET /v1/runtime/schemas` (owner = bundle source, canonical tool = the owning tool's stable id) | e2e (Track P) |
-| T2.20 | [p25_goal_loop_bundle.rs](../../crates/hya-e2e/tests/p25_goal_loop_bundle.rs) | `hya/goal-loop` preset bundle: skills + guide agent served to sessions, skill readable through the `skill` tool, and a patch plugin's `goal.evaluate` verdict injects a directive after the first verification (session pollution reaches the next model request) | e2e (Track P) |
+| T2.20 | [p25_goal_loop_bundle.rs](../../crates/hya-e2e/tests/p25_goal_loop_bundle.rs) | `hya/goal-loop` preset Skills and guide Agent; evaluator verdict reaches the next model request | e2e (Track P) |
+| T2.21 | [p26_plugin_bundle.rs](../../crates/hya-e2e/tests/p26_plugin_bundle.rs) | agentless Plugin installs and publishes a static Skill | e2e (Track P) |
+| T2.22 | [p27_bundle_process.rs](../../crates/hya-e2e/tests/p27_bundle_process.rs) | native process, JavaScript Plugin, and MCP execute from packaged files; private tools/hooks remain owner-scoped; uninstall removes new-session visibility | e2e (Track P) |
+| T2.23 | [p28_subagent_bundle.rs](../../crates/hya-e2e/tests/p28_subagent_bundle.rs) | default subagent bundle executes transient report and resident mail with parent follow-up | e2e (Track P) |
+| T2.24 | [p29_claude_bundle.rs](../../crates/hya-e2e/tests/p29_claude_bundle.rs) | Claude directory imports into Plugin; packaged hook veto and Skill execute after source deletion; uninstall removes Skill | e2e (Track P) |
+| T2.25 | [p30_channel_bundle.rs](../../crates/hya-e2e/tests/p30_channel_bundle.rs) | installed channel-only bundle denies child sends without parent delivery; uninstall restores default delivery in a new session | e2e (Track P) |
 
 ### Built-in tool coverage
 

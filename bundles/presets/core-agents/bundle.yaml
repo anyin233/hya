@@ -1,0 +1,64 @@
+kind: AgentSetBundle
+identity:
+  id: hya/core-agents
+  version: 1.0.0
+  publisher: hya
+extensions:
+  files:
+    - id: policy
+      path: policy.yaml
+agents:
+  - id: build
+    description: The default agent. Executes tools based on configured permissions.
+    role: main
+  - id: compaction
+    role: subagent
+    prompt: prompts/compaction.md
+  - id: explore
+    description: 'Fast agent specialized for exploring codebases. Use this when you need to quickly find files by patterns (eg. "src/components/**/*.tsx"), search code for keywords (eg. "API endpoints"), or answer questions about the codebase (eg. "how do API endpoints work?"). When calling this agent, specify the desired thoroughness level: "quick" for basic searches, "medium" for moderate exploration, or "very thorough" for comprehensive analysis across multiple locations and naming conventions.'
+    role: subagent
+    prompt: prompts/explore.md
+  - id: general
+    description: General-purpose agent for researching complex questions and executing multi-step tasks. Use this agent to execute multiple units of work in parallel.
+    role: subagent
+  - id: hya-docs
+    description: Transient subagent for requested documentation, API docs, glossary, and ADR updates.
+    role: subagent
+    prompt: prompts/hya-docs.md
+  - id: hya-explorer
+    description: Transient subagent for codebase reconnaissance, flows, conventions, and blast radius.
+    role: subagent
+    prompt: prompts/hya-explorer.md
+  - id: hya-implementer
+    description: Transient subagent for focused code changes after scope and target files are clear.
+    role: subagent
+    prompt: prompts/hya-implementer.md
+  - id: hya-main
+    description: Default primary agent for coding work. Delegates to specialist subagents and integrates verified results.
+    role: main
+    prompt: prompts/hya-main.md
+  - id: hya-planner
+    description: Transient subagent for design tradeoffs, implementation plans, and task breakdowns.
+    role: subagent
+    prompt: prompts/hya-planner.md
+  - id: hya-release
+    description: Transient subagent for version, changelog, tag, and release readiness work.
+    role: subagent
+    prompt: prompts/hya-release.md
+  - id: hya-reviewer
+    description: Transient subagent for correctness, standards, security, and simplification review.
+    role: subagent
+    prompt: prompts/hya-reviewer.md
+  - id: hya-tester
+    description: Transient subagent for TDD tests, behavioral coverage, and focused verification.
+    role: subagent
+    prompt: prompts/hya-tester.md
+  - id: plan
+    description: Plan mode. Planning-focused agent for designs and task breakdowns.
+    role: main
+  - id: summary
+    role: subagent
+    prompt: prompts/summary.md
+  - id: title
+    role: subagent
+    prompt: prompts/title.md

@@ -58,7 +58,6 @@ fn agent_set_rejects_empty_duplicate_and_unknown_source_contracts() {
             "[{id: member, role: main}]",
             "workflow: {id: demo, path: demo.md}",
         ),
-        ("[{id: member, role: main}]", "channels: []"),
         ("[{id: member, role: main, harness_access: full}]", ""),
         ("[{id: member, role: main, prompt: missing.md}]", ""),
     ] {

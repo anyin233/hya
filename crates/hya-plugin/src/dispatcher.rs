@@ -16,6 +16,7 @@ use hya_core::hooks::{
 use hya_core::loop_mode::{EvidenceQuality, PlannerOutput, VerifierVerdict};
 use hya_proto::Envelope;
 use hya_provider::{CompletionRequest, ReasoningEffort};
+use hya_tool::{Action, Decision, Resource};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
@@ -35,6 +36,19 @@ const GUARD_FAILED_SAFE: &str = "guard failed safe";
 impl HookDispatcher for PluginHost {
     fn dispatch_event(&self, envelope: &Envelope) {
         self.fan_out_event(envelope);
+    }
+
+    fn permission_semantic_identity_v1(&self) -> Option<[u8; 32]> {
+        PluginHost::permission_semantic_identity_v1(self)
+    }
+
+    async fn permission_ask(
+        &self,
+        session: Option<hya_proto::SessionId>,
+        action: Action,
+        resource: &Resource,
+    ) -> Option<Decision> {
+        PluginHost::permission_ask(self, session, action, resource).await
     }
 
     async fn command_execute_before(

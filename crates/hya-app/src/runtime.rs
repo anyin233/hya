@@ -3010,9 +3010,8 @@ mod tests {
     #[test]
     fn builtin_agent_catalog_includes_first_party_workflow_bundle() {
         let catalog = builtin_agent_catalog().expect("builtin agent catalog must build");
-        assert_eq!(
-            catalog.bundles().bundles().len(),
-            2,
+        assert!(
+            catalog.bundles().bundles().len() >= 2,
             "fresh process includes the immutable first-party bundles"
         );
         assert!(
@@ -3022,6 +3021,31 @@ mod tests {
                 .is_some(),
             "first-party Workflow must be cataloged"
         );
+        let goal_loop = catalog
+            .bundles()
+            .bundles()
+            .iter()
+            .find(|bundle| bundle.identity().id == "hya/goal-loop")
+            .expect("goal-loop first-party bundle");
+        assert_eq!(
+            goal_loop.kind(),
+            hya_bundle::PreparedBundleKind::AgentSetBundle
+        );
+        assert_eq!(goal_loop.agents().len(), 2);
+        for skill in [
+            "goal-contract",
+            "guided-goal",
+            "evaluator-prompt",
+            "loop-verifier-prompt",
+            "loop-planner-prompt",
+        ] {
+            assert!(
+                goal_loop
+                    .skills()
+                    .iter()
+                    .any(|resource| resource.local_id == skill)
+            );
+        }
         for id in ["build", "plan", "explore", "general", "hya-main"] {
             assert!(
                 catalog.resolve(id).is_some(),

@@ -489,7 +489,15 @@ impl IterationExecutor for WorkerSessionExecutor {
             })
             .await?;
         self.engine
-            .admit_user_prompt(child, directive.to_string())
+            .capture_session_bundle_hooks(child, &self.binding, self.agent.name.as_str())
+            .await;
+        self.engine
+            .admit_user_prompt_with_binding(
+                child,
+                directive.to_string(),
+                &self.binding,
+                self.agent.name.as_str(),
+            )
             .await?;
         self.engine
             .run_bound_turn(
@@ -615,13 +623,25 @@ fn evidence_quality_from_wire(value: Option<&str>) -> EvidenceQuality {
 pub struct ModelLoopVerifier {
     providers: Arc<ProviderRouter>,
     model: ModelRef,
+    system_prompt: String,
 }
 
 impl ModelLoopVerifier {
     /// Build a verifier that routes to `model` through `providers`.
     #[must_use]
     pub fn new(providers: Arc<ProviderRouter>, model: ModelRef) -> Self {
-        Self { providers, model }
+        Self {
+            providers,
+            model,
+            system_prompt: LOOP_VERIFIER_SYSTEM.to_string(),
+        }
+    }
+
+    /// Replace the built-in verifier instructions with a bundle-owned prompt.
+    #[must_use]
+    pub fn with_system_prompt(mut self, prompt: impl Into<String>) -> Self {
+        self.system_prompt = prompt.into();
+        self
     }
 }
 
@@ -668,7 +688,7 @@ impl LoopVerifier for ModelLoopVerifier {
         );
         let request = CompletionRequest {
             model: self.model.clone(),
-            system: Some(LOOP_VERIFIER_SYSTEM.to_string()),
+            system: Some(self.system_prompt.clone()),
             messages: vec![Message::User {
                 id: MessageId::new(),
                 parts: vec![Part::Text {
@@ -734,13 +754,25 @@ impl LoopVerifier for ModelLoopVerifier {
 pub struct ModelLoopPlanner {
     providers: Arc<ProviderRouter>,
     model: ModelRef,
+    system_prompt: String,
 }
 
 impl ModelLoopPlanner {
     /// Build a planner that routes to `model` through `providers`.
     #[must_use]
     pub fn new(providers: Arc<ProviderRouter>, model: ModelRef) -> Self {
-        Self { providers, model }
+        Self {
+            providers,
+            model,
+            system_prompt: LOOP_PLANNER_SYSTEM.to_string(),
+        }
+    }
+
+    /// Replace the built-in planner instructions with a bundle-owned prompt.
+    #[must_use]
+    pub fn with_system_prompt(mut self, prompt: impl Into<String>) -> Self {
+        self.system_prompt = prompt.into();
+        self
     }
 }
 
@@ -782,7 +814,7 @@ impl LoopPlanner for ModelLoopPlanner {
         );
         let request = CompletionRequest {
             model: self.model.clone(),
-            system: Some(LOOP_PLANNER_SYSTEM.to_string()),
+            system: Some(self.system_prompt.clone()),
             messages: vec![Message::User {
                 id: MessageId::new(),
                 parts: vec![Part::Text {
@@ -850,5 +882,83 @@ fn neutral_plan() -> PlannerOutput {
         planner_notes: String::new(),
         strategy_change: false,
         change_note: String::new(),
+    }
+}
+
+/// Process-hook loop verifier with model fallback on hook failure.
+pub struct HookLoopVerifier {
+    dispatcher: Arc<dyn crate::hooks::HookDispatcher>,
+    fallback: Arc<dyn LoopVerifier>,
+}
+
+impl HookLoopVerifier {
+    /// Try process hooks first, then the supplied model verifier on failure.
+    #[must_use]
+    pub fn new(
+        dispatcher: Arc<dyn crate::hooks::HookDispatcher>,
+        fallback: Arc<dyn LoopVerifier>,
+    ) -> Self {
+        Self {
+            dispatcher,
+            fallback,
+        }
+    }
+}
+
+#[async_trait]
+impl LoopVerifier for HookLoopVerifier {
+    async fn grade(&self, target: &str, transcript: &str) -> Result<VerifierVerdict, CoreError> {
+        match self.dispatcher.loop_verify(target, transcript).await {
+            Ok(verdict) => Ok(verdict),
+            Err(error) => {
+                tracing::warn!(%error, "loop.verifier hook failed; using model fallback");
+                self.fallback.grade(target, transcript).await
+            }
+        }
+    }
+}
+
+/// Process-hook loop planner with model fallback on hook failure.
+pub struct HookLoopPlanner {
+    dispatcher: Arc<dyn crate::hooks::HookDispatcher>,
+    fallback: Arc<dyn LoopPlanner>,
+}
+
+impl HookLoopPlanner {
+    /// Try process hooks first, then the supplied model planner on failure.
+    #[must_use]
+    pub fn new(
+        dispatcher: Arc<dyn crate::hooks::HookDispatcher>,
+        fallback: Arc<dyn LoopPlanner>,
+    ) -> Self {
+        Self {
+            dispatcher,
+            fallback,
+        }
+    }
+}
+
+#[async_trait]
+impl LoopPlanner for HookLoopPlanner {
+    async fn plan_next(
+        &self,
+        target: &str,
+        history: &[String],
+        last: &VerifierVerdict,
+        planner_notes: &str,
+    ) -> Result<PlannerOutput, CoreError> {
+        match self
+            .dispatcher
+            .loop_plan(target, history, last, planner_notes)
+            .await
+        {
+            Ok(plan) => Ok(plan),
+            Err(error) => {
+                tracing::warn!(%error, "loop.planner hook failed; using model fallback");
+                self.fallback
+                    .plan_next(target, history, last, planner_notes)
+                    .await
+            }
+        }
     }
 }

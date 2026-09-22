@@ -2945,6 +2945,10 @@ async fn resident_direct_send_committed_before_stop_is_durably_cancelled() {
         SessionStore::connect(&db_path).await.unwrap(),
         EventBus::default(),
     );
+    sender
+        .admit_user_prompt(root, "admit sender binding".to_string())
+        .await
+        .unwrap();
     let release = Arc::new(Notify::new());
     let ready = Arc::new(Barrier::new(2));
     let (committed_tx, mut committed_rx) = mpsc::unbounded_channel();

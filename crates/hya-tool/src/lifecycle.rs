@@ -6,6 +6,7 @@ use hya_proto::{ReportOutcome, SessionId};
 use serde_json::{Value, json};
 use tokio::sync::{mpsc, oneshot};
 
+use crate::mailbox::ChannelPolicySnapshot;
 use crate::tool::{Tool, ToolCtx, ToolError, obj_schema};
 
 /// One lifecycle request from a tool call to the supervisor.
@@ -19,6 +20,8 @@ pub enum LifecycleRequest {
         outcome: ReportOutcome,
         /// Result text for the parent.
         report: String,
+        /// Channel policy captured by the admitted turn.
+        channel_policy: Option<ChannelPolicySnapshot>,
         /// Gate rejection text or acceptance.
         reply: oneshot::Sender<Result<(), String>>,
     },
@@ -40,6 +43,7 @@ pub enum LifecycleRequest {
 pub struct LifecyclePlane {
     tx: Option<mpsc::UnboundedSender<LifecycleRequest>>,
     session: Option<SessionId>,
+    channel_policy: Option<ChannelPolicySnapshot>,
 }
 
 impl Default for LifecyclePlane {
@@ -57,6 +61,7 @@ impl LifecyclePlane {
             Self {
                 tx: Some(tx),
                 session: None,
+                channel_policy: None,
             },
             rx,
         )
@@ -68,6 +73,7 @@ impl LifecyclePlane {
         Self {
             tx: None,
             session: None,
+            channel_policy: None,
         }
     }
 
@@ -77,6 +83,13 @@ impl LifecyclePlane {
         let mut plane = self.clone();
         plane.session = Some(session);
         plane
+    }
+
+    /// Attach the channel policy captured by the same admitted turn.
+    #[must_use]
+    pub fn with_channel_policy(mut self, policy: ChannelPolicySnapshot) -> Self {
+        self.channel_policy = Some(policy);
+        self
     }
 
     fn session(&self) -> Result<SessionId, ToolError> {
@@ -102,6 +115,7 @@ impl LifecyclePlane {
                 session,
                 outcome,
                 report,
+                channel_policy: self.channel_policy,
                 reply: reply_tx,
             })
             .map_err(|_| ToolError::Other("lifecycle service unavailable".to_string()))?;

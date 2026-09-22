@@ -8,6 +8,7 @@ import {
   MarketplaceError,
   readMarketplace,
   resolveMarketplaceEntry,
+  withResolvedMarketplaceEntry,
 } from "../src/marketplace"
 
 afterEach(cleanupTempDirs)
@@ -25,7 +26,7 @@ describe("readMarketplace", () => {
       plugins: [
         { name: "local-one", source: "./plugins/local-one" },
         { name: "default-dir" },
-        { name: "git-one", source: "git", repo: "https://example.com/repo" },
+        { name: "git-one", source: { source: "git", repo: "https://example.com/repo" } },
         { name: "" },
       ],
     })
@@ -36,8 +37,7 @@ describe("readMarketplace", () => {
       { name: "default-dir", localPath: "./default-dir" },
       {
         name: "git-one",
-        unsupportedReason:
-          'source "git" is not a local path (v1 installs local plugin directories only)',
+        gitUrl: "https://example.com/repo",
       },
     ])
   })
@@ -48,6 +48,28 @@ describe("readMarketplace", () => {
     const broken = await makeTempDir()
     fs.writeFileSync(path.join(broken, "marketplace.json"), "{oops")
     expect(() => readMarketplace(broken)).toThrow(MarketplaceError)
+  })
+})
+
+describe("withResolvedMarketplaceEntry", () => {
+  test("shallow-clones a git source for the action and removes it afterward", async () => {
+    const repo = await makeTempDir("hya-claude-git-")
+    fs.writeFileSync(path.join(repo, "plugin.json"), JSON.stringify({ name: "cloned" }))
+    for (const args of [["init"], ["add", "plugin.json"], ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "fixture"]]) {
+      const run = Bun.spawnSync(["git", ...args], { cwd: repo })
+      expect(run.exitCode).toBe(0)
+    }
+    let checkout = ""
+    const name = await withResolvedMarketplaceEntry(
+      { root: repo, name: "fixture", plugins: [] },
+      { name: "cloned", gitUrl: `file://${repo}` },
+      async (pluginDir) => {
+        checkout = pluginDir
+        return JSON.parse(fs.readFileSync(path.join(pluginDir, "plugin.json"), "utf8")).name as string
+      },
+    )
+    expect(name).toBe("cloned")
+    expect(fs.existsSync(checkout)).toBe(false)
   })
 })
 

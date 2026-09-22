@@ -13,6 +13,7 @@ use tokio_util::sync::CancellationToken;
 use crate::agents::{AgentDef, ListAgentsTool};
 use crate::apply_patch::ApplyPatchTool;
 use crate::ask_user::AskUserTool;
+use crate::base_tools::{AliasVisibility, base_tools_preset};
 use crate::edit::EditTool;
 use crate::formatter::FormatterPlane;
 pub use crate::grep::GrepTool;
@@ -378,6 +379,7 @@ struct ToolRegistryInner {
     tools: HashMap<String, ResolvedTool>,
     aliases: HashMap<String, ResolvedTool>,
     dispatch_identities: HashMap<String, [u8; 32]>,
+    advertised_aliases: BTreeSet<String>,
 }
 
 /// Immutable, lock-free tool view retained by an admitted turn.
@@ -391,7 +393,8 @@ pub struct ToolRegistrySnapshot {
 /// Drives the default mode for [`ResolvedTool::invocation`]: read-only and task
 /// default to allow, general tools and MCP default to ask, and commands build a
 /// dual tool+command subject from the `command` field.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum ToolPermission {
     /// Local discovery and read tools that default to allow under `default`.
     ReadOnly,
@@ -460,7 +463,7 @@ impl ToolRegistry {
     pub fn builtins() -> Self {
         let registry = Self::empty();
         let hashline_runtime = Arc::new(HashlineRuntime::new());
-        for tool in [
+        let implementations = [
             Arc::new(InvalidTool) as Arc<dyn Tool>,
             Arc::new(ReadTool::new(Arc::clone(&hashline_runtime))),
             Arc::new(WriteTool::new(Arc::clone(&hashline_runtime))),
@@ -479,21 +482,44 @@ impl ToolRegistry {
             Arc::new(SearchAgentTool),
             Arc::new(crate::lifecycle::ReportTool),
             Arc::new(crate::lifecycle::KillTool),
-        ] {
-            registry.insert_builtin(tool);
-        }
-        registry.insert_aliased_builtin("ask_user", "question", Arc::new(AskUserTool));
-        registry.insert_aliased_builtin("bash", "shell", Arc::new(ShellTool));
-        registry.insert_aliased_builtin("apply_patch", "patch", Arc::new(ApplyPatchTool));
-        registry.insert_aliased_builtin("webfetch", "fetch", Arc::new(WebFetchTool));
-        registry.insert_aliased_builtin("websearch", "search", Arc::new(WebSearchTool));
-        registry.insert_aliased_builtin("plan_exit", "plan", Arc::new(PlanExitTool));
-        for tool in [
+            Arc::new(AskUserTool),
+            Arc::new(ShellTool),
+            Arc::new(ApplyPatchTool),
+            Arc::new(WebFetchTool),
+            Arc::new(WebSearchTool),
+            Arc::new(PlanExitTool),
             Arc::new(crate::todo::TodoReadTool) as Arc<dyn Tool>,
             Arc::new(crate::todo::TodoUpdateStatusTool),
             Arc::new(crate::todo::TodoUpdateContentTool),
-        ] {
-            registry.insert_builtin(tool);
+        ];
+        let mut by_name = implementations
+            .into_iter()
+            .map(|tool| (tool.name().to_string(), tool))
+            .collect::<HashMap<_, _>>();
+        for exposure in base_tools_preset().tools() {
+            let Some(tool) = by_name.remove(exposure.name()) else {
+                panic!(
+                    "hya/base-tools declares `{}` without a Rust implementation",
+                    exposure.name()
+                );
+            };
+            if !exposure.exposed() {
+                continue;
+            }
+            registry.insert_preset_builtin(tool, exposure);
+        }
+        assert!(
+            by_name.is_empty(),
+            "Rust builtin implementations are missing from hya/base-tools: {:?}",
+            by_name.keys().collect::<BTreeSet<_>>()
+        );
+        for scheme in base_tools_preset().schemes() {
+            assert!(
+                registry.get(scheme.tool()).is_some(),
+                "hya/base-tools scheme `{}` names missing tool `{}`",
+                scheme.scheme(),
+                scheme.tool()
+            );
         }
         registry
     }
@@ -634,25 +660,43 @@ impl ToolRegistry {
     /// Collect advertised schemas for every **canonical** tool (aliases excluded).
     #[must_use]
     pub fn schemas(&self) -> Vec<ToolSchema> {
-        self.read()
+        let inner = self.read();
+        let mut schemas = inner
             .tools
             .values()
             .map(|resolved| resolved.tool.schema())
-            .collect()
+            .collect::<Vec<_>>();
+        schemas.extend(inner.advertised_aliases.iter().filter_map(|alias| {
+            inner.aliases.get(alias).map(|resolved| {
+                let mut schema = resolved.tool.schema();
+                schema.name = ToolName::new(alias.clone());
+                schema
+            })
+        }));
+        schemas
     }
 
     /// Install one built-in tool, failing loudly when the fixed builtin list
     /// ever carries a duplicate name: a silent overwrite would shadow an
     /// earlier tool with no diagnostic, so the registry treats it as an
     /// invariant violation instead.
-    fn insert_builtin(&self, tool: Arc<dyn Tool>) {
+    fn insert_preset_builtin(
+        &self,
+        tool: Arc<dyn Tool>,
+        exposure: &crate::base_tools::BaseToolExposure,
+    ) {
         let name = tool.name().to_string();
+        assert_eq!(
+            name,
+            exposure.name(),
+            "preset and implementation names differ"
+        );
         let mut inner = self.write();
         let replaced = inner.tools.insert(
             name.clone(),
             ResolvedTool {
-                tool,
-                permission: builtin_permission(&name),
+                tool: Arc::clone(&tool),
+                permission: exposure.permission(),
             },
         );
         assert!(
@@ -662,34 +706,22 @@ impl ToolRegistry {
         if let Some(identity) = builtin_dispatch_identity(&name) {
             inner.dispatch_identities.insert(name.clone(), identity);
         }
-    }
-
-    /// Install one built-in tool under its canonical name plus a legacy alias
-    /// spelling, with the same duplicate-name invariant as [`Self::insert_builtin`].
-    fn insert_aliased_builtin(&self, canonical: &str, legacy: &str, tool: Arc<dyn Tool>) {
-        let permission = builtin_permission(canonical);
-        let mut inner = self.write();
-        let replaced_canonical = inner.tools.insert(
-            canonical.to_string(),
-            ResolvedTool {
-                tool: Arc::new(NamedTool {
-                    name: canonical.to_string(),
-                    inner: tool.clone(),
-                }),
-                permission,
-            },
-        );
-        let replaced_alias = inner
-            .aliases
-            .insert(legacy.to_string(), ResolvedTool { tool, permission });
-        assert!(
-            replaced_canonical.is_none() && replaced_alias.is_none(),
-            "duplicate built-in tool name `{canonical}` or legacy alias `{legacy}`              in the fixed builtin list"
-        );
-        if let Some(identity) = builtin_dispatch_identity(canonical) {
-            inner
-                .dispatch_identities
-                .insert(canonical.to_string(), identity);
+        for alias in exposure.aliases() {
+            let replaced = inner.aliases.insert(
+                alias.name().to_string(),
+                ResolvedTool {
+                    tool: Arc::clone(&tool),
+                    permission: exposure.permission(),
+                },
+            );
+            assert!(
+                replaced.is_none() && !inner.tools.contains_key(alias.name()),
+                "duplicate hya/base-tools alias `{}`",
+                alias.name()
+            );
+            if alias.visibility() == AliasVisibility::Public {
+                inner.advertised_aliases.insert(alias.name().to_string());
+            }
         }
     }
 }
@@ -769,16 +801,6 @@ impl ToolRegistrySnapshot {
             .collect::<Vec<_>>();
         names.sort();
         names
-    }
-}
-
-fn builtin_permission(name: &str) -> ToolPermission {
-    match name {
-        "read" | "ls" | "glob" | "find" | "grep" | "lsp" | "skill" | "list_agents"
-        | "list_channel" | "search_agent" | "todo__read" => ToolPermission::ReadOnly,
-        "task" | "kill" => ToolPermission::Task,
-        "shell" | "bash" => ToolPermission::Command,
-        _ => ToolPermission::Tool,
     }
 }
 

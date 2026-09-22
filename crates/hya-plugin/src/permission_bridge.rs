@@ -51,7 +51,7 @@ impl PermissionInterceptor for PermissionBridge {
 }
 
 impl PluginHost {
-    fn permission_semantic_identity_v1(&self) -> Option<[u8; 32]> {
+    pub(crate) fn permission_semantic_identity_v1(&self) -> Option<[u8; 32]> {
         let prepared = self.prepared_plugins();
         let participants = self
             .plugins()

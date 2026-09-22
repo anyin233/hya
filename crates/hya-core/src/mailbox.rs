@@ -77,27 +77,49 @@ pub async fn run_mailbox_service(
                 MailboxRequest::Send {
                     from,
                     actor_claim,
+                    channel_policy,
                     to,
                     kind,
                     body,
                     reply,
                 } => {
-                    let result = engine
-                        .mail_send_for_actor(from, to, kind, body, actor_claim.as_ref())
-                        .await
-                        .map_err(|e| e.to_string());
+                    let result = if channel_policy.is_none() {
+                        Err("channel policy snapshot missing for admitted send".to_string())
+                    } else {
+                        engine
+                            .mail_send_for_actor_with_policy(
+                                from,
+                                to,
+                                kind,
+                                body,
+                                actor_claim.as_ref(),
+                                channel_policy,
+                            )
+                            .await
+                            .map_err(|e| e.to_string())
+                    };
                     let _ = reply.send(result);
                 }
                 MailboxRequest::SendDefault {
                     from,
                     actor_claim,
+                    channel_policy,
                     body,
                     reply,
                 } => {
-                    let result = engine
-                        .mail_send_default_for_actor(from, body, actor_claim.as_ref())
-                        .await
-                        .map_err(|e| e.to_string());
+                    let result = if channel_policy.is_none() {
+                        Err("channel policy snapshot missing for admitted send".to_string())
+                    } else {
+                        engine
+                            .mail_send_default_for_actor_with_policy(
+                                from,
+                                body,
+                                actor_claim.as_ref(),
+                                channel_policy,
+                            )
+                            .await
+                            .map_err(|e| e.to_string())
+                    };
                     let _ = reply.send(result);
                 }
             }

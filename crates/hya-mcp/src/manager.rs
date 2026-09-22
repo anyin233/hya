@@ -1,6 +1,7 @@
 //! Multi-server MCP lifecycle: config, prepare, status map, and tool aggregation.
 
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
@@ -112,7 +113,28 @@ impl PreparedMcpServer {
 /// `name` is the config id used in tool namespaces. Equivalent to the path used
 /// inside [`McpManager::connect_all_into`] for a single server.
 pub async fn prepare(name: String, config: McpServerConfig) -> Result<PreparedMcpServer, McpError> {
-    connect_server(name, config).await
+    connect_server(name, config, None).await
+}
+
+/// Prepare a packaged MCP server in its private materialized root.
+pub async fn prepare_bundle(
+    name: String,
+    mut config: McpServerConfig,
+    root: PathBuf,
+) -> Result<PreparedMcpServer, McpError> {
+    let mut env = BTreeMap::new();
+    if let Ok(path) = std::env::var("PATH") {
+        env.insert("PATH".to_string(), path);
+    }
+    if let Some(explicit) = config.env.take() {
+        env.extend(explicit);
+    }
+    env.insert(
+        "HYA_BUNDLE_ROOT".to_string(),
+        root.to_string_lossy().into_owned(),
+    );
+    config.env = Some(env);
+    connect_server(name, config, Some(root)).await
 }
 
 impl McpManager {
@@ -163,7 +185,7 @@ impl McpManager {
                 continue;
             }
             let status_name = name.clone();
-            set.spawn(async move { (status_name, connect_server(name, config).await) });
+            set.spawn(async move { (status_name, connect_server(name, config, None).await) });
         }
         while let Some(joined) = set.join_next().await {
             match joined {
@@ -216,6 +238,7 @@ impl McpManager {
 async fn connect_server(
     name: String,
     config: McpServerConfig,
+    bundle_root: Option<PathBuf>,
 ) -> Result<PreparedMcpServer, McpError> {
     let timeout = config
         .timeout_ms
@@ -237,7 +260,10 @@ async fn connect_server(
             (client, None)
         }
         None => {
-            let (client, guard) = McpClient::spawn(&config.command, config.env.as_ref())?;
+            let (client, guard) = match bundle_root.as_deref() {
+                Some(root) => McpClient::spawn_bundle(&config.command, root, config.env.as_ref())?,
+                None => McpClient::spawn(&config.command, config.env.as_ref())?,
+            };
             (client, Some(guard))
         }
     };
@@ -426,6 +452,58 @@ for line in sys.stdin:
             .map(|tool| tool.name().to_string())
             .collect();
         assert_eq!(names, vec!["mcp__good__ping".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn bundle_server_uses_private_cwd_and_minimal_environment() {
+        let root =
+            std::env::temp_dir().join(format!("hya-mcp-bundle-{}", hya_proto::SessionId::new()));
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("sibling.txt"), "PACKAGED_SIBLING").unwrap();
+        std::fs::write(
+            root.join("server.py"),
+            r#"
+import json, os, sys
+description = "|".join([
+    open("sibling.txt").read(),
+    "home=" + str("HOME" in os.environ),
+    "explicit=" + os.environ.get("BUNDLE_EXPLICIT", ""),
+    "rootmatch=" + str(os.path.samefile(os.getcwd(), os.environ.get("HYA_BUNDLE_ROOT"))),
+])
+for line in sys.stdin:
+    req = json.loads(line)
+    if "id" not in req:
+        continue
+    if req["method"] == "initialize":
+        result = {"capabilities": {}}
+    elif req["method"] == "tools/list":
+        result = {"tools": [{"name": "probe", "description": description, "inputSchema": {"type": "object"}}]}
+    else:
+        result = {"resources": []}
+    print(json.dumps({"jsonrpc":"2.0", "id":req["id"], "result":result}), flush=True)
+"#,
+        )
+        .unwrap();
+        let config = McpServerConfig {
+            command: vec!["python3".to_string(), "server.py".to_string()],
+            env: Some(BTreeMap::from([(
+                "BUNDLE_EXPLICIT".to_string(),
+                "kept".to_string(),
+            )])),
+            timeout_ms: Some(1000),
+            ..McpServerConfig::default()
+        };
+
+        let server = prepare_bundle("fixture".to_string(), config, root.clone())
+            .await
+            .unwrap();
+        let description = &server.tools()[0].schema().description;
+        assert_eq!(
+            description,
+            "PACKAGED_SIBLING|home=False|explicit=kept|rootmatch=True"
+        );
+        drop(server);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]

@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -19,9 +20,8 @@ pub(crate) enum BundleCommand {
         /// Bundle package (`.hyabundle`); conflicts with `--claude`.
         #[arg(value_name = "PACKAGE")]
         package: Option<PathBuf>,
-        /// Claude Code plugin source: a local plugin directory translated
-        /// offline by the bundled Claude adapter into an AgentBundle before
-        /// installation (marketplace refs are a later milestone).
+        /// Claude Code plugin source: a local directory or
+        /// `<marketplace-root>#<entry>` translated into a standard bundle.
         #[arg(long, value_name = "SOURCE")]
         claude: Option<PathBuf>,
         /// Accept a namespace conflict (replacing the incumbent bundle) and
@@ -119,17 +119,25 @@ async fn install_dispatch(
     }
 }
 
-/// Translate a local Claude Code plugin directory offline into a staged
+/// Translate a local Claude Code plugin directory or marketplace reference into a staged
 /// `.hyabundle` package via the bundled Claude adapter.
 ///
 /// The adapter prints one JSON envelope (`hya-plugin-claude::emit`) with the
-/// `AgentBundle` manifest and its translated files; they are prepared through
+/// standard `Plugin`/`AgentSetBundle` manifest and its translated files; they are prepared through
 /// the canonical `hya_bundle` pipeline, so namespace and digest validation is
 /// shared with every other install path.
 async fn stage_claude_source(source: &Path) -> anyhow::Result<PathBuf> {
+    let source_text = source.to_string_lossy();
+    let marketplace = if source.is_dir() {
+        None
+    } else {
+        source_text
+            .rsplit_once('#')
+            .filter(|(root, entry)| !root.is_empty() && !entry.is_empty())
+    };
     anyhow::ensure!(
-        source.is_dir(),
-        "--claude source must be a local plugin directory: {}",
+        source.is_dir() || marketplace.is_some(),
+        "--claude source must be a local plugin directory or <marketplace-root>#<entry>: {}",
         source.display()
     );
     let Some(bun) = hya_app::plugins::find_bun() else {
@@ -144,12 +152,21 @@ async fn stage_claude_source(source: &Path) -> anyhow::Result<PathBuf> {
         "claude adapter not found at {} (set HYA_CLAUDE_ADAPTER_DIR)",
         adapter_main.display()
     );
-    let output = tokio::process::Command::new(&bun)
+    let mut command = tokio::process::Command::new(&bun);
+    command
         .arg("run")
         .arg(&adapter_main)
-        .arg("--emit-bundle-manifest")
-        .arg("--plugin-dir")
-        .arg(source)
+        .arg("--emit-bundle-manifest");
+    if let Some((root, entry)) = marketplace {
+        command
+            .arg("--marketplace")
+            .arg(root)
+            .arg("--entry")
+            .arg(entry);
+    } else {
+        command.arg("--plugin-dir").arg(source);
+    }
+    let output = command
         .output()
         .await
         .with_context(|| format!("run Claude adapter for {}", source.display()))?;
@@ -205,8 +222,29 @@ async fn install(package: PathBuf, overwrite: bool) -> anyhow::Result<()> {
     validate_package_path(&package)?;
     let inspection = inspect_package(&package)?;
     if let PackageInspection::Public(public) = &inspection {
-        let first_party =
+        let incoming = public
+            .prepared
+            .bundles()
+            .first()
+            .context("installed public package contains no bundle")?;
+        if let Some(preset) = hya_app::trusted_preset_inventory()
+            .context("decode trusted presets")?
+            .iter()
+            .find(|preset| preset.id == incoming.identity().id)
+        {
+            anyhow::bail!(
+                "immutable trusted preset `{}` cannot be installed or overridden",
+                preset.id
+            );
+        }
+        let mut first_party =
             hya_app::first_party_catalogs().context("decode embedded first-party bundles")?;
+        first_party.retain(|catalog| {
+            catalog.bundles().first().is_none_or(|bundle| {
+                bundle.identity().id != incoming.identity().id
+                    && bundle.namespace() != incoming.namespace()
+            })
+        });
         let mut catalogs = first_party.iter().collect::<Vec<_>>();
         catalogs.push(&public.prepared);
         BundleCatalog::from_verified_catalogs(&catalogs)
@@ -272,6 +310,18 @@ async fn install(package: PathBuf, overwrite: bool) -> anyhow::Result<()> {
         identity.id, identity.version
     );
     Ok(())
+}
+
+fn installed_shadow_keys(records: &[BundleRegistryRecord]) -> (BTreeSet<String>, BTreeSet<String>) {
+    let mut ids = BTreeSet::new();
+    let mut namespaces = BTreeSet::new();
+    for record in records {
+        ids.insert(record.bundle_id.clone());
+        if let Ok(bundle) = decode_installed_bundle(record) {
+            namespaces.insert(bundle.namespace().to_string());
+        }
+    }
+    (ids, namespaces)
 }
 
 fn info_file(package: &Path) -> anyhow::Result<()> {
@@ -345,9 +395,25 @@ async fn list() -> anyhow::Result<()> {
     let first_party =
         hya_app::first_party_catalogs().context("decode embedded first-party bundles")?;
     let installed = installed_records_if_exists().await?;
+    let (shadowed_ids, shadowed_namespaces) = installed_shadow_keys(&installed);
     let mut rows = Vec::new();
+    for preset in hya_app::trusted_preset_inventory().context("decode trusted presets")? {
+        rows.push((
+            preset.id,
+            preset.version,
+            preset.agent_ids.join(","),
+            "active".to_string(),
+            preset.kind,
+            "-".to_string(),
+        ));
+    }
     for catalog in &first_party {
         for bundle in catalog.bundles() {
+            if shadowed_ids.contains(&bundle.identity().id)
+                || shadowed_namespaces.contains(bundle.namespace())
+            {
+                continue;
+            }
             rows.push(bundle_list_row(bundle, "active"));
         }
     }
@@ -437,9 +503,33 @@ async fn search(query: &str) -> anyhow::Result<()> {
     let first_party =
         hya_app::first_party_catalogs().context("decode embedded first-party bundles")?;
     let installed = installed_records_if_exists().await?;
+    let (shadowed_ids, shadowed_namespaces) = installed_shadow_keys(&installed);
     let mut entries = Vec::new();
+    for preset in hya_app::trusted_preset_inventory().context("decode trusted presets")? {
+        let mut haystack = preset.id.to_lowercase();
+        for id in preset.agent_ids.iter().chain(preset.resource_ids.iter()) {
+            haystack.push('\n');
+            haystack.push_str(&id.to_lowercase());
+        }
+        entries.push(SearchEntry {
+            haystack,
+            row: (
+                preset.id,
+                preset.version,
+                preset.agent_ids.join(","),
+                "active".to_string(),
+                preset.kind,
+                "-".to_string(),
+            ),
+        });
+    }
     for catalog in &first_party {
         for bundle in catalog.bundles() {
+            if shadowed_ids.contains(&bundle.identity().id)
+                || shadowed_namespaces.contains(bundle.namespace())
+            {
+                continue;
+            }
             entries.push(SearchEntry {
                 haystack: bundle_search_haystack(bundle),
                 row: bundle_list_row(bundle, "active"),
@@ -484,48 +574,84 @@ async fn search(query: &str) -> anyhow::Result<()> {
 }
 
 async fn info(bundle_id: &str) -> anyhow::Result<()> {
-    if bundle_id == hya_app::FIRST_PARTY_BUNDLE_ID {
-        return info_first_party();
+    if let Some(preset) = hya_app::trusted_preset_inventory()
+        .context("decode trusted presets")?
+        .into_iter()
+        .find(|preset| preset.id == bundle_id)
+    {
+        println!("name={}", preset.id);
+        println!("version={}", preset.version);
+        println!("origin=preset");
+        println!("state=active");
+        println!("immutable={}", preset.immutable);
+        println!("installable={}", preset.installable);
+        println!("prepared_digest={}", preset.digest);
+        println!("kind={}", preset.kind);
+        for agent in preset.agent_ids {
+            println!("agent={agent}");
+        }
+        for resource in preset.resource_ids {
+            println!("resource={resource}");
+        }
+        return Ok(());
     }
-    let record = installed_records_if_exists()
+    if let Some(record) = installed_records_if_exists()
         .await?
         .into_iter()
         .find(|record| record.bundle_id == bundle_id)
-        .ok_or_else(|| StoreError::BundleNotFound {
-            bundle_id: bundle_id.to_string(),
-        })?;
-    let prepared = decode_installed_catalog(&record)?;
-    let [bundle] = prepared.bundles() else {
-        anyhow::bail!("installed catalog must contain exactly one bundle")
-    };
+    {
+        let prepared = decode_installed_catalog(&record)?;
+        let [bundle] = prepared.bundles() else {
+            anyhow::bail!("installed catalog must contain exactly one bundle")
+        };
 
-    let identity = bundle.identity();
-    println!("name={}", identity.id);
-    println!("version={}", identity.version);
-    println!("publisher={}", identity.publisher);
-    println!("origin=installed");
-    println!("format=public-v1");
-    println!("state=active");
-    println!("immutable=false");
-    println!("source_digest={}", hex_digest(&record.source_digest));
-    println!("prepared_digest={}", record.prepared_digest);
-    print_static_info(
-        bundle,
-        "=",
-        prepared.bundle_schemas(bundle_id),
-        prepared.bundle_process(bundle_id),
-    );
-    Ok(())
+        let identity = bundle.identity();
+        println!("name={}", identity.id);
+        println!("version={}", identity.version);
+        println!("publisher={}", identity.publisher);
+        println!("origin=installed");
+        println!("format=public-v1");
+        println!("state=active");
+        println!("immutable=false");
+        println!("source_digest={}", hex_digest(&record.source_digest));
+        println!("prepared_digest={}", record.prepared_digest);
+        print_static_info(
+            bundle,
+            "=",
+            prepared.bundle_schemas(bundle_id),
+            prepared.bundle_process(bundle_id),
+        );
+        return Ok(());
+    }
+    if hya_app::first_party_catalogs()
+        .context("decode embedded first-party bundles")?
+        .iter()
+        .any(|catalog| {
+            catalog
+                .bundles()
+                .iter()
+                .any(|bundle| bundle.identity().id == bundle_id)
+        })
+    {
+        return info_first_party(bundle_id);
+    }
+    Err(StoreError::BundleNotFound {
+        bundle_id: bundle_id.to_string(),
+    }
+    .into())
 }
 
 /// Print metadata for the immutable first-party bundles.
-fn info_first_party() -> anyhow::Result<()> {
+fn info_first_party(bundle_id: &str) -> anyhow::Result<()> {
     let catalogs =
         hya_app::first_party_catalogs().context("decode embedded first-party bundles")?;
     for prepared in &catalogs {
         let [bundle] = prepared.bundles() else {
             anyhow::bail!("first-party catalog must contain exactly one bundle")
         };
+        if bundle.identity().id != bundle_id {
+            continue;
+        }
         let identity = bundle.identity();
         println!("name={}", identity.id);
         println!("version={}", identity.version);
@@ -541,13 +667,35 @@ fn info_first_party() -> anyhow::Result<()> {
             prepared.bundle_schemas(&identity.id),
             prepared.bundle_process(&identity.id),
         );
+        return Ok(());
     }
-    Ok(())
+    Err(StoreError::BundleNotFound {
+        bundle_id: bundle_id.to_string(),
+    }
+    .into())
 }
 
 async fn uninstall(bundle_id: &str) -> anyhow::Result<()> {
+    let has_installed_override = installed_records_if_exists()
+        .await?
+        .iter()
+        .any(|record| record.bundle_id == bundle_id);
     anyhow::ensure!(
-        bundle_id != hya_app::FIRST_PARTY_BUNDLE_ID,
+        !hya_app::trusted_preset_inventory()
+            .context("decode trusted presets")?
+            .iter()
+            .any(|preset| preset.id == bundle_id),
+        "immutable trusted preset `{bundle_id}` cannot be uninstalled"
+    );
+    anyhow::ensure!(
+        has_installed_override
+            || !hya_app::first_party_catalogs()
+                .context("decode embedded first-party bundles")?
+                .iter()
+                .any(|catalog| catalog
+                    .bundles()
+                    .iter()
+                    .any(|bundle| bundle.identity().id == bundle_id)),
         "immutable first-party bundle `{bundle_id}` cannot be uninstalled"
     );
     let registry = open_registry().await?;
@@ -561,11 +709,19 @@ async fn uninstall(bundle_id: &str) -> anyhow::Result<()> {
 async fn schemas() -> anyhow::Result<()> {
     let first_party =
         hya_app::first_party_catalogs().context("decode embedded first-party bundles")?;
+    let installed = installed_records_if_exists().await?;
+    let (shadowed_ids, shadowed_namespaces) = installed_shadow_keys(&installed);
     let mut rows = Vec::new();
     for catalog in &first_party {
-        rows.extend(catalog_schema_rows(catalog));
+        let shadowed = catalog.bundles().first().is_some_and(|bundle| {
+            shadowed_ids.contains(&bundle.identity().id)
+                || shadowed_namespaces.contains(bundle.namespace())
+        });
+        if !shadowed {
+            rows.extend(catalog_schema_rows(catalog));
+        }
     }
-    for record in installed_records_if_exists().await? {
+    for record in installed {
         match decode_installed_catalog(&record) {
             Ok(prepared) => rows.extend(catalog_schema_rows(&prepared)),
             // Written by a different binary version: name the bundle rather

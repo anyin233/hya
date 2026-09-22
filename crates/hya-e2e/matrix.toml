@@ -342,6 +342,38 @@ path = "crates/hya-e2e/tests/p26_plugin_bundle.rs"
 tags = ["pr", "hyabundle", "plugin", "skills"]
 timeout_secs = 120
 
+[[scenario]]
+id = "T2.22"
+title = "packaged native processes, MCP and selected hooks execute with owner scope"
+track = "P"
+path = "crates/hya-e2e/tests/p27_bundle_process.rs"
+tags = ["pr", "hyabundle", "plugin", "mcp"]
+timeout_secs = 120
+
+[[scenario]]
+id = "T2.23"
+title = "default subagent bundle executes transient report and resident mail"
+track = "P"
+path = "crates/hya-e2e/tests/p28_subagent_bundle.rs"
+tags = ["pr", "hyabundle", "subagent", "mailbox"]
+timeout_secs = 120
+
+[[scenario]]
+id = "T2.24"
+title = "Claude import executes packaged hooks and skills after source removal"
+track = "P"
+path = "crates/hya-e2e/tests/p29_claude_bundle.rs"
+tags = ["pr", "hyabundle", "plugin", "skills"]
+timeout_secs = 120
+
+[[scenario]]
+id = "T2.25"
+title = "installed channel policy denies child sends and uninstall restores defaults"
+track = "P"
+path = "crates/hya-e2e/tests/p30_channel_bundle.rs"
+tags = ["pr", "hyabundle", "subagent", "mailbox"]
+timeout_secs = 120
+
 # Index-only deep engine coverage (not duplicated in Track P).
 [[scenario]]
 id = "I.nested"

@@ -87,7 +87,7 @@ fn first_party_collision_source() -> hya_bundle::BundleSource {
                 "bundle.yaml",
                 br#"kind: AgentBundle
 identity:
-  id: hya/plan-impl-review
+  id: hya/core-agents
   version: 9.9.9
   publisher: attacker
 agent:
@@ -100,6 +100,27 @@ agent:
             hya_bundle::SourceFile::new(
                 "prompts/collision.md",
                 b"This package must not replace a first-party bundle.\n".as_slice(),
+            ),
+        ],
+    )
+}
+
+fn goal_loop_override_source() -> hya_bundle::BundleSource {
+    hya_bundle::BundleSource::new(
+        "goal-loop-override",
+        vec![
+            hya_bundle::SourceFile::new(
+                "bundle.yaml",
+                br#"kind: Plugin
+identity: { id: hya/goal-loop, version: 9.0.0, publisher: local }
+namespace: goal-loop
+resources:
+  skills: [{ id: evaluator-prompt, path: evaluator.md }]
+"#,
+            ),
+            hya_bundle::SourceFile::new(
+                "evaluator.md",
+                b"---\nname: evaluator-prompt\ndescription: override\n---\nCLI_OVERRIDE\n",
             ),
         ],
     )
@@ -347,15 +368,17 @@ fn bundle_list_and_info_include_first_party_without_creating_registry()
         .output()?;
     assert_success("first-party list", &list);
     let list_stdout = String::from_utf8(list.stdout)?;
-    assert_eq!(
-        list_stdout.lines().collect::<Vec<_>>(),
-        vec![
-            LIST_HEADER,
-            "hya/goal-loop 1.0.0 goal-loop-guide active AgentBundle -",
-            "hya/plan-impl-review 1.0.0 plan-impl-review-implementer,plan-impl-review-planner,plan-impl-review-reviewer active WorkflowBundle plan-impl-review",
-        ],
-        "unexpected bundle list:\n{list_stdout}"
-    );
+    for expected in [
+        LIST_HEADER,
+        "hya/base-tools 1.0.0  active Plugin -",
+        "hya/goal-loop 1.0.0 goal-loop-guide,goal-loop-verifier active AgentSetBundle -",
+        "hya/plan-impl-review 1.0.0 plan-impl-review-implementer,plan-impl-review-planner,plan-impl-review-reviewer active WorkflowBundle plan-impl-review",
+    ] {
+        assert!(
+            list_stdout.lines().any(|line| line == expected),
+            "bundle list omitted {expected:?}:\n{list_stdout}"
+        );
+    }
     assert!(
         !registry_path.exists(),
         "read-only bundle list created a bundle registry"
@@ -405,7 +428,7 @@ fn bundle_list_and_info_include_first_party_without_creating_registry()
     Ok(())
 }
 
-/// Installation rejects package identities that collide with immutable first-party content.
+/// Installation rejects identities reserved by immutable trusted presets.
 #[test]
 fn bundle_install_rejects_first_party_identity_collision_before_registry_mutation()
 -> Result<(), Box<dyn std::error::Error>> {
@@ -426,7 +449,7 @@ fn bundle_install_rejects_first_party_identity_collision_before_registry_mutatio
     );
     let stderr = String::from_utf8(install.stderr)?;
     assert!(
-        stderr.contains("duplicate bundle id `hya/plan-impl-review`"),
+        stderr.contains("immutable trusted preset `hya/core-agents`"),
         "colliding install reported the wrong error:\n{stderr}"
     );
     assert!(
@@ -435,6 +458,70 @@ fn bundle_install_rejects_first_party_identity_collision_before_registry_mutatio
     );
 
     fs::remove_dir_all(&data_root)?;
+    Ok(())
+}
+
+#[test]
+fn bundle_install_first_party_override_and_uninstall_restores_fallback()
+-> Result<(), Box<dyn std::error::Error>> {
+    let data_root = unique_data_root()?;
+    let package = data_root.join("goal-loop-override.hyabundle");
+    fs::write(
+        &package,
+        hya_bundle::write_public_package(&goal_loop_override_source())?,
+    )?;
+
+    let install = bundle_command(&data_root)
+        .args(["bundle", "install"])
+        .arg(&package)
+        .output()?;
+    assert!(
+        install.status.success(),
+        "{}",
+        String::from_utf8_lossy(&install.stderr)
+    );
+
+    let info = bundle_command(&data_root)
+        .args(["bundle", "info", "hya/goal-loop"])
+        .output()?;
+    let info_stdout = String::from_utf8(info.stdout)?;
+    assert!(info_stdout.contains("version=9.0.0\n"), "{info_stdout}");
+    assert!(info_stdout.contains("origin=installed\n"), "{info_stdout}");
+
+    let list = bundle_command(&data_root)
+        .args(["bundle", "list"])
+        .output()?;
+    let list_stdout = String::from_utf8(list.stdout)?;
+    let goal_rows = list_stdout
+        .lines()
+        .filter(|line| line.starts_with("hya/goal-loop "))
+        .collect::<Vec<_>>();
+    assert_eq!(goal_rows.len(), 1, "{list_stdout}");
+    assert!(goal_rows[0].starts_with("hya/goal-loop 9.0.0 "));
+
+    let uninstall = bundle_command(&data_root)
+        .args(["bundle", "uninstall", "hya/goal-loop"])
+        .output()?;
+    assert!(
+        uninstall.status.success(),
+        "{}",
+        String::from_utf8_lossy(&uninstall.stderr)
+    );
+
+    let fallback = bundle_command(&data_root)
+        .args(["bundle", "info", "hya/goal-loop"])
+        .output()?;
+    let fallback_stdout = String::from_utf8(fallback.stdout)?;
+    assert!(
+        fallback_stdout.contains("version=1.0.0\n"),
+        "{fallback_stdout}"
+    );
+    assert!(
+        fallback_stdout.contains("origin=first-party\n"),
+        "{fallback_stdout}"
+    );
+
+    fs::remove_dir_all(data_root)?;
     Ok(())
 }
 
@@ -639,14 +726,10 @@ async fn workflow_bundle_list_and_info_show_kind_workflow_and_agents()
         .output()?;
     assert_success("WorkflowBundle list", &list);
     let list_stdout = String::from_utf8(list.stdout)?;
-    assert_eq!(
-        list_stdout.lines().collect::<Vec<_>>(),
-        vec![
-            "NAME VERSION AGENT STATE KIND WORKFLOW",
-            "hya/goal-loop 1.0.0 goal-loop-guide active AgentBundle -",
-            "hya/plan-impl-review 1.0.0 plan-impl-review-implementer,plan-impl-review-planner,plan-impl-review-reviewer active WorkflowBundle plan-impl-review",
-            "hya/workflow-info 1.0.0 demo-worker active WorkflowBundle demo",
-        ],
+    assert!(
+        list_stdout
+            .lines()
+            .any(|line| line == "hya/workflow-info 1.0.0 demo-worker active WorkflowBundle demo"),
         "unexpected WorkflowBundle list:\n{list_stdout}"
     );
 
@@ -982,7 +1065,7 @@ fn bundle_info_reports_schema_process_and_mcp_declarations()
 
 /// `bundle install --claude <dir>` translates the fixture plugin offline and
 /// installs it as `claude/demo`; `bundle list` and `bundle info` show the
-/// translated AgentBundle with its skills and MCP declarations.
+/// translated AgentSetBundle with its skills and MCP declarations.
 #[test]
 fn bundle_install_claude_translates_and_installs_fixture() -> Result<(), Box<dyn std::error::Error>>
 {
@@ -1012,7 +1095,7 @@ fn bundle_install_claude_translates_and_installs_fixture() -> Result<(), Box<dyn
     let list_stdout = String::from_utf8(list.stdout)?;
     let installed_row = list_lines_starting_with(&list_stdout, "claude/demo");
     assert_eq!(
-        installed_row, "claude/demo 1.0.0 reviewer active AgentBundle -",
+        installed_row, "claude/demo 1.0.0 reviewer active AgentSetBundle -",
         "bundle list omitted the claude/demo row:\n{list_stdout}"
     );
 
@@ -1025,11 +1108,10 @@ fn bundle_install_claude_translates_and_installs_fixture() -> Result<(), Box<dyn
         "name=claude/demo",
         "version=1.0.0",
         "publisher=claude",
-        "kind=AgentBundle",
+        "kind=AgentSetBundle",
         "agent=reviewer",
         "skill=bundle:claude/demo/skill/audit",
         "skill=bundle:claude/demo/skill/review",
-        "skill=bundle:claude/demo/skill/reviewer",
         "mcp=bundle:claude/demo/mcp/vecdb",
     ] {
         assert!(
@@ -1038,6 +1120,40 @@ fn bundle_install_claude_translates_and_installs_fixture() -> Result<(), Box<dyn
         );
     }
 
+    fs::remove_dir_all(&data_root)?;
+    Ok(())
+}
+
+#[test]
+fn bundle_install_claude_resolves_local_marketplace_reference()
+-> Result<(), Box<dyn std::error::Error>> {
+    if !bun_available() {
+        eprintln!("skipping: bun is not available");
+        return Ok(());
+    }
+    let data_root = unique_data_root()?;
+    let marketplace = data_root.join("marketplace");
+    let plugin = marketplace.join("plugins/resource-only");
+    fs::create_dir_all(plugin.join("skills/scan"))?;
+    fs::write(
+        plugin.join("plugin.json"),
+        r#"{"name":"market-resource","version":"1.0.0"}"#,
+    )?;
+    fs::write(plugin.join("skills/scan/SKILL.md"), "# Scan\n")?;
+    fs::write(
+        marketplace.join("marketplace.json"),
+        r#"{"name":"fixture","plugins":[{"name":"resource-only","source":"./plugins/resource-only"}]}"#,
+    )?;
+    let reference = format!("{}#resource-only", marketplace.display());
+    let install = bundle_command(&data_root)
+        .args(["bundle", "install", "--claude", &reference])
+        .output()?;
+    assert_success("claude marketplace install", &install);
+    let info = bundle_command(&data_root)
+        .args(["bundle", "info", "claude/market-resource"])
+        .output()?;
+    assert_success("claude marketplace info", &info);
+    assert!(String::from_utf8(info.stdout)?.contains("kind=Plugin"));
     fs::remove_dir_all(&data_root)?;
     Ok(())
 }
@@ -1141,7 +1257,7 @@ fn bundle_search_filters_first_party_and_installed_metadata()
         by_bundle_id_stdout.lines().collect::<Vec<_>>(),
         vec![
             LIST_HEADER,
-            "hya/goal-loop 1.0.0 goal-loop-guide active AgentBundle -",
+            "hya/goal-loop 1.0.0 goal-loop-guide,goal-loop-verifier active AgentSetBundle -",
         ],
         "unexpected bundle id search rows:\n{by_bundle_id_stdout}"
     );
@@ -1256,15 +1372,17 @@ fn bundle_search_without_a_metadata_match_lists_the_catalog()
         .output()?;
     assert_success("no-match search", &search);
     let stdout = String::from_utf8(search.stdout)?;
-    assert_eq!(
-        stdout.lines().collect::<Vec<_>>(),
-        vec![
-            LIST_HEADER,
-            "hya/goal-loop 1.0.0 goal-loop-guide active AgentBundle -",
-            "hya/plan-impl-review 1.0.0 plan-impl-review-implementer,plan-impl-review-planner,plan-impl-review-reviewer active WorkflowBundle plan-impl-review",
-        ],
-        "no-match search must list the full first-party catalog:\n{stdout}"
-    );
+    for expected in [
+        LIST_HEADER,
+        "hya/base-tools 1.0.0  active Plugin -",
+        "hya/goal-loop 1.0.0 goal-loop-guide,goal-loop-verifier active AgentSetBundle -",
+        "hya/plan-impl-review 1.0.0 plan-impl-review-implementer,plan-impl-review-planner,plan-impl-review-reviewer active WorkflowBundle plan-impl-review",
+    ] {
+        assert!(
+            stdout.lines().any(|line| line == expected),
+            "no-match search omitted {expected:?}:\n{stdout}"
+        );
+    }
     assert!(
         String::from_utf8(search.stderr)?.contains("no bundle metadata matched"),
         "no-match search must explain the fallback on stderr"

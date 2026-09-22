@@ -31,6 +31,24 @@ test("help command prints usage", async () => {
   expect(exitCode).toBe(0)
   expect(stdout).toContain("--bundle-extension")
   expect(stdout).toContain("--extension")
+  expect(stdout).toContain("--plugin-id")
+})
+
+test("rejects an empty plugin id", async () => {
+  const proc = Bun.spawn(
+    [process.execPath, "run", "src/main.ts", "--plugin-id", ""],
+    {
+      cwd: import.meta.dir.replace(/\/test$/, ""),
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+  )
+  const [stderr, exitCode] = await Promise.all([
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ])
+  expect(exitCode).toBe(1)
+  expect(stderr).toContain("--plugin-id requires a non-empty value")
 })
 
 test("rejects relative extension paths", async () => {

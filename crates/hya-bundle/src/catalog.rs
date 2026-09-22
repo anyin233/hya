@@ -1,8 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{
-    BundleError, PreparedAgent, PreparedCatalog, PreparedInstallableBundle, PreparedResource,
-    PreparedWorkflow, prepare::validate_hook_local_id,
+    BundleError, PreparedAgent, PreparedCatalog, PreparedChannelTemplate,
+    PreparedInstallableBundle, PreparedResource, PreparedWorkflow, prepare::validate_hook_local_id,
 };
 
 const SEMANTIC_IDENTITY_DOMAIN_V1: &[u8] = b"hya.bundle-catalog.semantic-identity/v1";
@@ -230,6 +230,27 @@ impl BundleCatalog {
             bundle.identity().id.as_str(),
             bundle.agents().get(agent_index)?,
         ))
+    }
+
+    /// All channel templates declared by one bundle, or an empty slice when absent.
+    #[must_use]
+    pub fn channels_for_bundle(&self, bundle_id: &str) -> &[PreparedChannelTemplate] {
+        self.bundles
+            .iter()
+            .find(|bundle| bundle.identity().id == bundle_id)
+            .map_or(&[], PreparedInstallableBundle::channels)
+    }
+
+    /// Resolve one bundle-local channel template id.
+    #[must_use]
+    pub fn resolve_channel_template(
+        &self,
+        bundle_id: &str,
+        template_id: &str,
+    ) -> Option<&PreparedChannelTemplate> {
+        self.channels_for_bundle(bundle_id)
+            .iter()
+            .find(|template| template.id == template_id)
     }
 
     /// Resolve a Workflow by its exact qualified id or an unambiguous bare id.

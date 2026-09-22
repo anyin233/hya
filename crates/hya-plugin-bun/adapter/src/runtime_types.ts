@@ -21,6 +21,8 @@ export type RuntimeOptions = {
   readonly stdout: TextSink
   readonly stderr: TextSink
   readonly version: string
+  /** Initialize identity for synthetic bundle plugins; defaults to `bun`. */
+  readonly pluginId?: string
   readonly extensions: readonly string[]
   readonly env?: RuntimeEnv
 }
@@ -32,6 +34,7 @@ export type HandledRequest = {
 
 export type RequestContext = {
   readonly version: string
+  readonly pluginId: string
   readonly env: RuntimeEnv
   readonly stderr: TextSink
   readonly hooks: ExtensionHooks[]
@@ -45,6 +48,7 @@ export type RequestContext = {
 export function createRequestContext(options: RuntimeOptions): RequestContext {
   return {
     version: options.version,
+    pluginId: options.pluginId ?? "bun",
     env: options.env ?? process.env,
     stderr: options.stderr,
     hooks: [],

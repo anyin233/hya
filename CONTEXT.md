@@ -119,8 +119,8 @@ _Avoid_: restart, replay, continue
 
 **Agent**:
 A role/config — name, system prompt, model or category, tools, permissions — with one of two
-**Origins**: a **built-in agent** compiled into the binary, or an **AgentBundle agent** from an
-installed prepared bundle. Both are resolved through the **Agent catalog** on the process
+**Origins**: a **built-in agent** from the trusted embedded `hya/core-agents`
+AgentSetBundle preset, or a **bundle agent** from an installed prepared bundle. Both are resolved through the **Agent catalog** on the process
 `AgentCatalog` / `TurnBinding`. Legacy per-file markdown agent definitions under
 `.hya/` / `.claude/` / `.opencode` are **not** discovered or used. Distinct from the
 Session that runs it.
@@ -146,9 +146,31 @@ declarations, hooks, and extensions that Agent may use. Install one bundle per s
 Built-in agents are **not** AgentBundles.
 _Avoid_: plugin, extension, agent pack
 
+**AgentSetBundle**:
+One prepared package containing multiple Agent definitions and optional restrictive channel
+policy templates, without a Workflow graph. A channel-only AgentSetBundle may omit Agents.
+
+**Plugin**:
+The slim hyabundle payload: shared tools, Skills, hooks, MCP declarations, schema claims,
+and optional process extensions, without an Agent, Workflow, or channel declaration.
+
+**Preset bundle**:
+A verified embedded bundle supplied by the binary. `hya/core-agents` and `hya/base-tools`
+define Agent metadata and native tool exposure. Trusted origin, not manifest identity,
+establishes their reserved privileges. Ordinary installed bundles cannot become presets.
+
+**subagent bundle**:
+An AgentSetBundle of spawnable transient/resident definitions. `hya/subagents` is the
+first-party reference; the engine owns admission, sessions, mailbox, and replay.
+
+**agent channel bundle**:
+An AgentSetBundle of unit/parent-DM policy templates. `hya/agent-channels` supplies trusted
+defaults; installed declarations may restrict capabilities. Runtime channel IDs still come
+from engine events rather than package-authored identifiers.
+
 **Agent catalog**:
 The set of Agent definitions available for selection or spawning, owned by `AgentCatalog` on the
-runtime snapshot / turn binding: the compiled-in built-in roster joined with the installed
+runtime snapshot / turn binding: the verified core-agents preset joined with the installed
 `BundleCatalog`. Not a disk walk of markdown agent files. Distinct from the live
 **Roster**, which is projected from a running Team.
 _Avoid_: roster, directory, list, legacy agent-file discovery

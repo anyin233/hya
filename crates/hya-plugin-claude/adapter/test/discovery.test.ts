@@ -3,7 +3,7 @@ import path from "node:path"
 
 import { afterEach, describe, expect, test } from "bun:test"
 
-import { cleanupTempDirs, makePluginDir, makeTempDir } from "./helpers"
+import { cleanupTempDirs, makePluginDir, makeTempDir, writePluginDir } from "./helpers"
 import { discoverPluginSources, readPluginJson } from "../src/discovery"
 
 afterEach(cleanupTempDirs)
@@ -67,5 +67,11 @@ describe("discoverPluginSources", () => {
 
     const found = discoverPluginSources({ cwd: project, home: project })
     expect(found.map((source) => source.manifest.name)).toEqual(["good"])
+  })
+
+  test("discovers a project-local .claude-plugin source", async () => {
+    const project = await makeTempDir()
+    await writePluginDir(project, { name: "project-plugin", nested: true })
+    expect(discoverPluginSources({ cwd: project, home: await makeTempDir() }).map((source) => source.manifest.name)).toEqual(["project-plugin"])
   })
 })

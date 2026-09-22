@@ -6,9 +6,10 @@ use hya_store::{
 use tokio_util::sync::CancellationToken;
 
 use super::SessionEngine;
+use crate::TurnBinding;
 use crate::error::CoreError;
 use crate::hooks::{
-    CommandExecuteBeforeInput, CommandExecuteBeforeOutcome, MessageUserBeforeInput,
+    CommandExecuteBeforeInput, CommandExecuteBeforeOutcome, HookDispatcher, MessageUserBeforeInput,
     MessageUserBeforeOutcome,
 };
 use crate::orchestrator::OperationReservation;
@@ -29,6 +30,63 @@ pub enum SpawnAdmissionOutcome {
 }
 
 impl SessionEngine {
+    async fn admission_binding(
+        &self,
+        session: SessionId,
+    ) -> Result<(TurnBinding, String), CoreError> {
+        let projection = self.read_projection(session).await?;
+        let stable_id = projection
+            .session
+            .agent
+            .as_ref()
+            .map_or("build", hya_proto::AgentName::as_str)
+            .to_string();
+        let workdir = projection
+            .session
+            .workdir
+            .as_deref()
+            .map_or_else(|| std::path::PathBuf::from("."), std::path::PathBuf::from);
+        Ok((
+            self.bind_session_runtime(session, &workdir).await?,
+            stable_id,
+        ))
+    }
+
+    async fn apply_bundle_message_hook(
+        &self,
+        binding: &TurnBinding,
+        stable_id: &str,
+        session: SessionId,
+        text: String,
+    ) -> String {
+        let hooks = binding.bundle_hooks_for_agent(stable_id);
+        if hooks.is_empty() {
+            return text;
+        }
+        let dispatcher = crate::HookChain::new(hooks);
+        match dispatcher
+            .message_user_before(MessageUserBeforeInput { session, text })
+            .await
+        {
+            MessageUserBeforeOutcome::Continue { text } => text,
+        }
+    }
+
+    async fn apply_bundle_command_hook(
+        &self,
+        binding: &TurnBinding,
+        stable_id: &str,
+        input: CommandExecuteBeforeInput,
+    ) -> String {
+        let hooks = binding.bundle_hooks_for_agent(stable_id);
+        if hooks.is_empty() {
+            return input.text;
+        }
+        let dispatcher = crate::HookChain::new(hooks);
+        let CommandExecuteBeforeOutcome::Continue { text } =
+            dispatcher.command_execute_before(input).await;
+        text
+    }
     /// Reserve one durable operation, reconciling terminal journal releases on overload.
     ///
     /// `root` selects the run budget, `operation` identifies the exact debit,
@@ -469,6 +527,23 @@ impl SessionEngine {
             .await
     }
 
+    pub(crate) async fn admit_user_prompt_with_binding(
+        &self,
+        session: SessionId,
+        text: String,
+        binding: &TurnBinding,
+        stable_id: &str,
+    ) -> Result<MessageId, CoreError> {
+        self.admit_user_prompt_with_id_and_binding(
+            session,
+            MessageId::new(),
+            text,
+            binding,
+            stable_id,
+        )
+        .await
+    }
+
     /// Admit a user prompt with a caller-supplied message id.
     pub async fn admit_user_prompt_with_id(
         &self,
@@ -476,6 +551,20 @@ impl SessionEngine {
         message: MessageId,
         text: String,
     ) -> Result<MessageId, CoreError> {
+        let (binding, stable_id) = self.admission_binding(session).await?;
+        self.admit_user_prompt_with_id_and_binding(session, message, text, &binding, &stable_id)
+            .await
+    }
+
+    pub(crate) async fn admit_user_prompt_with_id_and_binding(
+        &self,
+        session: SessionId,
+        message: MessageId,
+        text: String,
+        binding: &TurnBinding,
+        stable_id: &str,
+    ) -> Result<MessageId, CoreError> {
+        let channel_policy = crate::ChannelPolicy::from_binding(binding)?.snapshot_for(stable_id);
         let text = if let Some(hooks) = &self.hooks {
             match hooks
                 .message_user_before(MessageUserBeforeInput { session, text })
@@ -486,6 +575,9 @@ impl SessionEngine {
         } else {
             text
         };
+        let text = self
+            .apply_bundle_message_hook(binding, stable_id, session, text)
+            .await;
         let part = PartId::new();
         self.emit(
             session,
@@ -535,15 +627,19 @@ impl SessionEngine {
             },
         )
         .await?;
+        self.update_session_channel_policy(session, channel_policy);
         Ok(message)
     }
 
-    pub(crate) async fn admit_user_prompt_for_actor(
+    pub(crate) async fn admit_user_prompt_for_actor_with_binding(
         &self,
         claim: &ActorClaim,
         session: SessionId,
         text: String,
+        binding: &TurnBinding,
+        stable_id: &str,
     ) -> Result<MessageId, CoreError> {
+        let channel_policy = crate::ChannelPolicy::from_binding(binding)?.snapshot_for(stable_id);
         let text = if let Some(hooks) = &self.hooks {
             match hooks
                 .message_user_before(MessageUserBeforeInput { session, text })
@@ -554,6 +650,9 @@ impl SessionEngine {
         } else {
             text
         };
+        let text = self
+            .apply_bundle_message_hook(binding, stable_id, session, text)
+            .await;
         let message = MessageId::new();
         let part = PartId::new();
         self.commit_resident_mutation(
@@ -591,6 +690,7 @@ impl SessionEngine {
             ],
         )
         .await?;
+        self.update_session_channel_policy(session, channel_policy);
         Ok(message)
     }
 
@@ -638,6 +738,7 @@ impl SessionEngine {
         arguments: String,
         text: String,
     ) -> Result<MessageId, CoreError> {
+        let (binding, stable_id) = self.admission_binding(session).await?;
         let text = if let Some(hooks) = &self.hooks {
             match hooks
                 .command_execute_before(CommandExecuteBeforeInput {
@@ -653,8 +754,20 @@ impl SessionEngine {
         } else {
             text
         };
+        let text = self
+            .apply_bundle_command_hook(
+                &binding,
+                &stable_id,
+                CommandExecuteBeforeInput {
+                    session,
+                    command: command.clone(),
+                    arguments: arguments.clone(),
+                    text,
+                },
+            )
+            .await;
         let message = self
-            .admit_user_prompt_with_id(session, message, text)
+            .admit_user_prompt_with_id_and_binding(session, message, text, &binding, &stable_id)
             .await?;
         self.emit(
             session,

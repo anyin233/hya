@@ -1,0 +1,23 @@
+kind: AgentSetBundle
+identity:
+  id: hya/agent-channels
+  version: 1.0.0
+  publisher: hya
+namespace: agent-channels
+channels:
+  - id: unit-default
+    kind: unit
+    participants:
+      - { kind: role, role: unit_leader }
+      - { kind: role, role: direct_reports }
+    capabilities: [send, steer, follow_up, resident_mail]
+    scope: unit
+    retention: team_session
+  - id: parent-dm-default
+    kind: parent_dm
+    participants:
+      - { kind: role, role: parent }
+      - { kind: role, role: child }
+    capabilities: [send, report, steer, follow_up, resident_mail]
+    scope: vertical
+    retention: team_session

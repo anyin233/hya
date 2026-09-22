@@ -304,6 +304,9 @@ async fn run_member(
             }
         }
     };
+    engine
+        .capture_session_bundle_hooks(child, &spec.binding, spec.agent.name.as_str())
+        .await;
     // Resume (task_id) reuses the child session; keep the original member id so
     // MemberSpawned upserts rather than listing the same agent twice.
     let member = resolve_member_id(&engine, lead, spec.id, child).await;
@@ -349,7 +352,7 @@ async fn run_member(
         .await?;
     // Notify `agent.spawn` (best-effort observation point): the team root owns
     // the roster, and the child session is the freshly registered agent.
-    if let Some(hooks) = engine.hook_dispatcher() {
+    if let Some(hooks) = engine.session_hook_dispatcher(lead) {
         hooks
             .agent_spawn(AgentSpawnInput {
                 parent: root,
@@ -381,7 +384,9 @@ async fn run_member(
                 return Err(error);
             }
             let sidecar_tools = handle.tool_bindings();
-            let sidecar_hooks = handle.hook_dispatcher();
+            let sidecar_hooks = handle
+                .hook_dispatcher()
+                .map(crate::bundle_hooks::restricted_sidecar_hooks);
             (Some(handle), sidecar_tools, sidecar_hooks)
         } else {
             (None, Arc::from([]), None)
@@ -404,7 +409,13 @@ async fn run_member(
         let finish_reason = match actor_claim.as_ref() {
             Some(claim) => {
                 engine
-                    .admit_user_prompt_for_actor(claim, child, spec.directive)
+                    .admit_user_prompt_for_actor_with_binding(
+                        claim,
+                        child,
+                        spec.directive,
+                        &spec.binding,
+                        spec.agent.name.as_str(),
+                    )
                     .await?;
                 match spec.resources.clone() {
                     Some(resources) => {
@@ -447,7 +458,14 @@ async fn run_member(
                 }
             }
             None => {
-                engine.admit_user_prompt(child, spec.directive).await?;
+                engine
+                    .admit_user_prompt_with_binding(
+                        child,
+                        spec.directive,
+                        &spec.binding,
+                        spec.agent.name.as_str(),
+                    )
+                    .await?;
                 match spec.resources {
                     Some(resources) => {
                         engine
