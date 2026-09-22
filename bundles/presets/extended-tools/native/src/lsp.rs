@@ -6,13 +6,11 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::lsp_path::{absolutize, display_path, file_uri, normalize, resolve_file};
-use crate::lsp_plane::{LspOperation, LspRequest};
-use crate::permission::{Action, Resource};
-use crate::tool::{Tool, ToolCtx, ToolError};
+use hya_tool::{Action, Resource};
+use hya_tool::{LspOperation, LspRequest};
+use hya_tool::{Tool, ToolCtx, ToolError};
 
-pub(crate) use crate::lsp_plane::LspPlane;
-
-pub(crate) struct LspTool;
+pub struct LspTool;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -70,7 +68,7 @@ impl Tool for LspTool {
             .assert(Action::Lsp, Resource::Path(display_path(&file)))
             .await?;
 
-        if tokio::fs::metadata(&file).await.is_err() {
+        if std::fs::metadata(&file).is_err() {
             return Err(ToolError::Other(format!(
                 "File not found: {}",
                 display_path(&file)

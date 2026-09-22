@@ -4,6 +4,14 @@ The tool system lives in [`../../crates/hya-tool`](../../crates/hya-tool). The
 engine exposes tool schemas to the model, then executes requested calls only
 after permission checks pass.
 
+The interface crate owns the registry and session-scoped service planes.
+Concrete TODO and extended tool bodies and schemas live in their respective
+sources under [`../../bundles/presets`](../../bundles/presets), are packaged as
+lockstep Rust libraries, and are loaded by `ToolRegistry::builtins()`. The
+extended library uses the host's LSP, skill, spawn, workflow, mailbox, and
+lifecycle planes through `ToolCtx`; the plane methods and request types remain
+in `hya-tool` so host authority stays with the session runtime.
+
 ## Tool Registry
 
 [`tool.rs`](../../crates/hya-tool/src/tool.rs) defines:

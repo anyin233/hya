@@ -10,7 +10,7 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
-use crate::agents::{AgentDef, ListAgentsTool};
+use crate::agents::AgentDef;
 use crate::apply_patch::ApplyPatchTool;
 use crate::ask_user::AskUserTool;
 use crate::base_tools::{AliasVisibility, tool_bundle_presets};
@@ -20,23 +20,20 @@ pub use crate::grep::GrepTool;
 use crate::handle::{ArtifactPlane, HandleRouter};
 use crate::hashline::HashlineRuntime;
 use crate::interaction::InteractionPlane;
-use crate::invalid::InvalidTool;
-use crate::lsp::{LspPlane, LspTool};
 use crate::lsp_path::{absolutize, display_path, normalize, resolve_file};
-use crate::mailbox::{ListChannelTool, MailboxPlane, SearchAgentTool, SendTool};
+use crate::lsp_plane::LspPlane;
+use crate::mailbox::{ListChannelTool, MailboxPlane, SendTool};
 use crate::permission::{
     Action, Invocation, Mode, PermissionError, PermissionPlane, Resource, glob_match,
 };
-use crate::plan::PlanExitTool;
 use crate::read::ReadTool;
 use crate::shell::ShellTool;
-use crate::skill::{SkillPlane, SkillTool};
+use crate::skill::SkillPlane;
 use crate::spawn::SpawnerPlane;
-use crate::task::TaskTool;
 use crate::todo::TodoPlane;
 use crate::webfetch::WebFetchTool;
 use crate::websearch::{WebSearchPlane, WebSearchTool};
-use crate::workflow_plane::{WorkflowPlane, WorkflowTool};
+use crate::workflow_plane::WorkflowPlane;
 use crate::write::WriteTool;
 
 /// Failure returned from tool execution and mapped to wire `error.type` strings by the engine.
@@ -466,58 +463,56 @@ impl ToolRegistry {
         let registry = Self::empty();
         let hashline_runtime = Arc::new(HashlineRuntime::new());
         let mut implementations = vec![
-            Arc::new(InvalidTool) as Arc<dyn Tool>,
-            Arc::new(ReadTool::new(Arc::clone(&hashline_runtime))),
+            Arc::new(ReadTool::new(Arc::clone(&hashline_runtime))) as Arc<dyn Tool>,
             Arc::new(WriteTool::new(Arc::clone(&hashline_runtime))),
             Arc::new(EditTool::new(Arc::clone(&hashline_runtime))),
             Arc::new(LsTool),
             Arc::new(GlobTool),
             Arc::new(FindTool),
             Arc::new(GrepTool::with_runtime(Arc::clone(&hashline_runtime))),
-            Arc::new(LspTool),
-            Arc::new(SkillTool),
-            Arc::new(ListAgentsTool),
-            Arc::new(TaskTool),
-            Arc::new(WorkflowTool),
             Arc::new(SendTool),
             Arc::new(ListChannelTool),
-            Arc::new(SearchAgentTool),
             Arc::new(crate::lifecycle::ReportTool),
-            Arc::new(crate::lifecycle::KillTool),
             Arc::new(AskUserTool),
             Arc::new(ShellTool),
             Arc::new(ApplyPatchTool),
             Arc::new(WebFetchTool),
             Arc::new(WebSearchTool),
-            Arc::new(PlanExitTool),
         ];
-        let todo_tools = crate::native_bundle::load_family("hya_todo_tools")
-            .unwrap_or_else(|error| panic!("load hya/todo-tools: {error}"));
-        let native_names = todo_tools
-            .iter()
-            .map(|tool| tool.name().to_string())
-            .collect::<BTreeSet<_>>();
-        let expected_todo_names = tool_bundle_presets()
-            .iter()
-            .find(|preset| preset.identity() == "hya/todo-tools")
-            .map(|preset| {
-                preset
-                    .tools()
-                    .iter()
-                    .map(|tool| tool.name().to_string())
-                    .collect::<BTreeSet<_>>()
-            })
-            .unwrap_or_default();
-        assert_eq!(
-            native_names, expected_todo_names,
-            "hya/todo-tools library tool set differs from its bundle policy"
-        );
-        assert_eq!(
-            native_names.len(),
-            todo_tools.len(),
-            "hya/todo-tools library declared duplicate tools"
-        );
-        implementations.extend(todo_tools);
+        let mut native_origins = HashMap::new();
+        for (stem, identity) in [
+            ("hya_extended_tools", "hya/extended-tools"),
+            ("hya_todo_tools", "hya/todo-tools"),
+        ] {
+            let tools = crate::native_bundle::load_family(stem)
+                .unwrap_or_else(|error| panic!("load {identity}: {error}"));
+            let names = tools
+                .iter()
+                .map(|tool| tool.name().to_string())
+                .collect::<BTreeSet<_>>();
+            let expected = tool_bundle_presets()
+                .iter()
+                .find(|preset| preset.identity() == identity)
+                .map(|preset| {
+                    preset
+                        .tools()
+                        .iter()
+                        .map(|tool| tool.name().to_string())
+                        .collect::<BTreeSet<_>>()
+                })
+                .unwrap_or_default();
+            assert_eq!(
+                names, expected,
+                "{identity} library tool set differs from its bundle policy"
+            );
+            assert_eq!(
+                names.len(),
+                tools.len(),
+                "{identity} library declared duplicate tools"
+            );
+            native_origins.extend(names.into_iter().map(|name| (name, identity)));
+            implementations.extend(tools);
+        }
         let mut by_name = implementations
             .into_iter()
             .map(|tool| (tool.name().to_string(), tool))
@@ -534,9 +529,7 @@ impl ToolRegistry {
                 if !exposure.exposed() {
                     continue;
                 }
-                let origin = native_names
-                    .contains(exposure.name())
-                    .then_some(preset.identity());
+                let origin = native_origins.get(exposure.name()).copied();
                 registry.insert_preset_builtin(tool, exposure, origin);
             }
         }
@@ -851,12 +844,9 @@ impl ToolRegistrySnapshot {
     }
 }
 
-pub(crate) fn obj_schema(
-    name: &str,
-    description: &str,
-    props: Value,
-    required: &[&str],
-) -> ToolSchema {
+/// Construct an object-input tool schema from property and required-key sets.
+#[must_use]
+pub fn obj_schema(name: &str, description: &str, props: Value, required: &[&str]) -> ToolSchema {
     ToolSchema {
         name: ToolName::new(name),
         description: description.to_string(),

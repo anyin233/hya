@@ -12,9 +12,9 @@
 //! - **Runtime planes** — session-scoped services injected through [`ToolCtx`]:
 //!   interaction/questions, subagent spawning, todos, skills, web search, LSP,
 //!   mailbox, and formatters.
-//! - **Native bundle loading** — the TODO family executes from a trusted,
-//!   lockstep dynamic library; the remaining builtin implementations are being
-//!   moved to their owning families.
+//! - **Native bundle loading** — the TODO and extended families execute from
+//!   trusted, lockstep dynamic libraries; the remaining builtin implementations
+//!   are being moved to their owning families.
 //!
 //! Tool authors implement [`Tool`] and register with [`ToolRegistry`]. Security
 //! reviewers should start with [`PermissionPlane`], [`Action`], and
@@ -38,10 +38,8 @@ pub mod handle;
 mod hashline;
 /// Human interaction channel for structured questions and free-text asks.
 pub mod interaction;
-mod invalid;
 /// Team mailbox requests and the mailbox plane used by send/roster/channel tools.
 pub mod lifecycle;
-mod lsp;
 mod lsp_path;
 mod lsp_plane;
 mod lsp_post_edit;
@@ -53,7 +51,6 @@ pub mod native_bundle;
 mod output_cap;
 /// Allow/ask/deny permission plane: invocation policy, resource rules, and asks.
 pub mod permission;
-mod plan;
 mod read;
 mod read_media;
 mod shell;
@@ -61,7 +58,6 @@ mod skill;
 mod skill_catalog;
 /// Subagent spawn plane and request types used by the `task` tool.
 pub mod spawn;
-mod task;
 /// In-memory per-session todo list plane and the `todo__` tool group.
 pub mod todo;
 /// Tool trait, registry, permission class metadata, and local search builtins.
@@ -75,7 +71,6 @@ pub mod workflow_plane;
 mod write;
 pub use workflow_plane::{
     WorkflowHostError, WorkflowPlane, WorkflowRequest, WorkflowRequestSink, WorkflowSendError,
-    WorkflowTool,
 };
 
 pub use agents::AgentDef;
@@ -109,7 +104,7 @@ pub use permission::{
     InvocationRule, Mode, PermissionError, PermissionInterceptor, PermissionModel, PermissionPlane,
     PermissionRules, PermissionTarget, RememberScope, Resource, Rule, glob_match,
 };
-pub use skill::SkillPlane;
+pub use skill::{SkillError, SkillInfo, SkillPlane};
 pub use skill_catalog::{
     ParsedSkill, SkillCatalogEntry, SkillCatalogOrigin, builtin_skills, core_skills_preset_bytes,
     discover_skills, discover_skills_from_dirs, discover_skills_with_builtins, is_embedded_skill,

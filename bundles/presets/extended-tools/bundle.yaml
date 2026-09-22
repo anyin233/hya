@@ -8,3 +8,29 @@ extensions:
   files:
     - id: exposure
       path: exposure.yaml
+    - id: native-manifest
+      path: native/Cargo.toml
+    - id: native-entry
+      path: native/src/lib.rs
+    - id: native-agents
+      path: native/src/agents.rs
+    - id: native-invalid
+      path: native/src/invalid.rs
+    - id: native-kill
+      path: native/src/kill.rs
+    - id: native-lsp
+      path: native/src/lsp.rs
+    - id: native-lsp-description
+      path: native/src/lsp.txt
+    - id: native-lsp-path
+      path: native/src/lsp_path.rs
+    - id: native-plan
+      path: native/src/plan.rs
+    - id: native-search-agent
+      path: native/src/search_agent.rs
+    - id: native-skill
+      path: native/src/skill.rs
+    - id: native-task
+      path: native/src/task.rs
+    - id: native-workflow
+      path: native/src/workflow.rs

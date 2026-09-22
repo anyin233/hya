@@ -3,9 +3,10 @@ use hya_proto::ToolSchema;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
-use crate::permission::{Action, Resource};
-use crate::spawn::{InlineAgent, SpawnError, SpawnMember};
-use crate::tool::{Tool, ToolCtx, ToolError, obj_schema};
+use hya_tool::tool::obj_schema;
+use hya_tool::{Action, Resource};
+use hya_tool::{InlineAgent, SpawnError, SpawnMember};
+use hya_tool::{Tool, ToolCtx, ToolError};
 
 pub struct TaskTool;
 

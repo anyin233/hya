@@ -3,9 +3,9 @@ use hya_proto::{ToolName, ToolSchema};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::tool::{Tool, ToolCtx, ToolError};
+use hya_tool::{Tool, ToolCtx, ToolError};
 
-pub(crate) struct InvalidTool;
+pub struct InvalidTool;
 
 #[derive(Deserialize)]
 struct InvalidInput {

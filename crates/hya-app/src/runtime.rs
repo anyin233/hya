@@ -3754,7 +3754,10 @@ flowchart TD
             cancel: CancellationToken::new(),
         };
         let run = tokio::spawn(async move {
-            hya_tool::WorkflowTool
+            let workflow = hya_tool::ToolRegistry::builtins()
+                .get("workflow")
+                .expect("workflow tool");
+            workflow
                 .execute(&ctx, json!({"action": "run", "name": "shutdown-flow"}))
                 .await
         });

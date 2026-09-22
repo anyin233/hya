@@ -1,7 +1,7 @@
-# 0.37.14
+# 0.37.15
 
-## TODO native tool bundle
+## Extended native tool bundle
 
-- Move the three TODO tool implementations into the TODO bundle's Rust dynamic library while keeping session TODO state in the tool interface crate.
-- Package raw native libraries in public bundles and load trusted first-party family packages with a lockstep ABI check.
-- Ship the TODO library package beside the backend in release assets.
+- Move all nine extended built-in tool implementations into the extended bundle's Rust dynamic library.
+- Keep host-owned LSP, skill, spawn, workflow, mailbox, and lifecycle service planes in `hya-tool`, exposing their narrow methods to the bundle.
+- Package and load the extended library beside the backend in release assets.
