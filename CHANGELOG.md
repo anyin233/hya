@@ -1,6 +1,6 @@
-# 0.37.10
+# 0.37.11
 
-## Call-scoped native tool host RPC
+## Trusted core Skill bundle
 
-- Add optional `host_capability` on native `tool/call` requests and a child-to-host `host/capability` request on the same plugin connection.
-- Bind each capability to its process connection, session, and tool call; revoke it after completion or cancellation, with typed denial for invalid and expired requests.
+- Move the two built-in Skill files and their metadata into the build-prepared `hya/core-skills` Plugin bundle.
+- Expose the immutable bundle in the trusted inventory while preserving native Skill override precedence and existing Skill bodies.

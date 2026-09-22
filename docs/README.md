@@ -84,7 +84,7 @@ If you want to understand the codebase:
 | [Configuration](configuration.md) | Explain hya config, provider/auth resolution, MCP, plugins, formatter, and prompt-command discovery. |
 | [Compaction](compaction.md) | The five built-in context-reduction mechanisms (oh-my-pi parity), the configurable firing order, thresholds, and wire records. |
 | [CLI Reference](cli.md) | Document the shipped `hya-backend` commands, flags, and exit codes. |
-| [Skills](skills.md) | Skill discovery paths, skill tool, and authoring. |
+| [Skills](skills.md) | Skill discovery, authoring, and the trusted `hya/core-skills` bundle. |
 | [Workflows](workflows.md) | Workflow DAGs, governance, discovery, CLI/tool execution, and WorkflowBundle packaging. |
 | [Plugin protocol](plugin-protocol.md) | Native stdio JSON-RPC ABI for out-of-process plugins. |
 | [AgentBundle Authoring](agent-bundle-authoring.md) | Package, inspect, install, list, describe, and uninstall public Plugin, AgentBundle, and AgentSetBundle payloads, including static and Bun-sidecar forms. |

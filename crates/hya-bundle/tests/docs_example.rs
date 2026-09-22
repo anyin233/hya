@@ -71,7 +71,8 @@ fn docs_example_bundle_hya_md_prepares_deterministically() {
 fn bundle_authoring_commands_enumerate_regular_closure_files() {
     let paths = [
         repository_root().join("docs/agent-bundle-authoring.md"),
-        repository_root().join("crates/hya-tool/src/skill_templates/agent-bundle-authoring.md"),
+        repository_root()
+            .join("bundles/presets/core-skills/resources/skills/agent-bundle-authoring/SKILL.md"),
     ];
 
     for path in paths {
@@ -98,7 +99,8 @@ fn bundle_authoring_commands_enumerate_regular_closure_files() {
 fn bundle_authoring_docs_capture_hook_and_entrypoint_contract() {
     let paths = [
         repository_root().join("docs/agent-bundle-authoring.md"),
-        repository_root().join("crates/hya-tool/src/skill_templates/agent-bundle-authoring.md"),
+        repository_root()
+            .join("bundles/presets/core-skills/resources/skills/agent-bundle-authoring/SKILL.md"),
     ];
     let required_markers = [
         ("hook_refs", "`hook_refs`"),
@@ -198,7 +200,8 @@ fn bundle_authoring_docs_capture_hook_and_entrypoint_contract() {
 fn bundle_sidecar_docs_distinguish_jsonrpc_and_plugin_protocol_versions() {
     let paths = [
         repository_root().join("docs/agent-bundle-authoring.md"),
-        repository_root().join("crates/hya-tool/src/skill_templates/agent-bundle-authoring.md"),
+        repository_root()
+            .join("bundles/presets/core-skills/resources/skills/agent-bundle-authoring/SKILL.md"),
         repository_root().join("docs/architecture/runtime.md"),
     ];
     let required_markers = [

@@ -1,0 +1,12 @@
+kind: Plugin
+identity:
+  id: hya/core-skills
+  version: 1.0.0
+  publisher: hya
+namespace: core-skills
+resources:
+  skills:
+    - id: agent-bundle-authoring
+      path: resources/skills/agent-bundle-authoring/SKILL.md
+    - id: secure-self-update
+      path: resources/skills/secure-self-update/SKILL.md

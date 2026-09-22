@@ -115,39 +115,31 @@ pub fn merge_skill_catalog(mut native: Vec<SkillCatalogEntry>) -> Vec<SkillCatal
     native
 }
 
-const AGENT_BUNDLE_AUTHORING_DESCRIPTION: &str = "Use when authoring, packaging, importing, or installing public Plugin, AgentBundle, AgentSetBundle, or WorkflowBundle payloads: resources, process/MCP providers, scoped hooks, channel policies, trusted presets, immutable bindings, and permission boundaries. Harness remains the agent runtime.";
-const SECURE_SELF_UPDATE_DESCRIPTION: &str = "Use when verifying, staging, recovering, or owner-activating an independent hya release with hya-updater: signed metadata, local package fetch, immutable staging, smoke subprocess, activation journal/selector, anti-rollback floor, and install.sh break-glass. Do not use for bundle install, plugin load, or to skip the owner activation gate.";
+include!(concat!(env!("OUT_DIR"), "/core_skills_preset.rs"));
 
-const AGENT_BUNDLE_AUTHORING_BODY: &str = include_str!("skill_templates/agent-bundle-authoring.md");
-const SECURE_SELF_UPDATE_BODY: &str = include_str!("skill_templates/secure-self-update.md");
+/// Exact build-prepared bytes of the trusted `hya/core-skills` Plugin.
+#[must_use]
+pub const fn core_skills_preset_bytes() -> &'static [u8] {
+    CORE_SKILLS_PREPARED_BYTES
+}
 
 /// Return the authoritative compiled builtin Skill entries.
 #[must_use]
 pub fn builtin_skills() -> Vec<SkillCatalogEntry> {
-    [
-        (
-            "agent-bundle-authoring",
-            AGENT_BUNDLE_AUTHORING_DESCRIPTION,
-            AGENT_BUNDLE_AUTHORING_BODY,
-        ),
-        (
-            "secure-self-update",
-            SECURE_SELF_UPDATE_DESCRIPTION,
-            SECURE_SELF_UPDATE_BODY,
-        ),
-    ]
-    .into_iter()
-    .map(|(name, description, content)| SkillCatalogEntry {
-        name: name.to_string(),
-        description: description.to_string(),
-        content: content.to_string(),
-        allowed_tools: Vec::new(),
-        model: None,
-        path: PathBuf::from(format!("embedded:hya/skill/{name}/SKILL.md")),
-        dir: PathBuf::new(),
-        origin: SkillCatalogOrigin::Embedded,
-    })
-    .collect()
+    CORE_SKILL_ROWS
+        .iter()
+        .copied()
+        .map(|(name, description, content)| SkillCatalogEntry {
+            name: name.to_string(),
+            description: description.to_string(),
+            content: content.to_string(),
+            allowed_tools: Vec::new(),
+            model: None,
+            path: PathBuf::from(format!("embedded:hya/core-skills/skill/{name}/SKILL.md")),
+            dir: PathBuf::new(),
+            origin: SkillCatalogOrigin::Embedded,
+        })
+        .collect()
 }
 
 /// Whether an entry has no filesystem base and is compiled into the binary.

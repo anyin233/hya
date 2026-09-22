@@ -108,8 +108,8 @@ pub use permission::{
 };
 pub use skill::SkillPlane;
 pub use skill_catalog::{
-    ParsedSkill, SkillCatalogEntry, SkillCatalogOrigin, builtin_skills, discover_skills,
-    discover_skills_from_dirs, discover_skills_with_builtins, is_embedded_skill,
+    ParsedSkill, SkillCatalogEntry, SkillCatalogOrigin, builtin_skills, core_skills_preset_bytes,
+    discover_skills, discover_skills_from_dirs, discover_skills_with_builtins, is_embedded_skill,
     merge_skill_catalog, parse_skill, skill_dirs_for_workdir, skills_section,
 };
 pub use spawn::{

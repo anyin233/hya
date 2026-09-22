@@ -34,6 +34,17 @@ pub struct TrustedPresetDescriptor {
 /// Returns a bundle integrity error if embedded prepared bytes fail validation.
 pub fn trusted_preset_inventory() -> Result<Vec<TrustedPresetDescriptor>, BundleError> {
     let core = hya_core::core_agents_preset()?;
+    let core_skills_bytes = hya_tool::core_skills_preset_bytes();
+    let core_skills_digest = format!("{:x}", Sha256::digest(core_skills_bytes));
+    let core_skills_catalog = PreparedCatalog::decode(core_skills_bytes, &core_skills_digest)?;
+    let core_skills_bundle =
+        core_skills_catalog
+            .bundles()
+            .first()
+            .ok_or_else(|| BundleError::InvalidManifest {
+                source_name: "hya/core-skills".to_string(),
+                detail: "embedded preset catalog is empty".to_string(),
+            })?;
     let channels = prepare_package(BundleSource::new(
         hya_core::AGENT_CHANNELS_PRESET_ID,
         vec![SourceFile::new(
@@ -78,6 +89,20 @@ pub fn trusted_preset_inventory() -> Result<Vec<TrustedPresetDescriptor>, Bundle
         })
         .collect::<Result<Vec<_>, BundleError>>()?;
     presets.extend([
+        TrustedPresetDescriptor {
+            id: core_skills_bundle.identity().id.clone(),
+            kind: core_skills_bundle.kind().as_str().to_string(),
+            version: core_skills_bundle.identity().version.clone(),
+            digest: core_skills_digest,
+            immutable: true,
+            installable: false,
+            agent_ids: Vec::new(),
+            resource_ids: core_skills_bundle
+                .skills()
+                .iter()
+                .map(|skill| skill.local_id.clone())
+                .collect(),
+        },
         TrustedPresetDescriptor {
             id: channel_bundle.identity().id.clone(),
             kind: channel_bundle.kind().as_str().to_string(),

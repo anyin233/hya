@@ -33,7 +33,8 @@ Editing `bundle.yaml` or a prompt under the preset directory requires rebuilding
 `hya-core`. Invalid source fails the build before runtime code can embed it.
 
 The application exposes `hya/core-agents`, the five trusted
-[tool-family presets](base-tools.md), and the channel defaults in
+[tool-family presets](base-tools.md), the trusted
+[core Skills](skills.md#built-in-fallback-skills), and the channel defaults in
 `hya/agent-channels` through a read-only preset inventory
 for list/info surfaces. Inventory rows report
 their id, kind, version, digest, exported ids, and
