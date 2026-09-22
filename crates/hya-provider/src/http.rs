@@ -619,6 +619,7 @@ impl RouteCore {
             // rotates storage before this response is handled.
             let (headers, attempted_credential) =
                 self.request_headers(extra_headers, model_override)?;
+            eprintln!("[dbg-http] POST {url}");
             let result = timeout(
                 self.response_header_timeout,
                 self.client.post(url).headers(headers).json(body).send(),
