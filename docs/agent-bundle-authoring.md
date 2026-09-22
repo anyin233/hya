@@ -76,7 +76,7 @@ The closed manifest accepts only these top-level fields:
 | `identity` | object | Required `{ id: string, version: string, publisher: string }`; same identity rules as AgentBundle. |
 | `namespace` | optional string | Same namespace validation and default as AgentBundle. |
 | `resources` | object | Optional `tools`, `skills`, `mcp`, and `hooks` resource arrays, using the shared resource schema below. |
-| `extensions` | object | Optional `js`, `files`, `rust`, and `process` fields, with the same support limits described below. |
+| `extensions` | object | Optional `js`, `files`, `rust`, `libraries`, and `process` fields, with the same support limits described below. |
 | `schemas` | array | Optional `{ scheme: string, tool: string, writable: boolean = false }` declarations. |
 
 Unknown fields, including `agent`, `agents`, `workflow`, and `channels`, are
@@ -328,6 +328,7 @@ Filesystem `SKILL.md` discovery (outside bundles) is documented in
 | `js` | JavaScript extension resources (same `{id, path, aliases}` shape). |
 | `files` | Inert, explicitly packaged UTF-8 support files using the same `{id, path, aliases}` shape; no executable capability is inferred. |
 | `rust` | Raw executable files using `{id, path}`. Requires `process.kind: rust`; aliases are rejected. The first command argument must name one declared executable by its relative path or `${BUNDLE_ROOT}/<path>`. |
+| `libraries` | Raw dynamic-library bytes using `{id, path}`. No process declaration is required. First-party lockstep tool families load a single `runtime` library after package inspection and ABI validation; ordinary installed bundles do not execute these resources. |
 | `process` | The one optional out-of-process extension declaration: `{ kind, command }` where `kind` is `rust`, `bun`, or `claude` and `command` is the argv to spawn (non-empty, no blank arguments). Starts before runtime publication; `${BUNDLE_ROOT}` expands to the private materialized package root. |
 
 ### Schema extensions (`schemas:`)

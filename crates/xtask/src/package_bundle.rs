@@ -34,6 +34,31 @@ pub fn run_native(args: Vec<String>) -> anyhow::Result<()> {
             "usage: cargo xtask package-native-tool-bundle <source-directory> <built-executable> <output.hyabundle>"
         );
     };
+    stage_native(source, binary, output, NativeArtifact::Process)
+}
+
+/// Add a target-specific Rust dynamic library to a policy-only tool-family source.
+pub fn run_native_library(args: Vec<String>) -> anyhow::Result<()> {
+    let [source, library, output] = args.as_slice() else {
+        bail!(
+            "usage: cargo xtask package-native-tool-library <source-directory> <built-library> <output.hyabundle>"
+        );
+    };
+    stage_native(source, library, output, NativeArtifact::Library)
+}
+
+#[derive(Clone, Copy)]
+enum NativeArtifact {
+    Process,
+    Library,
+}
+
+fn stage_native(
+    source: &str,
+    binary: &str,
+    output: &str,
+    artifact: NativeArtifact,
+) -> anyhow::Result<()> {
     let source_root = PathBuf::from(source);
     let manifest_path = source_root.join("bundle.yaml");
     let exposure_path = source_root.join("exposure.yaml");
@@ -60,17 +85,34 @@ pub fn run_native(args: Vec<String>) -> anyhow::Result<()> {
         .get_mut("extensions")
         .and_then(Value::as_object_mut)
         .context("tool-family source needs extensions.files")?;
-    if extensions.contains_key("rust") || extensions.contains_key("process") {
-        bail!("tool-family source already declares a native process");
+    if extensions.contains_key("rust")
+        || extensions.contains_key("process")
+        || extensions.contains_key("libraries")
+    {
+        bail!("tool-family source already declares a native runtime");
     }
-    extensions.insert(
-        "rust".into(),
-        json!([{"id":"runtime","path":"native/tool-runtime"}]),
-    );
-    extensions.insert(
-        "process".into(),
-        json!({"kind":"rust","command":["${BUNDLE_ROOT}/native/tool-runtime"]}),
-    );
+    let binary_path = match artifact {
+        NativeArtifact::Process => {
+            extensions.insert(
+                "rust".into(),
+                json!([{"id":"runtime","path":"native/tool-runtime"}]),
+            );
+            extensions.insert(
+                "process".into(),
+                json!({"kind":"rust","command":["${BUNDLE_ROOT}/native/tool-runtime"]}),
+            );
+            "native/tool-runtime".to_string()
+        }
+        NativeArtifact::Library => {
+            let filename = std::path::Path::new(binary)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .context("native library needs a UTF-8 file name")?;
+            let path = format!("native/{filename}");
+            extensions.insert("libraries".into(), json!([{"id":"runtime","path":path}]));
+            path
+        }
+    };
     let resources = root.entry("resources").or_insert_with(|| json!({}));
     let resources = resources
         .as_object_mut()
@@ -96,8 +138,9 @@ pub fn run_native(args: Vec<String>) -> anyhow::Result<()> {
         )
         .with_file("declarations/tool.json", b"{}".to_vec())
         .with_file(
-            "native/tool-runtime",
-            std::fs::read(binary).with_context(|| format!("read built executable {binary}"))?,
+            binary_path,
+            std::fs::read(binary)
+                .with_context(|| format!("read built native artifact {binary}"))?,
         );
     write_package(source, PathBuf::from(output))
 }
@@ -174,6 +217,42 @@ mod native_tests {
             runtime.source_bytes().unwrap(),
             [0xff, 0x00, 0x7f, 0x45, 0x4c, 0x46]
         );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn native_tool_library_package_has_no_process_and_keeps_binary_bytes() {
+        let root = std::env::temp_dir().join(format!(
+            "hya-native-library-package-test-{}",
+            std::process::id()
+        ));
+        let source = root.join("source");
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::write(source.join("bundle.yaml"), "kind: Plugin\nidentity: { id: hya/todo-tools, version: 1.0.0, publisher: hya }\nnamespace: todo-tools\nextensions:\n  files: [{ id: exposure, path: exposure.yaml }]\n").unwrap();
+        std::fs::write(source.join("exposure.yaml"), "schema_version: 1\nidentity: hya/todo-tools\nprotected_names: []\ntools:\n  - { name: todo__read, schema_version: 1, permission: read_only }\n").unwrap();
+        let library = root.join(format!("libhya_todo_tools{}", std::env::consts::DLL_SUFFIX));
+        let bytes = [0xcf, 0xfa, 0xed, 0xfe, 0, 0xff];
+        std::fs::write(&library, bytes).unwrap();
+        let package = root.join("todo.hyabundle");
+        run_native_library(vec![
+            source.to_string_lossy().into_owned(),
+            library.to_string_lossy().into_owned(),
+            package.to_string_lossy().into_owned(),
+        ])
+        .unwrap();
+        let catalog = inspect_public_package(&std::fs::read(&package).unwrap()).unwrap();
+        assert!(catalog.process_extensions().is_empty());
+        let [bundle] = catalog.bundles() else {
+            panic!("one bundle")
+        };
+        assert_eq!(bundle.tools()[0].local_id, "todo__read");
+        let resource = bundle
+            .extensions()
+            .iter()
+            .find(|item| item.local_id == "runtime")
+            .unwrap();
+        assert!(resource.stable_id.contains("/library/runtime"));
+        assert_eq!(resource.source_bytes().unwrap(), bytes);
         std::fs::remove_dir_all(root).unwrap();
     }
 }

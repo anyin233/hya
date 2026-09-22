@@ -5,13 +5,14 @@
 Five trusted embedded Plugin presets own the exposure policy for Hya's Rust
 builtin tools. They record model visibility, compatibility aliases, schema
 versions, invocation permission posture, protected names, and URI-scheme
-ownership. The split lets each family acquire its own native implementation
-later. Tool execution currently remains in `hya-tool`; these policy bundles do
-not add executable code or grant package privileges.
+ownership. The TODO family now owns its concrete Rust tool implementations
+and ships a lockstep dynamic library inside its public `.hyabundle` package.
+Other families still use their in-crate implementations during migration.
 
 The sources live in `bundles/presets/{base,extended,network,channel,todo}-tools`.
 Each `bundle.yaml` identifies a `Plugin` and declares `exposure.yaml` as an inert
-`extensions.files` asset. The companion file carries trusted preset metadata
+`extensions.files` asset. The TODO source also declares its Cargo manifest and
+Rust implementation as source assets. The companion file carries trusted preset metadata
 that the public Plugin manifest intentionally cannot grant as permissions. The
 build prepares every Plugin, verifies its digest and policy, rejects duplicate
 names across families, then generates static Rust metadata. Runtime construction
@@ -56,7 +57,7 @@ assert!(registry.resolve("shell").is_some());
 
 To change builtin exposure, update the owning family's `exposure.yaml` together with the tool's
 documentation and parity tests. Adding an entry does not create a tool: every
-entry must match a Rust `Tool` implementation supplied by `hya-tool`.
+entry must match a Rust `Tool` implementation supplied by the owning family.
 
 To stage a built native family executable, use:
 
@@ -70,6 +71,27 @@ The command reads the policy-only source, preserves its declared files, adds
 `native/tool-runtime` with the exact executable bytes, and writes a
 deterministic package. It does not compile the executable or install the
 package. The executable must be built for the target platform first.
+
+To build and package the in-process TODO implementation for the current target:
+
+```sh
+cargo build -p hya-todo-tools --lib
+cargo run -p xtask -- package-native-tool-library \
+  bundles/presets/todo-tools \
+  target/debug/libhya_todo_tools.so \
+  target/debug/bundles/hya-todo-tools.hyabundle
+```
+
+Use `.dylib` instead of `.so` on macOS. The command embeds the raw library
+bytes as `extensions.libraries`, adds one tool declaration per policy entry,
+and writes the public package. Release builds put that package beside the
+backend's `bin` directory in `bundles/`. `ToolRegistry::builtins()` inspects
+the package, checks its identity and declared names, extracts the library to a
+temporary path, checks the lockstep ABI digest, and loads its tools.
+`builtin_bundle_origin(name)` returns the identity for a loaded native tool.
+Local Cargo builds can use a library beside the executable or in `deps/` when
+the package is absent. The Rust ABI is not stable across independent builds;
+build the backend and library from the same workspace and toolchain.
 
 ## Interface definitions
 
@@ -133,3 +155,23 @@ It repeats the `resources.tools` row for each canonical tool in the family's
 reply owns the input schemas. Package preparation validates the executable's
 raw bytes, paths, and manifest closure; runtime activation checks the announced
 tool set against the declarations.
+
+The in-process library package instead adds `extensions.libraries` and no
+`extensions.process`:
+
+```yaml
+resources:
+  tools:
+    - { id: todo__read, path: declarations/tool.json }
+extensions:
+  libraries:
+    - { id: runtime, path: native/libhya_todo_tools.so }
+```
+
+`extensions.libraries` is a list of `{id, path}` raw byte resources. A family
+package must have one library named `runtime`; its exported C symbols are
+`hya_tool_bundle_abi_v1(*mut u8)` and
+`hya_tool_bundle_register_v1(*mut Vec<Arc<dyn Tool>>)`. The host checks the
+32-byte ABI digest before calling `register`, and the library remains mapped
+for the process lifetime. A mismatch or missing library prevents builtin
+registry construction.

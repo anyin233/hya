@@ -94,6 +94,7 @@ cargo run -p xtask -- matrix-check
 cargo run -p xtask -- startup-bench
 cargo run -p xtask -- package-bundle <source-dir> <output.hyabundle>
 cargo run -p xtask -- package-native-tool-bundle <tool-family-source-dir> <built-executable> <output.hyabundle>
+cargo run -p xtask -- package-native-tool-library <tool-family-source-dir> <built-library> <output.hyabundle>
 cargo run -p xtask -- release-rehearsal --workflow .github/workflows/release.yml --version 0.36.12 --target x86_64-unknown-linux-gnu --no-publish
 ```
 
@@ -105,7 +106,8 @@ Use this guide when deciding where a change belongs:
 | --- | --- |
 | New event, id, API DTO, message field, projection behavior | `hya-proto` |
 | New provider route, protocol encoder/decoder, capability preflight | `hya-provider` |
-| New builtin tool or permission action | `hya-tool` |
+| New builtin tool implementation | Owning source under `bundles/presets/<family>-tools/native` |
+| Tool trait, loader, runtime plane, or permission action | `hya-tool` |
 | Persistence, replay, migrations, usage ledger | `hya-store` |
 | Turn-loop behavior, goal/loop/team/worktree runtime logic | `hya-core` |
 | HTTP route or SSE behavior | `hya-server` |

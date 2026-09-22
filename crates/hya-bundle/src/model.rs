@@ -252,8 +252,8 @@ pub struct PreparedResource {
     pub digest: String,
     /// File contents as UTF-8 text (JSON/YAML/JS source as appropriate).
     pub content: String,
-    /// Raw native executable bytes in canonical standard Base64. Present only
-    /// for a binary `extensions.rust` resource; `content` is then empty.
+    /// Raw native executable or library bytes in canonical standard Base64.
+    /// Present for `extensions.rust` and `extensions.libraries`; `content` is empty.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub binary_base64: Option<String>,
     /// Alternate local names that resolve to this resource inside the bundle.

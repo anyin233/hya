@@ -12,8 +12,9 @@
 //! - **Runtime planes** — session-scoped services injected through [`ToolCtx`]:
 //!   interaction/questions, subagent spawning, todos, skills, web search, LSP,
 //!   mailbox, and formatters.
-//! - **Concrete builtins** — read/write/edit/patch, shell, glob/grep/find, task,
-//!   webfetch/websearch, and team mailbox tools.
+//! - **Native bundle loading** — the TODO family executes from a trusted,
+//!   lockstep dynamic library; the remaining builtin implementations are being
+//!   moved to their owning families.
 //!
 //! Tool authors implement [`Tool`] and register with [`ToolRegistry`]. Security
 //! reviewers should start with [`PermissionPlane`], [`Action`], and
@@ -47,6 +48,8 @@ mod lsp_post_edit;
 pub mod mailbox;
 /// Namespaced tool names (`namespace__local`) and namespaced registration.
 pub mod namespace;
+/// Lockstep native-library loading contract for first-party tool bundles.
+pub mod native_bundle;
 mod output_cap;
 /// Allow/ask/deny permission plane: invocation policy, resource rules, and asks.
 pub mod permission;

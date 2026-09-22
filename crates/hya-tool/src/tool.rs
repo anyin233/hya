@@ -381,6 +381,7 @@ struct ToolRegistryInner {
     aliases: HashMap<String, ResolvedTool>,
     dispatch_identities: HashMap<String, [u8; 32]>,
     advertised_aliases: BTreeSet<String>,
+    bundle_origins: HashMap<String, &'static str>,
 }
 
 /// Immutable, lock-free tool view retained by an admitted turn.
@@ -464,7 +465,7 @@ impl ToolRegistry {
     pub fn builtins() -> Self {
         let registry = Self::empty();
         let hashline_runtime = Arc::new(HashlineRuntime::new());
-        let implementations = [
+        let mut implementations = vec![
             Arc::new(InvalidTool) as Arc<dyn Tool>,
             Arc::new(ReadTool::new(Arc::clone(&hashline_runtime))),
             Arc::new(WriteTool::new(Arc::clone(&hashline_runtime))),
@@ -489,10 +490,34 @@ impl ToolRegistry {
             Arc::new(WebFetchTool),
             Arc::new(WebSearchTool),
             Arc::new(PlanExitTool),
-            Arc::new(crate::todo::TodoReadTool) as Arc<dyn Tool>,
-            Arc::new(crate::todo::TodoUpdateStatusTool),
-            Arc::new(crate::todo::TodoUpdateContentTool),
         ];
+        let todo_tools = crate::native_bundle::load_family("hya_todo_tools")
+            .unwrap_or_else(|error| panic!("load hya/todo-tools: {error}"));
+        let native_names = todo_tools
+            .iter()
+            .map(|tool| tool.name().to_string())
+            .collect::<BTreeSet<_>>();
+        let expected_todo_names = tool_bundle_presets()
+            .iter()
+            .find(|preset| preset.identity() == "hya/todo-tools")
+            .map(|preset| {
+                preset
+                    .tools()
+                    .iter()
+                    .map(|tool| tool.name().to_string())
+                    .collect::<BTreeSet<_>>()
+            })
+            .unwrap_or_default();
+        assert_eq!(
+            native_names, expected_todo_names,
+            "hya/todo-tools library tool set differs from its bundle policy"
+        );
+        assert_eq!(
+            native_names.len(),
+            todo_tools.len(),
+            "hya/todo-tools library declared duplicate tools"
+        );
+        implementations.extend(todo_tools);
         let mut by_name = implementations
             .into_iter()
             .map(|tool| (tool.name().to_string(), tool))
@@ -509,7 +534,10 @@ impl ToolRegistry {
                 if !exposure.exposed() {
                     continue;
                 }
-                registry.insert_preset_builtin(tool, exposure);
+                let origin = native_names
+                    .contains(exposure.name())
+                    .then_some(preset.identity());
+                registry.insert_preset_builtin(tool, exposure, origin);
             }
         }
         assert!(
@@ -555,6 +583,7 @@ impl ToolRegistry {
         maps_match(&candidate.tools, &snapshot.inner.tools)
             && maps_match(&candidate.aliases, &snapshot.inner.aliases)
             && candidate.dispatch_identities == snapshot.inner.dispatch_identities
+            && candidate.bundle_origins == snapshot.inner.bundle_origins
     }
 
     /// Register a tool on this candidate builder through a shared reference.
@@ -642,6 +671,12 @@ impl ToolRegistry {
         self.resolve(name).map(|resolved| resolved.tool)
     }
 
+    /// Bundle identity that supplies a dynamically loaded builtin tool.
+    #[must_use]
+    pub fn builtin_bundle_origin(&self, canonical: &str) -> Option<&'static str> {
+        self.read().bundle_origins.get(canonical).copied()
+    }
+
     /// Resolve name or alias to the full [`ResolvedTool`] (tool + permission class).
     #[must_use]
     pub fn resolve(&self, name: &str) -> Option<ResolvedTool> {
@@ -658,6 +693,7 @@ impl ToolRegistry {
         let mut inner = self.write();
         if inner.tools.remove(name).is_some() {
             inner.dispatch_identities.remove(name);
+            inner.bundle_origins.remove(name);
         }
         inner
             .aliases
@@ -691,6 +727,7 @@ impl ToolRegistry {
         &self,
         tool: Arc<dyn Tool>,
         exposure: &crate::base_tools::BaseToolExposure,
+        origin: Option<&'static str>,
     ) {
         let name = tool.name().to_string();
         assert_eq!(
@@ -712,6 +749,9 @@ impl ToolRegistry {
         );
         if let Some(identity) = builtin_dispatch_identity(&name) {
             inner.dispatch_identities.insert(name.clone(), identity);
+        }
+        if let Some(origin) = origin {
+            inner.bundle_origins.insert(name.clone(), origin);
         }
         for alias in exposure.aliases() {
             let replaced = inner.aliases.insert(

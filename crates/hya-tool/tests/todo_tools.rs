@@ -48,6 +48,18 @@ fn ctx_with(rules: Vec<Rule>, session: SessionId, todo: TodoPlane) -> ToolCtx {
     }
 }
 
+#[test]
+fn todo_tools_are_loaded_from_the_todo_bundle() {
+    let registry = ToolRegistry::builtins();
+    for name in ["todo__read", "todo__update_status", "todo__update_content"] {
+        assert_eq!(registry.builtin_bundle_origin(name), Some("hya/todo-tools"));
+    }
+    assert!(
+        !include_str!("../src/todo.rs").contains("impl Tool for"),
+        "the interface crate must not keep the TODO implementations"
+    );
+}
+
 #[tokio::test]
 async fn update_content_add_assigns_stable_sequential_ids() {
     let session = SessionId::new();

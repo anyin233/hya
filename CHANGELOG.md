@@ -1,6 +1,7 @@
-# 0.37.13
+# 0.37.14
 
-## Native tool bundle packaging
+## TODO native tool bundle
 
-- Add `package-native-tool-bundle` to stage a target-specific Rust executable into any of the five tool-family sources.
-- Derive exact tool resource declarations from the family's exposure policy and preserve executable bytes in the public package.
+- Move the three TODO tool implementations into the TODO bundle's Rust dynamic library while keeping session TODO state in the tool interface crate.
+- Package raw native libraries in public bundles and load trusted first-party family packages with a lockstep ABI check.
+- Ship the TODO library package beside the backend in release assets.

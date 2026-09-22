@@ -315,6 +315,8 @@ pub(crate) struct SourceExtensions {
     pub js: Vec<SourceResource>,
     /// Raw native executables for a `kind: rust` process extension.
     pub rust: Vec<SourceResource>,
+    /// Raw Rust dynamic libraries loaded in-process by the first-party tool loader.
+    pub libraries: Vec<SourceResource>,
     /// Text assets materialized for process extensions or bundle MCP servers.
     pub files: Vec<SourceResource>,
     /// The one optional out-of-process extension (`rust` | `bun` | `claude`).

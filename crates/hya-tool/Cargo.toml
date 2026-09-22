@@ -9,6 +9,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+hya-bundle = { workspace = true }
 hya-proto = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -31,3 +32,6 @@ time = { workspace = true }
 hya-bundle = { workspace = true }
 serde = { workspace = true }
 serde_norway = { workspace = true }
+
+[dev-dependencies]
+hya-todo-tools = { workspace = true }

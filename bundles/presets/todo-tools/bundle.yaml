@@ -8,3 +8,7 @@ extensions:
   files:
     - id: exposure
       path: exposure.yaml
+    - id: native-manifest
+      path: native/Cargo.toml
+    - id: native-implementation
+      path: native/src/lib.rs

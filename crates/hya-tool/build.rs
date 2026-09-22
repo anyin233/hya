@@ -89,9 +89,7 @@ fn main() {
     let mut policies = Vec::with_capacity(families.len());
     for (directory, identity) in families {
         let preset_dir = manifest_dir.join("../../bundles/presets").join(directory);
-        for file in ["bundle.yaml", "exposure.yaml"] {
-            println!("cargo:rerun-if-changed={}", preset_dir.join(file).display());
-        }
+        println!("cargo:rerun-if-changed={}", preset_dir.display());
         let source = BundleSource::read_directory(&preset_dir).expect("read tool preset source");
         let prepared = prepare_package(source).expect("prepare tool preset Plugin");
         let [bundle] = prepared.bundles() else {
@@ -99,10 +97,11 @@ fn main() {
         };
         assert_eq!(bundle.kind(), PreparedBundleKind::Plugin);
         assert_eq!(bundle.identity().id, identity);
-        let [asset] = bundle.extensions() else {
-            panic!("tool preset must contain one policy asset")
-        };
-        assert_eq!(asset.local_id, "exposure");
+        let asset = bundle
+            .extensions()
+            .iter()
+            .find(|asset| asset.local_id == "exposure")
+            .expect("tool preset must contain exposure policy");
         let policy: Policy =
             serde_norway::from_str(&asset.content).expect("parse prepared exposure policy");
         validate(&policy, identity);
