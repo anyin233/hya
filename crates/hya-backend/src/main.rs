@@ -201,9 +201,19 @@ async fn cmd_rpc(model_override: Option<String>, yolo: bool, pure: bool) -> anyh
     use std::io::BufRead as _;
     first_run_config_bootstrap(false)?;
     let has_explicit_model = model_override.is_some();
-    let store = SessionStore::connect_memory()
+    // A temp file-backed store, not `connect_memory`: long worker turns (real
+    // cargo test runs) can idle out the single in-memory pooled connection,
+    // which drops every table mid-run. A file also enables `tail-session`.
+    let goal_db = std::env::temp_dir().join(format!(
+        "hya-goal-{}.db",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    let store = SessionStore::connect(goal_db.to_string_lossy().as_ref())
         .await
-        .context("open in-memory store")?;
+        .context("open goal store")?;
     let runtime = resolve_runtime(model_override)
         .await
         .with_yolo(yolo)
@@ -304,9 +314,19 @@ async fn cmd_goal(
 ) -> anyhow::Result<()> {
     first_run_config_bootstrap(false)?;
     let has_explicit_model = model_override.is_some();
-    let store = SessionStore::connect_memory()
+    // A temp file-backed store, not `connect_memory`: long worker turns (real
+    // cargo test runs) can idle out the single in-memory pooled connection,
+    // which drops every table mid-run. A file also enables `tail-session`.
+    let goal_db = std::env::temp_dir().join(format!(
+        "hya-goal-{}.db",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    let store = SessionStore::connect(goal_db.to_string_lossy().as_ref())
         .await
-        .context("open in-memory store")?;
+        .context("open goal store")?;
     let runtime = resolve_runtime(model_override)
         .await
         .with_yolo(yolo)
@@ -426,9 +446,19 @@ async fn cmd_loop(
 ) -> anyhow::Result<()> {
     first_run_config_bootstrap(false)?;
     let has_explicit_model = model_override.is_some();
-    let store = SessionStore::connect_memory()
+    // A temp file-backed store, not `connect_memory`: long worker turns (real
+    // cargo test runs) can idle out the single in-memory pooled connection,
+    // which drops every table mid-run. A file also enables `tail-session`.
+    let goal_db = std::env::temp_dir().join(format!(
+        "hya-goal-{}.db",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    let store = SessionStore::connect(goal_db.to_string_lossy().as_ref())
         .await
-        .context("open in-memory store")?;
+        .context("open goal store")?;
     let runtime = resolve_runtime(model_override)
         .await
         .with_yolo(yolo)
@@ -595,7 +625,7 @@ async fn main() -> anyhow::Result<()> {
             pure,
         )
         .await
-        .inspect_err(|error| eprintln!("goal debug: {error:#}"));
+        .inspect_err(|error| eprintln!("goal error: {error:#}"));
     }
     match cli.command {
         // No interactive frontend is bundled anymore: bare startup only points
