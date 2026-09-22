@@ -5,19 +5,22 @@
 Five trusted embedded Plugin presets own the exposure policy for Hya's Rust
 builtin tools. They record model visibility, compatibility aliases, schema
 versions, invocation permission posture, protected names, and URI-scheme
-ownership. The TODO family now owns its concrete Rust tool implementations
-and ships a lockstep dynamic library inside its public `.hyabundle` package.
-Other families still use their in-crate implementations during migration.
+ownership. The TODO and extended families own their concrete Rust tool
+implementations and ship lockstep dynamic libraries inside public `.hyabundle`
+packages. Base, network, and channel tools still use in-crate implementations
+during migration.
 
 The sources live in `bundles/presets/{base,extended,network,channel,todo}-tools`.
 Each `bundle.yaml` identifies a `Plugin` and declares `exposure.yaml` as an inert
 `extensions.files` asset. The TODO source also declares its Cargo manifest and
-Rust implementation as source assets. The companion file carries trusted preset metadata
+Rust implementation as source assets. The extended source likewise declares
+its Cargo manifest, Rust modules, and LSP description. The companion file carries trusted preset metadata
 that the public Plugin manifest intentionally cannot grant as permissions. The
 build prepares every Plugin, verifies its digest and policy, rejects duplicate
-names across families, then generates static Rust metadata. Runtime construction
-performs no file access or policy parsing. It still checks that every declared
-tool has a Rust implementation and that no compiled builtin was omitted.
+names across families, then generates static Rust policy metadata. Runtime
+registry construction reads native family packages when present, validates
+their prepared content and declared tool sets, and checks that every policy
+entry has a loaded implementation.
 
 A build tool can now stage one target-specific Rust executable into any of
 these policy sources. It adds an `extensions.rust` executable, a `kind: rust`
@@ -92,6 +95,15 @@ temporary path, checks the lockstep ABI digest, and loads its tools.
 Local Cargo builds can use a library beside the executable or in `deps/` when
 the package is absent. The Rust ABI is not stable across independent builds;
 build the backend and library from the same workspace and toolchain.
+
+The same command packages the extended family after building
+`hya-extended-tools`; use `libhya_extended_tools.so` (or `.dylib`) as the
+input and `hya-extended-tools.hyabundle` as the output. Its exported library
+registers `invalid`, `lsp`, `skill`, `list_agents`, `task`, `workflow`,
+`search_agent`, `kill`, and `plan_exit`. The host continues to provide the
+session-scoped interaction, LSP, skill, spawn, mailbox, lifecycle, and
+workflow planes through `ToolCtx`; each tool's body and schema now live in
+the extended bundle.
 
 ## Interface definitions
 

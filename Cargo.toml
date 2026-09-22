@@ -2,11 +2,11 @@
 # See CONTEXT.md for the full architecture and agent-spec contract.
 [workspace]
 resolver = "3"
-members = ["crates/*", "bundles/presets/todo-tools/native"]
+members = ["crates/*", "bundles/presets/todo-tools/native", "bundles/presets/extended-tools/native"]
 exclude = ["vendor/sevenz-rust2-0.20.2"]
 
 [workspace.package]
-version = "0.37.14"
+version = "0.37.15"
 edition = "2024"
 rust-version = "1.91"
 license = "MIT OR Apache-2.0"
@@ -19,6 +19,7 @@ hya-proto = { path = "crates/hya-proto" }
 hya-provider = { path = "crates/hya-provider" }
 hya-tool = { path = "crates/hya-tool" }
 hya-todo-tools = { path = "bundles/presets/todo-tools/native" }
+hya-extended-tools = { path = "bundles/presets/extended-tools/native" }
 hya-store = { path = "crates/hya-store" }
 hya-core = { path = "crates/hya-core" }
 hya-workflow = { path = "crates/hya-workflow" }

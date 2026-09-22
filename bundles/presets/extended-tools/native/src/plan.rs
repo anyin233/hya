@@ -3,10 +3,10 @@ use hya_proto::{ToolName, ToolSchema};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::interaction::{QuestionAnswer, QuestionKind};
-use crate::tool::{Tool, ToolCtx, ToolError};
+use hya_tool::{QuestionAnswer, QuestionKind};
+use hya_tool::{Tool, ToolCtx, ToolError};
 
-pub(crate) struct PlanExitTool;
+pub struct PlanExitTool;
 
 #[derive(Deserialize)]
 struct PlanExitInput {}

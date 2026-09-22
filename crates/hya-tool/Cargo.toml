@@ -35,3 +35,4 @@ serde_norway = { workspace = true }
 
 [dev-dependencies]
 hya-todo-tools = { workspace = true }
+hya-extended-tools = { workspace = true }

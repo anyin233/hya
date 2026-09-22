@@ -11,11 +11,17 @@ use hya_proto::{
 use hya_tool::{
     Action, InteractionPlane, LifecyclePlane, LspPlane, MailboxPlane, Mode, PermissionPlane,
     PermissionRules, Rule, SkillPlane, SpawnerPlane, TodoPlane, Tool, ToolCtx, ToolOperation,
-    WebSearchPlane, WorkflowHostError, WorkflowPlane, WorkflowRequest, WorkflowRequestSink,
-    WorkflowSendError, WorkflowTool, handle::ArtifactPlane,
+    ToolRegistry, WebSearchPlane, WorkflowHostError, WorkflowPlane, WorkflowRequest,
+    WorkflowRequestSink, WorkflowSendError, handle::ArtifactPlane,
 };
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
+
+fn workflow_tool() -> Arc<dyn Tool> {
+    ToolRegistry::builtins()
+        .get("workflow")
+        .expect("workflow tool")
+}
 
 #[derive(Default)]
 struct CaptureSink {
@@ -142,7 +148,7 @@ async fn frames_all_workflow_commands_and_preserves_operation_identity() {
     let sink = Arc::new(CaptureSink::default());
     let session = hya_proto::SessionId::new();
     let ctx = context(Arc::clone(&sink), session);
-    let tool = WorkflowTool;
+    let tool = workflow_tool();
     let revision = WorkflowRevision::from_bytes([7; 32]);
 
     for input in [
@@ -205,7 +211,7 @@ async fn preserves_route_fields_in_shared_workflow_results() {
     let session = hya_proto::SessionId::new();
     let ctx = context(Arc::clone(&sink), session);
 
-    let result = WorkflowTool
+    let result = workflow_tool()
         .execute(&ctx, json!({"action": "state"}))
         .await
         .expect("routed Workflow state result");
@@ -234,7 +240,7 @@ async fn preserves_route_fields_in_shared_workflow_results() {
 async fn defaults_to_list_and_rejects_unknown_action() {
     let sink = Arc::new(CaptureSink::default());
     let ctx = context(Arc::clone(&sink), hya_proto::SessionId::new());
-    let tool = WorkflowTool;
+    let tool = workflow_tool();
 
     tool.execute(&ctx, json!({}))
         .await
@@ -261,7 +267,7 @@ async fn preserves_structured_workflow_host_error() {
     let session = hya_proto::SessionId::new();
     let mut ctx = context(Arc::new(CaptureSink::default()), session);
     ctx.workflows = WorkflowPlane::from_sink(Arc::new(RejectingSink)).for_session(session);
-    let error = WorkflowTool
+    let error = workflow_tool()
         .execute(&ctx, json!({"action": "state"}))
         .await
         .expect_err("host rejection");

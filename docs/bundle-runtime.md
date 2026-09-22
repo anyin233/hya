@@ -10,7 +10,7 @@ Raw native executables are carried by `extensions.rust` and started through the
 existing out-of-process plugin protocol.
 
 First-party in-process tool families can carry a Rust dynamic library under
-`extensions.libraries`. The TODO preset currently uses this form. Its
+`extensions.libraries`. The TODO and extended presets currently use this form. Their
 `hya_tool_bundle_abi_v1` export must match the host's ABI digest, and
 `hya_tool_bundle_register_v1` registers tools after the bundle identity and
 declared names are checked. The backend and library must be built from the

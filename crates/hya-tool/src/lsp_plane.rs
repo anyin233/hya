@@ -129,14 +129,22 @@ impl LspPlane {
         self.provider.is_some()
     }
 
-    pub(crate) async fn has_clients(&self, file: &Path) -> Result<bool, LspError> {
+    /// Whether a server is available for this file.
+    ///
+    /// # Errors
+    /// Propagates provider failures.
+    pub async fn has_clients(&self, file: &Path) -> Result<bool, LspError> {
         match &self.provider {
             Some(provider) => provider.has_clients(file).await,
             None => Ok(false),
         }
     }
 
-    pub(crate) async fn execute(&self, request: LspRequest) -> Result<Vec<Value>, LspError> {
+    /// Execute one language-server request through the configured provider.
+    ///
+    /// # Errors
+    /// Propagates provider failures or reports that no provider is configured.
+    pub async fn execute(&self, request: LspRequest) -> Result<Vec<Value>, LspError> {
         match &self.provider {
             Some(provider) => provider.execute(request).await,
             None => Err(LspError(
