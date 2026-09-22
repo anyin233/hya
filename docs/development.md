@@ -77,7 +77,7 @@ There is **no** Cargo alias named `xtask` in this workspace: invoke it as
 `cargo run -p xtask -- <task> …`. The binary uses a hand-rolled positional
 dispatcher (not clap): the first positional argument selects the task and every
 remaining argument is forwarded verbatim. The currently supported tasks are
-`startup-bench`, `matrix-check`, `package-bundle`, `gen-api`, and
+`startup-bench`, `matrix-check`, `package-bundle`, `package-native-tool-bundle`, `gen-api`, and
 `release-rehearsal`.
 
 | Task | Role |
@@ -86,12 +86,14 @@ remaining argument is forwarded verbatim. The currently supported tasks are
 | `startup-bench` | Startup latency benchmark. Honours `HYA_BACKEND_BIN` to select the binary under test. |
 | `matrix-check` | Validates `crates/hya-e2e/matrix.toml`. See [agent-matrix.md](testing/agent-matrix.md). |
 | `package-bundle` | Validates a source directory and atomically writes the canonical deterministic public `.hyabundle` package. |
+| `package-native-tool-bundle` | Adds a built target-specific Rust executable and exact policy tool declarations to one tool-family source, then writes a deterministic public package. |
 | `release-rehearsal` | Runs the pinned, non-publishing release build/package/smoke rehearsal, including archive, adapter, Argus, and runtime-prune checks. |
 
 ```sh
 cargo run -p xtask -- matrix-check
 cargo run -p xtask -- startup-bench
 cargo run -p xtask -- package-bundle <source-dir> <output.hyabundle>
+cargo run -p xtask -- package-native-tool-bundle <tool-family-source-dir> <built-executable> <output.hyabundle>
 cargo run -p xtask -- release-rehearsal --workflow .github/workflows/release.yml --version 0.36.12 --target x86_64-unknown-linux-gnu --no-publish
 ```
 

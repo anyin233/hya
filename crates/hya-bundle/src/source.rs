@@ -86,6 +86,19 @@ impl BundleSource {
         Ok(Self::new(root.display().to_string(), files))
     }
 
+    /// Replace or add one logical file before preparing a generated package.
+    ///
+    /// Preparation still validates the normalized path, manifest closure, and
+    /// exact resource bytes. This supports build tooling that injects a
+    /// target-specific executable into a source bundle.
+    #[must_use]
+    pub fn with_file(mut self, path: impl Into<String>, bytes: impl Into<Vec<u8>>) -> Self {
+        let path = path.into();
+        self.files.retain(|file| file.path != path);
+        self.files.push(SourceFile::new(path, bytes));
+        self
+    }
+
     pub(crate) fn into_parts(self) -> (String, Vec<SourceFile>) {
         (self.name, self.files)
     }

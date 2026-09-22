@@ -1,6 +1,6 @@
-# 0.37.12
+# 0.37.13
 
-## Native tool context bridge
+## Native tool bundle packaging
 
-- Bind Rust bundle tool calls to their active `ToolCtx` through call-scoped host capabilities.
-- Expose call identity and workdir metadata plus host-enforced resource permission checks to native processes.
+- Add `package-native-tool-bundle` to stage a target-specific Rust executable into any of the five tool-family sources.
+- Derive exact tool resource declarations from the family's exposure policy and preserve executable bytes in the public package.

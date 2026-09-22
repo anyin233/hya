@@ -18,6 +18,14 @@ names across families, then generates static Rust metadata. Runtime construction
 performs no file access or policy parsing. It still checks that every declared
 tool has a Rust implementation and that no compiled builtin was omitted.
 
+A build tool can now stage one target-specific Rust executable into any of
+these policy sources. It adds an `extensions.rust` executable, a `kind: rust`
+process command, and one `resources.tools` declaration per canonical policy
+name before writing a public package. This prepares a native family package;
+it does not change the default builtin registry. The supplied executable must
+implement the [plugin protocol](plugin-protocol.md) and announce exactly the
+declared tools before the runtime can publish it.
+
 | Bundle | Canonical tool names |
 | --- | --- |
 | `hya/base-tools` | `read`, `write`, `edit`, `ls`, `glob`, `find`, `grep`, `ask_user`, `bash`, `apply_patch` |
@@ -49,6 +57,19 @@ assert!(registry.resolve("shell").is_some());
 To change builtin exposure, update the owning family's `exposure.yaml` together with the tool's
 documentation and parity tests. Adding an entry does not create a tool: every
 entry must match a Rust `Tool` implementation supplied by `hya-tool`.
+
+To stage a built native family executable, use:
+
+```sh
+cargo run -p xtask -- package-native-tool-bundle \
+  bundles/presets/todo-tools target/release/hya-todo-tools \
+  dist/todo-tools.hyabundle
+```
+
+The command reads the policy-only source, preserves its declared files, adds
+`native/tool-runtime` with the exact executable bytes, and writes a
+deterministic package. It does not compile the executable or install the
+package. The executable must be built for the target platform first.
 
 ## Interface definitions
 
@@ -91,3 +112,24 @@ and `prepared_catalog_bytes()` exposes its exact build-validated bytes for
 audit and replay metadata. `tool_bundle_presets()` returns all five policies in
 base, extended, network, channel, and TODO order. Each policy keeps its own
 tool names, aliases, permissions, schemes, and protected names.
+
+The staged package adds these manifest entries without modifying the source
+`bundle.yaml` on disk:
+
+```yaml
+resources:
+  tools:
+    - { id: todo__read, path: declarations/tool.json }
+extensions:
+  rust:
+    - { id: runtime, path: native/tool-runtime }
+  process:
+    kind: rust
+    command: ['${BUNDLE_ROOT}/native/tool-runtime']
+```
+
+It repeats the `resources.tools` row for each canonical tool in the family's
+`exposure.yaml`. The declaration file is `{}`; the executable's `initialize`
+reply owns the input schemas. Package preparation validates the executable's
+raw bytes, paths, and manifest closure; runtime activation checks the announced
+tool set against the declarations.
