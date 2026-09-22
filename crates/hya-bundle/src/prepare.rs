@@ -8,18 +8,20 @@ use crate::error::BundleError;
 use crate::model::{
     BundleIdentity, PreparedAgent, PreparedAgentBundle, PreparedAgentSetBundle,
     PreparedBundleIndex, PreparedBundleProcess, PreparedBundleSchemas, PreparedCatalog,
-    PreparedDocument, PreparedDocumentOwned, PreparedInstallableBundle, PreparedProcessExtension,
-    PreparedResource, PreparedSchema, PreparedWorkflow, PreparedWorkflowBundle,
+    PreparedDocument, PreparedDocumentOwned, PreparedInstallableBundle, PreparedPluginBundle,
+    PreparedProcessExtension, PreparedResource, PreparedSchema, PreparedWorkflow,
+    PreparedWorkflowBundle,
 };
 use crate::source::{
     BundleSource, ParsedSource, SourceAgent, SourceAgentManifest, SourceAgentSetManifest,
-    SourceExtensions, SourceFile, SourceManifest, SourceMcpServer, SourceResource, SourceResources,
-    SourceWorkflowManifest,
+    SourceExtensions, SourceFile, SourceManifest, SourceMcpServer, SourcePluginManifest,
+    SourceResource, SourceResources, SourceWorkflowManifest,
 };
 
 const AGENT_SOURCE_KIND: &str = "AgentBundle";
 const AGENT_SET_SOURCE_KIND: &str = "AgentSetBundle";
 const WORKFLOW_SOURCE_KIND: &str = "WorkflowBundle";
+const PLUGIN_SOURCE_KIND: &str = "Plugin";
 const PREPARED_FORMAT_VERSION: u32 = 2;
 
 /// Validate and deterministically prepare one installable package source.
@@ -162,6 +164,7 @@ fn manifest_identity(manifest: &SourceManifest) -> &BundleIdentity {
         SourceManifest::Agent(manifest) => &manifest.identity,
         SourceManifest::AgentSet(manifest) => &manifest.identity,
         SourceManifest::Workflow(manifest) => &manifest.identity,
+        SourceManifest::Plugin(manifest) => &manifest.identity,
     }
 }
 
@@ -192,6 +195,9 @@ fn prepared_bundle_is_canonical(bundle: &PreparedInstallableBundle) -> bool {
                 && is_canonical_workflow_path(&bundle.workflow.source_path)
                 && is_hex_digest(&bundle.workflow.source_digest)
                 && is_hex_digest(&bundle.workflow.compiler_revision)
+        }
+        PreparedInstallableBundle::Plugin(bundle) => {
+            bundle.format_version == PREPARED_FORMAT_VERSION
         }
     }
 }
@@ -610,6 +616,7 @@ fn resolve_catalog_references(
                 &local_resources,
                 &hook_resources,
             )?,
+            PreparedInstallableBundle::Plugin(_) => {}
         }
         set_bundle_digest(bundle)?;
     }
@@ -829,6 +836,12 @@ fn parse_source(source: BundleSource) -> Result<ParsedSource, BundleError> {
                     found: manifest.kind.clone(),
                 });
             }
+            SourceManifest::Plugin(manifest) if manifest.kind != PLUGIN_SOURCE_KIND => {
+                return Err(BundleError::WrongKind {
+                    source_name: name,
+                    found: manifest.kind.clone(),
+                });
+            }
             _ => {}
         }
     }
@@ -881,6 +894,13 @@ fn parse_yaml_manifest(name: &str, bytes: &[u8]) -> Result<SourceManifest, Bundl
         WORKFLOW_SOURCE_KIND => serde_norway::from_slice::<SourceWorkflowManifest>(bytes)
             .map(Box::new)
             .map(SourceManifest::Workflow)
+            .map_err(|error| BundleError::InvalidManifest {
+                source_name: name.to_string(),
+                detail: error.to_string(),
+            }),
+        PLUGIN_SOURCE_KIND => serde_norway::from_slice::<SourcePluginManifest>(bytes)
+            .map(Box::new)
+            .map(SourceManifest::Plugin)
             .map_err(|error| BundleError::InvalidManifest {
                 source_name: name.to_string(),
                 detail: error.to_string(),
@@ -976,7 +996,42 @@ fn prepare_bundle(
         SourceManifest::Workflow(manifest) => {
             prepare_workflow_bundle(source.files, *manifest, stable_agent_ids)
         }
+        SourceManifest::Plugin(manifest) => prepare_plugin_bundle(source.files, *manifest),
     }
+}
+
+fn prepare_plugin_bundle(
+    files: BTreeMap<String, Vec<u8>>,
+    manifest: SourcePluginManifest,
+) -> Result<
+    (
+        PreparedInstallableBundle,
+        Vec<PreparedSchema>,
+        Option<PreparedProcessExtension>,
+    ),
+    BundleError,
+> {
+    let bundle_id = manifest.identity.id.clone();
+    validate_identity(&bundle_id, &manifest.identity.version)?;
+    let namespace = resolve_namespace(&bundle_id, &manifest.identity, &manifest.namespace)?;
+    validate_unsupported(&bundle_id, &manifest.extensions)?;
+    let process = declared_process_extension(&bundle_id, &manifest.extensions)?;
+    let (tools, skills, mcp, hooks, extensions) =
+        prepare_resource_sets(&bundle_id, &files, manifest.resources, manifest.extensions)?;
+    let schemas = validate_declared_schemas(&bundle_id, &manifest.schemas, &tools)?;
+    let mut bundle = PreparedInstallableBundle::Plugin(Box::new(PreparedPluginBundle {
+        format_version: PREPARED_FORMAT_VERSION,
+        identity: manifest.identity,
+        namespace,
+        digest: String::new(),
+        tools,
+        skills,
+        mcp,
+        hooks,
+        extensions,
+    }));
+    set_bundle_digest(&mut bundle)?;
+    Ok((bundle, schemas, process))
 }
 
 /// Reserved namespace tokens that contributed sources may not claim.
@@ -1798,6 +1853,7 @@ fn set_bundle_digest(bundle: &mut PreparedInstallableBundle) -> Result<(), Bundl
         PreparedInstallableBundle::Agent(bundle) => bundle.digest = digest,
         PreparedInstallableBundle::AgentSet(bundle) => bundle.digest = digest,
         PreparedInstallableBundle::Workflow(bundle) => bundle.digest = digest,
+        PreparedInstallableBundle::Plugin(bundle) => bundle.digest = digest,
     }
     Ok(())
 }

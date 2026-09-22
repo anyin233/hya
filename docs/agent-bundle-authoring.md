@@ -1,6 +1,6 @@
-# AgentBundle and AgentSetBundle Authoring
+# Plugin, AgentBundle, and AgentSetBundle Authoring
 
-Author and install a public `AgentBundle` or `AgentSetBundle`. **An AgentBundle defines exactly one agent.** An `AgentSetBundle` defines one or more agents that share one bundle resource plane; it supports distributing several specialists without a Workflow graph. Install one AgentBundle per independent specialist agent, or use an AgentSetBundle when several agents must be distributed as one immutable unit. A packaged Workflow and its exact multi-Agent closure use the distinct `WorkflowBundle` payload documented in [Workflows](workflows.md#packaging-a-workflowbundle). Static-only bundles remain process-free. A public executable bundle may add one activation-scoped Bun sidecar for bundle-local tools, hooks, and event handlers; Harness remains the agent runtime.
+Author and install a public `Plugin`, `AgentBundle`, or `AgentSetBundle`. A `Plugin` is a slim hyabundle that distributes resources without an Agent, Workflow, or channel. **An AgentBundle defines exactly one agent.** An `AgentSetBundle` defines one or more agents that share one bundle resource plane; it supports distributing several specialists without a Workflow graph. Install one AgentBundle per independent specialist agent, or use an AgentSetBundle when several agents must be distributed as one immutable unit. A packaged Workflow and its exact multi-Agent closure use the distinct `WorkflowBundle` payload documented in [Workflows](workflows.md#packaging-a-workflowbundle). Static-only bundles remain process-free. A public executable bundle may add one activation-scoped Bun sidecar for bundle-local tools, hooks, and event handlers; Harness remains the agent runtime.
 
 Examples:
 
@@ -10,6 +10,79 @@ Examples:
 - Working split-entrypoint example: [`docs/examples/bun-disjoint`](examples/bun-disjoint/) (`bun-disjoint`)
 
 Built-in agents (`build`, `plan`, `explore`, `general`, the reserved `compaction` / `summary` / `title`, and the `hya-*` development agents) are still compiled into the binary in [`crates/hya-core/src/builtin_agents/`](../crates/hya-core/src/builtin_agents/) and run on the full Harness tool plane. Everything below describes public bundle payloads.
+
+## Plugin
+
+`Plugin` packages reusable tools, hooks, Skills, MCP declarations, and extensions
+without creating an Agent. Use it for capabilities shared by existing agents.
+It uses the same immutable package, catalog, namespace, and digest contracts as
+other hyabundle payloads.
+
+Create `bundle.yaml` in a source directory:
+
+```yaml
+kind: Plugin
+identity:
+  id: acme/skill-pack
+  version: 1.0.0
+  publisher: acme
+resources:
+  skills:
+    - id: plugin-help
+      path: resources/skills/plugin-help.md
+```
+
+Create `resources/skills/plugin-help.md` with the required Skill metadata:
+
+```markdown
+---
+name: plugin-help
+description: Explain the project's review checklist.
+---
+Read the changed code, check its tests, and report concrete findings.
+```
+
+Package, inspect, install, and remove it with the existing CLI:
+
+```sh
+cargo run -p xtask -- package-bundle path/to/skill-pack skill-pack.hyabundle
+hya-backend bundle info -f skill-pack.hyabundle
+hya-backend bundle install skill-pack.hyabundle
+hya-backend bundle list
+hya-backend bundle search skill-pack
+hya-backend bundle uninstall acme/skill-pack
+```
+
+The closed manifest accepts only these top-level fields:
+
+| Field | Type | Contract |
+| --- | --- | --- |
+| `kind` | string | Required, exactly `Plugin`. |
+| `identity` | object | Required `{ id: string, version: string, publisher: string }`; same identity rules as AgentBundle. |
+| `namespace` | optional string | Same namespace validation and default as AgentBundle. |
+| `resources` | object | Optional `tools`, `skills`, `mcp`, and `hooks` resource arrays, using the shared resource schema below. |
+| `extensions` | object | Optional `js`, `rust`, and `process` fields, with the same support limits described below. |
+| `schemas` | array | Optional `{ scheme: string, tool: string, writable: boolean = false }` declarations. |
+
+Unknown fields, including `agent`, `agents`, `workflow`, and `channels`, are
+rejected even when empty. Use `bundle.yaml`; `bundle.hya.md` is only supported
+by AgentBundle. No synthetic Agent or Workflow is added to the catalog.
+
+The prepared interface is `PreparedInstallableBundle::Plugin`, tagged with
+`kind: "Plugin"` in canonical format-v2 JSON. `PreparedPluginBundle` contains
+`format_version: u32`, `identity: BundleIdentity`, `namespace: Option<String>`,
+`digest: String`, and `tools`, `skills`, `mcp`, `hooks`, `extensions` arrays of
+`PreparedResource`. Schema and process declarations remain in the existing
+catalog-level tables. `agents()` returns an empty slice and `workflow()` returns
+`None`; `plugin_bundle()` exposes the prepared payload.
+
+Static Skills use the existing runtime resource registry. Full-plane agents such
+as `build` can invoke `skill` with `{"name":"plugin-help"}` after installation.
+Agent-bearing bundles retain their scoped resource views. An installed generation
+is loaded at the next root binding; existing bindings remain immutable. MCP and
+`extensions.process` declarations are validated and packaged, but automatic
+agentless process/MCP startup is follow-up work. Declaring a tool or hook alone
+does not start an executable provider.
 
 ## AgentSetBundle
 
@@ -75,7 +148,7 @@ A public bundle source directory must contain exactly one of:
 
 | File | Form |
 | --- | --- |
-| `bundle.yaml` | Plain YAML manifest (no embedded prompt body). Required for `AgentSetBundle` and `WorkflowBundle`; also supported by `AgentBundle`. |
+| `bundle.yaml` | Plain YAML manifest (no embedded prompt body). Required for `Plugin`, `AgentSetBundle`, and `WorkflowBundle`; also supported by `AgentBundle`. |
 | `bundle.hya.md` | YAML frontmatter fenced by `---` plus a Markdown body. Supported only by `AgentBundle`. |
 
 Rules ([`prepare.rs` `parse_source`](../crates/hya-bundle/src/prepare.rs)):
@@ -103,7 +176,7 @@ are rejected.
 - Required whenever the agent uses `prompt: path/to/file.md` instead of a body prompt.
 - Real example: [`crates/hya-bundle/tests/fixtures/directory/bundle.yaml`](../crates/hya-bundle/tests/fixtures/directory/bundle.yaml).
 
-A public archive contains the root manifest plus exactly the normalized source closure represented by its AgentBundle or WorkflowBundle payload, and nothing else. Undeclared directory files are ignored; unreferenced archive files are rejected. Missing declared files, wrapper directories, duplicate normalized paths, traversal, absolute paths, and non-regular files fail closed. Directory and archive forms of the same declared closure prepare to the same canonical format-v2 identity and digest.
+A public archive contains the root manifest plus exactly the normalized source closure represented by its prepared payload, and nothing else. Undeclared directory files are ignored; unreferenced archive files are rejected. Missing declared files, wrapper directories, duplicate normalized paths, traversal, absolute paths, and non-regular files fail closed. Directory and archive forms of the same declared closure prepare to the same canonical format-v2 identity and digest.
 
 The canonical package writer accepts a source directory and emits deterministic
 public `.hyabundle` bytes:
@@ -233,7 +306,7 @@ Filesystem `SKILL.md` discovery (outside bundles) is documented in
 
 ### Schema extensions (`schemas:`)
 
-An AgentBundle or WorkflowBundle may declare external URI-scheme extensions —
+Any public bundle payload may declare external URI-scheme extensions —
 `scheme://…` handles served by one of the bundle's own tools through the
 harness `read` (and, when `writable: true`, `write`) tools:
 
@@ -564,7 +637,7 @@ Prepared catalogs use **`PREPARED_FORMAT_VERSION = 2`** and a closed payload
 union in the document shape:
 
 ```text
-{ format_version, bundles: [AgentBundle | AgentSetBundle | WorkflowBundle], index[],
+{ format_version, bundles: [Plugin | AgentBundle | AgentSetBundle | WorkflowBundle], index[],
   schemas?, extensions_process? }
 ```
 

@@ -1230,7 +1230,9 @@ async fn queued_spawn_uses_parent_turn_binding_after_catalog_publication() {
         .iter_mut()
         .filter_map(|bundle| match bundle {
             PreparedInstallableBundle::Agent(bundle) => Some(&mut bundle.agent),
-            PreparedInstallableBundle::AgentSet(_) | PreparedInstallableBundle::Workflow(_) => None,
+            PreparedInstallableBundle::AgentSet(_)
+            | PreparedInstallableBundle::Workflow(_)
+            | PreparedInstallableBundle::Plugin(_) => None,
         })
         .find(|agent| agent.id.as_str() == "quick")
         .expect("quick agent in old prepared catalog");

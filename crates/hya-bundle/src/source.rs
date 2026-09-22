@@ -122,7 +122,7 @@ fn collect_directory(root: &Path, dir: &Path, files: &mut Vec<PathBuf>) -> Resul
 /// Minimal source-manifest discriminator used before strict kind parsing.
 #[derive(Debug, Deserialize)]
 pub(crate) struct SourceKind {
-    /// Manifest payload kind (`AgentBundle`, `AgentSetBundle`, or `WorkflowBundle`).
+    /// Manifest payload kind (`AgentBundle`, `AgentSetBundle`, `WorkflowBundle`, or `Plugin`).
     pub kind: String,
 }
 
@@ -171,6 +171,21 @@ pub(crate) struct SourceAgentSetManifest {
     pub extensions: SourceExtensions,
     /// The complete Agent set this bundle defines.
     pub agents: Vec<SourceAgent>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SourcePluginManifest {
+    pub kind: String,
+    pub identity: BundleIdentity,
+    #[serde(default)]
+    pub namespace: Option<String>,
+    #[serde(default)]
+    pub schemas: Vec<SourceSchema>,
+    #[serde(default)]
+    pub resources: SourceResources,
+    #[serde(default)]
+    pub extensions: SourceExtensions,
 }
 
 /// Strict source manifest shape for a WorkflowBundle.
@@ -226,6 +241,7 @@ pub(crate) enum SourceManifest {
     Agent(Box<SourceAgentManifest>),
     /// Closed AgentSetBundle manifest.
     AgentSet(Box<SourceAgentSetManifest>),
+    Plugin(Box<SourcePluginManifest>),
     /// WorkflowBundle manifest.
     Workflow(Box<SourceWorkflowManifest>),
 }

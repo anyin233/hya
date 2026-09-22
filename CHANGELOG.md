@@ -1,12 +1,12 @@
-# 0.37.5
+# 0.37.6
 
-## AgentSetBundle packages
+## Agentless Plugin packages
 
-Public `AgentSetBundle` packages distribute one or more agents with shared
-bundle resources without requiring a Workflow graph. The closed YAML schema,
-canonical prepared-v2 encoding, catalog lookup, package writer, and existing
-bundle install/list/search/info/uninstall path support the new payload.
-Empty or duplicate rosters and unknown fields fail validation. Agent permissions
-and late-bound `can_spawn` allowlists retain the existing bundle behavior.
+Public `Plugin` packages distribute resource capabilities without an Agent,
+Workflow, or channel. Strict YAML preparation, canonical prepared-v2 encoding,
+package writing, mixed catalogs, and the existing bundle CLI lifecycle support
+this slim hyabundle payload. Agent and Workflow fields are rejected.
 
-Built-in agent migration and channel declarations are follow-up work.
+Static Skills publish through the existing immutable runtime registry. Process
+and MCP declarations remain validated package metadata; automatic agentless
+process/MCP startup is follow-up work.

@@ -1857,6 +1857,7 @@ impl TurnBinding {
             policy.plane,
             self.skills(),
             &self.snapshot.sources,
+            bundles,
             &mut skill_candidates,
         );
         collect_harness_mcp_candidates(
@@ -2890,11 +2891,12 @@ fn collect_harness_skill_candidates(
     plane: AgentToolPlane,
     harness_skills: &[SkillCatalogEntry],
     sources: &BTreeMap<RuntimeSourceId, RuntimeSource>,
+    bundles: &BundleCatalog,
     out: &mut BTreeMap<String, ResourceCandidate>,
 ) {
     // Project and user skills are discovered from the working directory. A
-    // bundle agent must not see them. Bundle-owned source Skills are selected
-    // by `collect_bundle_skill_candidates` so they remain owner-scoped.
+    // bundle agent must not see them. Agent-bearing bundle Skills remain
+    // owner-scoped; only catalog-confirmed agentless Plugins join the Full plane.
     if plane != AgentToolPlane::Full {
         return;
     }
@@ -2911,11 +2913,17 @@ fn collect_harness_skill_candidates(
         );
     }
     for source in sources.values() {
-        if source.id.kind() != RuntimeSourceKind::Plugin {
+        let agentless_bundle_plugin = source.id.kind() == RuntimeSourceKind::Bundle
+            && bundles
+                .bundles()
+                .iter()
+                .find(|bundle| bundle.identity().id == source.id.configured_id())
+                .is_some_and(|bundle| bundle.plugin_bundle().is_some());
+        if source.id.kind() != RuntimeSourceKind::Plugin && !agentless_bundle_plugin {
             continue;
         }
         for skill in &source.skills {
-            if skill.stable_id.starts_with("bundle:") {
+            if skill.stable_id.starts_with("bundle:") && !agentless_bundle_plugin {
                 continue;
             }
             out.insert(
@@ -3650,6 +3658,85 @@ mod tests {
                 .expect("test bundle Skill sources must publish");
         }
         registry
+    }
+
+    #[test]
+    fn full_view_exposes_only_catalog_confirmed_plugin_bundle_skills() {
+        let prepare = |kind: &str, id: &str, name: &str, agent: &str| {
+            prepare_package(BundleSource::new(
+                id,
+                vec![
+                    SourceFile::new("bundle.yaml", format!(
+                        "kind: {kind}\nidentity: {{ id: acme/{id}, version: 1.0.0, publisher: acme }}\nresources:\n  skills:\n    - id: {name}\n      path: skills/guide.md\n{agent}"
+                    )),
+                    SourceFile::new("skills/guide.md", skill_md(name, "SKILL_BODY")),
+                ],
+            )).unwrap()
+        };
+        let plugin = prepare("Plugin", "shared", "shared-skill", "");
+        let agent = prepare(
+            "AgentBundle",
+            "private",
+            "private-skill",
+            "agent: { id: private-agent, role: main }\n",
+        );
+        let catalog = Arc::new(TestCatalog::from_verified_catalogs(&[&plugin, &agent]).unwrap());
+        let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
+        // An unrecognized bundle source cannot opt into shared Skill visibility.
+        let mut unknown =
+            registry.active().sources[&RuntimeSourceId::bundle("acme/shared")].clone();
+        unknown.id = RuntimeSourceId::bundle("acme/unknown");
+        unknown.skills[0].stable_id = "bundle:acme/unknown/skill/unknown-skill".into();
+        unknown.skills[0].local_id = "unknown-skill".into();
+        unknown.skills[0].entry.name = "unknown-skill".into();
+        registry
+            .refresh(|candidate| candidate.upsert_sources(vec![unknown]))
+            .unwrap();
+        let binding = registry
+            .bind_turn(Path::new("/tmp/hya-plugin-skill-view"))
+            .unwrap();
+        let policy = binding
+            .agent_resource_policy_on_plane("build", AgentToolPlane::Full)
+            .unwrap();
+        let resources = binding.compile_agent_resources(&policy).unwrap();
+        assert!(
+            resources
+                .skills()
+                .iter()
+                .any(|skill| skill.name == "shared-skill")
+        );
+        assert!(
+            resources
+                .skills()
+                .iter()
+                .any(|skill| skill.name == "bundle:acme/shared/skill/shared-skill")
+        );
+        assert!(
+            !resources
+                .skills()
+                .iter()
+                .any(|skill| skill.name == "private-skill")
+        );
+        assert!(
+            !resources
+                .skills()
+                .iter()
+                .any(|skill| skill.name == "unknown-skill")
+        );
+        let private_policy = binding.agent_resource_policy("private-agent").unwrap();
+        let private_resources = binding.compile_agent_resources(&private_policy).unwrap();
+        assert!(
+            private_resources
+                .skills()
+                .iter()
+                .any(|skill| skill.name == "private-skill")
+        );
+        assert!(
+            !private_resources
+                .skills()
+                .iter()
+                .any(|skill| skill.name == "shared-skill")
+        );
     }
 
     struct NoopTool {

@@ -40,3 +40,11 @@ Outcome: complete
 - Marked task 2/2.1 in progress. Added the first red test in `crates/hya-bundle/tests/prepare.rs` for a multi-agent `AgentSetBundle` payload.
 - Red test result: `WrongKind { source_name: "agent-set", found: "AgentSetBundle" }`, as expected.
 - 重新计算 digest 后的空 roster red test 暴露 prepared decoder 漏洞，已加入非空校验。
+
+## 2026-09-22 — parallel Plugin implementation
+
+User explicitly requested gpt-5.6-sol subagents. Three workers own payload, runtime, and CLI/process acceptance; coordinator integrates docs/version/gates. Plugin prepare and CLI RED tests failed with WrongKind before support; process acceptance revealed published Skills missing from Full-plane views. Runtime fix and scoped visibility regression coverage are being integrated. See parallel-implementation.md.
+
+### Plugin Wave 1 verification complete
+
+Version 0.37.6. Final fmt, full workspace clippy, workspace tests (1,737 passed / 3 ignored), local backend build, and full serial process E2E P01–P26 passed. Matrix-check and Markdown link target check passed. The atomic commit includes payload support, Plugin-only Full-plane static Skill visibility, isolation/lifecycle regression tests, CLI/P26 coverage, docs and archived changelog. Subsequent waves are still pending.

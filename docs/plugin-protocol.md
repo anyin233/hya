@@ -5,9 +5,11 @@ JSON-RPC 2.0 ABI used by AgentBundle sidecars; the framing here is the contract 
 plugin author implements.
 
 This document defines the process-plugin wire surface only. The package-level
-contribution inventory is broader: `AgentBundle` and `WorkflowBundle` carry
-agents, Workflow source, tools, Skills, MCP declarations, hooks, and extension
-resources through prepared payloads. See [AgentBundle authoring](agent-bundle-authoring.md)
+contribution inventory is broader: `Plugin` carries agentless resources;
+`AgentBundle`, `AgentSetBundle`, and `WorkflowBundle` additionally carry agents
+and, for WorkflowBundle, Workflow source. Tools, Skills, MCP declarations, hooks,
+and extensions use prepared payloads. The package kind `Plugin` does not by
+itself imply a running process. See [AgentBundle authoring](agent-bundle-authoring.md)
 and [Workflows](workflows.md); those package resources are not additional JSON-RPC
 methods.
 
