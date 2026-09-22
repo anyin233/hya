@@ -1,7 +1,9 @@
-<!--
-  Built-in skill. Name and description are registered in
-  skill_catalog.rs. The body below becomes the skill content.
--->
+---
+name: secure-self-update
+description: >-
+  Use when verifying, staging, recovering, or owner-activating an independent hya release with hya-updater: signed metadata, local package fetch, immutable staging, smoke subprocess, activation journal/selector, anti-rollback floor, and install.sh break-glass. Do not use for bundle install, plugin load, or to skip the owner activation gate.
+---
+<!-- Trusted core Skill; its metadata and body are prepared from this bundle. -->
 
 # Secure self-update
 

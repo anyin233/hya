@@ -142,7 +142,7 @@ for supported mappings and explicitly rejected hook semantics.
 `list`, `info`, and `search` include the trusted `hya/core-agents`,
 the five tool-family presets (`hya/base-tools`, `hya/extended-tools`,
 `hya/network-tools`, `hya/channel-tools`, `hya/todo-tools`), and
-`hya/agent-channels` preset inventory alongside first-party
+`hya/core-skills` and `hya/agent-channels` preset inventory alongside first-party
 and installed packages. Trusted inventory rows are immutable and not installable;
 public packages cannot acquire preset privileges. Installed first-party package
 overrides take precedence over the embedded fallback. Uninstalling the override

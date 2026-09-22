@@ -147,6 +147,7 @@ When changing a boundary, update the nearest docs page:
 | Events/projection | [Event Model](architecture/event-model.md) |
 | Providers | [Providers](architecture/providers.md) |
 | Tools/permissions | [Tools and Permissions](architecture/tools-and-permissions.md) |
+| Skills and the trusted core Skill bundle | [Skills](skills.md) |
 | Store/schema | [Storage](architecture/storage.md) |
 | Server/client API | [Server and Client](architecture/server-client.md), [Protocol guide](protocol/README.md) |
 | Bundle authoring and execution | [AgentBundle Authoring](agent-bundle-authoring.md), [Bundle Runtime](bundle-runtime.md), [Claude import](claude-plugin-import.md) |

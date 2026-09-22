@@ -60,6 +60,13 @@ struct Alias {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CoreSkillFrontmatter {
+    name: String,
+    description: String,
+}
+
+#[derive(Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum Visibility {
     Hidden,
@@ -110,6 +117,54 @@ fn main() {
     let output =
         PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR")).join("base_tools_preset.rs");
     fs::write(output, generated).expect("write generated tool-family policies");
+    prepare_core_skills(&manifest_dir);
+}
+
+fn prepare_core_skills(manifest_dir: &std::path::Path) {
+    let preset_dir = manifest_dir.join("../../bundles/presets/core-skills");
+    println!("cargo:rerun-if-changed={}", preset_dir.display());
+    let source = BundleSource::read_directory(&preset_dir).expect("read core skills source");
+    let prepared = prepare_package(source).expect("prepare core skills Plugin");
+    let [bundle] = prepared.bundles() else {
+        panic!("core skills preset must prepare one bundle")
+    };
+    assert_eq!(bundle.kind(), PreparedBundleKind::Plugin);
+    assert_eq!(bundle.identity().id, "hya/core-skills");
+    let resources = bundle.skills();
+    assert_eq!(resources.len(), 2, "core skills preset must own two Skills");
+    let mut output = String::from("static CORE_SKILL_ROWS: &[(&str, &str, &str)] = &[\n");
+    for (resource, expected) in resources
+        .iter()
+        .zip(["agent-bundle-authoring", "secure-self-update"])
+    {
+        assert_eq!(resource.local_id, expected);
+        let rest = resource
+            .content
+            .strip_prefix("---\n")
+            .expect("core Skill frontmatter start");
+        let (frontmatter, body) = rest
+            .split_once("\n---\n")
+            .expect("core Skill frontmatter end");
+        let parsed: CoreSkillFrontmatter =
+            serde_norway::from_str(frontmatter).expect("parse core Skill frontmatter");
+        assert_eq!(parsed.name, resource.local_id);
+        assert!(!parsed.description.trim().is_empty());
+        writeln!(
+            output,
+            "({:?}, {:?}, {:?}),",
+            parsed.name, parsed.description, body
+        )
+        .expect("write core Skill row");
+    }
+    writeln!(
+        output,
+        "]; static CORE_SKILLS_PREPARED_BYTES: &[u8] = &{:?};",
+        prepared.bytes()
+    )
+    .expect("write core skills prepared bytes");
+    let path =
+        PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR")).join("core_skills_preset.rs");
+    fs::write(path, output).expect("write generated core Skill metadata");
 }
 
 fn validate(policy: &Policy, expected_identity: &str) {

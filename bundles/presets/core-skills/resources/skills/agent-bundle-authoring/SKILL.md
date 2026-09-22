@@ -1,4 +1,9 @@
-<!-- Built-in skill; name and description are registered in skill_catalog.rs. -->
+---
+name: agent-bundle-authoring
+description: >-
+  Use when authoring, packaging, importing, or installing public Plugin, AgentBundle, AgentSetBundle, or WorkflowBundle payloads: resources, process/MCP providers, scoped hooks, channel policies, trusted presets, immutable bindings, and permission boundaries. Harness remains the agent runtime.
+---
+<!-- Trusted core Skill; its metadata and body are prepared from this bundle. -->
 
 # Bundle authoring
 
