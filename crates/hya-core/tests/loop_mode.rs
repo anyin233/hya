@@ -19,8 +19,9 @@ use hya_core::hooks::{
     ToolExecuteBeforeInput, ToolExecuteBeforeOutcome,
 };
 use hya_core::loop_mode::{
-    EvidenceQuality, LoopConfig, LoopGate, LoopPredicate, ModelLoopPlanner, ModelLoopVerifier,
-    PlannerOutput, PredicateMode, VerifierVerdict, clamp_budget, cost_preflight,
+    EvidenceQuality, HookLoopPlanner, HookLoopVerifier, LoopConfig, LoopGate, LoopPredicate,
+    ModelLoopPlanner, ModelLoopVerifier, PlannerOutput, PredicateMode, VerifierVerdict,
+    clamp_budget, cost_preflight,
 };
 use hya_core::{
     AgentSpec, CoreError, CreateSession, GateOutcome, IterationGate, LoopPlanner, LoopVerifier,
@@ -297,6 +298,91 @@ fn counting_verifier(satisfied: bool) -> Arc<CountingVerifier> {
         satisfied,
         calls: AtomicUsize::new(0),
     })
+}
+
+struct LoopEvaluatorHook;
+
+#[async_trait]
+impl HookDispatcher for LoopEvaluatorHook {
+    fn dispatch_event(&self, _envelope: &Envelope) {}
+
+    async fn command_execute_before(
+        &self,
+        input: CommandExecuteBeforeInput,
+    ) -> CommandExecuteBeforeOutcome {
+        NoopHookHost.command_execute_before(input).await
+    }
+    async fn text_complete(&self, input: TextCompleteInput) -> TextCompleteOutcome {
+        NoopHookHost.text_complete(input).await
+    }
+    async fn message_user_before(&self, input: MessageUserBeforeInput) -> MessageUserBeforeOutcome {
+        NoopHookHost.message_user_before(input).await
+    }
+    async fn chat_params(&self, input: ChatParamsInput) -> ChatParamsOutcome {
+        NoopHookHost.chat_params(input).await
+    }
+    async fn tool_execute_before(&self, input: ToolExecuteBeforeInput) -> ToolExecuteBeforeOutcome {
+        NoopHookHost.tool_execute_before(input).await
+    }
+    async fn tool_execute_after(&self, input: ToolExecuteAfterInput) -> ToolExecuteAfterOutcome {
+        NoopHookHost.tool_execute_after(input).await
+    }
+    async fn loop_verify(
+        &self,
+        _target: &str,
+        _transcript: &str,
+    ) -> Result<VerifierVerdict, CoreError> {
+        Ok(VerifierVerdict {
+            score: 91,
+            satisfied: true,
+            evidence_quality: EvidenceQuality::Verified,
+            critical_gaps: Vec::new(),
+            iteration_summary: "hook".to_string(),
+            reason: "hook verdict".to_string(),
+        })
+    }
+    async fn loop_plan(
+        &self,
+        _target: &str,
+        _history: &[String],
+        _last: &VerifierVerdict,
+        _planner_notes: &str,
+    ) -> Result<PlannerOutput, CoreError> {
+        Ok(PlannerOutput {
+            directive: "hook directive".to_string(),
+            continuity_brief: "hook".to_string(),
+            planner_notes: String::new(),
+            strategy_change: false,
+            change_note: String::new(),
+        })
+    }
+}
+
+#[tokio::test]
+async fn process_loop_evaluators_take_priority_and_failures_use_fallback() {
+    let unused_fallback = counting_verifier(false);
+    let verifier = HookLoopVerifier::new(Arc::new(LoopEvaluatorHook), unused_fallback.clone());
+    let verdict = verifier.grade("target", "transcript").await.unwrap();
+    assert_eq!(verdict.reason, "hook verdict");
+    assert_eq!(unused_fallback.calls.load(Ordering::SeqCst), 0);
+
+    let planner = HookLoopPlanner::new(Arc::new(LoopEvaluatorHook), unused_fallback.clone());
+    let plan = planner
+        .plan_next("target", &[], &verdict, "")
+        .await
+        .unwrap();
+    assert_eq!(plan.directive, "hook directive");
+
+    let failed_hook_fallback = counting_verifier(true);
+    let verifier = HookLoopVerifier::new(Arc::new(NoopHookHost), failed_hook_fallback.clone());
+    assert!(
+        verifier
+            .grade("target", "transcript")
+            .await
+            .unwrap()
+            .satisfied
+    );
+    assert_eq!(failed_hook_fallback.calls.load(Ordering::SeqCst), 1);
 }
 
 fn gate_with_hook(

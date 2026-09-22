@@ -828,7 +828,7 @@ async fn fixed_title_summary_compaction_exclude_ordinary_guidance_marker() {
 }
 
 #[tokio::test]
-async fn reserved_system_agents_are_always_resolvable_because_they_are_compiled_in() {
+async fn reserved_system_agents_are_always_resolvable_from_the_embedded_preset() {
     // The old "missing definition fails closed" tests are unreachable now: a
     // reserved system agent cannot be absent, so the invariant is presence.
     let workdir = support::TestDir::new("fixed-always-present");
@@ -843,6 +843,11 @@ async fn reserved_system_agents_are_always_resolvable_because_they_are_compiled_
             .resolve_agent(reserved)
             .unwrap_or_else(|| panic!("`{reserved}` must always resolve"));
         assert!(definition.origin.is_builtin());
+        assert!(definition.origin.is_preset());
+        assert_eq!(
+            definition.origin.preset_bundle_id(),
+            Some("hya/core-agents")
+        );
         assert_eq!(definition.prompt, Some(builtin_prompt(reserved)));
     }
 }

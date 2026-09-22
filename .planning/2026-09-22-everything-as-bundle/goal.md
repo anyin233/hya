@@ -1,3 +1,28 @@
+# Everything as Bundle: full implementation goal
+
+Project: /Users/saber/Projects/hya
+PLAN_ID: 2026-09-22-everything-as-bundle
+Status: complete
+
+## Current objective
+
+Bundleize all components in the agreed zcode plan and prove functional behavior. The original AgentSetBundle and agentless Plugin milestones are completed foundations, not completion of this goal.
+
+## Required scope and acceptance
+
+- B1 `hya/core-agents`: prepared trusted preset, reserved-agent privilege isolation, runtime catalog parity.
+- B2 `hya/base-tools`: data-owned tool exposure, aliases, permissions, protected names; existing native implementations remain Rust.
+- B3 Claude import: complete source closure, agentless Plugin / multi-agent AgentSetBundle, commands/skills/hooks/MCP, local and marketplace import with actual staged runtime execution.
+- B4 process/MCP: prepare before atomic publication, pinned lifetime, rollback on failure, owner-scoped resources, actual tool/hook/MCP execution after source removal.
+- B5 subagent bundle: transient/resident definitions and nested spawn, reports, mailbox and durable replay.
+- B6 agent channel bundle: validated declarative policy consumed by routing, scoped send/report/steer/follow-up and retention; channel IDs remain event-minted.
+- B7 `hya/goal-loop`: bundle-supplied planning/evaluation resources, process hook then prompt then builtin fallback, independent lifecycle; engine retains stop authority.
+- B8 full Rust, build, process E2E and touched Bun verification; documented interfaces/usage; versioned atomic commits pushed; requirement-by-requirement audit.
+
+## Historical milestone context
+
+The section below describes the completed initial 0.37.5 milestone only; its non-goals no longer constrain the full continuation.
+
 # Everything as Bundle：上下文基线与 P8 起点
 
 Project: /Users/saber/Projects/hya

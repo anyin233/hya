@@ -35,6 +35,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use hya_bundle::{ChannelCapability, ChannelParticipantRole, ChannelTemplateKind};
 use hya_proto::{
     ActorClaim, ActorEpoch, ArchiveReason, ChannelKind, Event, MailEndpoint, MailKind, MemberId,
     ModelRef, OwnerRunId, ReportOutcome, RosterStatus, SessionId, SubagentMode, scope,
@@ -49,7 +50,7 @@ use crate::hooks::{AgentSpawnInput, HookDispatcher, scope_activation_hooks};
 use crate::orchestrator::TeamBudget;
 use crate::sidecar::{BoundSidecarFactory, SidecarHandle, SidecarStart};
 use crate::workflow::WorkflowTurnRoute;
-use crate::{AgentResourcePolicy, TurnBinding};
+use crate::{AgentResourcePolicy, ChannelPolicy, TurnBinding};
 
 /// Runtime pieces needed to resume a resident after process restart.
 pub type ResolvedResidentRuntime = (
@@ -861,6 +862,7 @@ impl TeamActor {
             .inboxes
             .get(&handle)
             .map_or(0, |inbox| inbox.len());
+        let channel_policy = ChannelPolicy::from_binding(&binding)?;
         let new_mail: Vec<(String, String)> = projection
             .team
             .inboxes
@@ -869,6 +871,15 @@ impl TeamActor {
                 inbox
                     .iter()
                     .skip(cursor)
+                    .filter(|message| {
+                        let (kind, role) = recipient_channel_role(
+                            &projection,
+                            &message.to,
+                            &handle,
+                            &message.from,
+                        );
+                        resident_delivery_allowed(&channel_policy, agent.name.as_str(), kind, role)
+                    })
                     .map(|m| (m.from.clone(), m.body.clone()))
                     .collect()
             })
@@ -933,11 +944,24 @@ impl TeamActor {
             match claim.as_ref() {
                 Some(claim) => {
                     self.engine
-                        .admit_user_prompt_for_actor(claim, session, initial)
+                        .admit_user_prompt_for_actor_with_binding(
+                            claim,
+                            session,
+                            initial,
+                            &binding,
+                            agent.name.as_str(),
+                        )
                         .await?;
                 }
                 None => {
-                    self.engine.admit_user_prompt(session, initial).await?;
+                    self.engine
+                        .admit_user_prompt_with_binding(
+                            session,
+                            initial,
+                            &binding,
+                            agent.name.as_str(),
+                        )
+                        .await?;
                 }
             }
         }
@@ -946,11 +970,24 @@ impl TeamActor {
             match claim.as_ref() {
                 Some(claim) => {
                     self.engine
-                        .admit_user_prompt_for_actor(claim, session, prompt)
+                        .admit_user_prompt_for_actor_with_binding(
+                            claim,
+                            session,
+                            prompt,
+                            &binding,
+                            agent.name.as_str(),
+                        )
                         .await?;
                 }
                 None => {
-                    self.engine.admit_user_prompt(session, prompt).await?;
+                    self.engine
+                        .admit_user_prompt_with_binding(
+                            session,
+                            prompt,
+                            &binding,
+                            agent.name.as_str(),
+                        )
+                        .await?;
                 }
             }
         }
@@ -1138,11 +1175,52 @@ impl TeamActor {
             st.work_seq = st.work_seq.saturating_add(1);
         }
         let recipients = self.recipients(from, to).await;
-        let mut st = self.lock();
-        for session in recipients {
-            if let Some(slot) = st.residents.get_mut(&session) {
-                slot.pending = true;
-                slot.notify.notify_one();
+        let Ok(projection) = self.engine.read_projection(self.root).await else {
+            return;
+        };
+        let mut consumed = Vec::new();
+        {
+            let mut st = self.lock();
+            for session in recipients {
+                if let Some(slot) = st.residents.get_mut(&session) {
+                    let (kind, role) = recipient_channel_role(&projection, to, &slot.handle, from);
+                    let allowed = ChannelPolicy::from_binding(&slot.binding).is_ok_and(|policy| {
+                        resident_delivery_allowed(&policy, slot.agent.name.as_str(), kind, role)
+                    });
+                    if !allowed {
+                        let inbox_len = projection
+                            .team
+                            .inboxes
+                            .get(&slot.handle)
+                            .map_or(0, |inbox| inbox.len());
+                        if !slot.pending && inbox_len == slot.cursor.saturating_add(1) {
+                            consumed.push((session, slot.claim, slot.handle.clone(), inbox_len));
+                        }
+                        continue;
+                    }
+                    slot.pending = true;
+                    slot.notify.notify_one();
+                }
+            }
+        }
+        for (session, claim, handle, through) in consumed {
+            if self
+                .engine
+                .emit_for_actor(
+                    claim.as_ref(),
+                    self.root,
+                    Event::MailConsumed {
+                        session: self.root,
+                        handle: handle.clone(),
+                        through: through as u64,
+                    },
+                )
+                .await
+                .is_ok()
+                && let Some(slot) = self.lock().residents.get_mut(&session)
+                && slot.handle == handle
+            {
+                slot.cursor = slot.cursor.max(through);
             }
         }
     }
@@ -1156,22 +1234,108 @@ impl TeamActor {
         let Ok(projection) = self.engine.read_projection(self.root).await else {
             return;
         };
-        let mut st = self.lock();
-        if st.killed {
-            return;
+        let mut consumed = Vec::new();
+        {
+            let mut st = self.lock();
+            if st.killed {
+                return;
+            }
+            for slot in st.residents.values_mut() {
+                let inbox = projection
+                    .team
+                    .inboxes
+                    .get(&slot.handle)
+                    .map_or(&[][..], Vec::as_slice);
+                if inbox.len() <= slot.cursor {
+                    continue;
+                }
+                let policy = ChannelPolicy::from_binding(&slot.binding).ok();
+                let has_deliverable = inbox.iter().skip(slot.cursor).any(|message| {
+                    let (kind, role) = recipient_channel_role(
+                        &projection,
+                        &message.to,
+                        &slot.handle,
+                        &message.from,
+                    );
+                    policy.as_ref().is_some_and(|policy| {
+                        resident_delivery_allowed(policy, slot.agent.name.as_str(), kind, role)
+                    })
+                });
+                if has_deliverable {
+                    slot.pending = true;
+                    slot.notify.notify_one();
+                } else {
+                    consumed.push((slot.claim, slot.handle.clone(), inbox.len()));
+                }
+            }
         }
-        for slot in st.residents.values_mut() {
-            let inbox_len = projection
-                .team
-                .inboxes
-                .get(&slot.handle)
-                .map_or(0, |inbox| inbox.len());
-            if inbox_len > slot.cursor {
-                slot.pending = true;
-                slot.notify.notify_one();
+        for (claim, handle, through) in consumed {
+            if self
+                .engine
+                .emit_for_actor(
+                    claim.as_ref(),
+                    self.root,
+                    Event::MailConsumed {
+                        session: self.root,
+                        handle: handle.clone(),
+                        through: through as u64,
+                    },
+                )
+                .await
+                .is_ok()
+                && let Some(slot) = self
+                    .lock()
+                    .residents
+                    .values_mut()
+                    .find(|slot| slot.handle == handle)
+            {
+                slot.cursor = slot.cursor.max(through);
             }
         }
     }
+}
+
+fn recipient_channel_role(
+    projection: &hya_proto::Projection,
+    to: &MailEndpoint,
+    recipient: &str,
+    sender: &str,
+) -> (ChannelTemplateKind, ChannelParticipantRole) {
+    if let MailEndpoint::Channel(channel) = to
+        && let Some(state) = projection.team.channels.get(channel)
+        && state.kind == ChannelKind::Group
+    {
+        return (
+            ChannelTemplateKind::Unit,
+            if state.unit.as_deref() == Some(recipient) {
+                ChannelParticipantRole::UnitLeader
+            } else {
+                ChannelParticipantRole::DirectReports
+            },
+        );
+    }
+    (
+        ChannelTemplateKind::ParentDm,
+        if scope::parent_path(sender) == Some(recipient) {
+            ChannelParticipantRole::Parent
+        } else {
+            ChannelParticipantRole::Child
+        },
+    )
+}
+
+fn resident_delivery_allowed(
+    policy: &ChannelPolicy,
+    agent: &str,
+    kind: ChannelTemplateKind,
+    role: ChannelParticipantRole,
+) -> bool {
+    [ChannelCapability::ResidentMail, ChannelCapability::FollowUp]
+        .into_iter()
+        .all(|capability| match kind {
+            ChannelTemplateKind::Unit => policy.allows_unit(capability, agent, role),
+            ChannelTemplateKind::ParentDm => policy.allows_parent_dm(capability, agent, role),
+        })
 }
 
 /// The resident actor loop for one session: park at zero cost, then run turns
@@ -1264,7 +1428,9 @@ async fn resident_task(team: Arc<TeamActor>, session: SessionId, notify: Arc<Not
                                 return Err(error);
                             }
                             let tool_bindings = handle.tool_bindings();
-                            let hook_dispatcher = handle.hook_dispatcher();
+                            let hook_dispatcher = handle
+                                .hook_dispatcher()
+                                .map(crate::bundle_hooks::restricted_sidecar_hooks);
                             Ok::<
                                 (
                                     Box<dyn SidecarHandle>,
@@ -2607,6 +2773,9 @@ impl ResidentSupervisor {
                     .await?
             }
         };
+        self.engine
+            .capture_session_bundle_hooks(session, &binding, agent.name.as_str())
+            .await;
         let parent_path = self
             .engine
             .resolve_handle(root, parent)
@@ -2853,6 +3022,9 @@ impl ResidentSupervisor {
                 resources,
             } => (binding, Some(agents), Some(resources)),
         };
+        self.engine
+            .capture_session_bundle_hooks(session, &binding, agent.name.as_str())
+            .await;
         let handle = scope::join_path(&parent_path, &leaf);
         // ADR-0016 channel plane: resolve (or mint) the unit's group channel
         // and mint the pair's persistent DM channel. Both are event facts
@@ -2920,7 +3092,12 @@ impl ResidentSupervisor {
         }
         // Notify `agent.spawn` (best-effort observation point) for the
         // resident member that was just registered under its parent.
-        if let Some(hooks) = self.engine.hook_dispatcher() {
+        let parent_session = projection
+            .team
+            .roster
+            .get(&parent_path)
+            .map_or(root, |entry| entry.session);
+        if let Some(hooks) = self.engine.session_hook_dispatcher(parent_session) {
             hooks
                 .agent_spawn(AgentSpawnInput {
                     parent: root,

@@ -4,6 +4,7 @@
 //! demultiplexed by request `id`. A held `ChildGuard` owns process lifetime.
 
 use std::collections::HashMap;
+use std::path::Path;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
@@ -179,8 +180,30 @@ impl McpClient {
         command: &[String],
         env: Option<&std::collections::BTreeMap<String, String>>,
     ) -> Result<(Self, ChildGuard), McpError> {
+        Self::spawn_with_options(command, env, None, false)
+    }
+
+    /// Spawn a packaged MCP server in its private materialized root with only
+    /// the explicitly supplied environment.
+    pub fn spawn_bundle(
+        command: &[String],
+        root: &Path,
+        env: Option<&std::collections::BTreeMap<String, String>>,
+    ) -> Result<(Self, ChildGuard), McpError> {
+        Self::spawn_with_options(command, env, Some(root), true)
+    }
+
+    fn spawn_with_options(
+        command: &[String],
+        env: Option<&std::collections::BTreeMap<String, String>>,
+        cwd: Option<&Path>,
+        clear_env: bool,
+    ) -> Result<(Self, ChildGuard), McpError> {
         let (program, args) = command.split_first().ok_or(McpError::EmptyCommand)?;
         let mut cmd = Command::new(program);
+        if clear_env {
+            cmd.env_clear();
+        }
         cmd.args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -188,6 +211,9 @@ impl McpClient {
             .kill_on_drop(true);
         if let Some(env) = env {
             cmd.envs(env);
+        }
+        if let Some(cwd) = cwd {
+            cmd.current_dir(cwd);
         }
         let mut child = cmd.spawn().map_err(|e| McpError::Io(e.to_string()))?;
         let stdout = child.stdout.take().ok_or(McpError::MissingPipe("stdout"))?;

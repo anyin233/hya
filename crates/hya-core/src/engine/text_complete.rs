@@ -101,7 +101,7 @@ impl SessionEngine {
         part: PartId,
         text: String,
     ) -> Option<String> {
-        let hooks = self.hooks.as_ref()?;
+        let hooks = self.active_hook_dispatcher(session)?;
         let original = text.clone();
         let TextCompleteOutcome::Continue { text } = hooks
             .text_complete(TextCompleteInput {

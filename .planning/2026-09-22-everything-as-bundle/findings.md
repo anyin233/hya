@@ -51,3 +51,15 @@
 Existing catalog generation refresh supports agentless prepared payloads, but Full-plane Skill candidate collection previously excluded every bundle Skill. A Plugin-specific visibility rule is needed for builtin agents to consume its published static Skills. Agent-bearing and unrecognized bundle sources must remain excluded from that exception. Process/MCP declarations remain metadata in this wave.
 
 Plugin final boundary: runtime source kind is Bundle, distinct from process Plugin; the Full-plane exception checks both Bundle source identity and catalog-confirmed Plugin payload. Regression tests exclude AgentBundle/private and unknown bundle sources. Plugin preparation also runs validate_unsupported, preserving static extensions.rust rejection while retaining process declarations.
+
+## Full continuation architecture (0.37.7)
+
+The earlier sections preserve the initial inspection and Plugin Wave 1 boundary. They are not the current implementation status.
+
+- Core agents now come from build-prepared `hya/core-agents` bytes and explicit trusted policy metadata; `AgentOrigin::Builtin` is retained only as the compatibility spelling for this preset origin. Public packages cannot grant themselves that trust.
+- `hya/base-tools` owns builtin exposure, alias visibility, invocation permission posture, protected names, and scheme metadata. Rust remains the execution and JSON schema implementation.
+- `hya/subagents` supplies transient/resident definitions; channel-only AgentSet bundles supply restrictive policy for engine-owned unit/parent-DM topology. The trusted channel defaults are separate from installable restrictions.
+- Bundle process/MCP startup now prepares exact contributions before generation publication. Full agents see agentless Plugin exports; bundle agents see only their selected private resource plane. Captured hooks retain the process owner and materialized files.
+- Agentless JS Plugins launch explicit Bun entrypoints without synthetic Agents. MCP process cwd/env is private to the prepared package. Native workspace-adapter contributions reject because no matching bundle resource contract exists.
+- Claude import is a source adapter into Plugin/AgentSetBundle, with explicit rejection of hooks that have no equivalent native semantics.
+- Final review found additional admission/event/lifecycle and loop hook wiring gaps, first-party CLI override mismatch, and channel recovery/cursor bypasses. Those gaps are fixed. Final fmt, strict full clippy, workspace tests (1785 passed / 3 ignored), backend build, serial process E2E (53 passed), Bun tests (50 passed), Claude tests (47 passed), both adapter typechecks and matrix validation all pass. Root hook install/removal preserves typed tool errors and boxed async scope avoids child-stack overflow.

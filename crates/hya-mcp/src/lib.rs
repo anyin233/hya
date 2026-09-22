@@ -9,6 +9,8 @@
 //! Typical flow: parse [`McpServerConfig`] maps → [`prepare`] / [`McpManager::connect_all`]
 //! → take [`McpManager::tools`] into the runtime registry. Deferred startup can hold
 //! a [`McpManager::pending`] status map while connections finish in the background.
+//! Packaged bundles use [`prepare_bundle`] to isolate environment and cwd while
+//! keeping ordinary configured MCP startup behavior unchanged.
 
 /// Tool bridge: MCP tool → [`hya_tool::Tool`] with namespacing and output shaping.
 pub mod bridge;
@@ -23,4 +25,6 @@ pub mod protocol;
 mod resource;
 
 pub use client::{McpClient, McpError};
-pub use manager::{McpManager, McpServerConfig, McpStatus, PreparedMcpServer, prepare};
+pub use manager::{
+    McpManager, McpServerConfig, McpStatus, PreparedMcpServer, prepare, prepare_bundle,
+};

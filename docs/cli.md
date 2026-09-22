@@ -131,18 +131,25 @@ These are the canonical bundle commands, implemented by `hya-backend` directly.
 
 `install` reports whether the package was installed, replaced, or unchanged,
 along with bundle identity, version, closed payload kind, and registry generation.
-With `--claude <source>`, `install` accepts a local Claude Code plugin directory:
-the bundled Claude adapter translates it offline into an `AgentBundle`
-(identity `claude/<name>`, namespace = sanitized name, skills from
-`agents/`, `skills/`, and `commands/`, MCP from `.mcp.json`), which installs
-through the same namespace-conflict policy (`DenyConflicts` by default;
-`--overwrite` replaces the incumbent).
+With `--claude <source>`, `install` accepts a local Claude Code plugin directory
+or a marketplace reference `<marketplace-root>#<entry>`. The adapter emits an
+agentless `Plugin` or an `AgentSetBundle` containing all imported agents, with
+packaged Skills, supported hooks, MCP declarations, and their source files.
+Imports use the ordinary namespace-conflict policy (`DenyConflicts` by default;
+`--overwrite` replaces the incumbent). See [Claude plugin import](claude-plugin-import.md)
+for supported mappings and explicitly rejected hook semantics.
+
+`list`, `info`, and `search` include the trusted `hya/core-agents`,
+`hya/base-tools`, and `hya/agent-channels` preset inventory alongside first-party
+and installed packages. Trusted inventory rows are immutable and not installable;
+public packages cannot acquire preset privileges. Installed first-party package
+overrides take precedence over the embedded fallback. Uninstalling the override
+restores that fallback; an embedded package itself cannot be removed.
+
 `list` reports name, version, packaged Agents, state, package kind, and Workflow
-id for the merged immutable first-party and installed catalog. `info` also
-reports publisher, origin, format, immutability, digests, and packaged resource
-ids when available. The first-party WorkflowBundle is read-only and cannot be
-replaced or uninstalled. Repeating an install with the same digest is
-idempotent; replacement and removal publish through atomic registry operations.
+id. `info` adds publisher, origin, format, immutability, digests, and resource ids.
+Repeating an install with the same digest is idempotent; replacement and removal
+publish through atomic registry operations.
 
 `search <QUERY>` filters the same merged first-party and installed catalog with
 a case-insensitive substring match over bundle ids, agent ids, and skill ids
@@ -170,36 +177,41 @@ hand while an install is running.
 The separate registry is
 `$XDG_DATA_HOME/hya/bundles/registry.sqlite3`, falling back to
 `~/.local/share/hya/bundles/registry.sqlite3`. A successful generation change
-is loaded lazily before a new root turn binds and when the catalog is
-refreshed. In-flight and child turns remain pinned to their existing catalog;
-a failed candidate leaves the previous snapshot active. There is no filesystem
-watcher or per-round/tool-call registry query.
+is loaded at root admission, root turn binding, root model-round boundaries,
+and explicit catalog refresh. A running round keeps its captured snapshot;
+subagents and Workflow members keep their inherited binding throughout the
+activation. A failed rebind leaves the previous snapshot active. There is no
+filesystem watcher or per-tool-call registry query.
 
 `info -f` strictly inspects a package without mutating the registry or runtime
 publication. Package paths require the exact lowercase `.hyabundle` suffix;
 the bytes magic is still authoritative for public/private format detection.
-Public packages are a closed `Plugin | AgentBundle | AgentSetBundle | WorkflowBundle` payload. A Plugin carries resources without an Agent or Workflow. An
-AgentBundle carries one Agent; an AgentSetBundle carries one or more Agents without a Workflow. A WorkflowBundle carries one compiled Workflow
-and its exact reachable Agent closure. All kinds may remain process-free. Agent-bearing packages may
-include only their declared prompt/resource/Extension closure for
-self-contained selected JavaScript entrypoints in an activation-scoped Bun
-Compat sidecar; no helper/import closure is supported. Undeclared directory
-files are ignored and unreferenced archive files are rejected; activation never
-executes the authoring tree. See [AgentBundle Authoring](agent-bundle-authoring.md),
-[WorkflowBundle packaging](workflows.md#packaging-a-workflowbundle), and the
-[static](examples/bundle.hya.md), [transient Bun](examples/bun-transient/),
-[resident Bun](examples/bun-resident/), and [disjoint Bun](examples/bun-disjoint/)
-examples. Package publication validates collisions against the immutable
-first-party catalog, the complete installed BundleCatalog, and reserved core
-Agent ids before atomic generation publication. Each activation materializes
-only the selected Agent's captured Tool/Hook/Skill capability closure and
-exact-path-matched JavaScript Extension entrypoints; staged-but-unselected
-Extensions never activate.
-New root turns and catalog refreshes publish the installed generation lazily while
-existing TurnBindings remain pinned. Private output reports authentication as
-unverified, payload as opaque, and activation as unsupported in 0.36.0.
-Raw Rust extensions and Bundle-declared MCP remain unsupported; the sidecar
-does not run an agent loop or add a permission plane.
+Public packages are a closed `Plugin | AgentBundle | AgentSetBundle | WorkflowBundle`
+payload. A Plugin carries resources without an Agent or Workflow. An AgentBundle
+carries one Agent; an AgentSetBundle carries Agents and/or declarative channel
+policies without a Workflow. A WorkflowBundle carries one compiled Workflow and
+its exact reachable Agent closure. All kinds may remain process-free.
+
+Use `extensions.process` for a native/Bun/Claude provider, `resources.mcp` for
+managed MCP servers, and `extensions.files` for explicit support-file closure.
+Resources execute from the validated package after source removal. Agentless
+JavaScript Plugins use a generation-owned Bun process; agent-bearing JavaScript
+bundles retain activation-scoped sidecars with selected entrypoints. Process
+initialization must match declared resources before publication. See
+[Bundle Runtime](bundle-runtime.md), [AgentBundle Authoring](agent-bundle-authoring.md),
+and [WorkflowBundle packaging](workflows.md#packaging-a-workflowbundle).
+
+Package publication validates the merged catalog after first-party shadowing,
+the complete installed BundleCatalog, and reserved core Agent ids before atomic
+generation publication. Each JavaScript activation materializes only the selected
+Agent's captured Tool/Hook/Skill capability closure and exact-path-matched
+JavaScript Extension entrypoints; inert staged files never imply activation.
+Root admission, turn/round boundaries, and catalog refreshes publish installed
+generations lazily; each existing TurnBinding itself remains immutable. Public installed bundles cannot grant
+preset trust or expand their permission/resource planes. Private output reports
+authentication as unverified, payload as opaque, and activation as unsupported.
+Raw `extensions.rust` lists remain unsupported; `extensions.process.kind: rust`
+selects the native process ABI without compiling source.
 
 ## Bare `hya-backend`
 

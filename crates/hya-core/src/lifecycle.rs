@@ -28,12 +28,19 @@ pub async fn run_lifecycle_service(
                     session,
                     outcome,
                     report,
+                    channel_policy,
                     reply,
                 } => {
-                    let result =
-                        submit_report_for_session(&engine, &supervisor, session, outcome, report)
-                            .await
-                            .map_err(|e| e.to_string());
+                    let result = submit_report_for_session(
+                        &engine,
+                        &supervisor,
+                        session,
+                        outcome,
+                        report,
+                        channel_policy,
+                    )
+                    .await
+                    .map_err(|e| e.to_string());
                     let _ = reply.send(result);
                 }
                 LifecycleRequest::Kill {
@@ -59,9 +66,15 @@ async fn submit_report_for_session(
     session: hya_proto::SessionId,
     outcome: ReportOutcome,
     report: String,
+    channel_policy: Option<hya_tool::ChannelPolicySnapshot>,
 ) -> Result<(), crate::CoreError> {
     let (root, _) = engine.session_lineage(session).await?;
     let handle = engine.resolve_handle(root, session).await?;
+    if !channel_policy.is_some_and(|policy| policy.dm_child & (1 << 1) != 0) {
+        return Err(crate::CoreError::Invalid(
+            "channel policy denies report for this agent".to_string(),
+        ));
+    }
     supervisor
         .submit_report(root, &handle, outcome, report)
         .await

@@ -1,0 +1,17 @@
+kind: AgentSetBundle
+identity:
+  id: hya/subagents
+  version: 1.0.0
+  publisher: hya
+agents:
+  - id: hya-resident-worker
+    description: Long-lived worker for follow-up tasks delivered through its runtime mailbox.
+    role: subagent
+    prompt: prompts/resident-worker.md
+    spawn_lifecycle: resident
+    can_spawn: [hya-transient-worker]
+  - id: hya-transient-worker
+    description: One-shot worker for a bounded task that reports and exits.
+    role: subagent
+    prompt: prompts/transient-worker.md
+    spawn_lifecycle: transient

@@ -41,15 +41,16 @@ If you want to package a public Plugin, AgentBundle, AgentSetBundle, or Workflow
 2. Read [AgentBundle Authoring](agent-bundle-authoring.md) for agentless Plugin, singular or
    multi-agent (`AgentSetBundle`) payloads, or [Workflows](workflows.md#packaging-a-workflowbundle) for one
    Workflow plus its exact reachable Agent closure. Sources use exactly one
-   root form: `bundle.yaml` for all three kinds, or `bundle.hya.md` only for an
+   root form: `bundle.yaml` for all four kinds, or `bundle.hya.md` only for an
    AgentBundle body prompt. Start from the
    [single-file static example](examples/bundle.hya.md), the
    [transient Bun example](examples/bun-transient/), the
    [resident Bun example](examples/bun-resident/), the
    [disjoint Bun example](examples/bun-disjoint/), or the
    [directory `bundle.yaml` layout](../crates/hya-bundle/tests/fixtures/directory/bundle.yaml),
-   and use the [bundle CLI reference](cli.md#bundle-commands). Built-in Agents
-   are compiled in and cannot be shadowed by any package kind.
+   and use the [bundle CLI reference](cli.md#bundle-commands). Core Agents
+   come from the trusted [embedded preset](core-agents.md); public packages cannot
+   claim their reserved identities or trusted origin.
 
 If you want the independent self-update path (0.34.13+):
 
@@ -87,6 +88,12 @@ If you want to understand the codebase:
 | [Workflows](workflows.md) | Workflow DAGs, governance, discovery, CLI/tool execution, and WorkflowBundle packaging. |
 | [Plugin protocol](plugin-protocol.md) | Native stdio JSON-RPC ABI for out-of-process plugins. |
 | [AgentBundle Authoring](agent-bundle-authoring.md) | Package, inspect, install, list, describe, and uninstall public Plugin, AgentBundle, and AgentSetBundle payloads, including static and Bun-sidecar forms. |
+| [Bundle Runtime](bundle-runtime.md) | Packaged process/MCP startup, scoped tools/hooks, immutable bindings, and failure rollback. |
+| [Core agents](core-agents.md) | Trusted embedded agent preset and reserved-agent provenance. |
+| [Base tools](base-tools.md) | Data-owned native tool exposure, aliases, and permission defaults. |
+| [Claude plugin import](claude-plugin-import.md) | Import local and marketplace plugins into standard bundles. |
+| [Subagent bundles](subagent-bundles.md) | Transient and resident bundle-defined workers. |
+| [Agent channels](agent-channels.md) | Declarative unit and parent-DM policies. |
 | [Secure self-update](self-update.md) | Independent `hya-updater` TCB: signed metadata, local package stage, smoke, owner-gated activation, break-glass installer. |
 | [Project Structure](project-structure.md) | Map repository paths, crates, modules, tests, and data flow. |
 | [Architecture Overview](architecture/overview.md) | Explain the crate boundary model and end-to-end request path. |

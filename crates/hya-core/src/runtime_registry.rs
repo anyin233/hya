@@ -92,7 +92,7 @@ pub struct RuntimeCandidate {
 /// Kind of runtime contribution source.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum RuntimeSourceKind {
-    /// Statically prepared bundle resources.
+    /// Prepared bundle resources and their generation-owned process providers.
     Bundle,
     /// MCP server tools.
     Mcp,
@@ -135,6 +135,7 @@ pub struct RuntimeSource {
     skills: Vec<RuntimeSourceSkill>,
     resources: Arc<BTreeMap<String, Value>>,
     schemas: Vec<SourceSchema>,
+    hooks: Option<Arc<dyn crate::hooks::HookDispatcher>>,
 }
 
 /// One external URI-scheme claim a runtime source makes.
@@ -727,7 +728,6 @@ impl RuntimeCandidate {
         sources: &[RuntimeSource],
     ) -> (Vec<String>, BTreeMap<String, String>) {
         const RESERVED_HEADS: [&str; 3] = ["mcp", "harness", "builtin"];
-        const PROTECTED_BARE_NAMES: [&str; 1] = ["read"];
         const BUILTIN_LABEL: &str = "built-in";
         let valid_segment = |token: &str| {
             !token.is_empty()
@@ -799,7 +799,7 @@ impl RuntimeCandidate {
                 }
                 canonical_owner.insert(name.to_string(), label.clone());
                 for alias in &export.aliases {
-                    if PROTECTED_BARE_NAMES.contains(&alias.as_str()) {
+                    if hya_tool::base_tools_preset().is_protected(alias) {
                         conflicts.push(format!(
                             "source {label}: protected tool `{alias}` cannot be masked; \
                              the alias is rejected"
@@ -1335,7 +1335,18 @@ impl RuntimeSource {
             skills: Vec::new(),
             resources: Arc::new(BTreeMap::new()),
             schemas: Vec::new(),
+            hooks: None,
         }
+    }
+
+    /// Attach process hooks retained by this immutable runtime generation.
+    #[must_use]
+    pub fn with_hooks(mut self, hooks: Arc<dyn crate::hooks::HookDispatcher>) -> Self {
+        self.hooks = Some(Arc::new(crate::bundle_hooks::ScopedBundleHooks::retaining(
+            hooks,
+            Arc::clone(&self.owner),
+        )));
+        self
     }
 
     /// Attach parsed Skill contributions to the source.
@@ -1381,6 +1392,11 @@ fn sources_match(
             right.get(id).is_some_and(|right| {
                 left.declaration_digest == right.declaration_digest
                     && Arc::ptr_eq(&left.owner, &right.owner)
+                    && match (&left.hooks, &right.hooks) {
+                        (Some(left), Some(right)) => Arc::ptr_eq(left, right),
+                        (None, None) => true,
+                        _ => false,
+                    }
                     && left.resources == right.resources
                     && left.schemas == right.schemas
                     && left.skills.len() == right.skills.len()
@@ -1409,6 +1425,86 @@ fn sources_match(
 }
 
 impl TurnBinding {
+    /// Retain one explicitly selected bundle's process hooks from this generation.
+    #[must_use]
+    pub fn bundle_hooks(&self, bundle_id: &str) -> Option<Arc<dyn crate::hooks::HookDispatcher>> {
+        if !self
+            .snapshot
+            .catalog
+            .bundles()
+            .bundles()
+            .iter()
+            .any(|bundle| bundle.identity().id == bundle_id)
+        {
+            return None;
+        }
+        self.snapshot
+            .sources
+            .get(&RuntimeSourceId::bundle(bundle_id))?
+            .hooks
+            .clone()
+    }
+
+    /// Read a bundle-owned Skill from this immutable generation.
+    #[must_use]
+    pub fn bundle_skill_content(&self, bundle_id: &str, local_id: &str) -> Option<&str> {
+        self.snapshot
+            .catalog
+            .bundles()
+            .bundles()
+            .iter()
+            .find(|bundle| bundle.identity().id == bundle_id)?
+            .skills()
+            .iter()
+            .find(|skill| skill.local_id == local_id)
+            .map(|skill| skill.content.as_str())
+    }
+
+    /// Shared Plugin hooks for Full-plane agents, or selected owner hooks for bundle agents.
+    /// Sources are returned in stable ascending identity order; no live registry read occurs.
+    #[must_use]
+    pub fn bundle_hooks_for_agent(
+        &self,
+        stable_agent_id: &str,
+    ) -> Vec<Arc<dyn crate::hooks::HookDispatcher>> {
+        let Some(agent) = self.resolve_agent(stable_agent_id) else {
+            return Vec::new();
+        };
+        if let Some(bundle_id) = agent.origin.bundle_id() {
+            let Some(hooks) = self.bundle_hooks(bundle_id) else {
+                return Vec::new();
+            };
+            let Ok(policy) = self.agent_resource_policy(stable_agent_id) else {
+                return Vec::new();
+            };
+            if policy.canonical_hook_ids.is_empty() {
+                return Vec::new();
+            }
+            return vec![Arc::new(crate::bundle_hooks::ScopedBundleHooks::new(
+                hooks,
+                &policy.canonical_hook_ids,
+            ))];
+        }
+        self.snapshot
+            .sources
+            .values()
+            .filter(|source| {
+                source.id.kind() == RuntimeSourceKind::Bundle
+                    && self
+                        .snapshot
+                        .catalog
+                        .bundles()
+                        .bundles()
+                        .iter()
+                        .any(|bundle| {
+                            bundle.identity().id == source.id.configured_id()
+                                && bundle.plugin_bundle().is_some()
+                        })
+            })
+            .filter_map(|source| source.hooks.clone())
+            .collect()
+    }
+
     /// Return a deterministic identity for the currently supported complete
     /// runtime view. Views with unidentifiable sources are intentionally
     /// unavailable until their semantic sections have a canonical encoding.
@@ -1786,6 +1882,14 @@ impl TurnBinding {
             // A built-in owns no bundle resources, so it never needs a sidecar.
             return Ok(false);
         }
+        if policy
+            .bundle_id
+            .as_deref()
+            .is_some_and(|id| self.bundle_hooks(id).is_some())
+        {
+            // Process extensions already own the complete declared executable surface.
+            return Ok(false);
+        }
         let partitions = self.collect_resource_candidates(&policy)?;
         let selected = select_candidates_globally(&policy, &partitions)?;
         let selected_bundle_tool = selected.tool.iter().any(|id| {
@@ -1851,6 +1955,7 @@ impl TurnBinding {
             &self.snapshot.tools,
             &self.snapshot.sources,
             &self.snapshot.masks,
+            bundles,
             &mut tool_candidates,
         );
         collect_harness_skill_candidates(
@@ -1864,6 +1969,7 @@ impl TurnBinding {
             policy.plane,
             &self.snapshot.sources,
             &self.snapshot.masks,
+            bundles,
             &mut mcp_candidates,
         );
 
@@ -1906,18 +2012,6 @@ impl TurnBinding {
 
         let partitions = self.collect_resource_candidates(policy)?;
         let selected = select_candidates_globally(policy, &partitions)?;
-
-        if selected.mcp.iter().any(|id| {
-            partitions
-                .mcp
-                .get(id)
-                .is_some_and(ResourceCandidate::is_bundle_local)
-        }) {
-            return Err(BundleError::UnsupportedBundleFeature {
-                bundle_id: bundle_id.to_string(),
-                feature: "resources.mcp".to_string(),
-            });
-        }
 
         let view_aliases = resolve_view_aliases(policy, &partitions, &selected, view)?;
         let tool_view_aliases = aliases_for_kind("tool", &view_aliases);
@@ -1994,7 +2088,7 @@ impl TurnBinding {
             &tool_public,
             &tool_view_aliases,
         )?;
-        let model_mcp_names = model_schema_public_names(
+        let mut model_mcp_names = model_schema_public_names(
             bundle_id,
             "mcp",
             &partitions.mcp,
@@ -2017,6 +2111,7 @@ impl TurnBinding {
         }
 
         let mut tools = BTreeMap::new();
+        let mut mcp_expansions = BTreeMap::new();
         for (public_name, canonical_id) in tool_public.iter().chain(mcp_public.iter()) {
             let (kind, candidates) = if partitions.tool.contains_key(canonical_id) {
                 ("tool", &partitions.tool)
@@ -2032,8 +2127,33 @@ impl TurnBinding {
             })?;
             match candidate {
                 ResourceCandidate::BundleLocal { .. } if kind == "tool" => {
-                    if let Some(resolved) = sidecar_tools_by_name.get(canonical_id) {
-                        tools.insert(public_name.clone(), resolved.clone());
+                    let process_tool = canonical_id
+                        .strip_prefix("bundle:")
+                        .and_then(|id| id.split_once("/tool/"))
+                        .and_then(|(owner, local)| {
+                            self.snapshot
+                                .sources
+                                .get(&RuntimeSourceId::bundle(owner))
+                                .and_then(|source| {
+                                    source.exports.iter().find(|export| {
+                                        export.declared_id == local
+                                            && export.permission != ToolPermission::Mcp
+                                    })
+                                })
+                        })
+                        .map(|export| ResolvedTool {
+                            tool: Arc::new(NamedTool::new(
+                                canonical_id.clone(),
+                                export.tool.clone(),
+                            )),
+                            permission: export.permission,
+                        });
+                    if let Some(resolved) = sidecar_tools_by_name
+                        .get(canonical_id)
+                        .cloned()
+                        .or(process_tool)
+                    {
+                        tools.insert(public_name.clone(), resolved);
                     } else {
                         return Err(BundleError::UnsupportedBundleFeature {
                             bundle_id: bundle_id.to_string(),
@@ -2042,10 +2162,49 @@ impl TurnBinding {
                     }
                 }
                 ResourceCandidate::BundleLocal { .. } => {
-                    return Err(BundleError::UnsupportedBundleFeature {
-                        bundle_id: bundle_id.to_string(),
-                        feature: "resources.mcp".to_string(),
-                    });
+                    let (owner, server_id) = canonical_id
+                        .strip_prefix("bundle:")
+                        .and_then(|id| id.split_once("/mcp/"))
+                        .ok_or_else(|| BundleError::UnknownResourceReference {
+                            bundle_id: bundle_id.to_string(),
+                            kind: "mcp".into(),
+                            reference: canonical_id.clone(),
+                        })?;
+                    let source = self
+                        .snapshot
+                        .sources
+                        .get(&RuntimeSourceId::bundle(owner))
+                        .ok_or_else(|| BundleError::UnsupportedBundleFeature {
+                            bundle_id: bundle_id.to_string(),
+                            feature: "resources.mcp".into(),
+                        })?;
+                    let prefix = format!("mcp/{server_id}/");
+                    let mut expanded_names = BTreeSet::new();
+                    for export in source
+                        .exports
+                        .iter()
+                        .filter(|export| export.permission == ToolPermission::Mcp)
+                    {
+                        let Some(local) = export.declared_id.strip_prefix(&prefix) else {
+                            continue;
+                        };
+                        let name = format!("{public_name}__{local}");
+                        if tools.contains_key(&name) {
+                            return Err(BundleError::NamespaceCollision {
+                                bundle_id: bundle_id.into(),
+                                name,
+                            });
+                        }
+                        tools.insert(
+                            name.clone(),
+                            ResolvedTool {
+                                tool: export.tool.clone(),
+                                permission: export.permission,
+                            },
+                        );
+                        expanded_names.insert(name);
+                    }
+                    mcp_expansions.insert(public_name.clone(), expanded_names);
                 }
                 ResourceCandidate::HarnessTool { resolved, .. }
                 | ResourceCandidate::HarnessMcp { resolved, .. } => {
@@ -2097,6 +2256,21 @@ impl TurnBinding {
             skills.push(entry);
         }
 
+        for (server_name, expanded) in mcp_expansions {
+            if model_mcp_names.remove(&server_name) {
+                for name in expanded {
+                    if !is_model_tool_name(&name) {
+                        return Err(BundleError::InvalidManifest {
+                            source_name: bundle_id.into(),
+                            detail: format!(
+                                "expanded MCP tool `{name}` needs a shorter provider-safe server alias"
+                            ),
+                        });
+                    }
+                    model_mcp_names.insert(name);
+                }
+            }
+        }
         let schemas = model_tool_names
             .iter()
             .chain(model_mcp_names.iter())
@@ -2742,12 +2916,20 @@ fn collect_bundle_tool_candidates(
     Ok(())
 }
 
+fn is_harness_source(source: &RuntimeSource, bundles: &BundleCatalog) -> bool {
+    source.id.kind() != RuntimeSourceKind::Bundle
+        || bundles.bundles().iter().any(|bundle| {
+            bundle.identity().id == source.id.configured_id() && bundle.plugin_bundle().is_some()
+        })
+}
+
 fn collect_harness_tool_candidates(
     plane: AgentToolPlane,
     basic_tools: &ToolRegistrySnapshot,
     full_tools: &ToolRegistrySnapshot,
     sources: &BTreeMap<RuntimeSourceId, RuntimeSource>,
     masks: &BTreeMap<String, String>,
+    bundles: &BundleCatalog,
     out: &mut BTreeMap<String, ResourceCandidate>,
 ) {
     // `basic_tools` is the snapshot captured when the registry was built, before
@@ -2757,13 +2939,15 @@ fn collect_harness_tool_candidates(
         AgentToolPlane::InternalPublic => basic_tools,
         AgentToolPlane::Full => full_tools,
     };
-    let mcp_canonical_names = sources
+    let excluded_names = sources
         .values()
-        .filter(|source| source.id.kind() == RuntimeSourceKind::Mcp)
         .flat_map(|source| {
             source
                 .exports
                 .iter()
+                .filter(|export| {
+                    export.permission == ToolPermission::Mcp || !is_harness_source(source, bundles)
+                })
                 .map(|export| export.canonical_name.as_str())
         })
         .collect::<BTreeSet<_>>();
@@ -2772,7 +2956,7 @@ fn collect_harness_tool_candidates(
     let pool: BTreeSet<String> = entries.iter().map(|(name, _)| name.clone()).collect();
     for (name, resolved) in entries {
         // MCP is an independent resource kind; do not re-home it under tool.
-        if mcp_canonical_names.contains(name.as_str()) {
+        if excluded_names.contains(name.as_str()) {
             continue;
         }
         // A masked tool is excluded from the view: the mask winner provides
@@ -2968,6 +3152,7 @@ fn collect_harness_mcp_candidates(
     plane: AgentToolPlane,
     sources: &BTreeMap<RuntimeSourceId, RuntimeSource>,
     masks: &BTreeMap<String, String>,
+    bundles: &BundleCatalog,
     out: &mut BTreeMap<String, ResourceCandidate>,
 ) {
     // MCP servers are configured at the Harness level. A bundle agent gets only
@@ -2977,8 +3162,9 @@ fn collect_harness_mcp_candidates(
     }
     let mut exports = sources
         .values()
-        .filter(|source| source.id.kind() == RuntimeSourceKind::Mcp)
+        .filter(|source| is_harness_source(source, bundles))
         .flat_map(|source| source.exports.iter())
+        .filter(|export| export.permission == ToolPermission::Mcp)
         .collect::<Vec<_>>();
     exports.sort_by(|left, right| left.canonical_name.cmp(&right.canonical_name));
     for export in exports {
@@ -3737,6 +3923,186 @@ mod tests {
                 .iter()
                 .any(|skill| skill.name == "shared-skill")
         );
+    }
+
+    #[test]
+    fn bundled_mcp_stays_in_mcp_partition() {
+        let prepared = prepare_package(BundleSource::new("bundled-mcp", vec![
+            SourceFile::new("bundle.yaml", "kind: Plugin\nidentity: { id: acme/bundled-mcp, version: 1.0.0, publisher: acme }\n"),
+        ])).unwrap();
+        let catalog = Arc::new(TestCatalog::from_verified_catalogs(&[&prepared]).unwrap());
+        let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
+        registry
+            .refresh(|candidate| {
+                candidate.upsert_sources(vec![RuntimeSource::new(
+                    RuntimeSourceId::bundle("acme/bundled-mcp"),
+                    [1; 32],
+                    Arc::new(()),
+                    vec![RuntimeSourceExport::tool(
+                        "mcp/echo/ping",
+                        "bundled-mcp__mcp__echo__ping",
+                        Vec::new(),
+                        Arc::new(NoopTool::new("bundled-mcp__mcp__echo__ping")),
+                        ToolPermission::Mcp,
+                    )],
+                )])
+            })
+            .unwrap();
+        let binding = registry
+            .bind_turn(Path::new("/tmp/hya-bundled-mcp-kind"))
+            .unwrap();
+        let policy = binding.agent_resource_policy("build").unwrap();
+        let candidates = binding.collect_resource_candidates(&policy).unwrap();
+        assert!(
+            candidates
+                .mcp
+                .contains_key("harness:mcp/bundled-mcp__mcp__echo__ping")
+        );
+        assert!(
+            !candidates
+                .tool
+                .contains_key("harness:tool/bundled-mcp__mcp__echo__ping")
+        );
+    }
+
+    #[test]
+    fn bundle_process_tool_is_owner_scoped_and_needs_no_bun_sidecar() {
+        let prepared = prepare_package(BundleSource::new(
+            "private-process",
+            vec![
+                SourceFile::new(
+                    "bundle.yaml",
+                    r#"kind: AgentBundle
+identity: { id: acme/private-process, version: 1.0.0, publisher: acme }
+extensions:
+  process: { kind: rust, command: [fixture] }
+resources:
+  tools: [{ id: echo, path: echo.json }]
+  hooks: [{ id: tool.execute.before, path: echo.json }]
+agent:
+  hook_refs: [tool.execute.before]
+  id: private-process-agent
+  role: main
+  spawn_lifecycle: transient
+  resource_view: { allow: [echo] }
+"#,
+                ),
+                SourceFile::new("echo.json", "{}"),
+            ],
+        ))
+        .unwrap();
+        let catalog = Arc::new(TestCatalog::from_verified_catalogs(&[&prepared]).unwrap());
+        let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
+        registry
+            .refresh(|candidate| {
+                candidate.upsert_sources(vec![
+                    RuntimeSource::new(
+                        RuntimeSourceId::bundle("acme/private-process"),
+                        [2; 32],
+                        Arc::new(()),
+                        vec![RuntimeSourceExport::tool(
+                            "echo",
+                            "private-process__echo",
+                            Vec::new(),
+                            Arc::new(NoopTool::new("private-process__echo")),
+                            ToolPermission::Tool,
+                        )],
+                    )
+                    .with_hooks(Arc::new(crate::hooks::HookChain::new(Vec::new()))),
+                ])
+            })
+            .unwrap();
+        let binding = registry
+            .bind_turn(Path::new("/tmp/hya-private-process"))
+            .unwrap();
+        let policy = binding
+            .agent_resource_policy("private-process-agent")
+            .unwrap();
+        let compiled = binding
+            .compile_agent_resources(&policy)
+            .expect("owner process resource must compile");
+        assert!(compiled.resolve_tool("echo").is_some());
+        assert_eq!(
+            binding
+                .bundle_hooks_for_agent("private-process-agent")
+                .len(),
+            1
+        );
+        assert!(binding.bundle_hooks_for_agent("build").is_empty());
+        assert!(
+            !binding
+                .has_selected_bundle_sidecar_capability("private-process-agent")
+                .unwrap()
+        );
+        let root = binding
+            .compile_agent_resources(&binding.agent_resource_policy("build").unwrap())
+            .unwrap();
+        assert!(root.resolve_tool("private-process__echo").is_none());
+    }
+
+    #[test]
+    fn bundle_mcp_server_selection_expands_owner_tools_only() {
+        let prepared = prepare_package(BundleSource::new(
+            "private-mcp",
+            vec![
+                SourceFile::new(
+                    "bundle.yaml",
+                    r#"kind: AgentBundle
+identity: { id: acme/private-mcp, version: 1.0.0, publisher: acme }
+resources:
+  mcp: [{ id: echo, path: mcp.json }]
+agent:
+  id: private-mcp-agent
+  role: main
+  spawn_lifecycle: transient
+  resource_view: { allow: [echo] }
+"#,
+                ),
+                SourceFile::new("mcp.json", r#"{"command":["fixture"]}"#),
+            ],
+        ))
+        .unwrap();
+        let catalog = Arc::new(TestCatalog::from_verified_catalogs(&[&prepared]).unwrap());
+        let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
+        registry
+            .refresh(|candidate| {
+                candidate.upsert_sources(vec![RuntimeSource::new(
+                    RuntimeSourceId::bundle("acme/private-mcp"),
+                    [3; 32],
+                    Arc::new(()),
+                    vec![RuntimeSourceExport::tool(
+                        "mcp/echo/ping",
+                        "private-mcp__mcp__echo__ping",
+                        Vec::new(),
+                        Arc::new(NoopTool::new("private-mcp__mcp__echo__ping")),
+                        ToolPermission::Mcp,
+                    )],
+                )])
+            })
+            .unwrap();
+        let binding = registry
+            .bind_turn(Path::new("/tmp/hya-private-mcp"))
+            .unwrap();
+        let policy = binding.agent_resource_policy("private-mcp-agent").unwrap();
+        let compiled = binding
+            .compile_agent_resources(&policy)
+            .expect("selected MCP server must provide its tools");
+        assert_eq!(
+            compiled.resolve_tool("echo__ping").unwrap().permission,
+            ToolPermission::Mcp
+        );
+        assert_eq!(
+            compiled
+                .tool_schemas()
+                .iter()
+                .map(|schema| schema.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["echo__ping"]
+        );
+        let root = binding
+            .compile_agent_resources(&binding.agent_resource_policy("build").unwrap())
+            .unwrap();
+        assert!(root.resolve_tool("private-mcp__mcp__echo__ping").is_none());
     }
 
     struct NoopTool {

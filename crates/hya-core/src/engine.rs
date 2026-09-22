@@ -27,7 +27,7 @@ use crate::agent_catalog::AgentDefinition;
 use crate::bus::EventBus;
 use crate::compaction::{CompactionConfig, SummarizeOptions, Summarizer};
 use crate::error::CoreError;
-use crate::hooks::{HookDispatcher, SessionLifecycleInput, dispatch_activation_event};
+use crate::hooks::{HookChain, HookDispatcher, SessionLifecycleInput, activation_hook_for};
 use crate::runtime_registry::CompiledResourceView;
 use crate::sidecar::SidecarEnvironment;
 use crate::tokens::TokenAccounting;
@@ -374,6 +374,8 @@ pub struct SessionEngine {
     /// Family tokenizers backing the usage-ledger fallback estimate.
     usage_tokenizers: Arc<crate::model_tokenizers::ModelTokenizerSource>,
     hooks: Option<Arc<dyn HookDispatcher>>,
+    session_bundle_hooks: Arc<RwLock<HashMap<SessionId, Arc<dyn HookDispatcher>>>>,
+    session_channel_policies: Arc<RwLock<HashMap<SessionId, hya_tool::ChannelPolicySnapshot>>>,
     governor: Option<crate::orchestrator::SubagentGovernor>,
     sidecar_environment: Option<Arc<dyn SidecarEnvironment>>,
     /// Revival seam (ADR-0015): a downward mail to an archived direct child
@@ -428,6 +430,8 @@ impl Clone for SessionEngine {
             token_accounting: self.token_accounting.clone(),
             usage_tokenizers: self.usage_tokenizers.clone(),
             hooks: self.hooks.clone(),
+            session_bundle_hooks: Arc::clone(&self.session_bundle_hooks),
+            session_channel_policies: Arc::clone(&self.session_channel_policies),
             governor: self.governor.clone(),
             sidecar_environment: self.sidecar_environment.clone(),
             reviver: RwLock::new(
@@ -526,6 +530,8 @@ impl SessionEngine {
             token_accounting: TokenAccounting::default(),
             usage_tokenizers: Arc::new(crate::model_tokenizers::ModelTokenizerSource::default()),
             hooks: None,
+            session_bundle_hooks: Arc::new(RwLock::new(HashMap::new())),
+            session_channel_policies: Arc::new(RwLock::new(HashMap::new())),
             governor: None,
             sidecar_environment: None,
             reviver: RwLock::new(None),
@@ -1238,7 +1244,18 @@ impl SessionEngine {
         if let Some(hooks) = &self.hooks {
             hooks.dispatch_event(&envelope);
         }
-        dispatch_activation_event(&envelope);
+        let session = envelope.event.session();
+        let active = session.and_then(activation_hook_for);
+        let captured = session.and_then(|session| {
+            self.session_bundle_hooks
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .get(&session)
+                .cloned()
+        });
+        if let Some(hooks) = active.or(captured) {
+            hooks.dispatch_event(&envelope);
+        }
         self.bus.publish(envelope);
     }
 
@@ -1273,7 +1290,11 @@ impl SessionEngine {
             }],
         )
         .await?;
-        self.notify_session_lifecycle(id, true).await;
+        if let Some(hooks) = &self.hooks {
+            hooks
+                .session_start(SessionLifecycleInput { session: id })
+                .await;
+        }
         Ok(id)
     }
 
@@ -1290,6 +1311,9 @@ impl SessionEngine {
         if !self.replay(id).await?.is_empty() {
             return Ok(id);
         }
+        let is_root = spec.parent.is_none();
+        let stable_agent_id = spec.agent.as_str().to_string();
+        let workdir = PathBuf::from(&spec.workdir);
         self.emit(
             id,
             Event::SessionCreated {
@@ -1301,7 +1325,22 @@ impl SessionEngine {
             },
         )
         .await?;
-        self.notify_session_lifecycle(id, true).await;
+        if is_root {
+            match self.bind_session_runtime(id, &workdir).await {
+                Ok(binding) => {
+                    self.capture_session_bundle_hooks(id, &binding, &stable_agent_id)
+                        .await;
+                }
+                Err(error) => {
+                    tracing::warn!(session = %id, %error, "session.start bundle hook binding failed");
+                }
+            }
+        }
+        if let Some(hooks) = &self.hooks {
+            hooks
+                .session_start(SessionLifecycleInput { session: id })
+                .await;
+        }
         Ok(id)
     }
 
@@ -1316,12 +1355,132 @@ impl SessionEngine {
                 hooks.session_end(input).await;
             }
         }
+        let bundle_hooks = if start {
+            self.session_bundle_hooks
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .get(&session)
+                .cloned()
+        } else {
+            self.session_channel_policies
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .remove(&session);
+            self.session_bundle_hooks
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .remove(&session)
+        };
+        if let Some(hooks) = bundle_hooks {
+            let input = SessionLifecycleInput { session };
+            if start {
+                hooks.session_start(input).await;
+            } else {
+                hooks.session_end(input).await;
+            }
+        }
     }
 
-    /// The plugin/host hook dispatcher, for engine-adjacent modules (subagent
-    /// registration, resident supervisors) that must notify observation hooks.
-    pub(crate) fn hook_dispatcher(&self) -> Option<Arc<dyn HookDispatcher>> {
-        self.hooks.clone()
+    pub(crate) async fn capture_session_bundle_hooks(
+        &self,
+        session: SessionId,
+        binding: &TurnBinding,
+        stable_agent_id: &str,
+    ) {
+        let channel_policy = crate::ChannelPolicy::from_binding(binding)
+            .map(|policy| policy.snapshot_for(stable_agent_id))
+            .unwrap_or_default();
+        self.session_channel_policies
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(session, channel_policy);
+        let hooks = binding.bundle_hooks_for_agent(stable_agent_id);
+        if hooks.is_empty() {
+            return;
+        }
+        let dispatcher = Arc::new(HookChain::new(hooks)) as Arc<dyn HookDispatcher>;
+        let inserted = {
+            let mut captured = self
+                .session_bundle_hooks
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let std::collections::hash_map::Entry::Vacant(entry) = captured.entry(session) {
+                entry.insert(Arc::clone(&dispatcher));
+                true
+            } else {
+                false
+            }
+        };
+        if inserted {
+            dispatcher
+                .session_start(SessionLifecycleInput { session })
+                .await;
+        }
+    }
+
+    pub(crate) fn session_channel_policy(
+        &self,
+        session: SessionId,
+    ) -> Option<hya_tool::ChannelPolicySnapshot> {
+        self.session_channel_policies
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&session)
+            .copied()
+    }
+
+    pub(crate) fn update_session_channel_policy(
+        &self,
+        session: SessionId,
+        policy: hya_tool::ChannelPolicySnapshot,
+    ) {
+        self.session_channel_policies
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(session, policy);
+    }
+
+    pub(crate) fn session_hook_dispatcher(
+        &self,
+        session: SessionId,
+    ) -> Option<Arc<dyn HookDispatcher>> {
+        let mut dispatchers = Vec::new();
+        if let Some(hooks) = &self.hooks {
+            dispatchers.push(Arc::clone(hooks));
+        }
+        if let Some(hooks) = self
+            .session_bundle_hooks
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&session)
+            .cloned()
+        {
+            dispatchers.push(hooks);
+        }
+        match dispatchers.len() {
+            0 => None,
+            1 => dispatchers.pop(),
+            _ => Some(Arc::new(HookChain::new(dispatchers))),
+        }
+    }
+
+    /// Startup hooks followed by the immutable activation-bound hook chain.
+    pub(crate) fn active_hook_dispatcher(
+        &self,
+        session: SessionId,
+    ) -> Option<Arc<dyn HookDispatcher>> {
+        let mut dispatchers = Vec::new();
+        if let Some(hooks) = &self.hooks {
+            dispatchers.push(Arc::clone(hooks));
+        }
+        if let Some(hooks) = activation_hook_for(session) {
+            dispatchers.push(hooks);
+        }
+        match dispatchers.len() {
+            0 => None,
+            1 => dispatchers.pop(),
+            _ => Some(Arc::new(HookChain::new(dispatchers))),
+        }
     }
 
     /// Delete a session log from the store.

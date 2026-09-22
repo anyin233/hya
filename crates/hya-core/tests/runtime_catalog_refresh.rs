@@ -157,8 +157,7 @@ async fn root_turn_refreshes_installed_catalog_before_agent_resolution() {
         runtime,
         permission,
         EventBus::default(),
-    )
-    .with_catalog_refresh(refresh.clone());
+    );
     let workdir = support::TestDir::new("root-turn-catalog-refresh");
     let model = ModelRef::new("fake");
     let session = engine
@@ -174,6 +173,8 @@ async fn root_turn_refreshes_installed_catalog_before_agent_resolution() {
         .admit_user_prompt(session, "use the installed agent".to_string())
         .await
         .expect("admit prompt");
+    // Measure refresh at turn resolution, excluding lifecycle/admission setup.
+    let engine = engine.with_catalog_refresh(refresh.clone());
 
     let finish = engine
         .run_turn(
@@ -214,8 +215,7 @@ async fn root_shell_refreshes_catalog_before_agent_resolution() {
         runtime,
         permission,
         EventBus::default(),
-    )
-    .with_catalog_refresh(refresh.clone());
+    );
     let workdir = support::TestDir::new("root-shell-catalog-refresh");
     let model = ModelRef::new("fake");
     let session = engine
@@ -227,6 +227,7 @@ async fn root_shell_refreshes_catalog_before_agent_resolution() {
         })
         .await
         .expect("create root session");
+    let engine = engine.with_catalog_refresh(refresh.clone());
 
     let (_message, finish) = engine
         .run_shell(
@@ -264,16 +265,13 @@ async fn loop_children_reuse_one_root_catalog_binding() {
         vec![FakeStep::Finish(FinishReason::Stop)],
     ]);
     let (permission, _rx) = PermissionPlane::new(PermissionRules::default());
-    let engine = Arc::new(
-        SessionEngine::new(
-            SessionStore::connect_memory().await.expect("connect store"),
-            Arc::new(ProviderRouter::new().with(Arc::new(provider))),
-            Arc::new(RuntimeRegistry::new(ToolRegistry::builtins(), initial)),
-            permission,
-            EventBus::default(),
-        )
-        .with_catalog_refresh(refresh),
-    );
+    let engine = Arc::new(SessionEngine::new(
+        SessionStore::connect_memory().await.expect("connect store"),
+        Arc::new(ProviderRouter::new().with(Arc::new(provider))),
+        Arc::new(RuntimeRegistry::new(ToolRegistry::builtins(), initial)),
+        permission,
+        EventBus::default(),
+    ));
     let workdir = support::TestDir::new("loop-root-catalog-refresh");
     let agent = AgentSpec {
         name: AgentName::new("loop-agent"),
@@ -291,6 +289,8 @@ async fn loop_children_reuse_one_root_catalog_binding() {
         })
         .await
         .expect("create loop root session");
+    // Publish catalog A at the loop admission boundary, not during root creation.
+    let engine = Arc::new(engine.as_ref().clone().with_catalog_refresh(refresh));
 
     let outcome = run_loop(
         engine,

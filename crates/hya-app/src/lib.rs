@@ -12,6 +12,7 @@ pub mod agent_model_config;
 pub mod agent_model_control;
 /// Provider credential files under `~/.config/hya/auth/`.
 pub mod auth;
+mod bundle_runtime;
 /// `config.yaml` load, first-run bootstrap, and Compat import.
 pub mod config;
 /// Formatter plane construction from optional formatter config.
@@ -26,6 +27,7 @@ pub mod oauth;
 pub mod permission;
 /// Resolve plugin specs from config and `.hya/plugins` manifests.
 pub mod plugins;
+mod preset_inventory;
 pub mod project_bundles;
 /// Runtime assembly: store, engine, team supervisor, and [`HyaRuntime`].
 pub mod runtime;
@@ -44,6 +46,7 @@ pub use hya_tool::{InvocationPolicy, WebSearchConfig};
 pub use installed_bundle_refresh::{
     InstalledBundleRefresh, bundle_registry_path, first_party_catalogs,
 };
+pub use preset_inventory::{TrustedPresetDescriptor, trusted_preset_inventory};
 pub use runtime::{
     BuiltSessionEngine, HARNESS_AGENT_BASE, HyaRuntime, OfflineNotice, RuntimeConfig,
     RuntimeOptions, agent_base_with_model, agent_with_model, agent_with_model_pure,

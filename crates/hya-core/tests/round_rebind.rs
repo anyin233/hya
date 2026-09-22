@@ -224,27 +224,24 @@ fn runtime_with_marker(catalog: Arc<AgentCatalog>) -> Arc<RuntimeRegistry> {
     Arc::new(RuntimeRegistry::new(tools, catalog))
 }
 
-/// Engine with tool-call permissions and the given catalog refresh hook.
+/// Engine with tool-call permissions. Tests attach the refresh hook only after
+/// session creation/admission so refresh counters measure the turn itself.
 async fn engine_with(
     runtime: Arc<RuntimeRegistry>,
     provider: Arc<RoundRecorder>,
-    refresh: Arc<dyn RuntimeCatalogRefresh>,
 ) -> Arc<SessionEngine> {
     let (permission, _rx) = PermissionPlane::new(PermissionRules::new(vec![Rule::new(
         Action::Tool,
         "*",
         Mode::Allow,
     )]));
-    Arc::new(
-        SessionEngine::new(
-            SessionStore::connect_memory().await.unwrap(),
-            Arc::new(ProviderRouter::new().with(provider)),
-            runtime,
-            permission,
-            EventBus::default(),
-        )
-        .with_catalog_refresh(refresh),
-    )
+    Arc::new(SessionEngine::new(
+        SessionStore::connect_memory().await.unwrap(),
+        Arc::new(ProviderRouter::new().with(provider)),
+        runtime,
+        permission,
+        EventBus::default(),
+    ))
 }
 
 async fn root_session(
@@ -291,13 +288,19 @@ async fn root_turn_rebinds_new_tool_at_round_boundary() {
         calls: AtomicUsize::new(0),
     });
     let runtime = runtime_with_marker(support::builtin_only_catalog());
-    let engine = engine_with(runtime, Arc::clone(&provider), refresh.clone()).await;
+    let engine = engine_with(runtime, Arc::clone(&provider)).await;
     let workdir = support::TestDir::new("round-rebind-tool");
     let session = root_session(&engine, &workdir, "general").await;
     engine
         .admit_user_prompt(session, "call the marker tool".to_string())
         .await
         .unwrap();
+    let engine = Arc::new(
+        engine
+            .as_ref()
+            .clone()
+            .with_catalog_refresh(refresh.clone()),
+    );
 
     let finish = engine
         .run_turn(session, &base_spec(&workdir), CancellationToken::new())
@@ -330,13 +333,19 @@ async fn root_turn_survives_round_rebind_failure_with_old_tools() {
         calls: AtomicUsize::new(0),
     });
     let runtime = runtime_with_marker(support::builtin_only_catalog());
-    let engine = engine_with(runtime, Arc::clone(&provider), refresh.clone()).await;
+    let engine = engine_with(runtime, Arc::clone(&provider)).await;
     let workdir = support::TestDir::new("round-rebind-failure");
     let session = root_session(&engine, &workdir, "general").await;
     engine
         .admit_user_prompt(session, "call the marker tool".to_string())
         .await
         .unwrap();
+    let engine = Arc::new(
+        engine
+            .as_ref()
+            .clone()
+            .with_catalog_refresh(refresh.clone()),
+    );
 
     let finish = engine
         .run_turn(session, &base_spec(&workdir), CancellationToken::new())
@@ -371,9 +380,15 @@ async fn bound_member_rounds_do_not_rebind() {
         calls: AtomicUsize::new(0),
     });
     let runtime = runtime_with_marker(support::builtin_only_catalog());
-    let engine = engine_with(runtime, Arc::clone(&provider), refresh.clone()).await;
+    let engine = engine_with(runtime, Arc::clone(&provider)).await;
     let workdir = support::TestDir::new("round-rebind-member");
     let lead = root_session(&engine, &workdir, "general").await;
+    let engine = Arc::new(
+        engine
+            .as_ref()
+            .clone()
+            .with_catalog_refresh(refresh.clone()),
+    );
     let spec = MemberSpec {
         id: MemberId::new(),
         agent: base_spec(&workdir),
@@ -413,13 +428,19 @@ async fn root_turn_applies_agent_prompt_change_at_round_boundary() {
         "heated-agent",
         "round-rebind prompt v1",
     ));
-    let engine = engine_with(runtime, Arc::clone(&provider), refresh.clone()).await;
+    let engine = engine_with(runtime, Arc::clone(&provider)).await;
     let workdir = support::TestDir::new("round-rebind-prompt");
     let session = root_session(&engine, &workdir, "heated-agent").await;
     engine
         .admit_user_prompt(session, "call the marker tool".to_string())
         .await
         .unwrap();
+    let engine = Arc::new(
+        engine
+            .as_ref()
+            .clone()
+            .with_catalog_refresh(refresh.clone()),
+    );
 
     let finish = engine
         .run_turn(session, &base_spec(&workdir), CancellationToken::new())

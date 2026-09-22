@@ -1,4 +1,4 @@
-kind: AgentBundle
+kind: AgentSetBundle
 identity:
   id: hya/goal-loop
   version: 1.0.0
@@ -9,9 +9,21 @@ resources:
       path: resources/skills/goal-contract/SKILL.md
     - id: guided-goal
       path: resources/skills/guided-goal/SKILL.md
-agent:
-  id: goal-loop-guide
-  description: Guides authors through the goal-condition contract and the evaluator rubric.
-  role: subagent
-  spawn_lifecycle: transient
-  prompt: prompts/goal-loop-guide.md
+    - id: evaluator-prompt
+      path: resources/skills/evaluator-prompt/SKILL.md
+    - id: loop-verifier-prompt
+      path: resources/skills/loop-verifier-prompt/SKILL.md
+    - id: loop-planner-prompt
+      path: resources/skills/loop-planner-prompt/SKILL.md
+agents:
+  - id: goal-loop-guide
+    description: Guides authors through the goal-condition contract and the evaluator rubric.
+    role: subagent
+    spawn_lifecycle: transient
+    prompt: prompts/goal-loop-guide.md
+    can_spawn: [goal-loop-verifier]
+  - id: goal-loop-verifier
+    description: Independently verifies workflow output against the complete goal contract.
+    role: subagent
+    spawn_lifecycle: transient
+    prompt: prompts/goal-loop-verifier.md

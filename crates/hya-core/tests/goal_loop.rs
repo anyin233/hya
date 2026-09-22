@@ -324,6 +324,34 @@ async fn dispatcher_evaluator_malformed_counts_toward_cap() {
     );
 }
 
+struct AchievedFallback;
+
+#[async_trait]
+impl GoalEvaluator for AchievedFallback {
+    async fn evaluate(&self, _condition: &str, _transcript: &str) -> Result<Verdict, CoreError> {
+        Ok(Verdict {
+            met: true,
+            reason: "bundle prompt fallback".to_string(),
+        })
+    }
+}
+
+#[tokio::test]
+async fn malformed_process_evaluator_uses_model_fallback() {
+    let dispatcher = Arc::new(ScriptedHookDispatcher {
+        replies: vec![GoalEvaluateReply::Malformed],
+        idx: AtomicUsize::new(0),
+    });
+    let evaluator = PluginGoalEvaluator::new(dispatcher).with_fallback(Arc::new(AchievedFallback));
+    assert_eq!(
+        evaluator.evaluate("goal", "evidence").await.unwrap(),
+        Verdict {
+            met: true,
+            reason: "bundle prompt fallback".to_string()
+        }
+    );
+}
+
 #[tokio::test]
 async fn budget_limit_runs_wrap_up_pass_and_reports_budget_limited() {
     let provider = FakeProvider::scripted_turns(vec![vec![

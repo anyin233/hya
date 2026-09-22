@@ -1,6 +1,9 @@
 /** Shared runtime types for the Claude adapter request loop. */
 
-import type { Translation } from "./translate"
+import fs from "node:fs"
+import path from "node:path"
+import type { TranslatedSkill, Translation } from "./translate"
+import type { ClaudeHookGroup, HookName } from "./hooks"
 
 /** Minimal text sink for stdout/stderr writes. */
 export type TextSink = {
@@ -20,6 +23,8 @@ export type RuntimeOptions = {
   readonly pluginId: string
   /** Plugin source directory from `--plugin-dir`, when supplied. */
   readonly pluginDir?: string
+  /** Prepared bundle runtime snapshot from `--bundle-runtime`. */
+  readonly bundleRuntime?: string
   readonly env?: RuntimeEnv
 }
 
@@ -37,7 +42,14 @@ export type RequestContext = {
   readonly env: RuntimeEnv
   readonly stderr: TextSink
   /** Translation populated by initialize. */
-  translation?: Translation
+  translation?: Pick<Translation, "skills" | "hookGroups">
+  /** Preloaded translation from an installed bundle snapshot. */
+  readonly bundledTranslation?: {
+    readonly skills: readonly TranslatedSkill[]
+    readonly hookGroups: Readonly<Record<HookName, readonly ClaudeHookGroup[]>>
+  }
+  /** Private materialized bundle root used for hook cwd and placeholders. */
+  readonly bundleRoot?: string
 }
 
 /** Build the request context from the runtime options. */
@@ -46,7 +58,24 @@ export function createRequestContext(options: RuntimeOptions): RequestContext {
     version: options.version,
     pluginId: options.pluginId,
     pluginDir: options.pluginDir,
+    bundledTranslation: options.bundleRuntime === undefined
+      ? undefined
+      : loadBundleRuntime(options.bundleRuntime),
+    bundleRoot: options.bundleRuntime === undefined
+      ? undefined
+      : path.join(path.dirname(path.dirname(options.bundleRuntime)), "claude-plugin"),
     env: options.env ?? process.env,
     stderr: options.stderr,
+  }
+}
+
+function loadBundleRuntime(filePath: string): RequestContext["bundledTranslation"] {
+  const document = JSON.parse(fs.readFileSync(filePath, "utf8")) as Record<string, unknown>
+  if (document["format_version"] !== 1 || !Array.isArray(document["skills"]) || typeof document["hookGroups"] !== "object" || document["hookGroups"] === null) {
+    throw new Error(`${filePath} is not a Claude bundle runtime snapshot`)
+  }
+  return {
+    skills: document["skills"] as readonly TranslatedSkill[],
+    hookGroups: document["hookGroups"] as Readonly<Record<HookName, readonly ClaudeHookGroup[]>>,
   }
 }

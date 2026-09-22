@@ -19,7 +19,7 @@ pub(super) async fn apply_tool_after_hooks(
     result: Result<Value, ToolError>,
     call: AfterHookCall<'_>,
 ) -> Result<Value, ToolError> {
-    let Some(hooks) = &engine.hooks else {
+    let Some(hooks) = engine.active_hook_dispatcher(call.session) else {
         return result;
     };
     let was_permission_err = matches!(&result, Err(ToolError::Permission(_)));

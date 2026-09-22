@@ -1208,7 +1208,7 @@ the host **never dispatches** them (dead hooks — see
 
 | Hook name | Default posture | Status |
 | --- | --- | --- |
-| `goal.evaluate` | Open | Registered only; no dispatcher arm |
+| `goal.evaluate` | Open | Dispatched before the bundle/model fallback evaluator |
 | `loop.verifier` | Open | Registered only; no dispatcher arm |
 | `loop.planner` | Open | Registered only; no dispatcher arm |
 
@@ -1547,4 +1547,3 @@ Example bag fragment:
   }
 }
 ```
-

@@ -6,8 +6,9 @@ use sha2::{Digest, Sha256};
 
 use crate::error::BundleError;
 use crate::model::{
-    BundleIdentity, PreparedAgent, PreparedAgentBundle, PreparedAgentSetBundle,
-    PreparedBundleIndex, PreparedBundleProcess, PreparedBundleSchemas, PreparedCatalog,
+    BundleIdentity, ChannelParticipantRole, ChannelScope, ChannelTemplateKind, PreparedAgent,
+    PreparedAgentBundle, PreparedAgentSetBundle, PreparedBundleIndex, PreparedBundleProcess,
+    PreparedBundleSchemas, PreparedCatalog, PreparedChannelParticipant, PreparedChannelTemplate,
     PreparedDocument, PreparedDocumentOwned, PreparedInstallableBundle, PreparedPluginBundle,
     PreparedProcessExtension, PreparedResource, PreparedSchema, PreparedWorkflow,
     PreparedWorkflowBundle,
@@ -185,8 +186,16 @@ fn prepared_bundle_is_canonical(bundle: &PreparedInstallableBundle) -> bool {
         }
         PreparedInstallableBundle::AgentSet(bundle) => {
             bundle.format_version == PREPARED_FORMAT_VERSION
-                && !bundle.agents.is_empty()
+                && (!bundle.agents.is_empty() || !bundle.channels.is_empty())
                 && is_strictly_sorted(bundle.agents.iter().map(|agent| agent.id.as_str()))
+                && channels_are_canonical(
+                    &bundle.channels,
+                    &bundle
+                        .agents
+                        .iter()
+                        .map(|agent| agent.id.as_str())
+                        .collect::<BTreeSet<_>>(),
+                )
         }
         PreparedInstallableBundle::Workflow(bundle) => {
             bundle.format_version == PREPARED_FORMAT_VERSION
@@ -1167,10 +1176,11 @@ fn prepare_agent_set_bundle(
     let (tools, skills, mcp, hooks, extensions) =
         prepare_resource_sets(&bundle_id, &files, manifest.resources, manifest.extensions)?;
     let schemas = validate_declared_schemas(&bundle_id, &manifest.schemas, &tools)?;
-    if manifest.agents.is_empty() {
+    if manifest.agents.is_empty() && manifest.channels.is_empty() {
         return Err(BundleError::InvalidManifest {
             source_name: bundle_id,
-            detail: "AgentSetBundle must declare at least one agent".to_string(),
+            detail: "AgentSetBundle must declare at least one agent or channel template"
+                .to_string(),
         });
     }
     let mut source_agents = manifest.agents;
@@ -1203,12 +1213,14 @@ fn prepare_agent_set_bundle(
     for agent in &agents {
         validate_resource_views(&bundle_id, agent, &tools, &skills)?;
     }
+    let channels = prepare_channel_templates(&bundle_id, manifest.channels, &local_agent_ids)?;
     let mut bundle = PreparedInstallableBundle::AgentSet(Box::new(PreparedAgentSetBundle {
         format_version: PREPARED_FORMAT_VERSION,
         identity: manifest.identity,
         namespace,
         digest: String::new(),
         agents,
+        channels,
         tools,
         skills,
         mcp,
@@ -1217,6 +1229,73 @@ fn prepare_agent_set_bundle(
     }));
     set_bundle_digest(&mut bundle)?;
     Ok((bundle, schemas, process))
+}
+
+fn prepare_channel_templates(
+    bundle_id: &str,
+    mut channels: Vec<PreparedChannelTemplate>,
+    local_agent_ids: &BTreeSet<String>,
+) -> Result<Vec<PreparedChannelTemplate>, BundleError> {
+    for channel in &mut channels {
+        channel.participants.sort();
+        channel.capabilities.sort();
+    }
+    channels.sort_by(|left, right| left.id.cmp(&right.id));
+    if !channels_are_canonical(
+        &channels,
+        &local_agent_ids.iter().map(String::as_str).collect(),
+    ) {
+        return Err(BundleError::InvalidManifest {
+            source_name: bundle_id.to_string(),
+            detail: "invalid, duplicate, or unsupported channel template policy".to_string(),
+        });
+    }
+    Ok(channels)
+}
+
+fn channels_are_canonical(
+    channels: &[PreparedChannelTemplate],
+    local_agent_ids: &BTreeSet<&str>,
+) -> bool {
+    let mut kinds = BTreeSet::new();
+    is_strictly_sorted(channels.iter().map(|channel| channel.id.as_str()))
+        && channels.iter().all(|channel| {
+            kinds.insert(channel.kind)
+                && valid_workflow_identifier(&channel.id)
+                && !channel.participants.is_empty()
+                && is_strictly_ordered(&channel.participants)
+                && is_strictly_ordered(&channel.capabilities)
+                && channel
+                    .participants
+                    .iter()
+                    .all(|participant| match participant {
+                        PreparedChannelParticipant::Agent { agent } => {
+                            local_agent_ids.contains(agent.as_str())
+                        }
+                        PreparedChannelParticipant::Role { role } => match channel.kind {
+                            ChannelTemplateKind::Unit => matches!(
+                                role,
+                                ChannelParticipantRole::UnitLeader
+                                    | ChannelParticipantRole::DirectReports
+                            ),
+                            ChannelTemplateKind::ParentDm => {
+                                matches!(
+                                    role,
+                                    ChannelParticipantRole::Parent | ChannelParticipantRole::Child
+                                )
+                            }
+                        },
+                    })
+                && matches!(
+                    (channel.kind, channel.scope),
+                    (ChannelTemplateKind::Unit, ChannelScope::Unit)
+                        | (ChannelTemplateKind::ParentDm, ChannelScope::Vertical)
+                )
+        })
+}
+
+fn is_strictly_ordered<T: Ord>(values: &[T]) -> bool {
+    values.windows(2).all(|pair| pair[0] < pair[1])
 }
 
 fn prepare_workflow_bundle(
@@ -1355,10 +1434,29 @@ fn prepare_resource_sets(
     let skills = prepare_resources(bundle_id, "skill", files, resources.skills)?;
     let mcp = prepare_mcp_resources(bundle_id, files, resources.mcp)?;
     let hooks = prepare_resources(bundle_id, "hook", files, resources.hooks)?;
+    let process_backed = extensions.process.is_some();
     for hook in &hooks {
         validate_hook_local_id(bundle_id, &hook.local_id)?;
+        if !process_backed
+            && !matches!(
+                hook.local_id.as_str(),
+                "event" | "tool.execute.before" | "tool.execute.after"
+            )
+        {
+            return Err(BundleError::UnsupportedBundleFeature {
+                bundle_id: bundle_id.to_string(),
+                feature: format!("hook:{}", hook.local_id),
+            });
+        }
     }
-    let extensions = prepare_resources(bundle_id, "extension", files, extensions.js)?;
+    let mut executable_extensions = extensions.js;
+    if process_backed {
+        executable_extensions.extend(extensions.files);
+        let extensions = prepare_resources(bundle_id, "extension", files, executable_extensions)?;
+        return Ok((tools, skills, mcp, hooks, extensions));
+    }
+    let support_files = extensions.files;
+    let mut extensions = prepare_resources(bundle_id, "extension", files, executable_extensions)?;
     let extension_path_counts = extensions
         .iter()
         .fold(BTreeMap::new(), |mut counts, resource| {
@@ -1399,6 +1497,20 @@ fn prepare_resource_sets(
             });
         }
     }
+    let support = prepare_resources(bundle_id, "extension", files, support_files)?;
+    for resource in support {
+        if extensions
+            .iter()
+            .any(|entry| entry.stable_id == resource.stable_id)
+        {
+            return Err(BundleError::NamespaceCollision {
+                bundle_id: bundle_id.to_string(),
+                name: resource.stable_id,
+            });
+        }
+        extensions.push(resource);
+    }
+    extensions.sort_by(|left, right| left.stable_id.cmp(&right.stable_id));
     Ok((tools, skills, mcp, hooks, extensions))
 }
 
@@ -1664,7 +1776,23 @@ fn declared_process_extension(
 pub(crate) fn validate_hook_local_id(bundle_id: &str, local_id: &str) -> Result<(), BundleError> {
     if matches!(
         local_id,
-        "event" | "tool.execute.before" | "tool.execute.after"
+        "event"
+            | "tool.execute.before"
+            | "tool.execute.after"
+            | "command.execute.before"
+            | "experimental.text.complete"
+            | "message.user.before"
+            | "chat.params"
+            | "permission.ask"
+            | "goal.evaluate"
+            | "loop.verifier"
+            | "loop.planner"
+            | "loop.should_stop"
+            | "compaction.before"
+            | "compaction.after"
+            | "session.start"
+            | "session.end"
+            | "agent.spawn"
     ) {
         return Ok(());
     }

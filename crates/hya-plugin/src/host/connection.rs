@@ -16,12 +16,23 @@ pub(super) async fn connect_one(
     spec: PluginSpec,
     host: HostInfo,
 ) -> Result<Arc<PluginConn>, PluginError> {
+    connect_one_at(spec, host, None).await
+}
+
+pub(super) async fn connect_one_at(
+    spec: PluginSpec,
+    host: HostInfo,
+    bundle_root: Option<std::path::PathBuf>,
+) -> Result<Arc<PluginConn>, PluginError> {
     let timeout = spec
         .timeout_ms
         .map(Duration::from_millis)
         .unwrap_or(DEFAULT_CALL_TIMEOUT);
     let spawn_env = (!spec.env.is_empty()).then_some(&spec.env);
-    let (client, guard) = PluginClient::spawn(&spec.command, spawn_env)?;
+    let (client, guard) = match bundle_root.as_deref() {
+        Some(root) => PluginClient::spawn_bundle(&spec.command, root, spawn_env)?,
+        None => PluginClient::spawn(&spec.command, spawn_env)?,
+    };
     let init = client.initialize(host.clone()).await?;
     validate_initialize(&spec.id, &init)?;
     let canonical_declaration = Arc::<[u8]>::from(canonical_initialize(&init)?);
@@ -44,6 +55,7 @@ pub(super) async fn connect_one(
         canonical_declaration,
         timeout,
         command: spec.command,
+        bundle_root,
         env: spec.env,
         host_info: host,
         live: tokio::sync::Mutex::new(Some(LiveClient {

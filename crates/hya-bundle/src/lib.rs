@@ -13,11 +13,13 @@ mod source;
 pub use catalog::{BundleCatalog, ExportKind};
 pub use error::BundleError;
 pub use model::{
-    AgentRole, BundleIdentity, ModelPolicy, PreparedAgent, PreparedAgentBundle,
+    AgentRole, BundleIdentity, ChannelCapability, ChannelParticipantRole, ChannelRetention,
+    ChannelScope, ChannelTemplateKind, ModelPolicy, PreparedAgent, PreparedAgentBundle,
     PreparedAgentSetBundle, PreparedBundleIndex, PreparedBundleKind, PreparedBundleProcess,
-    PreparedBundleSchemas, PreparedCatalog, PreparedInstallableBundle, PreparedPluginBundle,
-    PreparedProcessExtension, PreparedProcessKind, PreparedResource, PreparedSchema,
-    PreparedWorkflow, PreparedWorkflowBundle, ResourceView, SpawnLifecycle,
+    PreparedBundleSchemas, PreparedCatalog, PreparedChannelParticipant, PreparedChannelTemplate,
+    PreparedInstallableBundle, PreparedPluginBundle, PreparedProcessExtension, PreparedProcessKind,
+    PreparedResource, PreparedSchema, PreparedWorkflow, PreparedWorkflowBundle, ResourceView,
+    SpawnLifecycle,
 };
 pub use package::{
     PackageFormat, PackageInspection, PrivatePackageAuthentication, PrivatePackageInspection,

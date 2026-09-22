@@ -11,7 +11,7 @@ use hya_bundle::{
     AgentRole, BundleCatalog, BundleError, BundleIdentity, ModelPolicy, PreparedAgent,
     PreparedAgentBundle, PreparedInstallableBundle, ResourceView, SpawnLifecycle,
 };
-use hya_core::{AgentCatalog, AgentOrigin};
+use hya_core::{AgentCatalog, AgentOrigin, BUILTIN_AGENTS, core_agents_preset};
 use hya_proto::AgentName;
 
 /// One installed bundle holding one agent with the given spawn graph.
@@ -55,6 +55,60 @@ fn catalog(bundles: &[PreparedInstallableBundle]) -> AgentCatalog {
 
 fn empty_catalog() -> AgentCatalog {
     catalog(&[])
+}
+
+#[test]
+fn core_agents_are_backed_by_the_verified_embedded_preset() {
+    let preset = core_agents_preset().expect("embedded core-agents preset");
+    assert_eq!(preset.bundle_id(), "hya/core-agents");
+    assert!(!preset.prepared_bytes().is_empty());
+    assert_eq!(preset.digest().len(), 64);
+
+    let catalog = empty_catalog();
+    let preset_ids = preset
+        .agents()
+        .iter()
+        .map(|agent| agent.id.as_str())
+        .collect::<Vec<_>>();
+    let catalog_ids = catalog
+        .all()
+        .iter()
+        .map(|agent| agent.stable_id)
+        .collect::<Vec<_>>();
+    assert_eq!(catalog_ids, preset_ids);
+
+    for (compat, prepared) in BUILTIN_AGENTS.iter().zip(preset.agents()) {
+        assert_eq!(compat.id, prepared.id.as_str());
+        assert_eq!(compat.description, prepared.description.as_deref());
+        assert_eq!(compat.role, prepared.role);
+        assert_eq!(compat.prompt, prepared.prompt.as_deref());
+        assert_eq!(compat.model_policy.to_model_policy(), prepared.model_policy);
+        assert_eq!(compat.spawn_lifecycle, prepared.spawn_lifecycle);
+        assert_eq!(compat.system_reserved, preset.is_reserved(compat.id));
+    }
+
+    for definition in catalog.all() {
+        assert!(definition.origin.is_builtin());
+        assert!(definition.origin.is_preset());
+        assert_eq!(
+            definition.origin.preset_bundle_id(),
+            Some("hya/core-agents")
+        );
+        assert!(definition.model_policy.model.is_none());
+        assert!(definition.model_policy.category.is_none());
+        assert!(definition.model_policy.reasoning.is_none());
+    }
+}
+
+#[test]
+fn core_agents_resolve_through_their_preset_qualified_identity() {
+    let catalog = empty_catalog();
+    let bare = catalog.resolve("build").expect("bare preset agent");
+    let qualified = catalog
+        .resolve("bundle:hya/core-agents/agent/build")
+        .expect("qualified preset agent");
+    assert_eq!(bare, qualified);
+    assert_eq!(qualified.origin.preset_bundle_id(), Some("hya/core-agents"));
 }
 
 #[test]
@@ -286,4 +340,34 @@ agents:
             .resolve("bundle:acme/team/agent/team-worker")
             .is_some()
     );
+}
+
+#[test]
+fn first_party_subagent_bundle_preserves_transient_and_resident_lifecycles() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../bundles/first-party/subagents");
+    let prepared = hya_bundle::prepare_package(
+        hya_bundle::BundleSource::read_directory(root).expect("subagent bundle source"),
+    )
+    .expect("prepare subagent bundle");
+    let bundles = BundleCatalog::from_verified_catalogs(&[&prepared]).expect("verified catalog");
+    let catalog = AgentCatalog::new(Arc::new(bundles)).expect("runtime catalog");
+
+    let transient = catalog
+        .resolve_spawn("build", "hya-transient-worker")
+        .expect("transient worker");
+    let resident = catalog
+        .resolve_spawn("build", "hya-resident-worker")
+        .expect("resident worker");
+    assert_eq!(transient.spawn_lifecycle, SpawnLifecycle::Transient);
+    assert_eq!(resident.spawn_lifecycle, SpawnLifecycle::Resident);
+    assert_eq!(
+        transient.origin,
+        AgentOrigin::Bundle {
+            bundle_id: "hya/subagents"
+        }
+    );
+    assert!(!transient.origin.is_preset());
+    assert!(!catalog.is_reserved(transient.stable_id));
+    assert!(!catalog.is_reserved(resident.stable_id));
 }

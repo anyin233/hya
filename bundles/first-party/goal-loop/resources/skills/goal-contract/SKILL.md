@@ -32,3 +32,5 @@ Audit the transcript against the objective's deliverables, in this order:
 3. Uncertainty is not achievement: if evidence is ambiguous, `met=false`.
 4. Never redefine success as a smaller or already-completed subset.
 5. Budget exhaustion is not completion.
+6. A boundary violation or triggered stop condition prevents achievement even
+   when the requested deliverable appears complete.

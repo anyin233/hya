@@ -7,12 +7,12 @@ const VERSION = "1.0.0"
 function printHelp() {
   console.log(`hya-bun-adapter ${VERSION}`)
   console.log(
-    "Usage: bun run src/main.ts [--help|--version|--bundle-extension <absolute-path> ...|--extension <absolute-path> ...]",
+    "Usage: bun run src/main.ts [--help|--version|--plugin-id <id>|--bundle-extension <absolute-path> ...|--extension <absolute-path> ...]",
   )
 }
 
 type StartupOptions =
-  | { readonly kind: "run"; readonly extensions: readonly string[] }
+  | { readonly kind: "run"; readonly extensions: readonly string[]; readonly pluginId?: string }
   | { readonly kind: "help" }
   | { readonly kind: "version" }
   | { readonly kind: "error"; readonly message: string }
@@ -33,8 +33,20 @@ function parseStartupArgs(args: readonly string[]): StartupOptions {
   }
 
   const extensions: string[] = []
+  let pluginId: string | undefined
   for (let index = 0; index < normalized.length; index += 2) {
     const flag = normalized[index]
+    if (flag === "--plugin-id") {
+      const value = normalized[index + 1]
+      if (value === undefined || value.trim().length === 0) {
+        return { kind: "error", message: "--plugin-id requires a non-empty value" }
+      }
+      if (pluginId !== undefined) {
+        return { kind: "error", message: "--plugin-id may be supplied only once" }
+      }
+      pluginId = value
+      continue
+    }
     if (flag !== "--bundle-extension" && flag !== "--extension") {
       return {
         kind: "error",
@@ -50,7 +62,7 @@ function parseStartupArgs(args: readonly string[]): StartupOptions {
     }
     extensions.push(extension)
   }
-  return { kind: "run", extensions: Object.freeze(extensions) }
+  return { kind: "run", extensions: Object.freeze(extensions), pluginId }
 }
 
 function isExtensionSpecifier(value: string): boolean {
@@ -75,6 +87,7 @@ switch (startup.kind) {
       stderr: { write: (data) => process.stderr.write(data) },
       version: VERSION,
       extensions: startup.extensions,
+      pluginId: startup.pluginId,
       env: process.env,
     })
 }

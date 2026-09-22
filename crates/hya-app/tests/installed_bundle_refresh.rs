@@ -12,7 +12,7 @@ use hya_core::{CreateSession, EventBus, RuntimeRegistry, RuntimeSourceId, Sessio
 use hya_proto::{AgentName, ModelRef};
 use hya_provider::ProviderRouter;
 use hya_store::{BundleInstallCandidate, BundleInstallOutcome, BundleRegistry, SessionStore};
-use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
+use hya_tool::{PermissionPlane, PermissionRules, ToolCtx, ToolRegistry};
 
 fn temp_path(suffix: &str) -> PathBuf {
     static NEXT_ID: AtomicU64 = AtomicU64::new(0);
@@ -25,6 +25,29 @@ fn temp_path(suffix: &str) -> PathBuf {
         elapsed.as_nanos(),
         std::process::id()
     ))
+}
+
+fn process_tool_ctx(workdir: &std::path::Path) -> ToolCtx {
+    ToolCtx {
+        permission: PermissionPlane::new(PermissionRules::default()).0,
+        interaction: hya_tool::InteractionPlane::new().0,
+        spawner: hya_tool::SpawnerPlane::new().0,
+        workflows: hya_tool::WorkflowPlane::disconnected(),
+        operation: hya_tool::ToolOperation::from_tool_call(hya_proto::ToolCallId::new()),
+        mailbox: hya_tool::MailboxPlane::disconnected(),
+        lifecycle: hya_tool::LifecyclePlane::disconnected(),
+        session: Some(hya_proto::SessionId::new()),
+        parent_session: None,
+        todo: hya_tool::TodoPlane::default(),
+        skills: hya_tool::SkillPlane::default(),
+        artifacts: hya_tool::handle::ArtifactPlane::default(),
+        websearch: hya_tool::WebSearchPlane::default(),
+        lsp: hya_tool::LspPlane::default(),
+        formatter: hya_tool::FormatterPlane::default(),
+        agents: Default::default(),
+        workdir: workdir.to_path_buf(),
+        cancel: tokio_util::sync::CancellationToken::new(),
+    }
 }
 
 fn installed_source() -> BundleSource {
@@ -76,6 +99,29 @@ resources:
             SourceFile::new(
                 "resources/skills/plugin-skill.md",
                 b"---\nname: plugin-skill\ndescription: Installed Plugin fixture.\n---\nPLUGIN_SKILL_BODY\n",
+            ),
+        ],
+    )
+}
+
+fn goal_loop_override_source() -> BundleSource {
+    BundleSource::new(
+        "goal-loop-override",
+        vec![
+            SourceFile::new(
+                "bundle.yaml",
+                br#"kind: Plugin
+identity: { id: hya/goal-loop, version: 9.0.0, publisher: test }
+namespace: goal-loop
+resources:
+  skills:
+    - id: evaluator-prompt
+      path: evaluator.md
+"#,
+            ),
+            SourceFile::new(
+                "evaluator.md",
+                b"---\nname: evaluator-prompt\ndescription: override\n---\nOVERRIDE_EVALUATOR_PROMPT\n",
             ),
         ],
     )
@@ -305,6 +351,59 @@ async fn installed_plugin_refresh_and_uninstall_preserve_old_binding_snapshot() 
 }
 
 #[tokio::test]
+async fn installed_goal_loop_override_uninstall_restores_first_party_prompt() {
+    let runtime = Arc::new(RuntimeRegistry::new(
+        ToolRegistry::builtins(),
+        hya_app::builtin_agent_catalog().expect("builtin agent catalog"),
+    ));
+    let registry_path = temp_path("goal-loop-registry.db");
+    let registry = BundleRegistry::connect(registry_path.to_str().unwrap())
+        .await
+        .unwrap();
+    let refresh = hya_app::InstalledBundleRefresh::new(registry_path);
+
+    refresh.refresh_if_changed(&runtime).await.unwrap();
+    let workdir = temp_path("goal-loop-workdir");
+    std::fs::create_dir_all(&workdir).unwrap();
+    let builtin = runtime.bind_turn(&workdir).unwrap();
+    let builtin_prompt = builtin
+        .bundle_skill_content("hya/goal-loop", "evaluator-prompt")
+        .unwrap();
+    assert!(!builtin_prompt.contains("OVERRIDE_EVALUATOR_PROMPT"));
+
+    let prepared = prepare_package(goal_loop_override_source()).unwrap();
+    registry
+        .install(
+            &[],
+            hya_store::NamespaceInstallPolicy::DenyConflicts,
+            BundleInstallCandidate {
+                source_digest: [0x77; 32],
+                prepared_digest: prepared.digest().to_string(),
+                prepared_bytes: prepared.bytes().to_vec(),
+                installed_at: 1,
+            },
+        )
+        .await
+        .unwrap();
+    refresh.refresh_if_changed(&runtime).await.unwrap();
+    let upgraded = runtime.bind_turn(&workdir).unwrap();
+    assert!(
+        upgraded
+            .bundle_skill_content("hya/goal-loop", "evaluator-prompt")
+            .unwrap()
+            .contains("OVERRIDE_EVALUATOR_PROMPT")
+    );
+
+    registry.uninstall("hya/goal-loop").await.unwrap();
+    refresh.refresh_if_changed(&runtime).await.unwrap();
+    let restored = runtime.bind_turn(&workdir).unwrap();
+    assert_eq!(
+        restored.bundle_skill_content("hya/goal-loop", "evaluator-prompt"),
+        Some(builtin_prompt)
+    );
+}
+
+#[tokio::test]
 async fn installed_workflow_refresh_publishes_workflow_and_agent_atomically_and_pins_bindings() {
     let runtime = Arc::new(RuntimeRegistry::new(
         ToolRegistry::builtins(),
@@ -455,12 +554,16 @@ async fn installed_bundle_schema_declarations_publish_scheme_claims() {
             .await
             .expect("connect bundle registry");
     let refresh = Arc::new(hya_app::InstalledBundleRefresh::new(registry_path));
+    refresh
+        .refresh_if_changed(&runtime)
+        .await
+        .expect("initial preset refresh");
     assert!(
         !refresh
             .refresh_if_changed(&runtime)
             .await
-            .expect("empty refresh"),
-        "an empty registry publishes nothing"
+            .expect("steady preset refresh"),
+        "prepared preset resources publish once even with an empty installed registry"
     );
 
     let installed = prepare_package(schema_bundle_source()).expect("prepare schema bundle");
@@ -510,4 +613,281 @@ async fn installed_bundle_schema_declarations_publish_scheme_claims() {
             .expect("steady refresh"),
         "an unchanged registry must not republish"
     );
+}
+
+#[tokio::test]
+async fn plugin_process_tools_publish_atomically_and_old_binding_survives_uninstall() {
+    let root = temp_path("process-root");
+    std::fs::create_dir_all(&root).unwrap();
+    let registry_path = root.join("registry.db");
+    let registry = BundleRegistry::connect(registry_path.to_str().unwrap())
+        .await
+        .unwrap();
+    let runtime = Arc::new(RuntimeRegistry::new(
+        ToolRegistry::builtins(),
+        hya_app::builtin_agent_catalog().unwrap(),
+    ));
+    let refresh = hya_app::InstalledBundleRefresh::new(registry_path);
+    let script = r#"import json,sys
+for line in sys.stdin:
+ r=json.loads(line)
+ if r.get('method') == 'initialize':
+  result={'protocol_version':1,'plugin':{'id':'process-fixture','version':'1.0.0','kind':'rust'},'hooks':[],'tools':[{'name':'echo','description':'echo fixture','inputSchema':{'type':'object'}}]}
+ elif r.get('method') == 'tool/call': result={'ok':True,'output':{'echo':r['params']['input']}}
+ else: result={}
+ if 'id' in r: print(json.dumps({'jsonrpc':'2.0','id':r['id'],'result':result}),flush=True)
+"#;
+    let prepared = prepare_package(BundleSource::new(
+        "process",
+        vec![
+            SourceFile::new(
+                "bundle.yaml",
+                br#"kind: Plugin
+identity: { id: acme/process-fixture, version: 1.0.0, publisher: acme }
+extensions:
+  process: { kind: rust, command: [python3, '${BUNDLE_ROOT}/runtime.py'] }
+  files: [{ id: runtime, path: runtime.py }]
+resources:
+  tools: [{ id: echo, path: tool.json }]
+"#,
+            ),
+            SourceFile::new("runtime.py", script),
+            SourceFile::new("tool.json", "{}"),
+        ],
+    ))
+    .unwrap();
+    registry
+        .install(
+            &[],
+            hya_store::NamespaceInstallPolicy::DenyConflicts,
+            BundleInstallCandidate {
+                source_digest: [0x61; 32],
+                prepared_digest: prepared.digest().to_string(),
+                prepared_bytes: prepared.bytes().to_vec(),
+                installed_at: 1,
+            },
+        )
+        .await
+        .unwrap();
+    refresh.refresh_if_changed(&runtime).await.unwrap();
+    let old = runtime.bind_turn(&root).unwrap();
+    assert!(
+        old.resolve_tool("process-fixture__echo").is_some(),
+        "installed process tool must publish"
+    );
+    registry.uninstall("acme/process-fixture").await.unwrap();
+    refresh.refresh_if_changed(&runtime).await.unwrap();
+    let new = runtime.bind_turn(&root).unwrap();
+    assert!(new.resolve_tool("process-fixture__echo").is_none());
+    assert!(old.resolve_tool("process-fixture__echo").is_some());
+}
+
+#[tokio::test]
+async fn failed_bundle_process_start_preserves_the_published_generation() {
+    let root = temp_path("failed-process-root");
+    std::fs::create_dir_all(&root).unwrap();
+    let registry_path = root.join("registry.db");
+    let registry = BundleRegistry::connect(registry_path.to_str().unwrap())
+        .await
+        .unwrap();
+    let runtime = Arc::new(RuntimeRegistry::new(
+        ToolRegistry::builtins(),
+        hya_app::builtin_agent_catalog().unwrap(),
+    ));
+    let refresh = hya_app::InstalledBundleRefresh::new(registry_path);
+    let prepared = prepare_package(BundleSource::new(
+        "old-process",
+        vec![
+            SourceFile::new(
+                "bundle.yaml",
+                br#"kind: Plugin
+identity: { id: acme/old-process, version: 1.0.0, publisher: acme }
+extensions:
+  process: { kind: rust, command: [python3, '${BUNDLE_ROOT}/runtime.py'] }
+  files: [{ id: runtime, path: runtime.py }]
+resources:
+  tools: [{ id: echo, path: tool.json }]
+"#,
+            ),
+            SourceFile::new("tool.json", "{}"),
+            SourceFile::new(
+                "runtime.py",
+                r#"import json,sys
+for line in sys.stdin:
+ r=json.loads(line)
+ if r.get('method') == 'initialize': result={'protocol_version':1,'plugin':{'id':'old-process','version':'1.0.0','kind':'rust'},'hooks':[],'tools':[{'name':'echo','description':'old process','inputSchema':{'type':'object'}}]}
+ elif r.get('method') == 'tool/call': result={'ok':True,'output':{'generation':'OLD_PROCESS','input':r['params']['input']}}
+ else: result={}
+ if 'id' in r: print(json.dumps({'jsonrpc':'2.0','id':r['id'],'result':result}),flush=True)
+"#,
+            ),
+        ],
+    ))
+    .unwrap();
+    registry
+        .install(
+            &[],
+            hya_store::NamespaceInstallPolicy::DenyConflicts,
+            BundleInstallCandidate {
+                source_digest: [0x71; 32],
+                prepared_digest: prepared.digest().into(),
+                prepared_bytes: prepared.bytes().to_vec(),
+                installed_at: 1,
+            },
+        )
+        .await
+        .unwrap();
+    refresh.refresh_if_changed(&runtime).await.unwrap();
+    let before = runtime.bind_turn(&root).unwrap();
+    let before_tool = before
+        .resolve_tool("old-process__echo")
+        .expect("old process tool must publish");
+    let before_ctx = process_tool_ctx(&root);
+    let before_output = before_tool
+        .tool
+        .execute(&before_ctx, serde_json::json!({"phase":"before"}))
+        .await
+        .expect("old process must be callable before failed refresh");
+    assert_eq!(before_output["generation"], "OLD_PROCESS");
+    assert!(
+        !refresh.refresh_if_changed(&runtime).await.unwrap(),
+        "unchanged sources must be reused"
+    );
+    let invalid = prepare_package(BundleSource::new(
+        "bad-process",
+        vec![SourceFile::new(
+            "bundle.yaml",
+            br#"kind: Plugin
+identity: { id: acme/bad-process, version: 1.0.0, publisher: acme }
+extensions:
+  process: { kind: rust, command: [/nonexistent/hya-bundle-test-process] }
+"#,
+        )],
+    ))
+    .unwrap();
+    registry
+        .install(
+            &[],
+            hya_store::NamespaceInstallPolicy::DenyConflicts,
+            BundleInstallCandidate {
+                source_digest: [0x72; 32],
+                prepared_digest: invalid.digest().into(),
+                prepared_bytes: invalid.bytes().to_vec(),
+                installed_at: 2,
+            },
+        )
+        .await
+        .unwrap();
+    assert!(refresh.refresh_if_changed(&runtime).await.is_err());
+    let after = runtime.bind_turn(&root).unwrap();
+    assert_eq!(
+        before.generation(),
+        after.generation(),
+        "failed startup must never publish a partial candidate"
+    );
+    assert!(
+        after
+            .bundle_catalog()
+            .bundles()
+            .iter()
+            .all(|bundle| bundle.identity().id != "acme/bad-process")
+    );
+    for (label, binding) in [("retained", &before), ("fresh", &after)] {
+        let tool = binding
+            .resolve_tool("old-process__echo")
+            .unwrap_or_else(|| panic!("{label} binding lost old process tool"));
+        let ctx = process_tool_ctx(&root);
+        let output = tool
+            .tool
+            .execute(&ctx, serde_json::json!({"phase":label}))
+            .await
+            .unwrap_or_else(|error| panic!("{label} binding old process call failed: {error}"));
+        assert_eq!(output["generation"], "OLD_PROCESS");
+        assert_eq!(output["input"]["phase"], label);
+    }
+    registry.uninstall("acme/bad-process").await.unwrap();
+    refresh.refresh_if_changed(&runtime).await.unwrap();
+    assert!(
+        runtime
+            .bind_turn(&root)
+            .unwrap()
+            .bundle_catalog()
+            .bundles()
+            .iter()
+            .any(|bundle| bundle.identity().id == "acme/old-process")
+    );
+}
+
+#[tokio::test]
+async fn retained_bundle_hook_keeps_materialized_files_after_uninstall() {
+    let root = temp_path("hook-lifetime");
+    std::fs::create_dir_all(&root).unwrap();
+    let registry_path = root.join("registry.db");
+    let registry = BundleRegistry::connect(registry_path.to_str().unwrap())
+        .await
+        .unwrap();
+    let runtime = RuntimeRegistry::new(
+        ToolRegistry::builtins(),
+        hya_app::builtin_agent_catalog().unwrap(),
+    );
+    let refresh = hya_app::InstalledBundleRefresh::new(registry_path);
+    let prepared = prepare_package(BundleSource::new("hook-files", vec![
+        SourceFile::new("bundle.yaml", br#"kind: Plugin
+identity: { id: acme/hook-files, version: 1.0.0, publisher: acme }
+extensions:
+  process: { kind: rust, command: [python3, '${BUNDLE_ROOT}/runtime.py'] }
+  files:
+    - { id: runtime, path: runtime.py }
+    - { id: payload, path: payload.txt }
+resources:
+  hooks: [{ id: tool.execute.before, path: hook.json }]
+"#),
+        SourceFile::new("hook.json", "{}"),
+        SourceFile::new("payload.txt", "RETAINED_HOOK_FILES"),
+        SourceFile::new("runtime.py", r#"import json,sys
+for line in sys.stdin:
+ r=json.loads(line)
+ if r.get('method') == 'initialize': result={'protocol_version':1,'plugin':{'id':'hook-files','version':'1.0.0','kind':'rust'},'hooks':[{'name':'tool.execute.before','posture':'safe'}],'tools':[]}
+ elif r.get('method') == 'hook/tool.execute.before': result={'outcome':'continue','input':{'marker':open('payload.txt').read()}}
+ else: result={}
+ if 'id' in r: print(json.dumps({'jsonrpc':'2.0','id':r['id'],'result':result}),flush=True)
+"#),
+    ])).unwrap();
+    registry
+        .install(
+            &[],
+            hya_store::NamespaceInstallPolicy::DenyConflicts,
+            BundleInstallCandidate {
+                source_digest: [0x73; 32],
+                prepared_digest: prepared.digest().into(),
+                prepared_bytes: prepared.bytes().to_vec(),
+                installed_at: 1,
+            },
+        )
+        .await
+        .unwrap();
+    refresh.refresh_if_changed(&runtime).await.unwrap();
+    let binding = runtime.bind_turn(&root).unwrap();
+    let retained_hooks = binding.bundle_hooks_for_agent("build");
+    assert_eq!(retained_hooks.len(), 1);
+    drop(binding);
+    registry.uninstall("acme/hook-files").await.unwrap();
+    refresh.refresh_if_changed(&runtime).await.unwrap();
+    let reply = retained_hooks[0]
+        .tool_execute_before(hya_core::hooks::ToolExecuteBeforeInput {
+            session: hya_proto::SessionId::new(),
+            message: hya_proto::MessageId::new(),
+            call: hya_proto::ToolCallId::new(),
+            tool: "read".into(),
+            input: serde_json::json!({}),
+        })
+        .await;
+    match reply {
+        hya_core::hooks::ToolExecuteBeforeOutcome::Continue { input } => {
+            assert_eq!(input["marker"], "RETAINED_HOOK_FILES")
+        }
+        hya_core::hooks::ToolExecuteBeforeOutcome::Veto { reason } => {
+            panic!("retained hook lost packaged files: {reason}")
+        }
+    }
 }

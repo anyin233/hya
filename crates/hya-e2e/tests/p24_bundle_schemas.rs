@@ -1,26 +1,17 @@
-//! T2.19 — installed bundle schema declarations surface end to end.
-//!
-//! A `.hyabundle` fixture declaring `schemas:`, `extensions.process`, and
-//! `resources.mcp` installs through the CLI, `bundle schemas` and `bundle info`
-//! report the declarations, and after the first turn binds the installed
-//! catalog the published runtime scheme table exposes the claim over
-//! `GET /v1/runtime/schemas` (owner = the bundle source, canonical tool = the
-//! owning tool's `bundle:{id}/tool/{local}` stable id). The `scheme://`
-//! read-dispatch through the owning sidecar tool is covered by the hya-core
-//! unit seam (`bundle_agent_view_with_sidecar_owner_reads_registered_scheme`),
-//! because driving a real JS sidecar is out of scope for the FakeLlm harness.
+//! T2.19 — executable bundle schema declarations and scheme reads surface end to end.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use hya_e2e::{E2eEnvBuilder, text_step};
+use hya_bundle::{BundleSource, SourceFile, write_public_package};
+use hya_e2e::{E2eEnvBuilder, fake_requests_from, mcp_echo_script, text_step, tool_step};
+use serde_json::json;
 
 const BUNDLE_ID: &str = "hya/schema-demo";
 
-/// Copy the checked-in fixture into a unique temp path with the required
-/// `.hyabundle` suffix (the CLI rejects packages without it).
+/// Prepare a real process fixture into a unique public package.
 fn materialized_package() -> PathBuf {
     static NEXT: AtomicU64 = AtomicU64::new(0);
     let nanos = SystemTime::now()
@@ -33,11 +24,50 @@ fn materialized_package() -> PathBuf {
         std::process::id()
     ));
     std::fs::create_dir_all(&dest_dir).expect("create fixture dir");
-    let source =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/schema_demo.hyabundle");
+    let source = BundleSource::new(
+        "schema-demo",
+        vec![
+            SourceFile::new(
+                "bundle.yaml",
+                br#"kind: AgentBundle
+identity: { id: hya/schema-demo, version: 1.0.0, publisher: hya }
+schemas: [{ scheme: db, tool: query, writable: false }]
+resources:
+  tools: [{ id: query, path: tool.json }]
+  mcp: [{ id: vecdb, path: mcp.json }]
+extensions:
+  process: { kind: rust, command: [python3, '${BUNDLE_ROOT}/runtime.py'] }
+  files:
+    - { id: runtime, path: runtime.py }
+    - { id: mcp-runtime, path: mcp.py }
+agent:
+  id: schema-lead
+  role: main
+  spawn_lifecycle: transient
+  resource_view: { allow: [query, 'harness:tool/read'] }
+"#,
+            ),
+            SourceFile::new("tool.json", "{}"),
+            SourceFile::new(
+                "mcp.json",
+                r#"{"command":["python3","${BUNDLE_ROOT}/mcp.py"]}"#,
+            ),
+            SourceFile::new("mcp.py", mcp_echo_script()),
+            SourceFile::new(
+                "runtime.py",
+                r#"import json,sys
+for line in sys.stdin:
+ r=json.loads(line)
+ if r.get('method') == 'initialize': result={'protocol_version':1,'plugin':{'id':'schema-demo','version':'1.0.0','kind':'rust'},'hooks':[],'tools':[{'name':'query','description':'Read db URI','inputSchema':{'type':'object'}}]}
+ elif r.get('method') == 'tool/call': result={'ok':True,'output':{'output':'BUNDLE_SCHEMA_READ_EXECUTED','input':r['params']['input']}}
+ else: result={}
+ if 'id' in r: print(json.dumps({'jsonrpc':'2.0','id':r['id'],'result':result}),flush=True)
+"#,
+            ),
+        ],
+    );
     let dest = dest_dir.join("schema-demo.hyabundle");
-    std::fs::copy(&source, &dest)
-        .unwrap_or_else(|error| panic!("copy fixture {}: {error}", source.display()));
+    std::fs::write(&dest, write_public_package(&source).unwrap()).unwrap();
     dest
 }
 
@@ -45,7 +75,10 @@ fn materialized_package() -> PathBuf {
 async fn t2_19_installed_bundle_schemas_surface_through_cli_and_runtime_api() {
     let package = materialized_package();
     let env = E2eEnvBuilder::new()
-        .scripts(vec![text_step("SCHEMA_SURFACED")])
+        .scripts(vec![
+            tool_step("read", json!({"path":"db://rows/42"})),
+            text_step("SCHEMA_SURFACED"),
+        ])
         .build()
         .await
         .expect("e2e env");
@@ -85,7 +118,7 @@ async fn t2_19_installed_bundle_schemas_surface_through_cli_and_runtime_api() {
     let info_out = String::from_utf8_lossy(&info.stdout);
     for expected in [
         "schema=db tool=query writable=false",
-        "process=bun command=bun schema-demo-worker",
+        "process=rust command=python3 ${BUNDLE_ROOT}/runtime.py",
         "mcp=bundle:hya/schema-demo/mcp/vecdb",
     ] {
         assert!(
@@ -104,6 +137,14 @@ async fn t2_19_installed_bundle_schemas_surface_through_cli_and_runtime_api() {
         .prompt(session, "surface the schema")
         .await
         .expect("prompt");
+
+    let requests = env.fake.requests().unwrap();
+    let followup = fake_requests_from(&requests, 1);
+    assert!(
+        followup.contains("BUNDLE_SCHEMA_READ_EXECUTED"),
+        "{followup}; {}",
+        env.diagnostics()
+    );
 
     let runtime_schemas = env
         .get_json("/v1/runtime/schemas")

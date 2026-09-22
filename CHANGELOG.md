@@ -1,12 +1,10 @@
-# 0.37.6
+# 0.37.7
 
-## Agentless Plugin packages
+## Everything as Bundle runtime and presets
 
-Public `Plugin` packages distribute resource capabilities without an Agent,
-Workflow, or channel. Strict YAML preparation, canonical prepared-v2 encoding,
-package writing, mixed catalogs, and the existing bundle CLI lifecycle support
-this slim hyabundle payload. Agent and Workflow fields are rejected.
-
-Static Skills publish through the existing immutable runtime registry. Process
-and MCP declarations remain validated package metadata; automatic agentless
-process/MCP startup is follow-up work.
+- Prepare core-agent definitions and native tool exposure from trusted `hya/core-agents` and `hya/base-tools` presets; preserve reserved identities, aliases, permissions, and compatibility names.
+- Start bundle process and MCP providers before atomic runtime publication. Preserve old bindings across install/remove, retain packaged resources for process lifetime, and keep agent tools/hooks owner-scoped.
+- Add declarative `AgentSetBundle.channels` policies for unit and parent-DM communication, with restrictive send/report/steer/follow-up and resident wake capabilities.
+- Supply transient and resident worker definitions through `hya/subagents` and goal/evaluator/verifier/planner resources through `hya/goal-loop`; retain engine stop authority and model fallback.
+- Import Claude plugin directories and local/Git marketplace entries into standard Plugin or AgentSetBundle packages with packaged source closure and supported native hook mappings.
+- Extend functional coverage for process/MCP execution, scoped hooks, URI scheme reads, Claude import, runtime rollback, presets, and immutable bindings.

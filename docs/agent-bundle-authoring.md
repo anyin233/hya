@@ -1,6 +1,16 @@
 # Plugin, AgentBundle, and AgentSetBundle Authoring
 
-Author and install a public `Plugin`, `AgentBundle`, or `AgentSetBundle`. A `Plugin` is a slim hyabundle that distributes resources without an Agent, Workflow, or channel. **An AgentBundle defines exactly one agent.** An `AgentSetBundle` defines one or more agents that share one bundle resource plane; it supports distributing several specialists without a Workflow graph. Install one AgentBundle per independent specialist agent, or use an AgentSetBundle when several agents must be distributed as one immutable unit. A packaged Workflow and its exact multi-Agent closure use the distinct `WorkflowBundle` payload documented in [Workflows](workflows.md#packaging-a-workflowbundle). Static-only bundles remain process-free. A public executable bundle may add one activation-scoped Bun sidecar for bundle-local tools, hooks, and event handlers; Harness remains the agent runtime.
+Author and install a public `Plugin`, `AgentBundle`, or `AgentSetBundle`. A
+`Plugin` distributes resources without an Agent, Workflow, or channel. An AgentBundle defines exactly one agent. An `AgentSetBundle` distributes agents
+sharing one resource plane and/or [channel policies](agent-channels.md), without
+a Workflow graph. A packaged Workflow and its exact Agent closure use the
+separate `WorkflowBundle` payload described in [Workflows](workflows.md#packaging-a-workflowbundle).
+
+Static bundles remain process-free. Executable bundles may carry native process
+providers, managed MCP servers, or Bun extensions; agent-bearing JavaScript
+extensions retain activation-scoped sidecars. See [Bundle Runtime](bundle-runtime.md)
+for process startup, naming, and immutable lifetime contracts. The engine remains
+the agent runtime.
 
 Examples:
 
@@ -9,7 +19,12 @@ Examples:
 - Resident Bun example: [`examples/bun-resident/`](examples/bun-resident/)
 - Working split-entrypoint example: [`docs/examples/bun-disjoint`](examples/bun-disjoint/) (`bun-disjoint`)
 
-Built-in agents (`build`, `plan`, `explore`, `general`, the reserved `compaction` / `summary` / `title`, and the `hya-*` development agents) are still compiled into the binary in [`crates/hya-core/src/builtin_agents/`](../crates/hya-core/src/builtin_agents/) and run on the full Harness tool plane. Everything below describes public bundle payloads.
+Core agents (`build`, `plan`, `explore`, `general`, the reserved
+`compaction` / `summary` / `title`, and the `hya-*` development agents) come
+from the trusted embedded [`hya/core-agents` preset](core-agents.md) and run on
+the full Harness plane. Its source is
+[`bundles/presets/core-agents`](../bundles/presets/core-agents/). Public bundle
+payloads cannot request that trusted origin.
 
 ## Plugin
 
@@ -61,7 +76,7 @@ The closed manifest accepts only these top-level fields:
 | `identity` | object | Required `{ id: string, version: string, publisher: string }`; same identity rules as AgentBundle. |
 | `namespace` | optional string | Same namespace validation and default as AgentBundle. |
 | `resources` | object | Optional `tools`, `skills`, `mcp`, and `hooks` resource arrays, using the shared resource schema below. |
-| `extensions` | object | Optional `js`, `rust`, and `process` fields, with the same support limits described below. |
+| `extensions` | object | Optional `js`, `files`, `rust`, and `process` fields, with the same support limits described below. |
 | `schemas` | array | Optional `{ scheme: string, tool: string, writable: boolean = false }` declarations. |
 
 Unknown fields, including `agent`, `agents`, `workflow`, and `channels`, are
@@ -79,10 +94,10 @@ catalog-level tables. `agents()` returns an empty slice and `workflow()` returns
 Static Skills use the existing runtime resource registry. Full-plane agents such
 as `build` can invoke `skill` with `{"name":"plugin-help"}` after installation.
 Agent-bearing bundles retain their scoped resource views. An installed generation
-is loaded at the next root binding; existing bindings remain immutable. MCP and
-`extensions.process` declarations are validated and packaged, but automatic
-agentless process/MCP startup is follow-up work. Declaring a tool or hook alone
-does not start an executable provider.
+is loaded at the next root binding; existing bindings remain immutable.
+Declared process and MCP providers start before the new generation is published.
+See [Bundle Runtime](bundle-runtime.md) for packaged files, invocation names,
+private agent views, and failure behavior.
 
 ## AgentSetBundle
 
@@ -112,17 +127,21 @@ agents:
     spawn_lifecycle: transient
 ```
 
-`agents` must contain at least one entry; ids are sorted and must be unique
+`agents` must contain at least one entry unless nonempty `channels` are present;
+channel-only AgentSets may omit `agents`. Agent ids are sorted and must be unique
 within the bundle and across the merged catalog. `can_spawn` keeps the existing late-bound allowlist semantics and may reference agents from other bundles; this payload does not require a Workflow reachability closure. Each entry uses the same
 `PreparedAgent` fields as a WorkflowBundle agent (`description`, `role`,
 `color`, `prompt`, `model_policy`, `workdir`, `spawn_lifecycle`,
 `resource_view`, `can_spawn`, and `hook_refs`). Resources and extensions use
 the same `resources`, `extensions`, and `schemas` sections as AgentBundle.
-`workflow` and `channels` are not accepted, and unknown manifest fields fail preparation. Channel declarations and preset migration are separate follow-up work; runtime channels continue to be created from spawn events.
+`workflow` is not accepted, and unknown manifest fields fail preparation.
+Optional `channels` declare restrictive unit/parent-DM templates; see
+[Agent Channels](agent-channels.md) for the exact contract. Runtime channel ids
+continue to be created from spawn events.
 
 The prepared interface is the `AgentSetBundle` member of
 `PreparedInstallableBundle`: `{ format_version, identity, namespace, digest,
-agents, tools, skills, mcp, hooks, extensions }`. The catalog exposes each
+agents, channels, tools, skills, mcp, hooks, extensions }`. The catalog exposes each
 agent by its stable id and `bundle:<bundle-id>/agent/<agent-id>`; no Workflow id
 is emitted for this payload. Build and install it with the existing commands:
 
@@ -134,11 +153,17 @@ hya-backend bundle install review-team.hyabundle
 
 ## Runtime boundary
 
-Harness is the sole agent, model, task, mailbox, event, `MemberOutcome`, and recovery runtime. The per-activation Bun Compat child supplies only Bundle-local tools, hooks, and event handlers. It never runs an agent/model loop and never receives a task, prompt, transcript, model state, grants, or runtime snapshot. There is no `agent/invoke`, sidecar send/wait, agent terminal/artifact result, second runtime, or second transport.
+Harness is the sole agent, model, task, mailbox, event, `MemberOutcome`, and recovery runtime. The per-activation Bun extension child supplies only Bundle-local tools, hooks, and event handlers. It never runs an agent/model loop and never receives a task, prompt, transcript, model state, grants, or runtime snapshot. There is no `agent/invoke`, sidecar send/wait, agent terminal/artifact result, second runtime, or second transport.
 
-Harness's `SessionEngine` remains the only agent runtime. The sidecar never receives task/prompt/transcript or returns `MemberOutcome`; each executable activation owns one per-activation process.
+Harness's `SessionEngine` remains the only agent runtime. An activation-scoped
+JavaScript sidecar never receives task/prompt/transcript or returns
+`MemberOutcome`; each executable JavaScript activation owns one process. Native
+process evaluator hooks receive their documented evaluation inputs while the
+engine retains stop authority.
 
-Bun Compat is the sole executable sidecar implementation. Static-only Bundles remain process-free.
+Activation-scoped JavaScript extensions use the Bun adapter. Explicit process
+extensions use the native plugin protocol or Claude adapter; see
+[Bundle Runtime](bundle-runtime.md). Static-only bundles remain process-free.
 
 ---
 
@@ -232,7 +257,7 @@ kind: AgentBundle
 | `namespace` | no | Provider-facing namespace for the bundle's tools and schemas; defaults to the identity name segment (the part after `/`). Token rules: `[a-zA-Z0-9_-]`, no `__`, and the reserved tokens `mcp`, `harness`, `builtin`, `plugin` are rejected. |
 | `schemas` | no | External URI-scheme extensions this bundle provides (see [Schema extensions (`schemas:`)](#schema-extensions-schemas)). |
 | `resources` | no | `tools`, `skills`, `mcp`, `hooks` resource lists. |
-| `extensions` | no | `js`, `rust` extension lists plus the optional `process` declaration. |
+| `extensions` | no | `js`, `files`, `rust` extension lists plus the optional `process` declaration. |
 | `agent` | yes | The single agent this bundle defines. |
 
 **Removed AgentBundle keys.** `api_version` and per-agent `harness_access` no longer exist,
@@ -241,9 +266,8 @@ WorkflowBundle uses `agents:` under its separate closed schema. An AgentBundle
 manifest that carries a removed key is rejected by name with `RemovedManifestKey`.
 
 **Unsupported in the current release** (declared but rejected at prepare):
-`extensions.rust` and per-agent `resource_profile`. `resources.mcp` is
-**declarable** (validated and shipped in the prepared catalog; runtime spawning
-of bundle-declared MCP servers lands in a later phase).
+`extensions.rust` and per-agent `resource_profile`. Use `extensions.process` for
+a native executable and `resources.mcp` for managed MCP servers.
 
 ### `identity`
 
@@ -277,8 +301,9 @@ that must parse into hya's `McpServerConfig` shape — a stdio server
 `{"command": [...], "env": {...}, "timeout_ms": N}` or a remote server
 `{"url": "...", "transport": "http" | "sse" | "stdio"}` (unknown fields, blank
 command arguments, and files declaring neither a command nor a url are
-rejected). The declaration is validated and shipped in the prepared catalog;
-the runtime does **not** spawn bundle-declared MCP servers yet.
+rejected). Servers start before runtime publication; `enabled: false` skips
+startup. Selecting a bundle-local server exposes its tools as
+`<server-public-name>__<tool-local-name>` and retains MCP permissions.
 
 **Skills example** (no shipped example currently includes one):
 
@@ -301,8 +326,9 @@ Filesystem `SKILL.md` discovery (outside bundles) is documented in
 | Field | Meaning |
 | --- | --- |
 | `js` | JavaScript extension resources (same `{id, path, aliases}` shape). |
+| `files` | Inert, explicitly packaged UTF-8 support files using the same `{id, path, aliases}` shape; no executable capability is inferred. |
 | `rust` | **Unsupported** — non-empty list fails prepare. |
-| `process` | The one optional out-of-process extension declaration: `{ kind, command }` where `kind` is `rust`, `bun`, or `claude` and `command` is the argv to spawn (non-empty, no blank arguments). Declared and validated this phase; the unified spawn path lands in a later phase. |
+| `process` | The one optional out-of-process extension declaration: `{ kind, command }` where `kind` is `rust`, `bun`, or `claude` and `command` is the argv to spawn (non-empty, no blank arguments). Starts before runtime publication; `${BUNDLE_ROOT}` expands to the private materialized package root. |
 
 ### Schema extensions (`schemas:`)
 
@@ -524,7 +550,7 @@ lookup does not rewrite an unknown `subagent_type` to `general`.
 
 ## Resources and permissions (Harness gate)
 
-Bundle-local tool calls resolve against the activation's captured catalog binding. Existing `PermissionPlane` and plugin policy run before `tool/call`; denial prevents RPC. Host tools, static skills, and host-managed MCP remain governed by the Harness view. Bundle-declared MCP is unsupported. A Bundle adds no sandbox and causes no permission expansion.
+Bundle-local tool calls resolve against the activation's captured catalog binding. Existing `PermissionPlane` and plugin policy run before `tool/call`; denial prevents RPC. Host tools, static skills, and host-managed MCP remain governed by the Harness view. Bundle-declared MCP tools remain owner-scoped for bundle agents and retain MCP permissions. A Bundle adds no sandbox and causes no permission expansion.
 
 ---
 
@@ -564,7 +590,7 @@ Each selected Tool or Hook source path must exact-path match exactly one JavaScr
 
 Tool and Hook initialize declarations independently equal the selected expected sets regardless of order; missing, extra, duplicate, or unselected declarations reject. The contract is: tool-only reports zero hooks and hook-only reports zero tools. When authoring, generic superset modules are rejected and must be split; authors may instead select the complete set.
 
-The public JS profile admits only self-contained selected Extension entrypoint files; no separate Bundle-local helper file kind or transitive JS source closure exists. Use external single-file bundling before packaging; activation never executes the authoring tree. Only selected captured PreparedResource bytes are rematerialized for activation. A missing relative helper import fails before ACK, with existing cleanup handling the failure before model or dispatch.
+The activation-scoped JS profile admits only self-contained selected Extension entrypoints; it does not load inert support files or discover transitive JS imports. Use external single-file bundling before packaging; activation never executes the authoring tree. Only selected captured PreparedResource bytes are rematerialized for activation. A missing relative helper import fails before ACK, with existing cleanup handling the failure before model or dispatch.
 
 ---
 
@@ -584,11 +610,11 @@ and declarations match the prepared Bundle.
 2. Materializes each selected bundle tool/hook resource plus its unique
    exact-path-matching JS extension with `create_new`. Multi-owner activations
    use **`owner-0000/`-style** path slots (`owner-{index:04}`).
-3. Spawns the Bun Compat adapter via `PluginClient::spawn_bundle` in that
+3. Spawns the Bun extension adapter via `PluginClient::spawn_bundle` in that
    directory with **`env_clear()`**, appending  
    `-- --bundle-extension <absolute path>` once per resolved entrypoint.
 4. Initialize reply must report **`protocol_version` 1** and plugin **`kind:
-   compat`** or the child is terminated.
+   bun`** or the child is terminated.
 
 ### `activation_id` validation
 
@@ -693,4 +719,4 @@ A bundle installed by an older binary cannot decode. Such a row is **skipped wit
 
 ## Trust and unsupported combinations
 
-Only public Bundles are supported for activation. Private inspection reports `authentication=unverified` and `payload=opaque`; private activation is unsupported and generation-preserving. Raw Rust extension **lists** (`extensions.rust`), and resource profiles without an enforceable current host mapping are unsupported; the declared `extensions.process` form (kind + argv) is accepted and shipped, while runtime spawn-unification lands in a later phase. Bundle-declared MCP servers are validated declarations only — they are not spawned yet. Structural and declared-digest checks do not establish publisher authenticity. There is no sandbox and no permission expansion. Do not add decryption, signatures, a marketplace, compilation on activation, native commands, arbitrary environment access, a second permission plane, or legacy agent-file discovery. Legacy definitions are not parsed, migrated, or used as a fallback.
+Only public Bundles are supported for activation. Private inspection reports `authentication=unverified` and `payload=opaque`; private activation is unsupported and generation-preserving. Raw Rust extension **lists** (`extensions.rust`), and resource profiles without an enforceable current host mapping are unsupported; the declared `extensions.process` form (kind + argv) starts a managed native/adapter process before publication. Bundle-declared MCP servers start through the same immutable runtime-source lifecycle. Structural and declared-digest checks do not establish publisher authenticity. There is no sandbox and no permission expansion. Bundle loading does not add decryption, signatures, compilation on activation, arbitrary environment access, a second permission plane, or legacy agent-file discovery. Claude marketplace import resolves a source before ordinary package validation; see [Claude import](claude-plugin-import.md). Legacy definitions are not parsed, migrated, or used as a fallback.

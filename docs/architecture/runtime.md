@@ -395,22 +395,34 @@ ASCII alphanumerics, `_`, and `-`, and replaces every other character with
 Resources are **not** registered as tools and are **not** reachable by the
 model through the tool registry today.
 
-Plugin reconciliation in `0.34.6` covers startup tool exports and their RPC
-binding. Plugin hook/command/permission callback lifecycle remains owned by the
-existing `PluginHost` and `PermissionPlane`; there is no dynamic hook plane,
-plugin watcher, or plugin hot-reload API. A respawn must reproduce the complete
-canonical initialize declaration or the new child is closed and calls fail
-closed.
+Configured Plugin reconciliation covers tool exports and their RPC binding;
+startup callbacks remain owned by the configured `PluginHost`. A respawn must
+reproduce the complete canonical initialize declaration or calls fail closed.
 
-`RuntimeSnapshot` owns exactly one `BundleCatalog`. For installed bundles,
-`hya-app` reads the bundle registry generation before binding each new root turn
-and before catalog refresh, merges installed payloads with the build-prepared
-read-only first-party WorkflowBundle, adapts prepared static Skills through the
-shared contribution seam, and publishes the catalog and Bundle sources
-atomically. An unchanged generation is a no-op; validation or load failure
-preserves the old snapshot. In-flight and child turns retain their pinned
-snapshot. There is no bundle watcher, per-provider-round or per-tool-call
-database check, or second catalog authority.
+`RuntimeSnapshot` owns exactly one `BundleCatalog`. At root admission, new turn
+binding, subsequent root model-round boundaries, and catalog refresh, `hya-app` merges project, installed, and embedded
+first-party payloads. It prepares static Skills, native/Bun/Claude process
+contributions, and bundled MCP servers before publishing catalog and Bundle
+sources atomically. Initialization failure preserves the previous generation.
+Unchanged sources reuse their process owners; retained bindings keep those
+owners and staged files alive across replacement and uninstall.
+
+Full-plane agents see agentless Plugin exports. Agent-bearing bundles retain
+private tool/MCP resource selection and scoped `hook_refs`. Hooks and permission
+interceptors follow captured bindings; they do not consult a second live catalog.
+See [Bundle Runtime](../bundle-runtime.md) for names, process environment, exact
+contribution checks, and lifecycle contracts. Root round rebinding replaces tools,
+prompts, and hooks only after successful preparation; a failed rebind retains
+the current snapshot. Bound child/Workflow activations do not rebind. There is
+no bundle watcher or per-tool-call database check.
+
+Core Agent definitions come from the build-prepared trusted
+[`hya/core-agents` preset](../core-agents.md), and native tool visibility/aliases/
+permission posture come from [`hya/base-tools`](../base-tools.md). Public packages
+cannot claim their trusted origin. [`hya/subagents`](../subagent-bundles.md)
+supplies ordinary transient/resident definitions; [channel policy bundles](../agent-channels.md)
+restrict engine-minted communication topology without owning channel identities
+or introducing separate event/replay state.
 
 Core preserves that child pinning with a typed `BoundSpawnRequest` carrying the
 parent `TurnBinding` through the application supervisor into both transient and

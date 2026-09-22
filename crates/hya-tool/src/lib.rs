@@ -23,6 +23,7 @@
 mod agents;
 mod apply_patch;
 mod ask_user;
+mod base_tools;
 mod edit;
 mod file_diff;
 mod formatter;
@@ -75,6 +76,10 @@ pub use workflow_plane::{
 };
 
 pub use agents::AgentDef;
+pub use base_tools::{
+    AliasVisibility, BaseToolAlias, BaseToolExposure, BaseToolScheme, BaseToolsPreset,
+    base_tools_preset,
+};
 pub use formatter::{
     BuiltinFormatterProvider, FormatterConfig, FormatterEntry, FormatterError, FormatterPlane,
     FormatterProvider, FormatterStatus,
@@ -86,8 +91,8 @@ pub use interaction::{
 pub use lifecycle::{LifecyclePlane, LifecycleRequest};
 pub use lsp_plane::{LspError, LspOperation, LspPlane, LspProvider, LspRequest};
 pub use mailbox::{
-    ArchivedAgentRow, ChannelInfo, ChannelRow, MailReceipt, MailboxError, MailboxPlane,
-    MailboxRequest, MemberStatusRow,
+    ArchivedAgentRow, ChannelInfo, ChannelPolicySnapshot, ChannelRow, MailReceipt, MailboxError,
+    MailboxPlane, MailboxRequest, MemberStatusRow,
 };
 pub use namespace::{
     InvalidNamespacedName, NAMESPACE_SEPARATOR, NamespacedRegisterError, namespace_of,

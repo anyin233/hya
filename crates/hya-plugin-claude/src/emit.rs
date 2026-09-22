@@ -5,12 +5,13 @@
 //!
 //! ```json
 //! {
-//!   "manifest": "kind: AgentBundle\n...",
+//!   "manifest": "kind: Plugin\n...",
 //!   "files": [{ "path": "skills/review.md", "content": "…" }]
 //! }
 //! ```
 //!
-//! `manifest` is a complete hya `AgentBundle` source manifest (`bundle.yaml`)
+//! `manifest` is a complete hya `Plugin` or `AgentSetBundle` source manifest
+//! (`bundle.yaml`)
 //! whose `resources.*[].path` references the translated files; `files` carries
 //! those translated file contents verbatim. The Rust side materializes both
 //! into a [`hya_bundle::BundleSource`] and installs through the normal
@@ -34,7 +35,7 @@ pub struct ManifestFile {
 /// The complete `--emit-bundle-manifest` stdout envelope.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct ManifestEmit {
-    /// Complete `AgentBundle` source manifest (YAML) referencing `files`.
+    /// Complete standard bundle source manifest (YAML) referencing `files`.
     pub manifest: String,
     /// Translated resource files referenced by `manifest`.
     #[serde(default)]

@@ -26,3 +26,8 @@ regex = { workspace = true }
 similar = { workspace = true }
 xxhash-rust = { workspace = true }
 time = { workspace = true }
+
+[build-dependencies]
+hya-bundle = { workspace = true }
+serde = { workspace = true }
+serde_norway = { workspace = true }

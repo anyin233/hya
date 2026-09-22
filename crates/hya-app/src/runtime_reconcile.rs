@@ -361,7 +361,7 @@ pub(crate) fn bundle_schema_claims(
 }
 
 /// Validate and parse every prepared bundle Skill exactly once at the contribution seam.
-fn prepared_bundle_skill_exports(
+pub(crate) fn prepared_bundle_skill_exports(
     bundle_id: &str,
     resources: &[PreparedResource],
     contributions: &PluginContributionSet,

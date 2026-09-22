@@ -6,7 +6,7 @@
  * Claude Code shell commands and translating their decisions.
  */
 
-import { claudeHookPayload, matcherMatches, runClaudeHookCommand, toolDecisionFromClaudeStdout } from "./hooks"
+import { claudeHookPayload, claudeToolName, matcherMatches, runClaudeHookCommand, toolDecisionFromClaudeStdout } from "./hooks"
 import { handleInitialize, PROTOCOL_VERSION } from "./initialize"
 import {
   ERROR_CODES,
@@ -28,11 +28,14 @@ export type { RuntimeOptions }
 
 const METHOD_INITIALIZE = "initialize"
 const METHOD_SHUTDOWN = "shutdown"
-const METHOD_EVENT = "event"
 const METHOD_TOOL_CALL = "tool/call"
 const METHOD_MESSAGE_USER_BEFORE = "hook/message.user.before"
 const METHOD_TOOL_EXECUTE_BEFORE = "hook/tool.execute.before"
 const METHOD_TOOL_EXECUTE_AFTER = "hook/tool.execute.after"
+const METHOD_COMPACTION_BEFORE = "hook/compaction.before"
+const METHOD_SESSION_START = "hook/session.start"
+const METHOD_SESSION_END = "hook/session.end"
+const METHOD_AGENT_SPAWN = "hook/agent.spawn"
 
 /** Read newline-delimited text from a byte stream. */
 export async function* readLines(
@@ -61,8 +64,9 @@ export function handleRequest(
   context: RequestContext,
 ): Promise<HandledRequest> | HandledRequest {
   if (request.id === undefined) {
-    // Event notifications carry session envelopes; the Claude adapter runs
-    // its mapped CC event hooks fire-and-forget and never replies.
+    if ([METHOD_SESSION_START, METHOD_SESSION_END, METHOD_AGENT_SPAWN].includes(request.method)) {
+      return handleObservation(request.method, request.params, context)
+    }
     return { response: "", shouldExit: false }
   }
   return handleRequestWithResponse(request, context)
@@ -92,6 +96,8 @@ function handleRequestWithResponse(
       return handleToolExecuteAfter(request, context)
     case METHOD_MESSAGE_USER_BEFORE:
       return handleMessageUserBefore(request, context)
+    case METHOD_COMPACTION_BEFORE:
+      return handleCompactionBefore(request, context)
     default:
       return {
         response: errorResponse(
@@ -102,6 +108,47 @@ function handleRequestWithResponse(
         shouldExit: false,
       }
   }
+}
+
+async function handleObservation(
+  method: string,
+  params: unknown,
+  context: RequestContext,
+): Promise<HandledRequest> {
+  if (context.translation === undefined || typeof params !== "object" || params === null || Array.isArray(params)) {
+    return { response: "", shouldExit: false }
+  }
+  const wireName = method.slice("hook/".length) as "session.start" | "session.end" | "agent.spawn"
+  const groups = context.translation.hookGroups[wireName] ?? []
+  const record = params as Record<string, unknown>
+  for (const group of groups) {
+    for (const hook of group.commands) {
+      await runClaudeHookCommand(hook, claudeHookPayload(wireName, {
+        session: typeof record["session"] === "string"
+          ? record["session"]
+          : typeof record["parent"] === "string" ? record["parent"] : "",
+      }), context.bundleRoot)
+    }
+  }
+  return { response: "", shouldExit: false }
+}
+
+async function handleCompactionBefore(
+  request: JsonRpcRequest,
+  context: RequestContext,
+): Promise<HandledRequest> {
+  if (context.translation === undefined || typeof request.params !== "object" || request.params === null || Array.isArray(request.params)) {
+    return invalidParams(request.id, "params must be an object")
+  }
+  const params = request.params as Record<string, unknown>
+  for (const group of context.translation.hookGroups["compaction.before"] ?? []) {
+    for (const hook of group.commands) {
+      await runClaudeHookCommand(hook, claudeHookPayload("compaction.before", {
+        session: typeof params["session"] === "string" ? params["session"] : "",
+      }), context.bundleRoot)
+    }
+  }
+  return { response: okResponse(request.id, { outcome: "proceed" }), shouldExit: false }
 }
 
 async function handleToolExecuteBefore(
@@ -116,8 +163,9 @@ async function handleToolExecuteBefore(
     return invalidParams(request.id, "adapter is not initialized")
   }
   const hooks = context.translation.hookGroups?.["tool.execute.before"] ?? []
+  const toolName = claudeToolName(params.value["tool"] as string)
   for (const group of hooks) {
-    if (!matcherMatches(group.matcher, params.value["tool"] as string)) {
+    if (!matcherMatches(group.matcher, toolName)) {
       continue
     }
     for (const hook of group.commands) {
@@ -125,9 +173,10 @@ async function handleToolExecuteBefore(
         hook,
         claudeHookPayload("tool.execute.before", {
           session: params.value["session"] as string,
-          tool: params.value["tool"] as string,
+          tool: toolName,
           input: params.value["input"],
         }),
+        context.bundleRoot,
       )
       const decision = toolDecisionFromClaudeStdout(run.stdout)
       if (decision !== undefined && decision.outcome === "veto") {
@@ -153,8 +202,9 @@ async function handleToolExecuteAfter(
     return invalidParams(request.id, "adapter is not initialized")
   }
   const hooks = context.translation.hookGroups?.["tool.execute.after"] ?? []
+  const toolName = claudeToolName(params.value["tool"] as string)
   for (const group of hooks) {
-    if (!matcherMatches(group.matcher, params.value["tool"] as string)) {
+    if (!matcherMatches(group.matcher, toolName)) {
       continue
     }
     for (const hook of group.commands) {
@@ -162,10 +212,11 @@ async function handleToolExecuteAfter(
         hook,
         claudeHookPayload("tool.execute.after", {
           session: params.value["session"] as string,
-          tool: params.value["tool"] as string,
+          tool: toolName,
           input: params.value["input"],
           result: params.value["result"],
         }),
+        context.bundleRoot,
       )
     }
   }
@@ -197,6 +248,7 @@ async function handleMessageUserBefore(
         claudeHookPayload("message.user.before", {
           session: params.value["session"] as string,
         }),
+        context.bundleRoot,
       )
     }
   }

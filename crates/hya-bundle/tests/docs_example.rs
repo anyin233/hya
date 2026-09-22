@@ -136,7 +136,7 @@ fn bundle_authoring_docs_capture_hook_and_entrypoint_contract() {
         ),
         (
             "self-contained public JS profile",
-            "The public JS profile admits only self-contained selected Extension entrypoint files; no separate Bundle-local helper file kind or transitive JS source closure exists.",
+            "The activation-scoped JS profile admits only self-contained selected Extension entrypoints; it does not load inert support files or discover transitive JS imports.",
         ),
         (
             "external single-file bundling",
@@ -254,7 +254,7 @@ fn bundle_cli_docs_distinguish_catalog_publication_from_activation_closure() {
         .join(" ");
 
     for marker in [
-        "publication validates collisions against the immutable first-party catalog, the complete installed BundleCatalog, and reserved core Agent ids before atomic generation publication",
+        "publication validates the merged catalog after first-party shadowing, the complete installed BundleCatalog, and reserved core Agent ids before atomic generation publication",
         "activation materializes only the selected Agent's captured Tool/Hook/Skill capability closure and exact-path-matched JavaScript Extension entrypoints",
     ] {
         assert!(

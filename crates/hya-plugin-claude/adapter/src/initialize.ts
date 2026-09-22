@@ -2,16 +2,17 @@
  * Initialize handling for the Claude adapter (P7 7.1).
  *
  * The adapter declares its translated Claude Code resources on the hya
- * plugin ABI v1 initialize reply: skills from `agents/`+`skills/`+
- * `commands/`, and hook registrations derived from `hooks/hooks.json`.
+ * plugin ABI v1 initialize reply: skills from `skills/`+`commands/`, and hook
+ * registrations derived from `hooks/hooks.json`. Agent definitions belong to
+ * the standard AgentSetBundle and are not duplicated as runtime skills.
  * Tool declarations stay empty in v1 — Claude Code plugin tools arrive
  * through MCP, not the JS tool API.
  */
 
 import { readPluginJson, type PluginSource } from "./discovery"
-import { hookRegistrationsFrom } from "./hooks"
+import { hookRegistrationsFrom, type HookRegistration } from "./hooks"
 import { CLAUDE_PLUGIN_KIND } from "./manifest_paths"
-import { translatePlugin } from "./translate"
+import { translatePlugin, type TranslatedSkill } from "./translate"
 import { isNonEmptyString, isRecord, ok, type ValidationResult } from "./validate"
 import { ERROR_CODES, errorResponse, okResponse, type JsonRpcRequest } from "./protocol"
 import type { HandledRequest, RequestContext } from "./runtime_types"
@@ -29,6 +30,12 @@ export async function handleInitialize(
       response: errorResponse(request.id, ERROR_CODES.INVALID_PARAMS, params.message),
       shouldExit: false,
     }
+  }
+  if (context.bundledTranslation !== undefined) {
+    const translation = context.bundledTranslation
+    const hooks = hookRegistrationsFrom({ groups: translation.hookGroups })
+    context.translation = translation
+    return initializeResponse(request.id, context, translation.skills, hooks)
   }
   let source: PluginSource
   try {
@@ -56,8 +63,17 @@ export async function handleInitialize(
   const translation = translatePlugin(source.dir)
   const hooks = hookRegistrationsFrom({ groups: translation.hookGroups })
   context.translation = translation
+  return initializeResponse(request.id, context, translation.skills, hooks)
+}
+
+function initializeResponse(
+  id: number,
+  context: RequestContext,
+  skills: readonly TranslatedSkill[],
+  hooks: readonly HookRegistration[],
+): HandledRequest {
   return {
-    response: okResponse(request.id, {
+    response: okResponse(id, {
       protocol_version: PROTOCOL_VERSION,
       plugin: {
         id: context.pluginId,
@@ -66,7 +82,7 @@ export async function handleInitialize(
       },
       hooks,
       tools: [],
-      skills: translation.skills.map((skill) => ({
+      skills: skills.map((skill) => ({
         id: skill.id,
         content: skill.content,
         digest: skill.digest,

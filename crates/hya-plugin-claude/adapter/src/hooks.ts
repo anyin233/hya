@@ -12,7 +12,13 @@
  * | `PostToolUse`     | `tool.execute.after`    |
  * | `UserPromptSubmit`| `message.user.before`   |
  * | `SessionStart`, `SessionEnd`, `Stop`, `SubagentStop`,
- *   `PreCompact`, `Notification` | `event` (fire-and-forget)      |
+ *   `PreCompact`      | `compaction.before`                      |
+ *   `SessionStart`    | `session.start`                          |
+ *   `SessionEnd`      | `session.end`                            |
+ *   `SubagentStart`   | `agent.spawn`                            |
+ *
+ * `Stop`, `SubagentStop`, and `Notification` have no exact native hya
+ * lifecycle point and are rejected by bundle translation.
  */
 
 import { isRecord } from "./validate"
@@ -24,6 +30,10 @@ export type HookName =
   | "message.user.before"
   | "tool.execute.before"
   | "tool.execute.after"
+  | "compaction.before"
+  | "session.start"
+  | "session.end"
+  | "agent.spawn"
 
 /** One hook registration on the initialize wire. */
 export type HookRegistration = {
@@ -55,12 +65,10 @@ const CC_EVENT_TO_HYA: Readonly<Record<string, HookName>> = {
   PreToolUse: "tool.execute.before",
   PostToolUse: "tool.execute.after",
   UserPromptSubmit: "message.user.before",
-  SessionStart: "event",
-  SessionEnd: "event",
-  Stop: "event",
-  SubagentStop: "event",
-  PreCompact: "event",
-  Notification: "event",
+  PreCompact: "compaction.before",
+  SessionStart: "session.start",
+  SessionEnd: "session.end",
+  SubagentStart: "agent.spawn",
 }
 
 /**
@@ -75,11 +83,16 @@ export function parseClaudeHooks(document: unknown): ClaudeHooks {
     "message.user.before": [],
     "tool.execute.before": [],
     "tool.execute.after": [],
+    "compaction.before": [],
+    "session.start": [],
+    "session.end": [],
+    "agent.spawn": [],
   }
   if (!isRecord(document)) {
     return { groups }
   }
-  for (const [ccEvent, rawValue] of Object.entries(document)) {
+  const eventDocument = isRecord(document["hooks"]) ? document["hooks"] : document
+  for (const [ccEvent, rawValue] of Object.entries(eventDocument)) {
     const hyaName = CC_EVENT_TO_HYA[ccEvent]
     if (hyaName === undefined || !Array.isArray(rawValue)) {
       continue
@@ -134,6 +147,19 @@ export function matcherMatches(matcher: string, toolName: string): boolean {
     .includes(toolName)
 }
 
+/** Translate canonical hya builtin names into Claude Code's tool vocabulary. */
+export function claudeToolName(nativeName: string): string {
+  const builtin: Readonly<Record<string, string>> = {
+    read: "Read",
+    bash: "Bash",
+    write: "Write",
+    edit: "Edit",
+    glob: "Glob",
+    grep: "Grep",
+  }
+  return builtin[nativeName] ?? nativeName
+}
+
 /** Build the CC stdin payload for one dispatched hya hook call. */
 export function claudeHookPayload(
   hookName: HookName,
@@ -165,8 +191,16 @@ export function claudeHookPayload(
 export async function runClaudeHookCommand(
   hook: ClaudeHookCommand,
   payload: unknown,
+  pluginRoot?: string,
 ): Promise<{ readonly ok: boolean; readonly stdout: string }> {
-  const process_ = Bun.spawn(["sh", "-c", hook.command], {
+  const command = pluginRoot === undefined
+    ? hook.command
+    : hook.command.replaceAll("${CLAUDE_PLUGIN_ROOT}", pluginRoot)
+  const process_ = Bun.spawn(["sh", "-c", command], {
+    ...(pluginRoot === undefined ? {} : { cwd: pluginRoot }),
+    env: pluginRoot === undefined
+      ? process.env
+      : { ...process.env, CLAUDE_PLUGIN_ROOT: pluginRoot },
     stdin: "pipe",
     stdout: "pipe",
     stderr: "pipe",
@@ -264,6 +298,14 @@ function reverseEventName(hookName: HookName): string {
       return "PostToolUse"
     case "message.user.before":
       return "UserPromptSubmit"
+    case "compaction.before":
+      return "PreCompact"
+    case "session.start":
+      return "SessionStart"
+    case "session.end":
+      return "SessionEnd"
+    case "agent.spawn":
+      return "SubagentStart"
     default:
       return "SessionStart"
   }

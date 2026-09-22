@@ -20,7 +20,7 @@ describe("--emit-bundle-manifest", () => {
     const run = await runEmitManifest(dir)
     expect(run.exitCode).toBe(0)
     const envelope = JSON.parse(run.stdout) as { manifest: string; files: { path: string; content: string }[] }
-    expect(envelope.manifest).toContain("kind: AgentBundle")
+    expect(envelope.manifest).toContain("kind: AgentSetBundle")
     expect(envelope.manifest).toContain('id: "claude/emit-plugin"')
     expect(envelope.manifest).toContain('namespace: "emit-plugin"')
 
@@ -29,6 +29,19 @@ describe("--emit-bundle-manifest", () => {
     for (const path of referenced) {
       expect(emitted.has(path)).toBe(true)
     }
+  })
+
+  test("emits an agentless Plugin for resource-only Claude plugins", async () => {
+    const dir = await makePluginDir({
+      name: "resource-only",
+      skills: [{ name: "scan", body: "Scan things." }],
+    })
+    const run = await runEmitManifest(dir)
+    expect(run.exitCode).toBe(0)
+    const envelope = JSON.parse(run.stdout) as { manifest: string }
+    expect(envelope.manifest).toContain("kind: Plugin")
+    expect(envelope.manifest).not.toContain("\nagent:")
+    expect(envelope.manifest).not.toContain("\nagents:")
   })
 
   test("fails with a diagnostic for a non-plugin directory", async () => {

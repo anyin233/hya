@@ -13,10 +13,7 @@ use std::sync::Arc;
 
 use hya_bundle::{AgentRole, BundleCatalog, BundleError, ModelPolicy, SpawnLifecycle};
 
-use crate::builtin_agents::{
-    BUILTIN_AGENTS, BuiltinAgent, SpawnScope, builtin_agent, builtin_digest, is_builtin_id,
-    ordinary_builtins,
-};
+use crate::builtin_agents::{CoreAgentsPreset, SpawnScope, builtin_digest, core_agents_preset};
 
 /// Where a resolved agent came from.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -35,6 +32,21 @@ impl AgentOrigin<'_> {
     #[must_use]
     pub const fn is_builtin(&self) -> bool {
         matches!(self, Self::Builtin)
+    }
+
+    /// Whether this definition comes from a trusted immutable preset.
+    #[must_use]
+    pub const fn is_preset(&self) -> bool {
+        matches!(self, Self::Builtin)
+    }
+
+    /// Trusted preset identity, when this is a built-in definition.
+    #[must_use]
+    pub const fn preset_bundle_id(&self) -> Option<&'static str> {
+        match self {
+            Self::Builtin => Some(crate::builtin_agents::CORE_AGENTS_PRESET_ID),
+            Self::Bundle { .. } => None,
+        }
     }
 
     /// Owning bundle id, or `None` for a built-in.
@@ -81,6 +93,7 @@ impl AgentDefinition<'_> {
 /// Built-ins plus installed bundles, resolved as one namespace.
 #[derive(Debug)]
 pub struct AgentCatalog {
+    preset: CoreAgentsPreset,
     bundles: Arc<BundleCatalog>,
 }
 
@@ -91,7 +104,10 @@ impl AgentCatalog {
     /// Returns [`BundleError::BuiltinAgentIdShadowed`] when an installed bundle
     /// declares an agent id that a built-in already owns.
     pub fn new(bundles: Arc<BundleCatalog>) -> Result<Self, BundleError> {
-        let catalog = Self { bundles };
+        let catalog = Self {
+            preset: core_agents_preset()?,
+            bundles,
+        };
         catalog.validate()?;
         Ok(catalog)
     }
@@ -100,7 +116,7 @@ impl AgentCatalog {
     fn validate(&self) -> Result<(), BundleError> {
         for bundle in self.bundles.bundles() {
             for agent in bundle.agents() {
-                if is_builtin_id(agent.id.as_str()) {
+                if self.preset_agent(agent.id.as_str()).is_some() {
                     return Err(BundleError::BuiltinAgentIdShadowed {
                         bundle_id: bundle.identity().id.clone(),
                         agent_id: agent.id.as_str().to_string(),
@@ -151,8 +167,8 @@ impl AgentCatalog {
     /// rejected any bundle that could make that ambiguous.
     #[must_use]
     pub fn resolve(&self, reference: &str) -> Option<AgentDefinition<'_>> {
-        if let Some(agent) = builtin_agent(reference) {
-            return Some(agent.definition());
+        if let Some(agent) = self.preset_agent(reference) {
+            return Some(preset_definition(agent));
         }
         let (bundle_id, agent) = self.bundles.resolve_agent_entry(reference)?;
         Some(AgentDefinition {
@@ -206,7 +222,7 @@ impl AgentCatalog {
         let target = self.require(requested)?;
         let allowed = match scope {
             CallerScope::Builtin(SpawnScope::None) => false,
-            CallerScope::Builtin(SpawnScope::AllOrdinary) => !is_reserved(target.stable_id),
+            CallerScope::Builtin(SpawnScope::AllOrdinary) => !self.is_reserved(target.stable_id),
             CallerScope::Bundle(can_spawn) => can_spawn
                 .iter()
                 .any(|listed| listed.as_str() == target.stable_id),
@@ -234,8 +250,13 @@ impl AgentCatalog {
     #[must_use]
     pub fn all(&self) -> Vec<AgentDefinition<'_>> {
         let mut agents = self.all_ordinary();
-        for agent in BUILTIN_AGENTS.iter().filter(|agent| agent.system_reserved) {
-            agents.push(agent.definition());
+        for agent in self
+            .preset
+            .agents()
+            .iter()
+            .filter(|agent| self.preset.is_reserved(agent.id.as_str()))
+        {
+            agents.push(preset_definition(agent));
         }
         agents.sort_by(|left, right| left.stable_id.cmp(right.stable_id));
         agents
@@ -244,13 +265,17 @@ impl AgentCatalog {
     /// Whether `id` is a reserved system agent that no ordinary agent may spawn.
     #[must_use]
     pub fn is_reserved(&self, id: &str) -> bool {
-        is_reserved(id)
+        self.preset.is_reserved(id)
     }
 
     /// Non-reserved built-ins followed by every installed bundle agent.
     fn all_ordinary(&self) -> Vec<AgentDefinition<'_>> {
-        let mut agents = ordinary_builtins()
-            .map(BuiltinAgent::definition)
+        let mut agents = self
+            .preset
+            .agents()
+            .iter()
+            .filter(|agent| !self.preset.is_reserved(agent.id.as_str()))
+            .map(preset_definition)
             .collect::<Vec<_>>();
         for bundle in self.bundles.bundles() {
             for agent in bundle.agents() {
@@ -264,8 +289,13 @@ impl AgentCatalog {
     }
 
     fn spawn_scope_of(&self, caller: &str) -> Result<CallerScope<'_>, BundleError> {
-        if let Some(agent) = builtin_agent(caller) {
-            return Ok(CallerScope::Builtin(agent.spawn_scope));
+        if let Some(agent) = self.preset_agent(caller) {
+            let scope = if self.preset.is_reserved(agent.id.as_str()) {
+                SpawnScope::None
+            } else {
+                SpawnScope::AllOrdinary
+            };
+            return Ok(CallerScope::Builtin(scope));
         }
         let (_, agent) = self.bundles.resolve_agent_entry(caller).ok_or_else(|| {
             BundleError::UnknownAgentId {
@@ -273,6 +303,17 @@ impl AgentCatalog {
             }
         })?;
         Ok(CallerScope::Bundle(&agent.can_spawn))
+    }
+
+    fn preset_agent(&self, reference: &str) -> Option<&hya_bundle::PreparedAgent> {
+        let id = reference
+            .strip_prefix("bundle:hya/core-agents/agent/")
+            .unwrap_or(reference);
+        self.preset
+            .agents()
+            .binary_search_by(|agent| agent.id.as_str().cmp(id))
+            .ok()
+            .map(|index| &self.preset.agents()[index])
     }
 }
 
@@ -291,9 +332,16 @@ enum CallerScope<'a> {
     Bundle(&'a [hya_proto::AgentName]),
 }
 
-/// Whether `id` is a reserved system agent that ordinary agents cannot spawn.
-fn is_reserved(id: &str) -> bool {
-    BUILTIN_AGENTS
-        .iter()
-        .any(|agent| agent.id == id && agent.system_reserved)
+fn preset_definition(agent: &hya_bundle::PreparedAgent) -> AgentDefinition<'_> {
+    AgentDefinition {
+        stable_id: agent.id.as_str(),
+        description: agent.description.as_deref(),
+        role: agent.role,
+        color: agent.color.as_deref(),
+        prompt: agent.prompt.as_deref(),
+        model_policy: Cow::Borrowed(&agent.model_policy),
+        workdir: agent.workdir.as_deref(),
+        spawn_lifecycle: agent.spawn_lifecycle,
+        origin: AgentOrigin::Builtin,
+    }
 }

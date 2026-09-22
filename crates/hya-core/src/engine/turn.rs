@@ -21,9 +21,10 @@ use super::{
 use crate::error::CoreError;
 use crate::hooks::{
     ChatParamsInput, ChatParamsOutcome, CompactionAfterInput, CompactionBeforeInput,
-    CompactionResolution, CompactionTrigger, HookDispatcher, ToolExecuteAfterInput,
+    CompactionResolution, CompactionTrigger, HookChain, HookDispatcher, ToolExecuteAfterInput,
     ToolExecuteAfterOutcome, ToolExecuteBeforeInput, ToolExecuteBeforeOutcome, ToolOutcomeNative,
-    activation_hook_for, resolve_compaction_decision, scope_activation_hooks,
+    activation_hook_for, replace_activation_hooks, resolve_compaction_decision,
+    scope_activation_hooks, scope_optional_activation_hooks,
 };
 use crate::runtime_registry::CompiledResourceView;
 use crate::sidecar::{SidecarEnvironment, SidecarHandle, SidecarStart};
@@ -96,6 +97,7 @@ struct TurnRebindInputs<'a> {
     /// Sidecar tools captured at activation; recompiled into every fresh
     /// resource view so a rebind never drops them.
     sidecar_tools: Arc<[ResolvedTool]>,
+    sidecar_hooks: Option<Arc<dyn HookDispatcher>>,
 }
 
 /// Request-local context shared by one governed turn activation.
@@ -597,7 +599,22 @@ impl SessionEngine {
             };
         let sidecar_hooks = sidecar_handle
             .as_ref()
-            .and_then(|handle| handle.hook_dispatcher());
+            .and_then(|handle| handle.hook_dispatcher())
+            .map(crate::bundle_hooks::restricted_sidecar_hooks);
+        let stable_id = projection
+            .session
+            .agent
+            .as_ref()
+            .unwrap_or(&agent.name)
+            .as_str();
+        self.capture_session_bundle_hooks(session, &binding, stable_id)
+            .await;
+        let mut bound_hooks = binding.bundle_hooks_for_agent(stable_id);
+        if let Some(sidecar_hooks) = sidecar_hooks.clone() {
+            bound_hooks.push(sidecar_hooks);
+        }
+        let activation_hooks = (!bound_hooks.is_empty())
+            .then(|| Arc::new(HookChain::new(bound_hooks)) as Arc<dyn HookDispatcher>);
         let sidecar_loss = sidecar_handle
             .as_ref()
             .and_then(|handle| handle.loss_token());
@@ -676,6 +693,7 @@ impl SessionEngine {
                 rebind: apply_default_overlays.then_some(TurnRebindInputs {
                     base_agent,
                     sidecar_tools: Arc::clone(&root_sidecar_tools),
+                    sidecar_hooks,
                 }),
             };
             let outcome = match sidecar_loss {
@@ -752,7 +770,9 @@ impl SessionEngine {
             }
             outcome
         };
-        let outcome = if let Some(hooks) = sidecar_hooks {
+        let outcome = if apply_default_overlays {
+            scope_optional_activation_hooks(session, activation_hooks, post_ack).await
+        } else if let Some(hooks) = activation_hooks {
             scope_activation_hooks(session, hooks, post_ack).await
         } else {
             post_ack.await
@@ -888,7 +908,12 @@ impl SessionEngine {
         // surfaced inside tool results, mid-turn, without breaking the model's
         // chain of thought. Snapshot the durable backlog once, then follow the
         // live bus so no per-tool projection replay is needed.
-        let mut steer = self.steer_mailbox_snapshot(session).await;
+        let steer_policy = Some(
+            crate::ChannelPolicy::from_binding(binding)?.snapshot_for(live_agent.name.as_str()),
+        );
+        let mut steer = self
+            .steer_mailbox_snapshot_with_policy(session, steer_policy)
+            .await;
         loop {
             self.validate_actor_claim(actor_claim).await?;
             if activation_hook_for(session).is_some_and(|hooks| !hooks.is_healthy()) {
@@ -973,6 +998,18 @@ impl SessionEngine {
                                 binding = &live_binding;
                                 resources = &live_resources;
                                 agents = &live_agents;
+                                let mut hooks = binding.bundle_hooks_for_agent(stable_id.as_str());
+                                if let Some(sidecar_hooks) = &inputs.sidecar_hooks {
+                                    hooks.push(Arc::clone(sidecar_hooks));
+                                }
+                                let hooks = (!hooks.is_empty()).then(|| {
+                                    Arc::new(HookChain::new(hooks)) as Arc<dyn HookDispatcher>
+                                });
+                                replace_activation_hooks(session, hooks);
+                                let channel_policy = crate::ChannelPolicy::from_binding(binding)?
+                                    .snapshot_for(live_agent.name.as_str());
+                                steer.set_policy(channel_policy);
+                                self.update_session_channel_policy(session, channel_policy);
                             }
                             Err(error) => {
                                 tracing::warn!(
@@ -1071,7 +1108,7 @@ impl SessionEngine {
             // `resolve_compaction_decision` demotes any Skip to a warning and
             // a Replace only rewrites the summarizer instructions below.
             let summarizer_instructions = if over_threshold(tokens, &messages) {
-                match &self.hooks {
+                match self.active_hook_dispatcher(session) {
                     Some(hooks) => {
                         let decision = hooks
                             .compaction_before(CompactionBeforeInput {
@@ -1365,7 +1402,10 @@ impl SessionEngine {
             }
             // Notify `compaction.after` best-effort: an enrichment point, so a
             // failure inside the host is logged there and never surfaced here.
-            if let (Some(hooks), Some(summary_tokens)) = (&self.hooks, committed_summary_tokens) {
+            if let (Some(hooks), Some(summary_tokens)) = (
+                self.active_hook_dispatcher(session),
+                committed_summary_tokens,
+            ) {
                 hooks
                     .compaction_after(CompactionAfterInput {
                         session,
@@ -1389,7 +1429,7 @@ impl SessionEngine {
             )
             .await?;
             let request = request_from_messages(&live_agent, messages, resources, &model, depth);
-            let request = if let Some(hooks) = &self.hooks {
+            let request = if let Some(hooks) = self.active_hook_dispatcher(session) {
                 match hooks
                     .chat_params(ChatParamsInput {
                         session,
@@ -1542,16 +1582,23 @@ impl SessionEngine {
                 let (result, result_policy) = match resources.resolve_tool(&tc.name) {
                     Some(resolved) => {
                         let result_policy = resolved.tool.result_policy();
+                        let mut permission =
+                            permission_for_session(&self.permission, session, external_dirs);
+                        if let Some(hooks) = &activation_hooks {
+                            permission = permission.prepend_interceptor(Arc::new(
+                                crate::bundle_hooks::BundlePermissionInterceptor::new(Arc::clone(
+                                    hooks,
+                                )),
+                            ));
+                        }
                         let result = match authorize_tool_call(
-                            &resolved,
-                            &tc.input,
-                            permission_for_session(&self.permission, session, external_dirs),
-                            message,
-                            tc.call,
+                            &resolved, &tc.input, permission, message, tc.call,
                         )
                         .await
                         {
                             Ok(permission) => {
+                                let channel_policy = crate::ChannelPolicy::from_binding(binding)?
+                                    .snapshot_for(live_agent.name.as_str());
                                 let ctx = ToolCtx {
                                     workflows: self
                                         .workflows
@@ -1571,8 +1618,12 @@ impl SessionEngine {
                                         .with_actor_claim(actor_claim.copied()),
                                     mailbox: self
                                         .mailbox
-                                        .for_session_with_actor(session, actor_claim.copied()),
-                                    lifecycle: self.lifecycle.for_session(session),
+                                        .for_session_with_actor(session, actor_claim.copied())
+                                        .with_channel_policy(channel_policy),
+                                    lifecycle: self
+                                        .lifecycle
+                                        .for_session(session)
+                                        .with_channel_policy(channel_policy),
                                     session: Some(session),
                                     parent_session: projection.session.parent,
                                     todo: self.todo.clone(),
@@ -1594,6 +1645,11 @@ impl SessionEngine {
                                     ctx,
                                     tc.input,
                                     &tc.name,
+                                    BackgroundOrigin {
+                                        permission: resolved.permission,
+                                        binding: binding.clone(),
+                                        stable_agent_id: stable_id.clone(),
+                                    },
                                     ToolCallSite {
                                         session,
                                         message,
@@ -1636,6 +1692,7 @@ impl SessionEngine {
                             message: e.to_string(),
                         },
                     };
+                    let original_native = native.clone();
                     native = apply_tool_execute_after_hooks(
                         self.hooks.as_ref(),
                         activation_hooks.as_ref(),
@@ -1650,7 +1707,7 @@ impl SessionEngine {
                     {
                         return Err(CoreError::Cancelled);
                     }
-                    if was_permission_err {
+                    if was_permission_err || native == original_native {
                         result
                     } else {
                         match native {
@@ -1788,12 +1845,20 @@ struct ToolCallSite {
     call: ToolCallId,
 }
 
+struct BackgroundOrigin {
+    permission: hya_tool::ToolPermission,
+    binding: TurnBinding,
+    stable_agent_id: String,
+}
+
 /// Identity of one backgrounded MCP call, detached from the turn loop.
 struct BackgroundCall {
     site: ToolCallSite,
     job: String,
     tool_name: String,
     started: std::time::Instant,
+    binding: TurnBinding,
+    stable_agent_id: String,
 }
 
 impl SessionEngine {
@@ -1803,11 +1868,12 @@ impl SessionEngine {
         ctx: ToolCtx,
         input: serde_json::Value,
         tool_name: &str,
+        origin: BackgroundOrigin,
         site: ToolCallSite,
     ) -> Result<serde_json::Value, ToolError> {
         let budget = self
             .mcp_background_after
-            .filter(|_| tool_name.starts_with("mcp__"));
+            .filter(|_| origin.permission == hya_tool::ToolPermission::Mcp);
         let Some(budget) = budget else {
             return tool.execute(&ctx, input).await;
         };
@@ -1827,6 +1893,8 @@ impl SessionEngine {
                     job,
                     tool_name: tool_name.to_string(),
                     started: std::time::Instant::now(),
+                    binding: origin.binding,
+                    stable_agent_id: origin.stable_agent_id,
                 };
                 tracing::info!(session=%finished.site.session, tool=%finished.tool_name, job=%finished.job, "mcp call backgrounded");
                 tokio::spawn(async move {
@@ -1848,6 +1916,8 @@ impl SessionEngine {
             job,
             tool_name,
             started,
+            binding,
+            stable_agent_id,
         } = finished;
         let ToolCallSite {
             session,
@@ -1878,7 +1948,13 @@ impl SessionEngine {
                 // Admission lands before the marker event so an observer that
                 // drives a reclaim turn on the marker always sees the prompt.
                 async {
-                    self.admit_user_prompt(session, prompt).await?;
+                    self.admit_user_prompt_with_binding(
+                        session,
+                        prompt,
+                        &binding,
+                        &stable_agent_id,
+                    )
+                    .await?;
                     self.emit(
                         session,
                         Event::ToolResult {
@@ -1909,7 +1985,13 @@ impl SessionEngine {
                     object.insert("background_failed".to_string(), serde_json::json!(job));
                 }
                 async {
-                    self.admit_user_prompt(session, prompt).await?;
+                    self.admit_user_prompt_with_binding(
+                        session,
+                        prompt,
+                        &binding,
+                        &stable_agent_id,
+                    )
+                    .await?;
                     self.emit(
                         session,
                         Event::ToolError {
