@@ -53,12 +53,37 @@ via the Bun extension adapter (`kind: bun`).
 | `initialize` | host → plugin | request / reply | `{ "protocol_version": 1, "host": { "name", "version" } }` | Full plugin declaration (see [Initialize reply](#initialize-reply)) |
 | `shutdown` | host → plugin | request / reply | `{}` | `{}` (then process exit) |
 | `event` | host → plugin | **notification** (no `id`, no reply) | `{ "envelope": <Envelope> }` | — |
-| `tool/call` | host → plugin | request / reply | `{ "tool", "session", "call", "input" }` | `{ "ok", "output", "time_ms"? }` |
+| `tool/call` | host → plugin | request / reply | `{ "tool", "session", "call", "input", "host_capability"? }` | `{ "ok", "output", "time_ms"? }` |
+| `host/capability` | plugin → host | request / reply | `{ "capability", "session", "call", "method", "params" }` | Handler-defined JSON value or JSON-RPC error |
 | `hook/<wire-name>` | host → plugin | request / reply | Hook-specific (see [Hooks](#hooks)) | Hook-specific outcome |
 
 `event` is sent only to plugins that registered the `event` hook. Hook methods
 use the literal prefix `hook/` plus the wire name, for example
 `hook/tool.execute.before`.
+
+### Call-scoped host capabilities for native tools
+
+The host can call a native tool through
+`PluginClient::call_tool_with_capability(tool, session, call, input, handler)`.
+This adds an opaque `host_capability` string to that `tool/call` request. A
+normal `call_tool` request omits it. The native process can send
+`host/capability` requests on the same stdio connection while its tool call is
+active:
+
+```json
+{"jsonrpc":"2.0","id":41,"method":"host/capability","params":{"capability":"<host_capability>","session":"<session-id>","call":"<call-id>","method":"example.operation","params":{"value":1}}}
+```
+
+`HostCapabilityHandler::handle(method, params)` defines the available operations
+for that call and must apply the owning host plane's resource and permission
+checks. The transport binds the token to the receiving process connection,
+session, and call id. It rejects an unknown, expired, or cross-call token with
+JSON-RPC error `-32001` (`CAPABILITY_DENIED`); malformed params return `-32602`.
+The token is revoked when the tool reply, transport error, timeout, or caller
+cancellation ends the call. In-flight host operations are cancelled on
+revocation or connection closure. Other child→host request methods still close
+the plugin connection. The transport provides no built-in host operations by
+itself; the runtime must install a handler for each native call it authorizes.
 
 ---
 
@@ -70,6 +95,7 @@ use the literal prefix `hook/` plus the wire name, for example
 | `-32602` | `INVALID_PARAMS` | Malformed params |
 | `-32603` | `INTERNAL_ERROR` | Plugin-side failure |
 | `1` | `VETO` | App-defined: a guard refused the action |
+| `-32001` | `CAPABILITY_DENIED` | Native tool capability is absent, expired, or bound to another call |
 
 Guard refusal on the wire is normally a **successful** result with
 `"outcome": "veto"` (see `tool.execute.before`). A JSON-RPC error from a

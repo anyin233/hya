@@ -29,6 +29,8 @@ pub const METHOD_SHUTDOWN: &str = "shutdown";
 pub const METHOD_EVENT: &str = "event";
 /// JSON-RPC method name for invoking a plugin-declared tool.
 pub const METHOD_TOOL_CALL: &str = "tool/call";
+/// Child→host request for a call-scoped native tool capability.
+pub const METHOD_HOST_CAPABILITY: &str = "host/capability";
 /// Prefix for hook method names on the wire (`hook/` + [`HookName::as_str`]).
 pub const HOOK_METHOD_PREFIX: &str = "hook/";
 
@@ -551,6 +553,25 @@ pub struct ToolCallParams {
     pub call: ToolCallId,
     /// Tool input object.
     pub input: Value,
+    /// Opaque per-call authority, present only when the host explicitly grants it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_capability: Option<String>,
+}
+
+/// Child→host request bound to one active native tool call.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HostCapabilityParams {
+    /// Opaque authority supplied with the corresponding `tool/call`.
+    pub capability: String,
+    /// Session bound to that call.
+    pub session: SessionId,
+    /// Tool call bound to that authority.
+    pub call: ToolCallId,
+    /// Host-owned capability operation.
+    pub method: String,
+    /// Operation input, interpreted by the host's call-scoped handler.
+    pub params: Value,
 }
 
 /// Plugin→host `tool/call` result.

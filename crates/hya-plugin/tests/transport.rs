@@ -2,17 +2,19 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use std::sync::Arc;
 use std::time::Duration;
 use std::{collections::BTreeMap, time::SystemTime};
 
 use hya_plugin::PluginError;
-use hya_plugin::client::{DEFAULT_CALL_TIMEOUT, PluginClient};
+use hya_plugin::client::{DEFAULT_CALL_TIMEOUT, HostCapabilityHandler, PluginClient};
 use hya_plugin::messages::{
     ActivationLifecycle, ActivationMetadata, EventNotificationParams, HookName, HostInfo,
     METHOD_EVENT, METHOD_INITIALIZE, METHOD_TOOL_CALL, PluginKindWire, ToolCallParams,
     ToolCallReply,
 };
 use hya_plugin::protocol::Frame;
+use hya_plugin::protocol::JsonRpcError;
 use hya_proto::{Envelope, Event, EventSeq, MessageId, Role, SessionId, ToolCallId};
 use serde_json::json;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, duplex, split};
@@ -175,6 +177,138 @@ async fn bundle_client_tool_call_uses_existing_request_reply_path() {
     assert!(reply.ok);
     assert_eq!(reply.output, json!({"echoed": "hello"}));
     assert_eq!(reply.time_ms, Some(7));
+    server.await.unwrap();
+}
+
+struct EchoCapability;
+
+#[async_trait::async_trait]
+impl HostCapabilityHandler for EchoCapability {
+    async fn handle(
+        &self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, JsonRpcError> {
+        assert_eq!(method, "echo");
+        Ok(params)
+    }
+}
+
+#[tokio::test]
+async fn native_tool_capability_is_call_scoped_and_revoked_after_reply() {
+    let session = SessionId::new();
+    let other_session = SessionId::new();
+    let call = ToolCallId::new();
+    let (client_io, server_io) = duplex(4096);
+    let (client_read, client_write) = split(client_io);
+    let (server_read, mut server_write) = split(server_io);
+    let client = PluginClient::new(client_read, client_write);
+
+    let server = tokio::spawn(async move {
+        let mut lines = BufReader::new(server_read).lines();
+        let tool_call: serde_json::Value =
+            serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+        let capability = tool_call["params"]["host_capability"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(!capability.is_empty());
+        let request = |id, request_session| {
+            json!({
+                "jsonrpc": "2.0", "id": id, "method": "host/capability",
+                "params": {"capability": capability, "session": request_session, "call": call,
+                    "method": "echo", "params": {"value": id}}
+            })
+        };
+        server_write
+            .write_all(format!("{}\n", request(41, session)).as_bytes())
+            .await
+            .unwrap();
+        let allowed: serde_json::Value =
+            serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+        assert_eq!(allowed["id"], 41);
+        assert_eq!(allowed["result"], json!({"value": 41}));
+
+        server_write
+            .write_all(format!("{}\n", request(42, other_session)).as_bytes())
+            .await
+            .unwrap();
+        let crossed: serde_json::Value =
+            serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+        assert_eq!(crossed["error"]["code"], -32001);
+
+        let response = json!({"jsonrpc": "2.0", "id": tool_call["id"],
+            "result": {"ok": true, "output": {"done": true}}});
+        server_write
+            .write_all(format!("{response}\n").as_bytes())
+            .await
+            .unwrap();
+        let resume = lines.next_line().await.unwrap();
+        assert!(resume.is_some());
+        server_write
+            .write_all(format!("{}\n", request(43, session)).as_bytes())
+            .await
+            .unwrap();
+        let expired: serde_json::Value =
+            serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+        assert_eq!(expired["error"]["code"], -32001);
+    });
+
+    let reply = client
+        .call_tool_with_capability("native", session, call, json!({}), Arc::new(EchoCapability))
+        .await
+        .unwrap();
+    assert!(reply.ok);
+    // The server waits for a harmless host request to ensure it tests revocation
+    // after the call future has returned, rather than racing its cleanup.
+    client.notify("fixture/resume", json!({})).await.unwrap();
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn cancelling_native_tool_call_revokes_its_host_capability() {
+    let session = SessionId::new();
+    let call = ToolCallId::new();
+    let (client_io, server_io) = duplex(4096);
+    let (client_read, client_write) = split(client_io);
+    let (server_read, mut server_write) = split(server_io);
+    let client = PluginClient::new(client_read, client_write);
+    let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+
+    let server = tokio::spawn(async move {
+        let mut lines = BufReader::new(server_read).lines();
+        let tool_call: serde_json::Value =
+            serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+        let capability = tool_call["params"]["host_capability"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        ready_tx.send(()).unwrap();
+        let resume: serde_json::Value =
+            serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+        assert_eq!(resume["method"], "fixture/resume");
+        let late = json!({"jsonrpc":"2.0", "id":44, "method":"host/capability",
+            "params":{"capability":capability, "session":session, "call":call,
+                "method":"echo", "params":{}}});
+        server_write
+            .write_all(format!("{late}\n").as_bytes())
+            .await
+            .unwrap();
+        let denied: serde_json::Value =
+            serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+        assert_eq!(denied["error"]["code"], -32001);
+    });
+
+    let call_client = client.clone();
+    let task = tokio::spawn(async move {
+        call_client
+            .call_tool_with_capability("native", session, call, json!({}), Arc::new(EchoCapability))
+            .await
+    });
+    ready_rx.await.unwrap();
+    task.abort();
+    assert!(task.await.unwrap_err().is_cancelled());
+    client.notify("fixture/resume", json!({})).await.unwrap();
     server.await.unwrap();
 }
 

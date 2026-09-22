@@ -262,6 +262,7 @@ fn tool_call_roundtrip() {
         session: SessionId::new(),
         call: ToolCallId::new(),
         input: json!({"k": "v"}),
+        host_capability: None,
     };
     assert_eq!(params, reparse(&params));
 

@@ -1,6 +1,6 @@
-# 0.37.9
+# 0.37.10
 
-## Trusted tool-family bundle policies
+## Call-scoped native tool host RPC
 
-- Split the built-in tool exposure policy into base, extended, network, channel, and TODO Plugin bundles, covering all 27 canonical tools without changing schemas, aliases, permissions, or protected names.
-- Expose all five immutable tool-family bundles in the read-only trusted preset inventory and document their interfaces and tool ownership.
+- Add optional `host_capability` on native `tool/call` requests and a child-to-host `host/capability` request on the same plugin connection.
+- Bind each capability to its process connection, session, and tool call; revoke it after completion or cancellation, with typed denial for invalid and expired requests.
