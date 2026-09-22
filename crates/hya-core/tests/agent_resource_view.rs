@@ -210,6 +210,7 @@ fn catalog() -> (Arc<AgentCatalog>, Vec<RuntimeSource>) {
                 content:
                     "---\nname: bundle-skill\ndescription: embedded bundle skill\n---\nbundle body\n"
                         .to_string(),
+                binary_base64: None,
                 aliases: Vec::new(),
             }],
             mcp: Vec::new(),

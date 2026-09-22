@@ -5650,6 +5650,7 @@ for line in sys.stdin:
                 source_path: format!("resources/skills/{local_id}.md"),
                 digest: format!("{:x}", Sha256::digest(content.as_bytes())),
                 content,
+                binary_base64: None,
                 aliases: Vec::new(),
             }
         };
@@ -7940,6 +7941,7 @@ for line in sys.stdin:
             source_path: source_path.to_string(),
             digest: format!("{marker}-{source_path}-digest"),
             content: format!("{marker} {source_path}\n"),
+            binary_base64: None,
             aliases: Vec::new(),
         }
     }

@@ -265,9 +265,9 @@ and `agents:` (a list) is replaced by singular `agent:` for this payload kind. A
 WorkflowBundle uses `agents:` under its separate closed schema. An AgentBundle
 manifest that carries a removed key is rejected by name with `RemovedManifestKey`.
 
-**Unsupported in the current release** (declared but rejected at prepare):
-`extensions.rust` and per-agent `resource_profile`. Use `extensions.process` for
-a native executable and `resources.mcp` for managed MCP servers.
+**Unsupported in the current release:** per-agent `resource_profile`. Native
+executables use `extensions.rust` together with `extensions.process` of kind
+`rust`; `resources.mcp` declares managed MCP servers.
 
 ### `identity`
 
@@ -327,7 +327,7 @@ Filesystem `SKILL.md` discovery (outside bundles) is documented in
 | --- | --- |
 | `js` | JavaScript extension resources (same `{id, path, aliases}` shape). |
 | `files` | Inert, explicitly packaged UTF-8 support files using the same `{id, path, aliases}` shape; no executable capability is inferred. |
-| `rust` | **Unsupported** — non-empty list fails prepare. |
+| `rust` | Raw executable files using `{id, path}`. Requires `process.kind: rust`; aliases are rejected. The first command argument must name one declared executable by its relative path or `${BUNDLE_ROOT}/<path>`. |
 | `process` | The one optional out-of-process extension declaration: `{ kind, command }` where `kind` is `rust`, `bun`, or `claude` and `command` is the argv to spawn (non-empty, no blank arguments). Starts before runtime publication; `${BUNDLE_ROOT}` expands to the private materialized package root. |
 
 ### Schema extensions (`schemas:`)
@@ -719,4 +719,4 @@ A bundle installed by an older binary cannot decode. Such a row is **skipped wit
 
 ## Trust and unsupported combinations
 
-Only public Bundles are supported for activation. Private inspection reports `authentication=unverified` and `payload=opaque`; private activation is unsupported and generation-preserving. Raw Rust extension **lists** (`extensions.rust`), and resource profiles without an enforceable current host mapping are unsupported; the declared `extensions.process` form (kind + argv) starts a managed native/adapter process before publication. Bundle-declared MCP servers start through the same immutable runtime-source lifecycle. Structural and declared-digest checks do not establish publisher authenticity. There is no sandbox and no permission expansion. Bundle loading does not add decryption, signatures, compilation on activation, arbitrary environment access, a second permission plane, or legacy agent-file discovery. Claude marketplace import resolves a source before ordinary package validation; see [Claude import](claude-plugin-import.md). Legacy definitions are not parsed, migrated, or used as a fallback.
+Only public Bundles are supported for activation. Private inspection reports `authentication=unverified` and `payload=opaque`; private activation is unsupported and generation-preserving. Resource profiles without an enforceable current host mapping are unsupported. A native `extensions.rust` executable must accompany a `kind: rust` process declaration; it is launched out of process before publication. Bundle-declared MCP servers start through the same immutable runtime-source lifecycle. Structural and declared-digest checks do not establish publisher authenticity. There is no sandbox and no permission expansion. Bundle loading does not add decryption, signatures, compilation on activation, arbitrary environment access, a second permission plane, or legacy agent-file discovery. Claude marketplace import resolves a source before ordinary package validation; see [Claude import](claude-plugin-import.md). Legacy definitions are not parsed, migrated, or used as a fallback.

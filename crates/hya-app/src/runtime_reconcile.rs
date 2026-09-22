@@ -1642,6 +1642,7 @@ mod tests {
             source_path: source_path.to_string(),
             digest: digest.clone(),
             content: content.to_string(),
+            binary_base64: None,
             aliases: Vec::new(),
         };
         let valid = PluginContributionSet {

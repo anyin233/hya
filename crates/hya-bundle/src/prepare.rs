@@ -77,6 +77,7 @@ fn prepare_sources(sources: Vec<BundleSource>) -> Result<PreparedCatalog, Bundle
     }
     resolve_catalog_references(&mut bundles)?;
     validate_prepared_references(&bundles)?;
+    validate_native_binary_bindings(&bundles, &process_extensions)?;
 
     let index = build_index(&bundles);
     let bytes = serde_json::to_vec(&PreparedDocument {
@@ -145,6 +146,7 @@ impl PreparedCatalog {
         validate_prepared_references(&document.bundles)?;
         validate_prepared_schema_rows(&document.bundles, &document.schemas)?;
         validate_prepared_process_rows(&document.bundles, &document.extensions_process)?;
+        validate_native_binary_bindings(&document.bundles, &document.extensions_process)?;
         let expected_index = build_index(&document.bundles);
         if expected_index != document.index {
             return Err(BundleError::PreparedIndexMismatch);
@@ -462,6 +464,44 @@ fn validate_prepared_process_rows(
     Ok(())
 }
 
+fn validate_native_binary_bindings(
+    bundles: &[PreparedInstallableBundle],
+    rows: &[PreparedBundleProcess],
+) -> Result<(), BundleError> {
+    for bundle in bundles {
+        let binaries = bundle
+            .extensions()
+            .iter()
+            .filter(|resource| resource.binary_base64.is_some())
+            .collect::<Vec<_>>();
+        if binaries.is_empty() {
+            continue;
+        }
+        let Some(process) = rows
+            .iter()
+            .find(|row| row.bundle_id == bundle.identity().id)
+            .map(|row| &row.process)
+        else {
+            return Err(BundleError::NonCanonicalPreparedCatalog);
+        };
+        if process.kind != crate::model::PreparedProcessKind::Rust {
+            return Err(BundleError::NonCanonicalPreparedCatalog);
+        }
+        let first = process
+            .command
+            .first()
+            .map(String::as_str)
+            .unwrap_or_default();
+        if !binaries.iter().any(|binary| {
+            first == binary.source_path
+                || first == format!("${{BUNDLE_ROOT}}/{}", binary.source_path)
+        }) {
+            return Err(BundleError::NonCanonicalPreparedCatalog);
+        }
+    }
+    Ok(())
+}
+
 /// Whether `command` is a usable argv: non-empty with no blank arguments.
 fn validate_process_command(command: &[String]) -> Result<(), String> {
     if command.is_empty() {
@@ -517,7 +557,20 @@ fn validate_prepared_content_digests(
         {
             return Err(BundleError::NonCanonicalPreparedCatalog);
         }
-        if resource.digest != digest_bytes(resource.content.as_bytes()) {
+        if resource.binary_base64.is_some() && !bundle.extensions().contains(resource) {
+            return Err(BundleError::NonCanonicalPreparedCatalog);
+        }
+        let bytes = resource
+            .source_bytes()
+            .map_err(|_| BundleError::NonCanonicalPreparedCatalog)?;
+        if resource.binary_base64.is_some()
+            && (!resource.content.is_empty()
+                || base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &bytes)
+                    != resource.binary_base64.as_deref().unwrap_or_default())
+        {
+            return Err(BundleError::NonCanonicalPreparedCatalog);
+        }
+        if resource.digest != digest_bytes(&bytes) {
             return Err(BundleError::PreparedContentDigestMismatch {
                 bundle_id: bundle.identity().id.clone(),
                 source_path: resource.source_path.clone(),
@@ -1450,9 +1503,24 @@ fn prepare_resource_sets(
         }
     }
     let mut executable_extensions = extensions.js;
+    let native_binaries = prepare_binary_resources(bundle_id, files, extensions.rust)?;
     if process_backed {
         executable_extensions.extend(extensions.files);
-        let extensions = prepare_resources(bundle_id, "extension", files, executable_extensions)?;
+        let mut extensions =
+            prepare_resources(bundle_id, "extension", files, executable_extensions)?;
+        extensions.extend(native_binaries);
+        extensions.sort_by(|left, right| left.stable_id.cmp(&right.stable_id));
+        let mut names = BTreeSet::new();
+        for extension in &extensions {
+            for name in std::iter::once(&extension.local_id).chain(&extension.aliases) {
+                if !names.insert(name.as_str()) {
+                    return Err(BundleError::NamespaceCollision {
+                        bundle_id: bundle_id.to_string(),
+                        name: name.clone(),
+                    });
+                }
+            }
+        }
         return Ok((tools, skills, mcp, hooks, extensions));
     }
     let support_files = extensions.files;
@@ -1737,10 +1805,14 @@ fn validate_identity(bundle_id: &str, version: &str) -> Result<(), BundleError> 
     Ok(())
 }
 
-/// Reserved feature: native Rust extension lists remain rejected while the
-/// unified process-extension path (`extensions.process`) lands.
+/// Native executable files require a Rust process extension.
 fn validate_unsupported(bundle_id: &str, extensions: &SourceExtensions) -> Result<(), BundleError> {
-    if !extensions.rust.is_empty() {
+    if !extensions.rust.is_empty()
+        && !extensions
+            .process
+            .as_ref()
+            .is_some_and(|process| matches!(process.kind, crate::source::SourceProcessKind::Rust))
+    {
         return Err(BundleError::UnsupportedBundleFeature {
             bundle_id: bundle_id.to_string(),
             feature: "extensions.rust".to_string(),
@@ -1914,7 +1986,44 @@ fn prepare_resources(
             source_path: path,
             digest: digest_bytes(bytes),
             content,
+            binary_base64: None,
             aliases: resource.aliases,
+        });
+    }
+    prepared.sort_by(|left, right| left.local_id.cmp(&right.local_id));
+    Ok(prepared)
+}
+
+fn prepare_binary_resources(
+    bundle_id: &str,
+    files: &BTreeMap<String, Vec<u8>>,
+    resources: Vec<SourceResource>,
+) -> Result<Vec<PreparedResource>, BundleError> {
+    use base64::Engine as _;
+    let mut prepared = Vec::with_capacity(resources.len());
+    let mut ids = BTreeSet::new();
+    for resource in resources {
+        if !ids.insert(resource.id.clone()) || !resource.aliases.is_empty() {
+            return Err(BundleError::NamespaceCollision {
+                bundle_id: bundle_id.to_string(),
+                name: resource.id,
+            });
+        }
+        let path = normalize_source_path(bundle_id, &resource.path)?;
+        let bytes = files
+            .get(&path)
+            .ok_or_else(|| BundleError::MissingReference {
+                bundle_id: bundle_id.to_string(),
+                path: path.clone(),
+            })?;
+        prepared.push(PreparedResource {
+            stable_id: format!("bundle:{bundle_id}/extension/{}", resource.id),
+            local_id: resource.id,
+            source_path: path,
+            digest: digest_bytes(bytes),
+            content: String::new(),
+            binary_base64: Some(base64::engine::general_purpose::STANDARD.encode(bytes)),
+            aliases: Vec::new(),
         });
     }
     prepared.sort_by(|left, right| left.local_id.cmp(&right.local_id));

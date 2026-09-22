@@ -494,6 +494,7 @@ fn sidecar_permission_bundle(spawn_lifecycle: SpawnLifecycle) -> PreparedAgentBu
             source_path: "tools/echo.js".to_string(),
             digest: "test-only-tool".to_string(),
             content: "export default {}".to_string(),
+            binary_base64: None,
             aliases: Vec::new(),
         }],
         skills: Vec::new(),

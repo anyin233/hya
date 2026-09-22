@@ -82,26 +82,44 @@ fn materialize(bundle: &PreparedInstallableBundle) -> Result<MaterializedRoot, C
                 resource.source_path
             )));
         }
-        if let Some(previous) =
-            paths.insert(resource.source_path.as_str(), resource.content.as_str())
-        {
-            if previous != resource.content {
+        let bytes = resource
+            .source_bytes()
+            .map_err(|error| invalid("decode bundle resource", error))?;
+        let path = guard.0.join(path);
+        if let Some(previous) = paths.insert(resource.source_path.as_str(), bytes.clone()) {
+            if previous != bytes {
                 return Err(CoreError::Invalid(format!(
                     "conflicting bundle resource {}",
                     resource.source_path
                 )));
             }
+            if resource.binary_base64.is_some() {
+                mark_executable(&path)?;
+            }
             continue;
         }
-        let path = guard.0.join(path);
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
                 .map_err(|error| invalid("create bundle resource parent", error))?;
         }
-        std::fs::write(path, &resource.content)
-            .map_err(|error| invalid("write bundle resource", error))?;
+        std::fs::write(&path, bytes).map_err(|error| invalid("write bundle resource", error))?;
+        if resource.binary_base64.is_some() {
+            mark_executable(&path)?;
+        }
     }
     Ok(guard)
+}
+
+fn mark_executable(path: &Path) -> Result<(), CoreError> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
+            .map_err(|error| invalid("mark bundle executable", error))?;
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+    Ok(())
 }
 
 fn invalid(context: &str, error: impl std::fmt::Display) -> CoreError {
@@ -396,6 +414,25 @@ mod tests {
 
     use super::*;
     use hya_bundle::{BundleSource, SourceFile, prepare_package};
+
+    #[cfg(unix)]
+    #[test]
+    fn materialized_native_bundle_executable_can_run() {
+        let prepared = prepare_package(BundleSource::new(
+            "native-executable",
+            vec![
+                SourceFile::new("bundle.yaml", "kind: Plugin\nidentity: { id: acme/native-run, version: 1.0.0, publisher: acme }\nextensions:\n  rust: [{ id: provider, path: bin/provider }]\n  process: { kind: rust, command: ['${BUNDLE_ROOT}/bin/provider'] }\n"),
+                SourceFile::new("bin/provider", b"#!/bin/sh\nprintf native-ok\n"),
+            ],
+        ))
+        .unwrap();
+        let root = materialize(&prepared.bundles()[0]).unwrap();
+        let output = std::process::Command::new(root.0.join("bin/provider"))
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"native-ok");
+    }
 
     #[tokio::test]
     async fn bundle_process_rejects_unrepresentable_workspace_adapter_contribution() {

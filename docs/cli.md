@@ -210,8 +210,10 @@ Root admission, turn/round boundaries, and catalog refreshes publish installed
 generations lazily; each existing TurnBinding itself remains immutable. Public installed bundles cannot grant
 preset trust or expand their permission/resource planes. Private output reports
 authentication as unverified, payload as opaque, and activation as unsupported.
-Raw `extensions.rust` lists remain unsupported; `extensions.process.kind: rust`
-selects the native process ABI without compiling source.
+`extensions.rust` packages raw native executable files when paired with
+`extensions.process.kind: rust`; the first process argument names the bundled
+executable. This selects the native process ABI without compiling source at
+activation time.
 
 ## Bare `hya-backend`
 

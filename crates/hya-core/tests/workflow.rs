@@ -1909,6 +1909,7 @@ fn sidecar_probe_catalog() -> Arc<hya_core::AgentCatalog> {
                     source_path: "tools/sidecar_ping.ts".to_string(),
                     digest: "test-only-sidecar-ping".to_string(),
                     content: "// provided by the bound sidecar at run time".to_string(),
+                    binary_base64: None,
                     aliases: Vec::new(),
                 });
             }

@@ -252,8 +252,26 @@ pub struct PreparedResource {
     pub digest: String,
     /// File contents as UTF-8 text (JSON/YAML/JS source as appropriate).
     pub content: String,
+    /// Raw native executable bytes in canonical standard Base64. Present only
+    /// for a binary `extensions.rust` resource; `content` is then empty.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binary_base64: Option<String>,
     /// Alternate local names that resolve to this resource inside the bundle.
     pub aliases: Vec<String>,
+}
+
+impl PreparedResource {
+    /// Decode this resource's original source bytes for materialization.
+    ///
+    /// # Errors
+    /// Returns a Base64 decode error if binary content is malformed.
+    pub fn source_bytes(&self) -> Result<Vec<u8>, base64::DecodeError> {
+        use base64::Engine as _;
+        match &self.binary_base64 {
+            Some(encoded) => base64::engine::general_purpose::STANDARD.decode(encoded),
+            None => Ok(self.content.as_bytes().to_vec()),
+        }
+    }
 }
 
 /// Fully prepared singular AgentBundle: exactly one Agent plus its resources.
