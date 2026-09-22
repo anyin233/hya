@@ -1122,3 +1122,158 @@ fn list_lines_starting_with(stdout: &str, prefix: &str) -> String {
         .collect::<Vec<_>>()
         .join(" ")
 }
+
+/// `bundle search <query>` filters the merged first-party + installed catalog
+/// by a case-insensitive substring over bundle ids, agent ids, and skill ids,
+/// printing `bundle list`-shaped rows for matching bundles only.
+#[test]
+fn bundle_search_filters_first_party_and_installed_metadata()
+-> Result<(), Box<dyn std::error::Error>> {
+    let data_root = unique_data_root()?;
+
+    // Mixed-case bundle id match: only the goal-loop row prints.
+    let by_bundle_id = bundle_command(&data_root)
+        .args(["bundle", "search", "GOAL-LOOP"])
+        .output()?;
+    assert_success("search by bundle id", &by_bundle_id);
+    let by_bundle_id_stdout = String::from_utf8(by_bundle_id.stdout)?;
+    assert_eq!(
+        by_bundle_id_stdout.lines().collect::<Vec<_>>(),
+        vec![
+            LIST_HEADER,
+            "hya/goal-loop 1.0.0 goal-loop-guide active AgentBundle -",
+        ],
+        "unexpected bundle id search rows:\n{by_bundle_id_stdout}"
+    );
+
+    // Skill id match: `goal-contract` exists only on hya/goal-loop.
+    let by_skill = bundle_command(&data_root)
+        .args(["bundle", "search", "goal-contract"])
+        .output()?;
+    assert_success("search by skill id", &by_skill);
+    let by_skill_stdout = String::from_utf8(by_skill.stdout)?;
+    assert!(
+        by_skill_stdout
+            .lines()
+            .any(|line| line.starts_with("hya/goal-loop")),
+        "skill id search omitted hya/goal-loop:\n{by_skill_stdout}"
+    );
+    assert!(
+        !by_skill_stdout.contains("hya/plan-impl-review"),
+        "skill id search printed an unrelated bundle:\n{by_skill_stdout}"
+    );
+
+    // Agent id match reaches the other first-party bundle.
+    let by_agent = bundle_command(&data_root)
+        .args(["bundle", "search", "plan-impl-review-planner"])
+        .output()?;
+    assert_success("search by agent id", &by_agent);
+    assert!(
+        String::from_utf8(by_agent.stdout)?
+            .lines()
+            .any(|line| line.starts_with("hya/plan-impl-review")),
+        "agent id search omitted hya/plan-impl-review"
+    );
+
+    // Installed bundles join the search surface after `bundle install`.
+    let package = write_fixture(&data_root)?;
+    let install = bundle_command(&data_root)
+        .args(["bundle", "install"])
+        .arg(&package)
+        .output()?;
+    assert_success("install", &install);
+    let installed = bundle_command(&data_root)
+        .args(["bundle", "search", "VALID-PUBLIC"])
+        .output()?;
+    assert_success("search installed bundle", &installed);
+    let installed_stdout = String::from_utf8(installed.stdout)?;
+    assert_eq!(
+        installed_stdout.lines().collect::<Vec<_>>(),
+        vec![
+            LIST_HEADER,
+            "hya/valid-public 1.0.0 valid-public-lead active AgentBundle -",
+        ],
+        "installed search must match the installed bundle only:\n{installed_stdout}"
+    );
+
+    fs::remove_dir_all(&data_root)?;
+    Ok(())
+}
+
+/// `bundle search` requires a query (missing or whitespace-only exits
+/// non-zero) and `--help` prints the usage line.
+#[test]
+fn bundle_search_requires_query_and_answers_help() -> Result<(), Box<dyn std::error::Error>> {
+    let data_root = unique_data_root()?;
+
+    let missing = bundle_command(&data_root)
+        .args(["bundle", "search"])
+        .output()?;
+    assert!(
+        !missing.status.success(),
+        "bundle search without a query must exit non-zero"
+    );
+    let missing_stderr = String::from_utf8(missing.stderr)?;
+    assert!(
+        missing_stderr.contains("Usage:"),
+        "missing-query error must print the usage line:\n{missing_stderr}"
+    );
+
+    let blank = bundle_command(&data_root)
+        .args(["bundle", "search", "   "])
+        .output()?;
+    assert!(
+        !blank.status.success(),
+        "whitespace-only query must exit non-zero"
+    );
+
+    let help = bundle_command(&data_root)
+        .args(["bundle", "search", "--help"])
+        .output()?;
+    assert_success("search help", &help);
+    let help_stdout = String::from_utf8(help.stdout)?;
+    assert!(
+        help_stdout.contains("Usage:") && help_stdout.contains("<QUERY>"),
+        "search help must show the usage line with <QUERY>:\n{help_stdout}"
+    );
+
+    fs::remove_dir_all(&data_root)?;
+    Ok(())
+}
+
+/// When no bundle metadata matches, `bundle search` exits 0 and lists the
+/// full catalog instead (with a stderr hint). `schemas` matches no
+/// first-party bundle id, agent, or skill, so this pins the documented
+/// fallback that keeps `bundle search schemas` showing `hya/goal-loop`.
+#[test]
+fn bundle_search_without_a_metadata_match_lists_the_catalog()
+-> Result<(), Box<dyn std::error::Error>> {
+    let data_root = unique_data_root()?;
+    let registry_path = data_root.join("hya/bundles/registry.sqlite3");
+
+    let search = bundle_command(&data_root)
+        .args(["bundle", "search", "schemas"])
+        .output()?;
+    assert_success("no-match search", &search);
+    let stdout = String::from_utf8(search.stdout)?;
+    assert_eq!(
+        stdout.lines().collect::<Vec<_>>(),
+        vec![
+            LIST_HEADER,
+            "hya/goal-loop 1.0.0 goal-loop-guide active AgentBundle -",
+            "hya/plan-impl-review 1.0.0 plan-impl-review-implementer,plan-impl-review-planner,plan-impl-review-reviewer active WorkflowBundle plan-impl-review",
+        ],
+        "no-match search must list the full first-party catalog:\n{stdout}"
+    );
+    assert!(
+        String::from_utf8(search.stderr)?.contains("no bundle metadata matched"),
+        "no-match search must explain the fallback on stderr"
+    );
+    assert!(
+        !registry_path.exists(),
+        "read-only bundle search created a bundle registry"
+    );
+
+    fs::remove_dir_all(&data_root)?;
+    Ok(())
+}

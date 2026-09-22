@@ -629,4 +629,24 @@ mod tests {
             _ => panic!("expected oauth login with loopback/browser"),
         }
     }
+
+    #[test]
+    fn parses_bundle_search_query_and_requires_one() {
+        let cli = parse(["hya-backend", "bundle", "search", "goal-loop"]);
+        match cli.command {
+            Some(super::Command::Bundle {
+                command: super::BundleCommand::Search { query },
+            }) => {
+                assert_eq!(query, "goal-loop");
+            }
+            _ => panic!("expected bundle search command"),
+        }
+        let error = Cli::try_parse_from(["hya-backend", "bundle", "search"])
+            .err()
+            .expect("bundle search without a query must fail to parse");
+        assert_eq!(
+            error.kind(),
+            clap::error::ErrorKind::MissingRequiredArgument
+        );
+    }
 }

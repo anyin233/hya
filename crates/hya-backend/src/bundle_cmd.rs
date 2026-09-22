@@ -31,6 +31,14 @@ pub(crate) enum BundleCommand {
     },
     /// List available bundles.
     List,
+    /// Search bundles by a case-insensitive substring over bundle ids,
+    /// agent ids, and skill ids.
+    Search {
+        /// Substring matched against bundle ids, agent ids, and skill ids
+        /// (case-insensitive).
+        #[arg(value_name = "QUERY", value_parser = parse_search_query)]
+        query: String,
+    },
     /// Uninstall an installed bundle.
     Uninstall { name: String },
     /// Show bundle information by installed name or package file.
@@ -50,6 +58,16 @@ pub(crate) enum BundleCommand {
     Schemas,
 }
 
+/// clap value parser for `bundle search <QUERY>`: a query of only whitespace
+/// cannot meaningfully substring-match, so reject it at parse time.
+fn parse_search_query(value: &str) -> Result<String, String> {
+    if value.trim().is_empty() {
+        Err("QUERY must contain at least one non-whitespace character".to_string())
+    } else {
+        Ok(value.to_string())
+    }
+}
+
 pub(crate) async fn run(command: BundleCommand) -> anyhow::Result<()> {
     match command {
         BundleCommand::Install {
@@ -58,6 +76,7 @@ pub(crate) async fn run(command: BundleCommand) -> anyhow::Result<()> {
             overwrite,
         } => install_dispatch(package, claude, overwrite).await,
         BundleCommand::List => list().await,
+        BundleCommand::Search { query } => search(&query).await,
         BundleCommand::Uninstall { name } => uninstall(&name).await,
         BundleCommand::Info {
             name: Some(name),
@@ -349,18 +368,12 @@ async fn list() -> anyhow::Result<()> {
     }));
     rows.sort_by(|left, right| left.0.as_bytes().cmp(right.0.as_bytes()));
 
-    println!("NAME VERSION AGENT STATE KIND WORKFLOW");
-    for (bundle_id, version, agents, state, kind, workflow) in rows {
-        println!("{bundle_id} {version} {agents} {state} {kind} {workflow}");
-    }
+    print_list_rows(rows.iter());
     Ok(())
 }
 
 /// Present one prepared bundle as an owned, sortable CLI list row.
-fn bundle_list_row(
-    bundle: &PreparedInstallableBundle,
-    state: &str,
-) -> (String, String, String, String, String, String) {
+fn bundle_list_row(bundle: &PreparedInstallableBundle, state: &str) -> BundleListRow {
     (
         bundle.identity().id.clone(),
         bundle.identity().version.clone(),
@@ -376,6 +389,98 @@ fn bundle_list_row(
             .workflow()
             .map_or_else(|| "-".to_string(), |workflow| workflow.id.clone()),
     )
+}
+
+/// One `bundle list` row: NAME VERSION AGENT STATE KIND WORKFLOW.
+type BundleListRow = (String, String, String, String, String, String);
+
+/// One searchable catalog entry: the lowercased metadata a query matches
+/// against and the `bundle list` row printed when it matches.
+struct SearchEntry {
+    haystack: String,
+    row: BundleListRow,
+}
+
+/// Print the `bundle list` header plus one line per row.
+fn print_list_rows<'a>(rows: impl Iterator<Item = &'a BundleListRow>) {
+    println!("NAME VERSION AGENT STATE KIND WORKFLOW");
+    for (bundle_id, version, agents, state, kind, workflow) in rows {
+        println!("{bundle_id} {version} {agents} {state} {kind} {workflow}");
+    }
+}
+
+/// Lowercased metadata one bundle contributes to `bundle search`: its bundle
+/// id plus every agent id and skill id (local and stable) it declares.
+fn bundle_search_haystack(bundle: &PreparedInstallableBundle) -> String {
+    let mut haystack = bundle.identity().id.to_lowercase();
+    for agent in bundle.agents() {
+        haystack.push('\n');
+        haystack.push_str(&agent.id.as_str().to_lowercase());
+    }
+    for skill in bundle.skills() {
+        haystack.push('\n');
+        haystack.push_str(&skill.local_id.to_lowercase());
+        haystack.push('\n');
+        haystack.push_str(&skill.stable_id.to_lowercase());
+    }
+    haystack
+}
+
+/// Search the merged first-party and installed catalog: a case-insensitive
+/// substring query over bundle ids, agent ids, and skill ids prints matching
+/// bundles as `bundle list` rows. When no metadata matches — a query naming a
+/// subcommand like `schemas` rather than bundle metadata — every bundle
+/// prints instead and the fallback is explained on stderr.
+async fn search(query: &str) -> anyhow::Result<()> {
+    let needle = query.trim().to_lowercase();
+    anyhow::ensure!(!needle.is_empty(), "bundle search requires a query");
+    let first_party =
+        hya_app::first_party_catalogs().context("decode embedded first-party bundles")?;
+    let installed = installed_records_if_exists().await?;
+    let mut entries = Vec::new();
+    for catalog in &first_party {
+        for bundle in catalog.bundles() {
+            entries.push(SearchEntry {
+                haystack: bundle_search_haystack(bundle),
+                row: bundle_list_row(bundle, "active"),
+            });
+        }
+    }
+    for record in &installed {
+        match decode_installed_bundle(record) {
+            Ok(bundle) => entries.push(SearchEntry {
+                haystack: bundle_search_haystack(&bundle),
+                row: bundle_list_row(&bundle, "active"),
+            }),
+            // Written by a different binary version: the bundle id is the
+            // only searchable metadata left, and the degraded row matches
+            // what `bundle list` prints for the same record.
+            Err(_) => entries.push(SearchEntry {
+                haystack: record.bundle_id.to_lowercase(),
+                row: (
+                    record.bundle_id.clone(),
+                    record.version.clone(),
+                    "-".to_string(),
+                    "unreadable (reinstall)".to_string(),
+                    "-".to_string(),
+                    "-".to_string(),
+                ),
+            }),
+        }
+    }
+    entries.sort_by(|left, right| left.row.0.as_bytes().cmp(right.row.0.as_bytes()));
+
+    let matched = entries
+        .iter()
+        .filter(|entry| entry.haystack.contains(needle.as_str()))
+        .collect::<Vec<_>>();
+    if matched.is_empty() {
+        eprintln!("hya: no bundle metadata matched `{query}`; listing every bundle instead");
+        print_list_rows(entries.iter().map(|entry| &entry.row));
+        return Ok(());
+    }
+    print_list_rows(matched.iter().map(|entry| &entry.row));
+    Ok(())
 }
 
 async fn info(bundle_id: &str) -> anyhow::Result<()> {

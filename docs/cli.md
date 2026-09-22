@@ -122,6 +122,7 @@ hya-backend bundle info -f example.hyabundle
 hya-backend bundle install example.hyabundle
 hya-backend bundle install --claude ./my-claude-plugin
 hya-backend bundle list
+hya-backend bundle search goal-loop
 hya-backend bundle info hya/docs-example
 hya-backend bundle uninstall hya/docs-example
 ```
@@ -142,6 +143,19 @@ reports publisher, origin, format, immutability, digests, and packaged resource
 ids when available. The first-party WorkflowBundle is read-only and cannot be
 replaced or uninstalled. Repeating an install with the same digest is
 idempotent; replacement and removal publish through atomic registry operations.
+
+`search <QUERY>` filters the same merged first-party and installed catalog with
+a case-insensitive substring match over bundle ids, agent ids, and skill ids
+(both local and stable spellings such as `handbook` and
+`bundle:hya/docs-example/skill/handbook`), printing one `bundle list`-shaped
+`NAME VERSION AGENT STATE KIND WORKFLOW` row per matching bundle, sorted by
+bundle id. `<QUERY>` is a required positional argument: omitting it or passing
+only whitespace exits non-zero and prints the usage line. An unreadable
+installed row stays searchable by its bundle id and prints the same degraded
+`unreadable (reinstall)` row as `bundle list`. `search` is read-only and never
+creates the bundle registry. When no bundle metadata matches — for example a
+query naming another subcommand such as `schemas` — it exits 0, prints the full
+catalog on stdout, and explains the fallback on stderr.
 
 Before the registry is touched, `install` stages the package on disk via
 `stage_package`: the bytes land in
