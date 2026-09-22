@@ -326,6 +326,12 @@ title = "installed bundle schemas surface through CLI and runtime API"
 track = "P"
 path = "crates/hya-e2e/tests/p24_bundle_schemas.rs"
 tags = ["pr", "hyabundle", "schemas"]
+[[scenario]]
+id = "T2.20"
+title = "goal-loop preset bundle serves skills and patched evaluator pollutes goal session"
+track = "P"
+path = "crates/hya-e2e/tests/p25_goal_loop_bundle.rs"
+tags = ["pr", "hyabundle", "goal", "plugins"]
 timeout_secs = 120
 
 # Index-only deep engine coverage (not duplicated in Track P).

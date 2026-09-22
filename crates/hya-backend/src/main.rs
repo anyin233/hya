@@ -594,7 +594,8 @@ async fn main() -> anyhow::Result<()> {
             yolo,
             pure,
         )
-        .await;
+        .await
+        .inspect_err(|error| eprintln!("goal debug: {error:#}"));
     }
     match cli.command {
         // No interactive frontend is bundled anymore: bare startup only points

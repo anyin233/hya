@@ -65,6 +65,7 @@ cargo test -p hya-e2e -- --test-threads=1
 | T2.17 | [p22_dispatch_model_resolution.rs](../../crates/hya-e2e/tests/p22_dispatch_model_resolution.rs) | exact id override; substring fallback (bare vendor ids defer); user-config tier | e2e (Track P) |
 | T2.18 | [p23_mcp_background.rs](../../crates/hya-e2e/tests/p23_mcp_background.rs) | long MCP call auto-backgrounds and steers reclaim | e2e (Track P) |
 | T2.19 | [p24_bundle_schemas.rs](../../crates/hya-e2e/tests/p24_bundle_schemas.rs) | installed bundle `schemas:` / `extensions.process` / `resources.mcp` declarations surface through `bundle install`, `bundle schemas`, `bundle info`, and — after the first bound turn — `GET /v1/runtime/schemas` (owner = bundle source, canonical tool = the owning tool's stable id) | e2e (Track P) |
+| T2.20 | [p25_goal_loop_bundle.rs](../../crates/hya-e2e/tests/p25_goal_loop_bundle.rs) | `hya/goal-loop` preset bundle: skills + guide agent served to sessions, skill readable through the `skill` tool, and a patch plugin's `goal.evaluate` verdict injects a directive after the first verification (session pollution reaches the next model request) | e2e (Track P) |
 
 ### Built-in tool coverage
 
