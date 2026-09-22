@@ -11,6 +11,7 @@ use std::sync::Mutex as StdMutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+use async_trait::async_trait;
 use serde::Serialize;
 use serde_json::{Value, json};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
@@ -22,10 +23,13 @@ use tokio_util::sync::CancellationToken;
 use crate::codec::read_bounded_line;
 use crate::error::PluginError;
 use crate::messages::{
-    ActivationMetadata, HostInfo, InitializeParams, InitializeResult, METHOD_INITIALIZE,
-    METHOD_SHUTDOWN, METHOD_TOOL_CALL, PROTOCOL_VERSION, ToolCallParams, ToolCallReply,
+    ActivationMetadata, HostCapabilityParams, HostInfo, InitializeParams, InitializeResult,
+    METHOD_HOST_CAPABILITY, METHOD_INITIALIZE, METHOD_SHUTDOWN, METHOD_TOOL_CALL, PROTOCOL_VERSION,
+    ToolCallParams, ToolCallReply,
 };
-use crate::protocol::{Frame, JsonRpcNotification, JsonRpcRequest};
+use crate::protocol::{
+    Frame, JsonRpcError, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, codes,
+};
 use hya_proto::{SessionId, ToolCallId};
 
 /// Default timeout for ordinary host→plugin requests (30s).
@@ -38,6 +42,49 @@ const STDERR_TAIL_BYTES: usize = 64 * 1024;
 
 type PendingEntries = HashMap<u64, oneshot::Sender<Result<Value, PluginError>>>;
 type Pending = Arc<StdMutex<PendingEntries>>;
+type Writer = Arc<Mutex<Box<dyn AsyncWrite + Send + Unpin>>>;
+type Capabilities = Arc<StdMutex<HashMap<String, RegisteredCapability>>>;
+
+/// Host-owned operations available to one explicitly authorized native tool call.
+///
+/// The transport validates the opaque token, session, and call id before this
+/// handler sees the operation. Implementations must still enforce their own
+/// operation-specific permission and resource checks.
+#[async_trait]
+pub trait HostCapabilityHandler: Send + Sync {
+    /// Dispatch a validated call-scoped host operation.
+    async fn handle(&self, method: &str, params: Value) -> Result<Value, JsonRpcError>;
+}
+
+#[derive(Clone)]
+struct RegisteredCapability {
+    session: SessionId,
+    call: ToolCallId,
+    handler: Arc<dyn HostCapabilityHandler>,
+    cancelled: CancellationToken,
+}
+
+struct CapabilityLease {
+    capabilities: Capabilities,
+    token: String,
+}
+
+impl Drop for CapabilityLease {
+    fn drop(&mut self) {
+        if let Some(entry) = lock_capabilities(&self.capabilities).remove(&self.token) {
+            entry.cancelled.cancel();
+        }
+    }
+}
+
+fn lock_capabilities(
+    capabilities: &Capabilities,
+) -> std::sync::MutexGuard<'_, HashMap<String, RegisteredCapability>> {
+    match capabilities.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
 
 struct PendingRegistration {
     pending: Pending,
@@ -78,9 +125,10 @@ pub struct PluginClient {
 }
 
 struct ClientInner {
-    writer: Mutex<Box<dyn AsyncWrite + Send + Unpin>>,
+    writer: Writer,
     next_id: AtomicU64,
     pending: Pending,
+    capabilities: Capabilities,
     closed: Arc<std::sync::atomic::AtomicBool>,
     closed_token: CancellationToken,
     timeout_taints_closed: bool,
@@ -315,20 +363,25 @@ impl PluginClient {
         W: AsyncWrite + Send + Unpin + 'static,
     {
         let pending: Pending = Arc::new(StdMutex::new(HashMap::new()));
+        let capabilities: Capabilities = Arc::new(StdMutex::new(HashMap::new()));
+        let writer: Writer = Arc::new(Mutex::new(Box::new(writer)));
         let closed = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let closed_token = CancellationToken::new();
         spawn_reader(
             reader,
+            writer.clone(),
             pending.clone(),
+            capabilities.clone(),
             closed.clone(),
             closed_token.clone(),
             timeout_taints_closed,
         );
         Self {
             inner: Arc::new(ClientInner {
-                writer: Mutex::new(Box::new(writer)),
+                writer,
                 next_id: AtomicU64::new(1),
                 pending,
+                capabilities,
                 closed,
                 closed_token,
                 timeout_taints_closed,
@@ -511,6 +564,67 @@ impl PluginClient {
             .await
     }
 
+    /// Call a native tool with a temporary, session-bound reverse-RPC authority.
+    ///
+    /// The authority is revoked on success, error, timeout, and caller
+    /// cancellation. Ordinary plugin tool calls do not receive this field.
+    ///
+    /// # Errors
+    /// Returns a plugin transport or JSON error as for [`Self::call_tool`].
+    pub async fn call_tool_with_capability(
+        &self,
+        tool: &str,
+        session: SessionId,
+        call: ToolCallId,
+        input: Value,
+        handler: Arc<dyn HostCapabilityHandler>,
+    ) -> Result<ToolCallReply, PluginError> {
+        let lease = self.register_capability(session, call, handler)?;
+        let result = self
+            .call_tool_with_timeout_and_capability(
+                tool,
+                session,
+                call,
+                input,
+                DEFAULT_CALL_TIMEOUT,
+                Some(lease.token.clone()),
+            )
+            .await;
+        drop(lease);
+        result
+    }
+
+    fn register_capability(
+        &self,
+        session: SessionId,
+        call: ToolCallId,
+        handler: Arc<dyn HostCapabilityHandler>,
+    ) -> Result<CapabilityLease, PluginError> {
+        if self.is_closed() {
+            return Err(PluginError::Closed);
+        }
+        let mut capabilities = lock_capabilities(&self.inner.capabilities);
+        let token = loop {
+            let candidate = ToolCallId::new().to_string();
+            if !capabilities.contains_key(&candidate) {
+                break candidate;
+            }
+        };
+        capabilities.insert(
+            token.clone(),
+            RegisteredCapability {
+                session,
+                call,
+                handler,
+                cancelled: CancellationToken::new(),
+            },
+        );
+        Ok(CapabilityLease {
+            capabilities: self.inner.capabilities.clone(),
+            token,
+        })
+    }
+
     pub(crate) async fn call_tool_with_timeout(
         &self,
         tool: &str,
@@ -519,11 +633,25 @@ impl PluginClient {
         input: Value,
         timeout: Duration,
     ) -> Result<ToolCallReply, PluginError> {
+        self.call_tool_with_timeout_and_capability(tool, session, call, input, timeout, None)
+            .await
+    }
+
+    async fn call_tool_with_timeout_and_capability(
+        &self,
+        tool: &str,
+        session: SessionId,
+        call: ToolCallId,
+        input: Value,
+        timeout: Duration,
+        host_capability: Option<String>,
+    ) -> Result<ToolCallReply, PluginError> {
         let params = serde_json::to_value(ToolCallParams {
             tool: tool.to_string(),
             session,
             call,
             input,
+            host_capability,
         })
         .map_err(|error| PluginError::Json(error.to_string()))?;
         let value = self.call(METHOD_TOOL_CALL, params, timeout).await?;
@@ -603,7 +731,9 @@ impl PluginClient {
 
 fn spawn_reader<R>(
     reader: R,
+    writer: Writer,
     pending: Pending,
+    capabilities: Capabilities,
     closed: Arc<std::sync::atomic::AtomicBool>,
     closed_token: CancellationToken,
     strict_protocol: bool,
@@ -672,15 +802,29 @@ fn spawn_reader<R>(
                     .await;
                     return;
                 }
-                Ok(Frame::Request(_)) => {
-                    close_transport(
-                        &closed,
-                        &closed_token,
-                        &pending,
-                        PluginError::Json("unexpected child request".to_string()),
-                    )
-                    .await;
-                    return;
+                Ok(Frame::Request(request)) => {
+                    if request.method != METHOD_HOST_CAPABILITY {
+                        close_transport(
+                            &closed,
+                            &closed_token,
+                            &pending,
+                            PluginError::Json("unexpected child request".to_string()),
+                        )
+                        .await;
+                        return;
+                    }
+                    let writer = writer.clone();
+                    let pending = pending.clone();
+                    let capabilities = capabilities.clone();
+                    let closed = closed.clone();
+                    let closed_token = closed_token.clone();
+                    tokio::spawn(async move {
+                        let response =
+                            dispatch_host_capability(request, &capabilities, &closed_token).await;
+                        if let Err(error) = write_host_response(&writer, response).await {
+                            close_transport(&closed, &closed_token, &pending, error).await;
+                        }
+                    });
                 }
                 Err(e) => {
                     close_transport(&closed, &closed_token, &pending, PluginError::Json(e)).await;
@@ -690,6 +834,75 @@ fn spawn_reader<R>(
         }
         close_transport(&closed, &closed_token, &pending, PluginError::Closed).await;
     });
+}
+
+async fn dispatch_host_capability(
+    request: JsonRpcRequest,
+    capabilities: &Capabilities,
+    closed_token: &CancellationToken,
+) -> JsonRpcResponse {
+    let params: HostCapabilityParams = match serde_json::from_value(request.params) {
+        Ok(params) => params,
+        Err(error) => {
+            return JsonRpcResponse::err(request.id, codes::INVALID_PARAMS, error.to_string());
+        }
+    };
+    let entry = lock_capabilities(capabilities)
+        .get(&params.capability)
+        .cloned();
+    let Some(entry) =
+        entry.filter(|entry| entry.session == params.session && entry.call == params.call)
+    else {
+        return JsonRpcResponse::err(
+            request.id,
+            codes::CAPABILITY_DENIED,
+            "capability is not active for this call",
+        );
+    };
+    let result = tokio::select! {
+        biased;
+        () = entry.cancelled.cancelled() => Err(JsonRpcError {
+            code: codes::CAPABILITY_DENIED,
+            message: "capability expired".to_string(),
+            data: None,
+        }),
+        () = closed_token.cancelled() => Err(JsonRpcError {
+            code: codes::CAPABILITY_DENIED,
+            message: "plugin connection closed".to_string(),
+            data: None,
+        }),
+        result = entry.handler.handle(&params.method, params.params) => result,
+    };
+    match result {
+        Ok(value) => JsonRpcResponse::ok(request.id, value),
+        Err(error) => JsonRpcResponse {
+            jsonrpc: crate::protocol::JSONRPC_VERSION.to_string(),
+            id: request.id,
+            result: None,
+            error: Some(error),
+        },
+    }
+}
+
+async fn write_host_response(
+    writer: &Writer,
+    response: JsonRpcResponse,
+) -> Result<(), PluginError> {
+    let line =
+        serde_json::to_vec(&response).map_err(|error| PluginError::Json(error.to_string()))?;
+    let mut writer = writer.lock().await;
+    writer
+        .write_all(&line)
+        .await
+        .map_err(|error| PluginError::Io(error.to_string()))?;
+    writer
+        .write_all(b"\n")
+        .await
+        .map_err(|error| PluginError::Io(error.to_string()))?;
+    writer
+        .flush()
+        .await
+        .map_err(|error| PluginError::Io(error.to_string()))
 }
 
 fn spawn_stderr_reader<R>(mut reader: R, tail: StderrTail) -> StderrTask

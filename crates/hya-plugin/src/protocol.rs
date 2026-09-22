@@ -17,6 +17,8 @@ pub mod codes {
     pub const INTERNAL_ERROR: i64 = -32603;
     /// App-defined: a guard hook vetoed the action.
     pub const VETO: i64 = 1;
+    /// Host refused an absent, expired, or cross-call capability.
+    pub const CAPABILITY_DENIED: i64 = -32001;
 }
 
 /// Host→plugin (or plugin→host) JSON-RPC request expecting a response.
