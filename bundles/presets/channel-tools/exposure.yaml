@@ -1,0 +1,8 @@
+schema_version: 1
+identity: hya/channel-tools
+protected_names: []
+schemes: []
+tools:
+  - { name: send, schema_version: 1, permission: tool }
+  - { name: list_channel, schema_version: 1, permission: read_only }
+  - { name: report, schema_version: 1, permission: tool }

@@ -90,7 +90,7 @@ If you want to understand the codebase:
 | [AgentBundle Authoring](agent-bundle-authoring.md) | Package, inspect, install, list, describe, and uninstall public Plugin, AgentBundle, and AgentSetBundle payloads, including static and Bun-sidecar forms. |
 | [Bundle Runtime](bundle-runtime.md) | Packaged process/MCP startup, scoped tools/hooks, immutable bindings, and failure rollback. |
 | [Core agents](core-agents.md) | Trusted embedded agent preset and reserved-agent provenance. |
-| [Base tools](base-tools.md) | Data-owned native tool exposure, aliases, and permission defaults. |
+| [Tool-family presets](base-tools.md) | Five trusted tool groups, exposure, aliases, and permission defaults. |
 | [Claude plugin import](claude-plugin-import.md) | Import local and marketplace plugins into standard bundles. |
 | [Subagent bundles](subagent-bundles.md) | Transient and resident bundle-defined workers. |
 | [Agent channels](agent-channels.md) | Declarative unit and parent-DM policies. |

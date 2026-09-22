@@ -1,4 +1,4 @@
-//! Prepare and validate the embedded `hya/base-tools` Plugin policy.
+//! Prepare and validate the embedded tool-family Plugin policies.
 #![allow(clippy::expect_used)]
 
 use std::collections::BTreeSet;
@@ -72,38 +72,49 @@ const fn default_true() -> bool {
 
 fn main() {
     let manifest_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("manifest dir"));
-    let preset_dir = manifest_dir.join("../../bundles/presets/base-tools");
-    println!(
-        "cargo:rerun-if-changed={}",
-        preset_dir.join("bundle.yaml").display()
-    );
-    println!(
-        "cargo:rerun-if-changed={}",
-        preset_dir.join("exposure.yaml").display()
-    );
-    let source = BundleSource::read_directory(&preset_dir).expect("read hya/base-tools source");
-    let prepared = prepare_package(source).expect("prepare hya/base-tools Plugin");
-    let [bundle] = prepared.bundles() else {
-        panic!("hya/base-tools must prepare one bundle")
-    };
-    assert_eq!(bundle.kind(), PreparedBundleKind::Plugin);
-    assert_eq!(bundle.identity().id, "hya/base-tools");
-    let [asset] = bundle.extensions() else {
-        panic!("hya/base-tools must contain one policy asset")
-    };
-    assert_eq!(asset.local_id, "exposure");
-    let policy: Policy =
-        serde_norway::from_str(&asset.content).expect("parse prepared exposure policy");
-    validate(&policy);
-    let generated = generate(&policy, bundle.digest(), prepared.bytes());
+    let families = [
+        ("base-tools", "hya/base-tools"),
+        ("extended-tools", "hya/extended-tools"),
+        ("network-tools", "hya/network-tools"),
+        ("channel-tools", "hya/channel-tools"),
+        ("todo-tools", "hya/todo-tools"),
+    ];
+    let mut policies = Vec::with_capacity(families.len());
+    for (directory, identity) in families {
+        let preset_dir = manifest_dir.join("../../bundles/presets").join(directory);
+        for file in ["bundle.yaml", "exposure.yaml"] {
+            println!("cargo:rerun-if-changed={}", preset_dir.join(file).display());
+        }
+        let source = BundleSource::read_directory(&preset_dir).expect("read tool preset source");
+        let prepared = prepare_package(source).expect("prepare tool preset Plugin");
+        let [bundle] = prepared.bundles() else {
+            panic!("tool preset must prepare one bundle")
+        };
+        assert_eq!(bundle.kind(), PreparedBundleKind::Plugin);
+        assert_eq!(bundle.identity().id, identity);
+        let [asset] = bundle.extensions() else {
+            panic!("tool preset must contain one policy asset")
+        };
+        assert_eq!(asset.local_id, "exposure");
+        let policy: Policy =
+            serde_norway::from_str(&asset.content).expect("parse prepared exposure policy");
+        validate(&policy, identity);
+        policies.push((
+            policy,
+            bundle.digest().to_string(),
+            prepared.bytes().to_vec(),
+        ));
+    }
+    validate_global(&policies);
+    let generated = generate(&policies);
     let output =
         PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR")).join("base_tools_preset.rs");
-    fs::write(output, generated).expect("write generated base-tools policy");
+    fs::write(output, generated).expect("write generated tool-family policies");
 }
 
-fn validate(policy: &Policy) {
+fn validate(policy: &Policy, expected_identity: &str) {
     assert_eq!(policy.schema_version, 1);
-    assert_eq!(policy.identity, "hya/base-tools");
+    assert_eq!(policy.identity, expected_identity);
     let names = policy
         .tools
         .iter()
@@ -140,52 +151,85 @@ fn validate(policy: &Policy) {
     }
 }
 
-fn generate(policy: &Policy, digest: &str, bytes: &[u8]) -> String {
+fn validate_global(policies: &[(Policy, String, Vec<u8>)]) {
+    let mut exports = BTreeSet::new();
+    for (policy, _, _) in policies {
+        for tool in &policy.tools {
+            assert!(
+                exports.insert(tool.name.as_str()),
+                "duplicate tool across families"
+            );
+            for alias in &tool.aliases {
+                assert!(
+                    exports.insert(alias.name.as_str()),
+                    "duplicate alias across families"
+                );
+            }
+        }
+    }
+}
+
+fn generate(policies: &[(Policy, String, Vec<u8>)]) -> String {
     let mut out = String::new();
-    for (index, tool) in policy.tools.iter().enumerate() {
-        writeln!(out, "static ALIASES_{index}: &[BaseToolAlias] = &[").expect("write aliases");
-        for alias in &tool.aliases {
-            let visibility = match alias.visibility {
-                Visibility::Hidden => "Hidden",
-                Visibility::Public => "Public",
-            };
+    for (family, (policy, _, bytes)) in policies.iter().enumerate() {
+        for (index, tool) in policy.tools.iter().enumerate() {
             writeln!(
                 out,
-                "BaseToolAlias {{ name: {:?}, visibility: AliasVisibility::{visibility} }},",
-                alias.name
+                "static ALIASES_{family}_{index}: &[BaseToolAlias] = &["
             )
-            .expect("write alias");
+            .expect("write aliases");
+            for alias in &tool.aliases {
+                let visibility = match alias.visibility {
+                    Visibility::Hidden => "Hidden",
+                    Visibility::Public => "Public",
+                };
+                writeln!(
+                    out,
+                    "BaseToolAlias {{ name: {:?}, visibility: AliasVisibility::{visibility} }},",
+                    alias.name
+                )
+                .expect("write alias");
+            }
+            writeln!(out, "];").expect("close aliases");
         }
-        writeln!(out, "];").expect("close aliases");
-    }
-    writeln!(out, "static TOOLS: &[BaseToolExposure] = &[").expect("write tools");
-    for (index, tool) in policy.tools.iter().enumerate() {
-        let permission = match tool.permission {
-            Permission::ReadOnly => "ReadOnly",
-            Permission::Task => "Task",
-            Permission::Tool => "Tool",
-            Permission::Command => "Command",
-            Permission::Mcp => "Mcp",
-        };
-        writeln!(out, "BaseToolExposure {{ name: {:?}, schema_version: {}, permission: ToolPermission::{permission}, exposed: {}, aliases: ALIASES_{index} }},", tool.name, tool.schema_version, tool.exposed).expect("write tool");
-    }
-    writeln!(out, "];").expect("close tools");
-    writeln!(out, "static SCHEMES: &[BaseToolScheme] = &[").expect("write schemes");
-    for scheme in &policy.schemes {
+        writeln!(out, "static TOOLS_{family}: &[BaseToolExposure] = &[").expect("write tools");
+        for (index, tool) in policy.tools.iter().enumerate() {
+            let permission = match tool.permission {
+                Permission::ReadOnly => "ReadOnly",
+                Permission::Task => "Task",
+                Permission::Tool => "Tool",
+                Permission::Command => "Command",
+                Permission::Mcp => "Mcp",
+            };
+            writeln!(out, "BaseToolExposure {{ name: {:?}, schema_version: {}, permission: ToolPermission::{permission}, exposed: {}, aliases: ALIASES_{family}_{index} }},", tool.name, tool.schema_version, tool.exposed).expect("write tool");
+        }
+        writeln!(out, "];").expect("close tools");
+        writeln!(out, "static SCHEMES_{family}: &[BaseToolScheme] = &[").expect("write schemes");
+        for scheme in &policy.schemes {
+            writeln!(
+                out,
+                "BaseToolScheme {{ scheme: {:?}, tool: {:?}, writable: {} }},",
+                scheme.scheme, scheme.tool, scheme.writable
+            )
+            .expect("write scheme");
+        }
         writeln!(
             out,
-            "BaseToolScheme {{ scheme: {:?}, tool: {:?}, writable: {} }},",
-            scheme.scheme, scheme.tool, scheme.writable
+            "]; static PROTECTED_NAMES_{family}: &[&str] = &{:?};",
+            policy.protected_names
         )
-        .expect("write scheme");
+        .expect("write protected");
+        writeln!(out, "static PREPARED_BYTES_{family}: &[u8] = &{:?};", bytes)
+            .expect("write bytes");
     }
     writeln!(
         out,
-        "]; static PROTECTED_NAMES: &[&str] = &{:?};",
-        policy.protected_names
+        "pub(super) static TOOL_BUNDLE_PRESETS: &[BaseToolsPreset] = &["
     )
-    .expect("write protected");
-    writeln!(out, "static PREPARED_BYTES: &[u8] = &{:?};", bytes).expect("write bytes");
-    writeln!(out, "pub(super) static BASE_TOOLS_PRESET: BaseToolsPreset = BaseToolsPreset {{ schema_version: {}, identity: {:?}, bundle_digest: {:?}, prepared_catalog_bytes: PREPARED_BYTES, protected_names: PROTECTED_NAMES, schemes: SCHEMES, tools: TOOLS }};", policy.schema_version, policy.identity, digest).expect("write preset");
+    .expect("open presets");
+    for (family, (policy, digest, _)) in policies.iter().enumerate() {
+        writeln!(out, "BaseToolsPreset {{ schema_version: {}, identity: {:?}, bundle_digest: {:?}, prepared_catalog_bytes: PREPARED_BYTES_{family}, protected_names: PROTECTED_NAMES_{family}, schemes: SCHEMES_{family}, tools: TOOLS_{family} }},", policy.schema_version, policy.identity, digest).expect("write preset");
+    }
+    writeln!(out, "];").expect("close presets");
     out
 }

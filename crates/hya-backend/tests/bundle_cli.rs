@@ -371,6 +371,10 @@ fn bundle_list_and_info_include_first_party_without_creating_registry()
     for expected in [
         LIST_HEADER,
         "hya/base-tools 1.0.0  active Plugin -",
+        "hya/channel-tools 1.0.0  active Plugin -",
+        "hya/extended-tools 1.0.0  active Plugin -",
+        "hya/network-tools 1.0.0  active Plugin -",
+        "hya/todo-tools 1.0.0  active Plugin -",
         "hya/goal-loop 1.0.0 goal-loop-guide,goal-loop-verifier active AgentSetBundle -",
         "hya/plan-impl-review 1.0.0 plan-impl-review-implementer,plan-impl-review-planner,plan-impl-review-reviewer active WorkflowBundle plan-impl-review",
     ] {
@@ -1375,6 +1379,10 @@ fn bundle_search_without_a_metadata_match_lists_the_catalog()
     for expected in [
         LIST_HEADER,
         "hya/base-tools 1.0.0  active Plugin -",
+        "hya/channel-tools 1.0.0  active Plugin -",
+        "hya/extended-tools 1.0.0  active Plugin -",
+        "hya/network-tools 1.0.0  active Plugin -",
+        "hya/todo-tools 1.0.0  active Plugin -",
         "hya/goal-loop 1.0.0 goal-loop-guide,goal-loop-verifier active AgentSetBundle -",
         "hya/plan-impl-review 1.0.0 plan-impl-review-implementer,plan-impl-review-planner,plan-impl-review-reviewer active WorkflowBundle plan-impl-review",
     ] {

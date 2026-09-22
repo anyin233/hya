@@ -32,8 +32,9 @@ are excluded from selectors and spawn rosters and cannot spawn other agents.
 Editing `bundle.yaml` or a prompt under the preset directory requires rebuilding
 `hya-core`. Invalid source fails the build before runtime code can embed it.
 
-The application exposes `hya/core-agents`, `hya/base-tools`, and the trusted
-channel defaults in `hya/agent-channels` through a read-only preset inventory
+The application exposes `hya/core-agents`, the five trusted
+[tool-family presets](base-tools.md), and the channel defaults in
+`hya/agent-channels` through a read-only preset inventory
 for list/info surfaces. Inventory rows report
 their id, kind, version, digest, exported ids, and
 `immutable: true, installable: false`. They do not enter the installed bundle

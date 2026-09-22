@@ -418,7 +418,7 @@ no bundle watcher or per-tool-call database check.
 
 Core Agent definitions come from the build-prepared trusted
 [`hya/core-agents` preset](../core-agents.md), and native tool visibility/aliases/
-permission posture come from [`hya/base-tools`](../base-tools.md). Public packages
+permission posture come from the [five tool-family presets](../base-tools.md). Public packages
 cannot claim their trusted origin. [`hya/subagents`](../subagent-bundles.md)
 supplies ordinary transient/resident definitions; [channel policy bundles](../agent-channels.md)
 restrict engine-minted communication topology without owning channel identities

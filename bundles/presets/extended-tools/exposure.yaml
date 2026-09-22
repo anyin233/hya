@@ -1,0 +1,17 @@
+schema_version: 1
+identity: hya/extended-tools
+protected_names: []
+schemes: []
+tools:
+  - { name: invalid, schema_version: 1, permission: tool }
+  - { name: lsp, schema_version: 1, permission: read_only }
+  - { name: skill, schema_version: 1, permission: read_only }
+  - { name: list_agents, schema_version: 1, permission: read_only }
+  - { name: task, schema_version: 1, permission: task }
+  - { name: workflow, schema_version: 1, permission: tool }
+  - { name: search_agent, schema_version: 1, permission: read_only }
+  - { name: kill, schema_version: 1, permission: task }
+  - name: plan_exit
+    schema_version: 1
+    permission: tool
+    aliases: [{ name: plan, visibility: hidden }]

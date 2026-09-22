@@ -150,7 +150,7 @@ When changing a boundary, update the nearest docs page:
 | Store/schema | [Storage](architecture/storage.md) |
 | Server/client API | [Server and Client](architecture/server-client.md), [Protocol guide](protocol/README.md) |
 | Bundle authoring and execution | [AgentBundle Authoring](agent-bundle-authoring.md), [Bundle Runtime](bundle-runtime.md), [Claude import](claude-plugin-import.md) |
-| Trusted presets and multi-agent bundles | [Core agents](core-agents.md), [Base tools](base-tools.md), [Subagent bundles](subagent-bundles.md), [Agent channels](agent-channels.md) |
+| Trusted presets and multi-agent bundles | [Core agents](core-agents.md), [Tool-family presets](base-tools.md), [Subagent bundles](subagent-bundles.md), [Agent channels](agent-channels.md) |
 | Goal/loop intelligence | [Goal and Loop Authoring](goal-loop-authoring.md) |
 | Agent process E2E / matrix | [Testing](testing/README.md), [Agent matrix](testing/agent-matrix.md) |
 
