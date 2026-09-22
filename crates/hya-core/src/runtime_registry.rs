@@ -799,7 +799,10 @@ impl RuntimeCandidate {
                 }
                 canonical_owner.insert(name.to_string(), label.clone());
                 for alias in &export.aliases {
-                    if hya_tool::base_tools_preset().is_protected(alias) {
+                    if hya_tool::tool_bundle_presets()
+                        .iter()
+                        .any(|preset| preset.is_protected(alias))
+                    {
                         conflicts.push(format!(
                             "source {label}: protected tool `{alias}` cannot be masked; \
                              the alias is rejected"

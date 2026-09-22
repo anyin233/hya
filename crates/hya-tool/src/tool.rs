@@ -13,7 +13,7 @@ use tokio_util::sync::CancellationToken;
 use crate::agents::{AgentDef, ListAgentsTool};
 use crate::apply_patch::ApplyPatchTool;
 use crate::ask_user::AskUserTool;
-use crate::base_tools::{AliasVisibility, base_tools_preset};
+use crate::base_tools::{AliasVisibility, tool_bundle_presets};
 use crate::edit::EditTool;
 use crate::formatter::FormatterPlane;
 pub use crate::grep::GrepTool;
@@ -496,30 +496,36 @@ impl ToolRegistry {
             .into_iter()
             .map(|tool| (tool.name().to_string(), tool))
             .collect::<HashMap<_, _>>();
-        for exposure in base_tools_preset().tools() {
-            let Some(tool) = by_name.remove(exposure.name()) else {
-                panic!(
-                    "hya/base-tools declares `{}` without a Rust implementation",
-                    exposure.name()
-                );
-            };
-            if !exposure.exposed() {
-                continue;
+        for preset in tool_bundle_presets() {
+            for exposure in preset.tools() {
+                let Some(tool) = by_name.remove(exposure.name()) else {
+                    panic!(
+                        "{} declares `{}` without a Rust implementation",
+                        preset.identity(),
+                        exposure.name()
+                    );
+                };
+                if !exposure.exposed() {
+                    continue;
+                }
+                registry.insert_preset_builtin(tool, exposure);
             }
-            registry.insert_preset_builtin(tool, exposure);
         }
         assert!(
             by_name.is_empty(),
-            "Rust builtin implementations are missing from hya/base-tools: {:?}",
+            "Rust builtin implementations are missing from tool-family presets: {:?}",
             by_name.keys().collect::<BTreeSet<_>>()
         );
-        for scheme in base_tools_preset().schemes() {
-            assert!(
-                registry.get(scheme.tool()).is_some(),
-                "hya/base-tools scheme `{}` names missing tool `{}`",
-                scheme.scheme(),
-                scheme.tool()
-            );
+        for preset in tool_bundle_presets() {
+            for scheme in preset.schemes() {
+                assert!(
+                    registry.get(scheme.tool()).is_some(),
+                    "{} scheme `{}` names missing tool `{}`",
+                    preset.identity(),
+                    scheme.scheme(),
+                    scheme.tool()
+                );
+            }
         }
         registry
     }
@@ -716,7 +722,7 @@ impl ToolRegistry {
             );
             assert!(
                 replaced.is_none() && !inner.tools.contains_key(alias.name()),
-                "duplicate hya/base-tools alias `{}`",
+                "duplicate tool-family preset alias `{}`",
                 alias.name()
             );
             if alias.visibility() == AliasVisibility::Public {

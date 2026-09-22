@@ -1,0 +1,8 @@
+schema_version: 1
+identity: hya/todo-tools
+protected_names: []
+schemes: []
+tools:
+  - { name: todo__read, schema_version: 1, permission: read_only }
+  - { name: todo__update_status, schema_version: 1, permission: tool }
+  - { name: todo__update_content, schema_version: 1, permission: tool }

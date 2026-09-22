@@ -49,33 +49,35 @@ pub fn trusted_preset_inventory() -> Result<Vec<TrustedPresetDescriptor>, Bundle
                 source_name: hya_core::AGENT_CHANNELS_PRESET_ID.to_string(),
                 detail: "embedded preset catalog is empty".to_string(),
             })?;
-    let base = hya_tool::base_tools_preset();
-    let prepared_digest = format!("{:x}", Sha256::digest(base.prepared_catalog_bytes()));
-    let base_catalog = PreparedCatalog::decode(base.prepared_catalog_bytes(), &prepared_digest)?;
-    let base_bundle =
-        base_catalog
-            .bundles()
-            .first()
-            .ok_or_else(|| BundleError::InvalidManifest {
-                source_name: base.identity().to_string(),
-                detail: "embedded preset catalog is empty".to_string(),
-            })?;
-
-    let mut presets = vec![
-        TrustedPresetDescriptor {
-            id: base_bundle.identity().id.clone(),
-            kind: base_bundle.kind().as_str().to_string(),
-            version: base_bundle.identity().version.clone(),
-            digest: prepared_digest,
-            immutable: true,
-            installable: false,
-            agent_ids: Vec::new(),
-            resource_ids: base
-                .tools()
-                .iter()
-                .map(|tool| tool.name().to_string())
-                .collect(),
-        },
+    let mut presets = hya_tool::tool_bundle_presets()
+        .iter()
+        .map(|policy| {
+            let digest = format!("{:x}", Sha256::digest(policy.prepared_catalog_bytes()));
+            let catalog = PreparedCatalog::decode(policy.prepared_catalog_bytes(), &digest)?;
+            let bundle = catalog
+                .bundles()
+                .first()
+                .ok_or_else(|| BundleError::InvalidManifest {
+                    source_name: policy.identity().to_string(),
+                    detail: "embedded preset catalog is empty".to_string(),
+                })?;
+            Ok(TrustedPresetDescriptor {
+                id: bundle.identity().id.clone(),
+                kind: bundle.kind().as_str().to_string(),
+                version: bundle.identity().version.clone(),
+                digest,
+                immutable: true,
+                installable: false,
+                agent_ids: Vec::new(),
+                resource_ids: policy
+                    .tools()
+                    .iter()
+                    .map(|tool| tool.name().to_string())
+                    .collect(),
+            })
+        })
+        .collect::<Result<Vec<_>, BundleError>>()?;
+    presets.extend([
         TrustedPresetDescriptor {
             id: channel_bundle.identity().id.clone(),
             kind: channel_bundle.kind().as_str().to_string(),
@@ -104,7 +106,7 @@ pub fn trusted_preset_inventory() -> Result<Vec<TrustedPresetDescriptor>, Bundle
                 .collect(),
             resource_ids: Vec::new(),
         },
-    ];
+    ]);
     presets.sort_by(|left, right| left.id.cmp(&right.id));
     Ok(presets)
 }

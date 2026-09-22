@@ -5,7 +5,22 @@
 #[test]
 fn inventory_exposes_immutable_noninstallable_core_and_tool_presets() {
     let inventory = hya_app::trusted_preset_inventory().expect("trusted preset inventory");
-    assert_eq!(inventory.len(), 3);
+    assert_eq!(inventory.len(), 7);
+    assert_eq!(
+        inventory
+            .iter()
+            .map(|item| item.id.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "hya/agent-channels",
+            "hya/base-tools",
+            "hya/channel-tools",
+            "hya/core-agents",
+            "hya/extended-tools",
+            "hya/network-tools",
+            "hya/todo-tools",
+        ]
+    );
     assert_eq!(inventory[0].id, "hya/agent-channels");
     assert_eq!(inventory[0].kind, "AgentSetBundle");
     assert_eq!(
@@ -14,8 +29,9 @@ fn inventory_exposes_immutable_noninstallable_core_and_tool_presets() {
     );
     assert_eq!(inventory[1].id, "hya/base-tools");
     assert_eq!(inventory[1].kind, "Plugin");
-    assert_eq!(inventory[2].id, "hya/core-agents");
-    assert_eq!(inventory[2].kind, "AgentSetBundle");
+    assert_eq!(inventory[2].kind, "Plugin");
+    assert_eq!(inventory[3].kind, "AgentSetBundle");
+    assert!(inventory[4..].iter().all(|item| item.kind == "Plugin"));
     for preset in inventory {
         assert!(preset.immutable);
         assert!(!preset.installable);

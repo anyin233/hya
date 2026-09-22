@@ -1,0 +1,10 @@
+kind: Plugin
+identity:
+  id: hya/network-tools
+  version: 1.0.0
+  publisher: hya
+namespace: network-tools
+extensions:
+  files:
+    - id: exposure
+      path: exposure.yaml

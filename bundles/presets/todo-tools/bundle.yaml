@@ -1,0 +1,10 @@
+kind: Plugin
+identity:
+  id: hya/todo-tools
+  version: 1.0.0
+  publisher: hya
+namespace: todo-tools
+extensions:
+  files:
+    - id: exposure
+      path: exposure.yaml

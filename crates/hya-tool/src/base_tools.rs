@@ -1,8 +1,8 @@
-//! Embedded exposure policy for the trusted `hya/base-tools` preset.
+//! Embedded exposure policies for the five trusted tool-family presets.
 
 use crate::tool::ToolPermission;
 
-/// Metadata that owns builtin visibility, aliases, and default permissions.
+/// Metadata that owns one family's builtin visibility, aliases, and defaults.
 pub struct BaseToolsPreset {
     schema_version: u32,
     identity: &'static str,
@@ -148,8 +148,14 @@ impl BaseToolScheme {
     }
 }
 
-/// Return the build-validated, process-wide embedded preset policy.
+/// Return every build-validated tool-family policy in stable family order.
 #[must_use]
-pub const fn base_tools_preset() -> &'static BaseToolsPreset {
-    &BASE_TOOLS_PRESET
+pub const fn tool_bundle_presets() -> &'static [BaseToolsPreset] {
+    TOOL_BUNDLE_PRESETS
+}
+
+/// Return the foundational `hya/base-tools` policy for compatibility.
+#[must_use]
+pub fn base_tools_preset() -> &'static BaseToolsPreset {
+    &TOOL_BUNDLE_PRESETS[0]
 }

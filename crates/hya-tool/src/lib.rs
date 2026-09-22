@@ -78,7 +78,7 @@ pub use workflow_plane::{
 pub use agents::AgentDef;
 pub use base_tools::{
     AliasVisibility, BaseToolAlias, BaseToolExposure, BaseToolScheme, BaseToolsPreset,
-    base_tools_preset,
+    base_tools_preset, tool_bundle_presets,
 };
 pub use formatter::{
     BuiltinFormatterProvider, FormatterConfig, FormatterEntry, FormatterError, FormatterPlane,

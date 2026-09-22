@@ -1,17 +1,111 @@
-//! Parity checks for the embedded `hya/base-tools` exposure policy.
+//! Parity checks for the embedded tool-family exposure policies.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use std::collections::BTreeSet;
 
-use hya_tool::{AliasVisibility, ToolPermission, ToolRegistry, base_tools_preset};
+use hya_tool::{
+    AliasVisibility, ToolPermission, ToolRegistry, base_tools_preset, tool_bundle_presets,
+};
+
+#[test]
+fn base_bundle_owns_only_the_requested_foundational_tools() {
+    let actual = base_tools_preset()
+        .tools()
+        .iter()
+        .map(|tool| tool.name())
+        .collect::<BTreeSet<_>>();
+    let expected = [
+        "read",
+        "write",
+        "edit",
+        "ls",
+        "glob",
+        "find",
+        "grep",
+        "ask_user",
+        "bash",
+        "apply_patch",
+    ]
+    .into_iter()
+    .collect();
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn each_embedded_bundle_owns_its_requested_tool_family() {
+    let expected = [
+        (
+            "hya/base-tools",
+            &[
+                "read",
+                "write",
+                "edit",
+                "ls",
+                "glob",
+                "find",
+                "grep",
+                "ask_user",
+                "bash",
+                "apply_patch",
+            ][..],
+        ),
+        (
+            "hya/extended-tools",
+            &[
+                "invalid",
+                "lsp",
+                "skill",
+                "list_agents",
+                "task",
+                "workflow",
+                "search_agent",
+                "kill",
+                "plan_exit",
+            ],
+        ),
+        ("hya/network-tools", &["webfetch", "websearch"]),
+        ("hya/channel-tools", &["send", "list_channel", "report"]),
+        (
+            "hya/todo-tools",
+            &["todo__read", "todo__update_status", "todo__update_content"],
+        ),
+    ];
+    for (preset, (identity, expected_names)) in tool_bundle_presets().iter().zip(expected) {
+        assert_eq!(preset.identity(), identity);
+        let actual = preset
+            .tools()
+            .iter()
+            .map(|tool| tool.name())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            actual,
+            expected_names.iter().copied().collect(),
+            "{identity}"
+        );
+    }
+}
 
 #[test]
 fn embedded_base_tools_preset_is_the_registry_authority() {
-    let preset = base_tools_preset();
-    assert_eq!(preset.identity(), "hya/base-tools");
-    assert_eq!(preset.schema_version(), 1);
-    assert_eq!(preset.bundle_digest().len(), 64);
-    assert!(!preset.prepared_catalog_bytes().is_empty());
+    let presets = tool_bundle_presets();
+    assert_eq!(
+        presets
+            .iter()
+            .map(|preset| preset.identity())
+            .collect::<Vec<_>>(),
+        [
+            "hya/base-tools",
+            "hya/extended-tools",
+            "hya/network-tools",
+            "hya/channel-tools",
+            "hya/todo-tools",
+        ]
+    );
+    for preset in presets {
+        assert_eq!(preset.schema_version(), 1);
+        assert_eq!(preset.bundle_digest().len(), 64);
+        assert!(!preset.prepared_catalog_bytes().is_empty());
+    }
 
     let frozen = [
         ("invalid", ToolPermission::Tool, &[][..]),
@@ -42,9 +136,9 @@ fn embedded_base_tools_preset_is_the_registry_authority() {
         ("todo__update_status", ToolPermission::Tool, &[][..]),
         ("todo__update_content", ToolPermission::Tool, &[][..]),
     ];
-    let actual_policy = preset
-        .tools()
+    let mut actual_policy = presets
         .iter()
+        .flat_map(|preset| preset.tools())
         .map(|tool| {
             (
                 tool.name(),
@@ -56,10 +150,12 @@ fn embedded_base_tools_preset_is_the_registry_authority() {
             )
         })
         .collect::<Vec<_>>();
-    let expected_policy = frozen
+    let mut expected_policy = frozen
         .iter()
         .map(|(name, permission, aliases)| (*name, *permission, aliases.to_vec()))
         .collect::<Vec<_>>();
+    actual_policy.sort_by(|left, right| left.0.cmp(right.0));
+    expected_policy.sort_by(|left, right| left.0.cmp(right.0));
     assert_eq!(actual_policy, expected_policy);
 
     let registry = ToolRegistry::builtins();
@@ -68,15 +164,15 @@ fn embedded_base_tools_preset_is_the_registry_authority() {
         .into_iter()
         .map(|schema| schema.name.as_str().to_string())
         .collect::<BTreeSet<_>>();
-    let expected = preset
-        .tools()
+    let expected = presets
         .iter()
+        .flat_map(|preset| preset.tools())
         .filter(|tool| tool.exposed())
         .map(|tool| tool.name().to_string())
         .collect::<BTreeSet<_>>();
     assert_eq!(actual, expected);
 
-    for tool in preset.tools() {
+    for tool in presets.iter().flat_map(|preset| preset.tools()) {
         assert_eq!(tool.schema_version(), 1, "{} schema version", tool.name());
         let resolved = registry
             .resolve(tool.name())
@@ -107,6 +203,7 @@ fn embedded_base_tools_preset_is_the_registry_authority() {
 #[test]
 fn preset_preserves_read_protection_and_permission_defaults() {
     let preset = base_tools_preset();
+    let extended = &tool_bundle_presets()[1];
     assert!(preset.is_protected("read"));
     assert!(!preset.is_protected("write"));
     assert_eq!(
@@ -118,7 +215,7 @@ fn preset_preserves_read_protection_and_permission_defaults() {
         ToolPermission::Command
     );
     assert_eq!(
-        preset.tool("task").unwrap().permission(),
+        extended.tool("task").unwrap().permission(),
         ToolPermission::Task
     );
     assert_eq!(
