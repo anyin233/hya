@@ -82,8 +82,29 @@ JSON-RPC error `-32001` (`CAPABILITY_DENIED`); malformed params return `-32602`.
 The token is revoked when the tool reply, transport error, timeout, or caller
 cancellation ends the call. In-flight host operations are cancelled on
 revocation or connection closure. Other child→host request methods still close
-the plugin connection. The transport provides no built-in host operations by
-itself; the runtime must install a handler for each native call it authorizes.
+the plugin connection.
+
+For a Rust process declared by an installed bundle, the `PluginTool` adapter
+installs a handler from the active `ToolCtx`. Other plugin kinds receive no
+context capability. For example, a native tool can request its call context:
+
+```json
+{"jsonrpc":"2.0","id":41,"method":"host/capability","params":{"capability":"<host_capability>","session":"<session-id>","call":"<call-id>","method":"context.describe","params":{}}}
+```
+
+`context.describe` requires empty params and returns `session`,
+`parent_session` (nullable), `workdir`, `source_tool_call_id`, and
+`operation_id`. The process can then request a resource check:
+
+```json
+{"jsonrpc":"2.0","id":42,"method":"host/capability","params":{"capability":"<host_capability>","session":"<session-id>","call":"<call-id>","method":"permission.assert","params":{"action":"read","resource":{"kind":"path","value":"/workspace/file"}}}}
+```
+
+`permission.assert` accepts lowercase `Action` names and a tagged resource
+`{ "kind": "tool|path|glob|command|subagent|url|web_search|skill", "value": string }`
+or `{ "kind": "any" }`. It returns `{}` on success, `-32002` on permission
+denial, and `-32602` for malformed params. An unsupported operation returns
+`-32601`. The host applies the active call's permission snapshot.
 
 ---
 
@@ -96,6 +117,7 @@ itself; the runtime must install a handler for each native call it authorizes.
 | `-32603` | `INTERNAL_ERROR` | Plugin-side failure |
 | `1` | `VETO` | App-defined: a guard refused the action |
 | `-32001` | `CAPABILITY_DENIED` | Native tool capability is absent, expired, or bound to another call |
+| `-32002` | `PERMISSION_DENIED` | The active permission plane denied the requested resource operation |
 
 Guard refusal on the wire is normally a **successful** result with
 `"outcome": "veto"` (see `tool.execute.before`). A JSON-RPC error from a

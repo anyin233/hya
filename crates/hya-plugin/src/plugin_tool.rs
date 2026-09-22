@@ -48,7 +48,7 @@ impl Tool for PluginTool {
             .ok_or_else(|| ToolError::Other("plugin tool requires a session".to_string()))?;
         let reply = self
             .conn
-            .call_tool(&self.tool, session, ToolCallId::new(), input)
+            .call_tool(ctx, &self.tool, session, ToolCallId::new(), input)
             .await
             .map_err(|error| ToolError::Other(error.to_string()))?;
         if !reply.ok {

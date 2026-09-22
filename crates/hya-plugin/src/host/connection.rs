@@ -55,6 +55,7 @@ pub(super) async fn connect_one_at(
         canonical_declaration,
         timeout,
         command: spec.command,
+        kind: spec.kind,
         bundle_root,
         env: spec.env,
         host_info: host,

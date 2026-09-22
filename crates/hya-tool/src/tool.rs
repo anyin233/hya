@@ -111,6 +111,7 @@ pub struct DuplicateName {
 ///
 /// Planes are session-scoped services; tools assert permissions and call planes
 /// without holding the session engine itself.
+#[derive(Clone)]
 pub struct ToolCtx {
     /// Call-scoped permission plane (after invocation authorization).
     pub permission: PermissionPlane,
