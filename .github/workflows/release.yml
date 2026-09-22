@@ -85,7 +85,9 @@ jobs:
 
       - name: Build release binaries
         shell: bash
-        run: cargo build --release --locked -p hya-backend --bins --target "$TARGET"
+        run: |
+          cargo build --release --locked -p hya-backend --bins --target "$TARGET"
+          cargo build --release --locked -p hya-todo-tools --lib --target "$TARGET"
 
       - name: Package release asset
         id: package
@@ -109,6 +111,10 @@ jobs:
             crates/hya-plugin-bun/adapter/bun.lock "$bun_adapter/"
           cp -R crates/hya-plugin-bun/adapter/src/. "$bun_adapter/src/"
           (cd "$bun_adapter" && "$HOME/.bun/bin/bun" install --frozen-lockfile --production)
+          cargo run --locked -p xtask -- package-native-tool-library \
+            bundles/presets/todo-tools \
+            "target/$TARGET/release/libhya_todo_tools.so" \
+            "dist/$package_dir/bundles/hya-todo-tools.hyabundle"
           scripts/package-argus-example.sh bundles/examples/argus-example \
             "dist/$package_dir/examples/hya-argus-example.hyabundle"
 
@@ -135,6 +141,7 @@ jobs:
           "$packaged_binary" --version | tee "$scratch/version.txt"
           grep -F "$version" "$scratch/version.txt"
           "$packaged_binary" --help >/dev/null
+          test -s "$scratch/$package_dir/bundles/hya-todo-tools.hyabundle"
           bun_adapter="$scratch/$package_dir/lib/hya/bun-adapter"
           for path in package.json bun.lock src/main.ts; do
             test -e "$bun_adapter/$path"
@@ -166,10 +173,11 @@ jobs:
           fi
           tar -tzf "dist/$ARCHIVE" > "$scratch/archive.txt"
           grep -Fx "$package_dir/bin/hya-backend" "$scratch/archive.txt"
-          grep -Fx "$package_dir/lib/hya/compat-adapter/package.json" "$scratch/archive.txt"
-          grep -Fx "$package_dir/lib/hya/compat-adapter/bun.lock" "$scratch/archive.txt"
-          grep -Fx "$package_dir/lib/hya/compat-adapter/src/main.ts" "$scratch/archive.txt"
-          grep -F "$package_dir/lib/hya/compat-adapter/node_modules/" "$scratch/archive.txt" >/dev/null
+          grep -Fx "$package_dir/lib/hya/bun-adapter/package.json" "$scratch/archive.txt"
+          grep -Fx "$package_dir/lib/hya/bun-adapter/bun.lock" "$scratch/archive.txt"
+          grep -Fx "$package_dir/lib/hya/bun-adapter/src/main.ts" "$scratch/archive.txt"
+          grep -F "$package_dir/lib/hya/bun-adapter/node_modules/" "$scratch/archive.txt" >/dev/null
+          grep -Fx "$package_dir/bundles/hya-todo-tools.hyabundle" "$scratch/archive.txt"
           grep -Fx "$package_dir/examples/hya-argus-example.hyabundle" "$scratch/archive.txt"
           if grep -F "$package_dir/bundles/examples/argus-example" "$scratch/archive.txt"; then
             echo "release archive must not contain the example source-tree prefix" >&2

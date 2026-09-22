@@ -30,6 +30,7 @@ tokenizers = { workspace = true }
 hf-hub = { workspace = true }
 
 [dev-dependencies]
+hya-todo-tools = { workspace = true }
 sqlx = { workspace = true }
 
 [build-dependencies]

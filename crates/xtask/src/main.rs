@@ -32,13 +32,14 @@ fn main() {
     let result = match task.as_deref() {
         Some("package-bundle") => package_bundle::run(args.collect()),
         Some("package-native-tool-bundle") => package_bundle::run_native(args.collect()),
+        Some("package-native-tool-library") => package_bundle::run_native_library(args.collect()),
         Some("release-rehearsal") => release_rehearsal::run(args.collect()),
         Some("startup-bench") => startup_bench::run(args.collect()),
         Some("matrix-check") => matrix_check::run(args.collect()),
         Some("gen-api") => gen_api::run(args.collect()),
         _ => {
             eprintln!(
-                "usage: cargo xtask <startup-bench|matrix-check|package-bundle|package-native-tool-bundle|release-rehearsal|gen-api>"
+                "usage: cargo xtask <startup-bench|matrix-check|package-bundle|package-native-tool-bundle|package-native-tool-library|release-rehearsal|gen-api>"
             );
             Ok(())
         }

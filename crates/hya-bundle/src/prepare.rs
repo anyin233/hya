@@ -472,7 +472,9 @@ fn validate_native_binary_bindings(
         let binaries = bundle
             .extensions()
             .iter()
-            .filter(|resource| resource.binary_base64.is_some())
+            .filter(|resource| {
+                resource.binary_base64.is_some() && !resource.stable_id.contains("/library/")
+            })
             .collect::<Vec<_>>();
         if binaries.is_empty() {
             continue;
@@ -1503,12 +1505,16 @@ fn prepare_resource_sets(
         }
     }
     let mut executable_extensions = extensions.js;
-    let native_binaries = prepare_binary_resources(bundle_id, files, extensions.rust)?;
+    let native_binaries = prepare_binary_resources(bundle_id, files, extensions.rust, "extension")?;
+    let native_libraries =
+        prepare_binary_resources(bundle_id, files, extensions.libraries, "library")?;
+    let library_backed = !native_libraries.is_empty();
     if process_backed {
         executable_extensions.extend(extensions.files);
         let mut extensions =
             prepare_resources(bundle_id, "extension", files, executable_extensions)?;
         extensions.extend(native_binaries);
+        extensions.extend(native_libraries);
         extensions.sort_by(|left, right| left.stable_id.cmp(&right.stable_id));
         let mut names = BTreeSet::new();
         for extension in &extensions {
@@ -1537,6 +1543,13 @@ fn prepare_resource_sets(
         .map(|resource| resource.source_path.as_str())
         .collect::<BTreeSet<_>>();
     for resource in tools.iter().chain(&hooks) {
+        if library_backed
+            && tools
+                .iter()
+                .any(|tool| tool.stable_id == resource.stable_id)
+        {
+            continue;
+        }
         match extension_path_counts
             .get(resource.source_path.as_str())
             .copied()
@@ -1578,7 +1591,19 @@ fn prepare_resource_sets(
         }
         extensions.push(resource);
     }
+    extensions.extend(native_libraries);
     extensions.sort_by(|left, right| left.stable_id.cmp(&right.stable_id));
+    let mut names = BTreeSet::new();
+    for extension in &extensions {
+        for name in std::iter::once(&extension.local_id).chain(&extension.aliases) {
+            if !names.insert(name.as_str()) {
+                return Err(BundleError::NamespaceCollision {
+                    bundle_id: bundle_id.to_string(),
+                    name: name.clone(),
+                });
+            }
+        }
+    }
     Ok((tools, skills, mcp, hooks, extensions))
 }
 
@@ -1998,6 +2023,7 @@ fn prepare_binary_resources(
     bundle_id: &str,
     files: &BTreeMap<String, Vec<u8>>,
     resources: Vec<SourceResource>,
+    kind: &str,
 ) -> Result<Vec<PreparedResource>, BundleError> {
     use base64::Engine as _;
     let mut prepared = Vec::with_capacity(resources.len());
@@ -2017,7 +2043,7 @@ fn prepare_binary_resources(
                 path: path.clone(),
             })?;
         prepared.push(PreparedResource {
-            stable_id: format!("bundle:{bundle_id}/extension/{}", resource.id),
+            stable_id: format!("bundle:{bundle_id}/{kind}/{}", resource.id),
             local_id: resource.id,
             source_path: path,
             digest: digest_bytes(bytes),

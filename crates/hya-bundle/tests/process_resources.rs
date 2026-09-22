@@ -97,3 +97,30 @@ resources:
     let inspected = inspect_public_package(&package).expect("inspect native executable package");
     assert_eq!(inspected.bytes(), prepared.bytes());
 }
+
+#[test]
+fn native_library_bundle_packages_raw_bytes_without_a_process() {
+    let library = vec![0xcf, 0xfa, 0xed, 0xfe, 0, 0xff, 0x80];
+    let source = BundleSource::new(
+        "native-library",
+        vec![
+            SourceFile::new(
+                "bundle.yaml",
+                br#"kind: Plugin
+identity: { id: hya/todo-tools, version: 1.0.0, publisher: hya }
+extensions:
+  libraries: [{ id: runtime, path: native/libhya_todo_tools.dylib }]
+"#,
+            ),
+            SourceFile::new("native/libhya_todo_tools.dylib", library.clone()),
+        ],
+    );
+    let prepared = prepare_package(source.clone()).expect("prepare native library");
+    assert!(prepared.process_extensions().is_empty());
+    let resource = &prepared.bundles()[0].extensions()[0];
+    assert!(resource.stable_id.contains("/library/runtime"));
+    assert_eq!(resource.source_bytes().expect("decode library"), library);
+    let package = write_public_package(&source).expect("package native library");
+    let inspected = inspect_public_package(&package).expect("inspect native library");
+    assert_eq!(inspected.bytes(), prepared.bytes());
+}
