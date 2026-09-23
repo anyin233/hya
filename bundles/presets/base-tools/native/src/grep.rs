@@ -112,7 +112,7 @@ impl Tool for GrepTool {
                 "properties": {
                     "pattern": {
                         "type": "string",
-                        "description": "Search pattern (regex unless literal is true)"
+                        "description": "Search pattern (regex unless literal is true). Uses Rust `regex` crate syntax: no look-around ((?=...), (?!...), (?<=...), (?<!...)) and no backreferences (\\1) are supported. Escape literal ( ) [ ] { } . + * ? | ^ $ with a backslash, or set literal: true to search for the exact text instead."
                     },
                     "path": {
                         "type": "string",
@@ -171,7 +171,7 @@ impl Tool for GrepTool {
         let matcher = RegexBuilder::new(&expression)
             .case_insensitive(ignore_case)
             .build()
-            .map_err(|error| ToolError::Input(error.to_string()))?;
+            .map_err(|error| regex_input_error(literal, &error))?;
 
         let workdir = normalize(&absolutize(&ctx.workdir));
         let root = input
@@ -432,6 +432,24 @@ fn validate_limit(limit: Option<usize>) -> Result<usize, ToolError> {
         )));
     }
     Ok(limit)
+}
+
+/// Wrap a Rust `regex` compile failure with an actionable dialect hint.
+///
+/// The underlying `regex` crate error already names the offending construct
+/// (with a `^^^` pointer); this appends the fix a model is most likely to
+/// need — hya's grep does not support look-around or backreferences — and,
+/// when the caller was not already using `literal`, points at that escape
+/// hatch for exact-text searches.
+fn regex_input_error(literal: bool, error: &regex::Error) -> ToolError {
+    if literal {
+        return ToolError::Input(error.to_string());
+    }
+    ToolError::Input(format!(
+        "{error}\nhya's grep uses Rust `regex` crate syntax: look-around ((?=...), (?!...), \
+(?<=...), (?<!...)) and backreferences (\\1) are not supported. Escape literal ( ) [ ] {{ }} . \
++ * ? | ^ $ with a backslash, or set \"literal\": true to search for the exact text instead."
+    ))
 }
 
 /// Reject a caller-provided filename glob that exceeds the native matcher bound.
@@ -1388,6 +1406,32 @@ fn bracket_class_matches(pattern: &[u8], start: usize, value: u8) -> Option<(boo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lookaround_regex_error_names_construct_and_suggests_literal() {
+        let pattern = r"foo(?!bar)";
+        let Err(compile_error) = RegexBuilder::new(pattern).build() else {
+            panic!("expected pattern with lookahead to fail to compile");
+        };
+        let message = regex_input_error(false, &compile_error).to_string();
+        assert!(message.contains("look-around"), "{message}");
+        assert!(message.contains("literal"), "{message}");
+    }
+
+    #[test]
+    fn literal_mode_regex_error_omits_dialect_hint() {
+        // The base `regex` crate diagnostic itself already names "look-around"
+        // for this construct; what literal mode must omit is hya's own added
+        // dialect guidance and its "set literal: true" suggestion (redundant
+        // when the caller already used literal: true).
+        let pattern = r"foo(?!bar)";
+        let Err(compile_error) = RegexBuilder::new(pattern).build() else {
+            panic!("expected pattern with lookahead to fail to compile");
+        };
+        let message = regex_input_error(true, &compile_error).to_string();
+        assert!(!message.contains("hya's grep"), "{message}");
+        assert!(!message.contains("backreferences"), "{message}");
+    }
 
     #[test]
     fn globstar_matches_root_and_nested_files() {

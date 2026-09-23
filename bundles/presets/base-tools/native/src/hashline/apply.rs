@@ -16,7 +16,7 @@ use super::HashlineError;
 use super::hash::{
     Anchor, DEFAULT_HASH_LENGTH, NIBBLE_STR, bare_hash_prefix, compute_changed_line_range,
     compute_hash_from_context, compute_line_hash, hint_has_signal, hint_matches_line,
-    is_fuzzy_equivalent_line, normalize_line_endings, parse_anchor,
+    is_fuzzy_equivalent_line, normalize_fuzzy_line, normalize_line_endings, parse_anchor,
 };
 
 const CANDIDATE_TOTAL_LIMIT: usize = 8;
@@ -233,17 +233,34 @@ fn parse_edit_item(value: &Value, index: usize) -> Result<HashlineEdit, Hashline
         (None, None) => {
             return Err(error(
                 "E_BAD_OP",
-                format!("{context} requires an \"op\" string."),
+                format!(
+                    "{context} requires an \"op\" string. Valid values: \"replace\" (pos/end anchors + lines), \"append\"/\"prepend\" (optional pos anchor + lines), or \"replace_text\" (oldText + newText)."
+                ),
             ));
         }
     };
 
     match op.as_str() {
         "replace" => {
-            if pair.is_some() {
+            if let Some((old_text, new_text)) = pair.clone() {
+                let has_hashline_fields = object.contains_key("pos")
+                    || object.contains_key("end")
+                    || object.contains_key("lines");
+                if !has_hashline_fields {
+                    // Leniency: op "replace" with only oldText/newText and no
+                    // pos/end/lines is unambiguous replace_text intent under the
+                    // wrong op name — the "replace" shape cannot otherwise succeed
+                    // without pos+lines, so this alias never masks a real error.
+                    return Ok(HashlineEdit::ReplaceText { old_text, new_text });
+                }
                 return Err(error(
                     "E_BAD_OP",
-                    format!("{context} with op \"replace\" does not support oldText/newText."),
+                    format!(
+                        "{context} with op \"replace\" does not support oldText/newText. \
+op \"replace\" takes a \"pos\" (and optional \"end\") hashline anchor plus \"lines\", e.g. \
+{{\"op\":\"replace\",\"pos\":\"12#A1B2\",\"lines\":[\"new line\"]}}; for literal text \
+replacement use op \"replace_text\" with \"oldText\"/\"newText\" instead."
+                    ),
                 ));
             }
             let pos = optional_string(object, "pos", &context)?.ok_or_else(|| {
@@ -273,13 +290,19 @@ fn parse_edit_item(value: &Value, index: usize) -> Result<HashlineEdit, Hashline
             if pair.is_some() {
                 return Err(error(
                     "E_BAD_OP",
-                    format!("{context} with op \"{op}\" does not support oldText/newText."),
+                    format!(
+                        "{context} with op \"{op}\" does not support oldText/newText. \
+op \"{op}\" takes an optional \"pos\" anchor plus \"lines\" to insert; for literal text \
+replacement use op \"replace_text\" with \"oldText\"/\"newText\" instead."
+                    ),
                 ));
             }
             if object.contains_key("end") {
                 return Err(error(
                     "E_BAD_OP",
-                    format!("{context} with op \"{op}\" does not support \"end\"."),
+                    format!(
+                        "{context} with op \"{op}\" does not support \"end\" (only \"replace\" takes a range)."
+                    ),
                 ));
             }
             let pos = optional_string(object, "pos", &context)?;
@@ -307,13 +330,18 @@ fn parse_edit_item(value: &Value, index: usize) -> Result<HashlineEdit, Hashline
             {
                 return Err(error(
                     "E_BAD_OP",
-                    format!("{context} with op \"replace_text\" only supports oldText/newText."),
+                    format!(
+                        "{context} with op \"replace_text\" only supports oldText/newText, not \
+pos/end/lines. For anchor-based line replacement, use op \"replace\" with \"pos\"/\"end\"/\"lines\" instead."
+                    ),
                 ));
             }
             let Some((old_text, new_text)) = pair else {
                 return Err(error(
                     "E_BAD_OP",
-                    format!("{context} with op \"replace_text\" requires oldText/newText."),
+                    format!(
+                        "{context} with op \"replace_text\" requires both \"oldText\" and \"newText\"."
+                    ),
                 ));
             };
             Ok(HashlineEdit::ReplaceText { old_text, new_text })
@@ -1007,6 +1035,81 @@ fn replace_text_location(old_text: &str) -> String {
     format!("replace_text of {} characters", old_text.chars().count())
 }
 
+/// Return the 1-based line number containing a valid UTF-8 byte offset.
+fn line_number_at(content: &str, byte_offset: usize) -> usize {
+    let bounded = byte_offset.min(content.len());
+    content
+        .get(..bounded)
+        .map_or(1, |prefix| prefix.matches('\n').count().saturating_add(1))
+}
+
+/// Find lines whose normalized text signals a likely near-miss for `old_text`,
+/// used to point a failed `replace_text` at the probable cause (whitespace,
+/// quoting, or line-ending drift) instead of a bare "no match" message.
+///
+/// Uses the longest trimmed line of `old_text` as the most distinctive anchor
+/// and reports at most [`CANDIDATE_PER_ANCHOR_LIMIT`] content-matched lines.
+fn near_miss_candidate_lines(content: &str, old_text: &str) -> Vec<usize> {
+    let Some(anchor) = old_text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .max_by_key(|line| line.len())
+    else {
+        return Vec::new();
+    };
+    let normalized_anchor = normalize_fuzzy_line(anchor);
+    if normalized_anchor.is_empty() {
+        return Vec::new();
+    }
+    let mut candidates = Vec::new();
+    for (index, line) in content.lines().enumerate() {
+        let normalized_line = normalize_fuzzy_line(line.trim());
+        if normalized_line == normalized_anchor || normalized_line.contains(&normalized_anchor) {
+            candidates.push(index.saturating_add(1));
+            if candidates.len() >= CANDIDATE_PER_ANCHOR_LIMIT {
+                break;
+            }
+        }
+    }
+    candidates
+}
+
+/// Build the `E_NO_MATCH` diagnostic, adding content-matched candidate line
+/// hints when a whitespace/quoting near-miss is found.
+fn no_exact_match_error(content: &str, old_text: &str) -> HashlineError {
+    const BASE: &str = "replace_text found no exact unique match in the current file.";
+    let candidates = near_miss_candidate_lines(content, old_text);
+    if candidates.is_empty() {
+        return HashlineError::new(
+            "E_NO_MATCH",
+            format!(
+                "{BASE} oldText must match the file byte-for-byte, including whitespace, \
+quoting, and line endings. Re-read the file and copy oldText exactly, or use op \"replace\" \
+with a fresh pos/end anchor instead."
+            ),
+        );
+    }
+    let lines = candidates
+        .iter()
+        .map(usize::to_string)
+        .collect::<Vec<_>>()
+        .join(", ");
+    let hints = candidates
+        .iter()
+        .map(|line| format!("line {line}: similar content after trimming whitespace"))
+        .collect::<Vec<_>>();
+    HashlineError::with_hints(
+        "E_NO_MATCH",
+        format!(
+            "{BASE} A near-match (differs only in whitespace/quoting) was found at line(s) \
+{lines} — oldText likely has different indentation, spacing, or quoting than the file. \
+Re-read the file and copy oldText exactly."
+        ),
+        hints,
+    )
+}
+
 /// Find one exact non-empty text match and reject overlap/multiplicity.
 fn find_exact_unique_text_match(
     content: &str,
@@ -1019,16 +1122,10 @@ fn find_exact_unique_text_match(
         ));
     }
     if old_text.len() > content.len() {
-        return Err(error(
-            "E_NO_MATCH",
-            "replace_text found no exact unique match in the current file.",
-        ));
+        return Err(no_exact_match_error(content, old_text));
     }
     let Some(first_relative) = content.find(old_text) else {
-        return Err(error(
-            "E_NO_MATCH",
-            "replace_text found no exact unique match in the current file.",
-        ));
+        return Err(no_exact_match_error(content, old_text));
     };
     let first = first_relative;
     let next_character_len = content[first..].chars().next().map_or(0, char::len_utf8);
@@ -1037,15 +1134,24 @@ fn find_exact_unique_text_match(
         && let Some(second_relative) = content[from..].find(old_text)
     {
         let second = from.saturating_add(second_relative);
+        let first_line = line_number_at(content, first);
+        let second_line = line_number_at(content, second);
         if second.saturating_sub(first) < old_text.len() {
             return Err(error(
                 "E_MULTI_MATCH",
-                "replace_text found overlapping exact matches; re-read and use hashline edits.",
+                format!(
+                    "replace_text found overlapping exact matches at line {first_line} and \
+line {second_line}; re-read and use hashline edits (op \"replace\" with pos/end anchors) to target one location."
+                ),
             ));
         }
         return Err(error(
             "E_MULTI_MATCH",
-            "replace_text found multiple exact matches in the current file. Re-read and use hashline edits.",
+            format!(
+                "replace_text found multiple exact matches in the current file, at least at \
+line {first_line} and line {second_line}. Make oldText longer/more specific to make it unique, \
+or re-read and use hashline edits (op \"replace\" with pos/end anchors) to target one location."
+            ),
         ));
     }
     Ok((first, first.saturating_add(old_text.len())))
@@ -1628,6 +1734,98 @@ mod tests {
             let error = apply_hashline_edits("alpha", &parsed).unwrap_err();
             assert_eq!(error.code, "E_STALE_ANCHOR");
         }
+    }
+
+    #[test]
+    fn replace_op_with_text_pair_and_no_hashline_fields_aliases_to_replace_text() {
+        let parsed = request(json!({
+            "path": "x",
+            "edits": [{"op": "replace", "oldText": "beta", "newText": "BETA"}]
+        }));
+        assert!(matches!(
+            &parsed.edits[0],
+            HashlineEdit::ReplaceText { old_text, new_text }
+            if old_text == "beta" && new_text == "BETA"
+        ));
+        let result = apply_hashline_edits("alpha\nbeta\ngamma\n", &parsed)
+            .unwrap_or_else(|error| panic!("{}", error.diagnostic()));
+        assert_eq!(result.content, "alpha\nBETA\ngamma\n");
+    }
+
+    #[test]
+    fn replace_op_with_text_pair_and_pos_still_rejected_with_actionable_message() {
+        let error = parse_edit_request(json!({
+            "path": "x",
+            "edits": [{"op": "replace", "pos": "1#AA", "oldText": "a", "newText": "b"}]
+        }))
+        .unwrap_err();
+        assert_eq!(error.code, "E_BAD_OP");
+        assert!(error.message.contains("replace_text"), "{}", error.message);
+        assert!(error.message.contains("oldText"), "{}", error.message);
+    }
+
+    #[test]
+    fn missing_op_lists_valid_values() {
+        let error = parse_edit_request(json!({
+            "path": "x",
+            "edits": [{"lines": ["x"]}]
+        }))
+        .unwrap_err();
+        assert_eq!(error.code, "E_BAD_OP");
+        assert!(error.message.contains("replace_text"), "{}", error.message);
+        assert!(error.message.contains("append"), "{}", error.message);
+    }
+
+    #[test]
+    fn replace_text_only_supports_old_new_text_message_points_to_replace_op() {
+        let error = parse_edit_request(json!({
+            "path": "x",
+            "edits": [{"op": "replace_text", "pos": "1#AA", "oldText": "a", "newText": "b"}]
+        }))
+        .unwrap_err();
+        assert_eq!(error.code, "E_BAD_OP");
+        assert!(error.message.contains("\"replace\""), "{}", error.message);
+    }
+
+    #[test]
+    fn no_match_reports_near_miss_candidate_line_and_hints() {
+        let parsed = request(json!({
+            "path": "x",
+            "edits": [{
+                "op": "replace_text",
+                "oldText": "        def foo():\n            pass",
+                "newText": "        def foo():\n            return 1"
+            }]
+        }));
+        let error =
+            apply_hashline_edits("class A:\n    def foo():\n        pass\n", &parsed).unwrap_err();
+        assert_eq!(error.code, "E_NO_MATCH");
+        assert!(error.message.contains("line(s) 2"), "{}", error.message);
+        assert!(!error.hints.is_empty());
+    }
+
+    #[test]
+    fn no_match_without_near_miss_suggests_re_read() {
+        let parsed = request(json!({
+            "path": "x",
+            "edits": [{"op": "replace_text", "oldText": "totally absent text", "newText": "y"}]
+        }));
+        let error = apply_hashline_edits("alpha\nbeta\n", &parsed).unwrap_err();
+        assert_eq!(error.code, "E_NO_MATCH");
+        assert!(error.message.contains("Re-read"), "{}", error.message);
+        assert!(error.hints.is_empty());
+    }
+
+    #[test]
+    fn multi_match_reports_line_numbers() {
+        let parsed = request(json!({
+            "path": "x",
+            "edits": [{"op": "replace_text", "oldText": "dup", "newText": "y"}]
+        }));
+        let error = apply_hashline_edits("dup\nother\ndup\n", &parsed).unwrap_err();
+        assert_eq!(error.code, "E_MULTI_MATCH");
+        assert!(error.message.contains("line 1"), "{}", error.message);
+        assert!(error.message.contains("line 3"), "{}", error.message);
     }
 
     #[test]

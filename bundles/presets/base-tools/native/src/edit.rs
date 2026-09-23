@@ -44,54 +44,65 @@ impl Tool for EditTool {
     fn schema(&self) -> ToolSchema {
         ToolSchema {
             name: ToolName::new("edit"),
-            description: "Apply strict hashline edits to a file.".to_string(),
+            description: "Apply strict hashline edits to a file. Each edit uses exactly one op: \
+\"replace\" (pos/end anchors + lines) to replace anchored line(s); \"append\"/\"prepend\" \
+(optional pos anchor + lines) to insert lines; or \"replace_text\" (oldText + newText) to \
+substitute one exact, unique occurrence of literal text. Never mix oldText/newText with \
+pos/end/lines in the same edit. Anchors (\"LINE#HASH\") come from a prior read/grep/edit result \
+against the current file — re-read the file if an anchor is rejected as stale."
+                .to_string(),
             input_schema: json!({
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
-                    "path": { "type": "string" },
+                    "path": { "type": "string", "description": "File to edit, relative to the session workdir unless absolute." },
                     "edits": {
                         "type": "array",
+                        "description": "One or more edit operations applied together. Pick exactly one op per edit; do not combine fields from different ops.",
                         "items": {
                             "anyOf": [
                                 {
                                     "type": "object",
                                     "additionalProperties": false,
+                                    "description": "Replace the line(s) at anchor \"pos\" (through optional \"end\", inclusive) with \"lines\". Anchors must be freshly read. Example: {\"op\":\"replace\",\"pos\":\"12#A1B2\",\"lines\":[\"new line\"]}. For exact literal-text substitution instead, use op \"replace_text\" with oldText/newText.",
                                     "properties": {
                                         "op": { "type": "string", "enum": ["replace"] },
-                                        "pos": { "type": "string" },
-                                        "end": { "type": "string" },
-                                        "lines": { "type": "array", "items": { "type": "string" } }
+                                        "pos": { "type": "string", "description": "Start anchor \"LINE#HASH\" from a prior read/grep/edit output." },
+                                        "end": { "type": "string", "description": "Optional inclusive end anchor \"LINE#HASH\" for a multi-line range." },
+                                        "lines": { "type": "array", "items": { "type": "string" }, "description": "Literal replacement lines (file content, not LINE#HASH-prefixed display text). Empty array deletes the range." }
                                     },
                                     "required": ["op", "pos", "lines"]
                                 },
                                 {
                                     "type": "object",
                                     "additionalProperties": false,
+                                    "description": "Insert \"lines\" after anchor \"pos\" (end of file if omitted). Does not take oldText/newText or end. Example: {\"op\":\"append\",\"lines\":[\"new line\"]}.",
                                     "properties": {
                                         "op": { "type": "string", "enum": ["append"] },
-                                        "pos": { "type": "string" },
-                                        "lines": { "type": "array", "items": { "type": "string" } }
+                                        "pos": { "type": "string", "description": "Optional anchor \"LINE#HASH\" to insert after; omit to append at end of file." },
+                                        "lines": { "type": "array", "items": { "type": "string" }, "description": "Literal lines to insert (file content, not LINE#HASH-prefixed display text)." }
                                     },
                                     "required": ["op", "lines"]
                                 },
                                 {
                                     "type": "object",
                                     "additionalProperties": false,
+                                    "description": "Insert \"lines\" before anchor \"pos\" (start of file if omitted). Does not take oldText/newText or end. Example: {\"op\":\"prepend\",\"lines\":[\"new line\"]}.",
                                     "properties": {
                                         "op": { "type": "string", "enum": ["prepend"] },
-                                        "pos": { "type": "string" },
-                                        "lines": { "type": "array", "items": { "type": "string" } }
+                                        "pos": { "type": "string", "description": "Optional anchor \"LINE#HASH\" to insert before; omit to prepend at start of file." },
+                                        "lines": { "type": "array", "items": { "type": "string" }, "description": "Literal lines to insert (file content, not LINE#HASH-prefixed display text)." }
                                     },
                                     "required": ["op", "lines"]
                                 },
                                 {
                                     "type": "object",
                                     "additionalProperties": false,
+                                    "description": "Replace one exact, unique occurrence of literal \"oldText\" with \"newText\". Does not take pos/end/lines. oldText must match the file byte-for-byte, including whitespace; if it might not, re-read the file first. Example: {\"op\":\"replace_text\",\"oldText\":\"foo = 1\",\"newText\":\"foo = 2\"}.",
                                     "properties": {
                                         "op": { "type": "string", "enum": ["replace_text"] },
-                                        "oldText": { "type": "string" },
-                                        "newText": { "type": "string" }
+                                        "oldText": { "type": "string", "description": "Exact literal text to find; must be unique in the file." },
+                                        "newText": { "type": "string", "description": "Literal text that replaces oldText." }
                                     },
                                     "required": ["op", "oldText", "newText"]
                                 }

@@ -279,6 +279,20 @@ impl Tool for GlobTool {
 struct LsInput {
     path: Option<String>,
 }
+
+/// Resolve the `ls` target directory relative to the session workdir.
+///
+/// Leniency: an empty string `path` is treated the same as an omitted one
+/// (the working directory) — models sometimes send `""` instead of leaving
+/// the optional field out, and there is no directory an empty path could
+/// unambiguously mean otherwise.
+fn resolve_ls_dir(workdir: &Path, path: Option<String>) -> PathBuf {
+    let raw_path = path.filter(|path| !path.is_empty());
+    raw_path
+        .as_deref()
+        .map_or_else(|| workdir.to_path_buf(), |path| resolve_file(workdir, path))
+}
+
 /// Lists immediate directory entries (name, type, size) without recursion.
 pub struct LsTool;
 #[async_trait]
@@ -290,17 +304,14 @@ impl Tool for LsTool {
         obj_schema(
             "ls",
             "List the immediate entries of a directory (name, type, size).",
-            json!({"path": {"type": "string"}}),
+            json!({"path": {"type": "string", "description": "Directory to list, relative to the session workdir unless absolute. Omit, or pass an empty string, to use the working directory."}}),
             &[],
         )
     }
     async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError> {
         let input: LsInput =
             serde_json::from_value(input).map_err(|e| ToolError::Input(e.to_string()))?;
-        let dir = input
-            .path
-            .clone()
-            .map_or_else(|| ctx.workdir.clone(), PathBuf::from);
+        let dir = resolve_ls_dir(&ctx.workdir, input.path);
         ctx.permission
             .assert(
                 Action::Read,
@@ -308,7 +319,9 @@ impl Tool for LsTool {
             )
             .await?;
         let mut rows: Vec<(String, &'static str, u64)> = Vec::new();
-        let mut rd = tokio::fs::read_dir(&dir).await?;
+        let mut rd = tokio::fs::read_dir(&dir).await.map_err(|error| {
+            ToolError::Other(format!("ls failed for {}: {error}", display_path(&dir)))
+        })?;
         while let Some(entry) = rd.next_entry().await? {
             let meta = entry.metadata().await?;
             let kind = if meta.is_dir() {
@@ -390,5 +403,35 @@ impl Tool for FindTool {
             .map(|(path, size)| json!({ "path": path, "size": size }))
             .collect();
         Ok(json!({ "results": results }))
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ls_empty_path_resolves_to_workdir_same_as_omitted() {
+        let workdir = PathBuf::from("/work/dir");
+        assert_eq!(
+            resolve_ls_dir(&workdir, Some(String::new())),
+            resolve_ls_dir(&workdir, None)
+        );
+        assert_eq!(resolve_ls_dir(&workdir, None), workdir);
+    }
+
+    #[test]
+    fn ls_relative_path_resolves_against_workdir_not_process_cwd() {
+        let workdir = PathBuf::from("/work/dir");
+        let resolved = resolve_ls_dir(&workdir, Some("sub".to_string()));
+        assert_eq!(resolved, PathBuf::from("/work/dir/sub"));
+    }
+
+    #[test]
+    fn ls_absolute_path_is_used_verbatim() {
+        let workdir = PathBuf::from("/work/dir");
+        let resolved = resolve_ls_dir(&workdir, Some("/elsewhere".to_string()));
+        assert_eq!(resolved, PathBuf::from("/elsewhere"));
     }
 }
