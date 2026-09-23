@@ -261,6 +261,9 @@ pub struct AgentResourcePolicy {
     bundle_id: Option<String>,
     plane: AgentToolPlane,
     resource_view: ResourceView,
+    /// Whether the agent may spawn anyone (a non-empty effective spawn set);
+    /// decides the `task`/`archive` coordination tools.
+    spawn_rights: bool,
     selected_bundle_tool_ids: Arc<Vec<String>>,
     selected_bundle_skill_ids: Arc<Vec<String>>,
     canonical_hook_ids: Arc<[String]>,
@@ -1922,10 +1925,18 @@ impl TurnBinding {
                 (agent.resource_view.clone(), agent.hook_refs.clone())
             }
         };
+        // Spawn rights are the effective (installed) spawn set: a built-in with
+        // the ordinary scope, or a bundle `can_spawn` naming an installed agent.
+        let spawn_rights = self
+            .snapshot
+            .catalog
+            .spawnable(stable_id)
+            .is_ok_and(|agents| !agents.is_empty());
         let mut policy = AgentResourcePolicy {
             bundle_id,
             plane,
             resource_view,
+            spawn_rights,
             selected_bundle_tool_ids: Arc::new(Vec::new()),
             selected_bundle_skill_ids: Arc::new(Vec::new()),
             canonical_hook_ids: Arc::from(hook_refs),
@@ -2397,7 +2408,32 @@ impl TurnBinding {
             })
             .collect::<Result<Vec<_>, BundleError>>()?;
 
-        let tools = self.with_scheme_dispatch(tools);
+        let mut tools = self.with_scheme_dispatch(tools);
+        let mut schemas = schemas;
+        // Coordination: with the channel family loaded, every agent can read
+        // its mail. A view without its own `read` gets a mail-only `read`
+        // (never file access); injected after scheme dispatch so no external
+        // scheme can reach through it.
+        if partitions.tool.contains_key(&harness_id(
+            "tool",
+            crate::coordination::CHANNEL_MARKER_TOOL,
+        )) && !selected.tool.contains(&harness_id("tool", "read"))
+            && !tools.contains_key("read")
+            && let Some(ResourceCandidate::HarnessTool { resolved, .. }) =
+                partitions.tool.get(&harness_id("tool", "read"))
+        {
+            let channel_read: Arc<dyn Tool> = Arc::new(crate::coordination::ChannelReadTool::new(
+                Arc::clone(&resolved.tool),
+            ));
+            schemas.push(channel_read.schema());
+            tools.insert(
+                "read".to_string(),
+                ResolvedTool {
+                    tool: channel_read,
+                    permission: resolved.permission,
+                },
+            );
+        }
 
         let compiled = Arc::new(CompiledResourceView {
             tools,
@@ -3368,10 +3404,26 @@ fn select_candidates_globally(
             .collect();
         selected.mcp = selected.mcp.intersection(&allowed.mcp).cloned().collect();
     }
+    // Coordination tools are harness-owned: `allow` never narrows them away.
+    let coordination = coordination_tool_ids(policy, partitions, &selected);
+    selected.tool.extend(coordination);
     for reference in &view.deny {
         let hit = resolve_global_reference(policy, reference, partitions)?;
         match hit.kind {
             "tool" => {
+                if let Some(name) = crate::coordination::UNDENIABLE_TOOLS
+                    .iter()
+                    .find(|name| hit.canonical == harness_id("tool", name))
+                {
+                    return Err(BundleError::InvalidManifest {
+                        source_name: bundle_id.to_string(),
+                        detail: format!(
+                            "resource_view.deny `{reference}` removes the coordination tool \
+                             `{name}`; a subagent without it can never finish (root agents \
+                             never see it anyway)"
+                        ),
+                    });
+                }
                 selected.tool.remove(&hit.canonical);
             }
             "skill" => {
@@ -3389,7 +3441,50 @@ fn select_candidates_globally(
             }
         }
     }
+    // `task`/`archive` exist only for agents that can spawn someone, however
+    // the view reached them (default view or an explicit allow).
+    if !policy.spawn_rights {
+        for name in crate::coordination::SPAWN_TOOLS {
+            selected.tool.remove(&harness_id("tool", name));
+        }
+    }
     Ok(selected)
+}
+
+/// Harness coordination tool ids to inject into `policy`'s view (see
+/// [`crate::coordination`]): each one present in the candidate pool, minus the
+/// spawn tools without spawn rights, minus any whose bare name the view already
+/// gives to one of its own selected resources or aliases (the bundle's own
+/// resource keeps the name; nothing collides).
+fn coordination_tool_ids(
+    policy: &AgentResourcePolicy,
+    partitions: &CandidatePartitions,
+    selected: &SelectedIds,
+) -> Vec<String> {
+    crate::coordination::COORDINATION_TOOLS
+        .iter()
+        .filter(|name| policy.spawn_rights || !crate::coordination::SPAWN_TOOLS.contains(name))
+        .filter_map(|name| {
+            let id = harness_id("tool", name);
+            if !partitions.tool.contains_key(&id) || selected.tool.contains(&id) {
+                return None;
+            }
+            let claimed_by_view = policy.resource_view.aliases.contains_key(*name)
+                || [
+                    (&partitions.tool, &selected.tool),
+                    (&partitions.mcp, &selected.mcp),
+                ]
+                .into_iter()
+                .flat_map(|(candidates, chosen)| {
+                    chosen.iter().filter_map(|chosen| candidates.get(chosen))
+                })
+                .any(|candidate| {
+                    candidate.short_name() == *name
+                        || candidate.aliases().iter().any(|alias| alias == name)
+                });
+            (!claimed_by_view).then_some(id)
+        })
+        .collect()
 }
 
 struct ResolvedReference {
@@ -4312,12 +4407,8 @@ agent:
             ToolPermission::Mcp
         );
         assert_eq!(
-            compiled
-                .tool_schemas()
-                .iter()
-                .map(|schema| schema.name.as_str())
-                .collect::<Vec<_>>(),
-            vec!["echo__ping"]
+            domain_schema_names(&compiled),
+            BTreeSet::from(["echo__ping".to_string()])
         );
         let root = binding
             .compile_agent_resources(&binding.agent_resource_policy("build").unwrap())
@@ -5864,11 +5955,7 @@ agent:
             .agent_resource_policy_on_plane("sd-agent", AgentToolPlane::Full)
             .unwrap();
         let compiled = binding.compile_agent_resources(&policy).unwrap();
-        let schema_names = compiled
-            .tool_schemas()
-            .into_iter()
-            .map(|schema| schema.name.as_str().to_string())
-            .collect::<BTreeSet<_>>();
+        let schema_names = domain_schema_names(&compiled);
         assert_eq!(
             schema_names,
             BTreeSet::from(["reader".to_string(), "write".to_string()])
@@ -5924,8 +6011,8 @@ agent:
         );
         let compiled = binding.compile_agent_resources(&policy).unwrap();
         assert!(
-            compiled.public_tool_names().is_empty(),
-            "an allow list of only bundle-local resources admits no harness tool"
+            domain_tool_names(&compiled).is_empty(),
+            "an allow list of only bundle-local resources admits no harness domain tool"
         );
         assert!(
             compiled.resolve_tool("skill").is_none(),
@@ -5936,8 +6023,12 @@ agent:
             "dispatch must not fall back to the live registry"
         );
         assert!(
-            compiled.resolve_tool("read").is_none(),
+            compiled.resolve_tool("bash").is_none(),
             "dispatch must not fall back to builtins outside the compiled view"
+        );
+        assert!(
+            has_mail_only_read(&compiled),
+            "without its own read the view gets only the mail-only channel read"
         );
         let section = compiled
             .skills_prompt_section()
@@ -6017,11 +6108,7 @@ agent:
             .agent_resource_policy_on_plane("q-agent", AgentToolPlane::Full)
             .unwrap();
         let compiled = binding.compile_agent_resources(&policy).unwrap();
-        let schema_names = compiled
-            .tool_schemas()
-            .into_iter()
-            .map(|schema| schema.name.as_str().to_string())
-            .collect::<BTreeSet<_>>();
+        let schema_names = domain_schema_names(&compiled);
         assert_eq!(
             schema_names,
             BTreeSet::from([
@@ -6161,7 +6248,7 @@ agent:
             )
             .unwrap();
         assert!(allowed.resolve_tool("mcp__fixture__ping").is_some());
-        assert!(allowed.resolve_tool("read").is_none());
+        assert!(!domain_tool_names(&allowed).contains("read"));
 
         let denied = binding
             .compile_agent_resources(
@@ -6525,6 +6612,11 @@ agent:
                 .into_iter()
                 .map(|schema| schema.name.as_str().to_string())
                 .collect::<BTreeSet<_>>();
+            // A bundle agent that can spawn nobody gets no `task`/`archive`.
+            let mut expected = expected.clone();
+            for name in crate::coordination::SPAWN_TOOLS {
+                expected.remove(name);
+            }
             assert_eq!(
                 schema_names, expected,
                 "{agent_id}: canonical schema set drifted"
@@ -7380,8 +7472,8 @@ agent:
         assert_eq!(alpha_compiled_hooks, alpha_hook_ids);
         assert_eq!(beta_compiled_hooks, beta_hook_ids);
 
-        let alpha_names = alpha_compiled.public_tool_names();
-        let beta_names = beta_compiled.public_tool_names();
+        let alpha_names = domain_tool_names(&alpha_compiled);
+        let beta_names = domain_tool_names(&beta_compiled);
         assert!(alpha_names.contains("alpha"));
         assert!(alpha_names.contains(alpha_tool_id.as_str()));
         assert!(!alpha_names.contains("beta"));
@@ -7879,5 +7971,312 @@ agent:
             vec!["db://rows/42".to_string()],
             "the owner receives the full handle text as its reference"
         );
+    }
+
+    /// Whether `name` spells a harness coordination tool (short or qualified).
+    fn is_coordination_spelling(name: &str) -> bool {
+        let short = name.strip_prefix("harness:tool/").unwrap_or(name);
+        crate::coordination::COORDINATION_TOOLS.contains(&short)
+    }
+
+    /// Whether the view's `read` is the injected mail-only channel reader.
+    fn has_mail_only_read(compiled: &CompiledResourceView) -> bool {
+        compiled
+            .resolve_tool("read")
+            .is_some_and(|read| read.tool.schema().description.starts_with("Read team mail"))
+    }
+
+    /// Public tool names minus the harness-injected coordination set: the
+    /// domain tools a `resource_view` actually narrows.
+    fn domain_tool_names(compiled: &CompiledResourceView) -> BTreeSet<String> {
+        let mail_only_read = has_mail_only_read(compiled);
+        compiled
+            .public_tool_names()
+            .into_iter()
+            .filter(|name| !is_coordination_spelling(name) && !(mail_only_read && name == "read"))
+            .collect()
+    }
+
+    /// Model-facing schema names minus the harness-injected coordination set.
+    fn domain_schema_names(compiled: &CompiledResourceView) -> BTreeSet<String> {
+        let mail_only_read = has_mail_only_read(compiled);
+        compiled
+            .tool_schemas()
+            .into_iter()
+            .map(|schema| schema.name.as_str().to_string())
+            .filter(|name| !is_coordination_spelling(name) && !(mail_only_read && name == "read"))
+            .collect()
+    }
+
+    // ---- Coordination tools (0.41.0): harness-owned, injected at startup ----
+
+    const WITHOUT_CHANNEL_TOOLS: [&str; 4] = [
+        "hya/base-tools",
+        "hya/extended-tools",
+        "hya/network-tools",
+        "hya/todo-tools",
+    ];
+
+    fn view(allow: &[&str], deny: &[&str]) -> ResourceView {
+        ResourceView {
+            allow: allow.iter().map(|entry| (*entry).to_string()).collect(),
+            deny: deny.iter().map(|entry| (*entry).to_string()).collect(),
+            aliases: BTreeMap::new(),
+            namespace: None,
+        }
+    }
+
+    /// Compile `agent` (installed as its own bundle) and return the view.
+    fn compile_bundle_agent(
+        tools: ToolRegistry,
+        agent: PreparedAgent,
+    ) -> Result<Arc<CompiledResourceView>, BundleError> {
+        let stable_id = agent.id.as_str().to_string();
+        let catalog = Arc::new(
+            TestCatalog::from_prepared(&[bundle_with_agent(
+                &format!("hya/coord-{stable_id}"),
+                agent,
+                Vec::new(),
+            )])
+            .unwrap(),
+        );
+        let registry = test_runtime_registry(tools, catalog);
+        let binding = registry
+            .bind_turn(&PathBuf::from("/tmp/hya-coordination-tools"))
+            .unwrap();
+        let policy = binding.agent_resource_policy(&stable_id)?;
+        binding.compile_agent_resources(&policy)
+    }
+
+    fn schema_names(compiled: &CompiledResourceView) -> BTreeSet<String> {
+        compiled
+            .tool_schemas()
+            .into_iter()
+            .map(|schema| schema.name.as_str().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn coordination_tools_join_a_narrow_bundle_view() {
+        let compiled = compile_bundle_agent(
+            ToolRegistry::builtins(),
+            agent("narrow-scout", view(&["harness:tool/grep"], &[])),
+        )
+        .unwrap();
+        let names = schema_names(&compiled);
+        for expected in ["grep", "report", "wait", "send", "list_channel", "read"] {
+            assert!(names.contains(expected), "missing `{expected}`: {names:?}");
+        }
+        for absent in ["task", "archive", "bash", "glob", "edit", "write"] {
+            assert!(!names.contains(absent), "`{absent}` leaked: {names:?}");
+        }
+    }
+
+    #[test]
+    fn injected_read_serves_channel_mail_but_never_files() {
+        let compiled = compile_bundle_agent(
+            ToolRegistry::builtins(),
+            agent("mail-reader", view(&["harness:tool/grep"], &[])),
+        )
+        .unwrap();
+        let schema = compiled
+            .tool_schemas()
+            .into_iter()
+            .find(|schema| schema.name.as_str() == "read")
+            .expect("channel read is advertised");
+        assert!(
+            schema.description.contains("channel://"),
+            "{}",
+            schema.description
+        );
+        let read = compiled.resolve_tool("read").unwrap();
+        let ctx = dispatch_ctx(Path::new("/tmp/hya-coordination-tools"));
+        let error =
+            futures::executor::block_on(read.tool.execute(&ctx, json!({ "path": "Cargo.toml" })))
+                .unwrap_err();
+        assert!(
+            matches!(&error, ToolError::Input(message) if message.contains("channel://")),
+            "a file path must be refused with the channel spelling: {error:?}"
+        );
+    }
+
+    #[test]
+    fn a_view_that_selects_read_keeps_the_full_read_tool() {
+        let compiled = compile_bundle_agent(
+            ToolRegistry::builtins(),
+            agent("file-reader", view(&["harness:tool/read"], &[])),
+        )
+        .unwrap();
+        let read = compiled
+            .tool_schemas()
+            .into_iter()
+            .find(|schema| schema.name.as_str() == "read")
+            .unwrap();
+        assert!(
+            read.description.starts_with("Read a file"),
+            "{}",
+            read.description
+        );
+    }
+
+    #[test]
+    fn spawn_rights_add_task_and_archive() {
+        let compiled = compile_bundle_agent(
+            ToolRegistry::builtins(),
+            PreparedAgent {
+                can_spawn: vec![AgentName::new("explore")],
+                ..agent("narrow-lead", view(&["harness:tool/grep"], &[]))
+            },
+        )
+        .unwrap();
+        let names = schema_names(&compiled);
+        assert!(
+            names.contains("task") && names.contains("archive"),
+            "{names:?}"
+        );
+    }
+
+    #[test]
+    fn a_default_view_without_spawn_rights_has_no_task_or_archive() {
+        let compiled = compile_bundle_agent(
+            ToolRegistry::builtins(),
+            agent("leaf-worker", ResourceView::default()),
+        )
+        .unwrap();
+        let names = schema_names(&compiled);
+        assert!(
+            names.contains("bash") && names.contains("wait"),
+            "{names:?}"
+        );
+        assert!(
+            !names.contains("task") && !names.contains("archive"),
+            "an agent that can spawn nobody must not see task/archive: {names:?}"
+        );
+    }
+
+    #[test]
+    fn without_channel_tools_no_channel_tools_are_injected() {
+        let compiled = compile_bundle_agent(
+            ToolRegistry::from_tool_families(&WITHOUT_CHANNEL_TOOLS),
+            agent("quiet-scout", view(&["harness:tool/grep"], &[])),
+        )
+        .unwrap();
+        let names = schema_names(&compiled);
+        assert_eq!(
+            names,
+            ["grep", "wait"].into_iter().map(str::to_string).collect(),
+            "only the extended-tools wait joins when the channel family is absent"
+        );
+    }
+
+    #[test]
+    fn explicit_coordination_entries_dedupe_with_the_injected_set() {
+        let compiled = compile_bundle_agent(
+            ToolRegistry::builtins(),
+            agent(
+                "explicit-scout",
+                view(
+                    &[
+                        "harness:tool/grep",
+                        "harness:tool/report",
+                        "harness:tool/wait",
+                        "list_channel",
+                    ],
+                    &[],
+                ),
+            ),
+        )
+        .unwrap();
+        let schemas = compiled.tool_schemas();
+        for name in ["report", "wait", "list_channel"] {
+            assert_eq!(
+                schemas
+                    .iter()
+                    .filter(|schema| schema.name.as_str() == name)
+                    .count(),
+                1,
+                "`{name}` must be advertised exactly once"
+            );
+        }
+    }
+
+    #[test]
+    fn deny_removes_a_safe_coordination_tool() {
+        let compiled = compile_bundle_agent(
+            ToolRegistry::builtins(),
+            PreparedAgent {
+                can_spawn: vec![AgentName::new("explore")],
+                ..agent(
+                    "no-task-lead",
+                    view(&["harness:tool/grep"], &["harness:tool/task", "send"]),
+                )
+            },
+        )
+        .unwrap();
+        let names = schema_names(&compiled);
+        assert!(
+            !names.contains("task") && !names.contains("send"),
+            "{names:?}"
+        );
+        assert!(
+            names.contains("archive") && names.contains("report"),
+            "{names:?}"
+        );
+    }
+
+    #[test]
+    fn deny_of_report_is_rejected() {
+        let error = compile_bundle_agent(
+            ToolRegistry::builtins(),
+            agent("stuck-scout", view(&[], &["harness:tool/report"])),
+        )
+        .err()
+        .expect("denying report must be rejected");
+        assert!(
+            matches!(&error, BundleError::InvalidManifest { detail, .. } if detail.contains("report")),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn deny_of_read_keeps_the_channel_mail_path() {
+        let compiled = compile_bundle_agent(
+            ToolRegistry::builtins(),
+            agent("no-files", view(&[], &["harness:tool/read"])),
+        )
+        .unwrap();
+        let read = compiled
+            .tool_schemas()
+            .into_iter()
+            .find(|schema| schema.name.as_str() == "read")
+            .expect("channel read survives a read deny");
+        assert!(
+            read.description.contains("channel://"),
+            "{}",
+            read.description
+        );
+    }
+
+    #[test]
+    fn builtin_agents_keep_every_coordination_tool() {
+        let catalog = Arc::new(TestCatalog::from_prepared(&[]).unwrap());
+        let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
+        let binding = registry
+            .bind_turn(&PathBuf::from("/tmp/hya-coordination-tools"))
+            .unwrap();
+        let policy = binding.agent_resource_policy("build").unwrap();
+        let compiled = binding.compile_agent_resources(&policy).unwrap();
+        let names = schema_names(&compiled);
+        for expected in [
+            "task",
+            "archive",
+            "wait",
+            "report",
+            "send",
+            "list_channel",
+            "read",
+        ] {
+            assert!(names.contains(expected), "missing `{expected}`: {names:?}");
+        }
     }
 }

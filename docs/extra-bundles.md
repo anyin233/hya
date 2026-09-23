@@ -72,7 +72,11 @@ questions about the local workspace. It answers with file:line evidence
 gathered through its own `zvec-grep` MCP server (bundle agents cannot see a
 sibling Plugin bundle's resources, so `scout` ships its own copy of the MCP
 server declaration) plus the read-only `read`/`grep`/`glob` harness tools. It
-has no write, edit, or shell access.
+has no write, edit, or shell access. Its manifest lists only these domain
+tools: like every agent, `scout` receives its coordination tools (`report`,
+`wait`, `send`, `list_channel`, channel reads) from the harness at startup, so
+it can read and answer its lead's mail and then report. It has no spawn rights,
+so it never sees `task` or `archive`.
 
 ### Usage
 
@@ -110,7 +114,8 @@ agents:
 | Agent id | `scout` (also `bundle:hya-extra/scout/agent/scout`) |
 | Role / lifecycle | `subagent`; spawned as a resident actor (reports, then is archived; follow-up mail wakes it) |
 | Model policy | `{category: quick, reasoning: low}` |
-| `resource_view.allow` | `harness:tool/read`, `harness:tool/grep`, `harness:tool/glob`, and its own bundle-local `zvec-grep` MCP server |
+| `resource_view.allow` | `harness:tool/read`, `harness:tool/grep`, `harness:tool/glob`, and its own bundle-local `zvec-grep` MCP server (domain tools only) |
+| Coordination tools (harness-allocated) | `report`, `wait`, `send`, `list_channel`, `read channel://…`; no `task`/`archive` (no `can_spawn`) |
 | MCP resource | `resources.mcp` id `zvec-grep`, argv `zg server --stdio --mcp-toolset full`, `timeout_ms: 600000` |
 | Tool name as `scout` sees it | `zvec-grep__zvec_grep_search` (also `zvec-grep__zvec_grep_index_status`, etc. from the `full` toolset) |
 | Prompt | `prompts/scout.md` — search first with `zvec_grep_search`, verify with `read`/`grep`, keep tool calls few, answer with file:line citations |

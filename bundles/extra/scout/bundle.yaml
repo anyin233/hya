@@ -15,10 +15,11 @@ agents:
     model_policy:
       category: quick
       reasoning: low
+    # Domain tools only: the harness adds the coordination tools (report,
+    # wait, send, list_channel, channel reads) to every agent at startup.
     resource_view:
       allow:
         - harness:tool/read
         - harness:tool/grep
         - harness:tool/glob
-        - harness:tool/report
         - zvec-grep

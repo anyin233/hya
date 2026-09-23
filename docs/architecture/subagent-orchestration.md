@@ -127,6 +127,14 @@ The **archive transaction** re-checks both conditions at commit time; a
 message that committed in between aborts the archive and wakes a follow-up
 turn instead of being lost. There is no timing window by construction.
 
+Mail the caller's current resident wake already injected into its turn
+(`ResidentWorkStarted.inbox_through`) counts as read for the in-turn check.
+The unread-mail rejection is actionable: it names each channel holding unread
+mail (`#DM-… (N)`, or `N harness notice(s)`), the exact `read channel://<id>`
+call, and the `send` / `wait` paths. Every agent can satisfy the gate because
+the harness allocates the mail tools to every agent regardless of its bundle
+`resource_view` (see the [coordination tools](agent-tool-surface.md#coordination-tools-allocated-at-startup)).
+
 ### 3.2 Handoff pipeline
 
 The handoff call is the existing compaction handoff machinery with a
@@ -279,9 +287,16 @@ recipient is archived routes to the revive path before wake.
 | Plane | Tools | Depth 0/1 (main, L1) | Depth 2 (L2) |
 | --- | --- | --- | --- |
 | Orchestration | `task`, `list_agents`, `workflow`, `search_agent`, `archive` | advertised | **not advertised** |
-| Communication | `send`, `list_channel`, `report` | advertised | advertised (group-default send errors: leads nobody) |
+| Communication | `send`, `list_channel`, `report` (`report`: subagents only) | advertised | advertised (group-default send errors: leads nobody) |
 | Waiting | `wait` | advertised | advertised (waits on mail when it has no subagents) |
 | Coding/etc. | read/write/edit/bash/… | advertised | advertised |
+
+These planes are **allocated by the harness** when an agent starts, not
+declared by its bundle: `report`, `wait`, `send`, `list_channel`, and channel
+reads go to every agent (channel tools when the channel family is loaded), and
+`task`/`archive` to every agent with spawn rights. A bundle `resource_view`
+narrows only the coding/etc. plane; `deny` cannot remove `report`. See
+[agent-tool-surface.md](agent-tool-surface.md#coordination-tools-allocated-at-startup).
 
 Enforcement is two-layer, engine-owned:
 

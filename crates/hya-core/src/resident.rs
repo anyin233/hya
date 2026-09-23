@@ -37,7 +37,7 @@
 //! "no pending work", quiescence can never fire while a turn is running or mail is
 //! queued, and it can never hang (the last resident to idle always runs the check).
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -2394,10 +2394,15 @@ async fn report_gate_projection(
         .inboxes
         .get(canonical)
         .map_or(0, |inbox| inbox.len() as u64);
-    if entry.resident_cursor < inbox_len {
-        return Err(CoreError::Invalid(format!(
-            "report rejected: `{canonical}` has {} unread mail message(s); answer them first",
-            inbox_len - entry.resident_cursor
+    // Mail the current resident wake injected into this turn was read there.
+    let read_through = entry.resident_work.map_or(entry.resident_cursor, |work| {
+        entry.resident_cursor.max(work.inbox_through)
+    });
+    if read_through < inbox_len {
+        return Err(CoreError::Invalid(unread_mail_rejection(
+            &projection,
+            canonical,
+            read_through,
         )));
     }
     let live_children = projection
@@ -2411,6 +2416,83 @@ async fn report_gate_projection(
         )));
     }
     Ok(projection)
+}
+
+/// Actionable unread-mail gate error: names each channel holding unread mail
+/// and the exact call that reads it, then the reply and `wait` paths. A real
+/// run's subagent guessed `#main/scout-1`, `#mail`, `#inbox`… because the old
+/// error named no channel.
+fn unread_mail_rejection(
+    projection: &hya_proto::Projection,
+    canonical: &str,
+    read_through: u64,
+) -> String {
+    let unread = projection
+        .team
+        .inboxes
+        .get(canonical)
+        .map(|inbox| {
+            inbox
+                .iter()
+                .skip(usize::try_from(read_through).unwrap_or(usize::MAX))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let mut per_channel: BTreeMap<String, usize> = BTreeMap::new();
+    let mut notices = 0usize;
+    for message in &unread {
+        let channel = match &message.to {
+            MailEndpoint::Channel(channel) => Some(channel.clone()),
+            // Handle mail travels over the DM pair shared with its sender.
+            MailEndpoint::Handle(_) => projection
+                .team
+                .channels
+                .iter()
+                .find(|(_, channel)| {
+                    channel.kind == ChannelKind::Dm
+                        && channel.members.iter().any(|member| member == canonical)
+                        && channel.members.iter().any(|member| member == &message.from)
+                })
+                .map(|(id, _)| id.clone()),
+        };
+        match channel {
+            Some(channel) => *per_channel.entry(channel).or_default() += 1,
+            None => notices += 1,
+        }
+    }
+    let mut holders: Vec<String> = per_channel
+        .iter()
+        .map(|(channel, count)| format!("#{channel} ({count})"))
+        .collect();
+    if notices > 0 {
+        holders.push(format!("{notices} harness notice(s)"));
+    }
+    let reads: Vec<String> = per_channel
+        .iter()
+        .map(|(channel, count)| {
+            if *count > 1 {
+                format!("`read channel://{channel}?last={count}`")
+            } else {
+                format!("`read channel://{channel}`")
+            }
+        })
+        .collect();
+    let read_hint = if reads.is_empty() {
+        "Call `list_channel`: pending notices arrive with the next tool result as `[NEW MAIL]`"
+            .to_string()
+    } else {
+        format!(
+            "Read it with {} (`list_channel` lists every channel with unread counts)",
+            reads.join(" and ")
+        )
+    };
+    format!(
+        "report rejected: `{canonical}` has {} unread mail message(s) on {}; answer them first. \
+         {read_hint}, reply with `send` if the sender needs an answer, then call `report` \
+         again — or call `wait` to block until more mail arrives.",
+        unread.len(),
+        holders.join(", ")
+    )
 }
 
 /// Single-active-turn delivery: when any turn on a team slot's session ends,
