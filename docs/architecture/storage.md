@@ -353,7 +353,7 @@ resident claims left active by a crash), debug build, same machine:
 | Operation | Before (full replay per read) | After |
 | --- | --- | --- |
 | `hya serve` ready, first open after upgrade (no snapshots yet) | 86 s | 5–6 s |
-| `hya serve` ready, restart after a crash (snapshots present) | 86 s | 1.2 s |
+| `hya serve` ready, restart after a crash (snapshots present) | 81 s | 1.2 s |
 | resident recovery phase (`residents_recovered`) | 79 s | 1.9 s first open, 0.6 s restart |
 | RSS at readiness | 450 MB | 100 MB |
 | token-summary tree usage (14 sessions), repeated | 4.2 s | 4 ms |
