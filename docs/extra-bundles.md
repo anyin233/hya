@@ -56,7 +56,7 @@ See [Bundle configuration files](configuration.md#bundle-configuration-files).
 
 | Contract | Value |
 | --- | --- |
-| MCP resource | `resources.mcp` id `zvec-grep`, argv `zg --server --stdio --mcp-toolset agent`, `timeout_ms: 600000` |
+| MCP resource | `resources.mcp` id `zvec-grep`, argv `zg server --stdio --mcp-toolset agent`, `timeout_ms: 600000` |
 | Tool name (full-plane agent, e.g. `build`) | `zvec-grep__mcp__zvec-grep__zvec_grep_search` |
 | Tool name (a bundle agent that selects this server, e.g. `hya-extra/scout`) | `<local-server-id>__zvec_grep_search` (the bundle chooses the local id) |
 | Tool input | `{"root": "<absolute path>", "query"?: string, "queries"?: [...], "fts"?: [...], "limit"?: number, ...}` — `root` is required and must be absolute |
@@ -111,7 +111,7 @@ agents:
 | Role / lifecycle | `subagent`, `spawn_lifecycle: transient` |
 | Model policy | `{category: quick, reasoning: low}` |
 | `resource_view.allow` | `harness:tool/read`, `harness:tool/grep`, `harness:tool/glob`, and its own bundle-local `zvec-grep` MCP server |
-| MCP resource | `resources.mcp` id `zvec-grep`, argv `zg --server --stdio --mcp-toolset full`, `timeout_ms: 600000` |
+| MCP resource | `resources.mcp` id `zvec-grep`, argv `zg server --stdio --mcp-toolset full`, `timeout_ms: 600000` |
 | Tool name as `scout` sees it | `zvec-grep__zvec_grep_search` (also `zvec-grep__zvec_grep_index_status`, etc. from the `full` toolset) |
 | Prompt | `prompts/scout.md` — search first with `zvec_grep_search`, verify with `read`/`grep`, keep tool calls few, answer with file:line citations |
 

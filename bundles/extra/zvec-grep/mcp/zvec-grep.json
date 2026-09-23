@@ -1,1 +1,1 @@
-{"command":["zg","--server","--stdio","--mcp-toolset","agent"],"timeout_ms":600000}
+{"command":["zg","server","--stdio","--mcp-toolset","agent"],"timeout_ms":600000}
