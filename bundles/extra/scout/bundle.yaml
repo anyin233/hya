@@ -1,0 +1,25 @@
+kind: AgentSetBundle
+identity:
+  id: hya-extra/scout
+  version: 0.41.0
+  publisher: hya-extra
+resources:
+  mcp:
+    - id: zvec-grep
+      path: mcp/zvec-grep.json
+agents:
+  - id: scout
+    description: 'Cheap retrieval scout: answers "where/what/how is X" questions about the local workspace with file:line evidence using zvec-grep semantic search.'
+    role: subagent
+    spawn_lifecycle: transient
+    prompt: prompts/scout.md
+    model_policy:
+      category: quick
+      reasoning: low
+    resource_view:
+      allow:
+        - harness:tool/read
+        - harness:tool/grep
+        - harness:tool/glob
+        - harness:tool/report
+        - zvec-grep
