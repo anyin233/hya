@@ -20,6 +20,7 @@ use thiserror::Error;
 use tokio::sync::Mutex;
 
 use crate::agent_model_config::AgentModelConfigFiles;
+use crate::bundle_config::BundleConfigResolver;
 
 /// Stable provider/model identity persisted for one catalog Agent.
 ///
@@ -191,12 +192,27 @@ impl PersistentAgentModelControl {
         Ok(self)
     }
 
+    /// Snapshot bundle configuration scopes once per request (scans the
+    /// project bundle directory off the async executor).
+    async fn configuration_resolver(
+        &self,
+    ) -> Result<Option<BundleConfigResolver>, AgentModelControlError> {
+        let Some(files) = self.configuration_files.clone() else {
+            return Ok(None);
+        };
+        tokio::task::spawn_blocking(move || files.resolver())
+            .await
+            .map(Some)
+            .map_err(|error| AgentModelControlError::Configuration(error.into()))
+    }
+
     fn configuration_path(
         &self,
+        resolver: Option<&BundleConfigResolver>,
         binding: &TurnBinding,
         agent_id: &str,
     ) -> Result<Option<String>, AgentModelControlError> {
-        let Some(files) = &self.configuration_files else {
+        let (Some(files), Some(resolver)) = (&self.configuration_files, resolver) else {
             return Ok(None);
         };
         let definition = binding.agent_catalog().resolve(agent_id).ok_or_else(|| {
@@ -205,7 +221,7 @@ impl PersistentAgentModelControl {
             }
         })?;
         files
-            .path_for(definition.origin)
+            .path_in(resolver, definition.origin)
             .map(|path| Some(path.to_string_lossy().into_owned()))
             .map_err(AgentModelControlError::Configuration)
     }
@@ -353,9 +369,13 @@ impl hya_server::AgentModelControl for PersistentAgentModelControl {
         Box::pin(async move {
             let mut rows =
                 project_agent_models(&binding, &self.categories, &self.router, &base_model);
+            let resolver = self
+                .configuration_resolver()
+                .await
+                .map_err(server_control_error)?;
             for row in &mut rows {
                 row.configuration_path = self
-                    .configuration_path(&binding, &row.agent_id)
+                    .configuration_path(resolver.as_ref(), &binding, &row.agent_id)
                     .map_err(server_control_error)?;
             }
             Ok(rows)
@@ -396,8 +416,12 @@ impl hya_server::AgentModelControl for PersistentAgentModelControl {
                 preference.as_ref(),
                 definition,
             );
+            let resolver = self
+                .configuration_resolver()
+                .await
+                .map_err(server_control_error)?;
             row.configuration_path = self
-                .configuration_path(&binding, &agent_id)
+                .configuration_path(resolver.as_ref(), &binding, &agent_id)
                 .map_err(server_control_error)?;
             Ok(row)
         })

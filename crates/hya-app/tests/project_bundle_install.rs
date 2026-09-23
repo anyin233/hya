@@ -217,3 +217,66 @@ fn remove_deletes_the_bundle_directory_found_by_id() {
     assert!(project_ids(&dir).is_empty());
     std::fs::remove_dir_all(&root).unwrap();
 }
+
+#[test]
+fn bundle_config_file_survives_upgrade_and_is_not_bundle_content() {
+    let root = temp_project();
+    let dir = root.join(".hya/bundles");
+    install_project_bundle(
+        &dir,
+        bundle_files("acme/tools", "tools", "1.0.0", "One."),
+        &[],
+        DENY,
+    )
+    .expect("install v1");
+    let (before_catalogs, before_fingerprint) = load_project_bundles(&dir);
+    let config = dir.join("acme__tools/config.yml");
+    std::fs::write(
+        &config,
+        "agents:\n  acme-tools-lead:\n    model: p/m\nkey: kept\n",
+    )
+    .unwrap();
+    std::fs::write(dir.join("acme__tools/.config.yml.lock"), "").unwrap();
+
+    let (with_config, with_config_fingerprint) = load_project_bundles(&dir);
+    assert_eq!(
+        with_config_fingerprint, before_fingerprint,
+        "config.yml must not change the project content fingerprint"
+    );
+    assert_eq!(with_config[0].digest(), before_catalogs[0].digest());
+    let unchanged = install_project_bundle(
+        &dir,
+        bundle_files("acme/tools", "tools", "1.0.0", "One."),
+        &[],
+        DENY,
+    )
+    .expect("same-content reinstall");
+    assert_eq!(unchanged.action, BundleInstallAction::Unchanged);
+
+    let mut incoming = bundle_files("acme/tools", "tools", "2.0.0", "Two.");
+    incoming.push(SourceFile::new("config.yml", "shipped: overwrite\n"));
+    let upgraded = install_project_bundle(&dir, incoming, &[], DENY).expect("upgrade");
+    assert!(matches!(
+        upgraded.action,
+        BundleInstallAction::Replace { .. }
+    ));
+    assert_eq!(
+        std::fs::read_to_string(&config).unwrap(),
+        "agents:\n  acme-tools-lead:\n    model: p/m\nkey: kept\n",
+        "an upgrade must preserve the user's config.yml"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.join("acme__tools/prompts/lead.md")).unwrap(),
+        "Two.\n"
+    );
+
+    let fresh = root.join(".hya/other");
+    let mut shipped = bundle_files("acme/fresh", "fresh", "1.0.0", "Fresh.");
+    shipped.push(SourceFile::new("config.yml", "shipped: ignored\n"));
+    install_project_bundle(&fresh, shipped, &[], DENY).expect("fresh install");
+    assert!(
+        !fresh.join("acme__fresh/config.yml").exists(),
+        "incoming sources never write the user-owned config.yml"
+    );
+    std::fs::remove_dir_all(&root).unwrap();
+}

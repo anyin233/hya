@@ -306,6 +306,15 @@ rejected). Servers start before runtime publication; `enabled: false` skips
 startup. Selecting a bundle-local server exposes its tools as
 `<server-public-name>__<tool-local-name>` and retains MCP permissions.
 
+**Bundle configuration.** Code in the bundle (an `extensions.process` provider,
+a stdio MCP server, or an Agent sidecar) finds the bundle's user-owned
+`config.yml` through `HYA_BUNDLE_CONFIG_FILE` and `HYA_BUNDLE_CONFIG_DIR`. In
+argv and MCP `env` values, use `${BUNDLE_CONFIG_FILE}` and
+`${BUNDLE_CONFIG_DIR}`. Don't ship a root-level `config.yml` as bundle
+content: project installs reserve that name for the user's file. For the path
+rules, precedence, and restart behavior, see
+[Bundle configuration files](configuration.md#bundle-configuration-files).
+
 **Skills example** (no shipped example currently includes one):
 
 ```yaml

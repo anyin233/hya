@@ -891,3 +891,101 @@ for line in sys.stdin:
         }
     }
 }
+
+#[tokio::test]
+async fn bundle_config_edit_restarts_the_process_at_the_next_refresh() {
+    let root = temp_path("config-restart-root");
+    std::fs::create_dir_all(&root).unwrap();
+    let registry_path = root.join("registry.db");
+    let registry = BundleRegistry::connect(registry_path.to_str().unwrap())
+        .await
+        .unwrap();
+    let runtime = Arc::new(RuntimeRegistry::new(
+        ToolRegistry::builtins(),
+        hya_app::builtin_agent_catalog().unwrap(),
+    ));
+    let config_file = root.join("config-home/hya/config.yaml");
+    let refresh =
+        hya_app::InstalledBundleRefresh::new(registry_path).with_config_file(config_file.clone());
+    // The tool description reports the config location and current content.
+    let script = r#"import json,os,sys
+path = os.environ.get('HYA_BUNDLE_CONFIG_FILE', '')
+content = open(path).read().strip() if path and os.path.exists(path) else 'absent'
+description = 'file=' + path + '|dir=' + os.environ.get('HYA_BUNDLE_CONFIG_DIR', '') + '|content=' + content
+for line in sys.stdin:
+ r=json.loads(line)
+ if r.get('method') == 'initialize':
+  result={'protocol_version':1,'plugin':{'id':'config-fixture','version':'1.0.0','kind':'rust'},'hooks':[],'tools':[{'name':'echo','description':description,'inputSchema':{'type':'object'}}]}
+ else: result={}
+ if 'id' in r: print(json.dumps({'jsonrpc':'2.0','id':r['id'],'result':result}),flush=True)
+"#;
+    let prepared = prepare_package(BundleSource::new(
+        "config-process",
+        vec![
+            SourceFile::new(
+                "bundle.yaml",
+                br#"kind: Plugin
+identity: { id: acme/config-fixture, version: 1.0.0, publisher: acme }
+extensions:
+  process: { kind: rust, command: [python3, '${BUNDLE_ROOT}/runtime.py'] }
+  files: [{ id: runtime, path: runtime.py }]
+resources:
+  tools: [{ id: echo, path: tool.json }]
+"#,
+            ),
+            SourceFile::new("runtime.py", script),
+            SourceFile::new("tool.json", "{}"),
+        ],
+    ))
+    .unwrap();
+    registry
+        .install(
+            &[],
+            hya_store::NamespaceInstallPolicy::DenyConflicts,
+            BundleInstallCandidate {
+                source_digest: [0x63; 32],
+                prepared_digest: prepared.digest().to_string(),
+                prepared_bytes: prepared.bytes().to_vec(),
+                installed_at: 1,
+            },
+        )
+        .await
+        .unwrap();
+    let describe = || {
+        runtime
+            .bind_turn(&root)
+            .unwrap()
+            .resolve_tool("config-fixture__echo")
+            .expect("process tool must publish")
+            .tool
+            .schema()
+            .description
+    };
+    let config_dir = root.join("config-home/hya/bundles/acme%2Fconfig-fixture");
+    let expected = |content: &str| {
+        format!(
+            "file={}|dir={}|content={content}",
+            config_dir.join("config.yml").display(),
+            config_dir.display()
+        )
+    };
+
+    assert!(refresh.refresh_if_changed(&runtime).await.unwrap());
+    assert_eq!(describe(), expected("absent"));
+    assert!(
+        !refresh.refresh_if_changed(&runtime).await.unwrap(),
+        "an unchanged config must not republish"
+    );
+
+    std::fs::create_dir_all(&config_dir).unwrap();
+    std::fs::write(config_dir.join("config.yml"), "mode: first\n").unwrap();
+    assert!(refresh.refresh_if_changed(&runtime).await.unwrap());
+    assert_eq!(describe(), expected("mode: first"));
+
+    std::fs::write(config_dir.join("config.yml"), "mode: second\n").unwrap();
+    assert!(refresh.refresh_if_changed(&runtime).await.unwrap());
+    assert_eq!(describe(), expected("mode: second"));
+    assert!(!refresh.refresh_if_changed(&runtime).await.unwrap());
+    drop(refresh);
+    let _ = std::fs::remove_dir_all(&root);
+}

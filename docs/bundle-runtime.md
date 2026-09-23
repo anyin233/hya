@@ -158,19 +158,29 @@ Agent-bearing JavaScript bundles retain their activation-scoped sidecars.
 - `${BUNDLE_ROOT}` in command arguments expands to a private temporary directory.
   Native processes use that directory as cwd. A declared relative file argument
   is also resolved against that directory, including MCP command arguments.
-  Native processes receive `PATH`, `HYA_BUNDLE_ROOT`, and `CLAUDE_PLUGIN_ROOT`.
-  Bundled stdio MCP servers also use the private directory as cwd and start with
-  a cleared environment containing only inherited `PATH`, explicit configured
-  environment entries, and the authoritative `HYA_BUNDLE_ROOT`. Explicit MCP
-  environment values support bundle-root expansion. Ordinary configured MCP
-  servers retain their existing startup behavior.
+  `${BUNDLE_CONFIG_DIR}` and `${BUNDLE_CONFIG_FILE}` expand to the bundle's
+  absolute [configuration directory and `config.yml`](configuration.md#bundle-configuration-files).
+- Process environment (`extensions.process`, including the implicit Bun process
+  of a JavaScript Plugin): the environment is cleared, then set to exactly
+  `PATH` (inherited), `HYA_BUNDLE_ROOT`, `CLAUDE_PLUGIN_ROOT`,
+  `HYA_BUNDLE_CONFIG_DIR`, and `HYA_BUNDLE_CONFIG_FILE`. `HOME` is not passed.
+- Bundled stdio MCP environment (`resources.mcp`): the server uses the private
+  directory as cwd and starts with a cleared environment. It gets the inherited
+  `PATH`, then `HYA_BUNDLE_CONFIG_DIR` and `HYA_BUNDLE_CONFIG_FILE`, then the
+  declared `env` map (a declared key overrides the keys before it), then the
+  host-owned `HYA_BUNDLE_ROOT`. `HOME` is not passed. Declared `env` values
+  support the root and config expansions. Ordinary configured MCP servers keep
+  their existing startup behavior.
+- The configuration file need not exist. Its content digest (or absence) is
+  part of a process/MCP bundle's runtime identity. If you edit it, that bundle's
+  providers restart at the next root binding, like a changed package.
 - The provider's initialized tools and hook names must exactly match declared
   resources. Nonempty dynamic Skill declarations must match packaged Skills.
   A missing executable, failed initialization, or declaration mismatch rejects
   the candidate without changing the published runtime generation.
   Workspace-adapter contributions reject initialization because the bundle
   schema has no resource contract for them; they are never silently ignored.
-- Unchanged package/process/schema identities reuse the existing source. New
+- Unchanged package/process/schema/configuration identities reuse the existing source. New
   bindings after uninstall omit that source; retained bindings keep it alive.
   Materialized files remain until the last retained process owner is dropped.
 - Plugin hooks join Full-plane agents in stable source-id order. Agent-bearing
