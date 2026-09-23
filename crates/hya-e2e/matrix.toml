@@ -374,6 +374,14 @@ path = "crates/hya-e2e/tests/p30_channel_bundle.rs"
 tags = ["pr", "hyabundle", "subagent", "mailbox"]
 timeout_secs = 120
 
+[[scenario]]
+id = "T2.26"
+title = "hya-extra/zvec-grep Plugin bundle MCP tool executes through fake zg on PATH"
+track = "P"
+path = "crates/hya-e2e/tests/p31_extra_bundles.rs"
+tags = ["pr", "hyabundle", "plugin", "mcp", "extras"]
+timeout_secs = 120
+
 # Index-only deep engine coverage (not duplicated in Track P).
 [[scenario]]
 id = "I.nested"
