@@ -19,13 +19,14 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
+use crate::fs_tools::assert_external_directory_lexical;
 use crate::hashline::{
     HashlineRuntime, MAX_SNAPSHOT_BYTES, MAX_SNAPSHOT_TARGETS, ReadRuntimeError,
 };
 use crate::lsp_path::{absolutize, display_path, normalize, resolve_file};
-use crate::permission::{Action, Resource};
 use crate::read_media::{ReadFileKind, classify_file};
-use crate::tool::{Tool, ToolCtx, ToolError, ToolResultPolicy, assert_external_directory_lexical};
+use hya_tool::{Action, Resource};
+use hya_tool::{Tool, ToolCtx, ToolError, ToolResultPolicy};
 
 const DEFAULT_LIMIT: usize = 50;
 const MAX_LIMIT: usize = 200;
@@ -73,15 +74,6 @@ pub struct GrepTool {
 }
 
 impl GrepTool {
-    /// Construct a standalone Grep adapter with an isolated runtime.
-    ///
-    /// Registry construction should use [`Self::with_runtime`] so Read, Edit,
-    /// Write, and Grep share recovery snapshots.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// Construct a Grep adapter using a registry-owned shared runtime.
     ///
     /// # Parameters

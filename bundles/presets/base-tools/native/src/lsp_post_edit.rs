@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use serde_json::Value;
 
 use crate::lsp_path::display_path;
-use crate::tool::{ToolCtx, ToolError};
+use hya_tool::{ToolCtx, ToolError};
 
 const MAX_PER_FILE: usize = 20;
 const MAX_PROJECT_FILES: usize = 5;

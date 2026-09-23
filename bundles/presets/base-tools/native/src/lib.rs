@@ -1,0 +1,79 @@
+//! Native implementations of the ten base built-in tools.
+
+use std::sync::Arc;
+
+use hya_tool::Tool;
+
+mod apply_patch;
+mod ask_user;
+mod edit;
+mod file_diff;
+mod fs_tools;
+mod grep;
+mod hashline;
+mod lsp_path;
+mod lsp_post_edit;
+mod read;
+mod read_media;
+mod shell;
+mod shell_output;
+mod utf8_bom;
+mod write;
+
+/// Report the lockstep Rust tool ABI before any Rust object crosses the library boundary.
+///
+/// # Safety
+///
+/// `out` must point to a writable array of at least 32 bytes, or be null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hya_tool_bundle_abi_v1(out: *mut u8) {
+    if out.is_null() {
+        return;
+    }
+    let digest = hya_tool::native_bundle::abi_digest_v1();
+    // SAFETY: the caller supplies a writable 32-byte output array.
+    unsafe { std::ptr::copy_nonoverlapping(digest.as_ptr(), out, digest.len()) };
+}
+
+/// Register this bundle's concrete tools with the host's tool registry loader.
+///
+/// # Safety
+///
+/// `out` must point to a live `Vec<Arc<dyn Tool>>` built with the matching
+/// hya-tool ABI, or be null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hya_tool_bundle_register_v1(out: *mut Vec<Arc<dyn Tool>>) {
+    // SAFETY: the host calls this only after the ABI digest matches.
+    if let Some(out) = unsafe { out.as_mut() } {
+        let hashline_runtime = Arc::new(hashline::HashlineRuntime::new());
+        let tools: [Arc<dyn Tool>; 10] = [
+            Arc::new(read::ReadTool::new(Arc::clone(&hashline_runtime))),
+            Arc::new(write::WriteTool::new(Arc::clone(&hashline_runtime))),
+            Arc::new(edit::EditTool::new(Arc::clone(&hashline_runtime))),
+            Arc::new(fs_tools::LsTool),
+            Arc::new(fs_tools::GlobTool),
+            Arc::new(fs_tools::FindTool),
+            Arc::new(grep::GrepTool::with_runtime(Arc::clone(&hashline_runtime))),
+            Arc::new(ask_user::AskUserTool),
+            Arc::new(shell::ShellTool),
+            Arc::new(apply_patch::ApplyPatchTool),
+        ];
+        out.extend(tools);
+    }
+}
+
+/// Poll one native tool future while this library's Tokio runtime TLS is entered.
+///
+/// # Safety
+///
+/// `handle` and `state` must remain valid throughout the synchronous callback;
+/// the handle must come from the matching host Tokio build.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hya_tool_bundle_with_runtime_v1(
+    handle: *const std::ffi::c_void,
+    callback: unsafe extern "C" fn(*mut std::ffi::c_void),
+    state: *mut std::ffi::c_void,
+) {
+    // SAFETY: the checked host ABI guarantees the live handle and callback.
+    unsafe { hya_tool::native_bundle::with_runtime_v1(handle, callback, state) };
+}

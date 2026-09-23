@@ -10,10 +10,12 @@ Raw native executables are carried by `extensions.rust` and started through the
 existing out-of-process plugin protocol.
 
 First-party in-process tool families can carry a Rust dynamic library under
-`extensions.libraries`. The TODO and extended presets currently use this form. Their
+`extensions.libraries`. All five trusted tool-family presets use this form. Their
 `hya_tool_bundle_abi_v1` export must match the host's ABI digest, and
 `hya_tool_bundle_register_v1` registers tools after the bundle identity and
-declared names are checked. The backend and library must be built from the
+declared names are checked. `hya_tool_bundle_with_runtime_v1` enters the
+bundle's Tokio runtime on each tool future poll while the host runtime
+remains available to host services. The backend and library must be built from the
 same workspace and toolchain; Rust trait objects have no stable plugin ABI.
 The release asset stores each trusted family package under `bundles/` beside
 `bin/`. Installed third-party bundles do not gain in-process execution by

@@ -89,6 +89,7 @@ jobs:
           cargo build --release --locked -p hya-backend --bins --target "$TARGET"
           cargo build --release --locked -p hya-todo-tools --lib --target "$TARGET"
           cargo build --release --locked -p hya-extended-tools --lib --target "$TARGET"
+          cargo build --release --locked -p hya-base-tools -p hya-network-tools -p hya-channel-tools --lib --target "$TARGET"
 
       - name: Package release asset
         id: package
@@ -120,6 +121,18 @@ jobs:
             bundles/presets/extended-tools \
             "target/$TARGET/release/libhya_extended_tools.so" \
             "dist/$package_dir/bundles/hya-extended-tools.hyabundle"
+          cargo run --locked -p xtask -- package-native-tool-library \
+            bundles/presets/base-tools \
+            "target/$TARGET/release/libhya_base_tools.so" \
+            "dist/$package_dir/bundles/hya-base-tools.hyabundle"
+          cargo run --locked -p xtask -- package-native-tool-library \
+            bundles/presets/network-tools \
+            "target/$TARGET/release/libhya_network_tools.so" \
+            "dist/$package_dir/bundles/hya-network-tools.hyabundle"
+          cargo run --locked -p xtask -- package-native-tool-library \
+            bundles/presets/channel-tools \
+            "target/$TARGET/release/libhya_channel_tools.so" \
+            "dist/$package_dir/bundles/hya-channel-tools.hyabundle"
           scripts/package-argus-example.sh bundles/examples/argus-example \
             "dist/$package_dir/examples/hya-argus-example.hyabundle"
 
@@ -148,6 +161,9 @@ jobs:
           "$packaged_binary" --help >/dev/null
           test -s "$scratch/$package_dir/bundles/hya-todo-tools.hyabundle"
           test -s "$scratch/$package_dir/bundles/hya-extended-tools.hyabundle"
+          test -s "$scratch/$package_dir/bundles/hya-channel-tools.hyabundle"
+          test -s "$scratch/$package_dir/bundles/hya-network-tools.hyabundle"
+          test -s "$scratch/$package_dir/bundles/hya-base-tools.hyabundle"
           bun_adapter="$scratch/$package_dir/lib/hya/bun-adapter"
           for path in package.json bun.lock src/main.ts; do
             test -e "$bun_adapter/$path"
@@ -185,6 +201,9 @@ jobs:
           grep -F "$package_dir/lib/hya/bun-adapter/node_modules/" "$scratch/archive.txt" >/dev/null
           grep -Fx "$package_dir/bundles/hya-todo-tools.hyabundle" "$scratch/archive.txt"
           grep -Fx "$package_dir/bundles/hya-extended-tools.hyabundle" "$scratch/archive.txt"
+          grep -Fx "$package_dir/bundles/hya-channel-tools.hyabundle" "$scratch/archive.txt"
+          grep -Fx "$package_dir/bundles/hya-network-tools.hyabundle" "$scratch/archive.txt"
+          grep -Fx "$package_dir/bundles/hya-base-tools.hyabundle" "$scratch/archive.txt"
           grep -Fx "$package_dir/examples/hya-argus-example.hyabundle" "$scratch/archive.txt"
           if grep -F "$package_dir/bundles/examples/argus-example" "$scratch/archive.txt"; then
             echo "release archive must not contain the example source-tree prefix" >&2

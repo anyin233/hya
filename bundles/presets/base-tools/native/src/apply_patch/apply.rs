@@ -2,8 +2,8 @@ use std::path::Path;
 
 use crate::apply_patch::parse::{Hunk, UpdateChunk};
 use crate::file_diff;
-use crate::tool::ToolError;
 use crate::utf8_bom;
+use hya_tool::ToolError;
 
 #[derive(Clone, Copy)]
 pub(crate) enum FileAction {

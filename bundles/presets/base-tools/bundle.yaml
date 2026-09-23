@@ -8,3 +8,51 @@ extensions:
   files:
     - id: exposure
       path: exposure.yaml
+    - id: native-0
+      path: native/Cargo.toml
+    - id: native-1
+      path: native/src/apply_patch/apply.rs
+    - id: native-2
+      path: native/src/apply_patch/mod.rs
+    - id: native-3
+      path: native/src/apply_patch/parse.rs
+    - id: native-4
+      path: native/src/ask_user.rs
+    - id: native-5
+      path: native/src/edit.rs
+    - id: native-6
+      path: native/src/file_diff.rs
+    - id: native-7
+      path: native/src/fs_tools.rs
+    - id: native-8
+      path: native/src/grep.rs
+    - id: native-9
+      path: native/src/hashline/apply.rs
+    - id: native-10
+      path: native/src/hashline/fs.rs
+    - id: native-11
+      path: native/src/hashline/hash.rs
+    - id: native-12
+      path: native/src/hashline/merge.rs
+    - id: native-13
+      path: native/src/hashline/mod.rs
+    - id: native-14
+      path: native/src/hashline/state.rs
+    - id: native-15
+      path: native/src/lib.rs
+    - id: native-16
+      path: native/src/lsp_path.rs
+    - id: native-17
+      path: native/src/lsp_post_edit.rs
+    - id: native-18
+      path: native/src/read.rs
+    - id: native-19
+      path: native/src/read_media.rs
+    - id: native-20
+      path: native/src/shell.rs
+    - id: native-21
+      path: native/src/shell_output.rs
+    - id: native-22
+      path: native/src/utf8_bom.rs
+    - id: native-23
+      path: native/src/write.rs

@@ -8,10 +8,8 @@ use hya_proto::{ToolName, ToolSchema};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::interaction::{
-    QuestionAnswer, QuestionInfo, QuestionKind, QuestionOption, QuestionPrompt,
-};
-use crate::tool::{Tool, ToolCtx, ToolError};
+use hya_tool::{QuestionAnswer, QuestionInfo, QuestionKind, QuestionOption, QuestionPrompt};
+use hya_tool::{Tool, ToolCtx, ToolError};
 
 pub(crate) struct AskUserTool;
 

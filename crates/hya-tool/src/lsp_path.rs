@@ -1,16 +1,6 @@
 use std::path::{Component, Path, PathBuf};
 
 #[must_use]
-pub(crate) fn resolve_file(workdir: &Path, file_path: &str) -> PathBuf {
-    let candidate = Path::new(file_path);
-    if candidate.is_absolute() {
-        normalize(candidate)
-    } else {
-        normalize(&workdir.join(candidate))
-    }
-}
-
-#[must_use]
 pub(crate) fn absolutize(path: &Path) -> PathBuf {
     if path.is_absolute() {
         path.to_path_buf()

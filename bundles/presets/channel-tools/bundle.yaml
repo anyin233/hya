@@ -8,3 +8,11 @@ extensions:
   files:
     - id: exposure
       path: exposure.yaml
+    - id: native-manifest
+      path: native/Cargo.toml
+    - id: native-entry
+      path: native/src/lib.rs
+    - id: native-mailbox-tools
+      path: native/src/mailbox_tools.rs
+    - id: native-report
+      path: native/src/report.rs

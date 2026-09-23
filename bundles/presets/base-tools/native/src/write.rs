@@ -1,17 +1,17 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::handle::{HandleError, HandleRef};
 use crate::hashline::{
     HashlineMutation, HashlineRuntime, MAX_READ_BYTES, MutationBeginError, MutationText,
     MutationWriteError, append_bounded_notices, bound_output,
 };
 use crate::lsp_path::{absolutize, display_path, normalize, resolve_file};
 use crate::lsp_post_edit;
-use crate::permission::{Action, Resource};
-use crate::tool::{Tool, ToolCtx, ToolError, ToolResultPolicy};
 use async_trait::async_trait;
 use hya_proto::{ToolName, ToolSchema};
+use hya_tool::handle::{HandleError, HandleRef};
+use hya_tool::{Action, Resource};
+use hya_tool::{Tool, ToolCtx, ToolError, ToolResultPolicy};
 use serde::Deserialize;
 use serde_json::{Value, json};
 

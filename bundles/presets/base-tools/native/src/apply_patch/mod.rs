@@ -9,9 +9,9 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::lsp_post_edit;
-use crate::permission::{Action, Resource};
-use crate::tool::{Tool, ToolCtx, ToolError};
 use crate::utf8_bom;
+use hya_tool::{Action, Resource};
+use hya_tool::{Tool, ToolCtx, ToolError};
 
 pub(crate) struct ApplyPatchTool;
 

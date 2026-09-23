@@ -12,9 +12,8 @@
 //! - **Runtime planes** — session-scoped services injected through [`ToolCtx`]:
 //!   interaction/questions, subagent spawning, todos, skills, web search, LSP,
 //!   mailbox, and formatters.
-//! - **Native bundle loading** — the TODO and extended families execute from
-//!   trusted, lockstep dynamic libraries; the remaining builtin implementations
-//!   are being moved to their owning families.
+//! - **Native bundle loading** — all five builtin families execute from
+//!   trusted, lockstep dynamic libraries. Their implementations live in bundles.
 //!
 //! Tool authors implement [`Tool`] and register with [`ToolRegistry`]. Security
 //! reviewers should start with [`PermissionPlane`], [`Action`], and
@@ -22,27 +21,20 @@
 //! tools; this crate stays free of the session engine.
 
 mod agents;
-mod apply_patch;
-mod ask_user;
 mod base_tools;
-mod edit;
-mod file_diff;
 mod formatter;
 mod formatter_catalog;
 mod formatter_command;
 mod formatter_definition;
-mod grep;
 /// Internal resource URLs (`artifact://`, `skill://`, `local://`) for
 /// agent-owned payloads. Ordinary filesystem paths are unaffected.
 pub mod handle;
-mod hashline;
 /// Human interaction channel for structured questions and free-text asks.
 pub mod interaction;
 /// Team mailbox requests and the mailbox plane used by send/roster/channel tools.
 pub mod lifecycle;
 mod lsp_path;
 mod lsp_plane;
-mod lsp_post_edit;
 pub mod mailbox;
 /// Namespaced tool names (`namespace__local`) and namespaced registration.
 pub mod namespace;
@@ -51,24 +43,17 @@ pub mod native_bundle;
 mod output_cap;
 /// Allow/ask/deny permission plane: invocation policy, resource rules, and asks.
 pub mod permission;
-mod read;
-mod read_media;
-mod shell;
 mod skill;
 mod skill_catalog;
 /// Subagent spawn plane and request types used by the `task` tool.
 pub mod spawn;
 /// In-memory per-session todo list plane and the `todo__` tool group.
 pub mod todo;
-/// Tool trait, registry, permission class metadata, and local search builtins.
+/// Tool trait, registry, and permission class metadata.
 pub mod tool;
-mod utf8_bom;
-mod webfetch;
 mod websearch;
-mod websearch_response;
 /// User-authored workflow plane and the `workflow` tool.
 pub mod workflow_plane;
-mod write;
 pub use workflow_plane::{
     WorkflowHostError, WorkflowPlane, WorkflowRequest, WorkflowRequestSink, WorkflowSendError,
 };

@@ -7,14 +7,14 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
-use crate::handle::{HandleError, HandleRef};
 use crate::hashline::{
     DEFAULT_READ_LIMIT, HashlineRuntime, MAX_READ_BYTES, ReadOptions, ReadResult, ReadRuntimeError,
 };
 use crate::lsp_path::{absolutize, display_path, normalize, resolve_file};
-use crate::permission::{Action, Resource};
 use crate::read_media::{ReadFileKind, attachment_value, classify_file};
-use crate::tool::{Tool, ToolCtx, ToolError, ToolResultPolicy};
+use hya_tool::handle::{HandleError, HandleRef};
+use hya_tool::{Action, Resource};
+use hya_tool::{Tool, ToolCtx, ToolError, ToolResultPolicy};
 
 /// Accepted Read arguments, including the hidden legacy path spelling.
 #[derive(Deserialize)]
@@ -1297,11 +1297,11 @@ async fn execute_channel_read(
 }
 
 /// Map mailbox plane failures to read tool errors.
-fn map_mailbox_error(error: crate::mailbox::MailboxError) -> ToolError {
+fn map_mailbox_error(error: hya_tool::MailboxError) -> ToolError {
     match error {
-        crate::mailbox::MailboxError::Unavailable => ToolError::Other(
+        hya_tool::MailboxError::Unavailable => ToolError::Other(
             "channel:// reads are only available inside a running team".to_string(),
         ),
-        crate::mailbox::MailboxError::Rejected(message) => ToolError::Input(message),
+        hya_tool::MailboxError::Rejected(message) => ToolError::Input(message),
     }
 }

@@ -16,16 +16,12 @@ serde_json = { workspace = true }
 serde_norway = { workspace = true }
 sha2 = { workspace = true }
 async-trait = { workspace = true }
-base64 = { workspace = true }
+futures = { workspace = true }
 thiserror = { workspace = true }
 libc = { workspace = true }
-pty-process = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
-reqwest = { workspace = true }
 regex = { workspace = true }
-similar = { workspace = true }
-xxhash-rust = { workspace = true }
 time = { workspace = true }
 
 [build-dependencies]
@@ -34,5 +30,8 @@ serde = { workspace = true }
 serde_norway = { workspace = true }
 
 [dev-dependencies]
+hya-base-tools = { workspace = true }
 hya-todo-tools = { workspace = true }
 hya-extended-tools = { workspace = true }
+hya-channel-tools = { workspace = true }
+hya-network-tools = { workspace = true }
