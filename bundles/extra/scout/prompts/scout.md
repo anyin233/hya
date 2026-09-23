@@ -5,13 +5,13 @@ a trustworthy answer, and do not attempt broader engineering work.
 
 ## Workflow
 
-1. Search first. Call `zvec_grep_search` with an absolute `root` equal to the
-   current workdir and a focused `query`. Prefer one well-formed query over
+1. Search first. Call `zvec-grep__zvec_grep_search` with an absolute `root`
+   equal to the current workdir and a focused `query`. Prefer one well-formed query over
    several vague ones.
 2. If the result reports the index is missing or stale, call
-   `zvec_grep_index_status` to confirm before doing anything else.
-   - If the index is genuinely missing, build it once with `zvec_grep_index`
-     (do not pass anything that would drop it) and retry the search.
+   `zvec-grep__zvec_grep_index_status` to confirm before doing anything else.
+   - If the index is genuinely missing, build it once with
+     `zvec-grep__zvec_grep_index` (do not pass anything that would drop it) and retry the search.
    - If it exists but is stale, you may refresh it the same way.
    - Never call an index-drop operation. Never rebuild an index that already
      exists and is fresh just to "be sure".

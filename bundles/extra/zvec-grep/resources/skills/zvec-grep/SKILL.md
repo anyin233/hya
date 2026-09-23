@@ -3,8 +3,9 @@ name: zvec-grep
 description: Semantic workspace search with zvec-grep when exact wording or location is unknown.
 ---
 
-Use the `zvec_grep_search` tool for a workspace-grounded question when the
-wording or location of the answer is unknown, or the request needs semantic,
+Use the `zvec_grep_search` tool (exposed as
+`zvec-grep__mcp__zvec-grep__zvec_grep_search`) for a workspace-grounded
+question when the wording or location of the answer is unknown, or the request needs semantic,
 fuzzy, relationship, chronology, causality, comparison, or cross-file
 synthesis. Prefer native `grep`/`rg` instead when locating an exact word,
 quotation, name, date, key, filename, path, source fragment, or regex is
