@@ -66,6 +66,17 @@ See [Testing](testing/README.md), [Process E2E](testing/process-e2e.md), and the
 [agent feature matrix](testing/agent-matrix.md). Optional CI wiring is sketched
 in [ci-agent-e2e-snippet.yml](testing/ci-agent-e2e-snippet.yml).
 
+### Bun unit tests in extra bundles
+
+`hya-extra/*` bundles with Bun processes (for example
+`bundles/extra/jev-model-router`) keep their unit tests in an undeclared,
+never-packaged `*.test.ts` file beside the script. CI does not run them;
+when you change such a bundle, run them from its directory:
+
+```sh
+cd bundles/extra/jev-model-router && bun test
+```
+
 There is currently no interactive TUI (the legacy TypeScript TUI was removed;
 a replacement built on `hya-sdk-v1` may be built later), so no frontend
 TypeScript gate exists.

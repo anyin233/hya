@@ -117,7 +117,149 @@ agents:
 
 ## `hya-extra/jev-model-router`
 
-Coming in this release.
+### Introduction
+
+A `Plugin` bundle that routes each model request to a model that fits the
+task's difficulty. It runs a small Bun process that implements the
+[`chat.params`](plugin-protocol.md#chatparams) hook. The first time it sees
+a request chain, it asks [Jev](https://docs.typesafe.ai) (TypeSafe's
+"System One" classifier, `POST /v1/systemone`) one `choice` question: which
+of your configured tiers (for example `easy` / `medium` / `hard`) covers
+this request? Then it rewrites `request.model` to that tier's model.
+
+Why: most turns don't need your most expensive model. Jev is a fast, cheap
+judge, so it adds one short HTTP call per chain rather than an LLM round
+trip. That lets short questions and trivial edits run on a cheaper, faster
+model, and design or debugging work keeps the strong one.
+
+Why sticky: providers cache the prompt prefix per model. If the model
+changed on every round, every request would miss the cache and pay full
+input price again. So the router makes one decision per request chain
+(`root_session`: a lead and all of its subagents) and reuses it for every
+later round and turn without calling Jev again. Optionally, a new user
+message can move the chain to a harder tier (`route.escalate`); the router
+never moves a chain to an easier tier.
+
+hya still owns routing after the rewrite. The rewritten model streams
+through the normal provider route, and its configured fallback chain and
+any `model.fallback` hook still apply.
+
+### Usage
+
+Prerequisites:
+
+- `bun` on `PATH` (>= 1.2.21; hya's release pins 1.4.2). hya runs
+  `bun run router.ts` as the bundle's `extensions.process`.
+- A TypeSafe API key.
+- Every tier model must be a model your hya providers can serve.
+
+Package and install:
+
+```sh
+cargo run -p xtask -- package-bundle bundles/extra/jev-model-router jev-model-router.hyabundle
+hya bundle install jev-model-router.hyabundle
+```
+
+Configure it in the bundle config file
+`<hya config dir>/bundles/hya-extra%2Fjev-model-router/config.yml` (user
+install), or `.hya/bundles/jev-model-router/config.yml` for a `--project`
+install. See [Bundle configuration files](configuration.md#bundle-configuration-files).
+The process has a cleared environment (no `HOME`), so it reads the key from
+this file, not from an environment variable. For example:
+
+```yaml
+jev:
+  endpoint: https://api.typesafe.ai/v1/systemone   # default
+  model: jev-latest                                 # default
+  api_key_file: /Users/me/.config/typesafe/api-key  # or api_key: ts-...
+  timeout_ms: 2000                                  # default
+  min_confidence: 0.5                               # default
+route:
+  from: []              # empty = route every request
+  default_tier: medium  # used when Jev fails or is unsure
+  stickiness: chain     # one decision per lead + subagents
+  escalate: false
+tiers:                  # ordered easy -> hard
+  - name: easy
+    model: openai/gpt-5.4-mini
+    criteria: Short questions, lookups, trivial one-file edits
+  - name: medium
+    model: anthropic/claude-sonnet-5
+    criteria: Normal feature work or bug fixes touching a few files
+  - name: hard
+    model: anthropic/claude-opus-5-5
+    criteria: Cross-cutting design, concurrency, migrations, subtle debugging
+```
+
+The same example, with comments, ships as
+`bundles/extra/jev-model-router/config.example.yml`. hya compares the file's
+content digest at each root binding and restarts the router when it changes.
+The restart also clears cached decisions. The target of `api_key_file` is not
+part of that digest, so restart hya after you rotate the key.
+
+With an empty `route.from`, every request is routed, including subagents
+that pin their own model (for example `hya-extra/scout` on a `quick`
+model). With `chain` stickiness, those subagents join their lead's tier. To
+leave them alone, list only the models the router may replace, for example
+`from: [anthropic/claude-opus-5-5]`. Then requests on any other model pass
+through untouched and do not call Jev.
+
+The router's `bun test` suite (pure logic: config validation, tier choice,
+stickiness, escalation, and Jev wire parsing) runs from the bundle
+directory:
+
+```sh
+cd bundles/extra/jev-model-router && bun test
+```
+
+### Interface
+
+| Contract | Value |
+| --- | --- |
+| Bundle | `kind: Plugin`, `extensions.process: {kind: bun, command: [bun, run, '${BUNDLE_ROOT}/router.ts']}`. Only `router.ts` is packaged. |
+| Plugin id / hook | `jev-model-router`; one hook, `chat.params` (posture `open`). No tools or Skills. |
+| Hook input used | `request.model` (the `from` filter), `root_session` / `session` (stickiness key), `agent`, `request.messages` (newest `role: user` message), `request.system`, and `request.tools` (count only). |
+| Hook output | `{"outcome": "continue", "request": <the same request with only model changed>}` |
+| Jev request | `POST <jev.endpoint>` with `Authorization: Bearer <key>` and body `{"model": <jev.model>, "state": {"agent", "latest_user_message" (first 4000 chars), "system_prompt_head" (first 1000 chars), "tool_count", "message_count"}, "questions": {"difficulty": {"type": "choice", "instructions": ..., "criteria": {<tier name>: <tier criteria>}}}}` |
+| Jev answer used | `answers.difficulty.choice` (must be a tier name) and `answers.difficulty.confidence` (must be at least `min_confidence`) |
+
+Config fields (`config.yml`; hya's own `agents:` leaf and other unknown
+top-level keys are ignored; unknown keys inside `jev`, `route`, or a tier
+are rejected):
+
+| Field | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `jev.endpoint` | string (URL) | `https://api.typesafe.ai/v1/systemone` | Jev System One endpoint. |
+| `jev.model` | string | `jev-latest` | Jev model. |
+| `jev.api_key` | string | — | API key. Set exactly one of `api_key` and `api_key_file`. |
+| `jev.api_key_file` | absolute path | — | File that holds the API key. Surrounding whitespace is trimmed. |
+| `jev.timeout_ms` | integer 1–20000 | `2000` | Timeout per Jev call. hya's 30 s hook timeout is the outer bound. |
+| `jev.min_confidence` | number 0–1 | `0.5` | If Jev's confidence is below this, the router uses `default_tier`. |
+| `route.from` | list of model refs | `[]` | If not empty, only requests whose incoming model is listed are routed. |
+| `route.default_tier` | tier name | last (hardest) tier | Tier used when Jev fails, times out, is unsure, or returns an unknown option. |
+| `route.stickiness` | `chain` \| `session` \| `none` | `chain` | Decision key. `chain` uses `root_session` (a lead and its subagents share one model). `session` gives each session its own decision. `none` asks Jev on every request, which is not cache-friendly. |
+| `route.escalate` | bool | `false` | If true, a new user message in the key's owner session (the chain root for `chain`) asks Jev again. The chain moves only to a harder tier. Tool-result rounds and subagent prompts never trigger this. |
+| `tiers[]` | list, at least 1 | — | Ordered easy → hard. Each tier is `{name, model, criteria}`; all three are non-empty strings and `name` is unique. `criteria` is the rubric text Jev sees for that option. |
+
+Failure behaviour: the router always answers `initialize`, so a
+misconfigured router cannot block runtime publication. Failures are
+reported on stderr, and stdout carries only protocol frames:
+
+- Missing or invalid config: every request passes through unchanged.
+- Jev HTTP error (401/422/429/529/5xx), timeout, unparsable answer, or low
+  confidence: the router uses `default_tier`. It caches that decision like
+  any other, so a chain does not retry Jev on every round.
+- Any other exception inside the hook: the request passes through unchanged.
+- The decision cache keeps at most 1024 keys (least recently used are
+  evicted). Concurrent first requests for one key share one Jev call.
+
+Known limits:
+
+- hya computes the compaction threshold from the pre-rewrite model's context
+  window, because compaction runs before `chat.params`. Keep the tier models'
+  context windows at least as large as the incoming model's.
+- Workflow stages that stream through a Workflow model route
+  (`stream_with_workflow_route`) ignore a `chat.params` model rewrite.
 
 ## `hya-extra/model-fallback`
 

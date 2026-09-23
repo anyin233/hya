@@ -382,6 +382,14 @@ path = "crates/hya-e2e/tests/p31_extra_bundles.rs"
 tags = ["pr", "hyabundle", "plugin", "mcp", "extras"]
 timeout_secs = 120
 
+[[scenario]]
+id = "T2.27"
+title = "hya-extra/jev-model-router routes chat.params to the Jev-chosen tier, sticky per chain, default_tier on Jev failure"
+track = "P"
+path = "crates/hya-e2e/tests/p32_jev_model_router.rs"
+tags = ["pr", "hyabundle", "plugin", "extras"]
+timeout_secs = 120
+
 # Index-only deep engine coverage (not duplicated in Track P).
 [[scenario]]
 id = "I.nested"
