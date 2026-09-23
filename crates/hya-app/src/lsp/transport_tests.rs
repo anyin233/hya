@@ -84,9 +84,13 @@ while True:
 struct Workspace(PathBuf);
 impl Workspace {
     fn new() -> Result<Self, Box<dyn std::error::Error>> {
+        // The clock alone repeats across parallel tests; the counter keeps
+        // every workspace in this process distinct.
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let path = std::env::temp_dir().join(format!(
-            "hya-lsp-boundary-{}-{}",
+            "hya-lsp-boundary-{}-{}-{}",
             std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
         ));
         std::fs::create_dir_all(&path)?;
@@ -120,6 +124,43 @@ fn provider(servers: BTreeMap<String, ServerConfig>) -> ProcessLspProvider {
         clients: Mutex::new(BTreeMap::new()),
         updates: watch::channel(0).0,
     }
+}
+
+#[test]
+fn concurrent_workspaces_never_share_a_directory() -> Result<(), Box<dyn std::error::Error>> {
+    // Parallel tests start within the same clock tick; a shared directory is
+    // deleted by whichever test finishes first while the other still uses it.
+    for _ in 0..50 {
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(16));
+        let workers = (0..16)
+            .map(|_| {
+                let barrier = std::sync::Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    Workspace::new().map_err(|error| error.to_string())
+                })
+            })
+            .collect::<Vec<_>>();
+        let workspaces = workers
+            .into_iter()
+            .map(|worker| {
+                worker
+                    .join()
+                    .map_err(|_| "workspace worker panicked".to_string())
+                    .and_then(|workspace| workspace)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let unique = workspaces
+            .iter()
+            .map(|workspace| workspace.0.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            unique.len(),
+            workspaces.len(),
+            "concurrent workspaces collided"
+        );
+    }
+    Ok(())
 }
 
 #[tokio::test]

@@ -407,17 +407,25 @@ engine.refresh_runtime(|candidate| {
 ### 2. Signatures
 
 - Release tag: `vX.Y.Z`, where `X.Y.Z` must match Cargo's `hya-backend` package version.
-- Cargo command: `cargo build --release --locked -p hya-backend --bins --target x86_64-unknown-linux-gnu`.
-- Release archive: `hya-<version>-x86_64-unknown-linux-gnu.tar.gz`.
-- Checksum file: `SHA256SUMS` generated beside the release archive.
-- Non-publishing rehearsal (requires Bun `1.3.14` and `actionlint` `1.7.12` on
-  `PATH`):
+- Release targets (build job matrix): `x86_64-unknown-linux-gnu`
+  (`ubuntu-22.04`), `aarch64-unknown-linux-gnu` (`ubuntu-22.04-arm`),
+  `aarch64-apple-darwin` (`macos-15`).
+- Cargo command per target: `cargo build --release --locked -p hya-backend --bins --target "$TARGET"`,
+  plus the five tool-family libraries.
+- Release archive per target: `hya-<version>-<target>.tar.gz`.
+- Bundle assets: `hya-<name>-<version>-<target>.hyabundle` (native tool
+  families, per target) and `hya-<name>-<version>.hyabundle` (the seven
+  platform-independent first-party bundles, once).
+- Checksum files: `SHA256SUMS-<target>` from each build job and a combined
+  `SHA256SUMS` from the release job, written with `shasum -a 256`.
+- Non-publishing rehearsal on a host of the rehearsed target (requires Bun
+  `1.4.2`, `actionlint` `1.7.12`, 7-Zip `7z`, and `shasum` on `PATH`):
 
 ```sh
 cargo run -p xtask -- release-rehearsal \
   --workflow .github/workflows/release.yml \
-  --version 0.36.7 \
-  --target x86_64-unknown-linux-gnu \
+  --version <workspace version> \
+  --target "$(rustc -vV | sed -n 's/^host: //p')" \
   --no-publish
 ```
 
@@ -427,12 +435,16 @@ cargo run -p xtask -- release-rehearsal \
 - Historical changelogs live under `docs/changes/CHANGELOG_<version>.md`.
 - The GitHub Release body is read verbatim from root `CHANGELOG.md`.
 - Release workflow permissions are read-only by default; only the release publishing job may request `contents: write`.
-- Build provenance attestations are generated for the archive and checksum.
+- Build provenance attestations are generated for every archive, bundle asset,
+  and checksum file.
 - Third-party release actions are pinned to immutable commit SHAs.
 - The publishing job uses the `release` environment so repository settings can require manual approval.
 - Within the release archive, the payload includes the shipped `hya-backend`
-  binary, the production `lib/hya/compat-adapter`, and the generated member
+  binary, the twelve first-party bundles under `bundles/`, the production
+  `lib/hya/bun-adapter`, and the generated member
   `examples/hya-argus-example.hyabundle`; it does not add `hya-updater`.
+- Platform-independent bundles must be byte-identical across targets; the
+  release job compares them before publishing.
   (The legacy frontend launcher/runtime payload was removed with the legacy
   TUI.)
 - `scripts/package-argus-example.sh` generates that member from tracked source
@@ -452,10 +464,18 @@ cargo run -p xtask -- release-rehearsal \
 - Build, archive, checksum, or packaged-binary smoke failure -> skip release publishing.
 - Missing release assets -> fail `softprops/action-gh-release` with `fail_on_unmatched_files: true`.
 - Missing `--no-publish` -> rehearsal rejects before validation or build.
-- `actionlint` missing or not version `1.7.12`, or Bun not version `1.3.14` ->
+- `actionlint` missing or not version `1.7.12`, or Bun not version `1.4.2` ->
   rehearsal fails its pinned prerequisite check.
-- Missing Compat adapter runtime, Argus package, locked production dependency,
-  or archive member -> package/rehearsal smoke fails before publication.
+- Bun adapter `bun.lock` written by a Bun newer than the pinned version ->
+  rehearsal fails before build and names the lockfile version.
+- Rehearsal target outside the build matrix, a matrix that differs from the
+  supported targets, or a target other than the host -> rehearsal fails before
+  build.
+- Platform-independent bundle bytes differ between targets -> the release job
+  fails before publishing.
+- Missing Bun adapter runtime, Argus package, locked production dependency,
+  first-party bundle, or archive member -> package/rehearsal smoke fails
+  before publication.
 - Missing adapter payload, locked production dependency, or archive member in
   the staged/extracted tree -> workflow validation fails closed and names the
   exact missing command before prerequisites or build.

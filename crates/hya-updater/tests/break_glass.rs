@@ -92,3 +92,24 @@ fn install_sh_does_not_reference_removed_components() {
         "compat adapter crate was removed"
     );
 }
+
+/// Drive the real installer with fake cargo, bun, and backend binaries:
+/// install layout, failed-dependency preservation, and post-placement rollback.
+#[test]
+fn install_script_contract_passes() {
+    let output = Command::new("bash")
+        .arg(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../tests/install_script.sh")
+                .canonicalize()
+                .expect("tests/install_script.sh must exist"),
+        )
+        .output()
+        .expect("run tests/install_script.sh");
+    assert!(
+        output.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

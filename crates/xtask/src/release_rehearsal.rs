@@ -16,8 +16,68 @@ use anyhow::{Context as _, Result, bail, ensure};
 use serde_norway::Value;
 
 const ACTIONLINT_VERSION: &str = "1.7.12";
-const BUN_VERSION: &str = "1.3.14";
-const WORKFLOW_TARGET: &str = "x86_64-unknown-linux-gnu";
+const BUN_VERSION: &str = "1.4.2";
+/// Highest text-lockfile version [`BUN_VERSION`] can read.
+const BUN_LOCKFILE_VERSION: u64 = 2;
+/// Targets the release matrix builds; a rehearsal runs on one of these hosts.
+const RELEASE_TARGETS: [&str; 3] = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "aarch64-apple-darwin",
+];
+
+/// Require the rehearsal target to be the machine it runs on.
+///
+/// A rehearsal builds, packages, and smoke-runs the release natively, exactly
+/// like that target's matrix job, so it cannot rehearse a foreign target.
+fn require_host_target(target: &str, host: &str) -> Result<()> {
+    ensure!(
+        target == host,
+        "release target `{target}` must be rehearsed on a `{target}` host; this host is `{host}`"
+    );
+    Ok(())
+}
+
+/// Require the Bun adapter lockfile to be readable by the pinned Bun.
+///
+/// A newer Bun writes a lockfile version the release's pinned Bun rejects, which
+/// would only surface when `bun install --frozen-lockfile` runs during packaging.
+fn validate_bun_lockfile(root: &Path) -> Result<()> {
+    let lockfile = read_text(root, &format!("{BUN_ADAPTER}/bun.lock"))?;
+    require_supported_bun_lockfile(parse_bun_lockfile_version(&lockfile)?)
+}
+
+/// Read `lockfileVersion` from Bun's text lockfile.
+fn parse_bun_lockfile_version(lockfile: &str) -> Result<u64> {
+    lockfile
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("\"lockfileVersion\":"))
+        .map(|value| value.trim().trim_end_matches(','))
+        .context("Bun adapter bun.lock has no lockfileVersion")?
+        .parse()
+        .context("Bun adapter bun.lock lockfileVersion is not a number")
+}
+
+/// Reject lockfile versions newer than the pinned Bun understands.
+fn require_supported_bun_lockfile(version: u64) -> Result<()> {
+    ensure!(
+        version <= BUN_LOCKFILE_VERSION,
+        "{BUN_ADAPTER}/bun.lock uses lockfileVersion {version}, which Bun {BUN_VERSION} cannot \
+         read; regenerate it with Bun {BUN_VERSION}"
+    );
+    Ok(())
+}
+
+/// Return the host target triple reported by `rustc -vV`.
+fn host_target(root: &Path) -> Result<String> {
+    let output = run_checked(OsStr::new("rustc"), &arg_list(&["-vV"]), root, &[], &[])
+        .context("read the host target from rustc -vV")?;
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .find_map(|line| line.strip_prefix("host: "))
+        .map(str::to_owned)
+        .context("rustc -vV did not report a host target")
+}
 const BINARY_NAME: &str = "hya";
 const RELEASE_JOB: &str = "release";
 /// Crates whose release `cdylib` the native tool-family bundles package.
@@ -34,7 +94,8 @@ const ARGUS_PACKAGE_SCRIPT: &str = "scripts/package-argus-example.sh";
 const WORKFLOW_BUN_SOURCE_COPY: &str =
     "cp -R crates/hya-plugin-bun/adapter/src/. \"$bun_adapter/src/\"";
 const WORKFLOW_FIRST_PARTY_STAGE: &str = "cargo run --locked -p xtask -- stage-first-party-bundles --target \"$TARGET\" --version \"$version\" --library-dir \"target/$TARGET/release\" --package-root \"dist/$package_dir\" --assets dist";
-const WORKFLOW_CHECKSUMS: &str = "(cd dist && sha256sum \"$archive\" hya-*.hyabundle > SHA256SUMS)";
+const WORKFLOW_CHECKSUMS: &str =
+    "(cd dist && shasum -a 256 \"$archive\" hya-*.hyabundle > \"SHA256SUMS-$TARGET\")";
 
 /// Command-line options for one non-publishing rehearsal.
 #[derive(Debug)]
@@ -115,6 +176,7 @@ pub fn run(args: Vec<String>) -> Result<()> {
         .with_context(|| format!("parse release workflow {} as YAML", workflow_path.display()))?;
     let run_blocks = validate_workflow(&workflow, &options.target)?;
     validate_release_metadata(&root, &options.version, &options.target, &workflow)?;
+    require_host_target(&options.target, &host_target(&root)?)?;
 
     run_actionlint(&workflow_path, &root)?;
     for (index, script) in run_blocks.iter().enumerate() {
@@ -228,7 +290,6 @@ fn validate_workflow(workflow: &Value, target: &str) -> Result<Vec<String>> {
         "workflow env",
     )?;
     ensure_string_field(root_env, "BINARY_NAME", BINARY_NAME, "workflow env")?;
-    ensure_string_field(root_env, "TARGET", target, "workflow env")?;
 
     for (job_name, job) in jobs {
         let job_label = key_label(job_name, "workflow job")?;
@@ -247,10 +308,11 @@ fn validate_workflow(workflow: &Value, target: &str) -> Result<Vec<String>> {
         }
     }
 
-    mapping(
+    let build = mapping(
         field(jobs, BUILD_JOB).context("release workflow must contain build job")?,
         "build job",
     )?;
+    validate_build_matrix(build, target)?;
     let release = mapping(
         field(jobs, RELEASE_JOB).context("release workflow must contain release job")?,
         "release job",
@@ -270,7 +332,7 @@ fn validate_workflow(workflow: &Value, target: &str) -> Result<Vec<String>> {
         "release workflow must keep the locked hya-backend target build command"
     );
     ensure!(
-        run_blocks.iter().any(|run| run.contains("sha256sum")),
+        run_blocks.iter().any(|run| run.contains("shasum -a 256")),
         "release workflow must keep SHA256SUMS generation"
     );
     ensure!(
@@ -295,6 +357,62 @@ fn validate_workflow(workflow: &Value, target: &str) -> Result<Vec<String>> {
         "checksum the archive and every first-party bundle asset",
     )?;
     Ok(run_blocks)
+}
+
+/// Require the build job to run one native job per release target.
+///
+/// The matrix must list exactly [`RELEASE_TARGETS`], each with a runner, and
+/// the job must take `TARGET` and `runs-on` from the matrix entry.
+fn validate_build_matrix(build: &serde_norway::Mapping, target: &str) -> Result<()> {
+    ensure_string_value(
+        field(build, "runs-on").context("build job must declare runs-on")?,
+        "${{ matrix.runner }}",
+        "build job runs-on",
+    )?;
+    let job_env = mapping(
+        field(build, "env").context("build job must declare env")?,
+        "build job env",
+    )?;
+    ensure_string_field(job_env, "TARGET", "${{ matrix.target }}", "build job env")?;
+    let strategy = mapping(
+        field(build, "strategy").context("build job must declare a target matrix")?,
+        "build job strategy",
+    )?;
+    let matrix = mapping(
+        field(strategy, "matrix").context("build job strategy must declare a matrix")?,
+        "build job matrix",
+    )?;
+    let include = sequence(
+        field(matrix, "include").context("build job matrix must list include entries")?,
+        "build job matrix include",
+    )?;
+    let mut targets = Vec::with_capacity(include.len());
+    for (index, entry) in include.iter().enumerate() {
+        let location = format!("build job matrix include[{index}]");
+        let entry = mapping(entry, &location)?;
+        let entry_target = string_value(
+            field(entry, "target").with_context(|| format!("{location} lacks target"))?,
+            &location,
+        )?;
+        let runner = string_value(
+            field(entry, "runner").with_context(|| format!("{location} lacks runner"))?,
+            &location,
+        )?;
+        ensure!(!runner.is_empty(), "{location} has an empty runner");
+        targets.push(entry_target.to_owned());
+    }
+    let mut expected = RELEASE_TARGETS.map(str::to_owned).to_vec();
+    expected.sort();
+    targets.sort();
+    ensure!(
+        targets == expected,
+        "build job matrix must build exactly {expected:?}, found {targets:?}"
+    );
+    ensure!(
+        RELEASE_TARGETS.contains(&target),
+        "release target `{target}` is not in the build job matrix {expected:?}"
+    );
+    Ok(())
 }
 
 /// Require one exact shell marker in the parsed release workflow.
@@ -494,8 +612,8 @@ fn validate_release_metadata(
     );
     validate_release_tag_trigger(workflow, &representative_tag)?;
     ensure!(
-        target == WORKFLOW_TARGET,
-        "release target must be `{WORKFLOW_TARGET}`"
+        RELEASE_TARGETS.contains(&target),
+        "release target `{target}` is not in the build job matrix {RELEASE_TARGETS:?}"
     );
 
     let manifest_path = root.join("Cargo.toml");
@@ -522,6 +640,7 @@ fn validate_release_metadata(
 
     let lockfile = read_text(root, "Cargo.lock")?;
     validate_lockfile_versions(&lockfile, version)?;
+    validate_bun_lockfile(root)?;
 
     let changelog = read_text(root, "CHANGELOG.md")?;
     let first_heading = changelog.lines().find(|line| line.starts_with("# "));
@@ -778,12 +897,13 @@ fn rehearse_package(root: &Path, version: &str, target: &str) -> Result<()> {
             package_name.clone(),
         ],
         root,
-        &[],
+        // macOS tar would otherwise add AppleDouble `._*` entries.
+        &[("COPYFILE_DISABLE", OsString::from("1"))],
         &[],
     )
     .context("create release tar.gz archive")?;
 
-    write_and_verify_checksums(&dist, &archive_name, &assets)?;
+    write_and_verify_checksums(&dist, target, &archive_name, &assets)?;
 
     verify_package_layout(&package_root)?;
     let extract_root = scratch.path().join("extract");
@@ -864,22 +984,34 @@ fn package_argus_example(root: &Path, output: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Generate `SHA256SUMS` for the archive and bundle assets, then verify it like CI.
-fn write_and_verify_checksums(dist: &Path, archive_name: &str, assets: &[String]) -> Result<()> {
-    let mut files = vec![archive_name.to_owned()];
+/// Write `SHA256SUMS-<target>` for the archive and bundle assets, then verify it like CI.
+fn write_and_verify_checksums(
+    dist: &Path,
+    target: &str,
+    archive_name: &str,
+    assets: &[String],
+) -> Result<()> {
+    let mut files = arg_list(&["-a", "256"]);
+    files.push(archive_name.to_owned());
     files.extend(assets.iter().cloned());
-    let checksum = run_checked(OsStr::new("sha256sum"), &files, dist, &[], &[])?;
-    let sums = dist.join("SHA256SUMS");
+    let checksum = run_checked(OsStr::new("shasum"), &files, dist, &[], &[])?;
+    let sums_name = format!("SHA256SUMS-{target}");
+    let sums = dist.join(&sums_name);
     fs::write(&sums, &checksum.stdout)
         .with_context(|| format!("write checksum manifest {}", sums.display()))?;
     run_checked(
-        OsStr::new("sha256sum"),
-        &arg_list(&["-c", "SHA256SUMS"]),
+        OsStr::new("shasum"),
+        &[
+            "-a".to_owned(),
+            "256".to_owned(),
+            "-c".to_owned(),
+            sums_name,
+        ],
         dist,
         &[],
         &[],
     )
-    .context("verify release SHA256SUMS")?;
+    .context("verify release checksums")?;
     Ok(())
 }
 
@@ -1270,8 +1402,57 @@ mod tests {
     fn validate_checked_in_workflow_release_contracts() -> Result<()> {
         let source = canonical_workflow_source()?;
         let workflow: Value = serde_norway::from_str(&source).context("parse release workflow")?;
-        validate_workflow(&workflow, WORKFLOW_TARGET)?;
+        for target in RELEASE_TARGETS {
+            validate_workflow(&workflow, target)?;
+        }
         Ok(())
+    }
+
+    /// Reject a target the release matrix does not build.
+    #[test]
+    fn validate_workflow_rejects_a_target_outside_the_matrix() -> Result<()> {
+        let workflow: Value =
+            serde_norway::from_str(&canonical_workflow_source()?).context("parse workflow")?;
+        let error = validate_workflow(&workflow, "x86_64-apple-darwin")
+            .expect_err("unlisted target accepted");
+        assert!(error.to_string().contains("matrix"), "{error:#}");
+        Ok(())
+    }
+
+    /// The matrix must build exactly the targets the rehearsal supports.
+    #[test]
+    fn validate_workflow_rejects_a_matrix_missing_a_release_target() -> Result<()> {
+        let source = canonical_workflow_source()?;
+        let modified = source.replacen(
+            "aarch64-unknown-linux-gnu",
+            "riscv64gc-unknown-linux-gnu",
+            1,
+        );
+        let workflow: Value = serde_norway::from_str(&modified).context("parse workflow")?;
+        let error = validate_workflow(&workflow, "x86_64-unknown-linux-gnu")
+            .expect_err("incomplete matrix accepted");
+        assert!(error.to_string().contains("matrix"), "{error:#}");
+        Ok(())
+    }
+
+    /// The pinned Bun must be able to read the checked-in adapter lockfile.
+    #[test]
+    fn adapter_lockfile_is_readable_by_the_pinned_bun() -> Result<()> {
+        validate_bun_lockfile(&repo_root()?)?;
+        let error = parse_bun_lockfile_version("{\n  \"lockfileVersion\": 3,\n}")
+            .and_then(require_supported_bun_lockfile)
+            .expect_err("a lockfile from a newer Bun was accepted");
+        assert!(error.to_string().contains(BUN_VERSION), "{error:#}");
+        Ok(())
+    }
+
+    /// A rehearsal builds and runs natively, so the target must be the host.
+    #[test]
+    fn rehearsal_target_must_match_the_host() {
+        assert!(require_host_target("aarch64-apple-darwin", "aarch64-apple-darwin").is_ok());
+        let error = require_host_target("x86_64-unknown-linux-gnu", "aarch64-apple-darwin")
+            .expect_err("foreign target accepted");
+        assert!(error.to_string().contains("host"), "{error:#}");
     }
 
     /// Require each independent release contract omission to fail closed.
@@ -1286,7 +1467,7 @@ mod tests {
             );
             let workflow: Value = serde_norway::from_str(&modified)
                 .with_context(|| format!("parse workflow fixture without `{marker}`"))?;
-            let error = validate_workflow(&workflow, WORKFLOW_TARGET)
+            let error = validate_workflow(&workflow, RELEASE_TARGETS[0])
                 .expect_err("workflow validation accepted a missing release contract");
             assert!(
                 error.to_string().contains(marker),

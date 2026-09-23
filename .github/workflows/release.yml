@@ -16,12 +16,23 @@ env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: "-D warnings"
   BINARY_NAME: hya
-  TARGET: x86_64-unknown-linux-gnu
 
 jobs:
   build:
-    name: build release binary
-    runs-on: ubuntu-22.04
+    name: build ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-22.04
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-22.04-arm
+          - target: aarch64-apple-darwin
+            runner: macos-15
+    env:
+      TARGET: ${{ matrix.target }}
     permissions:
       contents: read
       id-token: write
@@ -29,23 +40,29 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - name: Install Bun 1.3.14
+      - name: Install Bun 1.4.2
         shell: bash
         run: |
-          curl -fsSL https://bun.sh/install | bash -s "bun-v1.3.14"
-          test "$("$HOME/.bun/bin/bun" --version)" = "1.3.14"
+          curl -fsSL https://bun.sh/install | bash -s "bun-v1.4.2"
+          test "$("$HOME/.bun/bin/bun" --version)" = "1.4.2"
           echo "$HOME/.bun/bin" >> "$GITHUB_PATH"
       - name: Install 7-Zip for Workflow package smoke test
         shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install -y p7zip-full
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            brew install p7zip
+          else
+            sudo apt-get update
+            sudo apt-get install -y p7zip-full
+          fi
 
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
         with:
-          targets: x86_64-unknown-linux-gnu
+          targets: ${{ matrix.target }}
 
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+        with:
+          key: ${{ matrix.target }}
 
       - name: Validate tag version and changelog
         id: version
@@ -103,6 +120,8 @@ jobs:
           package_dir="${BINARY_NAME}-${version}-${TARGET}"
           archive="${package_dir}.tar.gz"
 
+          # macOS tar would otherwise add AppleDouble `._*` entries.
+          export COPYFILE_DISABLE=1
           rm -rf dist
           bun_adapter="dist/$package_dir/lib/hya/bun-adapter"
           mkdir -p "dist/$package_dir/bin" "$bun_adapter/src"
@@ -118,7 +137,7 @@ jobs:
             "dist/$package_dir/examples/hya-argus-example.hyabundle"
 
           tar -czf "dist/$archive" -C dist "$package_dir"
-          (cd dist && sha256sum "$archive" hya-*.hyabundle > SHA256SUMS)
+          (cd dist && shasum -a 256 "$archive" hya-*.hyabundle > "SHA256SUMS-$TARGET")
 
           echo "archive=$archive" >> "$GITHUB_OUTPUT"
 
@@ -140,7 +159,7 @@ jobs:
           "$packaged_binary" --version | tee "$scratch/version.txt"
           grep -F "$version" "$scratch/version.txt"
           "$packaged_binary" --help >/dev/null
-          (cd dist && sha256sum -c SHA256SUMS)
+          (cd dist && shasum -a 256 -c "SHA256SUMS-$TARGET")
           asset_count=0
           for asset in dist/hya-*.hyabundle; do
             name="$(basename "$asset" .hyabundle)"
@@ -210,16 +229,16 @@ jobs:
           subject-path: |
             dist/*.tar.gz
             dist/*.hyabundle
-            dist/SHA256SUMS
+            dist/SHA256SUMS-*
 
       - name: Upload release assets
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: release-assets-${{ env.TARGET }}
+          name: release-assets-${{ matrix.target }}
           path: |
             dist/*.tar.gz
             dist/*.hyabundle
-            dist/SHA256SUMS
+            dist/SHA256SUMS-*
           if-no-files-found: error
 
   release:
@@ -229,6 +248,8 @@ jobs:
     environment: release
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
@@ -240,8 +261,38 @@ jobs:
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: release-assets-*
-          path: dist
-          merge-multiple: true
+          path: artifacts
+
+      - name: Assemble release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p dist
+          targets=0
+          for directory in artifacts/release-assets-*; do
+            targets=$((targets + 1))
+            (cd "$directory" && shasum -a 256 -c SHA256SUMS-*)
+            for file in "$directory"/*; do
+              name="$(basename "$file")"
+              if [[ -e "dist/$name" ]]; then
+                # Platform-independent bundles must be byte-identical on every target.
+                cmp "$file" "dist/$name"
+              else
+                cp "$file" "dist/$name"
+              fi
+            done
+          done
+          test "$targets" -eq 3
+          test "$(find dist -name '*.tar.gz' | wc -l)" -eq "$targets"
+          test "$(find dist -name 'hya-*.hyabundle' | wc -l)" -eq $((5 * targets + 7))
+          (cd dist && for file in *.tar.gz hya-*.hyabundle; do shasum -a 256 "$file"; done > SHA256SUMS)
+          (cd dist && shasum -a 256 -c SHA256SUMS)
+
+      - name: Attest combined checksums
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be
+        with:
+          subject-path: dist/SHA256SUMS
 
       - name: Publish release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
