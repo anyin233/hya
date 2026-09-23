@@ -1,4 +1,4 @@
-//! Trusted embedded presets are visible without becoming installable bundles.
+//! Trusted first-party presets are visible without becoming installable bundles.
 
 #![allow(clippy::expect_used)]
 
@@ -26,7 +26,7 @@ fn builtin_skill_catalog_comes_from_prepared_core_skills_bundle() {
 #[test]
 fn inventory_exposes_immutable_noninstallable_core_and_tool_presets() {
     let inventory = hya_app::trusted_preset_inventory().expect("trusted preset inventory");
-    assert_eq!(inventory.len(), 8);
+    assert_eq!(inventory.len(), 9);
     assert_eq!(
         inventory
             .iter()
@@ -37,6 +37,7 @@ fn inventory_exposes_immutable_noninstallable_core_and_tool_presets() {
             "hya/base-tools",
             "hya/channel-tools",
             "hya/core-agents",
+            "hya/core-commands",
             "hya/core-skills",
             "hya/extended-tools",
             "hya/network-tools",
@@ -54,11 +55,13 @@ fn inventory_exposes_immutable_noninstallable_core_and_tool_presets() {
     assert_eq!(inventory[2].kind, "Plugin");
     assert_eq!(inventory[3].kind, "AgentSetBundle");
     assert_eq!(inventory[4].kind, "Plugin");
+    assert_eq!(inventory[4].resource_ids, ["init", "review"]);
+    assert_eq!(inventory[5].kind, "Plugin");
     assert_eq!(
-        inventory[4].resource_ids,
+        inventory[5].resource_ids,
         ["agent-bundle-authoring", "secure-self-update"]
     );
-    assert!(inventory[5..].iter().all(|item| item.kind == "Plugin"));
+    assert!(inventory[6..].iter().all(|item| item.kind == "Plugin"));
     for preset in inventory {
         assert!(preset.immutable);
         assert!(!preset.installable);

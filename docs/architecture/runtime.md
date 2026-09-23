@@ -400,7 +400,7 @@ startup callbacks remain owned by the configured `PluginHost`. A respawn must
 reproduce the complete canonical initialize declaration or calls fail closed.
 
 `RuntimeSnapshot` owns exactly one `BundleCatalog`. At root admission, new turn
-binding, subsequent root model-round boundaries, and catalog refresh, `hya-app` merges project, installed, and embedded
+binding, subsequent root model-round boundaries, and catalog refresh, `hya-app` merges project, installed, and
 first-party payloads. It prepares static Skills, native/Bun/Claude process
 contributions, and bundled MCP servers before publishing catalog and Bundle
 sources atomically. Initialization failure preserves the previous generation.
@@ -416,7 +416,7 @@ prompts, and hooks only after successful preparation; a failed rebind retains
 the current snapshot. Bound child/Workflow activations do not rebind. There is
 no bundle watcher or per-tool-call database check.
 
-Core Agent definitions come from the build-prepared trusted
+Core Agent definitions come from the trusted, runtime-loaded
 [`hya/core-agents` preset](../core-agents.md), and native tool visibility/aliases/
 permission posture come from the [five tool-family presets](../base-tools.md). Public packages
 cannot claim their trusted origin. [`hya/subagents`](../subagent-bundles.md)

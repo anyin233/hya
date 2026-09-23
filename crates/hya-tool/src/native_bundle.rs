@@ -13,7 +13,7 @@ use std::task::{Context, Poll};
 
 use async_trait::async_trait;
 use futures::future::{AbortHandle, Abortable};
-use hya_bundle::inspect_public_package;
+use hya_bundle::{FirstPartySource, first_party_bundle, first_party_source, load_first_party};
 use hya_proto::ToolSchema;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -327,7 +327,7 @@ fn open_library(stem: &str) -> Result<usize, String> {
     let library = match library_source(parent, &filename, stem) {
         Some(LibrarySource::Local(path)) => path,
         Some(LibrarySource::Package(package)) => {
-            extract_packaged_library(&package, stem, &filename)?
+            extract_packaged_library(parent, &package, stem, &filename)?
         }
         None => {
             return Err(format!(
@@ -370,24 +370,36 @@ fn open_library(stem: &str) -> Result<usize, String> {
 
 #[cfg(unix)]
 fn extract_packaged_library(
+    executable_dir: &std::path::Path,
     package: &std::path::Path,
     stem: &str,
     filename: &str,
 ) -> Result<std::path::PathBuf, String> {
     use std::os::unix::fs::DirBuilderExt as _;
-    let bytes = std::fs::read(package).map_err(|error| error.to_string())?;
-    let catalog = inspect_public_package(&bytes).map_err(|error| error.to_string())?;
+    let identity = format!(
+        "hya/{}",
+        stem.strip_prefix("hya_").unwrap_or(stem).replace('_', "-")
+    );
+    // Reuse the process catalog when the first-party loader resolved this same
+    // package (installed layout); otherwise verify the staged package directly.
+    let staged;
+    let catalog = match first_party_source(executable_dir, &identity) {
+        Some(FirstPartySource::Package(resolved)) if resolved == package => {
+            first_party_bundle(&identity).map_err(|error| error.to_string())?
+        }
+        _ => {
+            staged = load_first_party(&FirstPartySource::Package(package.to_path_buf()), &identity)
+                .map_err(|error| error.to_string())?;
+            &staged
+        }
+    };
     let [bundle] = catalog.bundles() else {
         return Err(format!(
             "{} must contain exactly one bundle",
             package.display()
         ));
     };
-    let identity = format!(
-        "hya/{}",
-        stem.strip_prefix("hya_").unwrap_or(stem).replace('_', "-")
-    );
-    if bundle.identity().id != identity || !catalog.process_extensions().is_empty() {
+    if !catalog.process_extensions().is_empty() {
         return Err(format!(
             "{} has an unexpected native tool identity or process",
             package.display()

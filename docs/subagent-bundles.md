@@ -7,7 +7,7 @@ agent definitions. It packages transient and resident workers, their prompts,
 model policies, resource views, and explicit `can_spawn` edges without owning a
 Workflow or pre-allocating runtime sessions and channels.
 
-`hya/subagents` is an embedded first-party reference package and is available
+`hya/subagents` is a first-party reference package and is available
 without installation. It contains unique
 `hya-transient-worker` and `hya-resident-worker` identities, so installing it
 does not duplicate the trusted `hya/core-agents` preset. It remains a public,
@@ -30,7 +30,7 @@ selected stable id.
 Operators may install a public bundle with identity `hya/subagents` (or the
 same namespace) as a local override. `hya-backend bundle list` and `bundle
 info hya/subagents` then show the installed definition. Uninstalling that
-override restores the embedded package on the next root binding:
+override restores the first-party package on the next root binding:
 
 ```sh
 hya-backend bundle install ./subagents-override.hyabundle

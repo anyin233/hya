@@ -6,7 +6,7 @@
 //! so the move out of the bundle system cannot silently drop or rename an agent.
 
 use hya_bundle::{AgentRole, SpawnLifecycle};
-use hya_core::builtin_agents::{BUILTIN_AGENTS, BuiltinAgent, SpawnScope, builtin_agent};
+use hya_core::builtin_agents::{BuiltinAgent, SpawnScope, builtin_agent, builtin_agents};
 
 /// Every built-in id, in the order the roster must expose them.
 const EXPECTED_IDS: &[&str] = &[
@@ -51,7 +51,7 @@ const MAIN_IDS: &[&str] = &["build", "hya-main", "plan"];
 
 #[test]
 fn roster_holds_every_builtin_id_in_sorted_order() {
-    let ids = BUILTIN_AGENTS
+    let ids = builtin_agents()
         .iter()
         .map(|agent| agent.id)
         .collect::<Vec<_>>();
@@ -61,7 +61,7 @@ fn roster_holds_every_builtin_id_in_sorted_order() {
 #[test]
 fn roster_is_strictly_sorted_so_lookup_and_digest_stay_deterministic() {
     assert!(
-        BUILTIN_AGENTS
+        builtin_agents()
             .windows(2)
             .all(|pair| pair[0].id < pair[1].id),
         "BUILTIN_AGENTS must be strictly sorted by id"
@@ -78,7 +78,7 @@ fn every_builtin_resolves_by_id() {
 
 #[test]
 fn reserved_system_agents_are_marked_and_spawn_nothing() {
-    for agent in BUILTIN_AGENTS {
+    for agent in builtin_agents() {
         let reserved = RESERVED_IDS.contains(&agent.id);
         assert_eq!(
             agent.system_reserved, reserved,
@@ -100,7 +100,7 @@ fn reserved_system_agents_are_marked_and_spawn_nothing() {
 
 #[test]
 fn roles_match_the_retired_builtin_bundles() {
-    for agent in BUILTIN_AGENTS {
+    for agent in builtin_agents() {
         let expected = if MAIN_IDS.contains(&agent.id) {
             AgentRole::Main
         } else {
@@ -112,7 +112,7 @@ fn roles_match_the_retired_builtin_bundles() {
 
 #[test]
 fn prompted_agents_carry_non_empty_compiled_in_bodies() {
-    for agent in BUILTIN_AGENTS {
+    for agent in builtin_agents() {
         let has_prompt = PROMPTED_IDS.contains(&agent.id);
         assert_eq!(
             agent.prompt.is_some(),
@@ -132,7 +132,7 @@ fn prompted_agents_carry_non_empty_compiled_in_bodies() {
 
 #[test]
 fn every_builtin_is_transient_and_selector_visible() {
-    for agent in BUILTIN_AGENTS {
+    for agent in builtin_agents() {
         assert_eq!(
             agent.spawn_lifecycle,
             SpawnLifecycle::Transient,
@@ -144,7 +144,7 @@ fn every_builtin_is_transient_and_selector_visible() {
 
 #[test]
 fn ordinary_agents_are_the_twelve_non_reserved_ids() {
-    let ordinary = BUILTIN_AGENTS
+    let ordinary = builtin_agents()
         .iter()
         .filter(|agent| !agent.system_reserved)
         .map(|agent| agent.id)
@@ -159,7 +159,7 @@ fn ordinary_agents_are_the_twelve_non_reserved_ids() {
 fn descriptions_exist_for_every_selector_visible_agent() {
     // Reserved system agents are never shown in a selector, so they need no
     // description. Everything else is pickable and must describe itself.
-    for agent in BUILTIN_AGENTS {
+    for agent in builtin_agents() {
         if agent.system_reserved {
             continue;
         }

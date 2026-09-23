@@ -73,8 +73,8 @@ mod test_support;
 
 pub use agent_catalog::{AgentCatalog, AgentDefinition, AgentOrigin};
 pub use builtin_agents::{
-    BUILTIN_AGENTS, BuiltinAgent, CORE_AGENTS_PRESET_ID, CoreAgentsPreset, SpawnScope,
-    builtin_agent, core_agents_preset, is_builtin_id,
+    BuiltinAgent, CORE_AGENTS_PRESET_ID, CoreAgentsPreset, SpawnScope, builtin_agent,
+    builtin_agents, core_agents_preset, is_builtin_id,
 };
 pub use bus::EventBus;
 pub use category::{

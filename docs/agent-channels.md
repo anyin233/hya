@@ -8,7 +8,7 @@ leaving concrete channel creation to the engine. Runtime channel ids such as
 `announce-…` and `DM-…` are always minted as event facts and never appear in a
 bundle.
 
-The embedded `hya/agent-channels` preset records the existing behavior. A
+The trusted `hya/agent-channels` preset (a [first-party bundle](bundle-runtime.md#first-party-bundles)) records the existing behavior. A
 manifest without `channels` continues to use that trusted default policy when
 the engine integration consumes this contract. Installed declarations can only
 intersect with and restrict those grants; they cannot elevate engine or preset

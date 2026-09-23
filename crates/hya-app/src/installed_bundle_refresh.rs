@@ -16,31 +16,19 @@ use tokio::sync::{Mutex, OnceCell};
 use crate::project_bundles::load_project_bundles;
 use crate::runtime_reconcile::{bundle_schema_claims, prepared_static_bundle_source};
 
-/// One embedded first-party bundle entry emitted by the build script.
-#[derive(serde::Deserialize)]
-struct FirstPartyEntry {
-    name: String,
-    digest: String,
-    bytes: String,
-}
+/// First-party WorkflowBundle and AgentSetBundle payloads published with the runtime catalog.
+const FIRST_PARTY_CATALOG_BUNDLES: [&str; 3] =
+    ["hya/goal-loop", "hya/plan-impl-review", "hya/subagents"];
 
-/// Decode every build-prepared first-party bundle, in deterministic order.
+/// Load every first-party runtime bundle, in deterministic order.
 pub fn first_party_catalogs() -> Result<Vec<PreparedCatalog>, CoreError> {
-    let raw = include_str!(concat!(env!("OUT_DIR"), "/first-party.json"));
-    let entries: Vec<FirstPartyEntry> = serde_json::from_str(raw).map_err(|error| {
-        CoreError::Invalid(format!(
-            "embedded first-party catalog list is malformed: {error}"
-        ))
-    })?;
-    entries
+    FIRST_PARTY_CATALOG_BUNDLES
         .iter()
-        .map(|entry| {
-            PreparedCatalog::decode(entry.bytes.as_bytes(), &entry.digest).map_err(|error| {
-                CoreError::Invalid(format!(
-                    "embedded first-party bundle `{}` failed decode: {error}",
-                    entry.name
-                ))
-            })
+        .map(|identity| {
+            let loaded = hya_bundle::first_party_bundle(identity)
+                .map_err(|error| CoreError::Invalid(error.to_string()))?;
+            PreparedCatalog::decode(loaded.bytes(), loaded.digest())
+                .map_err(|error| CoreError::Invalid(format!("first-party `{identity}`: {error}")))
         })
         .collect()
 }

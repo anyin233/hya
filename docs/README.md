@@ -49,7 +49,7 @@ If you want to package a public Plugin, AgentBundle, AgentSetBundle, or Workflow
    [disjoint Bun example](examples/bun-disjoint/), or the
    [directory `bundle.yaml` layout](../crates/hya-bundle/tests/fixtures/directory/bundle.yaml),
    and use the [bundle CLI reference](cli.md#bundle-commands). Core Agents
-   come from the trusted [embedded preset](core-agents.md); public packages cannot
+   come from the trusted [core-agents preset](core-agents.md); public packages cannot
    claim their reserved identities or trusted origin.
 
 If you want the independent self-update path (0.34.13+):
@@ -89,7 +89,7 @@ If you want to understand the codebase:
 | [Plugin protocol](plugin-protocol.md) | Native stdio JSON-RPC ABI for out-of-process plugins. |
 | [AgentBundle Authoring](agent-bundle-authoring.md) | Package, inspect, install, list, describe, and uninstall public Plugin, AgentBundle, and AgentSetBundle payloads, including static and Bun-sidecar forms. |
 | [Bundle Runtime](bundle-runtime.md) | Packaged process/MCP startup, scoped tools/hooks, immutable bindings, and failure rollback. |
-| [Core agents](core-agents.md) | Trusted embedded agent preset and reserved-agent provenance. |
+| [Core agents](core-agents.md) | Trusted first-party agent preset and reserved-agent provenance. |
 | [Tool-family presets](base-tools.md) | Five trusted tool groups, exposure, aliases, and permission defaults. |
 | [Claude plugin import](claude-plugin-import.md) | Import local and marketplace plugins into standard bundles. |
 | [Subagent bundles](subagent-bundles.md) | Transient and resident bundle-defined workers. |

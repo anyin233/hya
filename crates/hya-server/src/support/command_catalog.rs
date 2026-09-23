@@ -1,9 +1,71 @@
 use std::path::Path;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-const INIT_TEMPLATE: &str = include_str!("command_templates/initialize.txt");
-const REVIEW_TEMPLATE: &str = include_str!("command_templates/review.txt");
+/// Identity of the trusted bundle that owns the prompt-template commands.
+const CORE_COMMANDS_BUNDLE: &str = "hya/core-commands";
+
+/// The `commands.yaml` asset of `hya/core-commands`.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CoreCommands {
+    schema_version: u32,
+    commands: Vec<CoreCommand>,
+}
+
+/// One prompt-template command declared by `hya/core-commands`.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CoreCommand {
+    name: String,
+    description: String,
+    /// `extensions.files` id of the template body.
+    template: String,
+    #[serde(default)]
+    hints: Vec<String>,
+    #[serde(default)]
+    subtask: Option<bool>,
+}
+
+/// Prompt-template commands from `hya/core-commands`, loaded once per process.
+fn core_commands() -> &'static [(CoreCommand, String)] {
+    static COMMANDS: std::sync::OnceLock<Vec<(CoreCommand, String)>> = std::sync::OnceLock::new();
+    COMMANDS.get_or_init(|| {
+        load_core_commands().unwrap_or_else(|error| panic!("load {CORE_COMMANDS_BUNDLE}: {error}"))
+    })
+}
+
+fn load_core_commands() -> Result<Vec<(CoreCommand, String)>, String> {
+    let catalog =
+        hya_bundle::first_party_bundle(CORE_COMMANDS_BUNDLE).map_err(|error| error.to_string())?;
+    let [bundle] = catalog.bundles() else {
+        return Err("expected one bundle".to_string());
+    };
+    let asset = |id: &str| {
+        bundle
+            .extensions()
+            .iter()
+            .find(|asset| asset.local_id == id)
+            .map(|asset| asset.content.clone())
+            .ok_or_else(|| format!("missing `{id}` file"))
+    };
+    let declared: CoreCommands =
+        serde_norway::from_str(&asset("commands")?).map_err(|error| error.to_string())?;
+    if declared.schema_version != 1 {
+        return Err(format!(
+            "unsupported commands schema {}",
+            declared.schema_version
+        ));
+    }
+    declared
+        .commands
+        .into_iter()
+        .map(|command| {
+            let template = asset(&command.template)?;
+            Ok((command, template))
+        })
+        .collect()
+}
 
 #[derive(Serialize)]
 pub(crate) struct CommandInfo {
@@ -28,21 +90,20 @@ pub(crate) struct CommandInfo {
 
 pub(crate) fn list(workdir: &Path) -> Vec<CommandInfo> {
     let workdir = workdir.to_string_lossy();
-    let mut commands = vec![
-        command_info(
-            "init",
-            "guided AGENTS.md setup",
-            INIT_TEMPLATE.replace("${path}", workdir.as_ref()),
-            vec!["$ARGUMENTS"],
-            None,
-        ),
-        command_info(
-            "review",
-            "review changes [commit|branch|pr], defaults to uncommitted",
-            REVIEW_TEMPLATE.replace("${path}", workdir.as_ref()),
-            vec!["$ARGUMENTS"],
-            Some(true),
-        ),
+    let mut commands = core_commands()
+        .iter()
+        .map(|(command, template)| CommandInfo {
+            hints: command.hints.clone(),
+            ..command_info(
+                command.name.clone(),
+                command.description.clone(),
+                template.replace("${path}", workdir.as_ref()),
+                Vec::new(),
+                command.subtask,
+            )
+        })
+        .collect::<Vec<_>>();
+    commands.extend([
         command_info(
             "help",
             "show this help",
@@ -85,7 +146,7 @@ pub(crate) fn list(workdir: &Path) -> Vec<CommandInfo> {
             vec!["$ARGUMENTS"],
             None,
         ),
-    ];
+    ]);
     upsert_commands(
         &mut commands,
         crate::support::command_sources::disk_commands(Path::new(workdir.as_ref())),
@@ -286,6 +347,29 @@ fn add_skill_commands(commands: &mut Vec<CommandInfo>, workdir: &Path) {
 #[cfg(test)]
 mod tests {
     use super::expand_template;
+
+    #[test]
+    fn init_and_review_templates_come_from_the_core_commands_bundle() {
+        let catalog = hya_bundle::first_party_bundle("hya/core-commands")
+            .unwrap_or_else(|error| panic!("{error}"));
+        let asset = |id: &str| {
+            catalog.bundles()[0]
+                .extensions()
+                .iter()
+                .find(|asset| asset.local_id == id)
+                .map(|asset| asset.content.replace("${path}", "/work"))
+                .unwrap_or_else(|| panic!("missing {id} asset"))
+        };
+        let commands = super::list(std::path::Path::new("/work"));
+        for (name, id, subtask) in [("init", "init", None), ("review", "review", Some(true))] {
+            let command = commands
+                .iter()
+                .find(|command| command.name == name)
+                .unwrap_or_else(|| panic!("missing /{name}"));
+            assert_eq!(command.template, asset(id), "/{name}");
+            assert_eq!(command.subtask, subtask, "/{name}");
+        }
+    }
 
     #[test]
     fn expands_full_numeric_placeholder_without_reexpanding_arguments() {

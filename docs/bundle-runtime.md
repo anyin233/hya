@@ -21,6 +21,41 @@ The release asset stores each trusted family package under `bundles/` beside
 `bin/`. Installed third-party bundles do not gain in-process execution by
 declaring a library resource.
 
+## First-party bundles
+
+Hya's own tools, agents, Skills, commands, channel policy and workflows are
+bundles that the backend loads when it starts. None of their content is
+compiled into the binary. `hya_bundle::FIRST_PARTY_BUNDLES` lists the twelve
+trusted identities:
+
+| Identity | Source | Supplies |
+| --- | --- | --- |
+| `hya/base-tools`, `hya/extended-tools`, `hya/network-tools`, `hya/channel-tools`, `hya/todo-tools` | `bundles/presets/<family>-tools` | Tool exposure policy and native tool library |
+| `hya/core-skills` | `bundles/presets/core-skills` | Builtin Skills |
+| `hya/core-commands` | `bundles/presets/core-commands` | `/init` and `/review` prompt templates |
+| `hya/core-agents` | `bundles/presets/core-agents` | Builtin agent roster, prompts and reserved ids |
+| `hya/agent-channels` | `bundles/presets/agent-channels` | Default channel capabilities |
+| `hya/goal-loop`, `hya/plan-impl-review`, `hya/subagents` | `bundles/first-party/<name>` | First-party AgentSet and Workflow bundles |
+
+`first_party_source` picks one source per identity:
+
+- **Installed layout.** A backend in `<prefix>/bin/` loads only
+  `<prefix>/bundles/hya-<name>.hyabundle`. Trust comes from the installation
+  directory plus the exact identity allowlist; the loaded package must contain
+  exactly that identity.
+- **Cargo builds.** A backend or test binary under `target/<profile>/` reads the
+  in-tree source directory, so edits apply on the next start without a
+  rebuild. A package staged under `target/<profile>/bundles/` is used only when
+  the source directory is absent.
+
+`first_party_bundle(identity)` prepares each bundle once per process and keeps
+the verified catalog for the process lifetime. A missing or mismatched
+trusted bundle is a startup error, like a missing tool library.
+
+The engine keeps safety-critical logic and its prompt contracts in Rust:
+admission, permissions, events, lifecycle, and the compaction and handoff
+templates whose headings the engine parses.
+
 ## Usage
 
 Package each required UTF-8 support file explicitly. For example:

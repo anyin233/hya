@@ -11,7 +11,7 @@ use hya_bundle::{
     AgentRole, BundleCatalog, BundleError, BundleIdentity, ModelPolicy, PreparedAgent,
     PreparedAgentBundle, PreparedInstallableBundle, ResourceView, SpawnLifecycle,
 };
-use hya_core::{AgentCatalog, AgentOrigin, BUILTIN_AGENTS, core_agents_preset};
+use hya_core::{AgentCatalog, AgentOrigin, builtin_agents, core_agents_preset};
 use hya_proto::AgentName;
 
 /// One installed bundle holding one agent with the given spawn graph.
@@ -77,7 +77,7 @@ fn core_agents_are_backed_by_the_verified_embedded_preset() {
         .collect::<Vec<_>>();
     assert_eq!(catalog_ids, preset_ids);
 
-    for (compat, prepared) in BUILTIN_AGENTS.iter().zip(preset.agents()) {
+    for (compat, prepared) in builtin_agents().iter().zip(preset.agents()) {
         assert_eq!(compat.id, prepared.id.as_str());
         assert_eq!(compat.description, prepared.description.as_deref());
         assert_eq!(compat.role, prepared.role);
@@ -370,4 +370,17 @@ fn first_party_subagent_bundle_preserves_transient_and_resident_lifecycles() {
     assert!(!transient.origin.is_preset());
     assert!(!catalog.is_reserved(transient.stable_id));
     assert!(!catalog.is_reserved(resident.stable_id));
+}
+
+#[test]
+fn core_agents_preset_is_the_runtime_loaded_first_party_bundle() {
+    let preset = core_agents_preset().expect("core-agents preset");
+    let catalog = hya_bundle::first_party_bundle("hya/core-agents").expect("load core-agents");
+    assert!(std::ptr::eq(preset.prepared_bytes(), catalog.bytes()));
+    assert_eq!(preset.digest(), catalog.digest());
+    let roster = hya_core::builtin_agents::builtin_agents();
+    assert_eq!(roster.len(), preset.agents().len());
+    for (agent, prepared) in roster.iter().zip(preset.agents()) {
+        assert!(std::ptr::eq(agent.id, prepared.id.as_str()));
+    }
 }

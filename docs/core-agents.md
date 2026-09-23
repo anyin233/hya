@@ -4,9 +4,13 @@
 
 `hya/core-agents` is the trusted, immutable `AgentSetBundle` that supplies the
 agents shipped with hya. Its source lives under `bundles/presets/core-agents`.
-The `hya-core` build script validates and prepares that source, embeds the
-canonical prepared bytes and digest in the binary, and the runtime catalog
-resolves built-in agents from those verified bytes.
+It is a [first-party bundle](bundle-runtime.md#first-party-bundles):
+`hya_bundle::first_party_bundle("hya/core-agents")` validates and prepares
+that source once per process, and the runtime catalog resolves built-in
+agents from those verified, loaded bytes. In a Cargo build the in-tree source
+directory is read at startup, so edits apply on the next restart with no
+rebuild; an installed backend instead loads the packaged
+`hya-core-agents.hyabundle` beside it.
 
 The preset preserves the stable agent ids, prompts, selector roles, model
 defaults, transient spawn lifecycle, and reserved system-agent behavior that
@@ -29,14 +33,15 @@ including agents from installed bundles. `compaction`, `summary`, and `title`
 are reserved for engine-owned operations: they are resolvable by exact id but
 are excluded from selectors and spawn rosters and cannot spawn other agents.
 
-Editing `bundle.yaml` or a prompt under the preset directory requires rebuilding
-`hya-core`. Invalid source fails the build before runtime code can embed it.
+Editing `bundle.yaml` or a prompt under the preset directory takes effect on
+the next restart; no rebuild is required in a Cargo build. Invalid source
+fails at startup, before the runtime catalog can load it.
 
 The application exposes `hya/core-agents`, the five trusted
 [tool-family presets](base-tools.md), the trusted
-[core Skills](skills.md#built-in-fallback-skills), and the channel defaults in
-`hya/agent-channels` through a read-only preset inventory
-for list/info surfaces. Inventory rows report
+[core Skills](skills.md#built-in-fallback-skills), `hya/core-commands`, and the
+channel defaults in `hya/agent-channels` through a read-only preset inventory
+(nine presets in total) for list/info surfaces. Inventory rows report
 their id, kind, version, digest, exported ids, and
 `immutable: true, installable: false`. They do not enter the installed bundle
 catalog and cannot be upgraded or uninstalled through public bundle commands.
@@ -49,17 +54,22 @@ publisher `hya`. Every member uses the standard Agent interface: `id`, optional
 `spawn_lifecycle`, `resource_view`, `can_spawn`, and `hook_refs`. The shipped
 agents leave `model_policy` empty so the runtime's configured model remains the
 default, and all use `transient` lifecycle. The preset's inert `policy.yaml`
-explicitly names engine-only reserved ids and the ordinary spawn scope; the
-build validates every policy id against a real prepared Agent. This policy is
+explicitly names engine-only reserved ids and the ordinary spawn scope; loading
+the preset validates every policy id against a real prepared Agent. This policy is
 specific to the trusted preset origin and does not grant special behavior to
 public bundles.
 
-`hya_core::core_agents_preset()` exposes a verified `CoreAgentsPreset` view:
+`hya_core::core_agents_preset()` loads and verifies the bundle once per
+process and returns a `CoreAgentsPreset` view (or the load error):
 
 - `bundle_id() -> &'static str` returns `hya/core-agents`.
-- `prepared_bytes() -> &'static [u8]` returns the embedded canonical document.
+- `prepared_bytes() -> &'static [u8]` returns the loaded canonical document.
 - `digest() -> &'static str` returns its 64-character SHA-256 hex digest.
 - `agents() -> &'static [PreparedAgent]` returns agents in stable-id order.
+
+`hya_core::builtin_agents() -> &'static [BuiltinAgent]` (replacing the old
+`BUILTIN_AGENTS` constant) returns the same roster as a compatibility view for
+callers that do not need the full preset.
 
 `AgentOrigin::Builtin` is the compatibility spelling for this trusted preset
 origin. `is_preset()` identifies it and `preset_bundle_id()` returns

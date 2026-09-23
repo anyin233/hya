@@ -119,16 +119,16 @@ _Avoid_: restart, replay, continue
 
 **Agent**:
 A role/config — name, system prompt, model or category, tools, permissions — with one of two
-**Origins**: a **built-in agent** from the trusted embedded `hya/core-agents`
-AgentSetBundle preset, or a **bundle agent** from an installed prepared bundle. Both are resolved through the **Agent catalog** on the process
+**Origins**: a **built-in agent** from the trusted `hya/core-agents`
+AgentSetBundle preset (a first-party bundle), or a **bundle agent** from an installed prepared bundle. Both are resolved through the **Agent catalog** on the process
 `AgentCatalog` / `TurnBinding`. Legacy per-file markdown agent definitions under
 `.hya/` / `.claude/` / `.opencode` are **not** discovered or used. Distinct from the
 Session that runs it.
 _Avoid_: role, persona, bot
 
 **Agent origin**:
-Which of the two sources an Agent came from: **built-in** (compiled in, full Harness tool plane,
-owns no bundle resources) or **bundle** (installed, clamped **internal public** tool plane plus
+Which of the two sources an Agent came from: **built-in** (loaded from the first-party
+`hya/core-agents` preset, full Harness tool plane, owns no bundle resources) or **bundle** (installed, clamped **internal public** tool plane plus
 its own bundle resources). Origin decides the **Tool plane**; no manifest field selects it.
 _Avoid_: kind, type, provenance
 
@@ -155,7 +155,8 @@ The slim hyabundle payload: shared tools, Skills, hooks, MCP declarations, schem
 and optional process extensions, without an Agent, Workflow, or channel declaration.
 
 **Preset bundle**:
-A verified embedded bundle supplied by the binary. `hya/core-agents` and `hya/base-tools`
+A verified first-party bundle loaded from the installation's bundles directory at runtime.
+`hya/core-agents` and `hya/base-tools`
 define Agent metadata and native tool exposure. Trusted origin, not manifest identity,
 establishes their reserved privileges. Ordinary installed bundles cannot become presets.
 

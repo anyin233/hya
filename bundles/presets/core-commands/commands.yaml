@@ -1,0 +1,11 @@
+schema_version: 1
+commands:
+  - name: init
+    description: guided AGENTS.md setup
+    template: init
+    hints: [$ARGUMENTS]
+  - name: review
+    description: review changes [commit|branch|pr], defaults to uncommitted
+    template: review
+    hints: [$ARGUMENTS]
+    subtask: true

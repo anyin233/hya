@@ -372,6 +372,10 @@ fn channel_formatter(
 
 /// Require that no second formatter invocation starts while a prior call is held.
 //
+/// Tests using this wait run on the real clock: native tool I/O runs on the
+/// bundle's Tokio runtime, which a paused host test clock cannot observe, so a
+/// paused clock would auto-advance past this window while bundle work is in flight.
+//
 /// # Parameters
 /// - `calls`: Formatter invocation channel to inspect.
 /// - `operation`: Description included in the failure diagnostic.
@@ -844,7 +848,7 @@ async fn edit_forced_formatter_failure_leaves_no_temp_files() {
 }
 
 /// Serialize mutations of one resolved file even when sessions differ.
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 async fn same_resolved_file_serializes_mutations_across_sessions() {
     let workdir = tempdir();
     let target = workdir.join("shared.txt");
@@ -913,7 +917,7 @@ async fn same_resolved_file_serializes_mutations_across_sessions() {
 
 /// Serialize mutations through hard-link aliases using one inode identity.
 #[cfg(unix)]
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 async fn hard_link_aliases_serialize_mutations_by_inode() {
     use std::os::unix::fs::MetadataExt;
 
@@ -992,7 +996,7 @@ async fn hard_link_aliases_serialize_mutations_by_inode() {
 }
 
 /// Keep Read behind a formatter and expose only the formatter's final bytes.
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 async fn read_waits_for_formatter_and_snapshots_final_bytes() {
     let workdir = tempdir();
     let target = workdir.join("final.txt");
@@ -1071,7 +1075,7 @@ async fn read_waits_for_formatter_and_snapshots_final_bytes() {
 
 /// Re-resolve a symlink after waiting and edit only its newly named target.
 #[cfg(unix)]
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 async fn waiting_symlink_edit_reresolves_after_retarget() {
     use std::os::unix::fs::symlink;
 
@@ -1162,7 +1166,7 @@ async fn waiting_symlink_edit_reresolves_after_retarget() {
 }
 
 /// Cancel an Edit while it waits and prove that it never reaches the formatter.
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 async fn cancelled_waiting_edit_returns_cancelled_without_commit() {
     let workdir = tempdir();
     let target = workdir.join("cancel.txt");
