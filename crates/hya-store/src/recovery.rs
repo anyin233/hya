@@ -154,8 +154,11 @@ impl SessionStore {
         cause: FinishCause,
         reason: &str,
     ) -> Result<Vec<Envelope>, StoreError> {
+        // Fold outside the writer transaction first so the (possibly first)
+        // full replay lands in the cache; the transaction folds only the tail.
+        self.warm_projection(session).await?;
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
-        let projection = replay_projection(&mut tx, session).await?;
+        let projection = replay_projection(&self.projections, &mut tx, session).await?;
         let code = if cause == FinishCause::Interrupted {
             "INTERRUPTED"
         } else {

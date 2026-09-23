@@ -218,3 +218,31 @@ async fn legacy_uuid_session_round_trips_through_replay_list_and_delete() {
     assert!(store.delete_session(session).await.unwrap());
     assert!(store.replay(session).await.unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn session_info_matches_the_listed_row() {
+    let store = SessionStore::connect_memory().await.unwrap();
+    let listed = SessionId::new();
+    let other = SessionId::new();
+    for (session, title) in [(listed, "a"), (other, "b"), (listed, "c")] {
+        store
+            .append_event(
+                session,
+                &Event::SessionTitled {
+                    session,
+                    title: title.into(),
+                },
+            )
+            .await
+            .unwrap();
+    }
+    let row = store
+        .list_sessions()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|row| row.session == listed)
+        .unwrap();
+    assert_eq!(store.session_info(listed).await.unwrap(), Some(row));
+    assert_eq!(store.session_info(SessionId::new()).await.unwrap(), None);
+}
