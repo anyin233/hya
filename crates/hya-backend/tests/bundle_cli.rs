@@ -930,50 +930,160 @@ agent:
     Ok(package)
 }
 
+fn stdout_lines(output: &Output) -> Vec<String> {
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::to_string)
+        .collect()
+}
+
 #[test]
-fn bundle_schemas_lists_declared_scheme_extensions() -> Result<(), Box<dyn std::error::Error>> {
+fn bundle_schema_shows_one_bundles_declarations_in_any_scope()
+-> Result<(), Box<dyn std::error::Error>> {
     let data_root = unique_data_root()?;
     let package = schema_bundle_package(&data_root)?;
+    let expected = vec![
+        "SCHEME TOOL WRITABLE".to_string(),
+        "db query false".to_string(),
+    ];
+
+    // A package file prints its declarations without installing it.
+    let from_file = bundle_command(&data_root)
+        .args(["bundle", "schema"])
+        .arg(&package)
+        .output()?;
+    assert_success("schema <file>", &from_file);
+    assert_eq!(stdout_lines(&from_file), expected);
 
     let install = bundle_command(&data_root)
         .args(["bundle", "install", "-y"])
         .arg(&package)
         .output()?;
     assert_success("install", &install);
-
-    let schemas = bundle_command(&data_root)
-        .args(["bundle", "schemas"])
+    let installed = bundle_command(&data_root)
+        .args(["bundle", "schema", "hya/schema-cli"])
         .output()?;
-    assert_success("schemas", &schemas);
-    let schemas_stdout = String::from_utf8(schemas.stdout)?;
-    let mut lines = schemas_stdout.lines();
+    assert_success("schema <installed>", &installed);
     assert_eq!(
-        lines.next(),
-        Some("BUNDLE SCHEME TOOL WRITABLE"),
-        "unexpected schemas header:\n{schemas_stdout}"
-    );
-    let row = lines
-        .find(|line| line.split_whitespace().next() == Some("hya/schema-cli"))
-        .ok_or("installed bundle must be listed in bundle schemas output")?;
-    assert_eq!(
-        row.split_whitespace().collect::<Vec<_>>(),
-        ["hya/schema-cli", "db", "query", "false"],
-        "the schema row must carry scheme, owner tool, and writable flag:\n{schemas_stdout}"
+        stdout_lines(&installed),
+        expected,
+        "only this bundle's rows"
     );
 
-    let uninstall = bundle_command(&data_root)
-        .args(["bundle", "uninstall", "-y", "hya/schema-cli"])
+    // A builtin bundle without declarations prints just the header.
+    let builtin = bundle_command(&data_root)
+        .args(["bundle", "schema", "hya/goal-loop"])
         .output()?;
-    assert_success("uninstall", &uninstall);
+    assert_success("schema <builtin>", &builtin);
+    assert_eq!(
+        stdout_lines(&builtin),
+        vec!["SCHEME TOOL WRITABLE".to_string()]
+    );
+    let preset = bundle_command(&data_root)
+        .args(["bundle", "schema", "hya/base-tools"])
+        .output()?;
+    assert_success("schema <preset>", &preset);
+
+    let unknown = bundle_command(&data_root)
+        .args(["bundle", "schema", "acme/missing"])
+        .output()?;
+    assert!(!unknown.status.success(), "unknown bundle must fail");
+    assert!(String::from_utf8(unknown.stderr)?.contains("BUNDLE_NOT_FOUND"));
+
+    let remove = bundle_command(&data_root)
+        .args(["bundle", "remove", "-y", "hya/schema-cli"])
+        .output()?;
+    assert_success("remove", &remove);
     let after = bundle_command(&data_root)
+        .args(["bundle", "schema", "hya/schema-cli"])
+        .output()?;
+    assert!(!after.status.success(), "removed bundle must not resolve");
+
+    let project = bundle_command(&data_root)
+        .args(["bundle", "install", "--project", "-y"])
+        .arg(&package)
+        .output()?;
+    assert_success("install --project", &project);
+    let project_schema = bundle_command(&data_root)
+        .args(["bundle", "schema", "--project", "hya/schema-cli"])
+        .output()?;
+    assert_success("schema --project", &project_schema);
+    assert_eq!(stdout_lines(&project_schema), expected);
+    let user_schema = bundle_command(&data_root)
+        .args(["bundle", "schema", "--user", "hya/schema-cli"])
+        .output()?;
+    assert!(
+        !user_schema.status.success(),
+        "--user must not see project bundles"
+    );
+
+    let plural = bundle_command(&data_root)
         .args(["bundle", "schemas"])
         .output()?;
-    assert_success("schemas after uninstall", &after);
-    let after_stdout = String::from_utf8(after.stdout)?;
     assert!(
-        !after_stdout.contains("hya/schema-cli"),
-        "uninstalled bundle remained listed:\n{after_stdout}"
+        !plural.status.success(),
+        "`bundle schemas` is replaced by `bundle schema <NAME>`"
     );
+
+    fs::remove_dir_all(&data_root)?;
+    Ok(())
+}
+
+#[test]
+fn bundle_search_covers_user_and_project_bundles_with_scope_and_state()
+-> Result<(), Box<dyn std::error::Error>> {
+    let data_root = unique_data_root()?;
+    let package = write_fixture(&data_root)?;
+    let schema_package = schema_bundle_package(&data_root)?;
+    for args in [
+        vec!["bundle", "install", "-y"],
+        vec!["bundle", "install", "--project", "-y"],
+    ] {
+        let install = bundle_command(&data_root)
+            .args(&args)
+            .arg(&package)
+            .output()?;
+        assert_success("install", &install);
+    }
+    let project_only = bundle_command(&data_root)
+        .args(["bundle", "install", "--project", "-y"])
+        .arg(&schema_package)
+        .output()?;
+    assert_success("install --project schema bundle", &project_only);
+
+    let both = bundle_command(&data_root)
+        .args(["bundle", "search", "valid-public"])
+        .output()?;
+    assert_success("search", &both);
+    assert_eq!(
+        stdout_lines(&both),
+        vec![
+            LIST_HEADER.to_string(),
+            "hya/valid-public 1.0.0 valid-public-lead active AgentBundle - project".to_string(),
+            "hya/valid-public 1.0.0 valid-public-lead shadowed AgentBundle - user".to_string(),
+        ],
+        "search must cover both scopes the way list does"
+    );
+
+    let narrowed = bundle_command(&data_root)
+        .args(["bundle", "search", "--user", "valid-public"])
+        .output()?;
+    assert_success("search --user", &narrowed);
+    assert_eq!(
+        stdout_lines(&narrowed),
+        vec![
+            LIST_HEADER.to_string(),
+            "hya/valid-public 1.0.0 valid-public-lead shadowed AgentBundle - user".to_string(),
+        ]
+    );
+
+    let project = bundle_command(&data_root)
+        .args(["bundle", "search", "SCHEMA-CLI"])
+        .output()?;
+    assert_success("search project-only bundle", &project);
+    let rows = stdout_lines(&project);
+    assert_eq!(rows.len(), 2, "one matching row:\n{rows:?}");
+    assert!(rows[1].starts_with("hya/schema-cli ") && rows[1].ends_with(" project"));
 
     fs::remove_dir_all(&data_root)?;
     Ok(())

@@ -158,8 +158,8 @@ or removed.
 | `hya bundle list [--user\|--project]` | List bundles. All scopes by default; a flag narrows to one scope. |
 | `hya bundle info [--user\|--project] <BUNDLE_ID\|PACKAGE>` | Show metadata of a bundle by id (searching every scope unless narrowed) or of a package file. |
 | `hya bundle info -f <PACKAGE>` | Show metadata of a package file. |
-| `hya bundle search <QUERY>` | Filter builtin and user bundles by id, agent id, or skill id. |
-| `hya bundle schemas` | List URI-scheme extensions declared by builtin and user bundles. |
+| `hya bundle search [--user\|--project] <QUERY>` | Filter bundles in every scope (or one) by id, agent id, or skill id. |
+| `hya bundle schema [--user\|--project] <BUNDLE_ID\|PACKAGE>` | Show the URI-scheme extensions one bundle declares. |
 
 ```sh
 hya bundle verify example.hyabundle            # check only; nothing installed
@@ -170,6 +170,9 @@ hya bundle info hya/docs-example
 hya bundle info example.hyabundle              # read a package file
 hya bundle remove --project -y hya/docs-example
 hya bundle uninstall hya/docs-example          # same as remove, user scope
+hya bundle search --project docs               # search one scope
+hya bundle schema hya/schema-demo              # one bundle's schemes
+hya bundle schema schema-demo.hyabundle        # from a package file
 ```
 
 ### Confirmation
@@ -287,18 +290,38 @@ privileges. A user or project bundle that overrides a first-party bundle takes
 precedence; removing the override restores the first-party bundle, which itself
 cannot be removed.
 
-`search <QUERY>` filters the builtin and user catalog with
-a case-insensitive substring match over bundle ids, agent ids, and skill ids
+`search <QUERY>` covers exactly the bundles `list` shows: builtin, user, and
+project bundles, including user bundles shadowed by a project bundle
+(`shadowed`). `--user` or `--project` narrows it to one scope. It is a
+case-insensitive substring match over bundle ids, agent ids, and skill ids
 (both local and stable spellings such as `handbook` and
 `bundle:hya/docs-example/skill/handbook`), printing one `bundle list`-shaped
 `NAME VERSION AGENT STATE KIND WORKFLOW SCOPE` row per matching bundle, sorted by
-bundle id. `<QUERY>` is a required positional argument: omitting it or passing
+bundle id then scope. `<QUERY>` is a required positional argument: omitting it or passing
 only whitespace exits non-zero and prints the usage line. An unreadable
 installed row stays searchable by its bundle id and prints the same degraded
 `unreadable (reinstall)` row as `bundle list`. `search` is read-only and never
 creates the bundle registry. When no bundle metadata matches — for example a
-query naming another subcommand such as `schemas` — it exits 0, prints the full
-catalog on stdout, and explains the fallback on stderr.
+query naming another subcommand such as `schema` — it exits 0, prints every
+bundle in the searched scope on stdout, and explains the fallback on stderr.
+
+`schema <BUNDLE_ID|PACKAGE>` shows the URI-scheme extensions (`schemas:` in the
+manifest) of one bundle. It prints a `SCHEME TOOL WRITABLE` header and one row
+per declared scheme, sorted by scheme; a bundle that declares none prints only
+the header. A bundle id resolves like `info` — preset, project, user, then
+first-party — unless `--user` or `--project` narrows it; an unknown id exits 1
+with `BUNDLE_NOT_FOUND`. A path ending in `.hyabundle` that names a file is
+inspected without installing it. `schema` is read-only.
+
+```text
+$ hya bundle schema hya/schema-demo
+SCHEME TOOL WRITABLE
+db query false
+```
+
+The live, merged scheme table the runtime resolves (with the winning owner and
+the chain of claimants across bundles) is `GET /v1/runtime/schemas`; see
+[configuration](configuration.md#bundle-schemas).
 
 Before the registry is touched, `install` stages the package on disk via
 `stage_package`: the bytes land in

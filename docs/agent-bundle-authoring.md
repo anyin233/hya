@@ -356,9 +356,9 @@ Rules enforced at prepare:
 
 At runtime the published scheme table resolves cross-source contention the way
 bare-name masking does (the lexicographically greater source id wins), the
-chain of claimants stays queryable via `bundle schemas` and
-`GET /v1/runtime/schemas` (see [configuration](configuration.md#bundle-schemas)),
-and dispatch stays **view-scoped**: an agent's `read` dispatches `scheme://…`
+chain of claimants stays queryable via `GET /v1/runtime/schemas` (see
+[configuration](configuration.md#bundle-schemas)); `hya bundle schema <id>`
+shows one bundle's own declarations. Dispatch stays **view-scoped**: an agent's `read` dispatches `scheme://…`
 only when that agent's compiled view also resolves the owning bundle tool.
 
 ### Per-agent fields
@@ -713,11 +713,11 @@ hya bundle info -f bun.hyabundle
 hya bundle install bun.hyabundle
 hya bundle list
 hya bundle info <bundle-id>
-hya bundle schemas
+hya bundle schema <bundle-id>
 hya bundle remove <bundle-id>
 ```
 
-`hya bundle info -f` inspects without mutating the registry or publication. Content magic, not the suffix, selects public/private parsing after the exact lowercase command suffix check. Installed generations publish atomically, and new root turns bind the new catalog while existing turns and children retain their pinned binding. `bundle info` prints each bundle's declared schema extensions (`schema=… tool=… writable=…`), its `extensions.process` declaration (`process=<kind> command=…`), and its mcp entries when non-empty; `bundle schemas` lists every declared scheme across the first-party and installed bundles.
+`hya bundle info -f` inspects without mutating the registry or publication. Content magic, not the suffix, selects public/private parsing after the exact lowercase command suffix check. Installed generations publish atomically, and new root turns bind the new catalog while existing turns and children retain their pinned binding. `bundle info` prints each bundle's declared schema extensions (`schema=… tool=… writable=…`), its `extensions.process` declaration (`process=<kind> command=…`), and its mcp entries when non-empty; `bundle schema <bundle-id>` lists the schemes one bundle declares.
 
 A bundle installed by an older binary cannot decode. Such a row is **skipped with a named warning** rather than wedging the runtime, and `hya bundle list` marks it `unreadable (reinstall)`. Reinstall it to restore the agent.
 
