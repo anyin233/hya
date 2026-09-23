@@ -12,7 +12,7 @@ use serde::Deserialize;
 use crate::tool::ToolPermission;
 
 /// Tool-family bundles in stable registry order.
-const TOOL_FAMILIES: [&str; 5] = [
+pub(crate) const TOOL_FAMILIES: [&str; 5] = [
     "hya/base-tools",
     "hya/extended-tools",
     "hya/network-tools",
@@ -52,6 +52,13 @@ pub struct BaseToolExposure {
     exposed: bool,
     #[serde(default)]
     aliases: Vec<BaseToolAlias>,
+    /// Identity of another tool family whose same-named tool this entry
+    /// replaces whenever both families are loaded (for example channel-tools'
+    /// mail-aware `wait` over extended-tools' `wait`). The only way two
+    /// families may export one name: the winner is declared, never implied by
+    /// load or lexicographic order.
+    #[serde(default)]
+    overrides: Option<String>,
 }
 
 /// An alternate exported spelling and whether models see its schema.
@@ -143,6 +150,17 @@ fn validate_policy(policy: &ExposurePolicy, identity: &str) -> Result<(), String
             return Err(format!("duplicate alias {}", alias.name));
         }
     }
+    if let Some(tool) = policy.tools.iter().find(|tool| {
+        tool.overrides
+            .as_deref()
+            .is_some_and(|target| target == identity || !TOOL_FAMILIES.contains(&target))
+    }) {
+        return Err(format!(
+            "`{}` overrides `{}`, which is not another tool family",
+            tool.name,
+            tool.overrides.as_deref().unwrap_or_default()
+        ));
+    }
     if let Some(protected) = policy
         .protected_names
         .iter()
@@ -165,16 +183,49 @@ fn load_presets() -> Result<Vec<BaseToolsPreset>, String> {
         .iter()
         .map(|identity| load_preset(identity).map_err(|error| format!("{identity}: {error}")))
         .collect::<Result<Vec<_>, _>>()?;
-    let mut exports = BTreeSet::new();
-    for tool in presets.iter().flat_map(|preset| &preset.tools) {
-        for name in std::iter::once(&tool.name).chain(tool.aliases.iter().map(|alias| &alias.name))
-        {
-            if !exports.insert(name.as_str()) {
-                return Err(format!("`{name}` is exported by more than one tool family"));
+    check_family_exports(
+        &presets
+            .iter()
+            .map(|preset| (preset.identity.as_str(), preset.tools.as_slice()))
+            .collect::<Vec<_>>(),
+    )?;
+    Ok(presets)
+}
+
+/// Every exported name (canonical or alias) belongs to exactly one family,
+/// except a canonical name two families both export where exactly one entry
+/// declares `overrides: <the other family>`.
+fn check_family_exports(families: &[(&str, &[BaseToolExposure])]) -> Result<(), String> {
+    let mut claims: std::collections::BTreeMap<&str, Vec<(&str, Option<&BaseToolExposure>)>> =
+        std::collections::BTreeMap::new();
+    for (identity, tools) in families {
+        for tool in *tools {
+            claims
+                .entry(tool.name.as_str())
+                .or_default()
+                .push((identity, Some(tool)));
+            for alias in &tool.aliases {
+                claims
+                    .entry(alias.name.as_str())
+                    .or_default()
+                    .push((identity, None));
             }
         }
     }
-    Ok(presets)
+    for (name, owners) in &claims {
+        match owners.as_slice() {
+            [_] => {}
+            [(left, Some(left_tool)), (right, Some(right_tool))]
+                if (left_tool.overrides.as_deref() == Some(*right))
+                    != (right_tool.overrides.as_deref() == Some(*left)) => {}
+            _ => {
+                return Err(format!(
+                    "`{name}` is exported by more than one tool family without an `overrides` declaration"
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 impl BaseToolsPreset {
@@ -248,6 +299,12 @@ impl BaseToolExposure {
     pub fn aliases(&self) -> &[BaseToolAlias] {
         &self.aliases
     }
+    /// The tool family whose same-named tool this entry replaces when both
+    /// are loaded.
+    #[must_use]
+    pub fn overrides(&self) -> Option<&str> {
+        self.overrides.as_deref()
+    }
 }
 
 impl BaseToolAlias {
@@ -299,4 +356,74 @@ pub fn tool_bundle_presets() -> &'static [BaseToolsPreset] {
 #[must_use]
 pub fn base_tools_preset() -> &'static BaseToolsPreset {
     &tool_bundle_presets()[0]
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use super::*;
+
+    fn tools(yaml: &str) -> Vec<BaseToolExposure> {
+        serde_norway::from_str(yaml).unwrap_or_else(|error| panic!("{yaml}: {error}"))
+    }
+
+    #[test]
+    fn a_shared_name_needs_exactly_one_declared_override() {
+        let extended = tools("- { name: wait, schema_version: 1, permission: read_only }");
+        let plain = tools("- { name: wait, schema_version: 1, permission: read_only }");
+        let overriding = tools(
+            "- { name: wait, schema_version: 1, permission: read_only, overrides: hya/extended-tools }",
+        );
+        let wrong_target = tools(
+            "- { name: wait, schema_version: 1, permission: read_only, overrides: hya/todo-tools }",
+        );
+        let accepted = check_family_exports(&[
+            ("hya/extended-tools", &extended),
+            ("hya/channel-tools", &overriding),
+        ]);
+        assert_eq!(accepted, Ok(()));
+        for (label, other) in [("undeclared", &plain), ("wrong target", &wrong_target)] {
+            let error = check_family_exports(&[
+                ("hya/extended-tools", &extended),
+                ("hya/channel-tools", other),
+            ])
+            .unwrap_err();
+            assert!(error.contains("`wait`"), "{label}: {error}");
+        }
+        // Both sides claiming the override is as ambiguous as neither.
+        let back = tools(
+            "- { name: wait, schema_version: 1, permission: read_only, overrides: hya/channel-tools }",
+        );
+        assert!(
+            check_family_exports(&[
+                ("hya/extended-tools", &back),
+                ("hya/channel-tools", &overriding),
+            ])
+            .is_err()
+        );
+        // Aliases can never be shared.
+        let aliased = tools(
+            "- { name: waiting, schema_version: 1, permission: read_only, aliases: [{ name: wait, visibility: hidden }] }",
+        );
+        assert!(
+            check_family_exports(&[
+                ("hya/extended-tools", &extended),
+                ("hya/todo-tools", &aliased),
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn overrides_must_name_another_tool_family() {
+        for target in ["hya/channel-tools", "acme/unknown"] {
+            let policy: ExposurePolicy = serde_norway::from_str(&format!(
+                "schema_version: 1\nidentity: hya/channel-tools\nprotected_names: []\ntools:\n  - {{ name: wait, schema_version: 1, permission: read_only, overrides: {target} }}\n"
+            ))
+            .unwrap_or_else(|error| panic!("{error}"));
+            let error = validate_policy(&policy, "hya/channel-tools").unwrap_err();
+            assert!(error.contains("overrides"), "{target}: {error}");
+        }
+    }
 }

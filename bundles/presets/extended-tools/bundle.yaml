@@ -32,5 +32,7 @@ extensions:
       path: native/src/skill.rs
     - id: native-task
       path: native/src/task.rs
+    - id: native-wait
+      path: native/src/wait.rs
     - id: native-workflow
       path: native/src/workflow.rs

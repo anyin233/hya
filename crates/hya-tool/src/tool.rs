@@ -443,19 +443,46 @@ impl ToolRegistry {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// Install the full set of canonical builtins (and their hidden aliases).
+    /// Install the full set of canonical builtins (and their hidden aliases)
+    /// from all five trusted tool families.
     #[must_use]
     pub fn builtins() -> Self {
-        let registry = Self::empty();
-        let mut implementations = Vec::new();
-        let mut native_origins = HashMap::new();
-        for (stem, identity) in [
+        Self::from_tool_families(&crate::base_tools::TOOL_FAMILIES)
+    }
+
+    /// Install the builtins of a subset of the trusted tool families.
+    ///
+    /// A name two loaded families both export resolves to the entry that
+    /// declares `overrides: <the other family>` in its exposure policy (for
+    /// example channel-tools' mail-aware `wait` over extended-tools' `wait`);
+    /// when the overriding family is not loaded, the overridden tool is
+    /// installed. Load order never decides.
+    ///
+    /// # Panics
+    ///
+    /// Panics on an unknown family identity, or when a family's native
+    /// library cannot be loaded or disagrees with its bundle policy.
+    #[must_use]
+    pub fn from_tool_families(identities: &[&str]) -> Self {
+        const STEMS: [(&str, &str); 5] = [
             ("hya_base_tools", "hya/base-tools"),
             ("hya_extended_tools", "hya/extended-tools"),
             ("hya_channel_tools", "hya/channel-tools"),
             ("hya_network_tools", "hya/network-tools"),
             ("hya_todo_tools", "hya/todo-tools"),
-        ] {
+        ];
+        for identity in identities {
+            assert!(
+                STEMS.iter().any(|(_, known)| known == identity),
+                "unknown tool family {identity}"
+            );
+        }
+        let registry = Self::empty();
+        let mut implementations: HashMap<(&'static str, String), Arc<dyn Tool>> = HashMap::new();
+        for (stem, identity) in STEMS {
+            if !identities.contains(&identity) {
+                continue;
+            }
             let tools = crate::native_bundle::load_family(stem)
                 .unwrap_or_else(|error| panic!("load {identity}: {error}"));
             let names = tools
@@ -482,16 +509,25 @@ impl ToolRegistry {
                 tools.len(),
                 "{identity} library declared duplicate tools"
             );
-            native_origins.extend(names.into_iter().map(|name| (name, identity)));
-            implementations.extend(tools);
+            implementations.extend(
+                tools
+                    .into_iter()
+                    .map(|tool| ((identity, tool.name().to_string()), tool)),
+            );
         }
-        let mut by_name = implementations
-            .into_iter()
-            .map(|tool| (tool.name().to_string(), tool))
-            .collect::<HashMap<_, _>>();
-        for preset in tool_bundle_presets() {
+        let loaded = tool_bundle_presets()
+            .iter()
+            .filter(|preset| identities.contains(&preset.identity()))
+            .collect::<Vec<_>>();
+        for preset in &loaded {
+            let identity = STEMS
+                .iter()
+                .map(|(_, identity)| *identity)
+                .find(|identity| *identity == preset.identity())
+                .unwrap_or_else(|| panic!("unknown tool family {}", preset.identity()));
             for exposure in preset.tools() {
-                let Some(tool) = by_name.remove(exposure.name()) else {
+                let Some(tool) = implementations.remove(&(identity, exposure.name().to_string()))
+                else {
                     panic!(
                         "{} declares `{}` without a Rust implementation",
                         preset.identity(),
@@ -501,16 +537,23 @@ impl ToolRegistry {
                 if !exposure.exposed() {
                     continue;
                 }
-                let origin = native_origins.get(exposure.name()).copied();
-                registry.insert_preset_builtin(tool, exposure, origin);
+                let overridden = loaded.iter().any(|other| {
+                    other
+                        .tool(exposure.name())
+                        .is_some_and(|winner| winner.overrides() == Some(identity))
+                });
+                if overridden {
+                    continue;
+                }
+                registry.insert_preset_builtin(tool, exposure, Some(identity));
             }
         }
         assert!(
-            by_name.is_empty(),
+            implementations.is_empty(),
             "Rust builtin implementations are missing from tool-family presets: {:?}",
-            by_name.keys().collect::<BTreeSet<_>>()
+            implementations.keys().collect::<BTreeSet<_>>()
         );
-        for preset in tool_bundle_presets() {
+        for preset in &loaded {
             for scheme in preset.schemes() {
                 assert!(
                     registry.get(scheme.tool()).is_some(),

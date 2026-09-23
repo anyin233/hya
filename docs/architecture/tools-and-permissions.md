@@ -75,6 +75,7 @@ stay globally unique inside a registry. `hya-tool` exposes the mechanism in
 | `send` | `{ "channel"?: string, "body": string }` — `#channel`/channel id/handle/`^parent`; omitted = role default | Delivery receipt: group channel = broadcast announcement, DM channel/handle = private mail (archived child revives), default = led unit or parent. `^parent` auto-infers the DM channel minted with the direct parent at registration time (works even when the parent handle is not yet in the roster, and at any depth — it never targets the root); without a DM channel it falls back to the parent handle. |
 | `list_channel` | (none) | The caller's channels: group pipes with can-post flag, DM channels with peer + unread. |
 | `search_agent` | `{ "query"?: string }` | The caller's archived direct children (handle, digests, degraded flag). |
+| `wait` | `{ "targets"?: string[], "mode"?: "all"\|"any", "timeout_secs"?: integer 0..1800 }` — omitted targets = every live direct subagent | `{woke_by: members\|mail\|timeout\|nothing_to_wait_for, finished[], running[], mail[], waited_ms}`; blocks the turn until the condition, bounded; the channel-tools override also wakes on mail. Permission class `read_only`. |
 | `archive` | `{ "target": string, "reason"?: string }` — handle, leaf, or session id of a live descendant | `{handle, session, cancelled_turn, descendants}`: the in-flight turn is cancelled (`cause: archived`) and the member archived; mail to its handle wakes it. Permission class `task`. |
 
 `lsp` is a separate language-server contract and intentionally retains its

@@ -16,7 +16,8 @@ as source assets. The companion file carries trusted preset metadata
 that the public Plugin manifest intentionally cannot grant as permissions. Each
 family's bundle is loaded from its [first-party bundle](bundle-runtime.md#first-party-bundles)
 source once per process, which verifies its digest and policy and rejects
-duplicate names across families. Runtime
+duplicate names across families — unless exactly one of the two entries
+declares `overrides: <the other family>` (see [Overrides](#overrides)). Runtime
 registry construction reads native family packages when present, validates
 their prepared content and declared tool sets, and checks that every policy
 entry has a loaded implementation.
@@ -32,10 +33,13 @@ declared tools before the runtime can publish it.
 | Bundle | Canonical tool names |
 | --- | --- |
 | `hya/base-tools` | `read`, `write`, `edit`, `ls`, `glob`, `find`, `grep`, `ask_user`, `bash`, `apply_patch` |
-| `hya/extended-tools` | `invalid`, `lsp`, `skill`, `list_agents`, `task`, `workflow`, `search_agent`, `archive`, `plan_exit` |
+| `hya/extended-tools` | `invalid`, `lsp`, `skill`, `list_agents`, `task`, `workflow`, `search_agent`, `archive`, `plan_exit`, `wait` |
 | `hya/network-tools` | `webfetch`, `websearch` |
-| `hya/channel-tools` | `send`, `list_channel`, `report` |
+| `hya/channel-tools` | `send`, `list_channel`, `report`, `wait` (overrides extended-tools' `wait`) |
 | `hya/todo-tools` | `todo__read`, `todo__update_status`, `todo__update_content` |
+
+The registry holds 28 canonical names: `wait` is exported by two families and
+installed once.
 
 `ask_user` is the existing canonical name for the requested `ask` function;
 `question` remains its hidden compatibility alias. The user-assigned `lsp`,
@@ -127,6 +131,8 @@ tools:
     exposed: true
     aliases:
       - { name: legacy_read, visibility: hidden }
+    # optional: replace another family's same-named tool when both load
+    # overrides: hya/extended-tools
 ```
 
 `permission` is one of `read_only`, `task`, `tool`, `command`, or `mcp`. It
@@ -140,6 +146,35 @@ implementation; hidden aliases are excluded from advertised schemas. Each
 tool's `schema_version` versions its existing `ToolSchema` contract. The preset
 does not duplicate JSON schemas, so the Rust implementation remains their
 single content owner.
+
+### Overrides
+
+`overrides: <family identity>` (optional, string) on a tool entry declares that
+this family's implementation replaces the named family's same-named canonical
+tool whenever both families are loaded. It is the only way two families may
+export one name; the winner is declared, never implied by load order or by
+identity sorting (`hya/channel-tools` sorts before `hya/extended-tools`, so an
+order-based rule would pick wrong). Policy loading rejects an `overrides` that
+names the family itself or an unknown family, a shared name where neither or
+both entries declare the override, and any shared alias.
+
+The one use today is `wait`: `hya/extended-tools` exports a `wait` that wakes
+on subagent progress only, and `hya/channel-tools` exports
+`{ name: wait, schema_version: 1, permission: read_only, overrides: hya/extended-tools }`,
+which also wakes on mail for the caller. `ToolRegistry::builtins()` loads all
+five families, so the channel-aware `wait` is the one installed;
+`ToolRegistry::from_tool_families(&[...])` builds a registry from a subset of
+families (for example without `hya/channel-tools`, which installs the
+extended-tools `wait`). `builtin_bundle_origin("wait")` names the winner.
+
+```rust
+use hya_tool::ToolRegistry;
+let registry = ToolRegistry::from_tool_families(&[
+    "hya/base-tools", "hya/extended-tools", "hya/network-tools", "hya/todo-tools",
+]);
+assert_eq!(registry.builtin_bundle_origin("wait"), Some("hya/extended-tools"));
+assert_eq!(ToolRegistry::builtins().builtin_bundle_origin("wait"), Some("hya/channel-tools"));
+```
 
 `protected_names` declares names that runtime source composition must not mask.
 The initial protected set is `read`. `schemes` declares a scheme, its canonical

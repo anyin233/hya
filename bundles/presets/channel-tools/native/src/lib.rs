@@ -6,6 +6,7 @@ use hya_tool::Tool;
 
 mod mailbox_tools;
 mod report;
+mod wait;
 
 /// Report the lockstep Rust tool ABI before any Rust object crosses the library boundary.
 ///
@@ -32,10 +33,11 @@ pub unsafe extern "C" fn hya_tool_bundle_abi_v1(out: *mut u8) {
 pub unsafe extern "C" fn hya_tool_bundle_register_v1(out: *mut Vec<Arc<dyn Tool>>) {
     // SAFETY: the host calls this only after the ABI digest matches.
     if let Some(out) = unsafe { out.as_mut() } {
-        let tools: [Arc<dyn Tool>; 3] = [
+        let tools: [Arc<dyn Tool>; 4] = [
             Arc::new(mailbox_tools::SendTool),
             Arc::new(mailbox_tools::ListChannelTool),
             Arc::new(report::ReportTool),
+            Arc::new(wait::WaitTool),
         ];
         out.extend(tools);
     }

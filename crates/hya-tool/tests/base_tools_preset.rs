@@ -61,10 +61,14 @@ fn each_embedded_bundle_owns_its_requested_tool_family() {
                 "search_agent",
                 "archive",
                 "plan_exit",
+                "wait",
             ],
         ),
         ("hya/network-tools", &["webfetch", "websearch"]),
-        ("hya/channel-tools", &["send", "list_channel", "report"]),
+        (
+            "hya/channel-tools",
+            &["send", "list_channel", "report", "wait"],
+        ),
         (
             "hya/todo-tools",
             &["todo__read", "todo__update_status", "todo__update_content"],
@@ -126,6 +130,9 @@ fn embedded_base_tools_preset_is_the_registry_authority() {
         ("search_agent", ToolPermission::ReadOnly, &[][..]),
         ("report", ToolPermission::Tool, &[][..]),
         ("archive", ToolPermission::Task, &[][..]),
+        // extended-tools' `wait` and channel-tools' mail-aware override.
+        ("wait", ToolPermission::ReadOnly, &[][..]),
+        ("wait", ToolPermission::ReadOnly, &[][..]),
         ("ask_user", ToolPermission::Tool, &["question"][..]),
         ("bash", ToolPermission::Command, &["shell"][..]),
         ("apply_patch", ToolPermission::Tool, &["patch"][..]),

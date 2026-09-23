@@ -152,6 +152,7 @@ pub fn render_environment_and_context(
 const TEAM_QUICK_REFERENCE: &str = "## Team quick reference\n\
 - `task` is non-blocking: it returns the child's handle immediately. Results arrive later as mail — watch for `[NEW MAIL]` notices appended to tool results.\n\
 - New mail arrives automatically appended to tool results (`[NEW MAIL]`) — do NOT poll `list_channel` or sleep waiting for mail; children's live status is in `list_channel`'s team section (busy + last-heartbeat age).\n\
+- To block until your subagents finish (report, go idle, or are archived), call `wait` once — optionally naming targets, any/all, and a timeout; with the channel tools loaded it also returns when new mail arrives for you. It is the only correct way to wait: never loop on status tools.\n\
 - `report` is ONLY for subagents to end their own task. As the main agent NEVER call `report` — deliver your final answer as normal text.\n\
 - Read mail history with `read channel://<id>` (latest) or `channel://<id>?last=N`; `list_channel` shows channels + unread counts. A `#id` is never a file path.\n\
 - `send` covers all mail: `#channel` posts on that channel (a group channel broadcasts to your unit — leader-only); a bare handle DMs that vertical peer (`^parent` DMs your parent through your registration DM channel; an archived child revives with its saved state). Omit the channel to use your default: the unit you lead, else your parent.\n\
@@ -284,6 +285,12 @@ mod tests {
                 "quick reference names `{token}` but no such tool exists"
             );
         }
+    }
+
+    #[test]
+    fn team_reference_teaches_wait_instead_of_polling() {
+        let out = build_system_prompt("", &env(), &[]);
+        assert!(out.contains("call `wait` once"), "{out}");
     }
 
     #[test]
