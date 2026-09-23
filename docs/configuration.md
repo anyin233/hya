@@ -1060,8 +1060,9 @@ Bundles may declare external URI-scheme extensions (`schemas:` in the bundle
 manifest; see [Schema extensions](agent-bundle-authoring.md#schema-extensions-schemas)).
 Two read-only surfaces report what is registered:
 
-- **`hya bundle schemas`** — one `BUNDLE SCHEME TOOL WRITABLE` row per
-  declared schema across the first-party and installed bundles.
+- **`hya bundle schema <BUNDLE_ID|PACKAGE>`** — one `SCHEME TOOL WRITABLE`
+  row per schema that single bundle declares (builtin, user, or project scope,
+  or a package file).
 - **`GET /v1/runtime/schemas`** — the live published scheme table with its
   config `generation`, each row carrying `scheme`, `owner` (the winning source
   id, e.g. `bundle:hya/schema-demo`), `canonicalTool` (the owning tool's

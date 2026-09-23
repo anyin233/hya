@@ -96,17 +96,13 @@ async fn t2_19_installed_bundle_schemas_surface_through_cli_and_runtime_api() {
 
     let schemas = env
         .backend
-        .bundle_cli(&["bundle", "schemas"])
-        .expect("bundle schemas");
-    assert!(schemas.status.success(), "bundle schemas failed");
+        .bundle_cli(&["bundle", "schema", BUNDLE_ID])
+        .expect("bundle schema");
+    assert!(schemas.status.success(), "bundle schema failed");
     let schemas_out = String::from_utf8_lossy(&schemas.stdout);
-    let row = schemas_out
-        .lines()
-        .find(|line| line.split_whitespace().next() == Some(BUNDLE_ID))
-        .expect("installed bundle must be listed in bundle schemas");
     assert_eq!(
-        row.split_whitespace().collect::<Vec<_>>(),
-        [BUNDLE_ID, "db", "query", "false"],
+        schemas_out.lines().collect::<Vec<_>>(),
+        ["SCHEME TOOL WRITABLE", "db query false"],
         "the schema row must carry scheme, owner tool, and writable flag:\n{schemas_out}"
     );
 

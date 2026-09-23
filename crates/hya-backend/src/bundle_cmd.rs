@@ -99,13 +99,15 @@ pub(crate) enum BundleCommand {
         #[command(flatten)]
         scope: ScopeArgs,
     },
-    /// Search bundles by a case-insensitive substring over bundle ids,
-    /// agent ids, and skill ids.
+    /// Search bundles in every scope by a case-insensitive substring over
+    /// bundle ids, agent ids, and skill ids.
     Search {
         /// Substring matched against bundle ids, agent ids, and skill ids
         /// (case-insensitive).
         #[arg(value_name = "QUERY", value_parser = parse_search_query)]
         query: String,
+        #[command(flatten)]
+        scope: ScopeArgs,
     },
     /// Remove an installed bundle. Asks for confirmation unless `-y` is given.
     #[command(visible_alias = "uninstall")]
@@ -146,8 +148,13 @@ pub(crate) enum BundleCommand {
         #[command(flatten)]
         scope: ScopeArgs,
     },
-    /// List URI-scheme extensions declared by installed bundles.
-    Schemas,
+    /// Show the URI-scheme extensions one bundle declares.
+    Schema {
+        /// Bundle id, or a path to a `.hyabundle` package file.
+        name: String,
+        #[command(flatten)]
+        scope: ScopeArgs,
+    },
 }
 
 /// clap value parser for `bundle search <QUERY>`: a query of only whitespace
@@ -170,7 +177,7 @@ pub(crate) async fn run(command: BundleCommand) -> anyhow::Result<()> {
             yes,
         } => install_dispatch(package, claude, policy(overwrite), scope.target(), yes).await,
         BundleCommand::List { scope } => list(scope.filter()).await,
-        BundleCommand::Search { query } => search(&query).await,
+        BundleCommand::Search { query, scope } => search(&query, scope.filter()).await,
         BundleCommand::Remove { name, scope, yes } => remove(&name, scope.target(), yes).await,
         BundleCommand::Verify {
             package,
@@ -194,7 +201,7 @@ pub(crate) async fn run(command: BundleCommand) -> anyhow::Result<()> {
             ..
         } => info_file(&package),
         BundleCommand::Info { .. } => anyhow::bail!("bundle info requires a bundle name"),
-        BundleCommand::Schemas => schemas().await,
+        BundleCommand::Schema { name, scope } => schema(&name, scope.filter()).await,
     }
 }
 
@@ -651,18 +658,6 @@ fn project_dir() -> anyhow::Result<PathBuf> {
     project_bundles_dir().context("resolve the current directory for --project")
 }
 
-fn installed_shadow_keys(records: &[BundleRegistryRecord]) -> (BTreeSet<String>, BTreeSet<String>) {
-    let mut ids = BTreeSet::new();
-    let mut namespaces = BTreeSet::new();
-    for record in records {
-        ids.insert(record.bundle_id.clone());
-        if let Ok(bundle) = decode_installed_bundle(record) {
-            namespaces.insert(bundle.namespace().to_string());
-        }
-    }
-    (ids, namespaces)
-}
-
 fn info_file(package: &Path) -> anyhow::Result<()> {
     validate_package_path(package)?;
     match inspect_package(package)? {
@@ -730,10 +725,12 @@ fn reserved_agent_ids() -> Vec<&'static str> {
         .collect()
 }
 
-/// Every `bundle list` row across scopes, mirroring the runtime layering:
-/// project bundles shadow user-installed ones (id or namespace), and
-/// first-party bundles hide behind any active user or project bundle.
-async fn list_rows() -> anyhow::Result<Vec<BundleListRow>> {
+/// Every bundle across scopes as a `bundle list` row plus its search
+/// metadata, mirroring the runtime layering: project bundles shadow
+/// user-installed ones (id or namespace), and first-party bundles hide behind
+/// any active user or project bundle. Shared by `list` and `search` so both
+/// always cover the same bundles.
+async fn catalog_entries() -> anyhow::Result<Vec<SearchEntry>> {
     let first_party = hya_app::first_party_catalogs().context("load first-party bundles")?;
     let installed = installed_records_if_exists().await?;
     let project = project_bundles(&project_dir()?);
@@ -748,14 +745,22 @@ async fn list_rows() -> anyhow::Result<Vec<BundleListRow>> {
 
     let mut rows = Vec::new();
     for preset in hya_app::trusted_preset_inventory().context("decode trusted presets")? {
-        rows.push(BundleListRow {
-            name: preset.id,
-            version: preset.version,
-            agents: preset.agent_ids.join(","),
-            state: "active".to_string(),
-            kind: preset.kind,
-            workflow: "-".to_string(),
-            scope: BUILTIN_SCOPE,
+        let mut haystack = preset.id.to_lowercase();
+        for id in preset.agent_ids.iter().chain(preset.resource_ids.iter()) {
+            haystack.push('\n');
+            haystack.push_str(&id.to_lowercase());
+        }
+        rows.push(SearchEntry {
+            haystack,
+            row: BundleListRow {
+                name: preset.id,
+                version: preset.version,
+                agents: preset.agent_ids.join(","),
+                state: "active".to_string(),
+                kind: preset.kind,
+                workflow: "-".to_string(),
+                scope: BUILTIN_SCOPE,
+            },
         });
     }
     let mut higher_ids = project_ids.clone();
@@ -770,23 +775,27 @@ async fn list_rows() -> anyhow::Result<Vec<BundleListRow>> {
                     higher_namespaces.insert(bundle.namespace().to_string());
                 }
                 let state = if shadowed { "shadowed" } else { "active" };
-                rows.push(bundle_list_row(&bundle, state, Scope::User.as_str()));
+                rows.push(bundle_entry(&bundle, state, Scope::User.as_str()));
             }
             // Written by a different binary version: name the row and tell the
-            // operator what to do, rather than failing the whole list.
-            Err(_) => rows.push(BundleListRow {
-                name: record.bundle_id.clone(),
-                version: record.version.clone(),
-                agents: "-".to_string(),
-                state: "unreadable (reinstall)".to_string(),
-                kind: "-".to_string(),
-                workflow: "-".to_string(),
-                scope: Scope::User.as_str(),
+            // operator what to do, rather than failing the whole list. The
+            // bundle id is the only searchable metadata left.
+            Err(_) => rows.push(SearchEntry {
+                haystack: record.bundle_id.to_lowercase(),
+                row: BundleListRow {
+                    name: record.bundle_id.clone(),
+                    version: record.version.clone(),
+                    agents: "-".to_string(),
+                    state: "unreadable (reinstall)".to_string(),
+                    kind: "-".to_string(),
+                    workflow: "-".to_string(),
+                    scope: Scope::User.as_str(),
+                },
             }),
         }
     }
     for bundle in &project {
-        rows.push(bundle_list_row(
+        rows.push(bundle_entry(
             bundle.bundle(),
             "active",
             Scope::Project.as_str(),
@@ -799,22 +808,39 @@ async fn list_rows() -> anyhow::Result<Vec<BundleListRow>> {
             {
                 continue;
             }
-            rows.push(bundle_list_row(bundle, "active", BUILTIN_SCOPE));
+            rows.push(bundle_entry(bundle, "active", BUILTIN_SCOPE));
         }
     }
     rows.sort_by(|left, right| {
-        (left.name.as_bytes(), left.scope).cmp(&(right.name.as_bytes(), right.scope))
+        (left.row.name.as_bytes(), left.row.scope)
+            .cmp(&(right.row.name.as_bytes(), right.row.scope))
     });
     Ok(rows)
 }
 
+/// Catalog entries narrowed to one scope, or all of them.
+async fn scoped_entries(filter: Option<Scope>) -> anyhow::Result<Vec<SearchEntry>> {
+    let mut entries = catalog_entries().await?;
+    entries.retain(|entry| filter.is_none_or(|scope| entry.row.scope == scope.as_str()));
+    Ok(entries)
+}
+
 async fn list(filter: Option<Scope>) -> anyhow::Result<()> {
-    let rows = list_rows().await?;
-    print_list_rows(
-        rows.iter()
-            .filter(|row| filter.is_none_or(|scope| row.scope == scope.as_str())),
-    );
+    let entries = scoped_entries(filter).await?;
+    print_list_rows(entries.iter().map(|entry| &entry.row));
     Ok(())
+}
+
+/// One prepared bundle as a list row plus its search metadata.
+fn bundle_entry(
+    bundle: &PreparedInstallableBundle,
+    state: &str,
+    scope: &'static str,
+) -> SearchEntry {
+    SearchEntry {
+        haystack: bundle_search_haystack(bundle),
+        row: bundle_list_row(bundle, state, scope),
+    }
 }
 
 /// Scope label for the bundles shipped with hya (trusted presets and
@@ -891,75 +917,16 @@ fn bundle_search_haystack(bundle: &PreparedInstallableBundle) -> String {
     haystack
 }
 
-/// Search the merged first-party and installed catalog: a case-insensitive
-/// substring query over bundle ids, agent ids, and skill ids prints matching
-/// bundles as `bundle list` rows. When no metadata matches — a query naming a
-/// subcommand like `schemas` rather than bundle metadata — every bundle
-/// prints instead and the fallback is explained on stderr.
-async fn search(query: &str) -> anyhow::Result<()> {
+/// Search every scope (or one, with `--user`/`--project`): a
+/// case-insensitive substring query over bundle ids, agent ids, and skill ids
+/// prints matching bundles as `bundle list` rows, with the same scope and
+/// state `list` reports. When no metadata matches — a query naming a
+/// subcommand like `schema` rather than bundle metadata — every bundle in the
+/// searched scope prints instead and the fallback is explained on stderr.
+async fn search(query: &str, filter: Option<Scope>) -> anyhow::Result<()> {
     let needle = query.trim().to_lowercase();
     anyhow::ensure!(!needle.is_empty(), "bundle search requires a query");
-    let first_party = hya_app::first_party_catalogs().context("load first-party bundles")?;
-    let installed = installed_records_if_exists().await?;
-    let (shadowed_ids, shadowed_namespaces) = installed_shadow_keys(&installed);
-    let mut entries = Vec::new();
-    for preset in hya_app::trusted_preset_inventory().context("decode trusted presets")? {
-        let mut haystack = preset.id.to_lowercase();
-        for id in preset.agent_ids.iter().chain(preset.resource_ids.iter()) {
-            haystack.push('\n');
-            haystack.push_str(&id.to_lowercase());
-        }
-        entries.push(SearchEntry {
-            haystack,
-            row: BundleListRow {
-                name: preset.id,
-                version: preset.version,
-                agents: preset.agent_ids.join(","),
-                state: "active".to_string(),
-                kind: preset.kind,
-                workflow: "-".to_string(),
-                scope: BUILTIN_SCOPE,
-            },
-        });
-    }
-    for catalog in &first_party {
-        for bundle in catalog.bundles() {
-            if shadowed_ids.contains(&bundle.identity().id)
-                || shadowed_namespaces.contains(bundle.namespace())
-            {
-                continue;
-            }
-            entries.push(SearchEntry {
-                haystack: bundle_search_haystack(bundle),
-                row: bundle_list_row(bundle, "active", BUILTIN_SCOPE),
-            });
-        }
-    }
-    for record in &installed {
-        match decode_installed_bundle(record) {
-            Ok(bundle) => entries.push(SearchEntry {
-                haystack: bundle_search_haystack(&bundle),
-                row: bundle_list_row(&bundle, "active", Scope::User.as_str()),
-            }),
-            // Written by a different binary version: the bundle id is the
-            // only searchable metadata left, and the degraded row matches
-            // what `bundle list` prints for the same record.
-            Err(_) => entries.push(SearchEntry {
-                haystack: record.bundle_id.to_lowercase(),
-                row: BundleListRow {
-                    name: record.bundle_id.clone(),
-                    version: record.version.clone(),
-                    agents: "-".to_string(),
-                    state: "unreadable (reinstall)".to_string(),
-                    kind: "-".to_string(),
-                    workflow: "-".to_string(),
-                    scope: Scope::User.as_str(),
-                },
-            }),
-        }
-    }
-    entries.sort_by(|left, right| left.row.name.as_bytes().cmp(right.row.name.as_bytes()));
-
+    let entries = scoped_entries(filter).await?;
     let matched = entries
         .iter()
         .filter(|entry| entry.haystack.contains(needle.as_str()))
@@ -1207,65 +1174,91 @@ async fn remove(bundle_id: &str, scope: Scope, yes: bool) -> anyhow::Result<()> 
     Ok(())
 }
 
-/// List URI-scheme extensions across the first-party and installed bundles:
-/// one `BUNDLE SCHEME TOOL WRITABLE` row per declared schema.
-async fn schemas() -> anyhow::Result<()> {
-    let first_party = hya_app::first_party_catalogs().context("load first-party bundles")?;
-    let installed = installed_records_if_exists().await?;
-    let (shadowed_ids, shadowed_namespaces) = installed_shadow_keys(&installed);
-    let mut rows = Vec::new();
-    for catalog in &first_party {
-        let shadowed = catalog.bundles().first().is_some_and(|bundle| {
-            shadowed_ids.contains(&bundle.identity().id)
-                || shadowed_namespaces.contains(bundle.namespace())
-        });
-        if !shadowed {
-            rows.extend(catalog_schema_rows(catalog));
+/// Print the URI-scheme extensions one bundle declares, one
+/// `SCHEME TOOL WRITABLE` row each (header only when it declares none).
+///
+/// `name` is a bundle id resolved like `info` (preset, project, user, then
+/// first-party, or only the named scope), or a `.hyabundle` package file,
+/// which is inspected without installing it.
+async fn schema(name: &str, filter: Option<Scope>) -> anyhow::Result<()> {
+    let as_file = Path::new(name);
+    if name.ends_with(".hyabundle") && as_file.is_file() {
+        validate_package_path(as_file)?;
+        let PackageInspection::Public(public) = inspect_package(as_file)? else {
+            anyhow::bail!("private packages do not expose their schema declarations");
+        };
+        let [bundle] = public.prepared.bundles() else {
+            anyhow::bail!("public package must contain exactly one bundle");
+        };
+        print_schema_rows(public.prepared.bundle_schemas(&bundle.identity().id));
+        return Ok(());
+    }
+    let not_found = || -> anyhow::Error {
+        StoreError::BundleNotFound {
+            bundle_id: name.to_string(),
         }
-    }
-    for record in installed {
-        match decode_installed_catalog(&record) {
-            Ok(prepared) => rows.extend(catalog_schema_rows(&prepared)),
-            // Written by a different binary version: name the bundle rather
-            // than failing the whole listing, matching `bundle list`.
-            Err(_) => rows.push((
-                record.bundle_id.clone(),
-                "-".to_string(),
-                "-".to_string(),
-                "-".to_string(),
-            )),
+        .into()
+    };
+    let project = || -> anyhow::Result<Option<ProjectBundle>> {
+        Ok(find_project_bundle(&project_dir()?, name).ok())
+    };
+    let installed =
+        || async {
+            let Some(record) = installed_records_if_exists()
+                .await?
+                .into_iter()
+                .find(|record| record.bundle_id == name)
+            else {
+                return anyhow::Ok(None);
+            };
+            decode_installed_catalog(&record).map(Some).with_context(|| {
+            format!("installed bundle {name} is unreadable; reinstall it with `hya bundle install`")
+        })
+        };
+    let prepared: PreparedCatalog = match filter {
+        Some(Scope::Project) => {
+            let bundle = project()?.ok_or_else(not_found)?;
+            print_schema_rows(bundle.prepared().bundle_schemas(name));
+            return Ok(());
         }
-    }
-    rows.sort_by(|left, right| {
-        (left.0.as_bytes(), left.1.as_bytes()).cmp(&(right.0.as_bytes(), right.1.as_bytes()))
-    });
-
-    println!("BUNDLE SCHEME TOOL WRITABLE");
-    for (bundle_id, scheme, tool, writable) in rows {
-        println!("{bundle_id} {scheme} {tool} {writable}");
-    }
+        Some(Scope::User) => installed().await?.ok_or_else(not_found)?,
+        None => {
+            let builtin = hya_bundle::FIRST_PARTY_BUNDLES.contains(&name);
+            let preset = hya_app::trusted_preset_inventory()
+                .context("decode trusted presets")?
+                .iter()
+                .any(|preset| preset.id == name);
+            if preset {
+                return print_builtin_schema(name);
+            }
+            if let Some(bundle) = project()? {
+                print_schema_rows(bundle.prepared().bundle_schemas(name));
+                return Ok(());
+            }
+            match installed().await? {
+                Some(prepared) => prepared,
+                None if builtin => return print_builtin_schema(name),
+                None => return Err(not_found()),
+            }
+        }
+    };
+    print_schema_rows(prepared.bundle_schemas(name));
     Ok(())
 }
 
-/// Schema rows contributed by one decoded prepared catalog.
-fn catalog_schema_rows(prepared: &PreparedCatalog) -> Vec<(String, String, String, String)> {
-    prepared
-        .schemas()
-        .iter()
-        .flat_map(|row| {
-            row.schemas
-                .iter()
-                .map(|schema| {
-                    (
-                        row.bundle_id.clone(),
-                        schema.scheme.clone(),
-                        schema.tool.clone(),
-                        schema.writable.to_string(),
-                    )
-                })
-                .collect::<Vec<_>>()
-        })
-        .collect()
+/// Print a builtin (preset or first-party) bundle's declared schemas.
+fn print_builtin_schema(bundle_id: &str) -> anyhow::Result<()> {
+    let catalog = hya_bundle::first_party_bundle(bundle_id)
+        .with_context(|| format!("load builtin bundle {bundle_id}"))?;
+    print_schema_rows(catalog.bundle_schemas(bundle_id));
+    Ok(())
+}
+
+fn print_schema_rows(schemas: &[hya_bundle::PreparedSchema]) {
+    println!("SCHEME TOOL WRITABLE");
+    for schema in schemas {
+        println!("{} {} {}", schema.scheme, schema.tool, schema.writable);
+    }
 }
 
 /// Decode one installed record's full prepared catalog, verifying identity.

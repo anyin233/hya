@@ -345,6 +345,10 @@ mod tests {
             &["hya", "bundle", "list", "--user"],
             &["hya", "bundle", "info", "--project", "hya/demo"],
             &["hya", "bundle", "info", "demo.hyabundle"],
+            &["hya", "bundle", "search", "--project", "demo"],
+            &["hya", "bundle", "schema", "hya/demo"],
+            &["hya", "bundle", "schema", "--user", "hya/demo"],
+            &["hya", "bundle", "schema", "demo.hyabundle"],
         ] {
             parse_slice(args);
         }
@@ -742,7 +746,7 @@ mod tests {
         let cli = parse(["hya", "bundle", "search", "goal-loop"]);
         match cli.command {
             Some(super::Command::Bundle {
-                command: super::BundleCommand::Search { query },
+                command: super::BundleCommand::Search { query, .. },
             }) => {
                 assert_eq!(query, "goal-loop");
             }
