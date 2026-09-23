@@ -41,6 +41,28 @@ bundles such as `hya/agent-channels`. Agent references are local ids from the
 same manifest; topology roles let channel-only bundles remain independent of a
 specific roster.
 
+### Channel-aware `wait`
+
+The channel tool family (`hya/channel-tools`: `send`, `list_channel`,
+`report`, `wait`) owns the mail tools. When it is loaded — always, in the
+default builtin registry — its `wait` replaces the member-only `wait` of
+`hya/extended-tools` through an explicit `overrides: hya/extended-tools`
+declaration in its exposure policy ([Tool-family presets](base-tools.md#overrides)).
+Besides returning when subagents finish, it returns as soon as new mail reaches
+the caller's inbox — on a DM or group channel, or harness mail such as the
+`LEADER FAILED` wrap-up notice, which bypasses channel policy — with
+`woke_by: "mail"` and a bounded preview per message:
+
+```json
+{"woke_by": "mail", "mail": [{"from": "harness", "preview": "LEADER FAILED: …"}], "finished": [], "running": [], "waited_ms": 812}
+```
+
+A subagent with no subagents of its own can call `wait` to block until its
+parent (or the harness) writes to it. Without the channel family, `wait` does
+not wake on mail; mail still arrives in the `[NEW MAIL]` notice after the next
+tool call. See [Agent tool surface](architecture/agent-tool-surface.md) for the
+full `wait` contract.
+
 ## Interface definitions
 
 Each `channels[]` entry is closed and has these fields:

@@ -30,7 +30,8 @@ with the `task` tool:
 ```
 
 `task` returns the worker's handle immediately; the result arrives as its
-report mail. Send follow-up work with `send` to the handle; that mail wakes an
+report mail; block on it with `wait` instead of polling. Send follow-up work
+with `send` to the handle; that mail wakes an
 archived worker. Stop a worker you no longer need with `archive` (it can still
 be woken later). The caller's roster and `can_spawn` closure must authorize the selected stable id.
 

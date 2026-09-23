@@ -117,7 +117,7 @@ Important modules:
 | [`skill.rs`](../crates/hya-tool/src/skill.rs), [`task.rs`](../crates/hya-tool/src/task.rs), [`todo.rs`](../crates/hya-tool/src/todo.rs), [`ask_user.rs`](../crates/hya-tool/src/ask_user.rs) | Skill, subtask, todo, and human-question tools. |
 | [`workflow_plane.rs`](../crates/hya-tool/src/workflow_plane.rs) | Workflow list/info/use/run/state tool integration through `WorkflowControl`. |
 
-Builtins currently include **27 canonical schema names** (aliases are listed
+Builtins currently include **28 canonical schema names** (aliases are listed
 separately below):
 
 | Tool | Permission action | Behavior |
@@ -139,8 +139,10 @@ separately below):
 | `workflow` | `Tool` | List, inspect, select, run, or inspect state for a governed Workflow through the shared control plane. |
 | `todowrite` (`todo`) | `TodoWrite` | Store the latest session todo snapshot. |
 | `plan_exit` (`plan`) | `Tool` | Signal plan-mode completion semantics to the model. |
-| `roster`, `channels` | `ReadOnly` | Team roster and channel list; allow without prompting under `default`. |
-| `send`, `announce`, `join`, `leave` | `Tool` | Unit-scoped mailbox send, one-way announce to direct reports, and channel join/leave; ask under `default`. |
+| `list_channel`, `search_agent` | `ReadOnly` | The caller's channels (unread counts, team status) and its archived subagents; allow without prompting under `default`. |
+| `send`, `report` | `Tool` | Channel-addressed mail (archived children revive) and a subagent's terminal report; ask under `default`. |
+| `archive` | `Task` | Stop a live subagent (cancel its turn, `cause: archived`) and archive it; mail to its handle wakes it (replaces `kill`, 0.41.0). |
+| `wait` | `ReadOnly` | Block until subagents finish their current work (and, with the channel tools, until mail arrives), bounded by a timeout. |
 | `invalid` | `Tool` | Structured response for unknown tool calls. |
 
 Successful tool output passes through a global shape-aware cap

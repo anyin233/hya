@@ -16,3 +16,5 @@ extensions:
       path: native/src/mailbox_tools.rs
     - id: native-report
       path: native/src/report.rs
+    - id: native-wait
+      path: native/src/wait.rs

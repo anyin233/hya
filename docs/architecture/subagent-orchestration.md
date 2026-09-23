@@ -280,6 +280,7 @@ recipient is archived routes to the revive path before wake.
 | --- | --- | --- | --- |
 | Orchestration | `task`, `list_agents`, `workflow`, `search_agent`, `archive` | advertised | **not advertised** |
 | Communication | `send`, `list_channel`, `report` | advertised | advertised (group-default send errors: leads nobody) |
+| Waiting | `wait` | advertised | advertised (waits on mail when it has no subagents) |
 | Coding/etc. | read/write/edit/bash/… | advertised | advertised |
 
 Enforcement is two-layer, engine-owned:
@@ -307,6 +308,20 @@ turns, and `archive_stopped_agent` commits degraded handoff → member row
 report mail is sent (the archiver knows). The lead is never archivable; an
 unknown target lists the caller's live subagents. This is the parent's answer
 to a child that blocks its report gate or is no longer needed.
+
+`wait(targets?, mode?, timeout_secs?)` (0.41.0) blocks the caller's turn —
+typically the lead's own — until its subagents finish their current work
+(reported, archived, or idle with nothing owed), `any` or `all`, bounded by a
+timeout (default 600 s, max 1800 s). The waiter subscribes to the engine bus and
+re-evaluates on team-lifecycle events (`AgentActivityChanged`,
+`SubagentReported`, `AgentArchived`, `MailSent`, …) against the supervisor's
+in-memory slot state, so it is woken **inside** the running turn; it never
+relies on a resident wake of the lead, which would queue behind that same turn
+(single active turn per session). A report accepted mid-turn keeps the member
+"finishing" until the archive commits. Cancelling the turn aborts the wait. The
+channel-tools family overrides `wait` (explicit `overrides` in its exposure
+policy) with a version that also returns on mail for the caller — harness mail
+such as `LEADER FAILED` included — reporting `woke_by: mail`.
 
 `task` schema: `resident` and `background` fields are removed; `members[]`
 fan-out remains; the result carries, per member, handle + session + DM

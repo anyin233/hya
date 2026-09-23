@@ -271,7 +271,7 @@ fn todo_group_registered_under_namespace_without_legacy_names() {
     assert!(!canonical.contains(&"todowrite".to_string()));
     assert!(registry.get("todowrite").is_none());
     assert!(registry.get("todo").is_none());
-    assert_eq!(canonical.len(), 27);
+    assert_eq!(canonical.len(), 28);
 }
 
 #[tokio::test]

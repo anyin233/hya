@@ -199,5 +199,5 @@ fn send_replaces_dm_and_broadcast_in_the_registry() {
         .collect();
     assert!(!canonical.contains(&"dm".to_string()));
     assert!(!canonical.contains(&"broadcast".to_string()));
-    assert_eq!(canonical.len(), 27);
+    assert_eq!(canonical.len(), 28);
 }

@@ -43,6 +43,24 @@ pub async fn run_lifecycle_service(
                     .map_err(|e| e.to_string());
                     let _ = reply.send(result);
                 }
+                LifecycleRequest::Wait {
+                    session,
+                    spec,
+                    mut reply,
+                } => {
+                    // A dropped receiver (the tool call was cancelled or its
+                    // turn ended) aborts the wait at once.
+                    let result = tokio::select! {
+                        () = reply.closed() => return,
+                        result = crate::member_wait::wait_for_members(
+                            &engine,
+                            &supervisor,
+                            session,
+                            spec,
+                        ) => result.map_err(|e| e.to_string()),
+                    };
+                    let _ = reply.send(result);
+                }
                 LifecycleRequest::Archive {
                     session,
                     target,

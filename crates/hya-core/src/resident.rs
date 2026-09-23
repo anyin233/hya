@@ -1319,13 +1319,15 @@ impl TeamActor {
             .collect()
     }
 
-    /// Take the slot's accepted report for execution (ADR-0015).
+    /// Take the slot's accepted report for execution (ADR-0015). The slot is
+    /// marked archiving until the report commits (or is restored), so it owes
+    /// no turn meanwhile and a `wait` keeps seeing it as finishing.
     fn take_pending_archive(&self, session: SessionId) -> Option<PendingReport> {
         let mut state = self.lock();
-        state
-            .residents
-            .get_mut(&session)
-            .and_then(|slot| slot.pending_archive.take())
+        let slot = state.residents.get_mut(&session)?;
+        let pending = slot.pending_archive.take()?;
+        slot.archiving = true;
+        Some(pending)
     }
 
     /// Put an unexecuted report back (the gate re-check failed; the wake that
@@ -1334,6 +1336,7 @@ impl TeamActor {
         let mut state = self.lock();
         if let Some(slot) = state.residents.get_mut(&session) {
             slot.pending_archive = Some(pending);
+            slot.archiving = false;
         }
     }
 
@@ -2625,6 +2628,35 @@ impl ResidentSupervisor {
             team.drain_stop(reason).await;
         }
         report
+    }
+
+    /// Whether the resident slot for `session` has work in flight: a running
+    /// turn, owed mail or directive, or an accepted report still to execute.
+    /// `None` when this process tracks no such slot.
+    pub(crate) fn member_busy(&self, root: SessionId, session: SessionId) -> Option<bool> {
+        let team = self.teams().get(&root).cloned()?;
+        let state = team.lock();
+        let slot = state.residents.get(&session)?;
+        Some(
+            slot.status == SlotStatus::Busy
+                || slot.has_work()
+                || slot.initial_directive.is_some()
+                || slot.pending_archive.is_some()
+                || slot.archiving
+                || self.engine.turn_active(session),
+        )
+    }
+
+    /// Whether `session`'s slot is committing its archive (a report executing
+    /// or an `archive` in progress): its report mail may already be out while
+    /// the archive marker is not.
+    pub(crate) fn member_archiving(&self, root: SessionId, session: SessionId) -> bool {
+        self.teams().get(&root).cloned().is_some_and(|team| {
+            team.lock()
+                .residents
+                .get(&session)
+                .is_some_and(|slot| slot.archiving)
+        })
     }
 
     /// The team-wide cancellation token for `root`, if the team is tracked. Exposed

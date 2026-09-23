@@ -1,10 +1,20 @@
-//! Subagent lifecycle plane (ADR-0015): the `report` and `archive` tools ride
-//! a narrow request channel to the resident supervisor, mirroring the mailbox
-//! plane's dependency inversion (`hya-tool` never sees `CoreError`).
+//! Subagent lifecycle plane (ADR-0015): the `report`, `archive`, and `wait`
+//! tools ride a narrow request channel to the resident supervisor, mirroring
+//! the mailbox plane's dependency inversion (`hya-tool` never sees
+//! `CoreError`).
+//!
+//! `wait` has two implementations sharing this contract: the extended-tools
+//! one wakes on member progress only; the channel-tools one (which overrides
+//! it whenever the channel family is loaded, see `overrides` in the family
+//! exposure policy) also wakes on mail for the caller.
 
-use hya_proto::{ReportOutcome, SessionId};
+use std::time::Duration;
+
+use hya_proto::{ReportOutcome, SessionId, ToolSchema};
 use serde::Serialize;
+use serde_json::{Value, json};
 use tokio::sync::{mpsc, oneshot};
+use tokio_util::sync::CancellationToken;
 
 use crate::mailbox::ChannelPolicySnapshot;
 use crate::tool::ToolError;
@@ -12,6 +22,16 @@ use crate::tool::ToolError;
 /// One lifecycle request from a tool call to the supervisor.
 #[derive(Debug)]
 pub enum LifecycleRequest {
+    /// Block until subagents finish (or mail arrives, or the timeout).
+    /// Dropping the reply receiver aborts the wait.
+    Wait {
+        /// Waiting session.
+        session: SessionId,
+        /// Parsed request.
+        spec: WaitSpec,
+        /// Rejection text or the outcome.
+        reply: oneshot::Sender<Result<WaitOutcome, String>>,
+    },
     /// Accept a terminal report; archives once the actor is at rest.
     Report {
         /// Reporting session.
@@ -36,6 +56,286 @@ pub enum LifecycleRequest {
         /// Rejection text or what was archived.
         reply: oneshot::Sender<Result<ArchiveReceipt, String>>,
     },
+}
+
+/// Default `wait` timeout when the call names none.
+pub const WAIT_DEFAULT_TIMEOUT_SECS: u64 = 600;
+/// Upper bound on one `wait`; longer requests are clamped.
+pub const WAIT_MAX_TIMEOUT_SECS: u64 = 1800;
+
+/// Whether a `wait` returns on the first finished target or on all of them.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WaitMode {
+    /// Return as soon as one target finished its current work.
+    Any,
+    /// Return once every target finished its current work.
+    All,
+}
+
+/// A parsed `wait` call.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WaitSpec {
+    /// Handles, leaves, or session ids; empty = every live direct subagent.
+    pub targets: Vec<String>,
+    /// Any vs all.
+    pub mode: WaitMode,
+    /// Bounded wait; `0` only reports the current state.
+    pub timeout: Duration,
+    /// Also return when mail for the caller arrives (the channel-tools
+    /// override).
+    pub wake_on_mail: bool,
+}
+
+impl WaitSpec {
+    /// Parse `wait` input: `targets` (string or string array; the strings
+    /// `"any"`/`"all"` as the whole value select the mode over every live
+    /// subagent), `mode` (`any`/`all`, default `all`), `timeout_secs`
+    /// (default [`WAIT_DEFAULT_TIMEOUT_SECS`], clamped to
+    /// [`WAIT_MAX_TIMEOUT_SECS`]).
+    ///
+    /// # Errors
+    /// [`ToolError::Input`] naming the offending field and its valid shape.
+    pub fn parse(input: &Value, wake_on_mail: bool) -> Result<Self, ToolError> {
+        let mut mode = None;
+        let mut targets = Vec::new();
+        match input.get("targets").or_else(|| input.get("target")) {
+            None | Some(Value::Null) => {}
+            Some(Value::String(text)) => match text.trim() {
+                "" => {}
+                "any" => mode = Some(WaitMode::Any),
+                "all" => mode = Some(WaitMode::All),
+                one => targets.push(one.to_string()),
+            },
+            Some(Value::Array(items)) => {
+                for item in items {
+                    let Some(text) = item.as_str().map(str::trim).filter(|text| !text.is_empty())
+                    else {
+                        return Err(ToolError::Input(
+                            "wait `targets` must be subagent handles or session ids as strings, e.g. [\"main/hya-worker-1\"]".to_string(),
+                        ));
+                    };
+                    if !targets.iter().any(|known| known == text) {
+                        targets.push(text.to_string());
+                    }
+                }
+            }
+            Some(_) => {
+                return Err(ToolError::Input(
+                    "wait `targets` must be a list of subagent handles or session ids (omit it to wait on all your live subagents)".to_string(),
+                ));
+            }
+        }
+        match input.get("mode") {
+            None | Some(Value::Null) => {}
+            Some(Value::String(text)) if text.trim() == "any" => mode = Some(WaitMode::Any),
+            Some(Value::String(text)) if text.trim() == "all" => mode = Some(WaitMode::All),
+            Some(other) => {
+                return Err(ToolError::Input(format!(
+                    "wait `mode` must be \"any\" or \"all\", got {other}"
+                )));
+            }
+        }
+        let timeout = match input.get("timeout_secs").or_else(|| input.get("timeout")) {
+            None | Some(Value::Null) => WAIT_DEFAULT_TIMEOUT_SECS,
+            Some(value) => {
+                let seconds = value
+                    .as_f64()
+                    .filter(|seconds| seconds.is_finite() && *seconds >= 0.0)
+                    .ok_or_else(|| {
+                        ToolError::Input(format!(
+                            "wait `timeout_secs` must be a number of seconds between 0 and {WAIT_MAX_TIMEOUT_SECS}, got {value}"
+                        ))
+                    })?;
+                // Clamped, then truncated to whole seconds.
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let whole = seconds.min(WAIT_MAX_TIMEOUT_SECS as f64) as u64;
+                whole
+            }
+        };
+        Ok(Self {
+            targets,
+            mode: mode.unwrap_or(WaitMode::All),
+            timeout: Duration::from_secs(timeout),
+            wake_on_mail,
+        })
+    }
+}
+
+/// Model-facing schema of `wait`; `wake_on_mail` selects the channel-tools
+/// description.
+#[must_use]
+pub fn wait_tool_schema(wake_on_mail: bool) -> ToolSchema {
+    let description = if wake_on_mail {
+        "Block until your subagents finish their current work (they report, go idle, or are archived) OR new mail arrives for you (a message from a subagent or your parent, or a harness notice such as LEADER FAILED), whichever comes first, up to a timeout. Returns which event woke you (`members`, `mail`, `timeout`, or `nothing_to_wait_for`), each target's state with its report, and the arriving mail (full text follows in the mail notice). Use it instead of polling `list_channel` or sleeping. Cancelling your turn aborts the wait."
+    } else {
+        "Block until your subagents finish their current work (they report, go idle, or are archived), up to a timeout. Returns which event woke you (`members`, `timeout`, or `nothing_to_wait_for`), each finished target's state with its report, and which targets are still running. Use it instead of polling or sleeping. Cancelling your turn aborts the wait."
+    };
+    ToolSchema {
+        name: hya_proto::ToolName::new("wait"),
+        description: description.to_string(),
+        input_schema: json!({
+            "type": "object",
+            "properties": {
+                "targets": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Subagents to wait for: handles as returned by `task` (e.g. `main/hya-worker-1`, or the leaf `hya-worker-1`) or session ids. Omit to wait for all of your live direct subagents."
+                },
+                "mode": {
+                    "type": "string",
+                    "enum": ["all", "any"],
+                    "description": "`all` (default): return when every target finished; `any`: return when the first one finished."
+                },
+                "timeout_secs": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": WAIT_MAX_TIMEOUT_SECS,
+                    "description": "Give up after this many seconds (default 600, max 1800). 0 only reports the current state."
+                }
+            },
+            "required": []
+        }),
+        output_schema: None,
+    }
+}
+
+/// Why a `wait` returned.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WaitWake {
+    /// The target condition (`any`/`all`) was met.
+    Members,
+    /// Mail for the caller arrived (channel-tools `wait` only).
+    Mail,
+    /// The timeout elapsed first.
+    Timeout,
+    /// No target and nothing to wait for (no live subagents, no mail wake).
+    NothingToWaitFor,
+}
+
+/// Where one waited-on subagent stands.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WaitMemberState {
+    /// Delivered its terminal report and was archived.
+    Reported,
+    /// Archived without a report (parent `archive`, drain, teardown).
+    Archived,
+    /// Live and idle with no work owed.
+    Idle,
+    /// Running a turn or owing one.
+    Working,
+}
+
+/// One target's state in a [`WaitOutcome`].
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct WaitMember {
+    /// Canonical handle.
+    pub handle: String,
+    /// Session id.
+    pub session: SessionId,
+    /// Current state.
+    pub state: WaitMemberState,
+    /// `done` / `failed` for a report, `cancelled` for an archive, when known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<String>,
+    /// The report text (reported), the archive note, or the tail of the last
+    /// answer (idle), bounded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub report: Option<String>,
+}
+
+/// One mail message that woke a channel-aware `wait`.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct WaitMail {
+    /// Sender handle (`harness` for control notices).
+    pub from: String,
+    /// Channel id it arrived on, when channel-addressed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub channel: Option<String>,
+    /// Bounded body preview; the full text follows in the mail notice.
+    pub preview: String,
+}
+
+/// Structured result of one `wait`.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct WaitOutcome {
+    /// Why the wait returned.
+    pub woke_by: WaitWake,
+    /// Targets that finished their current work.
+    pub finished: Vec<WaitMember>,
+    /// Targets still working.
+    pub running: Vec<WaitMember>,
+    /// Mail that arrived for the caller (channel-aware wait only).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub mail: Vec<WaitMail>,
+    /// Wall-clock milliseconds spent waiting.
+    pub waited_ms: u64,
+}
+
+impl WaitOutcome {
+    /// Tool result JSON: `{title, output, metadata}` with a readable summary.
+    #[must_use]
+    pub fn to_tool_result(&self) -> Value {
+        let mut lines = Vec::new();
+        let headline = match self.woke_by {
+            WaitWake::Members => "Subagents finished.",
+            WaitWake::Mail => "Mail arrived for you.",
+            WaitWake::Timeout => "Timed out; some subagents are still running.",
+            WaitWake::NothingToWaitFor => "Nothing to wait for: you have no live subagents.",
+        };
+        lines.push(headline.to_string());
+        for member in &self.finished {
+            let mut line = format!("- {} [{}]", member.handle, state_label(member.state));
+            if let Some(outcome) = &member.outcome {
+                line.push_str(&format!(" {outcome}"));
+            }
+            if let Some(report) = &member.report {
+                line.push_str(&format!(": {report}"));
+            }
+            lines.push(line);
+        }
+        if !self.running.is_empty() {
+            lines.push(format!(
+                "Still running: {}",
+                self.running
+                    .iter()
+                    .map(|member| member.handle.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+        for mail in &self.mail {
+            let channel = mail
+                .channel
+                .as_ref()
+                .map_or(String::new(), |id| format!(" @{id}"));
+            lines.push(format!(
+                "- mail from {}{channel}: {}",
+                mail.from, mail.preview
+            ));
+        }
+        json!({
+            "title": format!("wait: {}", match self.woke_by {
+                WaitWake::Members => "members",
+                WaitWake::Mail => "mail",
+                WaitWake::Timeout => "timeout",
+                WaitWake::NothingToWaitFor => "nothing to wait for",
+            }),
+            "output": lines.join("\n"),
+            "metadata": self,
+        })
+    }
+}
+
+fn state_label(state: WaitMemberState) -> &'static str {
+    match state {
+        WaitMemberState::Reported => "reported",
+        WaitMemberState::Archived => "archived",
+        WaitMemberState::Idle => "idle",
+        WaitMemberState::Working => "working",
+    }
 }
 
 /// What one `archive` call stopped and archived.
@@ -159,6 +459,34 @@ impl LifecyclePlane {
     }
 }
 
+impl LifecyclePlane {
+    /// Wait for subagents per `spec`; `cancel` (the tool call's token) aborts
+    /// promptly with [`ToolError::Cancelled`] and drops the request.
+    ///
+    /// # Errors
+    /// Unknown or foreign targets surface as [`ToolError::Input`].
+    pub async fn wait(
+        &self,
+        spec: WaitSpec,
+        cancel: &CancellationToken,
+    ) -> Result<WaitOutcome, ToolError> {
+        let session = self.session()?;
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.tx()?
+            .send(LifecycleRequest::Wait {
+                session,
+                spec,
+                reply: reply_tx,
+            })
+            .map_err(|_| ToolError::Other("lifecycle service unavailable".to_string()))?;
+        tokio::select! {
+            biased;
+            () = cancel.cancelled() => Err(ToolError::Cancelled),
+            result = flatten(reply_rx) => result,
+        }
+    }
+}
+
 async fn flatten<T>(rx: oneshot::Receiver<Result<T, String>>) -> Result<T, ToolError> {
     match rx.await {
         Ok(Ok(value)) => Ok(value),
@@ -261,5 +589,80 @@ mod tests {
             unscoped.archive("x".to_string(), String::new()).await,
             Err(ToolError::Other(_))
         ));
+    }
+
+    #[test]
+    fn wait_spec_defaults_clamps_and_names_bad_fields() {
+        let spec = WaitSpec::parse(&json!({}), false).unwrap();
+        assert!(spec.targets.is_empty());
+        assert_eq!(spec.mode, WaitMode::All);
+        assert_eq!(spec.timeout, Duration::from_secs(WAIT_DEFAULT_TIMEOUT_SECS));
+        assert!(!spec.wake_on_mail);
+
+        let spec = WaitSpec::parse(
+            &json!({"targets": ["main/a-1", "main/a-1", "b-2"], "mode": "any", "timeout_secs": 99_999}),
+            true,
+        )
+        .unwrap();
+        assert_eq!(spec.targets, ["main/a-1", "b-2"]);
+        assert_eq!(spec.mode, WaitMode::Any);
+        assert_eq!(spec.timeout, Duration::from_secs(WAIT_MAX_TIMEOUT_SECS));
+        assert!(spec.wake_on_mail);
+
+        // "any"/"all" as the whole targets value selects the mode.
+        let spec = WaitSpec::parse(&json!({"targets": "any"}), false).unwrap();
+        assert!(spec.targets.is_empty());
+        assert_eq!(spec.mode, WaitMode::Any);
+        assert_eq!(
+            WaitSpec::parse(&json!({"timeout_secs": 0}), false)
+                .unwrap()
+                .timeout,
+            Duration::ZERO
+        );
+
+        for (input, field) in [
+            (json!({"mode": "some"}), "mode"),
+            (json!({"timeout_secs": -1}), "timeout_secs"),
+            (json!({"targets": [1]}), "targets"),
+            (json!({"targets": {"a": 1}}), "targets"),
+        ] {
+            let error = WaitSpec::parse(&input, false).unwrap_err();
+            assert!(
+                matches!(&error, ToolError::Input(message) if message.contains(field)),
+                "{input}: {error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn wait_schema_description_depends_on_the_mail_wake() {
+        assert!(wait_tool_schema(true).description.contains("mail arrives"));
+        assert!(!wait_tool_schema(false).description.contains("mail arrives"));
+        assert_eq!(wait_tool_schema(false).name.as_str(), "wait");
+    }
+
+    #[tokio::test]
+    async fn cancelling_the_tool_call_aborts_the_wait_and_drops_the_request() {
+        let (plane, mut rx) = LifecyclePlane::new();
+        let plane = plane.for_session(SessionId::new());
+        let cancel = CancellationToken::new();
+        let waiting = {
+            let cancel = cancel.clone();
+            tokio::spawn(async move {
+                plane
+                    .wait(WaitSpec::parse(&json!({}), false).unwrap(), &cancel)
+                    .await
+            })
+        };
+        let Some(LifecycleRequest::Wait { reply, .. }) = rx.recv().await else {
+            panic!("expected a wait request");
+        };
+        cancel.cancel();
+        let result = tokio::time::timeout(Duration::from_secs(1), waiting)
+            .await
+            .expect("cancel aborts promptly")
+            .unwrap();
+        assert!(matches!(result, Err(ToolError::Cancelled)));
+        assert!(reply.is_closed(), "the service sees the wait was abandoned");
     }
 }

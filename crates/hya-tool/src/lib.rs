@@ -72,7 +72,11 @@ pub use interaction::{
     InteractionError, InteractionPlane, QuestionAnswer, QuestionInfo, QuestionKind, QuestionOption,
     QuestionPrompt, QuestionReply, QuestionRequest,
 };
-pub use lifecycle::{ArchiveReceipt, LifecyclePlane, LifecycleRequest};
+pub use lifecycle::{
+    ArchiveReceipt, LifecyclePlane, LifecycleRequest, WAIT_DEFAULT_TIMEOUT_SECS,
+    WAIT_MAX_TIMEOUT_SECS, WaitMail, WaitMember, WaitMemberState, WaitMode, WaitOutcome, WaitSpec,
+    WaitWake, wait_tool_schema,
+};
 pub use lsp_plane::{LspError, LspOperation, LspPlane, LspProvider, LspRequest};
 pub use mailbox::{
     ArchivedAgentRow, ChannelInfo, ChannelPolicySnapshot, ChannelRow, MailReceipt, MailboxError,

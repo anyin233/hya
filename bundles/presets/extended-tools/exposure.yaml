@@ -11,6 +11,7 @@ tools:
   - { name: workflow, schema_version: 1, permission: tool }
   - { name: search_agent, schema_version: 1, permission: read_only }
   - { name: archive, schema_version: 1, permission: task }
+  - { name: wait, schema_version: 1, permission: read_only }
   - name: plan_exit
     schema_version: 1
     permission: tool

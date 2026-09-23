@@ -6,3 +6,6 @@ tools:
   - { name: send, schema_version: 1, permission: tool }
   - { name: list_channel, schema_version: 1, permission: read_only }
   - { name: report, schema_version: 1, permission: tool }
+  # Replaces extended-tools' `wait` whenever both families are loaded: this
+  # one also wakes on mail for the caller. Declared, never implied by order.
+  - { name: wait, schema_version: 1, permission: read_only, overrides: hya/extended-tools }

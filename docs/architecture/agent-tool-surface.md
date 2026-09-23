@@ -33,7 +33,7 @@ advertised.
 | Local discovery | `ls`, `glob`, `find`, `grep`, `lsp` | List directories, match paths, search text, or query language servers. |
 | Commands | `bash` | Run a command with bounded capture; hidden runtime name `shell` is not advertised. |
 | Human/session interaction | `ask_user`, `todo__read`, `todo__update_status`, `todo__update_content`, `plan_exit`, `invalid` | Ask batched structured questions, read/update session todos, request a plan-mode transition, or represent invalid tool arguments. |
-| Agents and teams | `skill`, `list_agents`, `task`, `workflow`, `search_agent`, `archive` | Load skills, discover/spawn agents, execute governed Workflow commands, search archived subagents, and stop-and-archive a subagent. The orchestration plane is hidden at depth 2 ([ADR-0015](../adr/0015-unified-resident-subagent-lifecycle.md)). |
+| Agents and teams | `skill`, `list_agents`, `task`, `workflow`, `search_agent`, `archive`, `wait` | Load skills, discover/spawn agents, execute governed Workflow commands, search archived subagents, stop-and-archive a subagent, and block until subagents finish (`wait` stays advertised at every depth). The orchestration plane is hidden at depth 2 ([ADR-0015](../adr/0015-unified-resident-subagent-lifecycle.md)). |
 | Communication | `send`, `list_channel`, `report` | Channel-plane communication: one channel-addressed send (the channel's nature picks DM vs broadcast, with archive revival), channel listing, and terminal reports ([ADR-0016](../adr/0016-channel-communication-plane.md)). |
 | Network | `webfetch`, `websearch` | Fetch a URL or run provider-backed web search. |
 
@@ -201,6 +201,52 @@ Errors (`ToolError::Input`, actionable text):
 | already archived | ``` `H` is already archived; send it mail (`send` to `H`) to wake it``` |
 | the lead | ``` `main` is the team lead; the lead is never archived``` |
 | not a descendant | ``` `H` is not one of your subagents; only its parent `P` or an ancestor can archive it``` |
+
+**`wait`** (permission `read_only`; advertised at every depth): block the
+calling turn until subagents finish their current work, bounded by a timeout.
+
+```json
+{"targets": ["main/hya-worker-1", "main/hya-worker-2"], "mode": "any", "timeout_secs": 300}
+```
+
+| Field | Type | Contract |
+| --- | --- | --- |
+| `targets` | string[] (optional) | Handles as returned by `task` (canonical, or a leaf relative to the caller) or session ids; every one must be a descendant of the caller. Omitted: all live **direct** subagents. The whole value `"any"`/`"all"` is accepted as the mode over all live subagents. |
+| `mode` | `"all"` (default) \| `"any"` | Return when every target / the first target finished. |
+| `timeout_secs` | integer, default 600, clamped to 1800 | `0` reports the current state without blocking. |
+
+A target has *finished its current work* when it reported (archived with a
+report), was archived, or is live and idle with no work owed (no running turn,
+no queued mail or directive, no accepted report still executing). The result
+is `{title, output, metadata}` where `metadata` is:
+
+```json
+{"woke_by": "members", "waited_ms": 5210,
+ "finished": [{"handle": "main/hya-worker-1", "session": "hysec_…", "state": "reported", "outcome": "done", "report": "…"}],
+ "running":  [{"handle": "main/hya-worker-2", "session": "hysec_…", "state": "working"}],
+ "mail": []}
+```
+
+`woke_by` is `members`, `mail`, `timeout`, or `nothing_to_wait_for` (no
+target: the caller has no live subagents; a subagent with the mail-aware wait
+instead waits for mail). `state` is `reported`, `archived`, `idle`, or
+`working`; `outcome` is `done`/`failed` for a report and `cancelled` for an
+archive; `report` carries the report, the archive note, or the tail of an idle
+member's last answer (≤ 600 chars). The wait runs inside the caller's turn and
+is woken through the engine bus (team-lifecycle events on the root or caller
+log), never by a resident wake of the caller — that would queue behind the
+waiting turn. Cancelling the turn (user cancel, drain) aborts it at once
+(`ToolError::Cancelled`). Unknown or foreign targets are input errors that list
+the caller's live subagents.
+
+Two implementations exist: the `hya/extended-tools` `wait` wakes on member
+progress only; the `hya/channel-tools` `wait` **overrides** it whenever the
+channel family is loaded (an explicit `overrides: hya/extended-tools` in its
+exposure policy, see [Tool-family presets](../base-tools.md#overrides)) and
+also returns when new mail reaches the caller — from a subagent, the parent, or
+the harness (`LEADER FAILED` wrap-up notices included) — with `woke_by: mail`
+and `mail: [{from, channel?, preview}]`; the full text follows in the
+`[NEW MAIL]` notice appended to the tool result.
 
 Removed tools: `roster`, `channels`, `join`, `leave` — their information folds
 into `list_channel`/`search_agent`; named user-created channels no longer

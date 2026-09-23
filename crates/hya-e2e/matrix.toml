@@ -414,6 +414,14 @@ path = "crates/hya-e2e/tests/p35_token_summary.rs"
 tags = ["pr", "hyabundle", "plugin", "extras"]
 timeout_secs = 120
 
+[[scenario]]
+id = "T2.31"
+title = "wait is woken inside the lead turn by a worker report; archive stops a worker and mail to its handle wakes it"
+track = "P"
+path = "crates/hya-e2e/tests/p36_wait_archive.rs"
+tags = ["pr", "subagent", "mailbox"]
+timeout_secs = 120
+
 # Index-only deep engine coverage (not duplicated in Track P).
 [[scenario]]
 id = "I.nested"

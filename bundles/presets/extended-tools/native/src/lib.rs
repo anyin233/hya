@@ -13,6 +13,7 @@ mod plan;
 mod search_agent;
 mod skill;
 mod task;
+mod wait;
 mod workflow;
 
 /// Report the lockstep Rust tool ABI before any Rust object crosses the library boundary.
@@ -40,7 +41,7 @@ pub unsafe extern "C" fn hya_tool_bundle_abi_v1(out: *mut u8) {
 pub unsafe extern "C" fn hya_tool_bundle_register_v1(out: *mut Vec<Arc<dyn Tool>>) {
     // SAFETY: the host calls this only after the ABI digest matches.
     if let Some(out) = unsafe { out.as_mut() } {
-        let tools: [Arc<dyn Tool>; 9] = [
+        let tools: [Arc<dyn Tool>; 10] = [
             Arc::new(invalid::InvalidTool),
             Arc::new(lsp::LspTool),
             Arc::new(skill::SkillTool),
@@ -50,6 +51,7 @@ pub unsafe extern "C" fn hya_tool_bundle_register_v1(out: *mut Vec<Arc<dyn Tool>
             Arc::new(search_agent::SearchAgentTool),
             Arc::new(archive::ArchiveTool),
             Arc::new(plan::PlanExitTool),
+            Arc::new(wait::WaitTool),
         ];
         out.extend(tools);
     }
