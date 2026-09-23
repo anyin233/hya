@@ -991,13 +991,13 @@ impl TeamActor {
 
     /// Cancel `child`'s non-terminal member row on its parent's log.
     async fn cancel_member_row(&self, child: SessionId, reason: &str) {
-        let Ok(child_projection) = self.engine.read_projection(child).await else {
+        let Ok(child_projection) = self.engine.read_projection_shared(child).await else {
             return;
         };
         let Some(parent) = child_projection.session.parent else {
             return;
         };
-        let Ok(parent_projection) = self.engine.read_projection(parent).await else {
+        let Ok(parent_projection) = self.engine.read_projection_shared(parent).await else {
             return;
         };
         for row in &parent_projection.session.members {
@@ -2182,7 +2182,7 @@ pub(crate) async fn archive_stopped_agent(
             "the team lead is never archived".to_string(),
         ));
     }
-    let projection = engine.read_projection(root).await?;
+    let projection = engine.read_projection_shared(root).await?;
     let handoff = engine.degraded_terminal_handoff(child).await;
     engine
         .emit_for_actor(
@@ -2203,7 +2203,7 @@ pub(crate) async fn archive_stopped_agent(
         .roster
         .get(parent_path)
         .map_or(root, |entry| entry.session);
-    let parent_projection = engine.read_projection(parent_session).await?;
+    let parent_projection = engine.read_projection_shared(parent_session).await?;
     for row in &parent_projection.session.members {
         if row.child == Some(child)
             && matches!(

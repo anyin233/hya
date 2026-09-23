@@ -82,13 +82,24 @@ async fn create_session(
 
 /// Read one session's projection summary with store timestamps.
 async fn projection_info(st: &ServerState, session: SessionId) -> Result<pb::SessionInfo, V1Error> {
-    let projection = st.engine.read_projection(session).await?;
-    let rows = st.engine.store().list_sessions().await?;
-    let (started, updated) = rows
-        .iter()
-        .find(|row| row.session == session)
+    let (started, updated) = st
+        .engine
+        .store()
+        .session_info(session)
+        .await?
         .map(|row| (row.started_millis, row.updated_millis))
         .unwrap_or((0, 0));
+    projection_info_at(st, session, started, updated).await
+}
+
+/// `SessionInfo` from the cached projection and already-known log bounds.
+async fn projection_info_at(
+    st: &ServerState,
+    session: SessionId,
+    started: i64,
+    updated: i64,
+) -> Result<pb::SessionInfo, V1Error> {
+    let projection = st.engine.read_projection_shared(session).await?;
     let mut info = session_info(&projection, started, updated);
     info.busy = st.is_busy(session);
     Ok(info)
@@ -114,13 +125,17 @@ async fn list_sessions(
         if !request.parent.is_empty()
             && let Ok(parent) = parse_session(&request.parent)
         {
-            let projection = st.engine.read_projection(row.session).await?;
+            let projection = st.engine.read_projection_shared(row.session).await?;
             let is_child = projection.session.parent == Some(parent);
             if !is_child {
                 continue;
             }
         }
-        infos.push(projection_info(&st, row.session).await?);
+        // The list query already carries each log's bounds; re-listing every
+        // session per row made this O(sessions x events).
+        infos.push(
+            projection_info_at(&st, row.session, row.started_millis, row.updated_millis).await?,
+        );
     }
     infos.reverse();
     let (sessions, page) = super::catalog::paginate(infos, &request.page);

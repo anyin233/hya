@@ -105,7 +105,7 @@ impl SessionEngine {
                 durable: false,
             };
         };
-        let Ok(projection) = self.read_projection(root).await else {
+        let Ok(projection) = self.read_projection_shared(root).await else {
             return SteerMailbox {
                 root,
                 handle: handle.clone(),
@@ -275,7 +275,9 @@ impl SteerMailbox {
     /// Rebuild the pending queue from the durable inbox (everything after the
     /// committed cursor), after the live tail lost envelopes.
     async fn resync_from_log(&mut self, engine: &SessionEngine) -> Result<(), CoreError> {
-        let projection = engine.read_projection(self.root).await?;
+        // Cached fold: after a bus lag every drain re-reads the root, so this
+        // must cost the root's new events, not its whole log.
+        let projection = engine.read_projection_shared(self.root).await?;
         let Some(inbox) = projection.team.inboxes.get(&self.handle) else {
             return Ok(());
         };

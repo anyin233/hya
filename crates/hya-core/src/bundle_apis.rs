@@ -9,8 +9,9 @@
 //! process owns itself: the host capability never grants writes.
 //!
 //! Every read here folds the session event logs through the shared projection
-//! reducer ([`hya_store::SessionStore::read_projection`]); there is no parallel
-//! read model.
+//! reducer ([`hya_store::SessionStore::read_projection_shared`], served by the
+//! store's replay-consistent projection cache); there is no parallel read
+//! model.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
@@ -198,8 +199,8 @@ pub async fn session_usage_report(
             truncated = true;
             break;
         }
-        let projection = store.read_projection(current).await?;
-        let state = projection.session;
+        let projection = store.read_projection_shared(current).await?;
+        let state = &projection.session;
         if scope != UsageScope::Session {
             for child in state.members.iter().filter_map(|member| member.child) {
                 if seen.insert(child) {
@@ -211,7 +212,7 @@ pub async fn session_usage_report(
         sessions.push(SessionUsageRow {
             session: current,
             parent: state.parent,
-            agent: state.agent,
+            agent: state.agent.clone(),
             usage: UsageReport::from(&state.usage),
         });
     }
@@ -229,7 +230,10 @@ async fn lineage_root(store: &SessionStore, session: SessionId) -> Result<Sessio
     let mut current = session;
     let mut seen = BTreeSet::from([session]);
     for _ in 0..MAX_USAGE_REPORT_SESSIONS {
-        match store.read_projection(current).await?.session.parent {
+        match store
+            .with_projection(current, |projection| projection.session.parent)
+            .await?
+        {
             Some(parent) if seen.insert(parent) => current = parent,
             _ => break,
         }
