@@ -424,6 +424,16 @@ uses the selected Agent's effective default from that database. Direct/category
 Agent configuration remains higher precedence. A command-line model override
 applies only to that invocation and is not written as an Agent preference.
 
+**Which agent runs.** The new root Session's Agent id is resolved the same way
+`serve` resolves one: config `default_agent` (see
+[Configuration](configuration.md#agent-selection)) when set, otherwise the
+built-in `build` agent. There is no per-invocation `--agent` flag yet. An
+unresolvable `default_agent` (not a selectable agent id in the bound catalog)
+fails the run with a clear `UnknownAgentId` error instead of silently falling
+back to `build`. `hya run`, `hya -p` goal mode, `hya loop`, `hya rpc`, and
+`hya workflow run` (when it creates a new Session) all resolve the root Agent
+the same way.
+
 ## `hya run`
 
 ```sh
@@ -432,7 +442,9 @@ hya run --format json "summarize this repo"
 ```
 
 Compat-compatible alias for `exec`. Message words are joined with spaces.
-Like `exec`, `run` persists only when the global `--db <PATH>` is supplied.
+Like `exec`, `run` persists only when the global `--db <PATH>` is supplied,
+and resolves its root Agent the same way (config `default_agent`, else the
+built-in `build` agent — see [`hya exec`](#hya-exec)).
 `--format json` and `--json` both emit event JSONL.
 
 ## `hya -p`
@@ -444,7 +456,10 @@ hya -p "make the workspace compile" --max-iterations 6
 Runs goal mode with an in-memory store. Each iteration runs an agent turn, then
 an independent evaluator judges the transcript. The run stops when the evaluator
 returns `met=true`, a cap is reached, or cancellation is requested. Goal mode
-does not persist to the global `--db` database.
+does not persist to the global `--db` database. The worker Agent is resolved
+the same way as `hya exec`'s root Agent (config `default_agent`, else `build`
+— see [`hya exec`](#hya-exec)); the independent evaluator is a separate,
+unaffected model selection (`--evaluator-model` / `goal.evaluator_model`).
 
 ## `hya serve`
 

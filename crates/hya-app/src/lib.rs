@@ -50,11 +50,11 @@ pub use installed_bundle_refresh::{
 };
 pub use preset_inventory::{TrustedPresetDescriptor, trusted_preset_inventory};
 pub use runtime::{
-    BuiltSessionEngine, HARNESS_AGENT_BASE, HyaRuntime, OfflineNotice, RuntimeConfig,
-    RuntimeOptions, agent_base_with_model, agent_with_model, agent_with_model_pure,
+    BUILTIN_DEFAULT_AGENT_ID, BuiltSessionEngine, HARNESS_AGENT_BASE, HyaRuntime, OfflineNotice,
+    RuntimeConfig, RuntimeOptions, agent_base_with_model, agent_with_model, agent_with_model_pure,
     build_session_engine, build_session_engine_pure, builtin_agent_catalog, compaction_config,
-    discover_context_files, host_info, offline_router, open_store, resolve_runtime,
-    spawn_team_supervisor, today, with_built_session_engine,
+    discover_context_files, host_info, offline_router, open_store, resolve_headless_agent_name,
+    resolve_runtime, spawn_team_supervisor, today, with_built_session_engine,
 };
 pub use workflow_control::{
     FIRST_PARTY_BUNDLE_ID, ResolvedWorkflow, WorkflowCatalog, WorkflowCatalogOwner,
