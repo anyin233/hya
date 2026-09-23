@@ -1,7 +1,7 @@
 kind: AgentSetBundle
 identity:
   id: hya/subagents
-  version: 0.37.18
+  version: 0.37.19
   publisher: hya
 agents:
   - id: hya-resident-worker

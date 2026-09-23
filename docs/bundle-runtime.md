@@ -56,18 +56,21 @@ trusted bundle is a startup error, like a missing tool library.
 
 Every first-party bundle is released at the hya version: each `bundle.yaml`
 identity version equals `[workspace.package].version`, and a test enforces it.
-A release publishes:
+A release builds each supported target natively: `x86_64-unknown-linux-gnu`,
+`aarch64-unknown-linux-gnu`, and `aarch64-apple-darwin`. It publishes:
 
-- `hya-<version>-<target>.tar.gz`, containing `bin/hya-backend`,
+- `hya-<version>-<target>.tar.gz` per target, containing `bin/hya-backend`,
   `bundles/hya-<name>.hyabundle` for all twelve bundles, and
   `lib/hya/bun-adapter`. Extracting it gives a working installed layout.
 - One standalone asset per bundle, byte-identical to the archived copy:
   `hya-<name>-<version>-<target>.hyabundle` for the five native tool families
-  and `hya-<name>-<version>.hyabundle` for the seven platform-independent
-  bundles. To replace a bundle in an installed layout, save the asset as
-  `<prefix>/bundles/hya-<name>.hyabundle`.
-- `SHA256SUMS` covering the archive and all twelve assets, plus build
-  provenance attestations for each file.
+  on each target, and `hya-<name>-<version>.hyabundle` once for the seven
+  platform-independent bundles. The release fails if two targets built a
+  platform-independent bundle with different bytes. To replace a bundle in an
+  installed layout, save the asset as `<prefix>/bundles/hya-<name>.hyabundle`.
+- `SHA256SUMS-<target>` from each target job and a combined `SHA256SUMS`
+  covering every archive and bundle asset, plus build provenance attestations
+  for each file.
 
 `cargo run -p xtask -- stage-first-party-bundles` produces both the archived
 packages and the assets and refuses a release version that any bundle does not

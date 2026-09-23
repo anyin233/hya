@@ -12,8 +12,48 @@ const TARGET: &str = "x86_64-unknown-linux-gnu";
 const WORKFLOW_CONTRACTS: &[&str] = &[
     "cp -R crates/hya-plugin-bun/adapter/src/. \"$bun_adapter/src/\"",
     "cargo run --locked -p xtask -- stage-first-party-bundles --target \"$TARGET\" --version \"$version\" --library-dir \"target/$TARGET/release\" --package-root \"dist/$package_dir\" --assets dist",
-    "(cd dist && sha256sum \"$archive\" hya-*.hyabundle > SHA256SUMS)",
+    "(cd dist && shasum -a 256 \"$archive\" hya-*.hyabundle > \"SHA256SUMS-$TARGET\")",
 ];
+
+/// Reject a matrix target that differs from the host before any build starts.
+#[test]
+fn release_rehearsal_requires_a_host_target() {
+    let host = String::from_utf8(
+        Command::new("rustc")
+            .arg("-vV")
+            .output()
+            .expect("run rustc -vV")
+            .stdout,
+    )
+    .expect("rustc output is UTF-8");
+    let host = host
+        .lines()
+        .find_map(|line| line.strip_prefix("host: "))
+        .expect("rustc reports its host");
+    let foreign = [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-unknown-linux-gnu",
+        "aarch64-apple-darwin",
+    ]
+    .into_iter()
+    .find(|target| *target != host)
+    .expect("a release target differs from the host");
+    let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
+        .args(["release-rehearsal", "--workflow"])
+        .arg(workspace_root().join(".github/workflows/release.yml"))
+        .args([
+            "--version",
+            env!("CARGO_PKG_VERSION"),
+            "--target",
+            foreign,
+            "--no-publish",
+        ])
+        .output()
+        .expect("run release rehearsal");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "foreign target passed: {stderr}");
+    assert!(stderr.contains("host"), "stderr was: {stderr}");
+}
 
 /// Require an explicit no-publish guard before a rehearsal can run.
 #[test]

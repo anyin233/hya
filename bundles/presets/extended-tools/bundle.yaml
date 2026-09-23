@@ -1,7 +1,7 @@
 kind: Plugin
 identity:
   id: hya/extended-tools
-  version: 0.37.18
+  version: 0.37.19
   publisher: hya
 namespace: extended-tools
 extensions:
