@@ -30,10 +30,11 @@ pub fn project_bundles_dir() -> Option<std::path::PathBuf> {
     Some(cwd.join(".hya/bundles"))
 }
 
-/// One loaded project bundle: its prepared catalog plus the content digest
-/// that feeds the directory fingerprint.
+/// One loaded project bundle: its prepared catalog, source directory, and the
+/// content digest that feeds the directory fingerprint.
 struct LoadedProjectBundle {
     prepared: PreparedCatalog,
+    dir: PathBuf,
     content_digest: u64,
 }
 
@@ -43,9 +44,20 @@ struct LoadedProjectBundle {
 /// Unreadable or invalid bundles are skipped with a `tracing::warn!` so one
 /// broken directory never wedges the whole catalog. Returns the prepared
 /// catalogs sorted by bundle id plus a fingerprint that changes whenever any
-/// project bundle file's contents change.
+/// project bundle file's contents change. Each bundle directory's own
+/// `config.yml` (see [`crate::bundle_config`]) is not bundle content: it never
+/// enters the prepared sources or this fingerprint.
 #[must_use]
 pub fn load_project_bundles(dir: &Path) -> (Vec<PreparedCatalog>, u64) {
+    let (loaded, fingerprint) = load_project_bundle_dirs(dir);
+    (
+        loaded.into_iter().map(|(prepared, _)| prepared).collect(),
+        fingerprint,
+    )
+}
+
+/// [`load_project_bundles`] that also returns each bundle's source directory.
+pub(crate) fn load_project_bundle_dirs(dir: &Path) -> (Vec<(PreparedCatalog, PathBuf)>, u64) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return (Vec::new(), 0);
     };
@@ -73,6 +85,7 @@ pub fn load_project_bundles(dir: &Path) -> (Vec<PreparedCatalog>, u64) {
                     identity,
                     LoadedProjectBundle {
                         prepared,
+                        dir: bundle_dir,
                         content_digest,
                     },
                 );
@@ -93,7 +106,7 @@ pub fn load_project_bundles(dir: &Path) -> (Vec<PreparedCatalog>, u64) {
         bundle.content_digest.hash(&mut fingerprint);
     }
     for bundle in loaded.into_values() {
-        catalogs.push(bundle.prepared);
+        catalogs.push((bundle.prepared, bundle.dir));
     }
     let mut fingerprint = fingerprint.finish();
     if fingerprint == 0 {
@@ -103,8 +116,9 @@ pub fn load_project_bundles(dir: &Path) -> (Vec<PreparedCatalog>, u64) {
 }
 
 /// Build a [`BundleSource`] from a directory: every regular file below it,
-/// keyed by its path relative to the directory (forward slashes). Returns
-/// `None` when the directory carries no manifest at its root.
+/// keyed by its path relative to the directory (forward slashes), except the
+/// user-owned `config.yml` and its lock/temporary siblings. Returns `None`
+/// when the directory carries no manifest at its root.
 fn directory_source(dir: &Path) -> Option<BundleSource> {
     let mut files = Vec::new();
     collect_files(dir, dir, &mut files);
@@ -140,6 +154,9 @@ fn collect_files(root: &Path, dir: &Path, files: &mut Vec<(String, Vec<u8>)>) {
                 .map(|component| component.as_os_str().to_string_lossy().into_owned())
                 .collect::<Vec<_>>()
                 .join("/");
+            if crate::bundle_config::is_bundle_config_entry(&keyed) {
+                continue;
+            }
             if let Ok(bytes) = std::fs::read(&path) {
                 files.push((keyed, bytes));
             }
@@ -147,7 +164,8 @@ fn collect_files(root: &Path, dir: &Path, files: &mut Vec<(String, Vec<u8>)>) {
     }
 }
 
-/// Stable digest of every file below `dir` (sorted relative path + bytes).
+/// Stable digest of every bundle file below `dir` (sorted relative path +
+/// bytes); the bundle's `config.yml` is excluded like in [`directory_source`].
 fn directory_digest(dir: &Path) -> u64 {
     let mut files = Vec::new();
     collect_files(dir, dir, &mut files);
@@ -323,7 +341,21 @@ fn validate_source_paths(files: &[SourceFile]) -> Result<(), ProjectBundleError>
     Ok(())
 }
 
+/// Drop the user-owned `config.yml` (and its lock/temporary siblings) from
+/// incoming sources: it is configuration, never bundle content, so an
+/// install neither ships nor overwrites it.
+fn without_config_entries(files: &[SourceFile]) -> Vec<SourceFile> {
+    files
+        .iter()
+        .filter(|file| !crate::bundle_config::is_bundle_config_entry(file.path()))
+        .cloned()
+        .collect()
+}
+
 /// Decide a project install of `files` into `dir` without writing anything.
+///
+/// A root-level `config.yml` in `files` is ignored (it is the bundle's
+/// user-owned configuration file, not bundle content).
 ///
 /// # Errors
 /// Returns the same policy errors the user registry reports
@@ -341,7 +373,7 @@ pub fn plan_project_install(
     validate_source_paths(files)?;
     let mut incoming = prepare_project_bundle(
         PathBuf::new(),
-        BundleSource::new("project-install", files.to_vec()),
+        BundleSource::new("project-install", without_config_entries(files)),
     )?;
     let bundle_id = incoming.bundle_id().to_string();
     let version = incoming.version().to_string();
@@ -474,6 +506,8 @@ fn write_files(root: &Path, files: &[SourceFile]) -> Result<(), ProjectBundleErr
 /// into place, so the runtime loader never sees a half-written bundle; a
 /// replaced directory is restored if the final rename fails. Returns the
 /// executed plan; an [`BundleInstallAction::Unchanged`] plan writes nothing.
+/// A replaced bundle keeps its existing `config.yml`; incoming sources never
+/// write one.
 ///
 /// # Errors
 /// Everything [`plan_project_install`] reports, plus filesystem failures.
@@ -487,10 +521,21 @@ pub fn install_project_bundle(
     if plan.action == BundleInstallAction::Unchanged {
         return Ok(plan);
     }
+    let files = without_config_entries(&files);
     std::fs::create_dir_all(dir).map_err(|error| io_error(dir, &error))?;
     let scratch_parent = dir.parent().unwrap_or(dir);
     let staging = scratch_path(scratch_parent, "staging");
-    if let Err(error) = write_files(&staging, &files) {
+    let staged = write_files(&staging, &files).and_then(|()| {
+        let config = plan
+            .target
+            .join(crate::bundle_config::BUNDLE_CONFIG_FILE_NAME);
+        if config.is_file() {
+            let preserved = staging.join(crate::bundle_config::BUNDLE_CONFIG_FILE_NAME);
+            std::fs::copy(&config, &preserved).map_err(|error| io_error(&config, &error))?;
+        }
+        Ok(())
+    });
+    if let Err(error) = staged {
         let _ = std::fs::remove_dir_all(&staging);
         return Err(error);
     }

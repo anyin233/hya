@@ -15,6 +15,7 @@ use hya_plugin::{PluginContributionSet, PluginHost, SkillContribution};
 use hya_tool::{NamedTool, Tool, ToolPermission};
 use sha2::{Digest, Sha256};
 
+use crate::bundle_config::BundleConfigLocation;
 use crate::runtime_reconcile::{bundle_schema_claims, prepared_bundle_skill_exports};
 
 #[derive(Clone)]
@@ -23,12 +24,75 @@ pub(crate) struct CachedBundleSource {
     pub(crate) source: RuntimeSource,
 }
 
+/// One bundle's configuration location plus, for bundles that start a
+/// process or MCP server, the `config.yml` content digest read at refresh.
+#[derive(Clone, Debug, serde::Serialize)]
+pub(crate) struct BundleRuntimeConfig {
+    location: BundleConfigLocation,
+    /// `None` when the file is absent or the bundle spawns nothing.
+    digest: Option<[u8; 32]>,
+    watched: bool,
+}
+
+impl BundleRuntimeConfig {
+    /// Capture `location` for `bundle`, reading the file only when the bundle
+    /// starts a process or MCP server that the file can influence.
+    pub(crate) fn capture(
+        bundle: &PreparedInstallableBundle,
+        process: Option<&PreparedProcessExtension>,
+        location: BundleConfigLocation,
+    ) -> Self {
+        let watched = spawns_runtime(bundle, process);
+        let digest = if watched {
+            location.content_digest()
+        } else {
+            None
+        };
+        Self {
+            location,
+            digest,
+            watched,
+        }
+    }
+
+    pub(crate) fn location(&self) -> &BundleConfigLocation {
+        &self.location
+    }
+
+    /// Whether config edits restart this bundle's runtime source.
+    pub(crate) fn watched(&self) -> bool {
+        self.watched
+    }
+
+    pub(crate) fn digest(&self) -> Option<[u8; 32]> {
+        self.digest
+    }
+}
+
+/// Whether preparing `bundle` starts an out-of-process provider: an explicit
+/// `extensions.process`, a declared MCP server, or the implicit Bun process of
+/// a JavaScript Plugin with tool or hook entrypoints.
+fn spawns_runtime(
+    bundle: &PreparedInstallableBundle,
+    process: Option<&PreparedProcessExtension>,
+) -> bool {
+    process.is_some()
+        || !bundle.mcp().is_empty()
+        || (bundle.plugin_bundle().is_some()
+            && (!bundle.tools().is_empty() || !bundle.hooks().is_empty()))
+}
+
+/// Runtime source identity: the prepared bundle, its process and schemas, and
+/// for spawning bundles the configuration location and content digest, so a
+/// `config.yml` edit restarts the bundle's providers like a changed bundle.
 pub(crate) fn fingerprint(
     bundle: &PreparedInstallableBundle,
     process: Option<&PreparedProcessExtension>,
     schemas: &[PreparedSchema],
+    config: &BundleRuntimeConfig,
 ) -> Result<[u8; 32], CoreError> {
-    let bytes = serde_json::to_vec(&(bundle, process, schemas))
+    let config = config.watched.then_some(config);
+    let bytes = serde_json::to_vec(&(bundle, process, schemas, config))
         .map_err(|error| CoreError::Invalid(format!("encode bundle runtime identity: {error}")))?;
     Ok(Sha256::digest(bytes).into())
 }
@@ -126,17 +190,21 @@ fn invalid(context: &str, error: impl std::fmt::Display) -> CoreError {
     CoreError::Invalid(format!("{context}: {error}"))
 }
 
-fn expand(value: &str, root: &Path) -> String {
+/// Expand `${BUNDLE_ROOT}`, `${CLAUDE_PLUGIN_ROOT}`, `${BUNDLE_CONFIG_DIR}`,
+/// and `${BUNDLE_CONFIG_FILE}` in one declared argv or env value.
+fn expand(value: &str, root: &Path, config: &BundleConfigLocation) -> String {
     value
         .replace("${BUNDLE_ROOT}", &root.to_string_lossy())
         .replace("${CLAUDE_PLUGIN_ROOT}", &root.to_string_lossy())
+        .replace("${BUNDLE_CONFIG_DIR}", &config.dir().to_string_lossy())
+        .replace("${BUNDLE_CONFIG_FILE}", &config.file().to_string_lossy())
 }
 
-fn argv(command: &[String], root: &Path) -> Vec<String> {
+fn argv(command: &[String], root: &Path, config: &BundleConfigLocation) -> Vec<String> {
     command
         .iter()
         .map(|arg| {
-            let expanded = expand(arg, root);
+            let expanded = expand(arg, root, config);
             let path = Path::new(&expanded);
             if path.is_relative() && root.join(path).is_file() {
                 root.join(path).to_string_lossy().into_owned()
@@ -147,13 +215,35 @@ fn argv(command: &[String], root: &Path) -> Vec<String> {
         .collect()
 }
 
+/// Cleared environment for a bundle `extensions.process` provider: inherited
+/// `PATH`, the materialized root, and the bundle's configuration location.
+fn process_env(root: &Path, config: &BundleConfigLocation) -> BTreeMap<String, String> {
+    let mut env = config.env();
+    env.extend([
+        (
+            "HYA_BUNDLE_ROOT".into(),
+            root.to_string_lossy().into_owned(),
+        ),
+        (
+            "CLAUDE_PLUGIN_ROOT".into(),
+            root.to_string_lossy().into_owned(),
+        ),
+    ]);
+    if let Ok(path) = std::env::var("PATH") {
+        env.insert("PATH".into(), path);
+    }
+    env
+}
+
 pub(crate) async fn prepare_source(
     bundle: &PreparedInstallableBundle,
     process: Option<&PreparedProcessExtension>,
     schemas: &[PreparedSchema],
+    config: &BundleRuntimeConfig,
 ) -> Result<CachedBundleSource, CoreError> {
+    let bundle_config = config.location();
     let id = &bundle.identity().id;
-    let fingerprint = fingerprint(bundle, process, schemas)?;
+    let fingerprint = fingerprint(bundle, process, schemas, config)?;
     // A shared JavaScript Plugin has no agent activation to own a Bun sidecar.
     // Promote its explicit executable entrypoints to a generation-owned process.
     let implicit_process = if process.is_none() && bundle.plugin_bundle().is_some() {
@@ -215,7 +305,7 @@ pub(crate) async fn prepare_source(
     if process.is_some() || !bundle.mcp().is_empty() {
         let root = materialize(bundle)?;
         if let Some(process) = process {
-            let mut command = argv(&process.command, &root.0);
+            let mut command = argv(&process.command, &root.0, bundle_config);
             let kind = match process.kind {
                 PreparedProcessKind::Rust => PluginKindWire::Rust,
                 PreparedProcessKind::Bun => PluginKindWire::Bun,
@@ -237,19 +327,7 @@ pub(crate) async fn prepare_source(
                     PluginKindWire::Claude
                 }
             };
-            let mut env = BTreeMap::from([
-                (
-                    "HYA_BUNDLE_ROOT".into(),
-                    root.0.to_string_lossy().into_owned(),
-                ),
-                (
-                    "CLAUDE_PLUGIN_ROOT".into(),
-                    root.0.to_string_lossy().into_owned(),
-                ),
-            ]);
-            if let Ok(path) = std::env::var("PATH") {
-                env.insert("PATH".into(), path);
-            }
+            let env = process_env(&root.0, bundle_config);
             let spec = PluginSpec {
                 id: bundle.namespace().into(),
                 kind,
@@ -343,12 +421,18 @@ pub(crate) async fn prepare_source(
             if config.enabled == Some(false) {
                 continue;
             }
-            config.command = argv(&config.command, &root.0);
-            if let Some(env) = &mut config.env {
-                for value in env.values_mut() {
-                    *value = expand(value, &root.0);
-                }
+            config.command = argv(&config.command, &root.0, bundle_config);
+            // Host defaults sit under the declared map (declared keys win);
+            // `hya_mcp::prepare_bundle` adds inherited `PATH` below both and
+            // pins `HYA_BUNDLE_ROOT` above them.
+            let mut env = bundle_config.env();
+            if let Some(declared) = config.env.take() {
+                env.extend(declared.into_iter().map(|(key, value)| {
+                    let value = expand(&value, &root.0, bundle_config);
+                    (key, value)
+                }));
             }
+            config.env = Some(env);
             let server_name = format!("{}_{}", bundle.namespace(), resource.local_id);
             let server = Arc::new(
                 hya_mcp::prepare_bundle(server_name, config, root.0.clone())
@@ -415,6 +499,158 @@ mod tests {
     use super::*;
     use hya_bundle::{BundleSource, SourceFile, prepare_package};
 
+    fn test_config(bundle_id: &str) -> BundleConfigLocation {
+        let root =
+            std::env::temp_dir().join(format!("hya-bundle-config-{}", hya_proto::SessionId::new()));
+        crate::bundle_config::bundle_config_location(
+            &root.join("hya/config.yaml"),
+            bundle_id,
+            crate::bundle_config::BundleConfigScope::User,
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn bundle_mcp_server_sees_path_root_and_config_location() {
+        let report = std::env::temp_dir().join(format!(
+            "hya-bundle-mcp-env-{}.txt",
+            hya_proto::SessionId::new()
+        ));
+        let script = r#"import json,os,sys
+report = "|".join([
+    "path=" + str(bool(os.environ.get("PATH"))),
+    "home=" + str("HOME" in os.environ),
+    "root=" + str(bool(os.environ.get("HYA_BUNDLE_ROOT"))),
+    "dir=" + os.environ.get("HYA_BUNDLE_CONFIG_DIR", ""),
+    "file=" + os.environ.get("HYA_BUNDLE_CONFIG_FILE", ""),
+    "arg=" + sys.argv[1],
+    "explicit=" + os.environ.get("EXPLICIT", ""),
+])
+open(os.environ["REPORT"], "w").write(report)
+for line in sys.stdin:
+    req = json.loads(line)
+    if "id" not in req:
+        continue
+    if req["method"] == "initialize":
+        result = {"capabilities": {}}
+    elif req["method"] == "tools/list":
+        result = {"tools": [{"name": "probe", "description": "probe", "inputSchema": {"type": "object"}}]}
+    else:
+        result = {"resources": []}
+    print(json.dumps({"jsonrpc": "2.0", "id": req["id"], "result": result}), flush=True)
+"#;
+        let declaration = serde_json::json!({
+            "command": ["python3", "server.py", "${BUNDLE_CONFIG_FILE}"],
+            "env": {"EXPLICIT": "${BUNDLE_CONFIG_DIR}", "REPORT": report.to_string_lossy()},
+        })
+        .to_string();
+        let prepared = prepare_package(BundleSource::new(
+            "mcp-env",
+            vec![
+                SourceFile::new("bundle.yaml", "kind: Plugin\nidentity: { id: acme/mcp-env, version: 1.0.0, publisher: acme }\nresources:\n  mcp: [{ id: probe, path: mcp/probe.json }]\nextensions:\n  files: [{ id: server, path: server.py }]\n"),
+                SourceFile::new("mcp/probe.json", declaration),
+                SourceFile::new("server.py", script),
+            ],
+        ))
+        .unwrap();
+        let config = test_config("acme/mcp-env");
+        let source = prepare_source(
+            &prepared.bundles()[0],
+            prepared.bundle_process("acme/mcp-env"),
+            &[],
+            &BundleRuntimeConfig::capture(
+                &prepared.bundles()[0],
+                prepared.bundle_process("acme/mcp-env"),
+                config.clone(),
+            ),
+        )
+        .await
+        .unwrap();
+        let observed = std::fs::read_to_string(&report).unwrap();
+        drop(source);
+        let _ = std::fs::remove_file(&report);
+        let dir = config.dir().to_string_lossy();
+        let file = config.file().to_string_lossy();
+        assert_eq!(
+            observed,
+            format!(
+                "path=True|home=False|root=True|dir={dir}|file={file}|arg={file}|explicit={dir}"
+            )
+        );
+    }
+
+    #[test]
+    fn config_content_is_folded_into_spawning_bundle_fingerprints_only() {
+        let spawning = prepare_package(BundleSource::new(
+            "spawning",
+            vec![
+                SourceFile::new("bundle.yaml", "kind: Plugin\nidentity: { id: acme/spawning, version: 1.0.0, publisher: acme }\nextensions:\n  process: { kind: rust, command: [python3, '${BUNDLE_ROOT}/runtime.py'] }\n  files: [{ id: runtime, path: runtime.py }]\n"),
+                SourceFile::new("runtime.py", "pass\n"),
+            ],
+        ))
+        .unwrap();
+        let skills_only = prepare_package(BundleSource::new(
+            "skills-only",
+            vec![
+                SourceFile::new("bundle.yaml", "kind: Plugin\nidentity: { id: acme/skills-only, version: 1.0.0, publisher: acme }\nresources:\n  skills: [{ id: guide, path: skills/guide/SKILL.md }]\n"),
+                SourceFile::new("skills/guide/SKILL.md", "---\nname: guide\ndescription: guide\n---\nbody\n"),
+            ],
+        ))
+        .unwrap();
+        for (prepared, id, watched) in [
+            (&spawning, "acme/spawning", true),
+            (&skills_only, "acme/skills-only", false),
+        ] {
+            let bundle = &prepared.bundles()[0];
+            let process = prepared.bundle_process(id);
+            let location = test_config(id);
+            let absent = BundleRuntimeConfig::capture(bundle, process, location.clone());
+            assert_eq!(absent.watched(), watched);
+            let before = fingerprint(bundle, process, &[], &absent).unwrap();
+            std::fs::create_dir_all(location.dir()).unwrap();
+            std::fs::write(location.file(), "key: value\n").unwrap();
+            let present = BundleRuntimeConfig::capture(bundle, process, location.clone());
+            let after = fingerprint(bundle, process, &[], &present).unwrap();
+            assert_eq!(before != after, watched, "{id}");
+            std::fs::write(location.file(), "key: other\n").unwrap();
+            let edited = BundleRuntimeConfig::capture(bundle, process, location.clone());
+            let edited = fingerprint(bundle, process, &[], &edited).unwrap();
+            assert_eq!(after != edited, watched, "{id}");
+            let _ = std::fs::remove_dir_all(location.dir());
+        }
+    }
+
+    #[test]
+    fn process_environment_carries_root_path_and_config_location() {
+        let config = test_config("acme/process-env");
+        let env = process_env(Path::new("/materialized"), &config);
+        assert_eq!(
+            env.get("HYA_BUNDLE_ROOT").map(String::as_str),
+            Some("/materialized")
+        );
+        assert_eq!(
+            env.get("CLAUDE_PLUGIN_ROOT").map(String::as_str),
+            Some("/materialized")
+        );
+        assert_eq!(
+            env.get("HYA_BUNDLE_CONFIG_FILE").map(String::as_str),
+            Some(config.file().to_string_lossy().as_ref())
+        );
+        assert_eq!(
+            env.get("HYA_BUNDLE_CONFIG_DIR").map(String::as_str),
+            Some(config.dir().to_string_lossy().as_ref())
+        );
+        assert!(!env.contains_key("HOME"));
+        assert_eq!(
+            argv(
+                &["${BUNDLE_CONFIG_FILE}".to_string()],
+                Path::new("/materialized"),
+                &config
+            ),
+            vec![config.file().to_string_lossy().into_owned()]
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn materialized_native_bundle_executable_can_run() {
@@ -453,6 +689,11 @@ for line in sys.stdin:
             &prepared.bundles()[0],
             prepared.bundle_process("acme/undeclared"),
             &[],
+            &BundleRuntimeConfig::capture(
+                &prepared.bundles()[0],
+                prepared.bundle_process("acme/undeclared"),
+                test_config("acme/undeclared"),
+            ),
         )
         .await;
         assert!(

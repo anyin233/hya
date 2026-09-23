@@ -481,16 +481,16 @@ async fn bundle_process_receives_only_explicit_configuration_environment() {
         "/usr/bin/env".to_string(),
         "/bin/sh".to_string(),
         "-c".to_string(),
-        "test -z \"${HOME-}\" && test \"$HYA_BUNDLE_CONFIG_FILE\" = /config/agents/reviewer/config.yml && test \"$HYA_BUNDLE_CONFIG_DIR\" = /config/agents/reviewer".to_string(),
+        "test -z \"${HOME-}\" && test \"$HYA_BUNDLE_CONFIG_FILE\" = /config/bundles/reviewer/config.yml && test \"$HYA_BUNDLE_CONFIG_DIR\" = /config/bundles/reviewer".to_string(),
     ];
     let environment = BTreeMap::from([
         (
             "HYA_BUNDLE_CONFIG_FILE".to_string(),
-            "/config/agents/reviewer/config.yml".to_string(),
+            "/config/bundles/reviewer/config.yml".to_string(),
         ),
         (
             "HYA_BUNDLE_CONFIG_DIR".to_string(),
-            "/config/agents/reviewer".to_string(),
+            "/config/bundles/reviewer".to_string(),
         ),
     ]);
     let (_client, mut guard) =

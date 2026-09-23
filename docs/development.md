@@ -99,7 +99,7 @@ cargo run -p xtask -- package-bundle <source-dir> <output.hyabundle>
 cargo run -p xtask -- package-native-tool-bundle <tool-family-source-dir> <built-executable> <output.hyabundle>
 cargo run -p xtask -- package-native-tool-library <tool-family-source-dir> <built-library> <output.hyabundle>
 cargo run -p xtask -- stage-first-party-bundles --library-dir target/release --package-root dist/hya [--version <semver>] [--target <triple> --assets dist]
-cargo run -p xtask -- release-rehearsal --workflow .github/workflows/release.yml --version 0.40.0 --target "$(rustc -vV | sed -n 's/^host: //p')" --no-publish
+cargo run -p xtask -- release-rehearsal --workflow .github/workflows/release.yml --version 0.41.0 --target "$(rustc -vV | sed -n 's/^host: //p')" --no-publish
 ```
 
 ## Crate Selection

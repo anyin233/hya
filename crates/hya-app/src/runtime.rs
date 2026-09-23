@@ -463,7 +463,8 @@ impl BoundSidecarFactory for BundleSidecarFactory {
             })?;
         let files = crate::agent_model_config::AgentModelConfigFiles::new(
             crate::config::active_config_path(),
-        );
+        )
+        .with_project_dir(crate::project_bundles::project_bundles_dir());
         let config_file = files
             .path_for(definition.origin)
             .and_then(|path| std::path::absolute(path).map_err(Into::into))
@@ -475,11 +476,11 @@ impl BoundSidecarFactory for BundleSidecarFactory {
         })?;
         let environment = BTreeMap::from([
             (
-                "HYA_BUNDLE_CONFIG_DIR".to_string(),
+                crate::bundle_config::HYA_BUNDLE_CONFIG_DIR.to_string(),
                 config_dir.to_string_lossy().into_owned(),
             ),
             (
-                "HYA_BUNDLE_CONFIG_FILE".to_string(),
+                crate::bundle_config::HYA_BUNDLE_CONFIG_FILE.to_string(),
                 config_file.to_string_lossy().into_owned(),
             ),
         ]);
@@ -2404,9 +2405,10 @@ async fn build_session_engine_with_mcp_defer(
     .await
     .context("load Agent model preferences before engine readiness")?
     .with_categories(categories.clone())
-    .with_configuration(crate::agent_model_config::AgentModelConfigFiles::new(
-        crate::config::active_config_path(),
-    ))
+    .with_configuration(
+        crate::agent_model_config::AgentModelConfigFiles::new(crate::config::active_config_path())
+            .with_project_dir(crate::project_bundles::project_bundles_dir()),
+    )
     .await
     .context("load Agent model configuration before engine readiness")?;
     let catalog_refresh = Arc::new(

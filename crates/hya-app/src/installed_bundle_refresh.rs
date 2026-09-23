@@ -11,9 +11,11 @@ use hya_core::{
 };
 use hya_plugin::{PluginContributionSet, SkillContribution};
 use hya_store::{BundleRegistry, BundleRegistryRecord};
+use sha2::Digest as _;
 use tokio::sync::{Mutex, OnceCell};
 
-use crate::project_bundles::load_project_bundles;
+use crate::bundle_config::BundleConfigResolver;
+use crate::project_bundles::load_project_bundle_dirs;
 use crate::runtime_reconcile::{bundle_schema_claims, prepared_static_bundle_source};
 
 /// First-party WorkflowBundle and AgentSetBundle payloads published with the runtime catalog.
@@ -55,6 +57,10 @@ pub struct InstalledBundleRefresh {
     applied_generation: Mutex<u64>,
     applied_project_fingerprint: Mutex<u64>,
     project_dir: Option<PathBuf>,
+    config_file: PathBuf,
+    /// `config.yml` files of the spawning bundles last published, with the
+    /// content digest each runtime source was started with.
+    watched_configs: Mutex<Vec<(PathBuf, Option<[u8; 32]>)>>,
     initialized: AtomicBool,
     sources: Mutex<BTreeMap<String, crate::bundle_runtime::CachedBundleSource>>,
 }
@@ -69,6 +75,8 @@ impl InstalledBundleRefresh {
             applied_generation: Mutex::new(0),
             applied_project_fingerprint: Mutex::new(0),
             project_dir: None,
+            config_file: crate::config::active_config_path(),
+            watched_configs: Mutex::new(Vec::new()),
             initialized: AtomicBool::new(false),
             sources: Mutex::new(BTreeMap::new()),
         }
@@ -81,15 +89,36 @@ impl InstalledBundleRefresh {
         self
     }
 
-    /// Publish a new installed catalog generation when the registry advanced.
+    /// Resolve user-scope bundle configuration beside `config_file` (the Hya
+    /// `config.yaml`, which need not exist) instead of the active one.
+    #[must_use]
+    pub fn with_config_file(mut self, config_file: PathBuf) -> Self {
+        self.config_file = config_file;
+        self
+    }
+
+    /// Publish a new installed catalog generation when the registry advanced,
+    /// a project bundle changed, or a spawning bundle's `config.yml` changed.
     ///
     /// Returns `Ok(true)` if the runtime registry was updated, `Ok(false)` when
-    /// the path is missing or the generation is unchanged.
+    /// nothing changed.
     pub async fn refresh_if_changed(&self, runtime: &RuntimeRegistry) -> Result<bool, CoreError> {
-        let (project_catalogs, project_fingerprint) = match &self.project_dir {
-            Some(dir) => load_project_bundles(dir),
+        let (project_bundles, project_fingerprint) = match &self.project_dir {
+            Some(dir) => load_project_bundle_dirs(dir),
             None => (Vec::new(), 0),
         };
+        let mut project_dirs = BTreeMap::new();
+        let mut project_catalogs = Vec::with_capacity(project_bundles.len());
+        for (catalog, dir) in project_bundles {
+            if let [bundle] = catalog.bundles() {
+                project_dirs
+                    .entry(bundle.identity().id.clone())
+                    .or_insert(dir);
+            }
+            project_catalogs.push(catalog);
+        }
+        let config_resolver = BundleConfigResolver::new(self.config_file.clone(), project_dirs);
+        let mut watched_configs = self.watched_configs.lock().await;
         let mut applied_project_fingerprint = self.applied_project_fingerprint.lock().await;
         let registry_generation = if self.registry.get().is_none()
             && !self.registry_path.try_exists().map_err(|error| {
@@ -110,7 +139,13 @@ impl InstalledBundleRefresh {
         let registry_changed = !self.initialized.load(Ordering::Acquire)
             || registry_generation.unwrap_or(0) != *applied_generation;
         let project_changed = project_fingerprint != *applied_project_fingerprint;
-        if !registry_changed && !project_changed {
+        let config_changed = watched_configs.iter().any(|(file, digest)| {
+            std::fs::read(file)
+                .ok()
+                .map(|bytes| <[u8; 32]>::from(sha2::Sha256::digest(bytes)))
+                != *digest
+        });
+        if !registry_changed && !project_changed && !config_changed {
             return Ok(false);
         }
 
@@ -220,6 +255,7 @@ impl InstalledBundleRefresh {
         }
         let mut source_cache = self.sources.lock().await;
         let mut next_sources = BTreeMap::new();
+        let mut next_watched = Vec::new();
         for bundle in bundles.bundles() {
             let id = &bundle.identity().id;
             let process = prepared_catalog_refs
@@ -229,10 +265,21 @@ impl InstalledBundleRefresh {
                 .iter()
                 .find(|row| &row.bundle_id == id)
                 .map_or(&[][..], |row| row.schemas.as_slice());
-            let fingerprint = crate::bundle_runtime::fingerprint(bundle, process, schemas)?;
+            let location = config_resolver.location(id).map_err(|error| {
+                CoreError::Invalid(format!("resolve bundle `{id}` configuration: {error}"))
+            })?;
+            let config =
+                crate::bundle_runtime::BundleRuntimeConfig::capture(bundle, process, location);
+            if config.watched() {
+                next_watched.push((config.location().file().to_path_buf(), config.digest()));
+            }
+            let fingerprint =
+                crate::bundle_runtime::fingerprint(bundle, process, schemas, &config)?;
             let prepared = match source_cache.get(id) {
                 Some(cached) if cached.fingerprint == fingerprint => cached.clone(),
-                _ => crate::bundle_runtime::prepare_source(bundle, process, schemas).await?,
+                _ => {
+                    crate::bundle_runtime::prepare_source(bundle, process, schemas, &config).await?
+                }
             };
             next_sources.insert(id.clone(), prepared);
         }
@@ -246,6 +293,7 @@ impl InstalledBundleRefresh {
             candidate.replace_sources_of_kind(RuntimeSourceKind::Bundle, static_sources.clone())
         })?;
         *source_cache = next_sources;
+        *watched_configs = next_watched;
         self.initialized.store(true, Ordering::Release);
         // Advance even when rows were skipped, so the warning is reported once
         // per generation instead of on every root binding.

@@ -1,10 +1,12 @@
 //! Configuration-file model defaults for built-in and installed-bundle Agents.
 //!
 //! The owning file is selected from the immutable [`hya_core::AgentOrigin`].
-//! Built-ins use the configured Hya file; bundle Agents use one file per bundle
-//! under `agents/`, with the complete bundle identity encoded as one canonical
-//! filesystem leaf. Updates lock a stable sidecar, reread the current document,
-//! and atomically replace the target after changing only the selected model leaf.
+//! Built-ins use the configured Hya file; bundle Agents use their bundle's one
+//! configuration file (see [`crate::bundle_config`]): user-scope bundles use
+//! `bundles/<percent-encoded-bundle-id>/config.yml` beside the Hya file, and
+//! project bundles use `config.yml` in their `.hya/bundles/<dir>/` source
+//! directory. Updates lock a stable sidecar, reread the current document, and
+//! atomically replace the target after changing only the selected model leaf.
 
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
@@ -14,6 +16,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Context as _, anyhow, bail};
 use hya_core::{AgentModelConfiguration, AgentOrigin};
+
+use crate::bundle_config::{
+    BUNDLE_CONFIG_FILE_NAME, BundleConfigResolver, decode_bundle_leaf, user_bundle_config_root,
+};
 use hya_proto::ModelRef;
 use serde_norway::{Mapping, Value};
 
@@ -27,13 +33,25 @@ static NEXT_TEMP_FILE_ID: AtomicU64 = AtomicU64::new(0);
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AgentModelConfigFiles {
     global_file: PathBuf,
+    project_dir: Option<PathBuf>,
 }
 
 impl AgentModelConfigFiles {
     /// Construct model configuration storage rooted at `global_file`.
     #[must_use]
     pub fn new(global_file: PathBuf) -> Self {
-        Self { global_file }
+        Self {
+            global_file,
+            project_dir: None,
+        }
+    }
+
+    /// Resolve project bundles under `dir` (usually `.hya/bundles`) to their
+    /// source directory's `config.yml` instead of the user scope.
+    #[must_use]
+    pub fn with_project_dir(mut self, dir: Option<PathBuf>) -> Self {
+        self.project_dir = dir;
+        self
     }
 
     /// Return the explicit global Hya configuration path.
@@ -42,28 +60,43 @@ impl AgentModelConfigFiles {
         &self.global_file
     }
 
+    /// Snapshot which bundle ids are project-scoped (scans the project dir).
+    #[must_use]
+    pub fn resolver(&self) -> BundleConfigResolver {
+        BundleConfigResolver::discover(self.global_file.clone(), self.project_dir.as_deref())
+    }
+
     /// Resolve the owning model configuration file for an Agent origin.
     ///
-    /// Bundle identities are encoded as one canonical percent-encoded path
-    /// segment. This keeps namespace separators such as `/` out of the
-    /// filesystem hierarchy while retaining a reversible identity.
+    /// Bundle Agents use their bundle's `config.yml`; see
+    /// [`crate::bundle_config`] for the scope rules. Scans the project bundle
+    /// directory for bundle origins; use [`Self::path_in`] to reuse a snapshot.
     ///
     /// # Errors
     ///
-    /// Returns an error when a bundle identity is empty or cannot be represented
-    /// as a non-empty UTF-8 filesystem leaf.
+    /// Returns an error when a bundle identity is empty or a path cannot be
+    /// made absolute.
     pub fn path_for(&self, origin: AgentOrigin<'_>) -> anyhow::Result<PathBuf> {
         match origin {
             AgentOrigin::Builtin => Ok(self.global_file.clone()),
+            AgentOrigin::Bundle { .. } => self.path_in(&self.resolver(), origin),
+        }
+    }
+
+    /// [`Self::path_for`] against an existing [`Self::resolver`] snapshot.
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::path_for`].
+    pub fn path_in(
+        &self,
+        resolver: &BundleConfigResolver,
+        origin: AgentOrigin<'_>,
+    ) -> anyhow::Result<PathBuf> {
+        match origin {
+            AgentOrigin::Builtin => Ok(self.global_file.clone()),
             AgentOrigin::Bundle { bundle_id } => {
-                let leaf = encode_bundle_leaf(bundle_id)?;
-                Ok(self
-                    .global_file
-                    .parent()
-                    .unwrap_or_else(|| Path::new(""))
-                    .join("agents")
-                    .join(leaf)
-                    .join("config.yml"))
+                Ok(resolver.location(bundle_id)?.file().to_path_buf())
             }
         }
     }
@@ -73,7 +106,8 @@ impl AgentModelConfigFiles {
     /// Missing files and missing bundle directories are equivalent to an empty
     /// configuration. Only `agents.<id>.model` values affect the returned
     /// snapshot; all other YAML is retained by subsequent [`Self::set_model`]
-    /// updates.
+    /// updates. A project bundle's `config.yml` replaces any user-scope file
+    /// for the same bundle id, because the project bundle shadows that install.
     ///
     /// # Errors
     ///
@@ -81,17 +115,32 @@ impl AgentModelConfigFiles {
     /// invalid bundle configuration directory leaves, or filesystem failures.
     pub fn load(&self) -> anyhow::Result<AgentModelConfiguration> {
         let builtin = self.read_models(&self.global_file)?.unwrap_or_default();
-        let mut bundles = BTreeMap::new();
+        let resolver = self.resolver();
+        let mut bundles = self.load_user_bundles(resolver.project_dirs())?;
+        for bundle_id in resolver.project_dirs().keys() {
+            let path = resolver.location(bundle_id)?.file().to_path_buf();
+            match self.read_models(&path)? {
+                Some(models) if !models.is_empty() => {
+                    bundles.insert(bundle_id.clone(), models);
+                }
+                _ => {}
+            }
+        }
+        Ok(AgentModelConfiguration { builtin, bundles })
+    }
 
-        let bundle_root = self
-            .global_file
-            .parent()
-            .unwrap_or_else(|| Path::new(""))
-            .join("agents");
+    /// Model leaves from every user-scope `bundles/<leaf>/config.yml`, except
+    /// bundle ids that a project bundle shadows.
+    fn load_user_bundles(
+        &self,
+        shadowed: &BTreeMap<String, PathBuf>,
+    ) -> anyhow::Result<BTreeMap<String, BTreeMap<String, ModelRef>>> {
+        let mut bundles = BTreeMap::new();
+        let bundle_root = user_bundle_config_root(&self.global_file);
         let entries = match fs::read_dir(&bundle_root) {
             Ok(entries) => entries,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(AgentModelConfiguration { builtin, bundles });
+                return Ok(bundles);
             }
             Err(error) => {
                 return Err(error).with_context(|| {
@@ -111,11 +160,6 @@ impl AgentModelConfigFiles {
                 continue;
             }
 
-            let config_path = entry.path().join("config.yml");
-            let Some(models) = self.read_models(&config_path)? else {
-                continue;
-            };
-
             let leaf = entry.file_name();
             let leaf = leaf.to_str().ok_or_else(|| {
                 anyhow!(
@@ -125,6 +169,13 @@ impl AgentModelConfigFiles {
             })?;
             let bundle_id = decode_bundle_leaf(leaf)
                 .with_context(|| format!("validate bundle config directory leaf `{leaf}`"))?;
+            if shadowed.contains_key(&bundle_id) {
+                continue;
+            }
+            let config_path = entry.path().join(BUNDLE_CONFIG_FILE_NAME);
+            let Some(models) = self.read_models(&config_path)? else {
+                continue;
+            };
             if models.is_empty() {
                 continue;
             }
@@ -132,8 +183,7 @@ impl AgentModelConfigFiles {
                 bail!("duplicate bundle model configuration for `{bundle_id}`");
             }
         }
-
-        Ok(AgentModelConfiguration { builtin, bundles })
+        Ok(bundles)
     }
 
     /// Set or clear one Agent model in its owning configuration file.
@@ -438,81 +488,6 @@ fn set_private_permissions(path: &Path) -> std::io::Result<()> {
     }
 }
 
-fn encode_bundle_leaf(bundle_id: &str) -> anyhow::Result<String> {
-    if bundle_id.is_empty() {
-        bail!("bundle identity must not be empty");
-    }
-    let special_dot = matches!(bundle_id, "." | "..");
-    let mut encoded = String::with_capacity(bundle_id.len());
-    for byte in bundle_id.as_bytes() {
-        if !special_dot && is_unreserved(*byte) {
-            encoded.push(char::from(*byte));
-        } else {
-            push_percent_encoded(&mut encoded, *byte);
-        }
-    }
-    if encoded.is_empty() {
-        bail!("bundle identity must produce a non-empty path leaf");
-    }
-    Ok(encoded)
-}
-
-fn decode_bundle_leaf(leaf: &str) -> anyhow::Result<String> {
-    if leaf.is_empty() {
-        bail!("bundle configuration directory leaf must not be empty");
-    }
-    let bytes = leaf.as_bytes();
-    let mut decoded = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-    while index < bytes.len() {
-        match bytes[index] {
-            b'%' => {
-                if index + 2 >= bytes.len() {
-                    bail!("bundle configuration leaf `{leaf}` has an incomplete escape");
-                }
-                let high = decode_hex(bytes[index + 1])?;
-                let low = decode_hex(bytes[index + 2])?;
-                decoded.push((high << 4) | low);
-                index += 3;
-            }
-            byte if is_unreserved(byte) => {
-                decoded.push(byte);
-                index += 1;
-            }
-            _ => {
-                bail!("bundle configuration leaf `{leaf}` contains an unescaped byte");
-            }
-        }
-    }
-    let bundle_id = String::from_utf8(decoded)
-        .with_context(|| format!("bundle configuration leaf `{leaf}` is not UTF-8"))?;
-    let canonical = encode_bundle_leaf(&bundle_id)?;
-    if canonical != leaf {
-        bail!("bundle configuration leaf `{leaf}` is not canonical (use `{canonical}`)");
-    }
-    Ok(bundle_id)
-}
-
-fn is_unreserved(byte: u8) -> bool {
-    byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~')
-}
-
-fn push_percent_encoded(output: &mut String, byte: u8) {
-    const HEX: &[u8; 16] = b"0123456789ABCDEF";
-    output.push('%');
-    output.push(char::from(HEX[(byte >> 4) as usize]));
-    output.push(char::from(HEX[(byte & 0x0F) as usize]));
-}
-
-fn decode_hex(byte: u8) -> anyhow::Result<u8> {
-    match byte {
-        b'0'..=b'9' => Ok(byte - b'0'),
-        b'a'..=b'f' => Ok(byte - b'a' + 10),
-        b'A'..=b'F' => Ok(byte - b'A' + 10),
-        _ => bail!("invalid percent escape byte 0x{byte:02X}"),
-    }
-}
-
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
@@ -562,7 +537,7 @@ mod tests {
         for (bundle_id, leaf) in cases {
             let path = files.path_for(AgentOrigin::Bundle { bundle_id }).unwrap();
             assert_eq!(path.file_name().unwrap().to_str().unwrap(), "config.yml");
-            assert!(path.parent().unwrap().ends_with(leaf));
+            assert!(path.parent().unwrap().ends_with(format!("bundles/{leaf}")));
             assert_eq!(decode_bundle_leaf(leaf).unwrap(), bundle_id);
         }
         assert!(decode_bundle_leaf("org%2ffoo").is_err());
@@ -588,7 +563,7 @@ mod tests {
             .global_path()
             .parent()
             .unwrap()
-            .join("agents/org%2ffoo");
+            .join("bundles/org%2ffoo");
         std::fs::create_dir_all(&alias).unwrap();
         std::fs::write(
             alias.join("config.yml"),
@@ -647,6 +622,56 @@ mod tests {
                 .get("org/foo")
                 .and_then(|models| models.get("shared")),
             Some(&ModelRef::new("new/bundle"))
+        );
+    }
+
+    #[test]
+    fn project_bundle_models_live_in_the_project_bundle_directory() {
+        let (dir, files) = files();
+        let project = dir.join("work/.hya/bundles");
+        let bundle_dir = project.join("acme__tools");
+        std::fs::create_dir_all(bundle_dir.join("prompts")).unwrap();
+        std::fs::write(
+            bundle_dir.join("bundle.yaml"),
+            "kind: AgentBundle\nidentity:\n  id: acme/tools\n  version: 1.0.0\n  publisher: acme\nagent:\n  id: tools-lead\n  role: main\n  prompt: prompts/lead.md\n  spawn_lifecycle: transient\n",
+        )
+        .unwrap();
+        std::fs::write(bundle_dir.join("prompts/lead.md"), "Lead.\n").unwrap();
+        std::fs::write(bundle_dir.join("config.yml"), "bundle_key: kept\n").unwrap();
+        let shadowed = files
+            .global_path()
+            .parent()
+            .unwrap()
+            .join("bundles/acme%2Ftools");
+        std::fs::create_dir_all(&shadowed).unwrap();
+        std::fs::write(
+            shadowed.join("config.yml"),
+            "agents:\n  tools-lead:\n    model: user/shadowed\n",
+        )
+        .unwrap();
+        let files = files.with_project_dir(Some(project));
+        let origin = AgentOrigin::Bundle {
+            bundle_id: "acme/tools",
+        };
+
+        let path = files
+            .set_model(origin, "tools-lead", Some(&ModelRef::new("p/project")))
+            .unwrap();
+        assert_eq!(
+            path,
+            std::path::absolute(bundle_dir.join("config.yml")).unwrap()
+        );
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(raw.contains("bundle_key: kept"), "{raw}");
+        assert!(raw.contains("p/project"), "{raw}");
+        let loaded = files.load().unwrap();
+        assert_eq!(
+            loaded
+                .bundles
+                .get("acme/tools")
+                .and_then(|models| models.get("tools-lead")),
+            Some(&ModelRef::new("p/project")),
+            "the project file shadows the user-scope file for the same id"
         );
     }
 

@@ -103,10 +103,10 @@ prior effective state and report an error. Old backends without the
 reading/writing per-Agent preferences has not been re-added yet — see below.)
 
 Built-in Agents use the active Hya `config.yaml` (XDG path with the existing HOME
-fallback). Bundle Agents use `agents/<encoded-bundle-id>/config.yml` beside it.
-The immutable Bundle identity is encoded as one canonical percent-encoded
-directory name: `hya/plan-impl-review` becomes `hya%2Fplan-impl-review`. Agents in
-one WorkflowBundle share that file. Both files use the same model leaf:
+fallback). Bundle Agents use their bundle's `config.yml`; see
+[Bundle configuration files](#bundle-configuration-files) for where it lives.
+Agents in one WorkflowBundle or AgentSetBundle share that file. Both files use
+the same model leaf:
 
 ```yaml
 agents:
@@ -116,10 +116,8 @@ agents:
 
 Use the bundle Agent's stable id instead of `hya-main` in a bundle file. Saves
 lock and reread the file, then atomically replace only the model leaf, preserving
-unrelated settings, credentials, reasoning fields and file permissions.
-Executable bundle sidecars receive `HYA_BUNDLE_CONFIG_DIR` and
-`HYA_BUNDLE_CONFIG_FILE` for their own storage location; prepared bundle content
-is never rewritten.
+unrelated settings (including the bundle's own keys), credentials, reasoning
+fields and file permissions. Prepared bundle content is never rewritten.
 
 `GET /v1/bootstrap` advertises the effective catalog (agents, models,
 providers) to frontends, and `PATCH /v1/sessions/{session}` switches a
@@ -152,6 +150,75 @@ hya: config error (...); using the offline provider
 
 To leave offline mode, declare a provider with explicit models or an endpoint
 that can return models. Credentials are optional (see [Providers](#providers)).
+
+## Bundle configuration files
+
+Every bundle has exactly one user-owned configuration file, `config.yml`. The
+file holds the bundle's Agent model defaults (`agents.<agent-id>.model`, see
+above) and any keys the bundle's own process, MCP server, or sidecar reads.
+Hya never writes bundle content into it, and it is not part of the bundle's
+identity. It exists so that you can configure an installed bundle without
+repackaging it.
+
+### Where the file lives
+
+| Bundle scope | Configuration directory | File |
+| --- | --- | --- |
+| User install (`hya bundle install`) and first-party/builtin bundles | `<hya config dir>/bundles/<percent-encoded-bundle-id>/` | `config.yml` in that directory |
+| Project install (`hya bundle install --project`) | The bundle's source directory, `.hya/bundles/<dir>/` | `config.yml` in that directory |
+
+`<hya config dir>` is the directory that holds the active `config.yaml`
+(`$XDG_CONFIG_HOME/hya`, with the existing `$HOME/.config/hya` fallback). The
+bundle id is encoded as one canonical percent-encoded path segment:
+`hya/plan-impl-review` becomes `hya%2Fplan-impl-review`. A project bundle
+shadows a user install with the same id, so its project `config.yml` is the only
+file read for that id.
+
+A project bundle's `config.yml` is not bundle content. It (and its
+`.config.yml.lock` / temporary siblings) never enters the bundle's prepared
+sources, digest, or project fingerprint. A reinstall or upgrade keeps the
+existing file, and a `config.yml` inside an incoming package is ignored.
+`hya bundle remove --project` deletes the source directory, including its
+`config.yml`. A user-scope file stays after `hya bundle remove`.
+
+**Breaking (0.41.0):** Hya no longer reads the old
+`<hya config dir>/agents/<encoded-bundle-id>/config.yml` Agent model file. Move
+it to `<hya config dir>/bundles/<encoded-bundle-id>/config.yml`. The `agents:`
+leaf is unchanged.
+
+### Example
+
+To pin the model of the `plan-impl-review` bundle's reviewer Agent and store a
+bundle-owned setting (`review.strict`), write
+`~/.config/hya/bundles/hya%2Fplan-impl-review/config.yml`:
+
+```yaml
+agents:
+  plan-impl-review-reviewer:
+    model: openai/gpt-4.1
+review:
+  strict: true
+```
+
+A bundle provider that reads the file:
+
+```python
+import os, pathlib
+config = pathlib.Path(os.environ["HYA_BUNDLE_CONFIG_FILE"])
+settings = config.read_text() if config.exists() else ""
+```
+
+### Interface
+
+| Contract | Value |
+| --- | --- |
+| `HYA_BUNDLE_CONFIG_DIR` | Absolute configuration directory. It might not exist yet. |
+| `HYA_BUNDLE_CONFIG_FILE` | Absolute `config.yml` path inside that directory. It might not exist yet. |
+| Receivers | `extensions.process` providers (Rust, Bun, and Claude kinds, and the implicit Bun process of a JavaScript Plugin), bundle-declared stdio MCP servers (`resources.mcp`), and Agent activation Bun sidecars. |
+| Expansion tokens | `${BUNDLE_CONFIG_DIR}` and `${BUNDLE_CONFIG_FILE}` expand in process argv, MCP argv, and MCP `env` values, like `${BUNDLE_ROOT}`. |
+| MCP precedence | Inherited `PATH` < `HYA_BUNDLE_CONFIG_*` < declared MCP `env` keys < `HYA_BUNDLE_ROOT` (host-owned). |
+| Restart rule | At each root binding, Hya compares the content digest of every loaded process/MCP bundle's `config.yml` (or its absence) with the digest the bundle's providers started with. On a mismatch, that bundle's providers restart, as they do when the bundle changes. Bundles without a process or MCP server aren't restarted. Sidecars read the file on each activation. Agent model defaults load at startup. |
+| Format | YAML mapping. Only `agents.<id>.model` is interpreted by Hya; other keys belong to the bundle. |
 
 ## Sample `config.yaml`
 
@@ -854,7 +921,7 @@ Read by the bundled Bun extension adapter
 
 | Variable | Effect | Default / notes | Source |
 | --- | --- | --- | --- |
-| `HYA_BUNDLE_CONFIG_DIR` / `HYA_BUNDLE_CONFIG_FILE` | Visible to loaded extensions via `process.env`; the factory argument itself is always a frozen empty object. | unset | `initialize.ts` |
+| `HYA_BUNDLE_CONFIG_DIR` / `HYA_BUNDLE_CONFIG_FILE` | The bundle's configuration directory and `config.yml` (see [Bundle configuration files](#bundle-configuration-files)), visible to loaded extensions via `process.env`; the factory argument itself is always a frozen empty object. | set by the host for bundle processes and sidecars | `initialize.ts` |
 | `HYA_DIRECTORY` | Extension working directory context. | `process.cwd()` | `initialize.ts` |
 | `HYA_WORKTREE` | Worktree root context. | same as directory | same |
 | `HYA_SERVER_URL` | `serverUrl` context for extensions that call back into the v1 API. | `http://127.0.0.1:0` | same |
