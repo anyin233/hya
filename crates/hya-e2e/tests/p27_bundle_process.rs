@@ -274,3 +274,91 @@ extensions:
     );
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[tokio::test]
+async fn plugin_chat_params_reaches_bundle_agents_with_request_lineage() {
+    let root = std::env::temp_dir().join(format!("hya-lineage-e2e-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let script = r#"import json,sys
+for line in sys.stdin:
+ r=json.loads(line)
+ method=r.get('method')
+ if method == 'initialize':
+  result={'protocol_version':1,'plugin':{'id':'lineage','version':'1.0.0','kind':'rust'},'hooks':[{'name':'chat.params'}],'tools':[]}
+ elif method == 'hook/chat.params':
+  p=r['params']; q=p['request']
+  q['system']=(q.get('system') or '')+' LINEAGE agent=%s root_is_self=%s' % (p.get('agent'), p.get('root_session')==p['session'])
+  result={'outcome':'continue','request':q}
+ else: result={}
+ if 'id' in r: print(json.dumps({'jsonrpc':'2.0','id':r['id'],'result':result}),flush=True)
+"#;
+    let plugin = BundleSource::new(
+        "lineage",
+        vec![
+            SourceFile::new(
+                "bundle.yaml",
+                br#"kind: Plugin
+identity: { id: acme/lineage, version: 1.0.0, publisher: acme }
+extensions:
+  process: { kind: rust, command: [python3, '${BUNDLE_ROOT}/runtime.py'] }
+  files:
+    - { id: runtime, path: runtime.py }
+resources:
+  hooks: [{ id: chat.params, path: hook.json }]
+"#,
+            ),
+            SourceFile::new("runtime.py", script),
+            SourceFile::new("hook.json", "{}"),
+        ],
+    );
+    let team = BundleSource::new(
+        "team",
+        vec![SourceFile::new(
+            "bundle.yaml",
+            br#"kind: AgentSetBundle
+identity: { id: acme/team, version: 1.0.0, publisher: acme }
+agents:
+  - id: team-agent
+    role: main
+    spawn_lifecycle: transient
+"#,
+        )],
+    );
+    let env = E2eEnvBuilder::new()
+        .scripts(vec![text_step("TEAM_DONE"), text_step("BUILD_DONE")])
+        .build()
+        .await
+        .unwrap();
+    for (name, source) in [("lineage", plugin), ("team", team)] {
+        let package = root.join(format!("{name}.hyabundle"));
+        std::fs::write(&package, write_public_package(&source).unwrap()).unwrap();
+        let install = env
+            .backend
+            .bundle_cli(&["bundle", "install", "-y", package.to_str().unwrap()])
+            .unwrap();
+        assert!(
+            install.status.success(),
+            "{}",
+            String::from_utf8_lossy(&install.stderr)
+        );
+        std::fs::remove_file(package).unwrap();
+    }
+    let session = env.create_session_with_agent("team-agent").await.unwrap();
+    env.prompt(session, "bundle agent turn").await.unwrap();
+    let session = env.create_session().await.unwrap();
+    env.prompt(session, "built-in agent turn").await.unwrap();
+    let requests = env.fake.requests().unwrap();
+    let team_request = fake_requests_from(&requests[..1], 0);
+    assert!(
+        team_request.contains("LINEAGE agent=team-agent root_is_self=True"),
+        "installed Plugin chat.params must reach the bundle agent: {team_request}; {}",
+        env.diagnostics()
+    );
+    let build_request = fake_requests_from(&requests, 1);
+    assert!(
+        build_request.contains("LINEAGE agent=build root_is_self=True"),
+        "{build_request}; {}",
+        env.diagnostics()
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}

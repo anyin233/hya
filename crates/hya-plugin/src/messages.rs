@@ -6,7 +6,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use hya_proto::{
-    Envelope, Message, MessageId, ModelRef, PartId, SessionId, ToolCallId, ToolSchema,
+    AgentName, Envelope, Message, MessageId, ModelRef, PartId, SessionId, ToolCallId, ToolSchema,
 };
 use hya_tool::Action;
 use serde::{Deserialize, Serialize};
@@ -727,6 +727,13 @@ pub struct TextCompleteParams {
 pub struct ChatParamsParams {
     /// Session for the upcoming completion.
     pub session: SessionId,
+    /// Root of the session's spawn tree (the request chain); equals `session`
+    /// for a root. Always sent by this host; optional so older payloads decode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root_session: Option<SessionId>,
+    /// Stable id of the agent bound to `session`, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<AgentName>,
     /// Assistant message id being prepared.
     pub message: MessageId,
     /// Full completion request the host intends to send.

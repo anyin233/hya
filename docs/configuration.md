@@ -1292,7 +1292,10 @@ request before dispatch. The wire form exposes `model`, `system`, `messages`,
 ([`dispatcher.rs`](../crates/hya-plugin/src/dispatcher.rs)). `headers` become
 per-request extra HTTP headers merged over the route’s auth headers. A
 plugin-supplied `reasoning` string that fails to parse as a `ReasoningEffort`
-leaves the **original** effort in place rather than clearing it.
+leaves the **original** effort in place rather than clearing it. The params also
+carry `root_session` (the root of the session's spawn tree) and `agent` (the
+session's stable agent id), so a plugin can keep one decision per request
+chain; see [Plugin protocol](plugin-protocol.md#chatparams).
 
 The plugin host also supports registered tools, command/message/text/chat hooks,
 event notifications, permission hooks, shell/tool hooks, and workspace adapter

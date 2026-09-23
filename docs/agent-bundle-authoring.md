@@ -100,6 +100,26 @@ Declared process and MCP providers start before the new generation is published.
 See [Bundle Runtime](bundle-runtime.md) for packaged files, invocation names,
 private agent views, and failure behavior.
 
+### Which sessions a Plugin's hooks reach
+
+An installed Plugin's hooks are global: they run for every agent's sessions.
+That includes built-in agents such as `build` and `explore`, and every
+bundle-defined agent from an AgentBundle, AgentSetBundle, or WorkflowBundle. A
+bundle agent does not select Plugin hooks, so its `hook_refs` do not list them.
+
+| Session's agent | Hooks that run, in order |
+| --- | --- |
+| Built-in agent | Configured plugins, then every installed Plugin (ascending bundle id). |
+| Bundle agent | Configured plugins, then every installed Plugin (ascending bundle id), then its own bundle's process hooks filtered to its `hook_refs`, then its activation sidecar's hooks (`event`, `tool.execute.before`, `tool.execute.after` only). |
+
+Each chain step follows the plugin protocol's
+[chain rules](plugin-protocol.md#multiple-plugins-on-one-hook). A Plugin's
+`tool.execute.before` veto or `permission.ask` answer therefore applies to
+bundle agents too. `permission.ask` is the one exception to the order above:
+the installed-bundle part of the chain (Plugins, own hooks, sidecar) runs
+before the configured plugins' permission hooks. The first answer that is not
+`defer` wins, so a Plugin's answer comes before the bundle's own hook.
+
 ## AgentSetBundle
 
 `AgentSetBundle` is the multi-agent payload with no Workflow graph. It exists so a

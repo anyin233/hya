@@ -1463,8 +1463,15 @@ impl TurnBinding {
             .map(|skill| skill.content.as_str())
     }
 
-    /// Shared Plugin hooks for Full-plane agents, or selected owner hooks for bundle agents.
-    /// Sources are returned in stable ascending identity order; no live registry read occurs.
+    /// Hooks bound to one agent, in dispatch order.
+    ///
+    /// Every agent gets every installed Plugin-kind bundle's hooks, in stable
+    /// ascending source-id order. A bundle agent (AgentBundle, AgentSetBundle,
+    /// WorkflowBundle) additionally gets its own bundle's process hooks,
+    /// filtered to the agent's `hook_refs`, after the Plugin hooks. An unknown
+    /// agent gets none. Plugin entries are the retained source dispatchers
+    /// themselves, so callers that merge chains can deduplicate by pointer.
+    /// No live registry read occurs.
     #[must_use]
     pub fn bundle_hooks_for_agent(
         &self,
@@ -1473,26 +1480,34 @@ impl TurnBinding {
         let Some(agent) = self.resolve_agent(stable_agent_id) else {
             return Vec::new();
         };
-        if let Some(bundle_id) = agent.origin.bundle_id() {
-            let Some(hooks) = self.bundle_hooks(bundle_id) else {
-                return Vec::new();
-            };
-            let Ok(policy) = self.agent_resource_policy(stable_agent_id) else {
-                return Vec::new();
-            };
-            if policy.canonical_hook_ids.is_empty() {
-                return Vec::new();
-            }
-            return vec![Arc::new(crate::bundle_hooks::ScopedBundleHooks::new(
-                hooks,
+        let owner = agent.origin.bundle_id();
+        let mut hooks = self.plugin_bundle_hooks(owner);
+        if let Some(bundle_id) = owner
+            && let Some(owner_hooks) = self.bundle_hooks(bundle_id)
+            && let Ok(policy) = self.agent_resource_policy(stable_agent_id)
+            && !policy.canonical_hook_ids.is_empty()
+        {
+            hooks.push(Arc::new(crate::bundle_hooks::ScopedBundleHooks::new(
+                owner_hooks,
                 &policy.canonical_hook_ids,
-            ))];
+            )));
         }
+        hooks
+    }
+
+    /// Every installed Plugin-kind bundle's hooks in stable ascending
+    /// source-id order, excluding `exclude` so an owner is never dispatched
+    /// twice.
+    fn plugin_bundle_hooks(
+        &self,
+        exclude: Option<&str>,
+    ) -> Vec<Arc<dyn crate::hooks::HookDispatcher>> {
         self.snapshot
             .sources
             .values()
             .filter(|source| {
                 source.id.kind() == RuntimeSourceKind::Bundle
+                    && exclude != Some(source.id.configured_id())
                     && self
                         .snapshot
                         .catalog
@@ -4041,6 +4056,121 @@ agent:
             .compile_agent_resources(&binding.agent_resource_policy("build").unwrap())
             .unwrap();
         assert!(root.resolve_tool("private-process__echo").is_none());
+    }
+
+    /// Installed Plugin-kind bundle hooks reach bundle agents too: a bundle
+    /// agent's chain is every Plugin's hooks (source-id order, the very same
+    /// retained dispatchers built-in agents get) followed by its own bundle's
+    /// `hook_refs`-scoped hooks. An agent without `hook_refs` still gets the
+    /// Plugin hooks.
+    #[test]
+    fn bundle_agents_receive_installed_plugin_hooks_before_their_own() {
+        let plugin_b = prepare_package(BundleSource::new(
+            "plugin-b",
+            vec![SourceFile::new(
+                "bundle.yaml",
+                "kind: Plugin\nidentity: { id: acme/plugin-b, version: 1.0.0, publisher: acme }\n",
+            )],
+        ))
+        .unwrap();
+        let plugin_a = prepare_package(BundleSource::new(
+            "plugin-a",
+            vec![SourceFile::new(
+                "bundle.yaml",
+                "kind: Plugin\nidentity: { id: acme/plugin-a, version: 1.0.0, publisher: acme }\n",
+            )],
+        ))
+        .unwrap();
+        let agents = prepare_package(BundleSource::new(
+            "owner",
+            vec![
+                SourceFile::new(
+                    "bundle.yaml",
+                    r#"kind: AgentSetBundle
+identity: { id: acme/owner, version: 1.0.0, publisher: acme }
+extensions:
+  process: { kind: rust, command: [fixture] }
+resources:
+  hooks: [{ id: chat.params, path: hook.json }]
+agents:
+  - id: hooked-agent
+    role: main
+    spawn_lifecycle: transient
+    hook_refs: [chat.params]
+  - id: plain-agent
+    role: main
+    spawn_lifecycle: transient
+"#,
+                ),
+                SourceFile::new("hook.json", "{}"),
+            ],
+        ))
+        .unwrap();
+        let catalog = Arc::new(
+            TestCatalog::from_verified_catalogs(&[&plugin_b, &agents, &plugin_a]).unwrap(),
+        );
+        let registry = test_runtime_registry(ToolRegistry::builtins(), catalog);
+        let empty = || -> Arc<dyn crate::hooks::HookDispatcher> {
+            Arc::new(crate::hooks::HookChain::new(Vec::new()))
+        };
+        registry
+            .refresh(|candidate| {
+                candidate.upsert_sources(vec![
+                    RuntimeSource::new(
+                        RuntimeSourceId::bundle("acme/plugin-b"),
+                        [4; 32],
+                        Arc::new(()),
+                        Vec::new(),
+                    )
+                    .with_hooks(empty()),
+                    RuntimeSource::new(
+                        RuntimeSourceId::bundle("acme/owner"),
+                        [5; 32],
+                        Arc::new(()),
+                        Vec::new(),
+                    )
+                    .with_hooks(empty()),
+                    RuntimeSource::new(
+                        RuntimeSourceId::bundle("acme/plugin-a"),
+                        [6; 32],
+                        Arc::new(()),
+                        Vec::new(),
+                    )
+                    .with_hooks(empty()),
+                ])
+            })
+            .unwrap();
+        let binding = registry
+            .bind_turn(Path::new("/tmp/hya-plugin-hooks-bundle-agents"))
+            .unwrap();
+
+        let plugin_a_hooks = binding.bundle_hooks("acme/plugin-a").unwrap();
+        let plugin_b_hooks = binding.bundle_hooks("acme/plugin-b").unwrap();
+        let owner_hooks = binding.bundle_hooks("acme/owner").unwrap();
+
+        let builtin = binding.bundle_hooks_for_agent("build");
+        assert_eq!(builtin.len(), 2, "built-ins keep every Plugin's hooks");
+        assert!(Arc::ptr_eq(&builtin[0], &plugin_a_hooks));
+        assert!(Arc::ptr_eq(&builtin[1], &plugin_b_hooks));
+
+        let hooked = binding.bundle_hooks_for_agent("hooked-agent");
+        assert_eq!(
+            hooked.len(),
+            3,
+            "Plugin hooks, then the owner's scoped hooks"
+        );
+        assert!(Arc::ptr_eq(&hooked[0], &plugin_a_hooks));
+        assert!(Arc::ptr_eq(&hooked[1], &plugin_b_hooks));
+        assert!(
+            !Arc::ptr_eq(&hooked[2], &owner_hooks),
+            "the owner's hooks stay filtered by hook_refs"
+        );
+
+        let plain = binding.bundle_hooks_for_agent("plain-agent");
+        assert_eq!(plain.len(), 2, "no hook_refs still gets the Plugin hooks");
+        assert!(Arc::ptr_eq(&plain[0], &plugin_a_hooks));
+        assert!(Arc::ptr_eq(&plain[1], &plugin_b_hooks));
+        assert!(binding.bundle_hooks_for_agent("missing-agent").is_empty());
     }
 
     #[test]

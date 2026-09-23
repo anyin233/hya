@@ -18,7 +18,7 @@ use hya_plugin::messages::{
     AgentSpawnParams, CompactionAfterParams, CompactionBeforeOutcomeWire, CompactionBeforeParams,
     CompactionTriggerWire, HookName, HookPosture, HostInfo, PluginKindWire, SessionLifecycleParams,
 };
-use hya_proto::{MessageId, ModelRef, SessionId};
+use hya_proto::{AgentName, MessageId, ModelRef, SessionId};
 use serde_json::json;
 
 fn host_info() -> HostInfo {
@@ -381,6 +381,62 @@ fn new_hook_params_round_trip() {
     assert_eq!(value["child"], serde_json::to_value(spawn.child).unwrap());
 }
 
+/// `chat.params` params carry the request lineage on the wire: `root_session`
+/// (the spawn tree's root) and `agent` (the bound stable agent id). The
+/// plugin sees both and its rewrite still folds back into the request.
+#[tokio::test]
+async fn chat_params_wire_params_carry_root_session_and_agent() {
+    let script = r#"
+import json, sys
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    msg = json.loads(line)
+    if msg.get("method") == "initialize":
+        result = {
+            "protocol_version": 1,
+            "plugin": {"id": "lineage", "version": "0.1.0", "kind": "rust"},
+            "hooks": [{"name": "chat.params"}],
+            "tools": [],
+        }
+        print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": result}), flush=True)
+    elif msg.get("method") == "hook/chat.params":
+        params = msg["params"]
+        request = params["request"]
+        request["model"] = "routed/" + params["agent"] + "/" + params["root_session"]
+        print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": {
+            "outcome": "continue", "request": request}}), flush=True)
+    elif "id" in msg:
+        print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": {}}), flush=True)
+"#;
+    let host = PluginHost::connect_all(vec![spec("lineage", script)], host_info()).await;
+    assert_eq!(host.len(), 1, "fixture must connect");
+
+    let root = SessionId::new();
+    let outcome = host
+        .chat_params(ChatParamsInput {
+            session: SessionId::new(),
+            root_session: root,
+            agent: Some(AgentName::new("explore")),
+            message: MessageId::new(),
+            request: wire_request("fake/model"),
+        })
+        .await;
+    let hya_core::hooks::ChatParamsOutcome::Continue { request } = outcome;
+    assert_eq!(request.model.as_str(), format!("routed/explore/{root}"));
+
+    // Additive and optional: params written by an older host still decode.
+    let legacy: hya_plugin::messages::ChatParamsParams = serde_json::from_value(json!({
+        "session": SessionId::new(),
+        "message": MessageId::new(),
+        "request": {"model": "fake/model", "messages": [], "tools": [], "headers": {}},
+    }))
+    .unwrap();
+    assert_eq!(legacy.root_session, None);
+    assert_eq!(legacy.agent, None);
+}
+
 /// Task 5.3 fail-open pin: a `chat.params` hook that errors (here: a JSON-RPC
 /// error reply) must not poison the model call — the original request flows
 /// through unchanged, and the failure is only a logged warning.
@@ -415,6 +471,8 @@ for line in sys.stdin:
     let outcome = host
         .chat_params(ChatParamsInput {
             session: SessionId::new(),
+            root_session: SessionId::new(),
+            agent: None,
             message: MessageId::new(),
             request: original.clone(),
         })
@@ -468,6 +526,8 @@ for line in sys.stdin:
     let outcome = host
         .chat_params(ChatParamsInput {
             session: SessionId::new(),
+            root_session: SessionId::new(),
+            agent: None,
             message: MessageId::new(),
             request: original.clone(),
         })

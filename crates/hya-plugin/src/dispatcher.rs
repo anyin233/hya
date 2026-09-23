@@ -123,6 +123,8 @@ impl HookDispatcher for PluginHost {
             }
             let params = ChatParamsParams {
                 session: input.session,
+                root_session: Some(input.root_session),
+                agent: input.agent.clone(),
                 message: input.message,
                 request: request_to_wire(&request),
             };

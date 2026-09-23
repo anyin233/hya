@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use std::future::Future;
 use std::sync::{Arc, RwLock};
 
-use hya_proto::{Envelope, MessageId, PartId, SessionId, ToolCallId};
+use hya_proto::{AgentName, Envelope, MessageId, PartId, SessionId, ToolCallId};
 use hya_provider::CompletionRequest;
 use hya_tool::{Action, Decision, Resource};
 use serde_json::Value;
@@ -292,6 +292,8 @@ impl HookDispatcher for HookChain {
             let ChatParamsOutcome::Continue { request } = dispatcher
                 .chat_params(ChatParamsInput {
                     session: input.session,
+                    root_session: input.root_session,
+                    agent: input.agent.clone(),
                     message: input.message,
                     request: input.request,
                 })
@@ -622,6 +624,11 @@ pub enum MessageUserBeforeOutcome {
 pub struct ChatParamsInput {
     /// Session for the completion.
     pub session: SessionId,
+    /// Root of `session`'s spawn tree (the request chain); equals `session`
+    /// for a root session.
+    pub root_session: SessionId,
+    /// Stable id of the agent bound to `session`, when known.
+    pub agent: Option<AgentName>,
     /// Assistant message being built.
     pub message: MessageId,
     /// Provider request about to be sent.

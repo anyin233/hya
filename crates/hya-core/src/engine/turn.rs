@@ -2,8 +2,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use hya_proto::{
-    CompactionStrategy, Event, FinishReason, Message, MessageId, ModelRef, PartId, Role, SessionId,
-    TokenUsage, ToolCallId,
+    AgentName, CompactionStrategy, Event, FinishReason, Message, MessageId, ModelRef, PartId, Role,
+    SessionId, TokenUsage, ToolCallId,
 };
 use hya_provider::{CompletionRequest, EventStream, ProviderError};
 use hya_store::ActorClaim;
@@ -280,6 +280,25 @@ fn workflow_failure_class(
 }
 
 impl SessionEngine {
+    /// Resolve the spawn-tree root that hooks report as `root_session`, once
+    /// per activation (`cache`). A lineage read failure falls back to
+    /// `session` itself: hook context is advisory and never fails the turn.
+    async fn request_root_session(
+        &self,
+        session: SessionId,
+        cache: &mut Option<SessionId>,
+    ) -> SessionId {
+        if let Some(root) = *cache {
+            return root;
+        }
+        let root = self
+            .session_lineage(session)
+            .await
+            .map_or(session, |(root, _)| root);
+        *cache = Some(root);
+        root
+    }
+
     /// Open the completion stream for `request`, walking the configured
     /// cross-model fallback plane while no event stream exists yet.
     ///
@@ -613,6 +632,17 @@ impl SessionEngine {
         if let Some(sidecar_hooks) = sidecar_hooks.clone() {
             bound_hooks.push(sidecar_hooks);
         }
+        // Bound/Resolved activations (subagents, resident members) run inside
+        // a scope their caller opened for this session with the member's
+        // activation-sidecar hooks. The turn's own scope replaces that one,
+        // so carry the inherited hooks along instead of silently dropping
+        // them; a Root activation owns its sidecar above.
+        if !apply_default_overlays
+            && !bound_hooks.is_empty()
+            && let Some(inherited) = activation_hook_for(session)
+        {
+            bound_hooks.push(inherited);
+        }
         let activation_hooks = (!bound_hooks.is_empty())
             .then(|| Arc::new(HookChain::new(bound_hooks)) as Arc<dyn HookDispatcher>);
         let sidecar_loss = sidecar_handle
@@ -914,6 +944,9 @@ impl SessionEngine {
         let mut steer = self
             .steer_mailbox_snapshot_with_policy(session, steer_policy)
             .await;
+        // Root of this session's spawn tree, resolved on first hook use: the
+        // parent chain is immutable, so one walk serves every round.
+        let mut root_session_cache = None;
         loop {
             self.validate_actor_claim(actor_claim).await?;
             if activation_hook_for(session).is_some_and(|hooks| !hooks.is_healthy()) {
@@ -1430,9 +1463,14 @@ impl SessionEngine {
             .await?;
             let request = request_from_messages(&live_agent, messages, resources, &model, depth);
             let request = if let Some(hooks) = self.active_hook_dispatcher(session) {
+                let root_session = self
+                    .request_root_session(session, &mut root_session_cache)
+                    .await;
                 match hooks
                     .chat_params(ChatParamsInput {
                         session,
+                        root_session,
+                        agent: Some(AgentName::new(stable_id.as_str())),
                         message,
                         request,
                     })

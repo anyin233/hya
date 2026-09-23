@@ -147,7 +147,7 @@ function invalidParams(id: number, message: string): HandledRequest {
 }
 
 function validateChatParams(value: unknown): ValidationResult<ChatParams> {
-  const params = recordWithStrings(value, ["session", "message"])
+  const params = recordWithStrings(value, ["session", "message"], ["root_session", "agent"])
   if (!params.ok) {
     return params
   }
@@ -156,9 +156,25 @@ function validateChatParams(value: unknown): ValidationResult<ChatParams> {
   }
   return ok({
     session: params.value.session as string,
+    ...optionalStrings(params.value, ["root_session", "agent"]),
     message: params.value.message as string,
     request: params.value.request,
   })
+}
+
+/** Copy the present (already validated) optional string fields. */
+function optionalStrings(
+  record: Readonly<Record<string, unknown>>,
+  keys: readonly string[],
+): Record<string, string> {
+  const present: Record<string, string> = {}
+  for (const key of keys) {
+    const value = record[key]
+    if (typeof value === "string") {
+      present[key] = value
+    }
+  }
+  return present
 }
 
 function validatePermissionParams(
