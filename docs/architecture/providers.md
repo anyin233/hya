@@ -96,9 +96,9 @@ leaves `reasoning_request` false.
 | Variant | Display | Typical cause | Troubleshooting |
 | --- | --- | --- | --- |
 | `Json` | `json: …` | Serde failure while encoding a body or parsing a stream frame. | No dedicated entry; inspect the JSON payload and stream frames. |
-| `Http(String)` | `http: …` | In-stream provider error frame, invalid request header name/value, or client build failure. | No dedicated entry; check the provider payload, base URL, and headers. |
+| `Http(String)` | `http: …` | Unclassified in-stream provider error frame, link-level stream failure (body decode error, idle stall), invalid request header name/value, or client build failure. | No dedicated entry; check the provider payload, base URL, and headers. |
 | `Transport(String)` | `transport: …` | Request transport failed before an event stream was returned. | Check provider reachability and connection health. This class is eligible for bounded retry/failover before stream ownership passes to the caller. |
-| `HttpStatus { status, message, retry_after }` | `http status <code>: …` | Upstream returned a non-success response before the stream began. | HTTP 429 and 5xx are retryable; other statuses fail immediately. `Retry-After`, when valid, is retained as a bounded delay. |
+| `HttpStatus { status, message, retry_after }` | `http status <code>: …` | Upstream returned a non-success response before the stream began, or a classified in-stream error frame (message starts with `in-stream error`; see [In-stream error frames](#in-stream-error-frames)). | HTTP 429 and 5xx are retryable; other statuses fail immediately. `Retry-After` (or an in-band `retry_after` hint), when valid, is retained as a bounded delay. |
 | `UnknownModel(String)` | `unknown provider for model: …` | No route's `capabilities()` returned `Some` for the ref. | [`../troubleshooting.md`](../troubleshooting.md) — *unknown provider for model*. |
 | `Incompatible(String)` | `incompatible route: …` | Preflight failure, or an unsupported part (for example media on a non-Google route). | No dedicated entry yet; for media MIME failures see [Media parts](#media-parts-non-google-routes) below and switch to a `kind: google` route when you need attachments. |
 | `Decode(String)` | `decode: …` | Malformed or truncated stream / compact-window payload. | No dedicated entry; inspect SSE frames. |
@@ -288,12 +288,17 @@ Five auth styles: **Bearer**, **CodexSession**, **GrokSession**, **Anthropic**,
   [configuration reference](../configuration.md).
 - **Zero-event replay window:** a response that dies before delivering any
   event to the consumer is treated as if no stream existed, and the whole
-  request is re-issued inside the same shared attempt budget. Only link-level
+  request is re-issued inside the same shared attempt budget, with the same
+  backoff and `Retry-After` handling as pre-stream retries. Link-level
   failures qualify (byte-stream decode errors such as truncated bodies,
-  connection resets, and idle stalls before the first frame);
-  provider-decided failures — 200-with-error-body frames, malformed payloads,
-  missing terminal frames — surface immediately even at zero events. The first
-  delivered event closes the window permanently.
+  connection resets, and idle stalls before the first frame), and so do
+  in-stream error frames classified as transient (rate limit, overload, 5xx —
+  see [In-stream error frames](#in-stream-error-frames)). Deterministic
+  provider-decided failures — invalid-request/auth error frames, unclassified
+  error frames, malformed payloads, missing terminal frames — surface
+  immediately even at zero events. The first delivered event closes the
+  window permanently: a later error frame of any class surfaces exactly once
+  on the stream and is never replayed or failed over.
 - **SSE frame-idle timeout: five minutes.** The window starts when response
   headers arrive and resets after every frame. Missing the deadline before the
   first frame joins the zero-event replay window; after any delivered frame it
@@ -303,6 +308,46 @@ Five auth styles: **Bearer**, **CodexSession**, **GrokSession**, **Anthropic**,
   frames may run indefinitely.
 - Auth header values are marked **sensitive** on `HeaderValue` so reqwest/tracing
   will not log them.
+
+### In-stream error frames
+
+Upstreams and gateways often answer HTTP 200 and then report throttling or an
+outage inside the SSE body — Anthropic sends
+`{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}`,
+Gemini `{"error":{"code":429,"status":"RESOURCE_EXHAUSTED",…}}`, Responses a
+`response.failed` / `error` event with `code`, and some gateways only
+`{"error":{"message":"Concurrency limit exceeded for account, please retry later"}}`.
+[`stream_error.rs`](../../crates/hya-provider/src/stream_error.rs) classifies
+the error object into the `HttpStatus` its out-of-band response would have
+carried, so `is_retryable_before_stream()`, `model.fallback` classes, and
+Workflow route failure classes apply unchanged. Precedence: a known
+`type`/`code`/`status` label, then a numeric `code`/`status` in 400–599, then
+a transient-sounding message; anything else stays `Http(message)`.
+
+| Error label / signal | Status | Retryable at zero events |
+| --- | --- | --- |
+| `rate_limit_error`, `rate_limit_exceeded`, `rate_limited`, `too_many_requests`, `RESOURCE_EXHAUSTED` | 429 | yes |
+| `overloaded_error`, `overloaded` | 529 | yes |
+| `api_error`, `server_error`, `internal_error`, `internal_server_error`, `INTERNAL` | 500 | yes |
+| `service_unavailable`, `UNAVAILABLE` | 503 | yes |
+| `timeout_error`, `timeout`, `DEADLINE_EXCEEDED`, `gateway_timeout` | 504 | yes |
+| `invalid_request_error`, `invalid_request`, `INVALID_ARGUMENT`, `bad_request`, `FAILED_PRECONDITION` | 400 | no |
+| `authentication_error`, `UNAUTHENTICATED`, `invalid_api_key` | 401 | no |
+| `permission_error`, `PERMISSION_DENIED` | 403 | no |
+| `not_found_error`, `NOT_FOUND`, `model_not_found` | 404 | no |
+| `request_too_large` | 413 | no |
+| numeric `code`/`status` 400–599 (no known label) | that status | 429/5xx only |
+| unlabeled message containing `overloaded` | 529 | yes |
+| unlabeled message containing `rate limit`, `too many requests`, `concurrency limit`, `retry later`, `try again later` | 429 | yes |
+| unlabeled message containing `temporarily unavailable`, `service unavailable` | 503 | yes |
+| anything else (e.g. `quota exhausted`) | `Http(message)` | no |
+
+Classified messages read `in-stream error (<label>): <upstream message>`. A
+numeric `retry_after` (seconds) on the error object or frame is honored like
+`Retry-After`, capped at 30 s and at `backoff_max`. Retrying still obeys STRICT
+NO-REPLAY: only while no event has reached the consumer, inside the shared
+`provider_retry` budget; once the budget is spent the last error surfaces on
+the stream (the router and `model.fallback` only act on pre-stream failures).
 - Anthropic routes hardcode `anthropic-version: **2023-06-01**`. That value is
   **not** configurable through `config.yaml`; changing it requires a code change
   at `crates/hya-provider/src/http.rs` (Anthropic `AuthStyle` construction).

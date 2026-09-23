@@ -416,16 +416,19 @@ providers:
 
 | Field | Env override | Default | Meaning |
 | --- | --- | --- | --- |
-| `max_attempts` | `HYA_PROVIDER_RETRY_MAX_ATTEMPTS` | `3` | Total request attempts per streamed completion, shared by pre-stream retries (transport, 429, 5xx) and the zero-event replay window. Clamped to at least 1. |
+| `max_attempts` | `HYA_PROVIDER_RETRY_MAX_ATTEMPTS` | `3` | Total request attempts per streamed completion, shared by pre-stream retries (transport, 429, 5xx) and the zero-event replay window (link-level failures and transient in-stream error frames). Clamped to at least 1. |
 | `backoff_base_ms` | `HYA_PROVIDER_RETRY_BACKOFF_BASE_MS` | `100` | Exponential backoff seed; grows `2^attempt` with jitter (75–125%). |
 | `backoff_max_ms` | `HYA_PROVIDER_RETRY_BACKOFF_MAX_MS` | `30000` | Ceiling for the exponential backoff and `Retry-After` waits (the latter is additionally hard-capped at 30 s). |
 
 The budget covers both recovery layers: the pre-stream attempt loop, and the
 zero-event replay window — when an established response dies before delivering
 any event to the consumer (truncated body, connection reset, idle stall before
-the first frame), the whole request is re-issued while budget remains. Once a
-single event has been delivered the strict no-replay boundary applies and
-errors surface exactly once.
+the first frame, or an in-stream error frame classed as rate limit, overload,
+or 5xx such as `{"error":{"type":"rate_limit_error",…}}` after an HTTP 200),
+the whole request is re-issued while budget remains. Non-transient error frames
+(invalid request, auth, unclassified) are never retried. Once a single event has
+been delivered the strict no-replay boundary applies and errors surface exactly
+once. See [In-stream error frames](architecture/providers.md#in-stream-error-frames).
 
 Discovery uses the declared provider kind and base URL: OpenAI-compatible and
 Responses use `/models`; Anthropic uses `/models` with bounded cursor pages;

@@ -5,7 +5,7 @@ use hya_proto::{
 };
 use serde_json::Value;
 
-use crate::{Decoder, ProviderError, ReasoningEffort};
+use crate::{Decoder, ProviderError, ReasoningEffort, stream_error::classify_error_frame};
 
 const MISSING_TYPED_TERMINAL: &str =
     "Responses stream ended without response.completed or response.incomplete";
@@ -396,19 +396,23 @@ impl Decoder for OpenAiResponsesDecoder {
                 self.close(FinishReason::Length)
             }
             "response.failed" => {
-                let message = event
-                    .pointer("/response/error/message")
-                    .and_then(Value::as_str)
-                    .unwrap_or("provider response failed");
-                return Err(ProviderError::Http(message.to_string()));
+                let error = event.pointer("/response/error").unwrap_or(&Value::Null);
+                return Err(classify_error_frame(
+                    error,
+                    &event,
+                    "provider response failed",
+                ));
             }
             "error" => {
-                let message = event
-                    .pointer("/error/message")
-                    .or_else(|| event.get("message"))
-                    .and_then(Value::as_str)
-                    .unwrap_or("provider returned an error");
-                return Err(ProviderError::Http(message.to_string()));
+                let error = event
+                    .get("error")
+                    .filter(|error| error.is_object())
+                    .unwrap_or(&event);
+                return Err(classify_error_frame(
+                    error,
+                    &event,
+                    "provider returned an error",
+                ));
             }
             _ => Vec::new(),
         };
