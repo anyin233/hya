@@ -390,6 +390,14 @@ path = "crates/hya-e2e/tests/p32_jev_model_router.rs"
 tags = ["pr", "hyabundle", "plugin", "extras"]
 timeout_secs = 120
 
+[[scenario]]
+id = "T2.28"
+title = "hya-extra/model-fallback consults model.fallback on a pre-stream failure, recovers on the configured chain, and gives up when no chain matches"
+track = "P"
+path = "crates/hya-e2e/tests/p33_model_fallback.rs"
+tags = ["pr", "hyabundle", "plugin", "extras"]
+timeout_secs = 120
+
 # Index-only deep engine coverage (not duplicated in Track P).
 [[scenario]]
 id = "I.nested"

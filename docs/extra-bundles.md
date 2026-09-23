@@ -263,4 +263,101 @@ Known limits:
 
 ## `hya-extra/model-fallback`
 
-Coming in this release.
+### Introduction
+
+A `Plugin` bundle that runs a small Bun process implementing the
+[`model.fallback`](plugin-protocol.md#modelfallback-choose-the-next-model-before-a-stream-exists)
+hook: when a model fails before its event stream opens, it picks the next
+model to try from a chain you configure per model.
+
+Relation to `categories:` chains: hya's static `default_model`/`categories:`
+cross-model chain (see [Configuration](configuration.md)) is tried first, on
+every round, whether or not this bundle is installed. The engine only asks
+`model.fallback` once that chain can't advance any further — including for
+error classes the chain never advances on, such as `auth`. This bundle is for
+policy the static chain can't express: a fallback chain scoped to a
+*particular* model, a choice of which provider-error classes should trigger a
+fallback at all, and a per-round retry cap. If you only need one global
+ordered list of candidate models for every request, `categories:` alone is
+simpler; reach for this bundle when different models need different fallback
+targets.
+
+### Usage
+
+Prerequisites:
+
+- `bun` on `PATH` (>= 1.2.21; hya's release pins 1.4.2). hya runs
+  `bun run fallback.ts` as the bundle's `extensions.process`; no adapter is
+  injected for an explicit process command, so `fallback.ts` speaks the hya
+  plugin protocol (NDJSON JSON-RPC 2.0 over stdio) directly.
+
+Package and install:
+
+```sh
+cargo run -p xtask -- package-bundle bundles/extra/model-fallback model-fallback.hyabundle
+hya bundle install model-fallback.hyabundle
+```
+
+Configure it in the bundle config file
+`<hya config dir>/bundles/hya-extra%2Fmodel-fallback/config.yml` (user
+install), or `.hya/bundles/model-fallback/config.yml` for a `--project`
+install. See
+[Bundle configuration files](configuration.md#bundle-configuration-files). An
+absent or invalid file behaves like an all-empty config (every consult gives
+up), never a startup failure. For example:
+
+```yaml
+# Fallback chain for anthropic/claude-opus-5-5, walked in order and skipping
+# any model already tried this round.
+chains:
+  anthropic/claude-opus-5-5: [anthropic/claude-sonnet-5, openai/gpt-5.5]
+
+# Chain used for a model with no entry above (empty = no fallback for it).
+default: []
+
+# Provider-error classes that trigger a consult at all. `any` matches every
+# class listed in the Interface table below.
+on: [retryable, unknown_model]
+
+# Bundle-side cap on retries per round; clamped to the engine's 8-attempt cap.
+max_attempts: 3
+```
+
+The router's `bun test` suite (pure logic: config parsing/validation and the
+`decide` chain walk) runs from the bundle directory:
+
+```sh
+cd bundles/extra/model-fallback && bun test
+```
+
+### Interface
+
+| Contract | Value |
+| --- | --- |
+| Bundle | `kind: Plugin`, `extensions.process: {kind: bun, command: [bun, run, '${BUNDLE_ROOT}/fallback.ts']}`. Only `fallback.ts` is packaged (`fallback.test.ts` is undeclared and stays out). |
+| Plugin id / hook | `model-fallback`; one hook, `model.fallback` (posture `open`, fail-open by protocol default: an error, timeout, or malformed reply always reads as give-up). No tools or Skills. |
+| Hook input used | `error.class`, `attempt`, `tried` (chain-walk key is `tried[0]`, the ORIGINAL failing model of the round — not the model that just failed, so `A -> B -> C` always walks `A`'s chain). `session`, `root_session`, `agent`, `message`, and `model` are accepted but not otherwise used. |
+| Hook output | `{"outcome": "retry", "model": "<provider/model>"}` or `{"outcome": "give_up"}` |
+
+Config fields (`config.yml`; hya's own `agents:` leaf is ignored, this bundle
+has no agents to pin a model for):
+
+| Field | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `chains` | map of model ref → list of model refs | `{}` | Fallback chain for a specific ORIGINAL failing model, in try order. |
+| `default` | list of model refs | `[]` | Chain used for a model with no entry in `chains`. |
+| `on` | list of `retryable` \| `unknown_model` \| `auth` \| `invalid_request` \| `other` \| `any` | `[retryable, unknown_model]` | Error classes that trigger a fallback consult; `any` in the list matches every class. |
+| `max_attempts` | integer 1–8 | `3` | Give up once the round's attempt count exceeds this. Values above 8 are clamped (the engine never makes more than 8 provider attempts in one round regardless). |
+
+Decision (`decide(params, config)` in `fallback.ts`, exported for `bun test`):
+give up if `error.class` is not in `on`, if `attempt` exceeds `max_attempts`,
+if every candidate in the applicable chain is already in `tried`, or if the
+config is missing or invalid (logged to stderr; `initialize` still succeeds).
+Otherwise retry with the first chain entry not already in `tried`.
+
+Semantics carried over from the hook itself (see
+[Plugin protocol](plugin-protocol.md#modelfallback-choose-the-next-model-before-a-stream-exists)):
+the hook is asked only before an event stream exists for the round — a
+mid-stream failure surfaces once and is never replayed on another model — and
+a turn on a Workflow route (`model:`/`fallback:` on a Workflow stage) never
+calls it; the Workflow owns its own declared candidate list instead.

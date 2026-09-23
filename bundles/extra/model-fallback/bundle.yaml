@@ -1,0 +1,16 @@
+kind: Plugin
+identity:
+  id: hya-extra/model-fallback
+  version: 0.41.0
+  publisher: hya-extra
+extensions:
+  process:
+    kind: bun
+    command: [bun, run, '${BUNDLE_ROOT}/fallback.ts']
+  files:
+    - id: fallback
+      path: fallback.ts
+resources:
+  hooks:
+    - id: model.fallback
+      path: hooks/model-fallback.json

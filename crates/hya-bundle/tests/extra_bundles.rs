@@ -170,3 +170,36 @@ fn jev_model_router_is_a_bun_process_plugin_with_one_chat_params_hook() {
         "tests, README and examples stay unpackaged"
     );
 }
+
+#[test]
+fn model_fallback_is_a_bun_process_plugin_with_one_model_fallback_hook() {
+    let dir = first_party_source_root().join("extra/model-fallback");
+    let source = BundleSource::read_directory(&dir).expect("read model-fallback source");
+    let prepared = prepare_package(source).expect("prepare model-fallback");
+    let bundle = &prepared.bundles()[0];
+
+    assert_eq!(bundle.kind(), PreparedBundleKind::Plugin);
+    assert_eq!(bundle.namespace(), "model-fallback");
+    assert!(bundle.agents().is_empty() && bundle.tools().is_empty());
+    let hooks: Vec<_> = bundle
+        .hooks()
+        .iter()
+        .map(|hook| hook.local_id.as_str())
+        .collect();
+    assert_eq!(hooks, ["model.fallback"], "exactly one model.fallback hook");
+    let process = prepared
+        .bundle_process("hya-extra/model-fallback")
+        .expect("explicit extensions.process");
+    assert_eq!(process.kind, hya_bundle::PreparedProcessKind::Bun);
+    assert_eq!(
+        process.command,
+        ["bun", "run", "${BUNDLE_ROOT}/fallback.ts"],
+        "fallback.ts speaks the plugin protocol itself (no adapter is injected)"
+    );
+    let files: Vec<_> = bundle
+        .extensions()
+        .iter()
+        .map(|file| file.source_path.as_str())
+        .collect();
+    assert_eq!(files, ["fallback.ts"], "tests stay unpackaged (undeclared)");
+}
