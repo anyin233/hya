@@ -10,9 +10,10 @@ import {
   type WireSessionUsageReport,
   type WireUsageTotals,
   type WireUsageTotalsReport,
-  buildView,
+  buildUsage,
+  handleApiRequest,
   parseToolInput,
-  parseViewQuery,
+  parseUsageQuery,
   renderTable,
 } from "./summary";
 
@@ -81,35 +82,35 @@ const REPORT: WireSessionUsageReport = {
   },
 };
 
-describe("buildView", () => {
+describe("buildUsage", () => {
   test("carries session/scope/generated_by through unchanged", () => {
-    const view = buildView(REPORT);
-    expect(view.session).toBe("sess-root");
-    expect(view.scope).toBe("tree");
-    expect(view.generated_by).toBe("hya-extra/token-summary");
+    const summary = buildUsage(REPORT);
+    expect(summary.session).toBe("sess-root");
+    expect(summary.scope).toBe("tree");
+    expect(summary.generated_by).toBe("hya-extra/token-summary");
   });
 
   test("sorts models by prompt+output total descending, then name", () => {
-    const view = buildView(REPORT);
+    const summary = buildUsage(REPORT);
     // anthropic: prompt_total 570 + output 200 = 770; fake/model: 100 + 40 = 140.
-    expect(view.models.map((row) => row.model)).toEqual(["anthropic/claude-opus-5-5", "fake/model"]);
+    expect(summary.models.map((row) => row.model)).toEqual(["anthropic/claude-opus-5-5", "fake/model"]);
   });
 
   test("maps cache_write to cache_creation", () => {
-    const view = buildView(REPORT);
-    const anthropic = view.models.find((row) => row.model === "anthropic/claude-opus-5-5");
+    const summary = buildUsage(REPORT);
+    const anthropic = summary.models.find((row) => row.model === "anthropic/claude-opus-5-5");
     expect(anthropic?.cache_creation).toBe(20);
     expect(anthropic?.cache_read).toBe(50);
   });
 
   test("thinking/visible_output are null exactly when the split has any unknown share", () => {
-    const view = buildView(REPORT);
-    const anthropic = view.models.find((row) => row.model === "anthropic/claude-opus-5-5");
+    const summary = buildUsage(REPORT);
+    const anthropic = summary.models.find((row) => row.model === "anthropic/claude-opus-5-5");
     expect(anthropic?.thinking).toBeNull();
     expect(anthropic?.visible_output).toBeNull();
     expect(anthropic?.unsplit_output).toBe(200);
 
-    const fake = view.models.find((row) => row.model === "fake/model");
+    const fake = summary.models.find((row) => row.model === "fake/model");
     expect(fake?.thinking).toBe(10);
     expect(fake?.visible_output).toBe(30);
     expect(fake?.unsplit_output).toBe(0);
@@ -117,38 +118,38 @@ describe("buildView", () => {
   });
 
   test("the grand total follows the same rules as a model row", () => {
-    const view = buildView(REPORT);
-    expect(view.total.rounds).toBe(5);
-    expect(view.total.input).toBe(600);
-    expect(view.total.cache_creation).toBe(20);
-    expect(view.total.thinking).toBeNull();
-    expect(view.total.unsplit_output).toBe(200);
+    const summary = buildUsage(REPORT);
+    expect(summary.total.rounds).toBe(5);
+    expect(summary.total.input).toBe(600);
+    expect(summary.total.cache_creation).toBe(20);
+    expect(summary.total.thinking).toBeNull();
+    expect(summary.total.unsplit_output).toBe(200);
   });
 
   test("emits one row per session, preserving parent/agent and per-session models", () => {
-    const view = buildView(REPORT);
-    expect(view.sessions).toHaveLength(2);
-    expect(view.sessions[0]).toMatchObject({ session: "sess-root", agent: "build" });
-    expect(view.sessions[0].parent).toBeUndefined();
-    expect(view.sessions[0].models.map((row) => row.model)).toEqual(["fake/model"]);
-    expect(view.sessions[1]).toMatchObject({
+    const summary = buildUsage(REPORT);
+    expect(summary.sessions).toHaveLength(2);
+    expect(summary.sessions[0]).toMatchObject({ session: "sess-root", agent: "build" });
+    expect(summary.sessions[0].parent).toBeUndefined();
+    expect(summary.sessions[0].models.map((row) => row.model)).toEqual(["fake/model"]);
+    expect(summary.sessions[1]).toMatchObject({
       session: "sess-child",
       parent: "sess-root",
       agent: "general",
     });
-    expect(view.sessions[1].models.map((row) => row.model)).toEqual(["anthropic/claude-opus-5-5"]);
+    expect(summary.sessions[1].models.map((row) => row.model)).toEqual(["anthropic/claude-opus-5-5"]);
   });
 
   test("truncated is included only when true", () => {
-    expect(buildView(REPORT).truncated).toBeUndefined();
-    expect(buildView({ ...REPORT, truncated: true }).truncated).toBe(true);
-    expect(buildView({ ...REPORT, truncated: false }).truncated).toBeUndefined();
+    expect(buildUsage(REPORT).truncated).toBeUndefined();
+    expect(buildUsage({ ...REPORT, truncated: true }).truncated).toBe(true);
+    expect(buildUsage({ ...REPORT, truncated: false }).truncated).toBeUndefined();
   });
 });
 
 describe("renderTable", () => {
   test("renders a model row, an unknown-split row with dashes, and a totals row", () => {
-    const table = renderTable(buildView(REPORT), "tree");
+    const table = renderTable(buildUsage(REPORT), "tree");
     expect(table).toContain(
       "| anthropic/claude-opus-5-5 | 500 | 20 | 50 | 200 | — | — | 3 |",
     );
@@ -157,7 +158,7 @@ describe("renderTable", () => {
   });
 
   test("lists one line per subagent session when scope != session", () => {
-    const table = renderTable(buildView(REPORT), "tree");
+    const table = renderTable(buildUsage(REPORT), "tree");
     expect(table).toContain("Sessions:");
     expect(table).toContain("sess-root");
     expect(table).toContain("sess-child (general)");
@@ -165,34 +166,34 @@ describe("renderTable", () => {
 
   test("omits the session list at scope session", () => {
     const single: WireSessionUsageReport = { ...REPORT, scope: "session", sessions: [REPORT.sessions[0]] };
-    const table = renderTable(buildView(single), "session");
+    const table = renderTable(buildUsage(single), "session");
     expect(table).not.toContain("Sessions:");
   });
 });
 
-describe("parseViewQuery", () => {
+describe("parseUsageQuery", () => {
   test("defaults to tree", () => {
-    expect(parseViewQuery({})).toEqual({ ok: true, scope: "tree" });
+    expect(parseUsageQuery({})).toEqual({ ok: true, scope: "tree" });
   });
 
   test("accepts scope=session", () => {
-    expect(parseViewQuery({ scope: "session" })).toEqual({ ok: true, scope: "session" });
+    expect(parseUsageQuery({ scope: "session" })).toEqual({ ok: true, scope: "session" });
   });
 
-  test("rejects scope=root (a view may only read its own session or its tree)", () => {
-    expect(parseViewQuery({ scope: "root" }).ok).toBe(false);
+  test("rejects scope=root (the usage endpoint may only read its own session or its tree)", () => {
+    expect(parseUsageQuery({ scope: "root" }).ok).toBe(false);
   });
 
   test("rejects an unrecognized scope value", () => {
-    expect(parseViewQuery({ scope: "bogus" }).ok).toBe(false);
+    expect(parseUsageQuery({ scope: "bogus" }).ok).toBe(false);
   });
 
   test("rejects the removed by key", () => {
-    expect(parseViewQuery({ by: "session" }).ok).toBe(false);
+    expect(parseUsageQuery({ by: "session" }).ok).toBe(false);
   });
 
   test("rejects an unknown query key", () => {
-    expect(parseViewQuery({ scope: "tree", bogus: "1" }).ok).toBe(false);
+    expect(parseUsageQuery({ scope: "tree", bogus: "1" }).ok).toBe(false);
   });
 });
 
@@ -203,7 +204,7 @@ describe("parseToolInput", () => {
     expect(parseToolInput({})).toEqual({ ok: true, scope: "tree", format: "table" });
   });
 
-  test("accepts scope=root (unlike a view, a tool call may read the whole spawn tree root)", () => {
+  test("accepts scope=root (unlike the usage endpoint, a tool call may read the whole spawn tree root)", () => {
     expect(parseToolInput({ scope: "root" })).toEqual({ ok: true, scope: "root", format: "table" });
   });
 
@@ -244,7 +245,7 @@ describe("CapabilityClient (the id-dispatching reader)", () => {
     // only ever awaited the next line in request order would stall here.
     // handleFrame must recognize it as a request (it carries `method`) and
     // hand it back to the caller instead of consuming it.
-    const hostRequest = { jsonrpc: "2.0", id: 999, method: "view/get", params: {} };
+    const hostRequest = { jsonrpc: "2.0", id: 999, method: "api/request", params: {} };
     expect(cap.handleFrame(hostRequest)).toBe(false);
 
     // The capability reply now arrives, matched purely by id.
@@ -287,5 +288,70 @@ describe("CapabilityClient (the id-dispatching reader)", () => {
   test("an unrelated reply id is swallowed, not left pending forever", () => {
     const cap = new CapabilityClient(() => {});
     expect(cap.handleFrame({ jsonrpc: "2.0", id: 4242, result: {} })).toBe(true);
+  });
+});
+
+describe("handleApiRequest", () => {
+  const params = (overrides: Record<string, unknown> = {}) => ({
+    api: "usage",
+    method: "GET",
+    path: "/usage",
+    path_params: {},
+    query: {},
+    body: null,
+    session: "sess-root",
+    call: "call-1",
+    host_capability: "cap-token",
+    ...overrides,
+  });
+
+  test("answers 200 with the usage body read through session.usage", async () => {
+    const written: Record<string, unknown>[] = [];
+    const cap = new CapabilityClient((frame) => written.push(frame));
+    const pending = handleApiRequest(params({ query: { scope: "session" } }), cap);
+    expect(written).toHaveLength(1);
+    expect(written[0].params).toMatchObject({
+      capability: "cap-token",
+      session: "sess-root",
+      call: "call-1",
+      method: "session.usage",
+      params: { scope: "session" },
+    });
+    cap.handleFrame({ jsonrpc: "2.0", id: written[0].id, result: REPORT });
+    const reply = await pending;
+    expect(reply.status).toBe(200);
+    expect(reply.body).toEqual(buildUsage(REPORT));
+  });
+
+  test("a bad query is the caller's 400, without a capability call", async () => {
+    const written: Record<string, unknown>[] = [];
+    const cap = new CapabilityClient((frame) => written.push(frame));
+    for (const query of [{ scope: "root" }, { by: "model" }]) {
+      const reply = await handleApiRequest(params({ query }), cap);
+      expect(reply.status).toBe(400);
+      expect(reply.body).toHaveProperty("error");
+    }
+    expect(written).toHaveLength(0);
+  });
+
+  test("an unknown endpoint or method is refused defensively", async () => {
+    const cap = new CapabilityClient(() => {});
+    expect((await handleApiRequest(params({ api: "other" }), cap)).status).toBe(404);
+    expect((await handleApiRequest(params({ method: "POST" }), cap)).status).toBe(405);
+    expect((await handleApiRequest(params({ session: undefined }), cap)).status).toBe(500);
+  });
+
+  test("a failed capability read is a 500 with the reason", async () => {
+    const written: Record<string, unknown>[] = [];
+    const cap = new CapabilityClient((frame) => written.push(frame));
+    const pending = handleApiRequest(params(), cap);
+    cap.handleFrame({
+      jsonrpc: "2.0",
+      id: written[0].id,
+      error: { code: -32001, message: "capability expired" },
+    });
+    const reply = await pending;
+    expect(reply.status).toBe(500);
+    expect(reply.body).toEqual({ error: "capability expired" });
   });
 });

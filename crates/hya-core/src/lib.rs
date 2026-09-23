@@ -23,9 +23,9 @@ pub const MAX_SUBAGENT_DEPTH: u32 = 2;
 pub mod agent_catalog;
 /// Compiled-in agent definitions (not AgentBundles).
 pub mod builtin_agents;
+/// Bundle-registered HTTP endpoints and the host reads behind their capability.
+pub mod bundle_apis;
 mod bundle_hooks;
-/// Read-only bundle session views and the host reads behind their capability.
-pub mod bundle_views;
 /// Live envelope broadcast for observers (SSE, TUI, plugins).
 pub mod bus;
 /// Model category resolution and member-agent construction.
@@ -78,9 +78,11 @@ pub use builtin_agents::{
     BuiltinAgent, CORE_AGENTS_PRESET_ID, CoreAgentsPreset, SpawnScope, builtin_agent,
     builtin_agents, core_agents_preset, is_builtin_id,
 };
-pub use bundle_views::{
-    BundleViewError, BundleViewProvider, HostSessionReads, PublishedBundleViews,
-    SessionUsageReport, SourceView, SourceViews, StoreSessionReads, UsageScope,
+pub use bundle_apis::{
+    ApiMethod, ApiPathTemplate, ApiScope, BundleApiCall, BundleApiError, BundleApiOutcome,
+    BundleApiProvider, BundleApiReply, BundleApiRequest, HostSessionReads,
+    MAX_BUNDLE_API_BODY_BYTES, PublishedBundleApis, SessionUsageReport, SourceApi, SourceApis,
+    StoreSessionReads, UsageScope,
 };
 pub use bus::EventBus;
 pub use category::{

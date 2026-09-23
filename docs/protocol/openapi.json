@@ -92,6 +92,69 @@
         "x-server-streaming": false
       }
     },
+    "/v1/bundle-apis": {
+      "get": {
+        "operationId": "BundleApi.ListBundleApis",
+        "summary": "List every endpoint the published bundles register, sorted by bundle id",
+        "tags": [
+          "BundleApi"
+        ],
+        "x-grpc-method": "hya.v1.BundleApi.ListBundleApis",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/bundles/{bundle}/api/{path}": {
+      "get": {
+        "operationId": "BundleApi.InvokeGlobalBundleApi.get",
+        "summary": "Invoke one global bundle endpoint (not tied to a session); otherwise",
+        "tags": [
+          "BundleApi"
+        ],
+        "x-grpc-method": "hya.v1.BundleApi.InvokeGlobalBundleApi",
+        "x-server-streaming": false,
+        "x-hya-any-method": true
+      },
+      "post": {
+        "operationId": "BundleApi.InvokeGlobalBundleApi.post",
+        "summary": "Invoke one global bundle endpoint (not tied to a session); otherwise",
+        "tags": [
+          "BundleApi"
+        ],
+        "x-grpc-method": "hya.v1.BundleApi.InvokeGlobalBundleApi",
+        "x-server-streaming": false,
+        "x-hya-any-method": true
+      },
+      "put": {
+        "operationId": "BundleApi.InvokeGlobalBundleApi.put",
+        "summary": "Invoke one global bundle endpoint (not tied to a session); otherwise",
+        "tags": [
+          "BundleApi"
+        ],
+        "x-grpc-method": "hya.v1.BundleApi.InvokeGlobalBundleApi",
+        "x-server-streaming": false,
+        "x-hya-any-method": true
+      },
+      "patch": {
+        "operationId": "BundleApi.InvokeGlobalBundleApi.patch",
+        "summary": "Invoke one global bundle endpoint (not tied to a session); otherwise",
+        "tags": [
+          "BundleApi"
+        ],
+        "x-grpc-method": "hya.v1.BundleApi.InvokeGlobalBundleApi",
+        "x-server-streaming": false,
+        "x-hya-any-method": true
+      },
+      "delete": {
+        "operationId": "BundleApi.InvokeGlobalBundleApi.delete",
+        "summary": "Invoke one global bundle endpoint (not tied to a session); otherwise",
+        "tags": [
+          "BundleApi"
+        ],
+        "x-grpc-method": "hya.v1.BundleApi.InvokeGlobalBundleApi",
+        "x-server-streaming": false,
+        "x-hya-any-method": true
+      }
+    },
     "/v1/commands": {
       "get": {
         "operationId": "Catalog.ListCommands",
@@ -571,6 +634,58 @@
         "x-server-streaming": false
       }
     },
+    "/v1/sessions/{session}/bundles/{bundle}/{path}": {
+      "get": {
+        "operationId": "BundleApi.InvokeSessionBundleApi.get",
+        "summary": "Invoke one session-scoped bundle endpoint. Over HTTP `bundle` is one",
+        "tags": [
+          "BundleApi"
+        ],
+        "x-grpc-method": "hya.v1.BundleApi.InvokeSessionBundleApi",
+        "x-server-streaming": false,
+        "x-hya-any-method": true
+      },
+      "post": {
+        "operationId": "BundleApi.InvokeSessionBundleApi.post",
+        "summary": "Invoke one session-scoped bundle endpoint. Over HTTP `bundle` is one",
+        "tags": [
+          "BundleApi"
+        ],
+        "x-grpc-method": "hya.v1.BundleApi.InvokeSessionBundleApi",
+        "x-server-streaming": false,
+        "x-hya-any-method": true
+      },
+      "put": {
+        "operationId": "BundleApi.InvokeSessionBundleApi.put",
+        "summary": "Invoke one session-scoped bundle endpoint. Over HTTP `bundle` is one",
+        "tags": [
+          "BundleApi"
+        ],
+        "x-grpc-method": "hya.v1.BundleApi.InvokeSessionBundleApi",
+        "x-server-streaming": false,
+        "x-hya-any-method": true
+      },
+      "patch": {
+        "operationId": "BundleApi.InvokeSessionBundleApi.patch",
+        "summary": "Invoke one session-scoped bundle endpoint. Over HTTP `bundle` is one",
+        "tags": [
+          "BundleApi"
+        ],
+        "x-grpc-method": "hya.v1.BundleApi.InvokeSessionBundleApi",
+        "x-server-streaming": false,
+        "x-hya-any-method": true
+      },
+      "delete": {
+        "operationId": "BundleApi.InvokeSessionBundleApi.delete",
+        "summary": "Invoke one session-scoped bundle endpoint. Over HTTP `bundle` is one",
+        "tags": [
+          "BundleApi"
+        ],
+        "x-grpc-method": "hya.v1.BundleApi.InvokeSessionBundleApi",
+        "x-server-streaming": false,
+        "x-hya-any-method": true
+      }
+    },
     "/v1/sessions/{session}/compact": {
       "post": {
         "operationId": "Session.CompactSession",
@@ -722,28 +837,6 @@
           "Turn"
         ],
         "x-grpc-method": "hya.v1.Turn.WaitTurn",
-        "x-server-streaming": false
-      }
-    },
-    "/v1/sessions/{session}/views": {
-      "get": {
-        "operationId": "Session.ListSessionViews",
-        "summary": "List the read-only session views that installed bundles serve (manifest",
-        "tags": [
-          "Session"
-        ],
-        "x-grpc-method": "hya.v1.Session.ListSessionViews",
-        "x-server-streaming": false
-      }
-    },
-    "/v1/sessions/{session}/views/{bundle}/{view}": {
-      "get": {
-        "operationId": "Session.GetSessionView",
-        "summary": "Compute one bundle-declared read-only view of a session. The server",
-        "tags": [
-          "Session"
-        ],
-        "x-grpc-method": "hya.v1.Session.GetSessionView",
         "x-server-streaming": false
       }
     },
@@ -1077,6 +1170,115 @@
         "properties": {
           "status": {
             "$ref": "#/components/schemas/AuthStatus"
+          }
+        }
+      },
+      "BundleApiInfo": {
+        "type": "object",
+        "description": "One endpoint a published bundle registers.",
+        "properties": {
+          "bundle": {
+            "type": "string"
+          },
+          "api": {
+            "type": "string"
+          },
+          "method": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "request_schema": {
+            "$ref": "#/components/schemas/google.protobuf.Value"
+          },
+          "response_schema": {
+            "$ref": "#/components/schemas/google.protobuf.Value"
+          }
+        }
+      },
+      "ListBundleApisResponse": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "apis": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BundleApiInfo"
+            }
+          }
+        }
+      },
+      "InvokeSessionBundleApiRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "session": {
+            "type": "string"
+          },
+          "bundle": {
+            "type": "string"
+          },
+          "method": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "string> query": {
+            "$ref": "#/components/schemas/map<string,"
+          },
+          "body": {
+            "$ref": "#/components/schemas/google.protobuf.Value"
+          }
+        }
+      },
+      "InvokeGlobalBundleApiRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "bundle": {
+            "type": "string"
+          },
+          "method": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "string> query": {
+            "$ref": "#/components/schemas/map<string,"
+          },
+          "body": {
+            "$ref": "#/components/schemas/google.protobuf.Value"
+          }
+        }
+      },
+      "BundleApiResponse": {
+        "type": "object",
+        "description": "One served bundle API call (the gRPC reply; HTTP returns `body` verbatim with `status` as the HTTP status).",
+        "properties": {
+          "bundle": {
+            "type": "string"
+          },
+          "api": {
+            "type": "string"
+          },
+          "status": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "content_type": {
+            "type": "string"
+          },
+          "body": {
+            "$ref": "#/components/schemas/google.protobuf.Value"
           }
         }
       },
@@ -3411,78 +3613,6 @@
         "properties": {
           "session": {
             "$ref": "#/components/schemas/SessionInfo"
-          }
-        }
-      },
-      "ListSessionViewsRequest": {
-        "type": "object",
-        "description": "",
-        "properties": {
-          "session": {
-            "type": "string"
-          }
-        }
-      },
-      "SessionViewInfo": {
-        "type": "object",
-        "description": "One read-only view a published bundle serves.",
-        "properties": {
-          "bundle": {
-            "type": "string"
-          },
-          "view": {
-            "type": "string"
-          },
-          "description": {
-            "type": "string"
-          }
-        }
-      },
-      "ListSessionViewsResponse": {
-        "type": "object",
-        "description": "",
-        "properties": {
-          "views": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/SessionViewInfo"
-            }
-          }
-        }
-      },
-      "GetSessionViewRequest": {
-        "type": "object",
-        "description": "",
-        "properties": {
-          "session": {
-            "type": "string"
-          },
-          "bundle": {
-            "type": "string"
-          },
-          "view": {
-            "type": "string"
-          },
-          "string> query": {
-            "$ref": "#/components/schemas/map<string,"
-          }
-        }
-      },
-      "SessionView": {
-        "type": "object",
-        "description": "One computed bundle view.",
-        "properties": {
-          "bundle": {
-            "type": "string"
-          },
-          "view": {
-            "type": "string"
-          },
-          "content_type": {
-            "type": "string"
-          },
-          "body": {
-            "$ref": "#/components/schemas/google.protobuf.Value"
           }
         }
       },

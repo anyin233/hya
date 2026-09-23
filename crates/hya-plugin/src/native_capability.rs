@@ -1,9 +1,10 @@
 //! Request-scoped host services for installed-bundle processes.
 //!
 //! One [`BundleCapability`] backs one capability lease: either a bundle tool
-//! call (any process kind — `rust`, `bun`, or `claude`) or a `view/get` view
-//! request. Every operation is read-only or permission-checked, and the lease
-//! is bound to (connection, session, call) and revoked when the reply arrives.
+//! call (any process kind — `rust`, `bun`, or `claude`) or an `api/request`
+//! bundle API request. Every operation is read-only or permission-checked,
+//! and the lease is bound to (connection, session-or-none, call) and revoked
+//! when the reply arrives.
 
 use std::sync::Arc;
 
@@ -21,10 +22,11 @@ use crate::protocol::{JsonRpcError, codes};
 enum Grant {
     /// A bundle tool call: its full tool context (permission plane, workdir).
     ToolCall(Box<ToolCtx>),
-    /// A read-only view request for one session.
-    View {
-        session: SessionId,
-        view: String,
+    /// A bundle API request: bound to its session for a session-scoped
+    /// endpoint, to no session for a global one.
+    Api {
+        api: String,
+        session: Option<SessionId>,
         call: ToolCallId,
     },
 }
@@ -43,17 +45,18 @@ impl BundleCapability {
         }
     }
 
-    /// Capability for one `view/get` request.
-    pub(crate) fn view(
-        session: SessionId,
-        view: &str,
+    /// Capability for one `api/request` (the synthetic `call` is set by the
+    /// client when it mints the lease; the grant only reports it).
+    pub(crate) fn api(
+        api: &str,
+        session: Option<SessionId>,
         call: ToolCallId,
         reads: Option<Arc<dyn HostSessionReads>>,
     ) -> Self {
         Self {
-            grant: Grant::View {
+            grant: Grant::Api {
+                api: api.to_string(),
                 session,
-                view: view.to_string(),
                 call,
             },
             reads,
@@ -61,6 +64,12 @@ impl BundleCapability {
     }
 
     async fn session_usage(&self, params: Value) -> Result<Value, JsonRpcError> {
+        if let Grant::Api { session: None, .. } = &self.grant {
+            return Err(rpc_error(
+                codes::CAPABILITY_DENIED,
+                "session.usage is unavailable to a global API request (it has no session)",
+            ));
+        }
         let request: SessionUsageParams = serde_json::from_value(params)
             .map_err(|error| rpc_error(codes::INVALID_PARAMS, error.to_string()))?;
         let session = match &self.grant {
@@ -70,14 +79,19 @@ impl BundleCapability {
                     "session.usage requires a session-bound tool call",
                 )
             })?,
-            Grant::View { session, .. } => {
+            Grant::Api { session, .. } => {
                 if request.scope == UsageScope::Root {
                     return Err(rpc_error(
                         codes::INVALID_PARAMS,
-                        "a view request may read only its session: scope `root` is not available",
+                        "an API request may read only its session: scope `root` is not available",
                     ));
                 }
-                *session
+                session.ok_or_else(|| {
+                    rpc_error(
+                        codes::CAPABILITY_DENIED,
+                        "session.usage is unavailable to a global API request",
+                    )
+                })?
             }
         };
         let reads = self.reads.as_ref().ok_or_else(|| {
@@ -168,16 +182,19 @@ impl HostCapabilityHandler for BundleCapability {
                         "source_tool_call_id": ctx.operation.source_tool_call_id(),
                         "operation_id": ctx.operation.operation_id(),
                     }),
-                    Grant::View {
-                        session,
-                        view,
-                        call,
-                    } => json!({
-                        "request": "view",
-                        "session": session,
-                        "view": view,
-                        "call": call,
-                    }),
+                    Grant::Api { api, session, call } => {
+                        let mut described = json!({
+                            "request": "api",
+                            "api": api,
+                            "scope": if session.is_some() { "session" } else { "global" },
+                            "call": call,
+                        });
+                        if let (Some(session), Some(object)) = (session, described.as_object_mut())
+                        {
+                            object.insert("session".to_string(), json!(session));
+                        }
+                        described
+                    }
                 })
             }
             "permission.assert" => {

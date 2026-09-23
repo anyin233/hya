@@ -111,6 +111,7 @@ pub(crate) async fn cmd_serve(
                     .add_service(pbv1::mcp_server::McpServer::new(grpc.clone()))
                     .add_service(pbv1::pty_server::PtyServer::new(grpc.clone()))
                     .add_service(pbv1::logs_server::LogsServer::new(grpc.clone()))
+                    .add_service(pbv1::bundle_api_server::BundleApiServer::new(grpc.clone()))
                     .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener));
                 let _ = server.await;
             }

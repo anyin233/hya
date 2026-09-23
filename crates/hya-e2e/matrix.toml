@@ -400,15 +400,15 @@ timeout_secs = 120
 
 [[scenario]]
 id = "T2.29"
-title = "an installed bundle process serves a read-only session view over GET /v1/sessions/{session}/views/{bundle}/{view} via the request-scoped session.usage capability (per-session + total usage of the session tree), and a kind: bun process tool call receives a capability"
+title = "an installed bundle process registers its own API endpoints (manifest apis:): a session-scoped GET /v1/sessions/{session}/bundles/{bundle}/usage reads the session tree's usage via the request-scoped session.usage capability, a global POST under /v1/bundles/{bundle}/api/ echoes body + path params with status 201 and a session-less capability, a global PUT/GET/DELETE trio keeps process-owned state, host-side failures use bundle_api_* codes, and a kind: bun process tool call receives a capability"
 track = "P"
-path = "crates/hya-e2e/tests/p34_bundle_views.rs"
+path = "crates/hya-e2e/tests/p34_bundle_apis.rs"
 tags = ["pr", "hyabundle", "plugin"]
 timeout_secs = 120
 
 [[scenario]]
 id = "T2.30"
-title = "hya-extra/token-summary Plugin bundle serves the usage session view (per-model input/cache/output tokens, thinking/visible split) for a root+subagent session tree, and its token_summary agent tool renders the same data as a Markdown table that reaches the model's follow-up request"
+title = "hya-extra/token-summary Plugin bundle serves the usage session API endpoint (per-model input/cache/output tokens, thinking/visible split) for a root+subagent session tree, and its token_summary agent tool renders the same data as a Markdown table that reaches the model's follow-up request"
 track = "P"
 path = "crates/hya-e2e/tests/p35_token_summary.rs"
 tags = ["pr", "hyabundle", "plugin", "extras"]

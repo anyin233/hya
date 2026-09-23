@@ -56,8 +56,10 @@ Stable codes and their HTTP status / gRPC code:
 | `conflict` | 409 | `FailedPrecondition` | State conflict (stale revision, patch rejection). |
 | `unavailable` | 503 | `Unavailable` | Required capability not configured (e.g. no summarizer, OAuth not wired). |
 | `internal` | 500 | `Internal` | Unhandled failure. |
-| `view_not_found` | 404 | `NotFound` | No published bundle serves this session view (unknown bundle, bundle without views, or undeclared view id). |
-| `view_failed` | 502 | `Unavailable` | The bundle process failed, timed out, or answered malformed data while computing a view. |
+| `bundle_api_not_found` | 404 | `NotFound` | No published bundle endpoint matches (unknown bundle, bundle without endpoints, or no template of the scope matches the path under any method). |
+| `bundle_api_method_not_allowed` | 405 | `Unimplemented` | The path matches bundle endpoints of the scope, but not under this method; HTTP lists the allowed ones in `Allow`. |
+| `bundle_api_bad_request` | 400 | `InvalidArgument` | Malformed bundle API request: body over 512 KiB or not JSON, bad percent escape, unparsable query, unknown method (gRPC). |
+| `bundle_api_failed` | 502 | `Unavailable` | The bundle process failed, timed out, or answered malformed data while serving an endpoint. |
 
 ## Pagination
 
@@ -103,28 +105,58 @@ listed by `GET /v1/interactions`. Answer with
 `{question: {rejected: true}}`. The response's `applied` is `false` when
 the request was already resolved (idempotent replay).
 
-## Bundle session views
+## Bundle API endpoints
 
-Installed bundles with an `extensions.process` may serve read-only views of a
-session (manifest `views:`; see
-[bundle runtime](../bundle-runtime.md#session-views)).
+Installed bundles with an `extensions.process` may register their own HTTP
+endpoints (manifest `apis:`; see
+[AgentBundle authoring](../agent-bundle-authoring.md#api-endpoints-apis) and
+[bundle runtime](../bundle-runtime.md#bundle-api-endpoints)). `{bundle}` is
+the bundle id percent-encoded as one path segment
+(`hya-extra%2Ftoken-summary`).
 
-- `GET /v1/sessions/{session}/views` → `{ "views": [{ "bundle", "view",
-  "description"? }] }` (rpc `Session.ListSessionViews`).
-- `GET /v1/sessions/{session}/views/{bundle}/{view}` (rpc
-  `Session.GetSessionView`). `bundle` is the bundle id percent-encoded as one
-  path segment (`hya-extra%2Ftoken-summary`); every query-string parameter is
-  passed to the bundle process verbatim as `query`. The response is
-  `{ "bundle", "view", "contentType": "application/json", "body": <JSON> }`.
-  Over HTTP `body` is the process's JSON unchanged (integers stay exact); over
-  gRPC it is a `google.protobuf.Value`, whose numbers are doubles.
+- `GET /v1/bundle-apis` → `{ "apis": [{ "bundle", "api", "method", "scope",
+  "path", "description"?, "requestSchema"?, "responseSchema"? }] }` (rpc
+  `BundleApi.ListBundleApis`), sorted by bundle then endpoint id. `path` is
+  the declared template (`/items/{id}`); the schemas are the declared JSON
+  Schema documents.
+- Session scope — `GET|POST|PUT|PATCH|DELETE
+  /v1/sessions/{session}/bundles/{bundle}/{path…}` (rpc
+  `BundleApi.InvokeSessionBundleApi`). The session must exist; the bundle
+  process may read its data through a read-only capability.
+- Global scope — `GET|POST|PUT|PATCH|DELETE /v1/bundles/{bundle}/api/{path…}`
+  (rpc `BundleApi.InvokeGlobalBundleApi`), not tied to a session.
+
+`{path…}` is the rest of the URL path, matched against the bundle's templates
+for that scope (a template parameter matches one segment; `%2F` inside a
+segment stays inside it). The query string reaches the process as a
+string→string map; a non-empty request body must be JSON (at most 512 KiB; the
+`Content-Type` header is not inspected) and an empty body is `null`. Request
+headers are never forwarded.
+
+Over HTTP the response **is** the process's answer: its status (any
+`200..=599`) and its JSON body verbatim (`Content-Type: application/json`,
+integers exact), or no content when it answered no body. Only host-side
+failures use the error envelope above (`session_not_found`,
+`bundle_api_not_found`, `bundle_api_method_not_allowed`,
+`bundle_api_bad_request`, `bundle_api_failed`) — so clients that must tell
+them apart from a bundle's own `404` should check for the
+`{"error": {"code", "message"}}` shape.
+
+Over gRPC the invoke rpcs take `{ session (session scope), bundle, method,
+path (with its leading "/"), query, body: google.protobuf.Value }` and answer
+`BundleApiResponse { bundle, api, status, content_type ("application/json" or
+"" without a body), body: google.protobuf.Value }`. A process status is data:
+a `404` from the bundle is an OK gRPC call with `status: 404`; only host-side
+failures are gRPC errors (codes in the table above). `Value` numbers are
+doubles.
 
 ```
-GET /v1/sessions/hysec_.../views/hya-extra%2Ftoken-summary/usage?scope=session
-→ {"bundle":"hya-extra/token-summary","view":"usage","contentType":"application/json","body":{...}}
-```
+GET /v1/sessions/hysec_.../bundles/hya-extra%2Ftoken-summary/usage?scope=session
+→ 200 {"session":"hysec_...","scope":"session","generated_by":"hya-extra/token-summary","models":[...],"total":{...},"sessions":[...]}
 
-Errors: `session_not_found`, `view_not_found`, `view_failed`.
+PUT /v1/bundles/acme%2Fnotes/api/notes/todo   {"text":"ship it"}
+→ 201 {"key":"todo","text":"ship it"}      (whatever the bundle answers)
+```
 
 ## Terminal (PTY)
 

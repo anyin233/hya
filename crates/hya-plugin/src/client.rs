@@ -23,9 +23,10 @@ use tokio_util::sync::CancellationToken;
 use crate::codec::read_bounded_line;
 use crate::error::PluginError;
 use crate::messages::{
-    ActivationMetadata, HostCapabilityParams, HostInfo, InitializeParams, InitializeResult,
-    METHOD_HOST_CAPABILITY, METHOD_INITIALIZE, METHOD_SHUTDOWN, METHOD_TOOL_CALL, METHOD_VIEW_GET,
-    PROTOCOL_VERSION, ToolCallParams, ToolCallReply, ViewGetParams, ViewGetResult,
+    ActivationMetadata, ApiRequestParams, ApiRequestResult, HostCapabilityParams, HostInfo,
+    InitializeParams, InitializeResult, METHOD_API_REQUEST, METHOD_HOST_CAPABILITY,
+    METHOD_INITIALIZE, METHOD_SHUTDOWN, METHOD_TOOL_CALL, PROTOCOL_VERSION, ToolCallParams,
+    ToolCallReply,
 };
 use crate::protocol::{
     Frame, JsonRpcError, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, codes,
@@ -46,7 +47,7 @@ type Writer = Arc<Mutex<Box<dyn AsyncWrite + Send + Unpin>>>;
 type Capabilities = Arc<StdMutex<HashMap<String, RegisteredCapability>>>;
 
 /// Host-owned operations available to one explicitly authorized request: a
-/// bundle-process tool call or a `view/get` view request.
+/// bundle-process tool call or an `api/request` bundle API request.
 ///
 /// The transport validates the opaque token, session, and call id before this
 /// handler sees the operation. Implementations must still enforce their own
@@ -59,7 +60,8 @@ pub trait HostCapabilityHandler: Send + Sync {
 
 #[derive(Clone)]
 struct RegisteredCapability {
-    session: SessionId,
+    /// Bound session; `None` only for a global API request.
+    session: Option<SessionId>,
     call: ToolCallId,
     handler: Arc<dyn HostCapabilityHandler>,
     cancelled: CancellationToken,
@@ -600,7 +602,7 @@ impl PluginClient {
         handler: Arc<dyn HostCapabilityHandler>,
         timeout: Duration,
     ) -> Result<ToolCallReply, PluginError> {
-        let lease = self.register_capability(session, call, handler)?;
+        let lease = self.register_capability(Some(session), call, handler)?;
         let result = self
             .call_tool_with_timeout_and_capability(
                 tool,
@@ -615,42 +617,35 @@ impl PluginClient {
         result
     }
 
-    /// Ask the plugin for one declared read-only session view.
+    /// Forward one routed bundle API request (`api/request`).
     ///
-    /// A fresh synthetic request id is minted and a capability lease bound to
-    /// `(this connection, session, request id)` is handed to the plugin as
-    /// `host_capability`; it is revoked on reply, error, timeout, and caller
-    /// cancellation, exactly like a tool-call lease.
+    /// A capability lease bound to `(this connection, params.session,
+    /// params.call)` is handed to the plugin as `host_capability` (the field
+    /// of `params` is overwritten); it is revoked on reply, error, timeout,
+    /// and caller cancellation, exactly like a tool-call lease. `params.call`
+    /// must be a fresh synthetic id per request.
     ///
     /// # Errors
     /// Returns the call-level errors from [`Self::call`] or `Json` when the
-    /// reply is not a `{ "body": <json> }` object.
-    pub async fn get_view(
+    /// reply is not a `{ "status"?, "body"? }` object.
+    pub async fn request_api(
         &self,
-        view: &str,
-        session: SessionId,
-        query: BTreeMap<String, String>,
+        mut params: ApiRequestParams,
         handler: Arc<dyn HostCapabilityHandler>,
         timeout: Duration,
-    ) -> Result<ViewGetResult, PluginError> {
-        let call = ToolCallId::new();
-        let lease = self.register_capability(session, call, handler)?;
-        let params = serde_json::to_value(ViewGetParams {
-            view: view.to_string(),
-            session,
-            call,
-            query,
-            host_capability: lease.token.clone(),
-        })
-        .map_err(|error| PluginError::Json(error.to_string()))?;
-        let result = self.call(METHOD_VIEW_GET, params, timeout).await;
+    ) -> Result<ApiRequestResult, PluginError> {
+        let lease = self.register_capability(params.session, params.call, handler)?;
+        params.host_capability = lease.token.clone();
+        let params =
+            serde_json::to_value(params).map_err(|error| PluginError::Json(error.to_string()))?;
+        let result = self.call(METHOD_API_REQUEST, params, timeout).await;
         drop(lease);
         serde_json::from_value(result?).map_err(|error| PluginError::Json(error.to_string()))
     }
 
     fn register_capability(
         &self,
-        session: SessionId,
+        session: Option<SessionId>,
         call: ToolCallId,
         handler: Arc<dyn HostCapabilityHandler>,
     ) -> Result<CapabilityLease, PluginError> {

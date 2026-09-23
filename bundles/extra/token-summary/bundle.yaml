@@ -13,10 +13,17 @@ extensions:
   files:
     - id: summary
       path: summary.ts
+    - id: usage-schema
+      path: schemas/usage.json
 resources:
   tools:
     - id: token_summary
       path: summary.ts
-views:
+# GET /v1/sessions/{session}/bundles/hya-extra%2Ftoken-summary/usage
+apis:
   - id: usage
+    method: GET
+    scope: session
+    path: /usage
     description: Per-model token usage of the session tree
+    response_schema: schemas/usage.json

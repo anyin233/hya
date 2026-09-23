@@ -369,9 +369,10 @@ calls it; the Workflow owns its own declared candidate list instead.
 A `Plugin` bundle that reports per-model token consumption for a session
 tree. It runs a small Bun process that reads the request-scoped
 [`session.usage`](plugin-protocol.md#request-scoped-host-capabilities) host
-capability and exposes it two ways: a read-only
-[session view](agent-bundle-authoring.md#session-views-views) named `usage`
-that any v1 client can `GET` without running a turn, and an agent tool,
+capability and exposes it two ways: a session-scoped
+[API endpoint](agent-bundle-authoring.md#api-endpoints-apis) `GET /usage`
+(id `usage`) that any v1 client can call without running a turn, and an
+agent tool,
 `token_summary`, that lets a running agent (or an orchestrator inspecting a
 subagent's spend) ask for the same numbers mid-conversation. Both answer with
 input, cache creation, cache read, and output tokens per model, with output
@@ -381,7 +382,7 @@ any model with at least one such round, rather than guessing.
 
 Why a session tree: hya turns commonly spawn subagents (`task`). The default
 scope, `tree`, folds the bound session plus every descendant subagent
-session recursively, so an orchestrator's own view already accounts for
+session recursively, so an orchestrator's own report already accounts for
 everything its team spent; `scope=session` narrows to one session's own log
 when that is what you want instead.
 
@@ -400,44 +401,45 @@ cargo run -p xtask -- package-bundle bundles/extra/token-summary token-summary.h
 hya bundle install token-summary.hyabundle
 ```
 
-Read the view over HTTP once a session exists (the bundle id is one
-percent-encoded path segment, `hya-extra%2Ftoken-summary`):
+Call the endpoint over HTTP once a session exists (the bundle id is one
+percent-encoded path segment, `hya-extra%2Ftoken-summary`); the response body
+is the bundle's own JSON, with no envelope:
 
 ```sh
-curl "$HYA_URL/v1/sessions/$SESSION/views/hya-extra%2Ftoken-summary/usage?scope=tree"
+curl "$HYA_URL/v1/sessions/$SESSION/bundles/hya-extra%2Ftoken-summary/usage?scope=tree"
 ```
 
 ```json
 {
-  "bundle": "hya-extra/token-summary",
-  "view": "usage",
-  "contentType": "application/json",
-  "body": {
-    "session": "hysec_...",
-    "scope": "tree",
-    "generated_by": "hya-extra/token-summary",
-    "models": [
-      {
-        "model": "anthropic/claude-sonnet-5",
-        "input": 500,
-        "cache_creation": 20,
-        "cache_read": 50,
-        "output": 200,
-        "thinking": null,
-        "visible_output": null,
-        "unsplit_output": 200,
-        "rounds": 3,
-        "prompt_total": 570
-      }
-    ],
-    "total": { "...": "same fields as a model row, without model" },
-    "sessions": [
-      { "session": "hysec_...", "agent": "build", "models": [ "..." ], "total": { "...": "..." } },
-      { "session": "hysec_...", "parent": "hysec_...", "agent": "general", "models": [ "..." ], "total": { "...": "..." } }
-    ]
-  }
+  "session": "hysec_...",
+  "scope": "tree",
+  "generated_by": "hya-extra/token-summary",
+  "models": [
+    {
+      "model": "anthropic/claude-sonnet-5",
+      "input": 500,
+      "cache_creation": 20,
+      "cache_read": 50,
+      "output": 200,
+      "thinking": null,
+      "visible_output": null,
+      "unsplit_output": 200,
+      "rounds": 3,
+      "prompt_total": 570
+    }
+  ],
+  "total": { "...": "same fields as a model row, without model" },
+  "sessions": [
+    { "session": "hysec_...", "agent": "build", "models": [ "..." ], "total": { "...": "..." } },
+    { "session": "hysec_...", "parent": "hysec_...", "agent": "general", "models": [ "..." ], "total": { "...": "..." } }
+  ]
 }
 ```
+
+Over gRPC the same call is `hya.v1.BundleApi.InvokeSessionBundleApi` with
+`{ session, bundle: "hya-extra/token-summary", method: "GET", path: "/usage",
+query: { scope: "tree" } }`; the reply's `status` is `200` and `body` holds
+the JSON above.
 
 Once installed, any agent that can reach the bundle's namespace can call the
 tool directly, for example `build`:
@@ -454,34 +456,41 @@ renders as `—`) plus one line per subagent session.
 
 | Contract | Value |
 | --- | --- |
-| Bundle | `kind: Plugin`, `extensions.process: {kind: bun, command: [bun, run, '${BUNDLE_ROOT}/summary.ts']}`. Only `summary.ts` is packaged (`summary.test.ts` is undeclared and stays out). |
-| View | id `usage`, description "Per-model token usage of the session tree". |
+| Bundle | `kind: Plugin`, `extensions.process: {kind: bun, command: [bun, run, '${BUNDLE_ROOT}/summary.ts']}`. `summary.ts` and `schemas/usage.json` are packaged (`summary.test.ts` is undeclared and stays out). |
+| API endpoint | `apis: [{ id: usage, method: GET, scope: session, path: /usage, description: "Per-model token usage of the session tree", response_schema: schemas/usage.json }]` — `GET /v1/sessions/{session}/bundles/hya-extra%2Ftoken-summary/usage`. `hya bundle info hya-extra/token-summary` prints `api=GET session /usage id=usage response_schema=schemas/usage.json description=…`. |
 | Tool name (full-plane agent, e.g. `build`) | `token-summary__token_summary` |
 | Config | None. |
 
-View `GET /v1/sessions/{session}/views/hya-extra%2Ftoken-summary/usage`:
+Endpoint `GET /v1/sessions/{session}/bundles/hya-extra%2Ftoken-summary/usage`:
 
 | Query param | Values | Default | Meaning |
 | --- | --- | --- | --- |
-| `scope` | `session` \| `tree` | `tree` | `root` is rejected (`{"error": ...}` body) — a view may only read its own session or its descendants, never the whole spawn-tree root; use the tool for that. |
+| `scope` | `session` \| `tree` | `tree` | `root` is rejected — a session endpoint may only read its own session or its descendants, never the whole spawn-tree root; use the tool for that. |
 
-An unrecognized query key or value answers `{ "body": { "error": "<reason>" } }`
-(HTTP 200; views can only return a body, never a distinct HTTP error status —
-see [Plugin protocol](plugin-protocol.md#session-views-viewget)); a capability
-failure (for example an unknown session) answers the same shape.
+| Status | Body |
+| --- | --- |
+| `200` | The usage JSON above; its JSON Schema is `schemas/usage.json`, published in `GET /v1/bundle-apis` as `responseSchema`. |
+| `400` | `{ "error": "<reason>" }` for an unrecognized query key or `scope` value. |
+| `500` | `{ "error": "<reason>" }` when the `session.usage` read itself fails. |
+
+Host-side failures use the standard codes instead: an unknown session is
+`session_not_found` (404), another method on `/usage` is
+`bundle_api_method_not_allowed` (405), and a crashed or timed-out process is
+`bundle_api_failed` (502) — see
+[Bundle runtime](bundle-runtime.md#bundle-api-endpoints).
 
 Tool `token_summary` input `{ "scope"?: "session" | "tree" | "root", "format"?: "table" | "json" }`
-(default `tree` / `table`). `format: "json"` returns exactly the view's body
-shape above; `format: "table"` (default) returns the rendered Markdown
+(default `tree` / `table`). `format: "json"` returns exactly the endpoint's
+200 body shape above; `format: "table"` (default) returns the rendered Markdown
 string. A capability failure or bad input answers `{ "ok": false, "output": "<reason>" }`
 instead of crashing the process; diagnostics otherwise go to stderr only.
 
 Response field mapping, from the `session.usage` capability's `UsageTotals`
 invariant (`input` excludes cache; `output` includes thinking — see
 [Plugin protocol](plugin-protocol.md#request-scoped-host-capabilities)) to
-this bundle's view/tool JSON:
+this bundle's endpoint/tool JSON:
 
-| `session.usage` field | View/tool field | Notes |
+| `session.usage` field | Endpoint/tool field | Notes |
 | --- | --- | --- |
 | `input` | `input` | Unchanged. |
 | `cache_write` | `cache_creation` | Renamed for readability. |
@@ -499,9 +508,10 @@ breadth-first, root-first row order and carries `parent`/`agent` only when
 known, plus `truncated: true` when the capability's 512-session cap cut the
 tree (see [Plugin protocol](plugin-protocol.md#request-scoped-host-capabilities)).
 
-The bundle's `bun test` suite (transform to view JSON, Markdown rendering,
-the id-dispatching NDJSON reader that lets a host request interleave with an
-outstanding capability reply, and query/input validation) runs from the
+The bundle's `bun test` suite (transform to the usage JSON, Markdown
+rendering, the id-dispatching NDJSON reader that lets a host request
+interleave with an outstanding capability reply, query/input validation, and
+the `api/request` handler's status codes) runs from the
 bundle directory:
 
 ```sh

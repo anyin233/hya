@@ -5,8 +5,8 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use hya_bundle::{
-    PreparedInstallableBundle, PreparedProcessExtension, PreparedProcessKind, PreparedSchema,
-    PreparedView,
+    PreparedApi, PreparedInstallableBundle, PreparedProcessExtension, PreparedProcessKind,
+    PreparedSchema,
 };
 use hya_core::{CoreError, RuntimeSource, RuntimeSourceExport, RuntimeSourceId};
 use hya_mcp::{McpServerConfig, PreparedMcpServer};
@@ -84,18 +84,18 @@ fn spawns_runtime(
 }
 
 /// Runtime source identity: the prepared bundle, its process, schemas, and
-/// views, and for spawning bundles the configuration location and content
+/// API endpoints, and for spawning bundles the configuration location and content
 /// digest, so a `config.yml` edit restarts the bundle's providers like a
 /// changed bundle.
 pub(crate) fn fingerprint(
     bundle: &PreparedInstallableBundle,
     process: Option<&PreparedProcessExtension>,
     schemas: &[PreparedSchema],
-    views: &[PreparedView],
+    apis: &[PreparedApi],
     config: &BundleRuntimeConfig,
 ) -> Result<[u8; 32], CoreError> {
     let config = config.watched.then_some(config);
-    let bytes = serde_json::to_vec(&(bundle, process, schemas, views, config))
+    let bytes = serde_json::to_vec(&(bundle, process, schemas, apis, config))
         .map_err(|error| CoreError::Invalid(format!("encode bundle runtime identity: {error}")))?;
     Ok(Sha256::digest(bytes).into())
 }
@@ -244,10 +244,55 @@ pub(crate) struct BundleRuntimeParts<'a> {
     pub(crate) process: Option<&'a PreparedProcessExtension>,
     /// Declared URI-scheme extensions.
     pub(crate) schemas: &'a [PreparedSchema],
-    /// Declared read-only session views (explicit process only).
-    pub(crate) views: &'a [PreparedView],
+    /// Declared API endpoints (explicit process only).
+    pub(crate) apis: &'a [PreparedApi],
     /// Read-only host services behind the process's capabilities.
     pub(crate) reads: Option<Arc<dyn hya_core::HostSessionReads>>,
+}
+
+/// Publishable endpoint declarations: parsed path templates plus the JSON
+/// Schema documents read from the bundle's own declared extension files
+/// (prepare already validated both; a failure here means a corrupt catalog).
+fn source_apis(
+    bundle: &PreparedInstallableBundle,
+    apis: &[PreparedApi],
+) -> Result<Vec<hya_core::SourceApi>, CoreError> {
+    let id = &bundle.identity().id;
+    let schema = |path: &Option<String>| -> Result<Option<serde_json::Value>, CoreError> {
+        let Some(path) = path else {
+            return Ok(None);
+        };
+        let resource = bundle
+            .extensions()
+            .iter()
+            .find(|resource| &resource.source_path == path)
+            .ok_or_else(|| {
+                CoreError::Invalid(format!("bundle `{id}` API schema `{path}` is not packaged"))
+            })?;
+        serde_json::from_str(&resource.content)
+            .map(Some)
+            .map_err(|error| {
+                CoreError::Invalid(format!("bundle `{id}` API schema `{path}`: {error}"))
+            })
+    };
+    apis.iter()
+        .map(|api| {
+            Ok(hya_core::SourceApi {
+                id: api.id.clone(),
+                method: api.method,
+                scope: api.scope,
+                path: hya_core::ApiPathTemplate::parse(&api.path).map_err(|reason| {
+                    CoreError::Invalid(format!(
+                        "bundle `{id}` API `{}` path `{}` {reason}",
+                        api.id, api.path
+                    ))
+                })?,
+                description: api.description.clone(),
+                request_schema: schema(&api.request_schema)?,
+                response_schema: schema(&api.response_schema)?,
+            })
+        })
+        .collect()
 }
 
 pub(crate) async fn prepare_source(
@@ -258,12 +303,12 @@ pub(crate) async fn prepare_source(
     let BundleRuntimeParts {
         process,
         schemas,
-        views,
+        apis,
         reads,
     } = parts;
     let bundle_config = config.location();
     let id = &bundle.identity().id;
-    let fingerprint = fingerprint(bundle, process, schemas, views, config)?;
+    let fingerprint = fingerprint(bundle, process, schemas, apis, config)?;
     // A shared JavaScript Plugin has no agent activation to own a Bun sidecar.
     // Promote its explicit executable entrypoints to a generation-owned process.
     let implicit_process = if process.is_none() && bundle.plugin_bundle().is_some() {
@@ -320,7 +365,7 @@ pub(crate) async fn prepare_source(
     };
     let mut resources = BTreeMap::new();
     let mut hooks: Option<Arc<dyn hya_core::hooks::HookDispatcher>> = None;
-    let mut view_provider: Option<Arc<dyn hya_core::BundleViewProvider>> = None;
+    let mut api_provider: Option<Arc<dyn hya_core::BundleApiProvider>> = None;
     let mut declaration = Sha256::new();
     declaration.update(fingerprint);
     if process.is_some() || !bundle.mcp().is_empty() {
@@ -399,23 +444,23 @@ pub(crate) async fn prepare_source(
                 )));
             }
             // A process that implicitly started (a JavaScript Plugin) has no
-            // manifest views, so this also rejects stray view declarations.
-            let declared_views = views
+            // manifest endpoints, so this also rejects stray API declarations.
+            let declared_apis = apis
                 .iter()
-                .map(|view| view.id.as_str())
+                .map(|api| api.id.as_str())
                 .collect::<BTreeSet<_>>();
-            let actual_views = host.declared_views();
-            let actual_views = actual_views
+            let actual_apis = host.declared_apis();
+            let actual_apis = actual_apis
                 .iter()
-                .map(|view| view.name.as_str())
+                .map(|api| api.name.as_str())
                 .collect::<BTreeSet<_>>();
-            if declared_views != actual_views {
+            if declared_apis != actual_apis {
                 return Err(CoreError::Invalid(format!(
-                    "bundle `{id}` process views differ from declared views: expected {declared_views:?}, got {actual_views:?}"
+                    "bundle `{id}` process API endpoints differ from declared apis: expected {declared_apis:?}, got {actual_apis:?}"
                 )));
             }
-            if !views.is_empty() {
-                view_provider = Some(host.clone());
+            if !apis.is_empty() {
+                api_provider = Some(host.clone());
             }
             for (_, set) in host.contributions() {
                 if !set.workspace_adapters.is_empty() {
@@ -531,17 +576,8 @@ pub(crate) async fn prepare_source(
     if let Some(hooks) = hooks {
         source = source.with_hooks(hooks);
     }
-    if let Some(provider) = view_provider {
-        source = source.with_views(
-            views
-                .iter()
-                .map(|view| hya_core::SourceView {
-                    id: view.id.clone(),
-                    description: view.description.clone(),
-                })
-                .collect(),
-            provider,
-        );
+    if let Some(provider) = api_provider {
+        source = source.with_apis(source_apis(bundle, apis)?, provider);
     }
     Ok(CachedBundleSource {
         fingerprint,
@@ -616,7 +652,7 @@ for line in sys.stdin:
             BundleRuntimeParts {
                 process: prepared.bundle_process("acme/mcp-env"),
                 schemas: &[],
-                views: &[],
+                apis: &[],
                 reads: None,
             },
             &BundleRuntimeConfig::capture(
@@ -751,7 +787,7 @@ for line in sys.stdin:
             BundleRuntimeParts {
                 process: prepared.bundle_process("acme/undeclared"),
                 schemas: &[],
-                views: &[],
+                apis: &[],
                 reads: None,
             },
             &BundleRuntimeConfig::capture(
@@ -767,72 +803,81 @@ for line in sys.stdin:
         );
     }
 
-    /// A bundle process whose initialize reply declares `views` (a Python
-    /// literal) for the manifest-declared `views:` block.
-    async fn prepare_view_bundle(
-        manifest_views: &str,
-        process_views: &str,
+    /// A bundle process whose initialize reply declares `apis` (a Python
+    /// literal) for the manifest-declared `apis:` block.
+    async fn prepare_api_bundle(
+        manifest_apis: &str,
+        process_apis: &str,
     ) -> Result<CachedBundleSource, CoreError> {
         let script = format!(
             r#"import json,sys
 for line in sys.stdin:
  r=json.loads(line)
- result={{'protocol_version':1,'plugin':{{'id':'views','version':'1.0.0','kind':'bun'}},'hooks':[],'tools':[],'views':{process_views}}} if r.get('method') == 'initialize' else {{}}
+ result={{'protocol_version':1,'plugin':{{'id':'apis','version':'1.0.0','kind':'bun'}},'hooks':[],'tools':[],'apis':{process_apis}}} if r.get('method') == 'initialize' else {{}}
  if 'id' in r: print(json.dumps({{'jsonrpc':'2.0','id':r['id'],'result':result}}),flush=True)
 "#
         );
         let prepared = prepare_package(BundleSource::new(
-            "views",
+            "apis",
             vec![
                 SourceFile::new(
                     "bundle.yaml",
-                    format!("kind: Plugin\nidentity: {{ id: acme/views, version: 1.0.0, publisher: acme }}\nextensions:\n  process: {{ kind: bun, command: [python3, '${{BUNDLE_ROOT}}/runtime.py'] }}\n  files: [{{ id: runtime, path: runtime.py }}]\n{manifest_views}"),
+                    format!("kind: Plugin\nidentity: {{ id: acme/apis, version: 1.0.0, publisher: acme }}\nextensions:\n  process: {{ kind: bun, command: [python3, '${{BUNDLE_ROOT}}/runtime.py'] }}\n  files: [{{ id: runtime, path: runtime.py }}, {{ id: usage-schema, path: usage.json }}]\n{manifest_apis}"),
                 ),
                 SourceFile::new("runtime.py", script),
+                SourceFile::new("usage.json", r#"{"type":"object"}"#),
             ],
         ))
         .unwrap();
         prepare_source(
             &prepared.bundles()[0],
             BundleRuntimeParts {
-                process: prepared.bundle_process("acme/views"),
+                process: prepared.bundle_process("acme/apis"),
                 schemas: &[],
-                views: prepared.bundle_views("acme/views"),
+                apis: prepared.bundle_apis("acme/apis"),
                 reads: None,
             },
             &BundleRuntimeConfig::capture(
                 &prepared.bundles()[0],
-                prepared.bundle_process("acme/views"),
-                test_config("acme/views"),
+                prepared.bundle_process("acme/apis"),
+                test_config("acme/apis"),
             ),
         )
         .await
     }
 
     #[tokio::test]
-    async fn bundle_process_views_must_equal_the_declared_views() {
-        let declared = "views: [{ id: usage, description: Token usage }]\n";
-        assert!(
-            prepare_view_bundle(declared, "[{'name':'usage'}]")
-                .await
-                .is_ok(),
-            "matching view declarations publish"
+    async fn bundle_process_apis_must_equal_the_declared_apis() {
+        let declared = "apis: [{ id: usage, method: GET, scope: session, path: /usage, description: Token usage, response_schema: usage.json }]\n";
+        let published = prepare_api_bundle(declared, "[{'name':'usage'}]")
+            .await
+            .unwrap();
+        let Some(apis) = published.source.apis() else {
+            panic!("matching API declarations publish their endpoints");
+        };
+        let apis = apis.apis();
+        assert_eq!(apis.len(), 1);
+        assert_eq!(apis[0].path.as_str(), "/usage");
+        assert_eq!(
+            apis[0].response_schema,
+            Some(serde_json::json!({"type": "object"})),
+            "the declared schema file is published with the endpoint"
         );
-        for process_views in [
+        for process_apis in [
             "[]",
             "[{'name':'usage'},{'name':'extra'}]",
             "[{'name':'other'}]",
         ] {
-            let result = prepare_view_bundle(declared, process_views).await;
+            let result = prepare_api_bundle(declared, process_apis).await;
             assert!(
-                matches!(result, Err(CoreError::Invalid(ref detail)) if detail.contains("views differ")),
-                "{process_views}: the process must declare exactly the manifest views"
+                matches!(result, Err(CoreError::Invalid(ref detail)) if detail.contains("API endpoints differ")),
+                "{process_apis}: the process must declare exactly the manifest apis"
             );
         }
-        let result = prepare_view_bundle("", "[{'name':'usage'}]").await;
+        let result = prepare_api_bundle("", "[{'name':'usage'}]").await;
         assert!(
-            matches!(result, Err(CoreError::Invalid(ref detail)) if detail.contains("views differ")),
-            "a process may not serve undeclared views"
+            matches!(result, Err(CoreError::Invalid(ref detail)) if detail.contains("API endpoints differ")),
+            "a process may not serve undeclared endpoints"
         );
     }
 }

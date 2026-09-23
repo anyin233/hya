@@ -213,46 +213,81 @@ Agent-bearing JavaScript bundles retain their activation-scoped sidecars.
   through its namespaced runtime export.
 - Every tool call into an installed bundle's process (any kind: `rust`, `bun`,
   `claude`, and the implicit Bun process of a JavaScript Plugin) carries a
-  call-scoped `host_capability`; view requests carry one too. The operations
+  call-scoped `host_capability`; bundle API requests carry one too. The operations
   are read-only or permission-checked (`context.describe`,
   `permission.assert`, `session.usage`); see
   [Plugin protocol](plugin-protocol.md#request-scoped-host-capabilities).
 
-## Session views
+## Bundle API endpoints
 
-A bundle with an explicit `extensions.process` may declare read-only session
-views (`views: [{ id, description? }]`, see
-[AgentBundle authoring](agent-bundle-authoring.md#session-views-views)). The
-lifecycle:
+A bundle with an explicit `extensions.process` may register its own HTTP
+endpoints (`apis: [{ id, method, scope, path, description?, request_schema?,
+response_schema? }]`, see
+[AgentBundle authoring](agent-bundle-authoring.md#api-endpoints-apis) for the
+fields and the path template grammar). The lifecycle:
 
-- **Prepare** rejects views without an explicit `extensions.process`, validates
-  ids, and records them (sorted) in the prepared catalog; the declared views are
-  part of the runtime source identity, like schemas.
-- **Start**: the process's initialize reply must list exactly the declared view
-  ids, or the candidate is rejected like a tool or hook mismatch. The published
-  runtime source then carries the declared views and a provider bound to that
+- **Prepare** rejects endpoints without an explicit `extensions.process`,
+  validates ids, methods, scopes, and templates, rejects overlapping templates
+  under one method and scope, checks that schema files are declared extension
+  files holding JSON, and records the endpoints (sorted) in the prepared
+  catalog. The declared endpoints are part of the runtime source identity,
+  like schemas, so a changed declaration restarts the process.
+- **Start**: the process's initialize reply must list exactly the declared
+  endpoint ids in `apis`, or the candidate is rejected like a tool or hook
+  mismatch. The published runtime source then carries the endpoints (with
+  their parsed templates and JSON Schemas) and a provider bound to that
   generation's process.
-- **Serve**: `GET /v1/sessions/{session}/views/{bundle}/{view}` checks the
-  session, refreshes the installed catalog if it changed (a failed refresh is
-  logged and the current generation keeps serving), resolves the bundle in the
-  live published generation, and sends the process `view/get` with a
-  request-scoped read-only capability bound to that session. The process's
-  `{ "body": … }` is returned as the response `body` (`contentType`
-  `application/json`).
+- **Serve**: a request to
+  `/v1/sessions/{session}/bundles/{bundle}/{path…}` (session scope) or
+  `/v1/bundles/{bundle}/api/{path…}` (global scope) checks the session (session
+  scope only), refreshes the installed catalog if it changed (a failed refresh
+  is logged and the current generation keeps serving), resolves the bundle in
+  the live published generation, matches `{path…}` against the bundle's
+  templates for that scope, and sends the process `api/request` with a
+  request-scoped read-only capability — bound to the session for session scope,
+  to no session for global scope. The process's `status` and `body` are the
+  HTTP response, verbatim.
 - **Generation swap**: each request resolves the generation that is live when
   it arrives and retains that generation's process and materialized root until
   it completes; requests after a swap (reinstall, config edit, uninstall) use
-  the new generation, or answer `view_not_found` once the bundle is gone.
-- **Errors**: unknown session → `session_not_found` (404); unknown bundle, a
-  bundle without views, or an undeclared view → `view_not_found` (404); process
-  error, crash, malformed reply, or the 30 s request timeout → `view_failed`
-  (502, gRPC `UNAVAILABLE`).
+  the new generation, or answer `bundle_api_not_found` once the bundle is gone.
+  In-process state (a store the process keeps in memory) does not survive a
+  restart; the bundle must persist it itself if it has to survive one.
+- **Errors** (host side; a process may answer any `200..=599` itself):
 
-`GET /v1/sessions/{session}/views` lists `{ bundle, view, description }` for
-every published view. Views are a bundle-process feature only: configured
-plugins (`plugins:`) and the Bun extension adapter never serve them.
+  | Condition | Code | HTTP | gRPC |
+  | --- | --- | --- | --- |
+  | Unknown session (session scope) | `session_not_found` | 404 | `NOT_FOUND` |
+  | Unknown bundle, a bundle without endpoints, or no template of the scope matches the path under any method | `bundle_api_not_found` | 404 | `NOT_FOUND` |
+  | The path matches only under other methods (the `Allow` header lists them) | `bundle_api_method_not_allowed` | 405 | `UNIMPLEMENTED` |
+  | Body over 512 KiB, a non-empty body that is not JSON, a bad percent escape, an unparsable query, an unknown method (gRPC) | `bundle_api_bad_request` | 400 | `INVALID_ARGUMENT` |
+  | Process error, crash, timeout (30 s), malformed reply, status outside `200..=599`, or a body on `204`/`205`/`304` | `bundle_api_failed` | 502 | `UNAVAILABLE` |
+
+**Limits.** Request body at most 512 KiB of JSON (half the 1 MiB stdio frame
+cap, leaving room for the request envelope and escaping); the reply travels in
+one stdio frame, so its body must stay under 1 MiB — a larger frame is a
+protocol violation that restarts the process. Concrete request paths are at
+most 4096 bytes; templates at most 256 bytes and 16 segments; 64 endpoints per
+bundle. The request timeout is the process's normal request timeout (30 s by
+default).
+
+**Security.** Bundle code runs as the user with the user's OS privileges, like
+every bundle process; registering an endpoint only lets HTTP clients reach
+code that is already trusted. The endpoints sit behind exactly the same
+access control as every other `/v1` route (the server binds `127.0.0.1` by
+default and adds no per-route authentication), so anyone who can reach the
+server can call them. The host capability stays read-only for every method:
+`POST`/`PUT`/`PATCH`/`DELETE` change only what the bundle process itself
+owns, never hya's event log. The process sees no request headers (in
+particular no `Authorization`), only method, path, path parameters, query,
+and JSON body.
+
+`GET /v1/bundle-apis` lists `{ bundle, api, method, scope, path, description,
+requestSchema?, responseSchema? }` for every published endpoint. Endpoints are
+a bundle-process feature only: configured plugins (`plugins:`) and the Bun
+extension adapter never serve them.
 
 The process E2E suite exercises native tools, MCP tools, scoped hooks, package
-removal, schema reads, session views (`p34_bundle_views`), and uninstall.
+removal, schema reads, bundle API endpoints (`p34_bundle_apis`), and uninstall.
 Startup rollback and binding lifetime are also covered by the installed-bundle
 refresh integration suite.

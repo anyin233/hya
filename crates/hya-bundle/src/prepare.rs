@@ -7,11 +7,11 @@ use sha2::{Digest, Sha256};
 use crate::error::BundleError;
 use crate::model::{
     BundleIdentity, ChannelParticipantRole, ChannelScope, ChannelTemplateKind, PreparedAgent,
-    PreparedAgentBundle, PreparedAgentSetBundle, PreparedBundleIndex, PreparedBundleProcess,
-    PreparedBundleSchemas, PreparedBundleViews, PreparedCatalog, PreparedChannelParticipant,
-    PreparedChannelTemplate, PreparedDocument, PreparedDocumentOwned, PreparedInstallableBundle,
-    PreparedPluginBundle, PreparedProcessExtension, PreparedResource, PreparedSchema, PreparedView,
-    PreparedWorkflow, PreparedWorkflowBundle,
+    PreparedAgentBundle, PreparedAgentSetBundle, PreparedApi, PreparedBundleApis,
+    PreparedBundleIndex, PreparedBundleProcess, PreparedBundleSchemas, PreparedCatalog,
+    PreparedChannelParticipant, PreparedChannelTemplate, PreparedDocument, PreparedDocumentOwned,
+    PreparedInstallableBundle, PreparedPluginBundle, PreparedProcessExtension, PreparedResource,
+    PreparedSchema, PreparedWorkflow, PreparedWorkflowBundle,
 };
 use crate::source::{
     BundleSource, ParsedSource, SourceAgent, SourceAgentManifest, SourceAgentSetManifest,
@@ -55,18 +55,18 @@ fn prepare_sources(sources: Vec<BundleSource>) -> Result<PreparedCatalog, Bundle
     let mut bundles = Vec::with_capacity(parsed.len());
     let mut schemas = Vec::new();
     let mut process_extensions = Vec::new();
-    let mut views = Vec::new();
+    let mut apis = Vec::new();
     for source in parsed {
         let bundle_id = manifest_identity(&source.manifest).id.clone();
         if !bundle_ids.insert(bundle_id.clone()) {
             return Err(BundleError::DuplicateBundleId { bundle_id });
         }
-        let (bundle, bundle_schemas, process, bundle_views) =
+        let (bundle, bundle_schemas, process, bundle_apis) =
             prepare_bundle(source, &mut stable_agent_ids)?;
-        if !bundle_views.is_empty() {
-            views.push(PreparedBundleViews {
+        if !bundle_apis.is_empty() {
+            apis.push(PreparedBundleApis {
                 bundle_id: bundle.identity().id.clone(),
-                views: bundle_views,
+                apis: bundle_apis,
             });
         }
         if !bundle_schemas.is_empty() {
@@ -94,7 +94,7 @@ fn prepare_sources(sources: Vec<BundleSource>) -> Result<PreparedCatalog, Bundle
         index: &index,
         schemas: schemas.clone(),
         extensions_process: process_extensions.clone(),
-        views: views.clone(),
+        apis: apis.clone(),
     })
     .map_err(|error| BundleError::PreparedEncode {
         detail: error.to_string(),
@@ -105,7 +105,7 @@ fn prepare_sources(sources: Vec<BundleSource>) -> Result<PreparedCatalog, Bundle
         index,
         schemas,
         process_extensions,
-        views,
+        apis,
         bytes,
         digest,
     })
@@ -157,10 +157,10 @@ impl PreparedCatalog {
         validate_prepared_schema_rows(&document.bundles, &document.schemas)?;
         validate_prepared_process_rows(&document.bundles, &document.extensions_process)?;
         validate_native_binary_bindings(&document.bundles, &document.extensions_process)?;
-        validate_prepared_view_rows(
+        validate_prepared_api_rows(
             &document.bundles,
             &document.extensions_process,
-            &document.views,
+            &document.apis,
         )?;
         let expected_index = build_index(&document.bundles);
         if expected_index != document.index {
@@ -171,7 +171,7 @@ impl PreparedCatalog {
             index: document.index,
             schemas: document.schemas,
             process_extensions: document.extensions_process,
-            views: document.views,
+            apis: document.apis,
             bytes: bytes.to_vec(),
             digest: expected_digest.to_string(),
         })
@@ -458,75 +458,171 @@ fn validate_prepared_schema_rows(
     Ok(())
 }
 
-/// Maximum UTF-8 byte length of a view id.
-const MAX_VIEW_ID_BYTES: usize = 64;
+/// Maximum UTF-8 byte length of an endpoint id.
+const MAX_API_ID_BYTES: usize = 64;
 
-/// Maximum UTF-8 byte length of a view description.
-const MAX_VIEW_DESCRIPTION_BYTES: usize = 1024;
+/// Maximum UTF-8 byte length of an endpoint description.
+const MAX_API_DESCRIPTION_BYTES: usize = 1024;
 
-/// Validate the manifest's `views:` declarations and return them sorted by id.
+/// Maximum number of endpoints one bundle may declare.
+const MAX_APIS_PER_BUNDLE: usize = 64;
+
+/// Validate the manifest's `apis:` declarations and return them sorted by id.
 ///
-/// Views are answered by the bundle's explicit `extensions.process` over the
-/// plugin `view/get` request, so declaring any view without one is rejected.
-/// Ids are `[A-Za-z0-9._-]` tokens of at most 64 bytes that start with an
-/// alphanumeric character (they appear as one HTTP path segment) and are
-/// unique within the bundle.
-fn validate_declared_views(
+/// Endpoints are answered by the bundle's explicit `extensions.process` over
+/// the plugin `api/request` request, so declaring any without one is
+/// rejected. Ids are `[A-Za-z0-9._-]` tokens of at most 64 bytes that start
+/// with an alphanumeric character and are unique within the bundle; paths
+/// follow the [`crate::api`] template grammar; two endpoints with the same
+/// method and scope may not have overlapping templates (every concrete path
+/// resolves to at most one endpoint). Schema paths must name a declared
+/// text extension file (`extensions.files`/`extensions.js`) whose content is
+/// a JSON object or boolean, so they are packaged and covered by the digest.
+fn validate_declared_apis(
     bundle_id: &str,
-    views: &[crate::source::SourceView],
+    apis: &[crate::source::SourceApi],
     process: Option<&PreparedProcessExtension>,
-) -> Result<Vec<PreparedView>, BundleError> {
+    extensions: &[PreparedResource],
+) -> Result<Vec<PreparedApi>, BundleError> {
     let invalid = |detail: String| BundleError::InvalidManifest {
         source_name: bundle_id.to_string(),
         detail,
     };
-    if views.is_empty() {
+    if apis.is_empty() {
         return Ok(Vec::new());
     }
     if process.is_none() {
         return Err(invalid(
-            "views: a bundle may declare views only with an explicit `extensions.process` \
-             that serves them"
+            "apis: a bundle may declare API endpoints only with an explicit \
+             `extensions.process` that serves them"
                 .to_string(),
         ));
     }
+    if apis.len() > MAX_APIS_PER_BUNDLE {
+        return Err(invalid(format!(
+            "apis: at most {MAX_APIS_PER_BUNDLE} endpoints may be declared"
+        )));
+    }
     let mut seen = BTreeSet::new();
-    let mut prepared = Vec::with_capacity(views.len());
-    for view in views {
-        if !is_valid_view_id(&view.id) {
+    let mut prepared = Vec::with_capacity(apis.len());
+    let mut templates: Vec<(&crate::source::SourceApi, crate::api::ApiPathTemplate)> =
+        Vec::with_capacity(apis.len());
+    for api in apis {
+        if !is_valid_api_id(&api.id) {
             return Err(invalid(format!(
-                "views: id `{}` must be a `[A-Za-z0-9._-]` token of at most \
-                 {MAX_VIEW_ID_BYTES} bytes starting with a letter or digit",
-                view.id
+                "apis: id `{}` must be a `[A-Za-z0-9._-]` token of at most \
+                 {MAX_API_ID_BYTES} bytes starting with a letter or digit",
+                api.id
             )));
         }
-        if !seen.insert(view.id.as_str()) {
+        if !seen.insert(api.id.as_str()) {
             return Err(invalid(format!(
-                "views: id `{}` is declared more than once",
-                view.id
+                "apis: id `{}` is declared more than once",
+                api.id
             )));
         }
-        if view.description.len() > MAX_VIEW_DESCRIPTION_BYTES
-            || view.description.chars().any(char::is_control)
+        if api.description.len() > MAX_API_DESCRIPTION_BYTES
+            || api.description.chars().any(char::is_control)
         {
             return Err(invalid(format!(
-                "views: description of `{}` must be at most {MAX_VIEW_DESCRIPTION_BYTES} bytes \
+                "apis: description of `{}` must be at most {MAX_API_DESCRIPTION_BYTES} bytes \
                  without control characters",
-                view.id
+                api.id
             )));
         }
-        prepared.push(PreparedView {
-            id: view.id.clone(),
-            description: view.description.clone(),
+        let template = crate::api::ApiPathTemplate::parse(&api.path).map_err(|reason| {
+            invalid(format!(
+                "apis: path `{}` of `{}` {reason}",
+                api.path, api.id
+            ))
+        })?;
+        if let Some((other, _)) = templates.iter().find(|(other, other_template)| {
+            other.method == api.method
+                && other.scope == api.scope
+                && other_template.overlaps(&template)
+        }) {
+            return Err(invalid(format!(
+                "apis: `{}` ({} {} {}) overlaps `{}` ({} {} {}): some request path \
+                 would match both",
+                api.id,
+                api.method,
+                api.scope,
+                api.path,
+                other.id,
+                other.method,
+                other.scope,
+                other.path
+            )));
+        }
+        let request_schema = api
+            .request_schema
+            .as_deref()
+            .map(|path| {
+                validate_api_schema_file(bundle_id, &api.id, "request_schema", path, extensions)
+            })
+            .transpose()?;
+        let response_schema = api
+            .response_schema
+            .as_deref()
+            .map(|path| {
+                validate_api_schema_file(bundle_id, &api.id, "response_schema", path, extensions)
+            })
+            .transpose()?;
+        templates.push((api, template));
+        prepared.push(PreparedApi {
+            id: api.id.clone(),
+            method: api.method,
+            scope: api.scope,
+            path: api.path.clone(),
+            description: api.description.clone(),
+            request_schema,
+            response_schema,
         });
     }
     prepared.sort_by(|left, right| left.id.cmp(&right.id));
     Ok(prepared)
 }
 
-/// Whether `id` is a publishable view id.
-fn is_valid_view_id(id: &str) -> bool {
-    id.len() <= MAX_VIEW_ID_BYTES
+/// Resolve one `request_schema`/`response_schema` path to a declared text
+/// extension file whose content parses as a JSON Schema root (an object or a
+/// boolean). Returns the normalized path.
+fn validate_api_schema_file(
+    bundle_id: &str,
+    api_id: &str,
+    field: &str,
+    path: &str,
+    extensions: &[PreparedResource],
+) -> Result<String, BundleError> {
+    let invalid = |detail: String| BundleError::InvalidManifest {
+        source_name: bundle_id.to_string(),
+        detail,
+    };
+    let normalized = normalize_source_path(bundle_id, path).map_err(|_| {
+        invalid(format!(
+            "apis: {field} `{path}` of `{api_id}` is not a valid path"
+        ))
+    })?;
+    let resource = extensions
+        .iter()
+        .find(|resource| resource.source_path == normalized && resource.binary_base64.is_none())
+        .ok_or_else(|| {
+            invalid(format!(
+                "apis: {field} `{path}` of `{api_id}` must name a file declared under \
+                 `extensions.files` (or `extensions.js`)"
+            ))
+        })?;
+    match serde_json::from_str::<serde_json::Value>(&resource.content) {
+        Ok(serde_json::Value::Object(_) | serde_json::Value::Bool(_)) => Ok(normalized),
+        Ok(_) | Err(_) => Err(invalid(format!(
+            "apis: {field} `{path}` of `{api_id}` must be a JSON Schema document \
+             (a JSON object or boolean)"
+        ))),
+    }
+}
+
+/// Whether `id` is a publishable endpoint id.
+fn is_valid_api_id(id: &str) -> bool {
+    id.len() <= MAX_API_ID_BYTES
         && id
             .bytes()
             .next()
@@ -536,44 +632,50 @@ fn is_valid_view_id(id: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
 }
 
-/// Validate the document-level `views` section of a decoded prepared
-/// catalog: rows strictly sorted by bundle id, every row naming a bundle in
-/// the document that also has an `extensions_process` row, and every row's
-/// declarations canonical (valid, unique, strictly sorted by id).
-fn validate_prepared_view_rows(
+/// Validate the document-level `apis` section of a decoded prepared catalog:
+/// rows strictly sorted by bundle id, every row naming a bundle in the
+/// document that also has an `extensions_process` row, and every row's
+/// declarations canonical (valid, non-overlapping, strictly sorted by id,
+/// schema files resolving to the bundle's declared extension files).
+fn validate_prepared_api_rows(
     bundles: &[PreparedInstallableBundle],
     processes: &[PreparedBundleProcess],
-    rows: &[PreparedBundleViews],
+    rows: &[PreparedBundleApis],
 ) -> Result<(), BundleError> {
     if !is_strictly_sorted(rows.iter().map(|row| row.bundle_id.as_str())) {
         return Err(BundleError::NonCanonicalPreparedCatalog);
     }
     for row in rows {
-        if row.views.is_empty()
-            || !bundles
-                .iter()
-                .any(|bundle| bundle.identity().id == row.bundle_id)
-            || !is_strictly_sorted(row.views.iter().map(|view| view.id.as_str()))
-        {
+        let bundle = bundles
+            .iter()
+            .find(|bundle| bundle.identity().id == row.bundle_id)
+            .ok_or(BundleError::NonCanonicalPreparedCatalog)?;
+        if row.apis.is_empty() || !is_strictly_sorted(row.apis.iter().map(|api| api.id.as_str())) {
             return Err(BundleError::NonCanonicalPreparedCatalog);
         }
         let process = processes
             .iter()
             .find(|process| process.bundle_id == row.bundle_id)
             .map(|process| &process.process);
-        let prepared = validate_declared_views(
+        let prepared = validate_declared_apis(
             &row.bundle_id,
-            &row.views
+            &row.apis
                 .iter()
-                .map(|view| crate::source::SourceView {
-                    id: view.id.clone(),
-                    description: view.description.clone(),
+                .map(|api| crate::source::SourceApi {
+                    id: api.id.clone(),
+                    method: api.method,
+                    scope: api.scope,
+                    path: api.path.clone(),
+                    description: api.description.clone(),
+                    request_schema: api.request_schema.clone(),
+                    response_schema: api.response_schema.clone(),
                 })
                 .collect::<Vec<_>>(),
             process,
+            bundle.extensions(),
         )
         .map_err(|_| BundleError::NonCanonicalPreparedCatalog)?;
-        if prepared != row.views {
+        if prepared != row.apis {
             return Err(BundleError::NonCanonicalPreparedCatalog);
         }
     }
@@ -1207,7 +1309,7 @@ fn prepare_plugin_bundle(
     let (tools, skills, mcp, hooks, extensions) =
         prepare_resource_sets(&bundle_id, &files, manifest.resources, manifest.extensions)?;
     let schemas = validate_declared_schemas(&bundle_id, &manifest.schemas, &tools)?;
-    let views = validate_declared_views(&bundle_id, &manifest.views, process.as_ref())?;
+    let apis = validate_declared_apis(&bundle_id, &manifest.apis, process.as_ref(), &extensions)?;
     let mut bundle = PreparedInstallableBundle::Plugin(Box::new(PreparedPluginBundle {
         format_version: PREPARED_FORMAT_VERSION,
         identity: manifest.identity,
@@ -1220,7 +1322,7 @@ fn prepare_plugin_bundle(
         extensions,
     }));
     set_bundle_digest(&mut bundle)?;
-    Ok((bundle, schemas, process, views))
+    Ok((bundle, schemas, process, apis))
 }
 
 /// Reserved namespace tokens that contributed sources may not claim.
@@ -1305,7 +1407,7 @@ fn prepare_agent_bundle(
     let (tools, skills, mcp, hooks, extensions) =
         prepare_resource_sets(&bundle_id, &files, manifest.resources, manifest.extensions)?;
     let schemas = validate_declared_schemas(&bundle_id, &manifest.schemas, &tools)?;
-    let views = validate_declared_views(&bundle_id, &manifest.views, process.as_ref())?;
+    let apis = validate_declared_apis(&bundle_id, &manifest.apis, process.as_ref(), &extensions)?;
     let agent = prepare_agent(
         &bundle_id,
         &files,
@@ -1327,7 +1429,7 @@ fn prepare_agent_bundle(
         extensions,
     }));
     set_bundle_digest(&mut bundle)?;
-    Ok((bundle, schemas, process, views))
+    Ok((bundle, schemas, process, apis))
 }
 
 fn prepare_agent_set_bundle(
@@ -1343,7 +1445,7 @@ fn prepare_agent_set_bundle(
     let (tools, skills, mcp, hooks, extensions) =
         prepare_resource_sets(&bundle_id, &files, manifest.resources, manifest.extensions)?;
     let schemas = validate_declared_schemas(&bundle_id, &manifest.schemas, &tools)?;
-    let views = validate_declared_views(&bundle_id, &manifest.views, process.as_ref())?;
+    let apis = validate_declared_apis(&bundle_id, &manifest.apis, process.as_ref(), &extensions)?;
     if manifest.agents.is_empty() && manifest.channels.is_empty() {
         return Err(BundleError::InvalidManifest {
             source_name: bundle_id,
@@ -1396,7 +1498,7 @@ fn prepare_agent_set_bundle(
         extensions,
     }));
     set_bundle_digest(&mut bundle)?;
-    Ok((bundle, schemas, process, views))
+    Ok((bundle, schemas, process, apis))
 }
 
 fn prepare_channel_templates(
@@ -1517,7 +1619,12 @@ fn prepare_workflow_bundle(
         manifest.extensions,
     )?;
     let schemas = validate_declared_schemas(&manifest.identity.id, &manifest.schemas, &tools)?;
-    let views = validate_declared_views(&manifest.identity.id, &manifest.views, process.as_ref())?;
+    let apis = validate_declared_apis(
+        &manifest.identity.id,
+        &manifest.apis,
+        process.as_ref(),
+        &extensions,
+    )?;
     let mut source_agents = manifest.agents;
     for source_agent in &source_agents {
         if let Some(prompt) = &source_agent.prompt {
@@ -1574,16 +1681,16 @@ fn prepare_workflow_bundle(
         extensions,
     }));
     set_bundle_digest(&mut bundle)?;
-    Ok((bundle, schemas, process, views))
+    Ok((bundle, schemas, process, apis))
 }
 
 /// One prepared bundle plus its document-level sections: schema claims, the
-/// optional explicit process extension, and read-only view declarations.
+/// optional explicit process extension, and HTTP endpoint declarations.
 type PreparedBundleParts = (
     PreparedInstallableBundle,
     Vec<PreparedSchema>,
     Option<PreparedProcessExtension>,
-    Vec<PreparedView>,
+    Vec<PreparedApi>,
 );
 
 /// Prepared resource vectors in tool, Skill, MCP, hook, and extension order.

@@ -1108,10 +1108,18 @@ schemas:
   - scheme: db
     tool: query
     writable: false
-views:
+apis:
   - id: usage
+    method: GET
+    scope: session
+    path: /usage
     description: Token usage
-  - id: health
+  - id: put-item
+    method: PUT
+    scope: global
+    path: /items/{id}
+    request_schema: schemas/item.json
+    response_schema: schemas/item.json
 resources:
   tools:
     - id: query
@@ -1123,6 +1131,9 @@ extensions:
   js:
     - id: runtime
       path: extensions/runtime.js
+  files:
+    - id: item-schema
+      path: schemas/item.json
   process:
     kind: bun
     command: [bun, run, extensions/runtime.ts]
@@ -1137,6 +1148,7 @@ agent:
 "#,
             ),
             hya_bundle::SourceFile::new("extensions/runtime.js", b"export default {}".to_vec()),
+            hya_bundle::SourceFile::new("schemas/item.json", br#"{"type":"object"}"#.to_vec()),
             hya_bundle::SourceFile::new(
                 "mcp/vecdb.json",
                 br#"{"command": ["python3", "vecdb.py"]}"#.to_vec(),
@@ -1148,7 +1160,7 @@ agent:
     Ok(package)
 }
 
-/// `bundle info` reports declared schemas, the process extension, views, and
+/// `bundle info` reports declared schemas, the process extension, API endpoints, and
 /// mcp entries — and prints none of those lines when the bundle declares none.
 #[test]
 fn bundle_info_reports_schema_process_and_mcp_declarations()
@@ -1172,8 +1184,8 @@ fn bundle_info_reports_schema_process_and_mcp_declarations()
         "schema=db tool=query writable=false",
         "process=bun command=bun run extensions/runtime.ts",
         "mcp=bundle:hya/decl-demo/mcp/vecdb",
-        "view=health",
-        "view=usage description=Token usage",
+        "api=PUT global /items/{id} id=put-item request_schema=schemas/item.json response_schema=schemas/item.json",
+        "api=GET session /usage id=usage description=Token usage",
     ] {
         assert!(
             lines.contains(&expected),
@@ -1188,7 +1200,7 @@ fn bundle_info_reports_schema_process_and_mcp_declarations()
     let plain_ok = plain.status.success();
     if plain_ok {
         let plain_stdout = String::from_utf8(plain.stdout)?;
-        for fragment in ["schema=", "process=", "mcp=", "view="] {
+        for fragment in ["schema=", "process=", "mcp=", "api="] {
             assert!(
                 !plain_stdout.lines().any(|line| line.starts_with(fragment)),
                 "plain bundle info must not print {fragment:?} lines:\n{plain_stdout}"

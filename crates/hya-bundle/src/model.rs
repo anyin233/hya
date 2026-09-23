@@ -707,31 +707,45 @@ pub struct PreparedBundleSchemas {
     pub schemas: Vec<PreparedSchema>,
 }
 
-/// One prepared read-only session view a bundle process serves.
+/// One prepared HTTP endpoint a bundle process serves (manifest `apis:`).
 ///
-/// Views exist only for bundles with an explicit `extensions.process`; the
-/// process answers `view/get` for each declared id.
+/// Endpoints exist only for bundles with an explicit `extensions.process`;
+/// the process answers `api/request` for each declared id.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct PreparedView {
-    /// View id, unique within the bundle.
+pub struct PreparedApi {
+    /// Endpoint id, unique within the bundle.
     pub id: String,
+    /// HTTP method.
+    pub method: crate::api::ApiMethod,
+    /// Mount scope.
+    pub scope: crate::api::ApiScope,
+    /// Canonical path template below the bundle mount (`/items/{id}`).
+    pub path: String,
     /// Human-readable description (empty when not declared).
     pub description: String,
+    /// Normalized path of the declared extension file holding the request
+    /// body's JSON Schema.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_schema: Option<String>,
+    /// Normalized path of the declared extension file holding the response
+    /// body's JSON Schema.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub response_schema: Option<String>,
 }
 
-/// Per-bundle view list in a prepared catalog document.
+/// Per-bundle endpoint list in a prepared catalog document.
 ///
 /// Like `schemas:` this is a document-level section parallel to the index,
-/// skipped entirely when no bundle declares a view, so documents written
+/// skipped entirely when no bundle declares an endpoint, so documents written
 /// before the section stay byte-identical and decodable.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct PreparedBundleViews {
-    /// Bundle identity id the views belong to.
+pub struct PreparedBundleApis {
+    /// Bundle identity id the endpoints belong to.
     pub bundle_id: String,
-    /// Declared views, sorted by id.
-    pub views: Vec<PreparedView>,
+    /// Declared endpoints, sorted by id.
+    pub apis: Vec<PreparedApi>,
 }
 
 /// Runtime kind that executes a bundle's declared process extension.
@@ -807,7 +821,7 @@ pub struct PreparedCatalog {
     pub(crate) index: Vec<PreparedBundleIndex>,
     pub(crate) schemas: Vec<PreparedBundleSchemas>,
     pub(crate) process_extensions: Vec<PreparedBundleProcess>,
-    pub(crate) views: Vec<PreparedBundleViews>,
+    pub(crate) apis: Vec<PreparedBundleApis>,
     pub(crate) bytes: Vec<u8>,
     pub(crate) digest: String,
 }
@@ -856,19 +870,19 @@ impl PreparedCatalog {
             .map(|row| &row.process)
     }
 
-    /// Per-bundle read-only view declarations, sorted by bundle id.
+    /// Per-bundle HTTP endpoint declarations, sorted by bundle id.
     #[must_use]
-    pub fn views(&self) -> &[PreparedBundleViews] {
-        &self.views
+    pub fn apis(&self) -> &[PreparedBundleApis] {
+        &self.apis
     }
 
-    /// The views one bundle declares, or an empty slice.
+    /// The endpoints one bundle declares, or an empty slice.
     #[must_use]
-    pub fn bundle_views(&self, bundle_id: &str) -> &[PreparedView] {
-        self.views
+    pub fn bundle_apis(&self, bundle_id: &str) -> &[PreparedApi] {
+        self.apis
             .iter()
             .find(|row| row.bundle_id == bundle_id)
-            .map(|row| row.views.as_slice())
+            .map(|row| row.apis.as_slice())
             .unwrap_or(&[])
     }
 
@@ -898,10 +912,10 @@ pub(crate) struct PreparedDocument<'a> {
     /// declares any, for the same byte-layout reason.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub extensions_process: Vec<PreparedBundleProcess>,
-    /// Per-bundle `views:` declarations; skipped when no bundle declares any,
+    /// Per-bundle `apis:` declarations; skipped when no bundle declares any,
     /// for the same byte-layout reason.
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub views: Vec<PreparedBundleViews>,
+    pub apis: Vec<PreparedBundleApis>,
 }
 
 #[derive(Deserialize)]
@@ -915,5 +929,5 @@ pub(crate) struct PreparedDocumentOwned {
     #[serde(default)]
     pub extensions_process: Vec<PreparedBundleProcess>,
     #[serde(default)]
-    pub views: Vec<PreparedBundleViews>,
+    pub apis: Vec<PreparedBundleApis>,
 }

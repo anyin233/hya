@@ -54,8 +54,8 @@ via the Bun extension adapter (`kind: bun`).
 | `shutdown` | host → plugin | request / reply | `{}` | `{}` (then process exit) |
 | `event` | host → plugin | **notification** (no `id`, no reply) | `{ "envelope": <Envelope> }` | — |
 | `tool/call` | host → plugin | request / reply | `{ "tool", "session", "call", "input", "host_capability"? }` | `{ "ok", "output", "time_ms"? }` |
-| `view/get` | host → plugin | request / reply | `{ "view", "session", "call", "query", "host_capability" }` | `{ "body": <any JSON> }` (see [Session views](#session-views-viewget)) |
-| `host/capability` | plugin → host | request / reply | `{ "capability", "session", "call", "method", "params" }` | Handler-defined JSON value or JSON-RPC error |
+| `api/request` | host → plugin | request / reply | `{ "api", "method", "path", "path_params", "query", "body", "session"?, "call", "host_capability" }` | `{ "status"?, "body"? }` (see [Bundle API endpoints](#bundle-api-endpoints-apirequest)) |
+| `host/capability` | plugin → host | request / reply | `{ "capability", "session"?, "call", "method", "params" }` | Handler-defined JSON value or JSON-RPC error |
 | `hook/<wire-name>` | host → plugin | request / reply | Hook-specific (see [Hooks](#hooks)) | Hook-specific outcome |
 
 `event` is sent only to plugins that registered the `event` hook. Hook methods
@@ -65,10 +65,11 @@ use the literal prefix `hook/` plus the wire name, for example
 ### Request-scoped host capabilities
 
 The host can hand one request an opaque `host_capability` string: a
-`tool/call` (`PluginClient::call_tool_with_capability`) or a `view/get`
-(`PluginClient::get_view`). A normal `call_tool` request omits it. While that
-request is active, the process can send `host/capability` requests on the same
-stdio connection, echoing the `session` and `call` it received:
+`tool/call` (`PluginClient::call_tool_with_capability`) or an `api/request`
+(`PluginClient::request_api`). A normal `call_tool` request omits it. While
+that request is active, the process can send `host/capability` requests on the
+same stdio connection, echoing the `session` and `call` it received (a global
+`api/request` carries no `session`, so its capability requests omit it too):
 
 ```json
 {"jsonrpc":"2.0","id":41,"method":"host/capability","params":{"capability":"<host_capability>","session":"<session-id>","call":"<call-id>","method":"example.operation","params":{"value":1}}}
@@ -77,8 +78,9 @@ stdio connection, echoing the `session` and `call` it received:
 `HostCapabilityHandler::handle(method, params)` defines the available operations
 for that request and must apply the owning host plane's resource and permission
 checks. The transport binds the token to the receiving process connection,
-session, and call id (for a view request, the synthetic `call` sent in
-`view/get`). It rejects an unknown, expired, or cross-request token with
+session (none for a global API request), and call id (for an API request, the
+synthetic `call` sent in `api/request`). It rejects an unknown, expired, or
+cross-request token — including one echoed with the wrong `session` — with
 JSON-RPC error `-32001` (`CAPABILITY_DENIED`); malformed params return `-32602`.
 The token is revoked when the reply, transport error, timeout, or caller
 cancellation ends the request. In-flight host operations are cancelled on
@@ -88,21 +90,24 @@ the plugin connection.
 **Who receives a capability.** Every process started for an installed bundle's
 explicit (or implicit JavaScript) `extensions.process` receives one on every
 `tool/call` — whatever its kind (`rust`, `bun`, or `claude`) — and on every
-`view/get`. Configured plugins (`plugins:` / `plugin.toml`) never do. This is
-safe to extend beyond Rust because every operation is read-only or
+`api/request`. Configured plugins (`plugins:` / `plugin.toml`) never do. This
+is safe to extend beyond Rust because every operation is read-only or
 permission-checked through the calling tool's own permission snapshot, the
 token is bound to one connection + session + call, and it dies with the reply;
 the bundle process already runs with the user's OS privileges, so the lease
 grants no authority beyond reading data about the session that invoked it.
+This holds for write methods too: a `POST`/`PUT`/`PATCH`/`DELETE` API request
+gets the same read-only operations, so whatever it changes is the bundle's own
+state, never hya's.
 Adapters that do not use the field (the Bun extension adapter) ignore it.
 
 Operations (`method` values):
 
-| Operation | Tool call | View request | Params | Result |
-| --- | --- | --- | --- | --- |
-| `context.describe` | yes | yes | `{}` | Tool call: `{ "request": "tool_call", "session", "parent_session" (nullable), "workdir", "source_tool_call_id", "operation_id" }`. View: `{ "request": "view", "session", "view", "call" }` |
-| `permission.assert` | yes | no (`-32001`) | `{ "action", "resource" }` | `{}`, or `-32002` on denial |
-| `session.usage` | yes | yes | `{ "scope"?: "session" \| "tree" \| "root" }` (default `tree`; `root` is tool-call only, `-32602` for a view) | Usage report (below) |
+| Operation | Tool call | Session API request | Global API request | Params | Result |
+| --- | --- | --- | --- | --- | --- |
+| `context.describe` | yes | yes | yes | `{}` | Tool call: `{ "request": "tool_call", "session", "parent_session" (nullable), "workdir", "source_tool_call_id", "operation_id" }`. API request: `{ "request": "api", "api", "scope": "session" \| "global", "session" (session scope only), "call" }` |
+| `permission.assert` | yes | no (`-32001`) | no (`-32001`) | `{ "action", "resource" }` | `{}`, or `-32002` on denial |
+| `session.usage` | yes | yes | no (`-32001`: no session) | `{ "scope"?: "session" \| "tree" \| "root" }` (default `tree`; `root` is tool-call only, `-32602` for an API request) | Usage report (below) |
 
 `permission.assert` accepts lowercase `Action` names and a tagged resource
 `{ "kind": "tool|path|glob|command|subagent|url|web_search|skill", "value": string }`
@@ -114,9 +119,9 @@ denial, and `-32602` for malformed params. An unsupported operation returns
 (the same `UsageRecorded` projection fold as the rest of the API; nothing is
 appended). It is bound to the lease's session: a tool call reads the calling
 session (`session`), the calling session plus every descendant subagent
-session (`tree`), or the whole spawn tree of its lineage root (`root`); a view
-request reads only the requested session (`session`) or its descendants
-(`tree`). Descendants are found through the `members[].child` spawn edges of
+session (`tree`), or the whole spawn tree of its lineage root (`root`); a
+session-scoped API request reads only the requested session (`session`) or its
+descendants (`tree`); a global API request has no session to read. Descendants are found through the `members[].child` spawn edges of
 each parent log, breadth-first, each session once, at most 512 sessions. The
 result:
 
@@ -159,31 +164,47 @@ result:
   `thinking + visible + unknown == output`; clients decide how to present an
   unknown share. `unattributed` keys legacy usage without a serving model.
 
-### Session views (`view/get`)
+### Bundle API endpoints (`api/request`)
 
-A bundle with an explicit `extensions.process` may declare read-only session
-views in its manifest (`views:`, see
-[AgentBundle authoring](agent-bundle-authoring.md#session-views-views)); its
-initialize reply must then list exactly those ids in `views`. The server's
-`GET /v1/sessions/{session}/views/{bundle}/{view}` forwards to the process of
-the live runtime generation:
+A bundle with an explicit `extensions.process` may register its own HTTP
+endpoints in its manifest (`apis:`, see
+[AgentBundle authoring](agent-bundle-authoring.md#api-endpoints-apis)); its
+initialize reply must then list exactly those endpoint ids in `apis`. The
+server matches a request against the bundle's path templates (session routes
+`/v1/sessions/{session}/bundles/{bundle}/…`, global routes
+`/v1/bundles/{bundle}/api/…`) and forwards the routed request to the process
+of the live runtime generation:
 
 ```json
-{"jsonrpc":"2.0","id":7,"method":"view/get","params":{"view":"usage","session":"<session-id>","call":"<synthetic-request-id>","query":{"scope":"tree"},"host_capability":"<host_capability>"}}
+{"jsonrpc":"2.0","id":7,"method":"api/request","params":{"api":"put-item","method":"PUT","path":"/items/a%2Fb","path_params":{"key":"a/b"},"query":{"dry":"1"},"body":{"n":1},"call":"<synthetic-request-id>","host_capability":"<host_capability>"}}
 ```
 
 | Param | Meaning |
 | --- | --- |
-| `view` | A declared view id. |
-| `session` | The session the view is read for (it exists). |
-| `call` | Synthetic request id minted per view request; send it back as `host/capability` `call`. |
-| `query` | The HTTP query string as a string→string map, verbatim (may be empty). |
+| `api` | The matched endpoint id (one of the ids the process declared). |
+| `method` | `GET`, `POST`, `PUT`, `PATCH`, or `DELETE`. |
+| `path` | The concrete request path below the bundle mount, with its leading `/` and percent-encoding as sent. |
+| `path_params` | The template's `{name}` parameters bound by the match, percent-decoded (`{}` when the template has none). |
+| `query` | The HTTP query string as a string→string map (may be empty). |
+| `body` | The JSON request body, or `null` when the request had none. At most 512 KiB (the host answers `bundle_api_bad_request` before forwarding anything larger). |
+| `session` | The session a session-scoped endpoint was called for (it exists). Absent for a global endpoint. |
+| `call` | Synthetic request id minted per request; send it back as `host/capability` `call`. |
 | `host_capability` | Request-scoped capability (always present). |
 
-The reply is `{ "body": <any JSON value> }` (unknown fields rejected). The host
-serves it as `application/json` unchanged. A JSON-RPC error, a malformed
-reply, a crash, or the ordinary request timeout (30 s, the same as
-`tool/call`) becomes API error `view_failed`. Views are a
+The reply is `{ "status"?: 200..=599, "body"?: <any JSON value> }` (unknown
+fields rejected; `status` defaults to `200`, `body` to `null`). The server
+answers the HTTP caller with that status and the body verbatim as
+`application/json`; a `null` body sends no content, and `204`, `205`, and
+`304` must not carry a body. A status outside `200..=599`, a body on those
+statuses, a JSON-RPC error, a malformed reply, a reply frame over the 1 MiB
+stdio cap, a crash, or the ordinary request timeout (30 s, the same as
+`tool/call`) becomes API error `bundle_api_failed` (502).
+
+The contract is JSON in, JSON out on purpose: no request headers (in
+particular no `Authorization`), no raw bytes, no response headers. That keeps
+the gRPC binding at parity (its request and reply carry the same fields as
+`google.protobuf.Value`s), keeps the client's credentials away from bundle
+code, and leaves one validation point on the host. API endpoints are a
 bundle-process feature: configured plugins and the Bun extension adapter do
 not serve them.
 
@@ -243,7 +264,7 @@ After `initialize`, the plugin must reply with an `InitializeResult`:
       "description": "Surfaced at GET /experimental/workspace/adapter"
     }
   ],
-  "views": [
+  "apis": [
     { "name": "usage", "description": "Token usage of the session tree" }
   ]
 }
@@ -258,7 +279,7 @@ After `initialize`, the plugin must reply with an `InitializeResult`:
 | `hooks` | Only hooks listed here are ever dispatched to this plugin. Optional per-hook `posture`. |
 | `tools` | Each entry becomes a first-class hya `Tool`. Field name is camelCase **`inputSchema`**. |
 | `workspaceAdapters` | Aggregated across all loaded plugins and served verbatim at `GET /experimental/workspace/adapter`. Shape: `{ type, name, description }`. |
-| `views` | Optional. Read-only session views answered over `view/get`: `{ name, description? }`, names unique and non-empty. A bundle process must list exactly its manifest `views:` ids (otherwise the bundle fails to start); configured plugins' views are ignored. |
+| `apis` | Optional. API endpoints answered over `api/request`: `{ name, description? }`, names unique and non-empty. A bundle process must list exactly its manifest `apis:` ids (otherwise the bundle fails to start); configured plugins' endpoints are ignored. |
 
 ---
 

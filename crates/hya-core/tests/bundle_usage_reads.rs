@@ -3,7 +3,7 @@
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
-use hya_core::bundle_views::session_usage_report;
+use hya_core::bundle_apis::session_usage_report;
 use hya_core::{HostSessionReads, StoreSessionReads, UsageScope};
 use hya_proto::{AgentName, Event, MemberId, ModelRef, SessionId, TokenUsage, UsagePurpose};
 use hya_store::SessionStore;

@@ -31,12 +31,19 @@ pub enum Code {
     Unavailable,
     /// Unhandled internal failure.
     Internal,
-    /// The requested bundle serves no view with this id (unknown bundle, a
-    /// bundle without views, or an undeclared view id).
-    ViewNotFound,
+    /// No published bundle endpoint matches the request (unknown bundle, a
+    /// bundle without endpoints, or no template of the scope matches the
+    /// path under any method).
+    BundleApiNotFound,
+    /// The path matches a bundle endpoint of the scope, but not under the
+    /// requested method.
+    BundleApiMethodNotAllowed,
+    /// The bundle API request is malformed (non-JSON or oversized body, bad
+    /// path escape, unknown method, unparsable query).
+    BundleApiBadRequest,
     /// The bundle process failed, timed out, or answered malformed data
-    /// while computing a view.
-    ViewFailed,
+    /// while serving an endpoint.
+    BundleApiFailed,
 }
 
 impl Code {
@@ -52,8 +59,10 @@ impl Code {
             Self::Conflict => "conflict",
             Self::Unavailable => "unavailable",
             Self::Internal => "internal",
-            Self::ViewNotFound => "view_not_found",
-            Self::ViewFailed => "view_failed",
+            Self::BundleApiNotFound => "bundle_api_not_found",
+            Self::BundleApiMethodNotAllowed => "bundle_api_method_not_allowed",
+            Self::BundleApiBadRequest => "bundle_api_bad_request",
+            Self::BundleApiFailed => "bundle_api_failed",
         }
     }
 
@@ -61,13 +70,14 @@ impl Code {
     #[must_use]
     pub fn http_status(&self) -> u16 {
         match self {
-            Self::InvalidArgument => 400,
-            Self::NotFound | Self::SessionNotFound | Self::ViewNotFound => 404,
+            Self::InvalidArgument | Self::BundleApiBadRequest => 400,
+            Self::NotFound | Self::SessionNotFound | Self::BundleApiNotFound => 404,
+            Self::BundleApiMethodNotAllowed => 405,
             Self::PermissionDenied => 403,
             Self::SessionBusy | Self::Conflict => 409,
             Self::Unavailable => 503,
             Self::Internal => 500,
-            Self::ViewFailed => 502,
+            Self::BundleApiFailed => 502,
         }
     }
 
@@ -75,11 +85,14 @@ impl Code {
     #[must_use]
     pub fn grpc_code(&self) -> tonic::Code {
         match self {
-            Self::InvalidArgument => tonic::Code::InvalidArgument,
-            Self::NotFound | Self::SessionNotFound | Self::ViewNotFound => tonic::Code::NotFound,
+            Self::InvalidArgument | Self::BundleApiBadRequest => tonic::Code::InvalidArgument,
+            Self::NotFound | Self::SessionNotFound | Self::BundleApiNotFound => {
+                tonic::Code::NotFound
+            }
+            Self::BundleApiMethodNotAllowed => tonic::Code::Unimplemented,
             Self::PermissionDenied => tonic::Code::PermissionDenied,
             Self::SessionBusy | Self::Conflict => tonic::Code::FailedPrecondition,
-            Self::Unavailable | Self::ViewFailed => tonic::Code::Unavailable,
+            Self::Unavailable | Self::BundleApiFailed => tonic::Code::Unavailable,
             Self::Internal => tonic::Code::Internal,
         }
     }
@@ -149,12 +162,36 @@ mod tests {
         assert_eq!(Code::SessionNotFound.http_status(), 404);
         assert_eq!(Code::SessionNotFound.grpc_code(), tonic::Code::NotFound);
         assert_eq!(Code::InvalidArgument.as_str(), "invalid_argument");
-        assert_eq!(Code::ViewNotFound.as_str(), "view_not_found");
-        assert_eq!(Code::ViewNotFound.http_status(), 404);
-        assert_eq!(Code::ViewNotFound.grpc_code(), tonic::Code::NotFound);
-        assert_eq!(Code::ViewFailed.as_str(), "view_failed");
-        assert_eq!(Code::ViewFailed.http_status(), 502);
-        assert_eq!(Code::ViewFailed.grpc_code(), tonic::Code::Unavailable);
+        for (code, name, http, grpc) in [
+            (
+                Code::BundleApiNotFound,
+                "bundle_api_not_found",
+                404,
+                tonic::Code::NotFound,
+            ),
+            (
+                Code::BundleApiMethodNotAllowed,
+                "bundle_api_method_not_allowed",
+                405,
+                tonic::Code::Unimplemented,
+            ),
+            (
+                Code::BundleApiBadRequest,
+                "bundle_api_bad_request",
+                400,
+                tonic::Code::InvalidArgument,
+            ),
+            (
+                Code::BundleApiFailed,
+                "bundle_api_failed",
+                502,
+                tonic::Code::Unavailable,
+            ),
+        ] {
+            assert_eq!(code.as_str(), name);
+            assert_eq!(code.http_status(), http);
+            assert_eq!(code.grpc_code(), grpc);
+        }
     }
 
     #[test]

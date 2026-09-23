@@ -8,6 +8,7 @@
 
 mod agent_models;
 mod auth;
+mod bundle_api;
 mod catalog;
 mod convert;
 mod events;
@@ -22,7 +23,6 @@ mod project;
 mod pty;
 mod session;
 mod turn;
-mod views;
 mod workflow;
 mod worktree;
 
@@ -48,7 +48,7 @@ pub(crate) fn router() -> Router<ServerState> {
         .merge(auth::router())
         .merge(logs::router())
         .merge(session::router())
-        .merge(views::router())
+        .merge(bundle_api::router())
         .merge(turn::router())
         .merge(message::router())
         .merge(events::router())
@@ -97,6 +97,11 @@ impl V1Error {
     /// Unhandled internal failure.
     pub(crate) fn internal(message: impl Into<String>) -> Self {
         Self::new(Code::Internal, message)
+    }
+
+    /// The same failure as a gRPC status (stable code table mapping).
+    pub(crate) fn grpc_status(&self) -> tonic::Status {
+        self.0.grpc_status()
     }
 }
 

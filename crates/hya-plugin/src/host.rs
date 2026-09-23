@@ -173,30 +173,37 @@ impl PluginConn {
         }
     }
 
-    /// Ask this bundle process for one declared read-only session view.
-    pub(crate) async fn get_view(
+    /// Forward one routed bundle API request to this bundle process.
+    pub(crate) async fn request_api(
         &self,
-        view: &str,
-        session: SessionId,
-        query: BTreeMap<String, String>,
-    ) -> Result<Value, PluginError> {
+        request: hya_core::BundleApiRequest,
+    ) -> Result<crate::messages::ApiRequestResult, PluginError> {
         if self.bundle_root.is_none() {
             return Err(PluginError::Json(
-                "only bundle processes serve views".to_string(),
+                "only bundle processes serve API endpoints".to_string(),
             ));
         }
         let client = self.ensure_client().await?;
-        let capability = Arc::new(BundleCapability::view(
-            session,
-            view,
-            ToolCallId::new(),
+        let call = ToolCallId::new();
+        let capability = Arc::new(BundleCapability::api(
+            &request.api,
+            request.session,
+            call,
             self.host_reads.clone(),
         ));
-        match client
-            .get_view(view, session, query, capability, self.timeout)
-            .await
-        {
-            Ok(result) => Ok(result.body),
+        let params = crate::messages::ApiRequestParams {
+            api: request.api,
+            method: request.method.as_str().to_string(),
+            path: request.path,
+            path_params: request.path_params,
+            query: request.query,
+            body: request.body,
+            session: request.session,
+            call,
+            host_capability: String::new(),
+        };
+        match client.request_api(params, capability, self.timeout).await {
+            Ok(result) => Ok(result),
             Err(error) => {
                 if matches!(error, PluginError::Closed | PluginError::OversizedLine(_)) {
                     *self.live.lock().await = None;
@@ -341,7 +348,7 @@ fn canonical_initialize(init: &crate::messages::InitializeResult) -> Result<Vec<
             .then_with(|| left.content.cmp(&right.content))
             .then_with(|| left.digest.cmp(&right.digest))
     });
-    declaration.contributions.views.sort_by(|left, right| {
+    declaration.contributions.apis.sort_by(|left, right| {
         left.name
             .cmp(&right.name)
             .then_with(|| left.description.cmp(&right.description))
@@ -391,7 +398,7 @@ impl PluginHost {
     }
 
     /// Like [`PluginHost::connect_bundle`], with the read-only host services
-    /// (`session.usage`) behind this process's tool-call and view capabilities.
+    /// (`session.usage`) behind this process's tool-call and API capabilities.
     pub async fn connect_bundle_with_reads(
         spec: PluginSpec,
         host: HostInfo,
@@ -404,12 +411,13 @@ impl PluginHost {
         })
     }
 
-    /// Views declared by this host's processes in their initialize replies.
+    /// API endpoints declared by this host's processes in their initialize
+    /// replies.
     #[must_use]
-    pub fn declared_views(&self) -> Vec<crate::messages::ViewInfo> {
+    pub fn declared_apis(&self) -> Vec<crate::messages::ApiInfo> {
         self.plugins
             .iter()
-            .flat_map(|conn| conn.contributions.views.iter().cloned())
+            .flat_map(|conn| conn.contributions.apis.iter().cloned())
             .collect()
     }
 
@@ -540,15 +548,13 @@ impl PluginHost {
     }
 }
 
-/// A bundle host forwards view requests to its (single) bundle process.
+/// A bundle host forwards routed API requests to its (single) bundle process.
 #[async_trait::async_trait]
-impl hya_core::BundleViewProvider for PluginHost {
-    async fn get_view(
+impl hya_core::BundleApiProvider for PluginHost {
+    async fn request(
         &self,
-        view: &str,
-        session: SessionId,
-        query: BTreeMap<String, String>,
-    ) -> Result<Value, String> {
+        request: hya_core::BundleApiRequest,
+    ) -> Result<hya_core::BundleApiReply, String> {
         let conn = self
             .plugins
             .iter()
@@ -556,14 +562,19 @@ impl hya_core::BundleViewProvider for PluginHost {
                 conn.bundle_root.is_some()
                     && conn
                         .contributions
-                        .views
+                        .apis
                         .iter()
-                        .any(|declared| declared.name == view)
+                        .any(|declared| declared.name == request.api)
             })
-            .ok_or_else(|| format!("no bundle process declares view `{view}`"))?;
-        conn.get_view(view, session, query)
+            .ok_or_else(|| format!("no bundle process declares API endpoint `{}`", request.api))?;
+        let result = conn
+            .request_api(request)
             .await
-            .map_err(|error| error.to_string())
+            .map_err(|error| error.to_string())?;
+        Ok(hya_core::BundleApiReply {
+            status: result.status,
+            body: result.body,
+        })
     }
 }
 
@@ -625,7 +636,7 @@ mod tests {
                         description: "alpha adapter".to_string(),
                     },
                 ],
-                views: Vec::new(),
+                apis: Vec::new(),
             },
         }
     }

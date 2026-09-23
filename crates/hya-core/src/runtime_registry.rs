@@ -136,7 +136,7 @@ pub struct RuntimeSource {
     resources: Arc<BTreeMap<String, Value>>,
     schemas: Vec<SourceSchema>,
     hooks: Option<Arc<dyn crate::hooks::HookDispatcher>>,
-    views: Option<crate::bundle_views::SourceViews>,
+    apis: Option<crate::bundle_apis::SourceApis>,
 }
 
 /// One external URI-scheme claim a runtime source makes.
@@ -520,12 +520,12 @@ impl RuntimeRegistry {
         self.active().tools.schemas()
     }
 
-    /// The read-only session views `bundle_id` serves in the live generation.
+    /// The API endpoints `bundle_id` serves in the live generation.
     ///
     /// `None` when the bundle is not in the published catalog or declares no
-    /// views. The returned handle retains that generation's process.
+    /// endpoints. The returned handle retains that generation's process.
     #[must_use]
-    pub fn bundle_views(&self, bundle_id: &str) -> Option<crate::bundle_views::SourceViews> {
+    pub fn bundle_apis(&self, bundle_id: &str) -> Option<crate::bundle_apis::SourceApis> {
         let active = self.active();
         if !active
             .catalog
@@ -539,13 +539,13 @@ impl RuntimeRegistry {
         active
             .sources
             .get(&RuntimeSourceId::bundle(bundle_id))?
-            .views
+            .apis
             .clone()
     }
 
-    /// Every published bundle's declared views, sorted by bundle id.
+    /// Every published bundle's declared endpoints, sorted by bundle id.
     #[must_use]
-    pub fn published_bundle_views(&self) -> Vec<crate::bundle_views::PublishedBundleViews> {
+    pub fn published_bundle_apis(&self) -> Vec<crate::bundle_apis::PublishedBundleApis> {
         let active = self.active();
         active
             .sources
@@ -561,11 +561,11 @@ impl RuntimeRegistry {
             })
             .filter_map(|(id, source)| {
                 source
-                    .views
+                    .apis
                     .as_ref()
-                    .map(|views| crate::bundle_views::PublishedBundleViews {
+                    .map(|apis| crate::bundle_apis::PublishedBundleApis {
                         bundle: id.configured_id().to_string(),
-                        views: views.views.clone(),
+                        apis: apis.apis.clone(),
                     })
             })
             .collect()
@@ -1391,29 +1391,35 @@ impl RuntimeSource {
             resources: Arc::new(BTreeMap::new()),
             schemas: Vec::new(),
             hooks: None,
-            views: None,
+            apis: None,
         }
     }
 
-    /// Attach the read-only session views this source's process serves.
-    ///
-    /// The provider is retained together with the source owner, so a view
-    /// request that resolved this generation keeps its process alive until it
-    /// completes even if a newer generation is published meanwhile. An empty
-    /// `views` list attaches nothing.
+    /// The API endpoints attached with [`Self::with_apis`], if any.
     #[must_use]
-    pub fn with_views(
+    pub fn apis(&self) -> Option<&crate::bundle_apis::SourceApis> {
+        self.apis.as_ref()
+    }
+
+    /// Attach the API endpoints this source's process serves.
+    ///
+    /// The provider is retained together with the source owner, so a request
+    /// that resolved this generation keeps its process alive until it
+    /// completes even if a newer generation is published meanwhile. An empty
+    /// `apis` list attaches nothing.
+    #[must_use]
+    pub fn with_apis(
         mut self,
-        mut views: Vec<crate::bundle_views::SourceView>,
-        provider: Arc<dyn crate::bundle_views::BundleViewProvider>,
+        mut apis: Vec<crate::bundle_apis::SourceApi>,
+        provider: Arc<dyn crate::bundle_apis::BundleApiProvider>,
     ) -> Self {
-        if views.is_empty() {
-            self.views = None;
+        if apis.is_empty() {
+            self.apis = None;
             return self;
         }
-        views.sort_by(|left, right| left.id.cmp(&right.id));
-        self.views = Some(crate::bundle_views::SourceViews {
-            views,
+        apis.sort_by(|left, right| left.id.cmp(&right.id));
+        self.apis = Some(crate::bundle_apis::SourceApis {
+            apis,
             provider,
             _owner: Some(Arc::clone(&self.owner)),
         });
@@ -1478,10 +1484,9 @@ fn sources_match(
                         (None, None) => true,
                         _ => false,
                     }
-                    && match (&left.views, &right.views) {
+                    && match (&left.apis, &right.apis) {
                         (Some(left), Some(right)) => {
-                            left.views == right.views
-                                && Arc::ptr_eq(&left.provider, &right.provider)
+                            left.apis == right.apis && Arc::ptr_eq(&left.provider, &right.provider)
                         }
                         (None, None) => true,
                         _ => false,

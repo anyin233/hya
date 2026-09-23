@@ -86,7 +86,7 @@ impl InstalledBundleRefresh {
     }
 
     /// Back bundle process capabilities (`session.usage`, for tool calls and
-    /// view requests) with these read-only host services.
+    /// bundle API requests) with these read-only host services.
     #[must_use]
     pub fn with_host_reads(mut self, reads: Arc<dyn hya_core::HostSessionReads>) -> Self {
         self.host_reads = Some(reads);
@@ -276,7 +276,7 @@ impl InstalledBundleRefresh {
                 .iter()
                 .find(|row| &row.bundle_id == id)
                 .map_or(&[][..], |row| row.schemas.as_slice());
-            let views = prepared_catalog_refs
+            let apis = prepared_catalog_refs
                 .iter()
                 .find(|catalog| {
                     catalog
@@ -284,7 +284,7 @@ impl InstalledBundleRefresh {
                         .iter()
                         .any(|candidate| &candidate.identity().id == id)
                 })
-                .map_or(&[][..], |catalog| catalog.bundle_views(id));
+                .map_or(&[][..], |catalog| catalog.bundle_apis(id));
             let location = config_resolver.location(id).map_err(|error| {
                 CoreError::Invalid(format!("resolve bundle `{id}` configuration: {error}"))
             })?;
@@ -294,7 +294,7 @@ impl InstalledBundleRefresh {
                 next_watched.push((config.location().file().to_path_buf(), config.digest()));
             }
             let fingerprint =
-                crate::bundle_runtime::fingerprint(bundle, process, schemas, views, &config)?;
+                crate::bundle_runtime::fingerprint(bundle, process, schemas, apis, &config)?;
             let prepared = match source_cache.get(id) {
                 Some(cached) if cached.fingerprint == fingerprint => cached.clone(),
                 _ => {
@@ -303,7 +303,7 @@ impl InstalledBundleRefresh {
                         crate::bundle_runtime::BundleRuntimeParts {
                             process,
                             schemas,
-                            views,
+                            apis,
                             reads: self.host_reads.clone(),
                         },
                         &config,
