@@ -20,7 +20,7 @@ hya bundle install zvec-grep.hyabundle
 
 ## What it exposes
 
-- MCP server `zvec-grep` running `zg --server --stdio --mcp-toolset agent`,
+- MCP server `zvec-grep` running `zg server --stdio --mcp-toolset agent`,
   which registers exactly one tool, `zvec_grep_search`.
 - Skill `zvec-grep` describing the search-vs-grep decision and index lifecycle.
 
