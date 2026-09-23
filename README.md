@@ -11,8 +11,9 @@ Google provider routes into one canonical event stream and executes tools behind
 a permission plane. Every client-facing surface speaks one consolidated contract
 — `hya.v1` — served identically over HTTP/JSON+SSE+WebSocket (`/v1`) and gRPC
 (`HYA_GRPC_BIND`); the legacy Compat and native HTTP routes are gone. There is
-currently no bundled interactive TUI; clients drive the backend through
-`hya-sdk-v1`, `hya-client`, or any `hya.v1` client.
+an OpenTUI frontend lives in `packages/hya-tui` and connects to the server
+through HTTP/JSON+SSE. Other clients use `hya-sdk-v1`, `hya-client`, or any
+`hya.v1` client.
 
 
 If no provider is configured, hya still runs: it falls back to an offline
@@ -21,11 +22,9 @@ keys while you set things up.
 
 ## Status
 
-hya is under active development (workspace version `0.36.55`,
-`MIT OR Apache-2.0`). The latest public binary release is `v0.35.1`; the
-checked-out `0.36.49` workspace is newer and is not published to crates.io. Build
-this checkout from source as described below. APIs, config, and command surfaces
-may still change between versions.
+hya is under active development (workspace version `0.37.5`,
+`MIT OR Apache-2.0`). Build this checkout from source as described below.
+APIs, config, and command surfaces may still change between versions.
 
 
 ## Build From Source
@@ -44,6 +43,16 @@ hya-backend serve
 
 The installer places the `hya-backend` binary plus `lib/hya/compat-adapter/`
 with its production dependencies.
+
+To use the OpenTUI frontend with the running server:
+
+```sh
+cd packages/hya-tui
+bun install --frozen-lockfile
+bun src/main.ts --server http://127.0.0.1:8080 --dir "$PWD/../.."
+```
+
+See [OpenTUI frontend](docs/tui.md) for commands, keys, and the API command view.
 
 
 ## Configure a Provider and Log In
@@ -114,6 +123,7 @@ inspected and installed with `hya-backend bundle info -f example.hyabundle` and
 | --- | --- |
 | [docs/README.md](docs/README.md) | Documentation index and reading paths. |
 | [docs/getting-started.md](docs/getting-started.md) | Zero-to-running: build, headless turns, goal mode, server, and a first live provider. |
+| [docs/tui.md](docs/tui.md) | OpenTUI frontend setup, commands, and v1 interface contracts. |
 | [docs/configuration.md](docs/configuration.md) | Config file, first-run/offline behavior, `HYA_*` env vars, providers/auth, MCP, plugins, formatter, custom commands. |
 | [docs/cli.md](docs/cli.md) | `hya-backend` commands, flags, and exit codes. |
 | [docs/workflows.md](docs/workflows.md) | Workflow document format, governance, CLI/tool execution, and WorkflowBundle packaging. |

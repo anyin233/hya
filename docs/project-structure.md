@@ -4,7 +4,7 @@ hya is organized as a Rust workspace of small crates. The central idea is that
 every runtime surface shares one canonical event model:
 
 ```text
-CLI / HTTP
+CLI / OpenTUI / HTTP
       |
       v
 hya-backend / hya-server
@@ -31,6 +31,7 @@ hya-backend / hya-server
 | [`../rustfmt.toml`](../rustfmt.toml) | Workspace formatting configuration. |
 | [`../README.md`](../README.md) | Short public overview and quick command examples. |
 | [`../crates`](../crates) | Production crates. |
+| [`../packages/hya-tui`](../packages/hya-tui) | Bun/OpenTUI terminal client of the v1 HTTP/JSON+SSE server. |
 | [`../crates/xtask`](../crates/xtask) | Developer tooling: `startup-bench`, `matrix-check`, deterministic `package-bundle`, and non-publishing `release-rehearsal`. |
 | [`../docs`](../docs) | Project documentation. |
 
@@ -268,7 +269,7 @@ groups are deleted.
 
 `hya-client` is the small typed wrapper over the v1 API (create session,
 event-driven prompt admit+wait, curated and raw-envelope event replay,
-pending-interaction list/respond). New frontends use `hya-sdk-v1` (typed SDK
+pending-interaction list/respond). Rust frontends use `hya-sdk-v1` (typed SDK
 with SSE `StreamFrame` subscription and `V1SessionMirror`). See
 [`architecture/server-client.md`](architecture/server-client.md) for details.
 
@@ -278,10 +279,9 @@ Independent self-update TCB (signed metadata, staged generations, smoke,
 owner-gated activation). Not part of `hya-backend`. See
 [self-update.md](self-update.md).
 
-There is no interactive frontend in the workspace today: the legacy TypeScript
-TUI was removed, and a replacement TUI built on `hya-sdk-v1` may be built
-later. New clients integrate through `hya-sdk-v1` / `hya-client` on the v1
-contract.
+The OpenTUI frontend is under `packages/hya-tui`. It is a Bun client of the
+same v1 HTTP/JSON+SSE contract as `hya-sdk-v1` and `hya-client`; Rust still owns
+the runtime and persistence boundaries. The legacy TypeScript TUI was removed.
 
 ## Tests
 

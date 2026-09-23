@@ -268,14 +268,11 @@ fn bundle_cli_docs_distinguish_catalog_publication_from_activation_closure() {
     );
 }
 
-/// Ensure the user guide and generated architecture wiki explain the durable
-/// Workflow product surface instead of only the compiler internals.
+/// Ensure the committed user guide explains the durable Workflow product
+/// surface instead of only the compiler internals.
 #[test]
 fn workflow_docs_cover_control_replay_and_client_state() {
-    let paths = [
-        repository_root().join("docs/workflows.md"),
-        repository_root().join(".autors/hya/wiki/pages/architecture/workflow-composition.md"),
-    ];
+    let paths = [repository_root().join("docs/workflows.md")];
     let required_markers = [
         "WorkflowBundle",
         "session.updated",
@@ -321,10 +318,7 @@ fn workflow_docs_cover_control_replay_and_client_state() {
 /// Ensure Workflow and provider docs describe the suffix-free model-routing contract.
 #[test]
 fn workflow_docs_cover_stage_model_routing_and_route_outcomes() {
-    for path in [
-        repository_root().join("docs/workflows.md"),
-        repository_root().join(".autors/hya/wiki/pages/architecture/workflow-composition.md"),
-    ] {
+    for path in [repository_root().join("docs/workflows.md")] {
         let source = std::fs::read_to_string(&path).unwrap_or_else(|error| {
             panic!(
                 "Workflow routing documentation must exist at {}: {error}",

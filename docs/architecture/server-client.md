@@ -5,7 +5,7 @@ serves exactly one contract — `hya.v1` — over two transports:
 
 - **HTTP/JSON + SSE + WebSocket** (axum): the `/v1` routes generated from
   the `proto/hya/v1` IDL (`crates/hya-api`).
-- **gRPC** (tonic): `hya_server::V1Grpc` implements all fifteen generated
+- **gRPC** (tonic): `hya_server::V1Grpc` implements all sixteen generated
   services and dispatches every unary call through the *same* axum `/v1`
   router (protojson in, protojson out, stable error codes mapped from the
   JSON error body), so dual-transport parity holds by construction.
@@ -82,6 +82,8 @@ methods `Any`.
   frontends (HTTP + SSE + `V1SessionMirror`).
 - [`../../crates/hya-client`](../../crates/hya-client) — lean typed
   `reqwest` client (tooling, e2e harness).
+- [`../../packages/hya-tui`](../../packages/hya-tui) — Bun/OpenTUI client of
+  the same HTTP/JSON+SSE contract; [commands and route usage](../tui.md).
 - gRPC through `V1Grpc` — same contract over tonic when `HYA_GRPC_BIND` is
   set.
 

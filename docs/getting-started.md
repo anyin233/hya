@@ -1,14 +1,15 @@
 # Getting Started
 
-This guide runs hya from the workspace. The only shipped binary is the backend
-CLI/API binary `hya-backend`; there is currently no interactive TUI (a
-replacement built on `hya-sdk-v1` may be built later). Clients drive the
-backend over the `hya.v1` HTTP/SSE/WebSocket or gRPC contract.
+This guide runs hya from the workspace. The shipped Rust binary is the backend
+CLI/API binary `hya-backend`. The Bun/OpenTUI frontend under
+`packages/hya-tui` connects to that backend. Both it and other clients drive
+the backend over the `hya.v1` HTTP/SSE/WebSocket or gRPC contract.
 
 ## Prerequisites
 
 - Rust 1.91 or later.
 - Bun 1.3.x (used by the Compat plugin sidecar).
+- Bun 1.3 or newer for the OpenTUI frontend.
 - Git.
 - Optional: a hya provider config if you want live model calls. Without
   one, hya uses an offline development provider that echoes prompts.
@@ -135,6 +136,21 @@ permission/question interactions, Workflow, files, project/VCS/worktrees, MCP,
 PTY, and logs. Setting `HYA_GRPC_BIND=<host:port>` additionally serves the same
 contract over gRPC. See the [Protocol guide](protocol/README.md) and the
 generated [API reference](protocol/api-reference.md).
+
+## Run the OpenTUI Frontend
+
+With the server still running in another terminal, install the frontend's
+locked dependencies and connect it:
+
+```sh
+cd packages/hya-tui
+bun install --frozen-lockfile
+bun src/main.ts --server http://127.0.0.1:8080 --dir "$PWD/../.."
+```
+
+Type a prompt to create a session and run a turn. `/help` shows commands for
+sessions, models, Workflows, interactions, and the generic API view. See
+[OpenTUI frontend](tui.md) for keys and exact request contracts.
 
 ## Replay a Session
 

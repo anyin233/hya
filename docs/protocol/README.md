@@ -1,7 +1,7 @@
 # hya Protocol Guide (v1)
 
 This guide explains how to integrate any client — GUI, WebUI, CLI, service, or
-a future TUI — with the hya backend over the v1 API. The same contract is served
+the OpenTUI frontend — with the hya backend over the v1 API. The same contract is served
 over two transports with identical functionality:
 
 - **HTTP/JSON + SSE + WebSocket** (documented here; see
@@ -61,7 +61,10 @@ Stable codes and their HTTP status / gRPC code:
 
 Every list rpc takes `page: {cursor, limit}` and answers
 `page: {nextCursor, hasMore}`. Cursors are opaque; pass `nextCursor` back
-verbatim. Events use the monotonic `sinceSeq` watermark instead.
+verbatim. On HTTP GET routes, send nested page fields as `page.cursor` and
+`page.limit` query parameters (for example,
+`GET /v1/sessions?page.cursor=abc&page.limit=50`). Events use the monotonic
+`sinceSeq` watermark instead.
 
 ## The event-driven model
 

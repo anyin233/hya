@@ -45,7 +45,12 @@ mod tests {
 
     #[test]
     fn pinned_constants_match_adapter_package() {
-        assert!(!CLAUDE_ADAPTER_VERSION.is_empty());
+        let package: serde_json::Value =
+            serde_json::from_str(include_str!("../adapter/package.json")).unwrap_or_default();
+        assert_eq!(
+            package.get("version").and_then(serde_json::Value::as_str),
+            Some(CLAUDE_ADAPTER_VERSION)
+        );
         assert_eq!(CLAUDE_PLUGIN_KIND, "claude");
         assert_eq!(PLUGIN_MANIFEST_FILE, "plugin.json");
     }

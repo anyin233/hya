@@ -1,9 +1,9 @@
 # hya Documentation
 
 hya is an event-sourced coding agent. Rust owns the runtime, server, and
-persistence boundaries. There is currently no interactive TUI; clients drive the
-backend through the `hya.v1` HTTP/SSE/WebSocket or gRPC contract (a replacement
-TUI built on `hya-sdk-v1` may be built later). Workflow compilation, durable
+persistence boundaries. The OpenTUI frontend under `packages/hya-tui` drives
+the backend through the `hya.v1` HTTP/JSON+SSE contract. Other clients use
+`hya-sdk-v1`, `hya-client`, HTTP/WebSocket, or gRPC. Workflow compilation, durable
 execution, package models, and the consolidated `hya.v1` HTTP/gRPC contract
 are documented separately below.
 
@@ -12,8 +12,8 @@ architecture notes.
 
 ## The v1 API contract
 
-- [Protocol guide](protocol/README.md) — how any client (GUI, WebUI, CLI, or a
-  future TUI) integrates over HTTP/SSE/WebSocket or gRPC (identical semantics
+- [Protocol guide](protocol/README.md) — how any client (GUI, WebUI, CLI, or
+  OpenTUI) integrates over HTTP/SSE/WebSocket or gRPC (identical semantics
   on both).
 - [API reference](protocol/api-reference.md) — generated per-rpc reference.
 - [OpenAPI](protocol/openapi.json) — generated HTTP schema.
@@ -26,9 +26,10 @@ If you want to run hya:
 2. [Configuration](configuration.md)
 3. [Compaction](compaction.md) — the five context-reduction mechanisms and their configurable order
 4. [CLI Reference](cli.md)
-5. [Skills](skills.md) — discovery, skill tool, and authoring
-6. [Workflows](workflows.md) — user-authored stage DAGs over subagent teams
-7. [Troubleshooting](troubleshooting.md)
+5. [OpenTUI frontend](tui.md)
+6. [Skills](skills.md) — discovery, skill tool, and authoring
+7. [Workflows](workflows.md) — user-authored stage DAGs over subagent teams
+8. [Troubleshooting](troubleshooting.md)
 
 If you want to compare hya with adjacent coding agents:
 
@@ -80,6 +81,7 @@ If you want to understand the codebase:
 | Page | Purpose |
 | --- | --- |
 | [Getting Started](getting-started.md) | Build and run a headless prompt, a goal run, and the server. |
+| [OpenTUI frontend](tui.md) | Connect the terminal frontend to a backend, use its commands, and inspect its v1 contracts. |
 | [Configuration](configuration.md) | Explain hya config, provider/auth resolution, MCP, plugins, formatter, and prompt-command discovery. |
 | [Compaction](compaction.md) | The five built-in context-reduction mechanisms (oh-my-pi parity), the configurable firing order, thresholds, and wire records. |
 | [CLI Reference](cli.md) | Document the shipped `hya-backend` commands, flags, and exit codes. |

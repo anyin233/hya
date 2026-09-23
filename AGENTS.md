@@ -52,9 +52,10 @@ cross-session recovery, keep `task_plan.md`, `findings.md`, and `progress.md` in
 `hya` is a Rust multi-agent coding agent. It is built as an event-sourced
 workspace: user prompts, model deltas, tool calls, permissions, token usage, and
 session lifecycle changes are appended as `Event`s, then replayed into a
-projection for the HTTP API and client surfaces. There is no bundled
-interactive TUI; the legacy TypeScript TUI was removed, and `hya-sdk-v1`,
-`hya-client`, and the gRPC surface are the supported ways to drive a backend.
+projection for the HTTP API and client surfaces. The OpenTUI frontend in
+`packages/hya-tui` uses the v1 HTTP/JSON+SSE contract; the legacy TypeScript
+TUI was removed. `hya-sdk-v1`, `hya-client`, and gRPC are other supported ways
+to drive a backend.
 
 The server exposes exactly one contract — `hya.v1` (16 services / 79 rpcs in
 `proto/hya/v1`) — over HTTP/JSON+SSE+WebSocket under `/v1` and, when
@@ -105,6 +106,7 @@ or verifiers; workers do not decide that their own objective is done.
 | `crates/hya-plugin-example` | Placeholder stub binary (`fn main() {}`); does **not** speak the plugin protocol. Reserved for a future deterministic native-plugin QA fixture. For a real ABI reference, see `docs/plugin-protocol.md`. |
 | `crates/xtask` | Dev-tooling entry point with working tasks: `startup-bench`, `matrix-check`, `package-bundle`, and `release-rehearsal`. |
 | `crates/hya-e2e` | Process-level agent E2E harness (Track P): real `hya-backend` + FakeLlm. Matrix in `matrix.toml`; docs under `docs/testing/`. |
+| `packages/hya-tui` | Bun/OpenTUI frontend over the v1 HTTP/JSON+SSE contract. Sessions, turns, events, models, Workflows, interactions, and a generic JSON API command view. |
 | `.planning` | Local task plans, findings, and progress using `planning-with-files`; existing tasks remain separate. |
 | `docs/spec` | Project coding guidelines. Read the relevant layer's `index.md` before changing code. |
 | `docs/development-history` | Preserved task artifacts and developer journals for historical reference. |
@@ -118,11 +120,9 @@ or verifiers; workers do not decide that their own objective is done.
 - Preserve the event-sourced architecture: append events, replay with the shared
   projection, and avoid parallel read-model logic that can drift from replay.
 - Keep `hya-proto` free of heavy runtime dependencies.
-- Do not add an interactive TUI frontend (a Rust TUI crate, ratatui frontend,
-  backend-owned terminal renderer, or a new TypeScript terminal frontend)
-  without an explicit decision; clients drive the backend through `hya-sdk-v1`,
-  `hya-client`, and the gRPC surface. A replacement TUI on `hya-sdk-v1` may be
-  designed later.
+- Do not add another interactive TUI frontend or move rendering into the
+  backend without an explicit decision. The current Bun/OpenTUI frontend uses
+  the v1 server contract; Rust clients use `hya-sdk-v1` and `hya-client`.
 - Prefer existing planes (`PermissionPlane`, `InteractionPlane`, `SpawnerPlane`,
   `TodoPlane`, `SkillPlane`, `WebSearchPlane`, `LspPlane`) over adding another
   cross-cutting runtime channel.
@@ -158,6 +158,13 @@ Matrix and harness docs: `docs/testing/README.md`, `docs/testing/agent-matrix.md
 
 For Bun adapter changes, also run from
 `crates/hya-plugin-bun/adapter`:
+
+```sh
+bun run typecheck
+bun test
+```
+
+For OpenTUI frontend changes, also run from `packages/hya-tui`:
 
 ```sh
 bun run typecheck
