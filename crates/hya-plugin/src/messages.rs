@@ -31,8 +31,8 @@ pub const METHOD_EVENT: &str = "event";
 pub const METHOD_TOOL_CALL: &str = "tool/call";
 /// Child→host request for a request-scoped host capability.
 pub const METHOD_HOST_CAPABILITY: &str = "host/capability";
-/// Host→plugin request for one declared read-only session view.
-pub const METHOD_VIEW_GET: &str = "view/get";
+/// Host→plugin request for one declared bundle API endpoint.
+pub const METHOD_API_REQUEST: &str = "api/request";
 /// Prefix for hook method names on the wire (`hook/` + [`HookName::as_str`]).
 pub const HOOK_METHOD_PREFIX: &str = "hook/";
 
@@ -261,12 +261,12 @@ pub struct PluginContributionSet {
     /// Workspace adapters aggregated for `GET /experimental/workspace/adapter`.
     #[serde(default, rename = "workspaceAdapters")]
     pub workspace_adapters: Vec<WorkspaceAdapterInfo>,
-    /// Read-only session views this process answers over `view/get`.
+    /// API endpoints this process answers over `api/request`.
     ///
-    /// Only bundle processes serve views; a bundle process must declare
-    /// exactly the manifest's `views:` ids.
+    /// Only bundle processes serve endpoints; a bundle process must declare
+    /// exactly the manifest's `apis:` ids.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub views: Vec<ViewInfo>,
+    pub apis: Vec<ApiInfo>,
 }
 
 impl PluginContributionSet {
@@ -357,21 +357,21 @@ impl PluginContributionSet {
             }
         }
 
-        let mut views = BTreeSet::new();
-        for view in &self.views {
+        let mut apis = BTreeSet::new();
+        for api in &self.apis {
             validate_text_field(
                 plugin,
-                "view",
-                &view.name,
+                "api",
+                &api.name,
                 "name",
-                &view.name,
+                &api.name,
                 MAX_SKILL_ID_BYTES,
             )?;
-            if !views.insert(view.name.as_str()) {
+            if !apis.insert(api.name.as_str()) {
                 return Err(PluginError::DuplicateContribution {
                     plugin: plugin.to_string(),
-                    kind: "view".to_string(),
-                    id: view.name.clone(),
+                    kind: "api".to_string(),
+                    id: api.name.clone(),
                 });
             }
         }
@@ -497,9 +497,9 @@ struct InitializeResultWire {
     /// Workspace adapter declarations.
     #[serde(default, rename = "workspaceAdapters")]
     workspace_adapters: Vec<WorkspaceAdapterInfo>,
-    /// Read-only session view declarations; absent on old plugins.
+    /// API endpoint declarations; absent on plugins that serve none.
     #[serde(default)]
-    views: Vec<ViewInfo>,
+    apis: Vec<ApiInfo>,
 }
 
 impl<'de> Deserialize<'de> for InitializeResult {
@@ -517,7 +517,7 @@ impl<'de> Deserialize<'de> for InitializeResult {
                 tools: wire.tools,
                 skills: wire.skills,
                 workspace_adapters: wire.workspace_adapters,
-                views: wire.views,
+                apis: wire.apis,
             },
         })
     }
@@ -579,11 +579,11 @@ pub struct ToolInfo {
     pub input_schema: Value,
 }
 
-/// One read-only session view declared in the initialize reply.
+/// One API endpoint declared in the initialize reply.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ViewInfo {
-    /// View id; must match a manifest `views:` id.
+pub struct ApiInfo {
+    /// Endpoint id; must match a manifest `apis:` id.
     pub name: String,
     /// Optional human-readable description (informational only; discovery
     /// lists the manifest description).
@@ -591,30 +591,52 @@ pub struct ViewInfo {
     pub description: String,
 }
 
-/// Host→plugin `view/get` request params.
+/// Host→plugin `api/request` params: one request already routed to a
+/// declared endpoint.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ViewGetParams {
-    /// Declared view id.
-    pub view: String,
-    /// Session the view is read for; the only session the capability reads.
-    pub session: SessionId,
-    /// Synthetic request id the capability is bound to (send it back as
-    /// `host/capability` `call`, exactly like a tool call id).
-    pub call: ToolCallId,
-    /// Caller query parameters (the HTTP query string), verbatim.
+#[serde(deny_unknown_fields)]
+pub struct ApiRequestParams {
+    /// Matched endpoint id.
+    pub api: String,
+    /// HTTP method (`GET`, `POST`, `PUT`, `PATCH`, `DELETE`).
+    pub method: String,
+    /// Concrete request path below the bundle mount (`/items/a%2Fb`),
+    /// percent-encoding preserved.
+    pub path: String,
+    /// Template parameters bound by the match, percent-decoded.
+    #[serde(default)]
+    pub path_params: BTreeMap<String, String>,
+    /// Query parameters (the HTTP query string), verbatim.
     #[serde(default)]
     pub query: BTreeMap<String, String>,
+    /// JSON request body; `null` when the request carried none.
+    #[serde(default)]
+    pub body: Value,
+    /// Bound session; present exactly for session-scoped endpoints.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<SessionId>,
+    /// Synthetic request id the capability is bound to (send it back as
+    /// `host/capability` `call`).
+    pub call: ToolCallId,
     /// Opaque request-scoped host authority, revoked when the reply arrives.
     pub host_capability: String,
 }
 
-/// Plugin→host `view/get` result.
+fn default_api_status() -> u16 {
+    200
+}
+
+/// Plugin→host `api/request` result.
 ///
-/// The host always serves the body as `application/json`.
+/// The host serves a non-null body as `application/json` with `status`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ViewGetResult {
-    /// Any JSON value; returned to the API caller unchanged.
+pub struct ApiRequestResult {
+    /// HTTP status in `200..=599` (default `200`).
+    #[serde(default = "default_api_status")]
+    pub status: u16,
+    /// Any JSON value; `null` (or absent) means no response body.
+    #[serde(default)]
     pub body: Value,
 }
 
@@ -634,15 +656,16 @@ pub struct ToolCallParams {
     pub host_capability: Option<String>,
 }
 
-/// Child→host request bound to one active tool call or view request.
+/// Child→host request bound to one active tool call or API request.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HostCapabilityParams {
     /// Opaque authority supplied with the corresponding `tool/call`.
     pub capability: String,
-    /// Session bound to that call.
-    pub session: SessionId,
-    /// Tool call bound to that authority.
+    /// Session bound to that request; absent for a global API request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<SessionId>,
+    /// Tool call (or synthetic API request id) bound to that authority.
     pub call: ToolCallId,
     /// Host-owned capability operation.
     pub method: String,

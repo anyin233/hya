@@ -680,7 +680,7 @@ fn info_file(package: &Path) -> anyhow::Result<()> {
                 ": ",
                 inspection.prepared.bundle_schemas(&identity.id),
                 inspection.prepared.bundle_process(&identity.id),
-                inspection.prepared.bundle_views(&identity.id),
+                inspection.prepared.bundle_apis(&identity.id),
             );
             Ok(())
         }
@@ -1038,7 +1038,7 @@ async fn info_installed(bundle_id: &str) -> anyhow::Result<bool> {
         "=",
         prepared.bundle_schemas(bundle_id),
         prepared.bundle_process(bundle_id),
-        prepared.bundle_views(bundle_id),
+        prepared.bundle_apis(bundle_id),
     );
     Ok(true)
 }
@@ -1063,7 +1063,7 @@ fn info_project(bundle: &ProjectBundle) {
         "=",
         prepared.bundle_schemas(&identity.id),
         prepared.bundle_process(&identity.id),
-        prepared.bundle_views(&identity.id),
+        prepared.bundle_apis(&identity.id),
     );
 }
 
@@ -1092,7 +1092,7 @@ fn info_first_party(bundle_id: &str) -> anyhow::Result<()> {
             "=",
             prepared.bundle_schemas(&identity.id),
             prepared.bundle_process(&identity.id),
-            prepared.bundle_views(&identity.id),
+            prepared.bundle_apis(&identity.id),
         );
         return Ok(());
     }
@@ -1342,14 +1342,14 @@ async fn installed_records_if_exists() -> anyhow::Result<Vec<BundleRegistryRecor
 }
 
 /// Print the static metadata of one prepared bundle, including its declared
-/// schemas, optional `extensions.process` declaration, read-only views, and
+/// schemas, optional `extensions.process` declaration, API endpoints, and
 /// mcp entries. The declaration lines print only when non-empty.
 fn print_static_info(
     bundle: &PreparedInstallableBundle,
     separator: &str,
     schemas: &[hya_bundle::PreparedSchema],
     process: Option<&hya_bundle::PreparedProcessExtension>,
-    views: &[hya_bundle::PreparedView],
+    apis: &[hya_bundle::PreparedApi],
 ) {
     println!("kind{separator}{}", bundle.kind().as_str());
     if let Some(workflow) = bundle.workflow() {
@@ -1388,16 +1388,27 @@ fn print_static_info(
             command = process.command.join(" ")
         );
     }
-    for view in views {
-        if view.description.is_empty() {
-            println!("view{separator}{}", view.id);
-        } else {
-            println!(
-                "view{separator}{id} description={description}",
-                id = view.id,
-                description = view.description
-            );
+    // One line per endpoint: `api=<METHOD> <scope> <path> id=<id>` plus the
+    // optional schema paths and (last, since it may contain spaces) the
+    // description.
+    for api in apis {
+        let mut line = format!(
+            "api{separator}{method} {scope} {path} id={id}",
+            method = api.method,
+            scope = api.scope,
+            path = api.path,
+            id = api.id
+        );
+        if let Some(schema) = &api.request_schema {
+            line.push_str(&format!(" request_schema={schema}"));
         }
+        if let Some(schema) = &api.response_schema {
+            line.push_str(&format!(" response_schema={schema}"));
+        }
+        if !api.description.is_empty() {
+            line.push_str(&format!(" description={}", api.description));
+        }
+        println!("{line}");
     }
 }
 

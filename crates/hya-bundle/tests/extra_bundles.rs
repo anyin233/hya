@@ -205,7 +205,7 @@ fn model_fallback_is_a_bun_process_plugin_with_one_model_fallback_hook() {
 }
 
 #[test]
-fn token_summary_is_a_bun_process_plugin_with_one_tool_and_one_usage_view() {
+fn token_summary_is_a_bun_process_plugin_with_one_tool_and_one_usage_api() {
     let dir = first_party_source_root().join("extra/token-summary");
     let source = BundleSource::read_directory(&dir).expect("read token-summary source");
     let prepared = prepare_package(source).expect("prepare token-summary");
@@ -234,10 +234,18 @@ fn token_summary_is_a_bun_process_plugin_with_one_tool_and_one_usage_view() {
         "summary.ts speaks the plugin protocol itself (no adapter is injected)"
     );
 
-    let views = prepared.bundle_views("hya-extra/token-summary");
-    assert_eq!(views.len(), 1, "expected exactly one declared view");
-    assert_eq!(views[0].id, "usage");
-    assert!(!views[0].description.is_empty());
+    let apis = prepared.bundle_apis("hya-extra/token-summary");
+    assert_eq!(apis.len(), 1, "expected exactly one declared API endpoint");
+    assert_eq!(apis[0].id, "usage");
+    assert_eq!(apis[0].method, hya_bundle::ApiMethod::Get);
+    assert_eq!(apis[0].scope, hya_bundle::ApiScope::Session);
+    assert_eq!(apis[0].path, "/usage");
+    assert_eq!(apis[0].request_schema, None);
+    assert_eq!(
+        apis[0].response_schema.as_deref(),
+        Some("schemas/usage.json")
+    );
+    assert!(!apis[0].description.is_empty());
 
     let files: Vec<_> = bundle
         .extensions()
@@ -246,7 +254,7 @@ fn token_summary_is_a_bun_process_plugin_with_one_tool_and_one_usage_view() {
         .collect();
     assert_eq!(
         files,
-        ["summary.ts"],
+        ["summary.ts", "schemas/usage.json"],
         "the bun test file stays unpackaged (undeclared)"
     );
 }

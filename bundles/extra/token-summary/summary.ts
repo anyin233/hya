@@ -4,23 +4,26 @@
 // Declared with `extensions.process: { kind: bun, command: [...] }`, so it
 // does NOT get the `hya-plugin-bun` adapter injected (that only happens for
 // implicit JavaScript Plugins) — this file owns the whole wire surface it
-// needs: `initialize`, `view/get` (view `usage`), and `tool/call` (tool
-// `token_summary`). Both answer by reading the request-scoped `session.usage`
-// host capability (docs/plugin-protocol.md#request-scoped-host-capabilities).
+// needs: `initialize`, `api/request` (the session-scoped `GET /usage`
+// endpoint `usage`, served at
+// `GET /v1/sessions/{session}/bundles/hya-extra%2Ftoken-summary/usage`), and
+// `tool/call` (tool `token_summary`). Both answer by reading the
+// request-scoped `session.usage` host capability
+// (docs/plugin-protocol.md#request-scoped-host-capabilities).
 //
 // Reading a capability answer means this process must itself act as a JSON-RPC
 // *client* on the same stdio connection it is served on: it sends
 // `host/capability` requests (with ids from its own counter) and must keep
 // reading incoming lines while one is outstanding, because the host may also
-// send this process a *new* request (another `view/get` or `tool/call`) before
+// send this process a *new* request (another `api/request` or `tool/call`) before
 // that reply arrives. So the stdio loop below never blocks on a single
 // in-flight exchange — it classifies every incoming line by shape (a
 // `method` field means a new host request/notification; a bare `result` /
 // `error` means a reply to one of our own outgoing requests) and dispatches
 // each independently. See `CapabilityClient` below.
 //
-// Pure logic (`buildView`, `renderTable`, `parseViewQuery`, `parseToolInput`,
-// `CapabilityClient`) is exported for `bun test` and does not touch stdio;
+// Pure logic (`buildUsage`, `renderTable`, `parseUsageQuery`, `parseToolInput`,
+// `CapabilityClient`, `handleApiRequest`) is exported for `bun test` and does not touch stdio;
 // the process loop is guarded by `import.meta.main` so importing this file
 // for tests never starts it.
 
@@ -28,7 +31,7 @@ import { createInterface } from "node:readline";
 
 const PLUGIN_ID = "token-summary";
 const PLUGIN_VERSION = "1.0.0";
-const VIEW_ID = "usage";
+const API_ID = "usage";
 const TOOL_ID = "token_summary";
 const GENERATED_BY = "hya-extra/token-summary";
 
@@ -79,9 +82,9 @@ export interface WireSessionUsageReport {
   truncated?: boolean;
 }
 
-// -------------------------------------------------------------- view shape
+// ------------------------------------------------------------- usage shape
 
-/** One model row (or the grand total, minus `model`) of the `usage` view. */
+/** One model row (or the grand total, minus `model`) of the `usage` endpoint body. */
 export interface ModelFields {
   input: number;
   cache_creation: number;
@@ -108,7 +111,7 @@ export interface SessionRow {
   total: ModelFields;
 }
 
-export interface ViewJson {
+export interface UsageJson {
   session: string;
   scope: string;
   generated_by: typeof GENERATED_BY;
@@ -118,7 +121,7 @@ export interface ViewJson {
   truncated?: boolean;
 }
 
-/** `UsageTotalsReport` -> the view's flat numeric fields (`cache_write` renamed `cache_creation`). */
+/** `UsageTotalsReport` -> the usage body's flat numeric fields (`cache_write` renamed `cache_creation`). */
 export function totalsToFields(totals: WireUsageTotalsReport): ModelFields {
   const unknown = totals.split.unknown;
   const known = unknown === 0;
@@ -155,9 +158,9 @@ function modelRows(byModel: Record<string, WireUsageTotalsReport>): ModelRow[] {
   return sortModels(rows);
 }
 
-/** Transform a `session.usage` capability result into the `usage` view/tool JSON. */
-export function buildView(report: WireSessionUsageReport): ViewJson {
-  const view: ViewJson = {
+/** Transform a `session.usage` capability result into the `usage` endpoint/tool JSON. */
+export function buildUsage(report: WireSessionUsageReport): UsageJson {
+  const summary: UsageJson = {
     session: report.session,
     scope: report.scope,
     generated_by: GENERATED_BY,
@@ -171,8 +174,8 @@ export function buildView(report: WireSessionUsageReport): ViewJson {
       total: totalsToFields(row.usage.total),
     })),
   };
-  if (report.truncated) view.truncated = true;
-  return view;
+  if (report.truncated) summary.truncated = true;
+  return summary;
 }
 
 // -------------------------------------------------------- markdown table
@@ -185,25 +188,25 @@ function cell(value: number | null): string {
  * Render a compact Markdown table: one row per model, a totals row, then
  * (when `scope` covers more than one session) one line per session.
  */
-export function renderTable(view: ViewJson, scope: string): string {
+export function renderTable(summary: UsageJson, scope: string): string {
   const lines: string[] = [];
   lines.push(`Token usage (scope: ${scope})`);
   lines.push("");
   lines.push("| model | input | cache creation | cache read | output | thinking | visible | rounds |");
   lines.push("| --- | --- | --- | --- | --- | --- | --- | --- |");
-  for (const row of view.models) {
+  for (const row of summary.models) {
     lines.push(
       `| ${row.model} | ${row.input} | ${row.cache_creation} | ${row.cache_read} | ${row.output} | ${cell(row.thinking)} | ${cell(row.visible_output)} | ${row.rounds} |`,
     );
   }
-  const total = view.total;
+  const total = summary.total;
   lines.push(
     `| **total** | ${total.input} | ${total.cache_creation} | ${total.cache_read} | ${total.output} | ${cell(total.thinking)} | ${cell(total.visible_output)} | ${total.rounds} |`,
   );
-  if (scope !== "session" && view.sessions.length > 0) {
+  if (scope !== "session" && summary.sessions.length > 0) {
     lines.push("");
     lines.push("Sessions:");
-    for (const row of view.sessions) {
+    for (const row of summary.sessions) {
       const label = row.agent ? `${row.session} (${row.agent})` : row.session;
       lines.push(
         `- ${label}: input ${row.total.input}, output ${row.total.output}, rounds ${row.total.rounds}`,
@@ -215,12 +218,12 @@ export function renderTable(view: ViewJson, scope: string): string {
 
 // ---------------------------------------------------------------- input
 
-export type ViewQuery =
+export type UsageQuery =
   | { ok: true; scope: "session" | "tree" }
   | { ok: false; error: string };
 
-/** Validate `view/get` query params: `scope` (`session`|`tree`, default `tree`) is the only known key. */
-export function parseViewQuery(query: Record<string, string>): ViewQuery {
+/** Validate the `usage` endpoint's query: `scope` (`session`|`tree`, default `tree`) is the only known key. */
+export function parseUsageQuery(query: Record<string, string>): UsageQuery {
   for (const key of Object.keys(query)) {
     if (key !== "scope") {
       return { ok: false, error: `unknown query parameter \`${key}\`` };
@@ -228,7 +231,7 @@ export function parseViewQuery(query: Record<string, string>): ViewQuery {
   }
   const scope = query.scope ?? "tree";
   if (scope !== "session" && scope !== "tree") {
-    return { ok: false, error: "`scope` must be `session` or `tree` for a view" };
+    return { ok: false, error: "`scope` must be `session` or `tree` for the usage endpoint" };
   }
   return { ok: true, scope };
 }
@@ -297,7 +300,7 @@ interface PendingCapability {
  * point: any line that is *not* itself a request (no `method` field) is a
  * candidate reply and is claimed here; a genuine host request/notification is
  * left untouched (`handleFrame` returns `false`) so the caller dispatches it
- * normally. This is what lets a host request (another `view/get`/`tool/call`)
+ * normally. This is what lets a host request (another `api/request`/`tool/call`)
  * arrive and be answered while a capability reply is still outstanding — a
  * naive reader that only ever awaited the *next* line in request order would
  * deadlock the moment the two interleave.
@@ -368,23 +371,38 @@ async function fetchUsage(
   }
 }
 
-async function handleViewGet(rawParams: unknown, cap: CapabilityClient): Promise<{ body: unknown }> {
-  if (!isRecord(rawParams)) return { body: { error: "malformed view/get params" } };
-  if (rawParams.view !== VIEW_ID) {
-    return { body: { error: `unknown view \`${String(rawParams.view)}\`` } };
+/** An `api/request` reply: an HTTP status plus a JSON body. */
+export interface ApiReply {
+  status: number;
+  body: unknown;
+}
+
+/**
+ * Answer one `api/request`. The host has already routed it to the declared
+ * endpoint (`GET /usage`, session scope), so the id/method checks are only
+ * defensive; a bad query is the caller's fault (400), a failed capability
+ * read or malformed params is ours (500).
+ */
+export async function handleApiRequest(rawParams: unknown, cap: CapabilityClient): Promise<ApiReply> {
+  if (!isRecord(rawParams)) return { status: 500, body: { error: "malformed api/request params" } };
+  if (rawParams.api !== API_ID) {
+    return { status: 404, body: { error: `unknown API endpoint \`${String(rawParams.api)}\`` } };
+  }
+  if (rawParams.method !== "GET") {
+    return { status: 405, body: { error: `endpoint \`${API_ID}\` answers GET only` } };
   }
   const query = isRecord(rawParams.query) ? (rawParams.query as Record<string, string>) : {};
-  const parsed = parseViewQuery(query);
-  if (!parsed.ok) return { body: { error: parsed.error } };
+  const parsed = parseUsageQuery(query);
+  if (!parsed.ok) return { status: 400, body: { error: parsed.error } };
   const session = rawParams.session;
   const call = rawParams.call;
   const hostCapability = rawParams.host_capability;
   if (typeof session !== "string" || typeof call !== "string" || typeof hostCapability !== "string") {
-    return { body: { error: "malformed view/get params" } };
+    return { status: 500, body: { error: "malformed api/request params" } };
   }
   const usage = await fetchUsage(cap, hostCapability, session, call, parsed.scope);
-  if (!usage.ok) return { body: { error: usage.error } };
-  return { body: buildView(usage.report) };
+  if (!usage.ok) return { status: 500, body: { error: usage.error } };
+  return { status: 200, body: buildUsage(usage.report) };
 }
 
 async function handleToolCall(rawParams: unknown, cap: CapabilityClient): Promise<{ ok: boolean; output: unknown }> {
@@ -402,9 +420,9 @@ async function handleToolCall(rawParams: unknown, cap: CapabilityClient): Promis
   if (!parsed.ok) return { ok: false, output: parsed.error };
   const usage = await fetchUsage(cap, hostCapability, session, call, parsed.scope);
   if (!usage.ok) return { ok: false, output: usage.error };
-  const view = buildView(usage.report);
-  if (parsed.format === "json") return { ok: true, output: view };
-  return { ok: true, output: renderTable(view, parsed.scope) };
+  const summary = buildUsage(usage.report);
+  if (parsed.format === "json") return { ok: true, output: summary };
+  return { ok: true, output: renderTable(summary, parsed.scope) };
 }
 
 const INITIALIZE_RESULT = {
@@ -427,7 +445,7 @@ const INITIALIZE_RESULT = {
     },
   ],
   skills: [],
-  views: [{ name: VIEW_ID, description: "Per-model token usage of the session tree" }],
+  apis: [{ name: API_ID, description: "Per-model token usage of the session tree" }],
 };
 
 // --- stdio JSON-RPC loop (skipped when this file is imported for tests) ---
@@ -451,8 +469,8 @@ async function handleRequest(message: Record<string, unknown>, cap: CapabilityCl
       case "shutdown":
         respond({}, () => process.exit(0));
         return;
-      case "view/get": {
-        const result = await handleViewGet(message.params, cap);
+      case "api/request": {
+        const result = await handleApiRequest(message.params, cap);
         respond(result);
         return;
       }
@@ -468,7 +486,7 @@ async function handleRequest(message: Record<string, unknown>, cap: CapabilityCl
     }
   } catch (error) {
     logError(`request \`${String(method)}\` failed: ${describe(error)}`);
-    respond({});
+    respond(method === "api/request" ? { status: 500, body: { error: describe(error) } } : {});
   }
 }
 
@@ -487,7 +505,7 @@ async function main(): Promise<void> {
     }
     if (!isRecord(message)) continue;
     if (cap.handleFrame(message)) continue;
-    // Answer concurrently: a slow `view/get`/`tool/call` (or its capability
+    // Answer concurrently: a slow `api/request`/`tool/call` (or its capability
     // round trip) must never block reading the next line.
     void handleRequest(message, cap);
   }

@@ -6,12 +6,16 @@ HTTP binding (`method path`) and its fully-qualified gRPC method
 (`hya.v1.<Service>.<Rpc>`).
 
 Conventions: pagination uses opaque cursors; errors use the stable code
-table (`hya_api::error`); timestamps are RFC 3339 strings in JSON.
+table (`hya_api::error`); timestamps are RFC 3339 strings in JSON. An `ANY`
+binding accepts GET, POST, PUT, PATCH, and DELETE on one path (the request
+message names the method), and its trailing `{path}` spans every remaining
+path segment.
 
 ## Contents
 
 - [AgentModels service](#service-agentmodels)
 - [Auth service](#service-auth)
+- [BundleApi service](#service-bundleapi)
 - [Catalog service](#service-catalog)
 - [Events service](#service-events)
 - [Files service](#service-files)
@@ -83,6 +87,45 @@ Begin a provider OAuth flow; returns the authorization URL to open.
 ### `Auth.CompleteOauth`
 
 Complete a provider OAuth flow with the callback code.
+
+
+## Service `BundleApi`
+
+Endpoints that installed bundles register for themselves (manifest
+`apis:`), answered by the bundle's `extensions.process` over the plugin
+`api/request` request. A session-scoped endpoint is mounted under one
+session and its process may read that session's data through a
+request-scoped read-only capability; a global endpoint is not tied to any
+session. Write methods only change state the bundle process owns itself.
+
+| RPC | HTTP | gRPC | Request | Response |
+|---|---|---|---|---|
+| `ListBundleApis` | `GET /v1/bundle-apis` | `hya.v1.BundleApi.ListBundleApis` | `ListBundleApisRequest` | `ListBundleApisResponse` |
+| `InvokeSessionBundleApi` | `ANY /v1/sessions/{session}/bundles/{bundle}/{path}` | `hya.v1.BundleApi.InvokeSessionBundleApi` | `InvokeSessionBundleApiRequest` | `BundleApiResponse` |
+| `InvokeGlobalBundleApi` | `ANY /v1/bundles/{bundle}/api/{path}` | `hya.v1.BundleApi.InvokeGlobalBundleApi` | `InvokeGlobalBundleApiRequest` | `BundleApiResponse` |
+
+### `BundleApi.ListBundleApis`
+
+List every endpoint the published bundles register, sorted by bundle id
+then endpoint id.
+
+
+### `BundleApi.InvokeSessionBundleApi`
+
+Invoke one session-scoped bundle endpoint. Over HTTP `bundle` is one
+percent-encoded path segment (`hya-extra%2Ftoken-summary`), `{path}` is
+the rest of the URL path (matched against the bundle's templates), the
+query string becomes `query`, a non-empty request body must be JSON, and
+the response is the process's own status and JSON body verbatim (no
+envelope). Over gRPC the reply is `BundleApiResponse`, whose `status`
+carries the process status (a non-2xx process status is still an OK
+gRPC call); only host-side failures are gRPC errors.
+
+
+### `BundleApi.InvokeGlobalBundleApi`
+
+Invoke one global bundle endpoint (not tied to a session); otherwise
+identical to `InvokeSessionBundleApi`.
 
 
 ## Service `Catalog`
@@ -500,8 +543,6 @@ every turn, message, and projection read hangs off a session id.
 | `CompactSession` | `POST /v1/sessions/{session}/compact` | `hya.v1.Session.CompactSession` | `CompactSessionRequest` | `CompactSessionResponse` |
 | `SummarizeSession` | `POST /v1/sessions/{session}/summarize` | `hya.v1.Session.SummarizeSession` | `SummarizeSessionRequest` | `SummarizeSessionResponse` |
 | `RevertSession` | `POST /v1/sessions/{session}/revert` | `hya.v1.Session.RevertSession` | `RevertSessionRequest` | `RevertSessionResponse` |
-| `ListSessionViews` | `GET /v1/sessions/{session}/views` | `hya.v1.Session.ListSessionViews` | `ListSessionViewsRequest` | `ListSessionViewsResponse` |
-| `GetSessionView` | `GET /v1/sessions/{session}/views/{bundle}/{view}` | `hya.v1.Session.GetSessionView` | `GetSessionViewRequest` | `SessionView` |
 
 ### `Session.CreateSession`
 
@@ -547,22 +588,6 @@ Produce a summary message for a session (titles, handoffs).
 ### `Session.RevertSession`
 
 Revert a session to an earlier watermark, or undo the last revert.
-
-
-### `Session.ListSessionViews`
-
-List the read-only session views that installed bundles serve (manifest
-`views:`, answered by the bundle's `extensions.process`).
-
-
-### `Session.GetSessionView`
-
-Compute one bundle-declared read-only view of a session. The server
-forwards the request to the bundle process of the live runtime
-generation, which reads through a request-scoped read-only capability
-bound to this session. Over HTTP `bundle` is one percent-encoded path
-segment (`hya-extra%2Ftoken-summary`) and every query-string parameter
-lands in `query`.
 
 
 ## Service `Turn`
@@ -777,6 +802,64 @@ OAuth tokens captured from a completed provider flow.
 | Field | Type | Description |
 |---|---|---|
 | `status` (1) | `AuthStatus` | Resulting auth status for the provider. |
+
+### `BundleApiInfo`
+
+One endpoint a published bundle registers.
+
+| Field | Type | Description |
+|---|---|---|
+| `bundle` (1) | `string` | Bundle identity id (for example `hya-extra/token-summary`). |
+| `api` (2) | `string` | Endpoint id declared in the bundle manifest. |
+| `method` (3) | `string` | HTTP method: `GET`, `POST`, `PUT`, `PATCH`, or `DELETE`. |
+| `scope` (4) | `string` | Mount scope: `session` (`/v1/sessions/{session}/bundles/{bundle}/...`) or `global` (`/v1/bundles/{bundle}/api/...`). |
+| `path` (5) | `string` | Path template below the mount, for example `/items/{id}`. |
+| `description` (6) | `string` | Manifest description; empty when not declared. |
+| `request_schema` (7) | `google.protobuf.Value` | JSON Schema of the request body; absent when not declared. |
+| `response_schema` (8) | `google.protobuf.Value` | JSON Schema of the response body; absent when not declared. |
+
+### `ListBundleApisResponse`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `apis` (1) | `repeated BundleApiInfo` | Endpoints sorted by bundle id, then endpoint id. |
+
+### `InvokeSessionBundleApiRequest`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `session` (1) | `string` | Session the endpoint is invoked for (must exist). |
+| `bundle` (2) | `string` | Bundle identity id; contains `/`, so HTTP carries it percent-encoded as one path segment. |
+| `method` (3) | `string` | HTTP method: `GET`, `POST`, `PUT`, `PATCH`, or `DELETE` (HTTP: the request method). |
+| `path` (4) | `string` | Request path below the bundle mount with a leading `/` (for example `/items/42`); segments may be percent-encoded. |
+| `string> query` (5) | `map<string,` | Query parameters passed to the process verbatim (HTTP: the query string). |
+| `body` (6) | `google.protobuf.Value` | JSON request body; absent for none (HTTP: the request body, at most 512 KiB). |
+
+### `InvokeGlobalBundleApiRequest`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `bundle` (1) | `string` | Bundle identity id (HTTP: one percent-encoded path segment). |
+| `method` (2) | `string` | HTTP method: `GET`, `POST`, `PUT`, `PATCH`, or `DELETE`. |
+| `path` (3) | `string` | Request path below the bundle mount with a leading `/`. |
+| `string> query` (4) | `map<string,` | Query parameters passed to the process verbatim. |
+| `body` (5) | `google.protobuf.Value` | JSON request body; absent for none (at most 512 KiB). |
+
+### `BundleApiResponse`
+
+One served bundle API call (the gRPC reply; HTTP returns `body` verbatim
+with `status` as the HTTP status).
+
+| Field | Type | Description |
+|---|---|---|
+| `bundle` (1) | `string` | Bundle identity id. |
+| `api` (2) | `string` | Matched endpoint id. |
+| `status` (3) | `uint32` | Status the bundle process answered, in 200..=599. |
+| `content_type` (4) | `string` | Media type of `body`: `application/json`, or empty when there is no body. |
+| `body` (5) | `google.protobuf.Value` | The process's JSON answer; absent when it answered no body. Numbers are doubles over gRPC (HTTP keeps integers exact). |
 
 ### `ModelRef`
 
@@ -2167,51 +2250,6 @@ Projection summary of one session.
 | Field | Type | Description |
 |---|---|---|
 | `session` (1) | `SessionInfo` | Projection summary after the revert. |
-
-### `ListSessionViewsRequest`
-
-
-| Field | Type | Description |
-|---|---|---|
-| `session` (1) | `string` | Session identifier (must exist). |
-
-### `SessionViewInfo`
-
-One read-only view a published bundle serves.
-
-| Field | Type | Description |
-|---|---|---|
-| `bundle` (1) | `string` | Bundle identity id (for example `hya-extra/token-summary`). |
-| `view` (2) | `string` | View id declared in the bundle manifest. |
-| `description` (3) | `string` | Manifest description; empty when not declared. |
-
-### `ListSessionViewsResponse`
-
-
-| Field | Type | Description |
-|---|---|---|
-| `views` (1) | `repeated SessionViewInfo` | Views sorted by bundle id, then view id. |
-
-### `GetSessionViewRequest`
-
-
-| Field | Type | Description |
-|---|---|---|
-| `session` (1) | `string` | Session the view is computed for. |
-| `bundle` (2) | `string` | Bundle identity id; contains `/`, so HTTP carries it percent-encoded as one path segment. |
-| `view` (3) | `string` | View id declared by the bundle. |
-| `string> query` (4) | `map<string,` | Caller parameters passed to the bundle process verbatim (HTTP: the query string). |
-
-### `SessionView`
-
-One computed bundle view.
-
-| Field | Type | Description |
-|---|---|---|
-| `bundle` (1) | `string` | Bundle identity id. |
-| `view` (2) | `string` | View id. |
-| `content_type` (3) | `string` | Media type of `body`; always `application/json`. |
-| `body` (4) | `google.protobuf.Value` | The bundle process's JSON answer, unchanged. HTTP renders it verbatim (integers stay exact); gRPC carries it as a protobuf `Value`, whose numbers are doubles. |
 
 ### `PromptTurn`
 

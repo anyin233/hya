@@ -277,7 +277,7 @@ kind: AgentBundle
 | `identity` | yes | Bundle identity block (see below). |
 | `namespace` | no | Provider-facing namespace for the bundle's tools and schemas; defaults to the identity name segment (the part after `/`). Token rules: `[a-zA-Z0-9_-]`, no `__`, and the reserved tokens `mcp`, `harness`, `builtin`, `plugin` are rejected. |
 | `schemas` | no | External URI-scheme extensions this bundle provides (see [Schema extensions (`schemas:`)](#schema-extensions-schemas)). |
-| `views` | no | Read-only session views served by `extensions.process` (see [Session views (`views:`)](#session-views-views)). |
+| `apis` | no | HTTP endpoints served by `extensions.process` (see [API endpoints (`apis:`)](#api-endpoints-apis)). |
 | `resources` | no | `tools`, `skills`, `mcp`, `hooks` resource lists. |
 | `extensions` | no | `js`, `files`, `rust` extension lists plus the optional `process` declaration. |
 | `agent` | yes | The single agent this bundle defines. |
@@ -391,44 +391,80 @@ chain of claimants stays queryable via `GET /v1/runtime/schemas` (see
 shows one bundle's own declarations. Dispatch stays **view-scoped**: an agent's `read` dispatches `scheme://…`
 only when that agent's compiled view also resolves the owning bundle tool.
 
-### Session views (`views:`)
+### API endpoints (`apis:`)
 
-A bundle can publish named **read-only views of a session** — for example a
-token-usage summary — that any v1 client reads over HTTP or gRPC without
-running a turn. Every bundle kind (`Plugin`, `AgentBundle`, `AgentSetBundle`,
-`WorkflowBundle`) may declare views, but only together with an explicit
-`extensions.process`, because that generation-owned process answers them:
+A bundle can register its **own HTTP endpoints** on the hya server — for
+example a token-usage report of a session, or a small store the bundle keeps —
+that any v1 client calls over HTTP or gRPC without running a turn. Every
+bundle kind (`Plugin`, `AgentBundle`, `AgentSetBundle`, `WorkflowBundle`) may
+declare endpoints, but only together with an explicit `extensions.process`,
+because that generation-owned process answers them:
 
 ```yaml
 kind: Plugin
-identity: { id: acme/token-report, version: 1.0.0, publisher: acme }
+identity: { id: acme/notes, version: 1.0.0, publisher: acme }
 extensions:
-  process: { kind: bun, command: [bun, run, '${BUNDLE_ROOT}/report.ts'] }
-  files: [{ id: report, path: report.ts }]
-views:
+  process: { kind: bun, command: [bun, run, '${BUNDLE_ROOT}/notes.ts'] }
+  files:
+    - { id: notes, path: notes.ts }
+    - { id: note-schema, path: schemas/note.json }   # packaged JSON Schema
+apis:
+  # GET /v1/sessions/{session}/bundles/acme%2Fnotes/usage
   - id: usage
-    description: Token usage of the session tree   # optional
+    method: GET
+    scope: session
+    path: /usage
+    description: Token usage of the session tree        # optional
+  # PUT /v1/bundles/acme%2Fnotes/api/notes/{key}
+  - id: put-note
+    method: PUT
+    scope: global
+    path: /notes/{key}
+    request_schema: schemas/note.json                   # optional
+    response_schema: schemas/note.json                  # optional
 ```
 
-Rules enforced at prepare:
+| Field | Required | Meaning |
+| --- | --- | --- |
+| `id` | yes | Endpoint id: a `[A-Za-z0-9._-]` token of at most 64 bytes that starts with a letter or digit, unique in the bundle. It names the endpoint on the wire (`api/request` `api`) and in listings. |
+| `method` | yes | `GET`, `POST`, `PUT`, `PATCH`, or `DELETE` (upper case). |
+| `scope` | yes | `session`: mounted at `/v1/sessions/{session}/bundles/{bundle}{path}`, called for one existing session, whose data the process may read through the request-scoped `session.usage` capability. `global`: mounted at `/v1/bundles/{bundle}/api{path}`, not tied to a session (no session capability). |
+| `path` | yes | Path template below the mount (grammar below). |
+| `description` | no | At most 1024 bytes, no control characters. |
+| `request_schema` / `response_schema` | no | Path of a JSON Schema document for the request / 200 response body. The file must be declared under `extensions.files` (or `extensions.js`), so it is packaged and covered by the bundle digest, and must parse as a JSON object or boolean. The host publishes the schemas in `GET /v1/bundle-apis`; it does **not** validate bodies against them — the process owns validation. |
 
-- declaring any view without an explicit `extensions.process` is rejected
-  (an implicit JavaScript Plugin process cannot serve views);
-- `id` is a `[A-Za-z0-9._-]` token of at most 64 bytes that starts with a
-  letter or digit (it is one URL path segment) and is unique in the bundle;
-  `description` is optional, at most 1024 bytes, no control characters;
-- declarations are emitted sorted by id in the prepared catalog document.
+**Path template grammar.** A leading `/` and 1–16 segments separated by single
+`/`, at most 256 bytes; no empty segments or trailing `/`. A segment is a
+literal `[A-Za-z0-9._-]+` (not `.` or `..`) or a whole-segment parameter
+`{name}` (`[A-Za-z_][A-Za-z0-9_]*`, at most 64 bytes, unique in the
+template). There are no wildcards and no partial-segment parameters (`/a{b}`).
+A parameter matches exactly one non-empty segment; its value reaches the
+process percent-decoded in `path_params`.
+
+**No ambiguous routes.** Two endpoints with the same `method` and `scope` may
+not have overlapping templates — templates with the same segment count whose
+segments are, position by position, equal literals or a parameter on either
+side (`/items/{id}` overlaps `/items/latest` and `/items/{key}`). Prepare
+rejects the pair instead of picking a winner, so every request path resolves
+to at most one endpoint per method. The same template under another method or
+scope is a different endpoint (`GET` and `PUT` `/notes/{key}`). At most 64
+endpoints per bundle.
+
+Other rules enforced at prepare: declaring any endpoint without an explicit
+`extensions.process` is rejected (an implicit JavaScript Plugin process
+cannot serve endpoints); declarations are emitted sorted by id in the prepared
+catalog document.
 
 At runtime the process must list exactly the declared ids in its initialize
-reply `views` (otherwise the bundle fails to start, like a tool or hook
-mismatch) and answer each `view/get` request with `{ "body": <JSON> }`,
-reading the session through the request-scoped `session.usage` capability —
-see [Plugin protocol](plugin-protocol.md#session-views-viewget). Clients list
-views with `GET /v1/sessions/{session}/views` and read one with
-`GET /v1/sessions/{session}/views/{bundle}/{view}` (bundle id percent-encoded
-as one segment, e.g. `acme%2Ftoken-report`; query parameters are passed to the
-process). `hya bundle info <id>` prints one `view=<id>` line per view. The
-lifecycle is in [Bundle runtime](bundle-runtime.md#session-views).
+reply `apis` (otherwise the bundle fails to start, like a tool or hook
+mismatch) and answer each `api/request` with `{ "status"?, "body"? }` — see
+[Plugin protocol](plugin-protocol.md#bundle-api-endpoints-apirequest). The
+HTTP caller receives that status and body verbatim. Clients list every
+endpoint with `GET /v1/bundle-apis`; the bundle id in a URL is percent-encoded
+as one segment (`acme%2Fnotes`). `hya bundle info <id>` prints one
+`api=<METHOD> <scope> <path> id=<id>` line per endpoint. The lifecycle,
+limits, and security notes are in
+[Bundle runtime](bundle-runtime.md#bundle-api-endpoints).
 
 ### Per-agent fields
 
@@ -739,14 +775,16 @@ union in the document shape:
 
 ```text
 { format_version, bundles: [Plugin | AgentBundle | AgentSetBundle | WorkflowBundle], index[],
-  schemas?, extensions_process?, views? }
+  schemas?, extensions_process?, apis? }
 ```
 
 `schemas` (per-bundle rows of `{bundle_id, schemas[]}` sorted by bundle id),
-`extensions_process` (per-bundle rows of `{bundle_id, process}`), and `views`
-(per-bundle rows of `{bundle_id, views: [{id, description}]}`, rows sorted by
-bundle id and views strictly by id; a row requires the bundle's
-`extensions_process` row) are document-level sections skipped entirely when no
+`extensions_process` (per-bundle rows of `{bundle_id, process}`), and `apis`
+(per-bundle rows of `{bundle_id, apis: [{id, method, scope, path,
+description, request_schema?, response_schema?}]}`, rows sorted by bundle id
+and endpoints strictly by id; a row requires the bundle's `extensions_process`
+row, and decode re-validates the templates, the overlap rule, and the schema
+files) are document-level sections skipped entirely when no
 bundle declares any, so documents written before those sections keep their
 exact byte layout and stay decodable.
 

@@ -1039,53 +1039,57 @@ impl SessionEngine {
     }
 
     /// Refresh the runtime catalog (when an app refresher is configured) so
-    /// view lookups see newly installed bundles. A failed refresh keeps the
-    /// live generation and is only logged: a read-only view must not fail
+    /// bundle API lookups see newly installed bundles. A failed refresh keeps
+    /// the live generation and is only logged: a bundle endpoint must not fail
     /// because an unrelated bundle cannot start.
-    async fn refresh_catalog_for_read(&self) {
+    async fn refresh_catalog_for_bundle_api(&self) {
         if let Some(refresh) = &self.catalog_refresh
             && let Err(error) = refresh.refresh_if_changed(self.runtime.as_ref()).await
         {
-            tracing::warn!("runtime catalog refresh before a view read failed: {error:#}");
+            tracing::warn!("runtime catalog refresh before a bundle API call failed: {error:#}");
         }
     }
 
-    /// Every published bundle's declared read-only session views.
-    pub async fn bundle_views(&self) -> Vec<crate::bundle_views::PublishedBundleViews> {
-        self.refresh_catalog_for_read().await;
-        self.runtime.published_bundle_views()
+    /// Every published bundle's declared API endpoints.
+    pub async fn bundle_apis(&self) -> Vec<crate::bundle_apis::PublishedBundleApis> {
+        self.refresh_catalog_for_bundle_api().await;
+        self.runtime.published_bundle_apis()
     }
 
-    /// Answer bundle view `view` of `bundle` for `session`.
+    /// Serve one bundle API call.
     ///
-    /// Resolves the bundle in the live published generation, then forwards the
-    /// request to its process, which reads through a request-scoped read-only
-    /// capability bound to `session`.
+    /// Checks the session of a session-scoped call, resolves the bundle in
+    /// the live published generation, routes the path against its declared
+    /// templates, and forwards the request to its process, which reads
+    /// through a request-scoped read-only capability (bound to the session for
+    /// session scope, to no session for global scope).
     ///
     /// # Errors
-    /// [`crate::BundleViewError`] for an unknown session, bundle, or view,
-    /// a process failure, or a store failure.
-    pub async fn bundle_view(
+    /// [`crate::BundleApiError`] for an unknown session, bundle, or endpoint,
+    /// a disallowed method, a malformed call, a process failure, or a store
+    /// failure.
+    pub async fn invoke_bundle_api(
         &self,
-        session: SessionId,
-        bundle: &str,
-        view: &str,
-        query: BTreeMap<String, String>,
-    ) -> Result<serde_json::Value, crate::BundleViewError> {
-        if !self
-            .store
-            .session_exists(session)
-            .await
-            .map_err(CoreError::from)?
+        call: crate::bundle_apis::BundleApiCall,
+    ) -> Result<crate::bundle_apis::BundleApiOutcome, crate::BundleApiError> {
+        if let Some(session) = call.session
+            && !self
+                .store
+                .session_exists(session)
+                .await
+                .map_err(CoreError::from)?
         {
-            return Err(crate::BundleViewError::SessionNotFound(session));
+            return Err(crate::BundleApiError::SessionNotFound(session));
         }
-        self.refresh_catalog_for_read().await;
-        let views = self
-            .runtime
-            .bundle_views(bundle)
-            .ok_or_else(|| crate::BundleViewError::BundleNotFound(bundle.to_string()))?;
-        views.get(bundle, view, session, query).await
+        self.refresh_catalog_for_bundle_api().await;
+        let apis = self.runtime.bundle_apis(&call.bundle).ok_or_else(|| {
+            crate::BundleApiError::NotFound {
+                bundle: call.bundle.clone(),
+                scope: call.scope(),
+                path: call.path.clone(),
+            }
+        })?;
+        apis.invoke(call).await
     }
 
     /// Walk the `SessionCreated{parent}` chain to the top ancestor, returning the

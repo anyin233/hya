@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "hya-extra/token-summary/usage.json",
+  "title": "token-summary usage",
+  "description": "Body of a 200 answer from GET /v1/sessions/{session}/bundles/hya-extra%2Ftoken-summary/usage. A 400 (bad query) or 500 (the usage read failed) answers { \"error\": string } instead.",
+  "type": "object",
+  "required": ["session", "scope", "generated_by", "models", "total", "sessions"],
+  "additionalProperties": false,
+  "properties": {
+    "session": { "type": "string", "description": "The session the endpoint was called for." },
+    "scope": { "enum": ["session", "tree"], "description": "`tree` (default) covers the session and every descendant subagent session; `session` only its own log." },
+    "generated_by": { "const": "hya-extra/token-summary" },
+    "models": {
+      "type": "array",
+      "description": "Per-model totals over every covered session, sorted by prompt_total + output descending, then model name.",
+      "items": { "$ref": "#/$defs/modelRow" }
+    },
+    "total": { "$ref": "#/$defs/fields" },
+    "sessions": {
+      "type": "array",
+      "description": "One row per covered session, breadth-first from the requested session.",
+      "items": {
+        "type": "object",
+        "required": ["session", "models", "total"],
+        "additionalProperties": false,
+        "properties": {
+          "session": { "type": "string" },
+          "parent": { "type": "string" },
+          "agent": { "type": "string" },
+          "models": { "type": "array", "items": { "$ref": "#/$defs/modelRow" } },
+          "total": { "$ref": "#/$defs/fields" }
+        }
+      }
+    },
+    "truncated": { "const": true, "description": "Present only when the 512-session cap cut the tree." }
+  },
+  "$defs": {
+    "count": { "type": "integer", "minimum": 0 },
+    "fields": {
+      "type": "object",
+      "required": [
+        "input",
+        "cache_creation",
+        "cache_read",
+        "output",
+        "thinking",
+        "visible_output",
+        "unsplit_output",
+        "rounds",
+        "prompt_total"
+      ],
+      "properties": {
+        "input": { "$ref": "#/$defs/count", "description": "Uncached prompt tokens." },
+        "cache_creation": { "$ref": "#/$defs/count", "description": "Prompt tokens written to the provider cache." },
+        "cache_read": { "$ref": "#/$defs/count", "description": "Prompt tokens read from the provider cache." },
+        "output": { "$ref": "#/$defs/count", "description": "Output tokens, thinking included." },
+        "thinking": { "type": ["integer", "null"], "minimum": 0, "description": "Thinking share of output; null when any contributing call did not report it." },
+        "visible_output": { "type": ["integer", "null"], "minimum": 0, "description": "Visible share of output; null under the same condition as thinking." },
+        "unsplit_output": { "$ref": "#/$defs/count", "description": "Output of calls whose thinking split is unknown." },
+        "rounds": { "$ref": "#/$defs/count", "description": "Billed provider calls." },
+        "prompt_total": { "$ref": "#/$defs/count", "description": "input + cache_read + cache_creation." }
+      }
+    },
+    "modelRow": {
+      "allOf": [{ "$ref": "#/$defs/fields" }],
+      "required": ["model"],
+      "properties": { "model": { "type": "string" } }
+    }
+  }
+}

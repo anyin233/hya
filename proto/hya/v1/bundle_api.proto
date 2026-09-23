@@ -1,0 +1,116 @@
+// hya API v1 — bundle-registered HTTP endpoints.
+syntax = "proto3";
+
+package hya.v1;
+
+import "google/protobuf/struct.proto";
+
+// Endpoints that installed bundles register for themselves (manifest
+// `apis:`), answered by the bundle's `extensions.process` over the plugin
+// `api/request` request. A session-scoped endpoint is mounted under one
+// session and its process may read that session's data through a
+// request-scoped read-only capability; a global endpoint is not tied to any
+// session. Write methods only change state the bundle process owns itself.
+service BundleApi {
+  // List every endpoint the published bundles register, sorted by bundle id
+  // then endpoint id.
+  //
+  // hya.http: GET /v1/bundle-apis
+  rpc ListBundleApis(ListBundleApisRequest) returns (ListBundleApisResponse);
+
+  // Invoke one session-scoped bundle endpoint. Over HTTP `bundle` is one
+  // percent-encoded path segment (`hya-extra%2Ftoken-summary`), `{path}` is
+  // the rest of the URL path (matched against the bundle's templates), the
+  // query string becomes `query`, a non-empty request body must be JSON, and
+  // the response is the process's own status and JSON body verbatim (no
+  // envelope). Over gRPC the reply is `BundleApiResponse`, whose `status`
+  // carries the process status (a non-2xx process status is still an OK
+  // gRPC call); only host-side failures are gRPC errors.
+  //
+  // hya.http: ANY /v1/sessions/{session}/bundles/{bundle}/{path}
+  rpc InvokeSessionBundleApi(InvokeSessionBundleApiRequest) returns (BundleApiResponse);
+
+  // Invoke one global bundle endpoint (not tied to a session); otherwise
+  // identical to `InvokeSessionBundleApi`.
+  //
+  // hya.http: ANY /v1/bundles/{bundle}/api/{path}
+  rpc InvokeGlobalBundleApi(InvokeGlobalBundleApiRequest) returns (BundleApiResponse);
+}
+
+message ListBundleApisRequest {}
+
+// One endpoint a published bundle registers.
+message BundleApiInfo {
+  // Bundle identity id (for example `hya-extra/token-summary`).
+  string bundle = 1;
+  // Endpoint id declared in the bundle manifest.
+  string api = 2;
+  // HTTP method: `GET`, `POST`, `PUT`, `PATCH`, or `DELETE`.
+  string method = 3;
+  // Mount scope: `session` (`/v1/sessions/{session}/bundles/{bundle}/...`)
+  // or `global` (`/v1/bundles/{bundle}/api/...`).
+  string scope = 4;
+  // Path template below the mount, for example `/items/{id}`.
+  string path = 5;
+  // Manifest description; empty when not declared.
+  string description = 6;
+  // JSON Schema of the request body; absent when not declared.
+  google.protobuf.Value request_schema = 7;
+  // JSON Schema of the response body; absent when not declared.
+  google.protobuf.Value response_schema = 8;
+}
+
+message ListBundleApisResponse {
+  // Endpoints sorted by bundle id, then endpoint id.
+  repeated BundleApiInfo apis = 1;
+}
+
+message InvokeSessionBundleApiRequest {
+  // Session the endpoint is invoked for (must exist).
+  string session = 1;
+  // Bundle identity id; contains `/`, so HTTP carries it percent-encoded as
+  // one path segment.
+  string bundle = 2;
+  // HTTP method: `GET`, `POST`, `PUT`, `PATCH`, or `DELETE` (HTTP: the
+  // request method).
+  string method = 3;
+  // Request path below the bundle mount with a leading `/` (for example
+  // `/items/42`); segments may be percent-encoded.
+  string path = 4;
+  // Query parameters passed to the process verbatim (HTTP: the query
+  // string).
+  map<string, string> query = 5;
+  // JSON request body; absent for none (HTTP: the request body, at most
+  // 512 KiB).
+  google.protobuf.Value body = 6;
+}
+
+message InvokeGlobalBundleApiRequest {
+  // Bundle identity id (HTTP: one percent-encoded path segment).
+  string bundle = 1;
+  // HTTP method: `GET`, `POST`, `PUT`, `PATCH`, or `DELETE`.
+  string method = 2;
+  // Request path below the bundle mount with a leading `/`.
+  string path = 3;
+  // Query parameters passed to the process verbatim.
+  map<string, string> query = 4;
+  // JSON request body; absent for none (at most 512 KiB).
+  google.protobuf.Value body = 5;
+}
+
+// One served bundle API call (the gRPC reply; HTTP returns `body` verbatim
+// with `status` as the HTTP status).
+message BundleApiResponse {
+  // Bundle identity id.
+  string bundle = 1;
+  // Matched endpoint id.
+  string api = 2;
+  // Status the bundle process answered, in 200..=599.
+  uint32 status = 3;
+  // Media type of `body`: `application/json`, or empty when there is no
+  // body.
+  string content_type = 4;
+  // The process's JSON answer; absent when it answered no body. Numbers are
+  // doubles over gRPC (HTTP keeps integers exact).
+  google.protobuf.Value body = 5;
+}

@@ -1,5 +1,7 @@
 //! T2.30 — the packaged `hya-extra/token-summary` Plugin bundle installs, its
-//! Bun process serves the `usage` session view (per-model input/cache/output
+//! Bun process serves its session-scoped `usage` API endpoint
+//! (`GET /v1/sessions/{session}/bundles/hya-extra%2Ftoken-summary/usage`;
+//! per-model input/cache/output
 //! token usage, thinking/visible split) over the request-scoped
 //! `session.usage` capability for a session tree (root + a spawned
 //! subagent), and its `token_summary` agent tool renders the same data as a
@@ -83,7 +85,7 @@ fn number(value: &Value) -> u64 {
 }
 
 #[tokio::test]
-async fn t2_30_token_summary_view_and_tool_report_session_tree_usage() {
+async fn t2_30_token_summary_api_and_tool_report_session_tree_usage() {
     let root = std::env::temp_dir().join(format!("hya-token-summary-e2e-{}", std::process::id()));
     std::fs::create_dir_all(&root).unwrap();
 
@@ -145,17 +147,17 @@ async fn t2_30_token_summary_view_and_tool_report_session_tree_usage() {
         turn.error_message,
         env.diagnostics()
     );
-    // --- (a) the `usage` session view reports the whole tree -----------
-    let view_path = format!("/v1/sessions/{session}/views/{BUNDLE_SEGMENT}/usage");
+    // --- (a) the `usage` session endpoint reports the whole tree -------
+    let usage_path = format!("/v1/sessions/{session}/bundles/{BUNDLE_SEGMENT}/usage");
     let mut tree_body = Value::Null;
     for _ in 0..100 {
-        let (status, body) = get(&env, &view_path).await;
+        let (status, body) = get(&env, &usage_path).await;
         assert_eq!(status, 200, "{body}; {}", env.diagnostics());
         tree_body = body;
         // Wait for both sessions to show up *and* for each to have folded at
         // least one `fake/model` round: a session can appear in the tree (via
         // the spawn edge) slightly before its own first round is folded.
-        let rows = tree_body["body"]["sessions"].as_array();
+        let rows = tree_body["sessions"].as_array();
         let settled = rows.is_some_and(|rows| {
             rows.len() == 2
                 && rows.iter().all(|row| {
@@ -169,10 +171,8 @@ async fn t2_30_token_summary_view_and_tool_report_session_tree_usage() {
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    assert_eq!(tree_body["bundle"], "hya-extra/token-summary");
-    assert_eq!(tree_body["view"], "usage");
-    assert_eq!(tree_body["contentType"], "application/json");
-    let report = &tree_body["body"];
+    // The HTTP body is the bundle's own JSON (no envelope).
+    let report = &tree_body;
     assert_eq!(report["session"], session.to_string());
     assert_eq!(report["scope"], "tree", "{report}");
     assert_eq!(report["generated_by"], "hya-extra/token-summary");
@@ -235,9 +235,9 @@ async fn t2_30_token_summary_view_and_tool_report_session_tree_usage() {
     );
 
     // `?scope=session` narrows to the root session's own rounds only.
-    let (status, single) = get(&env, &format!("{view_path}?scope=session")).await;
+    let (status, single) = get(&env, &format!("{usage_path}?scope=session")).await;
     assert_eq!(status, 200, "{single}");
-    let single_report = &single["body"];
+    let single_report = &single;
     assert_eq!(single_report["scope"], "session");
     assert_eq!(single_report["sessions"].as_array().unwrap().len(), 1);
     let single_model = &single_report["models"].as_array().unwrap()[0];
@@ -246,6 +246,11 @@ async fn t2_30_token_summary_view_and_tool_report_session_tree_usage() {
         root_rounds,
         "{single_report}"
     );
+
+    // A bad query is the bundle's own 400 with an `{error}` body.
+    let (status, refused) = get(&env, &format!("{usage_path}?scope=root")).await;
+    assert_eq!(status, 400, "{refused}");
+    assert!(refused["error"].is_string(), "{refused}");
 
     // --- (b) the `token_summary` tool's Markdown table reaches the model --
     let followup = fake_requests_from(&all_requests, 1);

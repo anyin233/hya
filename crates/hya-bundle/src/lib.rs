@@ -3,6 +3,7 @@
 //! Source parsing and filesystem access stop at this crate. Runtime callers
 //! consume only immutable prepared data returned by [`prepare_package`].
 
+mod api;
 mod catalog;
 mod error;
 mod first_party;
@@ -11,6 +12,10 @@ mod package;
 mod prepare;
 mod source;
 
+pub use api::{
+    ApiMethod, ApiPathTemplate, ApiScope, ApiTemplateSegment, MAX_API_PARAM_NAME_BYTES,
+    MAX_API_PATH_BYTES, MAX_API_PATH_SEGMENTS, MAX_API_REQUEST_PATH_BYTES, split_request_path,
+};
 pub use catalog::{BundleCatalog, ExportKind};
 pub use error::BundleError;
 pub use first_party::{
@@ -20,11 +25,11 @@ pub use first_party::{
 pub use model::{
     AgentRole, BundleIdentity, ChannelCapability, ChannelParticipantRole, ChannelRetention,
     ChannelScope, ChannelTemplateKind, ModelPolicy, PreparedAgent, PreparedAgentBundle,
-    PreparedAgentSetBundle, PreparedBundleIndex, PreparedBundleKind, PreparedBundleProcess,
-    PreparedBundleSchemas, PreparedBundleViews, PreparedCatalog, PreparedChannelParticipant,
-    PreparedChannelTemplate, PreparedInstallableBundle, PreparedPluginBundle,
-    PreparedProcessExtension, PreparedProcessKind, PreparedResource, PreparedSchema, PreparedView,
-    PreparedWorkflow, PreparedWorkflowBundle, ResourceView, SpawnLifecycle,
+    PreparedAgentSetBundle, PreparedApi, PreparedBundleApis, PreparedBundleIndex,
+    PreparedBundleKind, PreparedBundleProcess, PreparedBundleSchemas, PreparedCatalog,
+    PreparedChannelParticipant, PreparedChannelTemplate, PreparedInstallableBundle,
+    PreparedPluginBundle, PreparedProcessExtension, PreparedProcessKind, PreparedResource,
+    PreparedSchema, PreparedWorkflow, PreparedWorkflowBundle, ResourceView, SpawnLifecycle,
 };
 pub use package::{
     PackageFormat, PackageInspection, PrivatePackageAuthentication, PrivatePackageInspection,

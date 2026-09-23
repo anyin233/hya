@@ -2296,6 +2296,616 @@ pub mod auth_server {
         const NAME: &'static str = SERVICE_NAME;
     }
 }
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct ListBundleApisRequest {}
+/// One endpoint a published bundle registers.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct BundleApiInfo {
+    /// Bundle identity id (for example `hya-extra/token-summary`).
+    #[prost(string, tag = "1")]
+    pub bundle: ::prost::alloc::string::String,
+    /// Endpoint id declared in the bundle manifest.
+    #[prost(string, tag = "2")]
+    pub api: ::prost::alloc::string::String,
+    /// HTTP method: `GET`, `POST`, `PUT`, `PATCH`, or `DELETE`.
+    #[prost(string, tag = "3")]
+    pub method: ::prost::alloc::string::String,
+    /// Mount scope: `session` (`/v1/sessions/{session}/bundles/{bundle}/...`)
+    /// or `global` (`/v1/bundles/{bundle}/api/...`).
+    #[prost(string, tag = "4")]
+    pub scope: ::prost::alloc::string::String,
+    /// Path template below the mount, for example `/items/{id}`.
+    #[prost(string, tag = "5")]
+    pub path: ::prost::alloc::string::String,
+    /// Manifest description; empty when not declared.
+    #[prost(string, tag = "6")]
+    pub description: ::prost::alloc::string::String,
+    /// JSON Schema of the request body; absent when not declared.
+    #[prost(message, optional, tag = "7")]
+    pub request_schema: ::core::option::Option<::pbjson_types::Value>,
+    /// JSON Schema of the response body; absent when not declared.
+    #[prost(message, optional, tag = "8")]
+    pub response_schema: ::core::option::Option<::pbjson_types::Value>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ListBundleApisResponse {
+    /// Endpoints sorted by bundle id, then endpoint id.
+    #[prost(message, repeated, tag = "1")]
+    pub apis: ::prost::alloc::vec::Vec<BundleApiInfo>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct InvokeSessionBundleApiRequest {
+    /// Session the endpoint is invoked for (must exist).
+    #[prost(string, tag = "1")]
+    pub session: ::prost::alloc::string::String,
+    /// Bundle identity id; contains `/`, so HTTP carries it percent-encoded as
+    /// one path segment.
+    #[prost(string, tag = "2")]
+    pub bundle: ::prost::alloc::string::String,
+    /// HTTP method: `GET`, `POST`, `PUT`, `PATCH`, or `DELETE` (HTTP: the
+    /// request method).
+    #[prost(string, tag = "3")]
+    pub method: ::prost::alloc::string::String,
+    /// Request path below the bundle mount with a leading `/` (for example
+    /// `/items/42`); segments may be percent-encoded.
+    #[prost(string, tag = "4")]
+    pub path: ::prost::alloc::string::String,
+    /// Query parameters passed to the process verbatim (HTTP: the query
+    /// string).
+    #[prost(map = "string, string", tag = "5")]
+    pub query: ::std::collections::HashMap<
+        ::prost::alloc::string::String,
+        ::prost::alloc::string::String,
+    >,
+    /// JSON request body; absent for none (HTTP: the request body, at most
+    /// 512 KiB).
+    #[prost(message, optional, tag = "6")]
+    pub body: ::core::option::Option<::pbjson_types::Value>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct InvokeGlobalBundleApiRequest {
+    /// Bundle identity id (HTTP: one percent-encoded path segment).
+    #[prost(string, tag = "1")]
+    pub bundle: ::prost::alloc::string::String,
+    /// HTTP method: `GET`, `POST`, `PUT`, `PATCH`, or `DELETE`.
+    #[prost(string, tag = "2")]
+    pub method: ::prost::alloc::string::String,
+    /// Request path below the bundle mount with a leading `/`.
+    #[prost(string, tag = "3")]
+    pub path: ::prost::alloc::string::String,
+    /// Query parameters passed to the process verbatim.
+    #[prost(map = "string, string", tag = "4")]
+    pub query: ::std::collections::HashMap<
+        ::prost::alloc::string::String,
+        ::prost::alloc::string::String,
+    >,
+    /// JSON request body; absent for none (at most 512 KiB).
+    #[prost(message, optional, tag = "5")]
+    pub body: ::core::option::Option<::pbjson_types::Value>,
+}
+/// One served bundle API call (the gRPC reply; HTTP returns `body` verbatim
+/// with `status` as the HTTP status).
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct BundleApiResponse {
+    /// Bundle identity id.
+    #[prost(string, tag = "1")]
+    pub bundle: ::prost::alloc::string::String,
+    /// Matched endpoint id.
+    #[prost(string, tag = "2")]
+    pub api: ::prost::alloc::string::String,
+    /// Status the bundle process answered, in 200..=599.
+    #[prost(uint32, tag = "3")]
+    pub status: u32,
+    /// Media type of `body`: `application/json`, or empty when there is no
+    /// body.
+    #[prost(string, tag = "4")]
+    pub content_type: ::prost::alloc::string::String,
+    /// The process's JSON answer; absent when it answered no body. Numbers are
+    /// doubles over gRPC (HTTP keeps integers exact).
+    #[prost(message, optional, tag = "5")]
+    pub body: ::core::option::Option<::pbjson_types::Value>,
+}
+/// Generated client implementations.
+pub mod bundle_api_client {
+    #![allow(
+        unused_variables,
+        dead_code,
+        missing_docs,
+        clippy::wildcard_imports,
+        clippy::let_unit_value,
+    )]
+    use tonic::codegen::*;
+    use tonic::codegen::http::Uri;
+    /// Endpoints that installed bundles register for themselves (manifest
+    /// `apis:`), answered by the bundle's `extensions.process` over the plugin
+    /// `api/request` request. A session-scoped endpoint is mounted under one
+    /// session and its process may read that session's data through a
+    /// request-scoped read-only capability; a global endpoint is not tied to any
+    /// session. Write methods only change state the bundle process owns itself.
+    #[derive(Debug, Clone)]
+    pub struct BundleApiClient<T> {
+        inner: tonic::client::Grpc<T>,
+    }
+    impl BundleApiClient<tonic::transport::Channel> {
+        /// Attempt to create a new client by connecting to a given endpoint.
+        pub async fn connect<D>(dst: D) -> Result<Self, tonic::transport::Error>
+        where
+            D: TryInto<tonic::transport::Endpoint>,
+            D::Error: Into<StdError>,
+        {
+            let conn = tonic::transport::Endpoint::new(dst)?.connect().await?;
+            Ok(Self::new(conn))
+        }
+    }
+    impl<T> BundleApiClient<T>
+    where
+        T: tonic::client::GrpcService<tonic::body::Body>,
+        T::Error: Into<StdError>,
+        T::ResponseBody: Body<Data = Bytes> + std::marker::Send + 'static,
+        <T::ResponseBody as Body>::Error: Into<StdError> + std::marker::Send,
+    {
+        pub fn new(inner: T) -> Self {
+            let inner = tonic::client::Grpc::new(inner);
+            Self { inner }
+        }
+        pub fn with_origin(inner: T, origin: Uri) -> Self {
+            let inner = tonic::client::Grpc::with_origin(inner, origin);
+            Self { inner }
+        }
+        pub fn with_interceptor<F>(
+            inner: T,
+            interceptor: F,
+        ) -> BundleApiClient<InterceptedService<T, F>>
+        where
+            F: tonic::service::Interceptor,
+            T::ResponseBody: Default,
+            T: tonic::codegen::Service<
+                http::Request<tonic::body::Body>,
+                Response = http::Response<
+                    <T as tonic::client::GrpcService<tonic::body::Body>>::ResponseBody,
+                >,
+            >,
+            <T as tonic::codegen::Service<
+                http::Request<tonic::body::Body>,
+            >>::Error: Into<StdError> + std::marker::Send + std::marker::Sync,
+        {
+            BundleApiClient::new(InterceptedService::new(inner, interceptor))
+        }
+        /// Compress requests with the given encoding.
+        ///
+        /// This requires the server to support it otherwise it might respond with an
+        /// error.
+        #[must_use]
+        pub fn send_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.inner = self.inner.send_compressed(encoding);
+            self
+        }
+        /// Enable decompressing responses.
+        #[must_use]
+        pub fn accept_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.inner = self.inner.accept_compressed(encoding);
+            self
+        }
+        /// Limits the maximum size of a decoded message.
+        ///
+        /// Default: `4MB`
+        #[must_use]
+        pub fn max_decoding_message_size(mut self, limit: usize) -> Self {
+            self.inner = self.inner.max_decoding_message_size(limit);
+            self
+        }
+        /// Limits the maximum size of an encoded message.
+        ///
+        /// Default: `usize::MAX`
+        #[must_use]
+        pub fn max_encoding_message_size(mut self, limit: usize) -> Self {
+            self.inner = self.inner.max_encoding_message_size(limit);
+            self
+        }
+        /// List every endpoint the published bundles register, sorted by bundle id
+        /// then endpoint id.
+        ///
+        /// hya.http: GET /v1/bundle-apis
+        pub async fn list_bundle_apis(
+            &mut self,
+            request: impl tonic::IntoRequest<super::ListBundleApisRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ListBundleApisResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/hya.v1.BundleApi/ListBundleApis",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("hya.v1.BundleApi", "ListBundleApis"));
+            self.inner.unary(req, path, codec).await
+        }
+        /// Invoke one session-scoped bundle endpoint. Over HTTP `bundle` is one
+        /// percent-encoded path segment (`hya-extra%2Ftoken-summary`), `{path}` is
+        /// the rest of the URL path (matched against the bundle's templates), the
+        /// query string becomes `query`, a non-empty request body must be JSON, and
+        /// the response is the process's own status and JSON body verbatim (no
+        /// envelope). Over gRPC the reply is `BundleApiResponse`, whose `status`
+        /// carries the process status (a non-2xx process status is still an OK
+        /// gRPC call); only host-side failures are gRPC errors.
+        ///
+        /// hya.http: ANY /v1/sessions/{session}/bundles/{bundle}/{path}
+        pub async fn invoke_session_bundle_api(
+            &mut self,
+            request: impl tonic::IntoRequest<super::InvokeSessionBundleApiRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::BundleApiResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/hya.v1.BundleApi/InvokeSessionBundleApi",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("hya.v1.BundleApi", "InvokeSessionBundleApi"));
+            self.inner.unary(req, path, codec).await
+        }
+        /// Invoke one global bundle endpoint (not tied to a session); otherwise
+        /// identical to `InvokeSessionBundleApi`.
+        ///
+        /// hya.http: ANY /v1/bundles/{bundle}/api/{path}
+        pub async fn invoke_global_bundle_api(
+            &mut self,
+            request: impl tonic::IntoRequest<super::InvokeGlobalBundleApiRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::BundleApiResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/hya.v1.BundleApi/InvokeGlobalBundleApi",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("hya.v1.BundleApi", "InvokeGlobalBundleApi"));
+            self.inner.unary(req, path, codec).await
+        }
+    }
+}
+/// Generated server implementations.
+pub mod bundle_api_server {
+    #![allow(
+        unused_variables,
+        dead_code,
+        missing_docs,
+        clippy::wildcard_imports,
+        clippy::let_unit_value,
+    )]
+    use tonic::codegen::*;
+    /// Generated trait containing gRPC methods that should be implemented for use with BundleApiServer.
+    #[async_trait]
+    pub trait BundleApi: std::marker::Send + std::marker::Sync + 'static {
+        /// List every endpoint the published bundles register, sorted by bundle id
+        /// then endpoint id.
+        ///
+        /// hya.http: GET /v1/bundle-apis
+        async fn list_bundle_apis(
+            &self,
+            request: tonic::Request<super::ListBundleApisRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ListBundleApisResponse>,
+            tonic::Status,
+        >;
+        /// Invoke one session-scoped bundle endpoint. Over HTTP `bundle` is one
+        /// percent-encoded path segment (`hya-extra%2Ftoken-summary`), `{path}` is
+        /// the rest of the URL path (matched against the bundle's templates), the
+        /// query string becomes `query`, a non-empty request body must be JSON, and
+        /// the response is the process's own status and JSON body verbatim (no
+        /// envelope). Over gRPC the reply is `BundleApiResponse`, whose `status`
+        /// carries the process status (a non-2xx process status is still an OK
+        /// gRPC call); only host-side failures are gRPC errors.
+        ///
+        /// hya.http: ANY /v1/sessions/{session}/bundles/{bundle}/{path}
+        async fn invoke_session_bundle_api(
+            &self,
+            request: tonic::Request<super::InvokeSessionBundleApiRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::BundleApiResponse>,
+            tonic::Status,
+        >;
+        /// Invoke one global bundle endpoint (not tied to a session); otherwise
+        /// identical to `InvokeSessionBundleApi`.
+        ///
+        /// hya.http: ANY /v1/bundles/{bundle}/api/{path}
+        async fn invoke_global_bundle_api(
+            &self,
+            request: tonic::Request<super::InvokeGlobalBundleApiRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::BundleApiResponse>,
+            tonic::Status,
+        >;
+    }
+    /// Endpoints that installed bundles register for themselves (manifest
+    /// `apis:`), answered by the bundle's `extensions.process` over the plugin
+    /// `api/request` request. A session-scoped endpoint is mounted under one
+    /// session and its process may read that session's data through a
+    /// request-scoped read-only capability; a global endpoint is not tied to any
+    /// session. Write methods only change state the bundle process owns itself.
+    #[derive(Debug)]
+    pub struct BundleApiServer<T> {
+        inner: Arc<T>,
+        accept_compression_encodings: EnabledCompressionEncodings,
+        send_compression_encodings: EnabledCompressionEncodings,
+        max_decoding_message_size: Option<usize>,
+        max_encoding_message_size: Option<usize>,
+    }
+    impl<T> BundleApiServer<T> {
+        pub fn new(inner: T) -> Self {
+            Self::from_arc(Arc::new(inner))
+        }
+        pub fn from_arc(inner: Arc<T>) -> Self {
+            Self {
+                inner,
+                accept_compression_encodings: Default::default(),
+                send_compression_encodings: Default::default(),
+                max_decoding_message_size: None,
+                max_encoding_message_size: None,
+            }
+        }
+        pub fn with_interceptor<F>(
+            inner: T,
+            interceptor: F,
+        ) -> InterceptedService<Self, F>
+        where
+            F: tonic::service::Interceptor,
+        {
+            InterceptedService::new(Self::new(inner), interceptor)
+        }
+        /// Enable decompressing requests with the given encoding.
+        #[must_use]
+        pub fn accept_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.accept_compression_encodings.enable(encoding);
+            self
+        }
+        /// Compress responses with the given encoding, if the client supports it.
+        #[must_use]
+        pub fn send_compressed(mut self, encoding: CompressionEncoding) -> Self {
+            self.send_compression_encodings.enable(encoding);
+            self
+        }
+        /// Limits the maximum size of a decoded message.
+        ///
+        /// Default: `4MB`
+        #[must_use]
+        pub fn max_decoding_message_size(mut self, limit: usize) -> Self {
+            self.max_decoding_message_size = Some(limit);
+            self
+        }
+        /// Limits the maximum size of an encoded message.
+        ///
+        /// Default: `usize::MAX`
+        #[must_use]
+        pub fn max_encoding_message_size(mut self, limit: usize) -> Self {
+            self.max_encoding_message_size = Some(limit);
+            self
+        }
+    }
+    impl<T, B> tonic::codegen::Service<http::Request<B>> for BundleApiServer<T>
+    where
+        T: BundleApi,
+        B: Body + std::marker::Send + 'static,
+        B::Error: Into<StdError> + std::marker::Send + 'static,
+    {
+        type Response = http::Response<tonic::body::Body>;
+        type Error = std::convert::Infallible;
+        type Future = BoxFuture<Self::Response, Self::Error>;
+        fn poll_ready(
+            &mut self,
+            _cx: &mut Context<'_>,
+        ) -> Poll<std::result::Result<(), Self::Error>> {
+            Poll::Ready(Ok(()))
+        }
+        fn call(&mut self, req: http::Request<B>) -> Self::Future {
+            match req.uri().path() {
+                "/hya.v1.BundleApi/ListBundleApis" => {
+                    #[allow(non_camel_case_types)]
+                    struct ListBundleApisSvc<T: BundleApi>(pub Arc<T>);
+                    impl<
+                        T: BundleApi,
+                    > tonic::server::UnaryService<super::ListBundleApisRequest>
+                    for ListBundleApisSvc<T> {
+                        type Response = super::ListBundleApisResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::ListBundleApisRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as BundleApi>::list_bundle_apis(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = ListBundleApisSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/hya.v1.BundleApi/InvokeSessionBundleApi" => {
+                    #[allow(non_camel_case_types)]
+                    struct InvokeSessionBundleApiSvc<T: BundleApi>(pub Arc<T>);
+                    impl<
+                        T: BundleApi,
+                    > tonic::server::UnaryService<super::InvokeSessionBundleApiRequest>
+                    for InvokeSessionBundleApiSvc<T> {
+                        type Response = super::BundleApiResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::InvokeSessionBundleApiRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as BundleApi>::invoke_session_bundle_api(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = InvokeSessionBundleApiSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/hya.v1.BundleApi/InvokeGlobalBundleApi" => {
+                    #[allow(non_camel_case_types)]
+                    struct InvokeGlobalBundleApiSvc<T: BundleApi>(pub Arc<T>);
+                    impl<
+                        T: BundleApi,
+                    > tonic::server::UnaryService<super::InvokeGlobalBundleApiRequest>
+                    for InvokeGlobalBundleApiSvc<T> {
+                        type Response = super::BundleApiResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::InvokeGlobalBundleApiRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as BundleApi>::invoke_global_bundle_api(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = InvokeGlobalBundleApiSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                _ => {
+                    Box::pin(async move {
+                        let mut response = http::Response::new(
+                            tonic::body::Body::default(),
+                        );
+                        let headers = response.headers_mut();
+                        headers
+                            .insert(
+                                tonic::Status::GRPC_STATUS,
+                                (tonic::Code::Unimplemented as i32).into(),
+                            );
+                        headers
+                            .insert(
+                                http::header::CONTENT_TYPE,
+                                tonic::metadata::GRPC_CONTENT_TYPE,
+                            );
+                        Ok(response)
+                    })
+                }
+            }
+        }
+    }
+    impl<T> Clone for BundleApiServer<T> {
+        fn clone(&self) -> Self {
+            let inner = self.inner.clone();
+            Self {
+                inner,
+                accept_compression_encodings: self.accept_compression_encodings,
+                send_compression_encodings: self.send_compression_encodings,
+                max_decoding_message_size: self.max_decoding_message_size,
+                max_encoding_message_size: self.max_encoding_message_size,
+            }
+        }
+    }
+    /// Generated gRPC service name
+    pub const SERVICE_NAME: &str = "hya.v1.BundleApi";
+    impl<T> tonic::server::NamedService for BundleApiServer<T> {
+        const NAME: &'static str = SERVICE_NAME;
+    }
+}
 /// One pending interaction request.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Interaction {
@@ -10755,69 +11365,6 @@ pub struct RevertSessionResponse {
     #[prost(message, optional, tag = "1")]
     pub session: ::core::option::Option<SessionInfo>,
 }
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ListSessionViewsRequest {
-    /// Session identifier (must exist).
-    #[prost(string, tag = "1")]
-    pub session: ::prost::alloc::string::String,
-}
-/// One read-only view a published bundle serves.
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct SessionViewInfo {
-    /// Bundle identity id (for example `hya-extra/token-summary`).
-    #[prost(string, tag = "1")]
-    pub bundle: ::prost::alloc::string::String,
-    /// View id declared in the bundle manifest.
-    #[prost(string, tag = "2")]
-    pub view: ::prost::alloc::string::String,
-    /// Manifest description; empty when not declared.
-    #[prost(string, tag = "3")]
-    pub description: ::prost::alloc::string::String,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct ListSessionViewsResponse {
-    /// Views sorted by bundle id, then view id.
-    #[prost(message, repeated, tag = "1")]
-    pub views: ::prost::alloc::vec::Vec<SessionViewInfo>,
-}
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct GetSessionViewRequest {
-    /// Session the view is computed for.
-    #[prost(string, tag = "1")]
-    pub session: ::prost::alloc::string::String,
-    /// Bundle identity id; contains `/`, so HTTP carries it percent-encoded as
-    /// one path segment.
-    #[prost(string, tag = "2")]
-    pub bundle: ::prost::alloc::string::String,
-    /// View id declared by the bundle.
-    #[prost(string, tag = "3")]
-    pub view: ::prost::alloc::string::String,
-    /// Caller parameters passed to the bundle process verbatim (HTTP: the
-    /// query string).
-    #[prost(map = "string, string", tag = "4")]
-    pub query: ::std::collections::HashMap<
-        ::prost::alloc::string::String,
-        ::prost::alloc::string::String,
-    >,
-}
-/// One computed bundle view.
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct SessionView {
-    /// Bundle identity id.
-    #[prost(string, tag = "1")]
-    pub bundle: ::prost::alloc::string::String,
-    /// View id.
-    #[prost(string, tag = "2")]
-    pub view: ::prost::alloc::string::String,
-    /// Media type of `body`; always `application/json`.
-    #[prost(string, tag = "3")]
-    pub content_type: ::prost::alloc::string::String,
-    /// The bundle process's JSON answer, unchanged. HTTP renders it verbatim
-    /// (integers stay exact); gRPC carries it as a protobuf `Value`, whose
-    /// numbers are doubles.
-    #[prost(message, optional, tag = "4")]
-    pub body: ::core::option::Option<::pbjson_types::Value>,
-}
 /// Generated client implementations.
 pub mod session_client {
     #![allow(
@@ -11148,63 +11695,6 @@ pub mod session_client {
                 .insert(GrpcMethod::new("hya.v1.Session", "RevertSession"));
             self.inner.unary(req, path, codec).await
         }
-        /// List the read-only session views that installed bundles serve (manifest
-        /// `views:`, answered by the bundle's `extensions.process`).
-        ///
-        /// hya.http: GET /v1/sessions/{session}/views
-        pub async fn list_session_views(
-            &mut self,
-            request: impl tonic::IntoRequest<super::ListSessionViewsRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::ListSessionViewsResponse>,
-            tonic::Status,
-        > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::unknown(
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
-            let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/hya.v1.Session/ListSessionViews",
-            );
-            let mut req = request.into_request();
-            req.extensions_mut()
-                .insert(GrpcMethod::new("hya.v1.Session", "ListSessionViews"));
-            self.inner.unary(req, path, codec).await
-        }
-        /// Compute one bundle-declared read-only view of a session. The server
-        /// forwards the request to the bundle process of the live runtime
-        /// generation, which reads through a request-scoped read-only capability
-        /// bound to this session. Over HTTP `bundle` is one percent-encoded path
-        /// segment (`hya-extra%2Ftoken-summary`) and every query-string parameter
-        /// lands in `query`.
-        ///
-        /// hya.http: GET /v1/sessions/{session}/views/{bundle}/{view}
-        pub async fn get_session_view(
-            &mut self,
-            request: impl tonic::IntoRequest<super::GetSessionViewRequest>,
-        ) -> std::result::Result<tonic::Response<super::SessionView>, tonic::Status> {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::unknown(
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
-            let codec = tonic::codec::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/hya.v1.Session/GetSessionView",
-            );
-            let mut req = request.into_request();
-            req.extensions_mut()
-                .insert(GrpcMethod::new("hya.v1.Session", "GetSessionView"));
-            self.inner.unary(req, path, codec).await
-        }
     }
 }
 /// Generated server implementations.
@@ -11305,29 +11795,6 @@ pub mod session_server {
             tonic::Response<super::RevertSessionResponse>,
             tonic::Status,
         >;
-        /// List the read-only session views that installed bundles serve (manifest
-        /// `views:`, answered by the bundle's `extensions.process`).
-        ///
-        /// hya.http: GET /v1/sessions/{session}/views
-        async fn list_session_views(
-            &self,
-            request: tonic::Request<super::ListSessionViewsRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::ListSessionViewsResponse>,
-            tonic::Status,
-        >;
-        /// Compute one bundle-declared read-only view of a session. The server
-        /// forwards the request to the bundle process of the live runtime
-        /// generation, which reads through a request-scoped read-only capability
-        /// bound to this session. Over HTTP `bundle` is one percent-encoded path
-        /// segment (`hya-extra%2Ftoken-summary`) and every query-string parameter
-        /// lands in `query`.
-        ///
-        /// hya.http: GET /v1/sessions/{session}/views/{bundle}/{view}
-        async fn get_session_view(
-            &self,
-            request: tonic::Request<super::GetSessionViewRequest>,
-        ) -> std::result::Result<tonic::Response<super::SessionView>, tonic::Status>;
     }
     /// Session lifecycle surface. Sessions are the durable event-sourced roots;
     /// every turn, message, and projection read hangs off a session id.
@@ -11797,96 +12264,6 @@ pub mod session_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = RevertSessionSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
-                        let mut grpc = tonic::server::Grpc::new(codec)
-                            .apply_compression_config(
-                                accept_compression_encodings,
-                                send_compression_encodings,
-                            )
-                            .apply_max_message_size_config(
-                                max_decoding_message_size,
-                                max_encoding_message_size,
-                            );
-                        let res = grpc.unary(method, req).await;
-                        Ok(res)
-                    };
-                    Box::pin(fut)
-                }
-                "/hya.v1.Session/ListSessionViews" => {
-                    #[allow(non_camel_case_types)]
-                    struct ListSessionViewsSvc<T: Session>(pub Arc<T>);
-                    impl<
-                        T: Session,
-                    > tonic::server::UnaryService<super::ListSessionViewsRequest>
-                    for ListSessionViewsSvc<T> {
-                        type Response = super::ListSessionViewsResponse;
-                        type Future = BoxFuture<
-                            tonic::Response<Self::Response>,
-                            tonic::Status,
-                        >;
-                        fn call(
-                            &mut self,
-                            request: tonic::Request<super::ListSessionViewsRequest>,
-                        ) -> Self::Future {
-                            let inner = Arc::clone(&self.0);
-                            let fut = async move {
-                                <T as Session>::list_session_views(&inner, request).await
-                            };
-                            Box::pin(fut)
-                        }
-                    }
-                    let accept_compression_encodings = self.accept_compression_encodings;
-                    let send_compression_encodings = self.send_compression_encodings;
-                    let max_decoding_message_size = self.max_decoding_message_size;
-                    let max_encoding_message_size = self.max_encoding_message_size;
-                    let inner = self.inner.clone();
-                    let fut = async move {
-                        let method = ListSessionViewsSvc(inner);
-                        let codec = tonic::codec::ProstCodec::default();
-                        let mut grpc = tonic::server::Grpc::new(codec)
-                            .apply_compression_config(
-                                accept_compression_encodings,
-                                send_compression_encodings,
-                            )
-                            .apply_max_message_size_config(
-                                max_decoding_message_size,
-                                max_encoding_message_size,
-                            );
-                        let res = grpc.unary(method, req).await;
-                        Ok(res)
-                    };
-                    Box::pin(fut)
-                }
-                "/hya.v1.Session/GetSessionView" => {
-                    #[allow(non_camel_case_types)]
-                    struct GetSessionViewSvc<T: Session>(pub Arc<T>);
-                    impl<
-                        T: Session,
-                    > tonic::server::UnaryService<super::GetSessionViewRequest>
-                    for GetSessionViewSvc<T> {
-                        type Response = super::SessionView;
-                        type Future = BoxFuture<
-                            tonic::Response<Self::Response>,
-                            tonic::Status,
-                        >;
-                        fn call(
-                            &mut self,
-                            request: tonic::Request<super::GetSessionViewRequest>,
-                        ) -> Self::Future {
-                            let inner = Arc::clone(&self.0);
-                            let fut = async move {
-                                <T as Session>::get_session_view(&inner, request).await
-                            };
-                            Box::pin(fut)
-                        }
-                    }
-                    let accept_compression_encodings = self.accept_compression_encodings;
-                    let send_compression_encodings = self.send_compression_encodings;
-                    let max_decoding_message_size = self.max_decoding_message_size;
-                    let max_encoding_message_size = self.max_encoding_message_size;
-                    let inner = self.inner.clone();
-                    let fut = async move {
-                        let method = GetSessionViewSvc(inner);
                         let codec = tonic::codec::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(

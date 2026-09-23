@@ -108,6 +108,7 @@ async fn grpc_endpoint(app: AppState) -> std::net::SocketAddr {
         .add_service(pb::mcp_server::McpServer::new(grpc.clone()))
         .add_service(pb::pty_server::PtyServer::new(grpc.clone()))
         .add_service(pb::logs_server::LogsServer::new(grpc.clone()))
+        .add_service(pb::bundle_api_server::BundleApiServer::new(grpc.clone()))
         .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener));
     tokio::spawn(async move {
         let _ = serve.await;

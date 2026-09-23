@@ -8,6 +8,12 @@
 //!   derived from the same sources,
 //! - a coverage check that every rpc declares exactly one
 //!   `// hya.http: METHOD /path` mapping and that no mapping collides.
+//!
+//! `METHOD` is `GET`, `POST`, `PUT`, `PATCH`, or `DELETE`, or the catch-all
+//! `ANY`, which binds all five on one path (used by the bundle API
+//! passthrough rpcs, whose request message carries the method explicitly).
+//! An `ANY` mapping collides with every explicit method on the same path, and
+//! OpenAPI output expands it into five operations.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -240,6 +246,13 @@ fn parse_contract(protos: &[PathBuf]) -> Result<Contract> {
                             proto.display()
                         );
                     };
+                    if method != ANY_METHOD && !HTTP_METHODS.contains(&method) {
+                        bail!(
+                            "unsupported hya.http method `{method}` in {} (expected one of {} or {ANY_METHOD})",
+                            proto.display(),
+                            HTTP_METHODS.join(", ")
+                        );
+                    }
                     http = Some((method.to_owned(), path.to_owned()));
                 } else {
                     comment.push(body.to_owned());
@@ -281,16 +294,17 @@ fn parse_contract(protos: &[PathBuf]) -> Result<Contract> {
                         proto.display()
                     );
                 };
-                if let Some(previous) = seen_paths.insert(
-                    (method.clone(), path.clone()),
-                    format!("{}.{}", contract.services[index].name, name),
-                ) {
-                    bail!(
-                        "duplicate HTTP mapping {} {path}: {previous} and {}.{}",
-                        method,
-                        contract.services[index].name,
-                        name
-                    );
+                for bound in expand_method(&method) {
+                    if let Some(previous) = seen_paths.insert(
+                        (bound.to_owned(), path.clone()),
+                        format!("{}.{}", contract.services[index].name, name),
+                    ) {
+                        bail!(
+                            "duplicate HTTP mapping {bound} {path}: {previous} and {}.{}",
+                            contract.services[index].name,
+                            name
+                        );
+                    }
                 }
                 contract.services[index].rpcs.push(RpcDoc {
                     name,
@@ -375,6 +389,21 @@ fn parse_contract(protos: &[PathBuf]) -> Result<Contract> {
         }
     }
     Ok(contract)
+}
+
+/// Explicit HTTP methods an rpc may bind.
+const HTTP_METHODS: [&str; 5] = ["GET", "POST", "PUT", "PATCH", "DELETE"];
+
+/// Catch-all binding: every method in [`HTTP_METHODS`] on one path.
+const ANY_METHOD: &str = "ANY";
+
+/// The concrete methods one `hya.http` mapping binds.
+fn expand_method(method: &str) -> Vec<&str> {
+    if method == ANY_METHOD {
+        HTTP_METHODS.to_vec()
+    } else {
+        vec![method]
+    }
 }
 
 fn declaration_name(line: &str, keyword: &str) -> String {
@@ -477,7 +506,10 @@ fn write_api_reference(path: &Path, contract: &Contract) -> Result<()> {
          HTTP binding (`method path`) and its fully-qualified gRPC method\n\
          (`hya.v1.<Service>.<Rpc>`).\n\n\
          Conventions: pagination uses opaque cursors; errors use the stable code\n\
-         table (`hya_api::error`); timestamps are RFC 3339 strings in JSON.\n\n",
+         table (`hya_api::error`); timestamps are RFC 3339 strings in JSON. An `ANY`\n\
+         binding accepts GET, POST, PUT, PATCH, and DELETE on one path (the request\n\
+         message names the method), and its trailing `{path}` spans every remaining\n\
+         path segment.\n\n",
     );
     out.push_str("## Contents\n\n");
     for service in &contract.services {
@@ -587,18 +619,29 @@ fn write_openapi(path: &Path, contract: &Contract) -> Result<()> {
     let mut paths: BTreeMap<String, serde_json::Map<String, serde_json::Value>> = BTreeMap::new();
     for service in &contract.services {
         for rpc in &service.rpcs {
-            let operation = serde_json::json!({
-                "operationId": format!("{}.{}", service.name, rpc.name),
-                "summary": rpc.comment.first().cloned().unwrap_or_default(),
-                "tags": [service.name],
-                "x-grpc-method": format!("hya.v1.{}.{}", service.name, rpc.name),
-                "x-server-streaming": rpc.server_streaming,
-            });
-            let method = rpc.method.to_lowercase();
-            paths
-                .entry(rpc.path.clone())
-                .or_default()
-                .insert(method, operation);
+            let any = rpc.method == ANY_METHOD;
+            for method in expand_method(&rpc.method) {
+                let method = method.to_lowercase();
+                let operation_id = if any {
+                    format!("{}.{}.{method}", service.name, rpc.name)
+                } else {
+                    format!("{}.{}", service.name, rpc.name)
+                };
+                let mut operation = serde_json::json!({
+                    "operationId": operation_id,
+                    "summary": rpc.comment.first().cloned().unwrap_or_default(),
+                    "tags": [service.name],
+                    "x-grpc-method": format!("hya.v1.{}.{}", service.name, rpc.name),
+                    "x-server-streaming": rpc.server_streaming,
+                });
+                if any && let Some(object) = operation.as_object_mut() {
+                    object.insert("x-hya-any-method".to_owned(), serde_json::Value::Bool(true));
+                }
+                paths
+                    .entry(rpc.path.clone())
+                    .or_default()
+                    .insert(method, operation);
+            }
         }
     }
     let paths: serde_json::Map<String, serde_json::Value> = paths
@@ -700,5 +743,49 @@ fn primitive_schema(kind: &str) -> serde_json::Value {
             serde_json::json!({ "type": "integer", "format": "int64" })
         }
         _ => serde_json::json!({ "type": "string" }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn contract_of(name: &str, body: &str) -> Result<Contract> {
+        let dir = std::env::temp_dir().join(format!("hya-gen-api-{name}-{}", std::process::id()));
+        fs::create_dir_all(&dir)?;
+        let proto = dir.join("demo.proto");
+        fs::write(
+            &proto,
+            format!("syntax = \"proto3\";\npackage hya.v1;\n{body}"),
+        )?;
+        let contract = parse_contract(&[proto]);
+        fs::remove_dir_all(&dir)?;
+        contract
+    }
+
+    #[test]
+    fn any_mapping_binds_every_method_and_collides_with_explicit_ones() -> Result<()> {
+        let contract = contract_of(
+            "any-ok",
+            "service Demo {\n  // hya.http: ANY /v1/demo/{path}\n  rpc Invoke(A) returns (B);\n  // hya.http: GET /v1/demo\n  rpc List(A) returns (B);\n}\n",
+        )?;
+        assert_eq!(contract.services[0].rpcs[0].method, "ANY");
+        let collision = contract_of(
+            "any-collides",
+            "service Demo {\n  // hya.http: ANY /v1/demo/{path}\n  rpc Invoke(A) returns (B);\n  // hya.http: PATCH /v1/demo/{path}\n  rpc Patch(A) returns (B);\n}\n",
+        );
+        let Err(error) = collision else {
+            bail!("an ANY mapping must collide with PATCH on the same path");
+        };
+        assert!(
+            error.to_string().contains("duplicate HTTP mapping PATCH"),
+            "{error}"
+        );
+        let unknown = contract_of(
+            "head",
+            "service Demo {\n  // hya.http: HEAD /v1/demo\n  rpc Head(A) returns (B);\n}\n",
+        );
+        assert!(unknown.is_err(), "unsupported methods are rejected");
+        Ok(())
     }
 }
