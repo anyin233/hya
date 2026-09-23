@@ -31,7 +31,7 @@ hya-backend / hya-server
 | [`../rustfmt.toml`](../rustfmt.toml) | Workspace formatting configuration. |
 | [`../README.md`](../README.md) | Short public overview and quick command examples. |
 | [`../crates`](../crates) | Production crates. |
-| [`../crates/xtask`](../crates/xtask) | Developer tooling: `startup-bench`, `matrix-check`, deterministic `package-bundle`, and non-publishing `release-rehearsal`. |
+| [`../crates/xtask`](../crates/xtask) | Developer tooling: `startup-bench`, `matrix-check`, deterministic `package-bundle`, first-party `stage-first-party-bundles`, and non-publishing `release-rehearsal`. |
 | [`../docs`](../docs) | Project documentation. |
 
 ## Crate Responsibilities

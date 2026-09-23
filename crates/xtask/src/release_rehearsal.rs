@@ -20,11 +20,21 @@ const BUN_VERSION: &str = "1.3.14";
 const WORKFLOW_TARGET: &str = "x86_64-unknown-linux-gnu";
 const BINARY_NAME: &str = "hya";
 const RELEASE_JOB: &str = "release";
+/// Crates whose release `cdylib` the native tool-family bundles package.
+const TOOL_FAMILY_CRATES: [&str; 5] = [
+    "hya-base-tools",
+    "hya-extended-tools",
+    "hya-network-tools",
+    "hya-channel-tools",
+    "hya-todo-tools",
+];
 const BUILD_JOB: &str = "build";
 const BUN_ADAPTER: &str = "crates/hya-plugin-bun/adapter";
 const ARGUS_PACKAGE_SCRIPT: &str = "scripts/package-argus-example.sh";
 const WORKFLOW_BUN_SOURCE_COPY: &str =
     "cp -R crates/hya-plugin-bun/adapter/src/. \"$bun_adapter/src/\"";
+const WORKFLOW_FIRST_PARTY_STAGE: &str = "cargo run --locked -p xtask -- stage-first-party-bundles --target \"$TARGET\" --version \"$version\" --library-dir \"target/$TARGET/release\" --package-root \"dist/$package_dir\" --assets dist";
+const WORKFLOW_CHECKSUMS: &str = "(cd dist && sha256sum \"$archive\" hya-*.hyabundle > SHA256SUMS)";
 
 /// Command-line options for one non-publishing rehearsal.
 #[derive(Debug)]
@@ -273,6 +283,16 @@ fn validate_workflow(workflow: &Value, target: &str) -> Result<Vec<String>> {
         &run_blocks,
         WORKFLOW_BUN_SOURCE_COPY,
         "recursively copy the complete Bun adapter source tree",
+    )?;
+    ensure_workflow_run_contract(
+        &run_blocks,
+        WORKFLOW_FIRST_PARTY_STAGE,
+        "stage the twelve first-party bundles into the archive and as release assets",
+    )?;
+    ensure_workflow_run_contract(
+        &run_blocks,
+        WORKFLOW_CHECKSUMS,
+        "checksum the archive and every first-party bundle asset",
     )?;
     Ok(run_blocks)
 }
@@ -665,6 +685,13 @@ fn prepare_and_build(root: &Path, target: &str) -> Result<()> {
     ];
     run_checked(OsStr::new("cargo"), &args, root, &[], &[])
         .context("run locked release build for hya-backend")?;
+    let mut libraries = arg_list(&["build", "--release", "--locked"]);
+    for family in TOOL_FAMILY_CRATES {
+        libraries.extend(["-p".to_owned(), family.to_owned()]);
+    }
+    libraries.extend(["--lib".to_owned(), "--target".to_owned(), target.to_owned()]);
+    run_checked(OsStr::new("cargo"), &libraries, root, &[], &[])
+        .context("run locked release build for the native tool libraries")?;
     Ok(())
 }
 
@@ -718,6 +745,27 @@ fn rehearse_package(root: &Path, version: &str, target: &str) -> Result<()> {
     .context("list packaged example archive")?;
     verify_example_listing(&String::from_utf8_lossy(&seven_zip_listing.stdout))?;
 
+    let staged = crate::first_party_release::stage(&crate::first_party_release::StageOptions {
+        version: version.to_owned(),
+        library_dir: root.join("target").join(target).join("release"),
+        package_root: package_root.clone(),
+        target: Some(target.to_owned()),
+        assets: Some(dist.clone()),
+    })
+    .context("stage first-party bundles like the release workflow")?;
+    let assets = staged
+        .iter()
+        .map(|bundle| {
+            bundle
+                .asset
+                .as_ref()
+                .and_then(|asset| asset.file_name())
+                .and_then(OsStr::to_str)
+                .map(str::to_owned)
+                .context("first-party bundle asset has no UTF-8 file name")
+        })
+        .collect::<Result<Vec<_>>>()?;
+
     let archive_name = format!("{package_name}.tar.gz");
     let archive = dist.join(&archive_name);
     run_checked(
@@ -735,7 +783,7 @@ fn rehearse_package(root: &Path, version: &str, target: &str) -> Result<()> {
     )
     .context("create release tar.gz archive")?;
 
-    write_and_verify_checksums(&dist, &archive_name)?;
+    write_and_verify_checksums(&dist, &archive_name, &assets)?;
 
     verify_package_layout(&package_root)?;
     let extract_root = scratch.path().join("extract");
@@ -758,6 +806,23 @@ fn rehearse_package(root: &Path, version: &str, target: &str) -> Result<()> {
     verify_package_layout(&extracted)?;
     verify_archive_listing(root, &archive, &package_name, &scratch)?;
     smoke_packaged_release(&extracted, &scratch, version)?;
+    for bundle in &staged {
+        let asset = bundle
+            .asset
+            .as_ref()
+            .context("first-party bundle asset is missing")?;
+        let installed = bundle
+            .installed
+            .strip_prefix(&package_root)
+            .context("staged bundle is outside the package root")?;
+        ensure!(
+            fs::read(asset).with_context(|| format!("read {}", asset.display()))?
+                == fs::read(extracted.join(installed))
+                    .with_context(|| format!("read extracted {}", installed.display()))?,
+            "release asset {} differs from the archived package",
+            asset.display()
+        );
+    }
     Ok(())
 }
 
@@ -799,15 +864,11 @@ fn package_argus_example(root: &Path, output: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Generate `SHA256SUMS` and verify it through the same `sha256sum -c` path as CI.
-fn write_and_verify_checksums(dist: &Path, archive_name: &str) -> Result<()> {
-    let checksum = run_checked(
-        OsStr::new("sha256sum"),
-        &[archive_name.to_owned()],
-        dist,
-        &[],
-        &[],
-    )?;
+/// Generate `SHA256SUMS` for the archive and bundle assets, then verify it like CI.
+fn write_and_verify_checksums(dist: &Path, archive_name: &str, assets: &[String]) -> Result<()> {
+    let mut files = vec![archive_name.to_owned()];
+    files.extend(assets.iter().cloned());
+    let checksum = run_checked(OsStr::new("sha256sum"), &files, dist, &[], &[])?;
     let sums = dist.join("SHA256SUMS");
     fs::write(&sums, &checksum.stdout)
         .with_context(|| format!("write checksum manifest {}", sums.display()))?;
@@ -848,6 +909,14 @@ fn verify_package_layout(package_root: &Path) -> Result<()> {
     for path in ["package.json", "bun.lock", "src/main.ts"] {
         require_file(&bun_adapter.join(path), "packaged Bun adapter file")?;
     }
+    for identity in hya_bundle::FIRST_PARTY_BUNDLES {
+        let name = hya_bundle::first_party_package_name(identity)
+            .with_context(|| format!("no package name for {identity}"))?;
+        require_file(
+            &package_root.join("bundles").join(name),
+            "packaged first-party bundle",
+        )?;
+    }
     Ok(())
 }
 
@@ -880,6 +949,15 @@ fn verify_archive_listing(
         require_listing_line(
             &listing,
             &format!("{package_name}/{path}"),
+            "release tar listing",
+        )?;
+    }
+    for identity in hya_bundle::FIRST_PARTY_BUNDLES {
+        let name = hya_bundle::first_party_package_name(identity)
+            .with_context(|| format!("no package name for {identity}"))?;
+        require_listing_line(
+            &listing,
+            &format!("{package_name}/bundles/{name}"),
             "release tar listing",
         )?;
     }
@@ -916,8 +994,43 @@ fn smoke_packaged_release(
         &[],
     )
     .context("smoke packaged hya-backend --help")?;
+    smoke_first_party_bundles(&backend, scratch, version)?;
 
     smoke_bun_adapter(&package_root.join("lib/hya/bun-adapter"), scratch)?;
+    Ok(())
+}
+
+/// Require the packaged backend to load every first-party bundle at `version`.
+fn smoke_first_party_bundles(
+    backend: &Path,
+    scratch: &ScratchDirectory,
+    version: &str,
+) -> Result<()> {
+    let home = scratch.path().join("smoke-home");
+    fs::create_dir_all(&home).with_context(|| format!("create {}", home.display()))?;
+    let envs = [
+        ("HOME", home.as_os_str().to_os_string()),
+        ("XDG_CONFIG_HOME", home.join("config").into_os_string()),
+        ("XDG_DATA_HOME", home.join("data").into_os_string()),
+        ("XDG_STATE_HOME", home.join("state").into_os_string()),
+        ("XDG_CACHE_HOME", home.join("cache").into_os_string()),
+    ];
+    let output = run_checked(
+        backend.as_os_str(),
+        &arg_list(&["bundle", "list"]),
+        scratch.path(),
+        &envs,
+        &[],
+    )
+    .context("list first-party bundles with the packaged backend")?;
+    let listing = String::from_utf8_lossy(&output.stdout);
+    for identity in hya_bundle::FIRST_PARTY_BUNDLES {
+        let row = format!("{identity} {version} ");
+        ensure!(
+            listing.lines().any(|line| line.starts_with(&row)),
+            "packaged bundle list lacks `{identity}` at {version}"
+        );
+    }
     Ok(())
 }
 
@@ -1146,7 +1259,11 @@ mod tests {
     use anyhow::{Context, Result};
 
     /// Exact-line packaging contracts that must stay in the checked-in workflow.
-    const WORKFLOW_CONTRACTS: &[&str] = &[WORKFLOW_BUN_SOURCE_COPY];
+    const WORKFLOW_CONTRACTS: &[&str] = &[
+        WORKFLOW_BUN_SOURCE_COPY,
+        WORKFLOW_FIRST_PARTY_STAGE,
+        WORKFLOW_CHECKSUMS,
+    ];
 
     /// Require the checked-in workflow to satisfy every release package contract.
     #[test]

@@ -1,7 +1,7 @@
 kind: Plugin
 identity:
   id: hya/base-tools
-  version: 1.0.0
+  version: 0.37.18
   publisher: hya
 namespace: base-tools
 extensions:

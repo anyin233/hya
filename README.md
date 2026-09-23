@@ -21,9 +21,9 @@ keys while you set things up.
 
 ## Status
 
-hya is under active development (workspace version `0.37.6`,
+hya is under active development (workspace version `0.37.18`,
 `MIT OR Apache-2.0`). The latest public binary release is `v0.35.1`; the
-checked-out `0.37.6` workspace is newer and is not published to crates.io. Build
+checked-out `0.37.18` workspace is newer and is not published to crates.io. Build
 this checkout from source as described below. APIs, config, and command surfaces
 may still change between versions.
 
@@ -32,7 +32,7 @@ may still change between versions.
 
 Requires a Rust toolchain matching the workspace manifest
 ([`Cargo.toml`](Cargo.toml); currently edition 2024, Rust `1.91`), Git, and Bun
-(pinned at 1.3.14 for the Compat adapter runtime).
+(pinned at 1.3.14 for the Bun adapter runtime).
 
 ```sh
 git clone <this-repo> hya
@@ -42,8 +42,11 @@ export PATH="$HOME/.local/bin:$PATH"
 hya-backend serve
 ```
 
-The installer places the `hya-backend` binary plus `lib/hya/compat-adapter/`
-with its production dependencies.
+The installer places `bin/hya-backend`, the twelve first-party bundles it loads
+at startup under `bundles/`, and `lib/hya/bun-adapter/` with its production
+dependencies. Release archives use the same layout; each first-party bundle is
+also published as a standalone release asset (see
+[first-party bundles](docs/bundle-runtime.md#release-assets)).
 
 
 ## Configure a Provider and Log In
@@ -124,5 +127,5 @@ inspected and installed with `hya-backend bundle info -f example.hyabundle` and
 | [docs/hya-pi-compat-comparison.md](docs/hya-pi-compat-comparison.md) | Feature comparison across hya, upstream stock Pi, and current Compat. |
 
 The Rust workspace is licensed under either MIT or Apache-2.0 at your option.
-The checked-out Compat adapter has no separate license file; consult the
+The checked-out Bun adapter has no separate license file; consult the
 repository license files for the complete applicable terms.

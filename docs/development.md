@@ -77,7 +77,8 @@ There is **no** Cargo alias named `xtask` in this workspace: invoke it as
 `cargo run -p xtask -- <task> …`. The binary uses a hand-rolled positional
 dispatcher (not clap): the first positional argument selects the task and every
 remaining argument is forwarded verbatim. The currently supported tasks are
-`startup-bench`, `matrix-check`, `package-bundle`, `package-native-tool-bundle`, `gen-api`, and
+`startup-bench`, `matrix-check`, `package-bundle`, `package-native-tool-bundle`,
+`package-native-tool-library`, `stage-first-party-bundles`, `gen-api`, and
 `release-rehearsal`.
 
 | Task | Role |
@@ -87,7 +88,9 @@ remaining argument is forwarded verbatim. The currently supported tasks are
 | `matrix-check` | Validates `crates/hya-e2e/matrix.toml`. See [agent-matrix.md](testing/agent-matrix.md). |
 | `package-bundle` | Validates a source directory and atomically writes the canonical deterministic public `.hyabundle` package. |
 | `package-native-tool-bundle` | Adds a built target-specific Rust executable and exact policy tool declarations to one tool-family source, then writes a deterministic public package. |
-| `release-rehearsal` | Runs the pinned, non-publishing release build/package/smoke rehearsal, including archive, adapter, Argus, and runtime-prune checks. |
+| `package-native-tool-library` | Adds a built tool-family dynamic library and exact policy tool declarations to one tool-family source, then writes a deterministic public package. |
+| `stage-first-party-bundles` | Packages the twelve trusted first-party bundles into `<package-root>/bundles/` and fails if any bundle version differs from the release version. With `--target` and `--assets`, it also writes each package as a versioned standalone release asset. The release workflow, the rehearsal, and `install.sh` all use it. |
+| `release-rehearsal` | Runs the pinned, non-publishing release build/package/smoke rehearsal, including archive, first-party bundle assets, adapter, Argus, and runtime-prune checks. Linux x86_64 only; needs Bun 1.3.14 and 7-Zip. |
 
 ```sh
 cargo run -p xtask -- matrix-check
@@ -95,7 +98,8 @@ cargo run -p xtask -- startup-bench
 cargo run -p xtask -- package-bundle <source-dir> <output.hyabundle>
 cargo run -p xtask -- package-native-tool-bundle <tool-family-source-dir> <built-executable> <output.hyabundle>
 cargo run -p xtask -- package-native-tool-library <tool-family-source-dir> <built-library> <output.hyabundle>
-cargo run -p xtask -- release-rehearsal --workflow .github/workflows/release.yml --version 0.36.12 --target x86_64-unknown-linux-gnu --no-publish
+cargo run -p xtask -- stage-first-party-bundles --library-dir target/release --package-root dist/hya [--version <semver>] [--target <triple> --assets dist]
+cargo run -p xtask -- release-rehearsal --workflow .github/workflows/release.yml --version 0.37.18 --target x86_64-unknown-linux-gnu --no-publish
 ```
 
 ## Crate Selection

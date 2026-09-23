@@ -66,7 +66,7 @@ fn inventory_exposes_immutable_noninstallable_core_and_tool_presets() {
         assert!(preset.immutable);
         assert!(!preset.installable);
         assert_eq!(preset.digest.len(), 64);
-        assert_eq!(preset.version, "1.0.0");
+        assert_eq!(preset.version, env!("CARGO_PKG_VERSION"));
     }
 
     let public = hya_app::builtin_agent_catalog().expect("public catalog");

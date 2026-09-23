@@ -9,8 +9,11 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 const TARGET: &str = "x86_64-unknown-linux-gnu";
-const WORKFLOW_CONTRACTS: &[&str] =
-    &["cp -R crates/hya-plugin-bun/adapter/src/. \"$bun_adapter/src/\""];
+const WORKFLOW_CONTRACTS: &[&str] = &[
+    "cp -R crates/hya-plugin-bun/adapter/src/. \"$bun_adapter/src/\"",
+    "cargo run --locked -p xtask -- stage-first-party-bundles --target \"$TARGET\" --version \"$version\" --library-dir \"target/$TARGET/release\" --package-root \"dist/$package_dir\" --assets dist",
+    "(cd dist && sha256sum \"$archive\" hya-*.hyabundle > SHA256SUMS)",
+];
 
 /// Require an explicit no-publish guard before a rehearsal can run.
 #[test]
