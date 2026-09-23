@@ -56,6 +56,8 @@ struct Shared {
     scripts: VecDeque<ScriptStep>,
     requests: Vec<Value>,
     routes: Vec<Route>,
+    /// OpenAI `usage` object attached to every streamed response when set.
+    usage: Option<Value>,
 }
 
 /// Running FakeLlm HTTP server.
@@ -79,6 +81,7 @@ impl FakeLlm {
             scripts: scripts.into(),
             requests: Vec::new(),
             routes: Vec::new(),
+            usage: None,
         }));
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
@@ -120,6 +123,24 @@ impl FakeLlm {
             .lock()
             .map_err(|_| E2eError::Other("fake llm mutex poisoned".into()))?;
         Ok(guard.requests.clone())
+    }
+
+    /// Report deterministic token usage on every streamed response from now
+    /// on: `prompt_tokens`, `completion_tokens`, and
+    /// `completion_tokens_details.reasoning_tokens` (so the thinking split is
+    /// known). Off by default, so existing scenarios stream no usage.
+    pub fn set_usage(&self, prompt: u64, completion: u64, reasoning: u64) -> Result<(), E2eError> {
+        let mut guard = self
+            .shared
+            .lock()
+            .map_err(|_| E2eError::Other("fake llm mutex poisoned".into()))?;
+        guard.usage = Some(json!({
+            "prompt_tokens": prompt,
+            "completion_tokens": completion,
+            "total_tokens": prompt + completion,
+            "completion_tokens_details": {"reasoning_tokens": reasoning},
+        }));
+        Ok(())
     }
 
     /// Unconsumed steps left on the shared (unrouted) script queue.
@@ -205,16 +226,17 @@ async fn chat_completions(
     _headers: HeaderMap,
     body: axum::Json<Value>,
 ) -> Response {
-    let step = {
+    let (step, usage) = {
         let Ok(mut guard) = state.shared.lock() else {
             return (StatusCode::INTERNAL_SERVER_ERROR, "mutex poisoned").into_response();
         };
         guard.requests.push(body.0.clone());
+        let usage = guard.usage.clone();
         // Attribution is by marker alone. An exhausted route does NOT fall back
         // to the shared queue: a resident that ran out of script must stop, not
         // start eating the main agent's steps.
         let system = system_text(&body.0);
-        match guard
+        let step = match guard
             .routes
             .iter_mut()
             .find(|route| system.contains(&route.marker))
@@ -224,15 +246,19 @@ async fn chat_completions(
                 route.steps.pop_front()
             }
             None => guard.scripts.pop_front(),
-        }
+        };
+        (step, usage)
     };
     let Some(step) = step else {
         // Terminate agent loop cleanly if scripts exhausted.
-        return sse_response(vec![
-            json!({"choices":[{"delta":{"content":""},"finish_reason":null}]}),
-            json!({"choices":[{"delta":{},"finish_reason":"stop"}]}),
-            Value::String("[DONE]".into()),
-        ]);
+        return sse_response_with_usage(
+            vec![
+                json!({"choices":[{"delta":{"content":""},"finish_reason":null}]}),
+                json!({"choices":[{"delta":{},"finish_reason":"stop"}]}),
+                Value::String("[DONE]".into()),
+            ],
+            usage,
+        );
     };
     let frames = match step {
         ScriptStep::HttpError(status) => {
@@ -283,6 +309,20 @@ async fn chat_completions(
             frames
         }
     };
+    sse_response_with_usage(frames, usage)
+}
+
+/// Stream `frames`, first attaching `usage` (when set) to the finishing
+/// chunk — the last frame before `[DONE]`.
+fn sse_response_with_usage(mut frames: Vec<Value>, usage: Option<Value>) -> Response {
+    if let Some(usage) = usage
+        && let Some(finish) = frames
+            .iter_mut()
+            .rev()
+            .find_map(|frame| frame.as_object_mut())
+    {
+        finish.insert("usage".to_string(), usage);
+    }
     sse_response(frames)
 }
 

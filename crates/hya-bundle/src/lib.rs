@@ -21,10 +21,10 @@ pub use model::{
     AgentRole, BundleIdentity, ChannelCapability, ChannelParticipantRole, ChannelRetention,
     ChannelScope, ChannelTemplateKind, ModelPolicy, PreparedAgent, PreparedAgentBundle,
     PreparedAgentSetBundle, PreparedBundleIndex, PreparedBundleKind, PreparedBundleProcess,
-    PreparedBundleSchemas, PreparedCatalog, PreparedChannelParticipant, PreparedChannelTemplate,
-    PreparedInstallableBundle, PreparedPluginBundle, PreparedProcessExtension, PreparedProcessKind,
-    PreparedResource, PreparedSchema, PreparedWorkflow, PreparedWorkflowBundle, ResourceView,
-    SpawnLifecycle,
+    PreparedBundleSchemas, PreparedBundleViews, PreparedCatalog, PreparedChannelParticipant,
+    PreparedChannelTemplate, PreparedInstallableBundle, PreparedPluginBundle,
+    PreparedProcessExtension, PreparedProcessKind, PreparedResource, PreparedSchema, PreparedView,
+    PreparedWorkflow, PreparedWorkflowBundle, ResourceView, SpawnLifecycle,
 };
 pub use package::{
     PackageFormat, PackageInspection, PrivatePackageAuthentication, PrivatePackageInspection,

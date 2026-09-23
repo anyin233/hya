@@ -59,6 +59,11 @@
 
 - Operation identity remains internal in 0.34.4; do not add it to HTTP/proto/CLI
   payloads.
+- Bundle session views map `hya_core::BundleViewError` onto the stable v1
+  codes: `SessionNotFound` → `session_not_found`, `BundleNotFound`/
+  `ViewNotFound` → `view_not_found` (404), `Failed` (process error, timeout,
+  malformed reply) → `view_failed` (502 / gRPC `UNAVAILABLE`), store failures
+  → `internal`. Do not collapse a process failure into `internal`.
 - Existing tool-result event JSON carries `{ "error": { "type", "message" } }`.
   Use `operation_id_conflict` and `operation_already_handled` for the new tool
   variants.

@@ -7149,6 +7149,150 @@ impl<'de> serde::Deserialize<'de> for GetSessionTodoRequest {
         deserializer.deserialize_struct("hya.v1.GetSessionTodoRequest", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for GetSessionViewRequest {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.session.is_empty() {
+            len += 1;
+        }
+        if !self.bundle.is_empty() {
+            len += 1;
+        }
+        if !self.view.is_empty() {
+            len += 1;
+        }
+        if !self.query.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("hya.v1.GetSessionViewRequest", len)?;
+        if !self.session.is_empty() {
+            struct_ser.serialize_field("session", &self.session)?;
+        }
+        if !self.bundle.is_empty() {
+            struct_ser.serialize_field("bundle", &self.bundle)?;
+        }
+        if !self.view.is_empty() {
+            struct_ser.serialize_field("view", &self.view)?;
+        }
+        if !self.query.is_empty() {
+            struct_ser.serialize_field("query", &self.query)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for GetSessionViewRequest {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "session",
+            "bundle",
+            "view",
+            "query",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Session,
+            Bundle,
+            View,
+            Query,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "session" => Ok(GeneratedField::Session),
+                            "bundle" => Ok(GeneratedField::Bundle),
+                            "view" => Ok(GeneratedField::View),
+                            "query" => Ok(GeneratedField::Query),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = GetSessionViewRequest;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct hya.v1.GetSessionViewRequest")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<GetSessionViewRequest, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut session__ = None;
+                let mut bundle__ = None;
+                let mut view__ = None;
+                let mut query__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Session => {
+                            if session__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("session"));
+                            }
+                            session__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Bundle => {
+                            if bundle__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("bundle"));
+                            }
+                            bundle__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::View => {
+                            if view__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("view"));
+                            }
+                            view__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Query => {
+                            if query__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("query"));
+                            }
+                            query__ = Some(
+                                map_.next_value::<std::collections::HashMap<_, _>>()?
+                            );
+                        }
+                    }
+                }
+                Ok(GetSessionViewRequest {
+                    session: session__.unwrap_or_default(),
+                    bundle: bundle__.unwrap_or_default(),
+                    view: view__.unwrap_or_default(),
+                    query: query__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("hya.v1.GetSessionViewRequest", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for GetTurnRequest {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -11071,6 +11215,188 @@ impl<'de> serde::Deserialize<'de> for ListSavedRulesResponse {
             }
         }
         deserializer.deserialize_struct("hya.v1.ListSavedRulesResponse", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for ListSessionViewsRequest {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.session.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("hya.v1.ListSessionViewsRequest", len)?;
+        if !self.session.is_empty() {
+            struct_ser.serialize_field("session", &self.session)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for ListSessionViewsRequest {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "session",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Session,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "session" => Ok(GeneratedField::Session),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = ListSessionViewsRequest;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct hya.v1.ListSessionViewsRequest")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<ListSessionViewsRequest, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut session__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Session => {
+                            if session__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("session"));
+                            }
+                            session__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(ListSessionViewsRequest {
+                    session: session__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("hya.v1.ListSessionViewsRequest", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for ListSessionViewsResponse {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.views.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("hya.v1.ListSessionViewsResponse", len)?;
+        if !self.views.is_empty() {
+            struct_ser.serialize_field("views", &self.views)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for ListSessionViewsResponse {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "views",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Views,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "views" => Ok(GeneratedField::Views),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = ListSessionViewsResponse;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct hya.v1.ListSessionViewsResponse")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<ListSessionViewsResponse, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut views__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Views => {
+                            if views__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("views"));
+                            }
+                            views__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(ListSessionViewsResponse {
+                    views: views__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("hya.v1.ListSessionViewsResponse", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for ListSessionsRequest {
@@ -18881,6 +19207,274 @@ impl<'de> serde::Deserialize<'de> for SessionUpdated {
             }
         }
         deserializer.deserialize_struct("hya.v1.SessionUpdated", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for SessionView {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.bundle.is_empty() {
+            len += 1;
+        }
+        if !self.view.is_empty() {
+            len += 1;
+        }
+        if !self.content_type.is_empty() {
+            len += 1;
+        }
+        if self.body.is_some() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("hya.v1.SessionView", len)?;
+        if !self.bundle.is_empty() {
+            struct_ser.serialize_field("bundle", &self.bundle)?;
+        }
+        if !self.view.is_empty() {
+            struct_ser.serialize_field("view", &self.view)?;
+        }
+        if !self.content_type.is_empty() {
+            struct_ser.serialize_field("contentType", &self.content_type)?;
+        }
+        if let Some(v) = self.body.as_ref() {
+            struct_ser.serialize_field("body", v)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for SessionView {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "bundle",
+            "view",
+            "content_type",
+            "contentType",
+            "body",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Bundle,
+            View,
+            ContentType,
+            Body,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "bundle" => Ok(GeneratedField::Bundle),
+                            "view" => Ok(GeneratedField::View),
+                            "contentType" | "content_type" => Ok(GeneratedField::ContentType),
+                            "body" => Ok(GeneratedField::Body),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = SessionView;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct hya.v1.SessionView")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<SessionView, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut bundle__ = None;
+                let mut view__ = None;
+                let mut content_type__ = None;
+                let mut body__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Bundle => {
+                            if bundle__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("bundle"));
+                            }
+                            bundle__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::View => {
+                            if view__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("view"));
+                            }
+                            view__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::ContentType => {
+                            if content_type__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("contentType"));
+                            }
+                            content_type__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Body => {
+                            if body__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("body"));
+                            }
+                            body__ = map_.next_value()?;
+                        }
+                    }
+                }
+                Ok(SessionView {
+                    bundle: bundle__.unwrap_or_default(),
+                    view: view__.unwrap_or_default(),
+                    content_type: content_type__.unwrap_or_default(),
+                    body: body__,
+                })
+            }
+        }
+        deserializer.deserialize_struct("hya.v1.SessionView", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for SessionViewInfo {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.bundle.is_empty() {
+            len += 1;
+        }
+        if !self.view.is_empty() {
+            len += 1;
+        }
+        if !self.description.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("hya.v1.SessionViewInfo", len)?;
+        if !self.bundle.is_empty() {
+            struct_ser.serialize_field("bundle", &self.bundle)?;
+        }
+        if !self.view.is_empty() {
+            struct_ser.serialize_field("view", &self.view)?;
+        }
+        if !self.description.is_empty() {
+            struct_ser.serialize_field("description", &self.description)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for SessionViewInfo {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "bundle",
+            "view",
+            "description",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Bundle,
+            View,
+            Description,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "bundle" => Ok(GeneratedField::Bundle),
+                            "view" => Ok(GeneratedField::View),
+                            "description" => Ok(GeneratedField::Description),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = SessionViewInfo;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct hya.v1.SessionViewInfo")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<SessionViewInfo, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut bundle__ = None;
+                let mut view__ = None;
+                let mut description__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Bundle => {
+                            if bundle__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("bundle"));
+                            }
+                            bundle__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::View => {
+                            if view__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("view"));
+                            }
+                            view__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Description => {
+                            if description__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("description"));
+                            }
+                            description__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(SessionViewInfo {
+                    bundle: bundle__.unwrap_or_default(),
+                    view: view__.unwrap_or_default(),
+                    description: description__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("hya.v1.SessionViewInfo", FIELDS, GeneratedVisitor)
     }
 }
 impl serde::Serialize for SetAgentModelRequest {

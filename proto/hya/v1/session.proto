@@ -4,6 +4,7 @@ syntax = "proto3";
 
 package hya.v1;
 
+import "google/protobuf/struct.proto";
 import "google/protobuf/timestamp.proto";
 import "hya/v1/catalog.proto";
 import "hya/v1/common.proto";
@@ -56,6 +57,22 @@ service Session {
   //
   // hya.http: POST /v1/sessions/{session}/revert
   rpc RevertSession(RevertSessionRequest) returns (RevertSessionResponse);
+
+  // List the read-only session views that installed bundles serve (manifest
+  // `views:`, answered by the bundle's `extensions.process`).
+  //
+  // hya.http: GET /v1/sessions/{session}/views
+  rpc ListSessionViews(ListSessionViewsRequest) returns (ListSessionViewsResponse);
+
+  // Compute one bundle-declared read-only view of a session. The server
+  // forwards the request to the bundle process of the live runtime
+  // generation, which reads through a request-scoped read-only capability
+  // bound to this session. Over HTTP `bundle` is one percent-encoded path
+  // segment (`hya-extra%2Ftoken-summary`) and every query-string parameter
+  // lands in `query`.
+  //
+  // hya.http: GET /v1/sessions/{session}/views/{bundle}/{view}
+  rpc GetSessionView(GetSessionViewRequest) returns (SessionView);
 }
 
 // Session id string (`hysec_...`, `ses_...`, or legacy raw UUID accepted on
@@ -202,4 +219,51 @@ message RevertSessionRequest {
 message RevertSessionResponse {
   // Projection summary after the revert.
   SessionInfo session = 1;
+}
+
+message ListSessionViewsRequest {
+  // Session identifier (must exist).
+  string session = 1;
+}
+
+// One read-only view a published bundle serves.
+message SessionViewInfo {
+  // Bundle identity id (for example `hya-extra/token-summary`).
+  string bundle = 1;
+  // View id declared in the bundle manifest.
+  string view = 2;
+  // Manifest description; empty when not declared.
+  string description = 3;
+}
+
+message ListSessionViewsResponse {
+  // Views sorted by bundle id, then view id.
+  repeated SessionViewInfo views = 1;
+}
+
+message GetSessionViewRequest {
+  // Session the view is computed for.
+  string session = 1;
+  // Bundle identity id; contains `/`, so HTTP carries it percent-encoded as
+  // one path segment.
+  string bundle = 2;
+  // View id declared by the bundle.
+  string view = 3;
+  // Caller parameters passed to the bundle process verbatim (HTTP: the
+  // query string).
+  map<string, string> query = 4;
+}
+
+// One computed bundle view.
+message SessionView {
+  // Bundle identity id.
+  string bundle = 1;
+  // View id.
+  string view = 2;
+  // Media type of `body`; always `application/json`.
+  string content_type = 3;
+  // The bundle process's JSON answer, unchanged. HTTP renders it verbatim
+  // (integers stay exact); gRPC carries it as a protobuf `Value`, whose
+  // numbers are doubles.
+  google.protobuf.Value body = 4;
 }

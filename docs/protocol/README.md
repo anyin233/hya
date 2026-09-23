@@ -56,6 +56,8 @@ Stable codes and their HTTP status / gRPC code:
 | `conflict` | 409 | `FailedPrecondition` | State conflict (stale revision, patch rejection). |
 | `unavailable` | 503 | `Unavailable` | Required capability not configured (e.g. no summarizer, OAuth not wired). |
 | `internal` | 500 | `Internal` | Unhandled failure. |
+| `view_not_found` | 404 | `NotFound` | No published bundle serves this session view (unknown bundle, bundle without views, or undeclared view id). |
+| `view_failed` | 502 | `Unavailable` | The bundle process failed, timed out, or answered malformed data while computing a view. |
 
 ## Pagination
 
@@ -100,6 +102,29 @@ listed by `GET /v1/interactions`. Answer with
 `{permission: {allowed, persist}}` or `{question: {answer}}` /
 `{question: {rejected: true}}`. The response's `applied` is `false` when
 the request was already resolved (idempotent replay).
+
+## Bundle session views
+
+Installed bundles with an `extensions.process` may serve read-only views of a
+session (manifest `views:`; see
+[bundle runtime](../bundle-runtime.md#session-views)).
+
+- `GET /v1/sessions/{session}/views` → `{ "views": [{ "bundle", "view",
+  "description"? }] }` (rpc `Session.ListSessionViews`).
+- `GET /v1/sessions/{session}/views/{bundle}/{view}` (rpc
+  `Session.GetSessionView`). `bundle` is the bundle id percent-encoded as one
+  path segment (`hya-extra%2Ftoken-summary`); every query-string parameter is
+  passed to the bundle process verbatim as `query`. The response is
+  `{ "bundle", "view", "contentType": "application/json", "body": <JSON> }`.
+  Over HTTP `body` is the process's JSON unchanged (integers stay exact); over
+  gRPC it is a `google.protobuf.Value`, whose numbers are doubles.
+
+```
+GET /v1/sessions/hysec_.../views/hya-extra%2Ftoken-summary/usage?scope=session
+→ {"bundle":"hya-extra/token-summary","view":"usage","contentType":"application/json","body":{...}}
+```
+
+Errors: `session_not_found`, `view_not_found`, `view_failed`.
 
 ## Terminal (PTY)
 

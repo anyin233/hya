@@ -24,8 +24,8 @@ use crate::codec::read_bounded_line;
 use crate::error::PluginError;
 use crate::messages::{
     ActivationMetadata, HostCapabilityParams, HostInfo, InitializeParams, InitializeResult,
-    METHOD_HOST_CAPABILITY, METHOD_INITIALIZE, METHOD_SHUTDOWN, METHOD_TOOL_CALL, PROTOCOL_VERSION,
-    ToolCallParams, ToolCallReply,
+    METHOD_HOST_CAPABILITY, METHOD_INITIALIZE, METHOD_SHUTDOWN, METHOD_TOOL_CALL, METHOD_VIEW_GET,
+    PROTOCOL_VERSION, ToolCallParams, ToolCallReply, ViewGetParams, ViewGetResult,
 };
 use crate::protocol::{
     Frame, JsonRpcError, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, codes,
@@ -45,7 +45,8 @@ type Pending = Arc<StdMutex<PendingEntries>>;
 type Writer = Arc<Mutex<Box<dyn AsyncWrite + Send + Unpin>>>;
 type Capabilities = Arc<StdMutex<HashMap<String, RegisteredCapability>>>;
 
-/// Host-owned operations available to one explicitly authorized native tool call.
+/// Host-owned operations available to one explicitly authorized request: a
+/// bundle-process tool call or a `view/get` view request.
 ///
 /// The transport validates the opaque token, session, and call id before this
 /// handler sees the operation. Implementations must still enforce their own
@@ -612,6 +613,39 @@ impl PluginClient {
             .await;
         drop(lease);
         result
+    }
+
+    /// Ask the plugin for one declared read-only session view.
+    ///
+    /// A fresh synthetic request id is minted and a capability lease bound to
+    /// `(this connection, session, request id)` is handed to the plugin as
+    /// `host_capability`; it is revoked on reply, error, timeout, and caller
+    /// cancellation, exactly like a tool-call lease.
+    ///
+    /// # Errors
+    /// Returns the call-level errors from [`Self::call`] or `Json` when the
+    /// reply is not a `{ "body": <json> }` object.
+    pub async fn get_view(
+        &self,
+        view: &str,
+        session: SessionId,
+        query: BTreeMap<String, String>,
+        handler: Arc<dyn HostCapabilityHandler>,
+        timeout: Duration,
+    ) -> Result<ViewGetResult, PluginError> {
+        let call = ToolCallId::new();
+        let lease = self.register_capability(session, call, handler)?;
+        let params = serde_json::to_value(ViewGetParams {
+            view: view.to_string(),
+            session,
+            call,
+            query,
+            host_capability: lease.token.clone(),
+        })
+        .map_err(|error| PluginError::Json(error.to_string()))?;
+        let result = self.call(METHOD_VIEW_GET, params, timeout).await;
+        drop(lease);
+        serde_json::from_value(result?).map_err(|error| PluginError::Json(error.to_string()))
     }
 
     fn register_capability(

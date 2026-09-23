@@ -63,6 +63,8 @@ pub struct InstalledBundleRefresh {
     watched_configs: Mutex<Vec<(PathBuf, Option<[u8; 32]>)>>,
     initialized: AtomicBool,
     sources: Mutex<BTreeMap<String, crate::bundle_runtime::CachedBundleSource>>,
+    /// Read-only host services behind bundle process capabilities.
+    host_reads: Option<Arc<dyn hya_core::HostSessionReads>>,
 }
 
 impl InstalledBundleRefresh {
@@ -79,7 +81,16 @@ impl InstalledBundleRefresh {
             watched_configs: Mutex::new(Vec::new()),
             initialized: AtomicBool::new(false),
             sources: Mutex::new(BTreeMap::new()),
+            host_reads: None,
         }
+    }
+
+    /// Back bundle process capabilities (`session.usage`, for tool calls and
+    /// view requests) with these read-only host services.
+    #[must_use]
+    pub fn with_host_reads(mut self, reads: Arc<dyn hya_core::HostSessionReads>) -> Self {
+        self.host_reads = Some(reads);
+        self
     }
 
     /// Track a project bundle directory (highest-precedence catalog tier).
@@ -265,6 +276,15 @@ impl InstalledBundleRefresh {
                 .iter()
                 .find(|row| &row.bundle_id == id)
                 .map_or(&[][..], |row| row.schemas.as_slice());
+            let views = prepared_catalog_refs
+                .iter()
+                .find(|catalog| {
+                    catalog
+                        .bundles()
+                        .iter()
+                        .any(|candidate| &candidate.identity().id == id)
+                })
+                .map_or(&[][..], |catalog| catalog.bundle_views(id));
             let location = config_resolver.location(id).map_err(|error| {
                 CoreError::Invalid(format!("resolve bundle `{id}` configuration: {error}"))
             })?;
@@ -274,11 +294,21 @@ impl InstalledBundleRefresh {
                 next_watched.push((config.location().file().to_path_buf(), config.digest()));
             }
             let fingerprint =
-                crate::bundle_runtime::fingerprint(bundle, process, schemas, &config)?;
+                crate::bundle_runtime::fingerprint(bundle, process, schemas, views, &config)?;
             let prepared = match source_cache.get(id) {
                 Some(cached) if cached.fingerprint == fingerprint => cached.clone(),
                 _ => {
-                    crate::bundle_runtime::prepare_source(bundle, process, schemas, &config).await?
+                    crate::bundle_runtime::prepare_source(
+                        bundle,
+                        crate::bundle_runtime::BundleRuntimeParts {
+                            process,
+                            schemas,
+                            views,
+                            reads: self.host_reads.clone(),
+                        },
+                        &config,
+                    )
+                    .await?
                 }
             };
             next_sources.insert(id.clone(), prepared);

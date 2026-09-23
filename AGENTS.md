@@ -57,7 +57,7 @@ projection for the HTTP API and client surfaces. There is no bundled
 interactive TUI; the legacy TypeScript TUI was removed, and `hya-sdk-v1`,
 `hya-client`, and the gRPC surface are the supported ways to drive a backend.
 
-The server exposes exactly one contract — `hya.v1` (16 services / 79 rpcs in
+The server exposes exactly one contract — `hya.v1` (16 services / 81 rpcs in
 `proto/hya/v1`) — over HTTP/JSON+SSE+WebSocket under `/v1` and, when
 `HYA_GRPC_BIND` is set, over gRPC through `hya_server::V1Grpc`, which dispatches
 through the same router. The legacy Compat `/api/*`, bare native routes, and

@@ -22,7 +22,7 @@ use crate::messages::{
     ToolCallReply, ToolInfo,
 };
 
-use crate::native_capability::NativeToolCapability;
+use crate::native_capability::BundleCapability;
 use crate::plugin_tool::PluginTool;
 
 mod connection;
@@ -99,7 +99,6 @@ pub(crate) struct PluginConn {
     canonical_declaration: Arc<[u8]>,
     pub(crate) timeout: Duration,
     command: Vec<String>,
-    kind: crate::messages::PluginKindWire,
     bundle_root: Option<std::path::PathBuf>,
     env: BTreeMap<String, String>,
     host_info: HostInfo,
@@ -109,6 +108,9 @@ pub(crate) struct PluginConn {
     declaration_drift: AtomicBool,
     event_tx: mpsc::Sender<Envelope>,
     event_drops: AtomicU64,
+    /// Read-only host services behind bundle capabilities (bundle processes
+    /// only; `None` for configured plugins and hosts without a store).
+    host_reads: Option<Arc<dyn hya_core::HostSessionReads>>,
 }
 
 impl PluginConn {
@@ -142,25 +144,59 @@ impl PluginConn {
         input: Value,
     ) -> Result<ToolCallReply, PluginError> {
         let client = self.ensure_client().await?;
-        let reply =
-            if self.bundle_root.is_some() && self.kind == crate::messages::PluginKindWire::Rust {
-                client
-                    .call_tool_with_capability_timeout(
-                        tool,
-                        session,
-                        call,
-                        input,
-                        Arc::new(NativeToolCapability::new(ctx)),
-                        self.timeout,
-                    )
-                    .await
-            } else {
-                client
-                    .call_tool_with_timeout(tool, session, call, input, self.timeout)
-                    .await
-            };
+        // Every installed-bundle process (any kind) receives a call-scoped,
+        // read-only / permission-checked capability; configured plugins never do.
+        let reply = if self.bundle_root.is_some() {
+            client
+                .call_tool_with_capability_timeout(
+                    tool,
+                    session,
+                    call,
+                    input,
+                    Arc::new(BundleCapability::tool_call(ctx, self.host_reads.clone())),
+                    self.timeout,
+                )
+                .await
+        } else {
+            client
+                .call_tool_with_timeout(tool, session, call, input, self.timeout)
+                .await
+        };
         match reply {
             Ok(reply) => Ok(reply),
+            Err(error) => {
+                if matches!(error, PluginError::Closed | PluginError::OversizedLine(_)) {
+                    *self.live.lock().await = None;
+                }
+                Err(error)
+            }
+        }
+    }
+
+    /// Ask this bundle process for one declared read-only session view.
+    pub(crate) async fn get_view(
+        &self,
+        view: &str,
+        session: SessionId,
+        query: BTreeMap<String, String>,
+    ) -> Result<Value, PluginError> {
+        if self.bundle_root.is_none() {
+            return Err(PluginError::Json(
+                "only bundle processes serve views".to_string(),
+            ));
+        }
+        let client = self.ensure_client().await?;
+        let capability = Arc::new(BundleCapability::view(
+            session,
+            view,
+            ToolCallId::new(),
+            self.host_reads.clone(),
+        ));
+        match client
+            .get_view(view, session, query, capability, self.timeout)
+            .await
+        {
+            Ok(result) => Ok(result.body),
             Err(error) => {
                 if matches!(error, PluginError::Closed | PluginError::OversizedLine(_)) {
                     *self.live.lock().await = None;
@@ -305,6 +341,11 @@ fn canonical_initialize(init: &crate::messages::InitializeResult) -> Result<Vec<
             .then_with(|| left.content.cmp(&right.content))
             .then_with(|| left.digest.cmp(&right.digest))
     });
+    declaration.contributions.views.sort_by(|left, right| {
+        left.name
+            .cmp(&right.name)
+            .then_with(|| left.description.cmp(&right.description))
+    });
     declaration
         .contributions
         .workspace_adapters
@@ -346,10 +387,30 @@ impl PluginHost {
         host: HostInfo,
         root: std::path::PathBuf,
     ) -> Result<Self, PluginError> {
-        let conn = connection::connect_one_at(spec, host, Some(root)).await?;
+        Self::connect_bundle_with_reads(spec, host, root, None).await
+    }
+
+    /// Like [`PluginHost::connect_bundle`], with the read-only host services
+    /// (`session.usage`) behind this process's tool-call and view capabilities.
+    pub async fn connect_bundle_with_reads(
+        spec: PluginSpec,
+        host: HostInfo,
+        root: std::path::PathBuf,
+        reads: Option<Arc<dyn hya_core::HostSessionReads>>,
+    ) -> Result<Self, PluginError> {
+        let conn = connection::connect_one_at(spec, host, Some(root), reads).await?;
         Ok(Self {
             plugins: vec![conn],
         })
+    }
+
+    /// Views declared by this host's processes in their initialize replies.
+    #[must_use]
+    pub fn declared_views(&self) -> Vec<crate::messages::ViewInfo> {
+        self.plugins
+            .iter()
+            .flat_map(|conn| conn.contributions.views.iter().cloned())
+            .collect()
     }
 
     /// Connect every spec in parallel; failed plugins are logged and omitted.
@@ -479,6 +540,33 @@ impl PluginHost {
     }
 }
 
+/// A bundle host forwards view requests to its (single) bundle process.
+#[async_trait::async_trait]
+impl hya_core::BundleViewProvider for PluginHost {
+    async fn get_view(
+        &self,
+        view: &str,
+        session: SessionId,
+        query: BTreeMap<String, String>,
+    ) -> Result<Value, String> {
+        let conn = self
+            .plugins
+            .iter()
+            .find(|conn| {
+                conn.bundle_root.is_some()
+                    && conn
+                        .contributions
+                        .views
+                        .iter()
+                        .any(|declared| declared.name == view)
+            })
+            .ok_or_else(|| format!("no bundle process declares view `{view}`"))?;
+        conn.get_view(view, session, query)
+            .await
+            .map_err(|error| error.to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use hya_proto::WorkspaceAdapterInfo;
@@ -537,6 +625,7 @@ mod tests {
                         description: "alpha adapter".to_string(),
                     },
                 ],
+                views: Vec::new(),
             },
         }
     }

@@ -277,6 +277,7 @@ kind: AgentBundle
 | `identity` | yes | Bundle identity block (see below). |
 | `namespace` | no | Provider-facing namespace for the bundle's tools and schemas; defaults to the identity name segment (the part after `/`). Token rules: `[a-zA-Z0-9_-]`, no `__`, and the reserved tokens `mcp`, `harness`, `builtin`, `plugin` are rejected. |
 | `schemas` | no | External URI-scheme extensions this bundle provides (see [Schema extensions (`schemas:`)](#schema-extensions-schemas)). |
+| `views` | no | Read-only session views served by `extensions.process` (see [Session views (`views:`)](#session-views-views)). |
 | `resources` | no | `tools`, `skills`, `mcp`, `hooks` resource lists. |
 | `extensions` | no | `js`, `files`, `rust` extension lists plus the optional `process` declaration. |
 | `agent` | yes | The single agent this bundle defines. |
@@ -389,6 +390,45 @@ chain of claimants stays queryable via `GET /v1/runtime/schemas` (see
 [configuration](configuration.md#bundle-schemas)); `hya bundle schema <id>`
 shows one bundle's own declarations. Dispatch stays **view-scoped**: an agent's `read` dispatches `scheme://…`
 only when that agent's compiled view also resolves the owning bundle tool.
+
+### Session views (`views:`)
+
+A bundle can publish named **read-only views of a session** — for example a
+token-usage summary — that any v1 client reads over HTTP or gRPC without
+running a turn. Every bundle kind (`Plugin`, `AgentBundle`, `AgentSetBundle`,
+`WorkflowBundle`) may declare views, but only together with an explicit
+`extensions.process`, because that generation-owned process answers them:
+
+```yaml
+kind: Plugin
+identity: { id: acme/token-report, version: 1.0.0, publisher: acme }
+extensions:
+  process: { kind: bun, command: [bun, run, '${BUNDLE_ROOT}/report.ts'] }
+  files: [{ id: report, path: report.ts }]
+views:
+  - id: usage
+    description: Token usage of the session tree   # optional
+```
+
+Rules enforced at prepare:
+
+- declaring any view without an explicit `extensions.process` is rejected
+  (an implicit JavaScript Plugin process cannot serve views);
+- `id` is a `[A-Za-z0-9._-]` token of at most 64 bytes that starts with a
+  letter or digit (it is one URL path segment) and is unique in the bundle;
+  `description` is optional, at most 1024 bytes, no control characters;
+- declarations are emitted sorted by id in the prepared catalog document.
+
+At runtime the process must list exactly the declared ids in its initialize
+reply `views` (otherwise the bundle fails to start, like a tool or hook
+mismatch) and answer each `view/get` request with `{ "body": <JSON> }`,
+reading the session through the request-scoped `session.usage` capability —
+see [Plugin protocol](plugin-protocol.md#session-views-viewget). Clients list
+views with `GET /v1/sessions/{session}/views` and read one with
+`GET /v1/sessions/{session}/views/{bundle}/{view}` (bundle id percent-encoded
+as one segment, e.g. `acme%2Ftoken-report`; query parameters are passed to the
+process). `hya bundle info <id>` prints one `view=<id>` line per view. The
+lifecycle is in [Bundle runtime](bundle-runtime.md#session-views).
 
 ### Per-agent fields
 
@@ -699,13 +739,16 @@ union in the document shape:
 
 ```text
 { format_version, bundles: [Plugin | AgentBundle | AgentSetBundle | WorkflowBundle], index[],
-  schemas?, extensions_process? }
+  schemas?, extensions_process?, views? }
 ```
 
-`schemas` (per-bundle rows of `{bundle_id, schemas[]}` sorted by bundle id) and
-`extensions_process` (per-bundle rows of `{bundle_id, process}`) are document-
-level sections skipped entirely when no bundle declares any, so documents
-written before those sections keep their exact byte layout and stay decodable.
+`schemas` (per-bundle rows of `{bundle_id, schemas[]}` sorted by bundle id),
+`extensions_process` (per-bundle rows of `{bundle_id, process}`), and `views`
+(per-bundle rows of `{bundle_id, views: [{id, description}]}`, rows sorted by
+bundle id and views strictly by id; a row requires the bundle's
+`extensions_process` row) are document-level sections skipped entirely when no
+bundle declares any, so documents written before those sections keep their
+exact byte layout and stay decodable.
 
 **Canonical ordering** (non-canonical catalogs are rejected on decode):
 

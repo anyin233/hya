@@ -59,10 +59,10 @@ impl V1Grpc {
             .unwrap_or_else(|| String::from_utf8_lossy(body).into_owned());
         let tonic_code = match code.as_str() {
             "invalid_argument" => tonic::Code::InvalidArgument,
-            "not_found" | "session_not_found" => tonic::Code::NotFound,
+            "not_found" | "session_not_found" | "view_not_found" => tonic::Code::NotFound,
             "permission_denied" => tonic::Code::PermissionDenied,
             "session_busy" | "conflict" => tonic::Code::FailedPrecondition,
-            "unavailable" => tonic::Code::Unavailable,
+            "unavailable" | "view_failed" => tonic::Code::Unavailable,
             _ => tonic::Code::Internal,
         };
         let _ = status;
@@ -501,6 +501,39 @@ impl pb::session_server::Session for V1Grpc {
         let session = field(&inner, "session");
         into_response(
             self.post(&format!("/v1/sessions/{session}/revert"), &inner)
+                .await?,
+        )
+    }
+
+    async fn list_session_views(
+        &self,
+        request: GrpcRequest<pb::ListSessionViewsRequest>,
+    ) -> Result<GrpcResponse<pb::ListSessionViewsResponse>, Status> {
+        let session = field(&request.into_inner(), "session");
+        into_response(
+            self.get(
+                &format!("/v1/sessions/{}/views", encode(&session)),
+                &pb::ListSessionViewsRequest::default(),
+            )
+            .await?,
+        )
+    }
+
+    async fn get_session_view(
+        &self,
+        request: GrpcRequest<pb::GetSessionViewRequest>,
+    ) -> Result<GrpcResponse<pb::SessionView>, Status> {
+        let inner = request.into_inner();
+        // The bundle id contains `/`: it travels as one percent-encoded path
+        // segment, and every `query` entry becomes one query-string parameter.
+        let path = format!(
+            "/v1/sessions/{}/views/{}/{}",
+            encode(&inner.session),
+            encode(&inner.bundle),
+            encode(&inner.view)
+        );
+        into_response(
+            self.dispatch("GET", &path, inner.query.into_iter().collect(), &())
                 .await?,
         )
     }

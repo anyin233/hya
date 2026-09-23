@@ -1038,6 +1038,56 @@ impl SessionEngine {
         Ok(self.store.read_projection(session).await?)
     }
 
+    /// Refresh the runtime catalog (when an app refresher is configured) so
+    /// view lookups see newly installed bundles. A failed refresh keeps the
+    /// live generation and is only logged: a read-only view must not fail
+    /// because an unrelated bundle cannot start.
+    async fn refresh_catalog_for_read(&self) {
+        if let Some(refresh) = &self.catalog_refresh
+            && let Err(error) = refresh.refresh_if_changed(self.runtime.as_ref()).await
+        {
+            tracing::warn!("runtime catalog refresh before a view read failed: {error:#}");
+        }
+    }
+
+    /// Every published bundle's declared read-only session views.
+    pub async fn bundle_views(&self) -> Vec<crate::bundle_views::PublishedBundleViews> {
+        self.refresh_catalog_for_read().await;
+        self.runtime.published_bundle_views()
+    }
+
+    /// Answer bundle view `view` of `bundle` for `session`.
+    ///
+    /// Resolves the bundle in the live published generation, then forwards the
+    /// request to its process, which reads through a request-scoped read-only
+    /// capability bound to `session`.
+    ///
+    /// # Errors
+    /// [`crate::BundleViewError`] for an unknown session, bundle, or view,
+    /// a process failure, or a store failure.
+    pub async fn bundle_view(
+        &self,
+        session: SessionId,
+        bundle: &str,
+        view: &str,
+        query: BTreeMap<String, String>,
+    ) -> Result<serde_json::Value, crate::BundleViewError> {
+        if !self
+            .store
+            .session_exists(session)
+            .await
+            .map_err(CoreError::from)?
+        {
+            return Err(crate::BundleViewError::SessionNotFound(session));
+        }
+        self.refresh_catalog_for_read().await;
+        let views = self
+            .runtime
+            .bundle_views(bundle)
+            .ok_or_else(|| crate::BundleViewError::BundleNotFound(bundle.to_string()))?;
+        views.get(bundle, view, session, query).await
+    }
+
     /// Walk the `SessionCreated{parent}` chain to the top ancestor, returning the
     /// root session and this session's depth (0 = no parent / interactive lead,
     /// 1 = a direct subagent, and so on). Depth is derived from the replayed

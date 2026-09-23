@@ -10755,6 +10755,69 @@ pub struct RevertSessionResponse {
     #[prost(message, optional, tag = "1")]
     pub session: ::core::option::Option<SessionInfo>,
 }
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ListSessionViewsRequest {
+    /// Session identifier (must exist).
+    #[prost(string, tag = "1")]
+    pub session: ::prost::alloc::string::String,
+}
+/// One read-only view a published bundle serves.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SessionViewInfo {
+    /// Bundle identity id (for example `hya-extra/token-summary`).
+    #[prost(string, tag = "1")]
+    pub bundle: ::prost::alloc::string::String,
+    /// View id declared in the bundle manifest.
+    #[prost(string, tag = "2")]
+    pub view: ::prost::alloc::string::String,
+    /// Manifest description; empty when not declared.
+    #[prost(string, tag = "3")]
+    pub description: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ListSessionViewsResponse {
+    /// Views sorted by bundle id, then view id.
+    #[prost(message, repeated, tag = "1")]
+    pub views: ::prost::alloc::vec::Vec<SessionViewInfo>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetSessionViewRequest {
+    /// Session the view is computed for.
+    #[prost(string, tag = "1")]
+    pub session: ::prost::alloc::string::String,
+    /// Bundle identity id; contains `/`, so HTTP carries it percent-encoded as
+    /// one path segment.
+    #[prost(string, tag = "2")]
+    pub bundle: ::prost::alloc::string::String,
+    /// View id declared by the bundle.
+    #[prost(string, tag = "3")]
+    pub view: ::prost::alloc::string::String,
+    /// Caller parameters passed to the bundle process verbatim (HTTP: the
+    /// query string).
+    #[prost(map = "string, string", tag = "4")]
+    pub query: ::std::collections::HashMap<
+        ::prost::alloc::string::String,
+        ::prost::alloc::string::String,
+    >,
+}
+/// One computed bundle view.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SessionView {
+    /// Bundle identity id.
+    #[prost(string, tag = "1")]
+    pub bundle: ::prost::alloc::string::String,
+    /// View id.
+    #[prost(string, tag = "2")]
+    pub view: ::prost::alloc::string::String,
+    /// Media type of `body`; always `application/json`.
+    #[prost(string, tag = "3")]
+    pub content_type: ::prost::alloc::string::String,
+    /// The bundle process's JSON answer, unchanged. HTTP renders it verbatim
+    /// (integers stay exact); gRPC carries it as a protobuf `Value`, whose
+    /// numbers are doubles.
+    #[prost(message, optional, tag = "4")]
+    pub body: ::core::option::Option<::pbjson_types::Value>,
+}
 /// Generated client implementations.
 pub mod session_client {
     #![allow(
@@ -11085,6 +11148,63 @@ pub mod session_client {
                 .insert(GrpcMethod::new("hya.v1.Session", "RevertSession"));
             self.inner.unary(req, path, codec).await
         }
+        /// List the read-only session views that installed bundles serve (manifest
+        /// `views:`, answered by the bundle's `extensions.process`).
+        ///
+        /// hya.http: GET /v1/sessions/{session}/views
+        pub async fn list_session_views(
+            &mut self,
+            request: impl tonic::IntoRequest<super::ListSessionViewsRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ListSessionViewsResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/hya.v1.Session/ListSessionViews",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("hya.v1.Session", "ListSessionViews"));
+            self.inner.unary(req, path, codec).await
+        }
+        /// Compute one bundle-declared read-only view of a session. The server
+        /// forwards the request to the bundle process of the live runtime
+        /// generation, which reads through a request-scoped read-only capability
+        /// bound to this session. Over HTTP `bundle` is one percent-encoded path
+        /// segment (`hya-extra%2Ftoken-summary`) and every query-string parameter
+        /// lands in `query`.
+        ///
+        /// hya.http: GET /v1/sessions/{session}/views/{bundle}/{view}
+        pub async fn get_session_view(
+            &mut self,
+            request: impl tonic::IntoRequest<super::GetSessionViewRequest>,
+        ) -> std::result::Result<tonic::Response<super::SessionView>, tonic::Status> {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/hya.v1.Session/GetSessionView",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("hya.v1.Session", "GetSessionView"));
+            self.inner.unary(req, path, codec).await
+        }
     }
 }
 /// Generated server implementations.
@@ -11185,6 +11305,29 @@ pub mod session_server {
             tonic::Response<super::RevertSessionResponse>,
             tonic::Status,
         >;
+        /// List the read-only session views that installed bundles serve (manifest
+        /// `views:`, answered by the bundle's `extensions.process`).
+        ///
+        /// hya.http: GET /v1/sessions/{session}/views
+        async fn list_session_views(
+            &self,
+            request: tonic::Request<super::ListSessionViewsRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ListSessionViewsResponse>,
+            tonic::Status,
+        >;
+        /// Compute one bundle-declared read-only view of a session. The server
+        /// forwards the request to the bundle process of the live runtime
+        /// generation, which reads through a request-scoped read-only capability
+        /// bound to this session. Over HTTP `bundle` is one percent-encoded path
+        /// segment (`hya-extra%2Ftoken-summary`) and every query-string parameter
+        /// lands in `query`.
+        ///
+        /// hya.http: GET /v1/sessions/{session}/views/{bundle}/{view}
+        async fn get_session_view(
+            &self,
+            request: tonic::Request<super::GetSessionViewRequest>,
+        ) -> std::result::Result<tonic::Response<super::SessionView>, tonic::Status>;
     }
     /// Session lifecycle surface. Sessions are the durable event-sourced roots;
     /// every turn, message, and projection read hangs off a session id.
@@ -11654,6 +11797,96 @@ pub mod session_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = RevertSessionSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/hya.v1.Session/ListSessionViews" => {
+                    #[allow(non_camel_case_types)]
+                    struct ListSessionViewsSvc<T: Session>(pub Arc<T>);
+                    impl<
+                        T: Session,
+                    > tonic::server::UnaryService<super::ListSessionViewsRequest>
+                    for ListSessionViewsSvc<T> {
+                        type Response = super::ListSessionViewsResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::ListSessionViewsRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as Session>::list_session_views(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = ListSessionViewsSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/hya.v1.Session/GetSessionView" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetSessionViewSvc<T: Session>(pub Arc<T>);
+                    impl<
+                        T: Session,
+                    > tonic::server::UnaryService<super::GetSessionViewRequest>
+                    for GetSessionViewSvc<T> {
+                        type Response = super::SessionView;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetSessionViewRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as Session>::get_session_view(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetSessionViewSvc(inner);
                         let codec = tonic::codec::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(

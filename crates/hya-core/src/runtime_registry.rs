@@ -136,6 +136,7 @@ pub struct RuntimeSource {
     resources: Arc<BTreeMap<String, Value>>,
     schemas: Vec<SourceSchema>,
     hooks: Option<Arc<dyn crate::hooks::HookDispatcher>>,
+    views: Option<crate::bundle_views::SourceViews>,
 }
 
 /// One external URI-scheme claim a runtime source makes.
@@ -517,6 +518,57 @@ impl RuntimeRegistry {
     /// Model-facing tool schemas from this snapshot or view.
     pub fn tool_schemas(&self) -> Vec<ToolSchema> {
         self.active().tools.schemas()
+    }
+
+    /// The read-only session views `bundle_id` serves in the live generation.
+    ///
+    /// `None` when the bundle is not in the published catalog or declares no
+    /// views. The returned handle retains that generation's process.
+    #[must_use]
+    pub fn bundle_views(&self, bundle_id: &str) -> Option<crate::bundle_views::SourceViews> {
+        let active = self.active();
+        if !active
+            .catalog
+            .bundles()
+            .bundles()
+            .iter()
+            .any(|bundle| bundle.identity().id == bundle_id)
+        {
+            return None;
+        }
+        active
+            .sources
+            .get(&RuntimeSourceId::bundle(bundle_id))?
+            .views
+            .clone()
+    }
+
+    /// Every published bundle's declared views, sorted by bundle id.
+    #[must_use]
+    pub fn published_bundle_views(&self) -> Vec<crate::bundle_views::PublishedBundleViews> {
+        let active = self.active();
+        active
+            .sources
+            .iter()
+            .filter(|(id, _)| id.kind() == RuntimeSourceKind::Bundle)
+            .filter(|(id, _)| {
+                active
+                    .catalog
+                    .bundles()
+                    .bundles()
+                    .iter()
+                    .any(|bundle| bundle.identity().id == id.configured_id())
+            })
+            .filter_map(|(id, source)| {
+                source
+                    .views
+                    .as_ref()
+                    .map(|views| crate::bundle_views::PublishedBundleViews {
+                        bundle: id.configured_id().to_string(),
+                        views: views.views.clone(),
+                    })
+            })
+            .collect()
     }
 
     #[must_use]
@@ -1339,7 +1391,33 @@ impl RuntimeSource {
             resources: Arc::new(BTreeMap::new()),
             schemas: Vec::new(),
             hooks: None,
+            views: None,
         }
+    }
+
+    /// Attach the read-only session views this source's process serves.
+    ///
+    /// The provider is retained together with the source owner, so a view
+    /// request that resolved this generation keeps its process alive until it
+    /// completes even if a newer generation is published meanwhile. An empty
+    /// `views` list attaches nothing.
+    #[must_use]
+    pub fn with_views(
+        mut self,
+        mut views: Vec<crate::bundle_views::SourceView>,
+        provider: Arc<dyn crate::bundle_views::BundleViewProvider>,
+    ) -> Self {
+        if views.is_empty() {
+            self.views = None;
+            return self;
+        }
+        views.sort_by(|left, right| left.id.cmp(&right.id));
+        self.views = Some(crate::bundle_views::SourceViews {
+            views,
+            provider,
+            _owner: Some(Arc::clone(&self.owner)),
+        });
+        self
     }
 
     /// Attach process hooks retained by this immutable runtime generation.
@@ -1397,6 +1475,14 @@ fn sources_match(
                     && Arc::ptr_eq(&left.owner, &right.owner)
                     && match (&left.hooks, &right.hooks) {
                         (Some(left), Some(right)) => Arc::ptr_eq(left, right),
+                        (None, None) => true,
+                        _ => false,
+                    }
+                    && match (&left.views, &right.views) {
+                        (Some(left), Some(right)) => {
+                            left.views == right.views
+                                && Arc::ptr_eq(&left.provider, &right.provider)
+                        }
                         (None, None) => true,
                         _ => false,
                     }

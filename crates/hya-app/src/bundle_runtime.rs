@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use hya_bundle::{
     PreparedInstallableBundle, PreparedProcessExtension, PreparedProcessKind, PreparedSchema,
+    PreparedView,
 };
 use hya_core::{CoreError, RuntimeSource, RuntimeSourceExport, RuntimeSourceId};
 use hya_mcp::{McpServerConfig, PreparedMcpServer};
@@ -82,17 +83,19 @@ fn spawns_runtime(
             && (!bundle.tools().is_empty() || !bundle.hooks().is_empty()))
 }
 
-/// Runtime source identity: the prepared bundle, its process and schemas, and
-/// for spawning bundles the configuration location and content digest, so a
-/// `config.yml` edit restarts the bundle's providers like a changed bundle.
+/// Runtime source identity: the prepared bundle, its process, schemas, and
+/// views, and for spawning bundles the configuration location and content
+/// digest, so a `config.yml` edit restarts the bundle's providers like a
+/// changed bundle.
 pub(crate) fn fingerprint(
     bundle: &PreparedInstallableBundle,
     process: Option<&PreparedProcessExtension>,
     schemas: &[PreparedSchema],
+    views: &[PreparedView],
     config: &BundleRuntimeConfig,
 ) -> Result<[u8; 32], CoreError> {
     let config = config.watched.then_some(config);
-    let bytes = serde_json::to_vec(&(bundle, process, schemas, config))
+    let bytes = serde_json::to_vec(&(bundle, process, schemas, views, config))
         .map_err(|error| CoreError::Invalid(format!("encode bundle runtime identity: {error}")))?;
     Ok(Sha256::digest(bytes).into())
 }
@@ -235,15 +238,32 @@ fn process_env(root: &Path, config: &BundleConfigLocation) -> BTreeMap<String, S
     env
 }
 
+/// The declared parts of one bundle that its runtime source is prepared from.
+pub(crate) struct BundleRuntimeParts<'a> {
+    /// The explicit `extensions.process`, when declared.
+    pub(crate) process: Option<&'a PreparedProcessExtension>,
+    /// Declared URI-scheme extensions.
+    pub(crate) schemas: &'a [PreparedSchema],
+    /// Declared read-only session views (explicit process only).
+    pub(crate) views: &'a [PreparedView],
+    /// Read-only host services behind the process's capabilities.
+    pub(crate) reads: Option<Arc<dyn hya_core::HostSessionReads>>,
+}
+
 pub(crate) async fn prepare_source(
     bundle: &PreparedInstallableBundle,
-    process: Option<&PreparedProcessExtension>,
-    schemas: &[PreparedSchema],
+    parts: BundleRuntimeParts<'_>,
     config: &BundleRuntimeConfig,
 ) -> Result<CachedBundleSource, CoreError> {
+    let BundleRuntimeParts {
+        process,
+        schemas,
+        views,
+        reads,
+    } = parts;
     let bundle_config = config.location();
     let id = &bundle.identity().id;
-    let fingerprint = fingerprint(bundle, process, schemas, config)?;
+    let fingerprint = fingerprint(bundle, process, schemas, views, config)?;
     // A shared JavaScript Plugin has no agent activation to own a Bun sidecar.
     // Promote its explicit executable entrypoints to a generation-owned process.
     let implicit_process = if process.is_none() && bundle.plugin_bundle().is_some() {
@@ -300,6 +320,7 @@ pub(crate) async fn prepare_source(
     };
     let mut resources = BTreeMap::new();
     let mut hooks: Option<Arc<dyn hya_core::hooks::HookDispatcher>> = None;
+    let mut view_provider: Option<Arc<dyn hya_core::BundleViewProvider>> = None;
     let mut declaration = Sha256::new();
     declaration.update(fingerprint);
     if process.is_some() || !bundle.mcp().is_empty() {
@@ -338,9 +359,14 @@ pub(crate) async fn prepare_source(
                 plugin_dir: None,
             };
             let host = Arc::new(
-                PluginHost::connect_bundle(spec, crate::host_info(), root.0.clone())
-                    .await
-                    .map_err(|error| invalid("start bundle process", error))?,
+                PluginHost::connect_bundle_with_reads(
+                    spec,
+                    crate::host_info(),
+                    root.0.clone(),
+                    reads,
+                )
+                .await
+                .map_err(|error| invalid("start bundle process", error))?,
             );
             let tools = host.tools();
             let declared = bundle
@@ -371,6 +397,25 @@ pub(crate) async fn prepare_source(
                 return Err(CoreError::Invalid(format!(
                     "bundle `{id}` process hooks differ from declared resources"
                 )));
+            }
+            // A process that implicitly started (a JavaScript Plugin) has no
+            // manifest views, so this also rejects stray view declarations.
+            let declared_views = views
+                .iter()
+                .map(|view| view.id.as_str())
+                .collect::<BTreeSet<_>>();
+            let actual_views = host.declared_views();
+            let actual_views = actual_views
+                .iter()
+                .map(|view| view.name.as_str())
+                .collect::<BTreeSet<_>>();
+            if declared_views != actual_views {
+                return Err(CoreError::Invalid(format!(
+                    "bundle `{id}` process views differ from declared views: expected {declared_views:?}, got {actual_views:?}"
+                )));
+            }
+            if !views.is_empty() {
+                view_provider = Some(host.clone());
             }
             for (_, set) in host.contributions() {
                 if !set.workspace_adapters.is_empty() {
@@ -486,6 +531,18 @@ pub(crate) async fn prepare_source(
     if let Some(hooks) = hooks {
         source = source.with_hooks(hooks);
     }
+    if let Some(provider) = view_provider {
+        source = source.with_views(
+            views
+                .iter()
+                .map(|view| hya_core::SourceView {
+                    id: view.id.clone(),
+                    description: view.description.clone(),
+                })
+                .collect(),
+            provider,
+        );
+    }
     Ok(CachedBundleSource {
         fingerprint,
         source,
@@ -556,8 +613,12 @@ for line in sys.stdin:
         let config = test_config("acme/mcp-env");
         let source = prepare_source(
             &prepared.bundles()[0],
-            prepared.bundle_process("acme/mcp-env"),
-            &[],
+            BundleRuntimeParts {
+                process: prepared.bundle_process("acme/mcp-env"),
+                schemas: &[],
+                views: &[],
+                reads: None,
+            },
             &BundleRuntimeConfig::capture(
                 &prepared.bundles()[0],
                 prepared.bundle_process("acme/mcp-env"),
@@ -606,15 +667,15 @@ for line in sys.stdin:
             let location = test_config(id);
             let absent = BundleRuntimeConfig::capture(bundle, process, location.clone());
             assert_eq!(absent.watched(), watched);
-            let before = fingerprint(bundle, process, &[], &absent).unwrap();
+            let before = fingerprint(bundle, process, &[], &[], &absent).unwrap();
             std::fs::create_dir_all(location.dir()).unwrap();
             std::fs::write(location.file(), "key: value\n").unwrap();
             let present = BundleRuntimeConfig::capture(bundle, process, location.clone());
-            let after = fingerprint(bundle, process, &[], &present).unwrap();
+            let after = fingerprint(bundle, process, &[], &[], &present).unwrap();
             assert_eq!(before != after, watched, "{id}");
             std::fs::write(location.file(), "key: other\n").unwrap();
             let edited = BundleRuntimeConfig::capture(bundle, process, location.clone());
-            let edited = fingerprint(bundle, process, &[], &edited).unwrap();
+            let edited = fingerprint(bundle, process, &[], &[], &edited).unwrap();
             assert_eq!(after != edited, watched, "{id}");
             let _ = std::fs::remove_dir_all(location.dir());
         }
@@ -687,8 +748,12 @@ for line in sys.stdin:
         )).unwrap();
         let result = prepare_source(
             &prepared.bundles()[0],
-            prepared.bundle_process("acme/undeclared"),
-            &[],
+            BundleRuntimeParts {
+                process: prepared.bundle_process("acme/undeclared"),
+                schemas: &[],
+                views: &[],
+                reads: None,
+            },
             &BundleRuntimeConfig::capture(
                 &prepared.bundles()[0],
                 prepared.bundle_process("acme/undeclared"),
@@ -699,6 +764,75 @@ for line in sys.stdin:
         assert!(
             matches!(result, Err(CoreError::Invalid(ref detail)) if detail.contains("workspace adapters")),
             "bundle initialization must reject contributions absent from its schema"
+        );
+    }
+
+    /// A bundle process whose initialize reply declares `views` (a Python
+    /// literal) for the manifest-declared `views:` block.
+    async fn prepare_view_bundle(
+        manifest_views: &str,
+        process_views: &str,
+    ) -> Result<CachedBundleSource, CoreError> {
+        let script = format!(
+            r#"import json,sys
+for line in sys.stdin:
+ r=json.loads(line)
+ result={{'protocol_version':1,'plugin':{{'id':'views','version':'1.0.0','kind':'bun'}},'hooks':[],'tools':[],'views':{process_views}}} if r.get('method') == 'initialize' else {{}}
+ if 'id' in r: print(json.dumps({{'jsonrpc':'2.0','id':r['id'],'result':result}}),flush=True)
+"#
+        );
+        let prepared = prepare_package(BundleSource::new(
+            "views",
+            vec![
+                SourceFile::new(
+                    "bundle.yaml",
+                    format!("kind: Plugin\nidentity: {{ id: acme/views, version: 1.0.0, publisher: acme }}\nextensions:\n  process: {{ kind: bun, command: [python3, '${{BUNDLE_ROOT}}/runtime.py'] }}\n  files: [{{ id: runtime, path: runtime.py }}]\n{manifest_views}"),
+                ),
+                SourceFile::new("runtime.py", script),
+            ],
+        ))
+        .unwrap();
+        prepare_source(
+            &prepared.bundles()[0],
+            BundleRuntimeParts {
+                process: prepared.bundle_process("acme/views"),
+                schemas: &[],
+                views: prepared.bundle_views("acme/views"),
+                reads: None,
+            },
+            &BundleRuntimeConfig::capture(
+                &prepared.bundles()[0],
+                prepared.bundle_process("acme/views"),
+                test_config("acme/views"),
+            ),
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn bundle_process_views_must_equal_the_declared_views() {
+        let declared = "views: [{ id: usage, description: Token usage }]\n";
+        assert!(
+            prepare_view_bundle(declared, "[{'name':'usage'}]")
+                .await
+                .is_ok(),
+            "matching view declarations publish"
+        );
+        for process_views in [
+            "[]",
+            "[{'name':'usage'},{'name':'extra'}]",
+            "[{'name':'other'}]",
+        ] {
+            let result = prepare_view_bundle(declared, process_views).await;
+            assert!(
+                matches!(result, Err(CoreError::Invalid(ref detail)) if detail.contains("views differ")),
+                "{process_views}: the process must declare exactly the manifest views"
+            );
+        }
+        let result = prepare_view_bundle("", "[{'name':'usage'}]").await;
+        assert!(
+            matches!(result, Err(CoreError::Invalid(ref detail)) if detail.contains("views differ")),
+            "a process may not serve undeclared views"
         );
     }
 }

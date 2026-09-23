@@ -31,6 +31,12 @@ pub enum Code {
     Unavailable,
     /// Unhandled internal failure.
     Internal,
+    /// The requested bundle serves no view with this id (unknown bundle, a
+    /// bundle without views, or an undeclared view id).
+    ViewNotFound,
+    /// The bundle process failed, timed out, or answered malformed data
+    /// while computing a view.
+    ViewFailed,
 }
 
 impl Code {
@@ -46,6 +52,8 @@ impl Code {
             Self::Conflict => "conflict",
             Self::Unavailable => "unavailable",
             Self::Internal => "internal",
+            Self::ViewNotFound => "view_not_found",
+            Self::ViewFailed => "view_failed",
         }
     }
 
@@ -54,11 +62,12 @@ impl Code {
     pub fn http_status(&self) -> u16 {
         match self {
             Self::InvalidArgument => 400,
-            Self::NotFound | Self::SessionNotFound => 404,
+            Self::NotFound | Self::SessionNotFound | Self::ViewNotFound => 404,
             Self::PermissionDenied => 403,
             Self::SessionBusy | Self::Conflict => 409,
             Self::Unavailable => 503,
             Self::Internal => 500,
+            Self::ViewFailed => 502,
         }
     }
 
@@ -67,10 +76,10 @@ impl Code {
     pub fn grpc_code(&self) -> tonic::Code {
         match self {
             Self::InvalidArgument => tonic::Code::InvalidArgument,
-            Self::NotFound | Self::SessionNotFound => tonic::Code::NotFound,
+            Self::NotFound | Self::SessionNotFound | Self::ViewNotFound => tonic::Code::NotFound,
             Self::PermissionDenied => tonic::Code::PermissionDenied,
             Self::SessionBusy | Self::Conflict => tonic::Code::FailedPrecondition,
-            Self::Unavailable => tonic::Code::Unavailable,
+            Self::Unavailable | Self::ViewFailed => tonic::Code::Unavailable,
             Self::Internal => tonic::Code::Internal,
         }
     }
@@ -140,6 +149,12 @@ mod tests {
         assert_eq!(Code::SessionNotFound.http_status(), 404);
         assert_eq!(Code::SessionNotFound.grpc_code(), tonic::Code::NotFound);
         assert_eq!(Code::InvalidArgument.as_str(), "invalid_argument");
+        assert_eq!(Code::ViewNotFound.as_str(), "view_not_found");
+        assert_eq!(Code::ViewNotFound.http_status(), 404);
+        assert_eq!(Code::ViewNotFound.grpc_code(), tonic::Code::NotFound);
+        assert_eq!(Code::ViewFailed.as_str(), "view_failed");
+        assert_eq!(Code::ViewFailed.http_status(), 502);
+        assert_eq!(Code::ViewFailed.grpc_code(), tonic::Code::Unavailable);
     }
 
     #[test]

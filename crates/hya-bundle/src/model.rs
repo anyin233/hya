@@ -707,6 +707,33 @@ pub struct PreparedBundleSchemas {
     pub schemas: Vec<PreparedSchema>,
 }
 
+/// One prepared read-only session view a bundle process serves.
+///
+/// Views exist only for bundles with an explicit `extensions.process`; the
+/// process answers `view/get` for each declared id.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PreparedView {
+    /// View id, unique within the bundle.
+    pub id: String,
+    /// Human-readable description (empty when not declared).
+    pub description: String,
+}
+
+/// Per-bundle view list in a prepared catalog document.
+///
+/// Like `schemas:` this is a document-level section parallel to the index,
+/// skipped entirely when no bundle declares a view, so documents written
+/// before the section stay byte-identical and decodable.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PreparedBundleViews {
+    /// Bundle identity id the views belong to.
+    pub bundle_id: String,
+    /// Declared views, sorted by id.
+    pub views: Vec<PreparedView>,
+}
+
 /// Runtime kind that executes a bundle's declared process extension.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -780,6 +807,7 @@ pub struct PreparedCatalog {
     pub(crate) index: Vec<PreparedBundleIndex>,
     pub(crate) schemas: Vec<PreparedBundleSchemas>,
     pub(crate) process_extensions: Vec<PreparedBundleProcess>,
+    pub(crate) views: Vec<PreparedBundleViews>,
     pub(crate) bytes: Vec<u8>,
     pub(crate) digest: String,
 }
@@ -828,6 +856,22 @@ impl PreparedCatalog {
             .map(|row| &row.process)
     }
 
+    /// Per-bundle read-only view declarations, sorted by bundle id.
+    #[must_use]
+    pub fn views(&self) -> &[PreparedBundleViews] {
+        &self.views
+    }
+
+    /// The views one bundle declares, or an empty slice.
+    #[must_use]
+    pub fn bundle_views(&self, bundle_id: &str) -> &[PreparedView] {
+        self.views
+            .iter()
+            .find(|row| row.bundle_id == bundle_id)
+            .map(|row| row.views.as_slice())
+            .unwrap_or(&[])
+    }
+
     /// Canonical JSON bytes of the prepared document (what the registry stores).
     #[must_use]
     pub fn bytes(&self) -> &[u8] {
@@ -854,6 +898,10 @@ pub(crate) struct PreparedDocument<'a> {
     /// declares any, for the same byte-layout reason.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub extensions_process: Vec<PreparedBundleProcess>,
+    /// Per-bundle `views:` declarations; skipped when no bundle declares any,
+    /// for the same byte-layout reason.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub views: Vec<PreparedBundleViews>,
 }
 
 #[derive(Deserialize)]
@@ -866,4 +914,6 @@ pub(crate) struct PreparedDocumentOwned {
     pub schemas: Vec<PreparedBundleSchemas>,
     #[serde(default)]
     pub extensions_process: Vec<PreparedBundleProcess>,
+    #[serde(default)]
+    pub views: Vec<PreparedBundleViews>,
 }

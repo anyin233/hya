@@ -22,6 +22,7 @@ mod project;
 mod pty;
 mod session;
 mod turn;
+mod views;
 mod workflow;
 mod worktree;
 
@@ -47,6 +48,7 @@ pub(crate) fn router() -> Router<ServerState> {
         .merge(auth::router())
         .merge(logs::router())
         .merge(session::router())
+        .merge(views::router())
         .merge(turn::router())
         .merge(message::router())
         .merge(events::router())

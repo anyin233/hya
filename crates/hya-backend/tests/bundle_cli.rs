@@ -1108,6 +1108,10 @@ schemas:
   - scheme: db
     tool: query
     writable: false
+views:
+  - id: usage
+    description: Token usage
+  - id: health
 resources:
   tools:
     - id: query
@@ -1144,8 +1148,8 @@ agent:
     Ok(package)
 }
 
-/// `bundle info` reports declared schemas, the process extension, and mcp
-/// entries — and prints none of those lines when the bundle declares none.
+/// `bundle info` reports declared schemas, the process extension, views, and
+/// mcp entries — and prints none of those lines when the bundle declares none.
 #[test]
 fn bundle_info_reports_schema_process_and_mcp_declarations()
 -> Result<(), Box<dyn std::error::Error>> {
@@ -1168,6 +1172,8 @@ fn bundle_info_reports_schema_process_and_mcp_declarations()
         "schema=db tool=query writable=false",
         "process=bun command=bun run extensions/runtime.ts",
         "mcp=bundle:hya/decl-demo/mcp/vecdb",
+        "view=health",
+        "view=usage description=Token usage",
     ] {
         assert!(
             lines.contains(&expected),
@@ -1182,7 +1188,7 @@ fn bundle_info_reports_schema_process_and_mcp_declarations()
     let plain_ok = plain.status.success();
     if plain_ok {
         let plain_stdout = String::from_utf8(plain.stdout)?;
-        for fragment in ["schema=", "process=", "mcp="] {
+        for fragment in ["schema=", "process=", "mcp=", "view="] {
             assert!(
                 !plain_stdout.lines().any(|line| line.starts_with(fragment)),
                 "plain bundle info must not print {fragment:?} lines:\n{plain_stdout}"

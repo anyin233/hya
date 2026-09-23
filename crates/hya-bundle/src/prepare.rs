@@ -8,10 +8,10 @@ use crate::error::BundleError;
 use crate::model::{
     BundleIdentity, ChannelParticipantRole, ChannelScope, ChannelTemplateKind, PreparedAgent,
     PreparedAgentBundle, PreparedAgentSetBundle, PreparedBundleIndex, PreparedBundleProcess,
-    PreparedBundleSchemas, PreparedCatalog, PreparedChannelParticipant, PreparedChannelTemplate,
-    PreparedDocument, PreparedDocumentOwned, PreparedInstallableBundle, PreparedPluginBundle,
-    PreparedProcessExtension, PreparedResource, PreparedSchema, PreparedWorkflow,
-    PreparedWorkflowBundle,
+    PreparedBundleSchemas, PreparedBundleViews, PreparedCatalog, PreparedChannelParticipant,
+    PreparedChannelTemplate, PreparedDocument, PreparedDocumentOwned, PreparedInstallableBundle,
+    PreparedPluginBundle, PreparedProcessExtension, PreparedResource, PreparedSchema, PreparedView,
+    PreparedWorkflow, PreparedWorkflowBundle,
 };
 use crate::source::{
     BundleSource, ParsedSource, SourceAgent, SourceAgentManifest, SourceAgentSetManifest,
@@ -55,12 +55,20 @@ fn prepare_sources(sources: Vec<BundleSource>) -> Result<PreparedCatalog, Bundle
     let mut bundles = Vec::with_capacity(parsed.len());
     let mut schemas = Vec::new();
     let mut process_extensions = Vec::new();
+    let mut views = Vec::new();
     for source in parsed {
         let bundle_id = manifest_identity(&source.manifest).id.clone();
         if !bundle_ids.insert(bundle_id.clone()) {
             return Err(BundleError::DuplicateBundleId { bundle_id });
         }
-        let (bundle, bundle_schemas, process) = prepare_bundle(source, &mut stable_agent_ids)?;
+        let (bundle, bundle_schemas, process, bundle_views) =
+            prepare_bundle(source, &mut stable_agent_ids)?;
+        if !bundle_views.is_empty() {
+            views.push(PreparedBundleViews {
+                bundle_id: bundle.identity().id.clone(),
+                views: bundle_views,
+            });
+        }
         if !bundle_schemas.is_empty() {
             schemas.push(PreparedBundleSchemas {
                 bundle_id: bundle.identity().id.clone(),
@@ -86,6 +94,7 @@ fn prepare_sources(sources: Vec<BundleSource>) -> Result<PreparedCatalog, Bundle
         index: &index,
         schemas: schemas.clone(),
         extensions_process: process_extensions.clone(),
+        views: views.clone(),
     })
     .map_err(|error| BundleError::PreparedEncode {
         detail: error.to_string(),
@@ -96,6 +105,7 @@ fn prepare_sources(sources: Vec<BundleSource>) -> Result<PreparedCatalog, Bundle
         index,
         schemas,
         process_extensions,
+        views,
         bytes,
         digest,
     })
@@ -147,6 +157,11 @@ impl PreparedCatalog {
         validate_prepared_schema_rows(&document.bundles, &document.schemas)?;
         validate_prepared_process_rows(&document.bundles, &document.extensions_process)?;
         validate_native_binary_bindings(&document.bundles, &document.extensions_process)?;
+        validate_prepared_view_rows(
+            &document.bundles,
+            &document.extensions_process,
+            &document.views,
+        )?;
         let expected_index = build_index(&document.bundles);
         if expected_index != document.index {
             return Err(BundleError::PreparedIndexMismatch);
@@ -156,6 +171,7 @@ impl PreparedCatalog {
             index: document.index,
             schemas: document.schemas,
             process_extensions: document.extensions_process,
+            views: document.views,
             bytes: bytes.to_vec(),
             digest: expected_digest.to_string(),
         })
@@ -436,6 +452,128 @@ fn validate_prepared_schema_rows(
             bundle.tools(),
         )?;
         if prepared != row.schemas {
+            return Err(BundleError::NonCanonicalPreparedCatalog);
+        }
+    }
+    Ok(())
+}
+
+/// Maximum UTF-8 byte length of a view id.
+const MAX_VIEW_ID_BYTES: usize = 64;
+
+/// Maximum UTF-8 byte length of a view description.
+const MAX_VIEW_DESCRIPTION_BYTES: usize = 1024;
+
+/// Validate the manifest's `views:` declarations and return them sorted by id.
+///
+/// Views are answered by the bundle's explicit `extensions.process` over the
+/// plugin `view/get` request, so declaring any view without one is rejected.
+/// Ids are `[A-Za-z0-9._-]` tokens of at most 64 bytes that start with an
+/// alphanumeric character (they appear as one HTTP path segment) and are
+/// unique within the bundle.
+fn validate_declared_views(
+    bundle_id: &str,
+    views: &[crate::source::SourceView],
+    process: Option<&PreparedProcessExtension>,
+) -> Result<Vec<PreparedView>, BundleError> {
+    let invalid = |detail: String| BundleError::InvalidManifest {
+        source_name: bundle_id.to_string(),
+        detail,
+    };
+    if views.is_empty() {
+        return Ok(Vec::new());
+    }
+    if process.is_none() {
+        return Err(invalid(
+            "views: a bundle may declare views only with an explicit `extensions.process` \
+             that serves them"
+                .to_string(),
+        ));
+    }
+    let mut seen = BTreeSet::new();
+    let mut prepared = Vec::with_capacity(views.len());
+    for view in views {
+        if !is_valid_view_id(&view.id) {
+            return Err(invalid(format!(
+                "views: id `{}` must be a `[A-Za-z0-9._-]` token of at most \
+                 {MAX_VIEW_ID_BYTES} bytes starting with a letter or digit",
+                view.id
+            )));
+        }
+        if !seen.insert(view.id.as_str()) {
+            return Err(invalid(format!(
+                "views: id `{}` is declared more than once",
+                view.id
+            )));
+        }
+        if view.description.len() > MAX_VIEW_DESCRIPTION_BYTES
+            || view.description.chars().any(char::is_control)
+        {
+            return Err(invalid(format!(
+                "views: description of `{}` must be at most {MAX_VIEW_DESCRIPTION_BYTES} bytes \
+                 without control characters",
+                view.id
+            )));
+        }
+        prepared.push(PreparedView {
+            id: view.id.clone(),
+            description: view.description.clone(),
+        });
+    }
+    prepared.sort_by(|left, right| left.id.cmp(&right.id));
+    Ok(prepared)
+}
+
+/// Whether `id` is a publishable view id.
+fn is_valid_view_id(id: &str) -> bool {
+    id.len() <= MAX_VIEW_ID_BYTES
+        && id
+            .bytes()
+            .next()
+            .is_some_and(|byte| byte.is_ascii_alphanumeric())
+        && id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+}
+
+/// Validate the document-level `views` section of a decoded prepared
+/// catalog: rows strictly sorted by bundle id, every row naming a bundle in
+/// the document that also has an `extensions_process` row, and every row's
+/// declarations canonical (valid, unique, strictly sorted by id).
+fn validate_prepared_view_rows(
+    bundles: &[PreparedInstallableBundle],
+    processes: &[PreparedBundleProcess],
+    rows: &[PreparedBundleViews],
+) -> Result<(), BundleError> {
+    if !is_strictly_sorted(rows.iter().map(|row| row.bundle_id.as_str())) {
+        return Err(BundleError::NonCanonicalPreparedCatalog);
+    }
+    for row in rows {
+        if row.views.is_empty()
+            || !bundles
+                .iter()
+                .any(|bundle| bundle.identity().id == row.bundle_id)
+            || !is_strictly_sorted(row.views.iter().map(|view| view.id.as_str()))
+        {
+            return Err(BundleError::NonCanonicalPreparedCatalog);
+        }
+        let process = processes
+            .iter()
+            .find(|process| process.bundle_id == row.bundle_id)
+            .map(|process| &process.process);
+        let prepared = validate_declared_views(
+            &row.bundle_id,
+            &row.views
+                .iter()
+                .map(|view| crate::source::SourceView {
+                    id: view.id.clone(),
+                    description: view.description.clone(),
+                })
+                .collect::<Vec<_>>(),
+            process,
+        )
+        .map_err(|_| BundleError::NonCanonicalPreparedCatalog)?;
+        if prepared != row.views {
             return Err(BundleError::NonCanonicalPreparedCatalog);
         }
     }
@@ -1039,14 +1177,7 @@ fn split_markdown(content: &str) -> Option<(&str, &str)> {
 fn prepare_bundle(
     source: ParsedSource,
     stable_agent_ids: &mut BTreeSet<String>,
-) -> Result<
-    (
-        PreparedInstallableBundle,
-        Vec<PreparedSchema>,
-        Option<PreparedProcessExtension>,
-    ),
-    BundleError,
-> {
+) -> Result<PreparedBundleParts, BundleError> {
     match source.manifest {
         SourceManifest::Agent(manifest) => prepare_agent_bundle(
             source.files,
@@ -1067,14 +1198,7 @@ fn prepare_bundle(
 fn prepare_plugin_bundle(
     files: BTreeMap<String, Vec<u8>>,
     manifest: SourcePluginManifest,
-) -> Result<
-    (
-        PreparedInstallableBundle,
-        Vec<PreparedSchema>,
-        Option<PreparedProcessExtension>,
-    ),
-    BundleError,
-> {
+) -> Result<PreparedBundleParts, BundleError> {
     let bundle_id = manifest.identity.id.clone();
     validate_identity(&bundle_id, &manifest.identity.version)?;
     let namespace = resolve_namespace(&bundle_id, &manifest.identity, &manifest.namespace)?;
@@ -1083,6 +1207,7 @@ fn prepare_plugin_bundle(
     let (tools, skills, mcp, hooks, extensions) =
         prepare_resource_sets(&bundle_id, &files, manifest.resources, manifest.extensions)?;
     let schemas = validate_declared_schemas(&bundle_id, &manifest.schemas, &tools)?;
+    let views = validate_declared_views(&bundle_id, &manifest.views, process.as_ref())?;
     let mut bundle = PreparedInstallableBundle::Plugin(Box::new(PreparedPluginBundle {
         format_version: PREPARED_FORMAT_VERSION,
         identity: manifest.identity,
@@ -1095,7 +1220,7 @@ fn prepare_plugin_bundle(
         extensions,
     }));
     set_bundle_digest(&mut bundle)?;
-    Ok((bundle, schemas, process))
+    Ok((bundle, schemas, process, views))
 }
 
 /// Reserved namespace tokens that contributed sources may not claim.
@@ -1171,14 +1296,7 @@ fn prepare_agent_bundle(
     markdown_prompt: Option<String>,
     manifest: SourceAgentManifest,
     stable_agent_ids: &mut BTreeSet<String>,
-) -> Result<
-    (
-        PreparedInstallableBundle,
-        Vec<PreparedSchema>,
-        Option<PreparedProcessExtension>,
-    ),
-    BundleError,
-> {
+) -> Result<PreparedBundleParts, BundleError> {
     let bundle_id = manifest.identity.id.clone();
     validate_identity(&bundle_id, &manifest.identity.version)?;
     let namespace = resolve_namespace(&bundle_id, &manifest.identity, &manifest.namespace)?;
@@ -1187,6 +1305,7 @@ fn prepare_agent_bundle(
     let (tools, skills, mcp, hooks, extensions) =
         prepare_resource_sets(&bundle_id, &files, manifest.resources, manifest.extensions)?;
     let schemas = validate_declared_schemas(&bundle_id, &manifest.schemas, &tools)?;
+    let views = validate_declared_views(&bundle_id, &manifest.views, process.as_ref())?;
     let agent = prepare_agent(
         &bundle_id,
         &files,
@@ -1208,21 +1327,14 @@ fn prepare_agent_bundle(
         extensions,
     }));
     set_bundle_digest(&mut bundle)?;
-    Ok((bundle, schemas, process))
+    Ok((bundle, schemas, process, views))
 }
 
 fn prepare_agent_set_bundle(
     files: BTreeMap<String, Vec<u8>>,
     manifest: SourceAgentSetManifest,
     stable_agent_ids: &mut BTreeSet<String>,
-) -> Result<
-    (
-        PreparedInstallableBundle,
-        Vec<PreparedSchema>,
-        Option<PreparedProcessExtension>,
-    ),
-    BundleError,
-> {
+) -> Result<PreparedBundleParts, BundleError> {
     let bundle_id = manifest.identity.id.clone();
     validate_identity(&bundle_id, &manifest.identity.version)?;
     let namespace = resolve_namespace(&bundle_id, &manifest.identity, &manifest.namespace)?;
@@ -1231,6 +1343,7 @@ fn prepare_agent_set_bundle(
     let (tools, skills, mcp, hooks, extensions) =
         prepare_resource_sets(&bundle_id, &files, manifest.resources, manifest.extensions)?;
     let schemas = validate_declared_schemas(&bundle_id, &manifest.schemas, &tools)?;
+    let views = validate_declared_views(&bundle_id, &manifest.views, process.as_ref())?;
     if manifest.agents.is_empty() && manifest.channels.is_empty() {
         return Err(BundleError::InvalidManifest {
             source_name: bundle_id,
@@ -1283,7 +1396,7 @@ fn prepare_agent_set_bundle(
         extensions,
     }));
     set_bundle_digest(&mut bundle)?;
-    Ok((bundle, schemas, process))
+    Ok((bundle, schemas, process, views))
 }
 
 fn prepare_channel_templates(
@@ -1357,14 +1470,7 @@ fn prepare_workflow_bundle(
     files: BTreeMap<String, Vec<u8>>,
     manifest: SourceWorkflowManifest,
     stable_agent_ids: &mut BTreeSet<String>,
-) -> Result<
-    (
-        PreparedInstallableBundle,
-        Vec<PreparedSchema>,
-        Option<PreparedProcessExtension>,
-    ),
-    BundleError,
-> {
+) -> Result<PreparedBundleParts, BundleError> {
     let bundle_id = manifest.identity.id.clone();
     validate_identity(&bundle_id, &manifest.identity.version)?;
     let namespace = resolve_namespace(&bundle_id, &manifest.identity, &manifest.namespace)?;
@@ -1411,6 +1517,7 @@ fn prepare_workflow_bundle(
         manifest.extensions,
     )?;
     let schemas = validate_declared_schemas(&manifest.identity.id, &manifest.schemas, &tools)?;
+    let views = validate_declared_views(&manifest.identity.id, &manifest.views, process.as_ref())?;
     let mut source_agents = manifest.agents;
     for source_agent in &source_agents {
         if let Some(prompt) = &source_agent.prompt {
@@ -1467,8 +1574,17 @@ fn prepare_workflow_bundle(
         extensions,
     }));
     set_bundle_digest(&mut bundle)?;
-    Ok((bundle, schemas, process))
+    Ok((bundle, schemas, process, views))
 }
+
+/// One prepared bundle plus its document-level sections: schema claims, the
+/// optional explicit process extension, and read-only view declarations.
+type PreparedBundleParts = (
+    PreparedInstallableBundle,
+    Vec<PreparedSchema>,
+    Option<PreparedProcessExtension>,
+    Vec<PreparedView>,
+);
 
 /// Prepared resource vectors in tool, Skill, MCP, hook, and extension order.
 type PreparedResourceSets = (
