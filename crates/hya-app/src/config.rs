@@ -1912,6 +1912,7 @@ pub async fn load() -> anyhow::Result<Option<ResolvedConfig>> {
         && file.plugins.is_empty()
         && !has_permission
         && !has_tools
+        && file.default_agent.is_none()
     {
         return Ok(None);
     }

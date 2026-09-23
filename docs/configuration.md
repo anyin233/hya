@@ -71,6 +71,31 @@ How to tell you are offline:
 - Assistant replies echo the input and say that no live provider is available
   and a provider must be configured.
 
+## Agent Selection
+
+`default_agent` (top-level `config.yaml` key, `Option<String>`) is the agent
+stable id used for a new **root** Session when nothing more specific selects
+one. It applies uniformly across every path that creates a root Session:
+
+- `hya serve` — `POST /v1/sessions` without an explicit `agent` id, and the
+  default row markers on `GET /v1/catalog/agents`.
+- Headless commands — `hya exec`, `hya run`, `hya -p` goal mode, `hya loop`,
+  `hya rpc`, and `hya workflow run` when it creates a new Session (see
+  [CLI Reference](cli.md#hya-exec)).
+
+Precedence: an explicit per-invocation agent id (a request field on `serve`;
+no CLI flag yet on the headless commands) outranks `default_agent`, which
+outranks the built-in `build` agent used when `default_agent` is unset. A
+`default_agent` that does not name a selectable agent in the bound catalog is
+a hard error (`UnknownAgentId`) at session-creation time — it does not
+silently fall back to `build`.
+
+```yaml
+# Optional: agent profile selected when a workdir does not specify one.
+# Falls back to the built-in `build` agent when omitted.
+default_agent: build
+```
+
 ## Remembered Agent Models
 
 Agent model selection covers primary Agents, ordinary subagents, and hidden

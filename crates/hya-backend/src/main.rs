@@ -45,8 +45,8 @@ use cli_args::{Cli, Command};
 pub use hya_app::{
     InvocationPolicy, RuntimeConfig, WebSearchConfig, agent_base_with_model, agent_with_model,
     agent_with_model_pure, build_session_engine, build_session_engine_pure, compaction_config,
-    discover_context_files, host_info, offline_router, open_store, resolve_runtime,
-    spawn_team_supervisor, today,
+    discover_context_files, host_info, offline_router, open_store, resolve_headless_agent_name,
+    resolve_runtime, spawn_team_supervisor, today,
 };
 
 pub(crate) fn first_run_config_bootstrap(interactive: bool) -> anyhow::Result<()> {
@@ -92,7 +92,7 @@ async fn cmd_exec(
         .await
         .with_yolo(yolo)
         .with_pure(pure);
-    let agent = if pure {
+    let mut agent = if pure {
         agent_with_model_pure(&runtime.model, runtime.reasoning)
     } else {
         agent_with_model(&runtime.model, runtime.reasoning)
@@ -118,6 +118,19 @@ async fn cmd_exec(
         )
         .await?
     };
+    let engine = built.engine();
+    // Honor the configured `default_agent` for this headless root session,
+    // same precedence and failure mode as `serve`'s root-session resolution:
+    // config `default_agent`, then the built-in default; an unselectable id
+    // fails clearly instead of silently falling back to the built-in agent.
+    agent.name = resolve_headless_agent_name(
+        &engine,
+        &agent.workdir,
+        None,
+        runtime.default_agent.as_deref(),
+    )
+    .await
+    .context("resolve default agent")?;
     let session_model = if has_explicit_model {
         agent.model.clone()
     } else {
@@ -126,7 +139,6 @@ async fn cmd_exec(
             .await
             .context("resolve headless root Agent model")?
     };
-    let engine = built.engine();
     let asks = built
         .take_asks()
         .ok_or_else(|| anyhow::anyhow!("asks receiver missing"))?;
@@ -221,7 +233,7 @@ async fn cmd_rpc(model_override: Option<String>, yolo: bool, pure: bool) -> anyh
         .await
         .with_yolo(yolo)
         .with_pure(pure);
-    let agent = if pure {
+    let mut agent = if pure {
         agent_with_model_pure(&runtime.model, runtime.reasoning)
     } else {
         agent_with_model(&runtime.model, runtime.reasoning)
@@ -247,6 +259,16 @@ async fn cmd_rpc(model_override: Option<String>, yolo: bool, pure: bool) -> anyh
         )
         .await?
     };
+    let engine = built.engine();
+    // Same `default_agent` precedence/failure mode as `serve` and `exec`.
+    agent.name = resolve_headless_agent_name(
+        &engine,
+        &agent.workdir,
+        None,
+        runtime.default_agent.as_deref(),
+    )
+    .await
+    .context("resolve default agent")?;
     let session_model = if has_explicit_model {
         agent.model.clone()
     } else {
@@ -255,7 +277,6 @@ async fn cmd_rpc(model_override: Option<String>, yolo: bool, pure: bool) -> anyh
             .await
             .context("resolve RPC root Agent model")?
     };
-    let engine = built.engine();
     let asks = built
         .take_asks()
         .ok_or_else(|| anyhow::anyhow!("asks receiver missing"))?;
@@ -343,7 +364,7 @@ async fn cmd_goal(
         &runtime.model,
     )
     .to_string();
-    let agent = if pure {
+    let mut agent = if pure {
         agent_with_model_pure(&runtime.model, runtime.reasoning)
     } else {
         agent_with_model(&runtime.model, runtime.reasoning)
@@ -369,6 +390,16 @@ async fn cmd_goal(
         )
         .await?
     };
+    let engine = built.engine();
+    // Same `default_agent` precedence/failure mode as `serve` and `exec`.
+    agent.name = resolve_headless_agent_name(
+        &engine,
+        &agent.workdir,
+        None,
+        runtime.default_agent.as_deref(),
+    )
+    .await
+    .context("resolve default agent")?;
     let session_model = if has_explicit_model {
         agent.model.clone()
     } else {
@@ -377,7 +408,6 @@ async fn cmd_goal(
             .await
             .context("resolve goal root Agent model")?
     };
-    let engine = built.engine();
     let binding = engine
         .bind_root_runtime(&agent.workdir)
         .await
@@ -485,7 +515,7 @@ async fn cmd_loop(
         &runtime.model,
     )
     .to_string();
-    let agent = if pure {
+    let mut agent = if pure {
         agent_with_model_pure(&runtime.model, runtime.reasoning)
     } else {
         agent_with_model(&runtime.model, runtime.reasoning)
@@ -511,6 +541,16 @@ async fn cmd_loop(
         )
         .await?
     };
+    let engine = built.engine();
+    // Same `default_agent` precedence/failure mode as `serve` and `exec`.
+    agent.name = resolve_headless_agent_name(
+        &engine,
+        &agent.workdir,
+        None,
+        runtime.default_agent.as_deref(),
+    )
+    .await
+    .context("resolve default agent")?;
     let session_model = if has_explicit_model {
         agent.model.clone()
     } else {
@@ -519,7 +559,6 @@ async fn cmd_loop(
             .await
             .context("resolve loop root Agent model")?
     };
-    let engine = built.engine();
     let binding = engine
         .bind_root_runtime(&agent.workdir)
         .await

@@ -169,6 +169,74 @@ fn json_exec_db_emits_hysec_session_and_sessions_lists_exact_id()
 }
 
 #[test]
+fn exec_starts_the_root_session_under_the_configured_default_agent()
+-> Result<(), Box<dyn std::error::Error>> {
+    let env = IsolatedEnv::new("hya-exec-default-agent")?;
+    write_config_with_default_agent(&env, "plan")?;
+
+    let output = hya_command(&env)
+        .args(["exec", "--json", "hello"])
+        .output()?;
+    assert_success("exec --json (default_agent: plan)", &output);
+
+    let stdout = String::from_utf8(output.stdout)?;
+    let agent = session_created_agent(&stdout)?.ok_or("missing session_created event")?;
+    assert_eq!(
+        agent, "plan",
+        "hya exec must start the root session under the configured `default_agent`, \
+         not the built-in `build` agent:\n{stdout}"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn run_honors_configured_default_agent_like_exec() -> Result<(), Box<dyn std::error::Error>> {
+    let env = IsolatedEnv::new("hya-run-default-agent")?;
+    write_config_with_default_agent(&env, "hya-main")?;
+
+    let output = hya_command(&env)
+        .args(["run", "--json", "hello"])
+        .output()?;
+    assert_success("run --json (default_agent: hya-main)", &output);
+
+    let stdout = String::from_utf8(output.stdout)?;
+    let agent = session_created_agent(&stdout)?.ok_or("missing session_created event")?;
+    assert_eq!(
+        agent, "hya-main",
+        "hya run (the exec alias) must honor `default_agent` the same way exec does:\n{stdout}"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn exec_fails_clearly_when_default_agent_is_unselectable() -> Result<(), Box<dyn std::error::Error>>
+{
+    let env = IsolatedEnv::new("hya-exec-unknown-default-agent")?;
+    write_config_with_default_agent(&env, "not-a-real-agent")?;
+
+    let output = hya_command(&env)
+        .args(["exec", "--json", "hello"])
+        .output()?;
+    assert!(
+        !output.status.success(),
+        "exec should fail clearly on an unselectable default_agent instead of \
+         silently falling back to `build`:\nstatus: {}\nstdout:\n{}\nstderr:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8(output.stderr)?;
+    assert!(
+        stderr.contains("not-a-real-agent"),
+        "expected the typed UnknownAgentId error to name the bad agent id:\n{stderr}"
+    );
+
+    Ok(())
+}
+
+#[test]
 fn sessions_empty_db_prints_no_sessions_found() -> Result<(), Box<dyn std::error::Error>> {
     let env = IsolatedEnv::new("hya-empty-sessions-db")?;
     let db = env.root.join("empty.db");
@@ -436,6 +504,45 @@ fn session_created_id(output: &str) -> Result<Option<String>, Box<dyn std::error
         }
     }
     Ok(None)
+}
+
+/// The root session's `agent` id from its `session_created` event, if the
+/// JSONL event stream (`--json`) contains one.
+fn session_created_agent(output: &str) -> Result<Option<String>, Box<dyn std::error::Error>> {
+    for line in output.lines().filter(|line| !line.trim().is_empty()) {
+        let value: Value = serde_json::from_str(line)?;
+        if value.pointer("/event/type") == Some(&Value::String("session_created".to_string())) {
+            return Ok(value
+                .pointer("/event/agent")
+                .and_then(Value::as_str)
+                .map(str::to_owned));
+        }
+    }
+    Ok(None)
+}
+
+/// Write a minimal offline-provider `config.yaml` (matches the first-run
+/// starter shape) with `default_agent` set to `agent_id`, so headless
+/// commands resolve their root session's agent from config without needing a
+/// live provider.
+fn write_config_with_default_agent(
+    env: &IsolatedEnv,
+    agent_id: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let config_dir = env.xdg_config.join("hya");
+    std::fs::create_dir_all(&config_dir)?;
+    std::fs::write(
+        config_dir.join("config.yaml"),
+        format!(
+            "default_model: hya/offline\n\
+             providers: {{}}\n\
+             mcp: {{}}\n\
+             plugins: {{}}\n\
+             permission:\n  model: default\n  rules: []\n\
+             default_agent: {agent_id}\n"
+        ),
+    )?;
+    Ok(())
 }
 
 fn assert_tail_replays_session(

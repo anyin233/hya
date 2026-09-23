@@ -907,6 +907,11 @@ fn validate_activation_id(activation_id: &str) -> Result<(), CoreError> {
     Ok(())
 }
 
+/// Built-in root-session agent id used when neither an explicit override nor
+/// config `default_agent` selects one. Matches `serve`'s own fallback
+/// (`ServerState.default_agent`, then this same built-in agent).
+pub const BUILTIN_DEFAULT_AGENT_ID: &str = "build";
+
 /// Agent base only — for HTTP/SSE server and interactive TUI AppState assembly.
 ///
 /// Bundle `prompt=None` keeps this base; per-turn server discovery appends
@@ -914,7 +919,7 @@ fn validate_activation_id(activation_id: &str) -> Result<(), CoreError> {
 /// would duplicate AGENTS when guidance is also layered.
 pub fn agent_base_with_model(model: &str, reasoning: Option<ReasoningEffort>) -> AgentSpec {
     AgentSpec {
-        name: AgentName::new("build"),
+        name: AgentName::new(BUILTIN_DEFAULT_AGENT_ID),
         model: ModelRef::new(model),
         system_prompt: HARNESS_AGENT_BASE.to_string(),
         workdir: PathBuf::from("."),
@@ -938,7 +943,7 @@ pub fn agent_with_model(model: &str, reasoning: Option<ReasoningEffort>) -> Agen
     let context = discover_context_files(&workdir);
     let system_prompt = build_system_prompt(HARNESS_AGENT_BASE, &env, &context);
     AgentSpec {
-        name: AgentName::new("build"),
+        name: AgentName::new(BUILTIN_DEFAULT_AGENT_ID),
         model: ModelRef::new(model),
         system_prompt,
         workdir,
@@ -959,12 +964,48 @@ pub fn agent_with_model_pure(model: &str, reasoning: Option<ReasoningEffort>) ->
     };
     let system_prompt = build_system_prompt(HARNESS_AGENT_BASE, &env, &[]);
     AgentSpec {
-        name: AgentName::new("build"),
+        name: AgentName::new(BUILTIN_DEFAULT_AGENT_ID),
         model: ModelRef::new(model),
         system_prompt,
         workdir,
         reasoning,
     }
+}
+
+/// Resolve which agent id a headless root session (`exec`/`run`, `-p` goal
+/// mode, `loop`, `rpc`) should use, mirroring `serve`'s own precedence:
+/// explicit override (a CLI flag, when the caller has one) first, then config
+/// `default_agent`, then the built-in [`BUILTIN_DEFAULT_AGENT_ID`].
+///
+/// Unlike `serve` (which resolves lazily per HTTP session-create request and
+/// can silently keep serving other sessions on failure), a headless run has
+/// exactly one root session: an unresolvable candidate fails the whole
+/// invocation up front with the same typed error `serve` uses
+/// (`BundleError::UnknownAgentId`) rather than silently falling back to the
+/// built-in agent.
+///
+/// # Errors
+/// Propagates [`SessionEngine::bind_root_runtime`] failures, and returns
+/// `CoreError::Bundle(BundleError::UnknownAgentId)` when the resolved
+/// candidate is not a selectable agent in the bound catalog.
+pub async fn resolve_headless_agent_name(
+    engine: &SessionEngine,
+    workdir: &Path,
+    explicit: Option<&str>,
+    default_agent: Option<&str>,
+) -> Result<AgentName, CoreError> {
+    let candidate = explicit
+        .or(default_agent)
+        .unwrap_or(BUILTIN_DEFAULT_AGENT_ID);
+    let binding = engine.bind_root_runtime(workdir).await?;
+    binding
+        .resolve_agent(candidate)
+        .map(|definition| AgentName::new(definition.stable_id))
+        .ok_or_else(|| {
+            CoreError::from(hya_bundle::BundleError::UnknownAgentId {
+                agent_id: candidate.to_string(),
+            })
+        })
 }
 
 /// First-run guidance produced when no usable config is found and hya falls

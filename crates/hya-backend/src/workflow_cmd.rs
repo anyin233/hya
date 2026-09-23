@@ -5,7 +5,8 @@ use anyhow::Context as _;
 use clap::Subcommand;
 use hya_app::{
     BuiltSessionEngine, WorkflowCommand as ControlCommand, WorkflowCommandResult, WorkflowControl,
-    WorkflowInvocation, agent_with_model, build_session_engine, open_store, resolve_runtime,
+    WorkflowInvocation, agent_with_model, build_session_engine, open_store,
+    resolve_headless_agent_name, resolve_runtime,
 };
 use hya_core::CreateSession;
 use hya_proto::{
@@ -98,7 +99,7 @@ impl WorkflowRuntime {
             .await
             .with_yolo(yolo)
             .with_pure(pure);
-        let agent = if pure {
+        let mut agent = if pure {
             crate::agent_with_model_pure(&runtime.model, runtime.reasoning)
         } else {
             agent_with_model(&runtime.model, runtime.reasoning)
@@ -141,6 +142,17 @@ impl WorkflowRuntime {
             );
             session
         } else {
+            // Same `default_agent` precedence/failure mode as `serve` and
+            // `exec`: config `default_agent`, then the built-in default; an
+            // unselectable id fails clearly rather than falling back silently.
+            agent.name = resolve_headless_agent_name(
+                &engine,
+                &workdir,
+                None,
+                runtime.default_agent.as_deref(),
+            )
+            .await
+            .context("resolve default agent")?;
             let model = if has_explicit_model {
                 agent.model.clone()
             } else {
