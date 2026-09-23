@@ -187,12 +187,8 @@ describe("parseViewQuery", () => {
     expect(parseViewQuery({ scope: "bogus" }).ok).toBe(false);
   });
 
-  test("accepts a recognized by value", () => {
-    expect(parseViewQuery({ by: "session" })).toEqual({ ok: true, scope: "tree" });
-  });
-
-  test("rejects an unrecognized by value", () => {
-    expect(parseViewQuery({ by: "nonsense" }).ok).toBe(false);
+  test("rejects the removed by key", () => {
+    expect(parseViewQuery({ by: "session" }).ok).toBe(false);
   });
 
   test("rejects an unknown query key", () => {
