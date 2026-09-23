@@ -4,14 +4,7 @@ identity:
   version: 0.41.0
   publisher: hya
 agents:
-  - id: hya-resident-worker
-    description: Long-lived worker for follow-up tasks delivered through its runtime mailbox.
+  - id: hya-worker
+    description: Resident worker for one delegated task; reports its result and can be woken again by follow-up mail.
     role: subagent
-    prompt: prompts/resident-worker.md
-    spawn_lifecycle: resident
-    can_spawn: [hya-transient-worker]
-  - id: hya-transient-worker
-    description: One-shot worker for a bounded task that reports and exits.
-    role: subagent
-    prompt: prompts/transient-worker.md
-    spawn_lifecycle: transient
+    prompt: prompts/worker.md

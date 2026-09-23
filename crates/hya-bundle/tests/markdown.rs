@@ -23,8 +23,7 @@ identity:
   publisher: hya
 agent:
   id: markdown-lead
-  role: main
-  spawn_lifecycle: transient"#
+  role: main"#
 }
 
 #[test]
@@ -84,7 +83,6 @@ agent:
   id: markdown-alpha
   role: main
   prompt: prompts/alpha.md
-  spawn_lifecycle: transient
 ---
 
 "#,

@@ -215,18 +215,13 @@ match store.claim_admission(&claim).await? {
 
 ### 1. Scope / Trigger
 
-Any test whose spawn reaches `prepare_spawn_admission` — i.e. where
-`uses_durable_admission_owner` is true. That is broader than "background": every
-member must be non-resident with `spawn_lifecycle: transient`, and then
-
-- **foreground** batches go durable at **any** member count, and
-- **background** batches go durable only when there is exactly one member.
-
-Multi-member background batches and any batch containing a resident member stay
-on the legacy route. Learned 2026-08-05 from three `nested_spawn_tree.rs` tests
-that failed with an opaque `SpawnError::Unavailable`; the "background"-only
-wording corrected 2026-08-06 against `uses_durable_admission_owner`'s
-`if req.background { len() == 1 } else { true }`.
+Any test whose spawn reaches durable spawn admission. Since ADR-0015 every
+`task` spawn is a resident actor and goes through one unified admission path
+(`begin_spawn_admission`), so this applies to every spawn test. (Before 0.41.0
+the route depended on the removed `spawn_lifecycle` key and the
+`uses_durable_admission_owner` split; learned 2026-08-05 from three
+`nested_spawn_tree.rs` tests that failed with an opaque
+`SpawnError::Unavailable`.)
 
 ### 2. Contracts
 

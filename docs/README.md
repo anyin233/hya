@@ -44,7 +44,7 @@ If you want to package a public Plugin, AgentBundle, AgentSetBundle, or Workflow
    root form: `bundle.yaml` for all four kinds, or `bundle.hya.md` only for an
    AgentBundle body prompt. Start from the
    [single-file static example](examples/bundle.hya.md), the
-   [transient Bun example](examples/bun-transient/), the
+   [per-activation Bun example](examples/bun-transient/), the
    [resident Bun example](examples/bun-resident/), the
    [disjoint Bun example](examples/bun-disjoint/), or the
    [directory `bundle.yaml` layout](../crates/hya-bundle/tests/fixtures/directory/bundle.yaml),
@@ -92,7 +92,7 @@ If you want to understand the codebase:
 | [Core agents](core-agents.md) | Trusted first-party agent preset and reserved-agent provenance. |
 | [Tool-family presets](base-tools.md) | Five trusted tool groups, exposure, aliases, and permission defaults. |
 | [Claude plugin import](claude-plugin-import.md) | Import local and marketplace plugins into standard bundles. |
-| [Subagent bundles](subagent-bundles.md) | Transient and resident bundle-defined workers. |
+| [Subagent bundles](subagent-bundles.md) | The bundle-defined resident worker (`hya-worker`). |
 | [Agent channels](agent-channels.md) | Declarative unit and parent-DM policies. |
 | [Extra bundles](extra-bundles.md) | Optional `hya-extra/*` packages (zvec-grep MCP, scout subagent, model routing) that double as bundle-coverage fixtures. |
 | [Secure self-update](self-update.md) | `hya update` over the independent `hya-updater` TCB: signed metadata, local package stage, smoke, owner-gated activation, break-glass installer. |

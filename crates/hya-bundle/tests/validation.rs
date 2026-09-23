@@ -24,7 +24,6 @@ identity:
 agent:
   id: {stable_id}
   role: main
-  spawn_lifecycle: transient
   can_spawn:
 {can_spawn}
 "#,
@@ -49,7 +48,6 @@ resources:
 agent:
   id: lead
   role: main
-  spawn_lifecycle: transient
   resource_view:
     aliases:
       local-docs: bundle:hya/test/skill/local-docs
@@ -138,7 +136,6 @@ identity:
 agent:
   id: lead
   role: main
-  spawn_lifecycle: transient
   resource_profile:
     max_depth: 2
     per_team_turn_budget: 8
@@ -171,7 +168,6 @@ identity:
 agent:
   id: alpha-lead
   role: main
-  spawn_lifecycle: transient
   resource_view:
     aliases:
       beta-docs: bundle:hya/beta/skill/docs
@@ -207,7 +203,6 @@ resources:
 agent:
   id: canonical-lead
   role: main
-  spawn_lifecycle: transient
   resource_view:
     allow:
       - docs
@@ -241,7 +236,6 @@ identity:
 agent:
   id: minimal-lead
   role: main
-  spawn_lifecycle: transient
 {extra}"#,
     )
     .into_bytes()
@@ -352,7 +346,6 @@ extensions:
 agent:
   id: lead
   role: main
-  spawn_lifecycle: transient
   resource_view:
     allow:
       - echo
@@ -419,7 +412,6 @@ extensions:
 agent:
   id: lead
   role: main
-  spawn_lifecycle: transient
   resource_view:
     allow:
       - echo
@@ -458,7 +450,6 @@ extensions:
 agent:
   id: lead
   role: main
-  spawn_lifecycle: transient
 "#;
     let result = prepare_package(BundleSource::new(
         "unreachable-extension",
@@ -503,7 +494,6 @@ extensions:
 agent:
   id: lead
   role: main
-  spawn_lifecycle: transient
   resource_view:
     allow:
       - echo
@@ -604,7 +594,6 @@ extensions:
 agent:
   id: lead
   role: main
-  spawn_lifecycle: transient
   hook_refs:
     - {local_id}
 "#,
@@ -662,7 +651,6 @@ extensions:
 agent:
   id: lead
   role: main
-  spawn_lifecycle: transient
 "#;
     let result = prepare_package(BundleSource::new(
         "unreferenced-hook",
@@ -706,7 +694,6 @@ extensions:
 agent:
   id: lead
   role: main
-  spawn_lifecycle: transient
   hook_refs:
     - {hook_ref}
 "#,
@@ -752,7 +739,6 @@ extensions:
 agent:
   id: lead
   role: main
-  spawn_lifecycle: transient
   hook_refs:
     - shared
 "#;
@@ -796,7 +782,6 @@ extensions:
 agent:
   id: lead
   role: main
-  spawn_lifecycle: transient
   hook_refs:
     - missing
 "#;
@@ -832,7 +817,6 @@ extensions:
 agent:
   id: lead
   role: main
-  spawn_lifecycle: transient
   hook_refs:
     - bundle:hya/executable/tool/echo
 "#;
@@ -875,7 +859,6 @@ identity:
 agent:
   id: lead
   role: main
-  spawn_lifecycle: transient
   hook_refs:
     - "{raw_hook_ref}"
 "#,
@@ -945,7 +928,6 @@ extensions:
 agent:
   id: lead
   role: main
-  spawn_lifecycle: transient
   hook_refs:
     - {first}
     - {second}
@@ -1008,4 +990,137 @@ fn duplicate_stable_ids_wrong_kind_and_parent_paths_are_rejected() {
         vec![SourceFile::new("../bundle.yaml", minimal_manifest(""))],
     ));
     assert!(matches!(parent, Err(BundleError::InvalidSourcePath { .. })));
+}
+
+/// `spawn_lifecycle` was removed in 0.41.0 (every subagent is a resident
+/// actor). Each manifest kind that declares agents rejects it by name.
+#[test]
+fn spawn_lifecycle_is_a_removed_manifest_key_in_every_agent_manifest() {
+    let agent_bundle = r#"kind: AgentBundle
+identity: { id: acme/solo, version: 1.0.0, publisher: acme }
+agent:
+  id: solo
+  role: subagent
+  spawn_lifecycle: transient
+"#;
+    let agent_set = r#"kind: AgentSetBundle
+identity: { id: acme/set, version: 1.0.0, publisher: acme }
+agents:
+  - id: worker
+    role: subagent
+    spawn_lifecycle: resident
+"#;
+    let workflow = r#"kind: WorkflowBundle
+identity: { id: acme/flow, version: 1.0.0, publisher: acme }
+workflow:
+  id: flow
+  path: workflows/flow.hya.md
+agents:
+  - id: flow-worker
+    role: subagent
+    spawn_lifecycle: transient
+"#;
+    let flow = "---\nkind: Workflow\nname: flow\ndescription: One stage.\nnodes:\n  work:\n    agent: flow-worker\n    directive: Work.\n---\nflowchart TD\n  work\n";
+    for (name, manifest) in [
+        ("agent", agent_bundle),
+        ("agent-set", agent_set),
+        ("workflow", workflow),
+    ] {
+        let mut files = vec![SourceFile::new("bundle.yaml", manifest.as_bytes().to_vec())];
+        if name == "workflow" {
+            files.push(SourceFile::new(
+                "workflows/flow.hya.md",
+                flow.as_bytes().to_vec(),
+            ));
+        }
+        let result = prepare_package(BundleSource::new(name, files));
+        match result {
+            Err(error @ BundleError::RemovedManifestKey { .. }) => {
+                let BundleError::RemovedManifestKey { ref key, .. } = error else {
+                    unreachable!();
+                };
+                assert_eq!(key, "spawn_lifecycle", "{name}");
+                let text = error.to_string();
+                assert!(
+                    text.contains("spawn_lifecycle") && text.contains("resident"),
+                    "{name}: the error must name the key and say what replaces it: {text}"
+                );
+            }
+            other => panic!("{name}: spawn_lifecycle must be rejected by name, got {other:?}"),
+        }
+    }
+}
+
+/// Catalogs prepared before 0.41.0 serialized `spawn_lifecycle` on every
+/// agent. They must keep decoding (and digest-verifying) so installed bundles
+/// survive the upgrade; new preparation never writes the key.
+#[test]
+fn legacy_prepared_catalog_with_spawn_lifecycle_still_decodes() {
+    use sha2::{Digest as _, Sha256};
+
+    let prepared = prepare_package(agent_source("legacy", "acme/legacy", "legacy-lead", &[]))
+        .unwrap_or_else(|error| panic!("fixture must prepare: {error:?}"));
+    let fresh = String::from_utf8(prepared.bytes().to_vec()).unwrap_or_default();
+    assert!(
+        !fresh.contains("spawn_lifecycle"),
+        "prepare must not write the removed key: {fresh}"
+    );
+
+    let hex = |bytes: &[u8]| {
+        Sha256::digest(bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    };
+    let mut document: serde_json::Value =
+        serde_json::from_slice(prepared.bytes()).unwrap_or_default();
+    let bundle = &mut document["bundles"][0];
+    let old_digest = bundle["digest"].as_str().unwrap_or_default().to_string();
+    fn legacy_agent(value: &mut serde_json::Value) -> bool {
+        match value {
+            serde_json::Value::Object(fields) => {
+                if fields.get("id").and_then(serde_json::Value::as_str) == Some("legacy-lead")
+                    && fields.contains_key("role")
+                {
+                    // Old catalogs serialized the key in struct order, right
+                    // after `workdir` (serde_json preserves key order here).
+                    let mut rebuilt = serde_json::Map::new();
+                    for (key, value) in std::mem::take(fields) {
+                        let after_workdir = key == "workdir";
+                        rebuilt.insert(key, value);
+                        if after_workdir {
+                            rebuilt.insert(
+                                "spawn_lifecycle".to_string(),
+                                serde_json::Value::String("transient".to_string()),
+                            );
+                        }
+                    }
+                    *fields = rebuilt;
+                    return fields.contains_key("spawn_lifecycle");
+                }
+                fields.values_mut().any(legacy_agent)
+            }
+            serde_json::Value::Array(items) => items.iter_mut().any(legacy_agent),
+            _ => false,
+        }
+    }
+    assert!(legacy_agent(bundle), "agent payload missing: {fresh}");
+    let mut unsigned = bundle.clone();
+    if let Some(fields) = unsigned.as_object_mut() {
+        fields.remove("digest");
+    }
+    let new_digest = hex(&serde_json::to_vec(&unsigned).unwrap_or_default());
+    let legacy = serde_json::to_string(&document)
+        .unwrap_or_default()
+        .replace(&old_digest, &new_digest);
+    let outer = hex(legacy.as_bytes());
+
+    let decoded = PreparedCatalog::decode(legacy.as_bytes(), &outer)
+        .unwrap_or_else(|error| panic!("legacy catalog must decode: {error:?}"));
+    assert_eq!(
+        decoded.bundles()[0].agents()[0]
+            .legacy_spawn_lifecycle
+            .as_deref(),
+        Some("transient")
+    );
 }

@@ -30,7 +30,7 @@ fn write_project_bundle(root: &Path, name: &str, bundle_id: &str, prompt: &str) 
     let dir = root.join(".hya/bundles").join(name);
     std::fs::create_dir_all(&dir).expect("create project bundle dir");
     let manifest = format!(
-        "---\nkind: AgentBundle\nidentity:\n  id: {bundle_id}\n  version: 1.0.0\n  publisher: hya\nresources:\n  skills:\n    - id: {name}-skill\n      path: resources/skills/{name}-skill.md\nagent:\n  id: {name}-agent\n  role: main\n  spawn_lifecycle: transient\n---\n{prompt}\n"
+        "---\nkind: AgentBundle\nidentity:\n  id: {bundle_id}\n  version: 1.0.0\n  publisher: hya\nresources:\n  skills:\n    - id: {name}-skill\n      path: resources/skills/{name}-skill.md\nagent:\n  id: {name}-agent\n  role: main\n---\n{prompt}\n"
     );
     std::fs::write(dir.join("bundle.hya.md"), manifest).expect("write project manifest");
     let skills = dir.join("resources/skills");
@@ -135,7 +135,6 @@ identity:
 agent:
   id: shared-agent
   role: main
-  spawn_lifecycle: transient
 ---
 You are the INSTALLED agent.
 "#
@@ -205,7 +204,6 @@ namespace: proj-ns
 agent:
   id: other-agent
   role: main
-  spawn_lifecycle: transient
 ---
 You are the INSTALLED agent.
 "#

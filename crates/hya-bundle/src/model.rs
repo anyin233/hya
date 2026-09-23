@@ -32,17 +32,6 @@ impl AgentRole {
     }
 }
 
-/// Lifecycle used only when Harness spawns the catalog entry.
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SpawnLifecycle {
-    /// Blocking one-shot subagent (default when omitted in source).
-    #[default]
-    Transient,
-    /// Long-lived mail-woken resident actor.
-    Resident,
-}
-
 /// Bundle payload kind in a prepared document.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum PreparedBundleKind {
@@ -135,8 +124,17 @@ pub struct PreparedAgent {
     pub model_policy: ModelPolicy,
     /// Optional workdir override for turns of this agent.
     pub workdir: Option<String>,
-    /// Transient vs resident when Harness spawns this entry.
-    pub spawn_lifecycle: SpawnLifecycle,
+    /// Decode-only remnant of the removed `spawn_lifecycle` key (every
+    /// subagent is a resident actor since 0.41.0). Catalogs prepared by earlier
+    /// releases carry `"spawn_lifecycle": "transient"|"resident"`; keeping the
+    /// value lets them decode and digest-verify unchanged. Prepare never writes
+    /// it and the runtime ignores it.
+    #[serde(
+        default,
+        rename = "spawn_lifecycle",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub legacy_spawn_lifecycle: Option<String>,
     /// Per-agent allow/deny/alias resource view.
     pub resource_view: ResourceView,
     /// Stable agent ids this agent is allowed to spawn.

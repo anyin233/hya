@@ -7,4 +7,3 @@ agent:
   id: directory-lead
   role: main
   prompt: prompts/lead.md
-  spawn_lifecycle: transient

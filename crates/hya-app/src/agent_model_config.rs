@@ -633,7 +633,7 @@ mod tests {
         std::fs::create_dir_all(bundle_dir.join("prompts")).unwrap();
         std::fs::write(
             bundle_dir.join("bundle.yaml"),
-            "kind: AgentBundle\nidentity:\n  id: acme/tools\n  version: 1.0.0\n  publisher: acme\nagent:\n  id: tools-lead\n  role: main\n  prompt: prompts/lead.md\n  spawn_lifecycle: transient\n",
+            "kind: AgentBundle\nidentity:\n  id: acme/tools\n  version: 1.0.0\n  publisher: acme\nagent:\n  id: tools-lead\n  role: main\n  prompt: prompts/lead.md\n",
         )
         .unwrap();
         std::fs::write(bundle_dir.join("prompts/lead.md"), "Lead.\n").unwrap();

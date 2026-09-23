@@ -66,7 +66,7 @@ See [Bundle configuration files](configuration.md#bundle-configuration-files).
 
 ### Introduction
 
-An `AgentSetBundle` defining one transient subagent, `scout`: a cheap
+An `AgentSetBundle` defining one subagent, `scout`: a cheap
 retrieval agent for orchestrators to spawn with "where/what/how is X"
 questions about the local workspace. It answers with file:line evidence
 gathered through its own `zvec-grep` MCP server (bundle agents cannot see a
@@ -108,7 +108,7 @@ agents:
 | Contract | Value |
 | --- | --- |
 | Agent id | `scout` (also `bundle:hya-extra/scout/agent/scout`) |
-| Role / lifecycle | `subagent`, `spawn_lifecycle: transient` |
+| Role / lifecycle | `subagent`; spawned as a resident actor (reports, then is archived; follow-up mail wakes it) |
 | Model policy | `{category: quick, reasoning: low}` |
 | `resource_view.allow` | `harness:tool/read`, `harness:tool/grep`, `harness:tool/glob`, and its own bundle-local `zvec-grep` MCP server |
 | MCP resource | `resources.mcp` id `zvec-grep`, argv `zg server --stdio --mcp-toolset full`, `timeout_ms: 600000` |

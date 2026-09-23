@@ -472,13 +472,15 @@ Core Agent definitions come from the trusted, runtime-loaded
 [`hya/core-agents` preset](../core-agents.md), and native tool visibility/aliases/
 permission posture come from the [five tool-family presets](../base-tools.md). Public packages
 cannot claim their trusted origin. [`hya/subagents`](../subagent-bundles.md)
-supplies ordinary transient/resident definitions; [channel policy bundles](../agent-channels.md)
+supplies the ordinary `hya-worker` definition (every spawned agent is a
+resident actor); [channel policy bundles](../agent-channels.md)
 restrict engine-minted communication topology without owning channel identities
 or introducing separate event/replay state.
 
 Core preserves that child pinning with a typed `BoundSpawnRequest` carrying the
-parent `TurnBinding` through the application supervisor into both transient and
-resident execution. The child path does not query the bundle registry database
+parent `TurnBinding` through the application supervisor into resident
+execution (and, for Workflow Stages without an `actor` key, into the one-shot
+Stage runner). The child path does not query the bundle registry database
 for a generation or bind whichever runtime is current when a queued request
 runs.
 
@@ -524,8 +526,9 @@ cancellation, or a round that ended in tool calls without completing — calls
 `terminate()`. Sidecar authors must assume `terminate()` is the common path on
 abnormal exit and must not rely on shutdown-time flushing for durability.
 
-A transient activation owns one child through its whole activation and then
-shuts down/reaps it. A healthy resident reuses one child across mailbox
+A root agent's turn activation owns one child through its whole activation
+and then shuts down/reaps it (a Workflow Stage without an `actor` key does the
+same). A healthy resident reuses one child across mailbox
 messages; idle loss lazily creates a fresh child, running loss aborts and
 fences the current item without replay, and queued-after work resumes with a
 fresh ACK on the same pinned binding. Explicit stop is final and idempotent,

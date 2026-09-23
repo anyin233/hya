@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use hya_bundle::{
     AgentRole, BundleCatalog, BundleError, BundleIdentity, ModelPolicy, PreparedAgent,
-    PreparedAgentBundle, PreparedInstallableBundle, ResourceView, SpawnLifecycle,
+    PreparedAgentBundle, PreparedInstallableBundle, ResourceView,
 };
 use hya_core::{AgentCatalog, AgentOrigin, builtin_agents, core_agents_preset};
 use hya_proto::AgentName;
@@ -35,7 +35,7 @@ fn installed(bundle_id: &str, agent_id: &str, can_spawn: &[&str]) -> PreparedIns
             prompt_digest: None,
             model_policy: ModelPolicy::default(),
             workdir: None,
-            spawn_lifecycle: SpawnLifecycle::Transient,
+            legacy_spawn_lifecycle: None,
             resource_view: ResourceView::default(),
             can_spawn: can_spawn.iter().map(|id| AgentName::new(*id)).collect(),
             hook_refs: Vec::new(),
@@ -83,7 +83,6 @@ fn core_agents_are_backed_by_the_verified_embedded_preset() {
         assert_eq!(compat.role, prepared.role);
         assert_eq!(compat.prompt, prepared.prompt.as_deref());
         assert_eq!(compat.model_policy.to_model_policy(), prepared.model_policy);
-        assert_eq!(compat.spawn_lifecycle, prepared.spawn_lifecycle);
         assert_eq!(compat.system_reserved, preset.is_reserved(compat.id));
     }
 
@@ -343,7 +342,7 @@ agents:
 }
 
 #[test]
-fn first_party_subagent_bundle_preserves_transient_and_resident_lifecycles() {
+fn first_party_subagent_bundle_exposes_one_resident_worker() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../bundles/first-party/subagents");
     let prepared = hya_bundle::prepare_package(
@@ -353,23 +352,24 @@ fn first_party_subagent_bundle_preserves_transient_and_resident_lifecycles() {
     let bundles = BundleCatalog::from_verified_catalogs(&[&prepared]).expect("verified catalog");
     let catalog = AgentCatalog::new(Arc::new(bundles)).expect("runtime catalog");
 
-    let transient = catalog
-        .resolve_spawn("build", "hya-transient-worker")
-        .expect("transient worker");
-    let resident = catalog
-        .resolve_spawn("build", "hya-resident-worker")
+    let worker = catalog
+        .resolve_spawn("build", "hya-worker")
         .expect("resident worker");
-    assert_eq!(transient.spawn_lifecycle, SpawnLifecycle::Transient);
-    assert_eq!(resident.spawn_lifecycle, SpawnLifecycle::Resident);
     assert_eq!(
-        transient.origin,
+        worker.origin,
         AgentOrigin::Bundle {
             bundle_id: "hya/subagents"
         }
     );
-    assert!(!transient.origin.is_preset());
-    assert!(!catalog.is_reserved(transient.stable_id));
-    assert!(!catalog.is_reserved(resident.stable_id));
+    assert!(!worker.origin.is_preset());
+    assert!(!catalog.is_reserved(worker.stable_id));
+    // The transient/resident split is gone with `spawn_lifecycle`.
+    for removed in ["hya-transient-worker", "hya-resident-worker"] {
+        assert!(
+            catalog.resolve_spawn("build", removed).is_err(),
+            "`{removed}` must no longer exist"
+        );
+    }
 }
 
 #[test]

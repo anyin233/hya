@@ -19,7 +19,6 @@ identity:
 agent:
   id: public-package-lead
   role: main
-  spawn_lifecycle: transient
 ---
 You are the public package lead.
 "#,
@@ -45,7 +44,6 @@ agents:
   - id: worker
     role: subagent
     prompt: prompts/worker.md
-    spawn_lifecycle: transient
 "#,
             ),
             SourceFile::new(
@@ -175,7 +173,6 @@ extensions:
 agent:
   id: schema-lead
   role: main
-  spawn_lifecycle: transient
   resource_view:
     allow:
       - query

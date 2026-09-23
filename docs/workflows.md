@@ -34,7 +34,6 @@ agents:
     description: Executes the packaged Workflow.
     role: subagent
     prompt: prompts/workflow-worker.md
-    spawn_lifecycle: transient
 ```
 
 The package closure also contains `workflows/feature-delivery.hya.md` in the document format below and `prompts/workflow-worker.md`.
@@ -230,10 +229,12 @@ actor: planner
 ```
 
 An actor key routes sequential Stages to one resident Session. Repeating an
-Agent id without `actor` still creates distinct transient Sessions. The target
-Agent must declare resident spawn lifecycle. An actor key on a transient Agent,
-a resident Agent without an actor key, an actor key bound to different Agent
-ids, or same-level reuse of one actor key fails before execution.
+Agent id without `actor` still creates distinct one-shot Stage Sessions. Any
+Agent can back either shape: since 0.41.0 Agent definitions carry no spawn
+lifecycle (`spawn_lifecycle` is a removed manifest key), so the Stage's `actor`
+key alone selects a persistent actor Session. An actor key bound to different
+Agent ids, an actor key combined with `mode: loop`, or same-level reuse of one
+actor key fails before execution.
 
 The first and later actor directives are durable mail. A Stage completes only
 after the team Projection shows that its captured inbox boundary is consumed,
@@ -242,13 +243,13 @@ resident work is absent, and the actor is idle or failed.
 ## Governance
 
 The executor resolves every worker and verifier through the caller's immutable
-runtime binding. Each target keeps its own roster, resource policy, sidecar, and
-spawn lifecycle. The complete worst-case run budget is reserved before the
-first child or mail effect. Same-level transient Stages run as one governed Team
-batch. Loop and resident work continue to use the existing iteration and
+runtime binding. Each target keeps its own roster, resource policy, and
+sidecar. The complete worst-case run budget is reserved before the
+first child or mail effect. Same-level one-shot Stages (no `actor`) run as one
+governed Team batch. Loop and resident work continue to use the existing iteration and
 resident supervisors.
 
-Cancellation stops new admissions, cancels transient work, stops active
+Cancellation stops new admissions, cancels one-shot Stage work, stops active
 run-owned resident work, waits for admitted boundaries, and returns a truthful
 cancelled report.
 

@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use hya_bundle::{
     AgentRole, BundleCatalog, BundleIdentity, ModelPolicy, PreparedAgent, PreparedAgentBundle,
-    PreparedInstallableBundle, ResourceView, SpawnLifecycle,
+    PreparedInstallableBundle, ResourceView,
 };
 use hya_core::{AgentCatalog, AgentSpec, CreateSession, EventBus, RuntimeRegistry, SessionEngine};
 use hya_proto::{AgentName, Event, FinishReason, ModelRef, Role};
@@ -95,7 +95,7 @@ fn catalog_without_historical() -> Arc<AgentCatalog> {
                     prompt_digest: None,
                     model_policy: ModelPolicy::default(),
                     workdir: None,
-                    spawn_lifecycle: SpawnLifecycle::Transient,
+                    legacy_spawn_lifecycle: None,
                     resource_view: ResourceView::default(),
                     can_spawn: Vec::new(),
                     hook_refs: Vec::new(),

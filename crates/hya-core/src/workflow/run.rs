@@ -13,7 +13,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use hya_bundle::SpawnLifecycle;
 use hya_proto::{
     ActorClaim, Event, MailEndpoint, MailKind, MemberId, ModelRef, RosterStatus, SessionId,
     WorkflowMemberRole, WorkflowRunId, WorkflowStageStatus,
@@ -150,7 +149,6 @@ struct ResolvedAgent {
     agents: Arc<[AgentDef]>,
     resources: AgentResourcePolicy,
     sidecar_factory: Option<Arc<dyn BoundSidecarFactory>>,
-    lifecycle: SpawnLifecycle,
     route: Option<WorkflowModelRoute>,
 }
 
@@ -281,7 +279,6 @@ fn resolve_agent(
         agents,
         resources,
         sidecar_factory,
-        lifecycle: definition.spawn_lifecycle,
         route,
     })
 }
@@ -431,7 +428,7 @@ pub async fn prepare_workflow_run_for_actor(
                 .transpose()?,
         );
     }
-    validate_resolved_semantics(name, plan.stages(), &resolved, &verifiers, &context)?;
+    validate_resolved_semantics(name, plan.stages(), &resolved, &context)?;
     let budget = reserve_workflow_budget(&engine, lead, name, wanted).await?;
     Ok(PreparedWorkflowRun {
         engine,
@@ -958,11 +955,10 @@ fn validate_resolved_semantics(
     workflow: &str,
     stages: &[WorkflowStage],
     resolved: &[ResolvedAgent],
-    verifiers: &[Option<ResolvedAgent>],
     ctx: &WorkflowRunContext,
 ) -> Result<(), WorkflowError> {
     let mut actor_routes: BTreeMap<&str, Option<&WorkflowModelRoute>> = BTreeMap::new();
-    for ((stage, worker), verifier) in stages.iter().zip(resolved).zip(verifiers) {
+    for (stage, worker) in stages.iter().zip(resolved) {
         if let Some(actor) = stage.actor() {
             if let Some(existing) = actor_routes.get(actor) {
                 if *existing != worker.route.as_ref() {
@@ -977,54 +973,24 @@ fn validate_resolved_semantics(
                 actor_routes.insert(actor, worker.route.as_ref());
             }
         }
-        match (stage.actor(), worker.lifecycle) {
-            (Some(_), SpawnLifecycle::Resident) => {
-                if ctx.resident_supervisor.is_none() {
-                    return Err(WorkflowError::Invalid {
-                        workflow: workflow.to_string(),
-                        detail: format!(
-                            "Stage `{}` requires a resident supervisor for actor `{}`",
-                            stage.id(),
-                            stage.actor().unwrap_or_default()
-                        ),
-                    });
-                }
-            }
-            (Some(actor), SpawnLifecycle::Transient) => {
-                return Err(WorkflowError::Invalid {
-                    workflow: workflow.to_string(),
-                    detail: format!(
-                        "Stage `{}` actor `{actor}` targets transient Agent `{}`",
-                        stage.id(),
-                        stage.agent()
-                    ),
-                });
-            }
-            (None, SpawnLifecycle::Resident) => {
-                return Err(WorkflowError::Invalid {
-                    workflow: workflow.to_string(),
-                    detail: format!(
-                        "Stage `{}` targets resident Agent `{}` without an actor key",
-                        stage.id(),
-                        stage.agent()
-                    ),
-                });
-            }
-            (None, SpawnLifecycle::Transient) => {}
+        // Every Agent is a resident actor (0.41.0): a Stage's `actor` key,
+        // not the Agent definition, selects a persistent actor Session; a
+        // Stage without one runs a fresh one-shot member Session.
+        if let Some(actor) = stage.actor()
+            && ctx.resident_supervisor.is_none()
+        {
+            return Err(WorkflowError::Invalid {
+                workflow: workflow.to_string(),
+                detail: format!(
+                    "Stage `{}` requires a resident supervisor for actor `{actor}`",
+                    stage.id()
+                ),
+            });
         }
         if stage.actor().is_some() && stage.mode() == StageMode::Loop {
             return Err(WorkflowError::Invalid {
                 workflow: workflow.to_string(),
                 detail: format!("Stage `{}` cannot combine actor and loop modes", stage.id()),
-            });
-        }
-        if verifier
-            .as_ref()
-            .is_some_and(|agent| agent.lifecycle == SpawnLifecycle::Resident)
-        {
-            return Err(WorkflowError::Invalid {
-                workflow: workflow.to_string(),
-                detail: format!("Stage `{}` verifier Agent must be transient", stage.id()),
             });
         }
     }

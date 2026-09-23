@@ -8,7 +8,7 @@
 use std::borrow::Cow;
 use std::sync::OnceLock;
 
-use hya_bundle::{AgentRole, ModelPolicy, SpawnLifecycle};
+use hya_bundle::{AgentRole, ModelPolicy};
 use hya_bundle::{
     BundleError, PreparedAgent, PreparedAgentSetBundle, PreparedCatalog, PreparedInstallableBundle,
     first_party_bundle,
@@ -87,8 +87,6 @@ pub struct BuiltinAgent {
     pub prompt: Option<&'static str>,
     /// Model/category/reasoning overrides.
     pub model_policy: BuiltinModelPolicy,
-    /// Transient vs resident when Harness spawns this entry.
-    pub spawn_lifecycle: SpawnLifecycle,
     /// What this agent may spawn.
     pub spawn_scope: SpawnScope,
     /// Reserved system agent: never selectable and never an ordinary spawn target.
@@ -107,7 +105,6 @@ impl BuiltinAgent {
             prompt: self.prompt,
             model_policy: Cow::Owned(self.model_policy.to_model_policy()),
             workdir: None,
-            spawn_lifecycle: self.spawn_lifecycle,
             origin: AgentOrigin::Builtin,
         }
     }
@@ -170,7 +167,6 @@ fn load_core_agents() -> Result<LoadedCoreAgents, BundleError> {
                     category: agent.model_policy.category.as_deref(),
                     reasoning: agent.model_policy.reasoning.as_deref(),
                 },
-                spawn_lifecycle: agent.spawn_lifecycle,
                 spawn_scope: if reserved {
                     SpawnScope::None
                 } else {

@@ -13,7 +13,7 @@ use async_trait::async_trait;
 use futures::stream;
 use hya_bundle::{
     AgentRole, BundleCatalog, BundleIdentity, ModelPolicy, PreparedAgent, PreparedAgentBundle,
-    PreparedInstallableBundle, PreparedResource, ResourceView, SpawnLifecycle,
+    PreparedInstallableBundle, PreparedResource, ResourceView,
 };
 use hya_core::runtime_registry::RuntimeSourceSkill;
 use hya_core::{
@@ -187,7 +187,7 @@ fn catalog() -> (Arc<AgentCatalog>, Vec<RuntimeSource>) {
                 prompt_digest: None,
                 model_policy: ModelPolicy::default(),
                 workdir: None,
-                spawn_lifecycle: SpawnLifecycle::Transient,
+                legacy_spawn_lifecycle: None,
                 resource_view: if narrow {
                     ResourceView {
                         allow: vec![skill_id.clone()],
@@ -431,7 +431,7 @@ async fn canonical_allow_deny_and_alias_share_schema_and_dispatch() {
             prompt_digest: None,
             model_policy: ModelPolicy::default(),
             workdir: None,
-            spawn_lifecycle: SpawnLifecycle::Transient,
+            legacy_spawn_lifecycle: None,
             resource_view: ResourceView {
                 allow: vec![
                     "harness:tool/dynamic_marker".to_string(),
@@ -703,7 +703,7 @@ async fn a_bundle_agent_cannot_select_a_harness_mcp_export_or_skill() {
                 prompt_digest: None,
                 model_policy: ModelPolicy::default(),
                 workdir: None,
-                spawn_lifecycle: SpawnLifecycle::Transient,
+                legacy_spawn_lifecycle: None,
                 resource_view: ResourceView {
                     allow: vec![reference.to_string()],
                     deny: Vec::new(),

@@ -1,4 +1,4 @@
-//! Installed first-party subagent definitions reach transient and resident execution.
+//! The installed first-party worker definition spawns as a resident actor.
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use hya_app::{InstalledBundleRefresh, spawn_team_supervisor};
-use hya_bundle::{BundleSource, SpawnLifecycle, prepare_package};
+use hya_bundle::{BundleSource, prepare_package};
 use hya_core::{
     AgentSpec, BoundSpawnSender, CategoryRegistry, CreateSession, EventBus, ResidentSupervisor,
     RuntimeRegistry, SessionEngine,
@@ -17,7 +17,7 @@ use hya_store::{BundleInstallCandidate, BundleRegistry, SessionStore};
 use hya_tool::{PermissionPlane, PermissionRules, SpawnMember, ToolOperation, ToolRegistry};
 
 #[tokio::test]
-async fn installed_subagent_bundle_spawns_both_lifecycles_and_replays_resident_mail() {
+async fn installed_subagent_bundle_spawns_a_resident_worker_that_replays_mail() {
     let source_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../bundles/first-party/subagents");
     let prepared = prepare_package(BundleSource::read_directory(source_root).unwrap()).unwrap();
@@ -49,28 +49,15 @@ async fn installed_subagent_bundle_spawns_both_lifecycles_and_replays_resident_m
         .unwrap();
     let workdir = std::env::temp_dir();
     let binding = runtime.bind_turn(&workdir).unwrap();
-    assert_eq!(
+    assert!(binding.resolve_spawn("build", "hya-worker").is_ok());
+    assert!(
         binding
             .resolve_spawn("build", "hya-transient-worker")
-            .unwrap()
-            .spawn_lifecycle,
-        SpawnLifecycle::Transient
+            .is_err()
     );
-    assert_eq!(
+    assert!(
         binding
             .resolve_spawn("build", "hya-resident-worker")
-            .unwrap()
-            .spawn_lifecycle,
-        SpawnLifecycle::Resident
-    );
-    assert!(
-        binding
-            .resolve_spawn("hya-resident-worker", "hya-transient-worker")
-            .is_ok()
-    );
-    assert!(
-        binding
-            .resolve_spawn("hya-transient-worker", "hya-resident-worker")
             .is_err()
     );
 
@@ -117,30 +104,13 @@ async fn installed_subagent_bundle_spawns_both_lifecycles_and_replays_resident_m
         .for_binding(&binding)
         .for_session_with_agents(parent, agents);
 
-    let transient = spawner
-        .spawn(
-            ToolOperation::from_tool_call(ToolCallId::new()),
-            vec![SpawnMember {
-                description: "transient fixture".to_string(),
-                prompt: "complete once".to_string(),
-                subagent_type: "hya-transient-worker".to_string(),
-                ..SpawnMember::default()
-            }],
-            Default::default(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(transient[0].status, "running");
-    let transient_session: SessionId = transient[0].session.parse().unwrap();
-    wait_for_assistant_messages(&engine, transient_session, 1).await;
-
     let resident = spawner
         .spawn(
             ToolOperation::from_tool_call(ToolCallId::new()),
             vec![SpawnMember {
                 description: "resident fixture".to_string(),
                 prompt: "first resident turn".to_string(),
-                subagent_type: "hya-resident-worker".to_string(),
+                subagent_type: "hya-worker".to_string(),
                 ..SpawnMember::default()
             }],
             Default::default(),

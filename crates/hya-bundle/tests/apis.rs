@@ -20,9 +20,7 @@ fn api_bundle(kind: &str, process: bool, apis: Option<&str>) -> BundleSource {
     };
     let apis = apis.map_or_else(String::new, |block| format!("apis:\n{block}"));
     let body = match kind {
-        "AgentSetBundle" => {
-            "agents:\n  - id: api-lead\n    role: main\n    spawn_lifecycle: transient\n"
-        }
+        "AgentSetBundle" => "agents:\n  - id: api-lead\n    role: main\n",
         _ => "",
     };
     let manifest = format!(
@@ -319,7 +317,6 @@ extensions:
 agent:
   id: decl-lead
   role: main
-  spawn_lifecycle: transient
 "#;
     let catalog = prepared(BundleSource::new(
         "decl-demo",

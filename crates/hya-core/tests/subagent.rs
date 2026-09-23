@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use futures::{FutureExt as _, stream};
 use hya_bundle::{
     AgentRole, BundleCatalog, BundleIdentity, ModelPolicy, PreparedAgent, PreparedAgentBundle,
-    PreparedInstallableBundle, PreparedResource, ResourceView, SpawnLifecycle,
+    PreparedInstallableBundle, PreparedResource, ResourceView,
 };
 use hya_core::{
     AdmissionMemberIdentity, AgentCatalog, AgentSpec, BoundSidecarFactory, BoundSpawnSender,
@@ -464,7 +464,7 @@ struct ImmediateSidecarHandle {
 
 const SIDECAR_PERMISSION_TOOL: &str = "bundle:hya/sidecar-permission/tool/echo";
 
-fn sidecar_permission_bundle(spawn_lifecycle: SpawnLifecycle) -> PreparedAgentBundle {
+fn sidecar_permission_bundle() -> PreparedAgentBundle {
     PreparedAgentBundle {
         format_version: 2,
         identity: BundleIdentity {
@@ -484,7 +484,7 @@ fn sidecar_permission_bundle(spawn_lifecycle: SpawnLifecycle) -> PreparedAgentBu
             prompt_digest: None,
             model_policy: ModelPolicy::default(),
             workdir: None,
-            spawn_lifecycle,
+            legacy_spawn_lifecycle: None,
             resource_view: ResourceView::default(),
             can_spawn: Vec::new(),
             hook_refs: Vec::new(),
@@ -1818,8 +1818,7 @@ async fn sidecar_ack_precedes_running_state_provider_poll_and_task_admission() {
 #[tokio::test]
 async fn bundle_sidecar_tool_permission_denial_prevents_dispatch() {
     let canonical = SIDECAR_PERMISSION_TOOL;
-    let catalog =
-        Arc::new(agent_catalog(sidecar_permission_bundle(SpawnLifecycle::Transient)).unwrap());
+    let catalog = Arc::new(agent_catalog(sidecar_permission_bundle()).unwrap());
     let calls = Arc::new(AtomicUsize::new(0));
     let sidecar_tool = ResolvedTool {
         tool: Arc::new(SidecarPermissionTool {
@@ -1910,8 +1909,7 @@ async fn bundle_sidecar_tool_permission_denial_prevents_dispatch() {
 #[tokio::test]
 async fn activation_bound_sidecar_hooks_mutate_tool_and_observe_only_child_events() {
     let canonical = SIDECAR_PERMISSION_TOOL;
-    let catalog =
-        Arc::new(agent_catalog(sidecar_permission_bundle(SpawnLifecycle::Transient)).unwrap());
+    let catalog = Arc::new(agent_catalog(sidecar_permission_bundle()).unwrap());
     let inputs = Arc::new(Mutex::new(Vec::new()));
     let sidecar_tool = ResolvedTool {
         tool: Arc::new(HookProbeTool {
@@ -2070,9 +2068,7 @@ async fn plugin_hooks_reach_bundle_subagent_alongside_its_sidecar_hooks() {
     ))
     .unwrap();
     let bundles = [
-        PreparedInstallableBundle::Agent(Box::new(sidecar_permission_bundle(
-            SpawnLifecycle::Transient,
-        ))),
+        PreparedInstallableBundle::Agent(Box::new(sidecar_permission_bundle())),
         plugin.bundles()[0].clone(),
     ];
     let catalog = Arc::new(
@@ -2182,8 +2178,7 @@ async fn plugin_hooks_reach_bundle_subagent_alongside_its_sidecar_hooks() {
 #[tokio::test]
 async fn resident_sidecar_tool_binding_reaches_captured_turn_view() {
     let canonical = SIDECAR_PERMISSION_TOOL;
-    let catalog =
-        Arc::new(agent_catalog(sidecar_permission_bundle(SpawnLifecycle::Resident)).unwrap());
+    let catalog = Arc::new(agent_catalog(sidecar_permission_bundle()).unwrap());
     let calls = Arc::new(AtomicUsize::new(0));
     let sidecar_tool = ResolvedTool {
         tool: Arc::new(SidecarPermissionTool {
@@ -4022,8 +4017,7 @@ async fn resident_activation_hook_transport_loss_enters_epoch_recovery() {
 
 async fn assert_resident_hook_transport_loss(stage: HookLossStage) {
     let canonical = SIDECAR_PERMISSION_TOOL;
-    let catalog =
-        Arc::new(agent_catalog(sidecar_permission_bundle(SpawnLifecycle::Resident)).unwrap());
+    let catalog = Arc::new(agent_catalog(sidecar_permission_bundle()).unwrap());
     let calls = Arc::new(AtomicUsize::new(0));
     let sidecar_tool = ResolvedTool {
         tool: Arc::new(SidecarPermissionTool {

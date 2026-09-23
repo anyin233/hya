@@ -5,7 +5,7 @@
 //! These tests pin the roster that used to live in `bundles/builtin/*/bundle.yaml`
 //! so the move out of the bundle system cannot silently drop or rename an agent.
 
-use hya_bundle::{AgentRole, SpawnLifecycle};
+use hya_bundle::AgentRole;
 use hya_core::builtin_agents::{BuiltinAgent, SpawnScope, builtin_agent, builtin_agents};
 
 /// Every built-in id, in the order the roster must expose them.
@@ -127,18 +127,6 @@ fn prompted_agents_carry_non_empty_compiled_in_bodies() {
                 agent.id
             );
         }
-    }
-}
-
-#[test]
-fn every_builtin_is_transient_and_selector_visible() {
-    for agent in builtin_agents() {
-        assert_eq!(
-            agent.spawn_lifecycle,
-            SpawnLifecycle::Transient,
-            "`{}` lifecycle is wrong",
-            agent.id
-        );
     }
 }
 

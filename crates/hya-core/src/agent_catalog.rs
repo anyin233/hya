@@ -11,7 +11,7 @@
 use std::borrow::Cow;
 use std::sync::Arc;
 
-use hya_bundle::{AgentRole, BundleCatalog, BundleError, ModelPolicy, SpawnLifecycle};
+use hya_bundle::{AgentRole, BundleCatalog, BundleError, ModelPolicy};
 
 use crate::builtin_agents::{CoreAgentsPreset, SpawnScope, builtin_digest, core_agents_preset};
 
@@ -76,8 +76,6 @@ pub struct AgentDefinition<'a> {
     pub model_policy: Cow<'a, ModelPolicy>,
     /// Optional workdir override for turns of this agent.
     pub workdir: Option<&'a str>,
-    /// Transient vs resident when Harness spawns this entry.
-    pub spawn_lifecycle: SpawnLifecycle,
     /// Which plane and resource set this agent binds to.
     pub origin: AgentOrigin<'a>,
 }
@@ -179,7 +177,6 @@ impl AgentCatalog {
             prompt: agent.prompt.as_deref(),
             model_policy: Cow::Borrowed(&agent.model_policy),
             workdir: agent.workdir.as_deref(),
-            spawn_lifecycle: agent.spawn_lifecycle,
             origin: AgentOrigin::Bundle { bundle_id },
         })
     }
@@ -341,7 +338,6 @@ fn preset_definition(agent: &hya_bundle::PreparedAgent) -> AgentDefinition<'_> {
         prompt: agent.prompt.as_deref(),
         model_policy: Cow::Borrowed(&agent.model_policy),
         workdir: agent.workdir.as_deref(),
-        spawn_lifecycle: agent.spawn_lifecycle,
         origin: AgentOrigin::Builtin,
     }
 }

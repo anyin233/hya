@@ -132,8 +132,7 @@ impl Tool for TaskTool {
                         "name": { "type": "string", "description": "Agent name (defaults to subagent_type when omitted)" },
                         "prompt": { "type": "string", "description": "The system prompt / persona for the request-scoped overlay" },
                         "category": { "type": "string", "description": "Logical model category (request overlay; folds into spawn model precedence)" },
-                        "model": { "type": "string", "description": "Concrete provider/model (request overlay; folds into spawn model precedence)" },
-                        "resident": { "type": "boolean", "description": "Make this request-scoped overlay a resident actor" }
+                        "model": { "type": "string", "description": "Concrete provider/model (request overlay; folds into spawn model precedence)" }
                     }
                 },
                 "members": {
@@ -154,8 +153,7 @@ impl Tool for TaskTool {
                                     "name": { "type": "string" },
                                     "prompt": { "type": "string" },
                                     "category": { "type": "string" },
-                                    "model": { "type": "string" },
-                                    "resident": { "type": "boolean" }
+                                    "model": { "type": "string" }
                                 }
                             }
                         },

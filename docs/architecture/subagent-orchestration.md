@@ -79,6 +79,15 @@ task(members[])                       tool layer: parse/normalize, no execution 
    8 reply handles + DM channel ids   journal → Completed
 ```
 
+**All subagents are resident (0.41.0).** Agent definitions carry no spawn
+lifecycle: `spawn_lifecycle` is a removed manifest key, rejected by name with
+`RemovedManifestKey` in `AgentBundle`, `AgentSetBundle`, and `WorkflowBundle`
+agents (prepared catalogs written by earlier releases still decode; the value is
+ignored). Every `task` spawn takes this path and registers `mode: resident`,
+whatever the target definition is. The only one-shot member runner left is
+the Workflow Stage without an `actor` key (§10), selected by the Workflow
+shape, not by the Agent.
+
 Steps 3–4 reuse the existing journal/governor seam
 ([admission-and-governor.md](admission-and-governor.md)) with two changes:
 

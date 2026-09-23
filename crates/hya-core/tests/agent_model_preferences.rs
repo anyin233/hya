@@ -8,7 +8,7 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 
-use hya_bundle::{AgentRole, ModelPolicy, SpawnLifecycle};
+use hya_bundle::{AgentRole, ModelPolicy};
 use hya_core::{
     AgentDefinition, AgentOrigin, AgentSpec, CategoryEntry, CategoryRegistry, RuntimeRegistry,
     apply_agent_model_preference, resolve_configured_agent_model,
@@ -27,7 +27,6 @@ fn agent(policy: ModelPolicy) -> AgentDefinition<'static> {
         prompt: None,
         model_policy: Cow::Owned(policy),
         workdir: None,
-        spawn_lifecycle: SpawnLifecycle::Transient,
         origin: AgentOrigin::Builtin,
     }
 }

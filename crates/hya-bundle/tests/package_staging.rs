@@ -151,7 +151,7 @@ fn public_inspection_returns_the_declared_source_files() -> Result<(), Box<dyn s
         NEXT_TEMP_ROOT.fetch_add(1, Ordering::Relaxed),
     ));
     fs::create_dir(&temp_root)?;
-    let manifest = b"kind: AgentBundle\nidentity:\n  id: hya/files\n  version: 1.0.0\n  publisher: hya\nagent:\n  id: files-lead\n  role: main\n  prompt: prompts/lead.md\n  spawn_lifecycle: transient\n";
+    let manifest = b"kind: AgentBundle\nidentity:\n  id: hya/files\n  version: 1.0.0\n  publisher: hya\nagent:\n  id: files-lead\n  role: main\n  prompt: prompts/lead.md\n";
     let source = hya_bundle::BundleSource::new(
         "files",
         vec![

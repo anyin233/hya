@@ -58,7 +58,6 @@ agents:
   - id: demo-worker
     role: subagent
     prompt: prompts/worker.md
-    spawn_lifecycle: transient
 "#,
             ),
             hya_bundle::SourceFile::new(
@@ -100,7 +99,6 @@ agent:
   id: collision-agent
   role: main
   prompt: prompts/collision.md
-  spawn_lifecycle: transient
 "#,
             ),
             hya_bundle::SourceFile::new(
@@ -172,7 +170,6 @@ namespace: demo
 agent:
   id: napper
   role: main
-  spawn_lifecycle: transient
   prompt: prompts/nap.md
 "#,
             ),
@@ -251,8 +248,8 @@ fn bundle_install_list_info_uninstall_workflow() -> Result<(), Box<dyn std::erro
         "format=public-v1",
         "state=active",
         "immutable=false",
-        "source_digest=df26abcab48d8f192f7f6af59fedc3445a5254d3f4b9e765b2676143b8ce5592",
-        "prepared_digest=dcfeeea231160edc585189c7568f7234b4136d095ffd97c8db99cdff2e802a92",
+        "source_digest=43889c6597ed85a12b182d23634ebc5804392ee9b7d255e593cbf76c8e0d3f3e",
+        "prepared_digest=fb7a403bce9ad228efae42aabcc19793ea55cabce6651306b893016c141ce52d",
         "kind=AgentBundle",
         "agent=valid-public-lead",
     ] {
@@ -571,8 +568,8 @@ fn public_info_file_prepares_without_registry_mutation() -> Result<(), Box<dyn s
             "origin: package",
             "state: inspected",
             "immutable: false",
-            "source_digest: df26abcab48d8f192f7f6af59fedc3445a5254d3f4b9e765b2676143b8ce5592",
-            "prepared_digest: dcfeeea231160edc585189c7568f7234b4136d095ffd97c8db99cdff2e802a92",
+            "source_digest: 43889c6597ed85a12b182d23634ebc5804392ee9b7d255e593cbf76c8e0d3f3e",
+            "prepared_digest: fb7a403bce9ad228efae42aabcc19793ea55cabce6651306b893016c141ce52d",
             "kind: AgentBundle",
             "agent: valid-public-lead",
         ],
@@ -663,7 +660,6 @@ resources:
 agent:
   id: resource-info-lead
   role: main
-  spawn_lifecycle: transient
 ---
 You are the resource info lead.
 "#,
@@ -915,7 +911,6 @@ extensions:
 agent:
   id: lead
   role: main
-  spawn_lifecycle: transient
   resource_view:
     allow:
       - query
@@ -1140,7 +1135,6 @@ extensions:
 agent:
   id: decl-lead
   role: main
-  spawn_lifecycle: transient
   resource_view:
     allow:
       - query

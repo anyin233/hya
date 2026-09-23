@@ -67,7 +67,7 @@ describe("translatePlugin", () => {
     expect(manifest).toContain('publisher: "claude"')
     expect(manifest).toContain('namespace: "code-review"')
     expect(manifest).toContain("role: subagent")
-    expect(manifest).toContain("spawn_lifecycle: transient")
+    expect(manifest).not.toContain("spawn_lifecycle")
     expect(manifest).toContain(`prompt: "prompts/reviewer.md"`)
     expect(manifest).toContain('model: "anthropic/claude-sonnet"')
     expect(manifest).toContain('"harness:tool/read"')

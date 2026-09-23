@@ -74,7 +74,6 @@ extensions:
 agent:
   id: lead
   role: main
-  spawn_lifecycle: transient
   resource_view:
     allow:
       - echo
@@ -289,7 +288,6 @@ resources:
 agent:
   id: lead
   role: main
-  spawn_lifecycle: transient
   resource_view:
     allow:
       - echo
@@ -344,7 +342,6 @@ resources:
 agent:
   id: lead
   role: main
-  spawn_lifecycle: transient
   resource_view:
     allow:
       - escape
@@ -377,7 +374,6 @@ resources:
 agent:
   id: lead
   role: main
-  spawn_lifecycle: transient
   resource_view:
     allow:
       - echo
@@ -782,7 +778,6 @@ identity:
 agent:
   id: valid-public-lead
   role: main
-  spawn_lifecycle: transient
 ---
 
 You are the valid public bundle lead.
@@ -810,7 +805,6 @@ extensions:
 agent:
   id: archive-js-lead
   role: main
-  spawn_lifecycle: transient
   resource_view:
     allow:
       - echo

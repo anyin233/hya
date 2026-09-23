@@ -2130,6 +2130,18 @@ fn prepare_agent(
     mut source: SourceAgent,
     stable_agent_ids: &mut BTreeSet<String>,
 ) -> Result<PreparedAgent, BundleError> {
+    if source.spawn_lifecycle.is_some() {
+        return Err(BundleError::RemovedManifestKey {
+            source_name: bundle_id.to_string(),
+            key: "spawn_lifecycle".to_string(),
+            guidance: format!(
+                "delete it from agent `{}`; every subagent is a resident actor (spawned \
+                 non-blocking, woken by mail, archived by its report or its parent's \
+                 `archive`)",
+                source.id
+            ),
+        });
+    }
     if source.resource_profile.is_some() {
         return Err(BundleError::UnsupportedBundleFeature {
             bundle_id: bundle_id.to_string(),
@@ -2176,7 +2188,7 @@ fn prepare_agent(
         prompt_digest,
         model_policy: source.model_policy,
         workdir: source.workdir,
-        spawn_lifecycle: source.spawn_lifecycle,
+        legacy_spawn_lifecycle: None,
         resource_view: source.resource_view,
         can_spawn: source.can_spawn.into_iter().map(AgentName::new).collect(),
         hook_refs: source.hook_refs,

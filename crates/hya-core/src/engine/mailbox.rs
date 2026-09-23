@@ -848,7 +848,7 @@ mod tests {
                     prompt_digest: None,
                     model_policy: hya_bundle::ModelPolicy::default(),
                     workdir: None,
-                    spawn_lifecycle: hya_bundle::SpawnLifecycle::Resident,
+                    legacy_spawn_lifecycle: None,
                     resource_view: hya_bundle::ResourceView::default(),
                     can_spawn: Vec::new(),
                     hook_refs: Vec::new(),

@@ -38,7 +38,7 @@ fn installed_candidate(
     installed_at: i64,
 ) -> BundleInstallCandidate {
     let source = format!(
-        "---\nkind: AgentBundle\nidentity:\n  id: hya/installed-package\n  version: {version}\n  publisher: hya\nagent:\n  id: installed-package-lead\n  description: {description}\n  role: main\n  spawn_lifecycle: transient\n---\n{prompt}\n"
+        "---\nkind: AgentBundle\nidentity:\n  id: hya/installed-package\n  version: {version}\n  publisher: hya\nagent:\n  id: installed-package-lead\n  description: {description}\n  role: main\n---\n{prompt}\n"
     );
     let prepared = prepare_package(BundleSource::new(
         "installed-package",
@@ -79,11 +79,9 @@ agents:
   - id: workflow-planner
     role: subagent
     prompt: prompts/planner.md
-    spawn_lifecycle: transient
   - id: workflow-reviewer
     role: subagent
     prompt: prompts/reviewer.md
-    spawn_lifecycle: transient
 "#,
             ),
             SourceFile::new(
@@ -311,7 +309,6 @@ identity:
 agent:
   id: installed-package-lead
   role: main
-  spawn_lifecycle: transient
 ---
 You are the installed package lead.
 "#,
@@ -535,7 +532,6 @@ agent:
   id: installed-package-lead
   description: conflicting lead
   role: main
-  spawn_lifecycle: transient
 ---
 You are the conflicting lead.
 "#,
@@ -765,7 +761,7 @@ fn namespaced_candidate(
         .map(|value| format!("namespace: {value}\n"))
         .unwrap_or_default();
     let manifest = format!(
-        "kind: AgentBundle\nidentity:\n  id: {bundle_id}\n  version: {version}\n  publisher: hya\n{namespace_line}agent:\n  id: {bundle_id}-lead\n  role: main\n  prompt: prompts/lead.md\n  spawn_lifecycle: transient\n"
+        "kind: AgentBundle\nidentity:\n  id: {bundle_id}\n  version: {version}\n  publisher: hya\n{namespace_line}agent:\n  id: {bundle_id}-lead\n  role: main\n  prompt: prompts/lead.md\n"
     );
     let prepared = prepare_package(BundleSource::new(
         bundle_id,

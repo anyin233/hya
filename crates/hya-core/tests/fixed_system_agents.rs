@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use hya_bundle::{
     AgentRole, BundleCatalog, BundleIdentity, ModelPolicy, PreparedAgent, PreparedAgentBundle,
-    PreparedInstallableBundle, ResourceView, SpawnLifecycle,
+    PreparedInstallableBundle, ResourceView,
 };
 use hya_core::{
     AgentCatalog, AgentSpec, CompactionConfig, CreateSession, EventBus, ModelSummarizer,
@@ -205,7 +205,7 @@ fn catalog(agents: &[AgentFixture]) -> Arc<AgentCatalog> {
                         reasoning: agent.reasoning.clone(),
                     },
                     workdir: None,
-                    spawn_lifecycle: SpawnLifecycle::Transient,
+                    legacy_spawn_lifecycle: None,
                     resource_view: ResourceView::default(),
                     can_spawn: agent
                         .can_spawn

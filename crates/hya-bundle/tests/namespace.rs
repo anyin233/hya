@@ -31,7 +31,6 @@ identity:
   id: lead
   role: main
   prompt: prompts/lead.md
-  spawn_lifecycle: transient
 "#
     )
 }
@@ -135,7 +134,6 @@ agents:
   - id: worker
     role: subagent
     prompt: prompts/worker.md
-    spawn_lifecycle: transient
 "#;
     let files = vec![
         SourceFile::new("bundle.yaml", manifest.as_bytes().to_vec()),

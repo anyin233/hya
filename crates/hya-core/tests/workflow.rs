@@ -18,7 +18,7 @@ use std::sync::{
 
 use async_trait::async_trait;
 use futures::stream;
-use hya_bundle::{AgentRole, SpawnLifecycle};
+use hya_bundle::AgentRole;
 use hya_core::{
     CompiledWorkflow, CreateSession, EventBus, FailurePolicy, SessionEngine, SubagentGovernor,
     SubagentLimits, WorkflowStatus, load_workflow_file, run_workflow,
@@ -1220,12 +1220,7 @@ flowchart TD
 "#;
     let workflow = compile_workflow("resident.hya.md", source);
     let provider = RecordingProvider::new();
-    let catalog = support::test_catalog_with_lifecycles(&[(
-        "resident-planner",
-        AgentRole::Subagent,
-        SpawnLifecycle::Resident,
-        &[],
-    )]);
+    let catalog = support::test_catalog(&[("resident-planner", AgentRole::Subagent, &[])]);
     let (engine, _events) = engine_parts(provider.clone(), catalog, None).await;
     let supervisor = hya_core::ResidentSupervisor::start(engine.clone());
     let lead = start_lead(&engine).await;
@@ -1367,12 +1362,7 @@ flowchart TD
 "#;
     let workflow = compile_workflow("cancel-resident.hya.md", source);
     let provider = ResidentHangingProvider::new();
-    let catalog = support::test_catalog_with_lifecycles(&[(
-        "resident-worker",
-        AgentRole::Subagent,
-        SpawnLifecycle::Resident,
-        &[],
-    )]);
+    let catalog = support::test_catalog(&[("resident-worker", AgentRole::Subagent, &[])]);
     let (engine, _events) = engine_parts(provider.clone(), catalog, None).await;
     let supervisor = hya_core::ResidentSupervisor::start(engine.clone());
     let lead = start_lead(&engine).await;
@@ -1452,19 +1442,9 @@ flowchart TD
 "#;
     let workflow = compile_workflow("identity.hya.md", source);
     let provider = RecordingProvider::new();
-    let catalog = support::test_catalog_with_lifecycles(&[
-        (
-            "builder",
-            AgentRole::Subagent,
-            SpawnLifecycle::Transient,
-            &[],
-        ),
-        (
-            "resident-planner",
-            AgentRole::Subagent,
-            SpawnLifecycle::Resident,
-            &[],
-        ),
+    let catalog = support::test_catalog(&[
+        ("builder", AgentRole::Subagent, &[]),
+        ("resident-planner", AgentRole::Subagent, &[]),
     ]);
     let (engine, _events) = engine_parts(provider, catalog, None).await;
     let supervisor = hya_core::ResidentSupervisor::start(engine.clone());
@@ -1526,12 +1506,7 @@ flowchart TD
 "#;
     let workflow = compile_workflow("failed-resident.hya.md", source);
     let provider = RecordingProvider::new();
-    let catalog = support::test_catalog_with_lifecycles(&[(
-        "resident-worker",
-        AgentRole::Subagent,
-        SpawnLifecycle::Resident,
-        &[],
-    )]);
+    let catalog = support::test_catalog(&[("resident-worker", AgentRole::Subagent, &[])]);
     let (engine, _events) = engine_parts(provider, catalog, None).await;
     let supervisor = hya_core::ResidentSupervisor::start(engine.clone());
     let lead = start_lead(&engine).await;
@@ -1933,7 +1908,7 @@ fn sidecar_probe_catalog() -> Arc<hya_core::AgentCatalog> {
                         prompt_digest: None,
                         model_policy: hya_bundle::ModelPolicy::default(),
                         workdir: None,
-                        spawn_lifecycle: hya_bundle::SpawnLifecycle::Transient,
+                        legacy_spawn_lifecycle: None,
                         resource_view: hya_bundle::ResourceView::default(),
                         can_spawn: Vec::new(),
                         hook_refs: Vec::new(),
