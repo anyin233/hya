@@ -203,3 +203,50 @@ fn model_fallback_is_a_bun_process_plugin_with_one_model_fallback_hook() {
         .collect();
     assert_eq!(files, ["fallback.ts"], "tests stay unpackaged (undeclared)");
 }
+
+#[test]
+fn token_summary_is_a_bun_process_plugin_with_one_tool_and_one_usage_view() {
+    let dir = first_party_source_root().join("extra/token-summary");
+    let source = BundleSource::read_directory(&dir).expect("read token-summary source");
+    let prepared = prepare_package(source).expect("prepare token-summary");
+    let bundle = &prepared.bundles()[0];
+
+    assert_eq!(bundle.kind(), PreparedBundleKind::Plugin);
+    assert_eq!(bundle.namespace(), "token-summary");
+    assert!(bundle.agents().is_empty());
+    assert!(bundle.hooks().is_empty(), "token-summary declares no hooks");
+
+    let tools = bundle.tools();
+    assert_eq!(tools.len(), 1, "expected exactly one declared tool");
+    assert_eq!(tools[0].local_id, "token_summary");
+    assert_eq!(
+        tools[0].source_path, "summary.ts",
+        "the tool resource points at the process file itself, like jev-model-router's hook does"
+    );
+
+    let process = prepared
+        .bundle_process("hya-extra/token-summary")
+        .expect("explicit extensions.process");
+    assert_eq!(process.kind, hya_bundle::PreparedProcessKind::Bun);
+    assert_eq!(
+        process.command,
+        ["bun", "run", "${BUNDLE_ROOT}/summary.ts"],
+        "summary.ts speaks the plugin protocol itself (no adapter is injected)"
+    );
+
+    let views = prepared.bundle_views("hya-extra/token-summary");
+    assert_eq!(views.len(), 1, "expected exactly one declared view");
+    assert_eq!(views[0].id, "usage");
+    assert!(!views[0].description.is_empty());
+
+    let files: Vec<_> = bundle
+        .extensions()
+        .iter()
+        .map(|file| file.source_path.as_str())
+        .collect();
+    assert_eq!(
+        files,
+        ["summary.ts"],
+        "the bun test file stays unpackaged (undeclared)"
+    );
+}

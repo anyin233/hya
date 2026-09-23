@@ -8,7 +8,7 @@ install like any other bundle described in
 [AgentBundle Authoring](agent-bundle-authoring.md). They exist for two
 reasons at once: they are useful optional capabilities, and each one is a
 coverage fixture exercised by `crates/hya-bundle/tests/extra_bundles.rs` and
-the `crates/hya-e2e` process suite (`T2.26`–`T2.28` in the
+the `crates/hya-e2e` process suite (`T2.26`–`T2.28` and `T2.30` in the
 [Agent feature matrix](testing/agent-matrix.md)).
 
 Every `hya-extra/*` bundle follows the same identity rule as the first-party
@@ -361,3 +361,150 @@ the hook is asked only before an event stream exists for the round — a
 mid-stream failure surfaces once and is never replayed on another model — and
 a turn on a Workflow route (`model:`/`fallback:` on a Workflow stage) never
 calls it; the Workflow owns its own declared candidate list instead.
+
+## `hya-extra/token-summary`
+
+### Introduction
+
+A `Plugin` bundle that reports per-model token consumption for a session
+tree. It runs a small Bun process that reads the request-scoped
+[`session.usage`](plugin-protocol.md#request-scoped-host-capabilities) host
+capability and exposes it two ways: a read-only
+[session view](agent-bundle-authoring.md#session-views-views) named `usage`
+that any v1 client can `GET` without running a turn, and an agent tool,
+`token_summary`, that lets a running agent (or an orchestrator inspecting a
+subagent's spend) ask for the same numbers mid-conversation. Both answer with
+input, cache creation, cache read, and output tokens per model, with output
+further split into thinking and visible tokens wherever the provider
+reported that split — Anthropic never does, so that split reads `null` for
+any model with at least one such round, rather than guessing.
+
+Why a session tree: hya turns commonly spawn subagents (`task`). The default
+scope, `tree`, folds the bound session plus every descendant subagent
+session recursively, so an orchestrator's own view already accounts for
+everything its team spent; `scope=session` narrows to one session's own log
+when that is what you want instead.
+
+### Usage
+
+Prerequisites:
+
+- `bun` on `PATH` (>= 1.2.21; hya's release pins 1.4.2). hya runs
+  `bun run summary.ts` as the bundle's `extensions.process`.
+- No configuration file is needed.
+
+Package and install:
+
+```sh
+cargo run -p xtask -- package-bundle bundles/extra/token-summary token-summary.hyabundle
+hya bundle install token-summary.hyabundle
+```
+
+Read the view over HTTP once a session exists (the bundle id is one
+percent-encoded path segment, `hya-extra%2Ftoken-summary`):
+
+```sh
+curl "$HYA_URL/v1/sessions/$SESSION/views/hya-extra%2Ftoken-summary/usage?scope=tree"
+```
+
+```json
+{
+  "bundle": "hya-extra/token-summary",
+  "view": "usage",
+  "contentType": "application/json",
+  "body": {
+    "session": "hysec_...",
+    "scope": "tree",
+    "generated_by": "hya-extra/token-summary",
+    "models": [
+      {
+        "model": "anthropic/claude-sonnet-5",
+        "input": 500,
+        "cache_creation": 20,
+        "cache_read": 50,
+        "output": 200,
+        "thinking": null,
+        "visible_output": null,
+        "unsplit_output": 200,
+        "rounds": 3,
+        "prompt_total": 570
+      }
+    ],
+    "total": { "...": "same fields as a model row, without model" },
+    "sessions": [
+      { "session": "hysec_...", "agent": "build", "models": [ "..." ], "total": { "...": "..." } },
+      { "session": "hysec_...", "parent": "hysec_...", "agent": "general", "models": [ "..." ], "total": { "...": "..." } }
+    ]
+  }
+}
+```
+
+Once installed, any agent that can reach the bundle's namespace can call the
+tool directly, for example `build`:
+
+```
+build calls token-summary__token_summary({"scope": "tree", "format": "table"})
+```
+
+which returns a compact Markdown table (columns: model, input, cache
+creation, cache read, output, thinking, visible, rounds; unknown thinking
+renders as `—`) plus one line per subagent session.
+
+### Interface
+
+| Contract | Value |
+| --- | --- |
+| Bundle | `kind: Plugin`, `extensions.process: {kind: bun, command: [bun, run, '${BUNDLE_ROOT}/summary.ts']}`. Only `summary.ts` is packaged (`summary.test.ts` is undeclared and stays out). |
+| View | id `usage`, description "Per-model token usage of the session tree". |
+| Tool name (full-plane agent, e.g. `build`) | `token-summary__token_summary` |
+| Config | None. |
+
+View `GET /v1/sessions/{session}/views/hya-extra%2Ftoken-summary/usage`:
+
+| Query param | Values | Default | Meaning |
+| --- | --- | --- | --- |
+| `scope` | `session` \| `tree` | `tree` | `root` is rejected (`{"error": ...}` body) — a view may only read its own session or its descendants, never the whole spawn-tree root; use the tool for that. |
+| `by` | `model` \| `session` | — | Accepted and validated; reserved for future response shaping. |
+
+An unrecognized query key or value answers `{ "body": { "error": "<reason>" } }`
+(HTTP 200; views can only return a body, never a distinct HTTP error status —
+see [Plugin protocol](plugin-protocol.md#session-views-viewget)); a capability
+failure (for example an unknown session) answers the same shape.
+
+Tool `token_summary` input `{ "scope"?: "session" | "tree" | "root", "format"?: "table" | "json" }`
+(default `tree` / `table`). `format: "json"` returns exactly the view's body
+shape above; `format: "table"` (default) returns the rendered Markdown
+string. A capability failure or bad input answers `{ "ok": false, "output": "<reason>" }`
+instead of crashing the process; diagnostics otherwise go to stderr only.
+
+Response field mapping, from the `session.usage` capability's `UsageTotals`
+invariant (`input` excludes cache; `output` includes thinking — see
+[Plugin protocol](plugin-protocol.md#request-scoped-host-capabilities)) to
+this bundle's view/tool JSON:
+
+| `session.usage` field | View/tool field | Notes |
+| --- | --- | --- |
+| `input` | `input` | Unchanged. |
+| `cache_write` | `cache_creation` | Renamed for readability. |
+| `cache_read` | `cache_read` | Unchanged. |
+| `output` | `output` | Unchanged (thinking included). |
+| `split.thinking` | `thinking` | `null` when `split.unknown != 0` for that row. |
+| `split.visible` | `visible_output` | `null` under the same condition as `thinking`. |
+| `split.unknown` | `unsplit_output` | Always a number; `0` means the split above is exact. |
+| `rounds` | `rounds` | Unchanged. |
+| `input + cache_read + cache_write` | `prompt_total` | The whole prompt, cache included. |
+
+`models` (top-level and per-session) is sorted by `prompt_total + output`
+descending, then by model name. `sessions` mirrors the capability's
+breadth-first, root-first row order and carries `parent`/`agent` only when
+known, plus `truncated: true` when the capability's 512-session cap cut the
+tree (see [Plugin protocol](plugin-protocol.md#request-scoped-host-capabilities)).
+
+The bundle's `bun test` suite (transform to view JSON, Markdown rendering,
+the id-dispatching NDJSON reader that lets a host request interleave with an
+outstanding capability reply, and query/input validation) runs from the
+bundle directory:
+
+```sh
+cd bundles/extra/token-summary && bun test
+```

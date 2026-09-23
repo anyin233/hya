@@ -26,6 +26,7 @@
 - `hya-extra/scout` (AgentSetBundle): the `scout` subagent, a cheap-model retrieval scout (`model_policy.category: quick`). It uses its own zvec-grep MCP server plus `read`/`grep`/`glob`, and returns answers with `path:line` evidence.
 - `hya-extra/jev-model-router` (Plugin, Bun process, `chat.params`): asks TypeSafe's Jev model how hard a request is, then rewrites `request.model` to the matching configured tier. The decision sticks to the request chain (`root_session`) so prompt caches stay warm. It falls back to `default_tier` when Jev fails or is unsure. Configure it in its bundle `config.yml`.
 - `hya-extra/model-fallback` (Plugin, Bun process, `model.fallback`): configured per-model fallback chains, for example `chains: { provider/a: [provider/b] }`. It retries the next model when a provider fails before streaming, limited by an error-class filter and `max_attempts`.
+- `hya-extra/token-summary` (Plugin, Bun process): per-model token usage (input, cache creation, cache read, output split into thinking/visible) for a session tree, over a read-only session view (`GET /v1/sessions/{session}/views/hya-extra%2Ftoken-summary/usage`) and an agent tool, `token-summary__token_summary`, that renders the same data as a Markdown table.
 
 ## Per-round token accounting with the serving model
 

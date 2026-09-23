@@ -406,6 +406,14 @@ path = "crates/hya-e2e/tests/p34_bundle_views.rs"
 tags = ["pr", "hyabundle", "plugin"]
 timeout_secs = 120
 
+[[scenario]]
+id = "T2.30"
+title = "hya-extra/token-summary Plugin bundle serves the usage session view (per-model input/cache/output tokens, thinking/visible split) for a root+subagent session tree, and its token_summary agent tool renders the same data as a Markdown table that reaches the model's follow-up request"
+track = "P"
+path = "crates/hya-e2e/tests/p35_token_summary.rs"
+tags = ["pr", "hyabundle", "plugin", "extras"]
+timeout_secs = 120
+
 # Index-only deep engine coverage (not duplicated in Track P).
 [[scenario]]
 id = "I.nested"
