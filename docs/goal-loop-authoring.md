@@ -1,7 +1,7 @@
 # Goal/Loop Mode Authoring
 
 > **Audience:** bundle and plugin authors who want to provide the independent
-> evaluator for goal mode (`hya-backend -p "<goal>"`) or the verifier/planner
+> evaluator for goal mode (`hya -p "<goal>"`) or the verifier/planner
 > for loop mode — and operators configuring them.
 
 ## Introduction
@@ -40,7 +40,7 @@ precedence (the first provider returning an applicable result wins):
 ### Goal mode with a model evaluator
 
 ```sh
-hya-backend -p "ship the release notes" --evaluator-model anthropic/claude-haud-4-6 --max-iterations 6
+hya -p "ship the release notes" --evaluator-model anthropic/claude-haud-4-6 --max-iterations 6
 ```
 
 The evaluator model resolution order is: `--evaluator-model` flag →

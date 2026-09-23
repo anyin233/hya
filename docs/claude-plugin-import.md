@@ -13,11 +13,11 @@ hand-authored bundle.
 Import a local plugin directory with:
 
 ```sh
-hya-backend bundle install --claude ./my-plugin
+hya bundle install --claude ./my-plugin
 ```
 
 Select an entry from a local marketplace with
-`hya-backend bundle install --claude './marketplace#code-review'`.
+`hya bundle install --claude './marketplace#code-review'`.
 
 The directory may contain either `plugin.json` or
 `.claude-plugin/plugin.json`. For example, a plugin named `Code Review` at

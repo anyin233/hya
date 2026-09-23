@@ -1,4 +1,4 @@
-//! `hya-app` — backend bootstrap library shared by `hya-backend` and other hosts.
+//! `hya-app` — backend bootstrap library shared by `hya` and other hosts.
 //!
 //! Assembles the live runtime from config, auth, providers, MCP, plugins, agent
 //! base, and the session store: [`resolve_runtime`], [`build_session_engine`],

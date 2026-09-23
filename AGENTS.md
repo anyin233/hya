@@ -66,7 +66,7 @@ old `/sessions/*` surface are deleted.
 The main runtime path is:
 
 ```text
-hya-backend / hya-server
+hya / hya-server
   -> hya-app config/auth/plugin/MCP composition and WorkflowControl
   -> hya-workflow compiled/normalized Workflow plans
   -> hya-core::SessionEngine and durable Workflow execution
@@ -86,7 +86,7 @@ or verifiers; workers do not decide that their own objective is done.
 
 | Component | Feature |
 | --- | --- |
-| `crates/hya-backend` | Backend umbrella binary and the only shipped executable. Bare startup prints a guidance banner (no interactive frontend is bundled). Also supports `exec`, `-p/--prompt` goal mode, `serve`, `tail-session`, auth/token commands, session listing, JSONL RPC, and CLI entry points that **compose** the runtime through `hya-app`. |
+| `crates/hya-backend` | Package for the unified `hya` executable — the only shipped binary and the single terminal entry point; subcommands select the controlled area. Bare `hya` prints a guidance banner (no interactive frontend is bundled). Subcommands cover `exec`/`run`, `-p/--prompt` goal mode, `loop`, `serve`, `tail-session`, `sessions`, `rpc`, `login`/`oauth`/`auth`, `agent`, `bundle`, `workflow`, `models`, and `update` (the self-update TCB from `hya-updater`, dispatched before any runtime composition). Runtime commands **compose** through `hya-app`. Build with `cargo build -p hya-backend --bin hya`. |
 | `crates/hya-app` | Runtime composition library (not a binary). Config load, provider/auth resolution, MCP and plugin wiring, permission policy construction, session engine build, `WorkflowControl` admission/list/info/select/run/state, and installed-bundle catalog refresh. Prefer this crate over `hya-backend` when changing composition or Workflow control, not CLI surface. |
 | `crates/hya-bundle` | `AgentBundle` and `WorkflowBundle` prepare/validate/catalog types and package fixtures. Catalog builders and resource/agent/Workflow resolution used by install CLI and process E2E. Also the runtime loader for the twelve trusted first-party bundles (`first_party_bundle`; see `docs/bundle-runtime.md`). Prefer this crate for bundle authoring contracts and prepare semantics. |
 | `crates/hya-workflow` | Workflow source parsing, normalization, validation, and immutable compiled plans. Prefer this crate for authoring/compile contracts; execution belongs to `hya-core`. |
@@ -99,13 +99,13 @@ or verifiers; workers do not decide that their own objective is done.
 | `crates/hya-api` | The v1 dual-protocol contract crate: `proto/hya/v1` generated Rust types (prost/tonic/pbjson protojson), stable error-code table mapped to HTTP statuses and gRPC codes, and cursor helpers. Regenerate with `cargo run -p xtask -- gen-api` (vendored protoc; output committed). |
 | `crates/hya-sdk-v1` | Typed SDK for new frontends on the v1 API: bootstrap, sessions, event-driven turns, transcript/todo reads, curated replay, interactions, live SSE `StreamFrame` subscription, and `V1SessionMirror` transcript folding. |
 | `crates/hya-client` | Typed `reqwest` client for the v1 API: sessions, event-driven turns (admit+wait), curated and raw-envelope event replay, and pending-interaction list/respond. |
-| `crates/hya-updater` | Independent self-update TCB (verify signed metadata, stage generations, smoke, owner-gated activation). See `docs/self-update.md`. |
+| `crates/hya-updater` | Independent self-update TCB library (verify signed metadata, stage generations, smoke, owner-gated activation) and the `hya update` command surface (`hya_updater::cli`). Must not depend on runtime crates. See `docs/self-update.md`. |
 | `crates/hya-mcp` | MCP support. Implements the MCP protocol/client/manager and bridges MCP tools into `hya-tool` with namespaced `mcp__server__tool` names and permission checks. |
 | `crates/hya-plugin` | Out-of-process plugin host. Owns the JSON-RPC stdio protocol, plugin client/host, manifest/config loading, command/tool dispatch, hook dispatcher bridge, permission bridge, and plugin-backed tool adapter. |
 | `crates/hya-plugin-bun` | Bun extension adapter (`kind: bun`). The Rust crate exports `BUN_ADAPTER_VERSION`; the Bun adapter under `adapter/` loads bundle JS extensions (`--bundle-extension`/`--extension`), translates hya wire hooks/tools/events, and exposes the runtime over NDJSON JSON-RPC stdio. The OpenCode compat layer is deleted. |
 | `crates/hya-plugin-example` | Placeholder stub binary (`fn main() {}`); does **not** speak the plugin protocol. Reserved for a future deterministic native-plugin QA fixture. For a real ABI reference, see `docs/plugin-protocol.md`. |
 | `crates/xtask` | Dev-tooling entry point with working tasks: `startup-bench`, `matrix-check`, `package-bundle`, and `release-rehearsal`. |
-| `crates/hya-e2e` | Process-level agent E2E harness (Track P): real `hya-backend` + FakeLlm. Matrix in `matrix.toml`; docs under `docs/testing/`. |
+| `crates/hya-e2e` | Process-level agent E2E harness (Track P): real `hya` + FakeLlm. Matrix in `matrix.toml`; docs under `docs/testing/`. |
 | `.planning` | Local task plans, findings, and progress using `planning-with-files`; existing tasks remain separate. |
 | `docs/spec` | Project coding guidelines. Read the relevant layer's `index.md` before changing code. |
 | `docs/development-history` | Preserved task artifacts and developer journals for historical reference. |
@@ -150,7 +150,7 @@ For process agent E2E (`crates/hya-e2e`) or agent-surface features that must not
 regress the PR matrix (permissions, skills, MCP, subagents, hyabundle), also:
 
 ```sh
-cargo build -p hya-backend --bin hya-backend
+cargo build -p hya-backend --bin hya
 cargo test -p hya-e2e -- --test-threads=1
 ```
 

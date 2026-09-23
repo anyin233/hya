@@ -1,6 +1,6 @@
 //! Process-level E2E harness for hya.
 //!
-//! Spawns a real `hya-backend` against a temp XDG config and a local scripted
+//! Spawns a real `hya` against a temp XDG config and a local scripted
 //! OpenAI-compatible FakeLlm. Product code under test is the production binary
 //! path (config → HttpProvider → SessionEngine → tools → HTTP API).
 

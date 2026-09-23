@@ -1,12 +1,30 @@
 # CLI Reference
 
-The backend CLI/API binary is `hya-backend`, defined in
-[`../crates/hya-backend/src/main.rs`](../crates/hya-backend/src/main.rs).
+`hya` is the single terminal entry point: one executable (built from the
+`hya-backend` package, [`../crates/hya-backend/src/main.rs`](../crates/hya-backend/src/main.rs))
+whose subcommands select the area being controlled. Since 0.38.0 there are no
+other user-facing executables — the former `hya-backend` binary name and the
+standalone `hya-updater` binary are gone.
+
+| Area | Subcommands |
+| --- | --- |
+| Headless agent runs | `exec`, `run`, `-p/--prompt` (goal mode), `loop` |
+| Server and wire protocols | `serve`, `rpc` |
+| Sessions | `sessions`, `tail-session` |
+| Providers and auth | `login`, `oauth`, `auth` (alias `providers`), `models` |
+| Agents, bundles, Workflows | `agent`, `bundle`, `workflow` |
+| Self-update TCB | `update` (`version`, `status`, `recover`, `apply`, `discard`, `init-roots`) |
+
+```sh
+cargo build -p hya-backend --bin hya   # ./target/debug/hya
+hya --help                             # list every subcommand
+hya <subcommand> --help                # flags for one area
+```
 
 ## Global Options
 
 ```text
-hya-backend [--model <MODEL>] [--prompt <GOAL>] [--max-iterations <N>]
+hya [--model <MODEL>] [--prompt <GOAL>] [--max-iterations <N>]
      [--yolo] [--db <PATH>] [COMMAND]
 ```
 
@@ -22,11 +40,11 @@ hya-backend [--model <MODEL>] [--prompt <GOAL>] [--max-iterations <N>]
 | `--pure` | Compat-compatible global flag. Parsed, then ignored (no-op). |
 
 `--print-logs`, `--log-level`, and `--pure` exist only so Compat/OpenCode command
-lines are accepted unchanged. They are never read after clap parse. hya-backend
+lines are accepted unchanged. They are never read after clap parse. hya
 does not expose a CLI switch for verbose tracing today. Many operational notices
 go to stderr; the serve readiness line
 `hya server listening on <url>` is printed on **stdout** (see
-[`serve`](#hya-backend-serve)).
+[`serve`](#hya-serve)).
 
 ### `--db` empty-string semantics
 
@@ -97,12 +115,12 @@ therefore expands those templates.
 ## Workflow Commands
 
 ```sh
-hya-backend workflow list
-hya-backend workflow info plan-impl-review
-hya-backend --db sessions.db workflow use plan-impl-review --session hysec_...
-hya-backend --db sessions.db workflow run --session hysec_... \
+hya workflow list
+hya workflow info plan-impl-review
+hya --db sessions.db workflow use plan-impl-review --session hysec_...
+hya --db sessions.db workflow run --session hysec_... \
   --input request=verify-parser
-hya-backend --db sessions.db workflow state --session hysec_...
+hya --db sessions.db workflow state --session hysec_...
 ```
 
 `list` and `info` read the merged project, user, installed, and immutable
@@ -120,16 +138,16 @@ command result.
 ## Bundle Commands
 
 ```sh
-hya-backend bundle info -f example.hyabundle
-hya-backend bundle install example.hyabundle
-hya-backend bundle install --claude ./my-claude-plugin
-hya-backend bundle list
-hya-backend bundle search goal-loop
-hya-backend bundle info hya/docs-example
-hya-backend bundle uninstall hya/docs-example
+hya bundle info -f example.hyabundle
+hya bundle install example.hyabundle
+hya bundle install --claude ./my-claude-plugin
+hya bundle list
+hya bundle search goal-loop
+hya bundle info hya/docs-example
+hya bundle uninstall hya/docs-example
 ```
 
-These are the canonical bundle commands, implemented by `hya-backend` directly.
+These are the canonical bundle commands, implemented by `hya` directly.
 
 `install` reports whether the package was installed, replaced, or unchanged,
 along with bundle identity, version, closed payload kind, and registry generation.
@@ -220,18 +238,18 @@ authentication as unverified, payload as opaque, and activation as unsupported.
 executable. This selects the native process ABI without compiling source at
 activation time.
 
-## Bare `hya-backend`
+## Bare `hya`
 
-With no subcommand (and no `--prompt`), `hya-backend` prints a guidance banner
+With no subcommand (and no `--prompt`), `hya` prints a guidance banner
 and exits. No interactive frontend is bundled:
 
 ```text
 hya <version> — a multi-agent coding agent
-No interactive frontend is bundled. Try `hya-backend serve`, `hya-backend exec "<prompt>"`, `hya-backend -p "<goal>"`, or `hya-backend --help`.
+No interactive frontend is bundled. Try `hya serve`, `hya exec "<prompt>"`, `hya -p "<goal>"`, or `hya --help`.
 ```
 
 It exits **0** on both a TTY and a non-TTY stdout. Scripts that pipe
-`hya-backend` with no arguments hit this branch and must not treat exit 0 as
+`hya` with no arguments hit this branch and must not treat exit 0 as
 “interactive session ready.”
 
 ## `--pure`
@@ -244,11 +262,11 @@ skill catalog is the whole skill surface). Websearch keeps its own
 configuration, and builtin tools are unaffected. Use it for reproducible
 runs whose prompt context is exactly what you passed.
 
-## `hya-backend exec`
+## `hya exec`
 
 ```sh
-hya-backend exec "summarize this repo"
-hya-backend exec --json "summarize this repo"
+hya exec "summarize this repo"
+hya exec --json "summarize this repo"
 ```
 
 Runs one headless turn and prints the rendered transcript. The command uses the
@@ -272,21 +290,21 @@ uses the selected Agent's effective default from that database. Direct/category
 Agent configuration remains higher precedence. A command-line model override
 applies only to that invocation and is not written as an Agent preference.
 
-## `hya-backend run`
+## `hya run`
 
 ```sh
-hya-backend run "summarize this repo"
-hya-backend run --format json "summarize this repo"
+hya run "summarize this repo"
+hya run --format json "summarize this repo"
 ```
 
 Compat-compatible alias for `exec`. Message words are joined with spaces.
 Like `exec`, `run` persists only when the global `--db <PATH>` is supplied.
 `--format json` and `--json` both emit event JSONL.
 
-## `hya-backend -p`
+## `hya -p`
 
 ```sh
-hya-backend -p "make the workspace compile" --max-iterations 6
+hya -p "make the workspace compile" --max-iterations 6
 ```
 
 Runs goal mode with an in-memory store. Each iteration runs an agent turn, then
@@ -294,10 +312,10 @@ an independent evaluator judges the transcript. The run stops when the evaluator
 returns `met=true`, a cap is reached, or cancellation is requested. Goal mode
 does not persist to the global `--db` database.
 
-## `hya-backend serve`
+## `hya serve`
 
 ```sh
-hya-backend serve --bind 127.0.0.1:8080 --db hya.db
+hya serve --bind 127.0.0.1:8080 --db hya.db
 ```
 
 Starts the HTTP/SSE API from [`../crates/hya-server`](../crates/hya-server).
@@ -346,15 +364,15 @@ gRPC (reflection enabled). See [Protocol guide](protocol/README.md),
 ## Auth and Catalog Commands
 
 ```sh
-hya-backend login <provider> <token>
-hya-backend oauth login --provider <name> --type <openai-codex|grok-build|aliases…> [--device] [--loopback] [--no-browser] [--browser] [--model <id>] [--base-url <url>]
-hya-backend oauth status [provider]
-hya-backend auth list
-hya-backend auth logout <provider>
-hya-backend providers list
-hya-backend providers logout <provider>
-hya-backend models [provider] [--verbose]
-hya-backend agent list [--all]
+hya login <provider> <token>
+hya oauth login --provider <name> --type <openai-codex|grok-build|aliases…> [--device] [--loopback] [--no-browser] [--browser] [--model <id>] [--base-url <url>]
+hya oauth status [provider]
+hya auth list
+hya auth logout <provider>
+hya providers list
+hya providers logout <provider>
+hya models [provider] [--verbose]
+hya agent list [--all]
 ```
 
 `login` writes a plain provider token under `~/.config/hya/auth`. Prefer
@@ -370,7 +388,7 @@ implementations:
 | `openai-codex` | `openai_codex`, `codex` |
 | `grok-build` | `grok_build`, `grok`, `xai-oauth` |
 
-Every other provider must use `hya-backend login <provider> <token>` or an
+Every other provider must use `hya login <provider> <token>` or an
 inline `api_key` in config.
 
 **Device vs loopback.** For `openai-codex`, the default matches Codex CLI:
@@ -400,7 +418,7 @@ startup, so there is no `models --refresh` command or second refresh path.
 credential kind (`api` vs oauth), OAuth type when present, `expires` /
 `status=ok|EXPIRED`, and ChatGPT/Grok `account=` id when known. For expired
 OAuth credentials it also prints a ready-to-copy re-login line
-(`hya-backend oauth login --provider … --type …`). No token material is printed.
+(`hya oauth login --provider … --type …`). No token material is printed.
 
 **`models [provider]`.** Prints the sorted `provider/model` rows from the same
 immutable startup snapshot used by the server and its clients. With `--verbose`,
@@ -421,8 +439,8 @@ spawnable via catalog `can_spawn` reachability.
 ## Session and RPC Commands
 
 ```sh
-hya-backend sessions --db hya.db
-hya-backend rpc
+hya sessions --db hya.db
+hya rpc
 ```
 
 `sessions` lists persisted sessions in a SQLite database, including sessions
@@ -432,10 +450,10 @@ JSONL requests on stdin, accepts `{"type":"prompt","text":"..."}` and
 `{"type":"quit"}`, and emits new session events plus a `{"type":"done"}` marker
 using an in-memory store; `rpc` does not persist to the global `--db` database.
 
-## `hya-backend tail-session`
+## `hya tail-session`
 
 ```sh
-hya-backend tail-session <session-id> --db hya.db
+hya tail-session <session-id> --db hya.db
 ```
 
 Replays a persisted session's event log as JSON lines. The `<session-id>`
@@ -445,30 +463,42 @@ Empty `--db` is remapped to the durable XDG path (not in-memory).
 This command intentionally exits cleanly on broken pipe (exit 0), so shell
 filters such as `head` and `grep -q` can close stdout without causing a panic.
 
-## `hya-updater` (independent self-update TCB)
+## `hya update` (self-update TCB)
 
-`hya-updater` is a separate binary from `hya-backend`. It verifies signed
-release metadata, stages immutable generations, optionally smokes them, and
-activates only with explicit owner authorization. See
+`hya update` verifies signed release metadata, stages immutable generations,
+optionally smokes them, and activates only with explicit owner authorization.
+It replaces the former standalone `hya-updater` binary. The commands are
+implemented in the independent `hya-updater` library crate, and `hya`
+dispatches them before composing any runtime: no config bootstrap, bundles,
+providers, plugins, MCP, or session store are loaded. Global flags such as
+`--model` or `--db` are accepted but ignored. See
 [Secure self-update](self-update.md).
 
+| Command | Purpose |
+| --- | --- |
+| `hya update version` | Print the updater package version and supported metadata protocol. |
+| `hya update status --root DIR` | Show selector, accepted floor, and layout paths. |
+| `hya update recover --root DIR` | Recover interrupted prepare/commit journal state. |
+| `hya update apply --root DIR --metadata FILE --package DIR --platform TRIPLE [--smoke CMD] [--trust-roots FILE] [--owner-authorized-activation]` | Verify, stage, optionally smoke, and (owner-gated) activate. |
+| `hya update discard --root DIR --sequence N` | Discard a staged-but-not-accepted candidate. |
+| `hya update init-roots --path FILE --root KEY_ID=HEX32...` | Write a bootstrap `trust_roots.json` (operator only). |
+
 ```sh
-cargo build -p hya-updater --bin hya-updater
-./target/debug/hya-updater version
-./target/debug/hya-updater status --root /var/lib/hya/updater
-./target/debug/hya-updater recover --root /var/lib/hya/updater
-./target/debug/hya-updater apply \
+hya update version
+hya update status --root /var/lib/hya/updater
+hya update recover --root /var/lib/hya/updater
+hya update apply \
   --root /var/lib/hya/updater \
   --metadata release.metadata.json \
   --package ./package-dir \
   --platform x86_64-unknown-linux-gnu \
   --smoke smoke.sh
 # owner-gated activation only:
-./target/debug/hya-updater apply ... --owner-authorized-activation
+hya update apply ... --owner-authorized-activation
 # optional trust-roots override (default: <root>/trust_roots.json):
-./target/debug/hya-updater apply ... --trust-roots /secure/media/trust_roots.json
-./target/debug/hya-updater discard --root /var/lib/hya/updater --sequence 42
-./target/debug/hya-updater init-roots \
+hya update apply ... --trust-roots /secure/media/trust_roots.json
+hya update discard --root /var/lib/hya/updater --sequence 42
+hya update init-roots \
   --path /var/lib/hya/updater/trust_roots.json \
   --root KEY_ID=HEX32
 ```
@@ -483,5 +513,4 @@ flag list is in [Secure self-update](self-update.md).
 
 | Binary | Success | Failure / notes |
 | --- | --- | --- |
-| `hya-backend` | **0** on success (including the bare guidance banner, `serve` graceful signal shutdown, and `tail-session` broken-pipe). | **1** with the full `anyhow` error chain printed to stderr on any error — CLI validation failures use the same path. |
-| `hya-updater` | **0** on success. | **1** after printing `hya-updater: <error>` to stderr. |
+| `hya` | **0** on success (including the bare guidance banner, `serve` graceful signal shutdown, and `tail-session` broken-pipe). | **1** with the full `anyhow` error chain printed to stderr on any error — CLI validation failures use the same path. |

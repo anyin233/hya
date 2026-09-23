@@ -84,7 +84,7 @@ jobs:
 
           cargo_version="$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json, sys; metadata = json.load(sys.stdin); print(next(package["version"] for package in metadata["packages"] if package["name"] == "hya-backend"))')"
           if [[ "$cargo_version" != "$version" ]]; then
-            echo "tag version $version does not match hya-backend version $cargo_version" >&2
+            echo "tag version $version does not match hya version $cargo_version" >&2
             exit 1
           fi
 
@@ -125,9 +125,9 @@ jobs:
           rm -rf dist
           bun_adapter="dist/$package_dir/lib/hya/bun-adapter"
           mkdir -p "dist/$package_dir/bin" "$bun_adapter/src"
-          cp "target/$TARGET/release/hya-backend" "dist/$package_dir/bin/"
+          cp "target/$TARGET/release/hya" "dist/$package_dir/bin/"
           cp README.md "dist/$package_dir/"
-          chmod 755 "dist/$package_dir/bin/hya-backend"
+          chmod 755 "dist/$package_dir/bin/hya"
           cp crates/hya-plugin-bun/adapter/package.json \
             crates/hya-plugin-bun/adapter/bun.lock "$bun_adapter/"
           cp -R crates/hya-plugin-bun/adapter/src/. "$bun_adapter/src/"
@@ -155,7 +155,7 @@ jobs:
           trap 'rm -rf "$scratch"' EXIT
 
           tar -xzf "dist/$ARCHIVE" -C "$scratch"
-          packaged_binary="$scratch/$package_dir/bin/hya-backend"
+          packaged_binary="$scratch/$package_dir/bin/hya"
           "$packaged_binary" --version | tee "$scratch/version.txt"
           grep -F "$version" "$scratch/version.txt"
           "$packaged_binary" --help >/dev/null
@@ -209,7 +209,7 @@ jobs:
             exit 1
           fi
           tar -tzf "dist/$ARCHIVE" > "$scratch/archive.txt"
-          grep -Fx "$package_dir/bin/hya-backend" "$scratch/archive.txt"
+          grep -Fx "$package_dir/bin/hya" "$scratch/archive.txt"
           grep -Fx "$package_dir/lib/hya/bun-adapter/package.json" "$scratch/archive.txt"
           grep -Fx "$package_dir/lib/hya/bun-adapter/bun.lock" "$scratch/archive.txt"
           grep -Fx "$package_dir/lib/hya/bun-adapter/src/main.ts" "$scratch/archive.txt"

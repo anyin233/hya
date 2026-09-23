@@ -3,12 +3,12 @@
 ## There Is No Interactive Command
 
 There is currently no interactive TUI: the legacy TypeScript TUI was removed,
-and bare `hya-backend` (no subcommand) prints a version banner plus guidance
+and bare `hya` (no subcommand) prints a version banner plus guidance
 and exits. Drive the backend headlessly or over the API instead:
 
 ```sh
-hya-backend exec "summarize this repo"
-hya-backend serve --bind 127.0.0.1:8080
+hya exec "summarize this repo"
+hya serve --bind 127.0.0.1:8080
 ```
 
 See the [CLI Reference](cli.md) and the [Protocol guide](protocol/README.md).
@@ -16,18 +16,18 @@ See the [CLI Reference](cli.md) and the [Protocol guide](protocol/README.md).
 ## Diagnosing Slow Startup
 
 Set `HYA_STARTUP_TRACE=1` (the only truthy values are exactly `1` or `true`,
-case-insensitive) to have `hya-backend serve` emit a structured startup mark on
+case-insensitive) to have `hya serve` emit a structured startup mark on
 **stderr** after the listen line:
 
 ```sh
-HYA_STARTUP_TRACE=1 hya-backend serve --bind 127.0.0.1:0 2>trace.log
+HYA_STARTUP_TRACE=1 hya serve --bind 127.0.0.1:0 2>trace.log
 ```
 
 Each mark is one JSON line with a wall-clock timestamp:
 
 | Mark | Source | Notes |
 | --- | --- | --- |
-| `backend_listen` | `hya-backend` | Backend announced its listen URL. |
+| `backend_listen` | `hya` | Backend announced its listen URL. |
 
 For repeatable startup measurements use the benchmark task:
 
@@ -127,10 +127,10 @@ file and read the specific section you need.
 `ses_...` display id, or a legacy raw UUID:
 
 ```sh
-hya-backend tail-session hysec_ABCDEFGHIJKLMNOPQRST --db hya.db
+hya tail-session hysec_ABCDEFGHIJKLMNOPQRST --db hya.db
 ```
 
-If parsing fails, confirm the id came from `hya-backend sessions --db <PATH>`
+If parsing fails, confirm the id came from `hya sessions --db <PATH>`
 for the same database path.
 
 ## Server SSE Emits `resync`
@@ -158,7 +158,7 @@ continue:
 Use an explicit bind address:
 
 ```sh
-hya-backend serve --bind 127.0.0.1:8080 --db hya.db
+hya serve --bind 127.0.0.1:8080 --db hya.db
 ```
 
 Use `127.0.0.1:0` only when you want the OS to choose an ephemeral port; hya
@@ -166,11 +166,11 @@ prints the actual listening address on startup.
 
 ## Process Agent E2E (`hya-e2e`) Fails
 
-Track P tests spawn a real `hya-backend` against a local FakeLlm. Common failures:
+Track P tests spawn a real `hya` against a local FakeLlm. Common failures:
 
 1. **Binary missing** — build first:
    ```sh
-   cargo build -p hya-backend --bin hya-backend
+   cargo build -p hya-backend --bin hya
    cargo test -p hya-e2e -- --test-threads=1
    ```
 2. **Port / process flakiness** — always use `--test-threads=1`.

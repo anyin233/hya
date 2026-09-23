@@ -290,7 +290,7 @@ Evidence: Compat [agents](https://compat.ai/docs/agents),
 
 At the time of the original research (2026-06-30) hya was terminal-first: the
 canonical `hya` entrypoint delegated to the TypeScript supervisor, which started
-the SolidJS/OpenTUI frontend and connected it to `hya-backend` over the
+the SolidJS/OpenTUI frontend and connected it to `hya` over the
 `hya.v1` HTTP/SSE contract. **That TUI has since been removed**, and hya
 currently ships no interactive frontend; a replacement built on `hya-sdk-v1`
 may be built later. The research below records what that TUI offered: a

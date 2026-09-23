@@ -208,14 +208,14 @@ let session_id = created_session;
 
 ### 1. Scope / Trigger
 
-- Trigger: any `hya-backend` command that creates, mutates, replays, lists, or serves sessions while accepting a SQLite database path.
+- Trigger: any `hya` command that creates, mutates, replays, lists, or serves sessions while accepting a SQLite database path.
 - Applies to headless `exec` / `run`, `sessions`, `tail-session`, `serve`, and future CLI commands that share the event-sourced session store.
 
 ### 2. Signatures
 
-- Headless execution: `hya-backend --db <path> exec <prompt>` and `hya-backend --db <path> run <prompt>`.
-- Listing: `hya-backend sessions --db <path>`.
-- Server: `hya-backend serve --db <path> --bind <addr>`.
+- Headless execution: `hya --db <path> exec <prompt>` and `hya --db <path> run <prompt>`.
+- Listing: `hya sessions --db <path>`.
+- Server: `hya serve --db <path> --bind <addr>`.
 - Empty `--db ""` remains the in-memory store mode; a non-empty path is a persistent SQLite store.
 
 ### 3. Contracts
@@ -234,13 +234,13 @@ let session_id = created_session;
 
 ### 5. Good/Base/Bad Cases
 
-- Good: `hya-backend --db /tmp/hya.db exec "Say hello"` writes events to `/tmp/hya.db`, and `hya-backend sessions --db /tmp/hya.db` prints the resulting `hysec_...` row.
+- Good: `hya --db /tmp/hya.db exec "Say hello"` writes events to `/tmp/hya.db`, and `hya sessions --db /tmp/hya.db` prints the resulting `hysec_...` row.
 - Base: omitting `--db` uses in-memory execution and does not leave a durable session after process exit.
 - Bad: `exec` constructs `SessionStore::connect_memory()` even though the top-level CLI parsed `--db <path>`.
 
 ### 6. Tests Required
 
-- Add a CLI integration regression that runs `hya-backend --pure --db <tmp>/hya.db exec <prompt>` and then asserts `hya-backend sessions --pure --db <tmp>/hya.db` contains `hysec_`.
+- Add a CLI integration regression that runs `hya --pure --db <tmp>/hya.db exec <prompt>` and then asserts `hya sessions --pure --db <tmp>/hya.db` contains `hysec_`.
 - Manual QA should run a rendered `exec`, a JSONL `exec --json`, and `sessions --db` against the same DB to prove both output modes persist.
 - HTTP QA should run `serve --db`, create/prompt a session, then list the same DB through the CLI.
 
@@ -439,7 +439,7 @@ cargo run -p xtask -- release-rehearsal \
   and checksum file.
 - Third-party release actions are pinned to immutable commit SHAs.
 - The publishing job uses the `release` environment so repository settings can require manual approval.
-- Within the release archive, the payload includes the shipped `hya-backend`
+- Within the release archive, the payload includes the shipped `hya`
   binary, the twelve first-party bundles under `bundles/`, the production
   `lib/hya/bun-adapter`, and the generated member
   `examples/hya-argus-example.hyabundle`; it does not add `hya-updater`.
@@ -505,7 +505,7 @@ cargo run -p xtask -- release-rehearsal \
 - Run the tag/version/changelog validation logic with a representative tag and
   require the explicit `--no-publish` rehearsal guard.
 - Run the release build command for the configured target.
-- Package the `hya-backend` binary and the production Compat adapter; verify
+- Package the `hya` binary and the production Compat adapter; verify
   `SHA256SUMS`, extract the archive, and run
   each binary smoke.
 - Assert the Compat adapter's locked files and initialize/shutdown handshake.

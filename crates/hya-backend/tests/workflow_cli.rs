@@ -1,4 +1,4 @@
-//! Integration tests for `hya-backend workflow run`: the CLI run path.
+//! Integration tests for `hya workflow run`: the CLI run path.
 //!
 //! These tests execute REAL `workflow run` processes against the offline dev
 //! provider. The dev provider echoes each member's directive back as its final
@@ -82,7 +82,7 @@ impl IsolatedEnv {
         let nanos = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
         let serial = NEXT_ROOT.fetch_add(1, Ordering::Relaxed);
         let root = std::env::temp_dir().join(format!(
-            "hya-backend-workflow-cli-{prefix}-{}-{nanos}-{serial}",
+            "hya-workflow-cli-{prefix}-{}-{nanos}-{serial}",
             std::process::id()
         ));
         let home = root.join("home");
@@ -127,7 +127,7 @@ fn repository_root() -> Result<PathBuf, std::io::Error> {
 }
 
 fn workflow_command(env: &IsolatedEnv) -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_hya-backend"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_hya"));
     command.env_clear();
     if let Some(path) = &env.path {
         command.env("PATH", path);

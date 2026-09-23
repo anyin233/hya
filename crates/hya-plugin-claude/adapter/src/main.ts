@@ -8,7 +8,7 @@
  *   `--plugin-id` is the hya-configured plugin id echoed on the initialize
  *   reply (the host enforces the match).
  * - `bun run src/main.ts --emit-bundle-manifest --plugin-dir <dir>`
- *   Offline translation for `hya-backend bundle install --claude`: print one
+ *   Offline translation for `hya bundle install --claude`: print one
  *   JSON envelope `{manifest, files}` (see `hya-plugin-claude::emit`) on
  *   stdout and exit 0.
  */

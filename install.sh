@@ -21,7 +21,7 @@ Options:
   -h, --help                   Show this help
 
 Installs the release layout:
-  bin/hya-backend           backend CLI/API for login, exec, serve, and models
+  bin/hya                   unified CLI: exec, serve, login, bundles, models, update, ...
   bundles/hya-*.hyabundle   the twelve trusted first-party bundles it loads at startup
   lib/hya/bun-adapter       Bun adapter for JavaScript bundle extensions
 USAGE
@@ -92,7 +92,7 @@ if [[ -z "$bin_dir" ]]; then
 fi
 bin_dir=${bin_dir%/}
 if [[ "$(basename "$bin_dir")" != bin ]]; then
-  echo "--bin-dir must be a directory named bin: hya-backend loads its first-party bundles from ../bundles" >&2
+  echo "--bin-dir must be a directory named bin: hya loads its first-party bundles from ../bundles" >&2
   exit 2
 fi
 
@@ -108,10 +108,10 @@ lib_dir="$root_dir/lib/hya"
 bundles_dir="$root_dir/bundles"
 adapter_source="$(pwd -P)/crates/hya-plugin-bun/adapter"
 
-tmp_backend="$bin_dir/.hya-backend.tmp.$$"
+tmp_backend="$bin_dir/.hya.tmp.$$"
 tmp_adapter="$lib_dir/.bun-adapter.tmp.$$"
 tmp_bundles="$bundles_dir/.hya-bundles.tmp.$$"
-bak_backend="$bin_dir/.hya-backend.bak.$$"
+bak_backend="$bin_dir/.hya.bak.$$"
 bak_adapter="$lib_dir/.bun-adapter.bak.$$"
 bak_bundles="$bundles_dir/.hya-bundles.bak.$$"
 rollback_enabled=0
@@ -137,7 +137,7 @@ restore_install() {
   fi
 
   if [[ "$placed_backend" -eq 1 ]]; then
-    rm -f "$bin_dir/hya-backend"
+    rm -f "$bin_dir/hya"
   fi
   if [[ "$placed_adapter" -eq 1 ]]; then
     rm -rf "$lib_dir/bun-adapter"
@@ -147,7 +147,7 @@ restore_install() {
     rm -f "$bundles_dir/$bundle"
   done
   if [[ "$had_backend" -eq 1 && -e "$bak_backend" ]]; then
-    mv -f "$bak_backend" "$bin_dir/hya-backend"
+    mv -f "$bak_backend" "$bin_dir/hya"
   fi
   if [[ "$had_adapter" -eq 1 && -e "$bak_adapter" ]]; then
     mv "$bak_adapter" "$lib_dir/bun-adapter"
@@ -192,7 +192,7 @@ preflight_path() {
 }
 
 trap on_error ERR INT TERM
-say "Installing hya-backend to $bin_dir"
+say "Installing hya to $bin_dir"
 say "Installing first-party bundles to $bundles_dir"
 say "Installing Bun adapter to $lib_dir/bun-adapter"
 say "Rollback backup paths: $bak_backend $bak_bundles $bak_adapter"
@@ -205,7 +205,7 @@ run bun --version
 run cargo build --locked ${profile_args[@]+"${profile_args[@]}"} -p hya-backend --bins
 run cargo build --locked ${profile_args[@]+"${profile_args[@]}"} "${tool_libraries[@]}" --lib
 run mkdir -p "$bin_dir" "$lib_dir" "$bundles_dir" "$tmp_adapter/src"
-run install -m 0755 "$target_dir/hya-backend" "$tmp_backend"
+run install -m 0755 "$target_dir/hya" "$tmp_backend"
 run cargo run --locked -p xtask -- stage-first-party-bundles --library-dir "$target_dir" --package-root "$tmp_bundles"
 run cp "$adapter_source/package.json" "$adapter_source/bun.lock" "$tmp_adapter/"
 run cp -R "$adapter_source/src/." "$tmp_adapter/src/"
@@ -214,9 +214,9 @@ if [[ "$dry_run" -eq 0 ]]; then
   (cd "$tmp_adapter" && bun install --frozen-lockfile --production)
 fi
 [[ "$dry_run" -ne 0 ]] || rollback_enabled=1
-if [[ -e "$bin_dir/hya-backend" ]]; then
+if [[ -e "$bin_dir/hya" ]]; then
   had_backend=1
-  run mv -f "$bin_dir/hya-backend" "$bak_backend"
+  run mv -f "$bin_dir/hya" "$bak_backend"
 fi
 if [[ -e "$lib_dir/bun-adapter" ]]; then
   had_adapter=1
@@ -239,19 +239,19 @@ else
   say "+ move $tmp_bundles/bundles/hya-*.hyabundle to $bundles_dir"
 fi
 placed_backend=1
-run mv -f "$tmp_backend" "$bin_dir/hya-backend"
+run mv -f "$tmp_backend" "$bin_dir/hya"
 placed_adapter=1
 run mv "$tmp_adapter" "$lib_dir/bun-adapter"
 
 verify_home="${TMPDIR:-/tmp}/hya-install-verify.$$"
 first_party=(base-tools extended-tools network-tools channel-tools todo-tools core-skills core-commands core-agents agent-channels goal-loop plan-impl-review subagents)
 if [[ "$dry_run" -eq 0 ]]; then
-  "$bin_dir/hya-backend" --version >/dev/null
-  "$bin_dir/hya-backend" --help >/dev/null
+  "$bin_dir/hya" --version >/dev/null
+  "$bin_dir/hya" --help >/dev/null
   mkdir -p "$verify_home"
   listing=$(HOME="$verify_home" XDG_CONFIG_HOME="$verify_home/config" XDG_DATA_HOME="$verify_home/data" \
     XDG_STATE_HOME="$verify_home/state" XDG_CACHE_HOME="$verify_home/cache" \
-    "$bin_dir/hya-backend" bundle list)
+    "$bin_dir/hya" bundle list)
   rm -rf "$verify_home"
   for bundle in "${first_party[@]}"; do
     grep -q "^hya/$bundle " <<<"$listing"
@@ -260,31 +260,37 @@ if [[ "$dry_run" -eq 0 ]]; then
   test -f "$lib_dir/bun-adapter/bun.lock"
   test -f "$lib_dir/bun-adapter/src/main.ts"
   test -d "$lib_dir/bun-adapter/node_modules"
-  resolved=$(command -v hya-backend 2>/dev/null || true)
-  if [[ "$resolved" != "$bin_dir/hya-backend" ]]; then
-    echo "hya-backend is not first on PATH. Add this to your shell profile: export PATH=\"$bin_dir:\$PATH\"" >&2
-    echo "expected: $bin_dir/hya-backend" >&2
+  resolved=$(command -v hya 2>/dev/null || true)
+  if [[ "$resolved" != "$bin_dir/hya" ]]; then
+    echo "hya is not first on PATH. Add this to your shell profile: export PATH=\"$bin_dir:\$PATH\"" >&2
+    echo "expected: $bin_dir/hya" >&2
     echo "resolved: ${resolved:-<missing>}" >&2
     false
   fi
   install_complete=1
   cleanup_leftovers
-  say "hya-backend is on PATH: $resolved"
+  # Releases before 0.38.0 shipped the executable as bin/hya-backend.
+  if [[ -e "$bin_dir/hya-backend" ]]; then
+    rm -f "$bin_dir/hya-backend"
+    say "Removed legacy $bin_dir/hya-backend (now: hya)"
+  fi
+  say "hya is on PATH: $resolved"
 else
-  say "+ $bin_dir/hya-backend --version"
-  say "+ $bin_dir/hya-backend --help"
-  say "+ $bin_dir/hya-backend bundle list (isolated HOME) must list: ${first_party[*]}"
+  say "+ $bin_dir/hya --version"
+  say "+ $bin_dir/hya --help"
+  say "+ $bin_dir/hya bundle list (isolated HOME) must list: ${first_party[*]}"
   say "+ test -f $lib_dir/bun-adapter/package.json"
   say "+ test -f $lib_dir/bun-adapter/bun.lock"
   say "+ test -f $lib_dir/bun-adapter/src/main.ts"
   say "+ test -d $lib_dir/bun-adapter/node_modules"
-  say "+ PATH check: command -v hya-backend must resolve to $bin_dir/hya-backend"
+  say "+ PATH check: command -v hya must resolve to $bin_dir/hya"
+  say "+ rm -f $bin_dir/hya-backend (legacy executable name, if present)"
 fi
 
 cat <<'GUIDANCE'
 
 API setup:
-  hya-backend works offline by default. To use a live provider, create:
+  hya works offline by default. To use a live provider, create:
     $XDG_CONFIG_HOME/hya/config.yaml
   or, if XDG_CONFIG_HOME is unset:
     ~/.config/hya/config.yaml
@@ -299,7 +305,7 @@ API setup:
         models: [claude-sonnet-4-6]
 
   Then run:
-    hya-backend login anthropic "$ANTHROPIC_API_KEY"
-    hya-backend models
-    hya-backend serve
+    hya login anthropic "$ANTHROPIC_API_KEY"
+    hya models
+    hya serve
 GUIDANCE

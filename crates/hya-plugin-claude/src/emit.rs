@@ -1,5 +1,5 @@
 //! Offline `--emit-bundle-manifest` contract between the Claude adapter and
-//! `hya-backend bundle install --claude`.
+//! `hya bundle install --claude`.
 //!
 //! The adapter prints exactly one JSON document on stdout:
 //!

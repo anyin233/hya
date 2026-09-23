@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "Process-level agent E2E harness: real hya-backend + scripted FakeLlm"
+description = "Process-level agent E2E harness: real hya + scripted FakeLlm"
 publish = false
 
 [lints]

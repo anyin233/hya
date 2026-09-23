@@ -61,11 +61,11 @@ Package, inspect, install, and remove it with the existing CLI:
 
 ```sh
 cargo run -p xtask -- package-bundle path/to/skill-pack skill-pack.hyabundle
-hya-backend bundle info -f skill-pack.hyabundle
-hya-backend bundle install skill-pack.hyabundle
-hya-backend bundle list
-hya-backend bundle search skill-pack
-hya-backend bundle uninstall acme/skill-pack
+hya bundle info -f skill-pack.hyabundle
+hya bundle install skill-pack.hyabundle
+hya bundle list
+hya bundle search skill-pack
+hya bundle uninstall acme/skill-pack
 ```
 
 The closed manifest accepts only these top-level fields:
@@ -147,8 +147,8 @@ is emitted for this payload. Build and install it with the existing commands:
 
 ```sh
 cargo run -p xtask -- package-bundle path/to/review-team review-team.hyabundle
-hya-backend bundle info -f review-team.hyabundle
-hya-backend bundle install review-team.hyabundle
+hya bundle info -f review-team.hyabundle
+hya bundle install review-team.hyabundle
 ```
 
 ## Runtime boundary

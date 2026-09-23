@@ -10,7 +10,7 @@ The file is parsed strictly as YAML via `serde_norway::from_str`
 TOML are **not** accepted. Unknown top-level keys are ignored without warning —
 there is no `deny_unknown_fields` — so a misspelled section such as `provider:`
 instead of `providers:` is silently dropped. After editing, verify with
-`hya-backend models`. A file that is empty or whitespace-only is treated exactly
+`hya models`. A file that is empty or whitespace-only is treated exactly
 like a missing file and hya runs offline.
 
 If no configured or discovered live model row resolves, hya publishes exactly
@@ -23,7 +23,7 @@ plugins, permissions, subagent limits, model categories, and formatter status.
 On startup, hya tries to load `config.yaml` (see
 [`../crates/hya-app/src/config.rs`](../crates/hya-app/src/config.rs) `load()`
 and `config_path()`). `cargo build` only compiles the workspace and does not
-write user config. When a `hya-backend` command starts and no file exists, hya
+write user config. When a `hya` command starts and no file exists, hya
 creates the config directory and writes a starter `config.yaml` before
 resolving runtime config:
 
@@ -233,13 +233,13 @@ tools:
     enabled: true
 
 # Each entry under `providers.<id>` becomes one HTTP route. The <id> is also the
-# name used by `hya-backend login <id>` and shown as the provider in model refs.
+# name used by `hya login <id>` and shown as the provider in model refs.
 providers:
   anthropic:
     kind: anthropic                      # openai-completion | openai-response | openai-codex | grok-build | anthropic | google
     base_url: https://api.anthropic.com/v1
     # Inline key is optional. Forms: literal, {env:VAR}, or {file:/path}.
-    # A token saved via `hya-backend login anthropic <token>` takes precedence.
+    # A token saved via `hya login anthropic <token>` takes precedence.
     api_key: "{env:ANTHROPIC_API_KEY}"
     models: [claude-sonnet-4-6]          # explicit list: normalized, no catalog request
 
@@ -291,7 +291,7 @@ providers:
     kind: grok-build
     base_url: https://cli-chat-proxy.grok.com/v1
     # OAuth access token from `grok login` (JWT). Keep it in this config or via
-    # `hya-backend login grok <token>` — hya does not read `~/.grok/auth.json`.
+    # `hya login grok <token>` — hya does not read `~/.grok/auth.json`.
     api_key: "{env:GROK_OAUTH_TOKEN}"
     models: [grok-4.5]
   google:
@@ -453,7 +453,7 @@ Interactive OAuth is implemented entirely in Rust:
 
 ```sh
 # ChatGPT / Codex subscription (Codex default: device-code, print URL, no auto-open browser)
-hya-backend oauth login --provider codex --type openai-codex
+hya oauth login --provider codex --type openai-codex
 # same commands on the TypeScript launcher:
 hya oauth login --provider codex --type openai-codex
 # optional: open the verification URL, or use localhost PKCE instead of device-code
@@ -461,10 +461,10 @@ hya oauth login --provider codex --type openai-codex
 #   --loopback --browser
 
 # xAI SuperGrok / Grok CLI (device-code flow)
-hya-backend oauth login --provider grok --type grok-build --no-browser
+hya oauth login --provider grok --type grok-build --no-browser
 hya oauth login --provider grok --type grok-build --no-browser
 
-hya-backend oauth status
+hya oauth status
 hya oauth status
 ```
 
@@ -501,7 +501,7 @@ Two failure modes surface as `ProviderError::AuthExpired{provider, hint}`:
    400/401 on the Grok token endpoint). Hint is the re-login command:
 
    ```text
-   hya-backend oauth login --provider <name> --type <openai-codex|grok-build>
+   hya oauth login --provider <name> --type <openai-codex|grok-build>
    ```
 
 2. **Entitlement** — HTTP 403 from the Grok refresh endpoint means the account
@@ -564,8 +564,8 @@ Requests send `Authorization: Bearer <access_token>` and, when known,
 
 #### Grok Build OAuth (`kind: grok-build`)
 
-Credentials are **self-contained in hya config / auth** (`hya-backend oauth
-login` or `hya-backend login`). hya never reads `~/.grok/auth.json`.
+Credentials are **self-contained in hya config / auth** (`hya oauth
+login` or `hya login`). hya never reads `~/.grok/auth.json`.
 
 ```yaml
 providers:
@@ -583,7 +583,7 @@ Every `grok-build` request uses CLI chat-proxy session headers:
 - `x-grok-client-identifier: grok-cli`
 - `x-grok-model-override: <model id>`
 
-You can still paste a bearer with `hya-backend login grok <token>` or an
+You can still paste a bearer with `hya login grok <token>` or an
 inline `api_key`, but that path has no automatic refresh.
 
 ## Categories
@@ -631,11 +631,11 @@ api_key: "{file:/absolute/path/to/key.txt}"
 Saved tokens take precedence over inline `api_key` values:
 
 ```sh
-hya-backend login anthropic "$ANTHROPIC_API_KEY"
-hya-backend oauth login --provider codex --type openai-codex
-hya-backend auth list
-hya-backend oauth status
-hya-backend auth logout anthropic
+hya login anthropic "$ANTHROPIC_API_KEY"
+hya oauth login --provider codex --type openai-codex
+hya auth list
+hya oauth status
+hya auth logout anthropic
 ```
 
 ### On-disk auth file schema
@@ -685,9 +685,9 @@ Examples:
 
 ```sh
 HYA_MODEL=claude-sonnet-4-6 hya
-hya-backend --model gpt-5.5 exec "summarize the architecture"
-hya-backend models
-hya-backend models gateway --verbose
+hya --model gpt-5.5 exec "summarize the architecture"
+hya models
+hya models gateway --verbose
 ```
 
 The selected model must be served by one configured route. If no route reports
@@ -841,11 +841,11 @@ hya honors `HOME` and `XDG_CONFIG_HOME` / `XDG_DATA_HOME` / `XDG_STATE_HOME` /
 | `HYA_SUBAGENT_MESSAGE_BUDGET` | Overrides `subagents.per_team_message_budget`. Env wins. | `1024` | same |
 | `HYA_EVENT_BUS_CAPACITY` | Live EventBus broadcast ring capacity. Must parse as `usize` **> 0** or ignored. **Env-only** (no config.yaml key). Raising it trades memory for tolerance of slow SSE consumers. | `8192` (`DEFAULT_BUS_CAPACITY`) | `crates/hya-app/src/config.rs`, `crates/hya-core/src/bus.rs` |
 | `HYA_DEFER_SIDEPLANES` | When deferred (default), MCP connect runs after the engine is built so the HTTP listener comes up without waiting on MCP handshakes — MCP tools may not be registered for the very first prompt. Set to `0`, `false`, `off`, or `no` (case-insensitive, trimmed) for await-MCP-before-listen. Any other value, empty, or unset means deferred. | deferred (on) | `crates/hya-app/src/runtime.rs` |
-| `HYA_MCP_BACKGROUND_AFTER_MS` | Foreground budget in milliseconds for `mcp__` tool calls. A call still running past the budget moves to the background: the turn gets a `[backgrounded]` tool result immediately, the real result is delivered later as a steered `[background job …]` user prompt, and `hya-backend serve` runs the reclaim turn when the session is idle. Unset, `0`, or unparsable disables backgrounding (every call stays synchronous). | unset | `crates/hya-app/src/runtime.rs`, `crates/hya-core/src/engine/turn.rs` |
+| `HYA_MCP_BACKGROUND_AFTER_MS` | Foreground budget in milliseconds for `mcp__` tool calls. A call still running past the budget moves to the background: the turn gets a `[backgrounded]` tool result immediately, the real result is delivered later as a steered `[background job …]` user prompt, and `hya serve` runs the reclaim turn when the session is idle. Unset, `0`, or unparsable disables backgrounding (every call stays synchronous). | unset | `crates/hya-app/src/runtime.rs`, `crates/hya-core/src/engine/turn.rs` |
 | `HYA_BUN_ADAPTER_DIR` | Path to an alternate Bun extension adapter checkout (`kind: bun` plugins). | Resolution order: this env override, executable-adjacent `../lib/hya/bun-adapter`, then workspace `crates/hya-plugin-bun/adapter`. | `crates/hya-app/src/plugins.rs` |
 | `HYA_CLAUDE_ADAPTER_DIR` | Path to an alternate Claude Code adapter checkout (`kind: claude` plugins and `bundle install --claude`). | Resolution order: this env override, executable-adjacent `../lib/hya/claude-adapter`, then workspace `crates/hya-plugin-claude/adapter`. | `crates/hya-app/src/plugins.rs` |
-| `HYA_BACKEND_BIN` | Binary under test for the `startup-bench` xtask; overrides the default `hya-backend serve` target. | workspace `target/{profile}` binary | `crates/xtask/src/startup_bench.rs` |
-| `HYA_STARTUP_TRACE` | When `1` or `true` (case-insensitive; any other value off), `hya-backend serve` emits a newline-delimited JSON startup mark to stderr after the listen line: `{"hya_startup":true,"mark":"backend_listen","wall_ms":…,"detail":"<url>"}`. | off | `crates/hya-backend/src/serve.rs` |
+| `HYA_BACKEND_BIN` | Binary under test for the `startup-bench` xtask; overrides the default `hya serve` target. | workspace `target/{profile}` binary | `crates/xtask/src/startup_bench.rs` |
+| `HYA_STARTUP_TRACE` | When `1` or `true` (case-insensitive; any other value off), `hya serve` emits a newline-delimited JSON startup mark to stderr after the listen line: `{"hya_startup":true,"mark":"backend_listen","wall_ms":…,"detail":"<url>"}`. | off | `crates/hya-backend/src/serve.rs` |
 
 ### Bun adapter (`HYA_*`)
 
@@ -931,7 +931,7 @@ the turn:
    with value `background_failed` on failure) and a steered user prompt
    `[background job mcpbg-N completed|failed: <tool>] … Reclaim this result`
    is appended to the session carrying the result text.
-3. `hya-backend serve` watches for that marker: if the session is idle it
+3. `hya serve` watches for that marker: if the session is idle it
    starts a follow-up turn right away so the agent reclaims the result; a busy
    session simply sees the prompt on its next round. In `exec`/goal mode the
    prompt stays durable for the next turn.
@@ -1060,7 +1060,7 @@ Bundles may declare external URI-scheme extensions (`schemas:` in the bundle
 manifest; see [Schema extensions](agent-bundle-authoring.md#schema-extensions-schemas)).
 Two read-only surfaces report what is registered:
 
-- **`hya-backend bundle schemas`** — one `BUNDLE SCHEME TOOL WRITABLE` row per
+- **`hya bundle schemas`** — one `BUNDLE SCHEME TOOL WRITABLE` row per
   declared schema across the first-party and installed bundles.
 - **`GET /v1/runtime/schemas`** — the live published scheme table with its
   config `generation`, each row carrying `scheme`, `owner` (the winning source
@@ -1079,7 +1079,7 @@ Plugins may be declared directly in config or discovered from
 directory at startup (`plugins::plugins_dir()`), **not** the per-session
 workdir (**one directory deep** — nested `plugin.toml` files are never found).
 The two coincide when the launcher starts the backend with
-`.current_dir(project)`; a bare `hya-backend serve` from another directory only
+`.current_dir(project)`; a bare `hya serve` from another directory only
 scans that process CWD:
 
 ```yaml

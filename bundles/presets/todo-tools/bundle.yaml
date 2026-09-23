@@ -1,7 +1,7 @@
 kind: Plugin
 identity:
   id: hya/todo-tools
-  version: 0.37.19
+  version: 0.38.0
   publisher: hya
 namespace: todo-tools
 extensions:

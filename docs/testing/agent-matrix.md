@@ -1,6 +1,6 @@
 # Agent feature matrix
 
-Process E2E lives in `crates/hya-e2e` (**Track P**): real `hya-backend` +
+Process E2E lives in `crates/hya-e2e` (**Track P**): real `hya` +
 scripted OpenAI-compatible FakeLlm, driven entirely through the `hya.v1`
 contract. Existing in-process tests remain the authority for deep engine
 semantics (**Track I**); they are indexed, not duplicated. There is no TUI
@@ -16,7 +16,7 @@ today; former Track T is retired (see below).
 
 ```sh
 # Track P — process agent suite
-cargo build -p hya-backend --bin hya-backend
+cargo build -p hya-backend --bin hya
 cargo test -p hya-e2e -- --test-threads=1
 ```
 

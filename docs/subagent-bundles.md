@@ -28,14 +28,14 @@ directives. The caller's roster and `can_spawn` closure must authorize the
 selected stable id.
 
 Operators may install a public bundle with identity `hya/subagents` (or the
-same namespace) as a local override. `hya-backend bundle list` and `bundle
+same namespace) as a local override. `hya bundle list` and `bundle
 info hya/subagents` then show the installed definition. Uninstalling that
 override restores the first-party package on the next root binding:
 
 ```sh
-hya-backend bundle install ./subagents-override.hyabundle
-hya-backend bundle info hya/subagents
-hya-backend bundle uninstall hya/subagents
+hya bundle install ./subagents-override.hyabundle
+hya bundle info hya/subagents
+hya bundle uninstall hya/subagents
 ```
 
 The caller's captured `TurnBinding` resolves the selected definition and its

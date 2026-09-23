@@ -1,4 +1,4 @@
-//! Spawn and tear down a real `hya-backend serve` process.
+//! Spawn and tear down a real `hya serve` process.
 
 use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
@@ -28,7 +28,7 @@ pub struct McpFixture {
 /// How to configure the temp backend process.
 #[derive(Clone, Debug)]
 pub struct BackendSpec {
-    /// Absolute path to `hya-backend` binary.
+    /// Absolute path to `hya` binary.
     pub binary: PathBuf,
     /// When true, pass `--yolo` (auto-approve tools).
     pub yolo: bool,
@@ -86,7 +86,7 @@ pub struct BackendProcess {
     pub xdg_config_home: PathBuf,
     /// Same root used for XDG_DATA_HOME (bundle registry).
     pub xdg_data_home: PathBuf,
-    /// Path to the `hya-backend` binary that was spawned.
+    /// Path to the `hya` binary that was spawned.
     pub binary: PathBuf,
     child: Child,
     root: PathBuf,
@@ -108,7 +108,7 @@ impl BackendProcess {
     pub fn start(spec: &BackendSpec) -> Result<Self, E2eError> {
         if !spec.binary.is_file() {
             return Err(E2eError::Backend(format!(
-                "hya-backend binary missing at {} (run: cargo build -p hya-backend --bin hya-backend)",
+                "hya binary missing at {} (run: cargo build -p hya-backend --bin hya)",
                 spec.binary.display()
             )));
         }
@@ -234,7 +234,7 @@ permission:
 
         let mut child = cmd
             .spawn()
-            .map_err(|e| E2eError::Backend(format!("spawn hya-backend: {e}")))?;
+            .map_err(|e| E2eError::Backend(format!("spawn hya: {e}")))?;
 
         let mut stdout = child
             .stdout
@@ -334,7 +334,7 @@ permission:
 
         let mut child = cmd
             .spawn()
-            .map_err(|e| E2eError::Backend(format!("reopen hya-backend: {e}")))?;
+            .map_err(|e| E2eError::Backend(format!("reopen hya: {e}")))?;
         let mut stdout = match child.stdout.take() {
             Some(stdout) => stdout,
             None => {
@@ -385,7 +385,7 @@ permission:
         self.project.display().to_string()
     }
 
-    /// Run `hya-backend bundle …` with this process's data home.
+    /// Run `hya bundle …` with this process's data home.
     pub fn bundle_cli(&self, args: &[&str]) -> Result<std::process::Output, E2eError> {
         let mut cmd = Command::new(&self.binary);
         cmd.args(args)
@@ -540,7 +540,7 @@ fn parse_listen_url(text: &str) -> Option<String> {
 }
 
 /// Resolve the backend binary: `HYA_E2E_BACKEND_BIN` if set, else the workspace
-/// `target/debug/hya-backend`.
+/// `target/debug/hya`.
 ///
 /// The override exists so a coverage run can point the harness at an instrumented build
 /// without overwriting the normal debug binary that concurrent work is using.
@@ -558,11 +558,9 @@ fn resolve_backend_bin(override_bin: Option<std::ffi::OsString>) -> PathBuf {
         }
     }
     Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../target/debug/hya-backend")
+        .join("../../target/debug/hya")
         .canonicalize()
-        .unwrap_or_else(|_| {
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/debug/hya-backend")
-        })
+        .unwrap_or_else(|_| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/debug/hya"))
 }
 
 /// Relative project path for the stdio MCP echo fixture written by the harness.
@@ -664,11 +662,11 @@ mod tests {
 
     #[test]
     fn backend_bin_override_wins_over_the_workspace_debug_path() {
-        let resolved = resolve_backend_bin(Some("/nonexistent/instrumented/hya-backend".into()));
+        let resolved = resolve_backend_bin(Some("/nonexistent/instrumented/hya".into()));
 
         assert_eq!(
             resolved,
-            PathBuf::from("/nonexistent/instrumented/hya-backend"),
+            PathBuf::from("/nonexistent/instrumented/hya"),
             "HYA_E2E_BACKEND_BIN must point the harness at an arbitrary build"
         );
     }
@@ -691,7 +689,7 @@ mod tests {
         let binary = default_backend_bin();
         assert!(
             binary.is_file(),
-            "build the backend first: cargo build -p hya-backend --bin hya-backend (looked at {})",
+            "build the backend first: cargo build -p hya-backend --bin hya (looked at {})",
             binary.display()
         );
         // The fake provider is never contacted: this scenario only boots and stops.

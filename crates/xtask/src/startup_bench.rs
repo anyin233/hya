@@ -1,7 +1,7 @@
 //! Startup waterfall bench for the 500ms full-sync / 100ms shell budgets.
 //!
 //! Modes:
-//! - `backend` — spawn `hya-backend serve`, time until listen (and parse `HYA_STARTUP_TRACE`)
+//! - `backend` — spawn `hya serve`, time until listen (and parse `HYA_STARTUP_TRACE`)
 //! - `parse` — parse marks from stdin or a file (for tests / offline analysis)
 
 use std::io::{BufRead, BufReader};
@@ -290,12 +290,12 @@ fn resolve_backend_bin(explicit: Option<PathBuf>) -> anyhow::Result<PathBuf> {
     }
     let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     for profile in ["release", "debug"] {
-        let candidate = workspace.join("target").join(profile).join("hya-backend");
+        let candidate = workspace.join("target").join(profile).join("hya");
         if candidate.is_file() {
             return Ok(candidate);
         }
     }
-    bail!("cannot find hya-backend; build it or pass --backend-bin")
+    bail!("cannot find hya; build it or pass --backend-bin")
 }
 
 fn percentile(sorted: &[f64], p: f64) -> f64 {

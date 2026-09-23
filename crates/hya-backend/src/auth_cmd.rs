@@ -187,7 +187,7 @@ pub(crate) async fn run_oauth(command: OauthCommand) -> anyhow::Result<()> {
                         println!();
                         if status.expired {
                             println!(
-                                "  re-login: hya-backend oauth login --provider {} --type {}",
+                                "  re-login: hya oauth login --provider {} --type {}",
                                 status.provider, oauth_type
                             );
                         }

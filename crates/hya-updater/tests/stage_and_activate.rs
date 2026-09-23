@@ -87,12 +87,12 @@ fn verify_and_stage(
 fn stage_then_commit_advances_floor_and_selector() {
     let root = tempdir("stage");
     let bytes = b"artifact-v1";
-    let staged = verify_and_stage(&root, 1, 0, bytes, "hya-backend");
-    assert!(staged.directory().join("hya-backend").is_file());
+    let staged = verify_and_stage(&root, 1, 0, bytes, "hya");
+    assert!(staged.directory().join("hya").is_file());
 
     // Immutable: restage same sequence fails.
     let signing = SigningKey::from_bytes(&[3u8; 32]);
-    let (metadata, trust) = signed_release(&signing, 1, "hya-backend", bytes);
+    let (metadata, trust) = signed_release(&signing, 1, "hya", bytes);
     let verified = verify_release_metadata(
         &metadata,
         &[trust],
@@ -102,12 +102,7 @@ fn stage_then_commit_advances_floor_and_selector() {
     )
     .unwrap();
     assert!(
-        stage_verified_release(
-            &root,
-            &verified,
-            &[("hya-backend".to_string(), bytes.to_vec())],
-        )
-        .is_err()
+        stage_verified_release(&root, &verified, &[("hya".to_string(), bytes.to_vec())],).is_err()
     );
 
     journal_prepare(&root, 1, 0).unwrap();
@@ -125,11 +120,11 @@ fn stage_then_commit_advances_floor_and_selector() {
 #[test]
 fn recover_prepare_without_selector_keeps_previous_generation() {
     let root = tempdir("recover-keep");
-    verify_and_stage(&root, 1, 0, b"v1", "hya-backend");
+    verify_and_stage(&root, 1, 0, b"v1", "hya");
     journal_prepare(&root, 1, 0).unwrap();
     commit_activation(&root, 1).unwrap();
 
-    verify_and_stage(&root, 2, 1, b"v2", "hya-backend");
+    verify_and_stage(&root, 2, 1, b"v2", "hya");
     journal_prepare(&root, 2, 1).unwrap();
     // Crash before selector rename: recover must keep generation 1 and floor 1.
     let recovered = recover_activation(&root).unwrap();
@@ -144,11 +139,11 @@ fn recover_prepare_without_selector_keeps_previous_generation() {
 #[test]
 fn recover_prepare_after_selector_switch_finishes_commit() {
     let root = tempdir("recover-finish");
-    verify_and_stage(&root, 1, 0, b"v1", "hya-backend");
+    verify_and_stage(&root, 1, 0, b"v1", "hya");
     journal_prepare(&root, 1, 0).unwrap();
     commit_activation(&root, 1).unwrap();
 
-    verify_and_stage(&root, 2, 1, b"v2", "hya-backend");
+    verify_and_stage(&root, 2, 1, b"v2", "hya");
     journal_prepare(&root, 2, 1).unwrap();
     // Simulate selector rename without floor/journal commit.
     std::fs::write(root.join("current"), "2\n").unwrap();
@@ -166,7 +161,7 @@ fn recover_prepare_after_selector_switch_finishes_commit() {
 #[test]
 fn recover_ignores_stale_selector_temp_file() {
     let root = tempdir("recover-tmp");
-    verify_and_stage(&root, 1, 0, b"v1", "hya-backend");
+    verify_and_stage(&root, 1, 0, b"v1", "hya");
     journal_prepare(&root, 1, 0).unwrap();
     commit_activation(&root, 1).unwrap();
     // Crash left a temp selector behind; recovery must not use it as authority.
@@ -227,7 +222,7 @@ fn ownership_layout_keeps_tcb_outside_candidate() {
 #[test]
 fn artifact_digest_mismatch_is_rejected() {
     let signing = SigningKey::from_bytes(&[3u8; 32]);
-    let (metadata, trust) = signed_release(&signing, 1, "hya-backend", b"good-bytes");
+    let (metadata, trust) = signed_release(&signing, 1, "hya", b"good-bytes");
     let verified = verify_release_metadata(
         &metadata,
         &[trust],
@@ -236,7 +231,7 @@ fn artifact_digest_mismatch_is_rejected() {
         "x86_64-unknown-linux-gnu",
     )
     .unwrap();
-    let err = verify_artifact_bytes(&verified, "hya-backend", b"tampered")
+    let err = verify_artifact_bytes(&verified, "hya", b"tampered")
         .expect_err("tampered artifact must fail");
     assert!(matches!(err, UpdaterError::ArtifactDigestMismatch { .. }));
 }
@@ -244,12 +239,12 @@ fn artifact_digest_mismatch_is_rejected() {
 #[test]
 fn higher_sequence_recovery_release_may_advance_after_floor() {
     let root = tempdir("recovery-seq");
-    verify_and_stage(&root, 1, 0, b"v1", "hya-backend");
+    verify_and_stage(&root, 1, 0, b"v1", "hya");
     journal_prepare(&root, 1, 0).unwrap();
     commit_activation(&root, 1).unwrap();
 
     // Authorized recovery is just a higher sequence (floor never decreases).
-    verify_and_stage(&root, 3, 1, b"recovery-bits", "hya-backend");
+    verify_and_stage(&root, 3, 1, b"recovery-bits", "hya");
     journal_prepare(&root, 3, 1).unwrap();
     let selector = commit_activation(&root, 3).unwrap();
     assert_eq!(selector.current_sequence, 3);
@@ -266,8 +261,8 @@ fn apply_pipeline_stages_without_owner_auth_and_activates_with_flag() {
     let package = tempdir("package");
     let signing = SigningKey::from_bytes(&[3u8; 32]);
     let bytes = b"payload-v2";
-    std::fs::write(package.join("hya-backend"), bytes).unwrap();
-    let (metadata, trust) = signed_release(&signing, 2, "hya-backend", bytes);
+    std::fs::write(package.join("hya"), bytes).unwrap();
+    let (metadata, trust) = signed_release(&signing, 2, "hya", bytes);
     write_trust_roots(&layout(&root).trust_roots, &[trust]).unwrap();
     assert_eq!(
         load_trust_roots(&layout(&root).trust_roots).unwrap().len(),
@@ -275,7 +270,7 @@ fn apply_pipeline_stages_without_owner_auth_and_activates_with_flag() {
     );
 
     // Seed floor 1 so sequence 2 is a real advance.
-    verify_and_stage(&root, 1, 0, b"v1", "hya-backend");
+    verify_and_stage(&root, 1, 0, b"v1", "hya");
     journal_prepare(&root, 1, 0).unwrap();
     commit_activation(&root, 1).unwrap();
 

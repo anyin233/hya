@@ -7,7 +7,7 @@ process E2E when an in-process suite already owns them.
 | Track | What runs | When to use |
 | --- | --- | --- |
 | **I** (in-process) | Crate `#[test]` / integration tests with `FakeProvider`, in-memory store, Axum router | Engine rules, projection, permissions math, `hya.v1` route shapes and HTTP/gRPC parity (`crates/hya-server/tests/v1_api.rs`, `v1_grpc_parity.rs`) |
-| **P** (process) | Real `hya-backend serve` + scripted OpenAI-compatible **FakeLlm** (`crates/hya-e2e`), driven entirely through the v1 client | Product path: config → HTTP provider → tools → sessions → MCP/skills/subagents/hyabundle |
+| **P** (process) | Real `hya serve` + scripted OpenAI-compatible **FakeLlm** (`crates/hya-e2e`), driven entirely through the v1 client | Product path: config → HTTP provider → tools → sessions → MCP/skills/subagents/hyabundle |
 
 There is no Track T (TUI) today: the legacy TypeScript TUI was removed and its
 frontend suites retired with it; frontend-on-`hya-sdk-v1` coverage returns with
@@ -48,7 +48,7 @@ Process agent E2E needs a built backend binary (not always present after a bare
 `cargo test` matrix without prior build):
 
 ```sh
-cargo build -p hya-backend --bin hya-backend
+cargo build -p hya-backend --bin hya
 cargo test -p hya-e2e -- --test-threads=1
 ```
 

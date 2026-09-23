@@ -6,10 +6,12 @@
 //! directory owned by the updater TCB.
 //!
 //! Production activation remains owner-gated: signatures alone never activate.
-//! Callers must pass `owner_authorized = true` (CLI: `--owner-authorized-activation`).
+//! Callers must pass `owner_authorized = true` (CLI: `hya update apply
+//! --owner-authorized-activation`, implemented in [`cli`]).
 //! `install.sh` remains break-glass bootstrap/recovery. Network download is
 //! outside this TCB; operators copy a complete local package directory in.
 
+pub mod cli;
 mod error;
 mod fetch;
 mod journal;

@@ -331,7 +331,7 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error>> {
         let root =
             std::env::temp_dir().join(format!("hya-bun-adapter-resolution-{}", std::process::id()));
-        let executable = root.join("prefix/bin/hya-backend");
+        let executable = root.join("prefix/bin/hya");
         let installed = root.join("prefix/lib/hya/bun-adapter");
         let workspace = root.join("workspace");
         let executable_parent = executable
@@ -523,7 +523,7 @@ mod tests {
             "hya-claude-adapter-resolution-{}",
             std::process::id()
         ));
-        let executable = root.join("prefix/bin/hya-backend");
+        let executable = root.join("prefix/bin/hya");
         let installed = root.join("prefix/lib/hya/claude-adapter");
         let workspace = root.join("workspace");
         let executable_parent = executable

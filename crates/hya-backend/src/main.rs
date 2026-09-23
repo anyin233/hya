@@ -1,7 +1,9 @@
-//! `hya-backend` — backend umbrella binary and the workspace's only shipped binary.
-//! Bare `hya-backend` prints a guidance banner (no interactive frontend is bundled);
-//! subcommands cover headless `exec`, `-p` goal mode, HTTP/SSE `serve`, and
-//! `tail-session`.
+//! `hya` — the unified command-line entry point and the workspace's only
+//! shipped executable (built from the `hya-backend` package). Bare `hya` prints
+//! a guidance banner (no interactive frontend is bundled); subcommands select
+//! the controlled area: headless `exec`, `-p` goal mode, HTTP/SSE `serve`,
+//! `tail-session`, auth, bundles, Workflows, models, sessions, and `update`
+//! for the self-update TCB.
 //!
 //! Models come from Hya's provider declarations. Explicit model lists or bounded
 //! startup discovery build authenticated or anonymous routes. With no resolved
@@ -715,8 +717,8 @@ async fn main() -> anyhow::Result<()> {
                 env!("CARGO_PKG_VERSION")
             );
             println!(
-                "No interactive frontend is bundled. Try `hya-backend serve`, \
-                 `hya-backend exec \"<prompt>\"`, `hya-backend -p \"<goal>\"`, or `hya-backend --help`."
+                "No interactive frontend is bundled. Try `hya serve`, \
+                 `hya exec \"<prompt>\"`, `hya -p \"<goal>\"`, or `hya --help`."
             );
             Ok(())
         }
@@ -789,6 +791,13 @@ async fn main() -> anyhow::Result<()> {
             cmd_sessions(resolve_interactive_db(&path)).await
         }
         Some(Command::Rpc) => cmd_rpc(model, yolo, pure).await,
+        // The update TCB runs without composing any runtime: no config,
+        // bundles, providers, plugins, MCP, or session store.
+        Some(Command::Update { command }) => {
+            let mut stdout = std::io::stdout().lock();
+            hya_updater::cli::run(command, &mut stdout)
+                .map_err(|error| anyhow::anyhow!("hya update: {error}"))
+        }
         Some(Command::Loop {
             target,
             budget,

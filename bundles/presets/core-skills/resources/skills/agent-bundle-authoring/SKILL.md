@@ -116,11 +116,11 @@ mail/replay uses durable engine events, never persisted PIDs or stdio state.
 
 ```sh
 cargo run -p xtask -- package-bundle ./source ./example.hyabundle
-hya-backend bundle info -f ./example.hyabundle
-hya-backend bundle install ./example.hyabundle
-hya-backend bundle list
-hya-backend bundle info <bundle-id>
-hya-backend bundle uninstall <bundle-id>
+hya bundle info -f ./example.hyabundle
+hya bundle install ./example.hyabundle
+hya bundle list
+hya bundle info <bundle-id>
+hya bundle uninstall <bundle-id>
 ```
 
 When building the minimal `bundle.hya.md` + one-entrypoint example manually,

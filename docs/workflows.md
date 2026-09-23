@@ -53,9 +53,9 @@ Preparation stores the compiled Workflow source, source digest, compiler revisio
 The normal package commands accept both closed kinds:
 
 ```sh
-hya-backend bundle install feature-delivery.hyabundle
-hya-backend bundle list
-hya-backend bundle info acme/feature-delivery
+hya bundle install feature-delivery.hyabundle
+hya bundle list
+hya bundle info acme/feature-delivery
 ```
 
 `bundle list` and `bundle info` report `kind=WorkflowBundle`, the Workflow id, and the packaged Agent ids.
@@ -69,9 +69,9 @@ branch recognizes its topology. Package and install it from a source checkout:
 
 ```sh
 scripts/package-argus-example.sh bundles/examples/argus-example /tmp/hya-argus-example.hyabundle
-hya-backend bundle install /tmp/hya-argus-example.hyabundle
-hya-backend bundle info hya/argus-example
-hya-backend workflow run argus --input request="Investigate and deliver the requested change"
+hya bundle install /tmp/hya-argus-example.hyabundle
+hya bundle info hya/argus-example
+hya workflow run argus --input request="Investigate and deliver the requested change"
 ```
 
 Release archives include the same package as
@@ -296,12 +296,12 @@ messages. A run can also name the Workflow explicitly:
 ## CLI and Agent tool
 
 ```sh
-hya-backend workflow list
-hya-backend workflow info feature-delivery
-hya-backend --db sessions.db workflow use feature-delivery --session hysec_...
-hya-backend --db sessions.db workflow run feature-delivery \
+hya workflow list
+hya workflow info feature-delivery
+hya --db sessions.db workflow use feature-delivery --session hysec_...
+hya --db sessions.db workflow run feature-delivery \
   --session hysec_... --input request="Fix parser retries"
-hya-backend --db sessions.db workflow state --session hysec_...
+hya --db sessions.db workflow state --session hysec_...
 ```
 
 `workflow use` and `state` require an existing owning Session through
