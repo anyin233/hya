@@ -680,6 +680,7 @@ fn info_file(package: &Path) -> anyhow::Result<()> {
                 ": ",
                 inspection.prepared.bundle_schemas(&identity.id),
                 inspection.prepared.bundle_process(&identity.id),
+                inspection.prepared.bundle_views(&identity.id),
             );
             Ok(())
         }
@@ -1037,6 +1038,7 @@ async fn info_installed(bundle_id: &str) -> anyhow::Result<bool> {
         "=",
         prepared.bundle_schemas(bundle_id),
         prepared.bundle_process(bundle_id),
+        prepared.bundle_views(bundle_id),
     );
     Ok(true)
 }
@@ -1061,6 +1063,7 @@ fn info_project(bundle: &ProjectBundle) {
         "=",
         prepared.bundle_schemas(&identity.id),
         prepared.bundle_process(&identity.id),
+        prepared.bundle_views(&identity.id),
     );
 }
 
@@ -1089,6 +1092,7 @@ fn info_first_party(bundle_id: &str) -> anyhow::Result<()> {
             "=",
             prepared.bundle_schemas(&identity.id),
             prepared.bundle_process(&identity.id),
+            prepared.bundle_views(&identity.id),
         );
         return Ok(());
     }
@@ -1338,13 +1342,14 @@ async fn installed_records_if_exists() -> anyhow::Result<Vec<BundleRegistryRecor
 }
 
 /// Print the static metadata of one prepared bundle, including its declared
-/// schemas, optional `extensions.process` declaration, and mcp entries. The
-/// declaration lines print only when non-empty.
+/// schemas, optional `extensions.process` declaration, read-only views, and
+/// mcp entries. The declaration lines print only when non-empty.
 fn print_static_info(
     bundle: &PreparedInstallableBundle,
     separator: &str,
     schemas: &[hya_bundle::PreparedSchema],
     process: Option<&hya_bundle::PreparedProcessExtension>,
+    views: &[hya_bundle::PreparedView],
 ) {
     println!("kind{separator}{}", bundle.kind().as_str());
     if let Some(workflow) = bundle.workflow() {
@@ -1382,6 +1387,17 @@ fn print_static_info(
             kind = process.kind.as_str(),
             command = process.command.join(" ")
         );
+    }
+    for view in views {
+        if view.description.is_empty() {
+            println!("view{separator}{}", view.id);
+        } else {
+            println!(
+                "view{separator}{id} description={description}",
+                id = view.id,
+                description = view.description
+            );
+        }
     }
 }
 

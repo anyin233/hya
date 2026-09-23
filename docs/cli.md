@@ -156,7 +156,7 @@ or removed.
 | `hya bundle remove [--user\|--project] [-y] <BUNDLE_ID>` | Remove a bundle from the scope. Asks for confirmation unless `-y`. Alias: `uninstall`. |
 | `hya bundle verify [--user\|--project] [--overwrite] <PACKAGE>` | Run every install check against the scope and report what `install` would do. Writes nothing. |
 | `hya bundle list [--user\|--project]` | List bundles. All scopes by default; a flag narrows to one scope. |
-| `hya bundle info [--user\|--project] <BUNDLE_ID\|PACKAGE>` | Show metadata of a bundle by id (searching every scope unless narrowed) or of a package file. |
+| `hya bundle info [--user\|--project] <BUNDLE_ID\|PACKAGE>` | Show metadata of a bundle by id (searching every scope unless narrowed) or of a package file. Declarations print one line each: `schema=…`, `process=<kind> command=…`, and `view=<id>` (plus ` description=…` when declared) for every [session view](agent-bundle-authoring.md#session-views-views). |
 | `hya bundle info -f <PACKAGE>` | Show metadata of a package file. |
 | `hya bundle search [--user\|--project] <QUERY>` | Filter bundles in every scope (or one) by id, agent id, or skill id. |
 | `hya bundle schema [--user\|--project] <BUNDLE_ID\|PACKAGE>` | Show the URI-scheme extensions one bundle declares. |

@@ -500,6 +500,8 @@ every turn, message, and projection read hangs off a session id.
 | `CompactSession` | `POST /v1/sessions/{session}/compact` | `hya.v1.Session.CompactSession` | `CompactSessionRequest` | `CompactSessionResponse` |
 | `SummarizeSession` | `POST /v1/sessions/{session}/summarize` | `hya.v1.Session.SummarizeSession` | `SummarizeSessionRequest` | `SummarizeSessionResponse` |
 | `RevertSession` | `POST /v1/sessions/{session}/revert` | `hya.v1.Session.RevertSession` | `RevertSessionRequest` | `RevertSessionResponse` |
+| `ListSessionViews` | `GET /v1/sessions/{session}/views` | `hya.v1.Session.ListSessionViews` | `ListSessionViewsRequest` | `ListSessionViewsResponse` |
+| `GetSessionView` | `GET /v1/sessions/{session}/views/{bundle}/{view}` | `hya.v1.Session.GetSessionView` | `GetSessionViewRequest` | `SessionView` |
 
 ### `Session.CreateSession`
 
@@ -545,6 +547,22 @@ Produce a summary message for a session (titles, handoffs).
 ### `Session.RevertSession`
 
 Revert a session to an earlier watermark, or undo the last revert.
+
+
+### `Session.ListSessionViews`
+
+List the read-only session views that installed bundles serve (manifest
+`views:`, answered by the bundle's `extensions.process`).
+
+
+### `Session.GetSessionView`
+
+Compute one bundle-declared read-only view of a session. The server
+forwards the request to the bundle process of the live runtime
+generation, which reads through a request-scoped read-only capability
+bound to this session. Over HTTP `bundle` is one percent-encoded path
+segment (`hya-extra%2Ftoken-summary`) and every query-string parameter
+lands in `query`.
 
 
 ## Service `Turn`
@@ -2149,6 +2167,51 @@ Projection summary of one session.
 | Field | Type | Description |
 |---|---|---|
 | `session` (1) | `SessionInfo` | Projection summary after the revert. |
+
+### `ListSessionViewsRequest`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `session` (1) | `string` | Session identifier (must exist). |
+
+### `SessionViewInfo`
+
+One read-only view a published bundle serves.
+
+| Field | Type | Description |
+|---|---|---|
+| `bundle` (1) | `string` | Bundle identity id (for example `hya-extra/token-summary`). |
+| `view` (2) | `string` | View id declared in the bundle manifest. |
+| `description` (3) | `string` | Manifest description; empty when not declared. |
+
+### `ListSessionViewsResponse`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `views` (1) | `repeated SessionViewInfo` | Views sorted by bundle id, then view id. |
+
+### `GetSessionViewRequest`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `session` (1) | `string` | Session the view is computed for. |
+| `bundle` (2) | `string` | Bundle identity id; contains `/`, so HTTP carries it percent-encoded as one path segment. |
+| `view` (3) | `string` | View id declared by the bundle. |
+| `string> query` (4) | `map<string,` | Caller parameters passed to the bundle process verbatim (HTTP: the query string). |
+
+### `SessionView`
+
+One computed bundle view.
+
+| Field | Type | Description |
+|---|---|---|
+| `bundle` (1) | `string` | Bundle identity id. |
+| `view` (2) | `string` | View id. |
+| `content_type` (3) | `string` | Media type of `body`; always `application/json`. |
+| `body` (4) | `google.protobuf.Value` | The bundle process's JSON answer, unchanged. HTTP renders it verbatim (integers stay exact); gRPC carries it as a protobuf `Value`, whose numbers are doubles. |
 
 ### `PromptTurn`
 

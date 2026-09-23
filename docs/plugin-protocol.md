@@ -54,6 +54,7 @@ via the Bun extension adapter (`kind: bun`).
 | `shutdown` | host → plugin | request / reply | `{}` | `{}` (then process exit) |
 | `event` | host → plugin | **notification** (no `id`, no reply) | `{ "envelope": <Envelope> }` | — |
 | `tool/call` | host → plugin | request / reply | `{ "tool", "session", "call", "input", "host_capability"? }` | `{ "ok", "output", "time_ms"? }` |
+| `view/get` | host → plugin | request / reply | `{ "view", "session", "call", "query", "host_capability" }` | `{ "body": <any JSON> }` (see [Session views](#session-views-viewget)) |
 | `host/capability` | plugin → host | request / reply | `{ "capability", "session", "call", "method", "params" }` | Handler-defined JSON value or JSON-RPC error |
 | `hook/<wire-name>` | host → plugin | request / reply | Hook-specific (see [Hooks](#hooks)) | Hook-specific outcome |
 
@@ -61,50 +62,130 @@ via the Bun extension adapter (`kind: bun`).
 use the literal prefix `hook/` plus the wire name, for example
 `hook/tool.execute.before`.
 
-### Call-scoped host capabilities for native tools
+### Request-scoped host capabilities
 
-The host can call a native tool through
-`PluginClient::call_tool_with_capability(tool, session, call, input, handler)`.
-This adds an opaque `host_capability` string to that `tool/call` request. A
-normal `call_tool` request omits it. The native process can send
-`host/capability` requests on the same stdio connection while its tool call is
-active:
+The host can hand one request an opaque `host_capability` string: a
+`tool/call` (`PluginClient::call_tool_with_capability`) or a `view/get`
+(`PluginClient::get_view`). A normal `call_tool` request omits it. While that
+request is active, the process can send `host/capability` requests on the same
+stdio connection, echoing the `session` and `call` it received:
 
 ```json
 {"jsonrpc":"2.0","id":41,"method":"host/capability","params":{"capability":"<host_capability>","session":"<session-id>","call":"<call-id>","method":"example.operation","params":{"value":1}}}
 ```
 
 `HostCapabilityHandler::handle(method, params)` defines the available operations
-for that call and must apply the owning host plane's resource and permission
+for that request and must apply the owning host plane's resource and permission
 checks. The transport binds the token to the receiving process connection,
-session, and call id. It rejects an unknown, expired, or cross-call token with
+session, and call id (for a view request, the synthetic `call` sent in
+`view/get`). It rejects an unknown, expired, or cross-request token with
 JSON-RPC error `-32001` (`CAPABILITY_DENIED`); malformed params return `-32602`.
-The token is revoked when the tool reply, transport error, timeout, or caller
-cancellation ends the call. In-flight host operations are cancelled on
+The token is revoked when the reply, transport error, timeout, or caller
+cancellation ends the request. In-flight host operations are cancelled on
 revocation or connection closure. Other child→host request methods still close
 the plugin connection.
 
-For a Rust process declared by an installed bundle, the `PluginTool` adapter
-installs a handler from the active `ToolCtx`. Other plugin kinds receive no
-context capability. For example, a native tool can request its call context:
+**Who receives a capability.** Every process started for an installed bundle's
+explicit (or implicit JavaScript) `extensions.process` receives one on every
+`tool/call` — whatever its kind (`rust`, `bun`, or `claude`) — and on every
+`view/get`. Configured plugins (`plugins:` / `plugin.toml`) never do. This is
+safe to extend beyond Rust because every operation is read-only or
+permission-checked through the calling tool's own permission snapshot, the
+token is bound to one connection + session + call, and it dies with the reply;
+the bundle process already runs with the user's OS privileges, so the lease
+grants no authority beyond reading data about the session that invoked it.
+Adapters that do not use the field (the Bun extension adapter) ignore it.
 
-```json
-{"jsonrpc":"2.0","id":41,"method":"host/capability","params":{"capability":"<host_capability>","session":"<session-id>","call":"<call-id>","method":"context.describe","params":{}}}
-```
+Operations (`method` values):
 
-`context.describe` requires empty params and returns `session`,
-`parent_session` (nullable), `workdir`, `source_tool_call_id`, and
-`operation_id`. The process can then request a resource check:
-
-```json
-{"jsonrpc":"2.0","id":42,"method":"host/capability","params":{"capability":"<host_capability>","session":"<session-id>","call":"<call-id>","method":"permission.assert","params":{"action":"read","resource":{"kind":"path","value":"/workspace/file"}}}}
-```
+| Operation | Tool call | View request | Params | Result |
+| --- | --- | --- | --- | --- |
+| `context.describe` | yes | yes | `{}` | Tool call: `{ "request": "tool_call", "session", "parent_session" (nullable), "workdir", "source_tool_call_id", "operation_id" }`. View: `{ "request": "view", "session", "view", "call" }` |
+| `permission.assert` | yes | no (`-32001`) | `{ "action", "resource" }` | `{}`, or `-32002` on denial |
+| `session.usage` | yes | yes | `{ "scope"?: "session" \| "tree" \| "root" }` (default `tree`; `root` is tool-call only, `-32602` for a view) | Usage report (below) |
 
 `permission.assert` accepts lowercase `Action` names and a tagged resource
 `{ "kind": "tool|path|glob|command|subagent|url|web_search|skill", "value": string }`
 or `{ "kind": "any" }`. It returns `{}` on success, `-32002` on permission
 denial, and `-32602` for malformed params. An unsupported operation returns
 `-32601`. The host applies the active call's permission snapshot.
+
+`session.usage` reads billed token usage folded from the session event logs
+(the same `UsageRecorded` projection fold as the rest of the API; nothing is
+appended). It is bound to the lease's session: a tool call reads the calling
+session (`session`), the calling session plus every descendant subagent
+session (`tree`), or the whole spawn tree of its lineage root (`root`); a view
+request reads only the requested session (`session`) or its descendants
+(`tree`). Descendants are found through the `members[].child` spawn edges of
+each parent log, breadth-first, each session once, at most 512 sessions. The
+result:
+
+```json
+{
+  "session": "<bound session>",
+  "scope": "tree",
+  "root": "<first row's session>",
+  "sessions": [
+    {
+      "session": "<id>",
+      "parent": "<id>",
+      "agent": "build",
+      "usage": {
+        "by_model": {
+          "fake/model": {
+            "input": 200, "cache_read": 0, "cache_write": 0,
+            "output": 40, "reasoning": 10, "reasoning_unknown_output": 0,
+            "rounds": 2, "legacy_messages": 0,
+            "split": { "thinking": 10, "visible": 30, "unknown": 0 }
+          }
+        },
+        "by_purpose": { "turn": { "...": "same totals shape" } },
+        "total": { "...": "same totals shape, summed over models" }
+      }
+    }
+  ],
+  "total": { "by_model": {}, "by_purpose": {}, "total": {} },
+  "truncated": true
+}
+```
+
+- `sessions` is breadth-first from `root`; `parent`/`agent` are omitted when
+  unknown. `total` merges every row. `truncated` is present (and `true`) only
+  when the 512-session cap cut the tree.
+- Counters follow the `TokenUsage` invariant: `input` excludes cache reads and
+  writes; `output` includes thinking. `split` divides `output` into
+  `thinking` + `visible` (calls that reported their thinking share) and
+  `unknown` (output of calls that did not, for example Anthropic), so
+  `thinking + visible + unknown == output`; clients decide how to present an
+  unknown share. `unattributed` keys legacy usage without a serving model.
+
+### Session views (`view/get`)
+
+A bundle with an explicit `extensions.process` may declare read-only session
+views in its manifest (`views:`, see
+[AgentBundle authoring](agent-bundle-authoring.md#session-views-views)); its
+initialize reply must then list exactly those ids in `views`. The server's
+`GET /v1/sessions/{session}/views/{bundle}/{view}` forwards to the process of
+the live runtime generation:
+
+```json
+{"jsonrpc":"2.0","id":7,"method":"view/get","params":{"view":"usage","session":"<session-id>","call":"<synthetic-request-id>","query":{"scope":"tree"},"host_capability":"<host_capability>"}}
+```
+
+| Param | Meaning |
+| --- | --- |
+| `view` | A declared view id. |
+| `session` | The session the view is read for (it exists). |
+| `call` | Synthetic request id minted per view request; send it back as `host/capability` `call`. |
+| `query` | The HTTP query string as a string→string map, verbatim (may be empty). |
+| `host_capability` | Request-scoped capability (always present). |
+
+The reply is `{ "body": <any JSON value> }` (unknown fields rejected). The host
+serves it as `application/json` unchanged. A JSON-RPC error, a malformed
+reply, a crash, or the ordinary request timeout (30 s, the same as
+`tool/call`) becomes API error `view_failed`. Views are a
+bundle-process feature: configured plugins and the Bun extension adapter do
+not serve them.
 
 ---
 
@@ -116,7 +197,7 @@ denial, and `-32602` for malformed params. An unsupported operation returns
 | `-32602` | `INVALID_PARAMS` | Malformed params |
 | `-32603` | `INTERNAL_ERROR` | Plugin-side failure |
 | `1` | `VETO` | App-defined: a guard refused the action |
-| `-32001` | `CAPABILITY_DENIED` | Native tool capability is absent, expired, or bound to another call |
+| `-32001` | `CAPABILITY_DENIED` | Host capability is absent, expired, bound to another request, or the operation is unavailable to this request kind |
 | `-32002` | `PERMISSION_DENIED` | The active permission plane denied the requested resource operation |
 
 Guard refusal on the wire is normally a **successful** result with
@@ -161,6 +242,9 @@ After `initialize`, the plugin must reply with an `InitializeResult`:
       "name": "Example adapter",
       "description": "Surfaced at GET /experimental/workspace/adapter"
     }
+  ],
+  "views": [
+    { "name": "usage", "description": "Token usage of the session tree" }
   ]
 }
 ```
@@ -174,6 +258,7 @@ After `initialize`, the plugin must reply with an `InitializeResult`:
 | `hooks` | Only hooks listed here are ever dispatched to this plugin. Optional per-hook `posture`. |
 | `tools` | Each entry becomes a first-class hya `Tool`. Field name is camelCase **`inputSchema`**. |
 | `workspaceAdapters` | Aggregated across all loaded plugins and served verbatim at `GET /experimental/workspace/adapter`. Shape: `{ type, name, description }`. |
+| `views` | Optional. Read-only session views answered over `view/get`: `{ name, description? }`, names unique and non-empty. A bundle process must list exactly its manifest `views:` ids (otherwise the bundle fails to start); configured plugins' views are ignored. |
 
 ---
 

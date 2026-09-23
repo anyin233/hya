@@ -29,8 +29,10 @@ pub const METHOD_SHUTDOWN: &str = "shutdown";
 pub const METHOD_EVENT: &str = "event";
 /// JSON-RPC method name for invoking a plugin-declared tool.
 pub const METHOD_TOOL_CALL: &str = "tool/call";
-/// Child→host request for a call-scoped native tool capability.
+/// Child→host request for a request-scoped host capability.
 pub const METHOD_HOST_CAPABILITY: &str = "host/capability";
+/// Host→plugin request for one declared read-only session view.
+pub const METHOD_VIEW_GET: &str = "view/get";
 /// Prefix for hook method names on the wire (`hook/` + [`HookName::as_str`]).
 pub const HOOK_METHOD_PREFIX: &str = "hook/";
 
@@ -259,6 +261,12 @@ pub struct PluginContributionSet {
     /// Workspace adapters aggregated for `GET /experimental/workspace/adapter`.
     #[serde(default, rename = "workspaceAdapters")]
     pub workspace_adapters: Vec<WorkspaceAdapterInfo>,
+    /// Read-only session views this process answers over `view/get`.
+    ///
+    /// Only bundle processes serve views; a bundle process must declare
+    /// exactly the manifest's `views:` ids.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub views: Vec<ViewInfo>,
 }
 
 impl PluginContributionSet {
@@ -345,6 +353,25 @@ impl PluginContributionSet {
                     plugin: plugin.to_string(),
                     kind: "hook".to_string(),
                     id: hook.name.as_str().to_string(),
+                });
+            }
+        }
+
+        let mut views = BTreeSet::new();
+        for view in &self.views {
+            validate_text_field(
+                plugin,
+                "view",
+                &view.name,
+                "name",
+                &view.name,
+                MAX_SKILL_ID_BYTES,
+            )?;
+            if !views.insert(view.name.as_str()) {
+                return Err(PluginError::DuplicateContribution {
+                    plugin: plugin.to_string(),
+                    kind: "view".to_string(),
+                    id: view.name.clone(),
                 });
             }
         }
@@ -470,6 +497,9 @@ struct InitializeResultWire {
     /// Workspace adapter declarations.
     #[serde(default, rename = "workspaceAdapters")]
     workspace_adapters: Vec<WorkspaceAdapterInfo>,
+    /// Read-only session view declarations; absent on old plugins.
+    #[serde(default)]
+    views: Vec<ViewInfo>,
 }
 
 impl<'de> Deserialize<'de> for InitializeResult {
@@ -487,6 +517,7 @@ impl<'de> Deserialize<'de> for InitializeResult {
                 tools: wire.tools,
                 skills: wire.skills,
                 workspace_adapters: wire.workspace_adapters,
+                views: wire.views,
             },
         })
     }
@@ -548,6 +579,45 @@ pub struct ToolInfo {
     pub input_schema: Value,
 }
 
+/// One read-only session view declared in the initialize reply.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ViewInfo {
+    /// View id; must match a manifest `views:` id.
+    pub name: String,
+    /// Optional human-readable description (informational only; discovery
+    /// lists the manifest description).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+}
+
+/// Host→plugin `view/get` request params.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ViewGetParams {
+    /// Declared view id.
+    pub view: String,
+    /// Session the view is read for; the only session the capability reads.
+    pub session: SessionId,
+    /// Synthetic request id the capability is bound to (send it back as
+    /// `host/capability` `call`, exactly like a tool call id).
+    pub call: ToolCallId,
+    /// Caller query parameters (the HTTP query string), verbatim.
+    #[serde(default)]
+    pub query: BTreeMap<String, String>,
+    /// Opaque request-scoped host authority, revoked when the reply arrives.
+    pub host_capability: String,
+}
+
+/// Plugin→host `view/get` result.
+///
+/// The host always serves the body as `application/json`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ViewGetResult {
+    /// Any JSON value; returned to the API caller unchanged.
+    pub body: Value,
+}
+
 /// Host→plugin `tool/call` request params.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolCallParams {
@@ -564,7 +634,7 @@ pub struct ToolCallParams {
     pub host_capability: Option<String>,
 }
 
-/// Child→host request bound to one active native tool call.
+/// Child→host request bound to one active tool call or view request.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HostCapabilityParams {

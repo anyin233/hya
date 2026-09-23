@@ -211,7 +211,48 @@ Agent-bearing JavaScript bundles retain their activation-scoped sidecars.
 - URI scheme claims retain bundle ownership. An agent-bearing bundle's scheme
   tool resolves through its selected local resource; a Plugin claim resolves
   through its namespaced runtime export.
+- Every tool call into an installed bundle's process (any kind: `rust`, `bun`,
+  `claude`, and the implicit Bun process of a JavaScript Plugin) carries a
+  call-scoped `host_capability`; view requests carry one too. The operations
+  are read-only or permission-checked (`context.describe`,
+  `permission.assert`, `session.usage`); see
+  [Plugin protocol](plugin-protocol.md#request-scoped-host-capabilities).
+
+## Session views
+
+A bundle with an explicit `extensions.process` may declare read-only session
+views (`views: [{ id, description? }]`, see
+[AgentBundle authoring](agent-bundle-authoring.md#session-views-views)). The
+lifecycle:
+
+- **Prepare** rejects views without an explicit `extensions.process`, validates
+  ids, and records them (sorted) in the prepared catalog; the declared views are
+  part of the runtime source identity, like schemas.
+- **Start**: the process's initialize reply must list exactly the declared view
+  ids, or the candidate is rejected like a tool or hook mismatch. The published
+  runtime source then carries the declared views and a provider bound to that
+  generation's process.
+- **Serve**: `GET /v1/sessions/{session}/views/{bundle}/{view}` checks the
+  session, refreshes the installed catalog if it changed (a failed refresh is
+  logged and the current generation keeps serving), resolves the bundle in the
+  live published generation, and sends the process `view/get` with a
+  request-scoped read-only capability bound to that session. The process's
+  `{ "body": … }` is returned as the response `body` (`contentType`
+  `application/json`).
+- **Generation swap**: each request resolves the generation that is live when
+  it arrives and retains that generation's process and materialized root until
+  it completes; requests after a swap (reinstall, config edit, uninstall) use
+  the new generation, or answer `view_not_found` once the bundle is gone.
+- **Errors**: unknown session → `session_not_found` (404); unknown bundle, a
+  bundle without views, or an undeclared view → `view_not_found` (404); process
+  error, crash, malformed reply, or the 30 s request timeout → `view_failed`
+  (502, gRPC `UNAVAILABLE`).
+
+`GET /v1/sessions/{session}/views` lists `{ bundle, view, description }` for
+every published view. Views are a bundle-process feature only: configured
+plugins (`plugins:`) and the Bun extension adapter never serve them.
 
 The process E2E suite exercises native tools, MCP tools, scoped hooks, package
-removal, schema reads, and uninstall. Startup rollback and binding lifetime are
-also covered by the installed-bundle refresh integration suite.
+removal, schema reads, session views (`p34_bundle_views`), and uninstall.
+Startup rollback and binding lifetime are also covered by the installed-bundle
+refresh integration suite.

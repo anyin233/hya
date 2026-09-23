@@ -16,13 +16,14 @@ pub(super) async fn connect_one(
     spec: PluginSpec,
     host: HostInfo,
 ) -> Result<Arc<PluginConn>, PluginError> {
-    connect_one_at(spec, host, None).await
+    connect_one_at(spec, host, None, None).await
 }
 
 pub(super) async fn connect_one_at(
     spec: PluginSpec,
     host: HostInfo,
     bundle_root: Option<std::path::PathBuf>,
+    host_reads: Option<Arc<dyn hya_core::HostSessionReads>>,
 ) -> Result<Arc<PluginConn>, PluginError> {
     let timeout = spec
         .timeout_ms
@@ -47,6 +48,8 @@ pub(super) async fn connect_one_at(
         hooks.insert(registration.name, force_safer(declared, default));
     }
     let has_event_hook = hooks.contains_key(&HookName::Event);
+    // Only bundle processes receive capabilities, so only they keep host reads.
+    let host_reads = bundle_root.as_ref().and(host_reads);
     let (event_tx, event_rx) = mpsc::channel(EVENT_CHANNEL_CAP);
     let conn = Arc::new(PluginConn {
         id: spec.id,
@@ -55,7 +58,6 @@ pub(super) async fn connect_one_at(
         canonical_declaration,
         timeout,
         command: spec.command,
-        kind: spec.kind,
         bundle_root,
         env: spec.env,
         host_info: host,
@@ -68,6 +70,7 @@ pub(super) async fn connect_one_at(
         declaration_drift: std::sync::atomic::AtomicBool::new(false),
         event_tx,
         event_drops: std::sync::atomic::AtomicU64::new(0),
+        host_reads,
     });
     if has_event_hook {
         spawn_event_drain(Arc::downgrade(&conn), event_rx);

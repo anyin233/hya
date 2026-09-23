@@ -2413,7 +2413,8 @@ async fn build_session_engine_with_mcp_defer(
     .context("load Agent model configuration before engine readiness")?;
     let catalog_refresh = Arc::new(
         InstalledBundleRefresh::new(bundle_registry_path())
-            .with_project_dir(crate::project_bundles::project_bundles_dir()),
+            .with_project_dir(crate::project_bundles::project_bundles_dir())
+            .with_host_reads(Arc::new(hya_core::StoreSessionReads::new(store.clone()))),
     );
 
     let rules = PermissionRules::new(vec![

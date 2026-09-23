@@ -170,6 +170,9 @@ pub(crate) struct SourceAgentManifest {
     pub resources: SourceResources,
     #[serde(default)]
     pub extensions: SourceExtensions,
+    /// Read-only session views served by the explicit `extensions.process`.
+    #[serde(default)]
+    pub views: Vec<SourceView>,
     /// The one Agent this bundle defines.
     pub agent: SourceAgent,
     /// Keys removed with the single-agent format. Captured only so prepare can
@@ -196,6 +199,9 @@ pub(crate) struct SourceAgentSetManifest {
     pub resources: SourceResources,
     #[serde(default)]
     pub extensions: SourceExtensions,
+    /// Read-only session views served by the explicit `extensions.process`.
+    #[serde(default)]
+    pub views: Vec<SourceView>,
     /// The complete Agent set this bundle defines.
     #[serde(default)]
     pub agents: Vec<SourceAgent>,
@@ -217,6 +223,9 @@ pub(crate) struct SourcePluginManifest {
     pub resources: SourceResources,
     #[serde(default)]
     pub extensions: SourceExtensions,
+    /// Read-only session views served by the explicit `extensions.process`.
+    #[serde(default)]
+    pub views: Vec<SourceView>,
 }
 
 /// Strict source manifest shape for a WorkflowBundle.
@@ -240,6 +249,21 @@ pub(crate) struct SourceWorkflowManifest {
     pub resources: SourceResources,
     #[serde(default)]
     pub extensions: SourceExtensions,
+    /// Read-only session views served by the explicit `extensions.process`.
+    #[serde(default)]
+    pub views: Vec<SourceView>,
+}
+
+/// One `views:` entry: a named read-only session view the bundle's explicit
+/// `extensions.process` answers through the plugin `view/get` request.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SourceView {
+    /// View id (`[A-Za-z0-9._-]`, at most 64 bytes, starting alphanumeric).
+    pub id: String,
+    /// Human-readable description shown in discovery listings.
+    #[serde(default)]
+    pub description: String,
 }
 
 /// One `schemas:` entry: an external URI scheme served by a bundle-local tool.

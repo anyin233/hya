@@ -398,6 +398,14 @@ path = "crates/hya-e2e/tests/p33_model_fallback.rs"
 tags = ["pr", "hyabundle", "plugin", "extras"]
 timeout_secs = 120
 
+[[scenario]]
+id = "T2.29"
+title = "an installed bundle process serves a read-only session view over GET /v1/sessions/{session}/views/{bundle}/{view} via the request-scoped session.usage capability (per-session + total usage of the session tree), and a kind: bun process tool call receives a capability"
+track = "P"
+path = "crates/hya-e2e/tests/p34_bundle_views.rs"
+tags = ["pr", "hyabundle", "plugin"]
+timeout_secs = 120
+
 # Index-only deep engine coverage (not duplicated in Track P).
 [[scenario]]
 id = "I.nested"

@@ -24,6 +24,8 @@ pub mod agent_catalog;
 /// Compiled-in agent definitions (not AgentBundles).
 pub mod builtin_agents;
 mod bundle_hooks;
+/// Read-only bundle session views and the host reads behind their capability.
+pub mod bundle_views;
 /// Live envelope broadcast for observers (SSE, TUI, plugins).
 pub mod bus;
 /// Model category resolution and member-agent construction.
@@ -75,6 +77,10 @@ pub use agent_catalog::{AgentCatalog, AgentDefinition, AgentOrigin};
 pub use builtin_agents::{
     BuiltinAgent, CORE_AGENTS_PRESET_ID, CoreAgentsPreset, SpawnScope, builtin_agent,
     builtin_agents, core_agents_preset, is_builtin_id,
+};
+pub use bundle_views::{
+    BundleViewError, BundleViewProvider, HostSessionReads, PublishedBundleViews,
+    SessionUsageReport, SourceView, SourceViews, StoreSessionReads, UsageScope,
 };
 pub use bus::EventBus;
 pub use category::{

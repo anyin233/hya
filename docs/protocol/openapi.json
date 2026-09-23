@@ -725,6 +725,28 @@
         "x-server-streaming": false
       }
     },
+    "/v1/sessions/{session}/views": {
+      "get": {
+        "operationId": "Session.ListSessionViews",
+        "summary": "List the read-only session views that installed bundles serve (manifest",
+        "tags": [
+          "Session"
+        ],
+        "x-grpc-method": "hya.v1.Session.ListSessionViews",
+        "x-server-streaming": false
+      }
+    },
+    "/v1/sessions/{session}/views/{bundle}/{view}": {
+      "get": {
+        "operationId": "Session.GetSessionView",
+        "summary": "Compute one bundle-declared read-only view of a session. The server",
+        "tags": [
+          "Session"
+        ],
+        "x-grpc-method": "hya.v1.Session.GetSessionView",
+        "x-server-streaming": false
+      }
+    },
     "/v1/sessions/{session}/workflow": {
       "get": {
         "operationId": "Workflow.GetWorkflowState",
@@ -3389,6 +3411,78 @@
         "properties": {
           "session": {
             "$ref": "#/components/schemas/SessionInfo"
+          }
+        }
+      },
+      "ListSessionViewsRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "session": {
+            "type": "string"
+          }
+        }
+      },
+      "SessionViewInfo": {
+        "type": "object",
+        "description": "One read-only view a published bundle serves.",
+        "properties": {
+          "bundle": {
+            "type": "string"
+          },
+          "view": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          }
+        }
+      },
+      "ListSessionViewsResponse": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "views": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SessionViewInfo"
+            }
+          }
+        }
+      },
+      "GetSessionViewRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "session": {
+            "type": "string"
+          },
+          "bundle": {
+            "type": "string"
+          },
+          "view": {
+            "type": "string"
+          },
+          "string> query": {
+            "$ref": "#/components/schemas/map<string,"
+          }
+        }
+      },
+      "SessionView": {
+        "type": "object",
+        "description": "One computed bundle view.",
+        "properties": {
+          "bundle": {
+            "type": "string"
+          },
+          "view": {
+            "type": "string"
+          },
+          "content_type": {
+            "type": "string"
+          },
+          "body": {
+            "$ref": "#/components/schemas/google.protobuf.Value"
           }
         }
       },
