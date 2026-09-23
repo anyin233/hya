@@ -85,7 +85,7 @@ fn tampered_metadata_after_sign_is_rejected() {
         key_id: "ci".to_string(),
         verifying_key: signing.verifying_key().to_bytes(),
     }];
-    let (mut metadata, _) = signed_release(&signing, 5, "hya-backend", b"bytes");
+    let (mut metadata, _) = signed_release(&signing, 5, "hya", b"bytes");
     // Replay/tamper: change platform after signature without resigning.
     metadata.platform = "aarch64-unknown-linux-gnu".to_string();
     let err = verify_release_metadata(
@@ -183,11 +183,11 @@ fn failed_smoke_blocks_activation_and_allows_discard() {
 #[test]
 fn prepare_only_recover_keeps_previous_and_floor() {
     let root = tempdir("prepare-only");
-    stage_seq(&root, 1, 0, b"v1", "hya-backend");
+    stage_seq(&root, 1, 0, b"v1", "hya");
     journal_prepare(&root, 1, 0).unwrap();
     commit_activation(&root, 1).unwrap();
 
-    stage_seq(&root, 2, 1, b"v2", "hya-backend");
+    stage_seq(&root, 2, 1, b"v2", "hya");
     journal_prepare(&root, 2, 1).unwrap();
     let recovered = recover_activation(&root).unwrap();
     assert_eq!(recovered.current_sequence, 1);
@@ -200,10 +200,10 @@ fn prepare_only_recover_keeps_previous_and_floor() {
 #[test]
 fn selector_without_floor_recover_finishes_commit() {
     let root = tempdir("sel-no-floor");
-    stage_seq(&root, 1, 0, b"v1", "hya-backend");
+    stage_seq(&root, 1, 0, b"v1", "hya");
     journal_prepare(&root, 1, 0).unwrap();
     commit_activation(&root, 1).unwrap();
-    stage_seq(&root, 2, 1, b"v2", "hya-backend");
+    stage_seq(&root, 2, 1, b"v2", "hya");
     journal_prepare(&root, 2, 1).unwrap();
     std::fs::write(root.join("current"), "2\n").unwrap();
     let recovered = recover_activation(&root).unwrap();

@@ -10,7 +10,7 @@ the same API real frontends consume.
 
 | Path | Role |
 | --- | --- |
-| `src/backend.rs` | Temp dirs, `config.yaml`, MCP/skill/bundle fixtures, spawn `hya-backend serve` on `127.0.0.1:0` |
+| `src/backend.rs` | Temp dirs, `config.yaml`, MCP/skill/bundle fixtures, spawn `hya serve` on `127.0.0.1:0` |
 | `src/fake_llm.rs` | Queue of `ScriptStep::Text` / `ToolCalls` over SSE `/v1/chat/completions` |
 | `src/scenario.rs` | `E2eEnv` / `E2eEnvBuilder`, HTTP helpers, permission/question auto-reply, tree helpers |
 | `tests/p01_*.rs` … `p20_*.rs` | One scenario family per file (`p01`–`p20`, including `p12_context_api` through `p20_model_catalog_discovery`); run alone with `cargo test -p hya-e2e --test pNN_…` (two digits, e.g. `p20_model_catalog_discovery`) |
@@ -156,7 +156,7 @@ Install requires a path ending in `.hyabundle` — use
 ## Running
 
 ```sh
-cargo build -p hya-backend --bin hya-backend
+cargo build -p hya-backend --bin hya
 cargo test -p hya-e2e -- --test-threads=1
 cargo test -p hya-e2e --test p03_permissions -- --nocapture
 cargo clippy -p hya-e2e --all-targets -- -D warnings

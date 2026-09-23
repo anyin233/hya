@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# Local dry-run of hya-updater stage + optional owner-gated activation.
+# Local dry-run of `hya update` stage + optional owner-gated activation.
 # Demo keys only — never use for production signing.
 set -euo pipefail
 
 root_dir=$(cd "$(dirname "$0")/../../.." && pwd)
 cd "$root_dir"
 
-cargo build -q -p hya-updater --bin hya-updater
-bin="${CARGO_TARGET_DIR:-target}/debug/hya-updater"
+cargo build -q -p hya-backend --bin hya
+bin="${CARGO_TARGET_DIR:-target}/debug/hya"
 
 workdir=$(mktemp -d "${TMPDIR:-/tmp}/hya-self-update-demo.XXXXXX")
 trap 'rm -rf "$workdir"' EXIT
@@ -39,20 +39,20 @@ cargo run -q -p hya-updater --example sign_fixture -- \
 platform=$(rustc -vV | sed -n 's/^host: //p')
 
 echo "== stage only =="
-"$bin" apply \
+"$bin" update apply \
   --root "$updater_root" \
   --metadata "$meta_json" \
   --package "$package_dir" \
   --platform "$platform" \
   --smoke smoke.sh
 
-"$bin" status --root "$updater_root"
+"$bin" update status --root "$updater_root"
 
 echo "== discard staged candidate =="
-"$bin" discard --root "$updater_root" --sequence 1
+"$bin" update discard --root "$updater_root" --sequence 1
 
 echo "== owner-authorized activate =="
-"$bin" apply \
+"$bin" update apply \
   --root "$updater_root" \
   --metadata "$meta_json" \
   --package "$package_dir" \
@@ -60,5 +60,5 @@ echo "== owner-authorized activate =="
   --smoke smoke.sh \
   --owner-authorized-activation
 
-"$bin" status --root "$updater_root"
+"$bin" update status --root "$updater_root"
 echo "demo ok under $updater_root"

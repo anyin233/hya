@@ -4,7 +4,7 @@ This example shows the **product path** introduced in `0.34.13`, exercised
 against the checked-out updater at the current workspace version without claiming
 a production release or archive payload:
 
-1. Build `hya-updater`.
+1. Build `hya` (the `update` subcommand is the updater surface).
 2. Create a temporary updater root and package directory.
 3. Sign fixture metadata with a throwaway key (demo only).
 4. Run `apply` without `--owner-authorized-activation`; this verifies and stages

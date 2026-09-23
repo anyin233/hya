@@ -16,7 +16,7 @@
  * The same translation feeds two surfaces: the runtime initialize
  * declaration (skill contributions with digests) and the offline
  * `--emit-bundle-manifest` envelope consumed by
- * `hya-backend bundle install --claude`.
+ * `hya bundle install --claude`.
  */
 
 import fs from "node:fs"

@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "hya-backend"
+name = "hya"
 path = "src/main.rs"
 
 [lints]
@@ -22,6 +22,7 @@ hya-server = { workspace = true }
 hya-proto = { workspace = true }
 hya-app = { workspace = true }
 hya-plugin-claude = { workspace = true }
+hya-updater = { workspace = true }
 tokio-stream = { workspace = true }
 tokio = { workspace = true }
 tonic = { workspace = true }

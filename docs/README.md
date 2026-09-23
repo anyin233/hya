@@ -36,8 +36,8 @@ If you want to compare hya with adjacent coding agents:
 
 If you want to package a public Plugin, AgentBundle, AgentSetBundle, or WorkflowBundle:
 
-1. Run `hya-backend bundle info -f example.hyabundle`, then
-   `hya-backend bundle install example.hyabundle`.
+1. Run `hya bundle info -f example.hyabundle`, then
+   `hya bundle install example.hyabundle`.
 2. Read [AgentBundle Authoring](agent-bundle-authoring.md) for agentless Plugin, singular or
    multi-agent (`AgentSetBundle`) payloads, or [Workflows](workflows.md#packaging-a-workflowbundle) for one
    Workflow plus its exact reachable Agent closure. Sources use exactly one
@@ -83,7 +83,7 @@ If you want to understand the codebase:
 | [Getting Started](getting-started.md) | Build and run a headless prompt, a goal run, and the server. |
 | [Configuration](configuration.md) | Explain hya config, provider/auth resolution, MCP, plugins, formatter, and prompt-command discovery. |
 | [Compaction](compaction.md) | The five built-in context-reduction mechanisms (oh-my-pi parity), the configurable firing order, thresholds, and wire records. |
-| [CLI Reference](cli.md) | Document the shipped `hya-backend` commands, flags, and exit codes. |
+| [CLI Reference](cli.md) | Document the shipped `hya` commands, flags, and exit codes. |
 | [Skills](skills.md) | Skill discovery, authoring, and the trusted `hya/core-skills` bundle. |
 | [Workflows](workflows.md) | Workflow DAGs, governance, discovery, CLI/tool execution, and WorkflowBundle packaging. |
 | [Plugin protocol](plugin-protocol.md) | Native stdio JSON-RPC ABI for out-of-process plugins. |
@@ -94,7 +94,7 @@ If you want to understand the codebase:
 | [Claude plugin import](claude-plugin-import.md) | Import local and marketplace plugins into standard bundles. |
 | [Subagent bundles](subagent-bundles.md) | Transient and resident bundle-defined workers. |
 | [Agent channels](agent-channels.md) | Declarative unit and parent-DM policies. |
-| [Secure self-update](self-update.md) | Independent `hya-updater` TCB: signed metadata, local package stage, smoke, owner-gated activation, break-glass installer. |
+| [Secure self-update](self-update.md) | `hya update` over the independent `hya-updater` TCB: signed metadata, local package stage, smoke, owner-gated activation, break-glass installer. |
 | [Project Structure](project-structure.md) | Map repository paths, crates, modules, tests, and data flow. |
 | [Architecture Overview](architecture/overview.md) | Explain the crate boundary model and end-to-end request path. |
 | [Runtime](architecture/runtime.md) | Explain `SessionEngine`, turn execution, goal mode, loop mode, teams, and worktrees. |

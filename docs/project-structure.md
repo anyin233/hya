@@ -7,7 +7,7 @@ every runtime surface shares one canonical event model:
 CLI / HTTP
       |
       v
-hya-backend / hya-server
+hya / hya-server
       |
       +--> hya-app::WorkflowControl
       |      +--> hya-workflow compiles/normalizes Workflow plans
@@ -53,10 +53,10 @@ hya-backend / hya-server
 | `hya-client` | [`../crates/hya-client/src/lib.rs`](../crates/hya-client/src/lib.rs) | Typed reqwest client for the v1 API. |
 | `hya-sdk-v1` | [`../crates/hya-sdk-v1/src/lib.rs`](../crates/hya-sdk-v1/src/lib.rs) | Typed SDK for new frontends on the v1 API: bootstrap, event-driven turns, transcript reads, interactions, SSE subscription, `V1SessionMirror`. |
 | `hya-updater` | [`../crates/hya-updater`](../crates/hya-updater) | Independent self-update TCB; see [self-update.md](self-update.md). |
-| `hya-backend` | [`../crates/hya-backend/src/main.rs`](../crates/hya-backend/src/main.rs) | Backend umbrella binary and the only shipped binary: `run`/`exec`, goal mode, server, tail-session, config/auth, MCP/plugin setup, session listing, JSONL RPC; bare startup prints a guidance banner. |
+| `hya` | [`../crates/hya-backend/src/main.rs`](../crates/hya-backend/src/main.rs) | Unified `hya` executable (package `hya-backend`) and the only shipped binary; subcommands select the area: `run`/`exec`, goal mode, `loop`, server, tail-session, config/auth, bundles, Workflows, session listing, JSONL RPC, and `update` (self-update TCB); bare startup prints a guidance banner. |
 | `hya-app` | [`../crates/hya-app/src/lib.rs`](../crates/hya-app/src/lib.rs) | Runtime composition: config load, provider/MCP/plugin wiring, session engine build, installed-bundle refresh, and `WorkflowControl` admission/orchestration. |
 | `hya-bundle` | [`../crates/hya-bundle/src/lib.rs`](../crates/hya-bundle/src/lib.rs) | Plugin, AgentBundle, AgentSetBundle, and WorkflowBundle prepare/validate/catalog types and package fixtures used by install CLI and process E2E. Catalog builders: `from_prepared` / `from_verified_catalogs` / `with_verified_catalogs` index agents by stable id and `bundle:<id>/agent/<local_id>`, resources by `(ExportKind, stable id)` plus bundle-local names/aliases; reads include `resolve_agent`, `resolve_resource`, `bundle_resources`, `resolve_spawn`, `spawnable_agents`. |
-| `hya-e2e` | [`../crates/hya-e2e`](../crates/hya-e2e) | Process-level agent E2E: real `hya-backend` + FakeLlm (Track P). See [docs/testing](testing/README.md). |
+| `hya-e2e` | [`../crates/hya-e2e`](../crates/hya-e2e) | Process-level agent E2E: real `hya` + FakeLlm (Track P). See [docs/testing](testing/README.md). |
 
 ## `hya-proto`
 
@@ -275,7 +275,9 @@ with SSE `StreamFrame` subscription and `V1SessionMirror`). See
 ## `hya-updater`
 
 Independent self-update TCB (signed metadata, staged generations, smoke,
-owner-gated activation). Not part of `hya-backend`. See
+owner-gated activation) library, plus the `hya update` command surface
+(`hya_updater::cli`). It has no runtime dependencies; `hya` dispatches
+`update` before composing any runtime. See
 [self-update.md](self-update.md).
 
 There is no interactive frontend in the workspace today: the legacy TypeScript
@@ -318,7 +320,7 @@ provider tool store server/sdk
               |
             hya-app
 
-hya-backend -> hya-app/hya-server
+hya -> hya-app/hya-server
 ```
 
 The binary crate composes everything. Lower crates should avoid depending on the

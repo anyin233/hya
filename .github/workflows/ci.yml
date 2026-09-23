@@ -52,7 +52,7 @@ jobs:
         run: cargo test --workspace --jobs 1 --exclude hya-e2e
       - name: build agent e2e binaries
         if: ${{ !cancelled() }}
-        run: cargo build --locked -p hya-backend --bin hya-backend
+        run: cargo build --locked -p hya-backend --bin hya
       - name: agent process e2e (Track P)
         if: ${{ !cancelled() }}
         run: cargo test -p hya-e2e -- --test-threads=1

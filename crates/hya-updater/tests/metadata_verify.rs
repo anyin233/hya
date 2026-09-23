@@ -18,7 +18,7 @@ fn sample_artifact() -> ArtifactDigest {
     let bytes = b"hya-backend-bytes";
     let digest = Sha256::digest(bytes);
     ArtifactDigest {
-        name: "hya-backend".to_string(),
+        name: "hya".to_string(),
         size: bytes.len() as u64,
         sha256_hex: hex_lower(&digest),
     }

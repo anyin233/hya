@@ -14,7 +14,7 @@
 //!   breaks `kind: claude` activation; treat a change as a coordinated
 //!   release.
 //! - [`emit`] — the typed contract for the adapter's offline
-//!   `--emit-bundle-manifest` mode, which `hya-backend bundle install
+//!   `--emit-bundle-manifest` mode, which `hya bundle install
 //!   --claude` consumes to stage an [`crate::emit::ManifestEmit`] through
 //!   `hya_bundle::prepare_package`.
 

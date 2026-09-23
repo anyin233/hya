@@ -1,7 +1,10 @@
 # Secure self-update (0.34.13)
 
-`hya-updater` is the independent update trust boundary. It does **not** depend
-on `hya-core`, plugins, MCP, bundles, app config, or session storage.
+The `hya-updater` crate is the independent update trust boundary. It does
+**not** depend on `hya-core`, plugins, MCP, bundles, app config, or session
+storage. Its command surface is `hya update …` on the unified `hya` executable
+(the standalone `hya-updater` binary was removed in 0.38.0); `hya` dispatches
+`update` before composing any runtime.
 
 Production activation is **owner-gated**. A valid signature is necessary but not
 sufficient: the operator must pass `--owner-authorized-activation` (or set
@@ -29,21 +32,21 @@ must not appear under the updater root.
 Build:
 
 ```sh
-cargo build -p hya-updater --bin hya-updater
+cargo build -p hya-backend --bin hya
 ```
 
 Commands:
 
 ```sh
 # Inspect
-./target/debug/hya-updater version
-./target/debug/hya-updater status --root /var/lib/hya/updater
+./target/debug/hya update version
+./target/debug/hya update status --root /var/lib/hya/updater
 
 # Recover interrupted prepare/commit
-./target/debug/hya-updater recover --root /var/lib/hya/updater
+./target/debug/hya update recover --root /var/lib/hya/updater
 
 # Stage only (default product path without owner gate)
-./target/debug/hya-updater apply \
+./target/debug/hya update apply \
   --root /var/lib/hya/updater \
   --metadata ./release.metadata.json \
   --package ./package-dir \
@@ -51,7 +54,7 @@ Commands:
   --smoke smoke.sh
 
 # Owner-authorized activation (advances selector + accepted floor)
-./target/debug/hya-updater apply \
+./target/debug/hya update apply \
   --root /var/lib/hya/updater \
   --metadata ./release.metadata.json \
   --package ./package-dir \
@@ -61,7 +64,7 @@ Commands:
 
 # Optional: verify against trust roots outside <root>/trust_roots.json
 # (e.g. read-only media or a staged key set during rotation)
-./target/debug/hya-updater apply \
+./target/debug/hya update apply \
   --root /var/lib/hya/updater \
   --metadata ./release.metadata.json \
   --package ./package-dir \
@@ -70,13 +73,13 @@ Commands:
   --owner-authorized-activation
 
 # Discard a staged-but-not-accepted candidate
-./target/debug/hya-updater discard --root /var/lib/hya/updater --sequence 42
+./target/debug/hya update discard --root /var/lib/hya/updater --sequence 42
 ```
 
 Bootstrap trust roots (operator only):
 
 ```sh
-./target/debug/hya-updater init-roots \
+./target/debug/hya update init-roots \
   --path /var/lib/hya/updater/trust_roots.json \
   --root ci-root-1=<64-lower-hex-verifying-key>
 ```

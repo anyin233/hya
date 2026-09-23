@@ -102,7 +102,7 @@ leaves `reasoning_request` false.
 | `UnknownModel(String)` | `unknown provider for model: …` | No route's `capabilities()` returned `Some` for the ref. | [`../troubleshooting.md`](../troubleshooting.md) — *unknown provider for model*. |
 | `Incompatible(String)` | `incompatible route: …` | Preflight failure, or an unsupported part (for example media on a non-Google route). | No dedicated entry yet; for media MIME failures see [Media parts](#media-parts-non-google-routes) below and switch to a `kind: google` route when you need attachments. |
 | `Decode(String)` | `decode: …` | Malformed or truncated stream / compact-window payload. | No dedicated entry; inspect SSE frames. |
-| `AuthExpired { provider, hint }` | `auth expired for provider '<p>': <hint>` | Produced by the OAuth bearer-resolver wiring in `hya-app` when refresh fails or credentials are revoked. | Re-run `hya-backend oauth login` for that provider (see [`../configuration.md`](../configuration.md) / CLI auth). |
+| `AuthExpired { provider, hint }` | `auth expired for provider '<p>': <hint>` | Produced by the OAuth bearer-resolver wiring in `hya-app` when refresh fails or credentials are revoked. | Re-run `hya oauth login` for that provider (see [`../configuration.md`](../configuration.md) / CLI auth). |
 
 ## Provider Router
 
@@ -172,7 +172,7 @@ optional Hya auth. The app then publishes one immutable
 `ProviderCatalogSnapshot`. It contains model rows, provider source/auth/result
 states, the row-backed default, and the canonical offline notice when needed.
 
-`ProviderRouter`, `SessionEngine`, `hya-backend models`, server catalog and
+`ProviderRouter`, `SessionEngine`, `hya models`, server catalog and
 bootstrap routes, and Rust clients (`hya-client` / `hya-sdk-v1`) all consume
 that snapshot or a direct wire projection of it. They do not re-fetch, re-flatten
 config, or
@@ -621,8 +621,8 @@ without API keys.
 
 ## CLI Configuration
 
-`hya-backend` builds routes from `~/.config/hya/config.yaml`. Provider ids and
-models are surfaced through `hya-backend models`, the v1 catalog routes
+`hya` builds routes from `~/.config/hya/config.yaml`. Provider ids and
+models are surfaced through `hya models`, the v1 catalog routes
 (`GET /v1/models`, `GET /v1/providers`, and the bootstrap snapshot), and
 saved-token auth commands. See
 [`../configuration.md`](../configuration.md) for the YAML shape.

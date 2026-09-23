@@ -449,7 +449,7 @@ The same store replay powers:
 - `SessionEngine::replay`
 - `GET /v1/sessions/{session}/events` (curated replay; `include_raw` returns
   the raw envelope lines)
-- `hya-backend tail-session`
+- `hya tail-session`
 - `read_projection`
 
 This makes the database a useful debugging artifact: if the event log is intact,

@@ -16,17 +16,17 @@ Reference for work intentionally left for a future pass. The pi-parity waves
   + prompt templates.
 - Wave 4 — context compaction (`ModelSummarizer` auto-trigger, env-tunable
   threshold) + SKILL.md skills.
-- Wave 5 — native Google (Gemini) provider + auth token store + `hya-backend login`.
-- Wave 6 — session list / branch / resume (`list_sessions`, `hya-backend sessions`,
+- Wave 5 — native Google (Gemini) provider + auth token store + `hya login`.
+- Wave 6 — session list / branch / resume (`list_sessions`, `hya sessions`,
   `--db`; the interactive `--resume` flag and TUI session picker shipped here were
   removed later with the legacy TUI).
-- Wave 7 — `exec --json` and `hya-backend rpc` (stdin/stdout JSONL) integration modes.
+- Wave 7 — `exec --json` and `hya rpc` (stdin/stdout JSONL) integration modes.
 - Hardening — path-containment resolves symlinks on existing ancestors.
 - TUI typed-deny feedback — the permission overlay captures optional rejection
   text and sends it through `Decision::Reject { feedback }`.
 - **OAuth interactive login** — full Rust flow in `crates/hya-app/src/oauth/`
   (device-code and loopback/PKCE for `openai-codex`, Grok Build, browser open,
-  poll/refresh). CLI: `hya-backend oauth login --provider … --type openai-codex|grok-build`
+  poll/refresh). CLI: `hya oauth login --provider … --type openai-codex|grok-build`
   with `--device` / `--loopback` / `--browser` flags; see `docs/cli.md` and
   `docs/configuration.md`.
 - **`find` workdir scoping fix** — resolved against the confirmed defect below:

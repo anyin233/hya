@@ -118,7 +118,7 @@ impl E2eEnvBuilder {
         self
     }
 
-    /// Override path to the `hya-backend` binary (default: workspace/target lookup).
+    /// Override path to the `hya` binary (default: workspace/target lookup).
     #[must_use]
     pub fn binary(mut self, path: PathBuf) -> Self {
         self.binary = Some(path);
@@ -179,7 +179,7 @@ impl E2eEnvBuilder {
         self
     }
 
-    /// Start FakeLlm, spawn `hya-backend`, and return a ready [`E2eEnv`].
+    /// Start FakeLlm, spawn `hya`, and return a ready [`E2eEnv`].
     pub async fn build(self) -> Result<E2eEnv, E2eError> {
         let fake = FakeLlm::start(self.scripts).await?;
         for (marker, steps) in self.routes {
@@ -217,7 +217,7 @@ impl E2eEnvBuilder {
 pub struct E2eEnv {
     /// Scripted OpenAI-compatible completions server backing the backend.
     pub fake: FakeLlm,
-    /// Live `hya-backend serve` process and isolation roots.
+    /// Live `hya serve` process and isolation roots.
     pub backend: BackendProcess,
     /// Typed native API client pointed at [`Self::backend`].
     pub client: Client,

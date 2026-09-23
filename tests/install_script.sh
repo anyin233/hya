@@ -58,7 +58,8 @@ contains "$help" "--prefix DIR"
 contains "$help" "--bin-dir DIR"
 contains "$help" "--profile release|dev|debug"
 contains "$help" "--dry-run"
-contains "$help" "hya-backend"
+contains "$help" "bin/hya "
+not_contains "$help" "hya-backend"
 contains "$help" "bundles/hya-*.hyabundle"
 contains "$help" "lib/hya/bun-adapter"
 not_contains "$help" "compat"
@@ -71,20 +72,21 @@ contains "$dry_run" "cargo build --locked -p hya-base-tools -p hya-extended-tool
 contains "$dry_run" "stage-first-party-bundles --library-dir"
 contains "$dry_run" "bun install --frozen-lockfile --production"
 not_contains "$dry_run" "--profile debug"
-contains "$dry_run" "/tmp/hya-install-test/bin/.hya-backend.tmp"
-contains "$dry_run" "/tmp/hya-install-test/bin/.hya-backend.bak"
+contains "$dry_run" "/tmp/hya-install-test/bin/.hya.tmp"
+contains "$dry_run" "/tmp/hya-install-test/bin/.hya.bak"
 contains "$dry_run" "/tmp/hya-install-test/lib/hya/.bun-adapter.tmp"
 contains "$dry_run" "/tmp/hya-install-test/lib/hya/.bun-adapter.bak"
 contains "$dry_run" "/tmp/hya-install-test/bundles/.hya-bundles.tmp"
 contains "$dry_run" "/tmp/hya-install-test/bundles/.hya-bundles.bak"
-contains "$dry_run" "/tmp/hya-install-test/bin/hya-backend"
+contains "$dry_run" "/tmp/hya-install-test/bin/hya"
 contains "$dry_run" "/tmp/hya-install-test/lib/hya/bun-adapter"
 contains "$dry_run" "bundle list (isolated HOME) must list: ${first_party[*]}"
-contains "$dry_run" "PATH check: command -v hya-backend must resolve to /tmp/hya-install-test/bin/hya-backend"
+contains "$dry_run" "PATH check: command -v hya must resolve to /tmp/hya-install-test/bin/hya"
+contains "$dry_run" "rm -f /tmp/hya-install-test/bin/hya-backend (legacy executable name, if present)"
 [[ ! -e /tmp/hya-install-test ]] || fail "dry run created /tmp/hya-install-test"
 repo=$(pwd -P)
 relative_dry_run=$(bash ./install.sh --dry-run --bin-dir bin --profile debug)
-contains "$relative_dry_run" "PATH check: command -v hya-backend must resolve to $repo/bin/hya-backend"
+contains "$relative_dry_run" "PATH check: command -v hya must resolve to $repo/bin/hya"
 contains "$relative_dry_run" "$repo/bundles"
 contains "$relative_dry_run" "$repo/lib/hya/bun-adapter"
 if bash ./install.sh --dry-run --bin-dir /tmp/hya-install-test/tools >/dev/null 2>&1; then
@@ -92,9 +94,9 @@ if bash ./install.sh --dry-run --bin-dir /tmp/hya-install-test/tools >/dev/null 
 fi
 
 contains "$dry_run" 'XDG_CONFIG_HOME/hya/config.yaml'
-contains "$dry_run" 'hya-backend login anthropic "$ANTHROPIC_API_KEY"'
-contains "$dry_run" "hya-backend models"
-contains "$dry_run" "hya-backend serve"
+contains "$dry_run" 'hya login anthropic "$ANTHROPIC_API_KEY"'
+contains "$dry_run" "hya models"
+contains "$dry_run" "hya serve"
 
 fixture=$(mktemp -d)
 trap 'rm -rf "$fixture"' EXIT
@@ -124,10 +126,10 @@ profile=debug
 out="${CARGO_TARGET_DIR:?}/$profile"
 mkdir -p "$out"
 [[ " $* " == *" --bins "* ]] || exit 0
-cat >"$out/hya-backend" <<'FAKE_BACKEND'
+cat >"$out/hya" <<'FAKE_BACKEND'
 #!/usr/bin/env bash
 set -euo pipefail
-[[ "${HYA_INSTALL_SMOKE_FAIL:-}" != hya-backend ]] || exit 91
+[[ "${HYA_INSTALL_SMOKE_FAIL:-}" != hya ]] || exit 91
 case "${1:-}" in
   --help|--version) exit 0 ;;
   bundle)
@@ -140,7 +142,7 @@ case "${1:-}" in
 esac
 exit 2
 FAKE_BACKEND
-chmod +x "$out/hya-backend"
+chmod +x "$out/hya"
 FAKE_CARGO
 chmod +x "$fake_bin/cargo"
 
@@ -183,8 +185,11 @@ no_leftovers() {
 install_root="$fixture/install"
 mkdir -p "$install_root/bundles"
 printf 'unrelated\n' >"$install_root/bundles/other.txt"
+mkdir -p "$install_root/bin"
+printf 'legacy-binary\n' >"$install_root/bin/hya-backend"
 run_install "$install_root" env >/dev/null
-[[ -x "$install_root/bin/hya-backend" ]] || fail "missing installed binary: hya-backend"
+[[ -x "$install_root/bin/hya" ]] || fail "missing installed binary: hya"
+[[ ! -e "$install_root/bin/hya-backend" ]] || fail "installer kept the legacy hya-backend executable"
 for bundle in "${first_party[@]}"; do
   [[ $(<"$install_root/bundles/hya-$bundle.hyabundle") == "new-$bundle" ]] ||
     fail "missing installed first-party bundle: $bundle"
@@ -199,7 +204,7 @@ no_leftovers "$install_root" || fail "installer left temporary or backup paths a
 seed_previous_install() {
   local root=$1
   mkdir -p "$root/bin" "$root/lib/hya/bun-adapter" "$root/bundles"
-  printf 'old-binary\n' >"$root/bin/hya-backend"
+  printf 'old-binary\n' >"$root/bin/hya"
   printf 'old-adapter\n' >"$root/lib/hya/bun-adapter/marker"
   printf 'old-core-agents\n' >"$root/bundles/hya-core-agents.hyabundle"
 }
@@ -207,7 +212,7 @@ seed_previous_install() {
 assert_previous_install() {
   local root=$1
   local reason=$2
-  [[ $(<"$root/bin/hya-backend") == old-binary ]] || fail "$reason replaced the previous binary"
+  [[ $(<"$root/bin/hya") == old-binary ]] || fail "$reason replaced the previous binary"
   [[ $(<"$root/lib/hya/bun-adapter/marker") == old-adapter ]] || fail "$reason replaced the previous Bun adapter"
   [[ $(<"$root/bundles/hya-core-agents.hyabundle") == old-core-agents ]] ||
     fail "$reason replaced the previous first-party bundle"
@@ -226,7 +231,7 @@ assert_previous_install "$failed_install" "a failed dependency install"
 # A post-placement smoke failure must roll every component back.
 rollback_root="$fixture/rollback"
 seed_previous_install "$rollback_root"
-if run_install "$rollback_root" env HYA_INSTALL_SMOKE_FAIL=hya-backend >/dev/null 2>&1; then
+if run_install "$rollback_root" env HYA_INSTALL_SMOKE_FAIL=hya >/dev/null 2>&1; then
   fail "install should fail when a post-placement smoke fails"
 fi
 assert_previous_install "$rollback_root" "a post-placement rollback"

@@ -46,7 +46,7 @@ even when a test fails.
 | ---: | ---: | ---: | --- |
 | 0.0% | 1 | 1 | hya-plugin-example |
 | 0.0% | 60 | 60 | hya-client |
-| 51.8% | 1,461 | 704 | hya-backend |
+| 51.8% | 1,461 | 704 | hya |
 | 61.7% | 940 | 360 | hya-updater |
 | 64.3% | 709 | 253 | xtask |
 | 82.3% | 1,986 | 351 | hya-bundle |
@@ -67,7 +67,7 @@ even when a test fails.
   It is consumed by `crates/hya-e2e`, which this run excludes. It is exercised
   in reality — by Track P, whose contribution this run cannot see. The Track P
   measurement below puts it at **98.3%**, which settles it.
-- **`hya-backend` at 51.8%** is the lowest genuine figure. It is the CLI/binary
+- **`hya` at 51.8%** is the lowest genuine figure. It is the CLI/binary
   crate, where argument parsing and process wiring are exercised by running the
   real binary — again, mostly Track P territory.
 - One test target (`-p hya-app --lib`) failed during collection. It is the
@@ -83,7 +83,7 @@ even when a test fails.
 
 At the 2026-08-06 measurement, Track P (`crates/hya-e2e`: 18 binaries,
 27 scenarios) was excluded from the workspace run above and measured
-separately. It was the measured suite that drove the **real** `hya-backend`
+separately. It was the measured suite that drove the **real** `hya`
 binary over HTTP and covered that process/serving path end to end. These counts
 describe commit `3f18e6e5` plus the noted change, not the current matrix.
 
@@ -101,7 +101,7 @@ for a suite that serves 25 real sessions. Root cause: the harness stopped each
 backend with `std::process::Child::kill()`, which is **SIGKILL** on Unix. LLVM
 writes `.profraw` from an atexit handler, and a SIGKILL'd process never runs one.
 
-Sending SIGTERM instead was necessary but *not* sufficient: `hya-backend serve`
+Sending SIGTERM instead was necessary but *not* sufficient: `hya serve`
 installed no signal handler, and the default SIGTERM disposition also skips
 atexit handlers. Two changes were needed, and both are now in place:
 
@@ -122,15 +122,15 @@ the current one, `Some(0)` in ~15 ms. That assertion is now a regression test,
 ### Regenerate
 
 `HYA_E2E_BACKEND_BIN` points the harness at any build, so a coverage run no
-longer has to overwrite `target/debug/hya-backend` (which breaks concurrent work).
+longer has to overwrite `target/debug/hya` (which breaks concurrent work).
 
 ```sh
 # Instrumented build goes to its own target dir; target/debug is left alone.
 export CARGO_TARGET_DIR=/path/to/cov-target
 cargo llvm-cov clean --workspace
 eval "$(cargo llvm-cov show-env --sh)"
-cargo build --bin hya-backend
-HYA_E2E_BACKEND_BIN="$CARGO_TARGET_DIR/debug/hya-backend" \
+cargo build --bin hya
+HYA_E2E_BACKEND_BIN="$CARGO_TARGET_DIR/debug/hya" \
   cargo test -p hya-e2e -- --test-threads=1
 cargo llvm-cov report --summary-only
 ```
@@ -145,7 +145,7 @@ files, against **6** before the change.
 | 2.8% | 1,309 | 1,273 | hya-plugin |
 | 21.6% | 11,792 | 9,248 | hya-server |
 | 27.1% | 2,054 | 1,498 | hya-provider |
-| 31.7% | 1,182 | 807 | hya-backend |
+| 31.7% | 1,182 | 807 | hya |
 | 37.8% | 7,037 | 4,376 | hya-app |
 | 47.6% | 4,636 | 2,431 | hya-tool |
 | 49.0% | 2,511 | 1,281 | hya-store |

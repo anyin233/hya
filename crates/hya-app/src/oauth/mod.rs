@@ -30,7 +30,7 @@ pub use openai_codex::{login_openai_codex, login_openai_codex_device};
 pub enum OAuthError {
     /// Stored credentials are missing, expired, or revoked; user must re-login.
     #[error(
-        "OAuth credentials for provider '{provider}' require re-login ({reason}). Run: hya-backend oauth login --provider {provider} --type {oauth_type}"
+        "OAuth credentials for provider '{provider}' require re-login ({reason}). Run: hya oauth login --provider {provider} --type {oauth_type}"
     )]
     NeedsLogin {
         /// Config/auth provider id.

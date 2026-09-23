@@ -53,11 +53,11 @@ project docs.
 
 ### Process agent E2E (Track P)
 
-Product-path coverage lives in `crates/hya-e2e` (real `hya-backend` + FakeLlm).
+Product-path coverage lives in `crates/hya-e2e` (real `hya` + FakeLlm).
 It needs a built backend binary and should run single-threaded:
 
 ```sh
-cargo build -p hya-backend --bin hya-backend
+cargo build -p hya-backend --bin hya
 cargo test -p hya-e2e -- --test-threads=1
 cargo clippy -p hya-e2e --all-targets -- -D warnings
 ```
@@ -99,7 +99,7 @@ cargo run -p xtask -- package-bundle <source-dir> <output.hyabundle>
 cargo run -p xtask -- package-native-tool-bundle <tool-family-source-dir> <built-executable> <output.hyabundle>
 cargo run -p xtask -- package-native-tool-library <tool-family-source-dir> <built-library> <output.hyabundle>
 cargo run -p xtask -- stage-first-party-bundles --library-dir target/release --package-root dist/hya [--version <semver>] [--target <triple> --assets dist]
-cargo run -p xtask -- release-rehearsal --workflow .github/workflows/release.yml --version 0.37.19 --target "$(rustc -vV | sed -n 's/^host: //p')" --no-publish
+cargo run -p xtask -- release-rehearsal --workflow .github/workflows/release.yml --version 0.38.0 --target "$(rustc -vV | sed -n 's/^host: //p')" --no-publish
 ```
 
 ## Crate Selection
@@ -117,7 +117,7 @@ Use this guide when deciding where a change belongs:
 | HTTP route or SSE behavior | `hya-server` |
 | `hya.v1` contract change (proto message/rpc, error code, HTTP binding) | `hya-api` — edit `proto/hya/v1/*.proto`, then regenerate with `cargo run -p xtask -- gen-api` |
 | Typed HTTP integration | `hya-client`; new frontend integrations use `hya-sdk-v1` |
-| User-facing backend CLI command, config loading, server launch | `hya-backend` |
+| User-facing backend CLI command, config loading, server launch | `hya` |
 | Process-level agent scenario (real backend + FakeLlm) | `hya-e2e` (+ matrix docs under `docs/testing/`) |
 | Dev tooling (matrix check, startup bench) | `xtask` |
 

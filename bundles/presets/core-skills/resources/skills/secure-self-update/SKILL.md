@@ -1,14 +1,14 @@
 ---
 name: secure-self-update
 description: >-
-  Use when verifying, staging, recovering, or owner-activating an independent hya release with hya-updater: signed metadata, local package fetch, immutable staging, smoke subprocess, activation journal/selector, anti-rollback floor, and install.sh break-glass. Do not use for bundle install, plugin load, or to skip the owner activation gate.
+  Use when verifying, staging, recovering, or owner-activating an independent hya release with `hya update`: signed metadata, local package fetch, immutable staging, smoke subprocess, activation journal/selector, anti-rollback floor, and install.sh break-glass. Do not use for bundle install, plugin load, or to skip the owner activation gate.
 ---
 <!-- Trusted core Skill; its metadata and body are prepared from this bundle. -->
 
 # Secure self-update
 
 Use this skill when verifying, staging, recovering, or owner-activating an
-independent hya release with `hya-updater` (0.34.13+). Do **not** use it for
+independent hya release with `hya update` (0.38.0+; formerly the `hya-updater` binary). Do **not** use it for
 bundle install, plugin load, or ordinary `install.sh` source installs unless the
 user is comparing break-glass recovery.
 
@@ -30,10 +30,10 @@ user is comparing break-glass recovery.
 
 1. Ensure `trust_roots.json` exists under the updater root.
 2. Obtain signed `release.metadata.json` and a local package directory of artifacts.
-3. `hya-updater apply --root … --metadata … --package … --platform … [--smoke smoke.sh]` for stage-only.
+3. `hya update apply --root … --metadata … --package … --platform … [--smoke smoke.sh]` for stage-only.
 4. On success and owner approval: re-run with `--owner-authorized-activation`.
-5. On failed smoke before activation: `hya-updater discard --root … --sequence N`.
-6. On crash mid-update: `hya-updater recover --root …` then `status`.
+5. On failed smoke before activation: `hya update discard --root … --sequence N`.
+6. On crash mid-update: `hya update recover --root …` then `status`.
 
 ## Agent boundaries
 

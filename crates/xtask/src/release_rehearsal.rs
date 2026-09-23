@@ -329,7 +329,7 @@ fn validate_workflow(workflow: &Value, target: &str) -> Result<Vec<String>> {
         run_blocks.iter().any(
             |run| run.contains("cargo build --release --locked -p hya-backend --bins --target")
         ),
-        "release workflow must keep the locked hya-backend target build command"
+        "release workflow must keep the locked hya target build command"
     );
     ensure!(
         run_blocks.iter().any(|run| run.contains("shasum -a 256")),
@@ -797,13 +797,13 @@ fn prepare_and_build(root: &Path, target: &str) -> Result<()> {
         "--release".to_owned(),
         "--locked".to_owned(),
         "-p".to_owned(),
-        "hya-backend".to_owned(),
+        "hya".to_owned(),
         "--bins".to_owned(),
         "--target".to_owned(),
         target.to_owned(),
     ];
     run_checked(OsStr::new("cargo"), &args, root, &[], &[])
-        .context("run locked release build for hya-backend")?;
+        .context("run locked release build for hya")?;
     let mut libraries = arg_list(&["build", "--release", "--locked"]);
     for family in TOOL_FAMILY_CRATES {
         libraries.extend(["-p".to_owned(), family.to_owned()]);
@@ -824,12 +824,8 @@ fn rehearse_package(root: &Path, version: &str, target: &str) -> Result<()> {
     let bin = package_root.join("bin");
     fs::create_dir_all(&bin).with_context(|| format!("create {}", bin.display()))?;
 
-    let backend_source = root
-        .join("target")
-        .join(target)
-        .join("release")
-        .join("hya-backend");
-    let backend_destination = bin.join("hya-backend");
+    let backend_source = root.join("target").join(target).join("release").join("hya");
+    let backend_destination = bin.join("hya");
     copy_file(&backend_source, &backend_destination)?;
     set_executable(&backend_destination)?;
     copy_file(&root.join("README.md"), &package_root.join("README.md"))?;
@@ -1032,10 +1028,7 @@ fn verify_example_listing(listing: &str) -> Result<()> {
 
 /// Verify required runtime files before archiving.
 fn verify_package_layout(package_root: &Path) -> Result<()> {
-    require_file(
-        &package_root.join("bin").join("hya-backend"),
-        "packaged binary",
-    )?;
+    require_file(&package_root.join("bin").join("hya"), "packaged binary")?;
 
     let bun_adapter = package_root.join("lib/hya/bun-adapter");
     for path in ["package.json", "bun.lock", "src/main.ts"] {
@@ -1072,7 +1065,7 @@ fn verify_archive_listing(
     fs::write(&listing_path, listing.as_bytes())
         .with_context(|| format!("write archive listing {}", listing_path.display()))?;
     for path in [
-        "bin/hya-backend",
+        "bin/hya",
         "lib/hya/bun-adapter/package.json",
         "lib/hya/bun-adapter/bun.lock",
         "lib/hya/bun-adapter/src/main.ts",
@@ -1106,7 +1099,7 @@ fn smoke_packaged_release(
     scratch: &ScratchDirectory,
     version: &str,
 ) -> Result<()> {
-    let backend = package_root.join("bin/hya-backend");
+    let backend = package_root.join("bin/hya");
     let version_output = run_checked(
         backend.as_os_str(),
         &arg_list(&["--version"]),
@@ -1116,7 +1109,7 @@ fn smoke_packaged_release(
     )?;
     ensure!(
         combined_output(&version_output).contains(version),
-        "packaged hya-backend --version did not report {version}"
+        "packaged hya --version did not report {version}"
     );
     run_checked(
         backend.as_os_str(),
@@ -1125,7 +1118,7 @@ fn smoke_packaged_release(
         &[],
         &[],
     )
-    .context("smoke packaged hya-backend --help")?;
+    .context("smoke packaged hya --help")?;
     smoke_first_party_bundles(&backend, scratch, version)?;
 
     smoke_bun_adapter(&package_root.join("lib/hya/bun-adapter"), scratch)?;

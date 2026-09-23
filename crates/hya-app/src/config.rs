@@ -1649,7 +1649,7 @@ fn map_oauth_error(err: crate::oauth::OAuthError) -> hya_provider::ProviderError
         } => ProviderError::AuthExpired {
             provider: provider.clone(),
             hint: format!(
-                "{reason}. Re-login: hya-backend oauth login --provider {provider} --type {oauth_type}"
+                "{reason}. Re-login: hya oauth login --provider {provider} --type {oauth_type}"
             ),
         },
         crate::oauth::OAuthError::Entitlement { provider, detail } => ProviderError::AuthExpired {

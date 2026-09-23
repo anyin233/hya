@@ -1,4 +1,4 @@
-//! Integration tests for `hya-backend`: bundle cli.
+//! Integration tests for `hya`: bundle cli.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -31,7 +31,7 @@ fn unique_data_root() -> Result<PathBuf, Box<dyn std::error::Error>> {
     let nanos = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
     let serial = NEXT_DATA_ROOT.fetch_add(1, Ordering::Relaxed);
     let data_root = std::env::temp_dir().join(format!(
-        "hya-backend-bundle-cli-{}-{nanos}-{serial}",
+        "hya-bundle-cli-{}-{nanos}-{serial}",
         std::process::id()
     ));
     fs::create_dir(&data_root)?;
@@ -132,7 +132,7 @@ resources:
 }
 
 fn bundle_command(data_root: &Path) -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_hya-backend"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_hya"));
     command
         .env("XDG_DATA_HOME", data_root)
         .env("HOME", data_root);

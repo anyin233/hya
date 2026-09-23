@@ -1,4 +1,4 @@
-//! Integration tests for `hya-backend`: compat agent cli.
+//! Integration tests for `hya`: compat agent cli.
 
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -11,7 +11,7 @@ use serde_json::Value;
 
 #[test]
 fn agent_list_prints_compat_native_agent_shape() -> Result<(), Box<dyn std::error::Error>> {
-    let env = IsolatedEnv::new("hya-backend-agent-list")?;
+    let env = IsolatedEnv::new("hya-agent-list")?;
     let output = hya_command(&env).args(["agent", "list"]).output()?;
 
     assert_success("agent list", &output);
@@ -43,7 +43,7 @@ fn agent_list_prints_compat_native_agent_shape() -> Result<(), Box<dyn std::erro
 
 #[test]
 fn models_command_creates_default_config_when_missing() -> Result<(), Box<dyn std::error::Error>> {
-    let env = IsolatedEnv::new("hya-backend-first-run-config")?;
+    let env = IsolatedEnv::new("hya-first-run-config")?;
     let path = env.xdg_config.join("hya/config.yaml");
     assert!(!path.exists(), "test should start without hya config");
 
@@ -63,9 +63,35 @@ fn models_command_creates_default_config_when_missing() -> Result<(), Box<dyn st
 }
 
 #[test]
+fn update_commands_run_without_composing_the_runtime() -> Result<(), Box<dyn std::error::Error>> {
+    let env = IsolatedEnv::new("hya-update-cli")?;
+    let roots = env.root.join("updater/trust_roots.json");
+    std::fs::create_dir_all(env.root.join("updater"))?;
+    let key = format!("release={}", "ab".repeat(32));
+
+    let init = hya_command(&env)
+        .args(["update", "init-roots", "--path"])
+        .arg(&roots)
+        .args(["--root", &key])
+        .output()?;
+    assert_success("update init-roots", &init);
+    assert!(roots.is_file(), "init-roots must write {}", roots.display());
+
+    let version = hya_command(&env).args(["update", "version"]).output()?;
+    assert_success("update version", &version);
+    assert!(String::from_utf8(version.stdout)?.starts_with("hya update "));
+
+    assert!(
+        !env.xdg_config.join("hya").exists(),
+        "`hya update` must not bootstrap runtime config"
+    );
+    Ok(())
+}
+
+#[test]
 fn rendered_exec_db_persists_and_tail_replays_hysec_session()
 -> Result<(), Box<dyn std::error::Error>> {
-    let env = IsolatedEnv::new("hya-backend-rendered-exec-db")?;
+    let env = IsolatedEnv::new("hya-rendered-exec-db")?;
     let db = env.root.join("hya.db");
 
     let exec = hya_command(&env)
@@ -118,7 +144,7 @@ fn rendered_exec_db_persists_and_tail_replays_hysec_session()
 #[test]
 fn json_exec_db_emits_hysec_session_and_sessions_lists_exact_id()
 -> Result<(), Box<dyn std::error::Error>> {
-    let env = IsolatedEnv::new("hya-backend-json-exec-db")?;
+    let env = IsolatedEnv::new("hya-json-exec-db")?;
     let db = env.root.join("json.db");
 
     let exec = hya_command(&env)
@@ -144,7 +170,7 @@ fn json_exec_db_emits_hysec_session_and_sessions_lists_exact_id()
 
 #[test]
 fn sessions_empty_db_prints_no_sessions_found() -> Result<(), Box<dyn std::error::Error>> {
-    let env = IsolatedEnv::new("hya-backend-empty-sessions-db")?;
+    let env = IsolatedEnv::new("hya-empty-sessions-db")?;
     let db = env.root.join("empty.db");
     let expected = format!("no sessions found in {}\n", db.display());
 
@@ -169,7 +195,7 @@ fn sessions_empty_db_prints_no_sessions_found() -> Result<(), Box<dyn std::error
 #[test]
 fn tail_session_json_replays_only_requested_session_when_multiple_sessions_exist()
 -> Result<(), Box<dyn std::error::Error>> {
-    let env = IsolatedEnv::new("hya-backend-tail-selected-session")?;
+    let env = IsolatedEnv::new("hya-tail-selected-session")?;
     let db = env.root.join("tail.db");
 
     let first = exec_json_session(&env, &db, "first offline session")?;
@@ -199,7 +225,7 @@ fn tail_session_json_replays_only_requested_session_when_multiple_sessions_exist
 
 #[test]
 fn tail_session_does_not_run_spawn_admission_recovery() -> Result<(), Box<dyn std::error::Error>> {
-    let env = IsolatedEnv::new("hya-backend-tail-admission-read-only")?;
+    let env = IsolatedEnv::new("hya-tail-admission-read-only")?;
     let db = env.root.join("tail-admission.db");
     let db_text = db.to_string_lossy().into_owned();
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -246,7 +272,7 @@ fn tail_session_does_not_run_spawn_admission_recovery() -> Result<(), Box<dyn st
 #[test]
 fn subcommand_db_overrides_global_db_for_sessions_and_tail()
 -> Result<(), Box<dyn std::error::Error>> {
-    let env = IsolatedEnv::new("hya-backend-subcommand-db-override")?;
+    let env = IsolatedEnv::new("hya-subcommand-db-override")?;
     let db_a = env.root.join("a.db");
     let db_b = env.root.join("b.db");
 
@@ -320,7 +346,7 @@ impl Drop for IsolatedEnv {
 }
 
 fn hya_command(env: &IsolatedEnv) -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_hya-backend"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_hya"));
     command.env_clear();
     if let Some(path) = &env.path {
         command.env("PATH", path);

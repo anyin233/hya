@@ -6,7 +6,7 @@ use crate::bundle_cmd::BundleCommand;
 
 #[derive(Parser)]
 #[command(
-    name = "hya-backend",
+    name = "hya",
     version,
     about = "hya — a multi-agent coding agent",
     long_about = None
@@ -145,6 +145,11 @@ pub(crate) enum Command {
     },
     /// JSONL RPC over stdin/stdout: read {"type":"prompt","text":...} lines, emit event JSONL.
     Rpc,
+    /// Verify, stage, activate, or recover signed hya releases (update TCB).
+    Update {
+        #[command(subcommand)]
+        command: hya_updater::cli::UpdateCommand,
+    },
     /// Loop mode: iterate the agent toward `--target` until the deterministic
     /// `--while`/`--until` condition, the `loop.should_stop` hook, or the
     /// independent verifier stops the run.
@@ -243,9 +248,66 @@ mod tests {
         Cli::try_parse_from(args).unwrap_or_else(|err| panic!("{err}"))
     }
 
+    fn parse_slice(args: &[&str]) -> Cli {
+        Cli::try_parse_from(args.iter().copied()).unwrap_or_else(|err| panic!("{err}"))
+    }
+
+    #[test]
+    fn executable_is_named_hya() {
+        assert_eq!(Cli::command().get_name(), "hya");
+    }
+
+    #[test]
+    fn parses_update_subcommands() {
+        let cases: &[&[&str]] = &[
+            &["hya", "update", "version"],
+            &["hya", "update", "status", "--root", "/tmp/updater"],
+            &["hya", "update", "recover", "--root", "/tmp/updater"],
+            &[
+                "hya",
+                "update",
+                "discard",
+                "--root",
+                "/tmp/updater",
+                "--sequence",
+                "4",
+            ],
+            &[
+                "hya",
+                "update",
+                "apply",
+                "--root",
+                "/tmp/updater",
+                "--metadata",
+                "m.json",
+                "--package",
+                "pkg",
+                "--platform",
+                "x86_64-unknown-linux-gnu",
+                "--owner-authorized-activation",
+            ],
+            &[
+                "hya",
+                "update",
+                "init-roots",
+                "--path",
+                "t.json",
+                "--root",
+                "k=00",
+            ],
+        ];
+        for args in cases {
+            let cli = parse_slice(args);
+            assert!(
+                matches!(cli.command, Some(super::Command::Update { .. })),
+                "{args:?} must parse as `hya update`"
+            );
+        }
+    }
+
     #[test]
     fn rejects_mini_as_unknown_argument() {
-        let err = match Cli::try_parse_from(["hya-backend", "--mini"]) {
+        let err = match Cli::try_parse_from(["hya", "--mini"]) {
             Ok(_) => panic!("--mini should be rejected once legacy TUI is removed"),
             Err(err) => err,
         };
@@ -255,7 +317,7 @@ mod tests {
     }
     #[test]
     fn models_refresh_is_rejected_as_unknown_argument() {
-        let error = match Cli::try_parse_from(["hya-backend", "models", "--refresh"]) {
+        let error = match Cli::try_parse_from(["hya", "models", "--refresh"]) {
             Ok(_) => panic!("models --refresh must be removed"),
             Err(error) => error,
         };
@@ -272,11 +334,11 @@ mod tests {
     #[test]
     fn parses_bundle_install_list_uninstall_and_info_file_commands() {
         let cases: &[&[&str]] = &[
-            &["hya-backend", "bundle", "install", "demo.hyabundle"],
-            &["hya-backend", "bundle", "list"],
-            &["hya-backend", "bundle", "uninstall", "hya/demo"],
-            &["hya-backend", "bundle", "info", "hya/demo"],
-            &["hya-backend", "bundle", "info", "-f", "demo.hyabundle"],
+            &["hya", "bundle", "install", "demo.hyabundle"],
+            &["hya", "bundle", "list"],
+            &["hya", "bundle", "uninstall", "hya/demo"],
+            &["hya", "bundle", "info", "hya/demo"],
+            &["hya", "bundle", "info", "-f", "demo.hyabundle"],
         ];
 
         for args in cases {
@@ -288,11 +350,10 @@ mod tests {
 
     #[test]
     fn rejects_resume_as_unknown_argument() {
-        let err =
-            match Cli::try_parse_from(["hya-backend", "--resume", "hysec_abcdefghijklmnopqrst"]) {
-                Ok(_) => panic!("--resume should be rejected once the interactive TUI is removed"),
-                Err(err) => err,
-            };
+        let err = match Cli::try_parse_from(["hya", "--resume", "hysec_abcdefghijklmnopqrst"]) {
+            Ok(_) => panic!("--resume should be rejected once the interactive TUI is removed"),
+            Err(err) => err,
+        };
 
         assert_eq!(err.kind(), clap::error::ErrorKind::UnknownArgument);
         assert!(err.to_string().contains("--resume"));
@@ -300,15 +361,9 @@ mod tests {
 
     #[test]
     fn parses_evaluator_model_flag_for_goal_mode() {
-        let cli = parse([
-            "hya-backend",
-            "-p",
-            "ship it",
-            "--evaluator-model",
-            "deep/o3-mini",
-        ]);
+        let cli = parse(["hya", "-p", "ship it", "--evaluator-model", "deep/o3-mini"]);
         assert_eq!(cli.evaluator_model.as_deref(), Some("deep/o3-mini"));
-        let cli = parse(["hya-backend", "-p", "ship it"]);
+        let cli = parse(["hya", "-p", "ship it"]);
         assert!(
             cli.evaluator_model.is_none(),
             "the flag must stay optional so config/worker fallback applies"
@@ -318,7 +373,7 @@ mod tests {
     #[test]
     fn parses_loop_command_flags() {
         let cli = parse([
-            "hya-backend",
+            "hya",
             "loop",
             "--target",
             "tests are green",
@@ -352,7 +407,7 @@ mod tests {
     #[test]
     fn parses_loop_until_and_max_iterations_alias() {
         let cli = parse([
-            "hya-backend",
+            "hya",
             "loop",
             "--target",
             "docs rebuilt",
@@ -380,7 +435,7 @@ mod tests {
 
     #[test]
     fn loop_command_requires_target_and_defaults_flags() {
-        let cli = parse(["hya-backend", "loop", "--target", "ship it"]);
+        let cli = parse(["hya", "loop", "--target", "ship it"]);
         match cli.command {
             Some(super::Command::Loop {
                 target,
@@ -458,7 +513,7 @@ mod tests {
 
     #[test]
     fn parses_compat_run_alias() {
-        let cli = parse(["hya-backend", "run", "--format", "json", "hello", "world"]);
+        let cli = parse(["hya", "run", "--format", "json", "hello", "world"]);
         match cli.command {
             Some(super::Command::Run {
                 message,
@@ -475,14 +530,7 @@ mod tests {
 
     #[test]
     fn parses_compat_serve_network_aliases() {
-        let cli = parse([
-            "hya-backend",
-            "serve",
-            "--hostname",
-            "0.0.0.0",
-            "--port",
-            "4096",
-        ]);
+        let cli = parse(["hya", "serve", "--hostname", "0.0.0.0", "--port", "4096"]);
         match cli.command {
             Some(super::Command::Serve {
                 bind,
@@ -505,7 +553,7 @@ mod tests {
     #[test]
     fn parses_compat_serve_cors_and_mdns_flags() {
         let cli = parse([
-            "hya-backend",
+            "hya",
             "serve",
             "--mdns",
             "--mdns-domain",
@@ -537,7 +585,7 @@ mod tests {
 
     #[test]
     fn parses_models_command_without_refresh() {
-        let cli = parse(["hya-backend", "models", "openai", "--verbose"]);
+        let cli = parse(["hya", "models", "openai", "--verbose"]);
         match cli.command {
             Some(super::Command::Models { provider, verbose }) => {
                 assert_eq!(provider.as_deref(), Some("openai"));
@@ -549,7 +597,7 @@ mod tests {
 
     #[test]
     fn parses_compat_providers_alias_for_auth_list() {
-        let cli = parse(["hya-backend", "providers", "list"]);
+        let cli = parse(["hya", "providers", "list"]);
         match cli.command {
             Some(super::Command::Auth {
                 command: crate::auth_cmd::AuthCommand::List,
@@ -561,7 +609,7 @@ mod tests {
     #[test]
     fn parses_oauth_login_command() {
         let cli = parse([
-            "hya-backend",
+            "hya",
             "oauth",
             "login",
             "--provider",
@@ -602,7 +650,7 @@ mod tests {
     #[test]
     fn parses_oauth_login_loopback_and_browser_flags() {
         let cli = parse([
-            "hya-backend",
+            "hya",
             "oauth",
             "login",
             "--provider",
@@ -632,7 +680,7 @@ mod tests {
 
     #[test]
     fn parses_bundle_search_query_and_requires_one() {
-        let cli = parse(["hya-backend", "bundle", "search", "goal-loop"]);
+        let cli = parse(["hya", "bundle", "search", "goal-loop"]);
         match cli.command {
             Some(super::Command::Bundle {
                 command: super::BundleCommand::Search { query },
@@ -641,7 +689,7 @@ mod tests {
             }
             _ => panic!("expected bundle search command"),
         }
-        let error = Cli::try_parse_from(["hya-backend", "bundle", "search"])
+        let error = Cli::try_parse_from(["hya", "bundle", "search"])
             .err()
             .expect("bundle search without a query must fail to parse");
         assert_eq!(

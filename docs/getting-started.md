@@ -1,7 +1,7 @@
 # Getting Started
 
 This guide runs hya from the workspace. The only shipped binary is the backend
-CLI/API binary `hya-backend`; there is currently no interactive TUI (a
+CLI/API binary `hya`; there is currently no interactive TUI (a
 replacement built on `hya-sdk-v1` may be built later). Clients drive the
 backend over the `hya.v1` HTTP/SSE/WebSocket or gRPC contract.
 
@@ -20,7 +20,7 @@ cargo build --workspace
 ```
 
 Building does not create `~/.config/hya`; the starter config is created on the
-first `hya-backend` startup that needs runtime config.
+first `hya` startup that needs runtime config.
 
 ### Install from source (`./install.sh`)
 
@@ -51,9 +51,9 @@ Failures are easiest to diagnose if you know the order of operations
    writable directory, prints remedies (`sudo ./install.sh` or
    `./install.sh --prefix "$HOME/.local"`) and exits 1.
 2. **Bun preflight.** `bun --version` must succeed or the install aborts.
-3. **Cargo build.** Builds the locked `hya-backend` binaries and the five
+3. **Cargo build.** Builds the locked `hya` binaries and the five
    tool-family libraries for the selected profile.
-4. **Stage runtimes.** Stages the `hya-backend` binary, packages the twelve
+4. **Stage runtimes.** Stages the `hya` binary, packages the twelve
    first-party bundles with `cargo run -p xtask -- stage-first-party-bundles`,
    and stages the Bun adapter at `lib/hya/bun-adapter` with its pinned lockfile
    by running `bun install --frozen-lockfile --production`.
@@ -63,21 +63,21 @@ Failures are easiest to diagnose if you know the order of operations
    files in `bundles/` are left alone. An `ERR`/`INT`/`TERM` trap calls
    `restore_install` so a failed or interrupted install restores the previous
    backend, adapter, and bundles and cleans leftovers; it does not leave a
-   half-installed `hya-backend`.
+   half-installed `hya`.
 6. **Post-install verification** (skipped under `--dry-run`, which only
    prints the checks):
-   - Runs `hya-backend --version` and `hya-backend --help`.
-   - Runs `hya-backend bundle list` with an isolated `HOME` and requires every
+   - Runs `hya --version` and `hya --help`.
+   - Runs `hya bundle list` with an isolated `HOME` and requires every
      first-party bundle, which proves the installed backend loads them.
    - Asserts the Bun adapter payload and its production dependencies exist
      under `lib/hya/bun-adapter`.
-   - **Fails** if `command -v hya-backend` does not resolve to the install path
-     (usual cause: an older `hya-backend` earlier on `PATH`).
+   - **Fails** if `command -v hya` does not resolve to the install path
+     (usual cause: an older `hya` earlier on `PATH`).
 
-The installer produces the same layout as a release archive: `bin/hya-backend`,
-`bundles/hya-*.hyabundle`, and `lib/hya/bun-adapter`. Bare `hya-backend` (no subcommand)
+The installer produces the same layout as a release archive: `bin/hya`,
+`bundles/hya-*.hyabundle`, and `lib/hya/bun-adapter`. Bare `hya` (no subcommand)
 prints a guidance banner; see the
-[CLI Reference](cli.md#bare-hya-backend).
+[CLI Reference](cli.md#bare-hya).
 
 ## Run One Headless Turn
 
@@ -177,12 +177,12 @@ providers:
 Then provide the key and confirm the catalog resolved:
 
 ```sh
-export ANTHROPIC_API_KEY=sk-...                # or use `hya-backend login` instead of {env:...}
-hya-backend login anthropic "$ANTHROPIC_API_KEY"   # optional; takes precedence over api_key
-hya-backend models                            # should list claude-sonnet-4-6, not be empty
+export ANTHROPIC_API_KEY=sk-...                # or use `hya login` instead of {env:...}
+hya login anthropic "$ANTHROPIC_API_KEY"   # optional; takes precedence over api_key
+hya models                            # should list claude-sonnet-4-6, not be empty
 ```
 
-`hya-backend login <provider> <token>` stores an auth token that takes precedence over
+`hya login <provider> <token>` stores an auth token that takes precedence over
 inline `api_key`. For a fully-commented sample config, documented environment
 variables, and MCP/plugin setup, see [Configuration](configuration.md). Note that
 the configuration page lists selected `HYA_*` variables used by common workflows.

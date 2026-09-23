@@ -8,7 +8,7 @@ stream.
 user input
    |
    v
-hya-backend / hya-server
+hya / hya-server
    |
    v
 SessionEngine
@@ -36,7 +36,7 @@ API clients / transcript renderers
 | Persistence | [`hya-store`](../../crates/hya-store) | Append and replay events from SQLite; fold projections on read. |
 | Runtime | [`hya-core`](../../crates/hya-core) | Own sessions, turn execution, durable Workflow execution/replay, event publication, hooks, compaction, goal/loop/team primitives. |
 | Composition/control | [`hya-app`](../../crates/hya-app), [`hya-bundle`](../../crates/hya-bundle) | Build runtime bindings, admit Workflow commands, and model AgentBundle/WorkflowBundle packages. |
-| Surfaces/transports | [`hya-backend`](../../crates/hya-backend), [`hya-server`](../../crates/hya-server), [`hya-api`](../../crates/hya-api), [`hya-client`](../../crates/hya-client), [`hya-sdk-v1`](../../crates/hya-sdk-v1), [`hya-plugin-compat`](../../crates/hya-plugin-compat) | Expose the CLI, the `hya.v1` HTTP/SSE/WebSocket + gRPC contract, typed clients, and the Compat plugin adapter. The legacy Compat transport crates and the TypeScript TUI were removed; there is no interactive frontend today. |
+| Surfaces/transports | [`hya-backend`](../../crates/hya-backend) (the `hya` executable), [`hya-server`](../../crates/hya-server), [`hya-api`](../../crates/hya-api), [`hya-client`](../../crates/hya-client), [`hya-sdk-v1`](../../crates/hya-sdk-v1), [`hya-plugin-compat`](../../crates/hya-plugin-compat) | Expose the CLI, the `hya.v1` HTTP/SSE/WebSocket + gRPC contract, typed clients, and the Compat plugin adapter. The legacy Compat transport crates and the TypeScript TUI were removed; there is no interactive frontend today. |
 
 ## Turn Flow
 
@@ -72,18 +72,18 @@ The event log is the source of truth. This gives hya a few useful properties:
 
 ## Current Runtime Surfaces
 
-- Bare `hya-backend` prints a version banner plus guidance (serve / exec / -p);
+- Bare `hya` prints a version banner plus guidance (serve / exec / -p);
   no interactive frontend is bundled.
-- `hya-backend exec` runs one turn and prints a transcript.
-- `hya-backend run` is the headless prompt entry point.
-- `hya-backend -p` runs goal mode with an independent model-backed evaluator.
-- `hya-backend serve` exposes the `hya.v1` contract over HTTP/JSON+SSE+WebSocket
+- `hya exec` runs one turn and prints a transcript.
+- `hya run` is the headless prompt entry point.
+- `hya -p` runs goal mode with an independent model-backed evaluator.
+- `hya serve` exposes the `hya.v1` contract over HTTP/JSON+SSE+WebSocket
   on `/v1` and, with `HYA_GRPC_BIND`, over gRPC (see
   [Server and Client](server-client.md)).
-- `hya-backend tail-session` replays JSON envelopes from a persisted SQLite event log.
-- `hya-backend models`, `login`, `auth`/`providers`, `agent`, `sessions`, and
+- `hya tail-session` replays JSON envelopes from a persisted SQLite event log.
+- `hya models`, `login`, `auth`/`providers`, `agent`, `sessions`, and
   `rpc` expose local catalogs, auth tokens, session listing, and JSONL
   integration modes.
-- `hya-backend workflow` and `GET/POST /v1/sessions/{session}/workflow` use
+- `hya workflow` and `GET/POST /v1/sessions/{session}/workflow` use
   the same app-owned `WorkflowControl` path; route assignment and bounded
   outcomes remain in the canonical event stream.

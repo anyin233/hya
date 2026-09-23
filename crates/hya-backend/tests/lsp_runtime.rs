@@ -42,7 +42,7 @@ async fn configured_language_server_exposes_workspace_symbols()
             }
         }))?,
     )?;
-    let mut backend = tokio::process::Command::new(env!("CARGO_BIN_EXE_hya-backend"))
+    let mut backend = tokio::process::Command::new(env!("CARGO_BIN_EXE_hya"))
         .args(["serve", "--bind", "127.0.0.1:0"])
         .env("HOME", root.0.join("home"))
         .env("XDG_CONFIG_HOME", &config)

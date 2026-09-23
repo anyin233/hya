@@ -1,11 +1,8 @@
-# 0.37.19
+# 0.38.0
 
-## Multi-platform releases
+## One `hya` command
 
-- Build and publish every release for `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, and `aarch64-apple-darwin`. Each target gets its own `hya-<version>-<target>.tar.gz` and five native tool-family bundle assets.
-- Publish the seven platform-independent bundles once. The release job fails if any target built them with different bytes.
-- Each target job writes an attested `SHA256SUMS-<target>`. The release job checks them all, then writes and attests a combined `SHA256SUMS`. Checksums use the portable `shasum -a 256`.
-- `release-rehearsal` rehearses any target in the release matrix on a host of that target, including macOS. It requires the workflow matrix to list exactly the supported targets and fails early on a foreign host.
-- Require Bun 1.4.2 for releases and the rehearsal and drop support for older Bun versions. The rehearsal now fails before building if the Bun adapter `bun.lock` uses a lockfile version the pinned Bun cannot read. The previous 1.3.14 pin could not read the checked-in lockfile, which would have failed every release at `bun install`.
-- `tests/install_script.sh` now covers the current installer (twelve bundles, Bun adapter, rollback) and runs in the workspace tests. It had been failing since the Compat adapter was removed.
-- Fix a flaky LSP transport test: parallel tests could create the same temporary workspace because the clock repeats within a tick, and one test deleted it while another started its language server there. Workspace names now include a per-process counter.
+- **Breaking:** the shipped executable is now `hya` (formerly `hya-backend`). Every terminal interface goes through this one command, and subcommands select what you control: `exec`/`run`/`-p`/`loop`, `serve`/`rpc`, `sessions`/`tail-session`, `login`/`oauth`/`auth`/`models`, `agent`/`bundle`/`workflow`, and `update`. The Cargo package keeps its name, so build with `cargo build -p hya-backend --bin hya`.
+- **Breaking:** the standalone `hya-updater` binary is removed. Its commands moved to `hya update version|status|recover|apply|discard|init-roots` with the same flags, and `hya update version` now prints `hya update <version> protocol <n>`. The command code lives in the independent `hya-updater` library (`hya_updater::cli`), which still has no runtime dependencies. `hya` runs `update` before it loads any config, bundles, providers, plugins, MCP, or session store. Owner-gated activation (`--owner-authorized-activation`) is unchanged.
+- Release archives and `install.sh` now place `bin/hya`. After a successful install, `install.sh` deletes a leftover `bin/hya-backend` from an earlier release. A failed install keeps it.
+- Re-login hints, bundle-authoring and self-update skills, the E2E harness, `startup-bench`, `release-rehearsal`, CI, and the docs all use the `hya` name.

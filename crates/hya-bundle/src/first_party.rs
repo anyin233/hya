@@ -2,7 +2,7 @@
 //!
 //! First-party tools, agents, skills, commands, channel policy and workflows are bundle
 //! sources. The backend loads them when it starts instead of compiling them
-//! into the binary. An installed backend (`<prefix>/bin/hya-backend`) trusts
+//! into the binary. An installed backend (`<prefix>/bin/hya`) trusts
 //! only the allowlisted packages in `<prefix>/bundles/`. A Cargo build reads the
 //! in-tree sources, so edits apply on restart and a stale staged package cannot
 //! shadow them.
