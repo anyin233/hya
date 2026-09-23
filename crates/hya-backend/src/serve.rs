@@ -15,12 +15,15 @@ pub(crate) async fn cmd_serve(
     yolo: bool,
     pure: bool,
 ) -> anyhow::Result<()> {
+    emit_startup_mark("backend_start", None);
     super::first_run_config_bootstrap(false)?;
     let store = open_store(&db).await?;
+    emit_startup_mark("store_open", None);
     let mut runtime = resolve_runtime(model_override)
         .await
         .with_yolo(yolo)
         .with_pure(pure);
+    emit_startup_mark("runtime_resolved", None);
     let pending_discovery = std::mem::take(&mut runtime.pending_discovery);
     // Server AppState: base-only agent slot. Environment + AGENTS + references
     // are discovered per turn so Bundle Some does not drop project AGENTS and
@@ -47,6 +50,7 @@ pub(crate) async fn cmd_serve(
         )
         .await?
     };
+    emit_startup_mark("engine_built", None);
     let engine = built.engine();
     let asks = built
         .take_asks()
@@ -222,26 +226,5 @@ async fn wait_for_termination(signals: TerminationSignals) {
 
 /// Emit a structured startup mark when `HYA_STARTUP_TRACE` is truthy.
 fn emit_startup_mark(mark: &str, detail: Option<&str>) {
-    let enabled = std::env::var_os("HYA_STARTUP_TRACE")
-        .map(|value| {
-            let text = value.to_string_lossy();
-            text.eq_ignore_ascii_case("1") || text.eq_ignore_ascii_case("true")
-        })
-        .unwrap_or(false);
-    if !enabled {
-        return;
-    }
-    let wall_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_millis())
-        .unwrap_or(0);
-    match detail {
-        Some(detail) => {
-            let escaped = detail.replace('\\', "\\\\").replace('"', "\\\"");
-            eprintln!(
-                r#"{{"hya_startup":true,"mark":"{mark}","wall_ms":{wall_ms},"detail":"{escaped}"}}"#
-            );
-        }
-        None => eprintln!(r#"{{"hya_startup":true,"mark":"{mark}","wall_ms":{wall_ms}}}"#),
-    }
+    hya_app::startup_trace::mark(mark, detail);
 }

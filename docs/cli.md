@@ -536,9 +536,12 @@ matters for supervisors (systemd, `docker stop`) and for test harnesses that
 assert a clean exit.
 
 **Startup trace.** When `HYA_STARTUP_TRACE` is `1` or `true` (case-insensitive),
-serve also emits a JSON `backend_listen` startup mark on stderr after the listen
-line, for example
+serve also emits JSON startup phase marks on stderr (`backend_start`,
+`store_open`, `runtime_resolved`, `interrupted_turns_recovered`,
+`store_recovery`, `engine_runtime`, `residents_recovered`, `engine_built`, and
+`backend_listen` after the listen line), for example
 `{"hya_startup":true,"mark":"backend_listen","wall_ms":…,"detail":"<url>"}`.
+See [Diagnosing Slow Startup](troubleshooting.md#diagnosing-slow-startup).
 
 The server serves exactly one HTTP contract — `hya.v1` — under `/v1`
 (HTTP/JSON + SSE + WebSocket). The former native `/sessions/*` routes and the

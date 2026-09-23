@@ -16,8 +16,8 @@ See the [CLI Reference](cli.md) and the [Protocol guide](protocol/README.md).
 ## Diagnosing Slow Startup
 
 Set `HYA_STARTUP_TRACE=1` (the only truthy values are exactly `1` or `true`,
-case-insensitive) to have `hya serve` emit a structured startup mark on
-**stderr** after the listen line:
+case-insensitive) to have `hya serve` emit structured startup phase marks on
+**stderr**, ending with one after the listen line:
 
 ```sh
 HYA_STARTUP_TRACE=1 hya serve --bind 127.0.0.1:0 2>trace.log
@@ -25,14 +25,26 @@ HYA_STARTUP_TRACE=1 hya serve --bind 127.0.0.1:0 2>trace.log
 
 Each mark is one JSON line with a wall-clock timestamp:
 
-| Mark | Source | Notes |
+| Mark | Source | Closes the phase |
 | --- | --- | --- |
-| `backend_listen` | `hya` | Backend announced its listen URL. |
+| `backend_start` | `hya` | `serve` command entered (process start overhead before it). |
+| `store_open` | `hya` | SQLite opened and pending migrations applied. |
+| `runtime_resolved` | `hya` | Config, auth, providers, MCP/plugin specs resolved. |
+| `interrupted_turns_recovered` | `hya-app` | Runtime-owner claim and crash recovery of turns a dead process left open (indexed; touches only those sessions). |
+| `store_recovery` | `hya-app` | Workflow, resident-claim, and admission recovery. |
+| `engine_runtime` | `hya-app` | Tool registry, plugins, catalogs, and the session engine assembled. |
+| `residents_recovered` | `hya-app` | Every resident actor whose claim survived the restart re-registered; `detail` is the count. Reads the team-root and actor projections. |
+| `engine_built` | `hya` | Team/workflow supervisors started. |
+| `backend_listen` | `hya` | Backend announced its listen URL (`detail`). |
 
-For repeatable startup measurements use the benchmark task:
+For repeatable startup measurements use the benchmark task. `--db` copies an
+existing database into each run's scratch directory (the original is never
+opened) and prints each run's phase waterfall, so cold listen on a large event
+log can be compared before and after a change:
 
 ```sh
 cargo run -p xtask -- startup-bench
+cargo run -p xtask -- startup-bench --db ~/.local/share/hya/hya.db --runs 3 --timeout-secs 300
 ```
 
 ## Provider Call Fails with `http: <status>: ...`

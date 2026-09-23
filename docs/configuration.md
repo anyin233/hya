@@ -940,7 +940,7 @@ hya honors `HOME` and `XDG_CONFIG_HOME` / `XDG_DATA_HOME` / `XDG_STATE_HOME` /
 | `HYA_BUN_ADAPTER_DIR` | Path to an alternate Bun extension adapter checkout (`kind: bun` plugins). | Resolution order: this env override, executable-adjacent `../lib/hya/bun-adapter`, then workspace `crates/hya-plugin-bun/adapter`. | `crates/hya-app/src/plugins.rs` |
 | `HYA_CLAUDE_ADAPTER_DIR` | Path to an alternate Claude Code adapter checkout (`kind: claude` plugins and `bundle install --claude`). | Resolution order: this env override, executable-adjacent `../lib/hya/claude-adapter`, then workspace `crates/hya-plugin-claude/adapter`. | `crates/hya-app/src/plugins.rs` |
 | `HYA_BACKEND_BIN` | Binary under test for the `startup-bench` xtask; overrides the default `hya serve` target. | workspace `target/{profile}` binary | `crates/xtask/src/startup_bench.rs` |
-| `HYA_STARTUP_TRACE` | When `1` or `true` (case-insensitive; any other value off), `hya serve` emits a newline-delimited JSON startup mark to stderr after the listen line: `{"hya_startup":true,"mark":"backend_listen","wall_ms":…,"detail":"<url>"}`. | off | `crates/hya-backend/src/serve.rs` |
+| `HYA_STARTUP_TRACE` | When `1` or `true` (case-insensitive; any other value off), `hya serve` emits newline-delimited JSON startup phase marks to stderr, the last after the listen line: `{"hya_startup":true,"mark":"backend_listen","wall_ms":…,"detail":"<url>"}`. Mark names are listed in [troubleshooting](troubleshooting.md#diagnosing-slow-startup). | off | `crates/hya-app/src/startup_trace.rs`, `crates/hya-backend/src/serve.rs` |
 
 ### Bun adapter (`HYA_*`)
 
