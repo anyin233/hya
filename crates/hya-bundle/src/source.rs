@@ -32,6 +32,18 @@ impl SourceFile {
         }
     }
 
+    /// Logical `/`-separated path relative to the bundle root.
+    #[must_use]
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+
+    /// Raw file contents.
+    #[must_use]
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
     pub(crate) fn into_parts(self) -> (String, Vec<u8>) {
         (self.path, self.bytes)
     }

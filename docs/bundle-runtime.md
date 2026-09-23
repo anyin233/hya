@@ -128,7 +128,7 @@ does not register any tools or grant extra host capabilities.
 cargo run -p xtask -- package-bundle ./search ./search.hyabundle
 hya bundle install ./search.hyabundle
 hya bundle info acme/search
-hya bundle uninstall acme/search
+hya bundle remove acme/search
 ```
 
 A Full-plane agent can call `search__lookup`. For an AgentBundle or

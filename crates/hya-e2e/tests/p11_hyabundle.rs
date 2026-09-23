@@ -25,7 +25,7 @@ async fn t2_7_hyabundle_install_list_info_uninstall() {
 
     let install = env
         .backend
-        .bundle_cli(&["bundle", "install", package.to_str().unwrap()])
+        .bundle_cli(&["bundle", "install", "-y", package.to_str().unwrap()])
         .expect("install");
     assert!(
         install.status.success(),
@@ -64,7 +64,7 @@ async fn t2_7_hyabundle_install_list_info_uninstall() {
 
     let uninstall = env
         .backend
-        .bundle_cli(&["bundle", "uninstall", BUNDLE_ID])
+        .bundle_cli(&["bundle", "uninstall", "-y", BUNDLE_ID])
         .expect("uninstall");
     assert!(
         uninstall.status.success(),

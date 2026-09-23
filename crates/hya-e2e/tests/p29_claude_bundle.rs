@@ -39,7 +39,13 @@ async fn t2_24_claude_import_runs_packaged_hook_and_skill() {
         .unwrap();
     let install = env
         .backend
-        .bundle_cli(&["bundle", "install", "--claude", root.to_str().unwrap()])
+        .bundle_cli(&[
+            "bundle",
+            "install",
+            "-y",
+            "--claude",
+            root.to_str().unwrap(),
+        ])
         .unwrap();
     assert!(
         install.status.success(),
@@ -65,7 +71,7 @@ async fn t2_24_claude_import_runs_packaged_hook_and_skill() {
     );
     let uninstall = env
         .backend
-        .bundle_cli(&["bundle", "uninstall", "claude/claude-e2e"])
+        .bundle_cli(&["bundle", "uninstall", "-y", "claude/claude-e2e"])
         .unwrap();
     assert!(
         uninstall.status.success(),

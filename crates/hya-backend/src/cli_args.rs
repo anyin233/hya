@@ -306,6 +306,65 @@ mod tests {
     }
 
     #[test]
+    fn parses_bundle_scope_confirmation_and_verify_flags() {
+        use crate::bundle_cmd::BundleCommand;
+
+        for verb in ["remove", "uninstall"] {
+            let cli = parse_slice(&["hya", "bundle", verb, "-y", "--project", "hya/demo"]);
+            assert!(
+                matches!(
+                    cli.command,
+                    Some(super::Command::Bundle {
+                        command: BundleCommand::Remove { .. }
+                    })
+                ),
+                "`bundle {verb}` must parse as remove"
+            );
+        }
+        for args in [
+            &["hya", "bundle", "install", "-y", "demo.hyabundle"][..],
+            &[
+                "hya",
+                "bundle",
+                "install",
+                "--yes",
+                "--user",
+                "demo.hyabundle",
+            ],
+            &["hya", "bundle", "install", "--project", "demo.hyabundle"],
+            &["hya", "bundle", "verify", "demo.hyabundle"],
+            &[
+                "hya",
+                "bundle",
+                "verify",
+                "--project",
+                "--overwrite",
+                "demo.hyabundle",
+            ],
+            &["hya", "bundle", "list", "--project"],
+            &["hya", "bundle", "list", "--user"],
+            &["hya", "bundle", "info", "--project", "hya/demo"],
+            &["hya", "bundle", "info", "demo.hyabundle"],
+        ] {
+            parse_slice(args);
+        }
+        let conflict = Cli::try_parse_from([
+            "hya",
+            "bundle",
+            "install",
+            "--user",
+            "--project",
+            "demo.hyabundle",
+        ]);
+        assert!(conflict.is_err(), "--user and --project are exclusive");
+        let verify_yes = Cli::try_parse_from(["hya", "bundle", "verify", "-y", "demo.hyabundle"]);
+        assert!(
+            verify_yes.is_err(),
+            "verify never installs, so it takes no -y"
+        );
+    }
+
+    #[test]
     fn rejects_mini_as_unknown_argument() {
         let err = match Cli::try_parse_from(["hya", "--mini"]) {
             Ok(_) => panic!("--mini should be rejected once legacy TUI is removed"),

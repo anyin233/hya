@@ -182,7 +182,7 @@ permission:
 
         for package in &spec.preinstall_bundles {
             let output = Command::new(&spec.binary)
-                .args(["bundle", "install"])
+                .args(["bundle", "install", "-y"])
                 .arg(package)
                 .env("XDG_DATA_HOME", &xdg_data_home)
                 .env("HOME", &home)

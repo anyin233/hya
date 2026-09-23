@@ -321,7 +321,7 @@ fn cli_installs_and_runs_shipped_argus_workflowbundle() -> Result<(), Box<dyn st
     fs::write(&package, write_public_package(&source)?)?;
 
     let installed = workflow_command(&env)
-        .args(["bundle", "install"])
+        .args(["bundle", "install", "-y"])
         .arg(&package)
         .output()?;
     assert!(

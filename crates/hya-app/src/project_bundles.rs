@@ -4,12 +4,23 @@
 //! shadows an installed bundle with the same identity id **or** the same
 //! namespace, and content changes are republished at root bind boundaries via
 //! a content fingerprint (the registry generation does not move for files).
+//!
+//! [`install_project_bundle`] and [`remove_project_bundle`] manage this tier
+//! for `hya bundle install|remove --project`. They follow the user registry's
+//! rules: same-content reinstalls are unchanged, downgrades and namespace
+//! takeovers need [`NamespaceInstallPolicy::OverwriteConflicts`], and an
+//! install writes into a staging directory first and renames it into place.
 
 use std::collections::BTreeMap;
 use std::hash::{Hash, Hasher};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
-use hya_bundle::{BundleSource, PreparedCatalog, SourceFile};
+use hya_bundle::{
+    BundleCatalog, BundleError, BundleSource, PreparedCatalog, PreparedInstallableBundle,
+    SourceFile,
+};
+use hya_store::{BundleInstallAction, NamespaceInstallPolicy, StoreError};
 
 /// Default project bundle directory: `$CWD/.hya/bundles` (the backend process
 /// working directory at startup, mirroring [`crate::plugins::plugins_dir`]).
@@ -147,4 +158,398 @@ fn directory_digest(dir: &Path) -> u64 {
         bytes.hash(&mut hasher);
     }
     hasher.finish()
+}
+
+/// Failure managing a project-scope bundle.
+#[derive(Debug, thiserror::Error)]
+pub enum ProjectBundleError {
+    /// A policy failure shared with the user registry (namespace conflict,
+    /// downgrade, content conflict, reserved Agent id, or bundle not found).
+    #[error(transparent)]
+    Store(#[from] StoreError),
+    /// The bundle sources do not prepare.
+    #[error(transparent)]
+    Bundle(#[from] BundleError),
+    /// The install target exists but is not a project bundle with this id.
+    #[error(
+        "PROJECT_BUNDLE_DIRECTORY_OCCUPIED: {path} exists and is not a project bundle for {bundle_id}; move or remove it first"
+    )]
+    DirectoryOccupied {
+        /// Occupied directory.
+        path: PathBuf,
+        /// Bundle id being installed.
+        bundle_id: String,
+    },
+    /// A filesystem operation failed.
+    #[error("project bundle {path}: {detail}")]
+    Io {
+        /// Path the operation touched.
+        path: PathBuf,
+        /// Underlying error.
+        detail: String,
+    },
+}
+
+fn io_error(path: &Path, error: &std::io::Error) -> ProjectBundleError {
+    ProjectBundleError::Io {
+        path: path.to_path_buf(),
+        detail: error.to_string(),
+    }
+}
+
+/// One valid project bundle source directory.
+#[derive(Clone, Debug)]
+pub struct ProjectBundle {
+    dir: PathBuf,
+    prepared: std::sync::Arc<PreparedCatalog>,
+    bundle: PreparedInstallableBundle,
+}
+
+impl ProjectBundle {
+    /// Source directory under `.hya/bundles`.
+    #[must_use]
+    pub fn dir(&self) -> &Path {
+        &self.dir
+    }
+
+    /// Prepared single-bundle catalog.
+    #[must_use]
+    pub fn prepared(&self) -> &PreparedCatalog {
+        &self.prepared
+    }
+
+    /// The prepared bundle.
+    #[must_use]
+    pub fn bundle(&self) -> &PreparedInstallableBundle {
+        &self.bundle
+    }
+
+    /// Bundle identity id.
+    #[must_use]
+    pub fn bundle_id(&self) -> &str {
+        &self.bundle.identity().id
+    }
+
+    /// Bundle identity version.
+    #[must_use]
+    pub fn version(&self) -> &str {
+        &self.bundle.identity().version
+    }
+}
+
+/// Prepare one source set into a [`ProjectBundle`] rooted at `dir`.
+fn prepare_project_bundle(
+    dir: PathBuf,
+    source: BundleSource,
+) -> Result<ProjectBundle, ProjectBundleError> {
+    let prepared = hya_bundle::prepare_package(source)?;
+    let [bundle] = prepared.bundles() else {
+        return Err(StoreError::BundleRegistryData(
+            "a project bundle must prepare to exactly one bundle".to_string(),
+        )
+        .into());
+    };
+    let bundle = bundle.clone();
+    Ok(ProjectBundle {
+        dir,
+        prepared: std::sync::Arc::new(prepared),
+        bundle,
+    })
+}
+
+/// Every valid project bundle under `dir`, sorted by bundle id then
+/// directory. Directories without a manifest or that fail to prepare are
+/// skipped, as [`load_project_bundles`] skips them at runtime.
+#[must_use]
+pub fn project_bundles(dir: &Path) -> Vec<ProjectBundle> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut bundles = entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.is_dir())
+        .filter_map(|path| {
+            let source = directory_source(&path)?;
+            prepare_project_bundle(path, source).ok()
+        })
+        .collect::<Vec<_>>();
+    bundles.sort_by(|left, right| {
+        (left.bundle_id(), left.dir()).cmp(&(right.bundle_id(), right.dir()))
+    });
+    bundles
+}
+
+/// Directory name a fresh install uses for `bundle_id` (`acme/tools` ->
+/// `acme__tools`). Bundle ids never contain `__` ambiguity that matters here:
+/// an occupied name is refused rather than merged.
+#[must_use]
+pub fn project_bundle_dir_name(bundle_id: &str) -> String {
+    bundle_id.replace('/', "__")
+}
+
+/// What [`install_project_bundle`] does (or did) with one bundle.
+#[derive(Clone, Debug)]
+pub struct ProjectInstallPlan {
+    /// The incoming bundle.
+    pub incoming: ProjectBundle,
+    /// Directory the bundle is (or will be) written to.
+    pub target: PathBuf,
+    /// Effect on the incoming bundle id.
+    pub action: BundleInstallAction,
+    /// Project bundles removed because the incoming bundle takes over their
+    /// namespace.
+    pub displaced: Vec<ProjectBundle>,
+}
+
+/// Reject any source path that could escape the bundle directory.
+fn validate_source_paths(files: &[SourceFile]) -> Result<(), ProjectBundleError> {
+    for file in files {
+        let path = file.path();
+        let unsafe_path = path.is_empty()
+            || path.starts_with('/')
+            || path.contains('\\')
+            || path
+                .split('/')
+                .any(|part| part.is_empty() || part == "." || part == "..");
+        if unsafe_path {
+            return Err(BundleError::InvalidSourcePath {
+                source_name: "project-install".to_string(),
+                path: path.to_string(),
+            }
+            .into());
+        }
+    }
+    Ok(())
+}
+
+/// Decide a project install of `files` into `dir` without writing anything.
+///
+/// # Errors
+/// Returns the same policy errors the user registry reports
+/// ([`StoreError::NamespaceConflict`], [`StoreError::BundleDowngradeRequired`],
+/// [`StoreError::BundleContentConflict`], [`StoreError::BundleAgentIdReserved`]),
+/// a prepare failure, or [`ProjectBundleError::DirectoryOccupied`]. Under
+/// [`NamespaceInstallPolicy::OverwriteConflicts`] a same-version content
+/// change replaces the directory instead of failing.
+pub fn plan_project_install(
+    dir: &Path,
+    files: &[SourceFile],
+    reserved_agent_ids: &[&str],
+    policy: NamespaceInstallPolicy,
+) -> Result<ProjectInstallPlan, ProjectBundleError> {
+    validate_source_paths(files)?;
+    let mut incoming = prepare_project_bundle(
+        PathBuf::new(),
+        BundleSource::new("project-install", files.to_vec()),
+    )?;
+    let bundle_id = incoming.bundle_id().to_string();
+    let version = incoming.version().to_string();
+    for agent in incoming.bundle().agents() {
+        if reserved_agent_ids.contains(&agent.id.as_str()) {
+            return Err(StoreError::BundleAgentIdReserved {
+                bundle_id,
+                agent_id: agent.id.as_str().to_string(),
+            }
+            .into());
+        }
+    }
+
+    let installed = project_bundles(dir);
+    let existing = installed
+        .iter()
+        .find(|bundle| bundle.bundle_id() == bundle_id);
+    let same_content =
+        existing.is_some_and(|bundle| bundle.prepared().digest() == incoming.prepared().digest());
+    if let Some(bundle) = existing
+        && !same_content
+        && bundle.version() != version
+        && hya_store::is_downgrade(&version, bundle.version())
+        && policy == NamespaceInstallPolicy::DenyConflicts
+    {
+        return Err(StoreError::BundleDowngradeRequired {
+            bundle_id,
+            installed_version: bundle.version().to_string(),
+            incoming_version: version,
+        }
+        .into());
+    }
+
+    let namespace = incoming.bundle().namespace().to_string();
+    let displaced = installed
+        .iter()
+        .filter(|bundle| {
+            bundle.bundle_id() != bundle_id && bundle.bundle().namespace() == namespace
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if let Some(owner) = displaced.first()
+        && policy == NamespaceInstallPolicy::DenyConflicts
+    {
+        return Err(StoreError::NamespaceConflict {
+            namespace,
+            existing_bundle_id: owner.bundle_id().to_string(),
+            incoming_bundle_id: bundle_id,
+        }
+        .into());
+    }
+
+    let action = match existing {
+        None => BundleInstallAction::Install,
+        Some(_) if same_content => BundleInstallAction::Unchanged,
+        Some(bundle)
+            if bundle.version() == version && policy == NamespaceInstallPolicy::DenyConflicts =>
+        {
+            return Err(StoreError::BundleContentConflict { bundle_id, version }.into());
+        }
+        Some(bundle) => BundleInstallAction::Replace {
+            installed_version: bundle.version().to_string(),
+        },
+    };
+
+    let target = match existing {
+        Some(bundle) => bundle.dir().to_path_buf(),
+        None => {
+            let target = dir.join(project_bundle_dir_name(&bundle_id));
+            if std::fs::symlink_metadata(&target).is_ok() {
+                return Err(ProjectBundleError::DirectoryOccupied {
+                    path: target,
+                    bundle_id,
+                });
+            }
+            target
+        }
+    };
+
+    let mut complete = installed
+        .iter()
+        .filter(|bundle| {
+            bundle.bundle_id() != bundle_id
+                && !displaced
+                    .iter()
+                    .any(|loser| loser.bundle_id() == bundle.bundle_id())
+        })
+        .map(|bundle| bundle.bundle().clone())
+        .collect::<Vec<_>>();
+    complete.push(incoming.bundle().clone());
+    BundleCatalog::from_prepared(&complete).map_err(StoreError::from)?;
+
+    incoming.dir.clone_from(&target);
+    Ok(ProjectInstallPlan {
+        incoming,
+        target,
+        action,
+        displaced,
+    })
+}
+
+/// Unique sibling path under `parent` for staging or backups.
+fn scratch_path(parent: &Path, label: &str) -> PathBuf {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    parent.join(format!(
+        ".bundle-{label}-{}-{nanos}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ))
+}
+
+fn write_files(root: &Path, files: &[SourceFile]) -> Result<(), ProjectBundleError> {
+    for file in files {
+        let path = root.join(file.path());
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|error| io_error(parent, &error))?;
+        }
+        std::fs::write(&path, file.bytes()).map_err(|error| io_error(&path, &error))?;
+    }
+    Ok(())
+}
+
+/// Install `files` as a project bundle under `dir` (usually `.hya/bundles`).
+///
+/// The sources are written to a staging directory beside `dir` and renamed
+/// into place, so the runtime loader never sees a half-written bundle; a
+/// replaced directory is restored if the final rename fails. Returns the
+/// executed plan; an [`BundleInstallAction::Unchanged`] plan writes nothing.
+///
+/// # Errors
+/// Everything [`plan_project_install`] reports, plus filesystem failures.
+pub fn install_project_bundle(
+    dir: &Path,
+    files: Vec<SourceFile>,
+    reserved_agent_ids: &[&str],
+    policy: NamespaceInstallPolicy,
+) -> Result<ProjectInstallPlan, ProjectBundleError> {
+    let plan = plan_project_install(dir, &files, reserved_agent_ids, policy)?;
+    if plan.action == BundleInstallAction::Unchanged {
+        return Ok(plan);
+    }
+    std::fs::create_dir_all(dir).map_err(|error| io_error(dir, &error))?;
+    let scratch_parent = dir.parent().unwrap_or(dir);
+    let staging = scratch_path(scratch_parent, "staging");
+    if let Err(error) = write_files(&staging, &files) {
+        let _ = std::fs::remove_dir_all(&staging);
+        return Err(error);
+    }
+
+    let backup = plan
+        .target
+        .exists()
+        .then(|| scratch_path(scratch_parent, "replaced"));
+    if let Some(backup) = &backup
+        && let Err(error) = std::fs::rename(&plan.target, backup)
+    {
+        let _ = std::fs::remove_dir_all(&staging);
+        return Err(io_error(&plan.target, &error));
+    }
+    if let Err(error) = std::fs::rename(&staging, &plan.target) {
+        if let Some(backup) = &backup {
+            let _ = std::fs::rename(backup, &plan.target);
+        }
+        let _ = std::fs::remove_dir_all(&staging);
+        return Err(io_error(&plan.target, &error));
+    }
+    if let Some(backup) = &backup {
+        std::fs::remove_dir_all(backup).map_err(|error| io_error(backup, &error))?;
+    }
+    for loser in &plan.displaced {
+        std::fs::remove_dir_all(loser.dir()).map_err(|error| io_error(loser.dir(), &error))?;
+    }
+    Ok(plan)
+}
+
+/// Find the project bundle with `bundle_id` under `dir` without removing it.
+///
+/// # Errors
+/// [`StoreError::BundleNotFound`] when no valid project bundle has that id.
+pub fn find_project_bundle(
+    dir: &Path,
+    bundle_id: &str,
+) -> Result<ProjectBundle, ProjectBundleError> {
+    project_bundles(dir)
+        .into_iter()
+        .find(|bundle| bundle.bundle_id() == bundle_id)
+        .ok_or_else(|| {
+            StoreError::BundleNotFound {
+                bundle_id: bundle_id.to_string(),
+            }
+            .into()
+        })
+}
+
+/// Delete the source directory of the project bundle with `bundle_id`.
+///
+/// # Errors
+/// [`StoreError::BundleNotFound`] when no valid project bundle has that id, or
+/// a filesystem failure.
+pub fn remove_project_bundle(
+    dir: &Path,
+    bundle_id: &str,
+) -> Result<ProjectBundle, ProjectBundleError> {
+    let bundle = find_project_bundle(dir, bundle_id)?;
+    std::fs::remove_dir_all(bundle.dir()).map_err(|error| io_error(bundle.dir(), &error))?;
+    Ok(bundle)
 }

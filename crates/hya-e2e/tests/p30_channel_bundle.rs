@@ -72,7 +72,7 @@ async fn t2_25_installed_channel_policy_denies_child_send_and_uninstall_restores
         .unwrap();
     let installed = env
         .backend
-        .bundle_cli(&["bundle", "install", package.to_str().unwrap()])
+        .bundle_cli(&["bundle", "install", "-y", package.to_str().unwrap()])
         .unwrap();
     assert!(
         installed.status.success(),
@@ -93,7 +93,7 @@ async fn t2_25_installed_channel_policy_denies_child_send_and_uninstall_restores
 
     let removed = env
         .backend
-        .bundle_cli(&["bundle", "uninstall", "acme/channel-policy"])
+        .bundle_cli(&["bundle", "uninstall", "-y", "acme/channel-policy"])
         .unwrap();
     assert!(
         removed.status.success(),

@@ -111,6 +111,31 @@ pub enum BundleInstallOutcome {
     },
 }
 
+/// What [`BundleRegistry::install`] would do with a candidate, as reported by
+/// [`BundleRegistry::plan_install`] without writing anything.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BundleInstallPlan {
+    /// Effect on the candidate's own bundle id.
+    pub action: BundleInstallAction,
+    /// Other installed bundle ids removed because the candidate takes over
+    /// their namespace (only under [`NamespaceInstallPolicy::OverwriteConflicts`]).
+    pub displaced: Vec<String>,
+}
+
+/// Effect of an install on the candidate's bundle id.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum BundleInstallAction {
+    /// The bundle id is not installed yet.
+    Install,
+    /// A different version of the bundle id is installed and would be replaced.
+    Replace {
+        /// Version currently installed.
+        installed_version: String,
+    },
+    /// The same package content is already installed.
+    Unchanged,
+}
+
 /// Successful uninstall advances the registry generation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BundleUninstallOutcome {
@@ -121,11 +146,12 @@ pub enum BundleUninstallOutcome {
     },
 }
 
-/// Semver-aware downgrade check: `Some(true)` when `incoming` is strictly
-/// lower than `installed`, `Some(false)` otherwise, and `None` when either
-/// version is not semver-shaped (non-semver versions keep the legacy
-/// replace-always behavior).
-fn is_downgrade(incoming: &str, installed: &str) -> bool {
+/// Semver-aware downgrade check: `true` when `incoming` is strictly lower
+/// than `installed`. Non-semver versions never count as downgrades (they keep
+/// the legacy replace-always behavior). Shared with project-scope installs so
+/// both scopes apply one rule.
+#[must_use]
+pub fn is_downgrade(incoming: &str, installed: &str) -> bool {
     match (
         semver::Version::parse(incoming),
         semver::Version::parse(installed),
@@ -210,29 +236,15 @@ impl BundleRegistry {
         policy: NamespaceInstallPolicy,
         candidate: BundleInstallCandidate,
     ) -> Result<BundleInstallOutcome, StoreError> {
+        let incoming = decode_candidate(reserved_agent_ids, &candidate)?;
         let BundleInstallCandidate {
             source_digest,
             prepared_digest,
             prepared_bytes,
             installed_at,
         } = candidate;
-        let prepared = PreparedCatalog::decode(&prepared_bytes, &prepared_digest)?;
-        let [incoming] = prepared.bundles() else {
-            return Err(StoreError::BundleRegistryData(
-                "install candidate must contain exactly one mutable installed bundle".to_string(),
-            ));
-        };
-        let incoming = incoming.clone();
         let identity = incoming.identity();
         let bundle_id = identity.id.clone();
-        for agent in incoming.agents() {
-            if reserved_agent_ids.contains(&agent.id.as_str()) {
-                return Err(StoreError::BundleAgentIdReserved {
-                    bundle_id,
-                    agent_id: agent.id.as_str().to_string(),
-                });
-            }
-        }
         let version = identity.version.clone();
         let publisher = identity.publisher.clone();
 
@@ -248,119 +260,83 @@ impl BundleRegistry {
                 }
             })?;
         let snapshot = Self::snapshot_from_transaction(&mut transaction).await?;
-        let incoming_namespace = incoming.namespace().to_string();
-        let existing = snapshot
-            .bundles
-            .iter()
-            .find(|loaded| loaded.record.bundle_id == bundle_id);
+        let plan = plan_install(&snapshot, policy, incoming, source_digest)?;
 
-        // Same bundle id: refuse downgrades unless the policy allows them.
-        if let Some(loaded) = existing
-            && loaded.record.source_digest != source_digest
-            && loaded.record.version != version
-            && is_downgrade(&version, &loaded.record.version)
-            && policy == NamespaceInstallPolicy::DenyConflicts
-        {
-            return Err(StoreError::BundleDowngradeRequired {
-                bundle_id,
-                installed_version: loaded.record.version.clone(),
-                incoming_version: version,
-            });
-        }
-
-        // Cross-bundle namespace conflicts: refuse or replace the incumbent.
-        let namespace_losers: Vec<String> = snapshot
-            .bundles
-            .iter()
-            .filter(|loaded| {
-                loaded.record.bundle_id != bundle_id
-                    && loaded.prepared.namespace() == incoming_namespace
-            })
-            .map(|loaded| loaded.record.bundle_id.clone())
-            .collect();
-        if !namespace_losers.is_empty() && policy == NamespaceInstallPolicy::DenyConflicts {
-            return Err(StoreError::NamespaceConflict {
-                namespace: incoming_namespace,
-                existing_bundle_id: namespace_losers[0].clone(),
-                incoming_bundle_id: bundle_id,
-            });
-        }
-
-        let replaces = existing.is_some_and(|loaded| {
-            loaded.record.source_digest != source_digest && loaded.record.version != version
-        });
-
-        let mut complete = Vec::new();
-        for loaded in &snapshot.bundles {
-            if (replaces && loaded.record.bundle_id == bundle_id)
-                || namespace_losers.contains(&loaded.record.bundle_id)
-            {
-                continue;
-            }
-            complete.push(loaded.prepared.clone());
-        }
-        if existing.is_none() || replaces || !namespace_losers.is_empty() {
-            complete.push(incoming);
-        }
-        BundleCatalog::from_prepared(&complete)?;
-
-        for loser in &namespace_losers {
+        for loser in &plan.displaced {
             sqlx::query("DELETE FROM installed_bundle WHERE bundle_id = ?")
                 .bind(loser)
                 .execute(&mut *transaction)
                 .await?;
         }
 
-        if let Some(existing) = existing {
-            if existing.record.source_digest == source_digest {
+        match plan.action {
+            BundleInstallAction::Unchanged => {
                 transaction.commit().await?;
-                return Ok(BundleInstallOutcome::Unchanged {
+                Ok(BundleInstallOutcome::Unchanged {
                     generation: snapshot.generation,
-                });
+                })
             }
-            if existing.record.version == version {
-                return Err(StoreError::BundleContentConflict { bundle_id, version });
+            BundleInstallAction::Replace { .. } => {
+                let replaced = sqlx::query(
+                    "UPDATE installed_bundle SET version = ?, publisher = ?, source_digest = ?, prepared_digest = ?,
+                     prepared_bytes = ?, installed_at = ? WHERE bundle_id = ?",
+                )
+                .bind(version)
+                .bind(publisher)
+                .bind(source_digest.to_vec())
+                .bind(prepared_digest)
+                .bind(prepared_bytes)
+                .bind(installed_at)
+                .bind(bundle_id)
+                .execute(&mut *transaction)
+                .await?;
+                if replaced.rows_affected() != 1 {
+                    return Err(StoreError::BundleRegistryData(
+                        "bundle registry replacement row is missing".to_string(),
+                    ));
+                }
+                let generation = advance_generation(&mut transaction, snapshot.generation).await?;
+                transaction.commit().await?;
+                Ok(BundleInstallOutcome::Replaced { generation })
             }
-            let replaced = sqlx::query(
-                "UPDATE installed_bundle SET version = ?, publisher = ?, source_digest = ?, prepared_digest = ?,
-                 prepared_bytes = ?, installed_at = ? WHERE bundle_id = ?",
-            )
-            .bind(version)
-            .bind(publisher)
-            .bind(source_digest.to_vec())
-            .bind(prepared_digest)
-            .bind(prepared_bytes)
-            .bind(installed_at)
-            .bind(bundle_id)
-            .execute(&mut *transaction)
-            .await?;
-            if replaced.rows_affected() != 1 {
-                return Err(StoreError::BundleRegistryData(
-                    "bundle registry replacement row is missing".to_string(),
-                ));
+            BundleInstallAction::Install => {
+                sqlx::query(
+                    "INSERT INTO installed_bundle
+                     (bundle_id, version, publisher, source_digest, prepared_digest, prepared_bytes, installed_at)
+                     VALUES (?, ?, ?, ?, ?, ?, ?)",
+                )
+                .bind(bundle_id)
+                .bind(version)
+                .bind(publisher)
+                .bind(source_digest.to_vec())
+                .bind(prepared_digest)
+                .bind(prepared_bytes)
+                .bind(installed_at)
+                .execute(&mut *transaction)
+                .await?;
+                let generation = advance_generation(&mut transaction, snapshot.generation).await?;
+                transaction.commit().await?;
+                Ok(BundleInstallOutcome::Installed { generation })
             }
-            let generation = advance_generation(&mut transaction, snapshot.generation).await?;
-            transaction.commit().await?;
-            return Ok(BundleInstallOutcome::Replaced { generation });
         }
+    }
 
-        sqlx::query(
-            "INSERT INTO installed_bundle
-             (bundle_id, version, publisher, source_digest, prepared_digest, prepared_bytes, installed_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(bundle_id)
-        .bind(version)
-        .bind(publisher)
-        .bind(source_digest.to_vec())
-        .bind(prepared_digest)
-        .bind(prepared_bytes)
-        .bind(installed_at)
-        .execute(&mut *transaction)
-        .await?;
-        let generation = advance_generation(&mut transaction, snapshot.generation).await?;
+    /// Report what [`Self::install`] would do with `candidate` under `policy`,
+    /// running the same validation (reserved Agent ids, downgrade, namespace,
+    /// content, and merged-catalog checks) against a read snapshot. Nothing is
+    /// written and the generation never moves; a concurrent writer can still
+    /// change the outcome before a later install.
+    pub async fn plan_install(
+        &self,
+        reserved_agent_ids: &[&str],
+        policy: NamespaceInstallPolicy,
+        candidate: &BundleInstallCandidate,
+    ) -> Result<BundleInstallPlan, StoreError> {
+        let incoming = decode_candidate(reserved_agent_ids, candidate)?;
+        let mut transaction = self.pool.begin().await?;
+        let snapshot = Self::snapshot_from_transaction(&mut transaction).await?;
         transaction.commit().await?;
-        Ok(BundleInstallOutcome::Installed { generation })
+        plan_install(&snapshot, policy, incoming, candidate.source_digest)
     }
 
     /// Remove an installed bundle after re-validating the remaining catalog.
@@ -480,6 +456,112 @@ impl BundleRegistry {
         sqlx::migrate!("./bundle_migrations").run(pool).await?;
         Ok(())
     }
+}
+
+/// Decode an install candidate into its single bundle and reject any Agent id
+/// that collides with a compiled-in built-in.
+fn decode_candidate(
+    reserved_agent_ids: &[&str],
+    candidate: &BundleInstallCandidate,
+) -> Result<PreparedInstallableBundle, StoreError> {
+    let prepared = PreparedCatalog::decode(&candidate.prepared_bytes, &candidate.prepared_digest)?;
+    let [incoming] = prepared.bundles() else {
+        return Err(StoreError::BundleRegistryData(
+            "install candidate must contain exactly one mutable installed bundle".to_string(),
+        ));
+    };
+    for agent in incoming.agents() {
+        if reserved_agent_ids.contains(&agent.id.as_str()) {
+            return Err(StoreError::BundleAgentIdReserved {
+                bundle_id: incoming.identity().id.clone(),
+                agent_id: agent.id.as_str().to_string(),
+            });
+        }
+    }
+    Ok(incoming.clone())
+}
+
+/// Decide an install against one registry snapshot: the single source of
+/// truth shared by [`BundleRegistry::install`] and
+/// [`BundleRegistry::plan_install`].
+fn plan_install(
+    snapshot: &LoadedBundleRegistrySnapshot,
+    policy: NamespaceInstallPolicy,
+    incoming: PreparedInstallableBundle,
+    source_digest: [u8; 32],
+) -> Result<BundleInstallPlan, StoreError> {
+    let identity = incoming.identity();
+    let bundle_id = identity.id.clone();
+    let version = identity.version.clone();
+    let incoming_namespace = incoming.namespace().to_string();
+    let existing = snapshot
+        .bundles
+        .iter()
+        .find(|loaded| loaded.record.bundle_id == bundle_id);
+
+    // Same bundle id: refuse downgrades unless the policy allows them.
+    if let Some(loaded) = existing
+        && loaded.record.source_digest != source_digest
+        && loaded.record.version != version
+        && is_downgrade(&version, &loaded.record.version)
+        && policy == NamespaceInstallPolicy::DenyConflicts
+    {
+        return Err(StoreError::BundleDowngradeRequired {
+            bundle_id,
+            installed_version: loaded.record.version.clone(),
+            incoming_version: version,
+        });
+    }
+
+    // Cross-bundle namespace conflicts: refuse or replace the incumbent.
+    let displaced: Vec<String> = snapshot
+        .bundles
+        .iter()
+        .filter(|loaded| {
+            loaded.record.bundle_id != bundle_id
+                && loaded.prepared.namespace() == incoming_namespace
+        })
+        .map(|loaded| loaded.record.bundle_id.clone())
+        .collect();
+    if !displaced.is_empty() && policy == NamespaceInstallPolicy::DenyConflicts {
+        return Err(StoreError::NamespaceConflict {
+            namespace: incoming_namespace,
+            existing_bundle_id: displaced[0].clone(),
+            incoming_bundle_id: bundle_id,
+        });
+    }
+
+    let replaces = existing.is_some_and(|loaded| {
+        loaded.record.source_digest != source_digest && loaded.record.version != version
+    });
+
+    let mut complete = Vec::new();
+    for loaded in &snapshot.bundles {
+        if (replaces && loaded.record.bundle_id == bundle_id)
+            || displaced.contains(&loaded.record.bundle_id)
+        {
+            continue;
+        }
+        complete.push(loaded.prepared.clone());
+    }
+    if existing.is_none() || replaces || !displaced.is_empty() {
+        complete.push(incoming);
+    }
+    BundleCatalog::from_prepared(&complete)?;
+
+    let action = match existing {
+        None => BundleInstallAction::Install,
+        Some(loaded) if loaded.record.source_digest == source_digest => {
+            BundleInstallAction::Unchanged
+        }
+        Some(loaded) if loaded.record.version == version => {
+            return Err(StoreError::BundleContentConflict { bundle_id, version });
+        }
+        Some(loaded) => BundleInstallAction::Replace {
+            installed_version: loaded.record.version.clone(),
+        },
+    };
+    Ok(BundleInstallPlan { action, displaced })
 }
 
 fn decode_generation(generation: i64) -> Result<u64, StoreError> {

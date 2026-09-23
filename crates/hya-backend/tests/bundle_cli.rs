@@ -1,16 +1,17 @@
 //! Integration tests for `hya`: bundle cli.
 
 use std::fs;
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const LIST_HEADER: &str = "NAME VERSION AGENT STATE KIND WORKFLOW";
+const LIST_HEADER: &str = "NAME VERSION AGENT STATE KIND WORKFLOW SCOPE";
 
 /// One `bundle list` row for a first-party bundle, released at the hya version.
 fn first_party_row(id: &str, rest: &str) -> String {
-    format!("{id} {}{rest}", env!("CARGO_PKG_VERSION"))
+    format!("{id} {}{rest} builtin", env!("CARGO_PKG_VERSION"))
 }
 const BUNDLE_ID: &str = "hya/valid-public";
 const BUNDLE_AGENT_ID: &str = "valid-public-lead";
@@ -135,7 +136,8 @@ fn bundle_command(data_root: &Path) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_hya"));
     command
         .env("XDG_DATA_HOME", data_root)
-        .env("HOME", data_root);
+        .env("HOME", data_root)
+        .current_dir(data_root);
     command
 }
 
@@ -198,7 +200,7 @@ fn bundle_install_list_info_uninstall_workflow() -> Result<(), Box<dyn std::erro
     let package = write_fixture(&data_root)?;
 
     let install = bundle_command(&data_root)
-        .args(["bundle", "install"])
+        .args(["bundle", "install", "-y"])
         .arg(&package)
         .output()?;
     assert_success("install", &install);
@@ -231,6 +233,7 @@ fn bundle_install_list_info_uninstall_workflow() -> Result<(), Box<dyn std::erro
             "active",
             "AgentBundle",
             "-",
+            "user",
         ]),
         "bundle list omitted the installed row:\n{list_stdout}"
     );
@@ -260,7 +263,7 @@ fn bundle_install_list_info_uninstall_workflow() -> Result<(), Box<dyn std::erro
     }
 
     let uninstall = bundle_command(&data_root)
-        .args(["bundle", "uninstall", BUNDLE_ID])
+        .args(["bundle", "uninstall", "-y", BUNDLE_ID])
         .output()?;
     assert_success("uninstall", &uninstall);
     let uninstall_stdout = String::from_utf8(uninstall.stdout)?;
@@ -338,7 +341,7 @@ async fn private_info_is_opaque_and_install_does_not_mutate_registry()
     assert!(before.bundles.is_empty());
 
     let install = bundle_command(&data_root)
-        .args(["bundle", "install"])
+        .args(["bundle", "install", "-y"])
         .arg(&private_package)
         .output()?;
     assert!(
@@ -425,7 +428,7 @@ fn bundle_list_and_info_include_first_party_without_creating_registry()
     );
 
     let uninstall = bundle_command(&data_root)
-        .args(["bundle", "uninstall", "hya/plan-impl-review"])
+        .args(["bundle", "uninstall", "-y", "hya/plan-impl-review"])
         .output()?;
     assert!(
         !uninstall.status.success(),
@@ -457,7 +460,7 @@ fn bundle_install_rejects_first_party_identity_collision_before_registry_mutatio
     )?;
 
     let install = bundle_command(&data_root)
-        .args(["bundle", "install"])
+        .args(["bundle", "install", "-y"])
         .arg(&package)
         .output()?;
     assert!(
@@ -489,7 +492,7 @@ fn bundle_install_first_party_override_and_uninstall_restores_fallback()
     )?;
 
     let install = bundle_command(&data_root)
-        .args(["bundle", "install"])
+        .args(["bundle", "install", "-y"])
         .arg(&package)
         .output()?;
     assert!(
@@ -517,7 +520,7 @@ fn bundle_install_first_party_override_and_uninstall_restores_fallback()
     assert!(goal_rows[0].starts_with("hya/goal-loop 9.0.0 "));
 
     let uninstall = bundle_command(&data_root)
-        .args(["bundle", "uninstall", "hya/goal-loop"])
+        .args(["bundle", "uninstall", "-y", "hya/goal-loop"])
         .output()?;
     assert!(
         uninstall.status.success(),
@@ -602,7 +605,7 @@ fn install_and_info_file_require_exact_lowercase_hyabundle_suffix()
     assert!(!registry_path.exists());
     let commands: [(&str, &[&str]); 2] = [
         ("bundle info -f", &["bundle", "info", "-f"]),
-        ("bundle install", &["bundle", "install"]),
+        ("bundle install", &["bundle", "install", "-y"]),
     ];
 
     for package in &packages {
@@ -746,7 +749,8 @@ async fn workflow_bundle_list_and_info_show_kind_workflow_and_agents()
     assert!(
         list_stdout
             .lines()
-            .any(|line| line == "hya/workflow-info 1.0.0 demo-worker active WorkflowBundle demo"),
+            .any(|line| line
+                == "hya/workflow-info 1.0.0 demo-worker active WorkflowBundle demo user"),
         "unexpected WorkflowBundle list:\n{list_stdout}"
     );
 
@@ -777,7 +781,7 @@ async fn public_bun_bundle_install_publishes_resources_atomically()
     )?;
 
     let install = bundle_command(&data_root)
-        .args(["bundle", "install"])
+        .args(["bundle", "install", "-y"])
         .arg(&package)
         .output()?;
     assert_success("public Bun bundle install", &install);
@@ -932,7 +936,7 @@ fn bundle_schemas_lists_declared_scheme_extensions() -> Result<(), Box<dyn std::
     let package = schema_bundle_package(&data_root)?;
 
     let install = bundle_command(&data_root)
-        .args(["bundle", "install"])
+        .args(["bundle", "install", "-y"])
         .arg(&package)
         .output()?;
     assert_success("install", &install);
@@ -958,7 +962,7 @@ fn bundle_schemas_lists_declared_scheme_extensions() -> Result<(), Box<dyn std::
     );
 
     let uninstall = bundle_command(&data_root)
-        .args(["bundle", "uninstall", "hya/schema-cli"])
+        .args(["bundle", "uninstall", "-y", "hya/schema-cli"])
         .output()?;
     assert_success("uninstall", &uninstall);
     let after = bundle_command(&data_root)
@@ -1039,7 +1043,7 @@ fn bundle_info_reports_schema_process_and_mcp_declarations()
     let package = declaration_bundle_package(&data_root)?;
 
     let install = bundle_command(&data_root)
-        .args(["bundle", "install"])
+        .args(["bundle", "install", "-y"])
         .arg(&package)
         .output()?;
     assert_success("install", &install);
@@ -1093,7 +1097,7 @@ fn bundle_install_claude_translates_and_installs_fixture() -> Result<(), Box<dyn
     let data_root = unique_data_root()?;
 
     let install = bundle_command(&data_root)
-        .args(["bundle", "install", "--claude"])
+        .args(["bundle", "install", "-y", "--claude"])
         .arg(claude_fixture_dir())
         .output()?;
     assert_success("claude install", &install);
@@ -1112,7 +1116,7 @@ fn bundle_install_claude_translates_and_installs_fixture() -> Result<(), Box<dyn
     let list_stdout = String::from_utf8(list.stdout)?;
     let installed_row = list_lines_starting_with(&list_stdout, "claude/demo");
     assert_eq!(
-        installed_row, "claude/demo 1.0.0 reviewer active AgentSetBundle -",
+        installed_row, "claude/demo 1.0.0 reviewer active AgentSetBundle - user",
         "bundle list omitted the claude/demo row:\n{list_stdout}"
     );
 
@@ -1163,7 +1167,7 @@ fn bundle_install_claude_resolves_local_marketplace_reference()
     )?;
     let reference = format!("{}#resource-only", marketplace.display());
     let install = bundle_command(&data_root)
-        .args(["bundle", "install", "--claude", &reference])
+        .args(["bundle", "install", "-y", "--claude", &reference])
         .output()?;
     assert_success("claude marketplace install", &install);
     let info = bundle_command(&data_root)
@@ -1189,12 +1193,12 @@ fn bundle_install_claude_conflicts_follow_namespace_policy()
 
     // Same source twice: the registry dedupes to `unchanged`.
     let first = bundle_command(&data_root)
-        .args(["bundle", "install", "--claude"])
+        .args(["bundle", "install", "-y", "--claude"])
         .arg(claude_fixture_dir())
         .output()?;
     assert_success("first claude install", &first);
     let second = bundle_command(&data_root)
-        .args(["bundle", "install", "--claude"])
+        .args(["bundle", "install", "-y", "--claude"])
         .arg(claude_fixture_dir())
         .output()?;
     assert_success("second claude install", &second);
@@ -1205,18 +1209,18 @@ fn bundle_install_claude_conflicts_follow_namespace_policy()
 
     // Uninstall, then let a foreign bundle claim the `demo` namespace.
     let uninstall = bundle_command(&data_root)
-        .args(["bundle", "uninstall", "claude/demo"])
+        .args(["bundle", "uninstall", "-y", "claude/demo"])
         .output()?;
     assert_success("uninstall", &uninstall);
     let napper = namespace_napper_package(&data_root)?;
     let napper_install = bundle_command(&data_root)
-        .args(["bundle", "install"])
+        .args(["bundle", "install", "-y"])
         .arg(&napper)
         .output()?;
     assert_success("napper install", &napper_install);
 
     let denied = bundle_command(&data_root)
-        .args(["bundle", "install", "--claude"])
+        .args(["bundle", "install", "-y", "--claude"])
         .arg(claude_fixture_dir())
         .output()?;
     assert!(
@@ -1231,7 +1235,7 @@ fn bundle_install_claude_conflicts_follow_namespace_policy()
     );
 
     let replaced = bundle_command(&data_root)
-        .args(["bundle", "install", "--overwrite", "--claude"])
+        .args(["bundle", "install", "-y", "--overwrite", "--claude"])
         .arg(claude_fixture_dir())
         .output()?;
     assert_success("overwrite claude install", &replaced);
@@ -1314,7 +1318,7 @@ fn bundle_search_filters_first_party_and_installed_metadata()
     // Installed bundles join the search surface after `bundle install`.
     let package = write_fixture(&data_root)?;
     let install = bundle_command(&data_root)
-        .args(["bundle", "install"])
+        .args(["bundle", "install", "-y"])
         .arg(&package)
         .output()?;
     assert_success("install", &install);
@@ -1327,7 +1331,7 @@ fn bundle_search_filters_first_party_and_installed_metadata()
         installed_stdout.lines().collect::<Vec<_>>(),
         vec![
             LIST_HEADER,
-            "hya/valid-public 1.0.0 valid-public-lead active AgentBundle -",
+            "hya/valid-public 1.0.0 valid-public-lead active AgentBundle - user",
         ],
         "installed search must match the installed bundle only:\n{installed_stdout}"
     );
@@ -1449,7 +1453,7 @@ agents:
     let path = package.to_str().ok_or("non-UTF8 package path")?;
     for args in [
         vec!["bundle", "info", "-f", path],
-        vec!["bundle", "install", path],
+        vec!["bundle", "install", "-y", path],
         vec!["bundle", "info", "acme/set-cli"],
         vec!["bundle", "list"],
         vec!["bundle", "search", "set-cli-reviewer"],
@@ -1472,7 +1476,7 @@ agents:
     }
     assert!(
         bundle_command(&root)
-            .args(["bundle", "uninstall", "acme/set-cli"])
+            .args(["bundle", "uninstall", "-y", "acme/set-cli"])
             .output()?
             .status
             .success()
@@ -1512,7 +1516,7 @@ resources:
 
     for args in [
         vec!["bundle", "info", "-f", path],
-        vec!["bundle", "install", path],
+        vec!["bundle", "install", "-y", path],
         vec!["bundle", "info", "acme/plugin-cli"],
         vec!["bundle", "list"],
         vec!["bundle", "search", "plugin-help"],
@@ -1534,7 +1538,7 @@ resources:
     }
     assert!(
         bundle_command(&root)
-            .args(["bundle", "uninstall", "acme/plugin-cli"])
+            .args(["bundle", "uninstall", "-y", "acme/plugin-cli"])
             .output()?
             .status
             .success()
@@ -1542,5 +1546,259 @@ resources:
     let list = bundle_command(&root).args(["bundle", "list"]).output()?;
     assert!(!String::from_utf8_lossy(&list.stdout).contains("acme/plugin-cli"));
     fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+/// Run `hya bundle <args>` with `answer` written to stdin (`None` closes it).
+fn bundle_with_stdin(
+    data_root: &Path,
+    args: &[&std::ffi::OsStr],
+    answer: Option<&str>,
+) -> Result<Output, Box<dyn std::error::Error>> {
+    let mut child = bundle_command(data_root)
+        .arg("bundle")
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let mut stdin = child.stdin.take().ok_or("child stdin missing")?;
+    if let Some(answer) = answer {
+        stdin.write_all(answer.as_bytes())?;
+    }
+    drop(stdin);
+    Ok(child.wait_with_output()?)
+}
+
+fn registry_bundle_ids(data_root: &Path) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+    let list = bundle_command(data_root)
+        .args(["bundle", "list", "--user"])
+        .output()?;
+    assert_success("list --user", &list);
+    Ok(String::from_utf8(list.stdout)?
+        .lines()
+        .skip(1)
+        .filter_map(|line| line.split_whitespace().next().map(str::to_string))
+        .collect())
+}
+
+#[test]
+fn install_and_remove_ask_for_confirmation_unless_yes() -> Result<(), Box<dyn std::error::Error>> {
+    let data_root = unique_data_root()?;
+    let package = write_fixture(&data_root)?;
+    let install = [std::ffi::OsStr::new("install"), package.as_os_str()];
+
+    for (answer, label) in [(Some("n\n"), "declined"), (None, "closed stdin")] {
+        let output = bundle_with_stdin(&data_root, &install, answer)?;
+        assert!(!output.status.success(), "{label} install must not succeed");
+        let stderr = String::from_utf8(output.stderr)?;
+        assert!(
+            stderr.contains(BUNDLE_ID) && stderr.contains("[y/N]"),
+            "{label} install must summarize and prompt:\n{stderr}"
+        );
+        assert!(stderr.contains("cancelled"), "{label}:\n{stderr}");
+        assert!(
+            registry_bundle_ids(&data_root)?.is_empty(),
+            "{label} installed"
+        );
+    }
+
+    let accepted = bundle_with_stdin(&data_root, &install, Some("y\n"))?;
+    assert_success("confirmed install", &accepted);
+    assert!(String::from_utf8(accepted.stdout)?.contains("scope=user"));
+    assert_eq!(
+        registry_bundle_ids(&data_root)?,
+        vec![BUNDLE_ID.to_string()]
+    );
+
+    let remove = [
+        std::ffi::OsStr::new("remove"),
+        std::ffi::OsStr::new(BUNDLE_ID),
+    ];
+    let declined = bundle_with_stdin(&data_root, &remove, Some("no\n"))?;
+    assert!(!declined.status.success());
+    assert!(String::from_utf8(declined.stderr)?.contains("[y/N]"));
+    assert_eq!(
+        registry_bundle_ids(&data_root)?,
+        vec![BUNDLE_ID.to_string()]
+    );
+
+    let silent = bundle_with_stdin(
+        &data_root,
+        &[
+            std::ffi::OsStr::new("uninstall"),
+            std::ffi::OsStr::new("-y"),
+            std::ffi::OsStr::new(BUNDLE_ID),
+        ],
+        None,
+    )?;
+    assert_success("uninstall -y", &silent);
+    assert!(
+        !String::from_utf8(silent.stderr)?.contains("[y/N]"),
+        "-y must not prompt"
+    );
+    assert!(registry_bundle_ids(&data_root)?.is_empty());
+
+    let silent_install = bundle_with_stdin(
+        &data_root,
+        &[
+            std::ffi::OsStr::new("install"),
+            std::ffi::OsStr::new("--yes"),
+            package.as_os_str(),
+        ],
+        None,
+    )?;
+    assert_success("install --yes", &silent_install);
+    assert!(!String::from_utf8(silent_install.stderr)?.contains("[y/N]"));
+    assert_eq!(
+        registry_bundle_ids(&data_root)?,
+        vec![BUNDLE_ID.to_string()]
+    );
+
+    fs::remove_dir_all(&data_root)?;
+    Ok(())
+}
+
+#[test]
+fn verify_checks_a_package_without_installing_it() -> Result<(), Box<dyn std::error::Error>> {
+    let data_root = unique_data_root()?;
+    let package = write_fixture(&data_root)?;
+    let registry_path = data_root.join("hya/bundles/registry.sqlite3");
+
+    let verify = bundle_command(&data_root)
+        .args(["bundle", "verify"])
+        .arg(&package)
+        .output()?;
+    assert_success("verify", &verify);
+    let stdout = String::from_utf8(verify.stdout)?;
+    for expected in [
+        "verified hya/valid-public 1.0.0",
+        "format=public-v1",
+        "kind=AgentBundle",
+        "scope=user",
+        "action=install",
+    ] {
+        assert!(
+            stdout.lines().any(|line| line == expected),
+            "verify omitted {expected:?}:\n{stdout}"
+        );
+    }
+    assert!(
+        !registry_path.exists(),
+        "verify must not create the registry"
+    );
+    assert!(
+        !data_root.join(".hya").exists(),
+        "verify must not write project files"
+    );
+
+    let collision = data_root.join("collision.hyabundle");
+    fs::write(
+        &collision,
+        hya_bundle::write_public_package(&first_party_collision_source())?,
+    )?;
+    let rejected = bundle_command(&data_root)
+        .args(["bundle", "verify", "--project"])
+        .arg(&collision)
+        .output()?;
+    assert!(
+        !rejected.status.success(),
+        "verify must fail for a package install would reject"
+    );
+    assert!(!data_root.join(".hya").exists());
+
+    fs::remove_dir_all(&data_root)?;
+    Ok(())
+}
+
+#[test]
+fn project_scope_installs_lists_and_removes_under_dot_hya() -> Result<(), Box<dyn std::error::Error>>
+{
+    let data_root = unique_data_root()?;
+    let package = write_fixture(&data_root)?;
+    let registry_path = data_root.join("hya/bundles/registry.sqlite3");
+
+    let install = bundle_command(&data_root)
+        .args(["bundle", "install", "--project", "-y"])
+        .arg(&package)
+        .output()?;
+    assert_success("install --project", &install);
+    assert!(String::from_utf8(install.stdout)?.contains("scope=project"));
+    let bundle_dir = data_root.join(".hya/bundles/hya__valid-public");
+    assert!(
+        bundle_dir.join("bundle.yaml").is_file() || bundle_dir.join("bundle.hya.md").is_file(),
+        "project install must write the bundle sources to {}",
+        bundle_dir.display()
+    );
+    assert!(
+        !registry_path.exists(),
+        "project install must not touch the user registry"
+    );
+
+    let list = bundle_command(&data_root)
+        .args(["bundle", "list", "--project"])
+        .output()?;
+    assert_success("list --project", &list);
+    let list_stdout = String::from_utf8(list.stdout)?;
+    let rows = list_stdout.lines().collect::<Vec<_>>();
+    assert_eq!(rows.first().copied(), Some(LIST_HEADER));
+    assert_eq!(
+        rows.len(),
+        2,
+        "only the project bundle is listed:\n{list_stdout}"
+    );
+    assert!(rows[1].starts_with(BUNDLE_ID) && rows[1].ends_with(" project"));
+
+    let all = bundle_command(&data_root)
+        .args(["bundle", "list"])
+        .output()?;
+    assert_success("list", &all);
+    let all_stdout = String::from_utf8(all.stdout)?;
+    assert!(all_stdout.lines().any(|line| line.ends_with(" builtin")));
+    assert!(all_stdout.lines().any(|line| line.starts_with(BUNDLE_ID)));
+
+    let info = bundle_command(&data_root)
+        .args(["bundle", "info", BUNDLE_ID])
+        .output()?;
+    assert_success("info project bundle", &info);
+    let info_stdout = String::from_utf8(info.stdout)?;
+    for expected in ["name=hya/valid-public", "origin=project", "scope=project"] {
+        assert!(
+            info_stdout.lines().any(|line| line == expected),
+            "project info omitted {expected:?}:\n{info_stdout}"
+        );
+    }
+    let user_info = bundle_command(&data_root)
+        .args(["bundle", "info", "--user", BUNDLE_ID])
+        .output()?;
+    assert!(
+        !user_info.status.success(),
+        "--user must not find a project bundle"
+    );
+
+    let remove = bundle_command(&data_root)
+        .args(["bundle", "remove", "--project", "-y", BUNDLE_ID])
+        .output()?;
+    assert_success("remove --project", &remove);
+    assert!(!bundle_dir.exists());
+
+    fs::remove_dir_all(&data_root)?;
+    Ok(())
+}
+
+#[test]
+fn info_reads_a_package_file_given_as_the_positional_argument()
+-> Result<(), Box<dyn std::error::Error>> {
+    let data_root = unique_data_root()?;
+    let package = write_fixture(&data_root)?;
+    let info = bundle_command(&data_root)
+        .args(["bundle", "info"])
+        .arg(&package)
+        .output()?;
+    assert_success("info <file>", &info);
+    let stdout = String::from_utf8(info.stdout)?;
+    assert!(stdout.lines().any(|line| line == "name: hya/valid-public"));
+    assert!(stdout.lines().any(|line| line == "origin: package"));
+    fs::remove_dir_all(&data_root)?;
     Ok(())
 }

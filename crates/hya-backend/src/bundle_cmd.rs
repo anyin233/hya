@@ -1,21 +1,81 @@
 use std::collections::BTreeSet;
 use std::fs;
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use anyhow::Context as _;
-use clap::Subcommand;
+use clap::{Args, Subcommand};
+use hya_app::project_bundles::{
+    ProjectBundle, ProjectBundleError, find_project_bundle, install_project_bundle,
+    plan_project_install, project_bundles, project_bundles_dir, remove_project_bundle,
+};
 use hya_bundle::{
     BundleCatalog, PackageInspection, PreparedCatalog, PreparedInstallableBundle,
-    PrivatePackageAuthentication, PrivatePackagePayload, cleanup_orphaned_staging, stage_package,
+    PrivatePackageAuthentication, PrivatePackagePayload, PublicPackageInspection,
+    cleanup_orphaned_staging, stage_package,
 };
 use hya_store::{
-    BundleInstallOutcome, BundleRegistry, BundleRegistryRecord, BundleUninstallOutcome,
-    NamespaceInstallPolicy, StoreError,
+    BundleInstallAction, BundleInstallCandidate, BundleInstallOutcome, BundleInstallPlan,
+    BundleRegistry, BundleRegistryRecord, BundleUninstallOutcome, NamespaceInstallPolicy,
+    StoreError,
 };
+
+/// Where a bundle command reads or writes: `--user` (the installed-bundle
+/// registry, the default for install/remove/verify) or `--project`
+/// (`.hya/bundles` under the current directory). `list` and `info` show every
+/// scope unless one is named.
+#[derive(Args, Clone, Copy, Debug, Default)]
+pub(crate) struct ScopeArgs {
+    /// Project scope: bundle source directories under `./.hya/bundles`.
+    #[arg(long, conflicts_with = "user")]
+    project: bool,
+    /// User scope: the installed-bundle registry (default).
+    #[arg(long)]
+    user: bool,
+}
+
+/// One concrete bundle scope.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Scope {
+    User,
+    Project,
+}
+
+impl Scope {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::Project => "project",
+        }
+    }
+}
+
+impl ScopeArgs {
+    /// Scope a write (or verify) targets: user unless `--project`.
+    fn target(self) -> Scope {
+        if self.project {
+            Scope::Project
+        } else {
+            Scope::User
+        }
+    }
+
+    /// Scope a read is narrowed to, or `None` for every scope.
+    fn filter(self) -> Option<Scope> {
+        if self.project {
+            Some(Scope::Project)
+        } else if self.user {
+            Some(Scope::User)
+        } else {
+            None
+        }
+    }
+}
 
 #[derive(Subcommand)]
 pub(crate) enum BundleCommand {
-    /// Install a bundle package or a Claude Code plugin source.
+    /// Install a bundle package or a Claude Code plugin source. Asks for
+    /// confirmation unless `-y` is given.
     Install {
         /// Bundle package (`.hyabundle`); conflicts with `--claude`.
         #[arg(value_name = "PACKAGE")]
@@ -28,9 +88,17 @@ pub(crate) enum BundleCommand {
         /// same-bundle downgrades instead of failing.
         #[arg(long)]
         overwrite: bool,
+        #[command(flatten)]
+        scope: ScopeArgs,
+        /// Install without asking for confirmation.
+        #[arg(short = 'y', long)]
+        yes: bool,
     },
-    /// List available bundles.
-    List,
+    /// List bundles with their scope (builtin, user, project).
+    List {
+        #[command(flatten)]
+        scope: ScopeArgs,
+    },
     /// Search bundles by a case-insensitive substring over bundle ids,
     /// agent ids, and skill ids.
     Search {
@@ -39,12 +107,34 @@ pub(crate) enum BundleCommand {
         #[arg(value_name = "QUERY", value_parser = parse_search_query)]
         query: String,
     },
-    /// Uninstall an installed bundle.
-    Uninstall { name: String },
-    /// Show bundle information by installed name or package file.
+    /// Remove an installed bundle. Asks for confirmation unless `-y` is given.
+    #[command(visible_alias = "uninstall")]
+    Remove {
+        /// Bundle id, for example `acme/tools`.
+        name: String,
+        #[command(flatten)]
+        scope: ScopeArgs,
+        /// Remove without asking for confirmation.
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
+    /// Check that a package would install into a scope, without installing it.
+    Verify {
+        /// Bundle package (`.hyabundle`).
+        #[arg(value_name = "PACKAGE")]
+        package: PathBuf,
+        /// Check as `install --overwrite` would.
+        #[arg(long)]
+        overwrite: bool,
+        #[command(flatten)]
+        scope: ScopeArgs,
+    },
+    /// Show bundle metadata by bundle id or from a package file.
     Info {
+        /// Bundle id, or a path to a `.hyabundle` package file.
         #[arg(required_unless_present = "file", conflicts_with = "file")]
         name: Option<String>,
+        /// Package file to read.
         #[arg(
             short = 'f',
             long,
@@ -53,6 +143,8 @@ pub(crate) enum BundleCommand {
             conflicts_with = "name"
         )]
         file: Option<PathBuf>,
+        #[command(flatten)]
+        scope: ScopeArgs,
     },
     /// List URI-scheme extensions declared by installed bundles.
     Schemas,
@@ -74,14 +166,29 @@ pub(crate) async fn run(command: BundleCommand) -> anyhow::Result<()> {
             package,
             claude,
             overwrite,
-        } => install_dispatch(package, claude, overwrite).await,
-        BundleCommand::List => list().await,
+            scope,
+            yes,
+        } => install_dispatch(package, claude, policy(overwrite), scope.target(), yes).await,
+        BundleCommand::List { scope } => list(scope.filter()).await,
         BundleCommand::Search { query } => search(&query).await,
-        BundleCommand::Uninstall { name } => uninstall(&name).await,
+        BundleCommand::Remove { name, scope, yes } => remove(&name, scope.target(), yes).await,
+        BundleCommand::Verify {
+            package,
+            overwrite,
+            scope,
+        } => verify(&package, policy(overwrite), scope.target()).await,
         BundleCommand::Info {
             name: Some(name),
             file: None,
-        } => info(&name).await,
+            scope,
+        } => {
+            let as_file = Path::new(&name);
+            if name.ends_with(".hyabundle") && as_file.is_file() {
+                info_file(as_file)
+            } else {
+                info(&name, scope.filter()).await
+            }
+        }
         BundleCommand::Info {
             file: Some(package),
             ..
@@ -91,17 +198,27 @@ pub(crate) async fn run(command: BundleCommand) -> anyhow::Result<()> {
     }
 }
 
+fn policy(overwrite: bool) -> NamespaceInstallPolicy {
+    if overwrite {
+        NamespaceInstallPolicy::OverwriteConflicts
+    } else {
+        NamespaceInstallPolicy::DenyConflicts
+    }
+}
+
 /// Route `bundle install` to the package or Claude plugin source path.
 async fn install_dispatch(
     package: Option<PathBuf>,
     claude: Option<PathBuf>,
-    overwrite: bool,
+    policy: NamespaceInstallPolicy,
+    scope: Scope,
+    yes: bool,
 ) -> anyhow::Result<()> {
     match (package, claude) {
-        (Some(package), None) => install(package, overwrite).await,
+        (Some(package), None) => install(&package, policy, scope, yes).await,
         (None, Some(source)) => {
             let staged = stage_claude_source(&source).await?;
-            let result = install(staged.clone(), overwrite).await;
+            let result = install(&staged, policy, scope, yes).await;
             if let Err(error) = fs::remove_file(&staged) {
                 eprintln!(
                     "hya: could not remove staged claude package {} ({error})",
@@ -218,98 +335,320 @@ async fn stage_claude_source(source: &Path) -> anyhow::Result<PathBuf> {
     Ok(staged)
 }
 
-async fn install(package: PathBuf, overwrite: bool) -> anyhow::Result<()> {
-    validate_package_path(&package)?;
-    let inspection = inspect_package(&package)?;
-    if let PackageInspection::Public(public) = &inspection {
-        let incoming = public
-            .prepared
-            .bundles()
-            .first()
-            .context("installed public package contains no bundle")?;
-        if let Some(preset) = hya_app::trusted_preset_inventory()
-            .context("decode trusted presets")?
-            .iter()
-            .find(|preset| preset.id == incoming.identity().id)
-        {
-            anyhow::bail!(
-                "immutable trusted preset `{}` cannot be installed or overridden",
-                preset.id
-            );
-        }
-        let mut first_party =
-            hya_app::first_party_catalogs().context("load first-party bundles")?;
-        first_party.retain(|catalog| {
-            catalog.bundles().first().is_none_or(|bundle| {
-                bundle.identity().id != incoming.identity().id
-                    && bundle.namespace() != incoming.namespace()
-            })
-        });
-        let mut catalogs = first_party.iter().collect::<Vec<_>>();
-        catalogs.push(&public.prepared);
-        BundleCatalog::from_verified_catalogs(&catalogs)
-            .context("validate package against immutable first-party catalog")?;
-    }
-    let identity = match &inspection {
-        PackageInspection::Public(public) => public
-            .prepared
-            .bundles()
-            .first()
-            .map(PreparedInstallableBundle::identity)
-            .cloned()
-            .context("installed public package contains no bundle")?,
+/// Inspect a package for install into `scope`: it must be a public package
+/// whose bundle neither overrides an immutable trusted preset nor breaks the
+/// first-party catalog.
+fn inspect_installable(package: &Path) -> anyhow::Result<PublicPackageInspection> {
+    validate_package_path(package)?;
+    let public = match inspect_package(package)? {
+        PackageInspection::Public(public) => public,
         PackageInspection::Private(_) => {
             return Err(StoreError::PrivateActivationUnsupported.into());
         }
     };
-    let policy = if overwrite {
-        NamespaceInstallPolicy::OverwriteConflicts
-    } else {
-        NamespaceInstallPolicy::DenyConflicts
+    let [incoming] = public.prepared.bundles() else {
+        anyhow::bail!("public package must contain exactly one bundle");
     };
-    let registry = open_registry().await?;
-    let outcome = match registry
-        .install_inspection(
-            &reserved_agent_ids(),
-            policy,
-            inspection,
-            hya_proto::now_millis(),
-        )
-        .await
+    if let Some(preset) = hya_app::trusted_preset_inventory()
+        .context("decode trusted presets")?
+        .iter()
+        .find(|preset| preset.id == incoming.identity().id)
     {
-        Ok(outcome) => outcome,
-        Err(StoreError::NamespaceConflict {
+        anyhow::bail!(
+            "immutable trusted preset `{}` cannot be installed or overridden",
+            preset.id
+        );
+    }
+    let mut first_party = hya_app::first_party_catalogs().context("load first-party bundles")?;
+    first_party.retain(|catalog| {
+        catalog.bundles().first().is_none_or(|bundle| {
+            bundle.identity().id != incoming.identity().id
+                && bundle.namespace() != incoming.namespace()
+        })
+    });
+    let mut catalogs = first_party.iter().collect::<Vec<_>>();
+    catalogs.push(&public.prepared);
+    BundleCatalog::from_verified_catalogs(&catalogs)
+        .context("validate package against immutable first-party catalog")?;
+    Ok(public)
+}
+
+/// What installing one package into a scope would do.
+struct InstallPreview {
+    target: String,
+    action: BundleInstallAction,
+    displaced: Vec<String>,
+}
+
+/// Plan an install of `public` into `scope` without writing anything.
+///
+/// `registry` is the user registry handle when one exists; `None` plans
+/// against an empty registry without creating it.
+async fn preview_install(
+    public: &PublicPackageInspection,
+    policy: NamespaceInstallPolicy,
+    scope: Scope,
+    registry: Option<&BundleRegistry>,
+) -> anyhow::Result<InstallPreview> {
+    let reserved = reserved_agent_ids();
+    match scope {
+        Scope::User => {
+            let registry_path = hya_app::bundle_registry_path();
+            let plan = if let Some(registry) = registry {
+                registry
+                    .plan_install(&reserved, policy, &install_candidate(public))
+                    .await
+                    .map_err(explain_store_error)?
+            } else {
+                // Nothing installed yet: only the candidate's own rules apply,
+                // and verify must not create the registry to learn that.
+                let [incoming] = public.prepared.bundles() else {
+                    anyhow::bail!("public package must contain exactly one bundle");
+                };
+                if let Some(agent) = incoming
+                    .agents()
+                    .iter()
+                    .find(|agent| reserved.contains(&agent.id.as_str()))
+                {
+                    return Err(StoreError::BundleAgentIdReserved {
+                        bundle_id: incoming.identity().id.clone(),
+                        agent_id: agent.id.as_str().to_string(),
+                    }
+                    .into());
+                }
+                BundleInstallPlan {
+                    action: BundleInstallAction::Install,
+                    displaced: Vec::new(),
+                }
+            };
+            Ok(InstallPreview {
+                target: registry_path.display().to_string(),
+                action: plan.action,
+                displaced: plan.displaced,
+            })
+        }
+        Scope::Project => {
+            let dir = project_dir()?;
+            let plan = plan_project_install(&dir, &public.files, &reserved, policy)
+                .map_err(explain_project_error)?;
+            Ok(InstallPreview {
+                target: plan.target.display().to_string(),
+                action: plan.action,
+                displaced: plan
+                    .displaced
+                    .iter()
+                    .map(|bundle| bundle.bundle_id().to_string())
+                    .collect(),
+            })
+        }
+    }
+}
+
+fn install_candidate(public: &PublicPackageInspection) -> BundleInstallCandidate {
+    BundleInstallCandidate {
+        source_digest: public.source_digest,
+        prepared_digest: public.prepared.digest().to_owned(),
+        prepared_bytes: public.prepared.bytes().to_vec(),
+        installed_at: hya_proto::now_millis(),
+    }
+}
+
+fn action_label(action: &BundleInstallAction) -> String {
+    match action {
+        BundleInstallAction::Install => "install".to_string(),
+        BundleInstallAction::Replace { installed_version } => {
+            format!("replace from={installed_version}")
+        }
+        BundleInstallAction::Unchanged => "unchanged".to_string(),
+    }
+}
+
+/// Ask `question` on stderr and read one answer line from stdin. Only `y` or
+/// `yes` (any case) proceeds; anything else, including closed stdin, cancels.
+fn confirm(summary: &str, verb: &str, yes: bool) -> anyhow::Result<()> {
+    if yes {
+        return Ok(());
+    }
+    let mut stderr = std::io::stderr().lock();
+    write!(stderr, "{summary}Proceed? [y/N] ").context("write confirmation prompt")?;
+    stderr.flush().context("flush confirmation prompt")?;
+    drop(stderr);
+    let mut answer = String::new();
+    let read = std::io::stdin()
+        .read_line(&mut answer)
+        .context("read confirmation")?;
+    if read == 0 {
+        eprintln!();
+        anyhow::bail!("bundle {verb} cancelled: no answer on stdin (pass -y to skip the prompt)");
+    }
+    if matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
+        Ok(())
+    } else {
+        anyhow::bail!("bundle {verb} cancelled")
+    }
+}
+
+async fn install(
+    package: &Path,
+    policy: NamespaceInstallPolicy,
+    scope: Scope,
+    yes: bool,
+) -> anyhow::Result<()> {
+    let public = inspect_installable(package)?;
+    let [bundle] = public.prepared.bundles() else {
+        anyhow::bail!("public package must contain exactly one bundle");
+    };
+    let identity = bundle.identity().clone();
+    // One registry handle for plan and install: connecting again right after
+    // dropping a handle can race the old pool's close and find the DB locked.
+    let registry = match scope {
+        Scope::User => Some(open_registry().await?),
+        Scope::Project => None,
+    };
+    let preview = preview_install(&public, policy, scope, registry.as_ref()).await?;
+    if preview.action == BundleInstallAction::Unchanged {
+        println!(
+            "unchanged {} {} scope={}",
+            identity.id,
+            identity.version,
+            scope.as_str()
+        );
+        return Ok(());
+    }
+    let mut summary = format!(
+        "Install {} {} ({}) into {} scope\n  target: {}\n  action: {}\n",
+        identity.id,
+        identity.version,
+        bundle.kind().as_str(),
+        scope.as_str(),
+        preview.target,
+        action_label(&preview.action),
+    );
+    let agents = bundle
+        .agents()
+        .iter()
+        .map(|agent| agent.id.as_str())
+        .collect::<Vec<_>>();
+    if !agents.is_empty() {
+        summary.push_str(&format!("  agents: {}\n", agents.join(",")));
+    }
+    for displaced in &preview.displaced {
+        summary.push_str(&format!("  removes: {displaced} (namespace takeover)\n"));
+    }
+    confirm(&summary, "install", yes)?;
+
+    match scope {
+        Scope::User => {
+            let registry = registry.context("user registry handle missing")?;
+            let outcome = registry
+                .install(&reserved_agent_ids(), policy, install_candidate(&public))
+                .await
+                .map_err(explain_store_error)?;
+            let (action, generation) = match outcome {
+                BundleInstallOutcome::Installed { generation } => ("installed", generation),
+                BundleInstallOutcome::Replaced { generation } => ("replaced", generation),
+                BundleInstallOutcome::Unchanged { generation } => ("unchanged", generation),
+            };
+            println!(
+                "{action} {} {} scope=user generation={generation}",
+                identity.id, identity.version
+            );
+        }
+        Scope::Project => {
+            let plan = install_project_bundle(
+                &project_dir()?,
+                public.files,
+                &reserved_agent_ids(),
+                policy,
+            )
+            .map_err(explain_project_error)?;
+            let action = match plan.action {
+                BundleInstallAction::Install => "installed",
+                BundleInstallAction::Replace { .. } => "replaced",
+                BundleInstallAction::Unchanged => "unchanged",
+            };
+            println!(
+                "{action} {} {} scope=project path={}",
+                identity.id,
+                identity.version,
+                plan.target.display()
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Check that `package` would install into `scope`, printing what install
+/// would do. Writes nothing: no registry, no project directory.
+async fn verify(
+    package: &Path,
+    policy: NamespaceInstallPolicy,
+    scope: Scope,
+) -> anyhow::Result<()> {
+    let public = inspect_installable(package)?;
+    let [bundle] = public.prepared.bundles() else {
+        anyhow::bail!("public package must contain exactly one bundle");
+    };
+    let registry = match scope {
+        Scope::User => existing_registry().await?,
+        Scope::Project => None,
+    };
+    let preview = preview_install(&public, policy, scope, registry.as_ref()).await?;
+    let identity = bundle.identity();
+    println!("verified {} {}", identity.id, identity.version);
+    println!("format=public-v1");
+    println!("kind={}", bundle.kind().as_str());
+    println!("source_digest={}", hex_digest(&public.source_digest));
+    println!("prepared_digest={}", public.prepared.digest());
+    println!("scope={}", scope.as_str());
+    println!("target={}", preview.target);
+    println!("action={}", action_label(&preview.action));
+    for displaced in preview.displaced {
+        println!("removes={displaced}");
+    }
+    Ok(())
+}
+
+/// Turn the registry's overwrite-able conflicts into actionable messages.
+fn explain_store_error(error: StoreError) -> anyhow::Error {
+    match error {
+        StoreError::NamespaceConflict {
             namespace,
             existing_bundle_id,
             incoming_bundle_id,
-        }) => {
-            anyhow::bail!(
-                "NAMESPACE_CONFLICT: namespace {namespace} is owned by {existing_bundle_id}; \
-                 rerun with --overwrite to replace it with {incoming_bundle_id}"
-            );
-        }
-        Err(StoreError::BundleDowngradeRequired {
+        } => anyhow::anyhow!(
+            "NAMESPACE_CONFLICT: namespace {namespace} is owned by {existing_bundle_id}; \
+             rerun with --overwrite to replace it with {incoming_bundle_id}"
+        ),
+        StoreError::BundleDowngradeRequired {
             bundle_id,
             installed_version,
             incoming_version,
-        }) => {
-            anyhow::bail!(
-                "BUNDLE_DOWNGRADE_REQUIRED: {bundle_id} is installed at {installed_version}; \
-                 rerun with --overwrite to install {incoming_version}"
-            );
+        } => anyhow::anyhow!(
+            "BUNDLE_DOWNGRADE_REQUIRED: {bundle_id} is installed at {installed_version}; \
+             rerun with --overwrite to install {incoming_version}"
+        ),
+        error => error.into(),
+    }
+}
+
+fn explain_project_error(error: ProjectBundleError) -> anyhow::Error {
+    match error {
+        ProjectBundleError::Store(StoreError::BundleContentConflict { bundle_id, version }) => {
+            anyhow::anyhow!(
+                "BUNDLE_CONTENT_CONFLICT: project bundle {bundle_id} {version} has different \
+                 content; bump the version or rerun with --overwrite"
+            )
         }
-        Err(error) => return Err(error.into()),
-    };
-    let (action, generation) = match outcome {
-        BundleInstallOutcome::Installed { generation } => ("installed", generation),
-        BundleInstallOutcome::Replaced { generation } => ("replaced", generation),
-        BundleInstallOutcome::Unchanged { generation } => ("unchanged", generation),
-    };
-    println!(
-        "{action} {} {} generation={generation}",
-        identity.id, identity.version
-    );
-    Ok(())
+        ProjectBundleError::Store(error) => explain_store_error(error),
+        error => error.into(),
+    }
+}
+
+/// Project scope root: `.hya/bundles` under the current directory, the same
+/// directory the runtime loads project bundles from.
+fn project_dir() -> anyhow::Result<PathBuf> {
+    project_bundles_dir().context("resolve the current directory for --project")
 }
 
 fn installed_shadow_keys(records: &[BundleRegistryRecord]) -> (BTreeSet<String>, BTreeSet<String>) {
@@ -391,73 +730,131 @@ fn reserved_agent_ids() -> Vec<&'static str> {
         .collect()
 }
 
-async fn list() -> anyhow::Result<()> {
+/// Every `bundle list` row across scopes, mirroring the runtime layering:
+/// project bundles shadow user-installed ones (id or namespace), and
+/// first-party bundles hide behind any active user or project bundle.
+async fn list_rows() -> anyhow::Result<Vec<BundleListRow>> {
     let first_party = hya_app::first_party_catalogs().context("load first-party bundles")?;
     let installed = installed_records_if_exists().await?;
-    let (shadowed_ids, shadowed_namespaces) = installed_shadow_keys(&installed);
+    let project = project_bundles(&project_dir()?);
+    let project_ids = project
+        .iter()
+        .map(|bundle| bundle.bundle_id().to_string())
+        .collect::<BTreeSet<_>>();
+    let project_namespaces = project
+        .iter()
+        .map(|bundle| bundle.bundle().namespace().to_string())
+        .collect::<BTreeSet<_>>();
+
     let mut rows = Vec::new();
     for preset in hya_app::trusted_preset_inventory().context("decode trusted presets")? {
-        rows.push((
-            preset.id,
-            preset.version,
-            preset.agent_ids.join(","),
-            "active".to_string(),
-            preset.kind,
-            "-".to_string(),
+        rows.push(BundleListRow {
+            name: preset.id,
+            version: preset.version,
+            agents: preset.agent_ids.join(","),
+            state: "active".to_string(),
+            kind: preset.kind,
+            workflow: "-".to_string(),
+            scope: BUILTIN_SCOPE,
+        });
+    }
+    let mut higher_ids = project_ids.clone();
+    let mut higher_namespaces = project_namespaces.clone();
+    for record in &installed {
+        match decode_installed_bundle(record) {
+            Ok(bundle) => {
+                let shadowed = project_ids.contains(&record.bundle_id)
+                    || project_namespaces.contains(bundle.namespace());
+                if !shadowed {
+                    higher_ids.insert(record.bundle_id.clone());
+                    higher_namespaces.insert(bundle.namespace().to_string());
+                }
+                let state = if shadowed { "shadowed" } else { "active" };
+                rows.push(bundle_list_row(&bundle, state, Scope::User.as_str()));
+            }
+            // Written by a different binary version: name the row and tell the
+            // operator what to do, rather than failing the whole list.
+            Err(_) => rows.push(BundleListRow {
+                name: record.bundle_id.clone(),
+                version: record.version.clone(),
+                agents: "-".to_string(),
+                state: "unreadable (reinstall)".to_string(),
+                kind: "-".to_string(),
+                workflow: "-".to_string(),
+                scope: Scope::User.as_str(),
+            }),
+        }
+    }
+    for bundle in &project {
+        rows.push(bundle_list_row(
+            bundle.bundle(),
+            "active",
+            Scope::Project.as_str(),
         ));
     }
     for catalog in &first_party {
         for bundle in catalog.bundles() {
-            if shadowed_ids.contains(&bundle.identity().id)
-                || shadowed_namespaces.contains(bundle.namespace())
+            if higher_ids.contains(&bundle.identity().id)
+                || higher_namespaces.contains(bundle.namespace())
             {
                 continue;
             }
-            rows.push(bundle_list_row(bundle, "active"));
+            rows.push(bundle_list_row(bundle, "active", BUILTIN_SCOPE));
         }
     }
-    rows.extend(installed.iter().map(|record| {
-        match decode_installed_bundle(record) {
-            Ok(bundle) => bundle_list_row(&bundle, "active"),
-            // Written by a different binary version: name the row and tell the
-            // operator what to do, rather than failing the whole list.
-            Err(_) => (
-                record.bundle_id.clone(),
-                record.version.clone(),
-                "-".to_string(),
-                "unreadable (reinstall)".to_string(),
-                "-".to_string(),
-                "-".to_string(),
-            ),
-        }
-    }));
-    rows.sort_by(|left, right| left.0.as_bytes().cmp(right.0.as_bytes()));
+    rows.sort_by(|left, right| {
+        (left.name.as_bytes(), left.scope).cmp(&(right.name.as_bytes(), right.scope))
+    });
+    Ok(rows)
+}
 
-    print_list_rows(rows.iter());
+async fn list(filter: Option<Scope>) -> anyhow::Result<()> {
+    let rows = list_rows().await?;
+    print_list_rows(
+        rows.iter()
+            .filter(|row| filter.is_none_or(|scope| row.scope == scope.as_str())),
+    );
     Ok(())
 }
 
+/// Scope label for the bundles shipped with hya (trusted presets and
+/// first-party bundles).
+const BUILTIN_SCOPE: &str = "builtin";
+
 /// Present one prepared bundle as an owned, sortable CLI list row.
-fn bundle_list_row(bundle: &PreparedInstallableBundle, state: &str) -> BundleListRow {
-    (
-        bundle.identity().id.clone(),
-        bundle.identity().version.clone(),
-        bundle
+fn bundle_list_row(
+    bundle: &PreparedInstallableBundle,
+    state: &str,
+    scope: &'static str,
+) -> BundleListRow {
+    BundleListRow {
+        name: bundle.identity().id.clone(),
+        version: bundle.identity().version.clone(),
+        agents: bundle
             .agents()
             .iter()
             .map(|agent| agent.id.as_str())
             .collect::<Vec<_>>()
             .join(","),
-        state.to_string(),
-        bundle.kind().as_str().to_string(),
-        bundle
+        state: state.to_string(),
+        kind: bundle.kind().as_str().to_string(),
+        workflow: bundle
             .workflow()
             .map_or_else(|| "-".to_string(), |workflow| workflow.id.clone()),
-    )
+        scope,
+    }
 }
 
-/// One `bundle list` row: NAME VERSION AGENT STATE KIND WORKFLOW.
-type BundleListRow = (String, String, String, String, String, String);
+/// One `bundle list` row: NAME VERSION AGENT STATE KIND WORKFLOW SCOPE.
+struct BundleListRow {
+    name: String,
+    version: String,
+    agents: String,
+    state: String,
+    kind: String,
+    workflow: String,
+    scope: &'static str,
+}
 
 /// One searchable catalog entry: the lowercased metadata a query matches
 /// against and the `bundle list` row printed when it matches.
@@ -468,9 +865,12 @@ struct SearchEntry {
 
 /// Print the `bundle list` header plus one line per row.
 fn print_list_rows<'a>(rows: impl Iterator<Item = &'a BundleListRow>) {
-    println!("NAME VERSION AGENT STATE KIND WORKFLOW");
-    for (bundle_id, version, agents, state, kind, workflow) in rows {
-        println!("{bundle_id} {version} {agents} {state} {kind} {workflow}");
+    println!("NAME VERSION AGENT STATE KIND WORKFLOW SCOPE");
+    for row in rows {
+        println!(
+            "{} {} {} {} {} {} {}",
+            row.name, row.version, row.agents, row.state, row.kind, row.workflow, row.scope
+        );
     }
 }
 
@@ -511,14 +911,15 @@ async fn search(query: &str) -> anyhow::Result<()> {
         }
         entries.push(SearchEntry {
             haystack,
-            row: (
-                preset.id,
-                preset.version,
-                preset.agent_ids.join(","),
-                "active".to_string(),
-                preset.kind,
-                "-".to_string(),
-            ),
+            row: BundleListRow {
+                name: preset.id,
+                version: preset.version,
+                agents: preset.agent_ids.join(","),
+                state: "active".to_string(),
+                kind: preset.kind,
+                workflow: "-".to_string(),
+                scope: BUILTIN_SCOPE,
+            },
         });
     }
     for catalog in &first_party {
@@ -530,7 +931,7 @@ async fn search(query: &str) -> anyhow::Result<()> {
             }
             entries.push(SearchEntry {
                 haystack: bundle_search_haystack(bundle),
-                row: bundle_list_row(bundle, "active"),
+                row: bundle_list_row(bundle, "active", BUILTIN_SCOPE),
             });
         }
     }
@@ -538,25 +939,26 @@ async fn search(query: &str) -> anyhow::Result<()> {
         match decode_installed_bundle(record) {
             Ok(bundle) => entries.push(SearchEntry {
                 haystack: bundle_search_haystack(&bundle),
-                row: bundle_list_row(&bundle, "active"),
+                row: bundle_list_row(&bundle, "active", Scope::User.as_str()),
             }),
             // Written by a different binary version: the bundle id is the
             // only searchable metadata left, and the degraded row matches
             // what `bundle list` prints for the same record.
             Err(_) => entries.push(SearchEntry {
                 haystack: record.bundle_id.to_lowercase(),
-                row: (
-                    record.bundle_id.clone(),
-                    record.version.clone(),
-                    "-".to_string(),
-                    "unreadable (reinstall)".to_string(),
-                    "-".to_string(),
-                    "-".to_string(),
-                ),
+                row: BundleListRow {
+                    name: record.bundle_id.clone(),
+                    version: record.version.clone(),
+                    agents: "-".to_string(),
+                    state: "unreadable (reinstall)".to_string(),
+                    kind: "-".to_string(),
+                    workflow: "-".to_string(),
+                    scope: Scope::User.as_str(),
+                },
             }),
         }
     }
-    entries.sort_by(|left, right| left.row.0.as_bytes().cmp(right.row.0.as_bytes()));
+    entries.sort_by(|left, right| left.row.name.as_bytes().cmp(right.row.name.as_bytes()));
 
     let matched = entries
         .iter()
@@ -571,7 +973,29 @@ async fn search(query: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn info(bundle_id: &str) -> anyhow::Result<()> {
+async fn info(bundle_id: &str, filter: Option<Scope>) -> anyhow::Result<()> {
+    let not_found = || -> anyhow::Error {
+        StoreError::BundleNotFound {
+            bundle_id: bundle_id.to_string(),
+        }
+        .into()
+    };
+    match filter {
+        Some(Scope::User) => {
+            return if info_installed(bundle_id).await? {
+                Ok(())
+            } else {
+                Err(not_found())
+            };
+        }
+        Some(Scope::Project) => {
+            let bundle =
+                find_project_bundle(&project_dir()?, bundle_id).map_err(explain_project_error)?;
+            info_project(&bundle);
+            return Ok(());
+        }
+        None => {}
+    }
     if let Some(preset) = hya_app::trusted_preset_inventory()
         .context("decode trusted presets")?
         .into_iter()
@@ -580,6 +1004,7 @@ async fn info(bundle_id: &str) -> anyhow::Result<()> {
         println!("name={}", preset.id);
         println!("version={}", preset.version);
         println!("origin=preset");
+        println!("scope={BUILTIN_SCOPE}");
         println!("state=active");
         println!("immutable={}", preset.immutable);
         println!("installable={}", preset.installable);
@@ -593,32 +1018,11 @@ async fn info(bundle_id: &str) -> anyhow::Result<()> {
         }
         return Ok(());
     }
-    if let Some(record) = installed_records_if_exists()
-        .await?
-        .into_iter()
-        .find(|record| record.bundle_id == bundle_id)
-    {
-        let prepared = decode_installed_catalog(&record)?;
-        let [bundle] = prepared.bundles() else {
-            anyhow::bail!("installed catalog must contain exactly one bundle")
-        };
-
-        let identity = bundle.identity();
-        println!("name={}", identity.id);
-        println!("version={}", identity.version);
-        println!("publisher={}", identity.publisher);
-        println!("origin=installed");
-        println!("format=public-v1");
-        println!("state=active");
-        println!("immutable=false");
-        println!("source_digest={}", hex_digest(&record.source_digest));
-        println!("prepared_digest={}", record.prepared_digest);
-        print_static_info(
-            bundle,
-            "=",
-            prepared.bundle_schemas(bundle_id),
-            prepared.bundle_process(bundle_id),
-        );
+    if let Ok(bundle) = find_project_bundle(&project_dir()?, bundle_id) {
+        info_project(&bundle);
+        return Ok(());
+    }
+    if info_installed(bundle_id).await? {
         return Ok(());
     }
     if hya_app::first_party_catalogs()
@@ -633,10 +1037,64 @@ async fn info(bundle_id: &str) -> anyhow::Result<()> {
     {
         return info_first_party(bundle_id);
     }
-    Err(StoreError::BundleNotFound {
-        bundle_id: bundle_id.to_string(),
-    }
-    .into())
+    Err(not_found())
+}
+
+/// Print a user-installed bundle; `false` when the registry has no such id.
+async fn info_installed(bundle_id: &str) -> anyhow::Result<bool> {
+    let Some(record) = installed_records_if_exists()
+        .await?
+        .into_iter()
+        .find(|record| record.bundle_id == bundle_id)
+    else {
+        return Ok(false);
+    };
+    let prepared = decode_installed_catalog(&record)?;
+    let [bundle] = prepared.bundles() else {
+        anyhow::bail!("installed catalog must contain exactly one bundle")
+    };
+
+    let identity = bundle.identity();
+    println!("name={}", identity.id);
+    println!("version={}", identity.version);
+    println!("publisher={}", identity.publisher);
+    println!("origin=installed");
+    println!("scope=user");
+    println!("format=public-v1");
+    println!("state=active");
+    println!("immutable=false");
+    println!("source_digest={}", hex_digest(&record.source_digest));
+    println!("prepared_digest={}", record.prepared_digest);
+    print_static_info(
+        bundle,
+        "=",
+        prepared.bundle_schemas(bundle_id),
+        prepared.bundle_process(bundle_id),
+    );
+    Ok(true)
+}
+
+/// Print a project bundle read from its source directory.
+fn info_project(bundle: &ProjectBundle) {
+    let prepared = bundle.prepared();
+    let prepared_bundle = bundle.bundle();
+    let identity = prepared_bundle.identity();
+    println!("name={}", identity.id);
+    println!("version={}", identity.version);
+    println!("publisher={}", identity.publisher);
+    println!("origin=project");
+    println!("scope=project");
+    println!("format=source");
+    println!("path={}", bundle.dir().display());
+    println!("state=active");
+    println!("immutable=false");
+    println!("prepared_digest={}", prepared.digest());
+    print_static_info(
+        prepared_bundle,
+        "=",
+        prepared.bundle_schemas(&identity.id),
+        prepared.bundle_process(&identity.id),
+    );
 }
 
 /// Print metadata for the immutable first-party bundles.
@@ -654,6 +1112,7 @@ fn info_first_party(bundle_id: &str) -> anyhow::Result<()> {
         println!("version={}", identity.version);
         println!("publisher={}", identity.publisher);
         println!("origin=first-party");
+        println!("scope={BUILTIN_SCOPE}");
         println!("format=prepared-v2");
         println!("state=active");
         println!("immutable=true");
@@ -672,32 +1131,79 @@ fn info_first_party(bundle_id: &str) -> anyhow::Result<()> {
     .into())
 }
 
-async fn uninstall(bundle_id: &str) -> anyhow::Result<()> {
-    let has_installed_override = installed_records_if_exists()
-        .await?
-        .iter()
-        .any(|record| record.bundle_id == bundle_id);
+async fn remove(bundle_id: &str, scope: Scope, yes: bool) -> anyhow::Result<()> {
     anyhow::ensure!(
         !hya_app::trusted_preset_inventory()
             .context("decode trusted presets")?
             .iter()
             .any(|preset| preset.id == bundle_id),
-        "immutable trusted preset `{bundle_id}` cannot be uninstalled"
+        "immutable trusted preset `{bundle_id}` cannot be removed"
     );
-    anyhow::ensure!(
-        has_installed_override
-            || !hya_app::first_party_catalogs()
-                .context("load first-party bundles")?
-                .iter()
-                .any(|catalog| catalog
-                    .bundles()
+    match scope {
+        Scope::User => {
+            let registry = existing_registry().await?;
+            let installed = match &registry {
+                Some(registry) => registry
+                    .snapshot()
+                    .await?
+                    .bundles
+                    .into_iter()
+                    .find(|record| record.bundle_id == bundle_id),
+                None => None,
+            };
+            let Some(record) = installed else {
+                let first_party = hya_app::first_party_catalogs()
+                    .context("load first-party bundles")?
                     .iter()
-                    .any(|bundle| bundle.identity().id == bundle_id)),
-        "immutable first-party bundle `{bundle_id}` cannot be uninstalled"
-    );
-    let registry = open_registry().await?;
-    let BundleUninstallOutcome::Removed { generation } = registry.uninstall(bundle_id).await?;
-    println!("uninstalled {bundle_id} generation={generation}");
+                    .any(|catalog| {
+                        catalog
+                            .bundles()
+                            .iter()
+                            .any(|bundle| bundle.identity().id == bundle_id)
+                    });
+                anyhow::ensure!(
+                    !first_party,
+                    "immutable first-party bundle `{bundle_id}` cannot be removed"
+                );
+                return Err(StoreError::BundleNotFound {
+                    bundle_id: bundle_id.to_string(),
+                }
+                .into());
+            };
+            let registry_path = hya_app::bundle_registry_path();
+            confirm(
+                &format!(
+                    "Remove {bundle_id} {} from user scope\n  registry: {}\n",
+                    record.version,
+                    registry_path.display()
+                ),
+                "remove",
+                yes,
+            )?;
+            let registry = registry.context("user registry handle missing")?;
+            let BundleUninstallOutcome::Removed { generation } =
+                registry.uninstall(bundle_id).await?;
+            println!("removed {bundle_id} scope=user generation={generation}");
+        }
+        Scope::Project => {
+            let dir = project_dir()?;
+            let bundle = find_project_bundle(&dir, bundle_id).map_err(explain_project_error)?;
+            confirm(
+                &format!(
+                    "Remove {bundle_id} {} from project scope\n  deletes: {}\n",
+                    bundle.version(),
+                    bundle.dir().display()
+                ),
+                "remove",
+                yes,
+            )?;
+            let removed = remove_project_bundle(&dir, bundle_id).map_err(explain_project_error)?;
+            println!(
+                "removed {bundle_id} scope=project path={}",
+                removed.dir().display()
+            );
+        }
+    }
     Ok(())
 }
 
@@ -812,13 +1318,15 @@ async fn open_registry() -> anyhow::Result<BundleRegistry> {
     Ok(registry)
 }
 
-async fn installed_records_if_exists() -> anyhow::Result<Vec<BundleRegistryRecord>> {
+/// Open the user registry only when it already exists, so read-only
+/// commands never create it.
+async fn existing_registry() -> anyhow::Result<Option<BundleRegistry>> {
     let path = hya_app::bundle_registry_path();
     if !path
         .try_exists()
         .with_context(|| format!("inspect bundle registry path {}", path.display()))?
     {
-        return Ok(Vec::new());
+        return Ok(None);
     }
     let path = path
         .to_str()
@@ -826,7 +1334,14 @@ async fn installed_records_if_exists() -> anyhow::Result<Vec<BundleRegistryRecor
     let registry = BundleRegistry::connect(path)
         .await
         .context("open bundle registry")?;
-    Ok(registry.snapshot().await?.bundles)
+    Ok(Some(registry))
+}
+
+async fn installed_records_if_exists() -> anyhow::Result<Vec<BundleRegistryRecord>> {
+    match existing_registry().await? {
+        Some(registry) => Ok(registry.snapshot().await?.bundles),
+        None => Ok(Vec::new()),
+    }
 }
 
 /// Print the static metadata of one prepared bundle, including its declared
