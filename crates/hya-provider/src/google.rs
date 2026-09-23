@@ -348,25 +348,36 @@ impl Decoder for GoogleDecoder {
     }
 }
 
+/// Normalize Gemini usage metadata to the [`TokenUsage`] invariant.
+///
+/// `promptTokenCount` includes cached content, which is subtracted
+/// (saturating). `candidatesTokenCount` excludes thoughts, so thinking
+/// (`thoughtsTokenCount`, 0 when absent) is added back into `output`. Gemini
+/// reports the split exactly, so it is never unknown.
 fn google_usage(chunk: &Value) -> Option<TokenUsage> {
     let usage = chunk.get("usageMetadata")?;
+    let cache_read = usage
+        .get("cachedContentTokenCount")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let thoughts = usage
+        .get("thoughtsTokenCount")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
     Some(TokenUsage {
         input: usage
             .get("promptTokenCount")
             .and_then(Value::as_u64)
-            .unwrap_or(0),
+            .unwrap_or(0)
+            .saturating_sub(cache_read),
         output: usage
             .get("candidatesTokenCount")
             .and_then(Value::as_u64)
-            .unwrap_or(0),
-        reasoning: usage
-            .get("thoughtsTokenCount")
-            .and_then(Value::as_u64)
-            .unwrap_or(0),
-        cache_read: usage
-            .get("cachedContentTokenCount")
-            .and_then(Value::as_u64)
-            .unwrap_or(0),
+            .unwrap_or(0)
+            .saturating_add(thoughts),
+        reasoning: thoughts,
+        cache_read,
         cache_write: 0,
+        reasoning_unknown: false,
     })
 }

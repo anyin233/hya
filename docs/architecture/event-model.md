@@ -137,7 +137,7 @@ preferred model plus ordered fallback candidates and per-candidate reasoning.
 | `message_started` | `session`, `message: MessageId`, `role: Role` | Fold: creates `MessageProjection` if missing |
 | `turn_binding_recorded` | `session`, `message`, `generation: ConfigGeneration` | Fold: `config_generation` on that message. Engine emits it immediately after `MessageStarted{Assistant}` so the immutable runtime snapshot identity is durable before any provider call. |
 | `user_prompt_context_recorded` | `session`, `message`, `files: Vec<Value>`, `agents: Vec<Value>` | Fold: prompt `@file` / `@agent` attachment metadata. Engine **emits nothing** when both vectors are empty. |
-| `message_finished` | `session`, `message`, `role`, `finish: FinishReason`, `tokens: Option<TokenUsage>` | Fold: finish + tokens. Engine force-emits this with `error` or `cancelled` on turn failure / sidecar loss so clients never wait forever after `message_started`. |
+| `message_finished` | `session`, `message`, `role`, `finish: FinishReason`, `tokens: Option<TokenUsage>` | Fold: finish + tokens. `tokens` is the legacy sum of the message's rounds and is only set on a normal finish. Engine force-emits this with `error` or `cancelled` (and `tokens: None`) on turn failure / sidecar loss so clients never wait forever after `message_started`; billed rounds of such a message are still counted through `usage_recorded`. For a message with no `usage_recorded` record (a legacy log) a non-zero `tokens` is folded once into `SessionProjection.usage` under model `unattributed`, except in forked sessions, whose copied messages carry the source's sums. |
 | `message_deleted` | `session`, `message` | Fold: retain-by-id removal of the whole message |
 | `part_deleted` | `session`, `message`, `part: PartId` | Fold: removes that part from the message |
 
@@ -148,7 +148,39 @@ preferred model plus ordered fallback candidates and per-candidate reasoning.
 | `step_started` | `session`, `message`, `step: u32` | **no-op** (UI / compat) |
 | `step_finished` | `session`, `message`, `step: u32`, `finish: FinishReason` | **no-op**. `finish` defaults to `stop` when replaying older logs that lacked the field (`#[serde(default = "default_step_finish_reason")]`). |
 
-One pair marks one provider stream round inside an assistant message.
+One pair marks one provider stream round inside an assistant message. The
+round's billed usage and serving model are recorded separately by
+`usage_recorded` (below), emitted between the two markers once the stream ends.
+
+#### Token accounting
+
+| Wire `type` | Payload fields | Reducer |
+| --- | --- | --- |
+| `usage_recorded` | `session`, optional `message: MessageId`, optional `step: u32`, `model: ModelRef`, `purpose: UsagePurpose`, `tokens: TokenUsage` | Fold: adds `tokens` to `SessionProjection.usage` under `model` and `purpose`; for a `turn` round also sums it into that message's `MessageProjection.usage`. Session totals are never decremented. |
+
+One record per provider call that reported usage:
+
+- `purpose: turn` — every streaming round of an assistant turn, with `message`
+  and `step`. `model` is the model that served the round: the request model
+  after `chat.params`, then after the cross-model fallback chain or the
+  `model.fallback` hook, or the selected Workflow route candidate. A round
+  that delivered usage and then failed, or a round of a message that later
+  ended `cancelled`/`error`, is still recorded.
+- `purpose: title` — automatic title generation.
+- `purpose: compaction` — summarizer calls: the compaction ladder's
+  `summarize`/`handoff` rungs, `/compact` (`summarize_session`), and the
+  terminal handoff document.
+
+Side calls (`title`, `compaction`) omit `message` and `step` and never create
+transcript messages. `UsagePurpose` is `turn` \| `title` \| `compaction`; an
+unknown value from a newer binary decodes as `other`. An older binary folds the
+whole variant as `unknown`. The v1 curated stream does not map it (the IDL's
+`TokensRecorded` payload stays unconstructed); read the fold from the
+projection. Not attributed today: provider-native compaction
+(`/responses/compact` reports no usage to the engine), goal evaluators, and
+loop verifiers. Usage of a stream that is dropped before its decoder reports
+usage (mid-stream cancel or transport failure) is not known to the engine and
+is not recorded.
 
 #### Text streaming
 
@@ -251,7 +283,7 @@ the root.
 | Wire `type` | Payload fields | Reducer |
 | --- | --- | --- |
 | `context_compacted` | `session`, summary `message`, `strategy`, `from_message`, `to_message`, `folded_count`, `input_tokens_est`, `threshold` | **no-op** for projection; durable checkpoint marker. The system message carries summary output and the range points to the folded log entries. |
-| `session_forked` | `session`, `source`, optional `before_message` | **no-op** for projection; records a fork edge separate from subagent `SessionCreated.parent`. Copied messages receive fresh ids. |
+| `session_forked` | `session`, `source`, optional `before_message` | Fold: `SessionProjection.forked_from = source`. Records a fork edge separate from subagent `SessionCreated.parent`. Copied messages receive fresh ids; their copied `tokens` never count toward the fork's `usage`. |
 | `context_evicted` | `session`, `evicted_parts`, `tokens_before`, `tokens_after`, `threshold` | **no-op**; request-local tool-output reduction. The event log retains full outputs. |
 
 `ContextCompacted` is durable replay evidence and a baseline/checkpoint marker,
@@ -279,7 +311,6 @@ but `Projection::apply_event` ignores them:
 - `text_end`
 - `tool_input_delta`
 - `context_compacted`
-- `session_forked`
 - `context_evicted`
 - `error`
 - `unknown`
@@ -345,22 +376,73 @@ Terminal state of **both** a finished message and a finished provider step.
 
 ### `TokenUsage`
 
-Five counters (all `u64`, default 0):
+Five counters (all `u64`, default 0) plus one flag. Every provider decoder
+normalizes to this invariant (see
+[providers.md](providers.md#token-usage-normalization)):
 
-| Field | Serde notes |
-| --- | --- |
-| `input` | Also accepts alias `prompt` on decode |
-| `output` | Also accepts alias `completion` on decode |
-| `reasoning` | |
-| `cache_read` | |
-| `cache_write` | |
+| Field | Meaning | Serde notes |
+| --- | --- | --- |
+| `input` | Uncached prompt tokens; **excludes** `cache_read` and `cache_write` | Also accepts alias `prompt` on decode |
+| `output` | All generated tokens, **including** thinking | Also accepts alias `completion` on decode |
+| `reasoning` | Thinking tokens, a subset of `output`; 0 when unknown | |
+| `cache_read` | Prompt tokens read from cache | |
+| `cache_write` | Prompt tokens written to cache (cache creation) | |
+| `reasoning_unknown` | The provider did not report the thinking share of `output` (Anthropic); the split is unknown, never estimated | `bool`, omitted when `false` |
+
+The whole prompt is `input + cache_read + cache_write` (`TokenUsage::prompt`);
+visible output is `output - reasoning` when the split is known
+(`TokenUsage::visible_output`, `None` otherwise).
+
+Legacy logs (written before this invariant) carry provider-native values —
+OpenAI `input` included cached tokens, Google `output` excluded thoughts,
+Anthropic reported `reasoning: 0` — and no `reasoning_unknown` field. Readers
+treat the thinking split of legacy usage as unknown; the projection fold does
+so for every legacy `MessageFinished.tokens` sum.
 
 **Two aggregation rules (do not conflate them):**
 
 1. `TokenUsage::merge` takes the **max** per field — providers often re-report
    cumulative totals within a stream.
 2. The turn loop **sums** counters across provider rounds when building the
-   final `MessageFinished.tokens` (`saturating_add` in `add_tokens`).
+   final `MessageFinished.tokens` (`TokenUsage::add`).
+
+In both, `reasoning_unknown` is sticky: once any sample or round is unknown,
+the result is.
+
+### Session usage fold
+
+`SessionProjection.usage: SessionUsage` (in
+[`usage.rs`](../../crates/hya-proto/src/usage.rs)) is the replayable per-model
+account of billed tokens for **one** session log:
+
+```text
+SessionUsage {
+  by_model:   BTreeMap<ModelRef, UsageTotals>,     // serving model; legacy under "unattributed"
+  by_purpose: BTreeMap<UsagePurpose, UsageTotals>, // turn | title | compaction (| other)
+}
+UsageTotals {
+  input, cache_read, cache_write, output,  // sums under the TokenUsage invariant
+  reasoning,                 // thinking of calls that reported it (subset of output)
+  reasoning_unknown_output,  // output of calls whose thinking split is unknown
+  rounds,                    // usage_recorded records folded
+  legacy_messages,           // legacy MessageFinished sums folded
+}
+```
+
+- Sources: every `usage_recorded`; plus, for a message without any
+  `usage_recorded`, its non-zero `MessageFinished.tokens` once, as model
+  `unattributed` (`UNATTRIBUTED_MODEL`), purpose `turn`, thinking unknown.
+  Messages with records never fall back, so nothing is counted twice. Forked
+  sessions skip the fallback.
+- Billed stays billed: `message_deleted`, revert, and compaction never
+  decrement it.
+- `UsageTotals::output_split() -> OutputSplit { thinking, visible, unknown }`
+  keeps partial knowledge (`thinking + visible + unknown == output`);
+  `OutputSplit::thinking_exact()` / `visible_exact()` return `Some` only when
+  `unknown == 0`. `UsageTotals::prompt()` is `input + cache_read + cache_write`.
+- Child (subagent) sessions keep their own logs; aggregate a tree by folding
+  each session and calling `SessionUsage::merge`. `SessionUsage::total()` sums
+  every model.
 
 This is **not** the `token_ledger` row shape (session/role/iteration/run-id
 columns in storage). Ledger accounting and envelope `TokenUsage` are different
@@ -413,6 +495,9 @@ Projection {
 | `messages` | message lifecycle + part events |
 | `members` | member lifecycle (parent log) |
 | `workflow` | workflow lifecycle events |
+| `context_status` | latest `context_status` |
+| `forked_from` | `session_forked` (omitted when `None`) |
+| `usage` | `usage_recorded` + legacy `message_finished.tokens` fallback (omitted when empty) |
 
 ### `MessageProjection` fields
 
@@ -421,6 +506,7 @@ Projection {
 | `id`, `role` | `message_started` |
 | `config_generation` | `turn_binding_recorded` |
 | `finish`, `tokens` | `message_finished` |
+| `usage` | `usage_recorded` with this `message`: `MessageUsage { model /* latest round */, tokens /* sum */, rounds }` (omitted when `None`) |
 | `files`, `agents` | `user_prompt_context_recorded` |
 | `parts` | text / reasoning / tool events |
 

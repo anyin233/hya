@@ -25,6 +25,8 @@ pub mod projection_tree;
 pub mod scope;
 /// Wire types for token accounting (mode and count provenance).
 pub mod tokens;
+/// Session-level billed-usage fold keyed by serving model and purpose.
+pub mod usage;
 /// Durable Workflow selection, run, Stage, and member projection types.
 pub mod workflow;
 /// Compat workspace-adapter list entry.
@@ -44,7 +46,7 @@ pub use mail::{
 };
 pub use message::{
     FinishReason, MemberRunStatus, Message, Part, Role, RosterStatus, SubagentMode, TokenUsage,
-    ToolPartState,
+    ToolPartState, UsagePurpose,
 };
 pub use model::{AgentName, ModelRef, ToolName, ToolSchema};
 pub use projection::{
@@ -55,6 +57,7 @@ pub use projection::{
 };
 pub use projection_tree::{RunTreeNode, build_run_tree};
 pub use scope::{ANNOUNCE_CHANNEL, ROOT_HANDLE, Relation, in_scope, relation};
+pub use usage::{MessageUsage, OutputSplit, SessionUsage, UNATTRIBUTED_MODEL, UsageTotals};
 pub use workflow::{
     WorkflowAvailability, WorkflowCommand, WorkflowCommandResult, WorkflowDelivery,
     WorkflowIdentity, WorkflowInfo, WorkflowMemberProjection, WorkflowMemberRole,

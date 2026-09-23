@@ -154,6 +154,7 @@ mod tests {
             config_generation: None,
             finish: None,
             tokens: None,
+            usage: None,
             files: Vec::new(),
             agents: Vec::new(),
             parts: Vec::new(),

@@ -123,7 +123,8 @@ async fn ledger_records_provider_reported_usage() {
                 output: 34,
                 reasoning: 0,
                 cache_read: 10,
-                cache_write: 0,
+                cache_write: 5,
+                reasoning_unknown: false,
             }),
             FakeStep::Finish(FinishReason::Stop),
         ],
@@ -135,7 +136,8 @@ async fn ledger_records_provider_reported_usage() {
     assert_eq!(usage.len(), 1, "one row per finished assistant message");
     let row = &usage[0];
     assert_eq!(row.confidence, "provider");
-    assert_eq!(row.prompt_tokens, 130, "input + cache_read");
+    assert_eq!(row.prompt_tokens, 135, "input + cache_read + cache_write");
+    assert_eq!(row.model.as_deref(), Some("fake"), "the serving model");
     assert_eq!(row.completion_tokens, 34);
     assert_eq!(row.role, "build");
 }

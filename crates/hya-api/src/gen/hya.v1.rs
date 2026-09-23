@@ -3078,19 +3078,21 @@ pub mod interactions_server {
 /// Token accounting for one model round.
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct TokenUsage {
-    /// Billed input tokens of the round.
+    /// Uncached input tokens of the round; excludes `cache_read` and
+    /// `cache_write`, so the whole prompt is their sum.
     #[prost(uint64, tag = "1")]
     pub input: u64,
-    /// Billed output tokens of the round.
+    /// All generated tokens of the round, thinking included.
     #[prost(uint64, tag = "2")]
     pub output: u64,
-    /// Reasoning tokens counted within the round.
+    /// Thinking tokens within `output` when the provider reports them; 0 when it
+    /// does not (the thinking split is then unknown, never estimated).
     #[prost(uint64, tag = "3")]
     pub reasoning: u64,
-    /// Input tokens served from cache.
+    /// Prompt tokens served from cache.
     #[prost(uint64, tag = "4")]
     pub cache_read: u64,
-    /// Input tokens written to cache.
+    /// Prompt tokens written to cache (cache creation).
     #[prost(uint64, tag = "5")]
     pub cache_write: u64,
 }

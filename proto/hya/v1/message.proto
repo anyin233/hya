@@ -63,15 +63,17 @@ enum Role {
 
 // Token accounting for one model round.
 message TokenUsage {
-  // Billed input tokens of the round.
+  // Uncached input tokens of the round; excludes `cache_read` and
+  // `cache_write`, so the whole prompt is their sum.
   uint64 input = 1;
-  // Billed output tokens of the round.
+  // All generated tokens of the round, thinking included.
   uint64 output = 2;
-  // Reasoning tokens counted within the round.
+  // Thinking tokens within `output` when the provider reports them; 0 when it
+  // does not (the thinking split is then unknown, never estimated).
   uint64 reasoning = 3;
-  // Input tokens served from cache.
+  // Prompt tokens served from cache.
   uint64 cache_read = 4;
-  // Input tokens written to cache.
+  // Prompt tokens written to cache (cache creation).
   uint64 cache_write = 5;
 }
 

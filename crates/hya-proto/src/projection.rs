@@ -20,6 +20,7 @@ use crate::message::{
 use crate::model::{AgentName, ModelRef, ToolName};
 use crate::scope;
 use crate::tokens::{TokenAccountingMode, TokenSource};
+use crate::usage::{MessageUsage, SessionUsage};
 use crate::workflow::{
     WorkflowMemberProjection, WorkflowProjection, WorkflowRunProjection, WorkflowRunStatus,
     WorkflowStageProjection, WorkflowStageStatus,
@@ -71,6 +72,19 @@ pub struct SessionProjection {
     /// `ContextStatus` event. `None` until a streaming round has reported.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_status: Option<ContextStatusProjection>,
+    /// Source session when this session was forked (`SessionForked`).
+    ///
+    /// Copied messages carry the source's `MessageFinished.tokens`; the usage
+    /// fold never counts those for a fork.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub forked_from: Option<SessionId>,
+    /// Billed provider usage of this session, by serving model and purpose.
+    ///
+    /// Folded from `UsageRecorded` (plus legacy `MessageFinished.tokens` of
+    /// messages without records). Never decremented by message deletion,
+    /// revert, or compaction.
+    #[serde(default, skip_serializing_if = "SessionUsage::is_empty")]
+    pub usage: SessionUsage,
 }
 
 /// Latest window-occupancy report, mirroring the newest `ContextStatus` event.
@@ -127,9 +141,12 @@ pub struct MessageProjection {
     pub config_generation: Option<ConfigGeneration>,
     /// Finish reason when the message is closed.
     pub finish: Option<FinishReason>,
-    /// Usage recorded on `MessageFinished`.
+    /// Usage recorded on `MessageFinished` (legacy per-message sum).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tokens: Option<TokenUsage>,
+    /// Attributed usage folded from this message's `UsageRecorded` rounds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<MessageUsage>,
     /// Prompt file attachments from `UserPromptContextRecorded`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub files: Vec<serde_json::Value>,
@@ -898,6 +915,7 @@ impl Projection {
                         config_generation: None,
                         finish: None,
                         tokens: None,
+                        usage: None,
                         files: Vec::new(),
                         agents: Vec::new(),
                         parts: Vec::new(),
@@ -930,9 +948,25 @@ impl Projection {
                 tokens,
                 ..
             } => {
+                let forked = self.session.forked_from.is_some();
+                let mut legacy = None;
                 if let Some(m) = self.message_mut(*message) {
+                    // Legacy fallback: a message with no per-round records
+                    // (a log written before `UsageRecorded`) contributes its
+                    // sum once, unattributed. A fork's copies never count.
+                    if let Some(sum) = tokens
+                        && !sum.is_zero()
+                        && m.usage.is_none()
+                        && m.tokens.is_none()
+                        && !forked
+                    {
+                        legacy = Some(*sum);
+                    }
                     m.finish = Some(*finish);
                     m.tokens = *tokens;
+                }
+                if let Some(sum) = legacy {
+                    self.session.usage.record_legacy(&sum);
                 }
             }
             Event::MessageDeleted { message, .. } => {
@@ -1407,9 +1441,27 @@ impl Projection {
             // Observability record, not a state transition: the folded messages
             // stay in the log and the marker System message carries the output.
             | Event::ContextCompacted { .. }
-            | Event::SessionForked { .. }
             | Event::ContextEvicted { .. }
             | Event::Unknown => {}
+            Event::SessionForked { source, .. } => {
+                self.session.forked_from = Some(*source);
+            }
+            // Billed stays billed: session totals only ever grow.
+            Event::UsageRecorded {
+                message,
+                model,
+                purpose,
+                tokens,
+                ..
+            } => {
+                self.session.usage.record(model, *purpose, tokens);
+                if let Some(m) = message.and_then(|message| self.message_mut(message)) {
+                    match &mut m.usage {
+                        Some(existing) => existing.add(model, tokens),
+                        None => m.usage = Some(MessageUsage::first(model, tokens)),
+                    }
+                }
+            }
             // Latest occupancy wins: clients read one current figure, not a history.
             Event::ContextStatus {
                 tokens,
@@ -2096,6 +2148,233 @@ mod context_status_tests {
             },
         ));
         assert_eq!(p.session.context_status.unwrap().tokens, 9_000);
+    }
+}
+
+#[cfg(test)]
+mod usage_fold_tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::*;
+    use crate::ids::EventSeq;
+    use crate::message::UsagePurpose;
+    use crate::usage::UNATTRIBUTED_MODEL;
+
+    fn envs(events: Vec<Event>) -> Vec<Envelope> {
+        events
+            .into_iter()
+            .enumerate()
+            .map(|(index, event)| Envelope {
+                seq: EventSeq(index as u64 + 1),
+                ts_millis: 0,
+                event,
+            })
+            .collect()
+    }
+
+    fn created(session: SessionId) -> Event {
+        Event::SessionCreated {
+            session,
+            parent: None,
+            agent: AgentName::new("build"),
+            model: ModelRef::new("session-model"),
+            workdir: "/tmp".to_string(),
+        }
+    }
+
+    fn started(session: SessionId, message: MessageId) -> Event {
+        Event::MessageStarted {
+            session,
+            message,
+            role: Role::Assistant,
+        }
+    }
+
+    fn usage(input: u64, output: u64, reasoning: u64, unknown: bool) -> TokenUsage {
+        TokenUsage {
+            input,
+            output,
+            reasoning,
+            cache_read: 1,
+            cache_write: 2,
+            reasoning_unknown: unknown,
+        }
+    }
+
+    fn round(
+        session: SessionId,
+        message: MessageId,
+        step: u32,
+        model: &str,
+        tokens: TokenUsage,
+    ) -> Event {
+        Event::UsageRecorded {
+            session,
+            message: Some(message),
+            step: Some(step),
+            model: ModelRef::new(model),
+            purpose: UsagePurpose::Turn,
+            tokens,
+        }
+    }
+
+    fn finished(session: SessionId, message: MessageId, tokens: Option<TokenUsage>) -> Event {
+        Event::MessageFinished {
+            session,
+            message,
+            role: Role::Assistant,
+            finish: FinishReason::Stop,
+            tokens,
+        }
+    }
+
+    #[test]
+    fn rounds_fold_by_model_and_purpose_without_double_counting_the_message_sum() {
+        let session = SessionId::new();
+        let message = MessageId::new();
+        let first = usage(100, 30, 10, false);
+        let second = usage(50, 20, 0, true);
+        let mut sum = first;
+        sum.add(second);
+        let log = envs(vec![
+            created(session),
+            started(session, message),
+            round(session, message, 0, "model-a", first),
+            round(session, message, 1, "model-b", second),
+            finished(session, message, Some(sum)),
+            Event::UsageRecorded {
+                session,
+                message: None,
+                step: None,
+                model: ModelRef::new("model-a"),
+                purpose: UsagePurpose::Title,
+                tokens: usage(5, 3, 0, false),
+            },
+        ]);
+        let projection = Projection::from_events(&log);
+        let usage = &projection.session.usage;
+        let a = usage.by_model[&ModelRef::new("model-a")];
+        assert_eq!((a.input, a.output, a.reasoning, a.rounds), (105, 33, 10, 2));
+        assert_eq!((a.cache_read, a.cache_write), (2, 4));
+        let b = usage.by_model[&ModelRef::new("model-b")];
+        assert_eq!(
+            (b.output, b.reasoning_unknown_output, b.rounds),
+            (20, 20, 1)
+        );
+        assert!(
+            !usage
+                .by_model
+                .contains_key(&ModelRef::new(UNATTRIBUTED_MODEL)),
+            "a message with round records must not fall back to its sum"
+        );
+        assert_eq!(usage.by_purpose[&UsagePurpose::Turn].rounds, 2);
+        assert_eq!(usage.by_purpose[&UsagePurpose::Title].output, 3);
+        assert_eq!(usage.total().output, 53);
+
+        let message_usage = projection.session.messages[0].usage.clone().unwrap();
+        assert_eq!(message_usage.model, ModelRef::new("model-b"));
+        assert_eq!(message_usage.rounds, 2);
+        assert_eq!(message_usage.tokens, sum);
+
+        // Deterministic: replaying the same log (and re-delivering it) folds
+        // to the same totals.
+        let mut replayed = Projection::from_events(&log);
+        for env in &log {
+            replayed.apply(env);
+        }
+        assert_eq!(replayed.session.usage, projection.session.usage);
+    }
+
+    #[test]
+    fn deleting_a_message_keeps_its_billed_usage() {
+        let session = SessionId::new();
+        let message = MessageId::new();
+        let log = envs(vec![
+            created(session),
+            started(session, message),
+            round(session, message, 0, "model-a", usage(10, 4, 1, false)),
+            finished(session, message, Some(usage(10, 4, 1, false))),
+        ]);
+        let before = Projection::from_events(&log).session.usage;
+        let mut deleted = log.clone();
+        deleted.extend(
+            envs(vec![Event::MessageDeleted { session, message }])
+                .into_iter()
+                .map(|mut env| {
+                    env.seq = EventSeq(log.len() as u64 + 1);
+                    env
+                }),
+        );
+        let after = Projection::from_events(&deleted);
+        assert!(after.session.messages.is_empty());
+        assert_eq!(after.session.usage, before);
+    }
+
+    #[test]
+    fn legacy_message_sums_fold_as_unattributed_with_unknown_thinking() {
+        let session = SessionId::new();
+        let message = MessageId::new();
+        let empty = MessageId::new();
+        let legacy_json = serde_json::json!({
+            "type": "message_finished",
+            "session": session,
+            "message": message,
+            "role": "assistant",
+            "finish": "stop",
+            "tokens": {"input": 40, "output": 12, "reasoning": 5, "cache_read": 8, "cache_write": 0}
+        });
+        let legacy: Event = serde_json::from_value(legacy_json).unwrap();
+        let log = envs(vec![
+            created(session),
+            started(session, message),
+            legacy,
+            started(session, empty),
+            finished(session, empty, None),
+        ]);
+        let usage = Projection::from_events(&log).session.usage;
+        let totals = usage.by_model[&ModelRef::new(UNATTRIBUTED_MODEL)];
+        assert_eq!(totals.legacy_messages, 1);
+        assert_eq!(totals.rounds, 0);
+        assert_eq!(
+            (totals.input, totals.cache_read, totals.output),
+            (40, 8, 12)
+        );
+        assert_eq!(totals.output_split().thinking_exact(), None);
+        assert_eq!(usage.by_model.len(), 1);
+    }
+
+    #[test]
+    fn forked_copies_do_not_count_the_source_usage() {
+        let session = SessionId::new();
+        let copied = MessageId::new();
+        let own = MessageId::new();
+        let log = envs(vec![
+            created(session),
+            Event::SessionForked {
+                session,
+                source: SessionId::new(),
+                before_message: None,
+            },
+            started(session, copied),
+            finished(session, copied, Some(usage(10, 4, 0, false))),
+            started(session, own),
+            round(session, own, 0, "model-a", usage(3, 2, 0, false)),
+            finished(session, own, Some(usage(3, 2, 0, false))),
+        ]);
+        let projection = Projection::from_events(&log);
+        assert!(projection.session.forked_from.is_some());
+        let usage = projection.session.usage;
+        assert_eq!(usage.by_model.len(), 1);
+        assert_eq!(usage.total().output, 2);
+    }
+
+    #[test]
+    fn usage_is_absent_from_serialized_projection_until_recorded() {
+        let session = SessionId::new();
+        let projection = Projection::from_events(&envs(vec![created(session)]));
+        let json = serde_json::to_string(&projection).unwrap();
+        assert!(!json.contains("usage"), "{json}");
+        assert!(!json.contains("forked_from"), "{json}");
     }
 }
 

@@ -371,14 +371,55 @@ async fn openai_decodes_usage_when_usage_arrives_after_finish_reason() {
 
     assert_eq!(
         finished_tokens(&events),
+        // Normalized: OpenAI `prompt_tokens` includes cached tokens.
         Some(TokenUsage {
-            input: 11,
+            input: 6,
             output: 3,
             reasoning: 2,
             cache_read: 5,
             cache_write: 0,
+            reasoning_unknown: false,
         })
     );
+}
+
+#[tokio::test]
+async fn openai_usage_without_reasoning_details_reports_unknown_thinking() {
+    let protocol = OpenAiChatProtocol;
+    let fixture = [
+        r#"{"choices":[{"delta":{"content":"Hi"},"finish_reason":"stop"}]}"#,
+        r#"{"choices":[],"usage":{"prompt_tokens":20,"completion_tokens":4,"prompt_tokens_details":{"cached_tokens":8,"cache_creation_tokens":2}}}"#,
+        "[DONE]",
+    ];
+
+    let events = decode_all(&protocol, &fixture);
+
+    assert_eq!(
+        finished_tokens(&events),
+        Some(TokenUsage {
+            input: 10,
+            output: 4,
+            reasoning: 0,
+            cache_read: 8,
+            cache_write: 2,
+            reasoning_unknown: true,
+        })
+    );
+}
+
+#[tokio::test]
+async fn openai_cached_tokens_never_underflow_input() {
+    let protocol = OpenAiChatProtocol;
+    let fixture = [
+        r#"{"choices":[{"delta":{"content":"Hi"},"finish_reason":"stop"}]}"#,
+        r#"{"choices":[],"usage":{"prompt_tokens":3,"completion_tokens":1,"prompt_tokens_details":{"cached_tokens":9},"completion_tokens_details":{"reasoning_tokens":0}}}"#,
+        "[DONE]",
+    ];
+
+    let events = decode_all(&protocol, &fixture);
+
+    let tokens = finished_tokens(&events).unwrap();
+    assert_eq!((tokens.input, tokens.cache_read), (0, 9));
 }
 
 #[tokio::test]
@@ -483,6 +524,7 @@ fn fake_provider_materializes_reasoning_tool_usage_and_finish() {
                 reasoning: 3,
                 cache_read: 0,
                 cache_write: 0,
+                reasoning_unknown: false,
             }),
             FakeStep::Finish(FinishReason::Stop),
         ],
@@ -510,6 +552,7 @@ fn fake_provider_materializes_reasoning_tool_usage_and_finish() {
             reasoning: 3,
             cache_read: 0,
             cache_write: 0,
+            reasoning_unknown: false,
         })
     );
 }
@@ -575,12 +618,15 @@ fn anthropic_decodes_message_usage() {
 
     assert_eq!(
         finished_tokens(&events),
+        // Anthropic `input_tokens` already excludes cache reads and writes;
+        // `output_tokens` includes thinking but the split is not reported.
         Some(TokenUsage {
             input: 13,
             output: 4,
             reasoning: 0,
             cache_read: 5,
             cache_write: 7,
+            reasoning_unknown: true,
         })
     );
 }
@@ -617,12 +663,15 @@ async fn google_decodes_usage_metadata() {
 
     assert_eq!(
         finished_tokens(&events),
+        // Normalized: `promptTokenCount` includes cached content, and
+        // `candidatesTokenCount` excludes thoughts, so output adds them back.
         Some(TokenUsage {
-            input: 17,
-            output: 6,
+            input: 8,
+            output: 10,
             reasoning: 4,
             cache_read: 9,
             cache_write: 0,
+            reasoning_unknown: false,
         })
     );
 }

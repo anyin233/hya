@@ -253,6 +253,7 @@ async fn forked_reasoning_provider_data_reaches_next_request() {
                 config_generation: None,
                 finish: Some(FinishReason::Stop),
                 tokens: None,
+                usage: None,
                 files: Vec::new(),
                 agents: Vec::new(),
                 parts: vec![PartProjection::Reasoning {

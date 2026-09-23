@@ -83,6 +83,7 @@ impl TextPartAccumulator {
             | Event::SessionForked { .. }
             | Event::ContextEvicted { .. }
             | Event::ContextStatus { .. }
+            | Event::UsageRecorded { .. }
             | Event::Error { .. }
             | Event::Unknown => None,
         }

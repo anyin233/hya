@@ -1552,11 +1552,11 @@ Token accounting for one model round.
 
 | Field | Type | Description |
 |---|---|---|
-| `input` (1) | `uint64` | Billed input tokens of the round. |
-| `output` (2) | `uint64` | Billed output tokens of the round. |
-| `reasoning` (3) | `uint64` | Reasoning tokens counted within the round. |
-| `cache_read` (4) | `uint64` | Input tokens served from cache. |
-| `cache_write` (5) | `uint64` | Input tokens written to cache. |
+| `input` (1) | `uint64` | Uncached input tokens of the round; excludes `cache_read` and `cache_write`, so the whole prompt is their sum. |
+| `output` (2) | `uint64` | All generated tokens of the round, thinking included. |
+| `reasoning` (3) | `uint64` | Thinking tokens within `output` when the provider reports them; 0 when it does not (the thinking split is then unknown, never estimated). |
+| `cache_read` (4) | `uint64` | Prompt tokens served from cache. |
+| `cache_write` (5) | `uint64` | Prompt tokens written to cache (cache creation). |
 
 ### `TextPart`
 

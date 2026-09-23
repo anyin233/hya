@@ -374,9 +374,10 @@ impl TokenAccounting {
 
 /// Index and prompt size of the last message carrying non-zero reported usage.
 ///
-/// Window occupancy counts `input + cache_read`: cached prompt tokens still
-/// occupy the window, and providers disagree on whether `input` already
-/// includes them. Summing can only over-count, which fails safe.
+/// Window occupancy is the whole prompt, `input + cache_read + cache_write`:
+/// decoders normalize `input` to exclude both cache counters, and cached or
+/// cache-written tokens still occupy the window. Legacy logs whose `input`
+/// already included cached tokens can only over-count, which fails safe.
 fn last_reported_usage(messages: &[Message]) -> Option<(usize, usize)> {
     messages.iter().enumerate().rev().find_map(|(index, m)| {
         let Message::Assistant {
@@ -389,8 +390,7 @@ fn last_reported_usage(messages: &[Message]) -> Option<(usize, usize)> {
         if usage.is_zero() {
             return None;
         }
-        let reported =
-            usize::try_from(usage.input.saturating_add(usage.cache_read)).unwrap_or(usize::MAX);
+        let reported = usize::try_from(usage.prompt()).unwrap_or(usize::MAX);
         Some((index, reported))
     })
 }

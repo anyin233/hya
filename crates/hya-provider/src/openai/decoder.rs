@@ -196,28 +196,41 @@ impl Decoder for OpenAiChatDecoder {
     }
 }
 
+/// Normalize OpenAI Chat usage to the [`TokenUsage`] invariant.
+///
+/// `prompt_tokens` counts the whole prompt, cached tokens included, so the
+/// cache reads and writes are subtracted (saturating) to get uncached input.
+/// `completion_tokens` already includes reasoning; when
+/// `completion_tokens_details.reasoning_tokens` is absent the thinking split is
+/// unknown.
 fn openai_usage(chunk: &Value) -> Option<TokenUsage> {
     let usage = chunk.get("usage")?;
+    let prompt = usage
+        .get("prompt_tokens")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let cache_read = usage
+        .pointer("/prompt_tokens_details/cached_tokens")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let cache_write = usage
+        .pointer("/prompt_tokens_details/cache_creation_tokens")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let reasoning = usage
+        .pointer("/completion_tokens_details/reasoning_tokens")
+        .and_then(Value::as_u64);
     Some(TokenUsage {
-        input: usage
-            .get("prompt_tokens")
-            .and_then(Value::as_u64)
-            .unwrap_or(0),
+        input: prompt
+            .saturating_sub(cache_read)
+            .saturating_sub(cache_write),
         output: usage
             .get("completion_tokens")
             .and_then(Value::as_u64)
             .unwrap_or(0),
-        reasoning: usage
-            .pointer("/completion_tokens_details/reasoning_tokens")
-            .and_then(Value::as_u64)
-            .unwrap_or(0),
-        cache_read: usage
-            .pointer("/prompt_tokens_details/cached_tokens")
-            .and_then(Value::as_u64)
-            .unwrap_or(0),
-        cache_write: usage
-            .pointer("/prompt_tokens_details/cache_creation_tokens")
-            .and_then(Value::as_u64)
-            .unwrap_or(0),
+        reasoning: reasoning.unwrap_or(0),
+        cache_read,
+        cache_write,
+        reasoning_unknown: reasoning.is_none(),
     })
 }

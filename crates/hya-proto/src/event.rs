@@ -17,6 +17,7 @@ use crate::ids::{
 use crate::mail::{ChannelKind, MailEndpoint, MailKind};
 use crate::message::{
     FinishReason, MemberRunStatus, Role, RosterStatus, SubagentMode, TokenUsage, ToolPartState,
+    UsagePurpose,
 };
 use crate::model::{AgentName, ModelRef, ToolName};
 use crate::tokens::{TokenAccountingMode, TokenSource};
@@ -850,6 +851,36 @@ pub enum Event {
         threshold: u64,
     },
 
+    // -------- token accounting --------
+    /// Billed usage of one provider call, attributed to the model that served it.
+    ///
+    /// Emitted once per provider call that reported usage: every streaming
+    /// round of an assistant turn (including rounds of a message that later
+    /// finished `cancelled` or `error`), plus the title and summarizer side
+    /// calls made on the session's behalf. Side calls carry no `message`/`step`
+    /// and never create transcript messages. `tokens` follows the normalized
+    /// [`TokenUsage`] invariant for this one call (not a message sum).
+    ///
+    /// Folds into `SessionProjection.usage` only; `MessageFinished.tokens`
+    /// keeps its legacy per-message sum and is not counted again for messages
+    /// that have records. An older binary folds this variant as `Unknown`.
+    UsageRecorded {
+        /// Session billed for the call.
+        session: SessionId,
+        /// Assistant message of a `turn` round; `None` for side calls.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message: Option<MessageId>,
+        /// Zero-based round index within the message; `None` for side calls.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        step: Option<u32>,
+        /// Model that served the call (after chat.params, fallback, or route).
+        model: ModelRef,
+        /// Why the call was made.
+        purpose: UsagePurpose,
+        /// Provider-reported usage of this call.
+        tokens: TokenUsage,
+    },
+
     // -------- errors --------
     /// Runtime error frame; `session` optional for global errors; reducer no-op.
     Error {
@@ -1034,7 +1065,8 @@ impl Event {
             Event::ContextCompacted { session, .. }
             | Event::SessionForked { session, .. }
             | Event::ContextEvicted { session, .. }
-            | Event::ContextStatus { session, .. } => Some(*session),
+            | Event::ContextStatus { session, .. }
+            | Event::UsageRecorded { session, .. } => Some(*session),
             Event::Error { session, .. } => *session,
             Event::Unknown => None,
         }
@@ -1536,5 +1568,61 @@ mod tests {
         );
         let back: Event = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(nested, back);
+    }
+
+    #[test]
+    fn usage_recorded_round_trips_and_omits_side_call_fields() {
+        let session = SessionId::new();
+        let message = MessageId::new();
+        let tokens = TokenUsage {
+            input: 10,
+            output: 7,
+            reasoning: 0,
+            cache_read: 3,
+            cache_write: 2,
+            reasoning_unknown: true,
+        };
+        let round = Event::UsageRecorded {
+            session,
+            message: Some(message),
+            step: Some(1),
+            model: ModelRef::new("anthropic/claude"),
+            purpose: UsagePurpose::Turn,
+            tokens,
+        };
+        let json = serde_json::to_string(&round).expect("serialize");
+        assert!(json.contains(r#""type":"usage_recorded""#), "{json}");
+        assert!(json.contains(r#""purpose":"turn""#), "{json}");
+        assert!(json.contains(r#""reasoning_unknown":true"#), "{json}");
+        let back: Event = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back, round);
+        assert_eq!(back.session(), Some(session));
+
+        let side = Event::UsageRecorded {
+            session,
+            message: None,
+            step: None,
+            model: ModelRef::new("title-model"),
+            purpose: UsagePurpose::Title,
+            tokens: TokenUsage {
+                reasoning_unknown: false,
+                ..tokens
+            },
+        };
+        let json = serde_json::to_string(&side).expect("serialize");
+        assert!(!json.contains("\"message\""), "{json}");
+        assert!(!json.contains("\"step\""), "{json}");
+        assert!(!json.contains("reasoning_unknown"), "{json}");
+        let back: Event = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back, side);
+    }
+
+    #[test]
+    fn legacy_token_usage_decodes_with_known_flag_default() {
+        let json = r#"{"input":5,"output":4,"reasoning":1,"cache_read":2,"cache_write":0}"#;
+        let usage: TokenUsage = serde_json::from_str(json).expect("legacy usage decodes");
+        assert!(!usage.reasoning_unknown);
+        assert_eq!(usage.prompt(), 7);
+        assert_eq!(usage.visible_output(), Some(3));
     }
 }

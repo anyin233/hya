@@ -85,9 +85,10 @@ pub use category::{
 pub use channel_policy::{AGENT_CHANNELS_PRESET_ID, ChannelPolicy};
 pub use compaction::{
     CompactionConfig, CompactionPlan, CompactionRung, MIN_RESOLVED_THRESHOLD, ModelSummarizer,
-    SummarizeOptions, Summarizer, compact_with, estimate_tokens, handoff_request_messages,
-    measured_tokens, needs_compaction, needs_compaction_at, parse_method_order, plan_compaction,
-    plan_compaction_at, plan_handoff, resolved_threshold, snapcompact_archive, tokens_in_use,
+    SummarizeOptions, Summarizer, UsageCollector, compact_with, estimate_tokens,
+    handoff_request_messages, measured_tokens, needs_compaction, needs_compaction_at,
+    parse_method_order, plan_compaction, plan_compaction_at, plan_handoff, resolved_threshold,
+    snapcompact_archive, tokens_in_use,
 };
 pub use completion::{GateOutcome, IterationGate, validate_goal_condition};
 pub use completion::{

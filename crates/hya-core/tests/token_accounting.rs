@@ -346,6 +346,20 @@ fn cache_read_tokens_count_against_the_window() {
 }
 
 #[test]
+fn cache_write_tokens_count_against_the_window() {
+    // Normalized usage: `input` excludes both cache reads and cache writes,
+    // and a cache write is still part of the prompt the window holds.
+    let accounting = TokenAccounting::new(TokenAccountingMode::Provider);
+    let messages = transcript(Some(TokenUsage {
+        input: 500,
+        cache_read: 1_000,
+        cache_write: 700,
+        ..TokenUsage::default()
+    }));
+    assert_eq!(accounting.tokens_in_use(&messages, true).tokens, 2_200);
+}
+
+#[test]
 fn accounting_mode_round_trips_through_parse() {
     for mode in [
         TokenAccountingMode::Auto,

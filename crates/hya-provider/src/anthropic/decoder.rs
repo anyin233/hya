@@ -269,6 +269,12 @@ impl Decoder for AnthropicDecoder {
     }
 }
 
+/// Normalize Anthropic usage to the [`TokenUsage`] invariant.
+///
+/// `input_tokens` already excludes cache reads and cache writes, and
+/// `output_tokens` already includes thinking. Anthropic does not report the
+/// thinking share of the output, so the split is marked unknown rather than
+/// estimated.
 fn anthropic_usage(usage: &Value) -> TokenUsage {
     TokenUsage {
         input: usage
@@ -288,5 +294,6 @@ fn anthropic_usage(usage: &Value) -> TokenUsage {
             .get("cache_creation_input_tokens")
             .and_then(Value::as_u64)
             .unwrap_or(0),
+        reasoning_unknown: true,
     }
 }
