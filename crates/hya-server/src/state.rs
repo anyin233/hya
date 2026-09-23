@@ -218,15 +218,24 @@ impl ServerState {
         self.runs.start(session)
     }
 
-    /// Return whether either execution surface currently owns the Session.
+    /// Return whether the Session has any active turn: a server run, a
+    /// Workflow run, or an engine turn the server did not start (a resident
+    /// wake, a deferred quiescence-synthesis turn).
     pub(crate) fn is_busy(&self, session: hya_proto::SessionId) -> bool {
-        self.runs.is_busy(session) || self.workflow_control.active_run(session).is_some()
+        self.runs.is_busy(session)
+            || self.workflow_control.active_run(session).is_some()
+            || self.engine.turn_active(session)
     }
 
-    /// Cancel both parent-model and Workflow execution surfaces for a Session.
+    /// Cancel every execution surface for a Session: the engine turn first
+    /// (recording `cause: user_cancel` on its closing `MessageFinished`), then
+    /// the parent-model run and the Workflow run.
     pub(crate) fn cancel_run(&self, session: hya_proto::SessionId) -> bool {
+        let turn = self
+            .engine
+            .cancel_turn(session, hya_proto::FinishCause::UserCancel);
         let model = self.runs.cancel(session);
         let workflow = self.workflow_control.cancel(session);
-        model || workflow
+        turn || model || workflow
     }
 }

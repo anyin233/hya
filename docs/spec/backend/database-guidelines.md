@@ -57,6 +57,14 @@
   `BundleRegistry` migrations through its temp-DB tests.
 - Actor epoch is monotonic integer state. The claim table must not acquire TTL,
   heartbeat, wall-clock, or background-expiry columns.
+- Write-through index tables (`materialize.rs`) are maintained inside the
+  event-append transaction and read only for narrow queries that must not
+  replay every log. `open_assistant_message` (0010) indexes assistant messages
+  without a finish for startup crash recovery; every `event_log` writer must go
+  through `append_event` / `append_event_in_transaction` /
+  `commit_resident_mutation` so the index stays exact, and `delete_session`
+  clears its rows. A new index migration backfills from `event_log` in one
+  pass (filter on the `{"type":"…` payload prefix before `json_extract`).
 
 ---
 

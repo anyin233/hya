@@ -76,6 +76,7 @@ mod text_complete;
 mod todos;
 mod tool_error;
 mod turn;
+mod turn_end;
 mod turn_gate;
 pub(crate) use turn::TurnRequestContext;
 
@@ -96,6 +97,7 @@ async fn authorize_tool_call(
 
 pub use admission::SpawnAdmissionOutcome;
 pub use turn::advertise_tool;
+pub use turn_end::{DRAIN_DEADLINE, TurnDrainReport};
 pub use turn_gate::{TurnBoundaryObserver, TurnLease};
 
 /// Parameters for creating a new session event log.

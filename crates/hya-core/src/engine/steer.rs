@@ -269,6 +269,11 @@ impl SteerMailbox {
     }
 
     fn allows_steer(&self, from: &str, to: &MailEndpoint) -> bool {
+        // Harness mail (the leader-failed wrap-up notice) is a control
+        // message, never filtered by the channel policy.
+        if from == hya_proto::scope::HARNESS_HANDLE {
+            return true;
+        }
         let Some(policy) = self.policy else {
             return false;
         };

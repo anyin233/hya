@@ -138,6 +138,7 @@ impl Provider for RecordingProvider {
                 role: Role::Assistant,
                 finish: FinishReason::Stop,
                 tokens: None,
+                cause: None,
             },
         )])))
     }

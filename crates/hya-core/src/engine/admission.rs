@@ -465,6 +465,7 @@ impl SessionEngine {
                 role,
                 finish: FinishReason::Stop,
                 tokens: None,
+                cause: None,
             },
         )
         .await?;
@@ -510,6 +511,7 @@ impl SessionEngine {
                     role: Role::System,
                     finish: FinishReason::Stop,
                     tokens: None,
+                    cause: None,
                 },
             ],
         )
@@ -624,6 +626,7 @@ impl SessionEngine {
                 role: Role::User,
                 finish: FinishReason::Stop,
                 tokens: None,
+                cause: None,
             },
         )
         .await?;
@@ -686,6 +689,7 @@ impl SessionEngine {
                     role: Role::User,
                     finish: FinishReason::Stop,
                     tokens: None,
+                    cause: None,
                 },
             ],
         )

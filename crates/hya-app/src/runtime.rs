@@ -15,11 +15,11 @@ use hya_core::agent_catalog::{AgentCatalog, AgentDefinition};
 use hya_core::{
     AgentResourcePolicy, AgentSpec, BoundSidecarFactory, BoundSpawnRequest, BoundSpawnSender,
     BoundWorkflowRequest, BoundWorkflowSender, CategoryRegistry, CompactionConfig, CoreError,
-    EventBus, ModelSummarizer, PromptEnv, ResidentSupervisor, RuntimeRegistry, RuntimeSourceKind,
-    SessionEngine, SidecarEnvironment, SidecarHandle, SidecarLifecycle, SidecarStart,
-    SpawnAdmissionOutcome, SubagentGovernor, Summarizer, TokenAccounting, TurnBinding,
-    apply_agent_model_preference, apply_spawn_model_policy, build_system_prompt,
-    resolve_dispatch_model, run_lifecycle_service, run_mailbox_service,
+    DRAIN_DEADLINE, EventBus, ModelSummarizer, PromptEnv, ResidentSupervisor, RuntimeRegistry,
+    RuntimeSourceKind, SessionEngine, SidecarEnvironment, SidecarHandle, SidecarLifecycle,
+    SidecarStart, SpawnAdmissionOutcome, SubagentGovernor, Summarizer, TokenAccounting,
+    TurnBinding, TurnDrainReport, apply_agent_model_preference, apply_spawn_model_policy,
+    build_system_prompt, resolve_dispatch_model, run_lifecycle_service, run_mailbox_service,
 };
 
 // Single discovery/date implementation lives in hya-core; re-export for callers.
@@ -32,7 +32,7 @@ use hya_plugin::messages::{
 };
 use hya_plugin::{HostInfo, PluginContributionSet};
 use hya_proto::{
-    AgentName, ModelRef, OwnerRunId, SessionId, SubagentMode, ToolName, ToolSchema,
+    AgentName, FinishCause, ModelRef, OwnerRunId, SessionId, SubagentMode, ToolName, ToolSchema,
     WorkflowDelivery,
 };
 use hya_provider::{DevProvider, ProviderCatalogSnapshot, ProviderRouter, ReasoningEffort};
@@ -1830,8 +1830,20 @@ impl BuiltSessionEngine {
         Arc::clone(&self.plugin_host)
     }
 
-    /// Stop intake, abort handlers, and drain the supervisor JoinSet.
+    /// Graceful stop of every in-flight turn in every session (see
+    /// [`ResidentSupervisor::drain`]): new turns are refused, active turns are
+    /// cancelled with `cause` and given [`DRAIN_DEADLINE`] to close their
+    /// messages, then team members are made terminal and each lead is parked.
+    /// Idempotent; the first cause wins.
+    pub async fn drain(&self, cause: FinishCause) -> TurnDrainReport {
+        self.resident_supervisor.drain(cause, DRAIN_DEADLINE).await
+    }
+
+    /// Drain in-flight turns (cause `shutdown` unless an earlier
+    /// [`drain`](Self::drain) chose one), then stop intake, abort handlers,
+    /// and drain the supervisor JoinSet.
     pub async fn shutdown(&mut self) -> Result<(), CoreError> {
+        self.drain(FinishCause::Shutdown).await;
         self.lifecycle.shutdown().await
     }
 }
@@ -2378,6 +2390,14 @@ async fn build_session_engine_with_mcp_defer(
     store
         .claim_runtime_owner(owner_run_id)
         .context("claim runtime owner before startup recovery")?;
+    // Crash recovery: close every assistant turn a dead process left open
+    // (`MessageFinished { cancelled, cause: interrupted }`, open tool parts
+    // errored, member rows cancelled) before any turn of this process runs.
+    // Indexed, so it only touches sessions a crash left mid-turn.
+    store
+        .recover_interrupted_turns(owner_run_id)
+        .await
+        .context("close turns a stopped process left open")?;
     store
         .recover_nonterminal_workflows(owner_run_id, "backend startup recovery")
         .await
@@ -3618,6 +3638,43 @@ mod tests {
             .shutdown()
             .await
             .expect("idempotent shutdown after drain");
+    }
+
+    /// Building a new runtime owner closes every assistant turn a dead process
+    /// left open (`cause: interrupted`) before any turn of its own runs.
+    #[tokio::test]
+    async fn build_session_engine_closes_turns_a_crash_left_open() {
+        let store = SessionStore::connect_memory().await.unwrap();
+        let session = SessionId::new();
+        let message = hya_proto::MessageId::new();
+        store
+            .append_event(
+                session,
+                &Event::MessageStarted {
+                    session,
+                    message,
+                    role: hya_proto::Role::Assistant,
+                },
+            )
+            .await
+            .unwrap();
+        let (router, model) = offline_router(None);
+        let agent = agent_with_model(&model, None);
+        let mut built = build_session_engine(
+            store,
+            router,
+            &agent,
+            BTreeMap::new(),
+            Vec::new(),
+            (WebSearchConfig::default(), InvocationPolicy::default()),
+        )
+        .await
+        .unwrap();
+        let projection = built.engine().read_projection(session).await.unwrap();
+        let recovered = projection.session.messages.first().unwrap();
+        assert_eq!(recovered.finish, Some(hya_proto::FinishReason::Cancelled));
+        assert_eq!(recovered.cause, Some(FinishCause::Interrupted));
+        built.shutdown().await.unwrap();
     }
 
     /// Building a new runtime owner terminalizes persisted Workflow work before

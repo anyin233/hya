@@ -72,6 +72,7 @@ fn live_zero_seq_events_apply_without_advancing_durable_cursor() {
             role: Role::Assistant,
             finish: FinishReason::Stop,
             tokens: None,
+            cause: None,
         },
     ));
     assert_eq!(projection.last_seq, 2);

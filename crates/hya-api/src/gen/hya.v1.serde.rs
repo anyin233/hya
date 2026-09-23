@@ -5970,6 +5970,92 @@ impl<'de> serde::Deserialize<'de> for FindFilesResponse {
         deserializer.deserialize_struct("hya.v1.FindFilesResponse", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for FinishCause {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let variant = match self {
+            Self::Unspecified => "FINISH_CAUSE_UNSPECIFIED",
+            Self::UserCancel => "FINISH_CAUSE_USER_CANCEL",
+            Self::Shutdown => "FINISH_CAUSE_SHUTDOWN",
+            Self::LeaderFailed => "FINISH_CAUSE_LEADER_FAILED",
+            Self::Interrupted => "FINISH_CAUSE_INTERRUPTED",
+            Self::ProviderError => "FINISH_CAUSE_PROVIDER_ERROR",
+            Self::Other => "FINISH_CAUSE_OTHER",
+        };
+        serializer.serialize_str(variant)
+    }
+}
+impl<'de> serde::Deserialize<'de> for FinishCause {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "FINISH_CAUSE_UNSPECIFIED",
+            "FINISH_CAUSE_USER_CANCEL",
+            "FINISH_CAUSE_SHUTDOWN",
+            "FINISH_CAUSE_LEADER_FAILED",
+            "FINISH_CAUSE_INTERRUPTED",
+            "FINISH_CAUSE_PROVIDER_ERROR",
+            "FINISH_CAUSE_OTHER",
+        ];
+
+        struct GeneratedVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = FinishCause;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(formatter, "expected one of: {:?}", &FIELDS)
+            }
+
+            fn visit_i64<E>(self, v: i64) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                i32::try_from(v)
+                    .ok()
+                    .and_then(|x| x.try_into().ok())
+                    .ok_or_else(|| {
+                        serde::de::Error::invalid_value(serde::de::Unexpected::Signed(v), &self)
+                    })
+            }
+
+            fn visit_u64<E>(self, v: u64) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                i32::try_from(v)
+                    .ok()
+                    .and_then(|x| x.try_into().ok())
+                    .ok_or_else(|| {
+                        serde::de::Error::invalid_value(serde::de::Unexpected::Unsigned(v), &self)
+                    })
+            }
+
+            fn visit_str<E>(self, value: &str) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                match value {
+                    "FINISH_CAUSE_UNSPECIFIED" => Ok(FinishCause::Unspecified),
+                    "FINISH_CAUSE_USER_CANCEL" => Ok(FinishCause::UserCancel),
+                    "FINISH_CAUSE_SHUTDOWN" => Ok(FinishCause::Shutdown),
+                    "FINISH_CAUSE_LEADER_FAILED" => Ok(FinishCause::LeaderFailed),
+                    "FINISH_CAUSE_INTERRUPTED" => Ok(FinishCause::Interrupted),
+                    "FINISH_CAUSE_PROVIDER_ERROR" => Ok(FinishCause::ProviderError),
+                    "FINISH_CAUSE_OTHER" => Ok(FinishCause::Other),
+                    _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
+                }
+            }
+        }
+        deserializer.deserialize_any(GeneratedVisitor)
+    }
+}
 impl serde::Serialize for FinishReason {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -13656,6 +13742,9 @@ impl serde::Serialize for MessageFinished {
         if self.usage.is_some() {
             len += 1;
         }
+        if self.cause != 0 {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("hya.v1.MessageFinished", len)?;
         if !self.message.is_empty() {
             struct_ser.serialize_field("message", &self.message)?;
@@ -13667,6 +13756,11 @@ impl serde::Serialize for MessageFinished {
         }
         if let Some(v) = self.usage.as_ref() {
             struct_ser.serialize_field("usage", v)?;
+        }
+        if self.cause != 0 {
+            let v = FinishCause::try_from(self.cause)
+                .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.cause)))?;
+            struct_ser.serialize_field("cause", &v)?;
         }
         struct_ser.end()
     }
@@ -13681,6 +13775,7 @@ impl<'de> serde::Deserialize<'de> for MessageFinished {
             "message",
             "finish",
             "usage",
+            "cause",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -13688,6 +13783,7 @@ impl<'de> serde::Deserialize<'de> for MessageFinished {
             Message,
             Finish,
             Usage,
+            Cause,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -13712,6 +13808,7 @@ impl<'de> serde::Deserialize<'de> for MessageFinished {
                             "message" => Ok(GeneratedField::Message),
                             "finish" => Ok(GeneratedField::Finish),
                             "usage" => Ok(GeneratedField::Usage),
+                            "cause" => Ok(GeneratedField::Cause),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -13734,6 +13831,7 @@ impl<'de> serde::Deserialize<'de> for MessageFinished {
                 let mut message__ = None;
                 let mut finish__ = None;
                 let mut usage__ = None;
+                let mut cause__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Message => {
@@ -13754,12 +13852,19 @@ impl<'de> serde::Deserialize<'de> for MessageFinished {
                             }
                             usage__ = map_.next_value()?;
                         }
+                        GeneratedField::Cause => {
+                            if cause__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("cause"));
+                            }
+                            cause__ = Some(map_.next_value::<FinishCause>()? as i32);
+                        }
                     }
                 }
                 Ok(MessageFinished {
                     message: message__.unwrap_or_default(),
                     finish: finish__.unwrap_or_default(),
                     usage: usage__,
+                    cause: cause__.unwrap_or_default(),
                 })
             }
         }
@@ -13801,6 +13906,9 @@ impl serde::Serialize for MessageInfo {
         if self.time_updated.is_some() {
             len += 1;
         }
+        if self.finish_cause != 0 {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("hya.v1.MessageInfo", len)?;
         if !self.id.is_empty() {
             struct_ser.serialize_field("id", &self.id)?;
@@ -13833,6 +13941,11 @@ impl serde::Serialize for MessageInfo {
         if let Some(v) = self.time_updated.as_ref() {
             struct_ser.serialize_field("timeUpdated", v)?;
         }
+        if self.finish_cause != 0 {
+            let v = FinishCause::try_from(self.finish_cause)
+                .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.finish_cause)))?;
+            struct_ser.serialize_field("finishCause", &v)?;
+        }
         struct_ser.end()
     }
 }
@@ -13854,6 +13967,8 @@ impl<'de> serde::Deserialize<'de> for MessageInfo {
             "timeCreated",
             "time_updated",
             "timeUpdated",
+            "finish_cause",
+            "finishCause",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -13867,6 +13982,7 @@ impl<'de> serde::Deserialize<'de> for MessageInfo {
             Parts,
             TimeCreated,
             TimeUpdated,
+            FinishCause,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -13897,6 +14013,7 @@ impl<'de> serde::Deserialize<'de> for MessageInfo {
                             "parts" => Ok(GeneratedField::Parts),
                             "timeCreated" | "time_created" => Ok(GeneratedField::TimeCreated),
                             "timeUpdated" | "time_updated" => Ok(GeneratedField::TimeUpdated),
+                            "finishCause" | "finish_cause" => Ok(GeneratedField::FinishCause),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -13925,6 +14042,7 @@ impl<'de> serde::Deserialize<'de> for MessageInfo {
                 let mut parts__ = None;
                 let mut time_created__ = None;
                 let mut time_updated__ = None;
+                let mut finish_cause__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Id => {
@@ -13981,6 +14099,12 @@ impl<'de> serde::Deserialize<'de> for MessageInfo {
                             }
                             time_updated__ = map_.next_value()?;
                         }
+                        GeneratedField::FinishCause => {
+                            if finish_cause__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("finishCause"));
+                            }
+                            finish_cause__ = Some(map_.next_value::<FinishCause>()? as i32);
+                        }
                     }
                 }
                 Ok(MessageInfo {
@@ -13993,6 +14117,7 @@ impl<'de> serde::Deserialize<'de> for MessageInfo {
                     parts: parts__.unwrap_or_default(),
                     time_created: time_created__,
                     time_updated: time_updated__,
+                    finish_cause: finish_cause__.unwrap_or_default(),
                 })
             }
         }

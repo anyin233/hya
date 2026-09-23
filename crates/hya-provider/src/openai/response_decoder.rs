@@ -129,6 +129,7 @@ impl OpenAiResponsesDecoder {
             role: Role::Assistant,
             finish,
             tokens: (!self.usage.is_zero()).then_some(self.usage),
+            cause: None,
         });
         out
     }

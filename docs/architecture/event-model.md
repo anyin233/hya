@@ -137,7 +137,7 @@ preferred model plus ordered fallback candidates and per-candidate reasoning.
 | `message_started` | `session`, `message: MessageId`, `role: Role` | Fold: creates `MessageProjection` if missing |
 | `turn_binding_recorded` | `session`, `message`, `generation: ConfigGeneration` | Fold: `config_generation` on that message. Engine emits it immediately after `MessageStarted{Assistant}` so the immutable runtime snapshot identity is durable before any provider call. |
 | `user_prompt_context_recorded` | `session`, `message`, `files: Vec<Value>`, `agents: Vec<Value>` | Fold: prompt `@file` / `@agent` attachment metadata. Engine **emits nothing** when both vectors are empty. |
-| `message_finished` | `session`, `message`, `role`, `finish: FinishReason`, `tokens: Option<TokenUsage>` | Fold: finish + tokens. `tokens` is the legacy sum of the message's rounds and is only set on a normal finish. Engine force-emits this with `error` or `cancelled` (and `tokens: None`) on turn failure / sidecar loss so clients never wait forever after `message_started`; billed rounds of such a message are still counted through `usage_recorded`. For a message with no `usage_recorded` record (a legacy log) a non-zero `tokens` is folded once into `SessionProjection.usage` under model `unattributed`, except in forked sessions, whose copied messages carry the source's sums. |
+| `message_finished` | `session`, `message`, `role`, `finish: FinishReason`, `tokens: Option<TokenUsage>`, `cause: Option<FinishCause>` | Fold: finish + cause + tokens. `tokens` is the legacy sum of the message's rounds and is only set on a normal finish. Engine force-emits this with `error` or `cancelled` (and `tokens: None`) on turn failure, cancel, drain, sidecar loss, or crash recovery so clients never wait forever after `message_started` (see [End-event invariant](#end-event-invariant)); `cause` says why (omitted when the model ended the message, and absent in logs written before 0.41.0). Billed rounds of such a message are still counted through `usage_recorded`. For a message with no `usage_recorded` record (a legacy log) a non-zero `tokens` is folded once into `SessionProjection.usage` under model `unattributed`, except in forked sessions, whose copied messages carry the source's sums. |
 | `message_deleted` | `session`, `message` | Fold: retain-by-id removal of the whole message |
 | `part_deleted` | `session`, `message`, `part: PartId` | Fold: removes that part from the message |
 
@@ -374,6 +374,44 @@ Snake_case wire values on both `MessageFinished` and `StepFinished`:
 Terminal state of **both** a finished message and a finished provider step.
 `StepFinished.finish` defaults to `stop` when absent from older logs.
 
+### `FinishCause`
+
+Optional context on `MessageFinished` (never on `StepFinished`) when the
+harness, not the model, ended an assistant message. `FinishReason` stays the
+classification (`cancelled` / `error`); there is no extra finish reason.
+Additive serde: omitted when `None`, and an unknown value from a newer build
+decodes as `other`.
+
+| Wire | `finish` | Written when |
+| --- | --- | --- |
+| `user_cancel` | `cancelled` | A user stopped the turn: `/v1` turn cancel (`SessionEngine::cancel_turn`), SIGINT on `exec`/`run`/`-p`/`loop` |
+| `shutdown` | `cancelled` | Graceful process stop: end of a one-shot run, SIGTERM, `serve` shutdown (the drain) |
+| `leader_failed` | `cancelled` | A member turn drained because its lead's turn failed and the one-shot run ended |
+| `interrupted` | `cancelled` | The process died with the turn open; closed by startup crash recovery |
+| `provider_error` | `error` | The model provider failed the turn (`CoreError::Provider`) |
+| `other` | any | A cause this build does not know (forward compatibility) |
+
+Other cancels (team budget kill, sidecar loss, a parent turn's cancel reaching
+a child) and non-provider runtime errors carry no cause. The `hya.v1` wire
+mirrors the enum as `FinishCause` on `MessageFinished.cause` and
+`MessageInfo.finish_cause` (`FINISH_CAUSE_UNSPECIFIED` when absent).
+
+### End-event invariant
+
+1. Every assistant message ends with **exactly one** `message_finished`.
+2. Every non-terminal tool part (`pending` / `running`) reaches a terminal
+   state (`tool_error` with `value.code` `CANCELLED`, `TURN_FAILED`, or
+   `INTERRUPTED` when the harness closes it).
+3. Every member reaches a terminal status (`member_finished { cancelled }` for
+   member rows; roster `failed` for resident members stopped by a drain).
+   The lead (the root session's `main`) is never made terminal or archived.
+
+The engine keeps it on every path: a cancelled or failed turn closes its own
+message (open tool parts first, then the finish, checked against the folded
+log so nothing is closed twice); a graceful stop drains every in-flight turn in
+every session; a crash is repaired by the next runtime owner before any turn
+runs. See [Runtime — Turn termination guarantees](runtime.md#turn-termination-guarantees).
+
 ### `TokenUsage`
 
 Five counters (all `u64`, default 0) plus one flag. Every provider decoder
@@ -505,7 +543,7 @@ Projection {
 | --- | --- |
 | `id`, `role` | `message_started` |
 | `config_generation` | `turn_binding_recorded` |
-| `finish`, `tokens` | `message_finished` |
+| `finish`, `cause`, `tokens` | `message_finished` (`cause` omitted when `None`) |
 | `usage` | `usage_recorded` with this `message`: `MessageUsage { model /* latest round */, tokens /* sum */, rounds }` (omitted when `None`) |
 | `files`, `agents` | `user_prompt_context_recorded` |
 | `parts` | text / reasoning / tool events |
@@ -628,6 +666,14 @@ The engine is responsible for executing tool calls and appending
 The store serializes `Event` JSON into `event_log.payload`. It does not maintain
 a separate projection table for the current read path. `read_projection` replays
 the session and folds through the shared reducer.
+
+Write-through side tables are maintained in the append transaction for
+queries that must not replay every log. `open_assistant_message
+(session_id, message_id)` (migration `0010`) holds assistant messages that
+started but have not finished or been deleted; it is read only by startup
+crash recovery (`SessionStore::recover_interrupted_turns`), so recovery costs
+O(sessions a dead process left mid-turn). The migration backfills it from
+existing logs in one pass over the `message_*` rows.
 
 ## Version and restart boundary
 

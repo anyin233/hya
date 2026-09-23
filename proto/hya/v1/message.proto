@@ -47,6 +47,25 @@ enum FinishReason {
   FINISH_REASON_ERROR = 5;
 }
 
+// Why the harness (not the model) ended an assistant message. Context on
+// top of FinishReason; unset when the model ended the message itself.
+enum FinishCause {
+  // No harness cause recorded.
+  FINISH_CAUSE_UNSPECIFIED = 0;
+  // A user stopped the turn (client abort, SIGINT on a one-shot run).
+  FINISH_CAUSE_USER_CANCEL = 1;
+  // The process stopped gracefully and drained in-flight turns.
+  FINISH_CAUSE_SHUTDOWN = 2;
+  // The member was stopped because its team lead's turn failed.
+  FINISH_CAUSE_LEADER_FAILED = 3;
+  // The process died with the turn open; closed by startup crash recovery.
+  FINISH_CAUSE_INTERRUPTED = 4;
+  // The model provider failed the turn.
+  FINISH_CAUSE_PROVIDER_ERROR = 5;
+  // A cause this server build does not name.
+  FINISH_CAUSE_OTHER = 6;
+}
+
 // Author role of a message.
 enum Role {
   // Unset sentinel; never emitted by the server.
@@ -186,6 +205,8 @@ message MessageInfo {
   google.protobuf.Timestamp time_created = 8;
   // When the message projection last changed.
   google.protobuf.Timestamp time_updated = 9;
+  // Harness cause of the finish (cancel, shutdown, crash recovery, provider failure).
+  FinishCause finish_cause = 10;
 }
 
 message ListMessagesRequest {

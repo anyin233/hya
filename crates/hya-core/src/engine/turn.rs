@@ -685,11 +685,30 @@ impl SessionEngine {
                 None => return Ok(FinishReason::Cancelled),
             },
         };
+        // The turn's effective cancel: the caller's token, or the engine
+        // (user abort via `cancel_turn`, process drain).
+        request.cancel = lease.bind_cancel(&request.cancel);
+        let observer = self.turn_gate.observer();
+        if let Some(observer) = observer.as_ref() {
+            observer.turn_started(session);
+        }
         let outcome = scope_held_turn(
             session,
             self.run_claimed_turn(session, agent, activation, request),
         )
         .await;
+        if let Err(error) = &outcome
+            && !matches!(error, CoreError::Cancelled)
+        {
+            // A lead that failed (provider/runtime error, never a cancel)
+            // stays live and resumable; its team is told to wrap up. The
+            // observer hears it before the lease release can deliver any
+            // deferred wake (quiescence synthesis) to the failed lead.
+            if let Some(observer) = observer.as_ref() {
+                observer.turn_failed(session);
+            }
+            self.broadcast_leader_failed(session, error).await;
+        }
         drop(lease);
         outcome
     }
@@ -877,6 +896,37 @@ impl SessionEngine {
                     }
                 }
             };
+            // Close the message before anything fallible below: every
+            // assistant message ends with exactly one `MessageFinished`, and a
+            // turn that did not reach the model's own finish records why.
+            match &outcome {
+                Ok(FinishReason::Cancelled) | Err(CoreError::Cancelled) => {
+                    let cause = self.turn_gate.cancel_cause(session);
+                    let _ = self
+                        .close_turn_message(
+                            actor_claim,
+                            session,
+                            message,
+                            FinishReason::Cancelled,
+                            cause,
+                        )
+                        .await;
+                }
+                Err(error) => {
+                    // A provider/tool error after MessageStarted must still close the
+                    // assistant message, else clients wait forever for a finish event.
+                    let _ = self
+                        .close_turn_message(
+                            actor_claim,
+                            session,
+                            message,
+                            FinishReason::Error,
+                            super::turn_end::error_cause(error),
+                        )
+                        .await;
+                }
+                Ok(_) => {}
+            }
             if let Some(route) = workflow_route.as_ref() {
                 let failure = match &outcome {
                     Ok(FinishReason::Cancelled) => Some(if cancel.is_cancelled() {
@@ -890,47 +940,6 @@ impl SessionEngine {
                 if let Some(failure) = failure {
                     route.finalize(Some(failure)).await?;
                 }
-            }
-            if matches!(
-                &outcome,
-                Ok(FinishReason::Cancelled) | Err(CoreError::Cancelled)
-            ) && let Ok(projection) = self.store.read_projection(session).await
-                && projection
-                    .session
-                    .messages
-                    .iter()
-                    .any(|entry| entry.id == message && entry.finish.is_none())
-            {
-                let _ = self
-                    .emit_for_actor(
-                        actor_claim,
-                        session,
-                        Event::MessageFinished {
-                            session,
-                            message,
-                            role: Role::Assistant,
-                            finish: FinishReason::Cancelled,
-                            tokens: None,
-                        },
-                    )
-                    .await;
-            }
-            if outcome.is_err() && !matches!(&outcome, Err(CoreError::Cancelled)) {
-                // A provider/tool error after MessageStarted must still close the assistant
-                // message, else UI clients (e.g. the hya TUI) wait forever for a finish event.
-                let _ = self
-                    .emit_for_actor(
-                        actor_claim,
-                        session,
-                        Event::MessageFinished {
-                            session,
-                            message,
-                            role: Role::Assistant,
-                            finish: FinishReason::Error,
-                            tokens: None,
-                        },
-                    )
-                    .await;
             }
             outcome
         };
@@ -1096,6 +1105,7 @@ impl SessionEngine {
                         role: Role::Assistant,
                         finish: FinishReason::Cancelled,
                         tokens: None,
+                        cause: self.turn_gate.cancel_cause(session),
                     },
                 )
                 .await?;
@@ -1743,6 +1753,7 @@ impl SessionEngine {
                         role: Role::Assistant,
                         finish: stream_round.finish,
                         tokens: total_tokens,
+                        cause: None,
                     },
                 )
                 .await?;

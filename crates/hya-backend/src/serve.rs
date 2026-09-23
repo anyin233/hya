@@ -133,8 +133,19 @@ pub(crate) async fn cmd_serve(
     // would be unreachable and the process could only ever die by signal — skipping atexit
     // handlers (and therefore any coverage/profile flush). Handing it SIGTERM/Ctrl-C makes
     // the already-written teardown path run and lets `main` return normally.
+    // On a stop signal, drain first: every in-flight turn in every session
+    // (roots and members) is cancelled with cause `shutdown` and closes its
+    // messages within the drain deadline, members go terminal, and new turns
+    // are refused — so open turn requests finish and the HTTP server can
+    // complete its graceful shutdown.
+    let supervisor = built.resident_supervisor();
     let serve_result = axum::serve(listener, server_router(state))
-        .with_graceful_shutdown(wait_for_termination(terminate))
+        .with_graceful_shutdown(async move {
+            wait_for_termination(terminate).await;
+            supervisor
+                .drain(hya_proto::FinishCause::Shutdown, hya_core::DRAIN_DEADLINE)
+                .await;
+        })
         .await
         .context("serve http");
     let shutdown_result = built.shutdown().await.context("shutdown spawn supervisor");

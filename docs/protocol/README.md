@@ -95,6 +95,19 @@ SSE frames are `data:` lines containing one `StreamFrame`:
 { "resync": { "lastSeq": "40" } }
 ```
 
+When the harness rather than the model ended an assistant message,
+`messageFinished.cause` (and `MessageInfo.finishCause`) says why:
+`FINISH_CAUSE_USER_CANCEL` (turn cancel), `FINISH_CAUSE_SHUTDOWN` (graceful
+server/run stop), `FINISH_CAUSE_LEADER_FAILED`, `FINISH_CAUSE_INTERRUPTED`
+(closed by crash recovery on the next start), `FINISH_CAUSE_PROVIDER_ERROR`,
+or `FINISH_CAUSE_OTHER`; it is omitted (unspecified) otherwise. Every
+`messageStarted` for an assistant message is followed by exactly one
+`messageFinished` — also across a server stop or crash.
+
+```json
+{ "event": { "seq": "31", "session": "hysec_...", "messageFinished": { "message": "msg_...", "finish": "FINISH_REASON_CANCELLED", "cause": "FINISH_CAUSE_SHUTDOWN" } } }
+```
+
 ## Interactions (permissions and questions)
 
 Pending permission and question requests arrive as `permissionRequested` /

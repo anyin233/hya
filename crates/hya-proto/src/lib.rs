@@ -45,8 +45,8 @@ pub use mail::{
     CHANNEL_RANDOM_LEN, ChannelKind, MailEndpoint, MailKind, is_minted_channel_id, mint_channel_id,
 };
 pub use message::{
-    FinishReason, MemberRunStatus, Message, Part, Role, RosterStatus, SubagentMode, TokenUsage,
-    ToolPartState, UsagePurpose,
+    FinishCause, FinishReason, MemberRunStatus, Message, Part, Role, RosterStatus, SubagentMode,
+    TokenUsage, ToolPartState, UsagePurpose,
 };
 pub use model::{AgentName, ModelRef, ToolName, ToolSchema};
 pub use projection::{
@@ -56,7 +56,7 @@ pub use projection::{
     TeamProjection,
 };
 pub use projection_tree::{RunTreeNode, build_run_tree};
-pub use scope::{ANNOUNCE_CHANNEL, ROOT_HANDLE, Relation, in_scope, relation};
+pub use scope::{ANNOUNCE_CHANNEL, HARNESS_HANDLE, ROOT_HANDLE, Relation, in_scope, relation};
 pub use usage::{MessageUsage, OutputSplit, SessionUsage, UNATTRIBUTED_MODEL, UsageTotals};
 pub use workflow::{
     WorkflowAvailability, WorkflowCommand, WorkflowCommandResult, WorkflowDelivery,

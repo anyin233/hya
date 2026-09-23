@@ -43,16 +43,17 @@ use std::time::{Duration, Instant};
 
 use hya_bundle::{ChannelCapability, ChannelParticipantRole, ChannelTemplateKind};
 use hya_proto::{
-    ActorClaim, ActorEpoch, ArchiveReason, ChannelKind, Event, MailEndpoint, MailKind, MemberId,
-    ModelRef, OwnerRunId, ReportOutcome, RosterStatus, SessionId, SubagentMode, scope,
+    ActorClaim, ActorEpoch, ArchiveReason, ChannelKind, Event, FinishCause, MailEndpoint, MailKind,
+    MemberId, MemberRunStatus, ModelRef, OwnerRunId, ReportOutcome, RosterStatus, SessionId,
+    SubagentMode, scope,
 };
 use hya_tool::{AgentDef, ResolvedTool};
 use tokio::sync::{Notify, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use crate::engine::{
-    AgentSpec, ArchiveReviver, CreateSession, SessionEngine, TurnBoundaryObserver, TurnLease,
-    TurnRequestContext,
+    AgentSpec, ArchiveReviver, CreateSession, SessionEngine, TurnBoundaryObserver, TurnDrainReport,
+    TurnLease, TurnRequestContext,
 };
 use crate::error::CoreError;
 use crate::hooks::{AgentSpawnInput, HookDispatcher, scope_activation_hooks};
@@ -317,6 +318,11 @@ struct TeamState {
     kill_reason: Option<String>,
     /// Guards the one-time release of the team's governor counters.
     team_budget_released: bool,
+    /// The lead's (main actor's) last turn failed. While set the harness
+    /// starts no main turn on its own — no quiescence synthesis, no mail
+    /// wake — until a turn on the lead starts from outside the supervisor
+    /// (the user resumes it). Queued mail stays in the lead's inbox.
+    lead_failed: bool,
 }
 
 /// Everything one turn needs, snapshotted atomically under the team lock so the
@@ -543,6 +549,7 @@ impl TeamActor {
     fn next_action(&self, session: SessionId) -> Action {
         let mut st = self.lock();
         let killed = st.killed;
+        let lead_failed = st.lead_failed;
         let Some(slot) = st.residents.get_mut(&session) else {
             return Action::Stop { killed_now: false };
         };
@@ -558,7 +565,9 @@ impl TeamActor {
             }
             return Action::Stop { killed_now: false };
         }
-        if slot.has_work() {
+        // A failed lead is never woken by the harness: its owed work (mail)
+        // waits for the user to resume it.
+        if slot.has_work() && !(slot.is_main && lead_failed) {
             // Single active turn per session: when this session already has a
             // turn (e.g. the lead's own interactive turn while it is the main
             // actor), keep the owed work queued. The turn-boundary observer
@@ -775,7 +784,9 @@ impl TeamActor {
     /// termination: main's own synthesis (which produces no new work) leaves
     /// `work_seq` equal, so the next idle transition is a no-op (the team is done).
     fn maybe_fire_quiescence(&self, st: &mut TeamState) {
-        if st.killed || st.busy != 0 {
+        // A failed lead gets no synthesis turn: the lead is dead until the
+        // user resumes it (the synthesis re-fires after its next turn).
+        if st.killed || st.busy != 0 || st.lead_failed {
             return;
         }
         // A member (usually the lead) whose own turn is still running is not
@@ -815,6 +826,28 @@ impl TeamActor {
             slot.notify.notify_one();
         }
         self.maybe_fire_quiescence(&mut st);
+    }
+
+    /// The lead's turn failed: hold back every harness-started lead turn
+    /// (synthesis, mail wakes) until the lead is resumed from outside.
+    fn on_lead_turn_failed(&self, session: SessionId) {
+        let mut st = self.lock();
+        if st.main_session != Some(session) {
+            return;
+        }
+        st.lead_failed = true;
+        if let Some(slot) = st.residents.get_mut(&session) {
+            slot.synth_pending = false;
+        }
+    }
+
+    /// A turn on the lead started. While the lead is marked failed the
+    /// supervisor starts none, so this is the user resuming it.
+    fn on_lead_turn_started(&self, session: SessionId) {
+        let mut st = self.lock();
+        if st.main_session == Some(session) {
+            st.lead_failed = false;
+        }
     }
 
     /// Mark the team killed and cancel every in-flight turn. Idempotent. Wakes all
@@ -880,6 +913,92 @@ impl TeamActor {
         }
     }
 
+    /// Graceful-stop terminalization of this team (after its turns were
+    /// drained): kill the team so no slot wakes again, make every member
+    /// terminal — claimed residents are finalized (roster `failed` with
+    /// `reason`, claim released), their member rows on the parent log are
+    /// cancelled — and park the lead as `idle`: the lead is never terminal,
+    /// its session stays resumable.
+    async fn drain_stop(&self, reason: &str) {
+        let residents = {
+            let mut st = self.lock();
+            // Nothing to stop, or already terminalized (an earlier drain, a
+            // budget kill).
+            if st.residents.is_empty() || st.killed {
+                return;
+            }
+            self.kill_locked(&mut st, reason);
+            st.residents
+                .iter()
+                .map(|(session, slot)| (*session, slot.handle.clone(), slot.claim, slot.is_main))
+                .collect::<Vec<_>>()
+        };
+        for (session, handle, claim, is_main) in residents {
+            let finalized = match (claim.as_ref(), is_main) {
+                (Some(claim), _) => self
+                    .engine
+                    .finalize_resident_failure(claim, self.root, &handle, reason)
+                    .await
+                    .is_ok(),
+                (None, true) => {
+                    let _ = self
+                        .record_activity(None, handle.clone(), RosterStatus::Idle, None)
+                        .await;
+                    true
+                }
+                (None, false) => {
+                    let _ = self
+                        .record_activity(
+                            None,
+                            handle.clone(),
+                            RosterStatus::Failed,
+                            Some(reason.to_string()),
+                        )
+                        .await;
+                    true
+                }
+            };
+            if finalized {
+                self.mark_kill_finalized(session, &handle, claim.as_ref());
+            }
+            if !is_main {
+                self.cancel_member_row(session, reason).await;
+            }
+        }
+    }
+
+    /// Cancel `child`'s non-terminal member row on its parent's log.
+    async fn cancel_member_row(&self, child: SessionId, reason: &str) {
+        let Ok(child_projection) = self.engine.read_projection(child).await else {
+            return;
+        };
+        let Some(parent) = child_projection.session.parent else {
+            return;
+        };
+        let Ok(parent_projection) = self.engine.read_projection(parent).await else {
+            return;
+        };
+        for row in &parent_projection.session.members {
+            if row.child == Some(child)
+                && matches!(
+                    row.status,
+                    MemberRunStatus::Spawning | MemberRunStatus::Running
+                )
+            {
+                let _ = self
+                    .engine
+                    .record_member_finished(
+                        parent,
+                        row.member,
+                        MemberRunStatus::Cancelled,
+                        reason.to_string(),
+                        Some(child),
+                    )
+                    .await;
+            }
+        }
+    }
+
     /// Run exactly one turn for `session`: inject the initial directive (once), the
     /// synthesis directive (main, on quiescence), and every inbox message since the
     /// cursor, then advance the cursor and stream one turn. All of this is coalesced
@@ -938,6 +1057,9 @@ impl TeamActor {
                     .iter()
                     .skip(cursor)
                     .filter(|message| {
+                        if message.from == scope::HARNESS_HANDLE {
+                            return true;
+                        }
                         let (kind, role) = recipient_channel_role(
                             &projection,
                             &message.to,
@@ -1262,9 +1384,12 @@ impl TeamActor {
             for session in recipients {
                 if let Some(slot) = st.residents.get_mut(&session) {
                     let (kind, role) = recipient_channel_role(&projection, to, &slot.handle, from);
-                    let allowed = ChannelPolicy::from_binding(&slot.binding).is_ok_and(|policy| {
-                        resident_delivery_allowed(&policy, slot.agent.name.as_str(), kind, role)
-                    });
+                    // Harness mail (leader-failed notice) is a control message:
+                    // it bypasses the channel policy.
+                    let allowed = from == scope::HARNESS_HANDLE
+                        || ChannelPolicy::from_binding(&slot.binding).is_ok_and(|policy| {
+                            resident_delivery_allowed(&policy, slot.agent.name.as_str(), kind, role)
+                        });
                     if !allowed {
                         let inbox_len = projection
                             .team
@@ -1329,6 +1454,9 @@ impl TeamActor {
                 }
                 let policy = ChannelPolicy::from_binding(&slot.binding).ok();
                 let has_deliverable = inbox.iter().skip(slot.cursor).any(|message| {
+                    if message.from == scope::HARNESS_HANDLE {
+                        return true;
+                    }
                     let (kind, role) = recipient_channel_role(
                         &projection,
                         &message.to,
@@ -1476,6 +1604,7 @@ async fn resident_task(team: Arc<TeamActor>, session: SessionId, notify: Arc<Not
                 Action::Run(plan) => {
                     let handle = plan.handle.clone();
                     let claim = plan.claim;
+                    let is_main = plan.is_main;
                     if sidecar_handle
                         .as_ref()
                         .is_some_and(|cached| !cached.is_healthy())
@@ -1750,6 +1879,21 @@ async fn resident_task(team: Arc<TeamActor>, session: SessionId, notify: Arc<Not
                                 )
                                 .await;
                         }
+                        Err(err) if is_main => {
+                            // The lead is never archived: a failed lead turn
+                            // ended with `finish: error`, its team was told
+                            // to wrap up, and the session stays live and
+                            // resumable. The slot parks until the user
+                            // resumes the lead.
+                            let _ = team
+                                .record_activity(
+                                    claim.as_ref(),
+                                    handle,
+                                    RosterStatus::Idle,
+                                    Some(format!("turn failed: {err}")),
+                                )
+                                .await;
+                        }
                         Err(err) => {
                             // Engine-synthesized terminality (ADR-0015): a
                             // terminal turn error IS the agent's failure
@@ -1882,6 +2026,13 @@ pub(crate) async fn archive_reported_agent(
     reason: ArchiveReason,
     force_degraded: bool,
 ) -> Result<(), CoreError> {
+    // The lead (the user-started root agent) is never archived: its session
+    // stays live and resumable whatever happens to one of its turns.
+    if child == root || canonical == scope::ROOT_HANDLE {
+        return Err(CoreError::Invalid(
+            "the team lead is never archived".to_string(),
+        ));
+    }
     let projection = engine.read_projection(root).await?;
 
     // 1. Terminal handoff (never fails; degrades deterministically). Force-
@@ -2029,6 +2180,18 @@ impl TurnBoundaryObserver for ResidentSupervisor {
     fn turn_released(&self, session: SessionId) {
         if let Some(team) = self.team_with_resident(session) {
             team.on_turn_released(session);
+        }
+    }
+
+    fn turn_started(&self, session: SessionId) {
+        if let Some(team) = self.teams().get(&session).cloned() {
+            team.on_lead_turn_started(session);
+        }
+    }
+
+    fn turn_failed(&self, session: SessionId) {
+        if let Some(team) = self.teams().get(&session).cloned() {
+            team.on_lead_turn_failed(session);
         }
     }
 }
@@ -2201,10 +2364,30 @@ impl ResidentSupervisor {
                         main_session: None,
                         kill_reason: None,
                         team_budget_released: false,
+                        lead_failed: false,
                     }),
                 })
             })
             .clone()
+    }
+
+    /// Graceful stop (SIGINT/SIGTERM, user cancel, end of a one-shot run,
+    /// `serve` shutdown): cancel every in-flight turn in every session with
+    /// `cause` and wait up to `deadline` for them to close their messages
+    /// ([`SessionEngine::drain_turns`]), then make every team member terminal
+    /// and park each lead. New turns are refused from the first step on.
+    pub async fn drain(&self, cause: FinishCause, deadline: Duration) -> TurnDrainReport {
+        let report = self.engine.drain_turns(cause, deadline).await;
+        let reason = match cause {
+            FinishCause::UserCancel => "stopped: cancelled by the user",
+            FinishCause::LeaderFailed => "stopped: the team lead failed",
+            _ => "stopped: shutdown",
+        };
+        let teams: Vec<Arc<TeamActor>> = self.teams().values().cloned().collect();
+        for team in teams {
+            team.drain_stop(reason).await;
+        }
+        report
     }
 
     /// The team-wide cancellation token for `root`, if the team is tracked. Exposed

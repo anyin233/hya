@@ -141,7 +141,40 @@ derived deterministically from the projection: last assistant message +
 roster facts, written under the same six headings where known, and flagged
 `degraded: true`. Terminality never blocks on the summarizer.
 
-### 3.3 Storage
+### 3.3 The lead is never archived
+
+The lead — the user-started root agent at depth 0, handle `main` — is not a
+member and never goes through §3: it has no report, no handoff, and no
+archive. A failed lead turn (provider/runtime error) ends with
+`MessageFinished { finish: error, cause: provider_error }` and the lead's
+session stays live and resumable; members keep their DM back to it.
+`archive_reported_agent` refuses the root outright (`the team lead is never
+archived`), and the resident loop parks a failed main slot (roster `idle`,
+`current_task: "turn failed: …"`) instead of archiving it. A graceful drain
+parks the lead `idle` too.
+
+### 3.4 Leader failure
+
+When the lead's turn fails — never on a user kill/cancel, a SIGINT, or a
+drain — the harness broadcasts a wrap-up notice to the whole team:
+
+- **Recipients:** every live resident member on the team roster, at every
+  depth (roster row not `done`/`failed`, active claim), excluding the lead.
+- **Channel / author:** a direct `MailSent` per member on the team-root log,
+  `from: "harness"` (`hya_proto::HARNESS_HANDLE`; not an agent, never on the
+  roster, bypasses the hierarchy reach rule and the channel delivery policy),
+  written by `SessionStore::append_harness_mail`.
+- **Body:** `LEADER FAILED: your team lead's turn ended with an error and the
+  lead will not respond (<error, ≤400 chars>). Wrap up now: finish or commit
+  the unit you are on, send your report, then stop. Do not start new work.`
+- **Delivery:** a member mid-turn sees it through in-turn steering
+  (`[mail from harness] …` on its next tool result); an idle member is woken
+  for one turn.
+- **Synthesis:** the dead lead gets no automatic turn — a queued `TEAM
+  QUIESCED` synthesis is dropped and mail wakes of `main` wait — until the user
+  resumes the lead (see [Runtime — Leader failure](runtime.md#leader-failure)).
+
+### 3.5 Storage
 
 Handoff documents are events (`HandoffCommitted`) on the child session log;
 the archive index (§7) carries the parsed section digests for search. The
@@ -346,7 +379,8 @@ decisions are unchanged.
 4. Revival is only via downward DM from the direct parent; it bumps the claim
    epoch, re-debits budget, and never replays transcripts into model context.
 5. Every terminal path produces a report (model-issued or engine-synthesized)
-   and a handoff (model-written or degraded).
+   and a handoff (model-written or degraded). The lead has no terminal path:
+   it is never reported, handed off, or archived (§3.3).
 6. Journal claim precedes governor debit; refund is exactly-once via
    `logical_released`; archive is the only refund trigger for a completed
    lease.

@@ -5,7 +5,7 @@
 use hya_api::v1 as pb;
 use hya_proto::projection::{MessageProjection, PartProjection, Projection};
 use hya_proto::{Envelope, Event, Role};
-use hya_proto::{FinishReason, ToolPartState};
+use hya_proto::{FinishCause, FinishReason, ToolPartState};
 
 /// Map a domain finish reason to the wire enum.
 pub(crate) fn finish_reason(finish: FinishReason) -> i32 {
@@ -15,6 +15,19 @@ pub(crate) fn finish_reason(finish: FinishReason) -> i32 {
         FinishReason::Length => pb::FinishReason::Length as i32,
         FinishReason::Cancelled => pb::FinishReason::Cancelled as i32,
         FinishReason::Error => pb::FinishReason::Error as i32,
+    }
+}
+
+/// Map a domain finish cause to the wire enum (`0` when absent).
+pub(crate) fn finish_cause(cause: Option<FinishCause>) -> i32 {
+    match cause {
+        None => pb::FinishCause::Unspecified as i32,
+        Some(FinishCause::UserCancel) => pb::FinishCause::UserCancel as i32,
+        Some(FinishCause::Shutdown) => pb::FinishCause::Shutdown as i32,
+        Some(FinishCause::LeaderFailed) => pb::FinishCause::LeaderFailed as i32,
+        Some(FinishCause::Interrupted) => pb::FinishCause::Interrupted as i32,
+        Some(FinishCause::ProviderError) => pb::FinishCause::ProviderError as i32,
+        Some(FinishCause::Other) => pb::FinishCause::Other as i32,
     }
 }
 
@@ -153,6 +166,7 @@ pub(crate) fn message(message: &MessageProjection) -> pb::MessageInfo {
         parts: message.parts.iter().filter_map(part).collect(),
         time_created: None,
         time_updated: None,
+        finish_cause: finish_cause(message.cause),
     }
 }
 
@@ -255,11 +269,15 @@ pub(crate) fn stream_event(envelope: &Envelope) -> Option<pb::StreamEvent> {
             model: String::new(),
         }),
         Event::MessageFinished {
-            message, finish, ..
+            message,
+            finish,
+            cause,
+            ..
         } => P::MessageFinished(pb::MessageFinished {
             message: message.to_string(),
             finish: finish_reason(*finish),
             usage: None,
+            cause: finish_cause(*cause),
         }),
         Event::TextStart { message, part, .. } => {
             P::PartStarted(part_started(message, part, "text"))
@@ -354,5 +372,48 @@ fn part_started(
         message: message.to_string(),
         part: part.to_string(),
         kind: kind.to_owned(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::*;
+    use hya_proto::{EventSeq, MessageId, SessionId};
+
+    fn finished(cause: Option<FinishCause>) -> Envelope {
+        Envelope {
+            seq: EventSeq(1),
+            ts_millis: 1,
+            event: Event::MessageFinished {
+                session: SessionId::new(),
+                message: MessageId::new(),
+                role: Role::Assistant,
+                finish: FinishReason::Cancelled,
+                tokens: None,
+                cause,
+            },
+        }
+    }
+
+    #[test]
+    fn message_finished_carries_its_cause_on_the_wire() {
+        let event = stream_event(&finished(Some(FinishCause::Shutdown))).unwrap();
+        match event.payload {
+            Some(pb::stream_event::Payload::MessageFinished(finished)) => {
+                assert_eq!(finished.finish, pb::FinishReason::Cancelled as i32);
+                assert_eq!(finished.cause, pb::FinishCause::Shutdown as i32);
+            }
+            other => panic!("expected MessageFinished, got {other:?}"),
+        }
+        // Old logs and model-ended messages: unspecified (0).
+        let event = stream_event(&finished(None)).unwrap();
+        match event.payload {
+            Some(pb::stream_event::Payload::MessageFinished(finished)) => {
+                assert_eq!(finished.cause, pb::FinishCause::Unspecified as i32);
+            }
+            other => panic!("expected MessageFinished, got {other:?}"),
+        }
     }
 }

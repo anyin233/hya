@@ -206,6 +206,7 @@ impl Provider for TransientLossProvider {
                 role: Role::Assistant,
                 finish: FinishReason::Stop,
                 tokens: None,
+                cause: None,
             })
         })))
     }

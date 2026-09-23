@@ -126,6 +126,7 @@ impl Provider for UsageProvider {
                     role: Role::Assistant,
                     finish: FinishReason::Stop,
                     tokens: Some(usage),
+                    cause: None,
                 }),
                 Err(ProviderError::Transport("stream reset".to_string())),
             ]))),

@@ -16,8 +16,8 @@ use crate::ids::{
 };
 use crate::mail::{ChannelKind, MailEndpoint, MailKind};
 use crate::message::{
-    FinishReason, MemberRunStatus, Role, RosterStatus, SubagentMode, TokenUsage, ToolPartState,
-    UsagePurpose,
+    FinishCause, FinishReason, MemberRunStatus, Role, RosterStatus, SubagentMode, TokenUsage,
+    ToolPartState, UsagePurpose,
 };
 use crate::model::{AgentName, ModelRef, ToolName};
 use crate::tokens::{TokenAccountingMode, TokenSource};
@@ -283,6 +283,11 @@ pub enum Event {
         /// Aggregated token usage when known.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tokens: Option<TokenUsage>,
+        /// Why the harness ended the message (cancel, shutdown, crash
+        /// recovery, provider failure). Absent on model-ended messages and on
+        /// logs written before the field existed.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cause: Option<FinishCause>,
     },
     /// Removes a whole message from the projected view.
     MessageDeleted {
@@ -1615,6 +1620,120 @@ mod tests {
         assert!(!json.contains("reasoning_unknown"), "{json}");
         let back: Event = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(back, side);
+    }
+
+    #[test]
+    fn message_finished_cause_round_trips_and_is_omitted_when_absent() {
+        let session = SessionId::new();
+        let message = MessageId::new();
+        for cause in [
+            FinishCause::UserCancel,
+            FinishCause::Shutdown,
+            FinishCause::LeaderFailed,
+            FinishCause::Interrupted,
+            FinishCause::ProviderError,
+        ] {
+            let finished = Event::MessageFinished {
+                session,
+                message,
+                role: Role::Assistant,
+                finish: FinishReason::Cancelled,
+                tokens: None,
+                cause: Some(cause),
+            };
+            let json = serde_json::to_string(&finished).expect("serialize");
+            assert!(json.contains(r#""cause":""#), "{json}");
+            let back: Event = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(back, finished);
+        }
+        let json = serde_json::to_string(&Event::MessageFinished {
+            session,
+            message,
+            role: Role::Assistant,
+            finish: FinishReason::Error,
+            tokens: None,
+            cause: Some(FinishCause::ProviderError),
+        })
+        .expect("serialize");
+        assert!(json.contains(r#""cause":"provider_error""#), "{json}");
+
+        let plain = Event::MessageFinished {
+            session,
+            message,
+            role: Role::Assistant,
+            finish: FinishReason::Stop,
+            tokens: None,
+            cause: None,
+        };
+        let json = serde_json::to_string(&plain).expect("serialize");
+        assert!(
+            !json.contains("cause"),
+            "absent cause is not written: {json}"
+        );
+    }
+
+    #[test]
+    fn old_log_message_finished_without_cause_decodes() {
+        let session = SessionId::new();
+        let message = MessageId::new();
+        // An old log row: exactly the pre-`cause` wire shape.
+        let legacy = serde_json::json!({
+            "type": "message_finished",
+            "session": session,
+            "message": message,
+            "role": "assistant",
+            "finish": "cancelled",
+        });
+        let decoded: Event = serde_json::from_value(legacy.clone()).expect("legacy finish decodes");
+        assert_eq!(
+            decoded,
+            Event::MessageFinished {
+                session,
+                message,
+                role: Role::Assistant,
+                finish: FinishReason::Cancelled,
+                tokens: None,
+                cause: None,
+            }
+        );
+        // A cause written by a newer build decodes as `other`, never an error.
+        let mut future = legacy;
+        future["cause"] = serde_json::json!("power_loss");
+        let decoded: Event = serde_json::from_value(future).expect("future cause decodes");
+        assert!(matches!(
+            decoded,
+            Event::MessageFinished {
+                cause: Some(FinishCause::Other),
+                ..
+            }
+        ));
+        // The projection keeps the cause next to the finish reason.
+        let projection = crate::Projection::from_events(&[
+            Envelope {
+                seq: EventSeq(1),
+                ts_millis: 1,
+                event: Event::MessageStarted {
+                    session,
+                    message,
+                    role: Role::Assistant,
+                },
+            },
+            Envelope {
+                seq: EventSeq(2),
+                ts_millis: 2,
+                event: Event::MessageFinished {
+                    session,
+                    message,
+                    role: Role::Assistant,
+                    finish: FinishReason::Cancelled,
+                    tokens: None,
+                    cause: Some(FinishCause::Shutdown),
+                },
+            },
+        ]);
+        let projected = projection.session.messages.first().expect("message");
+        assert_eq!(projected.finish, Some(FinishReason::Cancelled));
+        assert_eq!(projected.cause, Some(FinishCause::Shutdown));
     }
 
     #[test]

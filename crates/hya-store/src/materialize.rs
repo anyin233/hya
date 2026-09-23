@@ -4,10 +4,11 @@
 //! projections maintained inside the same transaction as the event append:
 //! `session_created` → `session`, `agent_registered` → `team_run` +
 //! `team_member`, `mail_sent` → `mail`, `member_spawned`/`subagent_reported`
-//! → `task_board`. Reads keep folding the event log; nothing derives state
-//! from these rows.
+//! → `task_board`, assistant `message_started` / `message_finished` /
+//! `message_deleted` → `open_assistant_message` (the crash-recovery index).
+//! Reads keep folding the event log; nothing derives state from these rows.
 
-use hya_proto::{Event, MailEndpoint, MailKind, ReportOutcome, SessionId};
+use hya_proto::{Event, MailEndpoint, MailKind, MessageId, ReportOutcome, Role, SessionId};
 use sqlx::Sqlite;
 
 use crate::StoreError;
@@ -141,9 +142,41 @@ pub(crate) async fn materialize_event_side_tables(
             .execute(&mut **tx)
             .await?;
         }
+        Event::MessageStarted {
+            message,
+            role: Role::Assistant,
+            ..
+        } => {
+            sqlx::query(
+                "INSERT OR IGNORE INTO open_assistant_message (session_id, message_id) \
+                 VALUES (?, ?)",
+            )
+            .bind(root_key)
+            .bind(open_message_key(*message)?)
+            .execute(&mut **tx)
+            .await?;
+        }
+        Event::MessageFinished { message, .. } | Event::MessageDeleted { message, .. } => {
+            sqlx::query(
+                "DELETE FROM open_assistant_message WHERE session_id = ? AND message_id = ?",
+            )
+            .bind(root_key)
+            .bind(open_message_key(*message)?)
+            .execute(&mut **tx)
+            .await?;
+        }
         _ => {}
     }
     Ok(())
+}
+
+/// The `open_assistant_message.message_id` text: the id's JSON string form,
+/// identical to what the migration backfill reads with `json_extract`.
+pub(crate) fn open_message_key(message: MessageId) -> Result<String, StoreError> {
+    match serde_json::to_value(message)? {
+        serde_json::Value::String(key) => Ok(key),
+        other => Ok(other.to_string()),
+    }
 }
 
 /// The orchestration root's log session doubles as the team-run row; member,

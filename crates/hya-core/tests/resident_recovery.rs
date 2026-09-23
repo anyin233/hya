@@ -554,6 +554,7 @@ async fn repeated_startup_recovery_produces_identical_projection_and_no_duplicat
             role: hya_proto::Role::User,
             finish: hya_proto::FinishReason::Stop,
             tokens: None,
+            cause: None,
         },
     ] {
         store.append_event(actor, &event).await.unwrap();

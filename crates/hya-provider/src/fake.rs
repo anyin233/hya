@@ -139,6 +139,7 @@ impl FakeProvider {
                     role: Role::Assistant,
                     finish: *reason,
                     tokens,
+                    cause: None,
                 }),
             }
         }
