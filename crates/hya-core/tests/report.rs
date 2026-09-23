@@ -208,14 +208,73 @@ async fn wait_idle(engine: &SessionEngine, root: SessionId, handle: &str, child:
     panic!("resident {handle} never went idle; roster: {rows:?}");
 }
 
+/// Members park inside their first round until `release`; the root never
+/// parks. Mail sent meanwhile stays unread (no wake, no tool result to steer).
+#[derive(Default)]
+struct ParkedMembers {
+    root: std::sync::Mutex<Option<SessionId>>,
+    release: tokio::sync::Notify,
+}
+
+#[async_trait]
+impl Provider for ParkedMembers {
+    fn id(&self) -> &str {
+        "fake"
+    }
+
+    fn capabilities(&self, model: &ModelRef) -> Option<Capabilities> {
+        StubProvider.capabilities(model)
+    }
+
+    async fn stream(
+        &self,
+        req: CompletionRequest,
+        session: SessionId,
+        message: MessageId,
+    ) -> Result<EventStream, ProviderError> {
+        if *self.root.lock().unwrap() != Some(session) {
+            self.release.notified().await;
+        }
+        StubProvider.stream(req, session, message).await
+    }
+}
+
 #[tokio::test]
 async fn report_gate_rejects_unread_mail() {
-    let engine = engine().await;
+    let provider = Arc::new(ParkedMembers::default());
+    let (permission, _rx) = PermissionPlane::new(PermissionRules::new(Vec::new()));
+    let engine = Arc::new(SessionEngine::new(
+        SessionStore::connect_memory().await.unwrap(),
+        Arc::new(ProviderRouter::new().with(provider.clone())),
+        support::test_runtime(Arc::new(ToolRegistry::builtins())),
+        permission,
+        EventBus::default(),
+    ));
     let root = root_team(&engine).await;
+    *provider.root.lock().unwrap() = Some(root);
     let supervisor = ResidentSupervisor::start(engine.clone());
     ensure_main(&supervisor, &engine, root).await;
-    let (_child, handle) =
-        spawn_idle_resident(&supervisor, &engine, root, "explore the tree").await;
+    let agent = agent_spec();
+    let binding = engine.bind_runtime(&agent.workdir).unwrap();
+    let resources = binding.agent_resource_policy(agent.name.as_str()).unwrap();
+    let (_child, handle) = supervisor
+        .spawn_resident(
+            root,
+            agent,
+            (binding, Arc::from([]), resources, None),
+            "explore the tree".to_string(),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    for _ in 0..300 {
+        let projection = engine.read_projection(root).await.unwrap();
+        if projection.team.roster[&handle].status == RosterStatus::Busy {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
 
     engine
         .mail_send(
@@ -227,17 +286,43 @@ async fn report_gate_rejects_unread_mail() {
         .await
         .unwrap();
 
+    let dm = engine
+        .read_projection(root)
+        .await
+        .unwrap()
+        .team
+        .channels
+        .iter()
+        .find(|(_, channel)| {
+            channel.kind == hya_proto::ChannelKind::Dm && channel.members.contains(&handle)
+        })
+        .map(|(id, _)| id.clone())
+        .unwrap();
     let result = supervisor.report_gate(root, &handle).await;
     match result {
-        Err(CoreError::Invalid(message)) => assert!(
-            message.contains("unread"),
-            "gate error should mention unread mail: {message}"
-        ),
+        Err(CoreError::Invalid(message)) => {
+            assert!(
+                message.contains("unread mail"),
+                "gate error should mention unread mail: {message}"
+            );
+            // Actionable: the channel holding the mail, the exact read call,
+            // and the reply / wait paths.
+            for needle in [
+                format!("#{dm}"),
+                format!("`read channel://{dm}`"),
+                "`list_channel`".to_string(),
+                "`send`".to_string(),
+                "`wait`".to_string(),
+            ] {
+                assert!(message.contains(&needle), "missing {needle}: {message}");
+            }
+        }
         other => panic!("expected unread-mail rejection, got {other:?}"),
     }
     // Nothing archived: the roster row is still live.
     let projection = engine.read_projection(root).await.unwrap();
     assert!(projection.team.roster.contains_key(&handle));
+    provider.release.notify_waiters();
 }
 
 #[tokio::test]
@@ -1155,6 +1240,103 @@ async fn steer_notice_carries_the_channel_id_for_handle_mail() {
         notice.contains("handle-addressed status update"),
         "notice still carries the body"
     );
+}
+
+/// A busy team floods the bus (every member streams deltas): the steer
+/// receiver lags and the live `MailSent` is gone from the broadcast buffer.
+/// The mail must still be surfaced (and consumed) from the durable inbox —
+/// otherwise the report gate stays shut on mail the agent never saw.
+#[tokio::test]
+async fn steer_resyncs_mail_from_the_log_after_the_bus_lagged() {
+    let store = SessionStore::connect_memory().await.unwrap();
+    let router = Arc::new(ProviderRouter::new().with(Arc::new(StubProvider)));
+    let (permission, _rx) = PermissionPlane::new(PermissionRules::new(Vec::new()));
+    let engine = Arc::new(SessionEngine::new(
+        store,
+        router,
+        support::test_runtime(Arc::new(ToolRegistry::builtins())),
+        permission,
+        EventBus::new(4),
+    ));
+    let root = root_team(&engine).await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    ensure_main(&supervisor, &engine, root).await;
+    let (child, _) = spawn_idle_resident(&supervisor, &engine, root, "explore").await;
+
+    let mut steer = engine.steer_mailbox_snapshot(root).await;
+    engine
+        .mail_send(
+            child,
+            MailEndpoint::Handle("main".to_string()),
+            MailKind::Message,
+            "LAGGED_MAIL_BODY".to_string(),
+        )
+        .await
+        .unwrap();
+    for _ in 0..32 {
+        engine.bus().publish(hya_proto::Envelope {
+            seq: hya_proto::EventSeq(0),
+            ts_millis: 0,
+            event: Event::AgentHeartbeat {
+                session: root,
+                handle: "main".to_string(),
+                heartbeat_ms: 1,
+            },
+        });
+    }
+    let notice = steer
+        .drain(&engine)
+        .await
+        .unwrap()
+        .expect("mail lost to bus lag must be resynced from the log");
+    assert!(notice.contains("LAGGED_MAIL_BODY"), "{notice}");
+    let projection = engine.read_projection(root).await.unwrap();
+    assert_eq!(
+        projection.team.roster["main"].resident_cursor,
+        projection.team.inboxes["main"].len() as u64,
+        "the resynced mail is consumed durably"
+    );
+}
+
+/// Mail a resident wake already injected into its turn (`inbox_through`) is
+/// read: a `report` inside that turn must not be rejected for it.
+#[tokio::test]
+async fn report_gate_counts_mail_the_current_wake_delivered_as_read() {
+    let engine = engine().await;
+    let root = root_team(&engine).await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    ensure_main(&supervisor, &engine, root).await;
+    let (child, handle) = spawn_idle_resident(&supervisor, &engine, root, "explore").await;
+    engine
+        .mail_send(
+            root,
+            MailEndpoint::Handle(handle.clone()),
+            MailKind::Message,
+            "follow-up question".to_string(),
+        )
+        .await
+        .unwrap();
+    // The wake claimed the inbox through its end and is still working.
+    engine
+        .store()
+        .append_event(
+            root,
+            &Event::ResidentWorkStarted {
+                session: root,
+                actor_session: child,
+                handle: handle.clone(),
+                epoch: hya_proto::ActorEpoch::INITIAL,
+                inbox_through: 1,
+            },
+        )
+        .await
+        .unwrap();
+    let projection = engine.read_projection(root).await.unwrap();
+    assert!(projection.team.roster[&handle].resident_cursor < 1);
+    supervisor
+        .report_gate(root, &handle)
+        .await
+        .expect("mail injected by the current wake is not unread");
 }
 
 #[tokio::test]

@@ -36,6 +36,8 @@ pub mod channel_policy;
 pub mod compaction;
 /// Goal-mode iteration driver, safety caps, and independent evaluators.
 pub mod completion;
+/// Harness coordination tools injected into every agent view at startup.
+mod coordination;
 /// Session engine, agent specs, and turn admission.
 pub mod engine;
 /// Shared error type for the core runtime.

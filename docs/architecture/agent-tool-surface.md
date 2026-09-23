@@ -140,10 +140,84 @@ result echoes the list back with a title carrying the count of still-open items
 (status other than `"completed"`). Alias: `todo`.
 ([crates/hya-tool/src/todo.rs:75-136](../../crates/hya-tool/src/todo.rs#L75-L136))
 
+### Coordination tools (allocated at startup)
+
+An agent's **coordination tools** are allocated by the harness when the agent
+starts, the same way for built-in agents and for agents imported from bundles,
+for roots and for members, with or without a `resource_view`. A bundle
+`resource_view` narrows only *domain* tools (`read`, `write`, `edit`, `bash`,
+`grep`, `glob`, MCP, skills, …); it cannot take away the tools an agent needs to
+take part in a team. Before 0.41.0 a bundle subagent whose `allow` list named
+only `read`/`grep`/`glob`/`report` (the `hya-extra/scout` bundle) could never
+finish once its lead mailed it: every `report` was rejected for unread mail and
+it had no `list_channel` to find the channel holding it.
+
+There is nothing to configure. A manifest lists only its domain tools:
+
+```yaml
+agents:
+  - id: scout
+    role: subagent
+    resource_view:
+      allow: [harness:tool/read, harness:tool/grep, harness:tool/glob, zvec-grep]
+```
+
+and the harness adds `report`, `wait`, `send`, `list_channel`, and channel
+reads. Listing a coordination tool explicitly (`harness:tool/report`) still
+works; it is deduplicated with the injected set.
+
+The allocation is decided when the agent's view is compiled (per turn, from
+the bound catalog) and filtered by depth when each request is built:
+
+| Tool | Allocated to | Advertised |
+| --- | --- | --- |
+| `report` | every agent | subagents only (depth ≥ 1); the root never sees it |
+| `wait` | every agent | every depth; the mail-aware channel-tools `wait` when that family is loaded |
+| `task`, `archive` | agents with **spawn rights**: a built-in (ordinary spawn scope) or a bundle agent whose `can_spawn` names an installed agent | depth 0 and 1; hidden at the depth cap (`MAX_SUBAGENT_DEPTH` = 2) |
+| `send`, `list_channel` | every agent, when the channel family (`hya/channel-tools`) is loaded | every depth |
+| `read channel://<id>` | every agent, when the channel family is loaded | every depth; a view that does not select `read` gets a **mail-only** `read` that serves `channel://` handles and refuses every other path |
+
+Resulting sets (channel family loaded — the default builtin registry):
+
+| Agent kind | Depth | Coordination tools |
+| --- | --- | --- |
+| Root (built-in, or bundle `role: main`) with spawn rights | 0 | `wait`, `task`, `archive`, `send`, `list_channel`, `read channel://` |
+| Root without spawn rights | 0 | `wait`, `send`, `list_channel`, `read channel://` |
+| Subagent with spawn rights | 1 | `report`, `wait`, `task`, `archive`, `send`, `list_channel`, `read channel://` |
+| Subagent without spawn rights (e.g. `scout`) | ≥ 1 | `report`, `wait`, `send`, `list_channel`, `read channel://` |
+| Any subagent at the depth cap | 2 | `report`, `wait`, `send`, `list_channel`, `read channel://` |
+
+Without the channel family there are no channel tools and no `report` (it
+belongs to that family): every agent gets the member-only `wait`, plus `task`
+and `archive` with spawn rights below the cap. An agent that can spawn nobody
+never sees `task` or `archive`, even with a default (unnarrowed) view.
+
+`deny` semantics: `resource_view.deny` may remove any coordination tool except
+`report` — denying `task`, `archive`, `wait`, `send`, or `list_channel` is
+honored. Denying `harness:tool/report` (in any spelling) rejects the view with
+`InvalidManifest` (``resource_view.deny `…` removes the coordination tool
+`report`; a subagent without it can never finish``). Denying
+`harness:tool/read` removes file reading only: the mail-only `read` is still
+allocated, so the report gate can always be satisfied. When the view already
+gives a coordination tool's bare name to one of its own resources (a
+bundle-local tool, an MCP server, or a `resource_view.aliases` key), the
+bundle's resource keeps the name and the harness tool is not injected, so no
+`NamespaceCollision` is introduced.
+
+The team quick reference appended to every request's system prompt is
+rendered from the tools that request advertises
+([`hya_core::prompt::team_quick_reference`](../../crates/hya-core/src/prompt.rs)):
+each line appears only when the agent has the tools it teaches, and the root
+gets the "never call `report`" line instead of the subagent's "finish with
+`report`" line. Implementation:
+[`crates/hya-core/src/coordination.rs`](../../crates/hya-core/src/coordination.rs)
+and `select_candidates_globally` in
+[`runtime_registry.rs`](../../crates/hya-core/src/runtime_registry.rs).
+
 ### Communication tools (ADR-0016 channel plane)
 
 All communication tools report that they are available only inside a running
-team when the mailbox plane is disconnected. The system-prompt team quick
+team when the mailbox plane is disconnected. The per-request team quick
 reference mirrors this contract and is guarded by a registry-alignment test
 (every tool-named token it teaches must resolve in the builtin registry).
 
@@ -167,6 +241,21 @@ members: a group post never reaches them.
 **`list_channel`**: no parameters; lists the caller's channels — group pipes
 with a can-post flag and DM channels with peer identity and unread counts.
 Archived peers' DM channels are excluded (use `search_agent`).
+
+**`report`** (channel-tools family): required `result`, optional `outcome`
+(`done`/`failed`). Rejected while the caller has unread mail or live direct
+subagents. Mail the caller's current resident wake already put into its turn
+counts as read. The unread-mail rejection names every channel holding unread
+mail and the exact read call, for example:
+
+```text
+report rejected: `main/scout-1` has 2 unread mail message(s) on #DM-rgli51cb (2); answer them first. Read it with `read channel://DM-rgli51cb?last=2` (`list_channel` lists every channel with unread counts), reply with `send` if the sender needs an answer, then call `report` again — or call `wait` to block until more mail arrives.
+```
+
+Handle-addressed mail is attributed to the DM channel shared with its sender;
+harness notices with no channel are counted as `N harness notice(s)` and
+arrive with the next tool result as `[NEW MAIL]`. Reading any channel marks
+the whole inbox seen.
 
 **`search_agent`**: optional `query` (free text over the goal/pending digests
 of archived agents' final handoffs); lists the caller's own archived direct
@@ -349,7 +438,13 @@ applies an advertisement-only filter:
 - `apply_patch` is never advertised. It remains registered for hidden `patch`
   dispatch.
 - enabled `websearch` is advertised to every model provider.
+- `report` is never advertised to the root (depth 0); `task`, `list_agents`,
+  `workflow`, `search_agent`, and `archive` are not advertised at the depth
+  cap.
 - Every other canonical schema passes through.
+
+The schemas start from the agent's compiled view, which already carries the
+harness-allocated [coordination tools](#coordination-tools-allocated-at-startup).
 
 The tools remain registered even when their schemas are filtered from the
 request. File mutation on the model-facing path is the hashline `write`/`edit`

@@ -530,6 +530,30 @@ declaration, not a security boundary.
 **excluded** from the `tool` candidate partition (they are selected as `mcp`
 references, not as `tool` references).
 
+### Coordination tools are allocated, not declared
+
+Since 0.41.0 the harness allocates every agent's **coordination tools** when it
+starts, exactly as it does for built-in agents: `report` (advertised to
+subagents only), `wait`, `task` and `archive` (only with spawn rights — a
+`can_spawn` naming an installed agent), and, when the channel tools are loaded,
+`send`, `list_channel`, and `read channel://<id>`. `resource_view` narrows
+**domain** tools only (`read`, `write`, `edit`, `bash`, `grep`, `glob`, MCP,
+skills, …), so do not list coordination tools in `allow`; an explicit entry
+such as `harness:tool/report` still works and is deduplicated.
+
+- An agent whose view does not select `read` still gets a mail-only `read` that
+  serves `channel://` handles and refuses file paths, so it can always read the
+  mail the report gate names.
+- `deny` may remove `task`, `archive`, `wait`, `send`, or `list_channel`.
+  Denying `report` rejects the view with `InvalidManifest` (a subagent without
+  `report` could never finish). Denying `read` removes file reading only.
+- If the view gives a coordination tool's bare name to its own resource (a
+  bundle-local tool, an MCP server, or an `aliases` key), the bundle's resource
+  keeps the name and the harness tool is not added.
+
+The full allocation table (agent kind × depth × channel tools) is in
+[Agent tool surface](architecture/agent-tool-surface.md#coordination-tools-allocated-at-startup).
+
 ---
 
 ## `resource_view`
@@ -538,8 +562,8 @@ Deterministically narrows and renames the candidate set for one agent.
 
 | Key | Meaning |
 | --- | --- |
-| `allow` | Reference list of candidates to include (sorted and deduped on prepare). |
-| `deny` | Reference list removed after allow selection. |
+| `allow` | Reference list of candidates to include (sorted and deduped on prepare). Coordination tools are added regardless ([above](#coordination-tools-are-allocated-not-declared)). |
+| `deny` | Reference list removed after allow selection. `report` cannot be denied. |
 | `aliases` | Map of public name → target reference for selected entries. |
 | `namespace` | Optional segment used **only** for the **bundle-local** qualified public spelling `bundle:<namespace>/<kind>/<short>`. Default when omitted is the **bundle id**. Harness candidates keep their `harness:<kind>/<name>` qualified names; short public names are **never** prefixed. So an allow list of only `harness:tool/*` / `harness:skill/*` entries is unaffected by `namespace`. |
 
@@ -580,6 +604,10 @@ existing tool or skill public name is an **`AliasCollision`**.
    the `skill` tool facade (`harness:tool/skill`). Otherwise the view is rejected
    (`selected harness skills require the skill tool facade`), because skill bodies
    are only reachable through that tool.
+3. **`report` cannot be denied.** A `deny` entry resolving to
+   `harness:tool/report` rejects the view with `InvalidManifest`
+   (``resource_view.deny `…` removes the coordination tool `report`; a subagent
+   without it can never finish``).
 
 ### Example using deny and aliases
 

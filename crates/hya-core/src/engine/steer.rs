@@ -49,6 +49,10 @@ pub struct SteerMailbox {
     dm_by_peer: HashMap<String, String>,
     policy: Option<ChannelPolicySnapshot>,
     channel_roles: HashMap<String, (ChannelTemplateKind, ChannelParticipantRole)>,
+    /// Set once the live bus lagged (a busy team overflowed the broadcast
+    /// buffer and dropped `MailSent` envelopes): from then on every drain
+    /// re-reads the durable inbox instead of trusting the live tail.
+    durable: bool,
 }
 
 impl SessionEngine {
@@ -83,6 +87,7 @@ impl SessionEngine {
                 dm_by_peer: HashMap::new(),
                 policy,
                 channel_roles: HashMap::new(),
+                durable: false,
             };
         };
         let Ok(handle) = self.resolve_handle(root, session).await else {
@@ -97,6 +102,7 @@ impl SessionEngine {
                 dm_by_peer: HashMap::new(),
                 policy,
                 channel_roles: HashMap::new(),
+                durable: false,
             };
         };
         let Ok(projection) = self.read_projection(root).await else {
@@ -111,6 +117,7 @@ impl SessionEngine {
                 dm_by_peer: HashMap::new(),
                 policy,
                 channel_roles: HashMap::new(),
+                durable: false,
             };
         };
         // Baseline: mail already claimed by THIS turn's wake. A resident wake
@@ -184,6 +191,7 @@ impl SessionEngine {
             dm_by_peer,
             policy,
             channel_roles,
+            durable: false,
         };
         mailbox.queue = projection
             .team
@@ -255,10 +263,36 @@ impl SteerMailbox {
                         }
                     }
                 }
-                Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => {
+                    // Deliveries were dropped: switch to the durable inbox.
+                    self.durable = true;
+                }
                 Err(_) => break,
             }
         }
+    }
+
+    /// Rebuild the pending queue from the durable inbox (everything after the
+    /// committed cursor), after the live tail lost envelopes.
+    async fn resync_from_log(&mut self, engine: &SessionEngine) -> Result<(), CoreError> {
+        let projection = engine.read_projection(self.root).await?;
+        let Some(inbox) = projection.team.inboxes.get(&self.handle) else {
+            return Ok(());
+        };
+        let pending = inbox
+            .iter()
+            .skip(usize::try_from(self.committed_through).unwrap_or(usize::MAX))
+            .filter(|message| message.from != self.handle)
+            .filter(|message| self.allows_steer(&message.from, &message.to))
+            .map(|message| SteeredMail {
+                from: message.from.clone(),
+                body: message.body.clone(),
+                channel: delivered_channel(&message.to, &self.dm_by_peer),
+            })
+            .collect();
+        self.queue = pending;
+        self.through = self.committed_through.max(inbox.len() as u64);
+        Ok(())
     }
 
     fn reaches(&self, to: &MailEndpoint) -> bool {
@@ -301,6 +335,9 @@ impl SteerMailbox {
         self.poll_live();
         if self.handle.is_empty() {
             return Ok(None);
+        }
+        if self.durable {
+            self.resync_from_log(engine).await?;
         }
         let shown: Vec<SteeredMail> = std::mem::take(&mut self.queue);
         if shown.is_empty() && self.through == self.committed_through {

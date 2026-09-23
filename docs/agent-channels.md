@@ -58,7 +58,27 @@ the caller's inbox — on a DM or group channel, or harness mail such as the
 ```
 
 A subagent with no subagents of its own can call `wait` to block until its
-parent (or the harness) writes to it. Without the channel family, `wait` does
+parent (or the harness) writes to it.
+
+### Every agent gets the mail tools
+
+When the channel family is loaded, the harness allocates `send`,
+`list_channel`, `wait`, and `read channel://<id>` (plus `report` for
+subagents) to **every** agent at startup — built-in or bundle, root or member —
+whatever its bundle `resource_view` selects. A view that does not select `read`
+gets a mail-only `read` that serves `channel://` handles and refuses file
+paths. So a narrow bundle subagent can always read the mail its report gate
+names; the gate error says which channel and how:
+
+```text
+report rejected: `main/scout-1` has 1 unread mail message(s) on #DM-rgli51cb (1); answer them first. Read it with `read channel://DM-rgli51cb` (`list_channel` lists every channel with unread counts), reply with `send` if the sender needs an answer, then call `report` again — or call `wait` to block until more mail arrives.
+```
+
+Mail also reaches a working agent as a `[NEW MAIL]` notice appended to its next
+successful tool result. When a busy team overflows the live event bus, the
+notice is rebuilt from the durable inbox, so no mail is dropped. See
+[Agent tool surface](architecture/agent-tool-surface.md#coordination-tools-allocated-at-startup)
+for the full allocation table and `deny` rules. Without the channel family, `wait` does
 not wake on mail; mail still arrives in the `[NEW MAIL]` notice after the next
 tool call. See [Agent tool surface](architecture/agent-tool-surface.md) for the
 full `wait` contract.

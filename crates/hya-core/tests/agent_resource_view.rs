@@ -353,8 +353,19 @@ async fn agent_origin_decides_the_visible_tool_skill_and_mcp_plane() {
             .map(|schema| schema.name.as_str().to_string())
             .collect::<Vec<_>>()
     };
-    // narrowed: allow-list admits only the bundle skill, so no Harness tool.
-    assert!(!tool_names(&first_requests[0]).contains(&"read".to_string()));
+    // narrowed: allow-list admits only the bundle skill, so no Harness domain
+    // tool — only the harness-owned coordination tools (0.41.0), whose `read`
+    // serves channel mail only.
+    assert!(!tool_names(&first_requests[0]).contains(&"bash".to_string()));
+    assert!(!tool_names(&first_requests[0]).contains(&"grep".to_string()));
+    assert!(
+        first_requests[0]
+            .tools
+            .iter()
+            .filter(|schema| schema.name.as_str() == "read")
+            .all(|schema| schema.description.starts_with("Read team mail")),
+        "a narrowed view's read is the mail-only channel reader"
+    );
     assert!(!tool_names(&first_requests[0]).contains(&"dynamic_marker".to_string()));
     assert!(!tool_names(&first_requests[0]).contains(&"skill".to_string()));
     // clamped: the internal public snapshot, but never a later-registered tool.
@@ -508,7 +519,16 @@ async fn canonical_allow_deny_and_alias_share_schema_and_dispatch() {
         .collect::<Vec<_>>();
     assert!(names.contains(&"marker"));
     assert!(!names.contains(&"dynamic_marker"));
-    assert!(!names.contains(&"read"), "deny must win over allow");
+    // Deny wins over allow for file reading; the harness-owned mail-only
+    // channel read (0.41.0) is all that remains under that name.
+    assert!(
+        requests[0]
+            .tools
+            .iter()
+            .filter(|schema| schema.name.as_str() == "read")
+            .all(|schema| schema.description.starts_with("Read team mail")),
+        "deny must win over allow"
+    );
     assert_eq!(
         calls.load(Ordering::SeqCst),
         1,

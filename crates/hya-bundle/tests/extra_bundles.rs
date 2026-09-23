@@ -125,12 +125,31 @@ fn scout_is_an_agent_set_bundle_with_a_subagent_scout_and_its_own_mcp_server() {
         "scout ships its own MCP server (bundle agents cannot see a sibling Plugin's resources)"
     );
     // The prepared resource view resolved successfully (prepare_package fails
-    // closed on any unresolved reference), and selects at least the harness
-    // read/grep/glob tools plus the bundle-local MCP server.
+    // closed on any unresolved reference) and selects domain tools only: the
+    // harness read/grep/glob tools plus the bundle-local MCP server. The
+    // coordination tools (report, wait, mail) are injected by the harness at
+    // startup, so the manifest never lists them.
+    let allow: Vec<&str> = agent
+        .resource_view
+        .allow
+        .iter()
+        .map(String::as_str)
+        .collect();
+    for expected in [
+        "harness:tool/read",
+        "harness:tool/grep",
+        "harness:tool/glob",
+        "bundle:hya-extra/scout/mcp/zvec-grep",
+    ] {
+        assert!(
+            allow.contains(&expected),
+            "scout must select {expected}: {allow:?}"
+        );
+    }
+    assert_eq!(allow.len(), 4, "domain tools only: {allow:?}");
     assert!(
-        agent.resource_view.allow.len() >= 4,
-        "expected read/grep/glob plus the mcp server in scout's resource_view.allow: {:?}",
-        agent.resource_view.allow
+        !allow.contains(&"harness:tool/report"),
+        "report is a harness coordination tool, not a manifest entry: {allow:?}"
     );
 }
 

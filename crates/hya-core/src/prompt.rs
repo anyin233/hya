@@ -144,21 +144,80 @@ pub fn render_environment_and_context(
     out
 }
 
-/// The shortest correct mental model of the subagent system (ADR-0015/0016).
+/// The shortest correct mental model of the subagent system (ADR-0015/0016),
+/// rendered for one request from the coordination tools it actually
+/// advertises (`has(name)`), so each agent — built-in or bundle, root or
+/// member — is taught exactly the tools the harness allocated to it.
 ///
-/// Written from the observed failure modes of a real multi-agent run: the main
-/// agent tried to `report`, read `#channel` ids as files, and tried to stop
-/// already archived agents. Every line here exists to prevent one of those.
-const TEAM_QUICK_REFERENCE: &str = "## Team quick reference\n\
-- `task` is non-blocking: it returns the child's handle immediately. Results arrive later as mail — watch for `[NEW MAIL]` notices appended to tool results.\n\
-- New mail arrives automatically appended to tool results (`[NEW MAIL]`) — do NOT poll `list_channel` or sleep waiting for mail; children's live status is in `list_channel`'s team section (busy + last-heartbeat age).\n\
-- To block until your subagents finish (report, go idle, or are archived), call `wait` once — optionally naming targets, any/all, and a timeout; with the channel tools loaded it also returns when new mail arrives for you. It is the only correct way to wait: never loop on status tools.\n\
-- `report` is ONLY for subagents to end their own task. As the main agent NEVER call `report` — deliver your final answer as normal text.\n\
-- Read mail history with `read channel://<id>` (latest) or `channel://<id>?last=N`; `list_channel` shows channels + unread counts. A `#id` is never a file path.\n\
-- `send` covers all mail: `#channel` posts on that channel (a group channel broadcasts to your unit — leader-only); a bare handle DMs that vertical peer (`^parent` DMs your parent through your registration DM channel; an archived child revives with its saved state). Omit the channel to use your default: the unit you lead, else your parent.\n\
-- `archive` stops a LIVE subagent you no longer need (by handle or session id) and archives it. Archiving is not deletion: an archived agent keeps its handle and session, and `send` to its handle wakes it again. Already-archived agents are found with `search_agent`.";
+/// Written from the observed failure modes of real multi-agent runs: the main
+/// agent tried to `report`, agents read `#channel` ids as files, tried to stop
+/// already archived agents, and a narrow subagent could not find its mail.
+/// Every line exists to prevent one of those. `None` when the request has no
+/// coordination tool at all.
+#[must_use]
+pub fn team_quick_reference(has: impl Fn(&str) -> bool, depth: u32) -> Option<String> {
+    let mail = has("list_channel");
+    let mut lines: Vec<&str> = Vec::new();
+    if has("task") {
+        lines.push(
+            "- `task` is non-blocking: it returns the child's handle immediately. Results arrive later as mail — watch for `[NEW MAIL]` notices appended to tool results.",
+        );
+    }
+    if mail {
+        lines.push(
+            "- New mail arrives automatically appended to tool results (`[NEW MAIL]`) — do NOT poll `list_channel` or sleep waiting for mail; children's live status is in `list_channel`'s team section (busy + last-heartbeat age).",
+        );
+    }
+    if has("wait") && has("task") {
+        lines.push(
+            "- To block until your subagents finish (report, go idle, or are archived), call `wait` once — optionally naming targets, any/all, and a timeout; with the channel tools loaded it also returns when new mail arrives for you. It is the only correct way to wait: never loop on status tools.",
+        );
+    } else if has("wait") && mail {
+        lines.push(
+            "- To block until new mail arrives for you, call `wait` once (optionally with a timeout). It is the only correct way to wait: never loop on status tools.",
+        );
+    }
+    if depth == 0 {
+        if !lines.is_empty() || has("send") || has("archive") {
+            lines.push(
+                "- `report` is ONLY for subagents to end their own task. As the main agent NEVER call `report` — deliver your final answer as normal text.",
+            );
+        }
+    } else if has("report") {
+        lines.push(if has("archive") {
+            "- Finish your task with `report` (once, with your result for your parent). It is rejected while you have unread mail — read the channel the error names, answer if needed, then report again — or live subagents (`archive` them first)."
+        } else {
+            "- Finish your task with `report` (once, with your result for your parent). It is rejected while you have unread mail — read the channel the error names, answer if needed, then report again."
+        });
+    }
+    if mail && has("read") {
+        lines.push(
+            "- Read mail history with `read channel://<id>` (latest) or `channel://<id>?last=N`; `list_channel` shows channels + unread counts. A `#id` is never a file path.",
+        );
+    }
+    if has("send") {
+        lines.push(
+            "- `send` covers all mail: `#channel` posts on that channel (a group channel broadcasts to your unit — leader-only); a bare handle DMs that vertical peer (`^parent` DMs your parent through your registration DM channel; an archived child revives with its saved state). Omit the channel to use your default: the unit you lead, else your parent.",
+        );
+    }
+    if has("archive") {
+        lines.push(if has("search_agent") {
+            "- `archive` stops a LIVE subagent you no longer need (by handle or session id) and archives it. Archiving is not deletion: an archived agent keeps its handle and session, and `send` to its handle wakes it again. Already-archived agents are found with `search_agent`."
+        } else {
+            "- `archive` stops a LIVE subagent you no longer need (by handle or session id) and archives it. Archiving is not deletion: an archived agent keeps its handle and session, and `send` to its handle wakes it again."
+        });
+    }
+    if lines.is_empty() {
+        return None;
+    }
+    Some(format!("## Team quick reference\n{}", lines.join("\n")))
+}
 
 /// Compose agent base + Environment + discovered project context files.
+///
+/// The team quick reference is not part of this static prompt: it is rendered
+/// per request from the tools that request advertises
+/// ([`team_quick_reference`]).
 #[must_use]
 pub fn build_system_prompt(
     base: &str,
@@ -167,15 +226,12 @@ pub fn build_system_prompt(
 ) -> String {
     let layer = render_environment_and_context(env, context_files);
     let base = base.trim();
-    let with_team = if base.is_empty() {
-        TEAM_QUICK_REFERENCE.to_string()
+    if base.is_empty() {
+        layer
+    } else if layer.is_empty() {
+        base.to_string()
     } else {
-        format!("{base}\n\n{TEAM_QUICK_REFERENCE}")
-    };
-    if layer.is_empty() {
-        with_team
-    } else {
-        format!("{with_team}\n\n{layer}")
+        format!("{base}\n\n{layer}")
     }
 }
 
@@ -239,15 +295,46 @@ mod tests {
         assert!(!out.contains("Project context"));
     }
 
-    /// The report prohibition is main-only: build_system_prompt output (the
-    /// root agent's prompt) carries it, and no builtin subagent prompt may
-    /// contain the prohibition wording (subagents MUST report freely).
+    const FULL_TOOLS: [&str; 10] = [
+        "task",
+        "wait",
+        "report",
+        "archive",
+        "search_agent",
+        "send",
+        "list_channel",
+        "read",
+        "grep",
+        "bash",
+    ];
+
+    fn reference(tools: &[&str], depth: u32) -> String {
+        team_quick_reference(|name| tools.contains(&name), depth).unwrap_or_default()
+    }
+
+    /// The team reference is rendered per request from the tools that request
+    /// advertises; the static agent prompt no longer carries it.
+    #[test]
+    fn build_system_prompt_no_longer_carries_the_team_reference() {
+        let out = build_system_prompt("You are hya.", &env(), &[]);
+        assert!(!out.contains("Team quick reference"), "{out}");
+    }
+
+    /// The report prohibition is main-only: the depth-0 reference carries it,
+    /// no subagent reference does, and no builtin subagent prompt may contain
+    /// the prohibition wording (subagents MUST report freely).
     #[test]
     fn report_prohibition_is_main_only() {
-        let out = build_system_prompt("You are hya.", &env(), &[]);
+        let main = reference(&FULL_TOOLS, 0);
         assert!(
-            out.contains("As the main agent NEVER call `report`"),
-            "the main prompt keeps the prohibition line"
+            main.contains("As the main agent NEVER call `report`"),
+            "the main reference keeps the prohibition line: {main}"
+        );
+        let member = reference(&FULL_TOOLS, 1);
+        assert!(!member.contains("NEVER call `report`"), "{member}");
+        assert!(
+            member.contains("Finish your task with `report`"),
+            "{member}"
         );
         for agent in crate::builtin_agents::builtin_agents() {
             let Some(prompt) = agent.prompt else { continue };
@@ -265,37 +352,64 @@ mod tests {
     #[test]
     fn quick_reference_tool_tokens_resolve_in_the_registry() {
         let registry = hya_tool::ToolRegistry::builtins();
-        let out = build_system_prompt("", &env(), &[]);
-        let reference = out
-            .split("## Team quick reference")
-            .nth(1)
-            .unwrap_or_default();
-        for token in reference.split('`').skip(1).step_by(2) {
-            let token = token.trim();
-            let is_non_tool_spelling = token.is_empty()
-                || token.contains("://")
-                || token.starts_with('#')
-                || token.starts_with('[')
-                || token.starts_with('^');
-            if is_non_tool_spelling {
-                continue;
+        for depth in [0, 1] {
+            let out = reference(&FULL_TOOLS, depth);
+            assert!(out.starts_with("## Team quick reference"), "{out}");
+            for token in out.split('`').skip(1).step_by(2) {
+                let token = token.trim();
+                let is_non_tool_spelling = token.is_empty()
+                    || token.contains("://")
+                    || token.starts_with('#')
+                    || token.starts_with('[')
+                    || token.starts_with('^');
+                if is_non_tool_spelling {
+                    continue;
+                }
+                assert!(
+                    registry.get(token).is_some(),
+                    "quick reference names `{token}` but no such tool exists"
+                );
             }
-            assert!(
-                registry.get(token).is_some(),
-                "quick reference names `{token}` but no such tool exists"
-            );
         }
+    }
+
+    /// A line only appears when the request advertises the tools it teaches.
+    #[test]
+    fn quick_reference_lists_only_the_tools_the_agent_has() {
+        let member = reference(&["report", "wait", "send", "list_channel", "read"], 1);
+        for present in [
+            "`report`",
+            "`wait`",
+            "`send`",
+            "`list_channel`",
+            "channel://",
+        ] {
+            assert!(member.contains(present), "missing {present}: {member}");
+        }
+        for absent in ["`task`", "`archive`", "`search_agent`"] {
+            assert!(!member.contains(absent), "leaked {absent}: {member}");
+        }
+        let quiet = reference(&["wait", "grep"], 1);
+        assert!(
+            !quiet.contains("`send`") && !quiet.contains("channel://"),
+            "{quiet}"
+        );
+        assert_eq!(
+            team_quick_reference(|name| name == "grep", 1),
+            None,
+            "no coordination tool, no reference"
+        );
     }
 
     #[test]
     fn team_reference_teaches_wait_instead_of_polling() {
-        let out = build_system_prompt("", &env(), &[]);
+        let out = reference(&FULL_TOOLS, 0);
         assert!(out.contains("call `wait` once"), "{out}");
     }
 
     #[test]
     fn team_reference_forbids_polling_for_mail() {
-        let out = build_system_prompt("", &env(), &[]);
+        let out = reference(&FULL_TOOLS, 0);
         assert!(
             out.contains("do NOT poll `list_channel`"),
             "the quick reference must forbid polling for mail: {out}"

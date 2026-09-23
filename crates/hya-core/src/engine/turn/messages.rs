@@ -46,10 +46,22 @@ pub(super) fn request_from_messages(
     depth: u32,
 ) -> CompletionRequest {
     let reasoning = reasoning_for_model(model, agent.reasoning);
+    let tools = filtered_tool_schemas(resources, model, depth);
+    // The team quick reference teaches exactly the coordination tools this
+    // request advertises (harness-allocated per agent and depth).
+    let reference = crate::prompt::team_quick_reference(
+        |name| tools.iter().any(|schema| schema.name.as_str() == name),
+        depth,
+    );
+    let system = match reference {
+        Some(reference) if agent.system_prompt.trim().is_empty() => reference,
+        Some(reference) => format!("{}\n\n{reference}", agent.system_prompt.trim_end()),
+        None => agent.system_prompt.clone(),
+    };
     CompletionRequest {
-        tools: filtered_tool_schemas(resources, model, depth),
+        tools,
         model: model.clone(),
-        system: Some(agent.system_prompt.clone()),
+        system: Some(system),
         messages,
         temperature: None,
         max_output_tokens: None,

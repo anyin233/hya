@@ -102,7 +102,10 @@ ordinary catalog Agents. Unknown and unauthorized targets fail explicitly and
 are never silently rewritten to `general`.
 
 `resource_view.allow`, `deny`, `aliases`, and `namespace` narrow and name selected
-resources. Private hooks run only when listed in `hook_refs`; shared Plugin hooks
+resources. They narrow domain tools only: the harness gives every Agent its
+coordination tools at startup (`report` for subagents, `wait`, `task`/`archive`
+with spawn rights, `send`/`list_channel`/`read channel://` with the channel
+tools), so never list them; `deny` cannot remove `report`. Private hooks run only when listed in `hook_refs`; shared Plugin hooks
 join Full-plane Agents. Channel policy templates constrain existing unit or
 parent-DM operations; runtime channel ids still come from engine events.
 
