@@ -72,6 +72,7 @@ cargo test -p hya-e2e -- --test-threads=1
 | T2.24 | [p29_claude_bundle.rs](../../crates/hya-e2e/tests/p29_claude_bundle.rs) | Claude directory imports into Plugin; packaged hook veto and Skill execute after source deletion; uninstall removes Skill | e2e (Track P) |
 | T2.25 | [p30_channel_bundle.rs](../../crates/hya-e2e/tests/p30_channel_bundle.rs) | installed channel-only bundle denies child sends without parent delivery; uninstall restores default delivery in a new session | e2e (Track P) |
 | T2.26 | [p31_extra_bundles.rs](../../crates/hya-e2e/tests/p31_extra_bundles.rs) | packaged `hya-extra/zvec-grep` Plugin bundle installs; a fake `zg` stdio MCP server on `PATH` answers `zvec_grep_search`, and the result reaches a full-plane `build` agent's follow-up request | e2e (Track P) |
+| T2.27 | [p32_jev_model_router.rs](../../crates/hya-e2e/tests/p32_jev_model_router.rs) | packaged `hya-extra/jev-model-router` Bun process reads its bundle `config.yml`, asks a stub Jev endpoint once, and the provider request streams from the chosen tier model; a second turn in the same chain stays on it without another Jev call; a new chain is classified again; Jev HTTP 500 routes to `default_tier` (requires `bun` on `PATH`) | e2e (Track P) |
 
 ### Built-in tool coverage
 

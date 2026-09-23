@@ -133,3 +133,40 @@ fn scout_is_an_agent_set_bundle_with_a_subagent_scout_and_its_own_mcp_server() {
         agent.resource_view.allow
     );
 }
+
+#[test]
+fn jev_model_router_is_a_bun_process_plugin_with_one_chat_params_hook() {
+    let dir = first_party_source_root().join("extra/jev-model-router");
+    let source = BundleSource::read_directory(&dir).expect("read jev-model-router source");
+    let prepared = prepare_package(source).expect("prepare jev-model-router");
+    let bundle = &prepared.bundles()[0];
+
+    assert_eq!(bundle.kind(), PreparedBundleKind::Plugin);
+    assert_eq!(bundle.namespace(), "jev-model-router");
+    assert!(bundle.agents().is_empty() && bundle.tools().is_empty());
+    let hooks: Vec<_> = bundle
+        .hooks()
+        .iter()
+        .map(|hook| hook.local_id.as_str())
+        .collect();
+    assert_eq!(hooks, ["chat.params"], "exactly one chat.params hook");
+    let process = prepared
+        .bundle_process("hya-extra/jev-model-router")
+        .expect("explicit extensions.process");
+    assert_eq!(process.kind, hya_bundle::PreparedProcessKind::Bun);
+    assert_eq!(
+        process.command,
+        ["bun", "run", "${BUNDLE_ROOT}/router.ts"],
+        "router.ts speaks the plugin protocol itself (no adapter is injected)"
+    );
+    let files: Vec<_> = bundle
+        .extensions()
+        .iter()
+        .map(|file| file.source_path.as_str())
+        .collect();
+    assert_eq!(
+        files,
+        ["router.ts"],
+        "tests, README and examples stay unpackaged"
+    );
+}
