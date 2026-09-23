@@ -426,7 +426,20 @@ delete; `append` defaults to EOF and `prepend` defaults to BOF. `replace_text`
 requires exactly one exact occurrence. Literal lines must be file content, not
 copied hashline or diff prefixes. The parser rejects unknown fields, malformed
 anchors, mixed operation fields, duplicate/conflicting spans, and wrong types
-with stable input codes.
+with stable input codes (`E_BAD_OP`, `E_BAD_REF`, `E_NO_MATCH`, `E_MULTI_MATCH`,
+`E_STALE_ANCHOR`, ...); each `E_BAD_OP` message names the offending op's actual
+required fields and, where relevant, the alternative op to use instead. As a
+bounded leniency, `{"op":"replace","oldText":...,"newText":...}` with no
+`pos`/`end`/`lines` present is accepted as `replace_text` — that shape can
+never validly satisfy `replace` (which requires `pos`+`lines`), so treating it
+as the obviously-intended `replace_text` call never masks a real mistake.
+
+An `E_NO_MATCH` failure from `replace_text` additionally scans the file for a
+line that matches `oldText`'s most distinctive line after whitespace/quote
+normalization; when found, the message and `hints` list point at the
+candidate line number(s) (a likely indentation/quoting/line-ending mismatch)
+instead of a bare "no match" message. `E_MULTI_MATCH` reports the line numbers
+of (at least) the first two occurrences found.
 
 ### Anchor validation and recovery
 
@@ -463,7 +476,13 @@ snapshot, and duplicate guard, then returns the typed cancellation.
 
 ### Canonical schema and search behavior
 
-Grep is native Rust and does not invoke `rg`. Its closed schema requires
+Grep is native Rust and does not invoke `rg`. `pattern` uses Rust `regex`
+crate syntax unless `literal` is true: look-around (`(?=...)`, `(?!...)`,
+`(?<=...)`, `(?<!...)`) and backreferences (`\1`) are not supported, and
+literal `( ) [ ] { } . + * ? | ^ $` must be escaped. A pattern that fails to
+compile reports the `regex` crate's own diagnostic (which names the offending
+construct) plus, unless `literal` was already set, a hint to escape the
+construct or pass `literal: true` instead. Its closed schema requires
 `pattern` and accepts only `path`, `glob`, `ignoreCase`, `literal`, `context`
 (0..=5), and `limit` (1..=200) as optional fields:
 

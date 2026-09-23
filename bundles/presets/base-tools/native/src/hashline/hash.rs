@@ -475,6 +475,12 @@ fn diagnose_anchor(reference: &str, width: usize) -> String {
             .split(|character: char| character.is_whitespace() || character == ':')
             .next()
             .unwrap_or_default();
+        if line.is_empty() {
+            return format!(
+                "[E_BAD_REF] Invalid line reference \"{bounded}\": missing line number before \"#\", use \"LINE#HASH\" from read output (e.g. \"{}\").",
+                example_anchor(width)
+            );
+        }
         if line.chars().all(|character| character.is_ascii_digit()) {
             if line == "0" || line.chars().all(|character| character == '0') {
                 return format!("[E_BAD_REF] Line number must be >= 1, got 0 in \"{bounded}\".");
@@ -716,5 +722,25 @@ mod tests {
         assert_eq!(width.code, "E_BAD_REF");
         let separator = parse_anchor("2: beta", 2).unwrap_err();
         assert!(separator.message.contains("wrong separator"));
+    }
+
+    #[test]
+    fn parser_reports_missing_line_number_instead_of_false_zero() {
+        // Regression: an empty line segment before "#" (e.g. a stray "#WN:"
+        // placeholder token) used to satisfy `str::chars().all(...)` vacuously
+        // and get misreported as line "0" with a content-free "<invalid
+        // reference>" placeholder instead of naming the real problem.
+        let error = parse_anchor("#WN:", 2).unwrap_err();
+        assert_eq!(error.code, "E_BAD_REF");
+        assert!(
+            error.message.contains("missing line number"),
+            "{}",
+            error.message
+        );
+        assert!(
+            !error.message.contains("got 0"),
+            "should not misreport an empty line segment as line 0: {}",
+            error.message
+        );
     }
 }
