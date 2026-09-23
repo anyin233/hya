@@ -4,7 +4,9 @@ use hya_proto::{Event, MessageId, SessionId};
 use serde_json::Value;
 use tokio::{sync::mpsc, time::timeout};
 
-use crate::{Decoder, Protocol, ProviderError, ReasoningEffort};
+use crate::{
+    Decoder, Protocol, ProviderError, ReasoningEffort, stream_error::classify_error_frame,
+};
 
 use super::RouteCore;
 
@@ -28,9 +30,12 @@ pub(super) struct ReissuePlan {
 /// Link-level failures (SSE byte-stream decode errors, connection resets,
 /// idle stalls before any frame) hit before the provider's semantics are
 /// involved, so replaying the whole request while nothing was consumed is
-/// safe. Provider-decided failures — 200-with-error-body frames, malformed
-/// payloads, missing terminal frames — are surfaced immediately: replaying a
-/// deterministic provider error would only burn the budget.
+/// safe. Provider-decided failures are replayed at zero events only when the
+/// upstream classed them transient: in-stream error frames classified as
+/// rate limit / overload / 5xx ([`ProviderError::is_retryable_before_stream`]).
+/// Deterministic ones — invalid request, auth, unclassified error frames,
+/// malformed payloads, missing terminal frames — surface immediately:
+/// replaying them would only burn the budget.
 pub(super) struct TerminalError {
     pub(super) error: ProviderError,
     pub(super) link_level: bool,
@@ -101,14 +106,12 @@ pub(super) async fn pump(
         };
         if frame.data.contains("\"error\"")
             && let Ok(value) = serde_json::from_str::<Value>(&frame.data)
-            && let Some(err) = value.get("error")
+            && let Some(err) = value
+                .get("error")
+                .filter(|err| err.is_object() || err.is_string())
         {
-            let msg = err
-                .get("message")
-                .and_then(Value::as_str)
-                .unwrap_or("provider returned an error");
             outcome.terminal = Some(TerminalError {
-                error: ProviderError::Http(msg.to_string()),
+                error: classify_error_frame(err, &value, "provider returned an error"),
                 link_level: false,
             });
             return outcome;
@@ -177,9 +180,11 @@ pub(super) async fn pump_with_reissue(
         let Some(terminal) = outcome.terminal else {
             return;
         };
+        // STRICT NO-REPLAY: a single delivered event closes the window.
+        let replayable = terminal.link_level || terminal.error.is_retryable_before_stream();
         if outcome.delivered_any
             || plan.attempts_used >= plan.core.retry.max_attempts
-            || !terminal.link_level
+            || !replayable
         {
             let _ = tx.send(Err(terminal.error)).await;
             return;

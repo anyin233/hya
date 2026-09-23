@@ -34,6 +34,7 @@ mod media;
 pub mod openai;
 /// Ordered model routing with safe pre-stream provider failover.
 pub mod router;
+mod stream_error;
 mod wire;
 
 use async_trait::async_trait;
@@ -83,13 +84,17 @@ pub enum ProviderError {
     /// JSON body or frame (de)serialization failed.
     #[error("json: {0}")]
     Json(#[from] serde_json::Error),
-    /// Provider API error frame, bad header, or HTTP client construction failure.
+    /// Unclassified provider API error frame, link-level stream failure, bad
+    /// header, or HTTP client construction failure.
     #[error("http: {0}")]
     Http(String),
     /// Request transport failed before an HTTP response established the event stream.
     #[error("transport: {0}")]
     Transport(String),
-    /// Upstream returned a non-success HTTP response before the event stream began.
+    /// Upstream returned a non-success HTTP response before the event stream
+    /// began, or sent an in-stream error frame whose class (rate limit,
+    /// overload, server error, invalid request, auth, …) maps onto that HTTP
+    /// status; such messages start with `in-stream error`.
     #[error("http status {status}: {message}")]
     HttpStatus {
         /// Numeric HTTP status returned by the upstream provider.
