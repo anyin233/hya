@@ -62,7 +62,9 @@ The backend serves a built-in command catalog from
 [`command_catalog.rs`](../crates/hya-server/src/support/command_catalog.rs) over
 `GET /v1/commands` (Catalog `ListCommands` on the `hya.v1` contract; the former
 Compat `/api/command` surface is deleted). Clients surface these entries as
-slash commands in their prompt UIs.
+slash commands in their prompt UIs. The `/init` and `/review` prompt templates
+are loaded from the trusted `hya/core-commands` [first-party
+bundle](bundle-runtime.md#first-party-bundles).
 
 **Expandability.** Every built-in is constructed with `expandable: false`.
 Server-side `expand_prompt` only expands entries with `expandable: true`
@@ -142,11 +144,12 @@ for supported mappings and explicitly rejected hook semantics.
 `list`, `info`, and `search` include the trusted `hya/core-agents`,
 the five tool-family presets (`hya/base-tools`, `hya/extended-tools`,
 `hya/network-tools`, `hya/channel-tools`, `hya/todo-tools`), and
-`hya/core-skills` and `hya/agent-channels` preset inventory alongside first-party
-and installed packages. Trusted inventory rows are immutable and not installable;
-public packages cannot acquire preset privileges. Installed first-party package
-overrides take precedence over the embedded fallback. Uninstalling the override
-restores that fallback; an embedded package itself cannot be removed.
+`hya/core-skills`, `hya/core-commands`, and `hya/agent-channels` preset inventory
+alongside first-party and installed packages. Trusted inventory rows are
+immutable and not installable; public packages cannot acquire preset
+privileges. Installed first-party package overrides take precedence over the
+first-party bundle. Uninstalling the override restores that bundle; the
+first-party bundle itself cannot be removed.
 
 `list` reports name, version, packaged Agents, state, package kind, and Workflow
 id. `info` adds publisher, origin, format, immutability, digests, and resource ids.
@@ -236,8 +239,8 @@ It exits **0** on both a TTY and a non-TTY stdout. Scripts that pipe
 Global flag for `exec`, `run`, `rpc`, `-p` goal mode, `workflow`, and `serve`:
 load no external project or user context — no `AGENTS.md`/context-file
 discovery (startup-baked in direct modes, per-turn guidance on `serve`), no
-MCP servers, no plugins, and no external skill directories (the embedded
-builtin skill catalog is the whole skill surface). Websearch keeps its own
+MCP servers, no plugins, and no external skill directories (the built-in
+skill catalog is the whole skill surface). Websearch keeps its own
 configuration, and builtin tools are unaffected. Use it for reproducible
 runs whose prompt context is exactly what you passed.
 
@@ -409,9 +412,9 @@ Provider declarations that resolved no rows do not fabricate output.
 **`agent list`.** Default output is Compat-parity: only the built-in primary
 agent, printed as `build (primary)` followed by its permission rules as
 pretty-printed JSON. Pass `--all` to also list ordinary agents reachable from
-the build-embedded catalog. Deliberate limitation: `agent list` **never**
+the built-in catalog. Deliberate limitation: `agent list` **never**
 inspects on-disk agent files under `.hya/`, `.claude/`, or `.opencode/`, nor
-config-declared agents — it reflects the embedded catalog only. System agents
+config-declared agents — it reflects the built-in catalog only. System agents
 (compaction / title / summary) are excluded because they are not ordinarily
 spawnable via catalog `can_spawn` reachability.
 

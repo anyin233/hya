@@ -299,4 +299,12 @@ pub enum BundleError {
     /// Private package ciphertext SHA-256 does not match the header digest.
     #[error("private bundle ciphertext digest mismatch")]
     PrivateCiphertextDigestMismatch,
+    /// A trusted first-party bundle is unknown, missing, or has another identity.
+    #[error("first-party bundle `{identity}`: {detail}")]
+    FirstPartyBundle {
+        /// Requested first-party identity.
+        identity: String,
+        /// Why it could not be loaded.
+        detail: String,
+    },
 }

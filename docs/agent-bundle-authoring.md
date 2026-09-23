@@ -21,7 +21,7 @@ Examples:
 
 Core agents (`build`, `plan`, `explore`, `general`, the reserved
 `compaction` / `summary` / `title`, and the `hya-*` development agents) come
-from the trusted embedded [`hya/core-agents` preset](core-agents.md) and run on
+from the trusted [`hya/core-agents` preset](core-agents.md) and run on
 the full Harness plane. Its source is
 [`bundles/presets/core-agents`](../bundles/presets/core-agents/). Public bundle
 payloads cannot request that trusted origin.
@@ -641,9 +641,13 @@ limit. A malformed response or timeout taints and terminates the sidecar.
 
 ## Built-in agents are not bundles
 
-Built-in agents are compiled into the binary as Rust constants in
-[`crates/hya-core/src/builtin_agents/`](../crates/hya-core/src/builtin_agents/),
-with prompt bodies pulled in by `include_str!`. Editing one requires a rebuild.
+Built-in agents come from the trusted `hya/core-agents` [first-party
+bundle](bundle-runtime.md#first-party-bundles), loaded at runtime through
+[`crates/hya-core/src/builtin_agents/`](../crates/hya-core/src/builtin_agents/)
+and exposed as `hya_core::builtin_agents()`. In a Cargo build, editing the
+preset source under `bundles/presets/core-agents` takes effect on the next
+restart with no rebuild; an installed layout loads the packaged
+`hya-core-agents.hyabundle` instead.
 
 They differ from bundle agents in three ways:
 
@@ -693,9 +697,9 @@ written before those sections keep their exact byte layout and stay decodable.
 `b"hya.bundle-catalog.semantic-identity/v1"` plus sorted per-catalog records of
 `{ catalog digest, and each bundle’s id / version / publisher / digest }`.
 Installing or removing any bundle changes the catalog identity. The runtime
-fingerprint folds this together with a digest over the compiled-in built-in
-roster, so editing a built-in prompt (which requires a rebuild) is visible in
-identity too.
+fingerprint folds this together with the loaded `hya/core-agents` preset's
+digest, so editing a built-in prompt (which takes effect on the next restart)
+is visible in identity too.
 
 ---
 

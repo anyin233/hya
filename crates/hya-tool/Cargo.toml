@@ -24,11 +24,6 @@ tokio-util = { workspace = true }
 regex = { workspace = true }
 time = { workspace = true }
 
-[build-dependencies]
-hya-bundle = { workspace = true }
-serde = { workspace = true }
-serde_norway = { workspace = true }
-
 [dev-dependencies]
 hya-base-tools = { workspace = true }
 hya-todo-tools = { workspace = true }

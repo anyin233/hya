@@ -36,8 +36,3 @@ hya-extended-tools = { workspace = true }
 hya-channel-tools = { workspace = true }
 hya-network-tools = { workspace = true }
 sqlx = { workspace = true }
-
-[build-dependencies]
-hya-bundle = { workspace = true }
-serde = { workspace = true }
-serde_norway = { workspace = true }

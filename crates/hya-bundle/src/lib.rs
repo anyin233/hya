@@ -5,6 +5,7 @@
 
 mod catalog;
 mod error;
+mod first_party;
 mod model;
 mod package;
 mod prepare;
@@ -12,6 +13,10 @@ mod source;
 
 pub use catalog::{BundleCatalog, ExportKind};
 pub use error::BundleError;
+pub use first_party::{
+    FIRST_PARTY_BUNDLES, FirstPartySource, first_party_bundle, first_party_package_name,
+    first_party_source, first_party_source_root, load_first_party,
+};
 pub use model::{
     AgentRole, BundleIdentity, ChannelCapability, ChannelParticipantRole, ChannelRetention,
     ChannelScope, ChannelTemplateKind, ModelPolicy, PreparedAgent, PreparedAgentBundle,

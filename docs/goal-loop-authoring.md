@@ -59,7 +59,7 @@ outranks the active agent's selected hooks, other agentless bundle providers,
 and configured global plugins. A transport failure tries the next process
 provider; exhaustion or a malformed goal verdict falls back to the bundle
 prompt and evaluator model. Removing an installed override restores the
-embedded first-party prompt on the next root binding.
+first-party prompt on the next root binding.
 See [Plugin protocol](plugin-protocol.md) for the wire contract.
 
 ### Loop mode predicates

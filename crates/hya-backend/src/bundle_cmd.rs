@@ -238,7 +238,7 @@ async fn install(package: PathBuf, overwrite: bool) -> anyhow::Result<()> {
             );
         }
         let mut first_party =
-            hya_app::first_party_catalogs().context("decode embedded first-party bundles")?;
+            hya_app::first_party_catalogs().context("load first-party bundles")?;
         first_party.retain(|catalog| {
             catalog.bundles().first().is_none_or(|bundle| {
                 bundle.identity().id != incoming.identity().id
@@ -385,15 +385,14 @@ fn validate_package_path(package: &Path) -> anyhow::Result<()> {
 
 /// Built-in agent ids an installed bundle must not claim.
 fn reserved_agent_ids() -> Vec<&'static str> {
-    hya_core::BUILTIN_AGENTS
+    hya_core::builtin_agents()
         .iter()
         .map(|agent| agent.id)
         .collect()
 }
 
 async fn list() -> anyhow::Result<()> {
-    let first_party =
-        hya_app::first_party_catalogs().context("decode embedded first-party bundles")?;
+    let first_party = hya_app::first_party_catalogs().context("load first-party bundles")?;
     let installed = installed_records_if_exists().await?;
     let (shadowed_ids, shadowed_namespaces) = installed_shadow_keys(&installed);
     let mut rows = Vec::new();
@@ -500,8 +499,7 @@ fn bundle_search_haystack(bundle: &PreparedInstallableBundle) -> String {
 async fn search(query: &str) -> anyhow::Result<()> {
     let needle = query.trim().to_lowercase();
     anyhow::ensure!(!needle.is_empty(), "bundle search requires a query");
-    let first_party =
-        hya_app::first_party_catalogs().context("decode embedded first-party bundles")?;
+    let first_party = hya_app::first_party_catalogs().context("load first-party bundles")?;
     let installed = installed_records_if_exists().await?;
     let (shadowed_ids, shadowed_namespaces) = installed_shadow_keys(&installed);
     let mut entries = Vec::new();
@@ -624,7 +622,7 @@ async fn info(bundle_id: &str) -> anyhow::Result<()> {
         return Ok(());
     }
     if hya_app::first_party_catalogs()
-        .context("decode embedded first-party bundles")?
+        .context("load first-party bundles")?
         .iter()
         .any(|catalog| {
             catalog
@@ -643,8 +641,7 @@ async fn info(bundle_id: &str) -> anyhow::Result<()> {
 
 /// Print metadata for the immutable first-party bundles.
 fn info_first_party(bundle_id: &str) -> anyhow::Result<()> {
-    let catalogs =
-        hya_app::first_party_catalogs().context("decode embedded first-party bundles")?;
+    let catalogs = hya_app::first_party_catalogs().context("load first-party bundles")?;
     for prepared in &catalogs {
         let [bundle] = prepared.bundles() else {
             anyhow::bail!("first-party catalog must contain exactly one bundle")
@@ -690,7 +687,7 @@ async fn uninstall(bundle_id: &str) -> anyhow::Result<()> {
     anyhow::ensure!(
         has_installed_override
             || !hya_app::first_party_catalogs()
-                .context("decode embedded first-party bundles")?
+                .context("load first-party bundles")?
                 .iter()
                 .any(|catalog| catalog
                     .bundles()
@@ -707,8 +704,7 @@ async fn uninstall(bundle_id: &str) -> anyhow::Result<()> {
 /// List URI-scheme extensions across the first-party and installed bundles:
 /// one `BUNDLE SCHEME TOOL WRITABLE` row per declared schema.
 async fn schemas() -> anyhow::Result<()> {
-    let first_party =
-        hya_app::first_party_catalogs().context("decode embedded first-party bundles")?;
+    let first_party = hya_app::first_party_catalogs().context("load first-party bundles")?;
     let installed = installed_records_if_exists().await?;
     let (shadowed_ids, shadowed_namespaces) = installed_shadow_keys(&installed);
     let mut rows = Vec::new();

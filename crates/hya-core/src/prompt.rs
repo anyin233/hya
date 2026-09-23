@@ -248,7 +248,7 @@ mod tests {
             out.contains("As the main agent NEVER call `report`"),
             "the main prompt keeps the prohibition line"
         );
-        for agent in crate::builtin_agents::BUILTIN_AGENTS {
+        for agent in crate::builtin_agents::builtin_agents() {
             let Some(prompt) = agent.prompt else { continue };
             assert!(
                 !prompt.contains("NEVER call `report`"),

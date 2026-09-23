@@ -4,9 +4,8 @@ use std::collections::BTreeSet;
 use std::sync::OnceLock;
 
 use hya_bundle::{
-    BundleCatalog, BundleError, BundleSource, ChannelCapability, ChannelParticipantRole,
-    ChannelTemplateKind, PreparedChannelParticipant, PreparedChannelTemplate, SourceFile,
-    prepare_package,
+    BundleCatalog, BundleError, ChannelCapability, ChannelParticipantRole, ChannelTemplateKind,
+    PreparedChannelParticipant, PreparedChannelTemplate, first_party_bundle,
 };
 use hya_tool::ChannelPolicySnapshot;
 
@@ -14,8 +13,6 @@ use crate::TurnBinding;
 
 /// Stable identity of the trusted first-party channel-policy preset.
 pub const AGENT_CHANNELS_PRESET_ID: &str = "hya/agent-channels";
-
-const PRESET_SOURCE: &str = include_str!("../../../bundles/presets/agent-channels/bundle.yaml");
 
 /// Trusted defaults plus installed bundle restrictions for channel operations.
 #[derive(Clone, Debug)]
@@ -26,7 +23,7 @@ pub struct ChannelPolicy {
 }
 
 impl ChannelPolicy {
-    /// Compile policy from the trusted embedded preset and installed declarations.
+    /// Compile policy from the trusted first-party preset and installed declarations.
     pub fn from_bundle_catalog(catalog: &BundleCatalog) -> Result<Self, BundleError> {
         let (unit_defaults, parent_dm_defaults) = trusted_defaults()?;
         let restrictions = catalog
@@ -156,11 +153,8 @@ fn trusted_defaults() -> Result<&'static TrustedDefaults, BundleError> {
     static DEFAULTS: OnceLock<Result<TrustedDefaults, String>> = OnceLock::new();
     DEFAULTS
         .get_or_init(|| {
-            let preset = prepare_package(BundleSource::new(
-                AGENT_CHANNELS_PRESET_ID,
-                vec![SourceFile::new("bundle.yaml", PRESET_SOURCE)],
-            ))
-            .map_err(|error| error.to_string())?;
+            let preset =
+                first_party_bundle(AGENT_CHANNELS_PRESET_ID).map_err(|error| error.to_string())?;
             let channels = preset
                 .bundles()
                 .first()

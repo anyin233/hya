@@ -2,7 +2,7 @@
 
 ## Introduction
 
-Five trusted embedded Plugin presets own the exposure policy for Hya's Rust
+Five trusted first-party Plugin presets own the exposure policy for Hya's Rust
 builtin tools. They record model visibility, compatibility aliases, schema
 versions, invocation permission posture, protected names, and URI-scheme
 ownership. All five families own their concrete Rust implementations and ship lockstep
@@ -13,9 +13,10 @@ The sources live in `bundles/presets/{base,extended,network,channel,todo}-tools`
 Each `bundle.yaml` identifies a `Plugin` and declares `exposure.yaml` as an inert
 `extensions.files` asset. Every source also declares its Cargo manifest and Rust implementation modules
 as source assets. The companion file carries trusted preset metadata
-that the public Plugin manifest intentionally cannot grant as permissions. The
-build prepares every Plugin, verifies its digest and policy, rejects duplicate
-names across families, then generates static Rust policy metadata. Runtime
+that the public Plugin manifest intentionally cannot grant as permissions. Each
+family's bundle is loaded from its [first-party bundle](bundle-runtime.md#first-party-bundles)
+source once per process, which verifies its digest and policy and rejects
+duplicate names across families. Runtime
 registry construction reads native family packages when present, validates
 their prepared content and declared tool sets, and checks that every policy
 entry has a loaded implementation.

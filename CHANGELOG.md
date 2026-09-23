@@ -1,8 +1,9 @@
-# 0.37.16
+# 0.37.17
 
-## Built-in tool bundle completion
+## First-party bundles load at runtime
 
-- Move the base, network, and channel tool implementations and their source assets into their owning native bundles. All 27 canonical built-in tools now load from five trusted `.hyabundle` packages.
-- Poll native tool futures on their bundle's Tokio runtime while preserving host task-local admission context; support calls without an existing runtime through a temporary joined worker.
-- Load the lockstep library a Cargo build just linked before any package staged under `target/debug/bundles/`. Stale staged packages no longer shadow fresh builds or add package verification to local backend startup.
-- Keep `hya-tool` as the tool trait, registry, permission, session-plane, and native-loader crate. Release assets now include all five native tool bundles.
+- Load every first-party tool policy, agent, Skill, command, channel preset and workflow bundle at runtime through `hya_bundle::first_party_bundle`. Installed backends read the trusted `bundles/hya-<name>.hyabundle` packages beside `bin/`; Cargo builds read the in-tree sources, so edits apply on restart. The `hya-core`, `hya-tool` and `hya-app` build scripts no longer embed bundle content.
+- Add the `hya/core-commands` Plugin, which owns the `/init` and `/review` prompt templates. The trusted preset inventory and `bundle list` now show nine presets.
+- Replace the `hya_core::BUILTIN_AGENTS` constant with `hya_core::builtin_agents()`. Core agent reserved ids come from the loaded preset policy.
+- Release assets include all twelve first-party packages, and the release smoke test lists them through the packaged backend.
+- Run the edit and read serialization tests on the real clock. Native tool I/O runs on the bundle's Tokio runtime, which a paused host test clock cannot observe.

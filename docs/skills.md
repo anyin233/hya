@@ -2,7 +2,7 @@
 
 Author, discover, and use `SKILL.md` skills in hya. Skills are on-demand
 markdown bodies the model can load through the `skill` tool. The catalog is
-built from directory discovery plus three compiled-in fallback skills.
+built from directory discovery plus two first-party fallback skills.
 
 Sources:
 [`crates/hya-tool/src/skill_catalog.rs`](../crates/hya-tool/src/skill_catalog.rs),
@@ -109,8 +109,9 @@ OpenCode-style roots.
 ## Built-in fallback skills
 
 The trusted `hya/core-skills` Plugin owns the two built-in Skill files under
-`bundles/presets/core-skills/resources/skills/`. The build prepares the bundle
-and generates the embedded catalog from its declared resources. Discovery and
+`bundles/presets/core-skills/resources/skills/`. The bundle is loaded from its
+[first-party source](bundle-runtime.md#first-party-bundles) at startup, and
+its declared resources populate the catalog. Discovery and
 captured Skill execution append these entries only when no discovered Skill of
 the same name exists:
 
@@ -122,24 +123,27 @@ the same name exists:
 A user-authored skill with a matching `name` **shadows the built-in entirely**.
 
 Both `/skill` and skill-backed `/command` entries use this effective catalog,
-as do captured Session calls to the `skill` tool. Embedded skills have no
-filesystem base directory or sampled file list: load them with `skill`, not by
-opening their synthetic catalog path. Existing tool output limits still apply,
-so a long embedded body can be truncated like any other skill output.
+as do captured Session calls to the `skill` tool. Skills from `hya/core-skills`
+(`SkillCatalogOrigin::Embedded`) have no filesystem base directory or sampled
+file list: load them with `skill`, not by opening their synthetic catalog
+path. Existing tool output limits still apply, so a long skill body can be
+truncated like any other skill output.
 
 For example, `hya bundle info hya/core-skills` lists both Skill ids, and a
 model can call `skill` with `{"name":"agent-bundle-authoring"}`. To change a
-built-in Skill, edit its `SKILL.md` in the bundle source and rebuild Hya; no
-public installation or runtime file scan is involved. `hya/core-skills` is an
-immutable, noninstallable trusted inventory entry.
+built-in Skill, edit its `SKILL.md` in the bundle source; a Cargo build picks
+up the change on the next restart with no rebuild. No public installation or
+runtime file scan is involved. `hya/core-skills` is an immutable,
+noninstallable trusted inventory entry.
 
 The bundle's `bundle.yaml` declares `kind: Plugin`, identity
 `hya/core-skills` version `1.0.0`, and two `resources.skills` entries with
 `id` and `path`. Each `SKILL.md` begins with YAML frontmatter containing
 `name: string` and `description: string`, then the Markdown body. The `name`
-must equal the declared resource `id`; invalid or missing metadata fails the
-build. `hya_tool::core_skills_preset_bytes()` returns the exact prepared
-catalog bytes for inventory and audit. The runtime Skill catalog exposes
+must equal the declared resource `id`; invalid or missing metadata fails to
+load at startup. `hya_tool::core_skills_preset_bytes()` returns the loaded
+bundle's exact prepared catalog bytes for inventory and audit. The runtime
+Skill catalog exposes
 `name`, `description`, body `content`, empty `allowed_tools`, no model override,
 `SkillCatalogOrigin::Embedded`, and a synthetic path rooted at
 `embedded:hya/core-skills/skill/`.

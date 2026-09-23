@@ -90,14 +90,14 @@ pub fn skill_dirs_for_workdir(workdir: &Path) -> Vec<PathBuf> {
 pub fn discover_skills(workdir: &Path) -> Vec<SkillCatalogEntry> {
     discover_skills_from_dirs(&skill_dirs_for_workdir(workdir))
 }
-/// Discover native skills, then append compiled builtins that were not
+/// Discover native skills, then append bundled builtins that were not
 /// overridden by a native entry of the same name.
 #[must_use]
 pub fn discover_skills_with_builtins(workdir: &Path) -> Vec<SkillCatalogEntry> {
     merge_skill_catalog(discover_skills(workdir))
 }
 
-/// Merge the authoritative embedded builtin catalog after native entries.
+/// Merge the builtin `hya/core-skills` catalog after native entries.
 ///
 /// Native discovery owns precedence: a project/user skill with a builtin's
 /// name remains the effective entry and the builtin is not duplicated.
@@ -115,24 +115,75 @@ pub fn merge_skill_catalog(mut native: Vec<SkillCatalogEntry>) -> Vec<SkillCatal
     native
 }
 
-include!(concat!(env!("OUT_DIR"), "/core_skills_preset.rs"));
-
-/// Exact build-prepared bytes of the trusted `hya/core-skills` Plugin.
-#[must_use]
-pub const fn core_skills_preset_bytes() -> &'static [u8] {
-    CORE_SKILLS_PREPARED_BYTES
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CoreSkillFrontmatter {
+    name: String,
+    description: String,
 }
 
-/// Return the authoritative compiled builtin Skill entries.
+/// One builtin Skill row: name, description, and body.
+type CoreSkillRow = (String, String, String);
+
+fn core_skills_catalog() -> &'static hya_bundle::PreparedCatalog {
+    hya_bundle::first_party_bundle("hya/core-skills")
+        .unwrap_or_else(|error| panic!("load builtin Skills: {error}"))
+}
+
+fn core_skill_rows() -> &'static [CoreSkillRow] {
+    static ROWS: std::sync::OnceLock<Vec<CoreSkillRow>> = std::sync::OnceLock::new();
+    ROWS.get_or_init(|| {
+        let [bundle] = core_skills_catalog().bundles() else {
+            panic!("hya/core-skills must prepare one bundle")
+        };
+        bundle
+            .skills()
+            .iter()
+            .map(|resource| {
+                parse_core_skill(&resource.local_id, &resource.content).unwrap_or_else(|error| {
+                    panic!("hya/core-skills Skill `{}`: {error}", resource.local_id)
+                })
+            })
+            .collect()
+    })
+}
+
+fn parse_core_skill(local_id: &str, content: &str) -> Result<CoreSkillRow, String> {
+    let (frontmatter, body) = content
+        .strip_prefix("---\n")
+        .and_then(|rest| rest.split_once("\n---\n"))
+        .ok_or("missing frontmatter")?;
+    let parsed: CoreSkillFrontmatter =
+        serde_norway::from_str(frontmatter).map_err(|error| error.to_string())?;
+    if parsed.name != local_id || parsed.description.trim().is_empty() {
+        return Err("name must match the resource id and description must be set".to_string());
+    }
+    Ok((parsed.name, parsed.description, body.to_string()))
+}
+
+/// Exact prepared bytes of the runtime-loaded trusted `hya/core-skills` Plugin.
+///
+/// # Panics
+///
+/// Panics when the trusted bundle is missing or invalid.
+#[must_use]
+pub fn core_skills_preset_bytes() -> &'static [u8] {
+    core_skills_catalog().bytes()
+}
+
+/// Return the authoritative builtin Skill entries from `hya/core-skills`.
+///
+/// # Panics
+///
+/// Panics when the trusted bundle is missing or one of its Skills is invalid.
 #[must_use]
 pub fn builtin_skills() -> Vec<SkillCatalogEntry> {
-    CORE_SKILL_ROWS
+    core_skill_rows()
         .iter()
-        .copied()
         .map(|(name, description, content)| SkillCatalogEntry {
-            name: name.to_string(),
-            description: description.to_string(),
-            content: content.to_string(),
+            name: name.clone(),
+            description: description.clone(),
+            content: content.clone(),
             allowed_tools: Vec::new(),
             model: None,
             path: PathBuf::from(format!("embedded:hya/core-skills/skill/{name}/SKILL.md")),
@@ -142,7 +193,7 @@ pub fn builtin_skills() -> Vec<SkillCatalogEntry> {
         .collect()
 }
 
-/// Whether an entry has no filesystem base and is compiled into the binary.
+/// Whether an entry comes from the trusted `hya/core-skills` bundle rather than a Skill directory.
 #[must_use]
 pub fn is_embedded_skill(skill: &SkillCatalogEntry) -> bool {
     skill.origin == SkillCatalogOrigin::Embedded
