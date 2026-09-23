@@ -89,7 +89,9 @@ bytes as `extensions.libraries`, adds one tool declaration per policy entry,
 and writes the public package. Release builds put that package beside the
 backend's `bin` directory in `bundles/`. There, `ToolRegistry::builtins()` inspects
 the package, checks its identity and declared names, extracts the library to a
-temporary path, checks the lockstep ABI digest, and loads its tools.
+private temporary directory, checks the lockstep ABI digest, and loads its
+tools. The extracted copy is deleted right after loading; the loaded library
+stays mapped for the process lifetime.
 `builtin_bundle_origin(name)` returns the identity for a loaded native tool.
 Cargo builds load the library Cargo just linked instead: a library in the
 executable's `deps/` directory wins, then one beside the executable. A package

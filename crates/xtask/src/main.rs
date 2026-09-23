@@ -11,6 +11,8 @@
 //! - `package-native-tool-bundle` — stage one built Rust tool-family executable
 //!   into its policy source and emit a deterministic public package.
 //!
+//! - `stage-first-party-bundles` — package the twelve trusted first-party
+//!   bundles for an installed layout and, optionally, as release assets.
 //! - `release-rehearsal` — validate and smoke the non-publishing release asset.
 //! - `gen-api` — regenerate the `hya.v1` contract crate and its docs from
 //!   `proto/hya/v1` (Rust codegen + API reference + OpenAPI).
@@ -18,6 +20,7 @@
 //! An unknown or missing task prints usage and exits successfully, so the binary
 //! is safe to invoke from a wrapper that does not know the task list.
 
+mod first_party_release;
 mod gen_api;
 mod matrix_check;
 mod package_bundle;
@@ -33,6 +36,7 @@ fn main() {
         Some("package-bundle") => package_bundle::run(args.collect()),
         Some("package-native-tool-bundle") => package_bundle::run_native(args.collect()),
         Some("package-native-tool-library") => package_bundle::run_native_library(args.collect()),
+        Some("stage-first-party-bundles") => first_party_release::run(args.collect()),
         Some("release-rehearsal") => release_rehearsal::run(args.collect()),
         Some("startup-bench") => startup_bench::run(args.collect()),
         Some("matrix-check") => matrix_check::run(args.collect()),

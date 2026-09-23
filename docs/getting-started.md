@@ -35,8 +35,8 @@ export PATH="$HOME/.local/bin:$PATH"
 
 | Option | Meaning |
 | --- | --- |
-| `--prefix DIR` | Install into `DIR/bin` (default `/usr/local`). |
-| `--bin-dir DIR` | Install binaries directly into `DIR` (overrides `--prefix`). Relative paths resolve against the script directory. The Compat adapter goes under `DIR/../lib/hya/compat-adapter`. |
+| `--prefix DIR` | Install into `DIR/bin`, `DIR/bundles`, and `DIR/lib/hya` (default `/usr/local`). |
+| `--bin-dir DIR` | Install the backend into `DIR`, which must be named `bin` (overrides `--prefix`). The backend loads its first-party bundles from `DIR/../bundles`, so any other name exits 2. Relative paths resolve against the script directory. |
 | `--profile release\|dev\|debug` | Cargo build profile and matching target dir (honours `CARGO_TARGET_DIR`). Any other value exits 2. |
 | `--dry-run` | Print every action; skip building and installing; print verification commands instead of running them. |
 | `-h` / `--help` | Print usage and exit 0. |
@@ -47,30 +47,35 @@ Failures are easiest to diagnose if you know the order of operations
 ([`install.sh`](../install.sh)):
 
 1. **Permission preflight.** Walks up to the nearest existing ancestor of the
-   target bin and lib directories. If that ancestor is not a writable directory,
-   prints remedies (`sudo ./install.sh` or
-   `./install.sh --bin-dir "$HOME/.local/bin"`) and exits 1.
+   target `bin`, `bundles`, and `lib` directories. If that ancestor is not a
+   writable directory, prints remedies (`sudo ./install.sh` or
+   `./install.sh --prefix "$HOME/.local"`) and exits 1.
 2. **Bun preflight.** `bun --version` must succeed or the install aborts.
-3. **Cargo build.** Builds the locked `hya-backend` binaries for the selected
-   profile.
-4. **Stage runtimes.** Stages the `hya-backend` binary and stages the Compat
-   adapter separately at `lib/hya/compat-adapter` with its pinned lockfile by
-   running `bun install --frozen-lockfile --production`.
+3. **Cargo build.** Builds the locked `hya-backend` binaries and the five
+   tool-family libraries for the selected profile.
+4. **Stage runtimes.** Stages the `hya-backend` binary, packages the twelve
+   first-party bundles with `cargo run -p xtask -- stage-first-party-bundles`,
+   and stages the Bun adapter at `lib/hya/bun-adapter` with its pinned lockfile
+   by running `bun install --frozen-lockfile --production`.
 5. **Atomic swap.** Only complete staged artifacts reach the swap. The script
-   uses `.tmp.$$` paths, moves any existing install to `.bak.$$`, then renames
-   into place. An `ERR`/`INT`/`TERM` trap calls `restore_install` so an
-   interrupted install restores previous binaries/runtimes and cleans
-   leftovers; it does not leave a half-installed `hya-backend`.
+   uses `.tmp.$$` paths and moves any existing backend, adapter, and
+   `bundles/hya-*.hyabundle` files to `.bak.$$`, then renames into place. Other
+   files in `bundles/` are left alone. An `ERR`/`INT`/`TERM` trap calls
+   `restore_install` so a failed or interrupted install restores the previous
+   backend, adapter, and bundles and cleans leftovers; it does not leave a
+   half-installed `hya-backend`.
 6. **Post-install verification** (skipped under `--dry-run`, which only
    prints the checks):
    - Runs `hya-backend --version` and `hya-backend --help`.
-   - Asserts the Compat adapter payload and its production dependencies exist
-     under `lib/hya/compat-adapter`.
+   - Runs `hya-backend bundle list` with an isolated `HOME` and requires every
+     first-party bundle, which proves the installed backend loads them.
+   - Asserts the Bun adapter payload and its production dependencies exist
+     under `lib/hya/bun-adapter`.
    - **Fails** if `command -v hya-backend` does not resolve to the install path
      (usual cause: an older `hya-backend` earlier on `PATH`).
 
-The installer colocates the `hya-backend` binary and prepares the Compat
-adapter under `lib/hya/compat-adapter`. Bare `hya-backend` (no subcommand)
+The installer produces the same layout as a release archive: `bin/hya-backend`,
+`bundles/hya-*.hyabundle`, and `lib/hya/bun-adapter`. Bare `hya-backend` (no subcommand)
 prints a guidance banner; see the
 [CLI Reference](cli.md#bare-hya-backend).
 

@@ -311,9 +311,6 @@ fn library_source(parent: &std::path::Path, filename: &str, stem: &str) -> Optio
 
 #[cfg(unix)]
 fn open_library(stem: &str) -> Result<usize, String> {
-    use std::ffi::{CStr, CString};
-    use std::os::unix::ffi::OsStrExt as _;
-
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
     let parent = executable
         .parent()
@@ -324,17 +321,43 @@ fn open_library(stem: &str) -> Result<usize, String> {
         stem,
         std::env::consts::DLL_SUFFIX
     );
-    let library = match library_source(parent, &filename, stem) {
-        Some(LibrarySource::Local(path)) => path,
+    match library_source(parent, &filename, stem) {
+        Some(LibrarySource::Local(path)) => load_checked(stem, &path),
         Some(LibrarySource::Package(package)) => {
-            extract_packaged_library(parent, &package, stem, &filename)?
+            let extracted = extract_packaged_library(parent, &package, stem, &filename)?;
+            load_extracted(stem, &extracted)
         }
-        None => {
-            return Err(format!(
-                "native tool bundle `{stem}` is missing near {executable:?}"
-            ));
-        }
-    };
+        None => Err(format!(
+            "native tool bundle `{stem}` is missing near {executable:?}"
+        )),
+    }
+}
+
+/// Load a library extracted from its package, then delete the extracted copy.
+///
+/// The loaded image stays mapped after its file is unlinked, so nothing is
+/// left in the temporary directory once the process has the library.
+#[cfg(unix)]
+fn load_extracted(stem: &str, extracted: &std::path::Path) -> Result<usize, String> {
+    let loaded = load_checked(stem, extracted);
+    let _ = std::fs::remove_file(extracted);
+    if let Some(directory) = extracted.parent().filter(|directory| {
+        directory
+            .file_name()
+            .and_then(std::ffi::OsStr::to_str)
+            .is_some_and(|name| name.starts_with("hya-native-tool-"))
+    }) {
+        let _ = std::fs::remove_dir(directory);
+    }
+    loaded
+}
+
+/// `dlopen` one lockstep library and verify its ABI digest.
+#[cfg(unix)]
+fn load_checked(stem: &str, library: &std::path::Path) -> Result<usize, String> {
+    use std::ffi::{CStr, CString};
+    use std::os::unix::ffi::OsStrExt as _;
+
     let path = CString::new(library.as_os_str().as_bytes())
         .map_err(|_| "native tool bundle path contains a NUL byte".to_string())?;
     // SAFETY: `path` is NUL terminated; RTLD_NOW resolves all symbols before
@@ -566,6 +589,36 @@ mod tests {
             None
         );
         std::fs::remove_dir_all(root)
+    }
+
+    #[test]
+    fn extracted_library_copy_is_removed_after_loading() -> Result<(), String> {
+        let executable = std::env::current_exe().map_err(|error| error.to_string())?;
+        let deps = executable.parent().ok_or("test binary has no parent")?;
+        let filename = format!(
+            "{}hya_todo_tools{}",
+            std::env::consts::DLL_PREFIX,
+            std::env::consts::DLL_SUFFIX
+        );
+        let directory = std::env::temp_dir().join(format!(
+            "hya-native-tool-{}-removal-test",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+        let extracted = directory.join(&filename);
+        std::fs::copy(deps.join(&filename), &extracted).map_err(|error| error.to_string())?;
+
+        let handle = super::load_extracted("hya_todo_tools", &extracted)?;
+        super::symbol(handle, b"hya_tool_bundle_register_v1\0")?;
+        assert!(
+            !extracted.exists(),
+            "extracted library must not outlive loading"
+        );
+        assert!(
+            !directory.exists(),
+            "private extraction directory must be removed"
+        );
+        Ok(())
     }
 
     #[test]

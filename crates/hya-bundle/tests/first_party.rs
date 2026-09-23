@@ -184,3 +184,15 @@ fn no_crate_compiles_first_party_bundle_content_into_the_binary() {
         "first-party bundle content must load at runtime, not compile in: {offenders:?}"
     );
 }
+
+#[test]
+fn first_party_identity_versions_follow_the_hya_version() {
+    for identity in FIRST_PARTY_BUNDLES {
+        let catalog = first_party_bundle(identity).expect("load first-party bundle");
+        assert_eq!(
+            catalog.bundles()[0].identity().version,
+            env!("CARGO_PKG_VERSION"),
+            "{identity} must be released at the hya workspace version"
+        );
+    }
+}

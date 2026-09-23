@@ -7,6 +7,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const LIST_HEADER: &str = "NAME VERSION AGENT STATE KIND WORKFLOW";
+
+/// One `bundle list` row for a first-party bundle, released at the hya version.
+fn first_party_row(id: &str, rest: &str) -> String {
+    format!("{id} {}{rest}", env!("CARGO_PKG_VERSION"))
+}
 const BUNDLE_ID: &str = "hya/valid-public";
 const BUNDLE_AGENT_ID: &str = "valid-public-lead";
 
@@ -369,16 +374,22 @@ fn bundle_list_and_info_include_first_party_without_creating_registry()
     assert_success("first-party list", &list);
     let list_stdout = String::from_utf8(list.stdout)?;
     for expected in [
-        LIST_HEADER,
-        "hya/base-tools 1.0.0  active Plugin -",
-        "hya/channel-tools 1.0.0  active Plugin -",
-        "hya/core-commands 1.0.0  active Plugin -",
-        "hya/core-skills 1.0.0  active Plugin -",
-        "hya/extended-tools 1.0.0  active Plugin -",
-        "hya/network-tools 1.0.0  active Plugin -",
-        "hya/todo-tools 1.0.0  active Plugin -",
-        "hya/goal-loop 1.0.0 goal-loop-guide,goal-loop-verifier active AgentSetBundle -",
-        "hya/plan-impl-review 1.0.0 plan-impl-review-implementer,plan-impl-review-planner,plan-impl-review-reviewer active WorkflowBundle plan-impl-review",
+        LIST_HEADER.to_string(),
+        first_party_row("hya/base-tools", "  active Plugin -"),
+        first_party_row("hya/channel-tools", "  active Plugin -"),
+        first_party_row("hya/core-commands", "  active Plugin -"),
+        first_party_row("hya/core-skills", "  active Plugin -"),
+        first_party_row("hya/extended-tools", "  active Plugin -"),
+        first_party_row("hya/network-tools", "  active Plugin -"),
+        first_party_row("hya/todo-tools", "  active Plugin -"),
+        first_party_row(
+            "hya/goal-loop",
+            " goal-loop-guide,goal-loop-verifier active AgentSetBundle -",
+        ),
+        first_party_row(
+            "hya/plan-impl-review",
+            " plan-impl-review-implementer,plan-impl-review-planner,plan-impl-review-reviewer active WorkflowBundle plan-impl-review",
+        ),
     ] {
         assert!(
             list_stdout.lines().any(|line| line == expected),
@@ -519,7 +530,7 @@ fn bundle_install_first_party_override_and_uninstall_restores_fallback()
         .output()?;
     let fallback_stdout = String::from_utf8(fallback.stdout)?;
     assert!(
-        fallback_stdout.contains("version=1.0.0\n"),
+        fallback_stdout.contains(&format!("version={}\n", env!("CARGO_PKG_VERSION"))),
         "{fallback_stdout}"
     );
     assert!(
@@ -1262,8 +1273,11 @@ fn bundle_search_filters_first_party_and_installed_metadata()
     assert_eq!(
         by_bundle_id_stdout.lines().collect::<Vec<_>>(),
         vec![
-            LIST_HEADER,
-            "hya/goal-loop 1.0.0 goal-loop-guide,goal-loop-verifier active AgentSetBundle -",
+            LIST_HEADER.to_string(),
+            first_party_row(
+                "hya/goal-loop",
+                " goal-loop-guide,goal-loop-verifier active AgentSetBundle -"
+            ),
         ],
         "unexpected bundle id search rows:\n{by_bundle_id_stdout}"
     );
@@ -1379,16 +1393,22 @@ fn bundle_search_without_a_metadata_match_lists_the_catalog()
     assert_success("no-match search", &search);
     let stdout = String::from_utf8(search.stdout)?;
     for expected in [
-        LIST_HEADER,
-        "hya/base-tools 1.0.0  active Plugin -",
-        "hya/channel-tools 1.0.0  active Plugin -",
-        "hya/core-commands 1.0.0  active Plugin -",
-        "hya/core-skills 1.0.0  active Plugin -",
-        "hya/extended-tools 1.0.0  active Plugin -",
-        "hya/network-tools 1.0.0  active Plugin -",
-        "hya/todo-tools 1.0.0  active Plugin -",
-        "hya/goal-loop 1.0.0 goal-loop-guide,goal-loop-verifier active AgentSetBundle -",
-        "hya/plan-impl-review 1.0.0 plan-impl-review-implementer,plan-impl-review-planner,plan-impl-review-reviewer active WorkflowBundle plan-impl-review",
+        LIST_HEADER.to_string(),
+        first_party_row("hya/base-tools", "  active Plugin -"),
+        first_party_row("hya/channel-tools", "  active Plugin -"),
+        first_party_row("hya/core-commands", "  active Plugin -"),
+        first_party_row("hya/core-skills", "  active Plugin -"),
+        first_party_row("hya/extended-tools", "  active Plugin -"),
+        first_party_row("hya/network-tools", "  active Plugin -"),
+        first_party_row("hya/todo-tools", "  active Plugin -"),
+        first_party_row(
+            "hya/goal-loop",
+            " goal-loop-guide,goal-loop-verifier active AgentSetBundle -",
+        ),
+        first_party_row(
+            "hya/plan-impl-review",
+            " plan-impl-review-implementer,plan-impl-review-planner,plan-impl-review-reviewer active WorkflowBundle plan-impl-review",
+        ),
     ] {
         assert!(
             stdout.lines().any(|line| line == expected),

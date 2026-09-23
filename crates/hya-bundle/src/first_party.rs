@@ -57,6 +57,18 @@ pub fn first_party_package_name(identity: &str) -> Option<String> {
         .map(|name| format!("hya-{name}.hyabundle"))
 }
 
+/// In-tree source directory of a trusted first-party bundle.
+#[must_use]
+pub fn first_party_source_directory(identity: &str) -> Option<PathBuf> {
+    first_party_package_name(identity)?;
+    let name = identity.strip_prefix("hya/")?;
+    let root = first_party_source_root();
+    SOURCE_GROUPS
+        .iter()
+        .map(|group| root.join(group).join(name))
+        .find(|directory| directory.join("bundle.yaml").is_file())
+}
+
 /// Resolve where `identity` loads from for an executable in `executable_dir`.
 ///
 /// `bin/` is the installed layout and only uses `../bundles/`. Any other
@@ -65,7 +77,6 @@ pub fn first_party_package_name(identity: &str) -> Option<String> {
 #[must_use]
 pub fn first_party_source(executable_dir: &Path, identity: &str) -> Option<FirstPartySource> {
     let package_name = first_party_package_name(identity)?;
-    let name = identity.strip_prefix("hya/")?;
     let file_name = executable_dir.file_name().and_then(std::ffi::OsStr::to_str);
     let prefix = match file_name {
         Some("bin" | "deps") => executable_dir.parent().unwrap_or(executable_dir),
@@ -77,11 +88,7 @@ pub fn first_party_source(executable_dir: &Path, identity: &str) -> Option<First
             .is_file()
             .then_some(FirstPartySource::Package(package));
     }
-    let root = first_party_source_root();
-    SOURCE_GROUPS
-        .iter()
-        .map(|group| root.join(group).join(name))
-        .find(|directory| directory.join("bundle.yaml").is_file())
+    first_party_source_directory(identity)
         .map(FirstPartySource::Directory)
         .or_else(|| {
             package

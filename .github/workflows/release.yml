@@ -113,41 +113,12 @@ jobs:
             crates/hya-plugin-bun/adapter/bun.lock "$bun_adapter/"
           cp -R crates/hya-plugin-bun/adapter/src/. "$bun_adapter/src/"
           (cd "$bun_adapter" && "$HOME/.bun/bin/bun" install --frozen-lockfile --production)
-          cargo run --locked -p xtask -- package-native-tool-library \
-            bundles/presets/todo-tools \
-            "target/$TARGET/release/libhya_todo_tools.so" \
-            "dist/$package_dir/bundles/hya-todo-tools.hyabundle"
-          cargo run --locked -p xtask -- package-native-tool-library \
-            bundles/presets/extended-tools \
-            "target/$TARGET/release/libhya_extended_tools.so" \
-            "dist/$package_dir/bundles/hya-extended-tools.hyabundle"
-          cargo run --locked -p xtask -- package-native-tool-library \
-            bundles/presets/base-tools \
-            "target/$TARGET/release/libhya_base_tools.so" \
-            "dist/$package_dir/bundles/hya-base-tools.hyabundle"
-          cargo run --locked -p xtask -- package-native-tool-library \
-            bundles/presets/network-tools \
-            "target/$TARGET/release/libhya_network_tools.so" \
-            "dist/$package_dir/bundles/hya-network-tools.hyabundle"
-          cargo run --locked -p xtask -- package-native-tool-library \
-            bundles/presets/channel-tools \
-            "target/$TARGET/release/libhya_channel_tools.so" \
-            "dist/$package_dir/bundles/hya-channel-tools.hyabundle"
-          for preset in core-skills core-commands core-agents agent-channels; do
-            cargo run --locked -p xtask -- package-bundle \
-              "bundles/presets/$preset" \
-              "dist/$package_dir/bundles/hya-$preset.hyabundle"
-          done
-          for bundle in goal-loop plan-impl-review subagents; do
-            cargo run --locked -p xtask -- package-bundle \
-              "bundles/first-party/$bundle" \
-              "dist/$package_dir/bundles/hya-$bundle.hyabundle"
-          done
+          cargo run --locked -p xtask -- stage-first-party-bundles --target "$TARGET" --version "$version" --library-dir "target/$TARGET/release" --package-root "dist/$package_dir" --assets dist
           scripts/package-argus-example.sh bundles/examples/argus-example \
             "dist/$package_dir/examples/hya-argus-example.hyabundle"
 
           tar -czf "dist/$archive" -C dist "$package_dir"
-          (cd dist && sha256sum "$archive" > SHA256SUMS)
+          (cd dist && sha256sum "$archive" hya-*.hyabundle > SHA256SUMS)
 
           echo "archive=$archive" >> "$GITHUB_OUTPUT"
 
@@ -169,21 +140,26 @@ jobs:
           "$packaged_binary" --version | tee "$scratch/version.txt"
           grep -F "$version" "$scratch/version.txt"
           "$packaged_binary" --help >/dev/null
-          test -s "$scratch/$package_dir/bundles/hya-todo-tools.hyabundle"
-          test -s "$scratch/$package_dir/bundles/hya-extended-tools.hyabundle"
-          test -s "$scratch/$package_dir/bundles/hya-channel-tools.hyabundle"
-          test -s "$scratch/$package_dir/bundles/hya-network-tools.hyabundle"
-          test -s "$scratch/$package_dir/bundles/hya-base-tools.hyabundle"
-          for bundle in core-skills core-commands core-agents agent-channels goal-loop plan-impl-review subagents; do
-            test -s "$scratch/$package_dir/bundles/hya-$bundle.hyabundle"
+          (cd dist && sha256sum -c SHA256SUMS)
+          asset_count=0
+          for asset in dist/hya-*.hyabundle; do
+            name="$(basename "$asset" .hyabundle)"
+            name="${name#hya-}"
+            name="${name%-"$TARGET"}"
+            name="${name%-"$version"}"
+            cmp "$asset" "$scratch/$package_dir/bundles/hya-$name.hyabundle"
+            asset_count=$((asset_count + 1))
           done
+          test "$asset_count" -eq 12
+          test "$(find "$scratch/$package_dir/bundles" -name 'hya-*.hyabundle' | wc -l)" -eq 12
           smoke_home="$scratch/smoke-home"
           mkdir -p "$smoke_home"
           HOME="$smoke_home" XDG_CONFIG_HOME="$smoke_home/config" XDG_DATA_HOME="$smoke_home/data" \
             XDG_STATE_HOME="$smoke_home/state" XDG_CACHE_HOME="$smoke_home/cache" \
             "$packaged_binary" bundle list > "$scratch/bundle-list.txt"
-          grep -F "hya/core-commands 1.0.0" "$scratch/bundle-list.txt"
-          grep -F "hya/goal-loop 1.0.0" "$scratch/bundle-list.txt"
+          for bundle in base-tools extended-tools network-tools channel-tools todo-tools core-skills core-commands core-agents agent-channels goal-loop plan-impl-review subagents; do
+            grep -E "^hya/$bundle $version " "$scratch/bundle-list.txt"
+          done
           bun_adapter="$scratch/$package_dir/lib/hya/bun-adapter"
           for path in package.json bun.lock src/main.ts; do
             test -e "$bun_adapter/$path"
@@ -219,12 +195,7 @@ jobs:
           grep -Fx "$package_dir/lib/hya/bun-adapter/bun.lock" "$scratch/archive.txt"
           grep -Fx "$package_dir/lib/hya/bun-adapter/src/main.ts" "$scratch/archive.txt"
           grep -F "$package_dir/lib/hya/bun-adapter/node_modules/" "$scratch/archive.txt" >/dev/null
-          grep -Fx "$package_dir/bundles/hya-todo-tools.hyabundle" "$scratch/archive.txt"
-          grep -Fx "$package_dir/bundles/hya-extended-tools.hyabundle" "$scratch/archive.txt"
-          grep -Fx "$package_dir/bundles/hya-channel-tools.hyabundle" "$scratch/archive.txt"
-          grep -Fx "$package_dir/bundles/hya-network-tools.hyabundle" "$scratch/archive.txt"
-          grep -Fx "$package_dir/bundles/hya-base-tools.hyabundle" "$scratch/archive.txt"
-          for bundle in core-skills core-commands core-agents agent-channels goal-loop plan-impl-review subagents; do
+          for bundle in base-tools extended-tools network-tools channel-tools todo-tools core-skills core-commands core-agents agent-channels goal-loop plan-impl-review subagents; do
             grep -Fx "$package_dir/bundles/hya-$bundle.hyabundle" "$scratch/archive.txt"
           done
           grep -Fx "$package_dir/examples/hya-argus-example.hyabundle" "$scratch/archive.txt"
@@ -238,6 +209,7 @@ jobs:
         with:
           subject-path: |
             dist/*.tar.gz
+            dist/*.hyabundle
             dist/SHA256SUMS
 
       - name: Upload release assets
@@ -246,6 +218,7 @@ jobs:
           name: release-assets-${{ env.TARGET }}
           path: |
             dist/*.tar.gz
+            dist/*.hyabundle
             dist/SHA256SUMS
           if-no-files-found: error
 

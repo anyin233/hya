@@ -47,6 +47,30 @@ pub fn run_native_library(args: Vec<String>) -> anyhow::Result<()> {
     stage_native(source, library, output, NativeArtifact::Library)
 }
 
+/// Package a tool-family source with its built dynamic library at `output`.
+pub(crate) fn package_native_library(
+    source: &std::path::Path,
+    library: &std::path::Path,
+    output: &std::path::Path,
+) -> anyhow::Result<()> {
+    stage_native(
+        &source.to_string_lossy(),
+        &library.to_string_lossy(),
+        &output.to_string_lossy(),
+        NativeArtifact::Library,
+    )
+}
+
+/// Package one bundle source directory at `output`.
+pub(crate) fn package_directory(
+    source: &std::path::Path,
+    output: &std::path::Path,
+) -> anyhow::Result<()> {
+    let bundle = BundleSource::read_directory(source)
+        .with_context(|| format!("read bundle source directory {}", source.display()))?;
+    write_package(bundle, output.to_path_buf())
+}
+
 #[derive(Clone, Copy)]
 enum NativeArtifact {
     Process,
