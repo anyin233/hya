@@ -54,7 +54,10 @@ Semantics highlights:
 - **Event-driven execution**: `CreateTurn` admits and returns a handle;
   progress and terminal state arrive on the streams. `WaitTurn` is a
   convenience for synchronous clients. `SessionInfo.busy` derives from
-  the run registry.
+  the run registry. The engine additionally enforces one active turn per
+  session: a prompt/command turn queues behind a turn the engine is already
+  running for that session (for example a resident lead's synthesis turn),
+  and a shell turn in that state fails with `session_busy`.
 - **Reads fold the shared projection**: transcript/todo reads come from
   the event log through `hya_proto::Projection` — no second read model.
   `ListEvents.include_raw` exposes the canonical envelope JSON lines for

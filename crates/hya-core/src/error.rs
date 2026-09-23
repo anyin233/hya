@@ -34,6 +34,13 @@ pub enum CoreError {
     /// Caller-supplied parameters or preflight checks failed.
     #[error("invalid: {0}")]
     Invalid(String),
+    /// The session already has an active turn; a session runs at most one
+    /// turn at a time (single-active-turn invariant).
+    #[error("TURN_ALREADY_ACTIVE: session `{session}` already has an active turn")]
+    TurnAlreadyActive {
+        /// The busy session.
+        session: hya_proto::SessionId,
+    },
 }
 
 impl From<hya_provider::ProviderError> for CoreError {

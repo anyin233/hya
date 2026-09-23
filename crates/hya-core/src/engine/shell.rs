@@ -185,6 +185,10 @@ fn remove_owned_bash_artifact(artifact: &OwnedBashArtifact) -> io::Result<()> {
 
 impl SessionEngine {
     /// Run a shell command as a session operation with hooks and permissions.
+    ///
+    /// # Errors
+    /// [`CoreError::TurnAlreadyActive`] when the session already has an
+    /// active turn; store, hook, and permission failures otherwise.
     pub async fn run_shell(
         &self,
         session: SessionId,
@@ -192,6 +196,9 @@ impl SessionEngine {
         command: String,
         cancel: CancellationToken,
     ) -> Result<(MessageId, FinishReason), CoreError> {
+        // A shell turn is a turn: refuse (never interleave) while the session
+        // already has one active.
+        let _lease = self.try_begin_turn(session)?;
         self.admit_shell_user_message(session).await?;
         let projection = self.store.read_projection(session).await?;
         let workdir = session_workdir(agent, &projection);

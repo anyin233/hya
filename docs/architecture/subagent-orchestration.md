@@ -215,6 +215,12 @@ to fold — accepted breakage.
 
 Unchanged seam: bus `MailSent` → supervisor `on_mail` → channel members minus
 sender → `pending` + notify; busy recipients coalesce into one follow-up turn.
+A recipient whose session already has an active turn — including a lead whose
+turn was started by `exec`/`serve` rather than by the supervisor — is busy: the
+wake waits for that turn to end (single active turn per session, see
+[Runtime](runtime.md#single-active-turn-per-session)). Quiescence (`TEAM
+QUIESCED`) likewise fires only once no member, the lead included, has a turn
+in flight, and is delivered to the lead at its next turn boundary.
 New: membership excludes archived handles at fold time, and a DM whose
 recipient is archived routes to the revive path before wake.
 

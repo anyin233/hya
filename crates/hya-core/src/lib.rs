@@ -105,7 +105,7 @@ pub use completion::{
 pub use engine::{
     AdmissionMemberIdentity, AgentSpec, BoundSpawnRequest, BoundSpawnSender, BoundWorkflowRequest,
     BoundWorkflowSender, CreateSession, RuntimeCatalogRefresh, SessionEngine,
-    SpawnAdmissionOutcome, advertise_tool,
+    SpawnAdmissionOutcome, TurnBoundaryObserver, TurnLease, advertise_tool,
 };
 pub use error::CoreError;
 pub use hooks::{

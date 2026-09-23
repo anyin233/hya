@@ -19,6 +19,12 @@
 //!   team is *quiescent* and the main agent is woken once to synthesize — unless it
 //!   already synthesized with nothing new since (which is how termination is
 //!   reached without an infinite re-wake loop).
+//! - **Single active turn per session.** A slot claims its session's engine
+//!   turn lease under the team lock before running. A session whose turn is
+//!   already active (e.g. the lead's own `exec`/`serve` turn while it is the
+//!   main actor) is busy: its wake stays queued and quiescence is held back
+//!   until that turn's lease is released, when the supervisor (the engine's
+//!   `TurnBoundaryObserver`) delivers the deferred work.
 //! - **Runaway kill.** Per-team turn and message budgets (on the
 //!   [`SubagentGovernor`]) cancel the whole team when tripped.
 //!
@@ -44,7 +50,10 @@ use hya_tool::{AgentDef, ResolvedTool};
 use tokio::sync::{Notify, oneshot};
 use tokio_util::sync::CancellationToken;
 
-use crate::engine::{AgentSpec, ArchiveReviver, CreateSession, SessionEngine, TurnRequestContext};
+use crate::engine::{
+    AgentSpec, ArchiveReviver, CreateSession, SessionEngine, TurnBoundaryObserver, TurnLease,
+    TurnRequestContext,
+};
 use crate::error::CoreError;
 use crate::hooks::{AgentSpawnInput, HookDispatcher, scope_activation_hooks};
 use crate::orchestrator::TeamBudget;
@@ -329,6 +338,9 @@ struct RunPlan {
     initial_directive: Option<String>,
     claim: Option<ActorClaim>,
     cancel: CancellationToken,
+    /// The session's single-active-turn claim, taken atomically with the
+    /// decision to run and held until the turn ends.
+    lease: TurnLease,
 }
 
 enum ResidentRuntimeContext {
@@ -547,6 +559,28 @@ impl TeamActor {
             return Action::Stop { killed_now: false };
         }
         if slot.has_work() {
+            // Single active turn per session: when this session already has a
+            // turn (e.g. the lead's own interactive turn while it is the main
+            // actor), keep the owed work queued. The turn-boundary observer
+            // re-wakes this slot when that turn's lease is released.
+            let lease = match self.engine.try_begin_turn(session) {
+                Ok(lease) => lease,
+                Err(_) => {
+                    let handle = slot.handle.clone();
+                    let claim = slot.claim;
+                    let became_idle = slot.status == SlotStatus::Busy;
+                    if became_idle {
+                        slot.status = SlotStatus::Idle;
+                        st.busy = st.busy.saturating_sub(1);
+                        self.maybe_fire_quiescence(&mut st);
+                    }
+                    return Action::Idle {
+                        handle,
+                        claim,
+                        became_idle,
+                    };
+                }
+            };
             let synth = slot.synth_pending;
             let claim = slot.claim;
             let cursor = slot.cursor;
@@ -589,6 +623,7 @@ impl TeamActor {
                 initial_directive,
                 claim,
                 cancel,
+                lease,
             }))
         } else {
             let handle = slot.handle.clone();
@@ -743,6 +778,16 @@ impl TeamActor {
         if st.killed || st.busy != 0 {
             return;
         }
+        // A member (usually the lead) whose own turn is still running is not
+        // idle, even when the supervisor did not start that turn. Quiescence
+        // is re-checked when that turn's lease is released.
+        if st
+            .residents
+            .keys()
+            .any(|session| self.engine.turn_active(*session))
+        {
+            return;
+        }
         if st.work_seq == st.last_synth_work_seq {
             return; // nothing new since last synthesis → team is done, parked idle
         }
@@ -754,6 +799,22 @@ impl TeamActor {
             main_slot.pending = true;
             main_slot.notify.notify_one();
         }
+    }
+
+    /// A turn on `session` ended (its lease was released). Deliver work that
+    /// was deferred while it ran — mail or a synthesis owed to that slot — and
+    /// re-check quiescence, which that turn was holding back.
+    fn on_turn_released(&self, session: SessionId) {
+        let mut st = self.lock();
+        if st.killed {
+            return;
+        }
+        if let Some(slot) = st.residents.get(&session)
+            && slot.has_work()
+        {
+            slot.notify.notify_one();
+        }
+        self.maybe_fire_quiescence(&mut st);
     }
 
     /// Mark the team killed and cancel every in-flight turn. Idempotent. Wakes all
@@ -823,12 +884,16 @@ impl TeamActor {
     /// synthesis directive (main, on quiescence), and every inbox message since the
     /// cursor, then advance the cursor and stream one turn. All of this is coalesced
     /// into a single turn — many queued messages produce one turn, never several.
+    ///
+    /// Returns `Ok(false)` without running when a main-actor wake has nothing
+    /// left to deliver: mail that arrived during the lead's own turn and was
+    /// already steered into it needs no follow-up turn.
     async fn run_one_turn(
         &self,
         session: SessionId,
         plan: RunPlan,
         sidecar_tools: Arc<[ResolvedTool]>,
-    ) -> Result<(), CoreError> {
+    ) -> Result<bool, CoreError> {
         let RunPlan {
             agent,
             binding,
@@ -844,6 +909,7 @@ impl TeamActor {
             initial_directive,
             claim,
             cancel,
+            lease,
         } = plan;
         // Snapshot new inbox mail for this handle (folded before its wake, so it is
         // already visible here). The durable cursor leads the in-memory slot
@@ -884,6 +950,14 @@ impl TeamActor {
                     .collect()
             })
             .unwrap_or_default();
+
+        if is_main && !synth && initial_directive.is_none() && new_mail.is_empty() {
+            let mut st = self.lock();
+            if let Some(slot) = st.residents.get_mut(&session) {
+                slot.cursor = slot.cursor.max(inbox_len);
+            }
+            return Ok(false);
+        }
 
         let task_label = if synth && is_main {
             "synthesizing".to_string()
@@ -1006,7 +1080,8 @@ impl TeamActor {
                         session,
                         &agent,
                         (binding, agents, resources, Arc::clone(&sidecar_tools)),
-                        TurnRequestContext::new(cancel.clone(), &[], guidance, Some(claim), route),
+                        TurnRequestContext::new(cancel.clone(), &[], guidance, Some(claim), route)
+                            .with_lease(lease),
                     )
                     .await?;
             }
@@ -1016,7 +1091,8 @@ impl TeamActor {
                         session,
                         &agent,
                         (binding, agents, resources, Arc::clone(&sidecar_tools)),
-                        TurnRequestContext::new(cancel.clone(), &[], guidance, None, route),
+                        TurnRequestContext::new(cancel.clone(), &[], guidance, None, route)
+                            .with_lease(lease),
                     )
                     .await?;
             }
@@ -1026,7 +1102,8 @@ impl TeamActor {
                         session,
                         &agent,
                         binding,
-                        TurnRequestContext::new(cancel.clone(), &[], guidance, Some(claim), route),
+                        TurnRequestContext::new(cancel.clone(), &[], guidance, Some(claim), route)
+                            .with_lease(lease),
                     )
                     .await?;
             }
@@ -1036,7 +1113,8 @@ impl TeamActor {
                         session,
                         &agent,
                         binding,
-                        TurnRequestContext::new(cancel, &[], guidance, None, route),
+                        TurnRequestContext::new(cancel, &[], guidance, None, route)
+                            .with_lease(lease),
                     )
                     .await?;
             }
@@ -1045,7 +1123,7 @@ impl TeamActor {
         // when the turn's own engine events never tripped the throttle.
         self.heartbeat_turn_finish(session, claim.as_ref(), &handle)
             .await;
-        Ok(())
+        Ok(true)
     }
 
     /// Resolve a `MailSent`'s recipient sessions, EXCLUDING the sender's own handle
@@ -1654,7 +1732,8 @@ async fn resident_task(team: Arc<TeamActor>, session: SessionId, notify: Arc<Not
                     // so that observation must imply the slot is idle too.
                     team.finish_run(session);
                     match turn_result {
-                        Ok(()) => {
+                        Ok(false) => {}
+                        Ok(true) => {
                             let _ = team
                                 .record_activity(claim.as_ref(), handle, RosterStatus::Idle, None)
                                 .await;
@@ -1943,6 +2022,17 @@ async fn report_gate_projection(
     Ok(projection)
 }
 
+/// Single-active-turn delivery: when any turn on a team slot's session ends,
+/// the owning team re-wakes that slot if work was deferred behind the turn and
+/// re-checks quiescence.
+impl TurnBoundaryObserver for ResidentSupervisor {
+    fn turn_released(&self, session: SessionId) {
+        if let Some(team) = self.team_with_resident(session) {
+            team.on_turn_released(session);
+        }
+    }
+}
+
 /// A downward mail to an archived direct child revives it (ADR-0015): the
 /// supervisor is the engine's [`ArchiveReviver`].
 #[async_trait::async_trait]
@@ -2014,6 +2104,12 @@ impl ResidentSupervisor {
         supervisor
             .engine
             .set_reviver(supervisor.clone() as Arc<dyn ArchiveReviver>);
+        // Turn boundaries deliver wakes deferred by the single-active-turn
+        // invariant (mail/quiescence owed to a session whose turn was running).
+        let observer: Arc<dyn TurnBoundaryObserver> = supervisor.clone();
+        supervisor
+            .engine
+            .set_turn_observer(Arc::downgrade(&observer));
         let listener = supervisor.clone();
         tokio::spawn(async move { listener.run_bus(rx).await });
         supervisor
