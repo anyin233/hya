@@ -1,6 +1,8 @@
 //! `hya-store` — SQLite event log + replay; projection folded on read via the
-//! shared `hya_proto::Projection` reducer (materialized tables deferred to a
-//! later phase — one reducer, no SQL/reducer divergence).
+//! shared `hya_proto::Projection` reducer (one reducer, no SQL/reducer
+//! divergence). Folds are cached in-process and as durable snapshots
+//! (`projection_cache`), a pure cache of that reducer: a read folds only the
+//! events after the cached projection and always equals a full replay.
 //!
 //! NOTE: PRAGMAs (WAL etc.) are set via connect options, NOT a migration — `WAL`
 //! cannot run inside the transaction sqlx wraps migrations in.
@@ -13,6 +15,7 @@ pub mod error;
 mod mailbox;
 mod materialize;
 mod permission;
+mod projection_cache;
 mod recovery;
 mod resident_claim;
 mod sync;
@@ -29,6 +32,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use hya_proto::{Envelope, Event, EventSeq, Projection, SessionId, now_millis};
+use projection_cache::ProjectionCache;
 use sqlx::Row;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 
@@ -174,11 +178,13 @@ fn canonical_runtime_owner_lock_path(sqlite_path: &str) -> Result<PathBuf, Store
 ///
 /// Construct with [`SessionStore::connect`] (file) or [`SessionStore::connect_memory`].
 /// Projection is folded on read via `hya_proto::Projection` — there is no separate
-/// materialized read model.
+/// materialized read model; folds are cached (in-process and as durable
+/// snapshots) as a pure cache of that reducer, shared by every clone.
 #[derive(Clone)]
 pub struct SessionStore {
     pool: sqlx::SqlitePool,
     runtime_owner: Arc<RuntimeOwnerState>,
+    projections: Arc<ProjectionCache>,
 }
 
 /// One session row from `list_sessions`: id, time bounds, and event count.
@@ -235,6 +241,7 @@ impl SessionStore {
         Ok(Self {
             pool,
             runtime_owner: Arc::new(RuntimeOwnerState::file(lock_path)),
+            projections: Arc::new(ProjectionCache::new()),
         })
     }
 
@@ -251,7 +258,20 @@ impl SessionStore {
         Ok(Self {
             pool,
             runtime_owner: Arc::new(RuntimeOwnerState::memory()),
+            projections: Arc::new(ProjectionCache::new()),
         })
+    }
+
+    /// Set how many newly folded events make a projection read persist a
+    /// durable snapshot (default 1024; `0` is treated as `1`, a snapshot on
+    /// every read that folded new events). Applies to every clone of this store.
+    ///
+    /// Snapshots only change how much of a log a later read (or a restarted
+    /// process) must fold; the folded result is the same either way.
+    #[must_use]
+    pub fn with_projection_snapshot_interval(self, events: u64) -> Self {
+        self.projections.set_snapshot_interval(events);
+        self
     }
 
     /// Claim this store as the runtime owner for startup recovery and Workflow control.
@@ -348,17 +368,107 @@ impl SessionStore {
             .bind(key.clone())
             .execute(&mut *tx)
             .await?;
+        sqlx::query("DELETE FROM projection_snapshot WHERE session_id = ?")
+            .bind(key.clone())
+            .execute(&mut *tx)
+            .await?;
         let result = sqlx::query("DELETE FROM event_log WHERE session_id = ?")
             .bind(key)
             .execute(&mut *tx)
             .await?;
         tx.commit().await?;
+        self.projections.remove(session);
         Ok(result.rows_affected() > 0)
     }
 
     /// Fold the session event log into a [`Projection`] via the shared reducer.
+    ///
+    /// Served from the projection cache: only events after the cached fold are
+    /// decoded and applied, and the result always equals
+    /// `Projection::from_events(&self.replay(session).await?)`.
     pub async fn read_projection(&self, session: SessionId) -> Result<Projection, StoreError> {
-        Ok(Projection::from_events(&self.replay(session).await?))
+        Ok(Projection::clone(&*self.cached_projection(session).await?))
+    }
+
+    /// Shared handle to the session's folded [`Projection`], without cloning it.
+    ///
+    /// Same fold and cache as [`SessionStore::read_projection`]; the handle is
+    /// an immutable snapshot of the log as of this read.
+    pub async fn read_projection_shared(
+        &self,
+        session: SessionId,
+    ) -> Result<Arc<Projection>, StoreError> {
+        self.cached_projection(session).await
+    }
+
+    /// Run `read` against the session's folded [`Projection`] without cloning it.
+    ///
+    /// Same fold and cache as [`SessionStore::read_projection`]; prefer this
+    /// for hot paths that need a small part of a large projection.
+    pub async fn with_projection<R>(
+        &self,
+        session: SessionId,
+        read: impl FnOnce(&Projection) -> R,
+    ) -> Result<R, StoreError> {
+        Ok(read(&*self.cached_projection(session).await?))
+    }
+
+    /// Advance the cached fold of `session` before a writer transaction folds
+    /// it, so the transaction reads only the tail.
+    pub(crate) async fn warm_projection(&self, session: SessionId) -> Result<(), StoreError> {
+        self.cached_projection(session).await.map(drop)
+    }
+
+    /// Fold through the cache: cached base (in-process, else the durable
+    /// snapshot) plus the events after it; persist a durable snapshot once
+    /// enough events were folded since the last one.
+    async fn cached_projection(&self, session: SessionId) -> Result<Arc<Projection>, StoreError> {
+        let mut conn = self.pool.acquire().await?;
+        let base = match self.projections.get(session) {
+            Some(base) => Some(base),
+            None => projection_cache::load_snapshot(&mut conn, session)
+                .await?
+                .map(|projection| projection_cache::Base {
+                    persisted_seq: projection.last_seq,
+                    unpersisted: 0,
+                    projection: Arc::new(projection),
+                }),
+        };
+        let (mut persisted_seq, mut unpersisted) = base
+            .as_ref()
+            .map_or((0, 0), |base| (base.persisted_seq, base.unpersisted));
+        let folded =
+            projection_cache::fold(&mut conn, session, base.map(|base| base.projection)).await?;
+        if folded.rebuilt {
+            persisted_seq = 0;
+            unpersisted = folded.applied;
+        } else {
+            unpersisted = unpersisted.saturating_add(folded.applied);
+        }
+        let last_seq = folded.projection.last_seq;
+        if last_seq == 0 {
+            self.projections.remove(session);
+            return Ok(folded.projection);
+        }
+        if last_seq > persisted_seq && unpersisted >= self.projections.snapshot_interval() {
+            // Best effort: a failed write only means a later read folds more.
+            match projection_cache::persist_snapshot(&mut conn, session, &folded.projection).await {
+                Ok(()) => {
+                    persisted_seq = last_seq;
+                    unpersisted = 0;
+                }
+                Err(error) => {
+                    tracing::debug!(%session, "projection snapshot not persisted: {error}");
+                }
+            }
+        }
+        self.projections.put(
+            session,
+            Arc::clone(&folded.projection),
+            persisted_seq,
+            unpersisted,
+        );
+        Ok(folded.projection)
     }
 
     /// Sessions present in the event log, newest-updated first.
@@ -385,6 +495,31 @@ impl SessionStore {
             }
         }
         Ok(out)
+    }
+
+    /// One session's [`SessionInfo`] (log bounds and event count), without
+    /// grouping the whole log; `None` when the session has no events.
+    pub async fn session_info(
+        &self,
+        session: SessionId,
+    ) -> Result<Option<SessionInfo>, StoreError> {
+        let row = sqlx::query(
+            "SELECT MIN(ts) AS started, MAX(ts) AS updated, COUNT(*) AS n \
+             FROM event_log WHERE session_id = ?",
+        )
+        .bind(session.storage_key())
+        .fetch_one(&self.pool)
+        .await?;
+        let n: i64 = row.try_get("n")?;
+        if n == 0 {
+            return Ok(None);
+        }
+        Ok(Some(SessionInfo {
+            session,
+            started_millis: row.try_get("started")?,
+            updated_millis: row.try_get("updated")?,
+            events: n.max(0) as u64,
+        }))
     }
 
     /// Insert one token-ledger row (new UUID primary key, current timestamp).
@@ -466,28 +601,18 @@ pub(crate) async fn append_event_in_transaction(
 }
 
 /// Fold one Session log inside an existing writer transaction.
+///
+/// Starts from the cached fold (anchor-checked through the transaction) and
+/// sees the transaction's own uncommitted events, so the result is never
+/// written back to the cache.
 pub(crate) async fn replay_projection(
+    cache: &ProjectionCache,
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     session: SessionId,
 ) -> Result<Projection, StoreError> {
-    let rows =
-        sqlx::query("SELECT seq, ts, payload FROM event_log WHERE session_id = ? ORDER BY seq")
-            .bind(session.storage_key())
-            .fetch_all(&mut **tx)
-            .await?;
-    let mut envelopes = Vec::with_capacity(rows.len());
-    for row in rows {
-        let seq: i64 = row.try_get("seq")?;
-        let ts_millis: i64 = row.try_get("ts")?;
-        let payload: String = row.try_get("payload")?;
-        let event: Event = serde_json::from_str(&payload)?;
-        envelopes.push(Envelope {
-            seq: EventSeq(seq.max(0) as u64),
-            ts_millis,
-            event,
-        });
-    }
-    Ok(Projection::from_events(&envelopes))
+    let base = projection_cache::transaction_base(cache, tx, session).await?;
+    let folded = projection_cache::fold(tx, session, base).await?;
+    Ok(Arc::unwrap_or_clone(folded.projection))
 }
 
 pub(crate) fn decode_session_key(key: &[u8]) -> Option<SessionId> {

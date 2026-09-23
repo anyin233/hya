@@ -637,6 +637,33 @@ pub struct HandoffProjection {
     pub degraded: bool,
 }
 
+/// Version of the shared reducer's fold semantics and of the durable snapshot
+/// encoding ([`Projection::encode_snapshot`]).
+///
+/// Stores persist folded projections as a pure cache keyed by this version:
+/// a snapshot carrying any other version is ignored and rebuilt from the event
+/// log. Bump it whenever [`Projection::apply`] can fold the same events into a
+/// different projection, or when `Projection` (or anything it contains)
+/// changes shape; the `reducer_fingerprint_pins_the_version` test fails until
+/// the bump is recorded.
+pub const PROJECTION_REDUCER_VERSION: u32 = 1;
+
+/// Durable snapshot encoding: the wire projection plus replay-only reducer
+/// state the wire form deliberately omits.
+#[derive(Serialize)]
+struct SnapshotRef<'a> {
+    projection: &'a Projection,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    workflow_seen_runs: Vec<WorkflowRunId>,
+}
+
+#[derive(Deserialize)]
+struct SnapshotOwned {
+    projection: Projection,
+    #[serde(default)]
+    workflow_seen_runs: BTreeSet<WorkflowRunId>,
+}
+
 /// Full folded view: one session transcript plus optional team mailbox/roster state.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Projection {
@@ -682,8 +709,48 @@ impl Projection {
         self.last_seq = env.seq.0;
     }
 
+    /// Encode this projection as a durable snapshot.
+    ///
+    /// Unlike the wire form, the snapshot keeps replay-only reducer state
+    /// (Workflow run dedupe), so [`Projection::decode_snapshot`] followed by
+    /// applying the remaining events equals a full replay.
+    ///
+    /// # Errors
+    /// Returns the JSON encoder error (not expected for reducer output).
+    pub fn encode_snapshot(&self) -> Result<Vec<u8>, serde_json::Error> {
+        let workflow_seen_runs = self
+            .session
+            .workflow
+            .as_ref()
+            .map(|workflow| workflow.seen_runs.iter().copied().collect())
+            .unwrap_or_default();
+        serde_json::to_vec(&SnapshotRef {
+            projection: self,
+            workflow_seen_runs,
+        })
+    }
+
+    /// Decode a snapshot written by [`Projection::encode_snapshot`] under the
+    /// same [`PROJECTION_REDUCER_VERSION`].
+    ///
+    /// # Errors
+    /// Returns the JSON decoder error for bytes that are not a snapshot.
+    pub fn decode_snapshot(bytes: &[u8]) -> Result<Self, serde_json::Error> {
+        let SnapshotOwned {
+            mut projection,
+            workflow_seen_runs,
+        } = serde_json::from_slice(bytes)?;
+        if let Some(workflow) = projection.session.workflow.as_mut() {
+            workflow.seen_runs = workflow_seen_runs;
+        }
+        Ok(projection)
+    }
+
+    /// Streaming events almost always target the newest message, so search
+    /// from the back; message ids are unique in the list, so the result is the
+    /// same as a forward search.
     fn message_mut(&mut self, id: MessageId) -> Option<&mut MessageProjection> {
-        self.session.messages.iter_mut().find(|m| m.id == id)
+        self.session.messages.iter_mut().rev().find(|m| m.id == id)
     }
 
     /// Return the newest run only when `id` still owns the Session view.

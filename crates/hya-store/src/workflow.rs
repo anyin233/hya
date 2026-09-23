@@ -121,7 +121,7 @@ impl SessionStore {
         if let Some(claim) = actor_claim {
             fence_actor_claim(&mut tx, claim).await?;
         }
-        let projection = replay_projection(&mut tx, session).await?;
+        let projection = replay_projection(&self.projections, &mut tx, session).await?;
         if let Some(active) = projection
             .session
             .workflow
@@ -159,9 +159,12 @@ impl SessionStore {
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         // Only Sessions that ever started a Workflow can be nonterminal. Scanning
         // every idle Session's full event_log dominated cold listen on large DBs.
+        // serde writes the `type` tag first, so the LIKE prefix rejects almost
+        // every row without parsing JSON; `json_extract` keeps the match exact.
         let rows = sqlx::query(
             "SELECT DISTINCT session_id FROM event_log \
-             WHERE json_extract(payload, '$.type') = 'workflow_run_started' \
+             WHERE payload LIKE '{\"type\":\"workflow_run_started\"%' \
+               AND json_extract(payload, '$.type') = 'workflow_run_started' \
              ORDER BY session_id",
         )
         .fetch_all(&mut *tx)
@@ -172,7 +175,7 @@ impl SessionStore {
             let Some(session) = decode_session_key(&key) else {
                 continue;
             };
-            let projection = replay_projection(&mut tx, session).await?;
+            let projection = replay_projection(&self.projections, &mut tx, session).await?;
             let Some(run) = projection
                 .session
                 .workflow

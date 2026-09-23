@@ -16,9 +16,11 @@ pub(super) fn find_part(
     msg: MessageId,
     part: PartId,
 ) -> Option<&mut PartProjection> {
+    // Deltas target the newest part; part ids are unique within a message.
     p.message_mut(msg)?
         .parts
         .iter_mut()
+        .rev()
         .find(|x| x.id() == part)
 }
 

@@ -1606,6 +1606,7 @@ dependencies = [
 name = "hya-store"
 version = "0.41.0"
 dependencies = [
+ "futures",
  "hya-bundle",
  "hya-proto",
  "libc",
@@ -1614,6 +1615,7 @@ dependencies = [
  "sqlx",
  "thiserror 1.0.69",
  "tokio",
+ "tracing",
  "uuid",
 ]
 

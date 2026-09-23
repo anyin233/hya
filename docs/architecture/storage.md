@@ -135,6 +135,23 @@ variants, prompts, Session content, and provider responses never enter this
 table. File-backed databases retain the rows across restart; memory databases
 do not, and separate database paths remain isolated.
 
+### `0011_projection_snapshot.sql`
+
+Adds `projection_snapshot`, the durable level of the
+[projection cache](#projection-reads):
+
+| Column | Constraint |
+| --- | --- |
+| `session_id` | `BLOB PRIMARY KEY` (session storage key) |
+| `reducer_version` | `INTEGER NOT NULL` — `hya_proto::PROJECTION_REDUCER_VERSION` that folded the row |
+| `last_seq` | `INTEGER NOT NULL` — last `event_log.seq` folded into the snapshot (the anchor) |
+| `payload` | `BLOB NOT NULL` — `Projection::encode_snapshot` JSON |
+
+The table starts empty and holds only derived data: dropping every row is
+always safe (the next read of each session folds its full log once and writes
+a fresh row). Upgrading a database therefore costs one full fold per session,
+paid lazily by the first read of that session.
+
 ### `0005_resident_actor_claim.sql` (claim table)
 
 Adds coordination table `resident_actor_claim`:
@@ -239,22 +256,123 @@ row is not required for a session to be listed.
 One transaction:
 
 1. `DELETE FROM token_ledger WHERE session_id = ?`
-2. `DELETE FROM event_log WHERE session_id = ?`
+2. `DELETE FROM open_assistant_message WHERE session_id = ?`
+3. `DELETE FROM projection_snapshot WHERE session_id = ?`
+4. `DELETE FROM event_log WHERE session_id = ?`
 
+After the commit the session's in-process cached projection is dropped.
 Returns whether any **event_log** rows were removed.
 
 ## Projection Reads
 
-`read_projection(session)` is intentionally simple:
+`read_projection(session)` returns exactly
 
 ```text
-replay(session) -> Projection::from_events(envelopes)
+Projection::from_events(replay(session))
 ```
 
-This keeps store replay, HTTP event reads, SSE recovery, and transcript
-rendering on the same `hya_proto::Projection` reducer. The store, server, and
-native Rust clients share that reducer; remote clients consume the curated v1
-stream/read shapes over HTTP+SSE.
+— the shared `hya_proto::Projection` reducer over the session's log — but it
+does not decode the whole log on every call. Store replay, HTTP event reads,
+SSE recovery, and transcript rendering stay on that one reducer; remote
+clients consume the curated v1 stream/read shapes over HTTP+SSE.
+
+### Projection cache
+
+[`projection_cache.rs`](../../crates/hya-store/src/projection_cache.rs) caches
+the reducer's output at two levels. Both are a **pure cache** of the event log:
+they hold nothing that cannot be rebuilt by a full replay, and no read path
+treats them as a source of truth.
+
+| Level | Where | Written | Scope |
+| --- | --- | --- | --- |
+| In-process | `Arc<Projection>` per session, shared by every clone of one `SessionStore` (least recently read of 256 sessions evicted) | every read that folded new events | one process |
+| Durable | `projection_snapshot` row per session ([`0011`](#0011_projection_snapshotsql)) | a read that folded ≥ 1024 events since the last snapshot (every read for the first fold of an existing log above that size) | every process on the database |
+
+A read (`read_projection`, `read_projection_shared`, `with_projection`):
+
+1. takes the in-process projection, else the durable snapshot, as the base;
+2. selects `event_log` rows of the session with `seq >= base.last_seq`, checks
+   that the first row is the base's anchor (`seq == last_seq`), and applies
+   only the rows after it with `Projection::apply`;
+3. caches the result and, past the interval, upserts the durable snapshot.
+
+`read_projection_shared` returns the cached `Arc<Projection>` and
+`with_projection(session, |p| ...)` borrows it, so hot readers (the `wait`
+tool, the steer mailbox, the `session.usage` capability, lineage walks) pay
+neither a replay nor a deep clone. A read of an unchanged session costs one
+indexed query that returns only the anchor row.
+
+**Invariants** (why cached base + tail equals a full replay):
+
+- `event_log` is append-only per session; the only removal is
+  `delete_session`, which drops every row of the session. `seq` is a global
+  AUTOINCREMENT assigned under SQLite's single writer, so commit order equals
+  `seq` order: once the anchor row is visible, every earlier row of the
+  session is too, and every later row has a larger `seq`.
+- Every fold re-reads the anchor. When it is gone — the session was deleted
+  (possibly by another process), or the database was restored from an older
+  copy — the base is discarded and the full log is folded.
+- A durable snapshot is used only when its `reducer_version` equals the
+  running `PROJECTION_REDUCER_VERSION` and its payload decodes to a
+  projection whose `last_seq` matches the row; anything else is ignored and
+  overwritten by the next snapshot write. Snapshot writes are anchored in SQL
+  (`INSERT … SELECT … WHERE EXISTS (anchor row)`), so a write racing a delete
+  is a no-op.
+- The snapshot encoding (`Projection::encode_snapshot`) carries replay-only
+  reducer state the wire projection omits (the Workflow run dedupe set), so
+  decoding a snapshot and folding the tail is indistinguishable from a replay.
+- Writer transactions (mail appends, resident recovery, crash recovery,
+  Workflow selection) fold through `replay_projection(cache, tx, session)`:
+  they start from the cache, check the anchor through the transaction, and
+  see their own uncommitted events — so they **never write back** to the
+  cache. Startup recovery warms the cache outside the transaction first, so
+  the transaction folds only the tail.
+
+**Invalidation.** Bump `hya_proto::PROJECTION_REDUCER_VERSION` whenever
+`Projection::apply` can fold the same events differently or the projection's
+shape changes. The `reducer_fingerprint_pins_the_version` test in
+`crates/hya-proto/tests/projection_snapshot.rs` hashes the reducer's output
+over generated logs and fails until the bump (and the new fingerprint) is
+recorded. Older snapshots are then ignored and rebuilt lazily. A process
+running an older binary against the same database ignores newer snapshots the
+same way; the rows are simply rewritten by whichever version reads next.
+
+**Equivalence tests.** `crates/hya-proto/tests/projection_snapshot.rs`
+checks `decode(encode(fold(prefix))) + tail == fold(all)` at every split of
+generated logs (streaming, usage records and legacy totals, message/part
+deletion, compaction markers, forks, re-emitted Workflow run starts, team
+traffic). `crates/hya-store/tests/projection_cache.rs` checks warm and
+restarted reads against a full replay across interleaved appends, reducer
+version changes, undecodable and unanchored snapshots, and deletes; a unit
+test checks that a rolled-back transaction fold never reaches the cache.
+
+**Measured effect.** A real 187 MB database (14 sessions, ~646k events, the
+root session ~215k events mostly `reasoning_delta`/`tool_input_delta`, 8
+resident claims left active by a crash), debug build, same machine:
+
+| Operation | Before (full replay per read) | After |
+| --- | --- | --- |
+| `hya serve` ready, first open after upgrade (no snapshots yet) | 86 s | 5–6 s |
+| `hya serve` ready, restart after a crash (snapshots present) | 86 s | 1.2 s |
+| resident recovery phase (`residents_recovered`) | 79 s | 1.9 s first open, 0.6 s restart |
+| RSS at readiness | 450 MB | 100 MB |
+| token-summary tree usage (14 sessions), repeated | 4.2 s | 4 ms |
+| same, first request after a restart | 4.2 s | 0.3 s |
+| `GET /v1/sessions` | 8.8 s | 0.3 s |
+| root projection read: full fold / from snapshot / warm | 1.3 s / – / – | 1.3 s / 61 ms / <1 ms |
+
+The first read of a session that has no snapshot yet still folds its whole
+log once (1.1 s for a 190k-event log in a debug build). Reproduce with
+`cargo run -p xtask -- startup-bench --db <copy.db> --timeout-secs 300`
+(phase waterfall) and the ignored equivalence bench
+`HYA_PROJECTION_CACHE_DB=<db> cargo test -p hya-store --test projection_cache -- --ignored --nocapture`,
+which also asserts that every session's cold, snapshot, and warm reads equal
+its full replay.
+
+**Tuning.** `SessionStore::with_projection_snapshot_interval(events)` changes
+the durable-snapshot interval (tests use `1`). There is no configuration key:
+the interval only moves cost between snapshot writes and tail folds, never the
+result.
 
 ## Materialized team tables
 
@@ -456,7 +574,8 @@ The same store replay powers:
 - `GET /v1/sessions/{session}/events` (curated replay; `include_raw` returns
   the raw envelope lines)
 - `hya tail-session`
-- `read_projection`
+- `read_projection` (through the [projection cache](#projection-cache), which
+  folds the same log with the same reducer)
 
 This makes the database a useful debugging artifact: if the event log is intact,
 the session can be reconstructed.

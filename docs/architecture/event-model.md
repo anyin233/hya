@@ -665,8 +665,14 @@ The engine is responsible for executing tool calls and appending
 ## Store Boundary
 
 The store serializes `Event` JSON into `event_log.payload`. It does not maintain
-a separate projection table for the current read path. `read_projection` replays
-the session and folds through the shared reducer.
+a separate read model: `read_projection` always equals folding the session's
+log through the shared reducer. The fold is cached — in-process and as durable
+`projection_snapshot` rows keyed by session and last folded `seq`, tagged with
+`PROJECTION_REDUCER_VERSION` — so a read applies only the events after the
+cached fold. The cache is derivable from the event log alone and is discarded
+whenever its anchor event or reducer version no longer matches; see
+[storage.md](storage.md#projection-cache). Changing the reducer's fold result
+for existing events requires bumping `PROJECTION_REDUCER_VERSION`.
 
 Write-through side tables are maintained in the append transaction for
 queries that must not replay every log. `open_assistant_message

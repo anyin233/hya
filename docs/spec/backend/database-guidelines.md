@@ -65,6 +65,16 @@
   `commit_resident_mutation` so the index stays exact, and `delete_session`
   clears its rows. A new index migration backfills from `event_log` in one
   pass (filter on the `{"type":"…` payload prefix before `json_extract`).
+- `projection_snapshot` (0011) is the durable level of the projection cache —
+  a pure cache of the shared reducer, never read as truth. Rows are trusted
+  only under the running `PROJECTION_REDUCER_VERSION` and while their anchor
+  event (`event_log.seq = last_seq` of the same session) exists. Any change to
+  `Projection::apply` results or to the projection's shape bumps
+  `PROJECTION_REDUCER_VERSION` (the fingerprint test enforces it). Writer
+  transactions fold via `replay_projection(cache, tx, session)` and never write
+  the cache back; a new session-row removal path must also delete the
+  session's `projection_snapshot` row and drop the in-process entry, as
+  `delete_session` does. See `docs/architecture/storage.md#projection-cache`.
 
 ---
 

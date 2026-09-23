@@ -6,7 +6,9 @@ use hya_proto::{
 use crate::{
     AdmissionRecord, RecoveredActorClaim, SessionStore, StoreError,
     admission::{abort_recovered_actor_admissions_in_transaction, decode_record},
-    append_event_in_transaction, replay_projection,
+    append_event_in_transaction,
+    projection_cache::ProjectionCache,
+    replay_projection,
     resident_claim::fence_actor_claim,
 };
 
@@ -56,7 +58,7 @@ impl SessionStore {
             fence_actor_claim(&mut tx, claim).await?;
         }
 
-        let projection = replay_projection(&mut tx, root).await?;
+        let projection = replay_projection(&self.projections, &mut tx, root).await?;
         let Some(handle) = projection.team.resolve_in_scope(&from, &address) else {
             return Err(StoreError::MailboxRejected(format!(
                 "`{address}` is not a teammate you can message; you may message \
@@ -113,7 +115,7 @@ impl SessionStore {
         body: String,
     ) -> Result<Envelope, StoreError> {
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
-        let projection = replay_projection(&mut tx, root).await?;
+        let projection = replay_projection(&self.projections, &mut tx, root).await?;
         let handle = projection.team.canonical_member(handle);
         let Some(entry) = projection.team.roster.get(&handle) else {
             return Err(StoreError::MailboxRejected(format!(
@@ -162,7 +164,7 @@ impl SessionStore {
             fence_actor_claim(&mut tx, claim).await?;
         }
 
-        let projection = replay_projection(&mut tx, root).await?;
+        let projection = replay_projection(&self.projections, &mut tx, root).await?;
         let key = projection
             .team
             .resolve_channel(&from, &channel)
@@ -194,7 +196,7 @@ impl SessionStore {
             fence_actor_claim(&mut tx, claim).await?;
         }
 
-        let projection = replay_projection(&mut tx, root).await?;
+        let projection = replay_projection(&self.projections, &mut tx, root).await?;
         if !projection.team.leads_a_unit(&from) {
             return Err(StoreError::MailboxRejected(
                 "you lead no agents, so there is no one to announce to".to_string(),
@@ -227,10 +229,14 @@ impl SessionStore {
         root: SessionId,
         handle: &str,
     ) -> Result<RecoveredResidentOutcome, StoreError> {
+        // Fold outside the writer transaction so the transaction's folds of
+        // the root and actor logs start from the cache.
+        self.warm_projection(root).await?;
+        self.warm_projection(recovered.claim.actor_id).await?;
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         fence_actor_claim(&mut tx, &recovered.claim).await?;
 
-        let projection = replay_projection(&mut tx, root).await?;
+        let projection = replay_projection(&self.projections, &mut tx, root).await?;
         // Accept a canonical path or a bare leaf: callers hold handles minted at
         // different times, and the roster is keyed by canonical path.
         let handle = &projection.team.canonical_member(handle);
@@ -264,6 +270,7 @@ impl SessionStore {
             }
             envelopes.extend(
                 append_resident_effects_in_transaction(
+                    &self.projections,
                     &mut tx,
                     recovered.claim.actor_id,
                     recovery_reason,
@@ -288,7 +295,8 @@ impl SessionStore {
                 queued_after: inbox_len > resident_work.inbox_through,
             }
         } else {
-            let actor_projection = replay_projection(&mut tx, recovered.claim.actor_id).await?;
+            let actor_projection =
+                replay_projection(&self.projections, &mut tx, recovered.claim.actor_id).await?;
             let pending_user_turn = actor_projection
                 .session
                 .messages
@@ -352,14 +360,17 @@ impl SessionStore {
                 &error,
                 StoreError::StaleActorClaim { actor_id } if *actor_id == claim.actor_id
             );
-            if stale && released_resident_matches(&mut tx, claim, root, handle).await? {
+            if stale
+                && released_resident_matches(&self.projections, &mut tx, claim, root, handle)
+                    .await?
+            {
                 tx.commit().await?;
                 return Ok((Vec::new(), Vec::new()));
             }
             return Err(error);
         }
 
-        let projection = replay_projection(&mut tx, root).await?;
+        let projection = replay_projection(&self.projections, &mut tx, root).await?;
         // Canonical path or bare leaf, as elsewhere on the resident paths.
         let handle = &projection.team.canonical_member(handle);
         let Some(entry) = projection.team.roster.get(handle) else {
@@ -373,8 +384,13 @@ impl SessionStore {
             ));
         }
 
-        let mut envelopes =
-            append_resident_effects_in_transaction(&mut tx, claim.actor_id, reason).await?;
+        let mut envelopes = append_resident_effects_in_transaction(
+            &self.projections,
+            &mut tx,
+            claim.actor_id,
+            reason,
+        )
+        .await?;
 
         let epoch = i64::try_from(claim.epoch.get()).map_err(|_| {
             StoreError::ActorClaimData("actor epoch exceeds SQLite INTEGER range".to_string())
@@ -442,11 +458,12 @@ fn resident_effect_terminal_events(
 }
 
 async fn append_resident_effects_in_transaction(
+    cache: &ProjectionCache,
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     actor: SessionId,
     reason: &str,
 ) -> Result<Vec<Envelope>, StoreError> {
-    let projection = replay_projection(tx, actor).await?;
+    let projection = replay_projection(cache, tx, actor).await?;
     let events = resident_effect_terminal_events(actor, &projection, reason);
     let mut envelopes = Vec::with_capacity(events.len());
     for event in events {
@@ -456,6 +473,7 @@ async fn append_resident_effects_in_transaction(
 }
 
 async fn released_resident_matches(
+    cache: &ProjectionCache,
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     claim: &ActorClaim,
     root: SessionId,
@@ -476,7 +494,7 @@ async fn released_resident_matches(
         return Ok(false);
     }
 
-    let projection = replay_projection(tx, root).await?;
+    let projection = replay_projection(cache, tx, root).await?;
     let handle = projection.team.canonical_member(handle);
     Ok(projection.team.roster.get(&handle).is_some_and(|entry| {
         entry.session == claim.actor_id
