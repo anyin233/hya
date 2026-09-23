@@ -121,7 +121,11 @@ impl From<crate::ApiError> for V1Error {
 
 impl From<hya_core::CoreError> for V1Error {
     fn from(error: hya_core::CoreError) -> Self {
-        Self::new(Code::Internal, error.to_string())
+        let code = match &error {
+            hya_core::CoreError::TurnAlreadyActive { .. } => Code::SessionBusy,
+            _ => Code::Internal,
+        };
+        Self::new(code, error.to_string())
     }
 }
 

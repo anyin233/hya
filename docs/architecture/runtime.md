@@ -207,6 +207,48 @@ remain visible as stale or unavailable.
 
 The `_for_actor` variants carry an `ActorClaim` and are the resident path.
 
+### Single active turn per session
+
+A session is one agent, and **an agent runs at most one turn at any time**.
+This is an engine invariant, not a convention: every entry point above, shell
+turns (`run_shell`), and resident actor wakes funnel through the engine's
+per-session turn gate
+([`engine/turn_gate.rs`](../../crates/hya-core/src/engine/turn_gate.rs))
+and hold its `TurnLease` for the whole turn — from before the first
+`MessageStarted` until the turn's `MessageFinished`, sidecar cleanup, and
+root-admission finalization. Separate sessions hold separate leases, so team
+members and subagents (each its own session) keep streaming concurrently with
+each other and with their lead.
+
+| Path | Claim | When the session already has a turn |
+| --- | --- | --- |
+| `run_turn*`, `run_bound_turn*`, `run_resolved_turn*` (exec, serve, goal/loop drivers, Workflow stages, subagents) | waiting | queues behind the active turn; a cancel while queued returns `FinishReason::Cancelled` with no turn |
+| `run_shell` | non-blocking | `CoreError::TurnAlreadyActive` (`session_busy` on `/v1`) |
+| resident wake (mail, quiescence synthesis) | non-blocking, taken under the team lock | the wake stays queued on the slot and is delivered at the turn boundary |
+| nested same-session `run_turn*` from inside the holding task | — | `CoreError::TurnAlreadyActive` instead of self-deadlock |
+
+Interface (all on `SessionEngine`, exported from `hya_core`):
+
+```rust
+pub fn try_begin_turn(&self, session: SessionId) -> Result<TurnLease, CoreError>;
+pub fn turn_active(&self, session: SessionId) -> bool;
+pub fn set_turn_observer(&self, observer: Weak<dyn TurnBoundaryObserver>);
+
+pub trait TurnBoundaryObserver: Send + Sync {
+    fn turn_released(&self, session: SessionId); // runs on a fresh task
+}
+// CoreError::TurnAlreadyActive { session } — "TURN_ALREADY_ACTIVE: …"
+```
+
+Dropping a `TurnLease` releases the claim, wakes queued `run_turn*` callers,
+and notifies the observer. The `ResidentSupervisor` installs itself as the
+observer: a wake that arrived while the session's turn was running (child mail
+to the lead, the `TEAM QUIESCED` synthesis notice) is re-armed at that
+boundary. Team quiescence is declared only when no team member — the lead
+included, even when its turn was started by `hya exec`/`serve` rather than the
+supervisor — has an active turn. Mail the running turn already consumed
+through in-turn steering is not replayed as a separate lead turn.
+
 After prompt admission succeeds, a root turn resolves the session workdir,
 refreshes its skill candidate if the logical view changed, and captures one
 `TurnBinding`. It then records `MessageStarted` and

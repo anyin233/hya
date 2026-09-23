@@ -13,6 +13,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::shell::BashArtifactGuard;
 use super::tool_error::{tool_error_message_value, tool_error_value};
+use super::turn_gate::{TurnLease, scope_held_turn};
 use super::{
     AgentSpec, FixedSystemAgent, SessionEngine, agent_roster, agent_with_bound_skills,
     agent_with_guidance_layer, authorize_tool_call, effective_agent_for_binding_with_sidecar_tools,
@@ -110,6 +111,9 @@ pub(crate) struct TurnRequestContext<'a> {
     actor_claim: Option<&'a ActorClaim>,
     explicit_model: Option<ModelRef>,
     workflow_route: Option<WorkflowTurnRoute>,
+    /// Turn claim already taken by the caller (resident wakes claim under the
+    /// team lock). `None` claims — queueing behind an active turn — on entry.
+    lease: Option<TurnLease>,
 }
 
 impl<'a> TurnRequestContext<'a> {
@@ -128,7 +132,14 @@ impl<'a> TurnRequestContext<'a> {
             actor_claim,
             explicit_model: None,
             workflow_route,
+            lease: None,
         }
+    }
+
+    /// Run under a turn claim the caller already holds for this session.
+    pub(crate) fn with_lease(mut self, lease: TurnLease) -> Self {
+        self.lease = Some(lease);
+        self
     }
 }
 
@@ -651,7 +662,39 @@ impl SessionEngine {
         .await
     }
 
+    /// The single turn choke point: claim the session's one active turn
+    /// (single-active-turn invariant), then run it. A caller-held lease is
+    /// used as-is; otherwise the claim queues behind an active turn and a
+    /// cancel while queued ends the request as `Cancelled` with no turn.
     async fn run_turn_with_external_dirs_and_claim(
+        &self,
+        session: SessionId,
+        agent: &AgentSpec,
+        activation: TurnActivation,
+        mut request: TurnRequestContext<'_>,
+    ) -> Result<FinishReason, CoreError> {
+        let lease = match request.lease.take() {
+            Some(lease) if lease.session() == session => lease,
+            Some(_) => {
+                return Err(CoreError::Invalid(
+                    "turn lease belongs to another session".to_string(),
+                ));
+            }
+            None => match self.begin_turn(session, &request.cancel).await? {
+                Some(lease) => lease,
+                None => return Ok(FinishReason::Cancelled),
+            },
+        };
+        let outcome = scope_held_turn(
+            session,
+            self.run_claimed_turn(session, agent, activation, request),
+        )
+        .await;
+        drop(lease);
+        outcome
+    }
+
+    async fn run_claimed_turn(
         &self,
         session: SessionId,
         agent: &AgentSpec,
@@ -665,6 +708,7 @@ impl SessionEngine {
             actor_claim,
             workflow_route,
             explicit_model,
+            lease: _,
         } = request;
         self.validate_actor_claim(actor_claim).await?;
         let projection = self.store.read_projection(session).await?;

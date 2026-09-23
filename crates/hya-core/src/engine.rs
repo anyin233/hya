@@ -76,6 +76,7 @@ mod text_complete;
 mod todos;
 mod tool_error;
 mod turn;
+mod turn_gate;
 pub(crate) use turn::TurnRequestContext;
 
 async fn authorize_tool_call(
@@ -95,6 +96,7 @@ async fn authorize_tool_call(
 
 pub use admission::SpawnAdmissionOutcome;
 pub use turn::advertise_tool;
+pub use turn_gate::{TurnBoundaryObserver, TurnLease};
 
 /// Parameters for creating a new session event log.
 pub struct CreateSession {
@@ -389,6 +391,8 @@ pub struct SessionEngine {
     mcp_background_after: Option<Duration>,
     /// Monotonic `mcpbg-N` job ids for backgrounded MCP calls.
     background_job_seq: Arc<AtomicU64>,
+    /// Single-active-turn registry shared by every clone of this engine.
+    turn_gate: Arc<turn_gate::TurnGate>,
     #[cfg(test)]
     direct_mail_pre_append_gate: Option<Arc<DirectMailPreAppendGate>>,
 }
@@ -442,6 +446,7 @@ impl Clone for SessionEngine {
             ),
             mcp_background_after: self.mcp_background_after,
             background_job_seq: self.background_job_seq.clone(),
+            turn_gate: Arc::clone(&self.turn_gate),
             #[cfg(test)]
             direct_mail_pre_append_gate: self.direct_mail_pre_append_gate.clone(),
         }
@@ -537,6 +542,7 @@ impl SessionEngine {
             reviver: RwLock::new(None),
             mcp_background_after: None,
             background_job_seq: Arc::new(AtomicU64::new(1)),
+            turn_gate: Arc::new(turn_gate::TurnGate::default()),
             #[cfg(test)]
             direct_mail_pre_append_gate: None,
         }
@@ -677,6 +683,39 @@ impl SessionEngine {
             Ok(mut slot) => *slot = Some(reviver),
             Err(poisoned) => *poisoned.into_inner() = Some(reviver),
         }
+    }
+
+    /// Claim `session`'s single active turn without waiting.
+    ///
+    /// A session runs at most one turn at a time; every turn path holds this
+    /// lease for the whole turn. Dropping the lease releases the claim.
+    ///
+    /// # Errors
+    /// [`CoreError::TurnAlreadyActive`] when the session already has a turn.
+    pub fn try_begin_turn(&self, session: SessionId) -> Result<TurnLease, CoreError> {
+        self.turn_gate.try_acquire(session)
+    }
+
+    /// Whether `session` currently has an active turn.
+    #[must_use]
+    pub fn turn_active(&self, session: SessionId) -> bool {
+        self.turn_gate.is_active(session)
+    }
+
+    /// Install the turn-boundary observer (the resident supervisor). Held
+    /// weakly so the observer may own the engine.
+    pub fn set_turn_observer(&self, observer: std::sync::Weak<dyn TurnBoundaryObserver>) {
+        self.turn_gate.set_observer(observer);
+    }
+
+    /// Claim `session`'s turn, queueing behind an active one. `Ok(None)` when
+    /// `cancel` fires while waiting.
+    pub(crate) async fn begin_turn(
+        &self,
+        session: SessionId,
+        cancel: &tokio_util::sync::CancellationToken,
+    ) -> Result<Option<TurnLease>, CoreError> {
+        self.turn_gate.acquire(session, cancel).await
     }
 
     /// The installed archive reviver, if any.
