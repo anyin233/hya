@@ -203,6 +203,14 @@ errors (authentication expiry, protocol incompatibility, decode failures) fail
 the turn immediately without consuming the chain. With no chain configured the
 engine makes exactly one direct router call — behavior is unchanged.
 
+**Plugin-chosen fallback (`model.fallback`).** When the configured chain can
+no longer advance, whatever the error class, the engine asks the active hooks'
+[`model.fallback`](../plugin-protocol.md#modelfallback-choose-the-next-model-before-a-stream-exists)
+for the next model. A `retry` re-enters the router with that model and its own
+reasoning variant. A model already tried this round is refused. A round makes
+at most eight attempts, counting the chain. Workflow-routed turns keep their
+declared candidate list and never ask the hook.
+
 **Shared no-replay boundary.** Both levels stop recovering at the same line:
 once a provider returns an event stream, model selection is final. A mid-stream
 SSE error is delivered once to the turn, unchanged, and is never retried,

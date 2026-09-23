@@ -5,8 +5,8 @@ use async_trait::async_trait;
 use std::future::Future;
 use std::sync::{Arc, RwLock};
 
-use hya_proto::{AgentName, Envelope, MessageId, PartId, SessionId, ToolCallId};
-use hya_provider::CompletionRequest;
+use hya_proto::{AgentName, Envelope, MessageId, ModelRef, PartId, SessionId, ToolCallId};
+use hya_provider::{CompletionRequest, ProviderError};
 use hya_tool::{Action, Decision, Resource};
 use serde_json::Value;
 
@@ -65,6 +65,17 @@ pub trait HookDispatcher: Send + Sync {
     async fn tool_execute_before(&self, input: ToolExecuteBeforeInput) -> ToolExecuteBeforeOutcome;
     /// Rewrite tool results or error messages after execution.
     async fn tool_execute_after(&self, input: ToolExecuteAfterInput) -> ToolExecuteAfterOutcome;
+    /// Choose the next model after a provider failed before any stream
+    /// existed (`model.fallback`).
+    ///
+    /// Consulted only once the engine's configured cross-model chain can no
+    /// longer advance, and never after a stream was returned. Fail-open by
+    /// construction: implementors report errors, timeouts, and malformed
+    /// replies as [`ModelFallbackOutcome::GiveUp`]. The default gives up.
+    async fn model_fallback(&self, input: ModelFallbackInput) -> ModelFallbackOutcome {
+        let _ = input;
+        ModelFallbackOutcome::GiveUp
+    }
     /// Consulted before the engine compacts context.
     ///
     /// Implementors should be fail-open by construction: the engine additionally
@@ -347,6 +358,17 @@ impl HookDispatcher for HookChain {
         ToolExecuteAfterOutcome::Continue {
             result: input.result,
         }
+    }
+
+    async fn model_fallback(&self, input: ModelFallbackInput) -> ModelFallbackOutcome {
+        for dispatcher in &self.dispatchers {
+            if let retry @ ModelFallbackOutcome::Retry { .. } =
+                dispatcher.model_fallback(input.clone()).await
+            {
+                return retry;
+            }
+        }
+        ModelFallbackOutcome::GiveUp
     }
 
     async fn compaction_before(&self, input: CompactionBeforeInput) -> CompactionDecision {
@@ -672,6 +694,92 @@ pub enum ToolExecuteBeforeOutcome {
     },
 }
 
+/// Class of a pre-stream provider failure, as reported to `model.fallback`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ModelFailureClass {
+    /// Transport failure, HTTP 429, or HTTP 5xx
+    /// ([`ProviderError::is_retryable_before_stream`]).
+    Retryable,
+    /// No provider route claims the model.
+    UnknownModel,
+    /// Expired credentials, or HTTP 401/403.
+    Auth,
+    /// Another HTTP 4xx, or a route that cannot serve this request.
+    InvalidRequest,
+    /// Anything else (decode, JSON, provider error frame, other statuses).
+    Other,
+}
+
+impl ModelFailureClass {
+    /// Classify a provider error returned before any stream existed.
+    #[must_use]
+    pub fn of(error: &ProviderError) -> Self {
+        if error.is_retryable_before_stream() {
+            return Self::Retryable;
+        }
+        match error {
+            ProviderError::UnknownModel(_) => Self::UnknownModel,
+            ProviderError::AuthExpired { .. }
+            | ProviderError::HttpStatus {
+                status: 401 | 403, ..
+            } => Self::Auth,
+            ProviderError::HttpStatus { status, .. } if (400..500).contains(status) => {
+                Self::InvalidRequest
+            }
+            ProviderError::Incompatible(_) => Self::InvalidRequest,
+            _ => Self::Other,
+        }
+    }
+
+    /// Wire spelling (`retryable`, `unknown_model`, `auth`,
+    /// `invalid_request`, `other`).
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Retryable => "retryable",
+            Self::UnknownModel => "unknown_model",
+            Self::Auth => "auth",
+            Self::InvalidRequest => "invalid_request",
+            Self::Other => "other",
+        }
+    }
+}
+
+/// Input to `model_fallback`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ModelFallbackInput {
+    /// Session making the completion.
+    pub session: SessionId,
+    /// Root of `session`'s spawn tree; equals `session` for a root.
+    pub root_session: SessionId,
+    /// Stable id of the agent bound to `session`, when known.
+    pub agent: Option<AgentName>,
+    /// Assistant message being prepared.
+    pub message: MessageId,
+    /// Model whose attempt just failed.
+    pub model: ModelRef,
+    /// Class of the failure.
+    pub error_class: ModelFailureClass,
+    /// Display text of the failure.
+    pub error_message: String,
+    /// 1-based count of failed attempts so far in this round.
+    pub attempt: u32,
+    /// Models already attempted in this round, in order (all failed).
+    pub tried: Vec<ModelRef>,
+}
+
+/// Outcome of `model_fallback`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ModelFallbackOutcome {
+    /// Attempt the completion again on `model`.
+    Retry {
+        /// Next model to try.
+        model: ModelRef,
+    },
+    /// No opinion: let the next hook decide, or surface the failure.
+    GiveUp,
+}
+
 /// Native tool result shape passed through after-hooks.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ToolOutcomeNative {
@@ -960,6 +1068,46 @@ mod tests {
                 result: input.result,
             }
         }
+
+        async fn model_fallback(&self, _input: ModelFallbackInput) -> ModelFallbackOutcome {
+            ModelFallbackOutcome::Retry {
+                model: ModelRef::new(self.0),
+            }
+        }
+    }
+
+    /// `model.fallback` chains like `permission.ask`: give-ups pass the
+    /// consult on, and the first `retry` in dispatch order wins.
+    #[tokio::test]
+    async fn hook_chain_model_fallback_first_retry_wins() {
+        let input = ModelFallbackInput {
+            session: SessionId::new(),
+            root_session: SessionId::new(),
+            agent: None,
+            message: MessageId::new(),
+            model: ModelRef::new("alpha"),
+            error_class: ModelFailureClass::Retryable,
+            error_message: "reset".to_string(),
+            attempt: 1,
+            tried: vec![ModelRef::new("alpha")],
+        };
+        let chain = HookChain::new(vec![
+            Arc::new(NoopHookHost),
+            Arc::new(PrefixHook("beta")),
+            Arc::new(PrefixHook("gamma")),
+        ]);
+        assert_eq!(
+            chain.model_fallback(input.clone()).await,
+            ModelFallbackOutcome::Retry {
+                model: ModelRef::new("beta")
+            }
+        );
+        assert_eq!(
+            HookChain::new(vec![Arc::new(NoopHookHost)])
+                .model_fallback(input)
+                .await,
+            ModelFallbackOutcome::GiveUp
+        );
     }
 
     #[tokio::test]

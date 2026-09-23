@@ -362,3 +362,85 @@ agents:
     );
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[tokio::test]
+async fn plugin_model_fallback_recovers_an_unrouted_model_before_the_stream() {
+    let root = std::env::temp_dir().join(format!("hya-fallback-e2e-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    // chat.params routes the turn to a model no provider serves; the
+    // pre-stream UnknownModel failure then asks model.fallback, which names
+    // the fake model the turn started on.
+    let script = r#"import json,sys
+for line in sys.stdin:
+ r=json.loads(line)
+ method=r.get('method')
+ if method == 'initialize':
+  result={'protocol_version':1,'plugin':{'id':'fallback','version':'1.0.0','kind':'rust'},'hooks':[{'name':'chat.params'},{'name':'model.fallback'}],'tools':[]}
+ elif method == 'hook/chat.params':
+  q=r['params']['request']; original=q['model']; q['model']='ghost/unrouted'
+  q['system']=(q.get('system') or '')+' ORIGINAL_MODEL='+original
+  result={'outcome':'continue','request':q}
+ elif method == 'hook/model.fallback':
+  p=r['params']
+  if p['model']=='ghost/unrouted' and p['error']['class']=='unknown_model' and p['attempt']==1 and p['tried']==['ghost/unrouted']:
+   result={'outcome':'retry','model':'fake/model'}
+  else:
+   result={'outcome':'give_up'}
+ else: result={}
+ if 'id' in r: print(json.dumps({'jsonrpc':'2.0','id':r['id'],'result':result}),flush=True)
+"#;
+    let source = BundleSource::new(
+        "fallback",
+        vec![
+            SourceFile::new(
+                "bundle.yaml",
+                br#"kind: Plugin
+identity: { id: acme/fallback, version: 1.0.0, publisher: acme }
+extensions:
+  process: { kind: rust, command: [python3, '${BUNDLE_ROOT}/runtime.py'] }
+  files:
+    - { id: runtime, path: runtime.py }
+resources:
+  hooks:
+    - { id: chat.params, path: hook.json }
+    - { id: model.fallback, path: hook.json }
+"#,
+            ),
+            SourceFile::new("runtime.py", script),
+            SourceFile::new("hook.json", "{}"),
+        ],
+    );
+    let package = root.join("fallback.hyabundle");
+    std::fs::write(&package, write_public_package(&source).unwrap()).unwrap();
+    let env = E2eEnvBuilder::new()
+        .scripts(vec![text_step("RECOVERED")])
+        .build()
+        .await
+        .unwrap();
+    let install = env
+        .backend
+        .bundle_cli(&["bundle", "install", "-y", package.to_str().unwrap()])
+        .unwrap();
+    assert!(
+        install.status.success(),
+        "{}",
+        String::from_utf8_lossy(&install.stderr)
+    );
+    std::fs::remove_file(package).unwrap();
+    let session = env.create_session().await.unwrap();
+    let turn = env.prompt(session, "route me").await.unwrap();
+    assert!(
+        turn.error_message.is_empty(),
+        "model.fallback must recover the unrouted model: {}; {}",
+        turn.error_message,
+        env.diagnostics()
+    );
+    let requests = env.fake.requests().unwrap();
+    assert_eq!(requests.len(), 1, "{}", env.diagnostics());
+    assert!(
+        fake_requests_from(&requests, 0).contains("ORIGINAL_MODEL=fake/model"),
+        "{}",
+        env.diagnostics()
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}

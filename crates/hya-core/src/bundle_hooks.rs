@@ -140,6 +140,13 @@ impl HookDispatcher for ScopedBundleHooks {
             }
         }
     }
+    async fn model_fallback(&self, input: ModelFallbackInput) -> ModelFallbackOutcome {
+        if self.has("model.fallback") {
+            self.dispatcher.model_fallback(input).await
+        } else {
+            ModelFallbackOutcome::GiveUp
+        }
+    }
     async fn compaction_before(&self, input: CompactionBeforeInput) -> CompactionDecision {
         if self.has("compaction.before") {
             self.dispatcher.compaction_before(input).await

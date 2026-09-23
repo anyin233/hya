@@ -9,9 +9,9 @@ use hya_core::hooks::{
     AgentSpawnInput, ChatParamsInput, ChatParamsOutcome, CommandExecuteBeforeInput,
     CommandExecuteBeforeOutcome, CompactionAfterInput, CompactionBeforeInput, CompactionDecision,
     CompactionTrigger, GoalEvaluateReply, HookDispatcher, MessageUserBeforeInput,
-    MessageUserBeforeOutcome, SessionLifecycleInput, TextCompleteInput, TextCompleteOutcome,
-    ToolExecuteAfterInput, ToolExecuteAfterOutcome, ToolExecuteBeforeInput,
-    ToolExecuteBeforeOutcome, ToolOutcomeNative,
+    MessageUserBeforeOutcome, ModelFailureClass, ModelFallbackInput, ModelFallbackOutcome,
+    SessionLifecycleInput, TextCompleteInput, TextCompleteOutcome, ToolExecuteAfterInput,
+    ToolExecuteAfterOutcome, ToolExecuteBeforeInput, ToolExecuteBeforeOutcome, ToolOutcomeNative,
 };
 use hya_core::loop_mode::{EvidenceQuality, PlannerOutput, VerifierVerdict};
 use hya_proto::Envelope;
@@ -25,9 +25,10 @@ use crate::messages::{
     AgentSpawnParams, ChatParamsOutcomeWire, ChatParamsParams, CommandBeforeOutcomeWire,
     CommandExecuteBeforeParams, CompactionAfterParams, CompactionBeforeOutcomeWire,
     CompactionBeforeParams, HookName, HookPosture, MessageUserBeforeOutcomeWire,
-    MessageUserBeforeParams, SessionLifecycleParams, TextCompleteOutcomeWire, TextCompleteParams,
-    ToolAfterOutcomeWire, ToolBeforeOutcomeWire, ToolExecuteAfterParams, ToolExecuteBeforeParams,
-    WireCompletionRequest, WireToolResult,
+    MessageUserBeforeParams, ModelFailureClassWire, ModelFallbackErrorWire,
+    ModelFallbackOutcomeWire, ModelFallbackParams, SessionLifecycleParams, TextCompleteOutcomeWire,
+    TextCompleteParams, ToolAfterOutcomeWire, ToolBeforeOutcomeWire, ToolExecuteAfterParams,
+    ToolExecuteBeforeParams, WireCompletionRequest, WireToolResult,
 };
 
 const GUARD_FAILED_SAFE: &str = "guard failed safe";
@@ -192,6 +193,54 @@ impl HookDispatcher for PluginHost {
         ToolExecuteAfterOutcome::Continue {
             result: wire_to_outcome(result),
         }
+    }
+
+    async fn model_fallback(&self, input: ModelFallbackInput) -> ModelFallbackOutcome {
+        let params = ModelFallbackParams {
+            session: input.session,
+            root_session: input.root_session,
+            agent: input.agent,
+            message: input.message,
+            model: input.model,
+            error: ModelFallbackErrorWire {
+                class: failure_class_to_wire(input.error_class),
+                message: input.error_message,
+            },
+            attempt: input.attempt,
+            tried: input.tried,
+        };
+        for conn in self.plugins() {
+            if conn.posture(HookName::ModelFallback).is_none() {
+                continue;
+            }
+            match call_outcome::<ModelFallbackOutcomeWire>(conn, HookName::ModelFallback, &params)
+                .await
+            {
+                Ok(ModelFallbackOutcomeWire::Retry { model })
+                    if !model.as_str().trim().is_empty() =>
+                {
+                    return ModelFallbackOutcome::Retry { model };
+                }
+                Ok(ModelFallbackOutcomeWire::Retry { .. }) => {
+                    tracing::warn!(
+                        plugin = %conn.id,
+                        hook = HookName::ModelFallback.as_str(),
+                        "model.fallback retry named an empty model; treating it as give_up"
+                    );
+                }
+                Ok(ModelFallbackOutcomeWire::GiveUp) => {}
+                Err(failed) => {
+                    // Fail-open, posture notwithstanding: a broken hook reads
+                    // as give_up and the next plugin still gets the consult.
+                    tracing::warn!(
+                        plugin = %conn.id,
+                        hook = HookName::ModelFallback.as_str(),
+                        "model.fallback hook failed; treating it as give_up: {failed}"
+                    );
+                }
+            }
+        }
+        ModelFallbackOutcome::GiveUp
     }
 
     async fn compaction_before(&self, input: CompactionBeforeInput) -> CompactionDecision {
@@ -661,6 +710,16 @@ fn wire_to_request(wire: WireCompletionRequest, original: &CompletionRequest) ->
             .and_then(ReasoningEffort::parse)
             .or(original.reasoning),
         headers: wire.headers,
+    }
+}
+
+fn failure_class_to_wire(class: ModelFailureClass) -> ModelFailureClassWire {
+    match class {
+        ModelFailureClass::Retryable => ModelFailureClassWire::Retryable,
+        ModelFailureClass::UnknownModel => ModelFailureClassWire::UnknownModel,
+        ModelFailureClass::Auth => ModelFailureClassWire::Auth,
+        ModelFailureClass::InvalidRequest => ModelFailureClassWire::InvalidRequest,
+        ModelFailureClass::Other => ModelFailureClassWire::Other,
     }
 }
 

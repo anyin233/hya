@@ -6,6 +6,11 @@ import {
   type ToolBeforeOutcome,
   type WireToolResult,
 } from "./hooks"
+import {
+  runModelFallbackHooks,
+  type ModelFallbackOutcome,
+  type ModelFallbackParams,
+} from "./model_fallback_hooks"
 import { runPermissionAskHooks, type PermissionAskParams, type PermissionOutcome } from "./permission_hooks"
 import { ERROR_CODES, errorResponse, okResponse, type JsonRpcRequest } from "./protocol"
 import { runTextHooks, type TextOutcome } from "./text_hooks"
@@ -106,6 +111,21 @@ export async function handlePermissionAsk(
   }
 }
 
+export async function handleModelFallback(
+  request: JsonRpcRequest,
+  context: RequestContext,
+): Promise<HandledRequest> {
+  const params = validateModelFallbackParams(request.params)
+  if (!params.ok) {
+    return invalidParams(request.id, params.message)
+  }
+  const outcome: ModelFallbackOutcome = await runModelFallbackHooks(context.hooks, params.value)
+  return {
+    response: okResponse(request.id, outcome),
+    shouldExit: false,
+  }
+}
+
 export async function handleToolExecuteBefore(
   request: JsonRpcRequest,
   context: RequestContext,
@@ -175,6 +195,34 @@ function optionalStrings(
     }
   }
   return present
+}
+
+function validateModelFallbackParams(value: unknown): ValidationResult<ModelFallbackParams> {
+  const params = recordWithStrings(value, ["session", "root_session", "message", "model"], ["agent"])
+  if (!params.ok) {
+    return params
+  }
+  const error = params.value.error
+  if (!isRecord(error) || !isNonEmptyString(error.class) || typeof error.message !== "string") {
+    return { ok: false, message: "params.error must be an object with a class and message" }
+  }
+  if (!isInt(params.value.attempt) || params.value.attempt < 1) {
+    return { ok: false, message: "params.attempt must be a positive integer" }
+  }
+  const tried = params.value.tried
+  if (!Array.isArray(tried) || !tried.every((model) => typeof model === "string")) {
+    return { ok: false, message: "params.tried must be an array of strings" }
+  }
+  return ok({
+    session: params.value.session as string,
+    root_session: params.value.root_session as string,
+    ...optionalStrings(params.value, ["agent"]),
+    message: params.value.message as string,
+    model: params.value.model as string,
+    error: { class: error.class, message: error.message },
+    attempt: params.value.attempt,
+    tried: tried as string[],
+  })
 }
 
 function validatePermissionParams(

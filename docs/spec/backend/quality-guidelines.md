@@ -929,7 +929,11 @@ Bumping the version means updating **all** of these together:
   route only after a retryable pre-stream failure.
 - Core model fallback re-enters the router with the next category candidate on a
   retryable pre-stream error or `UnknownModel`; it never consumes non-retryable
-  protocol, compatibility, decode, or human-action auth errors.
+  protocol, compatibility, decode, or human-action auth errors. Once that chain
+  stops (any class), the `model.fallback` hook may name one more model per
+  consult; already-tried models are refused, a round is capped at eight
+  attempts, and the hook is never consulted after a stream exists or on a
+  Workflow-routed turn.
 - The header deadline is a retryable transport failure. The SSE idle deadline is
   delivered once on the established stream; before the first frame it joins the
   zero-event replay window, after any frame it is terminal and not retryable. A

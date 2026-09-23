@@ -189,7 +189,10 @@ Agent-bearing JavaScript bundles retain their activation-scoped sidecars.
   the owner's `hook_refs` (unselected hooks do not execute), then its
   activation sidecar's restricted hooks. A Plugin never dispatches twice in one
   chain. Native hook names and payloads are defined in the plugin protocol;
-  `chat.params` also carries the session's `root_session` and `agent`.
+  `chat.params` also carries the session's `root_session` and `agent`. A
+  process-backed bundle (explicit `extensions.process`) may declare
+  `model.fallback` to pick the next model after a pre-stream provider failure;
+  implicit JavaScript Plugins keep the `event`/`tool.execute.*` hook set.
 - Command and user-message admission hooks resolve from the fresh immutable
   binding admitted for that input. Session event hooks continue receiving that
   session's envelopes outside an active turn through the captured hook chain;

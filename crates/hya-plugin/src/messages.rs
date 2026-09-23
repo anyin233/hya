@@ -93,6 +93,10 @@ pub enum HookName {
     /// Notified when a subagent is registered under its parent.
     #[serde(rename = "agent.spawn")]
     AgentSpawn,
+    /// Choose the next model after a provider failed before any stream
+    /// existed: `retry{model}` or `give_up`. First `retry` wins; fail-open.
+    #[serde(rename = "model.fallback")]
+    ModelFallback,
 }
 
 impl HookName {
@@ -117,6 +121,7 @@ impl HookName {
             HookName::SessionStart => "session.start",
             HookName::SessionEnd => "session.end",
             HookName::AgentSpawn => "agent.spawn",
+            HookName::ModelFallback => "model.fallback",
         }
     }
 
@@ -147,6 +152,7 @@ impl HookName {
             "session.start" => HookName::SessionStart,
             "session.end" => HookName::SessionEnd,
             "agent.spawn" => HookName::AgentSpawn,
+            "model.fallback" => HookName::ModelFallback,
             _ => return None,
         })
     }
@@ -941,4 +947,64 @@ pub struct AgentSpawnParams {
     pub parent: SessionId,
     /// Session of the freshly registered child.
     pub child: SessionId,
+}
+
+/// Class of a pre-stream provider failure in `hook/model.fallback`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelFailureClassWire {
+    /// Transport failure, HTTP 429, or HTTP 5xx.
+    Retryable,
+    /// No provider route claims the model.
+    UnknownModel,
+    /// Expired credentials, or HTTP 401/403.
+    Auth,
+    /// Another HTTP 4xx, or a route that cannot serve the request.
+    InvalidRequest,
+    /// Anything else.
+    Other,
+}
+
+/// The failure a `hook/model.fallback` call reports.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelFallbackErrorWire {
+    /// Failure class.
+    pub class: ModelFailureClassWire,
+    /// Display text of the provider error.
+    pub message: String,
+}
+
+/// Params for `hook/model.fallback`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelFallbackParams {
+    /// Session making the completion.
+    pub session: SessionId,
+    /// Root of the session's spawn tree; equals `session` for a root.
+    pub root_session: SessionId,
+    /// Stable id of the agent bound to `session`, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<AgentName>,
+    /// Assistant message being prepared.
+    pub message: MessageId,
+    /// Model whose attempt just failed.
+    pub model: ModelRef,
+    /// The failure.
+    pub error: ModelFallbackErrorWire,
+    /// 1-based count of failed attempts so far in this round.
+    pub attempt: u32,
+    /// Models already attempted in this round, in order (all failed).
+    pub tried: Vec<ModelRef>,
+}
+
+/// Outcome for `model.fallback`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "outcome", rename_all = "snake_case")]
+pub enum ModelFallbackOutcomeWire {
+    /// Attempt the completion again on `model` (`provider/model`).
+    Retry {
+        /// Next model to try.
+        model: ModelRef,
+    },
+    /// No opinion: the next plugin decides, or the failure surfaces.
+    GiveUp,
 }
