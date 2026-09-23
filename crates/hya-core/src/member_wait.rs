@@ -50,7 +50,7 @@ pub(crate) async fn wait_for_members(
     let mut bus = engine.bus().subscribe();
     let (root, _) = engine.session_lineage(caller).await?;
     let caller_path = engine.resolve_handle(root, caller).await?;
-    let projection = engine.read_projection(root).await?;
+    let projection = engine.read_projection_shared(root).await?;
     let targets = wait_targets(&projection, root, &caller_path, &spec.targets)?;
     // Mail at or after this inbox index is new to the caller: in-turn steering
     // advances the durable cursor as it surfaces mail, and a resident wake
@@ -65,7 +65,8 @@ pub(crate) async fn wait_for_members(
     let mail_only = targets.is_empty() && spec.wake_on_mail && caller != root;
     let deadline = tokio::time::Instant::now() + spec.timeout;
     loop {
-        let projection = engine.read_projection(root).await?;
+        // Shared cached fold: each wake folds only the root's new events.
+        let projection = engine.read_projection_shared(root).await?;
         let (finished, running) = evaluate(engine, supervisor, root, &projection, &targets).await;
         let mail = if spec.wake_on_mail {
             new_mail(&projection, &caller_path, seen)
@@ -239,8 +240,13 @@ async fn terminal_row(
     engine: &SessionEngine,
     child: SessionId,
 ) -> Option<(MemberRunStatus, String)> {
-    let parent = engine.read_projection(child).await.ok()?.session.parent?;
-    let parent_projection = engine.read_projection(parent).await.ok()?;
+    let parent = engine
+        .read_projection_shared(child)
+        .await
+        .ok()?
+        .session
+        .parent?;
+    let parent_projection = engine.read_projection_shared(parent).await.ok()?;
     parent_projection
         .session
         .members
@@ -252,7 +258,7 @@ async fn terminal_row(
 
 /// The tail of the member's last assistant answer, bounded.
 async fn last_answer(engine: &SessionEngine, session: SessionId) -> Option<String> {
-    let projection = engine.read_projection(session).await.ok()?;
+    let projection = engine.read_projection_shared(session).await.ok()?;
     let message = projection
         .session
         .messages

@@ -949,12 +949,12 @@ impl SessionEngine {
         session: SessionId,
         workdir: &Path,
     ) -> Result<TurnBinding, CoreError> {
-        let projection = self.read_projection(session).await?;
+        let projection = self.read_projection_shared(session).await?;
         if projection.session.id != Some(session) {
             return Err(CoreError::Invalid(format!("session not found: {session}")));
         }
         let (root, _) = self.session_lineage(session).await?;
-        let root_projection = self.read_projection(root).await?;
+        let root_projection = self.read_projection_shared(root).await?;
         if root_projection.session.id != Some(root) {
             return Err(CoreError::Invalid(format!(
                 "session root not found: {root}"
@@ -964,8 +964,9 @@ impl SessionEngine {
         let overrides = root_projection
             .session
             .agent_model_overrides
-            .into_iter()
+            .iter()
             .filter(|(_, model)| self.provider_router().resolve(model).is_some())
+            .map(|(agent, model)| (agent.clone(), model.clone()))
             .collect::<BTreeMap<_, _>>();
         Ok(binding.with_session_agent_models(overrides))
     }
@@ -1079,6 +1080,20 @@ impl SessionEngine {
         Ok(self.store.read_projection(session).await?)
     }
 
+    /// Shared handle to the session's folded projection, without a deep clone.
+    ///
+    /// Same fold as [`SessionEngine::read_projection`] (the store's projection
+    /// cache); prefer it on hot paths that re-read large team-root logs.
+    ///
+    /// # Errors
+    /// Returns store failures as [`CoreError::Store`].
+    pub async fn read_projection_shared(
+        &self,
+        session: SessionId,
+    ) -> Result<Arc<Projection>, CoreError> {
+        Ok(self.store.read_projection_shared(session).await?)
+    }
+
     /// Refresh the runtime catalog (when an app refresher is configured) so
     /// bundle API lookups see newly installed bundles. A failed refresh keeps
     /// the live generation and is only logged: a bundle endpoint must not fail
@@ -1142,8 +1157,11 @@ impl SessionEngine {
         let mut current = session;
         let mut depth = 0u32;
         for _ in 0..1024 {
-            let projection = self.read_projection(current).await?;
-            match projection.session.parent {
+            let parent = self
+                .store
+                .with_projection(current, |projection| projection.session.parent)
+                .await?;
+            match parent {
                 Some(parent) => {
                     current = parent;
                     depth = depth.saturating_add(1);
@@ -1221,7 +1239,7 @@ impl SessionEngine {
     async fn record_session_usage(&self, session: SessionId) -> Result<(), CoreError> {
         use hya_proto::{MessageProjection, PartProjection};
 
-        let projection = self.store.read_projection(session).await?;
+        let projection = self.store.read_projection_shared(session).await?;
         let Some(message) = projection
             .session
             .messages
