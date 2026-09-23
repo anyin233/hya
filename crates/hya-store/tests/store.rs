@@ -50,6 +50,7 @@ async fn migration_applies_and_projection_is_correct() {
             role: Role::Assistant,
             finish: FinishReason::Stop,
             tokens: None,
+            cause: None,
         },
     ];
     for e in &events {

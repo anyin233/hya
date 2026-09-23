@@ -434,6 +434,35 @@ back to `build`. `hya run`, `hya -p` goal mode, `hya loop`, `hya rpc`, and
 `hya workflow run` (when it creates a new Session) all resolve the root Agent
 the same way.
 
+**Stopping and end of run.** Nothing keeps streaming after `exec` returns.
+When the lead's turn ends, `exec` drains every other in-flight turn — team
+members, subagents, and a quiescence-synthesis turn that may have started on
+the lead — before it flushes the trajectory, so the log (and `--json` stdout)
+ends on terminal events: each open assistant message gets `message_finished
+{ finish: "cancelled", cause }`, open tool parts get a `tool_error`, members go
+terminal. The cause is `shutdown`, or `leader_failed` when the lead's turn
+failed (then the exit status is 1).
+
+| Signal during the run | What happens | `cause` | Exit status |
+| --- | --- | --- | --- |
+| SIGINT (Ctrl-C) | Drain: every in-flight turn in every session is cancelled and closed; the transcript/trajectory is still printed | `user_cancel` | **130** |
+| second SIGINT while draining | Exit immediately; the next start's crash recovery closes what is left (`cause: interrupted`) | — | **130** |
+| SIGTERM | Drain as above | `shutdown` | **143** |
+
+The drain waits at most **5 s** (`DRAIN_DEADLINE`) for cancelled turns to
+close themselves, then closes any still-open message itself. A process killed
+outright (SIGKILL, crash) leaves turns open; the next `hya` process that opens
+the same `--db` closes them at startup with `cause: interrupted`, once. The same
+stop handling applies to `hya run`, `hya -p`, and `hya loop`; `hya rpc` and
+`hya workflow` drain at their normal end. Example:
+
+```sh
+hya --db run.db exec --json "long task" & pid=$!
+sleep 5; kill -INT $pid; wait $pid   # exit 130
+hya --db run.db tail-session <session> | tail -1
+# {"seq":12,…,"event":{"type":"message_finished",…,"finish":"cancelled","cause":"user_cancel"}}
+```
+
 ## `hya run`
 
 ```sh
@@ -491,9 +520,17 @@ change its wording. Source: [`serve.rs`](../crates/hya-backend/src/serve.rs).
 
 **Signal handling.** SIGTERM, SIGINT, and SIGHUP handlers are installed
 **before** the listen line is printed (an e2e-harness ordering requirement: a
-harness that sees the URL may signal immediately). Those signals trigger a
-graceful axum shutdown followed by spawn-supervisor teardown, so the process
-terminates normally with exit code **0** rather than dying by signal. This
+harness that sees the URL may signal immediately). A signal first drains the
+engine — every in-flight turn in every session (roots and members) is
+cancelled with `cause: shutdown` and closes its messages and tool parts within
+the 5 s drain deadline, resident members go terminal, each lead is parked
+`idle`, and new turns are refused — then the graceful axum shutdown and
+spawn-supervisor teardown run, so the process terminates normally with exit
+code **0** rather than dying by signal. A `/v1` turn cancel
+(`POST /v1/sessions/{id}/turns/{turn}/cancel`) closes that session's turn with
+`cause: user_cancel`, and `SessionInfo.busy` is true while any engine turn runs
+on the session (including a resident wake or synthesis turn the client did not
+start). This
 matters for supervisors (systemd, `docker stop`) and for test harnesses that
 assert a clean exit.
 
@@ -662,4 +699,4 @@ flag list is in [Secure self-update](self-update.md).
 
 | Binary | Success | Failure / notes |
 | --- | --- | --- |
-| `hya` | **0** on success (including the bare guidance banner, `serve` graceful signal shutdown, and `tail-session` broken-pipe). | **1** with the full `anyhow` error chain printed to stderr on any error — CLI validation failures use the same path. |
+| `hya` | **0** on success (including the bare guidance banner, `serve` graceful signal shutdown, and `tail-session` broken-pipe). **130** / **143** when `exec`/`run`/`-p`/`loop` was stopped by SIGINT / SIGTERM (after the drain). | **1** with the full `anyhow` error chain printed to stderr on any error — CLI validation failures use the same path. |

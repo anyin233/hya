@@ -3839,6 +3839,9 @@ pub struct MessageInfo {
     /// When the message projection last changed.
     #[prost(message, optional, tag = "9")]
     pub time_updated: ::core::option::Option<::pbjson_types::Timestamp>,
+    /// Harness cause of the finish (cancel, shutdown, crash recovery, provider failure).
+    #[prost(enumeration = "FinishCause", tag = "10")]
+    pub finish_cause: i32,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListMessagesRequest {
@@ -3948,6 +3951,56 @@ impl FinishReason {
             "FINISH_REASON_LENGTH" => Some(Self::Length),
             "FINISH_REASON_CANCELLED" => Some(Self::Cancelled),
             "FINISH_REASON_ERROR" => Some(Self::Error),
+            _ => None,
+        }
+    }
+}
+/// Why the harness (not the model) ended an assistant message. Context on
+/// top of FinishReason; unset when the model ended the message itself.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum FinishCause {
+    /// No harness cause recorded.
+    Unspecified = 0,
+    /// A user stopped the turn (client abort, SIGINT on a one-shot run).
+    UserCancel = 1,
+    /// The process stopped gracefully and drained in-flight turns.
+    Shutdown = 2,
+    /// The member was stopped because its team lead's turn failed.
+    LeaderFailed = 3,
+    /// The process died with the turn open; closed by startup crash recovery.
+    Interrupted = 4,
+    /// The model provider failed the turn.
+    ProviderError = 5,
+    /// A cause this server build does not name.
+    Other = 6,
+}
+impl FinishCause {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "FINISH_CAUSE_UNSPECIFIED",
+            Self::UserCancel => "FINISH_CAUSE_USER_CANCEL",
+            Self::Shutdown => "FINISH_CAUSE_SHUTDOWN",
+            Self::LeaderFailed => "FINISH_CAUSE_LEADER_FAILED",
+            Self::Interrupted => "FINISH_CAUSE_INTERRUPTED",
+            Self::ProviderError => "FINISH_CAUSE_PROVIDER_ERROR",
+            Self::Other => "FINISH_CAUSE_OTHER",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "FINISH_CAUSE_UNSPECIFIED" => Some(Self::Unspecified),
+            "FINISH_CAUSE_USER_CANCEL" => Some(Self::UserCancel),
+            "FINISH_CAUSE_SHUTDOWN" => Some(Self::Shutdown),
+            "FINISH_CAUSE_LEADER_FAILED" => Some(Self::LeaderFailed),
+            "FINISH_CAUSE_INTERRUPTED" => Some(Self::Interrupted),
+            "FINISH_CAUSE_PROVIDER_ERROR" => Some(Self::ProviderError),
+            "FINISH_CAUSE_OTHER" => Some(Self::Other),
             _ => None,
         }
     }
@@ -5575,6 +5628,9 @@ pub struct MessageFinished {
     /// Token usage of the final round when the backend accounts it here.
     #[prost(message, optional, tag = "3")]
     pub usage: ::core::option::Option<TokenUsage>,
+    /// Harness cause of the finish (cancel, shutdown, crash recovery, provider failure).
+    #[prost(enumeration = "FinishCause", tag = "4")]
+    pub cause: i32,
 }
 /// A part was appended to a message.
 #[derive(Clone, PartialEq, ::prost::Message)]

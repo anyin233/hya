@@ -226,6 +226,7 @@ each other and with their lead.
 | `run_shell` | non-blocking | `CoreError::TurnAlreadyActive` (`session_busy` on `/v1`) |
 | resident wake (mail, quiescence synthesis) | non-blocking, taken under the team lock | the wake stays queued on the slot and is delivered at the turn boundary |
 | nested same-session `run_turn*` from inside the holding task | — | `CoreError::TurnAlreadyActive` instead of self-deadlock |
+| any claim after a drain began | — | refused: `CoreError::Cancelled` (non-blocking) or `Ok(Cancelled)` with no turn (queued) |
 
 Interface (all on `SessionEngine`, exported from `hya_core`):
 
@@ -236,6 +237,8 @@ pub fn set_turn_observer(&self, observer: Weak<dyn TurnBoundaryObserver>);
 
 pub trait TurnBoundaryObserver: Send + Sync {
     fn turn_released(&self, session: SessionId); // runs on a fresh task
+    fn turn_started(&self, _session: SessionId) {} // sync, after the claim
+    fn turn_failed(&self, _session: SessionId) {}  // sync, before the lease is released
 }
 // CoreError::TurnAlreadyActive { session } — "TURN_ALREADY_ACTIVE: …"
 ```
@@ -541,9 +544,11 @@ The turn loop checks the activation hook dispatcher's `is_healthy()`:
 - again after each before/after hook batch
 
 An unhealthy dispatcher aborts the turn with `CoreError::Cancelled` (not a
-hard error) and **does not** force-emit `MessageFinished` on that path. Sidecar
-**loss-token** cancellation (separate from the health gate) does emit
-`MessageFinished { Cancelled }` when the assistant message is still open.
+hard error). The tool call whose hook was lost never commits its own
+`ToolResult`/`ToolError`; the turn then closes like any cancelled turn — the
+open tool part gets a harness `ToolError { code: "CANCELLED" }` and the
+message gets `MessageFinished { Cancelled }`. Sidecar **loss-token**
+cancellation (separate from the health gate) closes the message the same way.
 
 ## Resident recovery and actor fencing
 
@@ -578,37 +583,120 @@ future 100/256 workload envelope.
 
 ## Turn termination guarantees
 
-`run_turn` receives a `CancellationToken`. These paths **do** close an open
-assistant message with `MessageFinished`:
+Invariant (see [Event Model — End-event invariant](event-model.md#end-event-invariant)):
+every assistant message ends with exactly one `MessageFinished`, every
+non-terminal tool part reaches a terminal state, and every member reaches a
+terminal status. Implemented in
+[`engine/turn_end.rs`](../../crates/hya-core/src/engine/turn_end.rs).
 
-| Path | Finish reason |
-| --- | --- |
-| Cancel token observed at the top of a round (before provider stream) | `Cancelled` (emitted then return `Ok(Cancelled)`) |
-| Sidecar loss token fires while the message is open | `Cancelled` |
-| Non-cancel provider/tool error after `MessageStarted` | `Error` (force-emit only when `outcome.is_err()` and **not** `CoreError::Cancelled`) |
-| Normal completion with no further tool calls | provider finish reason |
+### A turn closes its own message
 
-**Not a universal guarantee.** Force-emit on error skips `CoreError::Cancelled`,
-so several paths can leave the assistant message **open** with no
-`MessageFinished`:
+`run_turn*` (and every resident/member/subagent turn — they share the choke
+point) runs under an effective cancel token: a child of the caller's token that
+the engine can also cancel. However the turn ends, before anything fallible
+(Workflow route finalization, sidecar cleanup) the turn closes its message
+against the folded log:
 
-- activation-hook health gate at the top of a round (`is_healthy` false →
-  `Err(Cancelled)` with no finish emit)
-- activation-hook health gate after tool before/after hook batches
-- resident tool path: `actor_claim` present, tool returns `ToolError::Cancelled`,
-  and the cancel token is cancelled → `Err(Cancelled)` without a finish emit
+| Outcome | Closing events | `cause` |
+| --- | --- | --- |
+| Model finished (`stop`, `length`, …) | the provider's `MessageFinished` | none |
+| Cancelled (caller token, `cancel_turn`, drain, sidecar loss, activation-hook health loss) | `ToolError { code: "CANCELLED" }` per open tool part, `MemberFinished { cancelled }` per member row spawned by those tool calls, then `MessageFinished { cancelled }` | the engine-recorded cause (`user_cancel`, `shutdown`, `leader_failed`), else none |
+| Provider/runtime error after `MessageStarted` | same, with `code: "TURN_FAILED"`, then `MessageFinished { error }` | `provider_error` for `CoreError::Provider`, else none |
 
-Forced `Cancelled`/`Error` finishes carry `tokens: None`. Rounds of such a
-message that already reported usage were recorded as `UsageRecorded` when they
-ended, so their billed tokens still reach `SessionProjection.usage` and the
-ledger.
+Each step is checked against the projection, so a part or message that already
+reached a terminal state is never closed twice. Shell turns (`run_shell`) bind
+the same cancel token and close their message the same way on error.
 
-Clients must not assume every `MessageStarted` is paired with a finish event
-on every cancel path; poll session projection or treat stream disconnect as
-terminal when hooks/sidecar health fail closed.
+### Graceful drain
 
-The shell tool also checks the token before spawning a command and kills the
-spawned Unix process group on cancellation.
+A graceful stop — SIGINT/SIGTERM on `exec`/`run`/`-p`/`loop`, the normal end
+of those runs, `serve` shutdown (SIGTERM/SIGINT/SIGHUP), `BuiltSessionEngine::shutdown`
+— drains every in-flight turn in **every** session (roots, members,
+subagents, and a quiescence-synthesis turn that started on the lead during
+shutdown):
+
+1. `begin_drain(cause)`: the turn gate refuses every new claim from now on
+   (`try_begin_turn` → `CoreError::Cancelled`; queued `run_turn*` →
+   `Ok(Cancelled)` with no turn; resident wakes stay parked) and cancels each
+   active turn, recording `cause` on it.
+2. Wait up to **`DRAIN_DEADLINE` = 5 s** for the gate to go idle; each
+   cancelled turn closes its own message (above).
+3. A turn still running at the deadline is a straggler: its open messages are
+   closed by the drain (`SessionStore::close_open_turns`, same events, same
+   cause).
+4. `ResidentSupervisor::drain` then kills every team: claimed resident members
+   are finalized (roster `failed` with a `stopped: …` reason, claim released),
+   their non-terminal member rows on the parent log get
+   `MemberFinished { cancelled }`, and each lead is parked `idle` — the lead is
+   never terminal and its session stays resumable.
+
+Causes: SIGINT → `user_cancel`; SIGTERM, normal end, `serve` shutdown →
+`shutdown`; end of a one-shot run whose lead turn failed → `leader_failed`.
+The drain is idempotent (the first cause wins). A second SIGINT during a
+one-shot run's drain exits at once (status 130); crash recovery closes whatever
+it left open.
+
+```rust
+pub const DRAIN_DEADLINE: Duration; // 5 s
+impl SessionEngine {
+    pub fn cancel_turn(&self, session: SessionId, cause: FinishCause) -> bool;
+    pub fn begin_drain(&self, cause: FinishCause) -> Vec<SessionId>;
+    pub async fn drain_turns(&self, cause: FinishCause, deadline: Duration) -> TurnDrainReport;
+    pub fn draining(&self) -> Option<FinishCause>;
+}
+pub struct TurnDrainReport { pub cancelled: Vec<SessionId>, pub stragglers: Vec<SessionId> }
+impl ResidentSupervisor {
+    pub async fn drain(&self, cause: FinishCause, deadline: Duration) -> TurnDrainReport;
+}
+impl BuiltSessionEngine { // hya-app
+    pub async fn drain(&self, cause: FinishCause) -> TurnDrainReport; // DRAIN_DEADLINE
+    pub async fn shutdown(&mut self) -> Result<(), CoreError>;         // drain(Shutdown) first
+}
+```
+
+### Crash recovery
+
+A process that dies mid-turn (SIGKILL, OOM, power loss) leaves assistant
+messages open. When the next process claims the runtime-owner lock
+(`.runtime-owner.lock` next to the SQLite file; every engine build claims it
+before startup recovery), `build_session_engine` runs
+`SessionStore::recover_interrupted_turns(owner)` **before** Workflow/resident
+recovery and before any turn:
+
+- The candidate set comes from the write-through `open_assistant_message`
+  index (inserted on assistant `message_started`, deleted on
+  `message_finished` / `message_deleted`, backfilled by migration `0010`), so
+  the pass folds only sessions a crash left mid-turn — not every log.
+- Per session, in one `BEGIN IMMEDIATE` writer transaction: `ToolError
+  { code: "INTERRUPTED" }` per open tool part, `MemberFinished { cancelled }`
+  per spawning/running member row, then `MessageFinished { cancelled, cause:
+  interrupted }` per open assistant message; stale index rows are dropped.
+- Idempotent: closing a message removes its index row, so a second pass (same
+  or later owner) appends nothing. It requires the owner claim, so it can never
+  close a live turn of another writer.
+
+Resident actors that were mid-turn are then recovered as before
+(`recover_resident_actor`); their messages are already closed.
+
+### Leader failure
+
+When a team lead's turn (the root session, handle `main`) fails with a
+provider/runtime error — never a user cancel, a drain, or a SIGINT:
+
+- the turn ends `finish: error` (`cause: provider_error` for provider
+  failures); the lead is **never** reported, handed off, or archived — its
+  session stays live and resumable and members keep their DM back to it;
+- the harness mails every live resident member of the team (all depths) a
+  wrap-up notice from `harness` (see
+  [Subagent Orchestration — Leader failure](subagent-orchestration.md#leader-failure));
+- the supervisor marks the lead failed: it starts **no** lead turn on its own
+  — no `TEAM QUIESCED` synthesis, no mail wake — until a turn on the lead
+  starts from outside the supervisor (the user resumes it). Members' reports
+  stay in the lead's inbox and are surfaced to that resumed turn by in-turn
+  steering. The next quiescence after the resumed turn synthesizes normally.
+
+In a one-shot `exec`, the run ends right after, so the members are drained
+with `cause: leader_failed` (the notice stays in the log).
 
 ## Usage attribution
 

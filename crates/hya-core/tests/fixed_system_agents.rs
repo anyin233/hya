@@ -76,6 +76,7 @@ fn stream_capture_output(
             role: Role::Assistant,
             finish: FinishReason::Stop,
             tokens: None,
+            cause: None,
         }),
     ])))
 }
@@ -897,6 +898,7 @@ impl Provider for UsageReportingProvider {
                 role: Role::Assistant,
                 finish: FinishReason::Stop,
                 tokens: Some(SIDE_CALL_USAGE),
+                cause: None,
             }),
         ])))
     }

@@ -104,6 +104,7 @@ impl Provider for CaptureProvider {
                 role: Role::Assistant,
                 finish: FinishReason::Stop,
                 tokens: None,
+                cause: None,
             },
         )])))
     }
@@ -138,6 +139,7 @@ impl Provider for RootLengthProvider {
                 role: Role::Assistant,
                 finish: FinishReason::Length,
                 tokens: None,
+                cause: None,
             },
         )])))
     }
@@ -180,6 +182,7 @@ impl Provider for RootInFlightLossProvider {
                 role: Role::Assistant,
                 finish: FinishReason::Stop,
                 tokens: None,
+                cause: None,
             })
         })))
     }
@@ -1834,11 +1837,16 @@ async fn root_sidecar_after_hook_transport_loss_fences_tool_event_before_commit(
     assert_eq!(after_calls.load(Ordering::SeqCst), 1);
 
     let events = engine.replay(session).await.unwrap();
+    // The tool's own outcome is fenced; the only terminal event for its part
+    // is the harness closing the cancelled turn (end-event invariant).
     assert!(!events.iter().any(|envelope| {
-        matches!(
-            &envelope.event,
-            Event::ToolResult { .. } | Event::ToolError { .. }
-        )
+        matches!(&envelope.event, Event::ToolResult { .. })
+            || matches!(
+                &envelope.event,
+                Event::ToolError { value, .. }
+                    if value.as_ref().and_then(|value| value.get("code"))
+                        != Some(&json!("CANCELLED"))
+            )
     }));
     assert!(!events.iter().any(|envelope| {
         matches!(
@@ -1927,11 +1935,16 @@ async fn root_sidecar_before_hook_transport_loss_stops_before_after_hook_or_comm
     assert!(matches!(result, Err(CoreError::Cancelled)));
 
     let events = engine.replay(session).await.unwrap();
+    // The tool's own outcome is fenced; the only terminal event for its part
+    // is the harness closing the cancelled turn (end-event invariant).
     assert!(!events.iter().any(|envelope| {
-        matches!(
-            &envelope.event,
-            Event::ToolResult { .. } | Event::ToolError { .. }
-        )
+        matches!(&envelope.event, Event::ToolResult { .. })
+            || matches!(
+                &envelope.event,
+                Event::ToolError { value, .. }
+                    if value.as_ref().and_then(|value| value.get("code"))
+                        != Some(&json!("CANCELLED"))
+            )
     }));
     assert!(!events.iter().any(|envelope| {
         matches!(

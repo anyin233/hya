@@ -1,7 +1,6 @@
 use hya_proto::{
-    ActorClaim, Envelope, Event, FinishReason, MailEndpoint, MailKind, MemberRunStatus,
-    PartProjection, Projection, Role, RosterEntry, RosterStatus, SessionId, SubagentMode,
-    ToolPartState, now_millis, scope,
+    ActorClaim, Envelope, Event, MailEndpoint, MailKind, Projection, Role, RosterEntry,
+    RosterStatus, SessionId, SubagentMode, now_millis, scope,
 };
 
 use crate::{
@@ -90,6 +89,50 @@ impl SessionStore {
             from,
             to: MailEndpoint::Handle(handle),
             kind,
+            body,
+        };
+        let envelope = append_event_in_transaction(&mut tx, root, event).await?;
+        tx.commit().await?;
+        Ok(envelope)
+    }
+
+    /// Append one harness-authored direct mail (`from` = [`scope::HARNESS_HANDLE`])
+    /// to a live resident member under the writer lock.
+    ///
+    /// Harness mail bypasses the hierarchy reach rule — the harness is not an
+    /// agent — but still only reaches a registered, live (non-terminal)
+    /// resident that is not the team root.
+    ///
+    /// # Errors
+    /// [`StoreError::MailboxRejected`] when `handle` is not such a member, or
+    /// SQLite failures.
+    pub async fn append_harness_mail(
+        &self,
+        root: SessionId,
+        handle: &str,
+        body: String,
+    ) -> Result<Envelope, StoreError> {
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        let projection = replay_projection(&mut tx, root).await?;
+        let handle = projection.team.canonical_member(handle);
+        let Some(entry) = projection.team.roster.get(&handle) else {
+            return Err(StoreError::MailboxRejected(format!(
+                "unknown mail target `{handle}`"
+            )));
+        };
+        if entry.session == root
+            || entry.mode != SubagentMode::Resident
+            || !resident_member_is_eligible(&mut tx, entry).await?
+        {
+            return Err(StoreError::MailboxRejected(format!(
+                "mail target `{handle}` is not a live resident member"
+            )));
+        }
+        let event = Event::MailSent {
+            session: root,
+            from: scope::HARNESS_HANDLE.to_string(),
+            to: MailEndpoint::Handle(handle),
+            kind: MailKind::Message,
             body,
         };
         let envelope = append_event_in_transaction(&mut tx, root, event).await?;
@@ -395,54 +438,7 @@ fn resident_effect_terminal_events(
     projection: &Projection,
     reason: &str,
 ) -> Vec<Event> {
-    let mut events = Vec::new();
-    for member in &projection.session.members {
-        if matches!(
-            member.status,
-            MemberRunStatus::Spawning | MemberRunStatus::Running
-        ) {
-            events.push(Event::MemberFinished {
-                session: actor,
-                member: member.member,
-                status: MemberRunStatus::Cancelled,
-                summary: reason.to_string(),
-                child: member.child,
-            });
-        }
-    }
-    for message in &projection.session.messages {
-        if message.role != Role::Assistant || message.finish.is_some() {
-            continue;
-        }
-        for part in &message.parts {
-            if let PartProjection::Tool {
-                id,
-                call,
-                state: ToolPartState::Pending { .. } | ToolPartState::Running { .. },
-                ..
-            } = part
-            {
-                events.push(Event::ToolError {
-                    session: actor,
-                    message: message.id,
-                    part: *id,
-                    call: *call,
-                    message_text: reason.to_string(),
-                    value: Some(serde_json::json!({
-                        "code": "STALE_ACTOR_CLAIM",
-                    })),
-                });
-            }
-        }
-        events.push(Event::MessageFinished {
-            session: actor,
-            message: message.id,
-            role: Role::Assistant,
-            finish: FinishReason::Cancelled,
-            tokens: None,
-        });
-    }
-    events
+    crate::recovery::open_turn_terminal_events(actor, projection, reason, "STALE_ACTOR_CLAIM", None)
 }
 
 async fn append_resident_effects_in_transaction(

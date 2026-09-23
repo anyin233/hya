@@ -35,7 +35,7 @@ use hya_core::{
     CreateSession, GoalEvaluator, HookChain, HookLoopPlanner, HookLoopVerifier, ModelGoalEvaluator,
     RunOutcome, SafetyCaps, TurnBinding, run_goal,
 };
-use hya_proto::{ModelRef, SessionId};
+use hya_proto::{FinishCause, ModelRef, SessionId};
 use hya_store::SessionStore;
 use tokio_util::sync::CancellationToken;
 
@@ -178,9 +178,26 @@ async fn cmd_exec(
         .admit_user_prompt(session, prompt)
         .await
         .context("admit prompt")?;
-    let turn = engine
-        .run_turn(session, &agent, CancellationToken::new())
-        .await;
+    let cancel = CancellationToken::new();
+    let (turn, stop) = run_until_stopped(
+        &built,
+        &cancel,
+        engine.run_turn(session, &agent, cancel.clone()),
+    )
+    .await?;
+    // End of the run: nothing may keep streaming after `exec` returns. Every
+    // other in-flight turn (members, a deferred synthesis turn on the lead)
+    // is drained before the trajectory is flushed, so stdout and the log end
+    // on terminal events.
+    if stop.is_none() {
+        built
+            .drain(if turn.is_err() {
+                FinishCause::LeaderFailed
+            } else {
+                FinishCause::Shutdown
+            })
+            .await;
+    }
     if let Some((task, done_tx)) = json_printer.take() {
         let _ = done_tx.send(());
         let printer = task
@@ -203,13 +220,84 @@ async fn cmd_exec(
             .context("read projection")?;
         print!("{}", render_transcript(&projection));
     }
+    let shutdown = built.shutdown().await.context("shutdown spawn supervisor");
+    exit_if_stopped(stop);
     // Surface the turn error only after the stdout trajectory is complete.
     turn.context("run turn")?;
-    built
-        .shutdown()
-        .await
-        .context("shutdown spawn supervisor")?;
+    shutdown?;
     Ok(())
+}
+
+/// A stop signal that ended a one-shot run early.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum StopSignal {
+    /// SIGINT (Ctrl-C): the user stopped the run.
+    Interrupt,
+    /// SIGTERM: the process is being stopped.
+    Terminate,
+}
+
+impl StopSignal {
+    fn cause(self) -> FinishCause {
+        match self {
+            Self::Interrupt => FinishCause::UserCancel,
+            Self::Terminate => FinishCause::Shutdown,
+        }
+    }
+
+    /// Conventional `128 + signal` exit status.
+    fn exit_code(self) -> i32 {
+        match self {
+            Self::Interrupt => 130,
+            Self::Terminate => 143,
+        }
+    }
+}
+
+/// Drive a one-shot run's `work` (`exec`/`run`, `-p` goal, `loop`).
+///
+/// SIGINT/SIGTERM starts a graceful drain instead of killing the process:
+/// every in-flight turn in every session is cancelled with cause
+/// `user_cancel` (SIGINT) or `shutdown` (SIGTERM) and closes its messages,
+/// members go terminal, and `work` — still polled — observes the cancel and
+/// returns. The drain is bounded by [`hya_core::DRAIN_DEADLINE`]; a second
+/// SIGINT during the drain exits immediately (crash recovery closes what is
+/// left on the next start).
+async fn run_until_stopped<T>(
+    built: &hya_app::BuiltSessionEngine,
+    cancel: &CancellationToken,
+    work: impl std::future::Future<Output = T>,
+) -> anyhow::Result<(T, Option<StopSignal>)> {
+    use tokio::signal::unix::{SignalKind, signal};
+    let mut interrupt = signal(SignalKind::interrupt()).context("install SIGINT handler")?;
+    let mut terminate = signal(SignalKind::terminate()).context("install SIGTERM handler")?;
+    tokio::pin!(work);
+    let stop = tokio::select! {
+        output = &mut work => return Ok((output, None)),
+        _ = interrupt.recv() => StopSignal::Interrupt,
+        _ = terminate.recv() => StopSignal::Terminate,
+    };
+    eprintln!("hya: stopping — draining in-flight turns (Ctrl-C again to exit now)");
+    // Record the cause on every in-flight turn first, then stop the driver.
+    built.engine().begin_drain(stop.cause());
+    cancel.cancel();
+    let drained = async { tokio::join!(&mut work, built.drain(stop.cause())) };
+    tokio::select! {
+        (output, _) = drained => Ok((output, Some(stop))),
+        _ = interrupt.recv() => {
+            eprintln!("hya: interrupted again; exiting without finishing the drain");
+            std::process::exit(StopSignal::Interrupt.exit_code());
+        }
+    }
+}
+
+/// Exit with the stop signal's conventional status once teardown is done.
+fn exit_if_stopped(stop: Option<StopSignal>) {
+    if let Some(stop) = stop {
+        use std::io::Write as _;
+        let _ = std::io::stdout().flush();
+        std::process::exit(stop.exit_code());
+    }
 }
 
 async fn cmd_rpc(model_override: Option<String>, yolo: bool, pure: bool) -> anyhow::Result<()> {
@@ -305,10 +393,15 @@ async fn cmd_rpc(model_override: Option<String>, yolo: bool, pure: bool) -> anyh
                     .admit_user_prompt(session, text)
                     .await
                     .context("admit prompt")?;
-                engine
+                if let Err(error) = engine
                     .run_turn(session, &agent, CancellationToken::new())
                     .await
-                    .context("run turn")?;
+                {
+                    // Drain members before surfacing the failure.
+                    built.drain(FinishCause::LeaderFailed).await;
+                    let _ = built.shutdown().await;
+                    return Err(error).context("run turn");
+                }
                 let envelopes = engine.replay(session).await.context("replay session")?;
                 for env in envelopes.iter().skip(emitted) {
                     let line = serde_json::to_string(env).context("serialize envelope")?;
@@ -452,22 +545,26 @@ async fn cmd_goal(
         max_iterations,
         ..SafetyCaps::default()
     };
-    let outcome = run_goal(
-        engine.clone(),
-        session,
-        agent,
-        goal,
-        evaluator,
-        caps,
-        CancellationToken::new(),
+    let cancel = CancellationToken::new();
+    let (outcome, stop) = run_until_stopped(
+        &built,
+        &cancel,
+        run_goal(
+            engine.clone(),
+            session,
+            agent,
+            goal,
+            evaluator,
+            caps,
+            cancel.clone(),
+        ),
     )
-    .await
-    .context("run goal")?;
+    .await?;
+    let shutdown = built.shutdown().await.context("shutdown spawn supervisor");
+    exit_if_stopped(stop);
+    let outcome = outcome.context("run goal")?;
     println!("goal outcome: {outcome:?}");
-    built
-        .shutdown()
-        .await
-        .context("shutdown spawn supervisor")?;
+    shutdown?;
     Ok(())
 }
 
@@ -606,22 +703,37 @@ async fn cmd_loop(
             ),
     );
     let should_stop = Arc::clone(&evaluator_dispatcher);
-    let outcome = run_loop(
-        engine.clone(),
-        session,
-        agent,
-        target,
-        Arc::new(HookLoopVerifier::new(
-            Arc::clone(&evaluator_dispatcher),
-            verifier_fallback,
-        )),
-        Arc::new(HookLoopPlanner::new(evaluator_dispatcher, planner_fallback)),
-        loop_config,
-        CancellationToken::new(),
-        Some(should_stop),
+    let cancel = CancellationToken::new();
+    let (outcome, stop) = run_until_stopped(
+        &built,
+        &cancel,
+        run_loop(
+            engine.clone(),
+            session,
+            agent,
+            target,
+            Arc::new(HookLoopVerifier::new(
+                Arc::clone(&evaluator_dispatcher),
+                verifier_fallback,
+            )),
+            Arc::new(HookLoopPlanner::new(evaluator_dispatcher, planner_fallback)),
+            loop_config,
+            cancel.clone(),
+            Some(should_stop),
+        ),
     )
-    .await
-    .context("run loop")?;
+    .await?;
+    if stop.is_some() {
+        let _ = built.shutdown().await;
+        exit_if_stopped(stop);
+    }
+    let outcome = match outcome {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            let _ = built.shutdown().await;
+            return Err(error).context("run loop");
+        }
+    };
     println!("loop outcome: {outcome:?}");
     // A broken deterministic condition stops with a "broken condition"
     // reason: surface it as a failure, never as a finished loop.

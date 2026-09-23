@@ -13,6 +13,7 @@ pub mod error;
 mod mailbox;
 mod materialize;
 mod permission;
+mod recovery;
 mod resident_claim;
 mod sync;
 mod workflow;
@@ -49,6 +50,7 @@ pub use error::StoreError;
 pub use hya_proto::{ActorClaim, OwnerRunId};
 pub use mailbox::{RecoveredResidentOutcome, RecoveredResidentWork};
 pub use permission::SavedPermission;
+pub use recovery::{INTERRUPTED_REASON, InterruptedTurnRecovery};
 pub use resident_claim::RecoveredActorClaim;
 pub use workflow::{WorkflowAdmissionOutcome, WorkflowSelectionOutcome};
 
@@ -339,6 +341,10 @@ impl SessionStore {
         let key = session.storage_key();
         let mut tx = self.pool.begin().await?;
         sqlx::query("DELETE FROM token_ledger WHERE session_id = ?")
+            .bind(key.clone())
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM open_assistant_message WHERE session_id = ?")
             .bind(key.clone())
             .execute(&mut *tx)
             .await?;

@@ -55,6 +55,7 @@ impl SessionEngine {
                 role: Role::User,
                 finish: FinishReason::Stop,
                 tokens: None,
+                cause: None,
             },
         )
         .await?;

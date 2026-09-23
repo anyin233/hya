@@ -63,6 +63,7 @@ impl Provider for CaptureProvider {
                 role: Role::Assistant,
                 finish: FinishReason::Stop,
                 tokens: None,
+                cause: None,
             },
         )])))
     }

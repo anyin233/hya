@@ -15,7 +15,8 @@ use crate::ids::{
 };
 use crate::mail::{ChannelKind, MailEndpoint, MailKind, is_minted_channel_id};
 use crate::message::{
-    FinishReason, MemberRunStatus, Role, RosterStatus, SubagentMode, TokenUsage, ToolPartState,
+    FinishCause, FinishReason, MemberRunStatus, Role, RosterStatus, SubagentMode, TokenUsage,
+    ToolPartState,
 };
 use crate::model::{AgentName, ModelRef, ToolName};
 use crate::scope;
@@ -141,6 +142,10 @@ pub struct MessageProjection {
     pub config_generation: Option<ConfigGeneration>,
     /// Finish reason when the message is closed.
     pub finish: Option<FinishReason>,
+    /// Harness cause recorded on `MessageFinished` (cancel, shutdown, crash
+    /// recovery, provider failure).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cause: Option<FinishCause>,
     /// Usage recorded on `MessageFinished` (legacy per-message sum).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tokens: Option<TokenUsage>,
@@ -320,6 +325,7 @@ impl TeamProjection {
     pub fn canonical_member(&self, raw: &str) -> String {
         if raw.contains(scope::PATH_SEPARATOR)
             || raw == scope::ROOT_HANDLE
+            || raw == scope::HARNESS_HANDLE
             || self.roster.contains_key(raw)
         {
             return raw.to_string();
@@ -914,6 +920,7 @@ impl Projection {
                         role: *role,
                         config_generation: None,
                         finish: None,
+                        cause: None,
                         tokens: None,
                         usage: None,
                         files: Vec::new(),
@@ -946,6 +953,7 @@ impl Projection {
                 message,
                 finish,
                 tokens,
+                cause,
                 ..
             } => {
                 let forked = self.session.forked_from.is_some();
@@ -963,6 +971,7 @@ impl Projection {
                         legacy = Some(*sum);
                     }
                     m.finish = Some(*finish);
+                    m.cause = *cause;
                     m.tokens = *tokens;
                 }
                 if let Some(sum) = legacy {
@@ -2225,6 +2234,7 @@ mod usage_fold_tests {
             role: Role::Assistant,
             finish: FinishReason::Stop,
             tokens,
+            cause: None,
         }
     }
 

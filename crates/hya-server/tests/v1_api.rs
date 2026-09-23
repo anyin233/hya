@@ -611,3 +611,42 @@ async fn runtime_schemas_lists_the_snapshot_scheme_table() {
         "the response is generation-tagged: {body}"
     );
 }
+
+/// `SessionInfo.busy` reflects any engine turn on the session — a resident
+/// wake or deferred synthesis turn the server did not start — not only the
+/// server's own run registry; `turns/{turn}/cancel` stops that engine turn.
+#[tokio::test]
+async fn v1_session_busy_reflects_engine_turns() {
+    let state = state().await;
+    let engine = Arc::clone(&state.engine);
+    let app = router(state);
+    let session = create_session(&app).await;
+    let id: hya_proto::SessionId = session.parse().unwrap();
+    let uri = format!("/v1/sessions/{session}");
+    let get = || send(app.clone(), Method::GET, &uri, Value::Null);
+
+    let (status, body) = get().await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_ne!(body["busy"], json!(true), "{body}");
+
+    let lease = engine.try_begin_turn(id).unwrap();
+    let (_, body) = get().await;
+    assert_eq!(
+        body["busy"],
+        json!(true),
+        "an engine turn makes the session busy: {body}"
+    );
+    let (status, body) = send(
+        app.clone(),
+        Method::POST,
+        &format!("/v1/sessions/{session}/turns/t/cancel"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["state"], json!("TURN_STATE_CANCELLED"), "{body}");
+    drop(lease);
+
+    let (_, body) = get().await;
+    assert_ne!(body["busy"], json!(true), "{body}");
+}

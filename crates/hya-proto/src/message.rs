@@ -37,6 +37,31 @@ pub enum FinishReason {
     Error,
 }
 
+/// Why an assistant message was ended by the harness rather than the model
+/// (wire: snake_case). Optional context on
+/// [`crate::event::Event::MessageFinished`]; the [`FinishReason`] stays the
+/// terminal classification (`cancelled` / `error`).
+///
+/// Unknown values written by a newer build decode as [`FinishCause::Other`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FinishCause {
+    /// A user stopped the turn (client abort, SIGINT on a one-shot run).
+    UserCancel,
+    /// The process stopped gracefully (end of a one-shot run, SIGTERM,
+    /// `serve` shutdown) and drained in-flight turns.
+    Shutdown,
+    /// The member was stopped because its team lead's turn failed.
+    LeaderFailed,
+    /// The process died with the turn open; closed by startup crash recovery.
+    Interrupted,
+    /// The model provider failed the turn.
+    ProviderError,
+    /// A cause this build does not know.
+    #[serde(other)]
+    Other,
+}
+
 /// Lifecycle status of a spawned subagent member, as observed by the lead/tree.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

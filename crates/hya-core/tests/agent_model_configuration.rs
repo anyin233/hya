@@ -60,6 +60,7 @@ impl Provider for RecordingProvider {
             role: hya_proto::Role::Assistant,
             finish: hya_proto::FinishReason::Stop,
             tokens: None,
+            cause: None,
         };
         Ok(Box::pin(stream::iter([Ok::<_, ProviderError>(event)])))
     }

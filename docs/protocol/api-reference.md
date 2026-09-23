@@ -1215,6 +1215,7 @@ A message reached a terminal state.
 | `message` (1) | `string` | Message identifier. |
 | `finish` (2) | `FinishReason` | Terminal finish reason. |
 | `usage` (3) | `TokenUsage` | Token usage of the final round when the backend accounts it here. |
+| `cause` (4) | `FinishCause` | Harness cause of the finish (cancel, shutdown, crash recovery, provider failure). |
 
 ### `PartStarted`
 
@@ -1739,6 +1740,7 @@ Projection snapshot of one message.
 | `parts` (7) | `repeated PartInfo` | Ordered message parts. |
 | `time_created` (8) | `google.protobuf.Timestamp` | When the message was created. |
 | `time_updated` (9) | `google.protobuf.Timestamp` | When the message projection last changed. |
+| `finish_cause` (10) | `FinishCause` | Harness cause of the finish (cancel, shutdown, crash recovery, provider failure). |
 
 ### `ListMessagesRequest`
 
@@ -2642,6 +2644,21 @@ Terminal reason of an assistant message.
 | `FINISH_REASON_LENGTH` | 3 | Hit an output length limit. |
 | `FINISH_REASON_CANCELLED` | 4 | Cancel token, sidecar loss, or client abort. |
 | `FINISH_REASON_ERROR` | 5 | Hard provider/tool failure after the assistant message started. |
+
+### `FinishCause`
+
+Why the harness (not the model) ended an assistant message. Context on
+top of FinishReason; unset when the model ended the message itself.
+
+| Value | Number | Description |
+|---|---|---|
+| `FINISH_CAUSE_UNSPECIFIED` | 0 | No harness cause recorded. |
+| `FINISH_CAUSE_USER_CANCEL` | 1 | A user stopped the turn (client abort, SIGINT on a one-shot run). |
+| `FINISH_CAUSE_SHUTDOWN` | 2 | The process stopped gracefully and drained in-flight turns. |
+| `FINISH_CAUSE_LEADER_FAILED` | 3 | The member was stopped because its team lead's turn failed. |
+| `FINISH_CAUSE_INTERRUPTED` | 4 | The process died with the turn open; closed by startup crash recovery. |
+| `FINISH_CAUSE_PROVIDER_ERROR` | 5 | The model provider failed the turn. |
+| `FINISH_CAUSE_OTHER` | 6 | A cause this server build does not name. |
 
 ### `Role`
 

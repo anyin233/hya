@@ -27,6 +27,11 @@
 /// Canonical handle of a team's root agent. Every path starts with this segment.
 pub const ROOT_HANDLE: &str = "main";
 
+/// Sender of harness-authored team mail (for example the leader-failed
+/// wrap-up notice). Not an agent: it never appears on the roster, is not a
+/// path, and cannot be addressed; only the harness writes it.
+pub const HARNESS_HANDLE: &str = "harness";
+
 /// Separator between segments of a canonical agent path.
 pub const PATH_SEPARATOR: char = '/';
 

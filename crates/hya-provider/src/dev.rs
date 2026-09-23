@@ -114,6 +114,7 @@ impl Provider for DevProvider {
                 role: Role::Assistant,
                 finish: FinishReason::Stop,
                 tokens: None,
+                cause: None,
             },
         ];
         Ok(Box::pin(stream::iter(events.into_iter().map(Ok))))

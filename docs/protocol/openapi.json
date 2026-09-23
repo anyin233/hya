@@ -1894,6 +1894,9 @@
           },
           "usage": {
             "$ref": "#/components/schemas/TokenUsage"
+          },
+          "cause": {
+            "$ref": "#/components/schemas/FinishCause"
           }
         }
       },
@@ -2763,6 +2766,9 @@
           "time_updated": {
             "type": "string",
             "format": "date-time"
+          },
+          "finish_cause": {
+            "$ref": "#/components/schemas/FinishCause"
           }
         }
       },
@@ -4170,6 +4176,19 @@
           "FINISH_REASON_LENGTH",
           "FINISH_REASON_CANCELLED",
           "FINISH_REASON_ERROR"
+        ]
+      },
+      "FinishCause": {
+        "type": "string",
+        "description": "Why the harness (not the model) ended an assistant message. Context on top of FinishReason; unset when the model ended the message itself.",
+        "enum": [
+          "FINISH_CAUSE_UNSPECIFIED",
+          "FINISH_CAUSE_USER_CANCEL",
+          "FINISH_CAUSE_SHUTDOWN",
+          "FINISH_CAUSE_LEADER_FAILED",
+          "FINISH_CAUSE_INTERRUPTED",
+          "FINISH_CAUSE_PROVIDER_ERROR",
+          "FINISH_CAUSE_OTHER"
         ]
       },
       "Role": {

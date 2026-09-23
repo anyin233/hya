@@ -148,6 +148,7 @@ impl Provider for RecordingProvider {
             role: Role::Assistant,
             finish: FinishReason::Stop,
             tokens: None,
+            cause: None,
         };
         Ok(Box::pin(futures::stream::iter(vec![Ok(event)])))
     }

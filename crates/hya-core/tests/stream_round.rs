@@ -77,6 +77,7 @@ impl Provider for DelayedDeltaProvider {
                 role: Role::Assistant,
                 finish: FinishReason::Stop,
                 tokens: None,
+                cause: None,
             },
         ];
         Ok(Box::pin(stream::unfold(
@@ -262,6 +263,7 @@ async fn forked_reasoning_provider_data_reaches_next_request() {
                     reason: Some("high".to_string()),
                     provider_data: Some(provider_data.clone()),
                 }],
+                cause: None,
             }],
             ..SessionProjection::default()
         },

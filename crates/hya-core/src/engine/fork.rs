@@ -92,6 +92,7 @@ impl SessionEngine {
                     role: source.role,
                     finish,
                     tokens: source.tokens,
+                    cause: None,
                 },
             )
             .await?;

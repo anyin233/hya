@@ -198,7 +198,8 @@ impl SessionEngine {
     ) -> Result<(MessageId, FinishReason), CoreError> {
         // A shell turn is a turn: refuse (never interleave) while the session
         // already has one active.
-        let _lease = self.try_begin_turn(session)?;
+        let lease = self.try_begin_turn(session)?;
+        let cancel = lease.bind_cancel(&cancel);
         self.admit_shell_user_message(session).await?;
         let projection = self.store.read_projection(session).await?;
         let workdir = session_workdir(agent, &projection);
@@ -215,8 +216,8 @@ impl SessionEngine {
         self.capture_session_bundle_hooks(session, &binding, stable_id)
             .await;
         let bound_hooks = binding.bundle_hooks_for_agent(stable_id);
+        let message = MessageId::new();
         let operation = async {
-            let message = MessageId::new();
             self.emit(
                 session,
                 Event::MessageStarted {
@@ -275,17 +276,35 @@ impl SessionEngine {
                     role: Role::Assistant,
                     finish,
                     tokens: None,
+                    cause: (finish == FinishReason::Cancelled)
+                        .then(|| self.turn_gate.cancel_cause(session))
+                        .flatten(),
                 },
             )
             .await?;
             Ok((message, finish))
         };
-        if bound_hooks.is_empty() {
+        let outcome = if bound_hooks.is_empty() {
             operation.await
         } else {
             let hooks = Arc::new(HookChain::new(bound_hooks)) as Arc<dyn HookDispatcher>;
             scope_activation_hooks(session, hooks, operation).await
+        };
+        if let Err(error) = &outcome {
+            // Never leave the shell turn's message open (no-op when it never started).
+            let (finish, cause) = match error {
+                CoreError::Cancelled => (
+                    FinishReason::Cancelled,
+                    self.turn_gate.cancel_cause(session),
+                ),
+                other => (FinishReason::Error, super::turn_end::error_cause(other)),
+            };
+            let _ = self
+                .close_turn_message(None, session, message, finish, cause)
+                .await;
         }
+        drop(lease);
+        outcome
     }
 
     async fn execute_shell_part(

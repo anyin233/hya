@@ -186,6 +186,8 @@ message MessageFinished {
   FinishReason finish = 2;
   // Token usage of the final round when the backend accounts it here.
   TokenUsage usage = 3;
+  // Harness cause of the finish (cancel, shutdown, crash recovery, provider failure).
+  FinishCause cause = 4;
 }
 
 // A part was appended to a message.
