@@ -124,3 +124,43 @@ extensions:
     let inspected = inspect_public_package(&package).expect("inspect native library");
     assert_eq!(inspected.bytes(), prepared.bytes());
 }
+
+#[test]
+fn process_backed_plugins_may_declare_chat_params_and_model_fallback_hooks() {
+    let source = |process: &str| {
+        BundleSource::new(
+            "router",
+            vec![
+                SourceFile::new(
+                    "bundle.yaml",
+                    format!(
+                        r#"kind: Plugin
+identity: {{ id: acme/router, version: 1.0.0, publisher: acme }}
+extensions:
+{process}  js: [{{ id: runtime, path: runtime.js }}]
+resources:
+  hooks:
+    - {{ id: chat.params, path: runtime.js }}
+    - {{ id: model.fallback, path: runtime.js }}
+"#
+                    ),
+                ),
+                SourceFile::new("runtime.js", b"export default {}\n"),
+            ],
+        )
+    };
+    let prepared = prepare_package(source(
+        "  process: { kind: bun, command: [bun, '${BUNDLE_ROOT}/runtime.js'] }\n",
+    ))
+    .expect("process-backed Plugin accepts model.fallback");
+    let hooks = prepared.bundles()[0]
+        .hooks()
+        .iter()
+        .map(|hook| hook.local_id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(hooks, vec!["chat.params", "model.fallback"]);
+    assert!(
+        prepare_package(source("")).is_err(),
+        "an implicit JavaScript Plugin keeps the three-hook sidecar contract"
+    );
+}

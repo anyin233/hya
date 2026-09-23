@@ -21,10 +21,11 @@ use super::{
 use crate::error::CoreError;
 use crate::hooks::{
     ChatParamsInput, ChatParamsOutcome, CompactionAfterInput, CompactionBeforeInput,
-    CompactionResolution, CompactionTrigger, HookChain, HookDispatcher, ToolExecuteAfterInput,
-    ToolExecuteAfterOutcome, ToolExecuteBeforeInput, ToolExecuteBeforeOutcome, ToolOutcomeNative,
-    activation_hook_for, replace_activation_hooks, resolve_compaction_decision,
-    scope_activation_hooks, scope_optional_activation_hooks,
+    CompactionResolution, CompactionTrigger, HookChain, HookDispatcher, ModelFailureClass,
+    ModelFallbackInput, ModelFallbackOutcome, ToolExecuteAfterInput, ToolExecuteAfterOutcome,
+    ToolExecuteBeforeInput, ToolExecuteBeforeOutcome, ToolOutcomeNative, activation_hook_for,
+    replace_activation_hooks, resolve_compaction_decision, scope_activation_hooks,
+    scope_optional_activation_hooks,
 };
 use crate::runtime_registry::CompiledResourceView;
 use crate::sidecar::{SidecarEnvironment, SidecarHandle, SidecarStart};
@@ -279,6 +280,18 @@ fn workflow_failure_class(
     }
 }
 
+/// Most provider attempts one model-selection round may make, counting the
+/// configured chain and every `model.fallback` pick.
+const MODEL_FALLBACK_MAX_ATTEMPTS: usize = 8;
+
+/// Hook-facing identity of the turn asking for a completion.
+struct RequestLineage<'a> {
+    /// Stable id of the session's bound agent.
+    agent: &'a str,
+    /// Spawn-tree root, resolved on first use (see `request_root_session`).
+    root_session_cache: &'a mut Option<SessionId>,
+}
+
 impl SessionEngine {
     /// Resolve the spawn-tree root that hooks report as `root_session`, once
     /// per activation (`cache`). A lineage read failure falls back to
@@ -300,21 +313,24 @@ impl SessionEngine {
     }
 
     /// Open the completion stream for `request`, walking the configured
-    /// cross-model fallback plane while no event stream exists yet.
+    /// cross-model fallback plane while no event stream exists yet, then the
+    /// `model.fallback` hook.
     ///
     /// Each candidate re-enters [`ProviderRouter::stream`], so preflight and
     /// reasoning-stripping keep applying per route. A retryable pre-stream
     /// failure (`is_retryable_before_stream`) or an unrouted candidate
-    /// (`UnknownModel`) advances to the next chain entry; any other error —
-    /// and everything that happens after an [`EventStream`] was returned —
-    /// stops selection immediately. STRICT NO-REPLAY: once a stream is
-    /// returned this never switches models or replays, so mid-stream errors
-    /// surface exactly once, unchanged.
+    /// (`UnknownModel`) advances to the next chain entry. When the chain
+    /// cannot advance (any error class), the active hooks' `model.fallback`
+    /// may name the next model; a model already tried this round is refused,
+    /// and a round makes at most [`MODEL_FALLBACK_MAX_ATTEMPTS`] attempts.
+    /// STRICT NO-REPLAY: once a stream is returned this never switches models
+    /// or replays, so mid-stream errors surface exactly once, unchanged.
     async fn stream_with_model_fallback(
         &self,
         request: CompletionRequest,
         session: SessionId,
         message: MessageId,
+        lineage: RequestLineage<'_>,
     ) -> Result<EventStream, ProviderError> {
         // Candidate order for this turn. An unconfigured plane yields exactly
         // one candidate — the preferred model — reproducing today's direct
@@ -324,35 +340,104 @@ impl SessionEngine {
             None => std::slice::from_ref(&request.model),
         };
         debug_assert_eq!(candidates.first(), Some(&request.model));
+        let mut tried: Vec<ModelRef> = Vec::new();
+        let mut last_failure = None;
         for (index, candidate) in candidates.iter().enumerate() {
-            let mut attempt = request.clone();
-            attempt.model = candidate.clone();
-            attempt.reasoning = messages::reasoning_for_model(&attempt.model, request.reasoning);
+            tried.push(candidate.clone());
             match self
-                .provider_router()
-                .stream(attempt, session, message)
+                .stream_model_candidate(&request, candidate, session, message)
                 .await
             {
                 Ok(stream) => return Ok(stream),
                 Err(error) => {
-                    let advance = (error.is_retryable_before_stream()
-                        || matches!(error, ProviderError::UnknownModel(_)))
-                        && index + 1 < candidates.len();
-                    if !advance {
-                        return Err(error);
-                    }
+                    let next = candidates.get(index + 1).filter(|_| {
+                        error.is_retryable_before_stream()
+                            || matches!(error, ProviderError::UnknownModel(_))
+                    });
+                    let Some(next) = next else {
+                        last_failure = Some((candidate.clone(), error));
+                        break;
+                    };
                     tracing::warn!(
                         from = %candidate,
-                        to = %candidates[index + 1],
+                        to = %next,
                         error = %error,
                         "pre-stream provider failure; advancing cross-model fallback chain"
                     );
                 }
             }
         }
-        // Unreachable: `advance` requires a successor candidate, so the final
-        // iteration always returns `Ok` or `Err` above.
-        unreachable!("cross-model fallback iteration must terminate")
+        let Some((mut failed, mut error)) = last_failure else {
+            // Unreachable: every iteration returns `Ok`, advances to an
+            // existing successor, or records the failure and stops.
+            return Err(ProviderError::UnknownModel(request.model.to_string()));
+        };
+        let Some(hooks) = self.active_hook_dispatcher(session) else {
+            return Err(error);
+        };
+        while tried.len() < MODEL_FALLBACK_MAX_ATTEMPTS {
+            let root_session = self
+                .request_root_session(session, lineage.root_session_cache)
+                .await;
+            let outcome = hooks
+                .model_fallback(ModelFallbackInput {
+                    session,
+                    root_session,
+                    agent: Some(AgentName::new(lineage.agent)),
+                    message,
+                    model: failed.clone(),
+                    error_class: ModelFailureClass::of(&error),
+                    error_message: error.to_string(),
+                    attempt: u32::try_from(tried.len()).unwrap_or(u32::MAX),
+                    tried: tried.clone(),
+                })
+                .await;
+            let ModelFallbackOutcome::Retry { model } = outcome else {
+                break;
+            };
+            if tried.contains(&model) {
+                tracing::warn!(
+                    model = %model,
+                    "model.fallback chose a model already tried this round; giving up"
+                );
+                break;
+            }
+            tracing::warn!(
+                from = %failed,
+                to = %model,
+                error = %error,
+                "pre-stream provider failure; model.fallback hook chose the next model"
+            );
+            tried.push(model.clone());
+            match self
+                .stream_model_candidate(&request, &model, session, message)
+                .await
+            {
+                Ok(stream) => return Ok(stream),
+                Err(next_error) => {
+                    failed = model;
+                    error = next_error;
+                }
+            }
+        }
+        Err(error)
+    }
+
+    /// One router attempt of `request` on `model`, with that model's own
+    /// reasoning variant.
+    async fn stream_model_candidate(
+        &self,
+        request: &CompletionRequest,
+        model: &ModelRef,
+        session: SessionId,
+        message: MessageId,
+    ) -> Result<EventStream, ProviderError> {
+        let mut attempt = request.clone();
+        attempt.model = model.clone();
+        attempt.reasoning = messages::reasoning_for_model(&attempt.model, request.reasoning);
+        self.provider_router()
+            .stream(attempt, session, message)
+            .await
     }
     /// Open one Workflow-assigned stream, starting at admission's candidate.
     ///
@@ -1505,8 +1590,16 @@ impl SessionEngine {
                     }
                 }
             } else {
-                self.stream_with_model_fallback(request, session, message)
-                    .await?
+                self.stream_with_model_fallback(
+                    request,
+                    session,
+                    message,
+                    RequestLineage {
+                        agent: stable_id.as_str(),
+                        root_session_cache: &mut root_session_cache,
+                    },
+                )
+                .await?
             };
             let step = rounds;
             self.emit_for_actor(

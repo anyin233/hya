@@ -103,8 +103,9 @@ pub use hooks::{
     AgentSpawnInput, ChatParamsInput, ChatParamsOutcome, CommandExecuteBeforeInput,
     CommandExecuteBeforeOutcome, CompactionAfterInput, CompactionBeforeInput, CompactionDecision,
     CompactionResolution, CompactionTrigger, HookChain, HookDispatcher, MessageUserBeforeInput,
-    MessageUserBeforeOutcome, NoopHookHost, SessionLifecycleInput, TextCompleteInput,
-    TextCompleteOutcome, ToolExecuteAfterInput, ToolExecuteAfterOutcome, ToolExecuteBeforeInput,
+    MessageUserBeforeOutcome, ModelFailureClass, ModelFallbackInput, ModelFallbackOutcome,
+    NoopHookHost, SessionLifecycleInput, TextCompleteInput, TextCompleteOutcome,
+    ToolExecuteAfterInput, ToolExecuteAfterOutcome, ToolExecuteBeforeInput,
     ToolExecuteBeforeOutcome, ToolOutcomeNative, resolve_compaction_decision,
 };
 pub use lifecycle::run_lifecycle_service;

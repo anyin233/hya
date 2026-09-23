@@ -18,8 +18,17 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use futures::stream;
-use hya_core::{AgentSpec, CoreError, CreateSession, EventBus, SessionEngine};
-use hya_proto::{AgentName, Event, FinishReason, MessageId, ModelRef, PartProjection, SessionId};
+use hya_core::{
+    AgentSpec, ChatParamsInput, ChatParamsOutcome, CommandExecuteBeforeInput,
+    CommandExecuteBeforeOutcome, CoreError, CreateSession, EventBus, HookDispatcher,
+    MessageUserBeforeInput, MessageUserBeforeOutcome, ModelFailureClass, ModelFallbackInput,
+    ModelFallbackOutcome, SessionEngine, TextCompleteInput, TextCompleteOutcome,
+    ToolExecuteAfterInput, ToolExecuteAfterOutcome, ToolExecuteBeforeInput,
+    ToolExecuteBeforeOutcome,
+};
+use hya_proto::{
+    AgentName, Envelope, Event, FinishReason, MessageId, ModelRef, PartProjection, SessionId,
+};
 use hya_provider::{
     Capabilities, CompletionRequest, EventStream, FakeProvider, FakeStep, Provider, ProviderError,
     ProviderRouter, ReasoningEffort,
@@ -153,6 +162,15 @@ async fn fixture(
     fallbacks: Option<HashMap<ModelRef, Vec<ModelRef>>>,
     session_model: &str,
 ) -> TurnFixture {
+    fixture_with_hooks(providers, fallbacks, session_model, None).await
+}
+
+async fn fixture_with_hooks(
+    providers: Vec<ScriptedModelProvider>,
+    fallbacks: Option<HashMap<ModelRef, Vec<ModelRef>>>,
+    session_model: &str,
+    hooks: Option<Arc<dyn HookDispatcher>>,
+) -> TurnFixture {
     let workdir = tempdir();
     let router = ProviderRouter::new();
     let router = providers
@@ -182,6 +200,9 @@ async fn fixture(
     );
     if let Some(fallbacks) = fallbacks {
         engine = engine.with_model_fallbacks(fallbacks);
+    }
+    if let Some(hooks) = hooks {
+        engine = engine.with_hooks(hooks);
     }
     let session = engine
         .create(CreateSession {
@@ -524,5 +545,390 @@ async fn fallback_uses_each_candidate_reasoning_variant() {
         *fallback_reasoning.lock().unwrap(),
         vec![Some(ReasoningEffort::High)],
         "fallback #high request must carry high reasoning",
+    );
+}
+
+/// `model.fallback` test double: answers from a script (then gives up) and
+/// records every consult.
+struct FallbackHook {
+    answers: Mutex<VecDeque<ModelFallbackOutcome>>,
+    /// When set, every consult past the script retries `<prefix>-<attempt>`.
+    endless_prefix: Option<&'static str>,
+    consults: Arc<Mutex<Vec<ModelFallbackInput>>>,
+}
+
+impl FallbackHook {
+    fn scripted(
+        answers: Vec<ModelFallbackOutcome>,
+    ) -> (Arc<Self>, Arc<Mutex<Vec<ModelFallbackInput>>>) {
+        let consults = Arc::new(Mutex::new(Vec::new()));
+        (
+            Arc::new(Self {
+                answers: Mutex::new(answers.into()),
+                endless_prefix: None,
+                consults: Arc::clone(&consults),
+            }),
+            consults,
+        )
+    }
+}
+
+fn retry(model: &str) -> ModelFallbackOutcome {
+    ModelFallbackOutcome::Retry {
+        model: ModelRef::new(model),
+    }
+}
+
+#[async_trait]
+impl HookDispatcher for FallbackHook {
+    fn dispatch_event(&self, _envelope: &Envelope) {}
+
+    async fn command_execute_before(
+        &self,
+        input: CommandExecuteBeforeInput,
+    ) -> CommandExecuteBeforeOutcome {
+        CommandExecuteBeforeOutcome::Continue { text: input.text }
+    }
+
+    async fn text_complete(&self, input: TextCompleteInput) -> TextCompleteOutcome {
+        TextCompleteOutcome::Continue { text: input.text }
+    }
+
+    async fn message_user_before(&self, input: MessageUserBeforeInput) -> MessageUserBeforeOutcome {
+        MessageUserBeforeOutcome::Continue { text: input.text }
+    }
+
+    async fn chat_params(&self, input: ChatParamsInput) -> ChatParamsOutcome {
+        ChatParamsOutcome::Continue {
+            request: input.request,
+        }
+    }
+
+    async fn tool_execute_before(&self, input: ToolExecuteBeforeInput) -> ToolExecuteBeforeOutcome {
+        ToolExecuteBeforeOutcome::Continue { input: input.input }
+    }
+
+    async fn tool_execute_after(&self, input: ToolExecuteAfterInput) -> ToolExecuteAfterOutcome {
+        ToolExecuteAfterOutcome::Continue {
+            result: input.result,
+        }
+    }
+
+    async fn model_fallback(&self, input: ModelFallbackInput) -> ModelFallbackOutcome {
+        let attempt = input.attempt;
+        self.consults.lock().unwrap().push(input);
+        if let Some(answer) = self.answers.lock().unwrap().pop_front() {
+            return answer;
+        }
+        match self.endless_prefix {
+            Some(prefix) => retry(&format!("{prefix}-{attempt}")),
+            None => ModelFallbackOutcome::GiveUp,
+        }
+    }
+}
+
+fn provider_error(error: &CoreError) -> &ProviderError {
+    match error {
+        CoreError::Provider(inner) => inner.as_ref(),
+        other => panic!("expected provider error, got: {other:?}"),
+    }
+}
+
+/// A non-retryable pre-stream failure with no configured chain consults the
+/// hook, which picks a model that then streams.
+#[tokio::test]
+async fn model_fallback_hook_supplies_next_model_after_pre_stream_failure() {
+    let alpha_attempts = attempts_counter();
+    let beta_attempts = attempts_counter();
+    let alpha = ScriptedModelProvider::new(
+        "alpha",
+        vec![Outcome::PreStreamFailure(ProviderError::AuthExpired {
+            provider: "alpha".to_string(),
+            hint: "re-login".to_string(),
+        })],
+        alpha_attempts.clone(),
+    );
+    let beta = ScriptedModelProvider::new(
+        "beta",
+        vec![Outcome::Complete("BETA_BY_HOOK")],
+        beta_attempts.clone(),
+    );
+    let (hook, consults) = FallbackHook::scripted(vec![retry("beta")]);
+    let fixt = fixture_with_hooks(vec![alpha, beta], None, "alpha", Some(hook)).await;
+
+    let finish = fixt
+        .engine
+        .run_turn(fixt.session, &fixt.agent, CancellationToken::new())
+        .await
+        .unwrap();
+
+    assert_eq!(finish, FinishReason::Stop);
+    assert!(assistant_text(&fixt).await.contains("BETA_BY_HOOK"));
+    assert_eq!(*alpha_attempts.lock().unwrap(), vec!["alpha".to_string()]);
+    assert_eq!(*beta_attempts.lock().unwrap(), vec!["beta".to_string()]);
+    let consults = consults.lock().unwrap();
+    assert_eq!(consults.len(), 1);
+    let consult = &consults[0];
+    assert_eq!(consult.session, fixt.session);
+    assert_eq!(consult.root_session, fixt.session);
+    assert_eq!(consult.agent, Some(AgentName::new("build")));
+    assert_eq!(consult.model, ModelRef::new("alpha"));
+    assert_eq!(consult.error_class, ModelFailureClass::Auth);
+    assert!(consult.error_message.contains("re-login"));
+    assert_eq!(consult.attempt, 1);
+    assert_eq!(consult.tried, vec![ModelRef::new("alpha")]);
+}
+
+/// The configured chain is walked exactly as before; the hook is consulted
+/// only when the chain is exhausted, and sees every model tried this round.
+#[tokio::test]
+async fn model_fallback_hook_runs_after_configured_chain_is_exhausted() {
+    let attempts = attempts_counter();
+    let alpha = ScriptedModelProvider::new(
+        "alpha",
+        vec![Outcome::PreStreamFailure(ProviderError::Transport(
+            "reset".to_string(),
+        ))],
+        attempts.clone(),
+    );
+    let beta = ScriptedModelProvider::new(
+        "beta",
+        vec![Outcome::PreStreamFailure(ProviderError::HttpStatus {
+            status: 529,
+            message: "overloaded".to_string(),
+            retry_after: None,
+        })],
+        attempts.clone(),
+    );
+    let gamma = ScriptedModelProvider::new(
+        "gamma",
+        vec![Outcome::Complete("GAMMA_BY_HOOK")],
+        attempts.clone(),
+    );
+    let (hook, consults) = FallbackHook::scripted(vec![retry("gamma")]);
+    let fixt = fixture_with_hooks(
+        vec![alpha, beta, gamma],
+        Some(chain("alpha", &["beta"])),
+        "alpha",
+        Some(hook),
+    )
+    .await;
+
+    fixt.engine
+        .run_turn(fixt.session, &fixt.agent, CancellationToken::new())
+        .await
+        .unwrap();
+
+    assert!(assistant_text(&fixt).await.contains("GAMMA_BY_HOOK"));
+    assert_eq!(*attempts.lock().unwrap(), vec!["alpha", "beta", "gamma"]);
+    let consults = consults.lock().unwrap();
+    assert_eq!(consults.len(), 1, "no consult while the chain can advance");
+    assert_eq!(consults[0].model, ModelRef::new("beta"));
+    assert_eq!(consults[0].error_class, ModelFailureClass::Retryable);
+    assert_eq!(consults[0].attempt, 2);
+    assert_eq!(
+        consults[0].tried,
+        vec![ModelRef::new("alpha"), ModelRef::new("beta")]
+    );
+}
+
+/// A retry that fails again re-consults with the grown history; `give_up`
+/// surfaces the latest failure.
+#[tokio::test]
+async fn model_fallback_give_up_surfaces_the_latest_failure() {
+    let attempts = attempts_counter();
+    let alpha = ScriptedModelProvider::new(
+        "alpha",
+        vec![Outcome::PreStreamFailure(ProviderError::Transport(
+            "reset".to_string(),
+        ))],
+        attempts.clone(),
+    );
+    let beta = ScriptedModelProvider::new(
+        "beta",
+        vec![Outcome::PreStreamFailure(ProviderError::HttpStatus {
+            status: 400,
+            message: "bad request".to_string(),
+            retry_after: None,
+        })],
+        attempts.clone(),
+    );
+    let (hook, consults) =
+        FallbackHook::scripted(vec![retry("beta"), ModelFallbackOutcome::GiveUp]);
+    let fixt = fixture_with_hooks(vec![alpha, beta], None, "alpha", Some(hook)).await;
+
+    let error = fixt
+        .engine
+        .run_turn(fixt.session, &fixt.agent, CancellationToken::new())
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        provider_error(&error),
+        ProviderError::HttpStatus { status: 400, .. }
+    ));
+    assert_eq!(*attempts.lock().unwrap(), vec!["alpha", "beta"]);
+    let consults = consults.lock().unwrap();
+    assert_eq!(consults.len(), 2);
+    assert_eq!(consults[1].model, ModelRef::new("beta"));
+    assert_eq!(consults[1].error_class, ModelFailureClass::InvalidRequest);
+    assert_eq!(consults[1].attempt, 2);
+}
+
+/// A retry naming a model already tried this round is refused (treated as
+/// give-up), so a hook cannot loop the turn.
+#[tokio::test]
+async fn model_fallback_refuses_a_model_already_tried() {
+    let attempts = attempts_counter();
+    let alpha = ScriptedModelProvider::new(
+        "alpha",
+        vec![
+            Outcome::PreStreamFailure(ProviderError::Transport("reset".to_string())),
+            Outcome::Complete("ALPHA_AGAIN"),
+        ],
+        attempts.clone(),
+    );
+    let (hook, consults) = FallbackHook::scripted(vec![retry("alpha"), retry("beta")]);
+    let fixt = fixture_with_hooks(vec![alpha], None, "alpha", Some(hook)).await;
+
+    let error = fixt
+        .engine
+        .run_turn(fixt.session, &fixt.agent, CancellationToken::new())
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        provider_error(&error),
+        ProviderError::Transport(_)
+    ));
+    assert_eq!(
+        *attempts.lock().unwrap(),
+        vec!["alpha"],
+        "alpha is never replayed"
+    );
+    assert_eq!(
+        consults.lock().unwrap().len(),
+        1,
+        "a refused retry ends the round"
+    );
+}
+
+/// At most eight attempts per round, whatever the hook keeps answering.
+#[tokio::test]
+async fn model_fallback_is_capped_at_eight_attempts_per_round() {
+    let attempts = attempts_counter();
+    let alpha = ScriptedModelProvider::new(
+        "alpha",
+        vec![Outcome::PreStreamFailure(ProviderError::Transport(
+            "reset".to_string(),
+        ))],
+        attempts.clone(),
+    );
+    let consults = Arc::new(Mutex::new(Vec::new()));
+    let hook = Arc::new(FallbackHook {
+        answers: Mutex::new(VecDeque::new()),
+        endless_prefix: Some("ghost"),
+        consults: Arc::clone(&consults),
+    });
+    let fixt = fixture_with_hooks(vec![alpha], None, "alpha", Some(hook)).await;
+
+    let error = fixt
+        .engine
+        .run_turn(fixt.session, &fixt.agent, CancellationToken::new())
+        .await
+        .unwrap_err();
+
+    // Every hook model is unrouted, so the last failure is UnknownModel.
+    assert!(matches!(
+        provider_error(&error),
+        ProviderError::UnknownModel(_)
+    ));
+    let consults = consults.lock().unwrap();
+    assert_eq!(
+        consults.len(),
+        7,
+        "alpha plus seven hook picks is eight attempts"
+    );
+    assert_eq!(consults[6].tried.len(), 7);
+    assert_eq!(consults[6].error_class, ModelFailureClass::UnknownModel);
+}
+
+/// STRICT NO-REPLAY: once a stream exists the hook is never consulted.
+#[tokio::test]
+async fn model_fallback_is_never_consulted_after_a_stream_exists() {
+    let attempts = attempts_counter();
+    let dropper = ScriptedModelProvider::new(
+        "dropzone",
+        vec![Outcome::MidStreamFailure(ProviderError::Decode(
+            "sse frame cut".to_string(),
+        ))],
+        attempts.clone(),
+    );
+    let spare = ScriptedModelProvider::new(
+        "spare",
+        vec![Outcome::Complete("SPARE_TEXT")],
+        attempts.clone(),
+    );
+    let (hook, consults) = FallbackHook::scripted(vec![retry("spare")]);
+    let fixt = fixture_with_hooks(vec![dropper, spare], None, "dropzone", Some(hook)).await;
+
+    let error = fixt
+        .engine
+        .run_turn(fixt.session, &fixt.agent, CancellationToken::new())
+        .await
+        .unwrap_err();
+
+    assert!(matches!(provider_error(&error), ProviderError::Decode(_)));
+    assert_eq!(*attempts.lock().unwrap(), vec!["dropzone"]);
+    assert!(consults.lock().unwrap().is_empty());
+}
+
+/// Error classes map from provider errors as documented.
+#[test]
+fn model_failure_classes_map_provider_errors() {
+    let status = |status| ProviderError::HttpStatus {
+        status,
+        message: String::new(),
+        retry_after: None,
+    };
+    for (error, class) in [
+        (
+            ProviderError::Transport(String::new()),
+            ModelFailureClass::Retryable,
+        ),
+        (status(429), ModelFailureClass::Retryable),
+        (status(503), ModelFailureClass::Retryable),
+        (
+            ProviderError::UnknownModel("x".to_string()),
+            ModelFailureClass::UnknownModel,
+        ),
+        (
+            ProviderError::AuthExpired {
+                provider: String::new(),
+                hint: String::new(),
+            },
+            ModelFailureClass::Auth,
+        ),
+        (status(401), ModelFailureClass::Auth),
+        (status(403), ModelFailureClass::Auth),
+        (status(400), ModelFailureClass::InvalidRequest),
+        (status(404), ModelFailureClass::InvalidRequest),
+        (
+            ProviderError::Incompatible(String::new()),
+            ModelFailureClass::InvalidRequest,
+        ),
+        (
+            ProviderError::Decode(String::new()),
+            ModelFailureClass::Other,
+        ),
+        (ProviderError::Http(String::new()), ModelFailureClass::Other),
+        (status(302), ModelFailureClass::Other),
+    ] {
+        assert_eq!(ModelFailureClass::of(&error), class, "{error:?}");
+    }
+    assert_eq!(ModelFailureClass::UnknownModel.as_str(), "unknown_model");
+    assert_eq!(
+        ModelFailureClass::InvalidRequest.as_str(),
+        "invalid_request"
     );
 }

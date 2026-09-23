@@ -1269,6 +1269,7 @@ Default posture when the plugin omits one: **Safe** for `permission.ask` and
 | `tool.execute.before` | Safe |
 | `tool.execute.after` | Open |
 | `permission.ask` | Safe |
+| `model.fallback` | Open (always fail-open) |
 
 These three names also parse and may appear in `plugin.toml` / initialize, but
 the host **never dispatches** them (dead hooks — see

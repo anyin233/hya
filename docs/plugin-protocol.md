@@ -341,6 +341,75 @@ Example params for a subagent turn:
   (`GUARD_FAILED_SAFE` in
   [`dispatcher.rs`](../crates/hya-plugin/src/dispatcher.rs)).
 
+### `model.fallback` (choose the next model before a stream exists)
+
+Lets a plugin pick the next model when a provider fails **before** any event
+stream exists. Use it for failover policy the static `categories:` chains
+can't express: per-error-class rules, chains per model, or picks based on
+the agent or request chain.
+
+- **Method:** `hook/model.fallback`
+- **Params:**
+
+  | Field | Type | Meaning |
+  | --- | --- | --- |
+  | `session` | session id | Session making the completion. |
+  | `root_session` | session id | Root of `session`'s spawn tree; equals `session` for a root. |
+  | `agent` | string, optional | Stable id of the session's agent. |
+  | `message` | message id | Assistant message being prepared. |
+  | `model` | string | Model whose attempt just failed (`provider/model`). |
+  | `error` | `{ "class", "message" }` | The failure. `class` is one of the values below; `message` is the provider error text. |
+  | `attempt` | u32 | 1-based count of failed attempts so far in this round. |
+  | `tried` | string[] | Every model attempted in this round, in order. All of them failed. |
+
+  | `error.class` | Provider failures |
+  | --- | --- |
+  | `retryable` | Transport failure, HTTP 429, HTTP 5xx |
+  | `unknown_model` | No provider route claims the model |
+  | `auth` | Expired credentials, HTTP 401 or 403 |
+  | `invalid_request` | Any other HTTP 4xx, or a route that can't serve the request (for example tools or media it doesn't support) |
+  | `other` | Decode, JSON, provider error frame, any other status |
+
+- **Outcomes:** `{ "outcome": "retry", "model": "<provider/model>" }` or
+  `{ "outcome": "give_up" }`
+- **Role:** decision chain. The first `retry` wins. `give_up` passes the
+  consult on to the next plugin.
+- **Default posture:** Open. The hook always fails open, whatever the posture:
+  an RPC error, a timeout, an undecodable reply, or a `retry` with an empty
+  model counts as `give_up` for that plugin.
+
+**When the engine asks.** Each model-selection round first walks the
+configured cross-model chain (`categories:`) exactly as it would without the
+hook. When that chain can't advance, the engine asks `model.fallback`. That
+covers every error class, including ones the chain never advances on, such as
+`auth`. A `retry` model is attempted with its own reasoning variant. If it also
+fails before a stream exists, the engine asks again, with the new failure and a
+longer `tried` list.
+
+**Limits.**
+
+- A `retry` naming a model already in `tried` is refused and ends the round, so
+  a plugin can't loop a turn.
+- A round makes at most **8** provider attempts in total, counting the
+  configured chain.
+- The hook is never called once a provider has returned a stream. A mid-stream
+  error surfaces once and is not replayed on another model.
+- Turns on a Workflow route (`model:` with `fallback:` on a Workflow stage)
+  don't call the hook. The Workflow owns its declared candidate list.
+- No new events are recorded. Each switch logs a `tracing::warn!` with the
+  `from` and `to` models, like the configured chain does.
+
+Example exchange:
+
+```json
+{"jsonrpc":"2.0","id":7,"method":"hook/model.fallback","params":{
+  "session":"0192f3c4-…","root_session":"0192f3c1-…","agent":"build",
+  "message":"0192f3c5-…","model":"anthropic/claude-opus-5-5",
+  "error":{"class":"retryable","message":"http status 529: overloaded"},
+  "attempt":1,"tried":["anthropic/claude-opus-5-5"]}}
+{"jsonrpc":"2.0","id":7,"result":{"outcome":"retry","model":"anthropic/claude-sonnet-5"}}
+```
+
 ### Injection-point hooks (dispatched, fail-open)
 
 Five observation/enrichment hooks round out the injection surface. All default
@@ -387,6 +456,7 @@ handshake timing.
 | **Enrichment** (`command.execute.before`, `message.user.before`, `experimental.text.complete`, `chat.params`, `tool.execute.after`) | **Fold:** plugin *N*’s output becomes plugin *N+1*’s input. A failing Open-posture plugin is skipped; its input is passed through. |
 | **Guard** (`tool.execute.before`) | **Short-circuit:** first `veto` returns immediately. Safe-posture failures become `guard failed safe: <plugin> (<error>)`. |
 | **`permission.ask`** | First non-`defer` outcome wins. Serialize/RPC/decode failures **skip** that plugin (no Safe veto). All-defer **or** all-error falls through to the normal user-ask path. |
+| **`model.fallback`** | First `retry` wins. `give_up`, RPC/decode failures, and empty models **skip** that plugin (always fail-open). Configured plugins are asked first, then installed Plugin bundles, then the session agent's own bundle hooks: the same order as `chat.params`. All give-up surfaces the provider error. |
 
 ---
 

@@ -16,6 +16,7 @@ export const HOOK_NAMES = [
   "tool.execute.before",
   "tool.execute.after",
   "permission.ask",
+  "model.fallback",
 ] as const
 
 export type HookName = (typeof HOOK_NAMES)[number]

@@ -225,7 +225,10 @@ Each round runs **in this order** (see `run_turn_rounds` in
 4. Read the current projection from the store.
 5. Maybe compact context (see [Compaction and Summaries](#compaction-and-summaries)).
 6. Run the `chat_params` hook (may rewrite the `CompletionRequest`).
-7. Acquire a governor stream permit (reserved or general by depth).
+7. Acquire a governor stream permit (reserved or general by depth), then open
+   the provider stream: walk the configured cross-model chain, then ask
+   `model_fallback` while no stream exists (Workflow-routed turns use their
+   declared route instead).
 8. Emit `StepStarted`.
 9. Stream the provider round (`collect_stream_round`) — live **text** via
    `publish_live` (then durable text triple at round end); reasoning, tool
@@ -707,7 +710,8 @@ bridge (see below).
 | `command_execute_before` | `CommandExecuteBeforeInput { session, command, arguments, text }` | `Continue { text }` |
 | `text_complete` | `TextCompleteInput { session, message, part, text }` | `Continue { text }` |
 | `message_user_before` | `MessageUserBeforeInput { session, text }` | `Continue { text }` |
-| `chat_params` | `ChatParamsInput { session, message, request }` | `Continue { request }` |
+| `chat_params` | `ChatParamsInput { session, root_session, agent, message, request }` | `Continue { request }` |
+| `model_fallback` | `ModelFallbackInput { session, root_session, agent, message, model, error_class, error_message, attempt, tried }` | `Retry { model }` or `GiveUp` (default); first `Retry` in chain order wins |
 | `tool_execute_before` | `ToolExecuteBeforeInput { session, message, call, tool, input }` | `Continue { input }` or `Veto { reason }` |
 | `tool_execute_after` | `ToolExecuteAfterInput { …, result: ToolOutcomeNative }` | `Continue { result }` where result is `Ok { output, time_ms }` or `Err { message }` |
 

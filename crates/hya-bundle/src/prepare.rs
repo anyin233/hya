@@ -1890,6 +1890,7 @@ pub(crate) fn validate_hook_local_id(bundle_id: &str, local_id: &str) -> Result<
             | "session.start"
             | "session.end"
             | "agent.spawn"
+            | "model.fallback"
     ) {
         return Ok(());
     }
