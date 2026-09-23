@@ -309,6 +309,34 @@ impl SessionEngine {
                 ));
             }
         };
+        // ADR-0015 revive: mail on the pair's DM channel whose other member
+        // is the sender's own ARCHIVED direct child wakes that child, exactly
+        // like handle-addressed mail.
+        if let Some(reviver) = self.archive_reviver() {
+            let projection = self.read_projection(root).await?;
+            let archived_peer = projection
+                .team
+                .channels
+                .get(&projection.team.canonical_channel(&channel))
+                .filter(|state| {
+                    state.kind == hya_proto::ChannelKind::Dm && state.members.contains(&from)
+                })
+                .and_then(|state| state.members.iter().find(|member| **member != from))
+                .filter(|peer| {
+                    projection.team.archived.contains_key(peer.as_str())
+                        && !projection.team.roster.contains_key(peer.as_str())
+                        && scope::parent_path(peer) == Some(from.as_str())
+                })
+                .cloned();
+            if let Some(peer) = archived_peer {
+                reviver.revive(root, &from, &peer, body).await?;
+                return Ok(MailReceipt {
+                    from,
+                    to,
+                    recipients: 1,
+                });
+            }
+        }
         // ADR-0016 write gate: group channels are the unit leader's broadcast
         // pipe. Anyone else posting into one is rejected before the store.
         // The channel's own nature also picks the delivery kind: a group

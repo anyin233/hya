@@ -32,7 +32,7 @@ declared tools before the runtime can publish it.
 | Bundle | Canonical tool names |
 | --- | --- |
 | `hya/base-tools` | `read`, `write`, `edit`, `ls`, `glob`, `find`, `grep`, `ask_user`, `bash`, `apply_patch` |
-| `hya/extended-tools` | `invalid`, `lsp`, `skill`, `list_agents`, `task`, `workflow`, `search_agent`, `kill`, `plan_exit` |
+| `hya/extended-tools` | `invalid`, `lsp`, `skill`, `list_agents`, `task`, `workflow`, `search_agent`, `archive`, `plan_exit` |
 | `hya/network-tools` | `webfetch`, `websearch` |
 | `hya/channel-tools` | `send`, `list_channel`, `report` |
 | `hya/todo-tools` | `todo__read`, `todo__update_status`, `todo__update_content` |

@@ -68,6 +68,33 @@ impl SessionEngine {
         self.turn_gate.cancel(session, cause)
     }
 
+    /// Stop `session`'s in-flight turn with `cause` and wait (up to
+    /// `deadline`) for it to close its own message; a turn still running at
+    /// the deadline has its open messages closed here, as a drain would.
+    /// `false` when the session had no active turn.
+    pub async fn stop_turn(
+        &self,
+        session: SessionId,
+        cause: FinishCause,
+        deadline: Duration,
+    ) -> bool {
+        if !self.turn_gate.cancel(session, cause) {
+            return false;
+        }
+        let until = tokio::time::Instant::now() + deadline;
+        if !self.turn_gate.wait_released(session, until).await
+            && let Ok(envelopes) = self
+                .store
+                .close_open_turns(session, cause, "stopped: the stop deadline passed")
+                .await
+        {
+            for envelope in envelopes {
+                self.publish_envelope(envelope);
+            }
+        }
+        true
+    }
+
     /// Whether a drain has begun (new turns are refused), and with which cause.
     #[must_use]
     pub fn draining(&self) -> Option<FinishCause> {

@@ -27,6 +27,7 @@ pub(crate) fn finish_cause(cause: Option<FinishCause>) -> i32 {
         Some(FinishCause::LeaderFailed) => pb::FinishCause::LeaderFailed as i32,
         Some(FinishCause::Interrupted) => pb::FinishCause::Interrupted as i32,
         Some(FinishCause::ProviderError) => pb::FinishCause::ProviderError as i32,
+        Some(FinishCause::Archived) => pb::FinishCause::Archived as i32,
         Some(FinishCause::Other) => pb::FinishCause::Other as i32,
     }
 }

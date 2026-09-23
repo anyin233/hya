@@ -5,8 +5,8 @@ use std::sync::Arc;
 use hya_tool::Tool;
 
 mod agents;
+mod archive;
 mod invalid;
-mod kill;
 mod lsp;
 mod lsp_path;
 mod plan;
@@ -48,7 +48,7 @@ pub unsafe extern "C" fn hya_tool_bundle_register_v1(out: *mut Vec<Arc<dyn Tool>
             Arc::new(task::TaskTool),
             Arc::new(workflow::WorkflowTool),
             Arc::new(search_agent::SearchAgentTool),
-            Arc::new(kill::KillTool),
+            Arc::new(archive::ArchiveTool),
             Arc::new(plan::PlanExitTool),
         ];
         out.extend(tools);

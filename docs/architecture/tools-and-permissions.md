@@ -66,7 +66,7 @@ stay globally unique inside a registry. `hya-tool` exposes the mechanism in
 | `lsp` | `{ "operation", "filePath", "line", "character", "query"? }` | LSP provider response. |
 | `skill` | `{ "name": string }` (name only; a path is not accepted) | `<skill_content>` envelope with body, `file://` base dir, and sampled files (cap 10). See also [`docs/skills.md`](../skills.md). |
 | `list_agents` | (none) | Agent definitions usable by `task`. |
-| `task` | `{ "description", "prompt", "subagent_type"?, "category"?, "model"?, "task_id"?, "command"?, "background"?, "resident"?, "inline_agent"?, "members"?: [...] }` | Foreground/background subagent outcomes. |
+| `task` | `{ "description", "prompt", "subagent_type"?, "category"?, "model"?, "command"?, "inline_agent"?, "members"?: [...] }` | Non-blocking: per member `{member (handle), session, status: running}`; results arrive as the member's report mail. Every member is a resident actor. |
 | `workflow` | `{ "action"?: "list"\|"info"\|"select"\|"run"\|"state", "name"?: string, "expected_revision"?: string, "inputs"?: object, "run"?: string }` | Shared app-owned Workflow control. |
 | `todo__read` | `{}` | Current items with stable ids and statuses. |
 | `todo__update_status` | `{ "updates": [{ "id", "status": "pending"\|"in_progress"\|"blocked"\|"completed" }] }` | Full snapshot after batch status updates. |
@@ -75,6 +75,7 @@ stay globally unique inside a registry. `hya-tool` exposes the mechanism in
 | `send` | `{ "channel"?: string, "body": string }` — `#channel`/channel id/handle/`^parent`; omitted = role default | Delivery receipt: group channel = broadcast announcement, DM channel/handle = private mail (archived child revives), default = led unit or parent. `^parent` auto-infers the DM channel minted with the direct parent at registration time (works even when the parent handle is not yet in the roster, and at any depth — it never targets the root); without a DM channel it falls back to the parent handle. |
 | `list_channel` | (none) | The caller's channels: group pipes with can-post flag, DM channels with peer + unread. |
 | `search_agent` | `{ "query"?: string }` | The caller's archived direct children (handle, digests, degraded flag). |
+| `archive` | `{ "target": string, "reason"?: string }` — handle, leaf, or session id of a live descendant | `{handle, session, cancelled_turn, descendants}`: the in-flight turn is cancelled (`cause: archived`) and the member archived; mail to its handle wakes it. Permission class `task`. |
 
 `lsp` is a separate language-server contract and intentionally retains its
 `filePath` field. This does not advertise or restore a legacy Read, Write, or

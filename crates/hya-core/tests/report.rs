@@ -491,39 +491,172 @@ async fn submit_report_archives_an_idle_agent_after_the_turn() {
 }
 
 #[tokio::test]
-async fn kill_archives_with_a_synthesized_failure_report() {
+async fn archive_stops_an_idle_member_and_mail_wakes_it_under_the_same_session() {
     let engine = engine().await;
     let root = root_team(&engine).await;
     let supervisor = ResidentSupervisor::start(engine.clone());
     ensure_main(&supervisor, &engine, root).await;
     let (child, handle) = spawn_idle_resident(&supervisor, &engine, root, "work").await;
 
-    supervisor
-        .kill_and_archive(root, &handle, "stuck")
+    // Addressed by session id, as the model saw it in the task result.
+    let receipt = supervisor
+        .archive_member(root, &child.to_string(), "done for now")
         .await
         .unwrap();
+    assert_eq!(receipt.handle, handle);
+    assert!(
+        !receipt.cancelled_turn,
+        "an idle member has no turn to cancel"
+    );
 
     let projection = engine.read_projection(root).await.unwrap();
-    assert!(
-        !projection.team.roster.contains_key(&handle),
-        "kill archives"
-    );
+    assert!(!projection.team.roster.contains_key(&handle), "archived");
     let archived = projection.team.archived.get(&handle).unwrap();
-    assert_eq!(archived.reason, ArchiveReason::Killed);
-    let inbox = projection.team.inboxes.get("main").unwrap();
+    assert_eq!(archived.reason, ArchiveReason::ArchivedByParent);
+    assert_eq!(archived.session, child);
+    // The parent chose to archive: no synthesized report mail comes back to it.
     assert!(
-        inbox.iter().any(|message| message.body.contains("stuck")),
-        "the killer receives the synthesized failure report: {:?}",
-        inbox
+        projection
+            .team
+            .inboxes
+            .get("main")
+            .is_none_or(|inbox| inbox.iter().all(|mail| !mail.body.contains("done for now"))),
+        "archive must not mail the archiver"
     );
+    // Archived members stay readable: transcript and degraded handoff.
     let child_projection = engine.read_projection(child).await.unwrap();
+    assert!(
+        child_projection
+            .session
+            .messages
+            .iter()
+            .any(|message| message.role == hya_proto::Role::Assistant),
+        "the archived member's transcript stays readable"
+    );
     assert!(
         child_projection
             .session
             .handoff
             .as_ref()
-            .is_some_and(|handoff| handoff.degraded),
-        "kill synthesizes a degraded handoff"
+            .is_some_and(|handoff| handoff.degraded)
+    );
+
+    // Mail to the archived handle wakes it: same handle, same session.
+    engine
+        .mail_send(
+            root,
+            MailEndpoint::Handle(handle.clone()),
+            MailKind::Message,
+            "resume: also check the docs".to_string(),
+        )
+        .await
+        .unwrap();
+    let projection = engine.read_projection(root).await.unwrap();
+    assert_eq!(
+        projection
+            .team
+            .roster
+            .get(&handle)
+            .map(|entry| entry.session),
+        Some(child),
+        "the woken member keeps its session"
+    );
+    wait_idle(&engine, root, &handle, child).await;
+    let child_projection = engine.read_projection(child).await.unwrap();
+    assert!(child_projection.session.messages.iter().any(|message| {
+        message.parts.iter().any(
+            |part| matches!(part, PartProjection::Text { text, .. } if text.contains("also check the docs")),
+        )
+    }));
+}
+
+#[tokio::test]
+async fn mail_on_the_dm_channel_wakes_an_archived_member() {
+    let engine = engine().await;
+    let root = root_team(&engine).await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    ensure_main(&supervisor, &engine, root).await;
+    let (child, handle) = spawn_idle_resident(&supervisor, &engine, root, "work").await;
+    supervisor
+        .archive_member(root, &handle, "pause")
+        .await
+        .unwrap();
+    let dm = engine
+        .read_projection(root)
+        .await
+        .unwrap()
+        .team
+        .channels
+        .iter()
+        .find(|(_, channel)| {
+            channel.kind == hya_proto::ChannelKind::Dm && channel.members.contains(&handle)
+        })
+        .map(|(id, _)| id.clone())
+        .expect("pair DM channel");
+    engine
+        .mail_send(
+            root,
+            MailEndpoint::Channel(dm),
+            MailKind::Message,
+            "wake via the DM channel".to_string(),
+        )
+        .await
+        .unwrap();
+    let projection = engine.read_projection(root).await.unwrap();
+    assert_eq!(
+        projection
+            .team
+            .roster
+            .get(&handle)
+            .map(|entry| entry.session),
+        Some(child)
+    );
+    wait_idle(&engine, root, &handle, child).await;
+}
+
+#[tokio::test]
+async fn archive_names_actionable_errors() {
+    let engine = engine().await;
+    let root = root_team(&engine).await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    ensure_main(&supervisor, &engine, root).await;
+    let (_child, handle) = spawn_idle_resident(&supervisor, &engine, root, "work").await;
+    let leaf = handle.rsplit('/').next().unwrap().to_string();
+
+    let lead = supervisor
+        .archive_member(root, "main", "x")
+        .await
+        .unwrap_err();
+    assert!(
+        lead.to_string().contains("team lead"),
+        "the lead is never archivable: {lead}"
+    );
+    let lead_by_session = supervisor
+        .archive_member(root, &root.to_string(), "x")
+        .await
+        .unwrap_err();
+    assert!(lead_by_session.to_string().contains("team lead"));
+
+    let unknown = supervisor
+        .archive_member(root, "nobody-7", "x")
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(
+        unknown.contains("nobody-7") && unknown.contains(&handle),
+        "unknown targets list the live subagents: {unknown}"
+    );
+
+    // The leaf spelling resolves relative to the caller.
+    supervisor.archive_member(root, &leaf, "x").await.unwrap();
+    let again = supervisor
+        .archive_member(root, &handle, "x")
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(
+        again.contains("already archived") && again.contains("mail"),
+        "a second archive says how to wake it: {again}"
     );
 }
 

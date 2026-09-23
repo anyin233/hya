@@ -33,8 +33,8 @@ advertised.
 | Local discovery | `ls`, `glob`, `find`, `grep`, `lsp` | List directories, match paths, search text, or query language servers. |
 | Commands | `bash` | Run a command with bounded capture; hidden runtime name `shell` is not advertised. |
 | Human/session interaction | `ask_user`, `todo__read`, `todo__update_status`, `todo__update_content`, `plan_exit`, `invalid` | Ask batched structured questions, read/update session todos, request a plan-mode transition, or represent invalid tool arguments. |
-| Agents and teams | `skill`, `list_agents`, `task`, `workflow`, `search_agent` | Load skills, discover/spawn agents, execute governed Workflow commands, and search archived subagents. The orchestration plane is hidden at depth 2 ([ADR-0015](../adr/0015-unified-resident-subagent-lifecycle.md)). |
-| `send`, `list_channel`, `report`, `kill` | Channel-plane communication: one channel-addressed send (the channel's nature picks DM vs broadcast, with archive revival), channel listing, terminal reports, and parent force-kill ([ADR-0016](../adr/0016-channel-communication-plane.md)). |
+| Agents and teams | `skill`, `list_agents`, `task`, `workflow`, `search_agent`, `archive` | Load skills, discover/spawn agents, execute governed Workflow commands, search archived subagents, and stop-and-archive a subagent. The orchestration plane is hidden at depth 2 ([ADR-0015](../adr/0015-unified-resident-subagent-lifecycle.md)). |
+| Communication | `send`, `list_channel`, `report` | Channel-plane communication: one channel-addressed send (the channel's nature picks DM vs broadcast, with archive revival), channel listing, and terminal reports ([ADR-0016](../adr/0016-channel-communication-plane.md)). |
 | Network | `webfetch`, `websearch` | Fetch a URL or run provider-backed web search. |
 
 ### ask_user
@@ -173,9 +173,38 @@ of archived agents' final handoffs); lists the caller's own archived direct
 children with handle, agent type, digests, and a degraded flag. `send` to
 the returned handle to revive.
 
+**`archive`** (extended-tools family, permission `task`; replaces `kill`,
+removed in 0.41.0): required `target`, optional `reason`.
+
+```json
+{"target": "main/hya-worker-1", "reason": "superseded by the new plan"}
+```
+
+`target` is the subagent's canonical handle, a leaf relative to the caller
+(`hya-worker-1`), or its session id (`hysec_…`) — the `task` result's
+`member`/`session`. The target must be a live descendant of the caller. Its
+own live subagents are archived first (deepest first). For each member an
+in-flight turn is cancelled (`MessageFinished { finish: cancelled, cause:
+archived }`, open tool parts `CANCELLED`) and waited for up to 5 s, then the
+member is archived: degraded handoff, member row `cancelled` with the reason,
+claim released, `AgentArchived { reason: archived_by_parent }`. No report mail
+comes back. The result is `{title, output, metadata: {handle, session,
+cancelled_turn, descendants}}`. An archived subagent stays readable (its
+session log, channel history, handoff) and is woken by mail to its handle or
+its DM channel — same handle, same session, resumed from the handoff.
+
+Errors (`ToolError::Input`, actionable text):
+
+| Case | Message |
+| --- | --- |
+| unknown target | ``no subagent `X` on your team; your live subagents: …`` |
+| already archived | ``` `H` is already archived; send it mail (`send` to `H`) to wake it``` |
+| the lead | ``` `main` is the team lead; the lead is never archived``` |
+| not a descendant | ``` `H` is not one of your subagents; only its parent `P` or an ancestor can archive it``` |
+
 Removed tools: `roster`, `channels`, `join`, `leave` — their information folds
 into `list_channel`/`search_agent`; named user-created channels no longer
-exist.
+exist. `kill` became `archive` (0.41.0).
 
 `list_agents` enumerates definitions usable by `task`.
 ([crates/hya-tool/src/agents.rs:22-84](../../crates/hya-tool/src/agents.rs#L22-L84))

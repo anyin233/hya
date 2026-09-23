@@ -389,6 +389,7 @@ decodes as `other`.
 | `leader_failed` | `cancelled` | A member turn drained because its lead's turn failed and the one-shot run ended |
 | `interrupted` | `cancelled` | The process died with the turn open; closed by startup crash recovery |
 | `provider_error` | `error` | The model provider failed the turn (`CoreError::Provider`) |
+| `archived` | `cancelled` | The member's parent archived it with the `archive` tool while it was mid-turn |
 | `other` | any | A cause this build does not know (forward compatibility) |
 
 Other cancels (team budget kill, sidecar loss, a parent turn's cancel reaching

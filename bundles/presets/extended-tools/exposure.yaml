@@ -10,7 +10,7 @@ tools:
   - { name: task, schema_version: 1, permission: task }
   - { name: workflow, schema_version: 1, permission: tool }
   - { name: search_agent, schema_version: 1, permission: read_only }
-  - { name: kill, schema_version: 1, permission: task }
+  - { name: archive, schema_version: 1, permission: task }
   - name: plan_exit
     schema_version: 1
     permission: tool

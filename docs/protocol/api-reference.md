@@ -2659,6 +2659,7 @@ top of FinishReason; unset when the model ended the message itself.
 | `FINISH_CAUSE_INTERRUPTED` | 4 | The process died with the turn open; closed by startup crash recovery. |
 | `FINISH_CAUSE_PROVIDER_ERROR` | 5 | The model provider failed the turn. |
 | `FINISH_CAUSE_OTHER` | 6 | A cause this server build does not name. |
+| `FINISH_CAUSE_ARCHIVED` | 7 | The member's parent archived it (`archive` tool) while it was mid-turn. |
 
 ### `Role`
 

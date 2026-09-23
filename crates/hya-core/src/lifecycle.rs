@@ -43,13 +43,14 @@ pub async fn run_lifecycle_service(
                     .map_err(|e| e.to_string());
                     let _ = reply.send(result);
                 }
-                LifecycleRequest::Kill {
+                LifecycleRequest::Archive {
                     session,
-                    handle,
+                    target,
                     reason,
                     reply,
                 } => {
-                    let result = kill_for_session(&engine, &supervisor, session, &handle, &reason)
+                    let result = supervisor
+                        .archive_member(session, &target, &reason)
                         .await
                         .map_err(|e| e.to_string());
                     let _ = reply.send(result);
@@ -78,16 +79,4 @@ async fn submit_report_for_session(
     supervisor
         .submit_report(root, &handle, outcome, report)
         .await
-}
-
-/// Resolve the killing session to its team root, then force-kill the child.
-async fn kill_for_session(
-    engine: &SessionEngine,
-    supervisor: &ResidentSupervisor,
-    session: hya_proto::SessionId,
-    handle: &str,
-    reason: &str,
-) -> Result<(), crate::CoreError> {
-    let (root, _) = engine.session_lineage(session).await?;
-    supervisor.kill_and_archive(root, handle, reason).await
 }

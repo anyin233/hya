@@ -123,7 +123,7 @@ fn degraded_handoff_doc(projection: Option<&Projection>) -> String {
 
 impl SessionEngine {
     /// Deterministic degraded handoff, bypassing the summarizer entirely
-    /// (kill / budget-kill paths must never wait on a model call).
+    /// (`archive`, drain, and budget-kill paths must never wait on a model call).
     pub async fn degraded_terminal_handoff(&self, session: SessionId) -> TerminalHandoff {
         match self.read_projection(session).await {
             Ok(projection) => {

@@ -4188,7 +4188,8 @@
           "FINISH_CAUSE_LEADER_FAILED",
           "FINISH_CAUSE_INTERRUPTED",
           "FINISH_CAUSE_PROVIDER_ERROR",
-          "FINISH_CAUSE_OTHER"
+          "FINISH_CAUSE_OTHER",
+          "FINISH_CAUSE_ARCHIVED"
         ]
       },
       "Role": {

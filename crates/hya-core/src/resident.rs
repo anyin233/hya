@@ -47,13 +47,13 @@ use hya_proto::{
     MemberId, MemberRunStatus, ModelRef, OwnerRunId, ReportOutcome, RosterStatus, SessionId,
     SubagentMode, scope,
 };
-use hya_tool::{AgentDef, ResolvedTool};
+use hya_tool::{AgentDef, ArchiveReceipt, ResolvedTool};
 use tokio::sync::{Notify, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use crate::engine::{
-    AgentSpec, ArchiveReviver, CreateSession, SessionEngine, TurnBoundaryObserver, TurnDrainReport,
-    TurnLease, TurnRequestContext,
+    AgentSpec, ArchiveReviver, CreateSession, DRAIN_DEADLINE, SessionEngine, TurnBoundaryObserver,
+    TurnDrainReport, TurnLease, TurnRequestContext,
 };
 use crate::error::CoreError;
 use crate::hooks::{AgentSpawnInput, HookDispatcher, scope_activation_hooks};
@@ -221,6 +221,9 @@ struct SlotState {
     stop_request: Option<StopRequest>,
     /// Accepted-but-not-yet-executed terminal report (ADR-0015).
     pending_archive: Option<PendingReport>,
+    /// An `archive` is stopping this slot: it owes no more turns, whatever
+    /// mail arrives before the archive marker commits.
+    archiving: bool,
     /// How many of this handle's inbox messages have already been injected.
     cursor: usize,
     /// Epoch-ms of the last engine activity observed on the bus for this
@@ -297,7 +300,7 @@ impl SlotState {
     /// Whether this slot owes a turn (mail, a synthesis directive, or its initial
     /// directive). The single source of truth for "is there work?" under the lock.
     fn has_work(&self) -> bool {
-        self.pending || self.synth_pending
+        !self.archiving && (self.pending || self.synth_pending)
     }
 }
 
@@ -914,13 +917,14 @@ impl TeamActor {
     }
 
     /// Graceful-stop terminalization of this team (after its turns were
-    /// drained): kill the team so no slot wakes again, make every member
-    /// terminal — claimed residents are finalized (roster `failed` with
-    /// `reason`, claim released), their member rows on the parent log are
-    /// cancelled — and park the lead as `idle`: the lead is never terminal,
-    /// its session stays resumable.
+    /// drained): kill the team so no slot wakes again, archive every member
+    /// (reason `shutdown`, deepest first so a parent stays live while its
+    /// children archive; claim released, member row cancelled, degraded
+    /// handoff) so a later run on the same database can wake it with mail,
+    /// and park the lead as `idle`: the lead is never archived, its session
+    /// stays resumable.
     async fn drain_stop(&self, reason: &str) {
-        let residents = {
+        let mut residents = {
             let mut st = self.lock();
             // Nothing to stop, or already terminalized (an earlier drain, a
             // budget kill).
@@ -933,35 +937,53 @@ impl TeamActor {
                 .map(|(session, slot)| (*session, slot.handle.clone(), slot.claim, slot.is_main))
                 .collect::<Vec<_>>()
         };
+        residents.sort_by_key(|(_, handle, _, _)| {
+            std::cmp::Reverse(handle.matches(scope::PATH_SEPARATOR).count())
+        });
         for (session, handle, claim, is_main) in residents {
-            let finalized = match (claim.as_ref(), is_main) {
-                (Some(claim), _) => self
-                    .engine
-                    .finalize_resident_failure(claim, self.root, &handle, reason)
-                    .await
-                    .is_ok(),
-                (None, true) => {
-                    let _ = self
-                        .record_activity(None, handle.clone(), RosterStatus::Idle, None)
-                        .await;
-                    true
-                }
-                (None, false) => {
-                    let _ = self
-                        .record_activity(
-                            None,
-                            handle.clone(),
-                            RosterStatus::Failed,
-                            Some(reason.to_string()),
-                        )
-                        .await;
-                    true
-                }
-            };
+            if is_main {
+                let _ = self
+                    .record_activity(None, handle.clone(), RosterStatus::Idle, None)
+                    .await;
+                self.mark_kill_finalized(session, &handle, claim.as_ref());
+                continue;
+            }
+            let archived = archive_stopped_agent(
+                &self.engine,
+                self.root,
+                &handle,
+                session,
+                claim.as_ref(),
+                ArchiveReason::Shutdown,
+                reason,
+            )
+            .await
+            .is_ok();
+            // An archive that could not commit still leaves the member
+            // terminal, as before archiving existed.
+            let finalized = archived
+                || match claim.as_ref() {
+                    Some(claim) => self
+                        .engine
+                        .finalize_resident_failure(claim, self.root, &handle, reason)
+                        .await
+                        .is_ok(),
+                    None => {
+                        let _ = self
+                            .record_activity(
+                                None,
+                                handle.clone(),
+                                RosterStatus::Failed,
+                                Some(reason.to_string()),
+                            )
+                            .await;
+                        true
+                    }
+                };
             if finalized {
                 self.mark_kill_finalized(session, &handle, claim.as_ref());
             }
-            if !is_main {
+            if !archived {
                 self.cancel_member_row(session, reason).await;
             }
         }
@@ -2137,6 +2159,221 @@ pub(crate) async fn archive_reported_agent(
     Ok(())
 }
 
+/// The stop-and-archive terminal sequence (the `archive` tool and a
+/// graceful drain): degraded handoff → the member row on the parent log goes
+/// `cancelled` → claim release → archive marker. Unlike a report there is no
+/// report marker and no mail to the parent: the archiver already knows, and a
+/// drain has nobody left to read it. The caller has stopped the member's turn
+/// and owns the slot teardown.
+pub(crate) async fn archive_stopped_agent(
+    engine: &SessionEngine,
+    root: SessionId,
+    canonical: &str,
+    child: SessionId,
+    claim: Option<&ActorClaim>,
+    reason: ArchiveReason,
+    note: &str,
+) -> Result<(), CoreError> {
+    if child == root || canonical == scope::ROOT_HANDLE {
+        return Err(CoreError::Invalid(
+            "the team lead is never archived".to_string(),
+        ));
+    }
+    let projection = engine.read_projection(root).await?;
+    let handoff = engine.degraded_terminal_handoff(child).await;
+    engine
+        .emit_for_actor(
+            None,
+            child,
+            Event::HandoffCommitted {
+                session: child,
+                handle: canonical.to_string(),
+                generation: handoff.generation,
+                doc: handoff.doc,
+                degraded: handoff.degraded,
+            },
+        )
+        .await?;
+    let parent_path = scope::parent_path(canonical).unwrap_or(scope::ROOT_HANDLE);
+    let parent_session = projection
+        .team
+        .roster
+        .get(parent_path)
+        .map_or(root, |entry| entry.session);
+    let parent_projection = engine.read_projection(parent_session).await?;
+    for row in &parent_projection.session.members {
+        if row.child == Some(child)
+            && matches!(
+                row.status,
+                MemberRunStatus::Spawning | MemberRunStatus::Running
+            )
+        {
+            engine
+                .record_member_finished(
+                    parent_session,
+                    row.member,
+                    MemberRunStatus::Cancelled,
+                    note.to_string(),
+                    Some(child),
+                )
+                .await?;
+        }
+    }
+    if let Some(claim) = claim {
+        engine
+            .store()
+            .finalize_resident_stop(claim, root, canonical)
+            .await?;
+    }
+    engine
+        .emit_for_actor(
+            None,
+            root,
+            Event::AgentArchived {
+                session: root,
+                handle: canonical.to_string(),
+                child,
+                reason,
+            },
+        )
+        .await?;
+    Ok(())
+}
+
+/// One resolved `archive`/`wait` target inside a team.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct MemberTarget {
+    /// Canonical handle.
+    pub handle: String,
+    /// The member's session.
+    pub session: SessionId,
+    /// On the live roster (`false`: archived).
+    pub live: bool,
+}
+
+/// Resolve a model-supplied subagent reference — canonical handle, a leaf
+/// relative to the caller (`hya-worker-1`), a unique leaf, or a session id
+/// (`hysec_…`) — against the team's live roster and archive. The lead
+/// resolves too (`main` or the root session id); callers decide what that
+/// means. The error lists the caller's live subagents.
+pub(crate) fn resolve_member_target(
+    projection: &hya_proto::Projection,
+    root: SessionId,
+    caller: &str,
+    raw: &str,
+) -> Result<MemberTarget, CoreError> {
+    let token = raw.trim().trim_start_matches('@');
+    let live = |handle: &str| {
+        projection
+            .team
+            .roster
+            .get(handle)
+            .map(|entry| MemberTarget {
+                handle: handle.to_string(),
+                session: entry.session,
+                live: true,
+            })
+    };
+    let archived = |handle: &str| {
+        projection
+            .team
+            .archived
+            .get(handle)
+            .map(|entry| MemberTarget {
+                handle: handle.to_string(),
+                session: entry.session,
+                live: false,
+            })
+    };
+    let found = if token.is_empty() {
+        None
+    } else if let Ok(session) = token.parse::<SessionId>() {
+        if session == root {
+            Some(MemberTarget {
+                handle: scope::ROOT_HANDLE.to_string(),
+                session: root,
+                live: true,
+            })
+        } else {
+            projection
+                .team
+                .roster
+                .values()
+                .find(|entry| entry.session == session)
+                .map(|entry| MemberTarget {
+                    handle: entry.handle.clone(),
+                    session,
+                    live: true,
+                })
+                .or_else(|| {
+                    projection
+                        .team
+                        .archived
+                        .values()
+                        .find(|entry| entry.session == session)
+                        .map(|entry| MemberTarget {
+                            handle: entry.handle.clone(),
+                            session,
+                            live: false,
+                        })
+                })
+        }
+    } else if token == scope::ROOT_HANDLE {
+        Some(MemberTarget {
+            handle: scope::ROOT_HANDLE.to_string(),
+            session: root,
+            live: true,
+        })
+    } else {
+        let relative = scope::join_path(caller, token);
+        live(token)
+            .or_else(|| archived(token))
+            .or_else(|| live(&relative))
+            .or_else(|| archived(&relative))
+            .or_else(|| {
+                let mut leaves = projection
+                    .team
+                    .roster
+                    .keys()
+                    .filter(|key| scope::leaf(key) == token);
+                match (leaves.next(), leaves.next()) {
+                    (Some(only), None) => live(only),
+                    _ => None,
+                }
+            })
+            .or_else(|| {
+                let mut leaves = projection
+                    .team
+                    .archived
+                    .keys()
+                    .filter(|key| scope::leaf(key) == token);
+                match (leaves.next(), leaves.next()) {
+                    (Some(only), None) => archived(only),
+                    _ => None,
+                }
+            })
+    };
+    found.ok_or_else(|| {
+        let prefix = format!("{caller}{}", scope::PATH_SEPARATOR);
+        let mine: Vec<&str> = projection
+            .team
+            .roster
+            .keys()
+            .filter(|key| key.starts_with(&prefix))
+            .map(String::as_str)
+            .collect();
+        let listed = if mine.is_empty() {
+            "none".to_string()
+        } else {
+            mine.join(", ")
+        };
+        CoreError::Invalid(format!(
+            "no subagent `{token}` on your team; your live subagents: {listed}. \
+             Name one by the handle or session id the `task` result returned"
+        ))
+    })
+}
+
 /// Projection-level report gate (ADR-0015): live roster row, inbox drained,
 /// no live children. Pure read; shared by the tool pre-check, the direct
 /// archive path, and the at-rest pending-report execution.
@@ -2686,76 +2923,163 @@ impl ResidentSupervisor {
         Ok(())
     }
 
-    /// Parent-side force kill (ADR-0015): cancel the child's in-flight turn,
-    /// synthesize a degraded failure report + handoff, archive, and tear the
-    /// slot down. This is the zombie answer for a child that blocks the
-    /// parent's report gate.
+    /// The `archive` tool (0.41.0, replaces `kill`): stop one of `caller`'s
+    /// subagents and archive it. Any live descendants of the target archive
+    /// first (deepest first). For each member the in-flight turn is cancelled
+    /// with `cause: archived` and waited for (up to [`DRAIN_DEADLINE`]; a turn
+    /// still open then is closed like a drain straggler), then the member
+    /// archives with reason `archived_by_parent`: degraded handoff, member row
+    /// cancelled, claim released, off the live roster. Its session log and
+    /// channel history stay readable, and mail to its handle (or its DM
+    /// channel) wakes it under the same handle and session.
     ///
     /// # Errors
-    /// Returns [`CoreError::Invalid`] when the handle is not a live non-main
-    /// resident of the team.
-    pub async fn kill_and_archive(
+    /// [`CoreError::Invalid`] with an actionable message when the target is
+    /// unknown (listing the caller's live subagents), already archived, the
+    /// team lead, or not a descendant of the caller.
+    pub async fn archive_member(
+        &self,
+        caller: SessionId,
+        target: &str,
+        reason: &str,
+    ) -> Result<ArchiveReceipt, CoreError> {
+        let (root, _) = self.engine.session_lineage(caller).await?;
+        let caller_path = self.engine.resolve_handle(root, caller).await?;
+        let projection = self.engine.read_projection(root).await?;
+        let resolved = resolve_member_target(&projection, root, &caller_path, target)?;
+        if resolved.session == root || resolved.handle == scope::ROOT_HANDLE {
+            return Err(CoreError::Invalid(
+                "`main` is the team lead; the lead is never archived".to_string(),
+            ));
+        }
+        if !resolved.live {
+            return Err(CoreError::Invalid(format!(
+                "`{}` is already archived; send it mail (`send` to `{}`) to wake it",
+                resolved.handle, resolved.handle
+            )));
+        }
+        let prefix = format!("{}{}", resolved.handle, scope::PATH_SEPARATOR);
+        if !resolved
+            .handle
+            .starts_with(&format!("{caller_path}{}", scope::PATH_SEPARATOR))
+        {
+            let parent = scope::parent_path(&resolved.handle).unwrap_or(scope::ROOT_HANDLE);
+            return Err(CoreError::Invalid(format!(
+                "`{}` is not one of your subagents; only its parent `{parent}` or an ancestor can archive it",
+                resolved.handle
+            )));
+        }
+        let note = if reason.trim().is_empty() {
+            "archived by parent".to_string()
+        } else {
+            format!("archived by parent: {}", reason.trim())
+        };
+        let mut descendants: Vec<(String, SessionId)> = projection
+            .team
+            .roster
+            .iter()
+            .filter(|(path, _)| path.starts_with(&prefix))
+            .map(|(path, entry)| (path.clone(), entry.session))
+            .collect();
+        descendants.sort_by_key(|(path, _)| {
+            std::cmp::Reverse(path.matches(scope::PATH_SEPARATOR).count())
+        });
+        for (handle, session) in &descendants {
+            self.stop_and_archive_live(root, handle, *session, &note)
+                .await?;
+        }
+        let cancelled_turn = self
+            .stop_and_archive_live(root, &resolved.handle, resolved.session, &note)
+            .await?;
+        Ok(ArchiveReceipt {
+            handle: resolved.handle,
+            session: resolved.session,
+            cancelled_turn,
+            descendants: descendants.into_iter().map(|(handle, _)| handle).collect(),
+        })
+    }
+
+    /// Stop one live member and archive it (`archived_by_parent`); `true`
+    /// when an in-flight turn was cancelled.
+    async fn stop_and_archive_live(
         &self,
         root: SessionId,
         handle: &str,
-        reason: &str,
-    ) -> Result<(), CoreError> {
-        let (canonical, child, claim, notify) = {
-            let team = self.teams().get(&root).cloned().ok_or_else(|| {
-                CoreError::Invalid(format!("resident `{handle}` has no live team"))
-            })?;
+        child: SessionId,
+        note: &str,
+    ) -> Result<bool, CoreError> {
+        let team = self.teams().get(&root).cloned();
+        let slot_claim = team.as_ref().and_then(|team| {
             let mut state = team.lock();
-            let (&session, slot) = state
-                .residents
-                .iter_mut()
-                .find(|(_, slot)| slot.handle == handle)
-                .ok_or_else(|| CoreError::Invalid(format!("resident `{handle}` is not live")))?;
-            if slot.is_main {
-                return Err(CoreError::Invalid(
-                    "the main actor cannot be killed".to_string(),
-                ));
+            state.residents.get_mut(&child).map(|slot| {
+                // No further turn: owed mail, a directive, or an accepted
+                // report are dropped; the archive supersedes them.
+                slot.archiving = true;
+                slot.pending = false;
+                slot.synth_pending = false;
+                slot.initial_directive = None;
+                slot.pending_archive = None;
+                slot.claim
+            })
+        });
+        let claim = match slot_claim {
+            Some(claim) => claim,
+            // No live slot in this process: archive durably when nobody owns
+            // the actor (a stale roster row); refuse when another process does.
+            None => {
+                if self
+                    .engine
+                    .store()
+                    .active_actor_ids()
+                    .await?
+                    .contains(&child)
+                {
+                    return Err(CoreError::Invalid(format!(
+                        "`{handle}` is run by another hya process on this database; archive it there"
+                    )));
+                }
+                None
             }
-            slot.pending_archive = None;
-            slot.pending = false;
-            slot.initial_directive = None;
-            // Stop any in-flight turn before the durable sequence commits.
-            slot.cancel.cancel();
-            (
-                slot.handle.clone(),
-                session,
-                slot.claim,
-                slot.notify.clone(),
-            )
         };
-        archive_reported_agent(
+        let cancelled = self
+            .engine
+            .stop_turn(child, FinishCause::Archived, DRAIN_DEADLINE)
+            .await;
+        if let Err(error) = archive_stopped_agent(
             &self.engine,
             root,
-            &canonical,
+            handle,
             child,
             claim.as_ref(),
-            ReportOutcome::Failed,
-            reason.to_string(),
-            ArchiveReason::Killed,
-            true,
+            ArchiveReason::ArchivedByParent,
+            note,
         )
-        .await?;
-        // Slot teardown: the task observes the archived roster + its cancelled
-        // token; nudge it so a parked task exits promptly.
-        notify.notify_one();
-        if let Some(team) = self.teams().get(&root).cloned() {
-            let mut state = team.lock();
-            if let Some(slot) = state.residents.get_mut(&child) {
-                let (reply, _receiver) = oneshot::channel();
-                slot.stop_request = Some(StopRequest {
-                    terminate: true,
-                    reply,
-                });
-                slot.notify.notify_one();
-                state.residents.remove(&child);
+        .await
+        {
+            if let Some(team) = team.as_ref()
+                && let Some(slot) = team.lock().residents.get_mut(&child)
+            {
+                slot.archiving = false;
             }
-            drop(state);
+            return Err(error);
         }
-        Ok(())
+        // Slot teardown: the task observes its missing slot (and a terminate
+        // request if it is still parked) and exits, terminating its sidecar.
+        if let Some(team) = team {
+            {
+                let mut state = team.lock();
+                if let Some(slot) = state.residents.get_mut(&child) {
+                    let (reply, _receiver) = oneshot::channel();
+                    slot.stop_request = Some(StopRequest {
+                        terminate: true,
+                        reply,
+                    });
+                    slot.notify.notify_one();
+                }
+            }
+            let _ = team.remove_slot(child);
+        }
+        Ok(cancelled)
     }
 
     /// Revive one archived direct child of `parent` with `body` as the wake
@@ -2928,6 +3252,7 @@ impl ResidentSupervisor {
                         pending: false,
                         initial_directive: None,
                         pending_archive: None,
+                        archiving: false,
                         synth_pending: false,
                         claim: None,
                         kill_finalized: false,
@@ -3408,6 +3733,7 @@ impl ResidentSupervisor {
                     pending: has_initial,
                     initial_directive: initial,
                     pending_archive: None,
+                    archiving: false,
                     synth_pending: false,
                     claim: Some(claim),
                     kill_finalized: false,
@@ -3478,6 +3804,7 @@ impl ResidentSupervisor {
                     pending,
                     initial_directive: None,
                     pending_archive: None,
+                    archiving: false,
                     synth_pending: false,
                     claim: Some(recovered.claim),
                     kill_finalized: false,
