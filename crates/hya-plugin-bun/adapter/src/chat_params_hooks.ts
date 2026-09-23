@@ -3,6 +3,10 @@ import { isRecord } from "./validate"
 
 export type ChatParams = {
   readonly session: string
+  /** Root of the session's spawn tree; equals `session` for a root. */
+  readonly root_session?: string
+  /** Stable id of the agent bound to `session`. */
+  readonly agent?: string
   readonly message: string
   readonly request: Readonly<Record<string, unknown>>
 }
@@ -13,9 +17,10 @@ export type ChatParamsOutcome = {
 }
 
 /**
- * `chat.params` handlers receive the hya wire params including the current
- * `request` object and may return a replacement request record; requests fold
- * across handlers in load order.
+ * `chat.params` handlers receive the hya wire params (`session`,
+ * `root_session?`, `agent?`, `message`, and the current `request` object) and
+ * may return a replacement request record; requests fold across handlers in
+ * load order.
  */
 export async function runChatParamsHooks(
   hooks: readonly ExtensionHooks[],

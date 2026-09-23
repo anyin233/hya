@@ -16,7 +16,9 @@ use hya_core::{
     ToolExecuteAfterInput, ToolExecuteAfterOutcome, ToolExecuteBeforeInput,
     ToolExecuteBeforeOutcome, ToolOutcomeNative,
 };
-use hya_proto::{AgentName, Envelope, FinishReason, ModelRef, PartProjection, Role, ToolPartState};
+use hya_proto::{
+    AgentName, Envelope, FinishReason, ModelRef, PartProjection, Role, SessionId, ToolPartState,
+};
 use hya_provider::{FakeProvider, FakeStep, ProviderRouter};
 use hya_store::SessionStore;
 use hya_tool::{
@@ -467,5 +469,139 @@ async fn normal_turn_after_hook_rewrite_removes_unpublished_bash_artifact() {
     assert!(
         artifacts.next_entry().await.unwrap().is_none(),
         "an after-hook rewrite must remove the pre-hook Bash artifact"
+    );
+}
+
+type Lineage = (SessionId, SessionId, Option<AgentName>);
+
+/// Records the request-lineage fields every `chat.params` call carries.
+struct LineageHost {
+    seen: Arc<std::sync::Mutex<Vec<Lineage>>>,
+}
+
+#[async_trait::async_trait]
+impl HookDispatcher for LineageHost {
+    fn dispatch_event(&self, _envelope: &Envelope) {}
+
+    async fn command_execute_before(
+        &self,
+        input: CommandExecuteBeforeInput,
+    ) -> CommandExecuteBeforeOutcome {
+        CommandExecuteBeforeOutcome::Continue { text: input.text }
+    }
+
+    async fn text_complete(&self, input: TextCompleteInput) -> TextCompleteOutcome {
+        TextCompleteOutcome::Continue { text: input.text }
+    }
+
+    async fn message_user_before(&self, input: MessageUserBeforeInput) -> MessageUserBeforeOutcome {
+        MessageUserBeforeOutcome::Continue { text: input.text }
+    }
+
+    async fn chat_params(&self, input: ChatParamsInput) -> ChatParamsOutcome {
+        self.seen
+            .lock()
+            .unwrap()
+            .push((input.session, input.root_session, input.agent.clone()));
+        ChatParamsOutcome::Continue {
+            request: input.request,
+        }
+    }
+
+    async fn tool_execute_before(&self, input: ToolExecuteBeforeInput) -> ToolExecuteBeforeOutcome {
+        ToolExecuteBeforeOutcome::Continue { input: input.input }
+    }
+
+    async fn tool_execute_after(&self, input: ToolExecuteAfterInput) -> ToolExecuteAfterOutcome {
+        ToolExecuteAfterOutcome::Continue {
+            result: input.result,
+        }
+    }
+}
+
+/// `chat.params` carries the request chain: `root_session` is the spawn
+/// tree's root (the session itself for a root) and `agent` is the session's
+/// bound stable agent id, so a router can keep one decision per chain.
+#[tokio::test]
+async fn chat_params_carries_root_session_and_agent_for_child_sessions() {
+    let dir = tempdir();
+    let provider = FakeProvider::scripted_turns(vec![
+        vec![
+            FakeStep::Text("root".to_string()),
+            FakeStep::Finish(FinishReason::Stop),
+        ],
+        vec![
+            FakeStep::Text("child".to_string()),
+            FakeStep::Finish(FinishReason::Stop),
+        ],
+    ]);
+    let router = Arc::new(ProviderRouter::new().with(Arc::new(provider)));
+    let (permission, _asks) = PermissionPlane::new(PermissionRules::default());
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let engine = SessionEngine::new(
+        SessionStore::connect_memory().await.unwrap(),
+        router,
+        support::test_runtime(Arc::new(ToolRegistry::builtins())),
+        permission,
+        EventBus::default(),
+    )
+    .with_hooks(Arc::new(LineageHost {
+        seen: Arc::clone(&seen),
+    }));
+    let root = engine
+        .create(CreateSession {
+            parent: None,
+            agent: AgentName::new("build"),
+            model: ModelRef::new("fake"),
+            workdir: dir.to_string_lossy().into_owned(),
+        })
+        .await
+        .unwrap();
+    let child = engine
+        .create(CreateSession {
+            parent: Some(root),
+            agent: AgentName::new("explore"),
+            model: ModelRef::new("fake"),
+            workdir: dir.to_string_lossy().into_owned(),
+        })
+        .await
+        .unwrap();
+    let grandchild = engine
+        .create(CreateSession {
+            parent: Some(child),
+            agent: AgentName::new("explore"),
+            model: ModelRef::new("fake"),
+            workdir: dir.to_string_lossy().into_owned(),
+        })
+        .await
+        .unwrap();
+
+    engine
+        .admit_user_prompt(root, "root turn".to_string())
+        .await
+        .unwrap();
+    engine
+        .run_turn(root, &agent(&dir), CancellationToken::new())
+        .await
+        .unwrap();
+    engine
+        .admit_user_prompt(grandchild, "child turn".to_string())
+        .await
+        .unwrap();
+    let explore = AgentSpec {
+        name: AgentName::new("explore"),
+        ..agent(&dir)
+    };
+    engine
+        .run_turn(grandchild, &explore, CancellationToken::new())
+        .await
+        .unwrap();
+
+    assert_eq!(
+        seen.lock().unwrap().as_slice(),
+        &[
+            (root, root, Some(AgentName::new("build"))),
+            (grandchild, root, Some(AgentName::new("explore"))),
+        ]
     );
 }

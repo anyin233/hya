@@ -183,9 +183,13 @@ Agent-bearing JavaScript bundles retain their activation-scoped sidecars.
 - Unchanged package/process/schema/configuration identities reuse the existing source. New
   bindings after uninstall omit that source; retained bindings keep it alive.
   Materialized files remain until the last retained process owner is dropped.
-- Plugin hooks join Full-plane agents in stable source-id order. Agent-bearing
-  process hooks are restricted to the owner's `hook_refs`; unselected hooks do
-  not execute. Native hook names and payloads are defined in the plugin protocol.
+- Plugin hooks reach every agent's sessions in stable source-id order: built-in
+  Full-plane agents and bundle agents alike. A bundle agent's chain is every
+  installed Plugin's hooks, then its own bundle's process hooks restricted to
+  the owner's `hook_refs` (unselected hooks do not execute), then its
+  activation sidecar's restricted hooks. A Plugin never dispatches twice in one
+  chain. Native hook names and payloads are defined in the plugin protocol;
+  `chat.params` also carries the session's `root_session` and `agent`.
 - Command and user-message admission hooks resolve from the fresh immutable
   binding admitted for that input. Session event hooks continue receiving that
   session's envelopes outside an active turn through the captured hook chain;

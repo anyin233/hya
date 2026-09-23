@@ -2009,6 +2009,175 @@ async fn activation_bound_sidecar_hooks_mutate_tool_and_observe_only_child_event
     assert_eq!(hooks.leak.load(Ordering::SeqCst), 0);
 }
 
+/// Counts the hooks an installed Plugin bundle's dispatcher receives.
+#[derive(Clone, Default)]
+struct PluginHookProbe {
+    chat_params: Arc<AtomicUsize>,
+    tool_before: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl HookDispatcher for PluginHookProbe {
+    fn dispatch_event(&self, _envelope: &hya_proto::Envelope) {}
+
+    async fn command_execute_before(
+        &self,
+        input: CommandExecuteBeforeInput,
+    ) -> CommandExecuteBeforeOutcome {
+        CommandExecuteBeforeOutcome::Continue { text: input.text }
+    }
+
+    async fn text_complete(&self, input: TextCompleteInput) -> TextCompleteOutcome {
+        TextCompleteOutcome::Continue { text: input.text }
+    }
+
+    async fn message_user_before(&self, input: MessageUserBeforeInput) -> MessageUserBeforeOutcome {
+        MessageUserBeforeOutcome::Continue { text: input.text }
+    }
+
+    async fn chat_params(&self, input: ChatParamsInput) -> ChatParamsOutcome {
+        self.chat_params.fetch_add(1, Ordering::SeqCst);
+        ChatParamsOutcome::Continue {
+            request: input.request,
+        }
+    }
+
+    async fn tool_execute_before(&self, input: ToolExecuteBeforeInput) -> ToolExecuteBeforeOutcome {
+        self.tool_before.fetch_add(1, Ordering::SeqCst);
+        ToolExecuteBeforeOutcome::Continue { input: input.input }
+    }
+
+    async fn tool_execute_after(&self, input: ToolExecuteAfterInput) -> ToolExecuteAfterOutcome {
+        ToolExecuteAfterOutcome::Continue {
+            result: input.result,
+        }
+    }
+}
+
+/// An installed Plugin's hooks reach a bundle subagent, and they compose with
+/// (never replace) the activation sidecar's restricted hooks scoped around the
+/// member run.
+#[tokio::test]
+async fn plugin_hooks_reach_bundle_subagent_alongside_its_sidecar_hooks() {
+    let canonical = SIDECAR_PERMISSION_TOOL;
+    let plugin = hya_bundle::prepare_package(hya_bundle::BundleSource::new(
+        "plugin",
+        vec![hya_bundle::SourceFile::new(
+            "bundle.yaml",
+            "kind: Plugin\nidentity: { id: acme/router, version: 1.0.0, publisher: acme }\n",
+        )],
+    ))
+    .unwrap();
+    let bundles = [
+        PreparedInstallableBundle::Agent(Box::new(sidecar_permission_bundle(
+            SpawnLifecycle::Transient,
+        ))),
+        plugin.bundles()[0].clone(),
+    ];
+    let catalog = Arc::new(
+        AgentCatalog::new(Arc::new(BundleCatalog::from_prepared(&bundles).unwrap())).unwrap(),
+    );
+    let inputs = Arc::new(Mutex::new(Vec::new()));
+    let sidecar_tool = ResolvedTool {
+        tool: Arc::new(HookProbeTool {
+            name: canonical.to_string(),
+            inputs: inputs.clone(),
+        }),
+        permission: ToolPermission::Tool,
+    };
+    let bindings: Arc<[ResolvedTool]> = Arc::from(vec![sidecar_tool]);
+    let sidecar = Arc::new(ActivationHookProbe::default());
+    let factory: Arc<dyn BoundSidecarFactory> = Arc::new(HookedSidecarFactory {
+        bindings,
+        hooks: sidecar.clone(),
+    });
+    let provider = Arc::new(SidecarPermissionProvider {
+        requests: Arc::new(Mutex::new(Vec::new())),
+        turn: AtomicUsize::new(0),
+    });
+    let router = Arc::new(ProviderRouter::new().with(provider));
+    let runtime = Arc::new(RuntimeRegistry::new(ToolRegistry::builtins(), catalog));
+    let plugin_hooks = PluginHookProbe::default();
+    runtime
+        .refresh(|candidate| {
+            candidate.upsert_sources(vec![
+                hya_core::RuntimeSource::new(
+                    hya_core::RuntimeSourceId::bundle("acme/router"),
+                    [9; 32],
+                    Arc::new(()),
+                    Vec::new(),
+                )
+                .with_hooks(Arc::new(plugin_hooks.clone())),
+            ])
+        })
+        .unwrap();
+    let (permission, _rx) = PermissionPlane::new(PermissionRules::new(vec![Rule::new(
+        Action::Tool,
+        canonical,
+        Mode::Allow,
+    )]));
+    let engine = Arc::new(SessionEngine::new(
+        SessionStore::connect_memory().await.unwrap(),
+        router,
+        runtime,
+        permission,
+        EventBus::default(),
+    ));
+    let agent = AgentSpec {
+        name: AgentName::new("sidecar-agent"),
+        model: ModelRef::new("fake"),
+        system_prompt: "sidecar hooks".to_string(),
+        workdir: PathBuf::from("/tmp"),
+        reasoning: None,
+    };
+    let lead = engine
+        .create(CreateSession {
+            parent: None,
+            agent: AgentName::new("build"),
+            model: agent.model.clone(),
+            workdir: agent.workdir.to_string_lossy().into_owned(),
+        })
+        .await
+        .unwrap();
+    let binding = engine.bind_runtime(&agent.workdir).unwrap();
+    let resources = Some(binding.agent_resource_policy("sidecar-agent").unwrap());
+    let spec = MemberSpec {
+        id: MemberId::new(),
+        agent,
+        binding,
+        agents: Arc::from([]),
+        resources,
+        guidance: None,
+        directive: "exercise plugin and sidecar hooks".to_string(),
+        description: "plugin hooks".to_string(),
+        session: None,
+        sidecar_factory: Some(factory),
+        tool_call: None,
+    };
+
+    let evidence = run_team(engine.clone(), lead, vec![spec], CancellationToken::new()).await;
+    assert_eq!(evidence.len(), 1);
+    assert_eq!(evidence[0].status, MemberStatus::Done);
+    assert_eq!(
+        plugin_hooks.chat_params.load(Ordering::SeqCst),
+        2,
+        "the Plugin's chat.params runs once per bundle-agent provider round"
+    );
+    assert_eq!(plugin_hooks.tool_before.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        inputs.lock().unwrap().as_slice(),
+        &[json!({ "hooked": true })],
+        "the sidecar's tool.execute.before still rewrites the input"
+    );
+    assert_eq!(sidecar.tool_before.load(Ordering::SeqCst), 1);
+    assert_eq!(sidecar.tool_after.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        sidecar.leak.load(Ordering::SeqCst),
+        0,
+        "the sidecar stays clamped to its three hooks"
+    );
+}
+
 #[tokio::test]
 async fn resident_sidecar_tool_binding_reaches_captured_turn_view() {
     let canonical = SIDECAR_PERMISSION_TOOL;

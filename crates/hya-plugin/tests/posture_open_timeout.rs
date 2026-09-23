@@ -73,6 +73,8 @@ async fn chat_params_open_timeout_keeps_original_request() {
     let ChatParamsOutcome::Continue { request } = host
         .chat_params(ChatParamsInput {
             session: SessionId::new(),
+            root_session: SessionId::new(),
+            agent: None,
             message: MessageId::new(),
             request: original,
         })

@@ -263,13 +263,39 @@ the wire method, params, outcomes, and default posture.
 ### `chat.params`
 
 - **Method:** `hook/chat.params`
-- **Params:** `{ "session", "message", "request": <WireCompletionRequest> }`
+- **Params:** `{ "session", "root_session"?, "agent"?, "message", "request": <WireCompletionRequest> }`
+
+  | Field | Type | Meaning |
+  | --- | --- | --- |
+  | `session` | session id | Session making the completion. |
+  | `root_session` | session id, optional | Root of `session`'s spawn tree (the request chain). It equals `session` for a root session; a subagent at any depth reports its top ancestor. The host always sends it; it is optional only so older payloads still decode. |
+  | `agent` | string, optional | Stable id of the agent bound to `session` (for example `build`, `explore`, or a bundle agent id). |
+  | `message` | message id | Assistant message being prepared. |
+  | `request` | `WireCompletionRequest` | The completion request the host intends to send. |
+
+  `root_session` and `agent` are additive: plugins that ignore unknown fields
+  keep working. Use `root_session` to keep one decision per request chain (for
+  example a model-routing choice shared by a lead and its subagents).
 - **`request` fields:** `model`, `system?`, `messages`, `tools`, `temperature?`,
   `max_output_tokens?`, `reasoning?`, `headers` (per-request extra HTTP headers)
 - **Outcome:** `{ "outcome": "continue", "request": <WireCompletionRequest> }`
 - **Role:** enrichment; a plugin-supplied `reasoning` string that fails to parse
-  leaves the **original** effort in place
+  leaves the **original** effort in place. A rewritten `request.model` is the
+  model the turn streams from, and the engine's configured cross-model fallback
+  chain for that model still applies.
 - **Default posture:** Open
+
+Example params for a subagent turn:
+
+```json
+{
+  "session": "0192f3c4-…-child",
+  "root_session": "0192f3c1-…-root",
+  "agent": "explore",
+  "message": "0192f3c5-…",
+  "request": { "model": "anthropic/claude-sonnet-5", "messages": [], "tools": [] }
+}
+```
 
 ### `tool.execute.before` (guard)
 

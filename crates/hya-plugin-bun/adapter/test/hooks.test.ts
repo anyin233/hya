@@ -251,3 +251,76 @@ test("wire hook methods dispatch through the adapter process", async () => {
     },
   })
 })
+
+test("chat.params handlers receive the request lineage (root_session, agent)", async () => {
+  const root = await makeTempDir()
+  const extensionFile = path.join(root, "lineage-extension.ts")
+  await writeFile(
+    extensionFile,
+    [
+      "export default {",
+      '  id: "lineage",',
+      "  server: async () => ({",
+      '    "chat.params": async (params) => ({',
+      "      ...params.request,",
+      '      model: `${params.agent ?? "none"}@${params.root_session ?? "none"}`,',
+      "    }),",
+      "  }),",
+      "}",
+    ].join("\n"),
+  )
+
+  const responses = await runAdapterProcess(
+    [
+      initializeRequest(1, {
+        activation_id: "activation-lineage-test",
+        lifecycle: "transient",
+      }),
+      {
+        jsonrpc: "2.0",
+        id: 2,
+        method: "hook/chat.params",
+        params: {
+          session: "child",
+          root_session: "root",
+          agent: "explore",
+          message: "m",
+          request: { model: "test-model", messages: [], tools: [] },
+        },
+      },
+      {
+        jsonrpc: "2.0",
+        id: 3,
+        method: "hook/chat.params",
+        params: {
+          session: "legacy",
+          message: "m",
+          request: { model: "test-model", messages: [], tools: [] },
+        },
+      },
+      {
+        jsonrpc: "2.0",
+        id: 4,
+        method: "hook/chat.params",
+        params: {
+          session: "s",
+          root_session: 7,
+          message: "m",
+          request: { model: "test-model", messages: [], tools: [] },
+        },
+      },
+      shutdownRequest(5),
+    ],
+    { argv: ["--bundle-extension", extensionFile] },
+  )
+
+  expect(responses[1]?.result).toEqual({
+    outcome: "continue",
+    request: { model: "explore@root", messages: [], tools: [] },
+  })
+  expect(responses[2]?.result).toEqual({
+    outcome: "continue",
+    request: { model: "none@none", messages: [], tools: [] },
+  })
+  expect(responses[3]?.error?.message).toBe("params.root_session is invalid")
+})
