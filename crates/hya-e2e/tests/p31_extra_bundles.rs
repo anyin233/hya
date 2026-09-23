@@ -150,3 +150,113 @@ async fn t2_26_zvec_grep_plugin_bundle_mcp_tool_executes_through_fake_zg() {
 
     std::fs::remove_dir_all(&root).unwrap();
 }
+
+/// Marker substring of `build`'s engine-constructed system prompt (matches the
+/// convention used by `p28_subagent_bundle.rs`).
+const ROOT: &str = "You are hya";
+/// Marker substring of `hya-extra/scout`'s own prompt (`prompts/scout.md`).
+const SCOUT: &str = "You are scout, a cheap retrieval subagent";
+
+#[tokio::test]
+async fn t2_26_scout_subagent_bundle_spawns_and_calls_its_own_mcp_server() {
+    let root = std::env::temp_dir().join(format!("hya-extra-scout-e2e-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+
+    let fake_bin_dir = install_fake_zg(&root);
+    let path = format!(
+        "{}:{}",
+        fake_bin_dir.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+
+    let source = BundleSource::read_directory(extra_bundle_dir("scout")).expect("read source");
+    let package = root.join("scout.hyabundle");
+    std::fs::write(&package, write_public_package(&source).expect("package")).unwrap();
+
+    let env = E2eEnvBuilder::new()
+        .backend_env("PATH", path)
+        .route(
+            SCOUT,
+            vec![
+                tool_step(
+                    "zvec-grep__zvec_grep_search",
+                    json!({"root": "/workspace/marker", "query": "SCOUT_QUERY_MARKER"}),
+                ),
+                tool_step(
+                    "report",
+                    json!({
+                        "result": "SCOUT_REPORT_OK src/marker.rs:1 ZG_FAKE_RESULT",
+                        "outcome": "done"
+                    }),
+                ),
+            ],
+        )
+        .route(
+            ROOT,
+            vec![
+                tool_step(
+                    "task",
+                    json!({"members": [{
+                        "description": "locate the marker",
+                        "prompt": "find where the marker lives",
+                        "subagent_type": "scout"
+                    }]}),
+                ),
+                text_step("ROOT_SPAWNED_SCOUT"),
+                text_step("ROOT_RECEIVED_SCOUT_RESULT"),
+            ],
+        )
+        .build()
+        .await
+        .expect("e2e env");
+
+    let install = env
+        .backend
+        .bundle_cli(&["bundle", "install", "-y", package.to_str().unwrap()])
+        .unwrap();
+    assert!(
+        install.status.success(),
+        "{}",
+        String::from_utf8_lossy(&install.stderr)
+    );
+    std::fs::remove_file(&package).unwrap();
+
+    let session = env.create_session().await.expect("root session");
+    env.prompt(session, "spawn scout to find the marker")
+        .await
+        .expect("prompt");
+
+    let timeout = std::time::Duration::from_secs(20);
+    env.wait_route_contains(ROOT, "SCOUT_REPORT_OK", timeout)
+        .await
+        .unwrap_or_else(|error| panic!("scout report missing: {error}; {}", env.diagnostics()));
+
+    let scout_requests = env
+        .fake
+        .route_requests(SCOUT)
+        .expect("route requests")
+        .unwrap_or_default();
+    assert!(
+        scout_requests.len() >= 2,
+        "expected a follow-up request to scout after its MCP tool call: {scout_requests:?}"
+    );
+    // The follow-up request carries the *result* of the MCP tool call (the
+    // fake zg server's canned text), proving scout's own bundle-local
+    // `zvec-grep` MCP resource actually executed — not just that the tool
+    // call was scripted.
+    let scout_followup = fake_requests_from(&scout_requests, 1);
+    assert!(
+        scout_followup.contains("ZG_FAKE_RESULT"),
+        "{scout_followup}"
+    );
+    assert!(
+        scout_followup.contains("root=/workspace/marker"),
+        "{scout_followup}"
+    );
+    assert!(
+        scout_followup.contains("query=SCOUT_QUERY_MARKER"),
+        "{scout_followup}"
+    );
+
+    std::fs::remove_dir_all(&root).unwrap();
+}

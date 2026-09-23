@@ -1,0 +1,1 @@
+{"command":["zg","--server","--stdio","--mcp-toolset","full"],"timeout_ms":600000}

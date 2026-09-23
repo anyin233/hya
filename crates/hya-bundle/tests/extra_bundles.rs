@@ -7,7 +7,7 @@
 use std::path::PathBuf;
 
 use hya_bundle::{
-    BundleSource, PreparedBundleKind, first_party_source_root, inspect_public_package,
+    AgentRole, BundleSource, PreparedBundleKind, first_party_source_root, inspect_public_package,
     prepare_package, write_public_package,
 };
 
@@ -105,4 +105,31 @@ fn zvec_grep_is_a_plugin_with_one_mcp_server_and_one_skill() {
     assert_eq!(bundle.skills().len(), 1, "expected exactly one Skill");
     assert_eq!(bundle.mcp()[0].local_id, "zvec-grep");
     assert_eq!(bundle.skills()[0].local_id, "zvec-grep");
+}
+
+#[test]
+fn scout_is_an_agent_set_bundle_with_a_subagent_scout_and_its_own_mcp_server() {
+    let dir = first_party_source_root().join("extra/scout");
+    let source = BundleSource::read_directory(&dir).expect("read scout source");
+    let prepared = prepare_package(source).expect("prepare scout");
+    let bundle = &prepared.bundles()[0];
+
+    assert_eq!(bundle.kind(), PreparedBundleKind::AgentSetBundle);
+    assert_eq!(bundle.agents().len(), 1, "expected exactly one agent");
+    let agent = &bundle.agents()[0];
+    assert_eq!(agent.id.as_str(), "scout");
+    assert_eq!(agent.role, AgentRole::Subagent);
+    assert_eq!(
+        bundle.mcp().len(),
+        1,
+        "scout ships its own MCP server (bundle agents cannot see a sibling Plugin's resources)"
+    );
+    // The prepared resource view resolved successfully (prepare_package fails
+    // closed on any unresolved reference), and selects at least the harness
+    // read/grep/glob tools plus the bundle-local MCP server.
+    assert!(
+        agent.resource_view.allow.len() >= 4,
+        "expected read/grep/glob plus the mcp server in scout's resource_view.allow: {:?}",
+        agent.resource_view.allow
+    );
 }
