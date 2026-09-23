@@ -8,7 +8,7 @@ install like any other bundle described in
 [AgentBundle Authoring](agent-bundle-authoring.md). They exist for two
 reasons at once: they are useful optional capabilities, and each one is a
 coverage fixture exercised by `crates/hya-bundle/tests/extra_bundles.rs` and
-the `crates/hya-e2e` process suite (`T2.26` in the
+the `crates/hya-e2e` process suite (`T2.26`–`T2.28` in the
 [Agent feature matrix](testing/agent-matrix.md)).
 
 Every `hya-extra/*` bundle follows the same identity rule as the first-party
