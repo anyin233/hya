@@ -2939,7 +2939,6 @@ impl HyaRuntime {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-    use hya_bundle::SpawnLifecycle;
     use hya_core::CreateSession;
     use hya_core::{MemberSpec, MemberStatus};
     use hya_proto::MemberId;
@@ -4220,7 +4219,6 @@ identity:
 agent:
   id: runtime-installed-agent
   role: main
-  spawn_lifecycle: transient
 ---
 You are the runtime-installed agent.
 "#,
@@ -4553,7 +4551,6 @@ extensions:
 agent:
   id: runtime-installed-resident-agent
   role: subagent
-  spawn_lifecycle: resident
   resource_view:
     allow:
       - bundle:hya/runtime-installed-resident/tool/echo
@@ -5078,7 +5075,7 @@ You are the installed resident agent.
                         prompt_digest: None,
                         model_policy: ModelPolicy::default(),
                         workdir: None,
-                        spawn_lifecycle: SpawnLifecycle::Transient,
+                        legacy_spawn_lifecycle: None,
                         resource_view: ResourceView::default(),
                         // Deliberately empty: recovery must not depend on can_spawn.
                         can_spawn: Vec::new(),
@@ -5225,7 +5222,7 @@ You are the installed resident agent.
                 prompt_digest: None,
                 model_policy: policy,
                 workdir: None,
-                spawn_lifecycle: SpawnLifecycle::Transient,
+                legacy_spawn_lifecycle: None,
                 resource_view: ResourceView::default(),
                 can_spawn: can_spawn.iter().map(|id| AgentName::new(*id)).collect(),
                 hook_refs: Vec::new(),
@@ -6130,7 +6127,6 @@ extensions:
 agent:
   id: directory-helper-main
   role: main
-  spawn_lifecycle: transient
   resource_view:
     allow:
       - echo
@@ -6726,7 +6722,6 @@ export default {
         bundle.hooks.extend([event_hook, before_hook, after_hook]);
         bundle.agent.id = AgentName::new("root-hook-agent");
         bundle.agent.role = AgentRole::Main;
-        bundle.agent.spawn_lifecycle = SpawnLifecycle::Transient;
         set_materialized_extension_content(
             &mut bundle,
             r#"
@@ -6881,7 +6876,6 @@ export default {
     async fn resident_bun_bundle_reuses_one_sidecar_across_two_mailbox_turns() {
         let canonical = "bundle:hya/materialized/tool/echo";
         let mut bundle = materialized_bun_bundle("bun-resident");
-        bundle.agent.spawn_lifecycle = SpawnLifecycle::Resident;
         set_materialized_extension_content(
             &mut bundle,
             r#"
@@ -7161,8 +7155,7 @@ export default {
     #[tokio::test]
     async fn resident_idle_sidecar_loss_restarts_before_next_mail() {
         let canonical = "bundle:hya/materialized/tool/echo";
-        let mut bundle = materialized_tool_bundle("bun-resident-loss");
-        bundle.agent.spawn_lifecycle = SpawnLifecycle::Resident;
+        let bundle = materialized_tool_bundle("bun-resident-loss");
         let catalog = Arc::new(to_agent_catalog(
             BundleCatalog::from_prepared(&agent_bundles([bundle]))
                 .expect("resident loss fixture catalog"),
@@ -7499,8 +7492,7 @@ for line in sys.stdin:
     #[tokio::test]
     async fn resident_running_sidecar_loss_fences_epoch_and_resumes_queued_mail_once() {
         let canonical = "bundle:hya/materialized/tool/echo";
-        let mut bundle = materialized_tool_bundle("bun-resident-running-loss");
-        bundle.agent.spawn_lifecycle = SpawnLifecycle::Resident;
+        let bundle = materialized_tool_bundle("bun-resident-running-loss");
         let catalog = Arc::new(to_agent_catalog(
             BundleCatalog::from_prepared(&agent_bundles([bundle]))
                 .expect("resident running loss fixture catalog"),
@@ -8072,7 +8064,7 @@ for line in sys.stdin:
                 prompt_digest: None,
                 model_policy: ModelPolicy::default(),
                 workdir: None,
-                spawn_lifecycle: SpawnLifecycle::Transient,
+                legacy_spawn_lifecycle: None,
                 resource_view,
                 can_spawn: Vec::new(),
                 hook_refs: vec!["bundle:hya/materialized/hook/event".to_string()],
@@ -8177,7 +8169,7 @@ for line in sys.stdin:
                 prompt_digest: None,
                 model_policy: ModelPolicy::default(),
                 workdir: None,
-                spawn_lifecycle: SpawnLifecycle::Transient,
+                legacy_spawn_lifecycle: None,
                 resource_view: ResourceView {
                     allow: vec![alpha_tool.stable_id.clone()],
                     ..ResourceView::default()
@@ -8765,8 +8757,7 @@ export default {
     fn sidecar_factory_is_scoped_to_the_selected_agent_effective_capability() {
         // Two bundles: `worker` selects the bundle tool, `lead` denies it. The
         // sidecar factory follows each agent's own effective capability.
-        let mut worker_bundle = materialized_bundle("selected-agent");
-        worker_bundle.agent.spawn_lifecycle = SpawnLifecycle::Resident;
+        let worker_bundle = materialized_bundle("selected-agent");
 
         let mut lead_bundle = worker_bundle.clone();
         lead_bundle.identity.id = "hya/selected-agent-lead".to_string();
@@ -8784,7 +8775,7 @@ export default {
             prompt_digest: None,
             model_policy: ModelPolicy::default(),
             workdir: None,
-            spawn_lifecycle: SpawnLifecycle::Transient,
+            legacy_spawn_lifecycle: None,
             resource_view: ResourceView::default(),
             can_spawn: vec![AgentName::new("worker")],
             hook_refs: Vec::new(),

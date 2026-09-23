@@ -8,7 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use hya_bundle::{
     AgentRole, BundleCatalog, BundleIdentity, ModelPolicy, PreparedAgent, PreparedAgentBundle,
-    PreparedInstallableBundle, ResourceView, SpawnLifecycle,
+    PreparedInstallableBundle, ResourceView,
 };
 use hya_core::runtime_registry::RuntimeSourceSkill;
 use hya_core::{RuntimeRegistry, RuntimeSource, RuntimeSourceId, RuntimeSourceKind};
@@ -122,7 +122,7 @@ pub fn runtime_with_catalog(
             prompt_digest: None,
             model_policy: ModelPolicy::default(),
             workdir: None,
-            spawn_lifecycle: SpawnLifecycle::Transient,
+            legacy_spawn_lifecycle: None,
             resource_view: ResourceView::default(),
             can_spawn: agent
                 .can_spawn

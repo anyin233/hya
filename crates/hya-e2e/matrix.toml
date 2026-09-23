@@ -352,7 +352,7 @@ timeout_secs = 120
 
 [[scenario]]
 id = "T2.23"
-title = "default subagent bundle executes transient report and resident mail"
+title = "default subagent bundle worker mails its parent, reports, and archives"
 track = "P"
 path = "crates/hya-e2e/tests/p28_subagent_bundle.rs"
 tags = ["pr", "hyabundle", "subagent", "mailbox"]

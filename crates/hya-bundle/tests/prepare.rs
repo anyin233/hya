@@ -16,7 +16,6 @@ agent:
   id: {stable_id}
   role: main
   prompt: prompts/lead.md
-  spawn_lifecycle: transient
 "#,
     );
     let mut files = vec![
@@ -44,11 +43,9 @@ agents:
   - id: alpha
     role: main
     prompt: prompts/alpha.md
-    spawn_lifecycle: transient
   - id: beta
     role: subagent
     prompt: prompts/beta.md
-    spawn_lifecycle: transient
 "#;
     let prepared = prepare_package(BundleSource::new(
         "agent-set",
@@ -227,11 +224,10 @@ agents:
   - id: worker
     role: subagent
     prompt: prompts/worker.md
-    spawn_lifecycle: transient
 {}
 "#,
         if include_orphan {
-            "  - id: orphan\n    role: subagent\n    prompt: prompts/orphan.md\n    spawn_lifecycle: transient"
+            "  - id: orphan\n    role: subagent\n    prompt: prompts/orphan.md"
         } else {
             ""
         }
@@ -275,11 +271,9 @@ agents:
   - id: worker
     role: subagent
     prompt: prompts/worker.md
-    spawn_lifecycle: transient
   - id: verifier
     role: subagent
     prompt: prompts/verifier.md
-    spawn_lifecycle: transient
 "#;
     let workflow = br#"---
 kind: Workflow
@@ -332,7 +326,6 @@ agents:
   - id: worker
     role: subagent
     prompt: prompts/worker.md
-    spawn_lifecycle: transient
 "#;
     let workflow = format!(
         r#"---
@@ -363,12 +356,10 @@ fn workflow_source_with_verifier_closure(
     include_verifier: bool,
     include_helper: bool,
 ) -> BundleSource {
-    let verifier = include_verifier.then_some(
-        "  - id: verifier\n    role: subagent\n    prompt: prompts/verifier.md\n    spawn_lifecycle: transient\n",
-    );
-    let helper = include_helper.then_some(
-        "  - id: helper\n    role: subagent\n    prompt: prompts/helper.md\n    spawn_lifecycle: transient\n",
-    );
+    let verifier = include_verifier
+        .then_some("  - id: verifier\n    role: subagent\n    prompt: prompts/verifier.md\n");
+    let helper = include_helper
+        .then_some("  - id: helper\n    role: subagent\n    prompt: prompts/helper.md\n");
     let manifest = format!(
         r#"kind: WorkflowBundle
 identity:
@@ -382,7 +373,6 @@ agents:
   - id: worker
     role: subagent
     prompt: prompts/worker.md
-    spawn_lifecycle: transient
     can_spawn:
       - helper
 {}{}"#,
@@ -709,7 +699,6 @@ identity:
 agent:
   id: lead
   role: main
-  spawn_lifecycle: transient
   can_spawn:
     - beta
     - alpha
@@ -780,7 +769,6 @@ extensions:
 agent:
   id: lead
   role: main
-  spawn_lifecycle: transient
 "#;
     let prepared = prepare_package(BundleSource::new(
         "prepared-hook",
@@ -907,7 +895,6 @@ resources:
 agent:
   id: lead
   role: main
-  spawn_lifecycle: transient
 "#,
     );
     BundleSource::new(
@@ -1060,7 +1047,6 @@ extensions:
 agent:
   id: lead
   role: main
-  spawn_lifecycle: transient
   resource_view:
     allow:
       - query
@@ -1223,7 +1209,6 @@ extensions:
 {process}agent:
   id: process-lead
   role: main
-  spawn_lifecycle: transient
 "#,
     );
     BundleSource::new(
@@ -1324,7 +1309,6 @@ resources:
 {mcp_list}agent:
   id: mcp-lead
   role: main
-  spawn_lifecycle: transient
 "#,
     );
     let mut sources = vec![SourceFile::new("bundle.yaml", manifest.into_bytes())];

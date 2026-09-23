@@ -3,9 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
-use hya_bundle::{
-    AgentRole, BundleSource, PreparedCatalog, SourceFile, SpawnLifecycle, prepare_package,
-};
+use hya_bundle::{AgentRole, BundleSource, PreparedCatalog, SourceFile, prepare_package};
 
 fn repository_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -47,7 +45,7 @@ fn docs_example_bundle_hya_md_prepares_deterministically() {
         panic!("docs example must prepare successfully on second pass: {error:?}");
     });
 
-    // Then: preparation succeeds with one flat main/transient agent and is deterministic.
+    // Then: preparation succeeds with one flat main agent and is deterministic.
     assert_eq!(first.bytes(), second.bytes());
     assert_eq!(first.digest(), second.digest());
     assert_eq!(first.bundles().len(), 1);
@@ -56,7 +54,6 @@ fn docs_example_bundle_hya_md_prepares_deterministically() {
     let bundle = &first.bundles()[0];
     let agent = &bundle.agents()[0];
     assert_eq!(agent.role, AgentRole::Main);
-    assert_eq!(agent.spawn_lifecycle, SpawnLifecycle::Transient);
     assert!(
         agent
             .prompt
@@ -378,7 +375,6 @@ fn workflow_docs_cover_stage_model_routing_and_route_outcomes() {
 struct ExpectedAgent {
     stable_id: &'static str,
     role: AgentRole,
-    lifecycle: SpawnLifecycle,
     can_spawn: &'static [&'static str],
 }
 
@@ -392,13 +388,11 @@ const NO_SPAWN: &[&str] = &[];
 const TRANSIENT_AGENTS: &[ExpectedAgent] = &[ExpectedAgent {
     stable_id: "docs-bun-transient",
     role: AgentRole::Main,
-    lifecycle: SpawnLifecycle::Transient,
     can_spawn: NO_SPAWN,
 }];
 const RESIDENT_AGENTS: &[ExpectedAgent] = &[ExpectedAgent {
     stable_id: "docs-bun-resident",
     role: AgentRole::Main,
-    lifecycle: SpawnLifecycle::Resident,
     can_spawn: NO_SPAWN,
 }];
 const BUN_EXAMPLES: &[ExpectedExample] = &[
@@ -459,7 +453,6 @@ fn bun_examples_are_prepare_valid_and_deterministic() {
             };
             assert_eq!(agent.id.as_str(), expected_agent.stable_id);
             assert_eq!(agent.role, expected_agent.role);
-            assert_eq!(agent.spawn_lifecycle, expected_agent.lifecycle);
             let can_spawn = agent
                 .can_spawn
                 .iter()
@@ -526,7 +519,6 @@ fn bun_disjoint_example_is_prepare_valid_and_captures_the_agent_closure() {
     let alpha = &bundle.agents()[0];
     assert_eq!(alpha.id.as_str(), "docs-bun-alpha");
     assert_eq!(alpha.role, AgentRole::Main);
-    assert_eq!(alpha.spawn_lifecycle, SpawnLifecycle::Transient);
     // The Markdown body is the prompt; the agent names no prompt resource.
     assert_eq!(alpha.prompt_source.as_deref(), Some("bundle.hya.md"));
     assert_eq!(

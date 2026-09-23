@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use hya_bundle::{
     AgentRole, BundleCatalog, BundleIdentity, ModelPolicy, PreparedAgent, PreparedAgentBundle,
-    PreparedInstallableBundle, ResourceView, SpawnLifecycle,
+    PreparedInstallableBundle, ResourceView,
 };
 use hya_core::{
     AgentCatalog, AgentSpec, BoundSidecarFactory, ChatParamsInput, ChatParamsOutcome,
@@ -661,7 +661,7 @@ fn catalog(agents: &[AgentFixture]) -> Arc<AgentCatalog> {
                         reasoning: agent.reasoning.clone(),
                     },
                     workdir: agent.workdir.clone(),
-                    spawn_lifecycle: SpawnLifecycle::Transient,
+                    legacy_spawn_lifecycle: None,
                     resource_view: ResourceView::default(),
                     can_spawn: Vec::new(),
                     hook_refs: Vec::new(),

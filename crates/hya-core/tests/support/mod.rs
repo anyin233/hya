@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use async_trait::async_trait;
 use hya_bundle::{
     AgentRole, BundleCatalog, BundleIdentity, ModelPolicy, PreparedAgent, PreparedAgentBundle,
-    PreparedInstallableBundle, ResourceView, SpawnLifecycle,
+    PreparedInstallableBundle, ResourceView,
 };
 use hya_core::{AgentCatalog, RuntimeRegistry};
 use hya_proto::{AgentName, ToolName, ToolSchema};
@@ -21,57 +21,42 @@ static NEXT_TEST_DIR: AtomicU64 = AtomicU64::new(0);
 /// A bundle defines exactly one agent, so a fixture asking for N agents becomes
 /// N single-agent bundles.
 pub fn test_catalog(agents: &[(&str, AgentRole, &[&str])]) -> Arc<AgentCatalog> {
-    let with_lifecycle = agents
-        .iter()
-        .map(|(stable_id, role, can_spawn)| {
-            (*stable_id, *role, SpawnLifecycle::Transient, *can_spawn)
-        })
-        .collect::<Vec<_>>();
-    test_catalog_with_lifecycles(&with_lifecycle)
-}
-
-/// Build one installed test bundle per Agent with an explicit spawn lifecycle.
-pub fn test_catalog_with_lifecycles(
-    agents: &[(&str, AgentRole, SpawnLifecycle, &[&str])],
-) -> Arc<AgentCatalog> {
     let bundles = agents
         .iter()
-        .filter(|(stable_id, _, _, _)| !hya_core::is_builtin_id(stable_id))
-        .map(
-            |(stable_id, role, lifecycle, can_spawn)| PreparedAgentBundle {
-                format_version: 2,
-                identity: BundleIdentity {
-                    id: format!("hya/test-{stable_id}"),
-                    version: "0.0.0".to_string(),
-                    publisher: "hya-tests".to_string(),
-                },
-                namespace: None,
-                digest: format!("test-only-{stable_id}"),
-                agent: PreparedAgent {
-                    id: AgentName::new(*stable_id),
-                    description: None,
-                    role: *role,
-                    color: None,
-                    prompt: Some(format!("{stable_id} prompt")),
-                    prompt_source: None,
-                    prompt_digest: None,
-                    model_policy: ModelPolicy::default(),
-                    workdir: None,
-                    spawn_lifecycle: *lifecycle,
-                    resource_view: ResourceView::default(),
-                    can_spawn: can_spawn
-                        .iter()
-                        .map(|agent| AgentName::new(*agent))
-                        .collect(),
-                    hook_refs: Vec::new(),
-                },
-                tools: Vec::new(),
-                skills: Vec::new(),
-                mcp: Vec::new(),
-                hooks: Vec::new(),
-                extensions: Vec::new(),
+        .filter(|(stable_id, _, _)| !hya_core::is_builtin_id(stable_id))
+        .map(|(stable_id, role, can_spawn)| PreparedAgentBundle {
+            format_version: 2,
+            identity: BundleIdentity {
+                id: format!("hya/test-{stable_id}"),
+                version: "0.0.0".to_string(),
+                publisher: "hya-tests".to_string(),
             },
-        )
+            namespace: None,
+            digest: format!("test-only-{stable_id}"),
+            agent: PreparedAgent {
+                id: AgentName::new(*stable_id),
+                description: None,
+                role: *role,
+                color: None,
+                prompt: Some(format!("{stable_id} prompt")),
+                prompt_source: None,
+                prompt_digest: None,
+                model_policy: ModelPolicy::default(),
+                workdir: None,
+                legacy_spawn_lifecycle: None,
+                resource_view: ResourceView::default(),
+                can_spawn: can_spawn
+                    .iter()
+                    .map(|agent| AgentName::new(*agent))
+                    .collect(),
+                hook_refs: Vec::new(),
+            },
+            tools: Vec::new(),
+            skills: Vec::new(),
+            mcp: Vec::new(),
+            hooks: Vec::new(),
+            extensions: Vec::new(),
+        })
         .collect::<Vec<_>>();
     let bundles = bundles
         .into_iter()

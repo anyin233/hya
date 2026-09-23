@@ -39,7 +39,7 @@ fn bundle_files(bundle_id: &str, namespace: &str, version: &str, prompt: &str) -
         SourceFile::new(
             "bundle.yaml",
             format!(
-                "kind: AgentBundle\nidentity:\n  id: {bundle_id}\n  version: {version}\n  publisher: hya\nnamespace: {namespace}\nagent:\n  id: {agent}-lead\n  role: main\n  prompt: prompts/lead.md\n  spawn_lifecycle: transient\n"
+                "kind: AgentBundle\nidentity:\n  id: {bundle_id}\n  version: {version}\n  publisher: hya\nnamespace: {namespace}\nagent:\n  id: {agent}-lead\n  role: main\n  prompt: prompts/lead.md\n"
             ),
         ),
         SourceFile::new("prompts/lead.md", format!("{prompt}\n")),

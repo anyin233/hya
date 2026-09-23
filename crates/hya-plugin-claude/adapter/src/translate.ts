@@ -390,7 +390,6 @@ function renderManifest(
         lines.push(`    description: ${yamlString(agent.description)}`)
       }
       lines.push("    role: subagent")
-      lines.push("    spawn_lifecycle: transient")
       lines.push(`    prompt: ${yamlString(agent.promptPath)}`)
       if (agent.model !== undefined) {
         lines.push("    model_policy:")

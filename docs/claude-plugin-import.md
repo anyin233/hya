@@ -61,7 +61,8 @@ Agent IDs come from frontmatter `name` and are sanitized and deduplicated in
 sorted file order. `model` becomes `model_policy.model` unless its value is
 `inherit`; `tools` become lowercase `harness:tool/<name>` allow references and
 must pass ordinary bundle closure validation. Imported agents use role
-`subagent` and transient spawn lifecycle. Hya does not infer a privileged main
+`subagent`; like every spawned agent they run as resident actors (the
+manifest carries no spawn lifecycle). Hya does not infer a privileged main
 Agent, spawn graph, tool permission expansion, or workflow from Claude metadata.
 
 The emitted JSON envelope has this exact shape:

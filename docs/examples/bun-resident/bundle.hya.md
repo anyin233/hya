@@ -15,7 +15,6 @@ extensions:
 agent:
   id: docs-bun-resident
   role: main
-  spawn_lifecycle: resident
   resource_view:
     allow:
       - echo

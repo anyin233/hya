@@ -3860,7 +3860,7 @@ mod tests {
     use async_trait::async_trait;
     use hya_bundle::{
         AgentRole, BundleIdentity, BundleSource, ModelPolicy, PreparedAgent, PreparedAgentBundle,
-        PreparedInstallableBundle, PreparedResource, SourceFile, SpawnLifecycle, prepare_package,
+        PreparedInstallableBundle, PreparedResource, SourceFile, prepare_package,
     };
     use hya_proto::{AgentName, ToolName};
     use hya_tool::{
@@ -4092,7 +4092,6 @@ agent:
   hook_refs: [tool.execute.before]
   id: private-process-agent
   role: main
-  spawn_lifecycle: transient
   resource_view: { allow: [echo] }
 "#,
                 ),
@@ -4186,11 +4185,9 @@ resources:
 agents:
   - id: hooked-agent
     role: main
-    spawn_lifecycle: transient
     hook_refs: [chat.params]
   - id: plain-agent
     role: main
-    spawn_lifecycle: transient
 "#,
                 ),
                 SourceFile::new("hook.json", "{}"),
@@ -4278,7 +4275,6 @@ resources:
 agent:
   id: private-mcp-agent
   role: main
-  spawn_lifecycle: transient
   resource_view: { allow: [echo] }
 "#,
                 ),
@@ -4436,7 +4432,7 @@ agent:
             prompt_digest: None,
             model_policy: ModelPolicy::default(),
             workdir: None,
-            spawn_lifecycle: SpawnLifecycle::Transient,
+            legacy_spawn_lifecycle: None,
             resource_view,
             can_spawn: Vec::new(),
             hook_refs: Vec::new(),
@@ -4961,7 +4957,6 @@ agent:
   id: fingerprint
   description: "manifest {catalog_marker}"
   role: main
-  spawn_lifecycle: transient
 "#
             );
             let prepared = prepare_package(BundleSource::new(
@@ -5176,7 +5171,6 @@ identity:
 agent:
   id: fingerprint-skills
   role: main
-  spawn_lifecycle: transient
 "#;
             let prepared = prepare_package(BundleSource::new(
                 "runtime-fingerprint-skills",
@@ -5367,7 +5361,6 @@ identity:
 agent:
   id: fingerprint-sources
   role: main
-  spawn_lifecycle: transient
 "#;
             let prepared = prepare_package(BundleSource::new(
                 "runtime-fingerprint-sources",

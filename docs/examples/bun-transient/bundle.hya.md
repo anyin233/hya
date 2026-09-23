@@ -15,7 +15,6 @@ extensions:
 agent:
   id: docs-bun-transient
   role: main
-  spawn_lifecycle: transient
   resource_view:
     allow:
       - echo

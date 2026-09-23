@@ -68,7 +68,6 @@ agents:
   - id: catalog-worker
     role: subagent
     prompt: prompts/catalog-worker.md
-    spawn_lifecycle: transient
 "#
     );
     let workflow = format!(

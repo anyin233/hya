@@ -11,7 +11,6 @@ agents:
   - id: scout
     description: 'Cheap retrieval scout: answers "where/what/how is X" questions about the local workspace with file:line evidence using zvec-grep semantic search.'
     role: subagent
-    spawn_lifecycle: transient
     prompt: prompts/scout.md
     model_policy:
       category: quick

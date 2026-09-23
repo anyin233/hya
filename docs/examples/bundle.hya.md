@@ -7,7 +7,6 @@ identity:
 agent:
   id: docs-example-lead
   role: main
-  spawn_lifecycle: transient
 ---
 
 You are a concise documentation example lead. Answer with the static prompt and

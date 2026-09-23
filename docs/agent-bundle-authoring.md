@@ -15,8 +15,8 @@ the agent runtime.
 Examples:
 
 - Retained static example: [`examples/bundle.hya.md`](examples/bundle.hya.md)
-- Transient Bun example: [`examples/bun-transient/`](examples/bun-transient/)
-- Resident Bun example: [`examples/bun-resident/`](examples/bun-resident/)
+- Per-activation Bun example (root agent): [`examples/bun-transient/`](examples/bun-transient/)
+- Resident Bun example (spawned agent): [`examples/bun-resident/`](examples/bun-resident/)
 - Working split-entrypoint example: [`docs/examples/bun-disjoint`](examples/bun-disjoint/) (`bun-disjoint`)
 
 Core agents (`build`, `plan`, `explore`, `general`, the reserved
@@ -141,19 +141,17 @@ agents:
   - id: reviewer
     role: main
     prompt: prompts/reviewer.md
-    spawn_lifecycle: transient
   - id: verifier
     role: subagent
     prompt: prompts/verifier.md
-    spawn_lifecycle: transient
 ```
 
 `agents` must contain at least one entry unless nonempty `channels` are present;
 channel-only AgentSets may omit `agents`. Agent ids are sorted and must be unique
 within the bundle and across the merged catalog. `can_spawn` keeps the existing late-bound allowlist semantics and may reference agents from other bundles; this payload does not require a Workflow reachability closure. Each entry uses the same
 `PreparedAgent` fields as a WorkflowBundle agent (`description`, `role`,
-`color`, `prompt`, `model_policy`, `workdir`, `spawn_lifecycle`,
-`resource_view`, `can_spawn`, and `hook_refs`). Resources and extensions use
+`color`, `prompt`, `model_policy`, `workdir`, `resource_view`, `can_spawn`,
+and `hook_refs`). Resources and extensions use
 the same `resources`, `extensions`, and `schemas` sections as AgentBundle.
 `workflow` is not accepted, and unknown manifest fields fail preparation.
 Optional `channels` declare restrictive unit/parent-DM templates; see
@@ -477,7 +475,7 @@ limits, and security notes are in
 | `prompt` | conditional | Path to prompt file, or omitted when `bundle.hya.md` body supplies the prompt. |
 | `model_policy` | no | Optional `{ model, category, reasoning }` (all optional sub-fields; `deny_unknown_fields`). Per-agent model preference. |
 | `workdir` | no | Optional working-directory string on the prepared agent. **Parsed and stored** on `PreparedAgent` and serialized into the prepared catalog. **Not applied** by the runtime today — no reader uses `PreparedAgent::workdir` to set session or tool workdirs; authors who set `workdir: subdir` get silent no-op behavior. |
-| `spawn_lifecycle` | no | `transient` (default) or `resident`. |
+| `spawn_lifecycle` | removed | **Rejected** since 0.41.0 with `RemovedManifestKey` (`` `spawn_lifecycle` was removed from the bundle manifest ``). Every spawned subagent is a resident actor: `task` returns its handle at once, it runs until it `report`s (or its parent `archive`s it), and follow-up mail wakes it again. Delete the key; there is no replacement. |
 | `resource_profile` | no | **Unsupported** if present — prepare fails. |
 | `namespace` | no | Provider-facing namespace for the bundle's tools; defaults to the identity name segment (the part after `/`). Token rules: `[a-zA-Z0-9_-]`, no `__`, and the reserved tokens `mcp`, `harness`, `builtin`, `plugin` are rejected. |
 | `resource_view` | no | `allow`, `deny`, `aliases`, `namespace` (see below). |
@@ -496,7 +494,6 @@ agent:
     model: anthropic/claude-sonnet-4-6
     category: deep
     reasoning: high
-  spawn_lifecycle: transient
   can_spawn: [explore, general]
 ```
 
@@ -631,7 +628,7 @@ agent:
 - `role: main` is selectable in a client's direct selector.
 - `role: subagent` is hidden from direct client selection.
 - `role` controls selector visibility only. Agent-facing roster and ordinary spawn derive from the caller's `can_spawn` reachability, never from `role`.
-- `spawn_lifecycle` is orthogonal to `role`.
+- Every spawned agent is a resident actor, whatever its `role`; there is no per-agent lifecycle choice.
 - Empty or omitted `subagent_type` on the `task` tool normalizes to `general` before authorization.
 
 ### `can_spawn` enforcement
@@ -737,8 +734,8 @@ limit. A malformed response or timeout taints and terminates the sidecar.
 
 ## Lifecycle and recovery
 
-- `spawn_lifecycle: transient` starts one child for the whole Harness activation and shuts it down and reaps it when the activation ends.
-- `spawn_lifecycle: resident` reuses one healthy child across mailbox messages. Its in-process state is volatile; process loss never replays completed messages or effects.
+- A root (user-started) agent's turn starts one child for the whole Harness activation and shuts it down and reaps it when the activation ends.
+- A spawned agent is a resident actor and reuses one healthy child across mailbox messages. Its in-process state is volatile; process loss never replays completed messages or effects.
 - Idle resident loss lazily creates a fresh child and ACKs it under the same captured binding. Running loss aborts and fences the running item without replay, then preserves queued-after work for a fresh ACK under that binding.
 - Explicit stop is final and idempotent.
 - There is no TTL, heartbeat, idle reclaim, process adoption, watcher, or persisted PID/stdio/process state.

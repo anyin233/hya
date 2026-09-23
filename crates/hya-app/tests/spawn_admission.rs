@@ -12,7 +12,7 @@ use std::time::Duration;
 use hya_app::spawn_team_supervisor;
 use hya_bundle::{
     AgentRole, BundleCatalog, BundleIdentity, ModelPolicy, PreparedAgent, PreparedAgentBundle,
-    PreparedInstallableBundle, ResourceView, SpawnLifecycle,
+    PreparedInstallableBundle, ResourceView,
 };
 use hya_core::{
     AgentSpec, BoundSpawnSender, CategoryRegistry, CreateSession, EventBus, ResidentSupervisor,
@@ -2068,7 +2068,7 @@ fn nested_root_divergence_runtime(tools: Arc<ToolRegistry>) -> Arc<RuntimeRegist
                 prompt_digest: None,
                 model_policy: ModelPolicy::default(),
                 workdir: None,
-                spawn_lifecycle: SpawnLifecycle::Transient,
+                legacy_spawn_lifecycle: None,
                 resource_view: ResourceView::default(),
                 can_spawn: can_spawn.iter().map(|id| AgentName::new(*id)).collect(),
                 hook_refs: Vec::new(),
@@ -2335,7 +2335,7 @@ async fn missing_root_definition_fails_before_admission_for_resident_batch() {
                 prompt_digest: None,
                 model_policy: ModelPolicy::default(),
                 workdir: None,
-                spawn_lifecycle: SpawnLifecycle::Transient,
+                legacy_spawn_lifecycle: None,
                 resource_view: ResourceView::default(),
                 can_spawn: can_spawn.iter().map(|id| AgentName::new(*id)).collect(),
                 hook_refs: Vec::new(),

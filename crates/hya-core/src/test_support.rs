@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use hya_bundle::{
     AgentRole, BundleCatalog, BundleIdentity, ModelPolicy, PreparedAgent, PreparedAgentBundle,
-    PreparedInstallableBundle, ResourceView, SpawnLifecycle,
+    PreparedInstallableBundle, ResourceView,
 };
 use hya_proto::AgentName;
 use hya_tool::ToolRegistry;
@@ -35,7 +35,7 @@ pub(crate) fn runtime(tools: ToolRegistry) -> Arc<RuntimeRegistry> {
                 prompt_digest: None,
                 model_policy: ModelPolicy::default(),
                 workdir: None,
-                spawn_lifecycle: SpawnLifecycle::Transient,
+                legacy_spawn_lifecycle: None,
                 resource_view: ResourceView::default(),
                 can_spawn: Vec::new(),
                 hook_refs: Vec::new(),

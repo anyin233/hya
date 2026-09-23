@@ -147,12 +147,10 @@ resources:
 agents:
   - id: owner-agent
     role: main
-    spawn_lifecycle: transient
     resource_view: { allow: [echo, remote] }
     hook_refs: [tool.execute.before]
   - id: quiet-agent
     role: main
-    spawn_lifecycle: transient
     resource_view: { allow: [echo] }
 "#,
             ),
@@ -320,7 +318,6 @@ identity: { id: acme/team, version: 1.0.0, publisher: acme }
 agents:
   - id: team-agent
     role: main
-    spawn_lifecycle: transient
 "#,
         )],
     );

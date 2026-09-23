@@ -11,9 +11,7 @@ use serde::de::IgnoredAny;
 use serde_json::Value;
 
 use crate::BundleError;
-use crate::model::{
-    AgentRole, BundleIdentity, ModelPolicy, PreparedChannelTemplate, ResourceView, SpawnLifecycle,
-};
+use crate::model::{AgentRole, BundleIdentity, ModelPolicy, PreparedChannelTemplate, ResourceView};
 
 /// One logical file in a bundle source: relative path plus raw bytes.
 #[derive(Clone, Debug)]
@@ -325,8 +323,9 @@ pub(crate) struct SourceAgent {
     #[serde(default)]
     pub model_policy: ModelPolicy,
     pub workdir: Option<String>,
+    /// Removed in 0.41.0: every subagent is a resident actor.
     #[serde(default)]
-    pub spawn_lifecycle: SpawnLifecycle,
+    pub spawn_lifecycle: Option<IgnoredAny>,
     pub resource_profile: Option<Value>,
     #[serde(default)]
     pub resource_view: ResourceView,

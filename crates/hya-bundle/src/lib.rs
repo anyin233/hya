@@ -29,7 +29,7 @@ pub use model::{
     PreparedBundleKind, PreparedBundleProcess, PreparedBundleSchemas, PreparedCatalog,
     PreparedChannelParticipant, PreparedChannelTemplate, PreparedInstallableBundle,
     PreparedPluginBundle, PreparedProcessExtension, PreparedProcessKind, PreparedResource,
-    PreparedSchema, PreparedWorkflow, PreparedWorkflowBundle, ResourceView, SpawnLifecycle,
+    PreparedSchema, PreparedWorkflow, PreparedWorkflowBundle, ResourceView,
 };
 pub use package::{
     PackageFormat, PackageInspection, PrivatePackageAuthentication, PrivatePackageInspection,

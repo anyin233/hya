@@ -13,7 +13,7 @@ rebuild; an installed backend instead loads the packaged
 `hya-core-agents.hyabundle` beside it.
 
 The preset preserves the stable agent ids, prompts, selector roles, model
-defaults, transient spawn lifecycle, and reserved system-agent behavior that
+defaults, and reserved system-agent behavior that
 existing sessions expect. The trusted preset origin selects the full host tool
 plane. Public `AgentBundle` and `AgentSetBundle` manifests cannot request that
 origin or the full plane, and an installed bundle cannot claim any core agent
@@ -51,9 +51,10 @@ catalog and cannot be upgraded or uninstalled through public bundle commands.
 The source payload is an `AgentSetBundle` with identity `hya/core-agents` and
 publisher `hya`. Every member uses the standard Agent interface: `id`, optional
 `description`, `role`, optional `prompt`, `model_policy`, `workdir`,
-`spawn_lifecycle`, `resource_view`, `can_spawn`, and `hook_refs`. The shipped
+`resource_view`, `can_spawn`, and `hook_refs`. The shipped
 agents leave `model_policy` empty so the runtime's configured model remains the
-default, and all use `transient` lifecycle. The preset's inert `policy.yaml`
+default. When spawned with `task`, every agent (built-in or bundle) runs as a
+resident actor; `spawn_lifecycle` is a removed manifest key. The preset's inert `policy.yaml`
 explicitly names engine-only reserved ids and the ordinary spawn scope; loading
 the preset validates every policy id against a real prepared Agent. This policy is
 specific to the trusted preset origin and does not grant special behavior to

@@ -43,7 +43,6 @@ extensions:
 agent:
   id: schema-lead
   role: main
-  spawn_lifecycle: transient
   resource_view: { allow: [query, 'harness:tool/read'] }
 "#,
             ),

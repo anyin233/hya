@@ -20,7 +20,6 @@ resources:
 agent:
   id: {stable_agent_id}
   role: main
-  spawn_lifecycle: transient
 "#,
     );
     BundleSource::new(
@@ -42,7 +41,6 @@ identity:
 agent:
   id: {stable_agent_id}
   role: main
-  spawn_lifecycle: transient
 "#,
     );
     BundleSource::new(
@@ -233,7 +231,6 @@ extensions:
 agent:
   id: catalog-hook
   role: main
-  spawn_lifecycle: transient
   hook_refs:
     - bundle:hya/catalog-hook/hook/event
 "#
@@ -344,7 +341,6 @@ resources:
 agent:
   id: nested-lead
   role: main
-  spawn_lifecycle: transient
 "#
                 )
                 .into_bytes(),
@@ -386,7 +382,6 @@ agents:
   - id: {agent_id}
     role: subagent
     prompt: prompts/{agent_id}.md
-    spawn_lifecycle: transient
 "#
     );
     let workflow = format!(
@@ -437,7 +432,6 @@ agents:
   - id: {agent_id}
     role: subagent
     prompt: prompts/{agent_id}.md
-    spawn_lifecycle: transient
 "#
     );
     let workflow = format!(

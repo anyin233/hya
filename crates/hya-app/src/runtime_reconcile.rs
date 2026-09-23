@@ -1212,7 +1212,7 @@ mod tests {
     use async_trait::async_trait;
     use hya_bundle::{
         AgentRole, BundleCatalog, BundleIdentity, ModelPolicy, PreparedAgent, PreparedAgentBundle,
-        PreparedInstallableBundle, ResourceView, SpawnLifecycle,
+        PreparedInstallableBundle, ResourceView,
     };
     use hya_core::{AgentCatalog, RuntimeRegistry};
     use hya_mcp::McpServerConfig;
@@ -1768,7 +1768,7 @@ mod tests {
             prompt_digest: None,
             model_policy: ModelPolicy::default(),
             workdir: None,
-            spawn_lifecycle: SpawnLifecycle::Transient,
+            legacy_spawn_lifecycle: None,
             resource_view: ResourceView {
                 allow: vec![prepared.stable_id.clone()],
                 deny: Vec::new(),

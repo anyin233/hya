@@ -47,7 +47,7 @@ pub enum BundleError {
     ///
     /// Reported per key with concrete guidance: `deny_unknown_fields` alone
     /// produces a serde message that does not say what to write instead.
-    #[error("`{key}` was removed from the AgentBundle manifest in `{source_name}`: {guidance}")]
+    #[error("`{key}` was removed from the bundle manifest in `{source_name}`: {guidance}")]
     RemovedManifestKey {
         /// Source root or package name for diagnostics.
         source_name: String,

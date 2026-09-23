@@ -69,7 +69,6 @@ resources:
 agent:
   id: installed-agent
   role: main
-  spawn_lifecycle: transient
 ---
 You are the installed agent.
 "#,
@@ -146,7 +145,6 @@ agents:
   - id: refresh-worker
     description: refresh worker
     role: subagent
-    spawn_lifecycle: transient
     prompt: prompts/refresh-worker.md
 "#,
             ),
@@ -528,7 +526,6 @@ extensions:
 agent:
   id: schema-lead
   role: main
-  spawn_lifecycle: transient
   resource_view:
     allow:
       - query

@@ -94,7 +94,8 @@ issue inbound Harness requests or create another Agent runtime.
 ## Identity, views, and lifecycle
 
 Preserve public Agent ids byte-for-byte for events and replay. `role` controls
-selector visibility; `spawn_lifecycle` independently chooses transient/resident.
+selector visibility only. Every spawned Agent is a resident actor; `spawn_lifecycle`
+is a removed manifest key (rejected with `RemovedManifestKey`).
 An installed Agent's tool plane is **derived from its origin, not declared**.
 **The clamp is not a sandbox.** A bundle Agent's `can_spawn` controls its roster; ordinary core Agents may spawn
 ordinary catalog Agents. Unknown and unauthorized targets fail explicitly and
