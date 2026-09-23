@@ -219,19 +219,16 @@ export type ViewQuery =
   | { ok: true; scope: "session" | "tree" }
   | { ok: false; error: string };
 
-/** Validate `view/get` query params: only `scope` (`session`|`tree`, default `tree`) and `by` (accepted, reserved) are known keys. */
+/** Validate `view/get` query params: `scope` (`session`|`tree`, default `tree`) is the only known key. */
 export function parseViewQuery(query: Record<string, string>): ViewQuery {
   for (const key of Object.keys(query)) {
-    if (key !== "scope" && key !== "by") {
+    if (key !== "scope") {
       return { ok: false, error: `unknown query parameter \`${key}\`` };
     }
   }
   const scope = query.scope ?? "tree";
   if (scope !== "session" && scope !== "tree") {
     return { ok: false, error: "`scope` must be `session` or `tree` for a view" };
-  }
-  if (query.by !== undefined && query.by !== "model" && query.by !== "session") {
-    return { ok: false, error: "`by` must be `model` or `session`" };
   }
   return { ok: true, scope };
 }

@@ -464,7 +464,6 @@ View `GET /v1/sessions/{session}/views/hya-extra%2Ftoken-summary/usage`:
 | Query param | Values | Default | Meaning |
 | --- | --- | --- | --- |
 | `scope` | `session` \| `tree` | `tree` | `root` is rejected (`{"error": ...}` body) — a view may only read its own session or its descendants, never the whole spawn-tree root; use the tool for that. |
-| `by` | `model` \| `session` | — | Accepted and validated; reserved for future response shaping. |
 
 An unrecognized query key or value answers `{ "body": { "error": "<reason>" } }`
 (HTTP 200; views can only return a body, never a distinct HTTP error status —
