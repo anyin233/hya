@@ -68,7 +68,7 @@ impl Tool for LspTool {
             .assert(Action::Lsp, Resource::Path(display_path(&file)))
             .await?;
 
-        if std::fs::metadata(&file).is_err() {
+        if tokio::fs::metadata(&file).await.is_err() {
             return Err(ToolError::Other(format!(
                 "File not found: {}",
                 display_path(&file)

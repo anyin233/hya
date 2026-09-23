@@ -11,10 +11,13 @@ workspace = true
 [dependencies]
 hya-todo-tools = { workspace = true }
 hya-extended-tools = { workspace = true }
+hya-channel-tools = { workspace = true }
+hya-network-tools = { workspace = true }
 hya-bundle = { workspace = true }
 hya-core = { workspace = true }
 hya-provider = { workspace = true }
 hya-tool = { workspace = true }
+hya-base-tools = { workspace = true }
 hya-workflow = { workspace = true }
 hya-store = { workspace = true }
 hya-server = { workspace = true }

@@ -303,3 +303,19 @@ pub unsafe extern "C" fn hya_tool_bundle_register_v1(out: *mut Vec<Arc<dyn Tool>
         out.extend(tools);
     }
 }
+
+/// Poll one native tool future while this library's Tokio runtime TLS is entered.
+///
+/// # Safety
+///
+/// `handle` and `state` must remain valid throughout the synchronous callback;
+/// the handle must come from the matching host Tokio build.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn hya_tool_bundle_with_runtime_v1(
+    handle: *const std::ffi::c_void,
+    callback: unsafe extern "C" fn(*mut std::ffi::c_void),
+    state: *mut std::ffi::c_void,
+) {
+    // SAFETY: the checked host ABI guarantees the live handle and callback.
+    unsafe { hya_tool::native_bundle::with_runtime_v1(handle, callback, state) };
+}

@@ -6,12 +6,213 @@
 //! boundary, then keeps the library mapped for the process lifetime.
 
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex, OnceLock};
+use std::task::{Context, Poll};
 
+use async_trait::async_trait;
+use futures::future::{AbortHandle, Abortable};
 use hya_bundle::inspect_public_package;
+use hya_proto::ToolSchema;
+use serde_json::Value;
 use sha2::{Digest, Sha256};
+use tokio_util::sync::CancellationToken;
 
-use crate::{Tool, ToolCtx, ToolError};
+use crate::{Tool, ToolCtx, ToolError, ToolResultPolicy};
+
+type RuntimeEntry = unsafe extern "C" fn(
+    *const libc::c_void,
+    unsafe extern "C" fn(*mut libc::c_void),
+    *mut libc::c_void,
+);
+
+type NativeFuture<'a> = Pin<Box<dyn Future<Output = Result<Value, ToolError>> + Send + 'a>>;
+
+struct NativePollState {
+    // The callback runs synchronously before `execute` releases these values.
+    future: *mut NativeFuture<'static>,
+    context: *mut Context<'static>,
+    result: Option<Poll<Result<Value, ToolError>>>,
+}
+
+unsafe extern "C" fn poll_native_future(state: *mut libc::c_void) {
+    // SAFETY: `with_runtime_v1` invokes this callback synchronously while the
+    // caller's future, context, and state are live. Their erased lifetimes are
+    // never retained beyond this call.
+    let state = unsafe { &mut *state.cast::<NativePollState>() };
+    // SAFETY: the synchronous callback owns exclusive access for this poll.
+    let future = unsafe { &mut *state.future };
+    let context = unsafe { &mut *state.context };
+    state.result = Some(future.as_mut().poll(context));
+}
+
+struct NativeTool {
+    inner: Arc<dyn Tool>,
+    with_runtime: RuntimeEntry,
+}
+
+struct NativeWorkerGuard {
+    abort: AbortHandle,
+    cancel: CancellationToken,
+    completed: bool,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for NativeWorkerGuard {
+    fn drop(&mut self) {
+        if !self.completed {
+            self.cancel.cancel();
+        }
+        self.abort.abort();
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+#[async_trait]
+impl Tool for NativeTool {
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+
+    fn schema(&self) -> ToolSchema {
+        self.inner.schema()
+    }
+
+    fn result_policy(&self) -> ToolResultPolicy {
+        self.inner.result_policy()
+    }
+
+    async fn execute(&self, ctx: &ToolCtx, input: Value) -> Result<Value, ToolError> {
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => {
+                poll_with_runtime(self.inner.execute(ctx, input), self.with_runtime, &handle).await
+            }
+            Err(_) => {
+                let runtime = tokio::runtime::Builder::new_multi_thread()
+                    .worker_threads(1)
+                    .enable_all()
+                    .build()
+                    .map_err(|error| {
+                        ToolError::Other(format!("start native tool runtime: {error}"))
+                    })?;
+                let handle = runtime.handle().clone();
+                runtime.block_on(execute_with_handle(
+                    Arc::clone(&self.inner),
+                    self.with_runtime,
+                    ctx.clone(),
+                    input,
+                    handle,
+                ))
+            }
+        }
+    }
+}
+
+async fn execute_with_handle(
+    inner: Arc<dyn Tool>,
+    with_runtime: RuntimeEntry,
+    ctx: ToolCtx,
+    input: Value,
+    handle: tokio::runtime::Handle,
+) -> Result<Value, ToolError> {
+    let (abort, registration) = AbortHandle::new_pair();
+    let cancel = ctx.cancel.clone();
+    let (sender, receiver) = futures::channel::oneshot::channel();
+    let thread = std::thread::Builder::new()
+        .name("hya-native-tool".to_string())
+        .spawn(move || {
+            let _host_guard = handle.enter();
+            let result = futures::executor::block_on(Abortable::new(
+                poll_with_runtime(inner.execute(&ctx, input), with_runtime, &handle),
+                registration,
+            ));
+            let result = result.unwrap_or(Err(ToolError::Cancelled));
+            let _ = sender.send(result);
+        })?;
+    let mut guard = NativeWorkerGuard {
+        abort,
+        cancel,
+        completed: false,
+        thread: Some(thread),
+    };
+    let result = receiver
+        .await
+        .map_err(|error| ToolError::Other(format!("native tool worker failed: {error}")));
+    guard.completed = true;
+    drop(guard);
+    result?
+}
+
+async fn poll_with_runtime(
+    mut future: NativeFuture<'_>,
+    with_runtime: RuntimeEntry,
+    handle: &tokio::runtime::Handle,
+) -> Result<Value, ToolError> {
+    std::future::poll_fn(|context| {
+        let mut state = NativePollState {
+            future: (&mut future as *mut NativeFuture<'_>).cast::<NativeFuture<'static>>(),
+            context: (context as *mut Context<'_>).cast::<Context<'static>>(),
+            result: None,
+        };
+        // SAFETY: `with_runtime` belongs to the checked lockstep library and
+        // polls synchronously before these locals drop.
+        unsafe {
+            (with_runtime)(
+                (handle as *const tokio::runtime::Handle).cast(),
+                poll_native_future,
+                (&mut state as *mut NativePollState).cast(),
+            );
+        }
+        state.result.unwrap_or_else(|| {
+            Poll::Ready(Err(ToolError::Other(
+                "native tool runtime bridge did not poll the future".to_string(),
+            )))
+        })
+    })
+    .await
+}
+
+/// Enter the bundle's Tokio runtime while polling one native tool future.
+///
+/// Native libraries export a C wrapper that calls this function. The callback
+/// must poll one tool future synchronously before returning. The host runtime
+/// and its task-local context remain active; the bundle runtime drives its own I/O.
+/// A failed bundle runtime build falls back to the checked host handle.
+///
+/// # Safety
+///
+/// `handle` must point to a live `tokio::runtime::Handle` from the matching
+/// lockstep build, and `callback` must accept the live `state` pointer without
+/// retaining it after this function returns.
+pub unsafe fn with_runtime_v1(
+    handle: *const libc::c_void,
+    callback: unsafe extern "C" fn(*mut libc::c_void),
+    state: *mut libc::c_void,
+) {
+    static BUNDLE_RUNTIME: OnceLock<Option<tokio::runtime::Runtime>> = OnceLock::new();
+    let runtime = BUNDLE_RUNTIME.get_or_init(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .ok()
+    });
+    if let Some(runtime) = runtime {
+        let _guard = runtime.enter();
+        // SAFETY: caller guarantees `state` is live for this synchronous call.
+        unsafe { callback(state) };
+    } else {
+        // SAFETY: the host passes a live Handle whose ABI was checked before
+        // invoking this export.
+        let handle = unsafe { &*handle.cast::<tokio::runtime::Handle>() };
+        let _guard = handle.enter();
+        // SAFETY: caller guarantees `state` is live for this synchronous call.
+        unsafe { callback(state) };
+    }
+}
 
 /// Digest of the lockstep Rust tool ABI required by built-in bundle libraries.
 ///
@@ -28,6 +229,8 @@ pub fn abi_digest_v1() -> [u8; 32] {
     hash.update(std::mem::align_of::<ToolCtx>().to_be_bytes());
     hash.update(std::mem::size_of::<ToolError>().to_be_bytes());
     hash.update(std::mem::size_of::<Arc<dyn Tool>>().to_be_bytes());
+    hash.update(std::mem::size_of::<tokio::runtime::Handle>().to_be_bytes());
+    hash.update(std::mem::align_of::<tokio::runtime::Handle>().to_be_bytes());
     hash.update(include_bytes!("tool.rs"));
     hash.finalize().into()
 }
@@ -54,11 +257,56 @@ pub(crate) fn load_family(stem: &'static str) -> Result<Vec<Arc<dyn Tool>>, Stri
     // this host. The library remains mapped for the process lifetime.
     let register: unsafe extern "C" fn(*mut Vec<Arc<dyn Tool>>) =
         unsafe { std::mem::transmute(register) };
+    let with_runtime = symbol(handle, b"hya_tool_bundle_with_runtime_v1\0")?;
+    // SAFETY: this checked bundle symbol has the documented C callback ABI.
+    let with_runtime: RuntimeEntry = unsafe { std::mem::transmute(with_runtime) };
     let mut tools = Vec::new();
     // SAFETY: `tools` is a live Vec with the exact type expected by the
     // matching, lockstep bundle library.
     unsafe { register(&mut tools) };
-    Ok(tools)
+    Ok(tools
+        .into_iter()
+        .map(|inner| {
+            Arc::new(NativeTool {
+                inner,
+                with_runtime,
+            }) as Arc<dyn Tool>
+        })
+        .collect())
+}
+
+#[cfg(unix)]
+fn native_package_directory(parent: &std::path::Path) -> std::path::PathBuf {
+    let root = match parent.file_name().and_then(std::ffi::OsStr::to_str) {
+        Some("bin" | "deps") => parent.parent().unwrap_or(parent),
+        _ => parent,
+    };
+    root.join("bundles")
+}
+
+#[cfg(unix)]
+#[derive(Debug, PartialEq, Eq)]
+enum LibrarySource {
+    Local(std::path::PathBuf),
+    Package(std::path::PathBuf),
+}
+
+/// Choose the lockstep library to load for one family.
+///
+/// A Cargo build places the library it just linked in `deps/` (and may uplift
+/// a copy beside the executable). That library always matches the running
+/// host, while a package staged under `bundles/` can be stale and is costly to
+/// verify in unoptimized builds. Installed layouts carry no adjacent library,
+/// so they load the verified package beside `bin/`.
+#[cfg(unix)]
+fn library_source(parent: &std::path::Path, filename: &str, stem: &str) -> Option<LibrarySource> {
+    let candidates = [parent.join("deps").join(filename), parent.join(filename)];
+    if let Some(local) = candidates.into_iter().find(|path| path.is_file()) {
+        return Some(LibrarySource::Local(local));
+    }
+    let package =
+        native_package_directory(parent).join(format!("{}.hyabundle", stem.replace('_', "-")));
+    package.is_file().then_some(LibrarySource::Package(package))
 }
 
 #[cfg(unix)]
@@ -76,24 +324,16 @@ fn open_library(stem: &str) -> Result<usize, String> {
         stem,
         std::env::consts::DLL_SUFFIX
     );
-    let package = parent
-        .parent()
-        .unwrap_or(parent)
-        .join("bundles")
-        .join(format!("{}.hyabundle", stem.replace('_', "-")));
-    let library = if package.is_file() {
-        extract_packaged_library(&package, stem, &filename)?
-    } else {
-        let candidates = [parent.join(&filename), parent.join("deps").join(&filename)];
-        candidates
-            .into_iter()
-            .find(|path| path.is_file())
-            .ok_or_else(|| {
-                format!(
-                    "native tool bundle `{}` is missing near {executable:?}",
-                    package.display()
-                )
-            })?
+    let library = match library_source(parent, &filename, stem) {
+        Some(LibrarySource::Local(path)) => path,
+        Some(LibrarySource::Package(package)) => {
+            extract_packaged_library(&package, stem, &filename)?
+        }
+        None => {
+            return Err(format!(
+                "native tool bundle `{stem}` is missing near {executable:?}"
+            ));
+        }
     };
     let path = CString::new(library.as_os_str().as_bytes())
         .map_err(|_| "native tool bundle path contains a NUL byte".to_string())?;
@@ -252,4 +492,74 @@ fn symbol(handle: usize, name: &[u8]) -> Result<usize, String> {
 #[cfg(not(unix))]
 fn symbol(_handle: usize, _name: &[u8]) -> Result<usize, String> {
     Err("native tool bundle symbol lookup requires Unix".to_string())
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use std::path::Path;
+
+    #[test]
+    fn native_package_directory_matches_backend_and_test_layouts() {
+        assert_eq!(
+            super::native_package_directory(Path::new("/tmp/target/debug")),
+            Path::new("/tmp/target/debug/bundles")
+        );
+        assert_eq!(
+            super::native_package_directory(Path::new("/tmp/target/debug/deps")),
+            Path::new("/tmp/target/debug/bundles")
+        );
+        assert_eq!(
+            super::native_package_directory(Path::new("/tmp/release/bin")),
+            Path::new("/tmp/release/bundles")
+        );
+    }
+
+    #[test]
+    fn cargo_build_layout_prefers_fresh_library_over_staged_package() -> std::io::Result<()> {
+        let root =
+            std::env::temp_dir().join(format!("hya-native-library-select-{}", std::process::id()));
+        let debug = root.join("target/debug");
+        let bundles = debug.join("bundles");
+        std::fs::create_dir_all(debug.join("deps"))?;
+        std::fs::create_dir_all(&bundles)?;
+        let fresh = debug.join("deps/libhya_demo_tools.so");
+        std::fs::write(&fresh, b"fresh")?;
+        std::fs::write(debug.join("libhya_demo_tools.so"), b"uplifted")?;
+        std::fs::write(bundles.join("hya-demo-tools.hyabundle"), b"staged")?;
+
+        for parent in [debug.clone(), debug.join("deps")] {
+            assert_eq!(
+                super::library_source(&parent, "libhya_demo_tools.so", "hya_demo_tools"),
+                Some(super::LibrarySource::Local(fresh.clone())),
+                "{}",
+                parent.display()
+            );
+        }
+
+        let installed = root.join("release");
+        std::fs::create_dir_all(installed.join("bin"))?;
+        std::fs::create_dir_all(installed.join("bundles"))?;
+        let package = installed.join("bundles/hya-demo-tools.hyabundle");
+        std::fs::write(&package, b"package")?;
+        assert_eq!(
+            super::library_source(
+                &installed.join("bin"),
+                "libhya_demo_tools.so",
+                "hya_demo_tools"
+            ),
+            Some(super::LibrarySource::Package(package))
+        );
+        assert_eq!(
+            super::library_source(&root, "libhya_demo_tools.so", "hya_demo_tools"),
+            None
+        );
+        std::fs::remove_dir_all(root)
+    }
+
+    #[test]
+    fn native_library_exposes_runtime_entry_for_async_tools() -> Result<(), String> {
+        let handle = super::open_library("hya_extended_tools")?;
+        super::symbol(handle, b"hya_tool_bundle_with_runtime_v1\0")?;
+        Ok(())
+    }
 }

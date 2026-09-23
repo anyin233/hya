@@ -1250,7 +1250,7 @@ checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
 
 [[package]]
 name = "hya-api"
-version = "0.37.15"
+version = "0.37.16"
 dependencies = [
  "base64 0.22.1",
  "pbjson",
@@ -1262,17 +1262,20 @@ dependencies = [
 
 [[package]]
 name = "hya-app"
-version = "0.37.15"
+version = "0.37.16"
 dependencies = [
  "anyhow",
  "async-trait",
  "axum 0.7.9",
  "base64 0.22.1",
  "http-body-util",
+ "hya-base-tools",
  "hya-bundle",
+ "hya-channel-tools",
  "hya-core",
  "hya-extended-tools",
  "hya-mcp",
+ "hya-network-tools",
  "hya-plugin",
  "hya-proto",
  "hya-provider",
@@ -1299,7 +1302,7 @@ dependencies = [
 
 [[package]]
 name = "hya-backend"
-version = "0.37.15"
+version = "0.37.16"
 dependencies = [
  "anyhow",
  "axum 0.7.9",
@@ -1324,8 +1327,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "hya-base-tools"
+version = "0.37.16"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "hya-proto",
+ "hya-tool",
+ "libc",
+ "pty-process",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "similar",
+ "tokio",
+ "tokio-util",
+ "xxhash-rust",
+]
+
+[[package]]
 name = "hya-bundle"
-version = "0.37.15"
+version = "0.37.16"
 dependencies = [
  "base64 0.22.1",
  "hya-proto",
@@ -1339,8 +1362,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "hya-channel-tools"
+version = "0.37.16"
+dependencies = [
+ "async-trait",
+ "hya-proto",
+ "hya-tool",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "hya-client"
-version = "0.37.15"
+version = "0.37.16"
 dependencies = [
  "hya-api",
  "hya-proto",
@@ -1352,13 +1386,16 @@ dependencies = [
 
 [[package]]
 name = "hya-core"
-version = "0.37.15"
+version = "0.37.16"
 dependencies = [
  "async-trait",
  "futures",
  "hf-hub",
+ "hya-base-tools",
  "hya-bundle",
+ "hya-channel-tools",
  "hya-extended-tools",
+ "hya-network-tools",
  "hya-proto",
  "hya-provider",
  "hya-store",
@@ -1380,7 +1417,7 @@ dependencies = [
 
 [[package]]
 name = "hya-e2e"
-version = "0.37.15"
+version = "0.37.16"
 dependencies = [
  "axum 0.7.9",
  "hya-api",
@@ -1398,18 +1435,19 @@ dependencies = [
 
 [[package]]
 name = "hya-extended-tools"
-version = "0.37.15"
+version = "0.37.16"
 dependencies = [
  "async-trait",
  "hya-proto",
  "hya-tool",
  "serde",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]
 name = "hya-mcp"
-version = "0.37.15"
+version = "0.37.16"
 dependencies = [
  "async-trait",
  "eventsource-stream",
@@ -1426,8 +1464,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "hya-network-tools"
+version = "0.37.16"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "hya-proto",
+ "hya-tool",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "time",
+]
+
+[[package]]
 name = "hya-plugin"
-version = "0.37.15"
+version = "0.37.16"
 dependencies = [
  "async-trait",
  "hya-core",
@@ -1447,11 +1499,11 @@ dependencies = [
 
 [[package]]
 name = "hya-plugin-bun"
-version = "0.37.15"
+version = "0.37.16"
 
 [[package]]
 name = "hya-plugin-claude"
-version = "0.37.15"
+version = "0.37.16"
 dependencies = [
  "serde",
  "serde_json",
@@ -1459,11 +1511,11 @@ dependencies = [
 
 [[package]]
 name = "hya-plugin-example"
-version = "0.37.15"
+version = "0.37.16"
 
 [[package]]
 name = "hya-proto"
-version = "0.37.15"
+version = "0.37.16"
 dependencies = [
  "rand_core 0.9.5",
  "serde",
@@ -1473,7 +1525,7 @@ dependencies = [
 
 [[package]]
 name = "hya-provider"
-version = "0.37.15"
+version = "0.37.16"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -1491,7 +1543,7 @@ dependencies = [
 
 [[package]]
 name = "hya-sdk-v1"
-version = "0.37.15"
+version = "0.37.16"
 dependencies = [
  "async-trait",
  "axum 0.7.9",
@@ -1516,7 +1568,7 @@ dependencies = [
 
 [[package]]
 name = "hya-server"
-version = "0.37.15"
+version = "0.37.16"
 dependencies = [
  "async-trait",
  "axum 0.7.9",
@@ -1551,7 +1603,7 @@ dependencies = [
 
 [[package]]
 name = "hya-store"
-version = "0.37.15"
+version = "0.37.16"
 dependencies = [
  "hya-bundle",
  "hya-proto",
@@ -1566,7 +1618,7 @@ dependencies = [
 
 [[package]]
 name = "hya-todo-tools"
-version = "0.37.15"
+version = "0.37.16"
 dependencies = [
  "async-trait",
  "hya-proto",
@@ -1577,33 +1629,32 @@ dependencies = [
 
 [[package]]
 name = "hya-tool"
-version = "0.37.15"
+version = "0.37.16"
 dependencies = [
  "async-trait",
- "base64 0.22.1",
+ "futures",
+ "hya-base-tools",
  "hya-bundle",
+ "hya-channel-tools",
  "hya-extended-tools",
+ "hya-network-tools",
  "hya-proto",
  "hya-todo-tools",
  "libc",
- "pty-process",
  "regex",
- "reqwest",
  "serde",
  "serde_json",
  "serde_norway",
  "sha2",
- "similar",
  "thiserror 1.0.69",
  "time",
  "tokio",
  "tokio-util",
- "xxhash-rust",
 ]
 
 [[package]]
 name = "hya-updater"
-version = "0.37.15"
+version = "0.37.16"
 dependencies = [
  "clap",
  "ed25519-dalek",
@@ -1615,7 +1666,7 @@ dependencies = [
 
 [[package]]
 name = "hya-workflow"
-version = "0.37.15"
+version = "0.37.16"
 dependencies = [
  "serde",
  "serde_norway",
@@ -4632,7 +4683,7 @@ checksum = "3ad82d2a33cdc9674dc7465672f271e096168fcdbe0f799d9e6db8c5892679dc"
 
 [[package]]
 name = "xtask"
-version = "0.37.15"
+version = "0.37.16"
 dependencies = [
  "anyhow",
  "hya-bundle",

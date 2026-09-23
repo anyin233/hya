@@ -2,11 +2,11 @@
 # See CONTEXT.md for the full architecture and agent-spec contract.
 [workspace]
 resolver = "3"
-members = ["crates/*", "bundles/presets/todo-tools/native", "bundles/presets/extended-tools/native"]
+members = ["crates/*", "bundles/presets/base-tools/native", "bundles/presets/todo-tools/native", "bundles/presets/extended-tools/native", "bundles/presets/channel-tools/native", "bundles/presets/network-tools/native"]
 exclude = ["vendor/sevenz-rust2-0.20.2"]
 
 [workspace.package]
-version = "0.37.15"
+version = "0.37.16"
 edition = "2024"
 rust-version = "1.91"
 license = "MIT OR Apache-2.0"
@@ -18,8 +18,11 @@ hya-bundle = { path = "crates/hya-bundle" }
 hya-proto = { path = "crates/hya-proto" }
 hya-provider = { path = "crates/hya-provider" }
 hya-tool = { path = "crates/hya-tool" }
+hya-base-tools = { path = "bundles/presets/base-tools/native" }
 hya-todo-tools = { path = "bundles/presets/todo-tools/native" }
 hya-extended-tools = { path = "bundles/presets/extended-tools/native" }
+hya-channel-tools = { path = "bundles/presets/channel-tools/native" }
+hya-network-tools = { path = "bundles/presets/network-tools/native" }
 hya-store = { path = "crates/hya-store" }
 hya-core = { path = "crates/hya-core" }
 hya-workflow = { path = "crates/hya-workflow" }

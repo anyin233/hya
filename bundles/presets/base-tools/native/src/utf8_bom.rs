@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use crate::tool::ToolError;
+use hya_tool::ToolError;
 
 const UTF8_BOM: char = '\u{feff}';
 const UTF8_BOM_BYTES: &[u8; 3] = b"\xEF\xBB\xBF";

@@ -8,14 +8,14 @@ use hya_proto::{ToolName, ToolSchema};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::permission::{Action, Resource};
-use crate::tool::{Tool, ToolCtx, ToolError};
+use hya_tool::{Action, Resource};
+use hya_tool::{Tool, ToolCtx, ToolError};
 
 const MAX_RESPONSE_BYTES: usize = 5 * 1024 * 1024;
 const DEFAULT_TIMEOUT_SECS: f64 = 30.0;
 const MAX_TIMEOUT_SECS: f64 = 120.0;
 
-pub(crate) struct WebFetchTool;
+pub struct WebFetchTool;
 
 #[derive(Clone, Copy, Debug, Default, Deserialize)]
 #[serde(rename_all = "lowercase")]

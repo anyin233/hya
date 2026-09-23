@@ -5,16 +5,14 @@
 Five trusted embedded Plugin presets own the exposure policy for Hya's Rust
 builtin tools. They record model visibility, compatibility aliases, schema
 versions, invocation permission posture, protected names, and URI-scheme
-ownership. The TODO and extended families own their concrete Rust tool
-implementations and ship lockstep dynamic libraries inside public `.hyabundle`
-packages. Base, network, and channel tools still use in-crate implementations
-during migration.
+ownership. All five families own their concrete Rust implementations and ship lockstep
+dynamic libraries inside public `.hyabundle` packages. `hya-tool` supplies the
+`Tool` interface, registry, native loader, permission model, and session planes.
 
 The sources live in `bundles/presets/{base,extended,network,channel,todo}-tools`.
 Each `bundle.yaml` identifies a `Plugin` and declares `exposure.yaml` as an inert
-`extensions.files` asset. The TODO source also declares its Cargo manifest and
-Rust implementation as source assets. The extended source likewise declares
-its Cargo manifest, Rust modules, and LSP description. The companion file carries trusted preset metadata
+`extensions.files` asset. Every source also declares its Cargo manifest and Rust implementation modules
+as source assets. The companion file carries trusted preset metadata
 that the public Plugin manifest intentionally cannot grant as permissions. The
 build prepares every Plugin, verifies its digest and policy, rejects duplicate
 names across families, then generates static Rust policy metadata. Runtime
@@ -70,40 +68,44 @@ cargo run -p xtask -- package-native-tool-bundle \
   dist/todo-tools.hyabundle
 ```
 
-The command reads the policy-only source, preserves its declared files, adds
+The command reads the family source, preserves its declared files, adds
 `native/tool-runtime` with the exact executable bytes, and writes a
 deterministic package. It does not compile the executable or install the
 package. The executable must be built for the target platform first.
 
-To build and package the in-process TODO implementation for the current target:
+To build and package one trusted family implementation for the current target:
 
 ```sh
 cargo build -p hya-todo-tools --lib
 cargo run -p xtask -- package-native-tool-library \
   bundles/presets/todo-tools \
   target/debug/libhya_todo_tools.so \
-  target/debug/bundles/hya-todo-tools.hyabundle
+  dist/bundles/hya-todo-tools.hyabundle
 ```
 
 Use `.dylib` instead of `.so` on macOS. The command embeds the raw library
 bytes as `extensions.libraries`, adds one tool declaration per policy entry,
 and writes the public package. Release builds put that package beside the
-backend's `bin` directory in `bundles/`. `ToolRegistry::builtins()` inspects
+backend's `bin` directory in `bundles/`. There, `ToolRegistry::builtins()` inspects
 the package, checks its identity and declared names, extracts the library to a
 temporary path, checks the lockstep ABI digest, and loads its tools.
 `builtin_bundle_origin(name)` returns the identity for a loaded native tool.
-Local Cargo builds can use a library beside the executable or in `deps/` when
-the package is absent. The Rust ABI is not stable across independent builds;
+Cargo builds load the library Cargo just linked instead: a library in the
+executable's `deps/` directory wins, then one beside the executable. A package
+staged under `target/debug/bundles/` is used only when neither exists, so a
+stale package cannot shadow a fresh build or slow backend startup with full
+package verification. The Rust ABI is not stable across independent builds;
 build the backend and library from the same workspace and toolchain.
 
-The same command packages the extended family after building
-`hya-extended-tools`; use `libhya_extended_tools.so` (or `.dylib`) as the
-input and `hya-extended-tools.hyabundle` as the output. Its exported library
-registers `invalid`, `lsp`, `skill`, `list_agents`, `task`, `workflow`,
-`search_agent`, `kill`, and `plan_exit`. The host continues to provide the
-session-scoped interaction, LSP, skill, spawn, mailbox, lifecycle, and
-workflow planes through `ToolCtx`; each tool's body and schema now live in
-the extended bundle.
+Build and package `hya-base-tools`, `hya-extended-tools`,
+`hya-network-tools`, and `hya-channel-tools` with the same command, using
+the matching `libhya_<family>_tools.so` (or `.dylib`) and
+`hya-<family>-tools.hyabundle` names. All five packages are required for
+`ToolRegistry::builtins()`. The host continues to provide session-scoped
+services through `ToolCtx`; each tool body and schema lives in its bundle.
+The loader enters each bundle's Tokio runtime for native future polls while
+the host runtime remains available to session planes. Bundled filesystem,
+process, timer, and HTTP operations use the bundle's reactor.
 
 ## Interface definitions
 
@@ -183,7 +185,14 @@ extensions:
 `extensions.libraries` is a list of `{id, path}` raw byte resources. A family
 package must have one library named `runtime`; its exported C symbols are
 `hya_tool_bundle_abi_v1(*mut u8)` and
-`hya_tool_bundle_register_v1(*mut Vec<Arc<dyn Tool>>)`. The host checks the
-32-byte ABI digest before calling `register`, and the library remains mapped
-for the process lifetime. A mismatch or missing library prevents builtin
-registry construction.
+`hya_tool_bundle_register_v1(*mut Vec<Arc<dyn Tool>>)` and
+`hya_tool_bundle_with_runtime_v1(*const c_void, unsafe extern "C" fn(*mut c_void), *mut c_void)`.
+The host checks the 32-byte ABI digest before calling `register`, and the
+library remains mapped for the process lifetime. The runtime callback polls
+one tool future synchronously while the bundle's Tokio runtime is entered.
+Calls with an existing host runtime stay on their original task, preserving
+task-local admission context. Calls without one use a temporary joined worker.
+A mismatch or missing
+library prevents builtin registry construction.
+Calls made outside an existing Tokio runtime use a one-call host runtime;
+the same bundle ABI and permission context apply.

@@ -1,19 +1,24 @@
-//! Native implementation of the extended built-in tool family.
+//! Native implementations of the ten base built-in tools.
 
 use std::sync::Arc;
 
 use hya_tool::Tool;
 
-mod agents;
-mod invalid;
-mod kill;
-mod lsp;
+mod apply_patch;
+mod ask_user;
+mod edit;
+mod file_diff;
+mod fs_tools;
+mod grep;
+mod hashline;
 mod lsp_path;
-mod plan;
-mod search_agent;
-mod skill;
-mod task;
-mod workflow;
+mod lsp_post_edit;
+mod read;
+mod read_media;
+mod shell;
+mod shell_output;
+mod utf8_bom;
+mod write;
 
 /// Report the lockstep Rust tool ABI before any Rust object crosses the library boundary.
 ///
@@ -40,16 +45,18 @@ pub unsafe extern "C" fn hya_tool_bundle_abi_v1(out: *mut u8) {
 pub unsafe extern "C" fn hya_tool_bundle_register_v1(out: *mut Vec<Arc<dyn Tool>>) {
     // SAFETY: the host calls this only after the ABI digest matches.
     if let Some(out) = unsafe { out.as_mut() } {
-        let tools: [Arc<dyn Tool>; 9] = [
-            Arc::new(invalid::InvalidTool),
-            Arc::new(lsp::LspTool),
-            Arc::new(skill::SkillTool),
-            Arc::new(agents::ListAgentsTool),
-            Arc::new(task::TaskTool),
-            Arc::new(workflow::WorkflowTool),
-            Arc::new(search_agent::SearchAgentTool),
-            Arc::new(kill::KillTool),
-            Arc::new(plan::PlanExitTool),
+        let hashline_runtime = Arc::new(hashline::HashlineRuntime::new());
+        let tools: [Arc<dyn Tool>; 10] = [
+            Arc::new(read::ReadTool::new(Arc::clone(&hashline_runtime))),
+            Arc::new(write::WriteTool::new(Arc::clone(&hashline_runtime))),
+            Arc::new(edit::EditTool::new(Arc::clone(&hashline_runtime))),
+            Arc::new(fs_tools::LsTool),
+            Arc::new(fs_tools::GlobTool),
+            Arc::new(fs_tools::FindTool),
+            Arc::new(grep::GrepTool::with_runtime(Arc::clone(&hashline_runtime))),
+            Arc::new(ask_user::AskUserTool),
+            Arc::new(shell::ShellTool),
+            Arc::new(apply_patch::ApplyPatchTool),
         ];
         out.extend(tools);
     }

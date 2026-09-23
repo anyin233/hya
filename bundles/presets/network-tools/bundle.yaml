@@ -8,3 +8,17 @@ extensions:
   files:
     - id: exposure
       path: exposure.yaml
+    - id: native-manifest
+      path: native/Cargo.toml
+    - id: native-entry
+      path: native/src/lib.rs
+    - id: native-webfetch
+      path: native/src/webfetch/mod.rs
+    - id: native-webfetch-html
+      path: native/src/webfetch/html.rs
+    - id: native-websearch
+      path: native/src/websearch.rs
+    - id: native-websearch-response
+      path: native/src/websearch/response.rs
+    - id: native-websearch-description
+      path: native/src/websearch.txt

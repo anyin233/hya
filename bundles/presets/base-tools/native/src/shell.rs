@@ -18,9 +18,9 @@ use tokio::process::{Child, ChildStderr, ChildStdout};
 use tokio_util::sync::CancellationToken;
 
 use crate::lsp_path::{absolutize, display_path, normalize, resolve_file};
-use crate::output_cap::{MAX_CODING_OUTPUT_PATH_BYTES, json_char_len, serialized_string_len};
-use crate::permission::{Action, Resource};
-use crate::tool::{Tool, ToolCtx, ToolError, ToolResultPolicy};
+use crate::shell_output::{MAX_CODING_OUTPUT_PATH_BYTES, json_char_len, serialized_string_len};
+use hya_tool::{Action, Resource};
+use hya_tool::{Tool, ToolCtx, ToolError, ToolResultPolicy};
 
 const DEFAULT_TIMEOUT_SECONDS: f64 = 300.0;
 const MIN_TIMEOUT_SECONDS: f64 = 1.0;
@@ -559,6 +559,7 @@ async fn capture_pipes(
 
         if !reaped {
             tokio::select! {
+                biased;
                 _ = cancel.cancelled(), if !cancellation_seen => {
                     terminate_pipe_child(child, process_group).await?;
                     reaped = true;
@@ -598,6 +599,7 @@ async fn capture_pipes(
             }
         } else {
             tokio::select! {
+                biased;
                 _ = cancel.cancelled(), if !cancellation_seen => {
                     terminate_pipe_process_group(process_group)?;
                     completion = Some(Completion::Cancelled);

@@ -1,5 +1,5 @@
 [package]
-name = "hya-extended-tools"
+name = "hya-channel-tools"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -17,4 +17,3 @@ hya-proto = { workspace = true }
 async-trait = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-tokio = { workspace = true }

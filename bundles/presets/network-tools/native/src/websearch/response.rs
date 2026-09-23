@@ -1,6 +1,6 @@
 use serde_json::Value;
 
-use crate::tool::ToolError;
+use hya_tool::ToolError;
 
 pub(crate) fn parse_response(body: &str) -> Result<Option<String>, ToolError> {
     let trimmed = body.trim();

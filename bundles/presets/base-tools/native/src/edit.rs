@@ -13,9 +13,9 @@ use crate::hashline::{
 };
 use crate::lsp_path::{absolutize, display_path, normalize, resolve_file};
 use crate::lsp_post_edit;
-use crate::permission::{Action, Resource};
 use crate::read_media::{ReadFileKind, classify_file};
-use crate::tool::{Tool, ToolCtx, ToolError, ToolResultPolicy};
+use hya_tool::{Action, Resource};
+use hya_tool::{Tool, ToolCtx, ToolError, ToolResultPolicy};
 
 /// Public Edit adapter backed by one registry-owned native runtime.
 pub(crate) struct EditTool {
