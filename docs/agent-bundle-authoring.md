@@ -62,10 +62,11 @@ Package, inspect, install, and remove it with the existing CLI:
 ```sh
 cargo run -p xtask -- package-bundle path/to/skill-pack skill-pack.hyabundle
 hya bundle info -f skill-pack.hyabundle
+hya bundle verify skill-pack.hyabundle
 hya bundle install skill-pack.hyabundle
 hya bundle list
 hya bundle search skill-pack
-hya bundle uninstall acme/skill-pack
+hya bundle remove acme/skill-pack
 ```
 
 The closed manifest accepts only these top-level fields:
@@ -713,7 +714,7 @@ hya bundle install bun.hyabundle
 hya bundle list
 hya bundle info <bundle-id>
 hya bundle schemas
-hya bundle uninstall <bundle-id>
+hya bundle remove <bundle-id>
 ```
 
 `hya bundle info -f` inspects without mutating the registry or publication. Content magic, not the suffix, selects public/private parsing after the exact lowercase command suffix check. Installed generations publish atomically, and new root turns bind the new catalog while existing turns and children retain their pinned binding. `bundle info` prints each bundle's declared schema extensions (`schema=… tool=… writable=…`), its `extensions.process` declaration (`process=<kind> command=…`), and its mcp entries when non-empty; `bundle schemas` lists every declared scheme across the first-party and installed bundles.

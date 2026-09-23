@@ -137,27 +137,145 @@ command result.
 
 ## Bundle Commands
 
+`hya bundle` manages bundles in two scopes, the same two tiers the runtime
+loads:
+
+| Scope | Flag | Where | Precedence |
+| --- | --- | --- | --- |
+| User (default) | `--user` | The installed-bundle registry, `$XDG_DATA_HOME/hya/bundles/registry.sqlite3` (fallback `~/.local/share/hya/bundles/registry.sqlite3`). | Shadows first-party bundles with the same id or namespace. |
+| Project | `--project` | Bundle source directories under `./.hya/bundles/<dir>/` in the current directory (the directory `hya` is started from). | Highest: shadows user-installed and first-party bundles with the same id or namespace. |
+
+`--user` and `--project` are mutually exclusive. The twelve bundles shipped with
+hya have scope `builtin`: they are listed but cannot be installed over as presets
+or removed.
+
+| Command | What it does |
+| --- | --- |
+| `hya bundle install [--user\|--project] [-y] [--overwrite] <PACKAGE>` | Verify a `.hyabundle` and install it into the scope. Asks for confirmation unless `-y`. |
+| `hya bundle install [--user\|--project] [-y] [--overwrite] --claude <SOURCE>` | Translate a Claude Code plugin and install it the same way. |
+| `hya bundle remove [--user\|--project] [-y] <BUNDLE_ID>` | Remove a bundle from the scope. Asks for confirmation unless `-y`. Alias: `uninstall`. |
+| `hya bundle verify [--user\|--project] [--overwrite] <PACKAGE>` | Run every install check against the scope and report what `install` would do. Writes nothing. |
+| `hya bundle list [--user\|--project]` | List bundles. All scopes by default; a flag narrows to one scope. |
+| `hya bundle info [--user\|--project] <BUNDLE_ID\|PACKAGE>` | Show metadata of a bundle by id (searching every scope unless narrowed) or of a package file. |
+| `hya bundle info -f <PACKAGE>` | Show metadata of a package file. |
+| `hya bundle search <QUERY>` | Filter builtin and user bundles by id, agent id, or skill id. |
+| `hya bundle schemas` | List URI-scheme extensions declared by builtin and user bundles. |
+
 ```sh
-hya bundle info -f example.hyabundle
-hya bundle install example.hyabundle
-hya bundle install --claude ./my-claude-plugin
-hya bundle list
-hya bundle search goal-loop
+hya bundle verify example.hyabundle            # check only; nothing installed
+hya bundle install example.hyabundle           # user scope, asks [y/N]
+hya bundle install --project -y example.hyabundle   # into ./.hya/bundles, no prompt
+hya bundle list --project
 hya bundle info hya/docs-example
-hya bundle uninstall hya/docs-example
+hya bundle info example.hyabundle              # read a package file
+hya bundle remove --project -y hya/docs-example
+hya bundle uninstall hya/docs-example          # same as remove, user scope
 ```
 
-These are the canonical bundle commands, implemented by `hya` directly.
+### Confirmation
 
-`install` reports whether the package was installed, replaced, or unchanged,
-along with bundle identity, version, closed payload kind, and registry generation.
+`install` and `remove` print a summary to stderr and ask `Proceed? [y/N]`.
+Only `y` or `yes` (any case) continues; any other answer cancels. Closed or
+empty stdin also cancels, so a script or CI job that omits `-y` fails safely
+instead of hanging. A cancelled command exits 1 with
+`bundle install cancelled` (or `bundle remove cancelled`) and changes nothing.
+`-y`/`--yes` skips the prompt. An install whose content is already present
+prints `unchanged` without asking.
+
+The install summary names the bundle, version, kind, scope, target (registry
+path or project directory), the action (`install`, `replace from=<version>`),
+its Agents, and any bundle it removes through a namespace takeover:
+
+```text
+Install hya/docs-example 1.0.0 (AgentBundle) into user scope
+  target: /home/me/.local/share/hya/bundles/registry.sqlite3
+  action: install
+  agents: docs-example
+Proceed? [y/N]
+```
+
+### Install rules
+
+Both scopes apply the same rules:
+
+- The package must be a public `.hyabundle` (exact lowercase suffix). Private
+  packages fail with `PRIVATE_ACTIVATION_UNSUPPORTED`.
+- A bundle may not claim a trusted preset id or a built-in Agent id, and must
+  form a valid catalog with the first-party bundles.
+- Reinstalling identical content is `unchanged`. A higher version replaces the
+  installed one.
+- A downgrade fails with `BUNDLE_DOWNGRADE_REQUIRED`, and taking over another
+  bundle's namespace fails with `NAMESPACE_CONFLICT`, unless `--overwrite` is
+  given (the incumbent namespace owner is then removed).
+- The same version with different content fails with `BUNDLE_CONTENT_CONFLICT`.
+  In the user scope this always fails; in the project scope `--overwrite`
+  replaces the directory.
+
+A project install unpacks the package's declared source files (the manifest
+plus every file it references) into `./.hya/bundles/<id with / replaced by __>/`,
+for example `.hya/bundles/acme__tools/`. It replaces a bundle with the same id
+in place, whatever its directory is named. If the target directory exists but
+is not that bundle, the install fails with `PROJECT_BUNDLE_DIRECTORY_OCCUPIED`
+and leaves it alone. Files are written to a staging directory under `./.hya/`
+and renamed into place, so the runtime never loads a half-written bundle.
+A project remove deletes the bundle's source directory, including
+hand-authored ones, which is why it confirms first.
+
 With `--claude <source>`, `install` accepts a local Claude Code plugin directory
 or a marketplace reference `<marketplace-root>#<entry>`. The adapter emits an
 agentless `Plugin` or an `AgentSetBundle` containing all imported agents, with
 packaged Skills, supported hooks, MCP declarations, and their source files.
-Imports use the ordinary namespace-conflict policy (`DenyConflicts` by default;
-`--overwrite` replaces the incumbent). See [Claude plugin import](claude-plugin-import.md)
-for supported mappings and explicitly rejected hook semantics.
+Imports follow the same namespace-conflict policy. See
+[Claude plugin import](claude-plugin-import.md) for supported mappings and
+explicitly rejected hook semantics.
+
+### Output
+
+`install` prints one line on stdout:
+
+```text
+installed|replaced <BUNDLE_ID> <VERSION> scope=user generation=<N>
+installed|replaced <BUNDLE_ID> <VERSION> scope=project path=<DIR>
+unchanged <BUNDLE_ID> <VERSION> scope=<user|project>
+```
+
+`remove` prints `removed <BUNDLE_ID> scope=user generation=<N>` or
+`removed <BUNDLE_ID> scope=project path=<DIR>`.
+
+`verify` prints `key=value` lines and exits 0 when `install` with the same
+flags would succeed, or exits 1 with the same error `install` would report:
+
+```text
+verified <BUNDLE_ID> <VERSION>
+format=public-v1
+kind=<Plugin|AgentBundle|AgentSetBundle|WorkflowBundle>
+source_digest=<sha256 hex>
+prepared_digest=<hex>
+scope=<user|project>
+target=<registry path or project directory>
+action=<install|replace from=VERSION|unchanged>
+removes=<BUNDLE_ID>        # once per bundle a namespace takeover would remove
+```
+
+`verify` never creates the registry or `./.hya`.
+
+`list` prints `NAME VERSION AGENT STATE KIND WORKFLOW SCOPE`, one row per
+bundle, sorted by name. SCOPE is `builtin`, `user`, or `project`. STATE is
+`active`, `shadowed` (a user bundle hidden by a project bundle with the same id
+or namespace), or `unreadable (reinstall)` (a registry row written by another
+hya version). A first-party bundle hidden by a user or project bundle is not
+listed, matching what the runtime loads.
+
+`info` prints `key=value` lines: `name`, `version`, `publisher`, `origin`
+(`preset`, `first-party`, `installed`, or `project`), `scope`, `format`, `state`,
+`immutable`, digests, `path` for project bundles, and one line per Agent,
+Skill, Tool, MCP server, hook, extension, schema, and process declaration.
+By id, `info` looks in the order the runtime resolves bundles (preset, project,
+user, first-party) unless `--user` or `--project` narrows it. Given a path that
+ends in `.hyabundle` and names a file, or `-f <PACKAGE>`, it reads the package
+without installing it and prints `key: value` lines (`format`, `name`,
+`version`, `publisher`, `origin: package`, digests, and the same resource
+lines).
 
 `list`, `info`, and `search` include the trusted `hya/core-agents`,
 the five tool-family presets (`hya/base-tools`, `hya/extended-tools`,
@@ -165,20 +283,15 @@ the five tool-family presets (`hya/base-tools`, `hya/extended-tools`,
 `hya/core-skills`, `hya/core-commands`, and `hya/agent-channels` preset inventory
 alongside first-party and installed packages. Trusted inventory rows are
 immutable and not installable; public packages cannot acquire preset
-privileges. Installed first-party package overrides take precedence over the
-first-party bundle. Uninstalling the override restores that bundle; the
-first-party bundle itself cannot be removed.
+privileges. A user or project bundle that overrides a first-party bundle takes
+precedence; removing the override restores the first-party bundle, which itself
+cannot be removed.
 
-`list` reports name, version, packaged Agents, state, package kind, and Workflow
-id. `info` adds publisher, origin, format, immutability, digests, and resource ids.
-Repeating an install with the same digest is idempotent; replacement and removal
-publish through atomic registry operations.
-
-`search <QUERY>` filters the same merged first-party and installed catalog with
+`search <QUERY>` filters the builtin and user catalog with
 a case-insensitive substring match over bundle ids, agent ids, and skill ids
 (both local and stable spellings such as `handbook` and
 `bundle:hya/docs-example/skill/handbook`), printing one `bundle list`-shaped
-`NAME VERSION AGENT STATE KIND WORKFLOW` row per matching bundle, sorted by
+`NAME VERSION AGENT STATE KIND WORKFLOW SCOPE` row per matching bundle, sorted by
 bundle id. `<QUERY>` is a required positional argument: omitting it or passing
 only whitespace exits non-zero and prints the usage line. An unreadable
 installed row stays searchable by its bundle id and prints the same degraded
@@ -197,9 +310,7 @@ inside a directory mode `0700`. The stage is first built under a
 stale `hya-bundle-stage-*` directories are self-healing — do not delete them by
 hand while an install is running.
 
-The separate registry is
-`$XDG_DATA_HOME/hya/bundles/registry.sqlite3`, falling back to
-`~/.local/share/hya/bundles/registry.sqlite3`. A successful generation change
+A successful user-registry generation change
 is loaded at root admission, root turn binding, root model-round boundaries,
 and explicit catalog refresh. A running round keeps its captured snapshot;
 subagents and Workflow members keep their inherited binding throughout the

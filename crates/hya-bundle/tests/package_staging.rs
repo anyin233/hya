@@ -142,3 +142,50 @@ fn cleanup_missing_staging_root_is_noop() -> Result<(), Box<dyn std::error::Erro
     fs::remove_dir(&temp_root)?;
     Ok(())
 }
+
+#[test]
+fn public_inspection_returns_the_declared_source_files() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_root = std::env::temp_dir().join(format!(
+        "hya-bundle-package-files-{}-{}",
+        std::process::id(),
+        NEXT_TEMP_ROOT.fetch_add(1, Ordering::Relaxed),
+    ));
+    fs::create_dir(&temp_root)?;
+    let manifest = b"kind: AgentBundle\nidentity:\n  id: hya/files\n  version: 1.0.0\n  publisher: hya\nagent:\n  id: files-lead\n  role: main\n  prompt: prompts/lead.md\n  spawn_lifecycle: transient\n";
+    let source = hya_bundle::BundleSource::new(
+        "files",
+        vec![
+            hya_bundle::SourceFile::new("bundle.yaml", manifest.as_slice()),
+            hya_bundle::SourceFile::new("prompts/lead.md", b"Lead.\n".as_slice()),
+            hya_bundle::SourceFile::new("notes/undeclared.txt", b"not packaged\n".as_slice()),
+        ],
+    );
+    let package = temp_root.join("files.hyabundle");
+    fs::write(&package, hya_bundle::write_public_package(&source)?)?;
+    let staging_root = temp_root.join("staging");
+    fs::create_dir(&staging_root)?;
+
+    let PackageInspection::Public(public) = stage_package(&package, &staging_root)?.inspect()?
+    else {
+        panic!("a written public package must inspect as public");
+    };
+    let files = public
+        .files
+        .iter()
+        .map(|file| (file.path().to_string(), file.bytes().to_vec()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        files,
+        vec![
+            ("bundle.yaml".to_string(), manifest.to_vec()),
+            ("prompts/lead.md".to_string(), b"Lead.\n".to_vec()),
+        ],
+        "inspection must return exactly the declared closure, sorted by path"
+    );
+    let reprepared =
+        hya_bundle::prepare_package(hya_bundle::BundleSource::new("files", public.files))?;
+    assert_eq!(reprepared.digest(), public.prepared.digest());
+
+    fs::remove_dir_all(&temp_root)?;
+    Ok(())
+}

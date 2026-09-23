@@ -46,7 +46,7 @@ resources:
 
     let install = env
         .backend
-        .bundle_cli(&["bundle", "install", package.to_str().unwrap()])
+        .bundle_cli(&["bundle", "install", "-y", package.to_str().unwrap()])
         .expect("install");
     assert!(
         install.status.success(),
@@ -68,7 +68,7 @@ resources:
 
     let uninstall = env
         .backend
-        .bundle_cli(&["bundle", "uninstall", "acme/plugin-e2e"])
+        .bundle_cli(&["bundle", "uninstall", "-y", "acme/plugin-e2e"])
         .expect("uninstall");
     assert!(
         uninstall.status.success(),

@@ -35,7 +35,7 @@ override restores the first-party package on the next root binding:
 ```sh
 hya bundle install ./subagents-override.hyabundle
 hya bundle info hya/subagents
-hya bundle uninstall hya/subagents
+hya bundle remove hya/subagents
 ```
 
 The caller's captured `TurnBinding` resolves the selected definition and its

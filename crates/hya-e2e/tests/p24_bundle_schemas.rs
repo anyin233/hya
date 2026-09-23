@@ -85,7 +85,7 @@ async fn t2_19_installed_bundle_schemas_surface_through_cli_and_runtime_api() {
 
     let install = env
         .backend
-        .bundle_cli(&["bundle", "install", package.to_str().unwrap()])
+        .bundle_cli(&["bundle", "install", "-y", package.to_str().unwrap()])
         .expect("install");
     assert!(
         install.status.success(),

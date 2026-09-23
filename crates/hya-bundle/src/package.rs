@@ -93,6 +93,9 @@ pub struct PrivatePackageInspection {
 pub struct PublicPackageInspection {
     /// Catalog produced by prepare over the archive's declared closure.
     pub prepared: PreparedCatalog,
+    /// The archive's source files (the declared closure prepare consumed),
+    /// sorted by path. Paths are validated relative `/`-separated names.
+    pub files: Vec<SourceFile>,
     /// SHA-256 of the raw package bytes before expansion.
     pub source_digest: [u8; 32],
 }
@@ -226,10 +229,14 @@ impl StagedPackage {
     pub fn inspect(mut self) -> Result<PackageInspection, BundleError> {
         let (bytes, source_digest) = self.read_staged_bytes()?;
         match detect_package_format(&bytes)? {
-            PackageFormat::PublicV1 => Ok(PackageInspection::Public(PublicPackageInspection {
-                prepared: inspect_public_package(&bytes)?,
-                source_digest,
-            })),
+            PackageFormat::PublicV1 => {
+                let (prepared, files) = read_public_package(&bytes)?;
+                Ok(PackageInspection::Public(PublicPackageInspection {
+                    prepared,
+                    files,
+                    source_digest,
+                }))
+            }
             PackageFormat::PrivateV1 => {
                 Ok(PackageInspection::Private(inspect_private_package(&bytes)?))
             }
@@ -513,6 +520,12 @@ pub fn write_public_package(source: &BundleSource) -> Result<Vec<u8>, BundleErro
 /// Undeclared archive members and unsafe entry types fail closed. On success,
 /// returns the same [`PreparedCatalog`] shape as [`crate::prepare_package`].
 pub fn inspect_public_package(bytes: &[u8]) -> Result<PreparedCatalog, BundleError> {
+    read_public_package(bytes).map(|(prepared, _)| prepared)
+}
+
+/// [`inspect_public_package`] that also returns the archive's source files:
+/// exactly the declared closure prepare consumed, sorted by path.
+fn read_public_package(bytes: &[u8]) -> Result<(PreparedCatalog, Vec<SourceFile>), BundleError> {
     if bytes.len() > PUBLIC_PACKAGE_MAX_BYTES {
         return Err(BundleError::PackageLimitExceeded {
             limit: "archive bytes",
@@ -764,7 +777,8 @@ pub fn inspect_public_package(bytes: &[u8]) -> Result<PreparedCatalog, BundleErr
         return Err(BundleError::InvalidPackageFormat);
     }
 
-    let prepared = prepare_package(BundleSource::new("public-package", source_files))?;
+    source_files.sort_by(|left, right| left.path().cmp(right.path()));
+    let prepared = prepare_package(BundleSource::new("public-package", source_files.clone()))?;
     let mut prepared_paths = BTreeSet::new();
     if archive_paths.contains("bundle.yaml") {
         prepared_paths.insert("bundle.yaml".to_string());
@@ -794,7 +808,7 @@ pub fn inspect_public_package(bytes: &[u8]) -> Result<PreparedCatalog, BundleErr
     if prepared_paths != archive_paths {
         return Err(BundleError::UnsafePackage);
     }
-    Ok(prepared)
+    Ok((prepared, source_files))
 }
 
 fn valid_public_archive_path(path: &str) -> bool {

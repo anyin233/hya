@@ -117,11 +117,18 @@ mail/replay uses durable engine events, never persisted PIDs or stdio state.
 ```sh
 cargo run -p xtask -- package-bundle ./source ./example.hyabundle
 hya bundle info -f ./example.hyabundle
-hya bundle install ./example.hyabundle
+hya bundle verify ./example.hyabundle          # every install check, nothing written
+hya bundle install ./example.hyabundle         # user scope; asks [y/N]
+hya bundle install --project -y ./example.hyabundle  # ./.hya/bundles, no prompt
 hya bundle list
 hya bundle info <bundle-id>
-hya bundle uninstall <bundle-id>
+hya bundle remove <bundle-id>                  # alias: uninstall; asks [y/N]
 ```
+
+`install` and `remove` confirm on stdin; pass `-y` in scripts and agent tool
+calls, where stdin is closed and an unanswered prompt cancels the command.
+`--user` (default) targets the installed-bundle registry; `--project` targets
+`./.hya/bundles`, which shadows user-installed bundles.
 
 When building the minimal `bundle.hya.md` + one-entrypoint example manually,
 enumerate regular files rather than directories:

@@ -65,7 +65,7 @@ resources:
         .unwrap();
     let install = env
         .backend
-        .bundle_cli(&["bundle", "install", package.to_str().unwrap()])
+        .bundle_cli(&["bundle", "install", "-y", package.to_str().unwrap()])
         .unwrap();
     assert!(
         install.status.success(),
@@ -91,7 +91,7 @@ resources:
     );
     let uninstall = env
         .backend
-        .bundle_cli(&["bundle", "uninstall", "acme/process-fixture"])
+        .bundle_cli(&["bundle", "uninstall", "-y", "acme/process-fixture"])
         .unwrap();
     assert!(
         uninstall.status.success(),
@@ -180,7 +180,7 @@ agents:
         .unwrap();
     let install = env
         .backend
-        .bundle_cli(&["bundle", "install", package.to_str().unwrap()])
+        .bundle_cli(&["bundle", "install", "-y", package.to_str().unwrap()])
         .unwrap();
     assert!(
         install.status.success(),
@@ -253,7 +253,7 @@ extensions:
         .unwrap();
     let install = env
         .backend
-        .bundle_cli(&["bundle", "install", package.to_str().unwrap()])
+        .bundle_cli(&["bundle", "install", "-y", package.to_str().unwrap()])
         .unwrap();
     assert!(
         install.status.success(),

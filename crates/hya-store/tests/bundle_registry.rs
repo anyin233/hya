@@ -8,8 +8,8 @@ use hya_bundle::{
     PrivatePackageInspection, PrivatePackagePayload, SourceFile, prepare_package,
 };
 use hya_store::{
-    BundleInstallCandidate, BundleInstallOutcome, BundleRegistry, BundleUninstallOutcome,
-    NamespaceInstallPolicy, StoreError,
+    BundleInstallAction, BundleInstallCandidate, BundleInstallOutcome, BundleRegistry,
+    BundleUninstallOutcome, NamespaceInstallPolicy, StoreError,
 };
 use sqlx::{Connection, SqliteConnection};
 
@@ -898,4 +898,84 @@ async fn distinct_namespaces_install_independently() {
         .await
         .unwrap_or_else(|error| panic!("snapshot: {error:?}"));
     assert_eq!(snapshot.bundles.len(), 2);
+}
+
+#[tokio::test]
+async fn plan_install_reports_the_install_outcome_without_mutation() {
+    let Ok(registry) = BundleRegistry::connect(&temp_db()).await else {
+        panic!("bundle registry connection failed");
+    };
+    let deny = NamespaceInstallPolicy::DenyConflicts;
+    let overwrite = NamespaceInstallPolicy::OverwriteConflicts;
+    let v1 = namespaced_candidate("hya/plan", Some("plan"), "1.0.0", [7_u8; 32]);
+
+    let plan = registry
+        .plan_install(&[], deny, &v1)
+        .await
+        .unwrap_or_else(|error| panic!("plan on empty registry: {error:?}"));
+    assert_eq!(plan.action, BundleInstallAction::Install);
+    assert!(plan.displaced.is_empty());
+    let snapshot = registry
+        .snapshot()
+        .await
+        .unwrap_or_else(|e| panic!("{e:?}"));
+    assert_eq!(snapshot.generation, 0, "planning must not install");
+    assert!(snapshot.bundles.is_empty());
+
+    registry
+        .install(&[], deny, v1.clone())
+        .await
+        .unwrap_or_else(|error| panic!("install v1: {error:?}"));
+    let plan = registry
+        .plan_install(&[], deny, &v1)
+        .await
+        .unwrap_or_else(|error| panic!("plan same content: {error:?}"));
+    assert_eq!(plan.action, BundleInstallAction::Unchanged);
+
+    let v2 = namespaced_candidate("hya/plan", Some("plan"), "2.0.0", [8_u8; 32]);
+    let plan = registry
+        .plan_install(&[], deny, &v2)
+        .await
+        .unwrap_or_else(|error| panic!("plan upgrade: {error:?}"));
+    assert_eq!(
+        plan.action,
+        BundleInstallAction::Replace {
+            installed_version: "1.0.0".to_string()
+        }
+    );
+
+    let v0 = namespaced_candidate("hya/plan", Some("plan"), "0.9.0", [9_u8; 32]);
+    assert!(matches!(
+        registry.plan_install(&[], deny, &v0).await,
+        Err(StoreError::BundleDowngradeRequired { .. })
+    ));
+    assert!(registry.plan_install(&[], overwrite, &v0).await.is_ok());
+
+    let rival = namespaced_candidate("hya/rival", Some("plan"), "1.0.0", [10_u8; 32]);
+    assert!(matches!(
+        registry.plan_install(&[], deny, &rival).await,
+        Err(StoreError::NamespaceConflict { .. })
+    ));
+    let plan = registry
+        .plan_install(&[], overwrite, &rival)
+        .await
+        .unwrap_or_else(|error| panic!("plan namespace overwrite: {error:?}"));
+    assert_eq!(plan.action, BundleInstallAction::Install);
+    assert_eq!(plan.displaced, vec!["hya/plan".to_string()]);
+
+    assert!(matches!(
+        registry.plan_install(&["hya/plan-lead"], deny, &v2).await,
+        Err(StoreError::BundleAgentIdReserved { .. })
+    ));
+
+    let snapshot = registry
+        .snapshot()
+        .await
+        .unwrap_or_else(|e| panic!("{e:?}"));
+    assert_eq!(
+        snapshot.generation, 1,
+        "planning never advances the generation"
+    );
+    assert_eq!(snapshot.bundles.len(), 1);
+    assert_eq!(snapshot.bundles[0].version, "1.0.0");
 }
