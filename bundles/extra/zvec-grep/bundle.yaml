@@ -1,0 +1,12 @@
+kind: Plugin
+identity:
+  id: hya-extra/zvec-grep
+  version: 0.41.0
+  publisher: hya-extra
+resources:
+  mcp:
+    - id: zvec-grep
+      path: mcp/zvec-grep.json
+  skills:
+    - id: zvec-grep
+      path: resources/skills/zvec-grep/SKILL.md

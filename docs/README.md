@@ -94,6 +94,7 @@ If you want to understand the codebase:
 | [Claude plugin import](claude-plugin-import.md) | Import local and marketplace plugins into standard bundles. |
 | [Subagent bundles](subagent-bundles.md) | Transient and resident bundle-defined workers. |
 | [Agent channels](agent-channels.md) | Declarative unit and parent-DM policies. |
+| [Extra bundles](extra-bundles.md) | Optional `hya-extra/*` packages (zvec-grep MCP, scout subagent, model routing) that double as bundle-coverage fixtures. |
 | [Secure self-update](self-update.md) | `hya update` over the independent `hya-updater` TCB: signed metadata, local package stage, smoke, owner-gated activation, break-glass installer. |
 | [Project Structure](project-structure.md) | Map repository paths, crates, modules, tests, and data flow. |
 | [Architecture Overview](architecture/overview.md) | Explain the crate boundary model and end-to-end request path. |
