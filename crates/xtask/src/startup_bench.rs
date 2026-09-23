@@ -3,6 +3,11 @@
 //! Modes:
 //! - `backend` — spawn `hya serve`, time until listen (and parse `HYA_STARTUP_TRACE`)
 //! - `parse` — parse marks from stdin or a file (for tests / offline analysis)
+//!
+//! `--db PATH` seeds every run with a copy of an existing database (the
+//! original is never opened), so cold listen on a large event log — including
+//! any pending migration and the first projection snapshot write — can be
+//! measured repeatedly; each run prints its phase waterfall from the marks.
 
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -20,6 +25,8 @@ pub fn run(args: Vec<String>) -> anyhow::Result<()> {
     let mut budget_backend_ms: Option<u64> = None;
     let mut backend_bin: Option<PathBuf> = None;
     let mut marks_file: Option<PathBuf> = None;
+    let mut seed_db: Option<PathBuf> = None;
+    let mut timeout_secs: u64 = 30;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -50,6 +57,18 @@ pub fn run(args: Vec<String>) -> anyhow::Result<()> {
                     args.get(i).context("--backend-bin requires a value")?,
                 ));
             }
+            "--db" => {
+                i += 1;
+                seed_db = Some(PathBuf::from(args.get(i).context("--db requires a value")?));
+            }
+            "--timeout-secs" => {
+                i += 1;
+                timeout_secs = args
+                    .get(i)
+                    .context("--timeout-secs requires a value")?
+                    .parse()
+                    .context("parse --timeout-secs")?;
+            }
             "--marks-file" => {
                 i += 1;
                 marks_file = Some(PathBuf::from(
@@ -66,7 +85,15 @@ pub fn run(args: Vec<String>) -> anyhow::Result<()> {
     }
 
     match mode.as_str() {
-        "backend" => run_backend_bench(runs, budget_backend_ms, backend_bin)?,
+        "backend" => run_backend_bench(
+            runs,
+            budget_backend_ms,
+            backend_bin,
+            &BackendRunOptions {
+                seed_db,
+                timeout: Duration::from_secs(timeout_secs),
+            },
+        )?,
         "parse" => {
             let marks = match marks_file {
                 Some(path) => parse_marks_file(&path)?,
@@ -85,7 +112,8 @@ pub fn run(args: Vec<String>) -> anyhow::Result<()> {
 fn print_help() {
     eprintln!(
         "usage: cargo xtask startup-bench [--mode backend|parse] [--runs N] \
-         [--budget-backend-ms MS] [--backend-bin PATH] [--marks-file PATH]"
+         [--budget-backend-ms MS] [--backend-bin PATH] [--marks-file PATH] \
+         [--db SEED_DB] [--timeout-secs N]"
     );
 }
 
@@ -151,15 +179,24 @@ fn summarize_marks(marks: &[StartupMark]) -> Value {
     })
 }
 
+/// Per-run knobs for the `backend` mode.
+struct BackendRunOptions {
+    /// Database copied into each run's scratch directory before spawn.
+    seed_db: Option<PathBuf>,
+    /// How long to wait for the listen line.
+    timeout: Duration,
+}
+
 fn run_backend_bench(
     runs: usize,
     budget_ms: Option<u64>,
     backend_bin: Option<PathBuf>,
+    options: &BackendRunOptions,
 ) -> anyhow::Result<()> {
     let bin = resolve_backend_bin(backend_bin)?;
     let mut samples = Vec::with_capacity(runs);
     for run in 0..runs {
-        let sample = time_backend_ready(&bin)?;
+        let sample = time_backend_ready(&bin, options)?;
         println!(
             "run {} backend_ready_ms={:.1} mark_delta_ms={}",
             run + 1,
@@ -169,6 +206,11 @@ fn run_backend_bench(
                 .map(|v| format!("{v:.1}"))
                 .unwrap_or_else(|| "n/a".into())
         );
+        if options.seed_db.is_some() {
+            for (phase, ms) in phase_deltas(&sample.marks) {
+                println!("  phase {phase} {ms}ms");
+            }
+        }
         samples.push(sample.ready_ms);
     }
     samples.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
@@ -189,11 +231,43 @@ fn run_backend_bench(
 struct BackendSample {
     ready_ms: f64,
     mark_delta_ms: Option<f64>,
+    marks: Vec<StartupMark>,
 }
 
-fn time_backend_ready(bin: &Path) -> anyhow::Result<BackendSample> {
+/// Time between consecutive marks, labelled by the mark that closes the phase.
+fn phase_deltas(marks: &[StartupMark]) -> Vec<(String, u128)> {
+    marks
+        .windows(2)
+        .map(|pair| {
+            (
+                pair[1].mark.clone(),
+                pair[1].wall_ms.saturating_sub(pair[0].wall_ms),
+            )
+        })
+        .collect()
+}
+
+/// Copy a seed database (and a WAL beside it, when present) into `dir`.
+fn copy_seed_db(seed: &Path, db: &Path) -> anyhow::Result<()> {
+    std::fs::copy(seed, db).with_context(|| format!("copy seed db {}", seed.display()))?;
+    let mut wal = seed.as_os_str().to_owned();
+    wal.push("-wal");
+    let wal = PathBuf::from(wal);
+    if wal.is_file() {
+        let mut target = db.as_os_str().to_owned();
+        target.push("-wal");
+        std::fs::copy(&wal, PathBuf::from(target))
+            .with_context(|| format!("copy seed wal {}", wal.display()))?;
+    }
+    Ok(())
+}
+
+fn time_backend_ready(bin: &Path, options: &BackendRunOptions) -> anyhow::Result<BackendSample> {
     let tmp = tempfile_dir()?;
     let db = tmp.join("sessions.db");
+    if let Some(seed) = &options.seed_db {
+        copy_seed_db(seed, &db)?;
+    }
     let t0 = Instant::now();
     let t0_wall = wall_ms();
     let mut child = Command::new(bin)
@@ -216,9 +290,10 @@ fn time_backend_ready(bin: &Path) -> anyhow::Result<BackendSample> {
     spawn_reader(stdout, LineSource::Stdout, tx.clone());
     spawn_reader(stderr, LineSource::Stderr, tx);
 
-    let deadline = Instant::now() + Duration::from_secs(30);
+    let deadline = Instant::now() + options.timeout;
     let mut ready_ms = None;
     let mut mark_delta_ms = None;
+    let mut marks = Vec::new();
     while Instant::now() < deadline {
         let remaining = deadline.saturating_duration_since(Instant::now());
         match rx.recv_timeout(remaining.min(Duration::from_millis(50))) {
@@ -226,13 +301,14 @@ fn time_backend_ready(bin: &Path) -> anyhow::Result<BackendSample> {
                 if ready_ms.is_none() && line.contains("listening on http://") {
                     ready_ms = Some(t0.elapsed().as_secs_f64() * 1000.0);
                 }
-                if let Some(mark) = parse_mark_line(&line)
-                    && mark.mark == "backend_listen"
-                {
-                    mark_delta_ms = Some(mark.wall_ms.saturating_sub(t0_wall) as f64);
-                    if ready_ms.is_none() {
-                        ready_ms = Some(t0.elapsed().as_secs_f64() * 1000.0);
+                if let Some(mark) = parse_mark_line(&line) {
+                    if mark.mark == "backend_listen" {
+                        mark_delta_ms = Some(mark.wall_ms.saturating_sub(t0_wall) as f64);
+                        if ready_ms.is_none() {
+                            ready_ms = Some(t0.elapsed().as_secs_f64() * 1000.0);
+                        }
                     }
+                    marks.push(mark);
                 }
                 // Prefer capturing the trace mark shortly after listen without padding every run.
                 if ready_ms.is_some()
@@ -252,9 +328,18 @@ fn time_backend_ready(bin: &Path) -> anyhow::Result<BackendSample> {
     let _ = std::fs::remove_dir_all(&tmp);
 
     let ready_ms = ready_ms.context("backend did not become ready within timeout")?;
+    marks.insert(
+        0,
+        StartupMark {
+            mark: "spawn".into(),
+            wall_ms: t0_wall,
+            detail: None,
+        },
+    );
     Ok(BackendSample {
         ready_ms,
         mark_delta_ms,
+        marks,
     })
 }
 
@@ -346,6 +431,27 @@ mod tests {
     fn parse_mark_line_ignores_noise() {
         assert!(parse_mark_line("hya server listening on http://x").is_none());
         assert!(parse_mark_line(r#"{"mark":"x"}"#).is_none());
+    }
+
+    #[test]
+    fn phase_deltas_label_each_phase_by_its_closing_mark() {
+        let mark = |name: &str, wall_ms| StartupMark {
+            mark: name.into(),
+            wall_ms,
+            detail: None,
+        };
+        let phases = phase_deltas(&[
+            mark("spawn", 1000),
+            mark("store_open", 1040),
+            mark("backend_listen", 1100),
+        ]);
+        assert_eq!(
+            phases,
+            vec![
+                ("store_open".to_string(), 40),
+                ("backend_listen".to_string(), 60)
+            ]
+        );
     }
 
     #[test]

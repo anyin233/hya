@@ -95,7 +95,7 @@ remaining argument is forwarded verbatim. The currently supported tasks are
 | Task | Role |
 | --- | --- |
 | `gen-api` | Regenerate the `hya.v1` contract from `proto/hya/v1`: Rust types (prost/tonic/pbjson), the API reference, and OpenAPI. Uses a vendored protoc; output is committed, and the task fails when any rpc lacks its `// hya.http:` mapping or two rpcs collide. |
-| `startup-bench` | Startup latency benchmark. Honours `HYA_BACKEND_BIN` to select the binary under test. |
+| `startup-bench` | Startup latency benchmark. Honours `HYA_BACKEND_BIN` to select the binary under test. `--db <seed.db>` runs every sample against a fresh copy of an existing database and prints the `HYA_STARTUP_TRACE` phase waterfall; `--timeout-secs N` (default 30) bounds the wait for the listen line. |
 | `matrix-check` | Validates `crates/hya-e2e/matrix.toml`. See [agent-matrix.md](testing/agent-matrix.md). |
 | `package-bundle` | Validates a source directory and atomically writes the canonical deterministic public `.hyabundle` package. |
 | `package-native-tool-bundle` | Adds a built target-specific Rust executable and exact policy tool declarations to one tool-family source, then writes a deterministic public package. |

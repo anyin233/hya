@@ -2398,6 +2398,7 @@ async fn build_session_engine_with_mcp_defer(
         .recover_interrupted_turns(owner_run_id)
         .await
         .context("close turns a stopped process left open")?;
+    crate::startup_trace::mark("interrupted_turns_recovered", None);
     store
         .recover_nonterminal_workflows(owner_run_id, "backend startup recovery")
         .await
@@ -2419,6 +2420,7 @@ async fn build_session_engine_with_mcp_defer(
         .recover_nonterminal_admissions("startup recovery")
         .await
         .context("recover nonterminal admissions before spawn readiness")?;
+    crate::startup_trace::mark("store_recovery", None);
     let (websearch, invocation_policy) = tool_config;
     let router = Arc::new(router);
     let registry = ToolRegistry::builtins();
@@ -2606,9 +2608,11 @@ async fn build_session_engine_with_mcp_defer(
             eprintln!("hya: startup runtime reconciliation rejected ({error})");
         }
     }
+    crate::startup_trace::mark("engine_runtime", None);
     // Drive resident (long-lived actor) subagents + quiescence (ADR-0002). Started
     // before the team supervisor so its bus subscription is live for the first mail.
     let resident_supervisor = ResidentSupervisor::start_with_owner(engine.clone(), owner_run_id);
+    let recovered_resident_count = recovered_claims.len();
     for recovered in recovered_claims {
         let actor_id = recovered.claim.actor_id;
         let (root, _) = engine
@@ -2699,6 +2703,10 @@ async fn build_session_engine_with_mcp_defer(
             .await
             .context("recreate recovered resident runtime owner")?;
     }
+    crate::startup_trace::mark(
+        "residents_recovered",
+        Some(&recovered_resident_count.to_string()),
+    );
     let workflow_control = crate::WorkflowControl::new_with_routing(
         engine.clone(),
         agent.clone(),
