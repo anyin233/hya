@@ -948,12 +948,14 @@ async fn http_provider_decodes_responses_reasoning_text_tool_and_usage() {
         &events[12],
         Event::MessageFinished {
             finish: FinishReason::ToolCalls,
+            // Normalized: Responses `input_tokens` includes cached tokens.
             tokens: Some(TokenUsage {
-                input: 11,
+                input: 8,
                 output: 7,
                 reasoning: 2,
                 cache_read: 3,
                 cache_write: 0,
+                reasoning_unknown: false,
             }),
             ..
         }

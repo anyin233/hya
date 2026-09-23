@@ -1,5 +1,6 @@
 use hya_proto::{
     AgentName, Message, MessageId, ModelRef, Part, PartProjection, Projection, Role, SessionId,
+    UsagePurpose,
 };
 
 use super::SessionEngine;
@@ -41,16 +42,21 @@ impl SessionEngine {
             &|model| self.provider_router().resolve(model).is_some(),
         );
         let messages = summary_messages(&projection)?;
+        let usage = crate::compaction::UsageCollector::default();
         let options = crate::compaction::SummarizeOptions {
             previous_summary: crate::compaction::previous_summary(&messages),
             max_output_tokens: Some(self.compaction.summary_max_tokens),
+            usage: Some(usage.clone()),
             ..options
         };
         let summarizer = self
             .summarizer
             .as_ref()
             .ok_or_else(|| CoreError::Invalid("summarizer not configured".to_string()))?;
-        let summary = summarizer.summarize(&messages, options).await?;
+        let summary = summarizer.summarize(&messages, options).await;
+        self.record_side_call_usage(None, session, UsagePurpose::Compaction, &usage)
+            .await;
+        let summary = summary?;
         // Behind the marker, not merely appended. Without it `compacted_messages`
         // never finds a cut point, so the summarized history stays in the
         // transcript and `/compact` *grows* the context it was asked to shrink.

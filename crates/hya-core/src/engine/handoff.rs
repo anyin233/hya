@@ -8,9 +8,9 @@
 //! failed call, or engine-synthesized terminality falls back to a deterministic
 //! projection-derived document flagged `degraded`.
 
-use hya_proto::{Projection, SessionId};
+use hya_proto::{Projection, SessionId, UsagePurpose};
 
-use crate::compaction::SummarizeOptions;
+use crate::compaction::{SummarizeOptions, UsageCollector};
 
 use super::SessionEngine;
 use super::summary::summary_messages;
@@ -45,14 +45,20 @@ impl SessionEngine {
         if let Some(summarizer) = self.summarizer.clone()
             && let Ok(messages) = summary_messages(&projection)
         {
+            let usage = UsageCollector::default();
             let options = SummarizeOptions {
                 handoff: true,
                 state_only: true,
                 previous_summary: previous_doc,
                 max_output_tokens: Some(self.compaction.summary_max_tokens),
+                usage: Some(usage.clone()),
                 ..SummarizeOptions::default()
             };
-            if let Ok(doc) = summarizer.summarize(&messages, options).await {
+            let written = summarizer.summarize(&messages, options).await;
+            // The terminal handoff is a summarizer call billed to this session.
+            self.record_side_call_usage(None, session, UsagePurpose::Compaction, &usage)
+                .await;
+            if let Ok(doc) = written {
                 return TerminalHandoff {
                     generation,
                     doc,

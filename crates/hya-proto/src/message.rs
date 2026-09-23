@@ -112,44 +112,123 @@ pub enum RosterStatus {
 
 /// Token counters on a finished message or stream round.
 ///
+/// # Invariant (normalized by every provider decoder)
+///
+/// - `input`: uncached prompt tokens. Excludes `cache_read` and `cache_write`,
+///   so the whole prompt is `input + cache_read + cache_write`
+///   ([`TokenUsage::prompt`]).
+/// - `cache_read`: prompt tokens served from the provider's cache.
+/// - `cache_write`: prompt tokens written to the provider's cache (cache
+///   creation).
+/// - `output`: every generated token, **including** thinking.
+/// - `reasoning`: thinking tokens, a subset of `output`. Meaningful only when
+///   `reasoning_unknown` is false.
+/// - `reasoning_unknown`: the provider did not report how many of `output`
+///   were thinking tokens (Anthropic). `reasoning` is then 0 and the split of
+///   `output` into thinking and visible text is unknown — never estimated.
+///
+/// Logs written before this invariant carry provider-native values (OpenAI
+/// `input` included cached tokens; Google `output` excluded thoughts;
+/// Anthropic reported `reasoning: 0`) and no `reasoning_unknown` field.
+/// Readers must treat the thinking split of such legacy usage as unknown.
+///
 /// Decode accepts `prompt`/`completion` aliases for `input`/`output`.
 /// [`TokenUsage::merge`] takes the **max** per field (providers re-report
-/// cumulative totals); the turn loop **sums** rounds separately when building
-/// final `MessageFinished.tokens`.
+/// cumulative totals); [`TokenUsage::add`] **sums** rounds, which the turn loop
+/// uses to build the final `MessageFinished.tokens`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TokenUsage {
-    /// Prompt / input tokens (serde alias `prompt`).
+    /// Uncached prompt tokens (serde alias `prompt`).
     #[serde(default, alias = "prompt")]
     pub input: u64,
-    /// Completion / output tokens (serde alias `completion`).
+    /// All generated tokens including thinking (serde alias `completion`).
     #[serde(default, alias = "completion")]
     pub output: u64,
-    /// Reasoning tokens when the provider reports them.
+    /// Thinking tokens within `output`, when the provider reports them.
     #[serde(default)]
     pub reasoning: u64,
-    /// Cache-read tokens when the provider reports them.
+    /// Prompt tokens read from the provider cache.
     #[serde(default)]
     pub cache_read: u64,
-    /// Cache-write tokens when the provider reports them.
+    /// Prompt tokens written to the provider cache.
     #[serde(default)]
     pub cache_write: u64,
+    /// The provider did not report the thinking share of `output`.
+    ///
+    /// Omitted from the wire when false; absent on legacy logs.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub reasoning_unknown: bool,
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 impl TokenUsage {
-    /// True when every counter is zero.
+    /// True when every counter is zero (the `reasoning_unknown` flag is ignored).
     #[must_use]
     pub fn is_zero(self) -> bool {
-        self == Self::default()
+        self.input == 0
+            && self.output == 0
+            && self.reasoning == 0
+            && self.cache_read == 0
+            && self.cache_write == 0
+    }
+
+    /// Whole prompt size: `input + cache_read + cache_write`.
+    #[must_use]
+    pub fn prompt(self) -> u64 {
+        self.input
+            .saturating_add(self.cache_read)
+            .saturating_add(self.cache_write)
+    }
+
+    /// Visible (non-thinking) output, or `None` when the thinking split is unknown.
+    #[must_use]
+    pub fn visible_output(self) -> Option<u64> {
+        (!self.reasoning_unknown).then(|| self.output.saturating_sub(self.reasoning))
     }
 
     /// Fold another sample by taking the maximum of each counter (not a sum).
+    ///
+    /// The thinking split stays unknown once any sample reported it unknown.
     pub fn merge(&mut self, other: Self) {
         self.input = self.input.max(other.input);
         self.output = self.output.max(other.output);
         self.reasoning = self.reasoning.max(other.reasoning);
         self.cache_read = self.cache_read.max(other.cache_read);
         self.cache_write = self.cache_write.max(other.cache_write);
+        self.reasoning_unknown |= other.reasoning_unknown;
     }
+
+    /// Add another round's usage (saturating sum per counter).
+    ///
+    /// The sum's thinking split is unknown when either side's is.
+    pub fn add(&mut self, other: Self) {
+        self.input = self.input.saturating_add(other.input);
+        self.output = self.output.saturating_add(other.output);
+        self.reasoning = self.reasoning.saturating_add(other.reasoning);
+        self.cache_read = self.cache_read.saturating_add(other.cache_read);
+        self.cache_write = self.cache_write.saturating_add(other.cache_write);
+        self.reasoning_unknown |= other.reasoning_unknown;
+    }
+}
+
+/// Why a provider call was made, for [`crate::Event::UsageRecorded`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UsagePurpose {
+    /// One streaming round of an assistant turn.
+    Turn,
+    /// Automatic session title generation.
+    Title,
+    /// Summarizer call: compaction ladder summary/handoff, `/compact`, or the
+    /// terminal handoff document.
+    Compaction,
+    /// A purpose written by a newer binary; decodes instead of failing replay.
+    #[serde(other)]
+    Other,
 }
 
 /// Lifecycle of a tool call as it streams: pending → running → completed | error.

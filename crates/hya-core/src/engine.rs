@@ -1083,12 +1083,46 @@ impl SessionEngine {
         Ok(())
     }
 
+    /// Append one `UsageRecorded` side-call record per call drained from `usage`.
+    ///
+    /// Side calls (title, summarizer) carry no message or step and never touch
+    /// the transcript. Best-effort: a failed append is logged, never surfaced,
+    /// so accounting cannot fail the work it describes.
+    pub(crate) async fn record_side_call_usage(
+        &self,
+        actor_claim: Option<&ActorClaim>,
+        session: SessionId,
+        purpose: hya_proto::UsagePurpose,
+        usage: &crate::compaction::UsageCollector,
+    ) {
+        for (model, tokens) in usage.take() {
+            let event = Event::UsageRecorded {
+                session,
+                message: None,
+                step: None,
+                model,
+                purpose,
+                tokens,
+            };
+            if let Err(error) = self.emit_for_actor(actor_claim, session, event).await {
+                tracing::warn!(%session, "side-call usage record was not appended: {error:#}");
+            }
+        }
+    }
+
     /// Record one token-ledger row for the just-finished assistant message.
     ///
-    /// Provider-reported usage wins (`confidence: provider`); otherwise the
-    /// turn's texts are counted with the model family's real tokenizer when
-    /// one resolves (`confidence: hf:<repo>`) or the calibrated estimator
-    /// (`confidence: estimated`). Always records — never skips.
+    /// Provider-reported usage wins (`confidence: provider`): the sum of the
+    /// message's attributed rounds (`UsageRecorded`, present even on a
+    /// cancelled or errored message) with the model that served the latest
+    /// round, else the legacy `MessageFinished.tokens` with the session model.
+    /// `prompt_tokens` is the whole prompt, `input + cache_read + cache_write`.
+    /// Otherwise the turn's texts are counted with the model family's real
+    /// tokenizer when one resolves (`confidence: hf:<repo>`) or the calibrated
+    /// estimator (`confidence: estimated`). Always records — never skips.
+    ///
+    /// The ledger is a best-effort side table; per-model truth for a message
+    /// whose rounds ran on several models lives in `SessionProjection.usage`.
     async fn record_session_usage(&self, session: SessionId) -> Result<(), CoreError> {
         use hya_proto::{MessageProjection, PartProjection};
 
@@ -1122,10 +1156,14 @@ impl SessionEngine {
             .collect::<Vec<_>>()
             .join("\n");
 
-        let model = projection
-            .session
-            .model
-            .as_ref()
+        let reported = match (&message.usage, message.tokens) {
+            (Some(attributed), _) => Some((attributed.tokens, Some(&attributed.model))),
+            (None, Some(tokens)) => Some((tokens, None)),
+            (None, None) => None,
+        };
+        let model = reported
+            .and_then(|(_, served)| served)
+            .or(projection.session.model.as_ref())
             .map(|model| model.as_str().to_string())
             .unwrap_or_default();
         let provider = model
@@ -1140,13 +1178,13 @@ impl SessionEngine {
             .map(|agent| agent.as_str().to_string())
             .unwrap_or_else(|| "assistant".to_string());
 
-        let entry = match message.tokens.as_ref() {
-            Some(usage) => hya_store::LedgerEntry {
+        let entry = match reported {
+            Some((usage, _)) => hya_store::LedgerEntry {
                 session,
                 role,
                 iteration: None,
                 completion_run_id: None,
-                prompt_tokens: (usage.input.saturating_add(usage.cache_read)) as i64,
+                prompt_tokens: usage.prompt() as i64,
                 completion_tokens: usage.output as i64,
                 confidence: "provider".to_string(),
                 provider,
@@ -1630,6 +1668,8 @@ pub(crate) fn summarize_options_from_definition(
         max_output_tokens: None,
         handoff: false,
         state_only: false,
+        // Callers that bill a session attach their own collector.
+        usage: None,
     }
 }
 

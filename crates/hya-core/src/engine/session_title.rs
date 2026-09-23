@@ -1,6 +1,5 @@
-use futures::StreamExt as _;
 use hya_proto::{
-    Event, Message, MessageId, ModelRef, Part, PartId, PartProjection, Role, SessionId,
+    Message, MessageId, ModelRef, Part, PartId, PartProjection, Role, SessionId, UsagePurpose,
 };
 use hya_provider::CompletionRequest;
 
@@ -46,9 +45,20 @@ impl SessionEngine {
             .model
             .clone()
             .unwrap_or_else(|| fallback_model.clone());
+        let usage = crate::compaction::UsageCollector::default();
         let generated = self
-            .generate_title(&model, options.system, options.reasoning, &user_text)
-            .await?;
+            .generate_title(
+                &model,
+                options.system,
+                options.reasoning,
+                &user_text,
+                &usage,
+            )
+            .await;
+        // Title generation is billed to the session it names.
+        self.record_side_call_usage(None, session, UsagePurpose::Title, &usage)
+            .await;
+        let generated = generated?;
         let Some(title) = title::clean_title_output(&generated) else {
             return Ok(false);
         };
@@ -62,6 +72,7 @@ impl SessionEngine {
         system: Option<String>,
         reasoning: Option<hya_provider::ReasoningEffort>,
         user_text: &str,
+        usage: &crate::compaction::UsageCollector,
     ) -> Result<String, CoreError> {
         let request = CompletionRequest {
             model: model.clone(),
@@ -79,17 +90,15 @@ impl SessionEngine {
             reasoning,
             headers: Default::default(),
         };
-        let mut stream = self
+        let stream = self
             .provider_router()
             .stream(request, SessionId::new(), MessageId::new())
             .await?;
-        let mut output = String::new();
-        while let Some(event) = stream.next().await {
-            if let Event::TextDelta { delta, .. } = event? {
-                output.push_str(&delta);
-            }
+        let (output, reported) = crate::compaction::collect_text_and_usage(stream).await;
+        if let Some(tokens) = reported.filter(|tokens| !tokens.is_zero()) {
+            usage.record(model.clone(), tokens);
         }
-        Ok(output)
+        Ok(output?)
     }
 }
 

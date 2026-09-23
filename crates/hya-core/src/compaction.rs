@@ -3,8 +3,10 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use futures::StreamExt as _;
-use hya_proto::{Event, Message, MessageId, ModelRef, Part, PartId, SessionId};
-use hya_provider::{CompletionRequest, ProviderRouter, ReasoningEffort};
+use hya_proto::{Event, Message, MessageId, ModelRef, Part, PartId, SessionId, TokenUsage};
+use hya_provider::{
+    CompletionRequest, EventStream, ProviderError, ProviderRouter, ReasoningEffort,
+};
 
 use crate::error::CoreError;
 
@@ -49,6 +51,63 @@ pub struct SummarizeOptions {
     /// archived agent carries into its next episode, so it records what *is*,
     /// never how the session got there.
     pub state_only: bool,
+    /// Sink for the usage of the provider calls this summarize makes.
+    ///
+    /// The summarizer records `(serving model, usage)` per call; the engine
+    /// drains it into `UsageRecorded { purpose: compaction }` for the session
+    /// it serves. `None` drops usage (callers that bill nothing).
+    pub usage: Option<UsageCollector>,
+}
+
+/// Shared sink collecting `(serving model, usage)` of side provider calls.
+///
+/// Cloning shares the sink. Recording never fails: a poisoned lock is
+/// recovered, since usage accounting must not fail the call it describes.
+#[derive(Clone, Debug, Default)]
+pub struct UsageCollector(Arc<std::sync::Mutex<Vec<(ModelRef, TokenUsage)>>>);
+
+impl UsageCollector {
+    /// Record one provider call's usage.
+    pub fn record(&self, model: ModelRef, tokens: TokenUsage) {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push((model, tokens));
+    }
+
+    /// Drain every recorded call, oldest first.
+    #[must_use]
+    pub fn take(&self) -> Vec<(ModelRef, TokenUsage)> {
+        std::mem::take(
+            &mut *self
+                .0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
+    }
+}
+
+/// Drain a side-call stream into its text and the usage it reported.
+///
+/// Usage is returned even when the stream fails after reporting it, so a
+/// billed call is never dropped from accounting.
+pub(crate) async fn collect_text_and_usage(
+    mut stream: EventStream,
+) -> (Result<String, ProviderError>, Option<TokenUsage>) {
+    let mut text = String::new();
+    let mut usage: Option<TokenUsage> = None;
+    while let Some(item) = stream.next().await {
+        match item {
+            Ok(Event::TextDelta { delta, .. }) => text.push_str(&delta),
+            Ok(Event::MessageFinished {
+                tokens: Some(tokens),
+                ..
+            }) => usage.get_or_insert_with(TokenUsage::default).merge(tokens),
+            Ok(_) => {}
+            Err(error) => return (Err(error), usage),
+        }
+    }
+    (Ok(text), usage)
 }
 
 /// Thresholds for when and how aggressively to compact a transcript.
@@ -194,10 +253,12 @@ pub fn estimate_tokens(messages: &[Message]) -> usize {
 /// example a route with `usage_reporting: false`), so callers fall back to
 /// [`estimate_tokens`] over the whole transcript.
 ///
-/// Window occupancy counts `input + cache_read`: cached prompt tokens still take
-/// up the window, and providers disagree on whether `input` already includes
-/// them. Summing can only over-count, which fails safe — compacting slightly
-/// early rather than overflowing.
+/// Window occupancy is the whole prompt, `input + cache_read + cache_write`
+/// ([`TokenUsage::prompt`]): decoders normalize `input` to exclude both cache
+/// counters, and cached or cache-written prompt tokens still take up the
+/// window. Legacy logs whose `input` already included cached tokens can only
+/// over-count, which fails safe — compacting slightly early rather than
+/// overflowing.
 #[must_use]
 pub fn measured_tokens(messages: &[Message]) -> Option<usize> {
     let (index, usage) = messages
@@ -211,8 +272,7 @@ pub fn measured_tokens(messages: &[Message]) -> Option<usize> {
             } if !usage.is_zero() => Some((i, usage)),
             _ => None,
         })?;
-    let measured =
-        usize::try_from(usage.input.saturating_add(usage.cache_read)).unwrap_or(usize::MAX);
+    let measured = usize::try_from(usage.prompt()).unwrap_or(usize::MAX);
     let appended = estimate_tokens(messages.get(index + 1..).unwrap_or(&[]));
     Some(measured.saturating_add(appended))
 }
@@ -1144,8 +1204,9 @@ impl Summarizer for ModelSummarizer {
                 }],
             }]
         };
+        let model = options.model.unwrap_or_else(|| self.model.clone());
         let request = CompletionRequest {
-            model: options.model.unwrap_or_else(|| self.model.clone()),
+            model: model.clone(),
             system: options.system,
             messages: request_messages,
             tools: Vec::new(),
@@ -1158,17 +1219,17 @@ impl Summarizer for ModelSummarizer {
             reasoning: options.reasoning,
             headers: Default::default(),
         };
-        let mut stream = self
+        let stream = self
             .providers
             .stream(request, SessionId::new(), MessageId::new())
             .await?;
-        let mut text = String::new();
-        while let Some(item) = stream.next().await {
-            if let Event::TextDelta { delta, .. } = item? {
-                text.push_str(&delta);
-            }
+        let (text, usage) = collect_text_and_usage(stream).await;
+        if let (Some(collector), Some(tokens)) = (&options.usage, usage)
+            && !tokens.is_zero()
+        {
+            collector.record(model, tokens);
         }
-        Ok(text)
+        Ok(text?)
     }
 }
 
@@ -1769,16 +1830,17 @@ mod tests {
             output: 50,
             reasoning: 0,
             cache_read: 200,
-            cache_write: 0,
+            cache_write: 7,
+            reasoning_unknown: false,
         };
         let msgs = vec![
             user(&"a".repeat(4000)), // would estimate to 1000 on its own
             assistant_with_usage(Some(usage)),
             user(&"b".repeat(400)), // appended after: estimates to 100
         ];
-        // 1000 input + 200 cache_read + 100 estimated delta.
-        assert_eq!(measured_tokens(&msgs), Some(1300));
-        assert_eq!(tokens_in_use(&msgs), 1300);
+        // 1000 input + 200 cache_read + 7 cache_write + 100 estimated delta.
+        assert_eq!(measured_tokens(&msgs), Some(1307));
+        assert_eq!(tokens_in_use(&msgs), 1307);
     }
 
     #[test]

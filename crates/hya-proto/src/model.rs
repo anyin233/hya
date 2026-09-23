@@ -5,7 +5,9 @@ use serde::{Deserialize, Serialize};
 macro_rules! str_newtype {
     ($name:ident, $doc:expr) => {
         #[doc = $doc]
-        #[derive(Clone, Debug, Default, Eq, PartialEq, Hash, Serialize, Deserialize)]
+        #[derive(
+            Clone, Debug, Default, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize,
+        )]
         #[serde(transparent)]
         pub struct $name(
             /// Underlying string value for this name/ref.

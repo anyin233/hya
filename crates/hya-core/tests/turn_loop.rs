@@ -278,6 +278,7 @@ async fn provider_usage_is_recorded_on_assistant_message_projection() {
         reasoning: 2,
         cache_read: 5,
         cache_write: 0,
+        reasoning_unknown: false,
     };
     let provider = FakeProvider::scripted_turns(vec![vec![
         FakeStep::Text("hi".to_string()),

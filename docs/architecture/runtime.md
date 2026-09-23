@@ -228,11 +228,15 @@ Each round runs **in this order** (see `run_turn_rounds` in
 7. Acquire a governor stream permit (reserved or general by depth), then open
    the provider stream: walk the configured cross-model chain, then ask
    `model_fallback` while no stream exists (Workflow-routed turns use their
-   declared route instead).
+   declared route instead). The opener returns the stream together with the
+   model that serves it.
 8. Emit `StepStarted`.
 9. Stream the provider round (`collect_stream_round`) — live **text** via
    `publish_live` (then durable text triple at round end); reasoning, tool
-   calls, and other events via durable `emit_for_actor` immediately.
+   calls, and other events via durable `emit_for_actor` immediately. When the
+   round reported usage, append `UsageRecorded { purpose: turn }` with the
+   serving model — also when the stream then failed (see
+   [Usage attribution](#usage-attribution)).
 10. Emit `StepFinished`.
 11. **Drop the stream permit** before any tool work.
 12. If the round produced no tool calls, emit `MessageFinished` and end the turn.
@@ -552,12 +556,55 @@ so several paths can leave the assistant message **open** with no
 - resident tool path: `actor_claim` present, tool returns `ToolError::Cancelled`,
   and the cancel token is cancelled → `Err(Cancelled)` without a finish emit
 
+Forced `Cancelled`/`Error` finishes carry `tokens: None`. Rounds of such a
+message that already reported usage were recorded as `UsageRecorded` when they
+ended, so their billed tokens still reach `SessionProjection.usage` and the
+ledger.
+
 Clients must not assume every `MessageStarted` is paired with a finish event
 on every cancel path; poll session projection or treat stream disconnect as
 terminal when hooks/sidecar health fail closed.
 
 The shell tool also checks the token before spawning a command and kills the
 spawned Unix process group on cancellation.
+
+## Usage attribution
+
+Every provider call that reports usage is recorded once in the session's log
+as `Event::UsageRecorded` (contract in
+[event-model.md](event-model.md#token-accounting)):
+
+| Call | `purpose` | `message` / `step` | `model` |
+| --- | --- | --- | --- |
+| Turn round | `turn` | assistant message / round index | model that opened the stream: after `chat.params`, the fallback chain or `model.fallback` hook, or the Workflow route candidate |
+| `auto_title_session` | `title` | none | title model (definition model or caller fallback) |
+| Ladder `summarize` / `handoff` rung, `summarize_session`, terminal handoff | `compaction` | none | summarizer request model (definition/preference model or summarizer fallback) |
+
+- `usage` is the call's own normalized `TokenUsage`, not a message sum.
+  `MessageFinished.tokens` keeps the legacy per-message sum; the projection
+  fold never counts both.
+- A round whose stream reported usage and then failed is still recorded
+  (best-effort on the failure path; the round's error wins). A stream dropped
+  before the decoder reported usage (mid-stream cancel, transport reset) has
+  no usage to record.
+- Side calls go through `SummarizeOptions.usage: Option<UsageCollector>` (the
+  summarizer records `(model, usage)` per call) and
+  `SessionEngine::record_side_call_usage`; recording failures are logged and
+  never fail the call.
+- Not attributed: provider-native `/responses/compact`, goal evaluators, and
+  loop verifiers.
+
+The fold `SessionProjection.usage` sums the records by serving model and by
+purpose, per session log; read it with `read_projection(session)`. Example: a
+turn whose first round ran on `openai/gpt-5` and whose second round failed
+over to `anthropic/claude-sonnet` yields two `turn` records and two
+`by_model` entries; the Anthropic entry's output lands in
+`reasoning_unknown_output` because Anthropic does not report thinking.
+
+The token ledger (`record_session_usage`, best-effort, one row per finished
+assistant message) prefers the message's attributed rounds: the sum of its
+records with the latest round's serving model, `prompt_tokens =
+input + cache_read + cache_write`.
 
 ## Compaction and Summaries
 
@@ -640,8 +687,9 @@ the provider at `temperature: 0.0` with `max_output_tokens: 128`, honoring the
 definition's model and reasoning effort (falling back to the caller's model
 when the definition has none). Then it emits `SessionTitled`.
 
-This is an extra billed provider call per successful title generation, on the
-route resolved for that model.
+This is an extra billed provider call per title generation, on the route
+resolved for that model; its usage is recorded as
+`UsageRecorded { purpose: title }` on the session being titled.
 
 ### Fixed system agents
 

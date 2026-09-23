@@ -299,28 +299,37 @@ impl OpenAiResponsesDecoder {
         out
     }
 
+    /// Normalize Responses usage to the [`TokenUsage`] invariant.
+    ///
+    /// `input_tokens` includes cached tokens, which are subtracted
+    /// (saturating); `output_tokens` already includes reasoning. A missing
+    /// `output_tokens_details.reasoning_tokens` leaves the thinking split
+    /// unknown.
     fn record_usage(&mut self, event: &Value) {
         let Some(usage) = event.pointer("/response/usage") else {
             return;
         };
+        let cache_read = usage
+            .pointer("/input_tokens_details/cached_tokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        let reasoning = usage
+            .pointer("/output_tokens_details/reasoning_tokens")
+            .and_then(Value::as_u64);
         self.usage.merge(TokenUsage {
             input: usage
                 .get("input_tokens")
                 .and_then(Value::as_u64)
-                .unwrap_or(0),
+                .unwrap_or(0)
+                .saturating_sub(cache_read),
             output: usage
                 .get("output_tokens")
                 .and_then(Value::as_u64)
                 .unwrap_or(0),
-            reasoning: usage
-                .pointer("/output_tokens_details/reasoning_tokens")
-                .and_then(Value::as_u64)
-                .unwrap_or(0),
-            cache_read: usage
-                .pointer("/input_tokens_details/cached_tokens")
-                .and_then(Value::as_u64)
-                .unwrap_or(0),
+            reasoning: reasoning.unwrap_or(0),
+            cache_read,
             cache_write: 0,
+            reasoning_unknown: reasoning.is_none(),
         });
     }
 }

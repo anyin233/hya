@@ -1,5 +1,8 @@
 use futures::StreamExt;
-use hya_proto::{Event, FinishReason, MessageId, PartId, SessionId, TokenUsage, ToolCallId};
+use hya_proto::{
+    Event, FinishReason, MessageId, ModelRef, PartId, SessionId, TokenUsage, ToolCallId,
+    UsagePurpose,
+};
 use hya_provider::EventStream;
 use hya_store::ActorClaim;
 
@@ -13,6 +16,12 @@ pub(super) struct StreamRound {
     pub(super) tokens: Option<TokenUsage>,
 }
 
+/// Which round of the message a stream serves, and the model serving it.
+pub(super) struct RoundAttribution {
+    pub(super) step: u32,
+    pub(super) model: ModelRef,
+}
+
 pub(super) struct ToolCallReq {
     pub(super) part: PartId,
     pub(super) call: ToolCallId,
@@ -21,18 +30,67 @@ pub(super) struct ToolCallReq {
 }
 
 impl SessionEngine {
+    /// Drain one provider round into durable events, then record its usage.
+    ///
+    /// The round's usage is appended as `UsageRecorded` attributed to
+    /// `attribution.model` whether or not the round completes: a stream that
+    /// reported usage and then failed was still billed. Recording on the
+    /// failure path is best-effort and never masks the round's own error.
     pub(super) async fn collect_stream_round(
+        &self,
+        session: SessionId,
+        message: MessageId,
+        stream: EventStream,
+        actor_claim: Option<&ActorClaim>,
+        attribution: RoundAttribution,
+    ) -> Result<StreamRound, CoreError> {
+        let mut tokens = None;
+        let collected = self
+            .drain_stream_round(session, message, stream, actor_claim, &mut tokens)
+            .await;
+        if let Some(usage) = tokens.filter(|usage: &TokenUsage| !usage.is_zero()) {
+            let record = self
+                .emit_for_actor(
+                    actor_claim,
+                    session,
+                    Event::UsageRecorded {
+                        session,
+                        message: Some(message),
+                        step: Some(attribution.step),
+                        model: attribution.model,
+                        purpose: UsagePurpose::Turn,
+                        tokens: usage,
+                    },
+                )
+                .await;
+            match (&collected, record) {
+                (Ok(_), Err(error)) => return Err(error),
+                (Err(_), Err(error)) => {
+                    tracing::warn!(%session, "usage record for a failed round was not appended: {error:#}");
+                }
+                (_, Ok(())) => {}
+            }
+        }
+        let (tool_calls, finish) = collected?;
+        Ok(StreamRound {
+            tool_calls,
+            finish,
+            tokens,
+        })
+    }
+
+    async fn drain_stream_round(
         &self,
         session: SessionId,
         message: MessageId,
         mut stream: EventStream,
         actor_claim: Option<&ActorClaim>,
-    ) -> Result<StreamRound, CoreError> {
+        tokens: &mut Option<TokenUsage>,
+    ) -> Result<(Vec<ToolCallReq>, FinishReason), CoreError> {
         let mut tool_calls: Vec<ToolCallReq> = Vec::new();
         let mut durable_text_parts: Vec<(PartId, String)> = Vec::new();
         let mut text_parts = TextPartAccumulator::default();
         let mut finish = FinishReason::Stop;
-        let mut tokens = None;
         while let Some(item) = stream.next().await {
             self.validate_actor_claim(actor_claim).await?;
             let event = item?;
@@ -58,7 +116,7 @@ impl SessionEngine {
             } = &event
             {
                 finish = *f;
-                merge_tokens(&mut tokens, *provider_tokens);
+                merge_tokens(tokens, *provider_tokens);
                 continue;
             }
             if matches!(
@@ -127,11 +185,7 @@ impl SessionEngine {
             )
             .await?;
         }
-        Ok(StreamRound {
-            tool_calls,
-            finish,
-            tokens,
-        })
+        Ok((tool_calls, finish))
     }
 }
 

@@ -294,16 +294,22 @@ logged and never fails the finished turn.
 - `role` (the session's agent name)
 - `prompt_tokens`, `completion_tokens`
 - `confidence` — how the numbers were obtained (below)
-- `provider`, `model` (when the session records a model ref)
+- `provider`, `model` — the model that served the message's latest attributed
+  round (`MessageProjection.usage.model`), else the session's model ref
 - `ts` (now)
 
 `read_usage` returns those fields for a session ordered by timestamp.
+
+The ledger is a best-effort side table. The replayable per-model account is
+`SessionProjection.usage`, folded from `UsageRecorded` events (see
+[event-model.md](event-model.md#session-usage-fold)); a message whose rounds
+ran on several models records only the latest round's model here.
 
 ### Confidence levels
 
 | `confidence` | Meaning |
 | --- | --- |
-| `provider` | The provider reported usage on the wire; `prompt_tokens` is `input + cache_read`, `completion_tokens` is `output`. |
+| `provider` | The provider reported usage on the wire: the sum of the message's `UsageRecorded` rounds (also on a cancelled or errored message), else the legacy `MessageFinished.tokens`. `prompt_tokens` is the whole prompt `input + cache_read + cache_write`, `completion_tokens` is `output` (thinking included). |
 | `hf:<repo>` | The provider reported nothing; the turn's texts were counted with the model family's real `tokenizer.json` (GPT, Claude, DeepSeek, GLM, Kimi, Qwen initially adapted; resolved lazily from the hya cache → local HF cache → one-time download, then cached per process). |
 | `estimated` | No family matched or no tokenizer resolved; the structure-aware `CalibratedTokenizer` estimate was used. |
 

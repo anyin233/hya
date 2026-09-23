@@ -527,19 +527,45 @@ route with `kind: google`.
 ## Usage Reporting
 
 When `usage_reporting` is true (HTTP default), decoders fill `TokenUsage` from
-protocol-specific fields. Always-zero fields are **not** measurements — the
-upstream simply does not expose that slot on that wire.
+protocol-specific fields and emit it on the stream's final `MessageFinished`.
 
-| Protocol | input | output | reasoning | cache_read | cache_write |
-| --- | --- | --- | --- | --- | --- |
-| OpenAI chat | `prompt_tokens` | `completion_tokens` | `completion_tokens_details.reasoning_tokens` | `prompt_tokens_details.cached_tokens` | `prompt_tokens_details.cache_creation_tokens` |
-| OpenAI Responses | `/response/usage` `input_tokens` | `output_tokens` | `output_tokens_details.reasoning_tokens` | `input_tokens_details.cached_tokens` | **always 0** |
-| Anthropic | `input_tokens` | `output_tokens` | **always 0** | `cache_read_input_tokens` | `cache_creation_input_tokens` |
-| Google | `usageMetadata.promptTokenCount` | `candidatesTokenCount` | `thoughtsTokenCount` | `cachedContentTokenCount` | **always 0** |
+### Token usage normalization
 
-Live HTTP routes declare `usage_reporting: true`. Per-protocol usage frames feed
-the store's token ledger (`record_usage` path) when non-zero usage is present on
-finish.
+Every decoder normalizes to one invariant before the usage leaves
+`hya-provider` (see [event-model.md](event-model.md#tokenusage)):
+
+- `input` = uncached prompt tokens — **excludes** `cache_read` and
+  `cache_write`; the whole prompt is `input + cache_read + cache_write`.
+- `output` = all generated tokens, **including** thinking.
+- `reasoning` = thinking tokens, a subset of `output`.
+- `reasoning_unknown = true` when the wire does not report the thinking share
+  of `output`. The split is then **unknown**, never estimated.
+
+| Protocol | input | output | reasoning | cache_read | cache_write | thinking split |
+| --- | --- | --- | --- | --- | --- | --- |
+| OpenAI chat | `prompt_tokens − cached_tokens − cache_creation_tokens` (saturating) | `completion_tokens` | `completion_tokens_details.reasoning_tokens` | `prompt_tokens_details.cached_tokens` | `prompt_tokens_details.cache_creation_tokens` | unknown when `reasoning_tokens` is absent |
+| OpenAI Responses / Codex / Grok Build | `input_tokens − input_tokens_details.cached_tokens` (saturating) | `output_tokens` | `output_tokens_details.reasoning_tokens` | `input_tokens_details.cached_tokens` | **always 0** | unknown when `reasoning_tokens` is absent |
+| Anthropic | `input_tokens` (already excludes cache) | `output_tokens` (already includes thinking) | **0** | `cache_read_input_tokens` | `cache_creation_input_tokens` | **always unknown** |
+| Google | `promptTokenCount − cachedContentTokenCount` (saturating) | `candidatesTokenCount + thoughtsTokenCount` | `thoughtsTokenCount` (0 when absent) | `cachedContentTokenCount` | **always 0** | always known |
+
+Always-zero cells are **not** measurements — the upstream does not expose that
+slot on that wire. `Dev` reports no usage; `FakeProvider` passes scripted
+`TokenUsage` through unchanged.
+
+Worked example — an OpenAI chat frame
+`{"prompt_tokens":20,"completion_tokens":4,"prompt_tokens_details":{"cached_tokens":8}}`
+decodes to `input: 12, cache_read: 8, output: 4, reasoning: 0,
+reasoning_unknown: true`.
+
+### Where usage goes
+
+Live HTTP routes declare `usage_reporting: true`. The engine records each
+round's usage as `UsageRecorded` with the model that served the round (see
+[runtime.md](runtime.md#usage-attribution)), which folds into
+`SessionProjection.usage`; the best-effort token ledger (`record_usage`) keeps
+one row per finished assistant message. Window occupancy
+(`measured_tokens`/`tokens_in_use`) uses the whole prompt,
+`input + cache_read + cache_write`.
 
 ## Configured Identity
 

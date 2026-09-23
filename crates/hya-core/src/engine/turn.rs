@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use hya_proto::{
     AgentName, CompactionStrategy, Event, FinishReason, Message, MessageId, ModelRef, PartId, Role,
-    SessionId, TokenUsage, ToolCallId,
+    SessionId, TokenUsage, ToolCallId, UsagePurpose,
 };
 use hya_provider::{CompletionRequest, EventStream, ProviderError};
 use hya_store::ActorClaim;
@@ -35,6 +35,7 @@ use crate::{AgentResourcePolicy, TurnBinding};
 mod messages;
 
 use super::spill::ArtifactEvictionSink;
+use super::stream_round::RoundAttribution;
 use crate::agent_catalog::AgentDefinition;
 pub use messages::advertise_tool;
 use messages::{projection_to_messages, request_from_messages};
@@ -325,13 +326,16 @@ impl SessionEngine {
     /// and a round makes at most [`MODEL_FALLBACK_MAX_ATTEMPTS`] attempts.
     /// STRICT NO-REPLAY: once a stream is returned this never switches models
     /// or replays, so mid-stream errors surface exactly once, unchanged.
+    ///
+    /// Returns the stream with the model that actually serves it (the
+    /// candidate whose attempt opened the stream), for usage attribution.
     async fn stream_with_model_fallback(
         &self,
         request: CompletionRequest,
         session: SessionId,
         message: MessageId,
         lineage: RequestLineage<'_>,
-    ) -> Result<EventStream, ProviderError> {
+    ) -> Result<(EventStream, ModelRef), ProviderError> {
         // Candidate order for this turn. An unconfigured plane yields exactly
         // one candidate — the preferred model — reproducing today's direct
         // router call; each configured chain starts with its own key.
@@ -348,7 +352,7 @@ impl SessionEngine {
                 .stream_model_candidate(&request, candidate, session, message)
                 .await
             {
-                Ok(stream) => return Ok(stream),
+                Ok(stream) => return Ok((stream, candidate.clone())),
                 Err(error) => {
                     let next = candidates.get(index + 1).filter(|_| {
                         error.is_retryable_before_stream()
@@ -413,7 +417,7 @@ impl SessionEngine {
                 .stream_model_candidate(&request, &model, session, message)
                 .await
             {
-                Ok(stream) => return Ok(stream),
+                Ok(stream) => return Ok((stream, model)),
                 Err(next_error) => {
                     failed = model;
                     error = next_error;
@@ -443,13 +447,14 @@ impl SessionEngine {
     ///
     /// The route remains request-local. Only pre-stream retryable failures can
     /// advance it, and a returned stream is never replayed on another model.
+    /// Returns the stream with the selected candidate's model.
     async fn stream_with_workflow_route(
         &self,
         request: CompletionRequest,
         session: SessionId,
         message: MessageId,
         route: &WorkflowTurnRoute,
-    ) -> Result<EventStream, ProviderError> {
+    ) -> Result<(EventStream, ModelRef), ProviderError> {
         let candidates = &route.route().candidates;
         let mut pending_failure = None;
         for index in route.route().selected_index..candidates.len() {
@@ -465,7 +470,7 @@ impl SessionEngine {
             {
                 Ok(stream) => {
                     route.selected(index, pending_failure);
-                    return Ok(stream);
+                    return Ok((stream, candidate.model.clone()));
                 }
                 Err(error) => {
                     let failure = workflow_provider_failure_class(&error);
@@ -1407,18 +1412,30 @@ impl SessionEngine {
                         // the fold range still leaves the recent tail in place.
                         // A `compaction.before` Replace decision steers the
                         // summarizer prompt for this walk.
-                        let options = with_hook_instructions(
-                            self.folding_options(definition, binding, &messages),
-                            &summarizer_instructions,
-                        );
-                        let Ok(Some(plan)) = crate::compaction::plan_handoff(
+                        let usage = crate::compaction::UsageCollector::default();
+                        let options = crate::compaction::SummarizeOptions {
+                            usage: Some(usage.clone()),
+                            ..with_hook_instructions(
+                                self.folding_options(definition, binding, &messages),
+                                &summarizer_instructions,
+                            )
+                        };
+                        let planned = crate::compaction::plan_handoff(
                             &messages,
                             &self.compaction,
                             summarizer.as_ref(),
                             options,
                         )
-                        .await
-                        else {
+                        .await;
+                        // Billed even when the rung then fails or is skipped.
+                        self.record_side_call_usage(
+                            actor_claim,
+                            session,
+                            UsagePurpose::Compaction,
+                            &usage,
+                        )
+                        .await;
+                        let Ok(Some(plan)) = planned else {
                             continue;
                         };
                         let body =
@@ -1466,18 +1483,30 @@ impl SessionEngine {
                         // already failed closed by the time we are here. A
                         // `compaction.before` Replace decision steers the
                         // summarizer prompt for this walk.
-                        let options = with_hook_instructions(
-                            self.folding_options(definition, binding, &messages),
-                            &summarizer_instructions,
-                        );
-                        let Ok(Some(plan)) = crate::compaction::fold_prefix(
+                        let usage = crate::compaction::UsageCollector::default();
+                        let options = crate::compaction::SummarizeOptions {
+                            usage: Some(usage.clone()),
+                            ..with_hook_instructions(
+                                self.folding_options(definition, binding, &messages),
+                                &summarizer_instructions,
+                            )
+                        };
+                        let planned = crate::compaction::fold_prefix(
                             &messages,
                             &self.compaction,
                             summarizer.as_ref(),
                             options,
                         )
-                        .await
-                        else {
+                        .await;
+                        // Billed even when the rung then fails or is skipped.
+                        self.record_side_call_usage(
+                            actor_claim,
+                            session,
+                            UsagePurpose::Compaction,
+                            &usage,
+                        )
+                        .await;
+                        let Ok(Some(plan)) = planned else {
                             continue;
                         };
                         // Persist the local summary behind the same marker the
@@ -1576,12 +1605,12 @@ impl SessionEngine {
                 (None, _) => None,
             };
             self.validate_actor_claim(actor_claim).await?;
-            let stream = if let Some(route) = workflow_route {
+            let (stream, served_model) = if let Some(route) = workflow_route {
                 match self
                     .stream_with_workflow_route(request, session, message, route)
                     .await
                 {
-                    Ok(stream) => stream,
+                    Ok(opened) => opened,
                     Err(error) => {
                         route
                             .finalize(Some(workflow_provider_failure_class(&error)))
@@ -1613,7 +1642,16 @@ impl SessionEngine {
             )
             .await?;
             let stream_round = match self
-                .collect_stream_round(session, message, stream, actor_claim)
+                .collect_stream_round(
+                    session,
+                    message,
+                    stream,
+                    actor_claim,
+                    RoundAttribution {
+                        step,
+                        model: served_model,
+                    },
+                )
                 .await
             {
                 Ok(stream_round) => {
@@ -1631,7 +1669,11 @@ impl SessionEngine {
                     return Err(error);
                 }
             };
-            add_tokens(&mut total_tokens, stream_round.tokens);
+            if let Some(tokens) = stream_round.tokens {
+                total_tokens
+                    .get_or_insert_with(TokenUsage::default)
+                    .add(tokens);
+            }
             self.emit_for_actor(
                 actor_claim,
                 session,
@@ -1910,17 +1952,6 @@ impl SessionEngine {
 
             rounds += 1;
         }
-    }
-}
-
-fn add_tokens(target: &mut Option<TokenUsage>, update: Option<TokenUsage>) {
-    if let Some(update) = update {
-        let current = target.get_or_insert_with(TokenUsage::default);
-        current.input = current.input.saturating_add(update.input);
-        current.output = current.output.saturating_add(update.output);
-        current.reasoning = current.reasoning.saturating_add(update.reasoning);
-        current.cache_read = current.cache_read.saturating_add(update.cache_read);
-        current.cache_write = current.cache_write.saturating_add(update.cache_write);
     }
 }
 

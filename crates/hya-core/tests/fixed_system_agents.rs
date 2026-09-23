@@ -851,3 +851,220 @@ async fn reserved_system_agents_are_always_resolvable_from_the_embedded_preset()
         assert_eq!(definition.prompt, Some(builtin_prompt(reserved)));
     }
 }
+
+/// Provider that answers every call with text plus a fixed usage frame.
+struct UsageReportingProvider;
+
+const SIDE_CALL_USAGE: hya_proto::TokenUsage = hya_proto::TokenUsage {
+    input: 21,
+    output: 8,
+    reasoning: 0,
+    cache_read: 4,
+    cache_write: 1,
+    reasoning_unknown: true,
+};
+
+#[async_trait]
+impl Provider for UsageReportingProvider {
+    fn id(&self) -> &str {
+        "usage-reporting"
+    }
+
+    fn capabilities(&self, _model: &ModelRef) -> Option<Capabilities> {
+        Some(Capabilities {
+            streaming_tool_calls: true,
+            usage_reporting: true,
+            ..Capabilities::default()
+        })
+    }
+
+    async fn stream(
+        &self,
+        _request: CompletionRequest,
+        session: hya_proto::SessionId,
+        message: hya_proto::MessageId,
+    ) -> Result<EventStream, ProviderError> {
+        Ok(Box::pin(futures::stream::iter([
+            Ok(Event::TextDelta {
+                session,
+                message,
+                part: PartId::new(),
+                delta: "Usage attributed output".to_string(),
+            }),
+            Ok(Event::MessageFinished {
+                session,
+                message,
+                role: Role::Assistant,
+                finish: FinishReason::Stop,
+                tokens: Some(SIDE_CALL_USAGE),
+            }),
+        ])))
+    }
+}
+
+/// `(message, step, model, purpose, tokens)` of every `UsageRecorded` record.
+async fn side_call_records(
+    engine: &SessionEngine,
+    session: hya_proto::SessionId,
+) -> Vec<(
+    Option<hya_proto::MessageId>,
+    Option<u32>,
+    ModelRef,
+    hya_proto::UsagePurpose,
+    hya_proto::TokenUsage,
+)> {
+    engine
+        .replay(session)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter_map(|envelope| match envelope.event {
+            Event::UsageRecorded {
+                message,
+                step,
+                model,
+                purpose,
+                tokens,
+                ..
+            } => Some((message, step, model, purpose, tokens)),
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn title_generation_usage_is_attributed_to_the_session_with_title_purpose() {
+    let workdir = support::TestDir::new("fixed-title-usage");
+    let engine = engine_with(
+        catalog(&[AgentFixture::main("build")]),
+        Arc::new(UsageReportingProvider),
+        false,
+    )
+    .await;
+    let session = engine
+        .create(CreateSession {
+            parent: None,
+            agent: AgentName::new("build"),
+            model: ModelRef::new("session-model"),
+            workdir: workdir.path().to_string_lossy().into_owned(),
+        })
+        .await
+        .unwrap();
+    engine
+        .admit_user_prompt(session, "debug production 500 errors".to_string())
+        .await
+        .unwrap();
+
+    assert!(
+        engine
+            .auto_title_session(session, &ModelRef::new("title-fallback-model"))
+            .await
+            .unwrap()
+    );
+
+    let records = side_call_records(&engine, session).await;
+    assert_eq!(records.len(), 1, "{records:?}");
+    let (message, step, model, purpose, tokens) = &records[0];
+    assert_eq!(
+        (*message, *step),
+        (None, None),
+        "side calls carry no message"
+    );
+    assert_eq!(model.as_str(), "title-fallback-model");
+    assert_eq!(*purpose, hya_proto::UsagePurpose::Title);
+    assert_eq!(*tokens, SIDE_CALL_USAGE);
+
+    let projection = engine.read_projection(session).await.unwrap();
+    assert_eq!(
+        projection
+            .session
+            .messages
+            .iter()
+            .filter(|m| m.role == Role::Assistant)
+            .count(),
+        0,
+        "title usage never creates a transcript message"
+    );
+    let title = projection.session.usage.by_purpose[&hya_proto::UsagePurpose::Title];
+    assert_eq!((title.prompt(), title.output, title.rounds), (26, 8, 1));
+}
+
+#[tokio::test]
+async fn compaction_usage_is_attributed_with_compaction_purpose() {
+    let workdir = support::TestDir::new("fixed-compaction-usage");
+    let engine = engine_with(
+        catalog(&[AgentFixture::main("build")]),
+        Arc::new(UsageReportingProvider),
+        true,
+    )
+    .await;
+    engine.runtime_registry().publish_agent_model_preferences(
+        [
+            (
+                "compaction".to_string(),
+                ModelRef::new("remembered/compaction"),
+            ),
+            ("summary".to_string(), ModelRef::new("remembered/summary")),
+        ]
+        .into_iter()
+        .collect(),
+    );
+    let session = engine
+        .create(CreateSession {
+            parent: None,
+            agent: AgentName::new("build"),
+            model: ModelRef::new("session-model"),
+            workdir: workdir.path().to_string_lossy().into_owned(),
+        })
+        .await
+        .unwrap();
+    for i in 0..4 {
+        engine
+            .admit_user_prompt(session, format!("earlier detail {i} {}", "x".repeat(40)))
+            .await
+            .unwrap();
+    }
+
+    // In-turn compaction ladder (local summarizer), then the turn's own round.
+    let finish = engine
+        .run_turn(
+            session,
+            &base_agent(workdir.path()),
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(finish, FinishReason::Stop);
+    // Explicit `/compact` summary.
+    engine.summarize_session(session).await.unwrap();
+
+    let records = side_call_records(&engine, session).await;
+    let compaction: Vec<_> = records
+        .iter()
+        .filter(|record| record.3 == hya_proto::UsagePurpose::Compaction)
+        .collect();
+    // The ladder may walk more than one summarizer rung while the tiny
+    // threshold stays exceeded; each call is billed and recorded.
+    assert!(compaction.len() >= 2, "{records:?}");
+    assert!(compaction.iter().all(|r| r.0.is_none() && r.1.is_none()));
+    let (summary, ladder) = compaction.split_last().unwrap();
+    assert!(
+        ladder
+            .iter()
+            .all(|r| r.2.as_str() == "remembered/compaction")
+    );
+    assert_eq!(summary.2.as_str(), "remembered/summary");
+    let turn: Vec<_> = records
+        .iter()
+        .filter(|record| record.3 == hya_proto::UsagePurpose::Turn)
+        .collect();
+    assert_eq!(turn.len(), 1);
+    assert_eq!(turn[0].2.as_str(), "session-model");
+
+    let usage = engine.read_projection(session).await.unwrap().session.usage;
+    assert_eq!(
+        usage.by_purpose[&hya_proto::UsagePurpose::Compaction].rounds,
+        compaction.len() as u64
+    );
+    assert_eq!(usage.by_model.len(), 3);
+}
