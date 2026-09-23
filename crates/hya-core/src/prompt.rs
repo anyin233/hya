@@ -147,15 +147,15 @@ pub fn render_environment_and_context(
 /// The shortest correct mental model of the subagent system (ADR-0015/0016).
 ///
 /// Written from the observed failure modes of a real multi-agent run: the main
-/// agent tried to `report`, read `#channel` ids as files, and killed already
-/// archived agents. Every line here exists to prevent one of those.
+/// agent tried to `report`, read `#channel` ids as files, and tried to stop
+/// already archived agents. Every line here exists to prevent one of those.
 const TEAM_QUICK_REFERENCE: &str = "## Team quick reference\n\
 - `task` is non-blocking: it returns the child's handle immediately. Results arrive later as mail — watch for `[NEW MAIL]` notices appended to tool results.\n\
 - New mail arrives automatically appended to tool results (`[NEW MAIL]`) — do NOT poll `list_channel` or sleep waiting for mail; children's live status is in `list_channel`'s team section (busy + last-heartbeat age).\n\
 - `report` is ONLY for subagents to end their own task. As the main agent NEVER call `report` — deliver your final answer as normal text.\n\
 - Read mail history with `read channel://<id>` (latest) or `channel://<id>?last=N`; `list_channel` shows channels + unread counts. A `#id` is never a file path.\n\
 - `send` covers all mail: `#channel` posts on that channel (a group channel broadcasts to your unit — leader-only); a bare handle DMs that vertical peer (`^parent` DMs your parent through your registration DM channel; an archived child revives with its saved state). Omit the channel to use your default: the unit you lead, else your parent.\n\
-- `kill` only works on LIVE agents. Archived agents are gone from the roster — check `list_channel`/`search_agent` first; to reach one again, `send` its handle.";
+- `archive` stops a LIVE subagent you no longer need (by handle or session id) and archives it. Archiving is not deletion: an archived agent keeps its handle and session, and `send` to its handle wakes it again. Already-archived agents are found with `search_agent`.";
 
 /// Compose agent base + Environment + discovered project context files.
 #[must_use]

@@ -226,6 +226,26 @@ impl TurnGate {
         }
     }
 
+    /// Wait until `session` holds no turn, up to `deadline`. `true` when its
+    /// turn (if any) ended in time.
+    pub(crate) async fn wait_released(
+        &self,
+        session: SessionId,
+        deadline: tokio::time::Instant,
+    ) -> bool {
+        loop {
+            let released = self.released.notified();
+            tokio::pin!(released);
+            released.as_mut().enable();
+            if !self.state().active.contains_key(&session) {
+                return true;
+            }
+            if tokio::time::timeout_at(deadline, released).await.is_err() {
+                return !self.state().active.contains_key(&session);
+            }
+        }
+    }
+
     /// Bind the turn's effective cancel token: a child of the caller's token
     /// that the engine can also cancel. A cancel that raced ahead of the
     /// binding is carried over.

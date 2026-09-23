@@ -100,7 +100,8 @@ When the harness rather than the model ended an assistant message,
 `FINISH_CAUSE_USER_CANCEL` (turn cancel), `FINISH_CAUSE_SHUTDOWN` (graceful
 server/run stop), `FINISH_CAUSE_LEADER_FAILED`, `FINISH_CAUSE_INTERRUPTED`
 (closed by crash recovery on the next start), `FINISH_CAUSE_PROVIDER_ERROR`,
-or `FINISH_CAUSE_OTHER`; it is omitted (unspecified) otherwise. Every
+`FINISH_CAUSE_ARCHIVED` (the member's parent archived it mid-turn), or
+`FINISH_CAUSE_OTHER`; it is omitted (unspecified) otherwise. Every
 `messageStarted` for an assistant message is followed by exactly one
 `messageFinished` — also across a server stop or crash.
 

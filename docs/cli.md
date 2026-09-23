@@ -439,8 +439,9 @@ When the lead's turn ends, `exec` drains every other in-flight turn — team
 members, subagents, and a quiescence-synthesis turn that may have started on
 the lead — before it flushes the trajectory, so the log (and `--json` stdout)
 ends on terminal events: each open assistant message gets `message_finished
-{ finish: "cancelled", cause }`, open tool parts get a `tool_error`, members go
-terminal. The cause is `shutdown`, or `leader_failed` when the lead's turn
+{ finish: "cancelled", cause }`, open tool parts get a `tool_error`, and
+members are archived (`reason: shutdown`) so a later run on the same `--db`
+can wake them by mailing their handle; the lead is never archived. The cause is `shutdown`, or `leader_failed` when the lead's turn
 failed (then the exit status is 1).
 
 | Signal during the run | What happens | `cause` | Exit status |

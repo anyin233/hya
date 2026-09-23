@@ -111,7 +111,7 @@ pub struct ToolCtx {
     pub operation: ToolOperation,
     /// Team mailbox plane (disconnected outside a running team).
     pub mailbox: MailboxPlane,
-    /// Subagent lifecycle plane for `report`/`kill` (ADR-0015).
+    /// Subagent lifecycle plane for `report`/`archive`/`wait` (ADR-0015).
     pub lifecycle: crate::lifecycle::LifecyclePlane,
     /// Active session id when the tool runs inside a session.
     pub session: Option<SessionId>,

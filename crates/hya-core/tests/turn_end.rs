@@ -20,8 +20,8 @@ use hya_core::{
     SubagentLimits,
 };
 use hya_proto::{
-    AgentName, Envelope, Event, FinishCause, FinishReason, MessageId, ModelRef, PartId,
-    PartProjection, Role, RosterStatus, SessionId, ToolCallId, ToolName, ToolPartState,
+    AgentName, ArchiveReason, Envelope, Event, FinishCause, FinishReason, MessageId, ModelRef,
+    PartId, PartProjection, Role, RosterStatus, SessionId, ToolCallId, ToolName, ToolPartState,
 };
 use hya_provider::{
     Capabilities, CompletionRequest, EventStream, FakeProvider, FakeStep, Provider, ProviderError,
@@ -407,14 +407,24 @@ async fn drain_closes_every_session_turn_with_a_cause() {
         assert_eq!(open_tool_parts(&engine, session).await, 0);
         assert!(!engine.turn_active(session));
     }
+    // A drain archives every member (reason `shutdown`) so a later run on
+    // the same database can wake it with mail; the lead is never archived.
     for leaf in ["worker-a", "worker-b"] {
         assert_eq!(
             roster_status(&engine, root, leaf).await,
-            Some(RosterStatus::Failed),
-            "{leaf} is terminal after the drain"
+            None,
+            "{leaf} left the live roster"
         );
     }
-    assert!(archived(&engine, root).await.is_empty());
+    let team = engine.read_projection(root).await.unwrap().team;
+    for leaf in ["worker-a", "worker-b"] {
+        let entry = team
+            .archived
+            .get(&format!("main/{leaf}"))
+            .unwrap_or_else(|| panic!("{leaf} must be archived: {:?}", team.archived));
+        assert_eq!(entry.reason, ArchiveReason::Shutdown);
+    }
+    assert_eq!(archived(&engine, root).await.len(), 2);
     assert!(
         roster_status(&engine, root, "main").await.is_some(),
         "the lead stays on the roster"
@@ -631,5 +641,68 @@ async fn a_failed_lead_wake_does_not_archive_main() {
         provider.streams_for(root),
         1,
         "no retry wake of the dead lead"
+    );
+}
+
+/// `archive` on a member that is mid-turn cancels that turn — its message
+/// closes with `finish: cancelled, cause: archived`, open tool parts error —
+/// and then archives it (reason `archived_by_parent`). The lead's own turn is
+/// untouched.
+#[tokio::test]
+async fn archive_cancels_a_busy_member_turn_with_cause_archived() {
+    let (engine, agent, provider) = engine_with_script().await;
+    let root = make_session(&engine, None, "build").await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    register_main(&supervisor, &engine, &agent, root).await;
+    let worker = make_session(&engine, Some(root), "general").await;
+    provider.script(worker, Script::Hang);
+    supervisor
+        .register_existing_resident(
+            root,
+            worker,
+            "worker".to_string(),
+            agent.clone(),
+            Some("work".to_string()),
+        )
+        .await
+        .unwrap();
+    assert!(
+        eventually(|| async {
+            engine.turn_active(worker) && open_tool_parts(&engine, worker).await == 1
+        })
+        .await,
+        "the member is mid-turn with an open tool part"
+    );
+
+    let receipt = supervisor
+        .archive_member(root, "worker", "no longer needed")
+        .await
+        .unwrap();
+    assert_eq!(receipt.handle, "main/worker");
+    assert_eq!(receipt.session, worker);
+    assert!(receipt.cancelled_turn, "{receipt:?}");
+
+    assert!(!engine.turn_active(worker));
+    let finishes = assistant_finishes(&engine.replay(worker).await.unwrap(), worker);
+    assert_eq!(
+        finishes[0].1,
+        vec![(FinishReason::Cancelled, Some(FinishCause::Archived))],
+        "the member's turn closes once with cause archived"
+    );
+    assert_eq!(open_tool_parts(&engine, worker).await, 0);
+    let team = engine.read_projection(root).await.unwrap().team;
+    assert!(!team.roster.contains_key("main/worker"));
+    assert_eq!(
+        team.archived.get("main/worker").map(|entry| entry.reason),
+        Some(ArchiveReason::ArchivedByParent)
+    );
+    assert!(
+        !engine
+            .store()
+            .active_actor_ids()
+            .await
+            .unwrap()
+            .contains(&worker),
+        "the member's actor claim is released"
     );
 }

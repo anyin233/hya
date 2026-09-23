@@ -91,10 +91,10 @@ pub fn advertise_tool(name: &str) -> bool {
 }
 
 /// The orchestration plane (ADR-0015): spawn, discovery, workflow control,
-/// archive search, and force-kill. Unadvertised for sessions at the hardcoded
+/// archive search, and `archive`. Unadvertised for sessions at the hardcoded
 /// depth cap — the bottom layer communicates, it does not orchestrate.
 pub const ORCHESTRATION_TOOLS: &[&str] =
-    &["task", "list_agents", "workflow", "search_agent", "kill"];
+    &["task", "list_agents", "workflow", "search_agent", "archive"];
 
 /// Depth-aware advertisement, two rules (ADR-0015 follow-up):
 /// - depth 0 (the main agent) never sees `report`: reporting ends a
@@ -226,7 +226,7 @@ mod tests {
     fn orchestration_tools_disappear_at_the_depth_cap() {
         // Above the cap everything normal is advertised.
         assert!(advertise_tool_at_depth("task", 1));
-        assert!(advertise_tool_at_depth("kill", 0));
+        assert!(advertise_tool_at_depth("archive", 0));
         // At the hardcoded cap (ADR-0015) the orchestration plane vanishes…
         for name in ORCHESTRATION_TOOLS {
             assert!(

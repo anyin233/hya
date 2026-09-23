@@ -5984,6 +5984,7 @@ impl serde::Serialize for FinishCause {
             Self::Interrupted => "FINISH_CAUSE_INTERRUPTED",
             Self::ProviderError => "FINISH_CAUSE_PROVIDER_ERROR",
             Self::Other => "FINISH_CAUSE_OTHER",
+            Self::Archived => "FINISH_CAUSE_ARCHIVED",
         };
         serializer.serialize_str(variant)
     }
@@ -6002,6 +6003,7 @@ impl<'de> serde::Deserialize<'de> for FinishCause {
             "FINISH_CAUSE_INTERRUPTED",
             "FINISH_CAUSE_PROVIDER_ERROR",
             "FINISH_CAUSE_OTHER",
+            "FINISH_CAUSE_ARCHIVED",
         ];
 
         struct GeneratedVisitor;
@@ -6049,6 +6051,7 @@ impl<'de> serde::Deserialize<'de> for FinishCause {
                     "FINISH_CAUSE_INTERRUPTED" => Ok(FinishCause::Interrupted),
                     "FINISH_CAUSE_PROVIDER_ERROR" => Ok(FinishCause::ProviderError),
                     "FINISH_CAUSE_OTHER" => Ok(FinishCause::Other),
+                    "FINISH_CAUSE_ARCHIVED" => Ok(FinishCause::Archived),
                     _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
                 }
             }

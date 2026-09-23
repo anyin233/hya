@@ -44,13 +44,21 @@ Termination signals other than a model-issued report:
 | --- | --- | --- |
 | Turn terminal error | engine | failure report + degraded handoff + archive |
 | Budget kill (per-team turn/message) | governor/supervisor | failure report + degraded handoff + archive |
-| Parent `kill(child)` | parent tool call | failure report + degraded handoff + archive |
-| Root teardown | engine (root turn end) | force-archive every live descendant |
+| Parent/ancestor `archive(target)` | tool call | turn cancelled (`cause: archived`) + degraded handoff + member row cancelled + archive (`archived_by_parent`); no report mail |
+| Graceful drain (end of a one-shot run, SIGINT/SIGTERM, `serve` stop) | `ResidentSupervisor::drain` | turns drained, then degraded handoff + member row cancelled + archive (`shutdown`) |
+| Root teardown | engine (root session delete) | force-archive every live descendant |
 | Handoff model call fails | engine | deterministic degraded handoff (projection-derived), marked `degraded`; archive proceeds |
 
 An idle agent without a report is **never** auto-archived: it may be awaiting
 a parent answer. A stuck child surfaces through the parent's report gate,
-which rejects reporting while any direct child is live.
+which rejects reporting while any direct child is live; the parent then
+`archive`s it.
+
+Every archived agent stays readable (session log, channel history,
+handoff) and is **wakeable**: mail from its parent to its handle or to their
+DM channel revives it (§4) under the same handle and session. A drain archives
+members instead of failing them, so a later run on the same database can wake
+them.
 
 Derived invariant (used by the channel plane): **while I am live, my parent is
 live** — a parent cannot archive before all its children archive. Upward mail
@@ -270,7 +278,7 @@ recipient is archived routes to the revive path before wake.
 
 | Plane | Tools | Depth 0/1 (main, L1) | Depth 2 (L2) |
 | --- | --- | --- | --- |
-| Orchestration | `task`, `list_agents`, `workflow`, `search_agent`, `kill` | advertised | **not advertised** |
+| Orchestration | `task`, `list_agents`, `workflow`, `search_agent`, `archive` | advertised | **not advertised** |
 | Communication | `send`, `list_channel`, `report` | advertised | advertised (group-default send errors: leads nobody) |
 | Coding/etc. | read/write/edit/bash/… | advertised | advertised |
 
@@ -283,15 +291,22 @@ Enforcement is two-layer, engine-owned:
 
 Deleted tools: `roster`, `channels`, `join`, `leave` (folded into
 `list_channel`). New tools: `dm`, `broadcast`, `list_channel`, `report`,
-`search_agent`, `kill`.
+`search_agent`, `archive` (was `kill` before 0.41.0).
 
 `list_channel` output: channel id, kind, can-speak, unread count, and for DM
 channels the peer identity; only channels the caller belongs to; archived
 peers' DM channels are excluded (archive discovery is `search_agent`).
 
-`kill(child)`: parent-side force-archive — engine-synthesized failure report
-to the killer, degraded handoff, archive transaction. This is the parent's
-answer to a child that blocks its report gate.
+`archive(target, reason?)` (0.41.0; replaces `kill`): stop and archive a live
+descendant. The target is a handle, a caller-relative leaf, or a session id;
+its live descendants archive first (deepest first). An in-flight turn is
+cancelled with `cause: archived` via `SessionEngine::stop_turn` (waits up to
+`DRAIN_DEADLINE`, then closes a straggler's message), the slot owes no more
+turns, and `archive_stopped_agent` commits degraded handoff → member row
+`cancelled` → claim release → `AgentArchived { archived_by_parent }`. No
+report mail is sent (the archiver knows). The lead is never archivable; an
+unknown target lists the caller's live subagents. This is the parent's answer
+to a child that blocks its report gate or is no longer needed.
 
 `task` schema: `resident` and `background` fields are removed; `members[]`
 fan-out remains; the result carries, per member, handle + session + DM
@@ -338,7 +353,7 @@ updated, not relaxed).
 | new | `ChannelCreated { session, channel, kind, members }` | `kind: Group\|Dm`; minted ids |
 | new | `SubagentReported { session, root, child, handle, outcome, report }` | terminal report; workflow consumes this (§10) |
 | new | `HandoffCommitted { session, handle, generation, doc, degraded }` | on the child session log |
-| new | `AgentArchived { session, root, handle, child, reason }` | sole archive marker; projection removes roster row |
+| new | `AgentArchived { session, root, handle, child, reason }` | sole archive marker; projection removes roster row. `reason`: `reported`, `root_teardown`, `archived_by_parent` (`archive` tool), `shutdown` (graceful drain), legacy `killed` |
 | new | `AgentRestarted { session, root, handle, child, epoch }` | revive marker; distinguishes from fresh spawn |
 | changed | `AgentRegistered` | `mode` minted as Resident only; `SubagentMode::Transient` deleted |
 | changed | `MailSent` | `MailEndpoint::Channel` only (`Handle` variant deleted) |

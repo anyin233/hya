@@ -923,10 +923,16 @@ pub enum ReportOutcome {
 pub enum ArchiveReason {
     /// Terminal report accepted (model-issued or engine-synthesized).
     Reported,
-    /// Parent force-kill or per-team budget kill.
+    /// Legacy (before 0.41.0): parent `kill` tool. Kept so old logs decode.
     Killed,
     /// Root-turn teardown force-archive.
     RootTeardown,
+    /// The parent (or an ancestor) archived the member with the `archive`
+    /// tool; any in-flight turn was cancelled first.
+    ArchivedByParent,
+    /// A graceful stop (end of a one-shot run, SIGINT/SIGTERM, `serve`
+    /// shutdown) archived the member so a later run can wake it with mail.
+    Shutdown,
 }
 
 /// Stable, bounded classification for one Workflow route outcome.
@@ -1520,6 +1526,24 @@ mod tests {
                 root,
             ),
             (
+                Event::AgentArchived {
+                    session: root,
+                    handle: "main/lead-1".to_string(),
+                    child,
+                    reason: ArchiveReason::ArchivedByParent,
+                },
+                root,
+            ),
+            (
+                Event::AgentArchived {
+                    session: root,
+                    handle: "main/lead-1".to_string(),
+                    child,
+                    reason: ArchiveReason::Shutdown,
+                },
+                root,
+            ),
+            (
                 Event::AgentRestarted {
                     session: root,
                     handle: "main/lead-1".to_string(),
@@ -1632,6 +1656,7 @@ mod tests {
             FinishCause::LeaderFailed,
             FinishCause::Interrupted,
             FinishCause::ProviderError,
+            FinishCause::Archived,
         ] {
             let finished = Event::MessageFinished {
                 session,

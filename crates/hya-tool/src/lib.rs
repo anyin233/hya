@@ -31,10 +31,11 @@ mod formatter_definition;
 pub mod handle;
 /// Human interaction channel for structured questions and free-text asks.
 pub mod interaction;
-/// Team mailbox requests and the mailbox plane used by send/roster/channel tools.
+/// Subagent lifecycle requests (`report`, `archive`, `wait`) to the supervisor.
 pub mod lifecycle;
 mod lsp_path;
 mod lsp_plane;
+/// Team mailbox requests and the mailbox plane used by send/channel tools.
 pub mod mailbox;
 /// Namespaced tool names (`namespace__local`) and namespaced registration.
 pub mod namespace;
@@ -71,7 +72,7 @@ pub use interaction::{
     InteractionError, InteractionPlane, QuestionAnswer, QuestionInfo, QuestionKind, QuestionOption,
     QuestionPrompt, QuestionReply, QuestionRequest,
 };
-pub use lifecycle::{LifecyclePlane, LifecycleRequest};
+pub use lifecycle::{ArchiveReceipt, LifecyclePlane, LifecycleRequest};
 pub use lsp_plane::{LspError, LspOperation, LspPlane, LspProvider, LspRequest};
 pub use mailbox::{
     ArchivedAgentRow, ChannelInfo, ChannelPolicySnapshot, ChannelRow, MailReceipt, MailboxError,

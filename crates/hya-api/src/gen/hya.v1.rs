@@ -3974,6 +3974,8 @@ pub enum FinishCause {
     ProviderError = 5,
     /// A cause this server build does not name.
     Other = 6,
+    /// The member's parent archived it (`archive` tool) while it was mid-turn.
+    Archived = 7,
 }
 impl FinishCause {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -3989,6 +3991,7 @@ impl FinishCause {
             Self::Interrupted => "FINISH_CAUSE_INTERRUPTED",
             Self::ProviderError => "FINISH_CAUSE_PROVIDER_ERROR",
             Self::Other => "FINISH_CAUSE_OTHER",
+            Self::Archived => "FINISH_CAUSE_ARCHIVED",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -4001,6 +4004,7 @@ impl FinishCause {
             "FINISH_CAUSE_INTERRUPTED" => Some(Self::Interrupted),
             "FINISH_CAUSE_PROVIDER_ERROR" => Some(Self::ProviderError),
             "FINISH_CAUSE_OTHER" => Some(Self::Other),
+            "FINISH_CAUSE_ARCHIVED" => Some(Self::Archived),
             _ => None,
         }
     }

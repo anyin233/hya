@@ -57,6 +57,9 @@ pub enum FinishCause {
     Interrupted,
     /// The model provider failed the turn.
     ProviderError,
+    /// The member's parent archived it (`archive` tool) while it was
+    /// mid-turn.
+    Archived,
     /// A cause this build does not know.
     #[serde(other)]
     Other,

@@ -1,8 +1,9 @@
-//! Subagent lifecycle plane (ADR-0015): the `report` and `kill` tools ride a
-//! narrow request channel to the resident supervisor, mirroring the mailbox
+//! Subagent lifecycle plane (ADR-0015): the `report` and `archive` tools ride
+//! a narrow request channel to the resident supervisor, mirroring the mailbox
 //! plane's dependency inversion (`hya-tool` never sees `CoreError`).
 
 use hya_proto::{ReportOutcome, SessionId};
+use serde::Serialize;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::mailbox::ChannelPolicySnapshot;
@@ -24,17 +25,30 @@ pub enum LifecycleRequest {
         /// Gate rejection text or acceptance.
         reply: oneshot::Sender<Result<(), String>>,
     },
-    /// Force-kill one direct child by handle.
-    Kill {
-        /// Killing (parent) session.
+    /// Stop and archive one of the caller's subagents (the `archive` tool).
+    Archive {
+        /// Archiving (ancestor) session.
         session: SessionId,
-        /// Child handle.
-        handle: String,
-        /// Bounded reason, surfaced to the killer as the failure report.
+        /// The subagent: canonical handle, leaf, or session id.
+        target: String,
+        /// Short reason recorded with the archive.
         reason: String,
-        /// Rejection text or confirmation.
-        reply: oneshot::Sender<Result<(), String>>,
+        /// Rejection text or what was archived.
+        reply: oneshot::Sender<Result<ArchiveReceipt, String>>,
     },
+}
+
+/// What one `archive` call stopped and archived.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ArchiveReceipt {
+    /// Canonical handle of the archived subagent.
+    pub handle: String,
+    /// Its session id (unchanged when it is woken again).
+    pub session: SessionId,
+    /// Whether an in-flight turn was cancelled (`cause: archived`).
+    pub cancelled_turn: bool,
+    /// Live descendants archived first (deepest first), if any.
+    pub descendants: Vec<String>,
 }
 
 /// Session-scoped facade tools use to request lifecycle transitions.
@@ -121,17 +135,22 @@ impl LifecyclePlane {
         flatten(reply_rx).await
     }
 
-    /// Force-kill a direct child by handle.
+    /// Stop and archive one of the caller's subagents.
     ///
     /// # Errors
-    /// Rejections surface as [`ToolError::Input`].
-    pub async fn kill(&self, handle: String, reason: String) -> Result<(), ToolError> {
+    /// Rejections (unknown target, already archived, the team lead, not a
+    /// descendant of the caller) surface as [`ToolError::Input`].
+    pub async fn archive(
+        &self,
+        target: String,
+        reason: String,
+    ) -> Result<ArchiveReceipt, ToolError> {
         let session = self.session()?;
         let (reply_tx, reply_rx) = oneshot::channel();
         self.tx()?
-            .send(LifecycleRequest::Kill {
+            .send(LifecycleRequest::Archive {
                 session,
-                handle,
+                target,
                 reason,
                 reply: reply_tx,
             })
@@ -140,9 +159,9 @@ impl LifecyclePlane {
     }
 }
 
-async fn flatten(rx: oneshot::Receiver<Result<(), String>>) -> Result<(), ToolError> {
+async fn flatten<T>(rx: oneshot::Receiver<Result<T, String>>) -> Result<T, ToolError> {
     match rx.await {
-        Ok(Ok(())) => Ok(()),
+        Ok(Ok(value)) => Ok(value),
         Ok(Err(message)) => Err(ToolError::Input(message)),
         Err(_) => Err(ToolError::Other("lifecycle service dropped".to_string())),
     }
@@ -204,32 +223,42 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn kill_requires_a_session_and_handle() {
+    async fn archive_round_trips_the_receipt() {
         let (plane, mut rx) = LifecyclePlane::new();
         let plane = plane.for_session(SessionId::new());
+        let child = SessionId::new();
         let task = tokio::spawn(async move {
             plane
-                .kill("main/x-1".to_string(), "stuck".to_string())
+                .archive("main/x-1".to_string(), "stuck".to_string())
                 .await
         });
         match rx.recv().await.expect("request") {
-            LifecycleRequest::Kill {
-                handle,
+            LifecycleRequest::Archive {
+                target,
                 reason,
                 reply,
                 ..
             } => {
-                assert_eq!(handle, "main/x-1");
+                assert_eq!(target, "main/x-1");
                 assert_eq!(reason, "stuck");
-                reply.send(Ok(())).expect("reply");
+                reply
+                    .send(Ok(ArchiveReceipt {
+                        handle: target,
+                        session: child,
+                        cancelled_turn: true,
+                        descendants: Vec::new(),
+                    }))
+                    .expect("reply");
             }
-            other => panic!("expected kill, got {other:?}"),
+            other => panic!("expected archive, got {other:?}"),
         }
-        task.await.unwrap().expect("killed");
+        let receipt = task.await.unwrap().expect("archived");
+        assert_eq!(receipt.session, child);
+        assert!(receipt.cancelled_turn);
 
         let unscoped = LifecyclePlane::new().0;
         assert!(matches!(
-            unscoped.kill("x".to_string(), String::new()).await,
+            unscoped.archive("x".to_string(), String::new()).await,
             Err(ToolError::Other(_))
         ));
     }

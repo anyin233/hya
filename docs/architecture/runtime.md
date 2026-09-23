@@ -603,7 +603,7 @@ against the folded log:
 | Outcome | Closing events | `cause` |
 | --- | --- | --- |
 | Model finished (`stop`, `length`, …) | the provider's `MessageFinished` | none |
-| Cancelled (caller token, `cancel_turn`, drain, sidecar loss, activation-hook health loss) | `ToolError { code: "CANCELLED" }` per open tool part, `MemberFinished { cancelled }` per member row spawned by those tool calls, then `MessageFinished { cancelled }` | the engine-recorded cause (`user_cancel`, `shutdown`, `leader_failed`), else none |
+| Cancelled (caller token, `cancel_turn`, drain, sidecar loss, activation-hook health loss) | `ToolError { code: "CANCELLED" }` per open tool part, `MemberFinished { cancelled }` per member row spawned by those tool calls, then `MessageFinished { cancelled }` | the engine-recorded cause (`user_cancel`, `shutdown`, `leader_failed`, `archived`), else none |
 | Provider/runtime error after `MessageStarted` | same, with `code: "TURN_FAILED"`, then `MessageFinished { error }` | `provider_error` for `CoreError::Provider`, else none |
 
 Each step is checked against the projection, so a part or message that already
@@ -627,11 +627,15 @@ shutdown):
 3. A turn still running at the deadline is a straggler: its open messages are
    closed by the drain (`SessionStore::close_open_turns`, same events, same
    cause).
-4. `ResidentSupervisor::drain` then kills every team: claimed resident members
-   are finalized (roster `failed` with a `stopped: …` reason, claim released),
-   their non-terminal member rows on the parent log get
-   `MemberFinished { cancelled }`, and each lead is parked `idle` — the lead is
-   never terminal and its session stays resumable.
+4. `ResidentSupervisor::drain` then stops every team and **archives** every
+   member (deepest first): a degraded handoff, `MemberFinished { cancelled }`
+   (summary `stopped: …`) on the parent log, claim released, then
+   `AgentArchived { reason: shutdown }`. Archived members stay readable and a
+   later run on the same database wakes one by mailing its handle (same handle
+   and session, resumed from the handoff). Each lead is parked `idle` — the
+   lead is never archived and its session stays resumable. (A member whose
+   archive cannot commit falls back to roster `failed` with a `stopped: …`
+   reason and a released claim, as before 0.41.0.)
 
 Causes: SIGINT → `user_cancel`; SIGTERM, normal end, `serve` shutdown →
 `shutdown`; end of a one-shot run whose lead turn failed → `leader_failed`.
@@ -643,6 +647,8 @@ it left open.
 pub const DRAIN_DEADLINE: Duration; // 5 s
 impl SessionEngine {
     pub fn cancel_turn(&self, session: SessionId, cause: FinishCause) -> bool;
+    /// cancel_turn + wait up to `deadline`, then close a straggler's message
+    pub async fn stop_turn(&self, session: SessionId, cause: FinishCause, deadline: Duration) -> bool;
     pub fn begin_drain(&self, cause: FinishCause) -> Vec<SessionId>;
     pub async fn drain_turns(&self, cause: FinishCause, deadline: Duration) -> TurnDrainReport;
     pub fn draining(&self) -> Option<FinishCause>;
