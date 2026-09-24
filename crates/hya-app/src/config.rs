@@ -303,6 +303,11 @@ struct DetailedModelConfig {
     id: String,
     #[serde(default)]
     reasoning: Option<ModelReasoningConfig>,
+    /// `{ context?, output? }` token limits. Kept as a raw value so
+    /// `resolve_model_limit` can name the provider, model, and field in errors
+    /// instead of failing the untagged `ModelConfig` match.
+    #[serde(default)]
+    limit: Option<Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -350,6 +355,52 @@ struct ParsedModel {
     id: String,
     reasoning_variants: Vec<String>,
     reasoning_default: Option<ReasoningEffort>,
+    /// Configured token limits (`0` in a field means unspecified).
+    limit: Option<hya_provider::ModelLimitOverride>,
+}
+
+/// Validate one object-form model `limit` block.
+///
+/// Accepts a mapping with optional `context` and `output` positive `u32`
+/// integers; when both are set `output` may not exceed `context`. Unknown keys
+/// are rejected so a typo cannot silently drop a limit.
+fn resolve_model_limit(
+    provider_id: &str,
+    model_id: &str,
+    limit: &Value,
+) -> anyhow::Result<hya_provider::ModelLimitOverride> {
+    let Value::Mapping(fields) = limit else {
+        anyhow::bail!("provider {provider_id} model {model_id} limit must be a mapping");
+    };
+    let mut resolved = hya_provider::ModelLimitOverride::default();
+    for (key, value) in fields {
+        let key = key.as_str().unwrap_or_default();
+        let slot = match key {
+            "context" => &mut resolved.context,
+            "output" => &mut resolved.output,
+            _ => anyhow::bail!(
+                "provider {provider_id} model {model_id} has unknown limit key {key} (expected context or output)"
+            ),
+        };
+        *slot = value
+            .as_u64()
+            .and_then(|tokens| u32::try_from(tokens).ok())
+            .filter(|tokens| *tokens > 0)
+            .with_context(|| {
+                format!(
+                    "provider {provider_id} model {model_id} limit.{key} must be a positive integer no larger than {}",
+                    u32::MAX
+                )
+            })?;
+    }
+    if resolved.context > 0 && resolved.output > resolved.context {
+        anyhow::bail!(
+            "provider {provider_id} model {model_id} limit.output {} exceeds limit.context {}",
+            resolved.output,
+            resolved.context
+        );
+    }
+    Ok(resolved)
 }
 
 #[derive(Clone, Debug)]
@@ -1244,9 +1295,13 @@ fn resolve_providers(file: &FileConfig) -> anyhow::Result<Vec<ParsedProvider>> {
         let mut seen = BTreeSet::new();
         let mut models = Vec::new();
         for model in &provider.models {
-            let (raw_id, reasoning) = match model {
-                ModelConfig::Id(id) => (id.as_str(), None),
-                ModelConfig::Detailed(model) => (model.id.as_str(), model.reasoning.as_ref()),
+            let (raw_id, reasoning, limit) = match model {
+                ModelConfig::Id(id) => (id.as_str(), None, None),
+                ModelConfig::Detailed(model) => (
+                    model.id.as_str(),
+                    model.reasoning.as_ref(),
+                    model.limit.as_ref(),
+                ),
             };
             let model_id = raw_id.trim();
             if model_id.is_empty() || model_id.chars().any(char::is_control) {
@@ -1295,10 +1350,14 @@ fn resolve_providers(file: &FileConfig) -> anyhow::Result<Vec<ParsedProvider>> {
                     default.as_str()
                 );
             }
+            let limit = limit
+                .map(|limit| resolve_model_limit(id, model_id, limit))
+                .transpose()?;
             models.push(ParsedModel {
                 id: model_id.to_string(),
                 reasoning_default: resolve_default_reasoning(explicit_default, None, &variants),
                 reasoning_variants: variants,
+                limit,
             });
         }
         let api_key = provider
@@ -1736,6 +1795,12 @@ fn route_for_plan(
             .models
             .iter()
             .map(|model| (model.id.clone(), model.reasoning_default)),
+    )
+    .with_model_limits(
+        provider
+            .models
+            .iter()
+            .filter_map(|model| Some((model.id.clone(), model.limit.clone()?))),
     );
     if credential.use_codex_session {
         route = route.with_codex_session_auth(credential.account_id.clone());
@@ -3317,5 +3382,105 @@ plugins:
         assert_eq!(remote.timeout_ms, Some(4000));
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    const GLM_LIMIT_YAML: &str = "providers:\n  12th:\n    kind: anthropic\n    base_url: https://api.12th.day/v1\n    models:\n      - glm-5.3\n      - id: glm-5.3-flash\n        limit:\n          context: 1048576\n          output: 131072\n      - id: glm-5.3-ctx\n        limit:\n          context: 262144\n";
+
+    #[test]
+    fn object_models_parse_context_and_output_limits() {
+        let parsed = parse_providers(GLM_LIMIT_YAML).unwrap();
+        let models = &parsed[0].models;
+        assert_eq!(models[0].id, "glm-5.3");
+        assert_eq!(models[0].limit, None, "plain string entries carry no limit");
+        assert_eq!(
+            models[1].limit,
+            Some(hya_provider::ModelLimitOverride {
+                context: 1_048_576,
+                output: 131_072,
+            })
+        );
+        assert_eq!(
+            models[2].limit,
+            Some(hya_provider::ModelLimitOverride {
+                context: 262_144,
+                output: 0,
+            }),
+            "an omitted field stays unspecified"
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_model_limits() {
+        let limit_yaml = |limit: &str| {
+            format!(
+                "providers:\n  12th:\n    kind: anthropic\n    base_url: https://api.12th.day/v1\n    models:\n      - id: glm-5.3-flash\n        limit: {limit}\n"
+            )
+        };
+        for (limit, expected) in [
+            ("{ output: 0 }", "limit.output must be a positive integer"),
+            ("{ context: 0 }", "limit.context must be a positive integer"),
+            ("{ output: -5 }", "limit.output must be a positive integer"),
+            ("{ output: 1.5 }", "limit.output must be a positive integer"),
+            (
+                "{ output: lots }",
+                "limit.output must be a positive integer",
+            ),
+            (
+                "{ output: 4294967296 }",
+                "limit.output must be a positive integer",
+            ),
+            (
+                "{ context: 1000, output: 2000 }",
+                "limit.output 2000 exceeds limit.context 1000",
+            ),
+            ("{ outputs: 2000 }", "unknown limit key outputs"),
+            ("[1, 2]", "limit must be a mapping"),
+        ] {
+            let error = parse_providers(&limit_yaml(limit)).err().unwrap();
+            let message = format!("{error:#}");
+            assert!(
+                message.contains("provider 12th model glm-5.3-flash") && message.contains(expected),
+                "{limit}: got {message}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn configured_model_limits_reach_route_capabilities() {
+        let provider = parse_providers(GLM_LIMIT_YAML)
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
+        let credential = ProviderCredential {
+            token: Some("test".to_string()),
+            use_grok_session: false,
+            use_codex_session: false,
+            account_id: None,
+            use_oauth_refresh: false,
+        };
+        let plan = resolve_provider_plan(provider, credential).await.unwrap();
+        let caps = |model: &str| {
+            plan.models
+                .iter()
+                .find(|row| row.model_id == model)
+                .map(|row| row.capabilities.clone())
+                .unwrap()
+        };
+        assert_eq!(caps("glm-5.3-flash").max_output, 131_072);
+        assert_eq!(caps("glm-5.3-flash").max_context, 1_048_576);
+        assert_eq!(caps("glm-5.3").max_output, 0, "unlimited rows stay unknown");
+        assert_eq!(caps("glm-5.3").max_context, 200_000);
+        assert_eq!(caps("glm-5.3-ctx").max_context, 262_144);
+        assert_eq!(caps("glm-5.3-ctx").max_output, 0);
+        let route = plan.route.unwrap();
+        assert_eq!(
+            hya_provider::Provider::capabilities(
+                &route,
+                &hya_proto::ModelRef::new("12th/glm-5.3-flash")
+            )
+            .map(|caps| caps.max_output),
+            Some(131_072)
+        );
     }
 }

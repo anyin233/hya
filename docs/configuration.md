@@ -542,6 +542,67 @@ Surprise: Google does **not** attach a thinking budget for off/minimal/low/mediu
 Responses sends configured labels unchanged; Chat Completions omits `none` and
 collapses both `xhigh` and `max` to the label `xhigh`.
 
+### Model limits
+
+An object-form model entry may declare the model's token limits with an
+optional `limit` block. hya otherwise knows nothing about a configured model's
+real window: routes advertise a 200k context and no output limit, and Anthropic
+routes send `max_tokens: 4096` whenever the agent does not ask for a specific
+value — enough to truncate a long report with `finish: length`.
+
+```yaml
+providers:
+  12th:
+    kind: anthropic
+    base_url: https://api.12th.day/v1
+    api_key: "{env:TWELFTH_API_KEY}"
+    models:
+      - glm-5.3                     # plain string: no limits, 4096 fallback
+      - id: glm-5.3-flash
+        limit:
+          context: 1048576          # 1M context window
+          output: 131072            # gateway accepts max_tokens in [1, 131072]
+```
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `limit.context` | positive `u32` | Context window in tokens. Replaces the 200k route default for this model's catalog row and drives the compaction threshold. |
+| `limit.output` | positive `u32` | Max output tokens. Becomes the default and the ceiling for the request's max-tokens field on this model. |
+
+Both fields are optional; an omitted field stays unspecified. Validation fails
+the config load when a value is zero, negative, fractional, non-numeric, or
+larger than `4294967295`, when `output` exceeds `context` (both set), when
+`limit` is not a mapping, or when it contains any key other than `context` and
+`output`. Plain string entries remain valid and carry no limit. The names match
+the `limit` rows of `models.yml.cache`, so discovered models whose cache row
+has a non-zero `limit.output` follow the same rules.
+
+**Request max tokens.** The rule is the same for every provider kind:
+
+1. When the model's output limit is known (a configured `limit.output`, or a
+   non-zero cached `limit.output` for a discovered model), a request without an
+   explicit max-tokens value sends the limit, and an explicit value (compaction
+   summaries, titles, plugin or model policy) larger than the limit is clamped
+   to it. Anthropic sends it as `max_tokens`, OpenAI-compatible Chat as
+   `max_tokens`, Responses (`openai-response`, `openai-codex`, `grok-build`) as
+   `max_output_tokens`, and Google as `generationConfig.maxOutputTokens`.
+2. When no output limit is known, the request is unchanged: Anthropic falls back
+   to `max_tokens: 4096` (the field is required), and the other kinds omit the
+   field unless the request carries an explicit value.
+
+**Anthropic thinking.** A thinking budget from the reasoning effort (see the
+table above) still requires `max_tokens` above the budget. A value at or below
+the budget is raised to `budget + 4096`, but never past a known `limit.output`.
+When the limit cannot hold the budget, the budget shrinks to leave
+`min(4096, limit / 2)` answer tokens (for example `limit.output: 8192` with
+`high` sends `max_tokens: 8192` and `budget_tokens: 4096`); when that leaves
+less than Anthropic's 1024-token minimum, thinking is omitted.
+
+Some upstreams reject a request whose input plus `max_tokens` exceeds the
+context window. Set `limit.output` to what the endpoint accepts for a single
+request, not a marketing figure, and keep it well below `limit.context` for such
+providers.
+
 ### OAuth login (`openai-codex` and `grok-build`)
 
 Interactive OAuth is implemented entirely in Rust:

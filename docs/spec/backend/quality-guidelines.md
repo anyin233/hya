@@ -564,7 +564,11 @@ jobs:
 - Provider kinds: `openai-completion`, `openai-response`, and `grok-build`;
   `openai` and `openai-compatible` remain Chat Completions aliases.
 - Model entries accept a string ID or
-  `{ id, reasoning: { default?, variants? } }`.
+  `{ id, reasoning: { default?, variants? }, limit: { context?, output? } }`.
+- A known per-model `limit.output` (configured or cached) is the default and
+  ceiling for `CompletionRequest.max_output_tokens`, applied by `HttpProvider`
+  before `Protocol::encode_with_output_limit`; without one the request is
+  encoded unchanged (Anthropic's required `max_tokens` falls back to 4096).
 - Provider behavior stays behind `Protocol::encode(CompletionRequest)` and a
   protocol-specific `Decoder` selected by `HttpProvider` construction.
 
@@ -594,6 +598,8 @@ jobs:
 - Unknown provider kind -> configuration error.
 - Unknown reasoning effort -> configuration error.
 - Default effort absent from configured variants -> configuration error.
+- `limit` not a mapping, an unknown `limit` key, a zero/negative/non-integer or
+  over-`u32` value, or `output` above `context` -> configuration error.
 - Legacy string model or Chat alias -> preserve existing Chat behavior.
 - `response.failed` or top-level Responses `error` -> `ProviderError`.
 - Grok Build transport termination without a typed terminal event ->

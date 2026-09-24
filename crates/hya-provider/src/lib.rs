@@ -580,6 +580,20 @@ pub trait Provider: Send + Sync {
 pub trait Protocol: Send + Sync {
     /// Encode a normalized request into the upstream JSON body.
     fn encode(&self, req: &CompletionRequest) -> Result<serde_json::Value, ProviderError>;
+    /// Encode with the model's known max-output limit (`None` = unknown).
+    ///
+    /// The route has already defaulted and clamped `req.max_output_tokens` to
+    /// `output_limit`; protocols that derive a larger value from other fields
+    /// (Anthropic's thinking budget) must stay within the limit. The default
+    /// ignores the limit and calls [`Protocol::encode`].
+    fn encode_with_output_limit(
+        &self,
+        req: &CompletionRequest,
+        output_limit: Option<u32>,
+    ) -> Result<serde_json::Value, ProviderError> {
+        let _ = output_limit;
+        self.encode(req)
+    }
     /// Construct a decoder bound to this turn's ids and requested effort.
     fn decoder(
         &self,

@@ -17,6 +17,8 @@ use tokio::{
 };
 use tokio_stream::wrappers::ReceiverStream;
 
+#[cfg(test)]
+mod output_limit_tests;
 mod stream;
 
 use crate::anthropic::AnthropicMessagesProtocol;
@@ -205,7 +207,8 @@ pub struct HttpProvider {
     models: HashSet<String>,
     model_reasoning_variants: BTreeMap<String, Vec<String>>,
     model_reasoning_defaults: BTreeMap<String, ReasoningEffort>,
-    /// Optional per-model context/output overrides (from `models.yml.cache`).
+    /// Optional per-model context/output limits (configured `limit` blocks or
+    /// `models.yml.cache` rows).
     model_limits: BTreeMap<String, ModelLimitOverride>,
     caps: Capabilities,
     kind: ProviderKind,
@@ -232,7 +235,8 @@ fn request_header_value(value: &str) -> Result<HeaderValue, ProviderError> {
 pub struct ModelLimitOverride {
     /// Context window in tokens (`0` keeps the route default).
     pub context: u32,
-    /// Max output tokens (`0` means unspecified).
+    /// Max output tokens (`0` means unspecified). When set, it is the default
+    /// and ceiling for the request's `max_output_tokens` on this model.
     pub output: u32,
 }
 
@@ -417,7 +421,9 @@ impl HttpProvider {
         self
     }
 
-    /// Attach per-model context / max-output overrides (from durable cache).
+    /// Attach per-model context / max-output limits (configured `limit` blocks
+    /// or the durable models cache). A non-zero `output` becomes the default
+    /// and ceiling for that model's request `max_output_tokens`.
     #[must_use]
     pub fn with_model_limits(
         mut self,
@@ -716,6 +722,30 @@ impl HttpProvider {
         caps
     }
 
+    /// Rewrite the request to the bare upstream model id, apply the model's
+    /// known output limit, and encode its body.
+    ///
+    /// A known limit (`max_output > 0` from [`ModelLimitOverride`]) is the
+    /// default for an unset `max_output_tokens` and clamps an explicit one.
+    /// Without a known limit the request is encoded unchanged.
+    fn prepare_request(
+        &self,
+        mut req: CompletionRequest,
+    ) -> Result<(CompletionRequest, Value), ProviderError> {
+        let output_limit = self
+            .served_model_name(&req.model)
+            .map(|model| self.caps_for_model(model).max_output)
+            .filter(|limit| *limit > 0);
+        if let Some(model_id) = self.served_model_id(&req.model) {
+            req.model = ModelRef::new(model_id);
+        }
+        if let Some(limit) = output_limit {
+            req.max_output_tokens = Some(req.max_output_tokens.map_or(limit, |max| max.min(limit)));
+        }
+        let body = self.protocol.encode_with_output_limit(&req, output_limit)?;
+        Ok((req, body))
+    }
+
     /// Return the claimed bare model id without allocating.
     fn served_model_name<'a>(&'a self, model: &'a ModelRef) -> Option<&'a str> {
         let base = match model.as_str().rsplit_once('#') {
@@ -777,6 +807,16 @@ impl HttpProvider {
                 .copied()
                 .unwrap_or(ReasoningEffort::Off);
             append_identity_bytes(&mut identity, default.as_str().as_bytes())?;
+        }
+
+        // Known limits shape the encoded max-tokens field, so they are part of
+        // what the route serves.
+        append_identity_bytes(&mut identity, b"model-limits")?;
+        append_identity_count(&mut identity, self.model_limits.len())?;
+        for (model, limit) in &self.model_limits {
+            append_identity_bytes(&mut identity, model.as_bytes())?;
+            identity.extend_from_slice(&limit.context.to_be_bytes());
+            identity.extend_from_slice(&limit.output.to_be_bytes());
         }
 
         append_capabilities_identity(&mut identity, &self.caps)?;
@@ -979,14 +1019,11 @@ impl Provider for HttpProvider {
 
     async fn stream(
         &self,
-        mut req: CompletionRequest,
+        req: CompletionRequest,
         session: SessionId,
         message: MessageId,
     ) -> Result<EventStream, ProviderError> {
-        if let Some(model_id) = self.served_model_id(&req.model) {
-            req.model = ModelRef::new(model_id);
-        }
-        let body = self.protocol.encode(&req)?;
+        let (req, body) = self.prepare_request(req)?;
         let url = match &self.google_base {
             Some(base) => format!(
                 "{base}/v1beta/models/{}:streamGenerateContent?alt=sse",
