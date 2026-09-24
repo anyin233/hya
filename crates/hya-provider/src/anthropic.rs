@@ -12,8 +12,22 @@ pub use decoder::AnthropicDecoder;
 /// Anthropic Messages API request encoder + stream decoder factory.
 pub struct AnthropicMessagesProtocol;
 
+/// Anthropic's minimum accepted `thinking.budget_tokens`.
+const MIN_THINKING_BUDGET: u32 = 1024;
+/// `max_tokens` when neither the request nor the model declares one, and the
+/// answer headroom added above a thinking budget.
+const DEFAULT_MAX_TOKENS: u32 = 4096;
+
 impl Protocol for AnthropicMessagesProtocol {
     fn encode(&self, req: &CompletionRequest) -> Result<Value, ProviderError> {
+        self.encode_with_output_limit(req, None)
+    }
+
+    fn encode_with_output_limit(
+        &self,
+        req: &CompletionRequest,
+        output_limit: Option<u32>,
+    ) -> Result<Value, ProviderError> {
         let mut messages: Vec<Value> = Vec::new();
         for m in &req.messages {
             match m {
@@ -44,16 +58,14 @@ impl Protocol for AnthropicMessagesProtocol {
                 })
             })
             .collect();
-        let mut max_tokens = req.max_output_tokens.unwrap_or(4096);
         let mut body = json!({
             "model": req.model.as_str(),
             "messages": messages,
             "stream": true,
         });
-        if let Some(budget) = req.reasoning.and_then(|e| e.anthropic_budget()) {
-            if max_tokens <= budget {
-                max_tokens = budget + 4096;
-            }
+        let budget = req.reasoning.and_then(|e| e.anthropic_budget());
+        let (max_tokens, budget) = resolve_max_tokens(req.max_output_tokens, output_limit, budget);
+        if let Some(budget) = budget {
             body["thinking"] = json!({ "type": "enabled", "budget_tokens": budget });
         }
         body["max_tokens"] = json!(max_tokens);
@@ -74,6 +86,41 @@ impl Protocol for AnthropicMessagesProtocol {
     ) -> Box<dyn Decoder> {
         Box::new(AnthropicDecoder::new(session, message, reasoning))
     }
+}
+
+/// Resolve the required `max_tokens` and the thinking budget that fits it.
+///
+/// Without a known limit an unset request falls back to 4096, and a value at or
+/// below the budget is raised to `budget + 4096`. A known limit is the default
+/// for an unset request and a hard ceiling: when it cannot hold the budget the
+/// budget shrinks to leave `min(4096, limit / 2)` answer tokens, and thinking
+/// is dropped when that leaves less than Anthropic's 1024-token minimum.
+fn resolve_max_tokens(
+    requested: Option<u32>,
+    output_limit: Option<u32>,
+    budget: Option<u32>,
+) -> (u32, Option<u32>) {
+    let limit = output_limit.filter(|limit| *limit > 0);
+    let mut max_tokens = requested.or(limit).unwrap_or(DEFAULT_MAX_TOKENS);
+    let Some(mut budget) = budget else {
+        return (
+            limit.map_or(max_tokens, |limit| max_tokens.min(limit)),
+            None,
+        );
+    };
+    if max_tokens <= budget {
+        max_tokens = budget.saturating_add(DEFAULT_MAX_TOKENS);
+    }
+    if let Some(limit) = limit {
+        max_tokens = max_tokens.min(limit);
+        if budget >= max_tokens {
+            budget = max_tokens
+                .saturating_sub(DEFAULT_MAX_TOKENS)
+                .max(max_tokens / 2);
+        }
+    }
+    let budget = (budget >= MIN_THINKING_BUDGET).then_some(budget);
+    (max_tokens, budget)
 }
 
 /// Append a message, merging it into the previous entry when the role repeats.

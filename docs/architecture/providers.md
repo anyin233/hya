@@ -39,6 +39,12 @@ Minimum surface for a new implementor: `id`, `capabilities`, and `stream`.
 ```text
 trait Protocol {
     fn encode(&self, req: &CompletionRequest) -> Result<serde_json::Value, ProviderError>;
+    // Default: ignores the limit and calls `encode`.
+    fn encode_with_output_limit(
+        &self,
+        req: &CompletionRequest,
+        output_limit: Option<u32>,
+    ) -> Result<serde_json::Value, ProviderError>;
     fn decoder(&self, session: SessionId, message: MessageId) -> Box<dyn Decoder>;
 }
 
@@ -48,7 +54,11 @@ trait Decoder {
 }
 ```
 
-`encode` builds the HTTP JSON body. `decoder` returns a fresh stateful decoder.
+`encode` builds the HTTP JSON body. `HttpProvider` calls
+`encode_with_output_limit` with the model's known output limit (see
+[Per-model limits](#per-model-limits)); only Anthropic overrides it, to keep a
+thinking-derived `max_tokens` within the limit. `decoder` returns a fresh
+stateful decoder.
 Each `push`/`finish` returns a batch of canonical `Event`s (may be empty).
 
 ### Capabilities
@@ -77,10 +87,12 @@ Each `push`/`finish` returns a batch of canonical `Event`s (may be empty).
 - `max_context` = **200_000**
 - `max_output` = 0
 
-There is **no** per-model capability table. Every configured HTTP route reports
-the same caps for every model it serves. The context window surfaced by the v1
-catalog (`GET /v1/models` and the bootstrap snapshot) is therefore this fixed
-**200k** default, not the model's real limit.
+Per-model limits (`HttpProvider::with_model_limits`, fed by a configured
+`limit` block or a `models.yml.cache` row) replace `max_context` when the
+context is non-zero and set `max_output`; every other cap is the route default.
+Without a limit a model reports the fixed **200k** context and `max_output` 0.
+The v1 `ModelSummary` rows (`GET /v1/models`, bootstrap) do not carry either
+limit; they reach the engine (compaction threshold) and the request encoders.
 
 `DevProvider` claims the same set **minus** `reasoning_request` (left false via
 `Capabilities::default()`). It accepts any `ModelRef` because
@@ -245,6 +257,7 @@ Builder methods layered on top:
 | Method | Effect |
 | --- | --- |
 | `with_model_reasoning_variants` | Per-model reasoning effort vocabulary. |
+| `with_model_limits` | Per-model `ModelLimitOverride { context, output }`; see [Per-model limits](#per-model-limits). |
 | `with_codex_session_auth` | Upgrade auth to Codex session headers (no-op unless kind is `OpenAiCodex`). |
 | `with_grok_session_auth` | Upgrade auth to Grok session headers (no-op unless kind is `GrokBuild`). |
 | `with_bearer_resolver` | Resolve the bearer token on each stream (hot-reload OAuth). |
@@ -254,6 +267,24 @@ Builder methods layered on top:
 
 Session-auth upgrades are no-ops for other kinds so callers can chain
 unconditionally.
+
+### Per-model limits
+
+`ModelLimitOverride { context, output }` (`0` = unspecified) comes from a
+configured object-form model `limit` block
+([configuration](../configuration.md#model-limits)) or a discovered model's
+`models.yml.cache` row. Before encoding, `HttpProvider` resolves the served
+model's `max_output`; when it is non-zero:
+
+- an absent `CompletionRequest.max_output_tokens` becomes the limit;
+- an explicit value is clamped to `min(value, limit)`;
+- the protocol receives the limit through `encode_with_output_limit`.
+
+Every kind then encodes `max_output_tokens` in its own field (Chat
+`max_tokens`, Responses `max_output_tokens`, Google
+`generationConfig.maxOutputTokens`, Anthropic `max_tokens`). With no known
+limit the request is encoded unchanged, so non-Anthropic kinds omit the field
+unless the caller set one. The transport never branches on the protocol.
 
 ### Provider kinds and auth styles
 
@@ -495,13 +526,20 @@ for Anthropic Messages:
 The encoder always emits `{ model, messages, stream: true, max_tokens }` (plus
 optional `system`, `tools`, `thinking`).
 
-- When `CompletionRequest.max_output_tokens` is absent, **`max_tokens` defaults
-  to 4096**, which silently caps output length on Anthropic routes.
+- When the model has a known output limit, the route has already set
+  `CompletionRequest.max_output_tokens` to it (or clamped an explicit value);
+  see [Per-model limits](#per-model-limits).
+- When `max_output_tokens` is still absent (no known limit), **`max_tokens`
+  defaults to 4096**, which caps output length on Anthropic routes.
 - When a thinking budget is set from reasoning effort
   (`reasoning.anthropic_budget()`), the body includes
   `thinking: { type: "enabled", budget_tokens: <budget> }`, and `max_tokens` is
   raised to `budget + 4096` if the current value would not already exceed the
   budget (`max_tokens <= budget`).
+- A known limit caps that raise. If the capped `max_tokens` cannot exceed the
+  budget, the budget shrinks to `max(max_tokens - 4096, max_tokens / 2)`; if the
+  result is below Anthropic's 1024-token minimum, `thinking` is omitted. The
+  body therefore always satisfies `budget_tokens < max_tokens <= limit`.
 
 ### Media
 
@@ -634,6 +672,9 @@ For `HttpProvider` the identity bytes include
 - alias rules markers
 - sorted model set
 - per-model reasoning variants
+- per-model reasoning defaults
+- per-model limits (tag `model-limits`, count, then model id + context +
+  output per row, sorted by model id) — they shape the encoded max-tokens field
 - full `Capabilities` bits
 - auth **shape** (style tag + non-secret fields)
 - **bearer-resolver slot:** literal `bearer-resolver-slot`, then a presence byte
