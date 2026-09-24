@@ -292,7 +292,7 @@ Errors (`ToolError::Input`, actionable text):
 | not a descendant | ``` `H` is not one of your subagents; only its parent `P` or an ancestor can archive it``` |
 
 **`wait`** (permission `read_only`; advertised at every depth): block the
-calling turn until subagents finish their current work, bounded by a timeout.
+calling turn until subagents finish, bounded by a timeout.
 
 ```json
 {"targets": ["main/hya-worker-1", "main/hya-worker-2"], "mode": "any", "timeout_secs": 300}
@@ -301,41 +301,76 @@ calling turn until subagents finish their current work, bounded by a timeout.
 | Field | Type | Contract |
 | --- | --- | --- |
 | `targets` | string[] (optional) | Handles as returned by `task` (canonical, or a leaf relative to the caller) or session ids; every one must be a descendant of the caller. Omitted: all live **direct** subagents. The whole value `"any"`/`"all"` is accepted as the mode over all live subagents. |
-| `mode` | `"all"` (default) \| `"any"` | Return when every target / the first target finished. |
-| `timeout_secs` | integer, default 600, clamped to 1800 | `0` reports the current state without blocking. |
+| `mode` | `"all"` (default) \| `"any"` | Return when every target / the first target finished during this call. |
+| `timeout_secs` | integer, default 600, clamped to 1800 | `0` returns the current state at once without blocking. |
 
-A target has *finished its current work* when it reported (archived with a
-report), was archived, or is live and idle with no work owed (no running turn,
-no queued mail or directive, no accepted report still executing). The result
-is `{title, output, metadata}` where `metadata` is:
+A target **finishes** only when it reports (`report`, then its archive
+commits) or is archived without a report (`archive` by an ancestor, a drain,
+teardown). Going idle is never finishing: a member between turns with work
+owed (a running turn, queued mail or directive, an accepted report still
+executing, or live subagents of its own) is `working`.
+
+Every call is measured against a baseline taken when it starts, so a repeated
+call never returns the same news twice:
+
+| Situation at the start / during the call | Result |
+| --- | --- |
+| Target reports or is archived during the call | listed in `finished` with its report; counts toward `any`/`all` → `woke_by: members` |
+| Target had already reported or been archived before the call (not woken since) | listed in `already_finished` with its report; never counts toward `any`/`all` and never wakes the wait |
+| Every target already finished (or no live subagent) | returns at once with `woke_by: nothing_to_wait_for`; calling again gives the same answer, never `members` |
+| Target woken again after its report (mail to an archived member revives it) | `working` until its **next** report; the earlier report is not repeated (the member's terminal handoff generation, bumped by every archive, tells the finishes apart) |
+| Target's turn ended without a report and nothing is queued for it | `idle` under `running`; it will not continue until it is mailed, so the wait returns `woke_by: stalled` — once per stopped turn; a repeated wait on the same stopped member blocks |
+| New mail for the caller (channel-tools `wait` only) | `woke_by: mail`; returned once (see below) |
+| Nothing new before the deadline | `woke_by: timeout` (`timeout_secs: 0`: the current state at once) |
+
+When several apply at one evaluation the order is `members`, `mail`,
+`stalled`, `nothing_to_wait_for`, `timeout`. The result is
+`{title, output, metadata}` where `metadata` is:
 
 ```json
 {"woke_by": "members", "waited_ms": 5210,
  "finished": [{"handle": "main/hya-worker-1", "session": "hysec_…", "state": "reported", "outcome": "done", "report": "…"}],
+ "already_finished": [{"handle": "main/scout-1", "session": "hysec_…", "state": "reported", "outcome": "done", "report": "…"}],
  "running":  [{"handle": "main/hya-worker-2", "session": "hysec_…", "state": "working"}],
  "mail": []}
 ```
 
-`woke_by` is `members`, `mail`, `timeout`, or `nothing_to_wait_for` (no
-target: the caller has no live subagents; a subagent with the mail-aware wait
-instead waits for mail). `state` is `reported`, `archived`, `idle`, or
-`working`; `outcome` is `done`/`failed` for a report and `cancelled` for an
-archive; `report` carries the report, the archive note, or the tail of an idle
-member's last answer (≤ 600 chars). The wait runs inside the caller's turn and
-is woken through the engine bus (team-lifecycle events on the root or caller
-log), never by a resident wake of the caller — that would queue behind the
-waiting turn. Cancelling the turn (user cancel, drain) aborts it at once
-(`ToolError::Cancelled`). Unknown or foreign targets are input errors that list
-the caller's live subagents.
+`woke_by` is `members`, `mail`, `stalled`, `timeout`, or `nothing_to_wait_for`
+(no target left: the caller has no live subagents or every target already
+finished; a subagent with the mail-aware wait and no subagents instead waits
+for mail). `state` is `reported` or `archived` (in `finished` /
+`already_finished`) and `working` or `idle` (in `running`); `outcome` is
+`done`/`failed` for a report and `cancelled` for an archive; `report` carries
+the report or the archive note (≤ 600 chars) and is omitted otherwise — a
+working or idle member's in-progress text is never surfaced as a report.
+`already_finished` and `mail` are omitted when empty. The wait runs inside the
+caller's turn and is woken through the engine bus (team-lifecycle events on the
+root or caller log), never by a resident wake of the caller — that would queue
+behind the waiting turn. Cancelling the turn (user cancel, drain) aborts it at
+once (`ToolError::Cancelled`). Unknown or foreign targets are input errors that
+list the caller's live subagents. Stall notices are remembered per
+(caller, member, last assistant message) in the resident supervisor's memory;
+after a process restart a still-stopped member is reported once more.
 
 Two implementations exist: the `hya/extended-tools` `wait` wakes on member
-progress only; the `hya/channel-tools` `wait` **overrides** it whenever the
-channel family is loaded (an explicit `overrides: hya/extended-tools` in its
-exposure policy, see [Tool-family presets](../base-tools.md#overrides)) and
-also returns when new mail reaches the caller — from a subagent, the parent, or
-the harness (`LEADER FAILED` wrap-up notices included) — with `woke_by: mail`
-and `mail: [{from, channel?, preview}]`; the full text follows in the
-`[NEW MAIL]` notice appended to the tool result.
+finishes and stalls only; the `hya/channel-tools` `wait` **overrides** it
+whenever the channel family is loaded (an explicit `overrides:
+hya/extended-tools` in its exposure policy, see
+[Tool-family presets](../base-tools.md#overrides)) and also returns when new
+mail reaches the caller — from a subagent, the parent, or the harness
+(`LEADER FAILED` wrap-up notices included) — with `woke_by: mail` and
+`mail: [{from, channel?, preview}]` (`preview` is the body, bounded to 600
+chars like the `[NEW MAIL]` notice; history stays readable with
+`read channel://<id>`). Mail is **new** only past the caller's durable inbox
+cursor — the same `MailConsumed` cursor in-turn steering and resident wakes
+use — and a wait that returns commits the cursor through the mail it
+accounted for: the channel-aware wait through the whole inbox, the
+member-only wait through the leading run of report mails of targets it
+reported `finished`. So a returned message is never returned by a later
+`wait`, never repeated in a `[NEW MAIL]` notice, and never re-injected by a
+later resident wake of the caller. A finished target's report mail is its
+finish, not a mail wake (it is not listed under `mail`); a report mailed while
+the target's archive is still committing holds the wait for that archive.
 
 Removed tools: `roster`, `channels`, `join`, `leave` — their information folds
 into `list_channel`/`search_agent`; named user-created channels no longer

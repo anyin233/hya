@@ -1,7 +1,31 @@
 //! The `wait` lifecycle request (0.41.0): block the caller until its
-//! subagents finish their current work — report, go idle, or are archived —
-//! or, for the channel-tools `wait`, until mail for the caller arrives
+//! subagents finish — a subagent finishes only when it **reports** or is
+//! **archived** (terminated), never merely by going idle between turns — or,
+//! for the channel-tools `wait`, until new mail for the caller arrives
 //! (harness mail such as `LEADER FAILED` included), bounded by a timeout.
+//!
+//! Every call is measured against a baseline taken when it starts, so a
+//! repeated call never returns the same news twice:
+//!
+//! - **Finishes** count only when they happen during the call: a target that
+//!   had already reported or been archived at the start is listed as
+//!   `already_finished` and never wakes the wait. A target woken again (mail
+//!   to an archived member revives it) is working until its NEXT report; the
+//!   member's terminal handoff generation, bumped by every archive, tells a
+//!   fresh finish from the one before the call.
+//! - **Mail** is new only past the caller's durable inbox cursor (the same
+//!   `MailConsumed` cursor in-turn steering and resident wakes use). The mail a
+//!   wait returns — and the report mail of targets it reports finished — is
+//!   committed as consumed, so neither the next wait nor the `[NEW MAIL]`
+//!   steer notice nor a later resident wake delivers it again.
+//! - **Stalls**: a target whose turn ended without a report while nothing is
+//!   queued for it (no running turn, owed mail or directive, accepted report,
+//!   or live subagent of its own) will not continue by itself. That is not a
+//!   finish; the wait says so once per stopped turn (`woke_by: stalled`, the
+//!   member `idle` under `running`) and a repeated wait blocks.
+//! - Only `timeout_secs: 0` returns the current state without blocking;
+//!   `nothing_to_wait_for` returns at once when there is no target left to
+//!   wait on (no live subagent, or every target already finished).
 //!
 //! The waiter usually runs INSIDE the lead's own turn (it is the model's tool
 //! call), holding that session's turn lease. It therefore never relies on a
@@ -10,16 +34,16 @@
 //! every team-lifecycle event — `AgentActivityChanged`, `SubagentReported`,
 //! `AgentArchived`, `MailSent`, … on the team root or the caller's log —
 //! against the resident supervisor's in-memory slot state (busy, owed work,
-//! a report accepted but not yet executed) plus the folded projection. A slow
-//! periodic re-check backs up a lagged bus. Dropping the request (the tool
-//! call was cancelled) drops this future; the lifecycle service watches its
-//! reply channel for that.
+//! a report accepted but not yet executed) plus the cached projections. A
+//! slow periodic re-check backs up a lagged bus. Dropping the request (the
+//! tool call was cancelled) drops this future; the lifecycle service watches
+//! its reply channel for that.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use hya_proto::{
-    Event, MailEndpoint, MemberRunStatus, PartProjection, Projection, Role, RosterStatus,
+    ArchiveReason, Event, MailEndpoint, MemberRunStatus, MessageId, Projection, Role, RosterStatus,
     SessionId, scope,
 };
 use hya_tool::{WaitMail, WaitMember, WaitMemberState, WaitMode, WaitOutcome, WaitSpec, WaitWake};
@@ -30,8 +54,34 @@ use crate::resident::{ResidentSupervisor, resolve_member_target};
 
 /// Backstop re-evaluation interval when no bus event arrives.
 const RECHECK: Duration = Duration::from_secs(5);
-/// Bound on report/answer/mail previews in the outcome.
+/// Bound on report/mail bodies in the outcome (the steer notice's bound).
 const PREVIEW_CHARS: usize = 600;
+
+/// One waited-on subagent and where it stood when the call began.
+struct Target {
+    handle: String,
+    session: SessionId,
+    /// Reported, archived, or terminal on the roster at the start.
+    done_at_start: bool,
+    /// Its terminal handoff generation at the start (every archive bumps it).
+    generation: u32,
+}
+
+/// Targets sorted by standing at one evaluation.
+#[derive(Default)]
+struct Standing {
+    /// Reported or archived during this call.
+    finished: Vec<WaitMember>,
+    /// Reported or archived before this call, not woken since.
+    already: Vec<WaitMember>,
+    /// Working, or stopped without a report (`idle`).
+    running: Vec<WaitMember>,
+    /// Stopped targets: (session, last assistant message).
+    stalled: Vec<(SessionId, Option<MessageId>)>,
+    /// Full report bodies of `finished` targets: (handle, body), to recognize
+    /// their report mail.
+    reports: Vec<(String, String)>,
+}
 
 /// Run one `wait` for `caller`. See the module docs.
 ///
@@ -51,48 +101,64 @@ pub(crate) async fn wait_for_members(
     let (root, _) = engine.session_lineage(caller).await?;
     let caller_path = engine.resolve_handle(root, caller).await?;
     let projection = engine.read_projection_shared(root).await?;
-    let targets = wait_targets(&projection, root, &caller_path, &spec.targets)?;
-    // Mail at or after this inbox index is new to the caller: in-turn steering
-    // advances the durable cursor as it surfaces mail, and a resident wake
-    // records what it injected.
-    let seen = projection.team.roster.get(&caller_path).map_or(0, |entry| {
+    let resolved = wait_targets(&projection, root, &caller_path, &spec.targets)?;
+    let mut targets = Vec::with_capacity(resolved.len());
+    for (handle, session) in resolved {
+        let done_at_start = projection
+            .team
+            .roster
+            .get(&handle)
+            .filter(|entry| entry.session == session)
+            .is_none_or(|entry| terminal_status(entry.status));
+        targets.push(Target {
+            handle,
+            session,
+            done_at_start,
+            generation: handoff_generation(engine, session).await,
+        });
+    }
+    // Mail past this inbox index is new to the caller: in-turn steering and
+    // earlier waits advance the durable cursor as they deliver mail, and a
+    // resident wake records what it injected.
+    let cursor = projection.team.roster.get(&caller_path).map_or(0, |entry| {
         entry.resident_work.map_or(entry.resident_cursor, |work| {
             entry.resident_cursor.max(work.inbox_through)
         })
     });
-    let seen = usize::try_from(seen).unwrap_or(usize::MAX);
+    let cursor = usize::try_from(cursor).unwrap_or(usize::MAX);
     // The lead has no parent: without subagents there is nobody to hear from.
     let mail_only = targets.is_empty() && spec.wake_on_mail && caller != root;
     let deadline = tokio::time::Instant::now() + spec.timeout;
     loop {
         // Shared cached fold: each wake folds only the root's new events.
         let projection = engine.read_projection_shared(root).await?;
-        let (finished, running) = evaluate(engine, supervisor, root, &projection, &targets).await;
-        let mail = if spec.wake_on_mail {
-            new_mail(&projection, &caller_path, seen)
-        } else {
-            Vec::new()
+        let standing = evaluate(engine, supervisor, root, &projection, &targets).await;
+        let inbox = scan_inbox(
+            supervisor,
+            root,
+            &projection,
+            &caller_path,
+            cursor,
+            &standing,
+            spec.wake_on_mail,
+        );
+        let members_done = match spec.mode {
+            WaitMode::Any => !standing.finished.is_empty(),
+            WaitMode::All => !standing.finished.is_empty() && standing.running.is_empty(),
         };
-        // A report is mailed a moment before its archive commits: mail that
-        // is only the report of a target still archiving is a member finish,
-        // not a separate wake — hold on for its `AgentArchived`.
-        let only_pending_reports = !mail.is_empty()
-            && mail.iter().all(|message| {
-                running.iter().any(|member| {
-                    member.handle == message.from
-                        && supervisor.member_archiving(root, member.session)
-                })
-            });
-        let members_done = !targets.is_empty()
-            && match spec.mode {
-                WaitMode::Any => !finished.is_empty(),
-                WaitMode::All => running.is_empty(),
-            };
+        let new_stall = standing
+            .stalled
+            .iter()
+            .any(|(member, last)| !supervisor.wait_stall_reported(caller, *member, *last));
+        let nothing_left = standing.finished.is_empty() && standing.running.is_empty();
         let woke_by = if members_done {
             Some(WaitWake::Members)
-        } else if !mail.is_empty() && !only_pending_reports {
+        } else if !inbox.mail.is_empty() {
             Some(WaitWake::Mail)
-        } else if targets.is_empty() && !mail_only {
+        } else if new_stall {
+            Some(WaitWake::Stalled)
+        } else if nothing_left && !mail_only {
+            // No live subagent, or every target already finished.
             Some(WaitWake::NothingToWaitFor)
         } else if tokio::time::Instant::now() >= deadline {
             Some(WaitWake::Timeout)
@@ -100,11 +166,28 @@ pub(crate) async fn wait_for_members(
             None
         };
         if let Some(woke_by) = woke_by {
+            if inbox.through > cursor {
+                engine
+                    .emit_for_actor(
+                        None,
+                        root,
+                        Event::MailConsumed {
+                            session: root,
+                            handle: caller_path.clone(),
+                            through: u64::try_from(inbox.through).unwrap_or(u64::MAX),
+                        },
+                    )
+                    .await?;
+            }
+            for (member, last) in &standing.stalled {
+                supervisor.record_wait_stall(caller, *member, *last);
+            }
             return Ok(WaitOutcome {
                 woke_by,
-                finished,
-                running,
-                mail,
+                finished: standing.finished,
+                already_finished: standing.already,
+                running: standing.running,
+                mail: inbox.mail,
                 waited_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
             });
         }
@@ -158,84 +241,147 @@ fn wait_targets(
                 target.handle
             )));
         }
-        if !targets.iter().any(|(handle, _)| *handle == target.handle) {
+        if !targets
+            .iter()
+            .any(|(_, session)| *session == target.session)
+        {
             targets.push((target.handle, target.session));
         }
     }
     Ok(targets)
 }
 
-/// Split targets into finished (reported / archived / idle) and running.
+/// A roster status that ends the member for good (a transient member's end,
+/// or a resident stopping on its way to the archive).
+fn terminal_status(status: RosterStatus) -> bool {
+    matches!(status, RosterStatus::Done | RosterStatus::Failed)
+}
+
+/// The member's latest terminal handoff generation (0: never archived).
+async fn handoff_generation(engine: &SessionEngine, session: SessionId) -> u32 {
+    engine
+        .read_projection_shared(session)
+        .await
+        .ok()
+        .and_then(|projection| {
+            projection
+                .session
+                .handoff
+                .as_ref()
+                .map(|handoff| handoff.generation)
+        })
+        .unwrap_or(0)
+}
+
+/// Sort the targets by standing against the call's baseline.
 async fn evaluate(
     engine: &SessionEngine,
     supervisor: &ResidentSupervisor,
     root: SessionId,
     projection: &Projection,
-    targets: &[(String, SessionId)],
-) -> (Vec<WaitMember>, Vec<WaitMember>) {
-    let mut finished = Vec::new();
-    let mut running = Vec::new();
-    for (handle, session) in targets {
+    targets: &[Target],
+) -> Standing {
+    let mut standing = Standing::default();
+    for target in targets {
         let live = projection
             .team
             .roster
-            .get(handle)
-            .filter(|entry| entry.session == *session);
-        if let Some(entry) = live {
-            let busy = supervisor
-                .member_busy(root, *session)
-                .unwrap_or(entry.status == RosterStatus::Busy);
-            if busy {
-                running.push(WaitMember {
-                    handle: handle.clone(),
-                    session: *session,
-                    state: WaitMemberState::Working,
-                    outcome: None,
-                    report: None,
-                });
+            .get(&target.handle)
+            .filter(|entry| entry.session == target.session);
+        if let Some(entry) = live.filter(|entry| !terminal_status(entry.status)) {
+            // Only a resident parks between turns; a transient (one-shot
+            // Workflow stage) member runs until its terminal status.
+            let busy = !entry.mode.is_resident()
+                || supervisor
+                    .member_busy(root, target.session)
+                    .unwrap_or(entry.status == RosterStatus::Busy);
+            // A member idle while its own subagents run is waiting on them.
+            let leads_live = projection
+                .team
+                .roster
+                .keys()
+                .any(|path| scope::parent_path(path) == Some(target.handle.as_str()));
+            let state = if busy || leads_live {
+                WaitMemberState::Working
             } else {
-                finished.push(WaitMember {
-                    handle: handle.clone(),
-                    session: *session,
-                    state: WaitMemberState::Idle,
-                    outcome: None,
-                    report: last_answer(engine, *session).await,
-                });
-            }
+                standing
+                    .stalled
+                    .push((target.session, last_answer(engine, target.session).await));
+                WaitMemberState::Idle
+            };
+            standing.running.push(WaitMember {
+                handle: target.handle.clone(),
+                session: target.session,
+                state,
+                outcome: None,
+                report: None,
+            });
             continue;
         }
-        let (state, outcome, report) = match terminal_row(engine, *session).await {
-            Some((MemberRunStatus::Done, summary)) => (
+        // Archived, or terminal on the roster.
+        let reason = if live.is_some() {
+            None
+        } else {
+            projection
+                .team
+                .archived
+                .get(&target.handle)
+                .filter(|entry| entry.session == target.session)
+                .map(|entry| entry.reason)
+        };
+        let row = terminal_row(engine, target.session).await;
+        let (state, outcome, full) = match (reason, row) {
+            (None | Some(ArchiveReason::Reported), Some((MemberRunStatus::Done, summary))) => (
                 WaitMemberState::Reported,
                 Some("done".to_string()),
                 Some(summary),
             ),
-            Some((MemberRunStatus::Failed, summary)) => (
+            (None | Some(ArchiveReason::Reported), Some((MemberRunStatus::Failed, summary))) => (
                 WaitMemberState::Reported,
                 Some("failed".to_string()),
                 Some(summary),
             ),
-            Some((MemberRunStatus::Cancelled, summary)) => (
+            (_, Some((MemberRunStatus::Cancelled, note))) => (
                 WaitMemberState::Archived,
                 Some("cancelled".to_string()),
-                Some(summary),
+                Some(note),
+            ),
+            // Archived without a report of this episode (a revived member's
+            // row still carries its earlier report — never repeat that).
+            (Some(reason), _) if reason != ArchiveReason::Reported => (
+                WaitMemberState::Archived,
+                Some("cancelled".to_string()),
+                None,
             ),
             _ => (WaitMemberState::Archived, None, None),
         };
-        finished.push(WaitMember {
-            handle: handle.clone(),
-            session: *session,
+        let member = WaitMember {
+            handle: target.handle.clone(),
+            session: target.session,
             state,
             outcome,
-            report: report
+            report: full
+                .as_deref()
                 .filter(|text| !text.trim().is_empty())
-                .map(|text| preview(&text)),
-        });
+                .map(preview),
+        };
+        let fresh = !target.done_at_start
+            || handoff_generation(engine, target.session).await > target.generation;
+        if fresh {
+            if state == WaitMemberState::Reported
+                && let Some(body) = full
+            {
+                standing.reports.push((target.handle.clone(), body));
+            }
+            standing.finished.push(member);
+        } else {
+            standing.already.push(member);
+        }
     }
-    (finished, running)
+    standing
 }
 
-/// The member row for `child` on its parent's log, when terminal.
+/// The member row for `child` on its parent's log.
 async fn terminal_row(
     engine: &SessionEngine,
     child: SessionId,
@@ -256,49 +402,86 @@ async fn terminal_row(
         .map(|row| (row.status, row.summary.clone()))
 }
 
-/// The tail of the member's last assistant answer, bounded.
-async fn last_answer(engine: &SessionEngine, session: SessionId) -> Option<String> {
+/// The member's last assistant message: the turn a stall notice is about.
+async fn last_answer(engine: &SessionEngine, session: SessionId) -> Option<MessageId> {
     let projection = engine.read_projection_shared(session).await.ok()?;
-    let message = projection
+    projection
         .session
         .messages
         .iter()
         .rev()
-        .find(|message| message.role == Role::Assistant)?;
-    let text: String = message
-        .parts
-        .iter()
-        .filter_map(|part| match part {
-            PartProjection::Text { text, .. } => Some(text.as_str()),
-            _ => None,
-        })
-        .collect();
-    let text = text.trim();
-    (!text.is_empty()).then(|| preview(text))
+        .find(|message| message.role == Role::Assistant)
+        .map(|message| message.id)
 }
 
-/// Mail in the caller's inbox from index `seen` on, excluding its own posts.
-fn new_mail(projection: &Projection, caller_path: &str, seen: usize) -> Vec<WaitMail> {
-    projection
+/// What the caller's inbox holds past its cursor at one evaluation.
+struct InboxScan {
+    /// New mail to return (channel-aware wait only).
+    mail: Vec<WaitMail>,
+    /// Inbox index this outcome delivers through (commit when past the
+    /// cursor): everything for the channel-aware wait; for the member-only
+    /// wait just the leading run of own posts and finished targets' reports.
+    through: usize,
+}
+
+/// Split the caller's unread inbox into new mail, the report mail of
+/// targets finishing now (delivered as their finish, not as mail), and report
+/// mail of targets still committing their archive (held: their finish follows).
+fn scan_inbox(
+    supervisor: &ResidentSupervisor,
+    root: SessionId,
+    projection: &Projection,
+    caller_path: &str,
+    cursor: usize,
+    standing: &Standing,
+    wake_on_mail: bool,
+) -> InboxScan {
+    let inbox = projection
         .team
         .inboxes
         .get(caller_path)
-        .map(|inbox| {
-            inbox
-                .iter()
-                .skip(seen)
-                .filter(|message| message.from != caller_path)
-                .map(|message| WaitMail {
-                    from: message.from.clone(),
-                    channel: match &message.to {
-                        MailEndpoint::Channel(channel) => Some(channel.clone()),
-                        MailEndpoint::Handle(_) => None,
-                    },
-                    preview: preview(&message.body),
-                })
-                .collect()
-        })
-        .unwrap_or_default()
+        .map_or(&[][..], Vec::as_slice);
+    let mut mail = Vec::new();
+    let mut through = cursor.min(inbox.len());
+    let mut contiguous = true;
+    for (index, message) in inbox.iter().enumerate().skip(cursor) {
+        let own = message.from == caller_path;
+        let finish_report = standing
+            .reports
+            .iter()
+            .any(|(handle, body)| *handle == message.from && *body == message.body);
+        if own || finish_report {
+            if contiguous {
+                through = index + 1;
+            }
+            continue;
+        }
+        contiguous = false;
+        if !wake_on_mail {
+            continue;
+        }
+        through = index + 1;
+        // A report is mailed a moment before its archive commits: hold on
+        // for the `AgentArchived` that makes it a member finish.
+        let pending_report = standing.running.iter().any(|member| {
+            member.handle == message.from && supervisor.member_archiving(root, member.session)
+        });
+        if pending_report {
+            continue;
+        }
+        mail.push(WaitMail {
+            from: message.from.clone(),
+            channel: match &message.to {
+                MailEndpoint::Channel(channel) => Some(channel.clone()),
+                MailEndpoint::Handle(_) => None,
+            },
+            preview: preview(&message.body),
+        });
+    }
+    if wake_on_mail {
+        through = through.max(inbox.len());
+    }
+    InboxScan { mail, through }
 }
 
 /// Team-lifecycle events on the team root or the caller's own log.

@@ -4,10 +4,14 @@
 //! already seen.
 //!
 //! Mechanics: one projection snapshot at turn start captures the durable
-//! backlog (`inbox[resident_cursor..]`); a bus subscription follows live
-//! `MailSent` deliveries that reach the acting handle. After each tool call
-//! the turn loop drains the queue into a notice appended to the tool result
-//! and commits a `MailConsumed` event advancing the durable cursor.
+//! backlog (`inbox[resident_cursor..]`); a bus subscription notices live
+//! `MailSent` deliveries on the team log. After each tool call, when anything
+//! may be pending, the turn loop rebuilds the pending mail from the durable
+//! inbox past the durable cursor — so mail another delivery path already
+//! consumed (a `wait` that returned it) is never shown twice, and mail on a
+//! channel minted after the turn began (a new member's DM) is not missed —
+//! drains it into a notice appended to the tool result, and commits a
+//! `MailConsumed` event advancing the durable cursor.
 
 use std::collections::HashMap;
 
@@ -53,6 +57,9 @@ pub struct SteerMailbox {
     /// buffer and dropped `MailSent` envelopes): from then on every drain
     /// re-reads the durable inbox instead of trusting the live tail.
     durable: bool,
+    /// Team mail was sent since the last drain: the next drain re-reads the
+    /// durable inbox.
+    dirty: bool,
 }
 
 impl SessionEngine {
@@ -88,6 +95,7 @@ impl SessionEngine {
                 policy,
                 channel_roles: HashMap::new(),
                 durable: false,
+                dirty: false,
             };
         };
         let Ok(handle) = self.resolve_handle(root, session).await else {
@@ -103,6 +111,7 @@ impl SessionEngine {
                 policy,
                 channel_roles: HashMap::new(),
                 durable: false,
+                dirty: false,
             };
         };
         let Ok(projection) = self.read_projection_shared(root).await else {
@@ -118,6 +127,7 @@ impl SessionEngine {
                 policy,
                 channel_roles: HashMap::new(),
                 durable: false,
+                dirty: false,
             };
         };
         // Baseline: mail already claimed by THIS turn's wake. A resident wake
@@ -130,56 +140,7 @@ impl SessionEngine {
                 entry.resident_cursor.max(work.inbox_through)
             })
         });
-        let channels: Vec<String> = projection
-            .team
-            .channels
-            .iter()
-            .filter(|(_, channel)| channel.members.contains(&handle))
-            .map(|(key, _)| key.clone())
-            .collect();
-        // DM resolution table: every Dm channel the acting handle is in, keyed
-        // by each member so a `to` handle maps to the pair's channel (the
-        // first minted pair wins when several exist).
-        let mut dm_by_peer: HashMap<String, String> = HashMap::new();
-        let mut channel_roles = HashMap::new();
-        for (id, channel) in &projection.team.channels {
-            if channel.members.contains(&handle) {
-                let topology = if channel.kind == hya_proto::ChannelKind::Group {
-                    (
-                        ChannelTemplateKind::Unit,
-                        if channel.unit.as_deref() == Some(handle.as_str()) {
-                            ChannelParticipantRole::UnitLeader
-                        } else {
-                            ChannelParticipantRole::DirectReports
-                        },
-                    )
-                } else {
-                    (
-                        ChannelTemplateKind::ParentDm,
-                        channel
-                            .members
-                            .iter()
-                            .find(|member| member.as_str() != handle)
-                            .map_or(ChannelParticipantRole::Child, |peer| {
-                                if hya_proto::scope::parent_path(peer) == Some(handle.as_str()) {
-                                    ChannelParticipantRole::Parent
-                                } else {
-                                    ChannelParticipantRole::Child
-                                }
-                            }),
-                    )
-                };
-                channel_roles.insert(id.clone(), topology);
-            }
-            if channel.kind != hya_proto::ChannelKind::Dm || !channel.members.contains(&handle) {
-                continue;
-            }
-            for member in &channel.members {
-                dm_by_peer
-                    .entry(member.clone())
-                    .or_insert_with(|| id.clone());
-            }
-        }
+        let (channels, dm_by_peer, channel_roles) = topology(&projection, &handle);
         let mut mailbox = SteerMailbox {
             root,
             handle,
@@ -192,6 +153,7 @@ impl SessionEngine {
             policy,
             channel_roles,
             durable: false,
+            dirty: false,
         };
         mailbox.queue = projection
             .team
@@ -219,6 +181,70 @@ impl SessionEngine {
     }
 }
 
+/// The acting handle's channel view: channels it is in, the DM channel shared
+/// with each peer (first minted pair wins), and its role per channel.
+#[allow(clippy::type_complexity)]
+fn topology(
+    projection: &hya_proto::Projection,
+    handle: &str,
+) -> (
+    Vec<String>,
+    HashMap<String, String>,
+    HashMap<String, (ChannelTemplateKind, ChannelParticipantRole)>,
+) {
+    let channels: Vec<String> = projection
+        .team
+        .channels
+        .iter()
+        .filter(|(_, channel)| channel.members.contains(handle))
+        .map(|(key, _)| key.clone())
+        .collect();
+    // DM resolution table: every Dm channel the acting handle is in, keyed
+    // by each member so a `to` handle maps to the pair's channel (the
+    // first minted pair wins when several exist).
+    let mut dm_by_peer: HashMap<String, String> = HashMap::new();
+    let mut channel_roles = HashMap::new();
+    for (id, channel) in &projection.team.channels {
+        if channel.members.contains(handle) {
+            let topology = if channel.kind == hya_proto::ChannelKind::Group {
+                (
+                    ChannelTemplateKind::Unit,
+                    if channel.unit.as_deref() == Some(handle) {
+                        ChannelParticipantRole::UnitLeader
+                    } else {
+                        ChannelParticipantRole::DirectReports
+                    },
+                )
+            } else {
+                (
+                    ChannelTemplateKind::ParentDm,
+                    channel
+                        .members
+                        .iter()
+                        .find(|member| member.as_str() != handle)
+                        .map_or(ChannelParticipantRole::Child, |peer| {
+                            if hya_proto::scope::parent_path(peer) == Some(handle) {
+                                ChannelParticipantRole::Parent
+                            } else {
+                                ChannelParticipantRole::Child
+                            }
+                        }),
+                )
+            };
+            channel_roles.insert(id.clone(), topology);
+        }
+        if channel.kind != hya_proto::ChannelKind::Dm || !channel.members.contains(handle) {
+            continue;
+        }
+        for member in &channel.members {
+            dm_by_peer
+                .entry(member.clone())
+                .or_insert_with(|| id.clone());
+        }
+    }
+    (channels, dm_by_peer, channel_roles)
+}
+
 /// The channel a delivered message arrived through, from its original address.
 ///
 /// Channel-addressed mail names the channel directly. Handle-addressed mail
@@ -239,7 +265,8 @@ impl SteerMailbox {
         self.policy = Some(policy);
     }
 
-    /// Pull live `MailSent` deliveries that reach the acting handle.
+    /// Notice live `MailSent` deliveries on the team log (the next drain
+    /// re-reads the durable inbox), or a bus lag.
     pub(crate) fn poll_live(&mut self) {
         if self.handle.is_empty() {
             // Drain the bus anyway so it cannot lag behind a full channel.
@@ -249,18 +276,13 @@ impl SteerMailbox {
         loop {
             match self.bus.try_recv() {
                 Ok(envelope) => {
-                    if let Event::MailSent { from, to, body, .. } = &envelope.event
+                    if let Event::MailSent {
+                        session, from, to, ..
+                    } = &envelope.event
                         && from != &self.handle
-                        && self.reaches(to)
+                        && (*session == self.root || self.reaches(to))
                     {
-                        self.through = self.through.saturating_add(1);
-                        if self.allows_steer(from, to) {
-                            self.queue.push(SteeredMail {
-                                from: from.clone(),
-                                body: body.clone(),
-                                channel: delivered_channel(to, &self.dm_by_peer),
-                            });
-                        }
+                        self.dirty = true;
                     }
                 }
                 Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => {
@@ -272,13 +294,23 @@ impl SteerMailbox {
         }
     }
 
-    /// Rebuild the pending queue from the durable inbox (everything after the
-    /// committed cursor), after the live tail lost envelopes.
+    /// Rebuild the pending queue from the durable inbox: everything past the
+    /// durable cursor (which another delivery — a `wait` returning the mail —
+    /// may have advanced) and past what this mailbox committed, with the
+    /// channel view refreshed so channels minted mid-turn resolve.
     async fn resync_from_log(&mut self, engine: &SessionEngine) -> Result<(), CoreError> {
-        // Cached fold: after a bus lag every drain re-reads the root, so this
-        // must cost the root's new events, not its whole log.
+        // Cached fold: this must cost the root's new events, not its whole log.
         let projection = engine.read_projection_shared(self.root).await?;
+        (self.channels, self.dm_by_peer, self.channel_roles) = topology(&projection, &self.handle);
+        let durable = projection.team.roster.get(&self.handle).map_or(0, |entry| {
+            entry.resident_work.map_or(entry.resident_cursor, |work| {
+                entry.resident_cursor.max(work.inbox_through)
+            })
+        });
+        self.committed_through = self.committed_through.max(durable);
         let Some(inbox) = projection.team.inboxes.get(&self.handle) else {
+            self.queue.clear();
+            self.through = self.committed_through;
             return Ok(());
         };
         let pending = inbox
@@ -338,9 +370,15 @@ impl SteerMailbox {
         if self.handle.is_empty() {
             return Ok(None);
         }
-        if self.durable {
-            self.resync_from_log(engine).await?;
+        let pending = self.durable
+            || self.dirty
+            || !self.queue.is_empty()
+            || self.through != self.committed_through;
+        if !pending {
+            return Ok(None);
         }
+        self.dirty = false;
+        self.resync_from_log(engine).await?;
         let shown: Vec<SteeredMail> = std::mem::take(&mut self.queue);
         if shown.is_empty() && self.through == self.committed_through {
             return Ok(None);

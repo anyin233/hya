@@ -1054,11 +1054,15 @@ impl TeamActor {
         } = plan;
         // Snapshot new inbox mail for this handle (folded before its wake, so it is
         // already visible here). The durable cursor leads the in-memory slot
-        // cursor when steer already surfaced mail inside a tool result — sync
-        // so the wake never re-injects steered messages as user prompts.
+        // cursor when steer already surfaced mail inside a tool result (or a
+        // `wait` returned it) — sync so the wake never re-injects delivered
+        // messages as user prompts. The plan's cursor was captured before
+        // this sync, so it advances here too.
         let projection = self.engine.read_projection(self.root).await?;
+        let mut cursor = cursor;
         if let Some(entry) = projection.team.roster.get(&handle) {
             let durable = usize::try_from(entry.resident_cursor).unwrap_or(usize::MAX);
+            cursor = cursor.max(durable);
             let mut st = self.lock();
             if let Some(slot) = st.residents.get_mut(&session) {
                 slot.cursor = slot.cursor.max(durable);
@@ -2033,6 +2037,10 @@ pub struct ResidentSupervisor {
     engine: Arc<SessionEngine>,
     owner_run_id: OwnerRunId,
     teams: Mutex<HashMap<SessionId, Arc<TeamActor>>>,
+    /// `wait` stall notices already given: (waiting session, member session)
+    /// → the member's last assistant message when it was reported stopped.
+    /// In-memory only: after a restart a stopped member is reported once more.
+    wait_stalls: Mutex<HashMap<(SessionId, SessionId), Option<hya_proto::MessageId>>>,
 }
 
 /// The shared terminal sequence (ADR-0015): handoff → report marker on the
@@ -2583,6 +2591,7 @@ impl ResidentSupervisor {
             engine,
             owner_run_id,
             teams: Mutex::new(HashMap::new()),
+            wait_stalls: Mutex::new(HashMap::new()),
         });
         // The supervisor is the engine's revive seam (ADR-0015): wire it before
         // the listener task starts so no mail send can race the installation.
@@ -2739,6 +2748,36 @@ impl ResidentSupervisor {
                 .get(&session)
                 .is_some_and(|slot| slot.archiving)
         })
+    }
+
+    /// Whether `caller`'s `wait` already reported `member` as stopped at the
+    /// turn ending in `last_answer` (so a repeated wait must not wake on it).
+    pub(crate) fn wait_stall_reported(
+        &self,
+        caller: SessionId,
+        member: SessionId,
+        last_answer: Option<hya_proto::MessageId>,
+    ) -> bool {
+        let stalls = match self.wait_stalls.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        stalls.get(&(caller, member)) == Some(&last_answer)
+    }
+
+    /// Remember that `caller`'s `wait` reported `member` stopped at
+    /// `last_answer`.
+    pub(crate) fn record_wait_stall(
+        &self,
+        caller: SessionId,
+        member: SessionId,
+        last_answer: Option<hya_proto::MessageId>,
+    ) {
+        let mut stalls = match self.wait_stalls.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        stalls.insert((caller, member), last_answer);
     }
 
     /// The team-wide cancellation token for `root`, if the team is tracked. Exposed

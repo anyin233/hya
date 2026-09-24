@@ -48,14 +48,23 @@ The channel tool family (`hya/channel-tools`: `send`, `list_channel`,
 default builtin registry — its `wait` replaces the member-only `wait` of
 `hya/extended-tools` through an explicit `overrides: hya/extended-tools`
 declaration in its exposure policy ([Tool-family presets](base-tools.md#overrides)).
-Besides returning when subagents finish, it returns as soon as new mail reaches
-the caller's inbox — on a DM or group channel, or harness mail such as the
-`LEADER FAILED` wrap-up notice, which bypasses channel policy — with
-`woke_by: "mail"` and a bounded preview per message:
+Besides returning when subagents finish (they report or are archived — idle
+is never finished), it returns as soon as new mail reaches the caller's inbox —
+on a DM or group channel, or harness mail such as the `LEADER FAILED` wrap-up
+notice, which bypasses channel policy — with `woke_by: "mail"` and each
+message's body (bounded to 600 chars, like the `[NEW MAIL]` notice):
 
 ```json
 {"woke_by": "mail", "mail": [{"from": "harness", "preview": "LEADER FAILED: …"}], "finished": [], "running": [], "waited_ms": 812}
 ```
+
+Mail is returned **once**. "New" means past the caller's durable inbox cursor
+(the `MailConsumed` cursor that in-turn steering and resident wakes share), and
+a returning `wait` advances that cursor through the mail it returned — so the
+same message never comes back from a later `wait`, never reappears in a
+`[NEW MAIL]` notice, and never re-wakes the caller as a user prompt. A
+subagent's report mail is delivered as that subagent's finish (with its
+report under `finished`), not as a mail wake.
 
 A subagent with no subagents of its own can call `wait` to block until its
 parent (or the harness) writes to it.
@@ -75,8 +84,11 @@ report rejected: `main/scout-1` has 1 unread mail message(s) on #DM-rgli51cb (1)
 ```
 
 Mail also reaches a working agent as a `[NEW MAIL]` notice appended to its next
-successful tool result. When a busy team overflows the live event bus, the
-notice is rebuilt from the durable inbox, so no mail is dropped. See
+successful tool result. The notice is rebuilt from the durable inbox past the
+durable cursor whenever team mail was sent (or the live event bus overflowed),
+with the agent's channel view refreshed — so no mail is dropped, mail on a
+channel created after the turn began (a new subagent's DM) is included, and
+mail a `wait` already returned is not repeated. See
 [Agent tool surface](architecture/agent-tool-surface.md#coordination-tools-allocated-at-startup)
 for the full allocation table and `deny` rules. Without the channel family, `wait` does
 not wake on mail; mail still arrives in the `[NEW MAIL]` notice after the next

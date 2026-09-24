@@ -910,15 +910,9 @@ async fn steer_surfaces_mail_inside_a_root_turn_tool_result() {
     let supervisor = ResidentSupervisor::start(engine.clone());
     ensure_main(&supervisor, &engine, root).await;
 
-    engine
-        .mail_send(
-            root,
-            MailEndpoint::Handle("main".to_string()),
-            MailKind::Message,
-            "steer payload for main".to_string(),
-        )
-        .await
-        .unwrap();
+    // From a peer: steer skips the agent's own posts (a channel post fans
+    // out to its sender too), so the backlog must come from someone else.
+    mail_main_from_peer(&engine, root, "steer payload for main").await;
 
     let agent = AgentSpec {
         name: AgentName::new("build"),
@@ -1179,20 +1173,15 @@ async fn steer_notice_truncation_survives_multibyte_bodies() {
     let supervisor = ResidentSupervisor::start(engine.clone());
     ensure_main(&supervisor, &engine, root).await;
     let long_body = "配置很长的中文邮件内容".repeat(120);
-    engine
-        .mail_send(
-            root,
-            MailEndpoint::Handle("main".to_string()),
-            MailKind::Message,
-            long_body,
-        )
-        .await
-        .unwrap();
-    let mut steer = engine.steer_mailbox_snapshot(root).await;
+    // From a peer: steer skips the agent's own posts.
+    mail_main_from_peer(&engine, root, &long_body).await;
+    let mut steer = engine
+        .steer_mailbox_snapshot_with_policy(root, Some(steer_everything()))
+        .await;
     let notice = steer.drain(&engine).await.unwrap().expect("notice");
     assert!(
-        notice.contains("[mail from main]"),
-        "notice carries the body"
+        notice.contains("[mail from main/peer-1]") && notice.contains("配置很长"),
+        "notice carries the truncated body: {notice}"
     );
 }
 
@@ -1564,4 +1553,32 @@ async fn resident_mail_without_follow_up_is_not_delivered_after_idle_recovery() 
         team.team.roster[&handle].resident_cursor,
         team.team.inboxes[&handle].len() as u64
     );
+}
+
+/// A durable direct mail to `main` from a peer handle (raw log append: the
+/// steer backlog reads the folded inbox).
+async fn mail_main_from_peer(engine: &SessionEngine, root: SessionId, body: &str) {
+    engine
+        .store()
+        .append_event(
+            root,
+            &Event::MailSent {
+                session: root,
+                from: "main/peer-1".to_string(),
+                to: MailEndpoint::Handle("main".to_string()),
+                kind: MailKind::Message,
+                body: body.to_string(),
+            },
+        )
+        .await
+        .unwrap();
+}
+
+fn steer_everything() -> ChannelPolicySnapshot {
+    ChannelPolicySnapshot {
+        unit_leader: u8::MAX,
+        unit_member: u8::MAX,
+        dm_parent: u8::MAX,
+        dm_child: u8::MAX,
+    }
 }

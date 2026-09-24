@@ -53,6 +53,7 @@ async fn requested_mail_wake(registry: &ToolRegistry) -> bool {
         .send(Ok(WaitOutcome {
             woke_by: WaitWake::NothingToWaitFor,
             finished: Vec::new(),
+            already_finished: Vec::new(),
             running: Vec::new(),
             mail: Vec::new(),
             waited_ms: 0,

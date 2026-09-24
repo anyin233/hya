@@ -325,9 +325,18 @@ unknown target lists the caller's live subagents. This is the parent's answer
 to a child that blocks its report gate or is no longer needed.
 
 `wait(targets?, mode?, timeout_secs?)` (0.41.0) blocks the caller's turn —
-typically the lead's own — until its subagents finish their current work
-(reported, archived, or idle with nothing owed), `any` or `all`, bounded by a
-timeout (default 600 s, max 1800 s). The waiter subscribes to the engine bus and
+typically the lead's own — until its subagents finish, `any` or `all`, bounded
+by a timeout (default 600 s, max 1800 s). A subagent **finishes** only by
+reporting or being archived; an idle member is never finished. Each call is
+measured against a baseline taken at its start: a target that had already
+reported or been archived is returned under `already_finished` and never wakes
+the wait (every target already finished → `nothing_to_wait_for` at once); a
+member woken again by mail after its report is working until its next report
+(its terminal handoff generation, bumped by every archive, tells the two
+finishes apart); a member whose turn ended without a report while nothing is
+queued for it — it will not continue until mailed — wakes the wait once as
+`stalled` and a repeated wait blocks. Only `timeout_secs: 0` returns the
+current state without blocking. The waiter subscribes to the engine bus and
 re-evaluates on team-lifecycle events (`AgentActivityChanged`,
 `SubagentReported`, `AgentArchived`, `MailSent`, …) against the supervisor's
 in-memory slot state, so it is woken **inside** the running turn; it never
@@ -335,8 +344,15 @@ relies on a resident wake of the lead, which would queue behind that same turn
 (single active turn per session). A report accepted mid-turn keeps the member
 "finishing" until the archive commits. Cancelling the turn aborts the wait. The
 channel-tools family overrides `wait` (explicit `overrides` in its exposure
-policy) with a version that also returns on mail for the caller — harness mail
-such as `LEADER FAILED` included — reporting `woke_by: mail`.
+policy) with a version that also returns on new mail for the caller — harness
+mail such as `LEADER FAILED` included — reporting `woke_by: mail`. Mail is new
+only past the caller's durable `MailConsumed` inbox cursor, and the wait
+commits that cursor for the mail it returns (and for finished targets' report
+mail), so neither a later `wait`, nor the `[NEW MAIL]` steer notice, nor a
+resident wake delivers it again. The steer notice rebuilds its pending mail
+from that durable cursor with the channel view refreshed, so mail on a DM
+channel minted after a long lead turn began is steered too. Full contract:
+[Agent tool surface](agent-tool-surface.md).
 
 `task` schema: `resident` and `background` fields are removed; `members[]`
 fan-out remains; the result carries, per member, handle + session + DM
