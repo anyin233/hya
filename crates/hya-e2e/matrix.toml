@@ -416,7 +416,7 @@ timeout_secs = 120
 
 [[scenario]]
 id = "T2.31"
-title = "wait is woken inside the lead turn by a worker report; archive stops a worker and mail to its handle wakes it"
+title = "wait is woken inside the lead turn by a worker report and never repeats it; a worker that stops without a report wakes it as stalled; archive stops a worker and mail to its handle wakes it"
 track = "P"
 path = "crates/hya-e2e/tests/p36_wait_archive.rs"
 tags = ["pr", "subagent", "mailbox"]

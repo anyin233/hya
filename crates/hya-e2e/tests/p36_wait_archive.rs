@@ -1,5 +1,8 @@
 //! T2.31 — `wait` and `archive` through a real backend: the lead's `wait`
-//! is woken inside its own turn by a worker's report; `archive` stops a worker
+//! is woken inside its own turn by a worker's report (delivered once: a
+//! repeated wait lists it as already finished and returns at once, and the
+//! report mail is not steered again); a worker that ends its turn without a
+//! report wakes the wait as `stalled`, never as finished; `archive` stops it
 //! and mail to its handle wakes it again.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
@@ -40,6 +43,10 @@ async fn t2_31_wait_returns_when_the_worker_reports_inside_the_lead_turn() {
             vec![
                 spawn_worker(),
                 tool_step("wait", json!({"timeout_secs": 60})),
+                tool_step(
+                    "wait",
+                    json!({"targets": ["main/hya-worker-1"], "timeout_secs": 60}),
+                ),
                 text_step("ROOT_AFTER_WAIT"),
                 text_step("ROOT_EXTRA_1"),
                 text_step("ROOT_EXTRA_2"),
@@ -59,6 +66,23 @@ async fn t2_31_wait_returns_when_the_worker_reports_inside_the_lead_turn() {
     env.wait_route_contains(ROOT, "WAITED_REPORT_OK", timeout)
         .await
         .unwrap_or_else(|error| panic!("report missing: {error}; {}", env.diagnostics()));
+    // The repeated wait returns at once (well inside its 60 s timeout).
+    env.wait_route_contains(ROOT, "every target already finished", timeout)
+        .await
+        .unwrap_or_else(|error| {
+            panic!(
+                "repeated wait did not return: {error}; {}",
+                env.diagnostics()
+            )
+        });
+    env.wait_route_contains(ROOT, "ROOT_AFTER_WAIT", timeout)
+        .await
+        .unwrap_or_else(|error| panic!("lead did not continue: {error}; {}", env.diagnostics()));
+    let dump = env.route_dump(ROOT).expect("root route");
+    assert!(
+        !dump.contains("[NEW MAIL · answer"),
+        "the report delivered by wait must not be steered again: {dump}"
+    );
 }
 
 #[tokio::test]
@@ -98,6 +122,9 @@ async fn t2_31_archive_stops_a_worker_and_mail_wakes_it() {
         .await
         .expect("prompt");
     let timeout = Duration::from_secs(30);
+    env.wait_route_contains(ROOT, "stopped without reporting", timeout)
+        .await
+        .unwrap_or_else(|error| panic!("stall wake missing: {error}; {}", env.diagnostics()));
     env.wait_route_contains(ROOT, "Archived `main/hya-worker-1`", timeout)
         .await
         .unwrap_or_else(|error| panic!("archive result missing: {error}; {}", env.diagnostics()));

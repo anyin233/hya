@@ -1,13 +1,17 @@
 //! The `wait` lifecycle request (0.41.0): block the caller — typically inside
-//! the lead's own active turn — until its subagents finish their current
-//! work, woken through the engine bus; optionally also on incoming mail (the
-//! channel-tools override), including harness mail; bounded by a timeout and
-//! aborted by the caller's cancellation.
+//! the lead's own active turn — until its subagents finish (report or are
+//! archived; idle never counts), woken through the engine bus; optionally also
+//! on new mail (the channel-tools override), including harness mail, which is
+//! returned once and marked read; bounded by a timeout and aborted by the
+//! caller's cancellation. Targets that finished before the call are listed as
+//! `already_finished` and never wake it; a target that stops without a report
+//! wakes it once as `stalled`.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 mod support;
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -19,8 +23,8 @@ use hya_core::{
     AgentSpec, CreateSession, EventBus, ResidentSupervisor, SessionEngine, run_lifecycle_service,
 };
 use hya_proto::{
-    AgentName, Event, FinishReason, MailEndpoint, MailKind, MessageId, ModelRef, ReportOutcome,
-    SessionId,
+    AgentName, ChannelKind, Event, FinishReason, MailEndpoint, MailKind, MessageId, ModelRef,
+    PartProjection, ReportOutcome, Role, SessionId,
 };
 use hya_provider::{
     Capabilities, CompletionRequest, EventStream, FakeProvider, FakeStep, Provider, ProviderError,
@@ -28,20 +32,44 @@ use hya_provider::{
 };
 use hya_store::SessionStore;
 use hya_tool::{
-    LifecyclePlane, PermissionPlane, PermissionRules, ToolError, ToolRegistry, WaitMemberState,
-    WaitOutcome, WaitSpec, WaitWake,
+    ChannelPolicySnapshot, LifecyclePlane, PermissionPlane, PermissionRules, ToolError,
+    ToolRegistry, WaitMemberState, WaitOutcome, WaitSpec, WaitWake,
 };
 use serde_json::json;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 
-/// While `gate_members` is set, every stream of a non-root session parks
-/// until `release` (set before the spawn, so the first turn cannot race it).
+/// While `gate_members` is set, every stream of a non-root session parks on
+/// its own gate until released (a release before the member reaches the gate
+/// is kept, so the first turn cannot race it).
 #[derive(Default)]
 struct GateProvider {
     root: Mutex<Option<SessionId>>,
     gate_members: AtomicBool,
-    release: Notify,
+    gates: Mutex<HashMap<SessionId, Arc<Notify>>>,
+}
+
+impl GateProvider {
+    fn gate(&self, session: SessionId) -> Arc<Notify> {
+        self.gates
+            .lock()
+            .unwrap()
+            .entry(session)
+            .or_default()
+            .clone()
+    }
+
+    /// Let one member's parked (or next) stream through.
+    fn release(&self, session: SessionId) {
+        self.gate(session).notify_one();
+    }
+
+    /// Let every member currently parked through.
+    fn release_all(&self) {
+        for gate in self.gates.lock().unwrap().values() {
+            gate.notify_waiters();
+        }
+    }
 }
 
 #[async_trait]
@@ -68,7 +96,8 @@ impl Provider for GateProvider {
     ) -> Result<EventStream, ProviderError> {
         let is_root = *self.root.lock().unwrap() == Some(session);
         if !is_root && self.gate_members.load(Ordering::SeqCst) {
-            self.release.notified().await;
+            let gate = self.gate(session);
+            gate.notified().await;
         }
         let events = FakeProvider::materialize(
             &[
@@ -225,7 +254,7 @@ async fn wait_returns_when_a_member_reports_inside_the_lead_turn_with_mail(mail:
         .unwrap();
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert!(!waiter.is_finished(), "the member is still mid-turn");
-    team.provider.release.notify_waiters();
+    team.provider.release_all();
     let outcome = tokio::time::timeout(Duration::from_secs(10), waiter)
         .await
         .expect("the report wakes the wait")
@@ -238,13 +267,18 @@ async fn wait_returns_when_a_member_reports_inside_the_lead_turn_with_mail(mail:
     assert_eq!(member.state, WaitMemberState::Reported, "{outcome:?}");
     assert_eq!(member.outcome.as_deref(), Some("done"));
     assert_eq!(member.report.as_deref(), Some("UNIT_SHIPPED"));
+    assert!(
+        outcome.mail.is_empty(),
+        "the report mail is the member's finish, not separate mail: {outcome:?}"
+    );
 }
 
+/// `any` returns on the first member that REPORTS; the other keeps running.
 #[tokio::test]
-async fn wait_any_returns_when_a_busy_member_goes_idle() {
+async fn wait_any_returns_when_the_first_member_reports() {
     let team = team().await;
     let _lead_turn = hold_lead_turn(&team);
-    let (_a, a) = spawn(&team, team.root, true).await;
+    let (a_session, a) = spawn(&team, team.root, true).await;
     let (_b, b) = spawn(&team, team.root, true).await;
     let waiter = {
         let lifecycle = team.lifecycle.for_session(team.root);
@@ -259,19 +293,379 @@ async fn wait_any_returns_when_a_busy_member_goes_idle() {
     };
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert!(!waiter.is_finished(), "both members are still working");
-    team.provider.release.notify_one();
+    team.supervisor
+        .submit_report(team.root, &a, ReportOutcome::Done, "A_DONE".to_string())
+        .await
+        .unwrap();
+    team.provider.release(a_session);
     let outcome = tokio::time::timeout(Duration::from_secs(10), waiter)
         .await
-        .expect("the idle transition wakes the wait")
+        .expect("the report wakes the wait")
         .unwrap()
         .unwrap();
-    assert_eq!(outcome.woke_by, WaitWake::Members);
+    assert_eq!(outcome.woke_by, WaitWake::Members, "{outcome:?}");
     assert_eq!(outcome.finished.len(), 1, "{outcome:?}");
-    assert_eq!(outcome.finished[0].state, WaitMemberState::Idle);
+    assert_eq!(outcome.finished[0].handle, a);
+    assert_eq!(outcome.finished[0].state, WaitMemberState::Reported);
     assert_eq!(outcome.running.len(), 1, "{outcome:?}");
-    let handles = [&outcome.finished[0].handle, &outcome.running[0].handle];
-    assert!(handles.contains(&&a) && handles.contains(&&b));
-    team.provider.release.notify_waiters();
+    assert_eq!(outcome.running[0].handle, b);
+    assert_eq!(outcome.running[0].state, WaitMemberState::Working);
+    team.provider.release_all();
+}
+
+/// Run-4 evidence (reviewer after 824 s, scout after a follow-up): a member
+/// whose turn ends without `report` is NOT finished — no `members` wake, no
+/// in-progress text surfaced as a report. It stopped for good (nothing is
+/// queued for it), so the wait says so once (`stalled`) and a repeated wait
+/// blocks instead of returning the same state again.
+#[tokio::test]
+async fn a_member_that_ends_its_turn_without_reporting_is_stalled_not_finished() {
+    let team = team().await;
+    let _lead_turn = hold_lead_turn(&team);
+    let (child, handle) = spawn(&team, team.root, true).await;
+    let waiter = {
+        let lifecycle = team.lifecycle.for_session(team.root);
+        tokio::spawn(async move {
+            lifecycle
+                .wait(
+                    WaitSpec::parse(&json!({"timeout_secs": 30}), true).unwrap(),
+                    &CancellationToken::new(),
+                )
+                .await
+        })
+    };
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    team.provider.release(child);
+    let outcome = tokio::time::timeout(Duration::from_secs(10), waiter)
+        .await
+        .expect("a stopped member must not leave the wait hanging")
+        .unwrap()
+        .unwrap();
+    assert_eq!(outcome.woke_by, WaitWake::Stalled, "{outcome:?}");
+    assert!(outcome.finished.is_empty(), "idle is never finished");
+    assert_eq!(outcome.running.len(), 1, "{outcome:?}");
+    assert_eq!(outcome.running[0].handle, handle);
+    assert_eq!(outcome.running[0].state, WaitMemberState::Idle);
+    assert!(outcome.running[0].report.is_none(), "{outcome:?}");
+    let rendered = outcome.to_tool_result().to_string();
+    assert!(
+        !rendered.contains("done with the unit"),
+        "in-progress assistant text is never a report: {rendered}"
+    );
+
+    // Nothing new since: the next wait blocks until its timeout.
+    let started = std::time::Instant::now();
+    let again = wait(&team, team.root, json!({"timeout_secs": 1}), true).await;
+    assert!(
+        started.elapsed() >= Duration::from_millis(900),
+        "a repeated wait on the same stopped member must block: {again:?}"
+    );
+    assert_eq!(again.woke_by, WaitWake::Timeout, "{again:?}");
+    assert_eq!(again.running[0].state, WaitMemberState::Idle);
+    assert!(again.finished.is_empty());
+}
+
+/// Run-4 evidence (scout): after its report the lead mails the member a
+/// follow-up, which wakes it under the same handle. It is working again until
+/// its NEXT report — the earlier report is neither `finished` nor
+/// `already_finished` for a wait that starts after the wake.
+#[tokio::test]
+async fn a_member_woken_after_its_report_counts_as_working_until_its_next_report() {
+    let team = team().await;
+    let _lead_turn = hold_lead_turn(&team);
+    let (child, handle) = spawn(&team, team.root, true).await;
+    team.supervisor
+        .submit_report(
+            team.root,
+            &handle,
+            ReportOutcome::Done,
+            "FIRST_REPORT".to_string(),
+        )
+        .await
+        .unwrap();
+    team.provider.release(child);
+    let first = wait(
+        &team,
+        team.root,
+        json!({"targets": [handle.clone()], "timeout_secs": 10}),
+        false,
+    )
+    .await;
+    assert_eq!(first.woke_by, WaitWake::Members, "{first:?}");
+    assert_eq!(first.finished[0].report.as_deref(), Some("FIRST_REPORT"));
+
+    // Mail to the archived member wakes it (gated: its new turn is running).
+    team.provider.gate_members.store(true, Ordering::SeqCst);
+    team.engine
+        .mail_send(
+            team.root,
+            MailEndpoint::Handle(handle.clone()),
+            MailKind::Message,
+            "follow-up: verify the call sites".to_string(),
+        )
+        .await
+        .unwrap();
+    let waiter = {
+        let lifecycle = team.lifecycle.for_session(team.root);
+        let handle = handle.clone();
+        tokio::spawn(async move {
+            lifecycle
+                .wait(
+                    WaitSpec::parse(&json!({"targets": [handle], "timeout_secs": 30}), true)
+                        .unwrap(),
+                    &CancellationToken::new(),
+                )
+                .await
+        })
+    };
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(
+        !waiter.is_finished(),
+        "the woken member is working; its previous report must not end the wait"
+    );
+    let mut accepted = false;
+    for _ in 0..100 {
+        if team
+            .supervisor
+            .submit_report(
+                team.root,
+                &handle,
+                ReportOutcome::Done,
+                "SECOND_REPORT".to_string(),
+            )
+            .await
+            .is_ok()
+        {
+            accepted = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(accepted, "the woken member can report again");
+    team.provider.release(child);
+    let outcome = tokio::time::timeout(Duration::from_secs(10), waiter)
+        .await
+        .expect("the next report wakes the wait")
+        .unwrap()
+        .unwrap();
+    assert_eq!(outcome.woke_by, WaitWake::Members, "{outcome:?}");
+    assert_eq!(outcome.finished.len(), 1, "{outcome:?}");
+    assert_eq!(outcome.finished[0].state, WaitMemberState::Reported);
+    assert_eq!(
+        outcome.finished[0].report.as_deref(),
+        Some("SECOND_REPORT"),
+        "{outcome:?}"
+    );
+    assert!(outcome.already_finished.is_empty(), "{outcome:?}");
+    assert!(outcome.mail.is_empty(), "{outcome:?}");
+}
+
+/// Targets that reported before the call are `already_finished`: returned at
+/// once with `nothing_to_wait_for` (never a repeated `members` wake), and they
+/// never satisfy `any` while another target is still running.
+#[tokio::test]
+async fn targets_that_already_reported_are_listed_once_as_already_finished() {
+    let team = team().await;
+    let (a_session, a) = spawn(&team, team.root, true).await;
+    let (_b, b) = spawn(&team, team.root, true).await;
+    team.supervisor
+        .submit_report(team.root, &a, ReportOutcome::Done, "A_ONCE".to_string())
+        .await
+        .unwrap();
+    team.provider.release(a_session);
+    let first = wait(&team, team.root, json!({"targets": [a.clone()]}), true).await;
+    assert_eq!(first.woke_by, WaitWake::Members, "{first:?}");
+    assert_eq!(first.finished[0].report.as_deref(), Some("A_ONCE"));
+
+    for _ in 0..2 {
+        let started = std::time::Instant::now();
+        let again = wait(&team, team.root, json!({"targets": [a.clone()]}), true).await;
+        assert!(started.elapsed() < Duration::from_secs(1), "{again:?}");
+        assert_eq!(again.woke_by, WaitWake::NothingToWaitFor, "{again:?}");
+        assert!(again.finished.is_empty(), "{again:?}");
+        assert!(again.mail.is_empty(), "{again:?}");
+        assert_eq!(again.already_finished.len(), 1, "{again:?}");
+        assert_eq!(again.already_finished[0].state, WaitMemberState::Reported);
+        assert_eq!(again.already_finished[0].report.as_deref(), Some("A_ONCE"));
+        let output = again.to_tool_result()["output"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(output.contains("already finished"), "{output}");
+    }
+
+    // `any` over [already finished, running] waits for the running one.
+    let started = std::time::Instant::now();
+    let mixed = wait(
+        &team,
+        team.root,
+        json!({"targets": [a.clone(), b.clone()], "mode": "any", "timeout_secs": 1}),
+        true,
+    )
+    .await;
+    assert!(started.elapsed() >= Duration::from_millis(900), "{mixed:?}");
+    assert_eq!(mixed.woke_by, WaitWake::Timeout, "{mixed:?}");
+    assert_eq!(mixed.already_finished.len(), 1, "{mixed:?}");
+    assert_eq!(mixed.already_finished[0].handle, a);
+    assert_eq!(mixed.running[0].handle, b);
+
+    // Default targets are the live subagents only: the reported one is gone.
+    let defaults = wait(&team, team.root, json!({"timeout_secs": 0}), true).await;
+    assert_eq!(defaults.woke_by, WaitWake::Timeout, "{defaults:?}");
+    assert!(defaults.already_finished.is_empty(), "{defaults:?}");
+    assert_eq!(defaults.running.len(), 1, "{defaults:?}");
+    assert_eq!(defaults.running[0].handle, b);
+    team.provider.release_all();
+}
+
+/// The DM channel between the lead and a member, minted at registration.
+async fn dm_channel(team: &Team, handle: &str) -> String {
+    let projection = team.engine.read_projection(team.root).await.unwrap();
+    projection
+        .team
+        .channels
+        .iter()
+        .find(|(_, channel)| {
+            channel.kind == ChannelKind::Dm
+                && channel.members.contains(handle)
+                && channel.members.contains("main")
+        })
+        .map(|(id, _)| id.clone())
+        .expect("registration mints the parent-child DM channel")
+}
+
+fn steer_everything() -> ChannelPolicySnapshot {
+    ChannelPolicySnapshot {
+        unit_leader: u8::MAX,
+        unit_member: u8::MAX,
+        dm_parent: u8::MAX,
+        dm_child: u8::MAX,
+    }
+}
+
+/// Run-4 evidence (the "RESEND — FULL REPORT" mail returned twice): mail a
+/// wait returned is marked read durably — a second wait never returns it
+/// again, and neither the steer notice of the lead's long-running turn (whose
+/// channel list predates the member) nor a later resident wake of the lead
+/// re-delivers it. New mail on that channel is still steered.
+#[tokio::test]
+async fn mail_a_wait_returned_is_never_delivered_again() {
+    let team = team().await;
+    let lead_turn = hold_lead_turn(&team);
+    // The lead's turn began before the member (and its DM channel) existed.
+    let mut stale_steer = team
+        .engine
+        .steer_mailbox_snapshot_with_policy(team.root, Some(steer_everything()))
+        .await;
+    let (child, handle) = spawn(&team, team.root, true).await;
+    let mut steer = team
+        .engine
+        .steer_mailbox_snapshot_with_policy(team.root, Some(steer_everything()))
+        .await;
+    let dm = dm_channel(&team, &handle).await;
+    team.engine
+        .mail_send(
+            child,
+            MailEndpoint::Channel(dm.clone()),
+            MailKind::Message,
+            "RESEND_FULL_REPORT".to_string(),
+        )
+        .await
+        .unwrap();
+    let first = wait(&team, team.root, json!({"timeout_secs": 10}), true).await;
+    assert_eq!(first.woke_by, WaitWake::Mail, "{first:?}");
+    assert_eq!(first.mail.len(), 1, "{first:?}");
+    assert!(first.mail[0].preview.contains("RESEND_FULL_REPORT"));
+    assert_eq!(first.mail[0].channel.as_deref(), Some(dm.as_str()));
+
+    let projection = team.engine.read_projection(team.root).await.unwrap();
+    assert_eq!(
+        projection.team.roster["main"].resident_cursor,
+        projection.team.inboxes["main"].len() as u64,
+        "the returned mail is consumed durably"
+    );
+    for mailbox in [&mut steer, &mut stale_steer] {
+        let notice = mailbox.drain(&team.engine).await.unwrap();
+        assert!(
+            notice
+                .as_deref()
+                .is_none_or(|notice| !notice.contains("RESEND_FULL_REPORT")),
+            "mail the wait returned must not be steered again: {notice:?}"
+        );
+    }
+
+    let started = std::time::Instant::now();
+    let second = wait(&team, team.root, json!({"timeout_secs": 1}), true).await;
+    assert!(
+        started.elapsed() >= Duration::from_millis(900),
+        "{second:?}"
+    );
+    assert_eq!(second.woke_by, WaitWake::Timeout, "{second:?}");
+    assert!(second.mail.is_empty(), "{second:?}");
+
+    // New mail on the channel minted after the turn began is still steered.
+    team.engine
+        .mail_send(
+            child,
+            MailEndpoint::Channel(dm.clone()),
+            MailKind::Message,
+            "FRESH_STATUS".to_string(),
+        )
+        .await
+        .unwrap();
+    let notice = stale_steer
+        .drain(&team.engine)
+        .await
+        .unwrap()
+        .expect("mail on a channel created mid-turn is steered");
+    assert!(notice.contains("FRESH_STATUS"), "{notice}");
+    assert!(!notice.contains("RESEND_FULL_REPORT"), "{notice}");
+
+    // The lead's turn ends: its resident wake must not re-inject either mail.
+    drop(lead_turn);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let root = team.engine.read_projection(team.root).await.unwrap();
+    let reinjected = root.session.messages.iter().any(|message| {
+        message.role == Role::User
+            && message.parts.iter().any(|part| {
+                matches!(part, PartProjection::Text { text, .. }
+                    if text.contains("RESEND_FULL_REPORT") || text.contains("FRESH_STATUS"))
+            })
+    });
+    assert!(!reinjected, "delivered mail must not wake the lead again");
+    team.provider.release_all();
+}
+
+/// `timeout_secs: 0` returns the current state at once; the mail it returns
+/// is consumed, so the next snapshot is empty.
+#[tokio::test]
+async fn timeout_zero_returns_the_current_state_at_once() {
+    let team = team().await;
+    let (child, handle) = spawn(&team, team.root, true).await;
+    team.engine
+        .mail_send(
+            child,
+            MailEndpoint::Handle("^parent".to_string()),
+            MailKind::Message,
+            "SNAPSHOT_MAIL".to_string(),
+        )
+        .await
+        .unwrap();
+    let started = std::time::Instant::now();
+    let snapshot = wait(&team, team.root, json!({"timeout_secs": 0}), true).await;
+    assert!(started.elapsed() < Duration::from_millis(500));
+    assert_eq!(snapshot.woke_by, WaitWake::Mail, "{snapshot:?}");
+    assert!(snapshot.mail[0].preview.contains("SNAPSHOT_MAIL"));
+    assert_eq!(snapshot.running[0].handle, handle);
+    assert_eq!(snapshot.running[0].state, WaitMemberState::Working);
+
+    let started = std::time::Instant::now();
+    let empty = wait(&team, team.root, json!({"timeout_secs": 0}), true).await;
+    assert!(started.elapsed() < Duration::from_millis(500));
+    assert_eq!(empty.woke_by, WaitWake::Timeout, "{empty:?}");
+    assert!(empty.mail.is_empty(), "{empty:?}");
+    assert_eq!(empty.running[0].state, WaitMemberState::Working);
+    team.provider.release_all();
 }
 
 #[tokio::test]
@@ -286,7 +680,7 @@ async fn wait_times_out_with_the_members_still_running() {
     assert!(outcome.finished.is_empty());
     assert_eq!(outcome.running[0].handle, handle);
     assert_eq!(outcome.running[0].state, WaitMemberState::Working);
-    team.provider.release.notify_waiters();
+    team.provider.release_all();
 }
 
 #[tokio::test]
@@ -310,7 +704,7 @@ async fn cancelling_the_caller_aborts_the_wait_promptly() {
         .expect("cancel aborts at once")
         .unwrap();
     assert!(matches!(result, Err(ToolError::Cancelled)), "{result:?}");
-    team.provider.release.notify_waiters();
+    team.provider.release_all();
 }
 
 #[tokio::test]
@@ -347,7 +741,7 @@ async fn with_channels_mail_from_a_member_wakes_the_wait() {
     assert_eq!(outcome.woke_by, WaitWake::Mail, "{outcome:?}");
     assert!(outcome.mail[0].preview.contains("PROGRESS: halfway"));
     assert_eq!(outcome.running.len(), 1, "the member is still working");
-    team.provider.release.notify_waiters();
+    team.provider.release_all();
 }
 
 #[tokio::test]
@@ -379,7 +773,7 @@ async fn without_channels_mail_does_not_wake_the_wait() {
     let outcome = waiter.await.unwrap().unwrap();
     assert_eq!(outcome.woke_by, WaitWake::Timeout, "{outcome:?}");
     assert!(outcome.mail.is_empty());
-    team.provider.release.notify_waiters();
+    team.provider.release_all();
 }
 
 /// A member's channel-aware wait wakes on harness mail (the LEADER FAILED

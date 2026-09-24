@@ -4,9 +4,10 @@
 //! `CoreError`).
 //!
 //! `wait` has two implementations sharing this contract: the extended-tools
-//! one wakes on member progress only; the channel-tools one (which overrides
-//! it whenever the channel family is loaded, see `overrides` in the family
-//! exposure policy) also wakes on mail for the caller.
+//! one wakes when subagents report or are archived (or stop without a
+//! report); the channel-tools one (which overrides it whenever the channel
+//! family is loaded, see `overrides` in the family exposure policy) also wakes
+//! on new mail for the caller and marks the mail it returns as read.
 
 use std::time::Duration;
 
@@ -167,9 +168,9 @@ impl WaitSpec {
 #[must_use]
 pub fn wait_tool_schema(wake_on_mail: bool) -> ToolSchema {
     let description = if wake_on_mail {
-        "Block until your subagents finish their current work (they report, go idle, or are archived) OR new mail arrives for you (a message from a subagent or your parent, or a harness notice such as LEADER FAILED), whichever comes first, up to a timeout. Returns which event woke you (`members`, `mail`, `timeout`, or `nothing_to_wait_for`), each target's state with its report, and the arriving mail (full text follows in the mail notice). Use it instead of polling `list_channel` or sleeping. Cancelling your turn aborts the wait."
+        "Block until your subagents finish — a subagent finishes only when it calls `report` or is archived, never merely by going idle — OR new mail arrives for you (a message from a subagent or your parent, or a harness notice such as LEADER FAILED), whichever comes first, up to a timeout. Returns why it woke (`members`, `mail`, `stalled`, `timeout`, or `nothing_to_wait_for`), the targets that finished during this call with their reports, targets that had already finished before this call (`already_finished`), the ones still running, and the new mail (each message is returned once and then marked read). `stalled` means a subagent ended its turn without reporting and has nothing queued: it will not continue until you `send` it mail (or `archive` it). Use it instead of polling `list_channel` or sleeping. Cancelling your turn aborts the wait."
     } else {
-        "Block until your subagents finish their current work (they report, go idle, or are archived), up to a timeout. Returns which event woke you (`members`, `timeout`, or `nothing_to_wait_for`), each finished target's state with its report, and which targets are still running. Use it instead of polling or sleeping. Cancelling your turn aborts the wait."
+        "Block until your subagents finish — a subagent finishes only when it calls `report` or is archived, never merely by going idle — up to a timeout. Returns why it woke (`members`, `stalled`, `timeout`, or `nothing_to_wait_for`), the targets that finished during this call with their reports, targets that had already finished before this call (`already_finished`), and the ones still running. `stalled` means a subagent ended its turn without reporting and has nothing queued: it will not continue until you mail it (or `archive` it). Use it instead of polling or sleeping. Cancelling your turn aborts the wait."
     };
     ToolSchema {
         name: hya_proto::ToolName::new("wait"),
@@ -185,13 +186,13 @@ pub fn wait_tool_schema(wake_on_mail: bool) -> ToolSchema {
                 "mode": {
                     "type": "string",
                     "enum": ["all", "any"],
-                    "description": "`all` (default): return when every target finished; `any`: return when the first one finished."
+                    "description": "`all` (default): return when every target finished (reported or archived); `any`: return when the first one finished during this call."
                 },
                 "timeout_secs": {
                     "type": "integer",
                     "minimum": 0,
                     "maximum": WAIT_MAX_TIMEOUT_SECS,
-                    "description": "Give up after this many seconds (default 600, max 1800). 0 only reports the current state."
+                    "description": "Give up after this many seconds (default 600, max 1800). 0 returns the current state at once without blocking."
                 }
             },
             "required": []
@@ -204,13 +205,18 @@ pub fn wait_tool_schema(wake_on_mail: bool) -> ToolSchema {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WaitWake {
-    /// The target condition (`any`/`all`) was met.
+    /// The target condition (`any`/`all`) was met by targets that reported or
+    /// were archived during this call.
     Members,
     /// Mail for the caller arrived (channel-tools `wait` only).
     Mail,
-    /// The timeout elapsed first.
+    /// A target ended its turn without reporting and has nothing queued: it
+    /// will not continue on its own. Reported once per stopped turn.
+    Stalled,
+    /// The timeout elapsed first (or `timeout_secs: 0` asked for a snapshot).
     Timeout,
-    /// No target and nothing to wait for (no live subagents, no mail wake).
+    /// Nothing to wait for: no live subagents, or every target had already
+    /// finished before this call (listed in `already_finished`).
     NothingToWaitFor,
 }
 
@@ -218,13 +224,16 @@ pub enum WaitWake {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WaitMemberState {
-    /// Delivered its terminal report and was archived.
+    /// Delivered its terminal report (and was archived).
     Reported,
     /// Archived without a report (parent `archive`, drain, teardown).
     Archived,
-    /// Live and idle with no work owed.
+    /// Live, its last turn ended without a report, and nothing is queued for
+    /// it (no running turn, mail, directive, or live subagent): it will not
+    /// continue until it is mailed. Never counts as finished.
     Idle,
-    /// Running a turn or owing one.
+    /// Running a turn, owing one, finishing an accepted report, or waiting on
+    /// its own live subagents.
     Working,
 }
 
@@ -240,13 +249,16 @@ pub struct WaitMember {
     /// `done` / `failed` for a report, `cancelled` for an archive, when known.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub outcome: Option<String>,
-    /// The report text (reported), the archive note, or the tail of the last
-    /// answer (idle), bounded.
+    /// The report text (reported) or the archive note, bounded. Never an idle
+    /// or working member's in-progress text.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub report: Option<String>,
 }
 
-/// One mail message that woke a channel-aware `wait`.
+/// One new mail message returned by a channel-aware `wait`. Each message is
+/// returned once: the wait advances the caller's durable inbox cursor
+/// (`MailConsumed`), so neither a later `wait` nor the `[NEW MAIL]` steer
+/// notice repeats it.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct WaitMail {
     /// Sender handle (`harness` for control notices).
@@ -254,7 +266,8 @@ pub struct WaitMail {
     /// Channel id it arrived on, when channel-addressed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub channel: Option<String>,
-    /// Bounded body preview; the full text follows in the mail notice.
+    /// The message body, bounded (600 chars); the full history stays readable
+    /// with `read channel://<id>`.
     pub preview: String,
 }
 
@@ -263,11 +276,15 @@ pub struct WaitMail {
 pub struct WaitOutcome {
     /// Why the wait returned.
     pub woke_by: WaitWake,
-    /// Targets that finished their current work.
+    /// Targets that reported or were archived during this call.
     pub finished: Vec<WaitMember>,
-    /// Targets still working.
+    /// Targets that had already reported or been archived before this call
+    /// (and were not woken again since): listed for reference, never a wake.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub already_finished: Vec<WaitMember>,
+    /// Targets still working, or stopped without a report (`idle`).
     pub running: Vec<WaitMember>,
-    /// Mail that arrived for the caller (channel-aware wait only).
+    /// New mail for the caller (channel-aware wait only), returned once.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub mail: Vec<WaitMail>,
     /// Wall-clock milliseconds spent waiting.
@@ -282,29 +299,51 @@ impl WaitOutcome {
         let headline = match self.woke_by {
             WaitWake::Members => "Subagents finished.",
             WaitWake::Mail => "Mail arrived for you.",
+            WaitWake::Stalled => {
+                "A subagent stopped without reporting: its turn ended and nothing is queued for it, so it will not continue until you `send` it mail (or `archive` it)."
+            }
             WaitWake::Timeout => "Timed out; some subagents are still running.",
-            WaitWake::NothingToWaitFor => "Nothing to wait for: you have no live subagents.",
+            WaitWake::NothingToWaitFor if self.already_finished.is_empty() => {
+                "Nothing to wait for: you have no live subagents."
+            }
+            WaitWake::NothingToWaitFor => {
+                "Nothing to wait for: every target already finished before this call (reports below); calling `wait` again will not change that."
+            }
         };
         lines.push(headline.to_string());
-        for member in &self.finished {
-            let mut line = format!("- {} [{}]", member.handle, state_label(member.state));
+        let member_line = |member: &WaitMember, tag: &str| {
+            let mut line = format!("- {} [{tag}]", member.handle);
             if let Some(outcome) = &member.outcome {
                 line.push_str(&format!(" {outcome}"));
             }
             if let Some(report) = &member.report {
                 line.push_str(&format!(": {report}"));
             }
-            lines.push(line);
+            line
+        };
+        for member in &self.finished {
+            lines.push(member_line(member, state_label(member.state)));
         }
-        if !self.running.is_empty() {
-            lines.push(format!(
-                "Still running: {}",
-                self.running
-                    .iter()
-                    .map(|member| member.handle.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ));
+        for member in &self.already_finished {
+            let tag = format!("already {}", state_label(member.state));
+            lines.push(member_line(member, &tag));
+        }
+        for member in &self.running {
+            if member.state == WaitMemberState::Idle {
+                lines.push(format!(
+                    "- {} [idle: ended its turn without `report`; nothing queued]",
+                    member.handle
+                ));
+            }
+        }
+        let working: Vec<&str> = self
+            .running
+            .iter()
+            .filter(|member| member.state == WaitMemberState::Working)
+            .map(|member| member.handle.as_str())
+            .collect();
+        if !working.is_empty() {
+            lines.push(format!("Still running: {}", working.join(", ")));
         }
         for mail in &self.mail {
             let channel = mail
@@ -316,10 +355,16 @@ impl WaitOutcome {
                 mail.from, mail.preview
             ));
         }
+        if !self.mail.is_empty() {
+            lines.push(
+                "(this mail is now marked read; history: read channel://<id>?last=N)".to_string(),
+            );
+        }
         json!({
             "title": format!("wait: {}", match self.woke_by {
                 WaitWake::Members => "members",
                 WaitWake::Mail => "mail",
+                WaitWake::Stalled => "stalled",
                 WaitWake::Timeout => "timeout",
                 WaitWake::NothingToWaitFor => "nothing to wait for",
             }),
@@ -632,6 +677,68 @@ mod tests {
                 "{input}: {error:?}"
             );
         }
+    }
+
+    fn member(handle: &str, state: WaitMemberState, report: Option<&str>) -> WaitMember {
+        WaitMember {
+            handle: handle.to_string(),
+            session: SessionId::new(),
+            state,
+            outcome: (state == WaitMemberState::Reported).then(|| "done".to_string()),
+            report: report.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn wait_result_flags_already_finished_stalled_and_read_mail() {
+        let already = WaitOutcome {
+            woke_by: WaitWake::NothingToWaitFor,
+            finished: Vec::new(),
+            already_finished: vec![member("main/a-1", WaitMemberState::Reported, Some("A"))],
+            running: Vec::new(),
+            mail: Vec::new(),
+            waited_ms: 0,
+        }
+        .to_tool_result();
+        let output = already["output"].as_str().unwrap();
+        assert!(output.contains("every target already finished"), "{output}");
+        assert!(
+            output.contains("- main/a-1 [already reported] done: A"),
+            "{output}"
+        );
+        assert_eq!(already["metadata"]["woke_by"], "nothing_to_wait_for");
+        assert_eq!(
+            already["metadata"]["already_finished"][0]["state"],
+            "reported"
+        );
+
+        let stalled = WaitOutcome {
+            woke_by: WaitWake::Stalled,
+            finished: Vec::new(),
+            already_finished: Vec::new(),
+            running: vec![
+                member("main/b-1", WaitMemberState::Idle, None),
+                member("main/c-1", WaitMemberState::Working, None),
+            ],
+            mail: vec![WaitMail {
+                from: "main/c-1".to_string(),
+                channel: Some("DM-x".to_string()),
+                preview: "status".to_string(),
+            }],
+            waited_ms: 5,
+        }
+        .to_tool_result();
+        let output = stalled["output"].as_str().unwrap();
+        assert_eq!(stalled["title"], "wait: stalled");
+        assert!(output.contains("stopped without reporting"), "{output}");
+        assert!(
+            output.contains("- main/b-1 [idle: ended its turn without `report`"),
+            "{output}"
+        );
+        assert!(output.contains("Still running: main/c-1"), "{output}");
+        assert!(!output.contains("Still running: main/b-1"), "{output}");
+        assert!(output.contains("marked read"), "{output}");
+        assert!(stalled["metadata"].get("already_finished").is_none());
     }
 
     #[test]
