@@ -158,7 +158,9 @@ export const test = base.extend<{ tui: (command: string[], options?: LaunchOptio
       last = new Tui(page, url)
       return last
     })
-    if (last) await last.attach(testInfo, "final-screen").catch(() => {})
+    // A derived fixture may already have captured the final screen.
+    const captured = testInfo.attachments.some((attachment) => attachment.name === "final-screen.png")
+    if (last && !captured) await last.attach(testInfo, "final-screen").catch(() => {})
     for (const child of children) child.kill("SIGTERM")
   },
 })
