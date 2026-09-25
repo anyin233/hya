@@ -10,7 +10,11 @@ or hide (see [Layout](#layout)). Assistant replies render as Markdown with
 highlighted code blocks; reasoning is collapsed to one `Thinking` line; each
 tool call is a card with its state, a one-line summary, and an expandable
 body; a subagent's `task` card shows the child's status and opens its session
-read-only (see [Messages](#messages)). Models, Workflows, and saved provider keys have
+read-only (see [Messages](#messages)). When the agent or one of its subagents
+needs a permission decision or asks a question, a prompt docked above the
+input shows the call and its options; press `1`, `2`, or `3` (see
+[Permission and question prompts](#permission-and-question-prompts)).
+Models, Workflows, and saved provider keys have
 dedicated views; the API command view exposes the other HTTP/JSON operations
 in `hya.v1`. The input is a multi-line editor with input history; it also
 runs `!command` shell turns, completes `@file` references, and opens a
@@ -79,7 +83,8 @@ backend is running.
 | `!<command>` + Enter | Run the command as a shell turn in the current session (see [Shell turns](#shell-turns)). |
 | `@<text>` | Show matching file paths; Up/Down select, Tab or Enter inserts `@<path>`, Esc closes (see [File references](#file-references)). |
 | `/` at the start of the input | Open the command menu; fuzzy-filters as you type the name (see [Command menu](#command-menu)). |
-| Esc | Close the command menu or the file list; else, in a subagent's read-only view, return to the parent session; else cancel the running turn; else clear the input. |
+| `1` `2` `3`, Up/Down + Enter | With a permission prompt shown and an empty input: Allow once, Always allow, Deny. On a question prompt the digits pick its options (see [Permission and question prompts](#permission-and-question-prompts)). |
+| Esc | Close the command menu or the file list; else, with a prompt shown and an empty input, deny the permission / reject the question; else, in a subagent's read-only view, return to the parent session; else cancel the running turn; else clear the input. |
 | Ctrl+C | Clear the input and show `Press Ctrl+C again to quit`; a second Ctrl+C within 2 s quits. |
 | Ctrl+D | Quit when the input is empty (otherwise delete the character under the cursor). |
 | `/exit`, `/quit` | Quit. |
@@ -93,7 +98,7 @@ backend is running.
 | `/key remove <provider>` | Delete the provider's saved credential. |
 | `/workflows`, `/workflow select <name>`, `/workflow run [name]` | View sources and selected state; select or start a Workflow in the selected session. |
 | `/interactions` | View pending permissions and questions. |
-| `/approve <id>`, `/deny <id>` | Respond to a permission request for this run only (`persist: false`). |
+| `/approve <id>`, `/deny <id>` | Respond to a permission request for this run only (`persist: false`); the keyboard fallback of the prompt, which shows the id. |
 | `/answer <id> <text>` | Answer a question request. |
 | `/cancel` or Esc | Cancel the running turn: the status line shows `Cancelling…`, then `Cancelled · Ready`. |
 | `/refresh` or Ctrl+R | Reload sessions, messages, interactions, models, Workflows, and the command catalog (commands and skills). |
@@ -154,31 +159,37 @@ routes. See the [protocol guide](protocol/README.md) for those frames.
 ```text
 hya · <session> · <agent> <provider/model> · <server>   ┌─Sessions───────────┐
                                                         │▸ 1. Review         │
-┃ your prompt                                           │   build            │
+┃ your prompt                                           │   build · ◌ waiting│
                                                         │                    │
 ● build · fake/model                                    └────────────────────┘
-The reply, rendered as Markdown.                        ┌─Todos──────────────┐
+◌ bash  cargo test · awaiting approval                  ┌─Todos──────────────┐
                                                         │No todos yet        │
-                                                        └────────────────────┘
-┌─Pending (1)────────────────────────────────────────┐  ┌─Context────────────┐
-│! bash · perm_…                                     │  │Session  hysec_…    │
-│/approve <id> · /deny <id> · /answer <id> <text> · …│  │Agent    build      │
-└────────────────────────────────────────────────────┘  │Model    fake/model │
-Ready                                                   │Messages 2          │
-┌────────────────────────────────────────────────────┐  │Dir      …/work     │
-│ Message, /command, !shell, or @file                │  │Server   127.0.0.1:…│
+┌─Permission─────────────────────────────────────────┐  └────────────────────┘
+│bash  cargo test                                    │  ┌─Context────────────┐
+│asked by build                                      │  │Session  hysec_…    │
+││ $ cargo test                                      │  │Agent    build      │
+│▸ 1  Allow once                                     │  │Model    fake/model │
+│  2  Always allow  bash: cargo test                 │  │Messages 2          │
+│  3  Deny                                           │  │Dir      …/work     │
+│1-3 or ↑↓ Enter · Esc denies · perm_…               │  │Server   127.0.0.1:…│
 └────────────────────────────────────────────────────┘  └────────────────────┘
+Running · msg_…
+┌────────────────────────────────────────────────────┐
+│ Message, /command, !shell, or @file                │
+└────────────────────────────────────────────────────┘
 Enter a prompt · /new creates a session · /help …
 ```
 
 The main column holds, from top to bottom: the header line (session, agent,
 model, server, in the accent color), the transcript (or the panel of the
-current view: models, Workflows, keys, API, help), the pending block, the
-status line, the bordered input, and the instruction line.
+current view: models, Workflows, keys, API, help), the pending block (asks
+of other sessions), the permission or question prompt, the status line, the
+bordered input, and the instruction line.
 
 - **Sidebar.** Three titled boxes on the right: `Sessions` (the list; `▸`
   marks the open one; a subagent's session is one `↳ N. <agent>` line nested
-  under its parent, `· running` while it works), `Todos` (a placeholder until the todo panel lands),
+  under its parent, `· running` while it works, `· ◌ waiting` while a
+  permission or question of that session waits for an answer), `Todos` (a placeholder until the todo panel lands),
   and `Context` (session, agent, model, projected message count, directory,
   server). It is 32 columns wide (at most 40% of a narrow terminal, at least
   20). By default it follows the width: shown at 110 columns or more, hidden
@@ -186,10 +197,16 @@ status line, the bordered input, and the instruction line.
   Ctrl+B or `/sidebar` pins it shown or hidden at any width; `/sidebar on` and
   `/sidebar off` set it explicitly. The status line confirms the change
   (`Sidebar shown · Ctrl+B toggles`).
-- **Pending block.** While permission requests (`!`) or questions (`?`) wait,
-  a `Pending (N)` box appears above the status line with up to three of them
-  (`! <title> · <id>`) and the commands that answer them. `/interactions`
-  lists every detail. It disappears when nothing is pending.
+- **Prompt.** A pending permission request or question of the open session
+  or one of its subagent sessions is a prompt box (warning-colored border)
+  above the status line; see
+  [Permission and question prompts](#permission-and-question-prompts).
+- **Pending block.** While permission requests (`!`) or questions (`?`) of
+  *other* sessions wait (sessions not in the open session's tree), a
+  `Pending (N)` box appears above the prompt with up to three of them
+  (`! <title> · <id>`) and the commands that answer them; open that session
+  to get its prompt. `/interactions` lists every detail. It disappears when
+  nothing else is pending.
 - **Keys and the browser.** Ctrl+B, Ctrl+O, and Ctrl+G are not reserved by
   browsers, so they also work in the WebUI (`packages/hya-tui-web`). Ctrl+B is tmux's
   default prefix; inside tmux press it twice (tmux passes the second one
@@ -357,6 +374,11 @@ child's status and what it last did, and it always shows these lines:
   (spinner) or `idle` (`✓`, its turn ended; a resident subagent waits for
   mail). Before anything is known it is `○ starting`. `✗ failed` also shows
   when the child's newest reply failed.
+- **Waiting.** While the child session has a pending permission request
+  (question), the status reads `◌ waiting for approval` (`◌ waiting for an
+  answer`) in the warning color, and the parent view shows the ask as a
+  prompt labelled with the subagent (see
+  [Subagent asks](#subagent-asks)).
 - **Latest activity** after `↳`: the member's finish `summary` when it has
   one, else the child's newest tool call (`<tool> <summary>`) or the first
   line of its newest text.
@@ -367,7 +389,8 @@ child's status and what it last did, and it always shows these lines:
   once per 1.5 s, and repeats every 1.5 s while a child is busy or this
   client's turn runs. It does not subscribe to child streams. The same round
   re-reads the session list, so the sidebar's nesting and `· running` stay
-  current.
+  current, and the pending interactions (`GET /v1/interactions`), so a
+  subagent's ask reaches the parent's prompt within one round.
 
 **Child view.** A click on the task card, `/open <child session id>`, or
 `/open <number>` of its sidebar row opens the child session read-only: a
@@ -451,8 +474,12 @@ line shows the next one, and past the newest entry it restores what you were
 typing before. Any edit ends history navigation. Repeated sends of the same
 input are stored once.
 
-**Esc.** Esc closes the file list if it is open. In a subagent's read-only
-view it then returns to the parent session (see [Subagents](#subagents)).
+**Esc.** Esc closes the file list if it is open. With a permission or
+question prompt shown and an empty input, it then denies the permission or
+rejects the question (see
+[Permission and question prompts](#permission-and-question-prompts)). In a
+subagent's read-only view it then returns to the parent session (see
+[Subagents](#subagents)).
 Otherwise, while a turn
 admitted by this TUI runs, it cancels that turn (like `/cancel`): the status
 shows `Cancelling…`, then `Cancelled · Ready`, and the transcript shows
@@ -485,7 +512,8 @@ prompt, so it waits while a turn runs.
 The backend runs it as a `ShellTurn`: its builtin `bash` tool runs the command
 in the session's working directory, with no model round, under the session's
 agent and permission rules. The default permission policy asks before `bash`
-runs, so a pending request may appear; answer it with `/approve <id>`.
+runs, so a permission prompt may appear; press `1` to run the command once
+(or `/approve <id>`).
 `CreateTurn` returns only when the command has finished; meanwhile the status
 reads `Running shell · <command>`.
 
@@ -577,6 +605,136 @@ idea as a `!command` shell turn showing `!<command>` (see
 (`state/store.ts` `commandDisplay`, `state/messages.ts`
 `commandUserView`) and shows it once the projection carries that message.
 
+## Permission and question prompts
+
+The backend asks before some tool calls run (under the default permission
+model: `bash`, `edit`, `write`, network reads, MCP and plugin tools; see
+[Configuration — Permissions](configuration.md#permissions)), and the
+`ask_user` tool asks you questions. The TUI shows each of these pending
+interactions as a prompt docked above the status line, so you can answer
+without typing its id. The agent's turn waits until you answer.
+
+### Permission prompt
+
+```text
+┌─Permission · 1 of 2──────────────────────────────────────────┐
+│edit  src/main.rs · +1 -1                                     │
+│asked by build                                                │
+││ - let x = 1;                                                │
+││ + let x = 2;                                                │
+│▸ 1  Allow once                                               │
+│  2  Always allow  tool: edit                                 │
+│  3  Deny                                                     │
+│1-3 or ↑↓ Enter · Esc denies · perm_…                         │
+└──────────────────────────────────────────────────────────────┘
+```
+
+- **Title row.** The waiting call as its tool card would summarize it
+  (`<tool>  <summary>`); an ask that is not tied to a tool call (for example
+  an external directory) shows the interaction title, `<action> <resource>`.
+- **Who asks.** `asked by <agent>` for the open session, `asked by subagent
+  <agent> · <task description>` for a subagent's session.
+- **Details**, beside a bar, rendered like the tool card body from the
+  call's arguments (`payload.input`): `bash` the command (`$ …`); `edit`,
+  `write`, `apply_patch` the diff (added rows green, removed rows red);
+  `read`, `webfetch` and other path or URL tools the path or URL; anything
+  else the compact JSON arguments; without a call, the resource. At most 8
+  lines (the first 3 and last 4 around `… N lines hidden`).
+- **Options.**
+
+| Key | Option | Sends |
+| --- | --- | --- |
+| `1` | Allow once: this call runs. | `{permission: {allowed: true, persist: false}}` |
+| `2` | Always allow: this call runs, and the backend stops asking for what the muted text names (`payload.always`, shown as `<action>: <patterns>`; the resource when the backend sends no patterns). | `{permission: {allowed: true, persist: true}}` |
+| `3` | Deny: the call fails with a permission error (its card shows `✗`), and the model continues with that result. | `{permission: {allowed: false, persist: false}}` |
+
+  An Always allow grant lives in the running backend process: it applies to
+  every session of that backend (and survives a permission mode switch) until
+  the backend restarts. For native tools it covers the exact subject (the
+  same command, the same path); see
+  [Tools and permissions](architecture/tools-and-permissions.md).
+
+### Question prompt
+
+```text
+┌─Question─────────────────────────────────────────────────────┐
+│Color: Which color do you want?                               │
+│asked by build                                                │
+│▸ 1  red                                                      │
+│  2  blue                                                     │
+│  3  Other…  type the answer in the input, Enter sends        │
+│  4  Reject                                                   │
+│1-4 or ↑↓ Enter · type an answer + Enter · Esc rejects · q_…  │
+└──────────────────────────────────────────────────────────────┘
+```
+
+The first row is `<header>: <question>`. Each option sends
+`{question: {answer: "<label>"}}`. For a free-text answer, type it into the
+input and press Enter: it sends `{question: {answer: "<text>"}}` instead of a
+prompt (a `/command` still runs as a command). Choosing `Other…` only points
+you at the input. `Reject` (or Esc) sends `{question: {rejected: true}}`;
+`ask_user` then reports the question as unanswered. Only the first question
+of a multi-question `ask_user` call is shown (the backend answers one per
+interaction).
+
+### Keys
+
+A prompt takes keys only while the input is empty, so text you are typing
+can never answer one by accident: with text in the input, digits, Enter, and
+Esc edit or send the input as usual, and the hint row reads `Clear the input
+to answer with 1-3 · or /approve <id>` (a question's reads `Enter sends the
+input as the answer`). The text you typed stays in the input while a prompt
+is shown and after you answer it.
+
+Key order, first match wins:
+
+1. An open list (the `/` command menu or the `@file` list) takes Up/Down,
+   Tab, Enter, and Esc.
+2. The prompt, with an empty input: `1`–`9` choose that option at once;
+   Up/Down move the highlight (`▸`, accent color); Enter chooses the
+   highlighted option; Esc declines. With text in the input, a question takes
+   Enter as its answer.
+3. The composer: history, sending, Esc's other meanings (return from a
+   subagent view, cancel the turn, clear the input).
+
+**Esc declines, it never approves.** On a permission prompt Esc is Deny
+(`allowed: false`, not saved); on a question it is Reject. Denying is the
+safe default: nothing runs that you did not allow, and the model sees the
+refusal and can continue or ask differently. There is no "answer later"
+state; to leave a prompt waiting, type in the input (the prompt stays and
+ignores keys) or open another view. A click on an option chooses it too.
+
+### Several asks
+
+Asks are shown one at a time, oldest first; the box title counts them
+(`Permission · 1 of 2`). Answering one shows the next. The session's own
+tool calls ask one after another; several asks wait at once when subagents
+ask too.
+
+An answer hides the prompt at once. The ask also closes when it is resolved
+elsewhere: another client answered it, or a switch of the session tree to
+the `yolo` permission mode allowed it (an `interactionResolved` frame, or the
+next listing). If the ask was already answered, the status line reads
+`Already answered elsewhere · <title>`; if the request fails, the prompt
+comes back with `Answer failed: …`.
+
+### Subagent asks
+
+A subagent runs in a child session and asks in its own name. The open
+session's prompt queue holds the asks of the open session and of every
+session below it (children by `SessionInfo.parent`, and the open session's
+members and `task` outputs before the session list knows them), so a
+subagent's ask appears in the parent view, labelled `asked by subagent
+<agent> · <task>`. The subagent's `task` card shows `◌ waiting for
+approval`, and its sidebar row `· ◌ waiting`. Opening the subagent's
+read-only view shows the same prompt there (only that subtree's asks); you
+can answer in either view. Asks of unrelated sessions stay in the
+[pending block](#layout).
+
+The keyboard commands keep working as a fallback: `/approve <id>`,
+`/deny <id>`, `/answer <id> <text>`, and `/interactions` (the prompt's hint
+row shows the id).
+
 ## Interface definitions
 
 The frontend uses the existing HTTP/JSON+SSE transport. Every request carries
@@ -603,8 +761,8 @@ string encoded 64-bit values, and the error envelope documented in the
 | `GET /v1/sessions/{id}` | No body | `SessionInfo.lastSeq` when a session is opened (the stream's first `sinceSeq`). |
 | `GET /v1/sessions/{id}/events/stream?sinceSeq=N` | SSE | `StreamFrame` with `event` or `resync`; `N` is the last applied durable seq. |
 | `GET /v1/sessions/{id}/events?sinceSeq=N&limit=500` | No body | `ListEventsResponse.events` / `nextSeq`, paged, to fill the gap after each stream (re)connect and `resync`. |
-| `GET /v1/interactions` | No body | `ListInteractionsResponse.interactions: Interaction[]`; a permission's `payload.callId` marks the waiting tool card (`◌ … · awaiting approval`). |
-| `POST /v1/interactions/{id}/respond` | `{permission: {allowed: boolean, persist: false}}` or `{question: {answer: string}}` | `RespondInteractionResponse.applied` |
+| `GET /v1/interactions` | No body (every type, every session; read at start, on refresh, after interaction frames, and in each child-session round) | `ListInteractionsResponse.interactions: Interaction[]`, oldest first. The TUI reads `id`, `session` (the asking session, a subagent's child session included), `type` (`INTERACTION_TYPE_PERMISSION` / `_QUESTION`), `title`, `detail` (a question's header), `options` (a question's option labels), and a permission's `payload`: `action`, `resource`, `always` (what Always allow covers), `callId` (marks the waiting tool card, `◌ … · awaiting approval`), `tool` and `input` (the prompt's details). A listed question has no options or header; the TUI keeps those from its live `questionRequested` frame, else reads them from the waiting `ask_user` call in the transcript. |
+| `POST /v1/interactions/{id}/respond` | Prompt: `{permission: {allowed: boolean, persist: boolean}}`, `{question: {answer: string}}`, or `{question: {rejected: true}}`. `/approve`, `/deny`: `persist: false`. | `RespondInteractionResponse.applied` (`false`: already resolved elsewhere) |
 | `GET /v1/models` | No body | `ListModelsResponse.models: ModelSummary[]` |
 | `GET /v1/providers` | No body | `ListProvidersResponse.providers: ProviderSummary[]` for key suggestions. |
 | `GET /v1/commands` | No body | `ListCommandsResponse.commands: CommandSummary[]` (includes skills, tagged `source: "skill"`) for slash completion and the command menu. |
@@ -654,7 +812,8 @@ rules follow the protocol guide's
 | `partCompleted {message, part}` | live or durable | No overlay change; a durable one triggers a projection re-read. |
 | `errorReported {message, code, errorMessage}` | durable | Stored as the message's error. Shown in the transcript and, at turn end, in the status line. |
 | `messageFinished {message, finish, cause}` | durable | The turn ends at the first assistant `messageFinished` after the turn's user message whose `finish` is not `FINISH_REASON_TOOL_CALLS`. Then the projection is re-read. |
-| `permissionRequested`, `questionRequested`, `interactionResolved` | live | Pending list re-read. |
+| `permissionRequested {interaction}`, `questionRequested {interaction}` | live | The ask is added to the pending list at once (a prompt appears); its options and header are remembered by id; then the listing is re-read. Only the open session's own asks arrive here; subagent asks come from the listing. |
+| `interactionResolved {request}` | live | The ask is removed at once (its prompt closes); then the listing is re-read. |
 | `resync {lastSeq}` | — | Live parts that were mid-stream stop taking deltas until their durable `partReplaced`; `ListEvents` fills the gap; the projection is re-read. |
 
 - **Sequence numbers.** The client keeps the last applied durable `seq` as a
@@ -711,10 +870,12 @@ together.
 | `src/main.ts` | Entry. Registers the Solid JSX transform (`@opentui/solid/preload`), parses flags, then dynamically imports the app. |
 | `src/cli.ts` | `--server`, `--dir`, `--help` parsing and the usage line. |
 | `src/client.ts` | Typed v1 HTTP/JSON+SSE client (`HyaClient`, `SseDecoder`, `parseApiCommand`). |
-| `src/state/store.ts` | `createAppStore()`: the single store. It holds the server projection (sessions, messages, interactions, models, agents, providers, workflows, saved key names, backend commands, todos, stream cursor, the open session's subagent members, what was last read about each child session), the published streaming overlay, the prompt queue, the turn state (`running`, `turnId`), and UI state (view, status, key-entry provider and mask, sidebar mode, terminal columns, the reasoning switch and per-part toggles, the tool-card switch and per-card toggles, the jump-to-bottom tick, the `/status` text, the backend version from bootstrap, the `/name args` display text of command turns by user message id). Each field is a Solid signal, and only the store's mutation methods change it. |
+| `src/state/store.ts` | `createAppStore()`: the single store. It holds the server projection (sessions, messages, interactions, models, agents, providers, workflows, saved key names, backend commands, todos, stream cursor, the open session's subagent members, what was last read about each child session), the published streaming overlay, the prompt queue, the turn state (`running`, `turnId`), and UI state (view, status, key-entry provider and mask, sidebar mode, terminal columns, the reasoning switch and per-part toggles, the tool-card switch and per-card toggles, the highlighted prompt option (`promptSelection`, by ask id), whether the input holds text (`draft`), the jump-to-bottom tick, the `/status` text, the backend version from bootstrap, the `/name args` display text of command turns by user message id). Each field is a Solid signal, and only the store's mutation methods change it. |
 | `src/state/overlay.ts` | `TranscriptOverlay`: the pure fold of stream frames by message and part id (seq filter, live/durable handover, `resync` handling, turn-end lookup). `mergeTranscript()` merges it over the projection. |
 | `src/state/messages.ts` | The transcript view model: `transcriptViews()` (projection + overlay + waiting queued prompts), `messageView()` (role, agent/model, typed blocks, finish notice; cached per message object), `finishNotice()`, `reasoningLabel()`, `reasoningExpanded()`, `toolExpanded()`. |
 | `src/state/tools.ts` | The tool-card view model: `toolCard()` (status, per-tool summary, body lines with tones, duration, error, task info), `toolStatus()`, `formatDuration()`, `clipLines()`, `diffLines()`, `partialField()`. |
+| `src/state/prompts.ts` | Permission and question prompts: `promptQueue()` (asks of the open session's tree), `treeSessionIds()`, `promptView()` (headline, asker, details from `toolCard()`, options), `currentPrompt()`, `promptKey()` (option keys), `respondBody()`, `mergeInteractions()` (listing + live frames + answered ids), `waitingKind()`. |
+| `src/app/prompts.ts` | `answerPrompt()`: send a choice's `RespondInteraction`, hide the ask, report the outcome in the status line. |
 | `src/state/members.ts` | Subagents: `foldMember()`, `taskLink()` (card → member and child session), `childStatus()`, `childActivity()`, `childSessionIds()`. |
 | `src/state/layout.ts` | Sidebar rules: `layoutBreakpoints`, `sidebarVisible()`, `toggledSidebar()`, `sidebarWidth()`, and `parseSwitch()` for `on`/`off` arguments. |
 | `src/state/scroll.ts` | `ScrollFollow` (the "new messages below" hint), `atBottom()`, `pageStep()`. |
@@ -722,7 +883,7 @@ together.
 | `src/app/controller.ts` | `createController()`: refreshes, the session SSE loop (subscribe, `ListEvents` gap-fill, `resync`), batched overlay flushes, the debounced projection re-read (`app/debounce.ts`), child-session rounds for subagent cards, `returnToParent()`, session creation, prompt submission (refused in a subagent's read-only view), command dispatch, and concealed key entry. It writes results into the store. |
 | `src/app/turns.ts` | `createTurnRunner()`: the client-side prompt queue, `409 session_busy` retry, and turn-end detection and status text. |
 | `src/app/App.tsx`, `src/app/run.tsx`, `src/app/context.ts` | Root layout (main column + sidebar), renderer startup, and the `AppContext` (store, controller, server URL, and `ui` handles such as the transcript's scroll actions) that components read with `useApp()`. |
-| `src/components/` | `Header`, `MainPanel` (transcript or view panel), `Transcript` (scrollbox, follow/hint), `MessageView` (`MessageItem`, user/assistant messages, blocks, reasoning, tool cards and `task` subagent cards, `KeyedFor`), `Spinner` (the shared spinner clock), `Markdown` (the `<markdown>` wrapper, `SyntaxStyle`, code-block boxes), `Panel`, `PendingBlock`, `Sidebar`, `StatusLine`, `Composer` (the `<textarea>` editor, its height, history, Esc / Ctrl+C / Ctrl+D, the shell-mode border, the `@file` list, the `/` command menu, Tab completion, key actions, concealed key entry), `Footer`. |
+| `src/components/` | `Header`, `MainPanel` (transcript or view panel), `Transcript` (scrollbox, follow/hint), `MessageView` (`MessageItem`, user/assistant messages, blocks, reasoning, tool cards and `task` subagent cards, `KeyedFor`), `Spinner` (the shared spinner clock), `Markdown` (the `<markdown>` wrapper, `SyntaxStyle`, code-block boxes), `Panel`, `PendingBlock` (other sessions' asks), `PromptDock` (the permission / question prompt), `Sidebar`, `StatusLine`, `Composer` (the `<textarea>` editor, its height, history, Esc / Ctrl+C / Ctrl+D, the shell-mode border, the `@file` list, the `/` command menu, Tab completion, key actions, concealed key entry), `Footer`. |
 | `src/composer/` | Pure composer logic: `history.ts` (`InputHistory`), `quit.ts` (`createQuitGuard`, the Ctrl+C double press), `escape.ts` (`escapeAction`), `shell.ts` (`shellCommand`, `isShellInput`), `mention.ts` (`mentionAt`, `insertMention`, `findPattern`, `rankPaths`). |
 | `src/commands/` | The slash-command registry (`registry.ts`), the built-in commands (`native.ts`), the `/help` text (`help.ts`), and the command menu's merge/fuzzy-filter/argument-hint logic (`menu.ts`: `mergeCommandEntries`, `filterCommands`, `requiresArgument`). |
 | `src/keys/bindings.ts` | The global key binding table (`keyBindings`) and the textarea overrides (`composerKeyBindings`: Enter submits; Ctrl+J, Shift+Enter, Alt+Enter insert a newline; Home/End). |
@@ -782,7 +943,7 @@ Then check the rendered TUI in the browser from `packages/hya-tui-web`
 `e2e/hya-tui-commands.spec.ts` cover the layout, colors, commands, key
 entry, narrow widths, and Ctrl+C. `e2e/hya-tui-layout.spec.ts` covers the
 main column and sidebar at the default viewport and at about 80 columns
-(Ctrl+B, `/sidebar`) and the pending block. `e2e/hya-tui-messages.spec.ts`
+(Ctrl+B, `/sidebar`), the prompt dock, and the pending block of another session's ask. `e2e/hya-tui-messages.spec.ts`
 covers user and assistant styling, Markdown and code highlighting, reasoning
 (Ctrl+O, `/thinking`, click), error, length, and cancel notices, and
 scrolling (PgUp/PgDn, End, Ctrl+End, the wheel, the new-messages hint).
@@ -799,5 +960,12 @@ read-only child view, Esc back, `/open`), also at about 80 columns.
 Ctrl+J / Alt+Enter newlines and box growth up to 8 rows, Shift+Enter in the
 browser, bracketed paste, cursor editing, history, Esc (clear, and cancel of
 a hanging fake-model turn), Ctrl+C once and twice, Ctrl+D, `/exit`,
-`!echo hello` (the waiting card, then its output), and `@file`
+`!echo hello` (the waiting card, `/approve`, then its output), and `@file`
 suggestions at the default width and about 80 columns.
+`e2e/hya-tui-prompts.spec.ts` covers the permission and question prompts
+under the default permission model: a bash ask (`1`, arrows + Enter, typed
+digits going to the input), Always allow (`2`, a second identical call runs
+without asking), Deny (`3`) and Esc, an edit ask's diff, two queued asks
+(`1 of 2`), `ask_user` options, a free-text answer, and Reject, a subagent's
+ask in the parent view (its task card and sidebar row waiting), a
+`!command` shell ask, and about 80 columns.

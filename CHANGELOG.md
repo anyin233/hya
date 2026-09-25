@@ -60,6 +60,11 @@
 - Tool calls render as cards with a state icon: pending, a running spinner, awaiting approval, done, or failed. Each card shows a per-tool summary and the duration. Edit, write, and patch cards show colored diffs, and long output is cut to its head and tail. Ctrl+G or `/tools [on|off]` expands or collapses all cards; clicking a card header toggles that card. `!command` shell turns use the bash card and show their output.
 - `task` cards show the subagent's status and latest activity. Clicking a card or `/open <child>` opens the child session read-only, with a banner, and Esc returns to the parent. The sidebar nests subagent sessions under their parent.
 - The browser test fixture gains a `model.permission` option (`default`, `allow`, or `danger`).
+- Permission prompts appear docked above the input, while the input is empty. Each prompt shows the waiting call the way its tool card does (the command, the diff, or the path or URL) and who asked.
+  - `1` allows once, and `2` always allows (the prompt shows what "always" covers).
+  - `3` and Esc deny; Esc never approves, and typing in the input never answers a prompt.
+- `ask_user` questions appear as prompts with selectable options, a free-text answer typed into the input, and Reject. Several pending asks show one at a time (`1 of N`).
+- A subagent's permission request or question shows in the parent view, labelled with the subagent. Its task card and sidebar row show that it is waiting. `/approve`, `/deny`, and `/answer` remain as keyboard fallbacks.
 
 ## List saved provider keys over the v1 API
 

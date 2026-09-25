@@ -181,8 +181,10 @@ test.describe("streamed reply", () => {
 parametrizes a test per array element for a bare array "option" value,
 silently dropping steps past the first). `protocol` defaults to `chat`. `permission` is the backend's `permission.model`
 (default `default`, under which `bash`, `edit`, and `write` ask first and
-leave a pending permission request); specs that run those tools without
-answering a prompt use `allow`.
+leave a pending permission request, shown by the TUI as a permission
+prompt); specs that run those tools without answering a prompt use `allow`,
+and specs that answer the prompt (`e2e/hya-tui-prompts.spec.ts`: press `1`,
+`2`, or `3`) keep `default`.
 Leaving `model` unset keeps the existing offline echo model, so specs that
 predate the fake model are unaffected. When `model` is set, the `backend`
 fixture starts the fake model before `hya serve` and writes

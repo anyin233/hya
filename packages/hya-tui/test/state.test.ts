@@ -129,3 +129,40 @@ test("submitting a prompt asks the transcript to jump to the newest line", () =>
   store.followTranscript()
   expect(store.state.followTick).toBe(before + 1)
 })
+
+test("interaction frames add, enrich, and resolve pending asks; answered ids stay hidden", () => {
+  const store = createAppStore()
+  store.openSession(session("hysec_1"))
+  const perm = { id: "perm_1", session: "hysec_1", type: "INTERACTION_TYPE_PERMISSION", title: "bash ls", payload: { callId: "call_1" } }
+  const ask = { id: "que_1", session: "hysec_1", type: "INTERACTION_TYPE_QUESTION", title: "Color?", detail: "Color", options: ["red", "blue"] }
+  store.applyEvent({ session: "hysec_1", permissionRequested: { interaction: perm } })
+  store.applyEvent({ session: "hysec_1", questionRequested: { interaction: ask } })
+  store.applyEvent({ session: "hysec_1", permissionRequested: { interaction: perm } })
+  expect(store.state.interactions.map((row) => row.id)).toEqual(["perm_1", "que_1"])
+  // The listing omits a question's options: the frame's are kept.
+  store.setInteractions([perm, { id: "que_1", session: "hysec_1", type: "INTERACTION_TYPE_QUESTION", title: "Color?" }])
+  expect(store.state.interactions[1]).toMatchObject({ options: ["red", "blue"], detail: "Color" })
+  // Resolved elsewhere (another client, a yolo switch).
+  store.applyEvent({ session: "hysec_1", interactionResolved: { request: "perm_1" } })
+  expect(store.state.interactions.map((row) => row.id)).toEqual(["que_1"])
+  // Answered here: hidden at once, and a stale listing does not bring it back.
+  store.resolveInteraction("que_1")
+  expect(store.state.interactions).toEqual([])
+  store.setInteractions([ask])
+  expect(store.state.interactions).toEqual([])
+  // A failed answer shows it again.
+  store.unresolveInteraction("que_1")
+  store.setInteractions([ask])
+  expect(store.state.interactions.map((row) => row.id)).toEqual(["que_1"])
+})
+
+test("the highlighted prompt option belongs to one ask; the draft flag follows the input", () => {
+  const store = createAppStore()
+  expect(store.promptIndex("perm_1")).toBe(0)
+  store.setPromptIndex("perm_1", 2)
+  expect(store.promptIndex("perm_1")).toBe(2)
+  expect(store.promptIndex("perm_2")).toBe(0)
+  expect(store.state.draft).toBe(false)
+  store.setDraft(true)
+  expect(store.state.draft).toBe(true)
+})

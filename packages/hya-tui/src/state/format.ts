@@ -2,6 +2,7 @@
 import type { SessionInfo } from "../client"
 import { helpText } from "../commands/help"
 import type { View } from "../instructions"
+import { promptQueue, waitingKind } from "./prompts"
 import type { AppState } from "./store"
 
 export function modelReference(session: SessionInfo): string {
@@ -69,7 +70,8 @@ export function sessionListText(state: AppState, width?: number): string {
   const groups: string[][] = []
   sessionTree(state.sessions).forEach(({ session, depth }, index) => {
     const mark = session.id === state.selected?.id ? "▸" : " "
-    const running = session.busy ? " · running" : ""
+    // A pending ask outranks `running`: the session is blocked on the user.
+    const running = waitingKind(state.interactions, session.id) ? " · ◌ waiting" : session.busy ? " · running" : ""
     if (depth === 0) {
       groups.push([
         truncate(`${mark} ${index + 1}. ${session.title || session.id}`, width),
@@ -82,9 +84,13 @@ export function sessionListText(state: AppState, width?: number): string {
   return groups.map((lines) => lines.join("\n")).join("\n\n")
 }
 
-/** One line per pending interaction: `! title · id` for permissions, `? title · id` for questions. */
+/**
+ * One line per pending interaction the prompt does not show (asks of other
+ * session trees): `! title · id` for permissions, `? title · id` for questions.
+ */
 export function pendingLines(state: AppState, width?: number): string[] {
-  return state.interactions.map((item) => truncate(`${item.type?.includes("QUESTION") ? "?" : "!"} ${item.title} · ${item.id}`, width))
+  const prompted = new Set(promptQueue(state.interactions, state).map((item) => item.id))
+  return state.interactions.filter((item) => !prompted.has(item.id)).map((item) => truncate(`${item.type?.includes("QUESTION") ? "?" : "!"} ${item.title} · ${item.id}`, width))
 }
 
 /** The sidebar's context box: the open session, its agent and model, message count, directory, server. */

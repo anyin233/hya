@@ -20,9 +20,16 @@
  * outputs; state/members.ts) are re-read — `GetSession` for `busy`,
  * `ListMessages` for the latest activity — after every projection read and
  * member frame, and every `childPollMs` while a child is busy or this
- * client's turn runs. No child stream is subscribed.
+ * client's turn runs. No child stream is subscribed, so the same round
+ * re-reads the pending interactions: a subagent's ask (its child session id)
+ * reaches the parent's prompt within one round.
+ *
+ * Prompts: `answer()` responds to a permission or question prompt
+ * (app/prompts.ts); live `permissionRequested` / `questionRequested` /
+ * `interactionResolved` frames of the open session update the pending list
+ * at once (state/store.ts), and the listing is re-read after them.
  */
-import type { HyaClient, MessageInfo, SessionInfo, StreamEvent, StreamFrame } from "../client"
+import type { HyaClient, Interaction, MessageInfo, SessionInfo, StreamEvent, StreamFrame } from "../client"
 import { completeCommand, SecretEntry } from "../completion"
 import { createCommandRegistry, mergeCommandEntries, type AppActions, type CommandEntry, type CommandRegistry } from "../commands"
 import { findPattern, rankPaths } from "../composer/mention"
@@ -30,7 +37,9 @@ import { shellCommand } from "../composer/shell"
 import type { KeyLike } from "../keys/bindings"
 import { sessionTree } from "../state/format"
 import { childActivity, childSessionIds } from "../state/members"
+import type { PromptChoice } from "../state/prompts"
 import type { AppStore } from "../state/store"
+import { answerPrompt } from "./prompts"
 import { createDebounce } from "./debounce"
 import { createTurnRunner, turnEndStatus } from "./turns"
 
@@ -162,6 +171,8 @@ export function createController({ client, store, directory, registry = createCo
     void Promise.all([
       ...ids.map((id) => readChild(id).catch(() => undefined)),
       client.listSessions().then((rows) => generation === childGeneration && store.setSessions(rows)).catch(() => undefined),
+      // Child streams are not subscribed: their asks come from the listing.
+      client.listInteractions().then((rows) => generation === childGeneration && store.setInteractions(rows)).catch(() => undefined),
     ]).then(() => {
       if (generation !== childGeneration) return
       childReading = false
@@ -316,6 +327,13 @@ export function createController({ client, store, directory, registry = createCo
     void turns.cancel().catch((error: unknown) => status(`Cancel failed: ${String(error)}`))
   }
 
+  /** Answer a permission or question prompt; the pending list and transcript are re-read after. */
+  function answer(interaction: Interaction, choice: PromptChoice): void {
+    void answerPrompt({ store, client }, interaction, choice).then(() => {
+      if (choice.kind !== "other") scheduleRefresh()
+    })
+  }
+
   /** `@file` suggestions: paths under `--dir` containing `query`, best first. */
   async function findFiles(query: string): Promise<string[]> {
     return rankPaths(await client.findFiles(findPattern(query), fileLookupLimit), query, fileSuggestionLimit)
@@ -400,6 +418,7 @@ export function createController({ client, store, directory, registry = createCo
     submit,
     returnToParent: () => void returnToParent().catch((error: unknown) => status(`Open failed: ${String(error)}`)),
     cancelTurn,
+    answer,
     findFiles,
     complete: (input: string) => completeCommand(input, store.completionContext(), registry),
     commandEntries,

@@ -1,3 +1,4 @@
+import type { RespondBody } from "./state/prompts"
 /** Small HTTP/JSON client for the shared hya.v1 server contract. */
 export interface SessionInfo {
   id: string
@@ -428,6 +429,11 @@ export class HyaClient {
 
   async cancelTurn(session: string, turn: string): Promise<unknown> {
     return this.request("POST", `/v1/sessions/${encodeURIComponent(session)}/turns/${encodeURIComponent(turn)}/cancel`, {})
+  }
+
+  /** `RespondInteraction` with one response kind (state/prompts.ts `respondBody`). */
+  async respondInteraction(id: string, body: RespondBody): Promise<{ applied?: boolean }> {
+    return this.request("POST", `/v1/interactions/${encodeURIComponent(id)}/respond`, body)
   }
 
   async respondPermission(id: string, allowed: boolean): Promise<unknown> {

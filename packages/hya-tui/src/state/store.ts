@@ -36,6 +36,7 @@ import type { View } from "../instructions"
 import { toggledSidebar, type SidebarMode } from "./layout"
 import { foldMember, type ChildState } from "./members"
 import { TranscriptOverlay, type OverlayEffect } from "./overlay"
+import { mergeInteractions } from "./prompts"
 
 /** A prompt submitted while a turn runs; sent when the session is free. */
 export interface QueuedPrompt {
@@ -116,6 +117,10 @@ export interface AppState {
   readonly todos: TodoItem[]
   /** Text of the `/status` view. */
   readonly statusText: string
+  /** Highlighted option of the shown permission/question prompt, for the ask `id`. */
+  readonly promptSelection: { id: string; index: number } | undefined
+  /** The composer holds text (a prompt then leaves its keys to the input). */
+  readonly draft: boolean
 }
 
 /** Rows loaded by one full catalog refresh. `savedKeys: null` = listing unsupported. */
@@ -171,6 +176,8 @@ function initialState(): { [K in keyof AppState]: AppState[K] } {
     serverVersion: "",
     todos: [],
     statusText: "",
+    promptSelection: undefined,
+    draft: false,
   }
 }
 
@@ -189,6 +196,21 @@ export function createAppStore() {
   }
   const fold = new TranscriptOverlay()
   let queueIds = 0
+  /** Asks as their live frames carried them (the listing omits a question's options), by id. */
+  const liveAsks = new Map<string, Interaction>()
+  /** Asks answered from this TUI: hidden even from a listing read before the answer landed. */
+  const answered = new Set<string>()
+  const upsertAsk = (interaction: Interaction): void => {
+    if (!interaction.id || answered.has(interaction.id)) return
+    liveAsks.set(interaction.id, interaction)
+    const rows = state.interactions
+    const at = rows.findIndex((row) => row.id === interaction.id)
+    set("interactions", at < 0 ? [...rows, interaction] : rows.map((row, index) => index === at ? { ...row, ...interaction } : row))
+  }
+  const dropAsk = (id: string): void => {
+    liveAsks.delete(id)
+    if (state.interactions.some((row) => row.id === id)) set("interactions", state.interactions.filter((row) => row.id !== id))
+  }
 
   return {
     state,
@@ -199,7 +221,7 @@ export function createAppStore() {
       batch(() => {
         set("agents", bootstrap.agents ?? [])
         set("models", bootstrap.models ?? [])
-        set("interactions", bootstrap.interactions ?? [])
+        set("interactions", mergeInteractions(bootstrap.interactions ?? [], liveAsks, answered))
         set("serverVersion", bootstrap.location?.version ?? "")
       })
     },
@@ -207,7 +229,7 @@ export function createAppStore() {
     applyCatalog(catalog: Catalog): void {
       batch(() => {
         set("sessions", catalog.sessions)
-        set("interactions", catalog.interactions)
+        set("interactions", mergeInteractions(catalog.interactions, liveAsks, answered))
         set("models", catalog.models)
         set("workflows", catalog.workflows)
         set("providers", catalog.providers)
@@ -277,6 +299,10 @@ export function createAppStore() {
       if (effect.durable) set("cursor", fold.lastSeq)
       // Members fold here, not in the overlay: they are session state, not transcript parts.
       if (event.memberUpdated?.member && (effect.durable || !event.seq)) set("members", foldMember(state.members, event.memberUpdated))
+      // Pending asks are live frames: shown at once, before the listing is re-read.
+      const asked = event.permissionRequested?.interaction ?? event.questionRequested?.interaction
+      if (asked) upsertAsk({ ...asked, ...(asked.session ? {} : event.session ? { session: event.session } : {}), type: asked.type || (event.questionRequested ? "INTERACTION_TYPE_QUESTION" : "INTERACTION_TYPE_PERMISSION") })
+      if (event.interactionResolved?.request) dropAsk(event.interactionResolved.request)
       return effect
     },
 
@@ -301,7 +327,24 @@ export function createAppStore() {
     },
     dequeue(id: number): void { set("queued", state.queued.filter((item) => item.id !== id)) },
 
-    setInteractions(rows: Interaction[]): void { set("interactions", rows) },
+    /** A fresh listing, merged with what live frames carried; asks answered here stay hidden. */
+    setInteractions(rows: Interaction[]): void { set("interactions", mergeInteractions(rows, liveAsks, answered)) },
+    /** An ask was answered from this TUI: hide it now (the answer is in flight). */
+    resolveInteraction(id: string): void {
+      answered.add(id)
+      dropAsk(id)
+    },
+    /** The answer failed: let the next listing show the ask again. */
+    unresolveInteraction(id: string): void { answered.delete(id) },
+    /** Highlighted option of the prompt for ask `id` (0 for any other ask). */
+    promptIndex(id: string): number {
+      const selection = state.promptSelection
+      return selection?.id === id ? selection.index : 0
+    },
+    setPromptIndex(id: string, index: number): void { set("promptSelection", { id, index }) },
+    setDraft(value: boolean): void {
+      if (value !== state.draft) set("draft", value)
+    },
     setWorkflowState(value: Record<string, unknown> | undefined): void { set("workflowState", value) },
     setView(view: View): void { set("view", view) },
     setStatus(text: string): void { set("status", text) },
