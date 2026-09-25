@@ -8,6 +8,7 @@
  */
 import type { HyaClient } from "../client"
 import type { CompletionContext } from "../completion"
+import type { PickerSpec } from "../state/picker"
 import type { AppStore } from "../state/store"
 
 /** Controller actions a command handler may call. */
@@ -23,6 +24,10 @@ export interface AppActions {
   cancelTurn(): Promise<void>
   /** Leave the TUI and restore the terminal. */
   quit(): void
+  /** Open the modal picker (components/Picker.tsx); the choice runs `spec.onSelect`. */
+  openPicker(spec: PickerSpec): void
+  /** Switch the session tree's permission mode (app/modes.ts): yolo asks first once per process; no session → applied on creation. */
+  requestPermissionMode(mode: string): Promise<void>
 }
 
 export interface CommandContext {

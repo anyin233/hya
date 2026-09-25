@@ -84,3 +84,16 @@ export function workingLineText(state: AppState, now: number): string | undefine
   const queued = queuedCount(state)
   return `${elapsed} · ${activity}${queued ? ` · Queued ${queued}` : ""} · Esc to interrupt`
 }
+
+/** Turn-progress status texts of app/turns.ts that repeat what the working line shows. */
+const progressStatus = /^(Running · |Running shell · |Sending prompt…$|Queued · )/
+
+/**
+ * The status line's text: while the working line is visible it already
+ * shows the run (elapsed time, activity, queued prompts), so the turn
+ * runner's progress texts (`Running · msg_…`, `Sending prompt…`, …) are
+ * hidden; other messages (`Ready`, errors, command results) stay.
+ */
+export function statusLineText(status: string, working: boolean): string {
+  return working && progressStatus.test(status) ? "" : status
+}

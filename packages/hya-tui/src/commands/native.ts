@@ -3,6 +3,7 @@ import { brief, operations } from "../api"
 import { parseApiCommand } from "../client"
 import { modelReference, sessionTree } from "../state/format"
 import { parseSwitch, sidebarVisible } from "../state/layout"
+import { effectiveMode, modeRows } from "../state/modes"
 import { CommandRegistry, matchValues, type CommandContext, type CommandInvocation, type CommandSpec } from "./registry"
 
 const workflowActions = ["select", "run"]
@@ -178,6 +179,25 @@ export const nativeCommandSpecs: CommandSpec[] = [
       ]
       store.setStatusText(lines.join("\n"))
       store.setView("status")
+    },
+  },
+  {
+    name: "/permissions",
+    description: "Pick the session's permission mode (manual, yolo, bundle modes), or set one directly",
+    argumentHint: "[mode]",
+    complete: ({ words, current, head }, context) => words.length === 1 ? matchValues(head, current, context.permissionModes ?? []) : [],
+    run: async ({ store, client, actions }, { args }) => {
+      if (args[0]) {
+        await actions.requestPermissionMode(args[0])
+        return
+      }
+      const modes = await client.listPermissionModes()
+      store.setPermissionModes(modes)
+      actions.openPicker({
+        title: "Permission mode",
+        rows: modeRows(modes, effectiveMode(store.state)),
+        onSelect: (row) => actions.requestPermissionMode(row.id),
+      })
     },
   },
   {

@@ -172,7 +172,7 @@ test.describe("errors and notices", () => {
 
     await prompt(term, "please hang")
     await expect.poll(() => fakeModel!.pendingHangs(), { timeout: 20_000 }).toBe(1)
-    await term.waitForText("Running ·")
+    await term.waitForText("Esc to interrupt")
     await prompt(term, "/cancel")
     await term.waitForText("! Cancelled", 20_000)
     const cancelled = await at(term, "! Cancelled")

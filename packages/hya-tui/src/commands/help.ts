@@ -10,6 +10,7 @@ export const helpText = [
   "/models               List models", "/model [provider/model] Change current session model, or show it with no argument",
   "/agent [name]         Change current session agent, or show it with no argument",
   "/rename <title>       Rename the current session",
+  "/permissions [mode]   Pick the permission mode (manual, yolo, bundle modes), or set it directly (Shift+Tab cycles)",
   "/workflows            List workflows",
   "/keys                 List saved provider key names", "/key set <provider>   Enter a key in a concealed prompt",
   "/login <provider>     Alias for /key set", "/key remove <provider> Delete a saved key",
@@ -29,6 +30,7 @@ export const helpText = [
   "Permission prompt (input empty): 1 allow once · 2 always allow · 3 deny · Up/Down + Enter · Esc denies",
   "Question prompt: 1-N pick an option · type an answer + Enter · Esc rejects",
   "Esc close a menu, else decline a shown prompt, else return from a subagent view, else cancel the running turn, else clear the input · Ctrl+C clear, twice quit · Ctrl+D quit on empty input",
+  "Shift+Tab cycle permission mode manual → yolo → bundle modes (yolo asks to confirm once) · in an open list: move up",
   "Tab completes commands · Ctrl+R refresh · Ctrl+B sidebar · Ctrl+O thinking · Ctrl+G tool cards",
   "PgUp/PgDn scroll · Ctrl+Home/Ctrl+End top/bottom (Home/End when the input is empty)",
 ].join("\n")

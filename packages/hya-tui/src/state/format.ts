@@ -151,7 +151,7 @@ export function compactionText(payload: { untilSeq?: string; strategy?: string }
 
 /** Status bar fields (E22); `statusBarText` renders them with graceful truncation at `width`. */
 export interface StatusBarFields {
-  /** Permission mode placeholder text (`SessionInfo.permissionMode`; S12 adds switching and colors). */
+  /** Permission mode label (state/modes.ts `modeDisplay`: `manual`, `⚠ yolo`, or a bundle mode's title); StatusBar colors it. */
   mode: string
   directory: string
   /** Current git branch; "" when unknown or not a repository. */

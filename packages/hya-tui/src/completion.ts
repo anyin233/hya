@@ -16,6 +16,8 @@ export interface CompletionContext {
   interactions: string[]
   agents: string[]
   apiOperations: string[]
+  /** Permission mode ids (`/permissions <mode>`). */
+  permissionModes?: string[]
 }
 
 const defaultRegistry = createCommandRegistry()

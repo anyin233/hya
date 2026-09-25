@@ -31,7 +31,9 @@ test.describe("streamed reply", () => {
     await term.waitForText("alpha br", 20_000)
     const partial = await term.text()
     expect(partial).not.toContain(reply)
-    expect(partial).toContain("Running ·")
+    // The working line shows the run; the status line does not repeat it as `Running · msg_…`.
+    expect(partial).toContain("Esc to interrupt")
+    expect(partial).not.toMatch(/Running · msg_/)
     await term.attach(testInfo, "streaming-screen")
     await term.waitForText(reply)
     await term.waitForText("● build · fake/model")
@@ -54,7 +56,8 @@ test.describe("queued prompt", () => {
     await prompt(term, "second prompt")
     // The queued prompt is a dimmed user block with a `queued` tag at its right.
     await term.waitForText(/second prompt\s+queued/)
-    await term.waitForText("1 queued")
+    // The working line counts it (the status line no longer repeats `Running · … · 1 queued`).
+    await term.waitForText("Queued 1")
     const queuedPrompt = (await term.find("second prompt"))!
     expect((await term.cell(queuedPrompt.row, queuedPrompt.col))?.fg).toBe(muted)
     expect((await term.cell(queuedPrompt.row, queuedPrompt.col - 2))?.fg).toBe(muted)

@@ -37,8 +37,10 @@ import { shellCommand } from "../composer/shell"
 import type { KeyLike } from "../keys/bindings"
 import { sessionTree } from "../state/format"
 import { childActivity, childSessionIds } from "../state/members"
+import { createPicker, pickerKey as pickerKeyOutcome, type PickerRow, type PickerSpec } from "../state/picker"
 import type { PromptChoice } from "../state/prompts"
 import type { AppStore } from "../state/store"
+import { createModeSwitcher } from "./modes"
 import { answerPrompt } from "./prompts"
 import { createDebounce } from "./debounce"
 import { createTurnRunner, turnEndStatus } from "./turns"
@@ -85,13 +87,16 @@ export function createController({ client, store, directory, registry = createCo
   const secret = new SecretEntry()
   const status = (text: string): void => store.setStatus(text)
   const turns = createTurnRunner({ store, client })
+  const modes = createModeSwitcher({ store, client })
 
   async function refresh(): Promise<void> {
-    const [sessions, interactions, models, workflows, providers, savedKeys, commands] = await Promise.all([
+    const [sessions, interactions, models, workflows, providers, savedKeys, commands, permissionModes] = await Promise.all([
       client.listSessions(), client.listInteractions(), client.listModels(), client.listWorkflows(),
       client.listProviders(), client.listSavedKeys(), client.listCommands(),
+      // Optional: the Shift+Tab cycle falls back to the built-ins without it.
+      client.listPermissionModes().catch(() => undefined),
     ])
-    store.applyCatalog({ sessions, interactions, models, workflows, providers, savedKeys, commands })
+    store.applyCatalog({ sessions, interactions, models, workflows, providers, savedKeys, commands, ...(permissionModes ? { permissionModes } : {}) })
   }
 
   async function refreshMessages(): Promise<void> {
@@ -299,6 +304,8 @@ export function createController({ client, store, directory, registry = createCo
     await refresh()
     await openSession(session.id)
     status(`Created ${session.id}`)
+    // A mode chosen before any session existed applies before the first prompt is admitted.
+    await modes.applyPending()
   }
 
   function beginKeyEntry(provider: string): void {
@@ -312,10 +319,42 @@ export function createController({ client, store, directory, registry = createCo
     store.endSecret()
   }
 
+  /** Open the modal picker; keys go to it (components/Composer.tsx) until a row is chosen or Esc closes it. */
+  function openPicker(spec: PickerSpec): void {
+    store.setPicker({ ...createPicker(spec), onSelect: spec.onSelect })
+  }
+
+  /** Close the picker; focus returns to the composer. */
+  function closePicker(): void {
+    store.setPicker(undefined)
+  }
+
+  /** Choose a picker row (Enter or a click): close first, then run the choice. */
+  function choosePickerRow(row: PickerRow): void {
+    const open = store.state.picker
+    if (!open) return
+    closePicker()
+    void Promise.resolve()
+      .then(() => open.onSelect(row))
+      .catch((error: unknown) => status(`Error: ${String(error)}`))
+  }
+
+  /** One key while the picker is open (it takes every key but Ctrl+C). */
+  function pickerKey(key: KeyLike): void {
+    const open = store.state.picker
+    if (!open) return
+    const outcome = pickerKeyOutcome(open, key)
+    if (outcome.type === "update") store.updatePicker(outcome.state)
+    else if (outcome.type === "close") closePicker()
+    else if (outcome.type === "select") choosePickerRow(outcome.row)
+  }
+
   const actions: AppActions = {
     refresh, refreshMessages, openSession, newSession, beginKeyEntry, scheduleRefresh,
     cancelTurn: () => turns.cancel(),
     quit,
+    openPicker,
+    requestPermissionMode: (mode) => modes.request(mode),
   }
 
   /** Submit one composer input: a prompt, a `!command` shell turn, a native command, or a backend command. */
@@ -446,6 +485,10 @@ export function createController({ client, store, directory, registry = createCo
     findFiles,
     complete: (input: string) => completeCommand(input, store.completionContext(), registry),
     commandEntries,
+    modes,
+    pickerKey,
+    choosePickerRow,
+    closePicker,
     secretKey,
     secretPaste,
     refreshAll,

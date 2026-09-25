@@ -199,7 +199,7 @@ test.describe("Esc cancels a running turn", () => {
     await term.type("hang please")
     await term.press("Enter")
     await expect.poll(() => fakeModel!.pendingHangs(), { timeout: 20_000 }).toBe(1)
-    await term.waitForText("Running ·")
+    await term.waitForText("Esc to interrupt")
     // Text typed while the turn runs stays: Esc cancels the turn, it does not clear.
     await term.type("next")
     await term.press("Escape")

@@ -10,6 +10,7 @@ import { insertMention, mentionAt, type MentionToken } from "../composer/mention
 import { createQuitGuard, quitWindowMs } from "../composer/quit"
 import { isShellInput } from "../composer/shell"
 import { composerKeyBindings, resolveBinding } from "../keys/bindings"
+import { isShiftTab } from "../state/modes"
 import { currentPrompt, promptKey } from "../state/prompts"
 import { colors } from "../theme"
 
@@ -37,6 +38,11 @@ interface CmdMenu {
  * scrolls. Up/Down on the first/last line walk the input history. Esc closes
  * the `@file` list, else declines a shown prompt, else cancels the running
  * turn, else clears the input (composer/escape.ts).
+ *
+ * Key order: the modal picker (every key but Ctrl+C), the one-line yolo
+ * confirmation (Enter, Esc, Shift+Tab), then Shift+Tab in an open list
+ * (highlight up), the lists, the prompt dock, and the key bindings
+ * (Shift+Tab cycles the permission mode; docs/tui.md "Permission modes").
  *
  * Permission/question prompts (components/PromptDock.tsx): after the lists,
  * a shown prompt takes digits, Up/Down, Enter, and Esc while the input is
@@ -298,6 +304,24 @@ export function Composer() {
       key.preventDefault()
       key.stopPropagation()
     }
+    // The modal picker (components/Picker.tsx) takes every key but Ctrl+C,
+    // which closes it and keeps its quit meaning.
+    if (store.state.picker) {
+      if (key.ctrl && !key.meta && key.name === "c") controller.closePicker()
+      else {
+        consume()
+        controller.pickerKey(key)
+        return
+      }
+    }
+    // The yolo confirmation line takes Enter, Esc, and Shift+Tab before the
+    // lists and the prompt dock (so they never answer an ask); any other key
+    // cancels it and is handled as usual.
+    if (store.state.modeConfirm && controller.modes.key(key)) {
+      consume()
+      quitGuard.disarm()
+      return
+    }
     // The editor's own text is always live; `sync()` (onContentChange) can
     // lag one render behind fast typing (programmatic or a fast typist), so
     // recompute the command menu from `editor.plainText` right here before
@@ -305,6 +329,16 @@ export function Composer() {
     // list from before the most recent keystroke.
     updateCommandMenu()
     const cmdOpen = cmdMenu()
+    // Shift+Tab in an open list moves its highlight up instead of cycling the permission mode.
+    if (isShiftTab(key) && (cmdOpen || menu())) {
+      consume()
+      if (cmdOpen) setCmdMenu({ ...cmdOpen, index: (cmdOpen.index - 1 + cmdOpen.items.length) % cmdOpen.items.length })
+      else {
+        const files = menu()!
+        setMenu({ ...files, index: (files.index - 1 + files.items.length) % files.items.length })
+      }
+      return
+    }
     if (cmdOpen && !key.ctrl && !key.meta && !key.shift && (key.name === "tab" || key.name === "return" || key.name === "kpenter")) {
       consume()
       acceptCommandEntry(key.name !== "tab")
@@ -379,6 +413,10 @@ export function Composer() {
       case "complete":
         consume()
         complete()
+        return
+      case "cycleMode":
+        consume()
+        controller.modes.cycle()
         return
       case "refresh":
         controller.refreshAll()
@@ -479,7 +517,7 @@ export function Composer() {
           wrapMode="word"
           keyBindings={[...composerKeyBindings]}
           visible={!entering()}
-          focused={!entering()}
+          focused={!entering() && !store.state.picker}
           onSubmit={submit}
           onContentChange={sync}
           onCursorChange={() => updateMention()}

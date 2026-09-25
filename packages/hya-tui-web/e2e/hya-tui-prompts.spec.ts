@@ -48,7 +48,7 @@ test.describe("bash permission prompt", () => {
     await term.waitForText(/▸ 1 {2}Allow once/)
     await term.waitForText(/2 {2}Always allow {2}bash: /)
     await term.waitForText(/3 {2}Deny/)
-    await term.waitForText(/1-3 or ↑↓ Enter · Esc denies · perm_\w+/)
+    await term.waitForText(/1-3 or ↑↓ Enter · Esc denies · perm_\w+ · mode manual/)
     // The box is drawn in the warning color; the highlighted option in the accent color.
     const box = await at(term, "Permission")
     expect((await term.cell(box.row, box.col - 1))?.fg).toBe(colors.warning)

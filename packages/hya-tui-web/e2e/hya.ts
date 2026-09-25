@@ -8,7 +8,7 @@ import { spawn, type ChildProcess } from "node:child_process"
 import { existsSync } from "node:fs"
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { startFakeModel, type FakeModel, type Protocol, type Step } from "./fake-model"
 import { test as base, type Tui } from "./harness"
@@ -33,7 +33,56 @@ const providerKinds: Record<Protocol, string> = { chat: "openai-compatible", res
 /** `permission.model` written to the backend config when a fake model is used. */
 export type PermissionModel = "default" | "allow" | "danger"
 
-async function startBackend(root: string, fakeModel: FakeModel | undefined, protocol: Protocol, permission: PermissionModel): Promise<{ child: ChildProcess; backend: Backend }> {
+/** Files of one bundle source directory, by path relative to it (`bundle.yaml`, …). */
+export type BundleFiles = Record<string, string>
+
+/** The Bun adapter entry (`crates/hya-plugin-bun/adapter`) that hosts a bundle's JS extension. */
+export const bunAdapterMain = join(repoRoot, "crates/hya-plugin-bun/adapter/src/main.ts")
+
+/**
+ * A `kind: Plugin` bundle that declares `permission_modes:` and answers
+ * `permission.approve` from a Bun process (the repository's Bun adapter
+ * loading `approver.ts` as a bundle extension). `approve` is the JS source
+ * of the hook handler, called with `{ session, root_session, agent, mode,
+ * action, resource }` and returning `allow_once | allow_always | reject |
+ * defer`. Select a mode as `<id>/<mode id>`; `GET /v1/permission-modes`
+ * lists it with `source: <id>`.
+ */
+export function approverBundle(options: { id: string; modes: { id: string; title: string; description?: string }[]; approve: string }): BundleFiles {
+  const namespace = options.id.split("/").at(-1)!
+  const modes = options.modes
+    .map((mode) => `  - id: ${mode.id}\n    title: ${JSON.stringify(mode.title)}\n${mode.description ? `    description: ${JSON.stringify(mode.description)}\n` : ""}`)
+    .join("")
+  return {
+    "bundle.yaml":
+      "kind: Plugin\n" +
+      `identity: { id: ${options.id}, version: 1.0.0, publisher: e2e }\n` +
+      "extensions:\n" +
+      `  process: { kind: bun, command: [bun, run, ${JSON.stringify(bunAdapterMain)}, --plugin-id, ${namespace}, --bundle-extension, '\${BUNDLE_ROOT}/approver.ts'] }\n` +
+      "  files:\n" +
+      "    - { id: approver, path: approver.ts }\n" +
+      "resources:\n" +
+      "  hooks:\n" +
+      "    - { id: permission.approve, path: hooks/permission-approve.json }\n" +
+      "permission_modes:\n" +
+      modes,
+    "hooks/permission-approve.json": "{}\n",
+    "approver.ts": `export default {\n  id: ${JSON.stringify(namespace)},\n  server: async () => ({\n    "permission.approve": ${options.approve},\n  }),\n}\n`,
+  }
+}
+
+/** Write project bundles into `<dir>/.hya/bundles/<name>/` (the backend runs in `dir`, so it loads them at startup). */
+async function writeProjectBundles(dir: string, bundles: Record<string, BundleFiles>): Promise<void> {
+  for (const [name, files] of Object.entries(bundles)) {
+    for (const [path, content] of Object.entries(files)) {
+      const target = join(dir, ".hya/bundles", name, path)
+      await mkdir(dirname(target), { recursive: true })
+      await writeFile(target, content)
+    }
+  }
+}
+
+async function startBackend(root: string, fakeModel: FakeModel | undefined, protocol: Protocol, permission: PermissionModel, bundles: Record<string, BundleFiles> | undefined): Promise<{ child: ChildProcess; backend: Backend }> {
   const dir = join(root, "work")
   const env: Record<string, string> = {}
   for (const name of ["home", "config", "data", "state", "cache"]) {
@@ -41,6 +90,7 @@ async function startBackend(root: string, fakeModel: FakeModel | undefined, prot
     await mkdir(env[name]!, { recursive: true })
   }
   await mkdir(dir, { recursive: true })
+  if (bundles) await writeProjectBundles(dir, bundles)
   if (fakeModel) {
     const hyaCfgDir = join(env.config!, "hya")
     await mkdir(join(hyaCfgDir, "auth"), { recursive: true })
@@ -124,10 +174,19 @@ type Options = {
    * model, so pre-existing specs are unaffected.
    */
   model: FakeModelOption | undefined
+  /**
+   * Project bundles for the isolated backend, by directory name
+   * (`test.use({ projectBundles: { approver: approverBundle({...}) } })`),
+   * written to `<backend.dir>/.hya/bundles/<name>/` before `hya serve`
+   * starts. An object, not an array (see `FakeModelOption`). Unset (the
+   * default) writes none.
+   */
+  projectBundles: Record<string, BundleFiles> | undefined
 }
 
 export const test = base.extend<Fixtures & Options>({
   model: [undefined, { option: true }],
+  projectBundles: [undefined, { option: true }],
   fakeModel: async ({ model }, use) => {
     if (!model) {
       await use(undefined)
@@ -137,12 +196,12 @@ export const test = base.extend<Fixtures & Options>({
     await use(fake)
     await fake.stop()
   },
-  backend: async ({ fakeModel, model }, use) => {
+  backend: async ({ fakeModel, model, projectBundles }, use) => {
     if (!existsSync(hyaBin)) {
       throw new Error(`hya binary not found at ${hyaBin}; run \`cargo build -p hya-backend --bin hya\` or set HYA_BIN`)
     }
     const root = await mkdtemp(join(tmpdir(), "hya-tui-web-"))
-    const { child, backend } = await startBackend(root, fakeModel, model?.protocol ?? "chat", model?.permission ?? "default")
+    const { child, backend } = await startBackend(root, fakeModel, model?.protocol ?? "chat", model?.permission ?? "default", projectBundles)
     await use(backend)
     if (child.exitCode === null) {
       const exited = new Promise((resolve) => child.once("exit", resolve))

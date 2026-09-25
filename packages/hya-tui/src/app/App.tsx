@@ -4,7 +4,9 @@ import { Composer } from "../components/Composer"
 import { Footer } from "../components/Footer"
 import { Header } from "../components/Header"
 import { MainPanel } from "../components/MainPanel"
+import { ModeConfirm } from "../components/ModeConfirm"
 import { PendingBlock } from "../components/PendingBlock"
+import { Picker } from "../components/Picker"
 import { PromptDock } from "../components/PromptDock"
 import { Sidebar } from "../components/Sidebar"
 import { StatusBar } from "../components/StatusBar"
@@ -19,9 +21,10 @@ export { layoutBreakpoints } from "../state/layout"
 /**
  * Root layout: one main column (header, status bar, transcript or view
  * panel, the working indicator for a running turn, pending block for other
- * sessions' asks, the permission/question prompt, status line, bordered
- * composer, footer instruction) and, when shown, the sidebar on the right
- * (state/layout.ts).
+ * sessions' asks, the permission/question prompt, the one-line yolo
+ * confirmation, status line, bordered composer, footer instruction) and,
+ * when shown, the sidebar on the right (state/layout.ts). The modal picker
+ * (components/Picker.tsx) is drawn over both when open.
  */
 export function App() {
   const { store } = useApp()
@@ -38,6 +41,7 @@ export function App() {
         <WorkingIndicator />
         <PendingBlock width={size().width - (shown() ? side() : 0)} />
         <PromptDock />
+        <ModeConfirm />
         <StatusLine />
         <Composer />
         <Footer />
@@ -45,6 +49,7 @@ export function App() {
       <Show when={shown()}>
         <Sidebar width={side()} />
       </Show>
+      <Picker />
     </box>
   )
 }
