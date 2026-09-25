@@ -7,6 +7,8 @@ export interface SessionInfo {
   model?: { providerId?: string; modelId?: string; variant?: string }
   busy?: boolean
   lastSeq?: string
+  /** `manual`, `yolo`, or a `<bundle-id>/<mode-id>`; empty when the server leaves it unset. */
+  permissionMode?: string
 }
 
 export interface TurnInfo {
@@ -76,6 +78,14 @@ export interface CommandSummary {
   name: string
   description?: string
   argumentHint?: string
+  /** Where the command was discovered: `command` (custom/built-in) or `skill`. */
+  source?: string
+}
+
+export interface TodoItem {
+  id: string
+  content: string
+  status: string
 }
 
 export interface AgentSummary {
@@ -183,6 +193,9 @@ export class HyaClient {
   ) {
     this.base = baseUrl.replace(/\/+$/, "")
   }
+
+  /** The server's base URL (`/status`). */
+  get baseUrl(): string { return this.base }
 
   async request<T>(method: string, path: string, body?: unknown): Promise<T> {
     if (!path.startsWith("/v1/") || path.startsWith("//")) {
@@ -347,6 +360,27 @@ export class HyaClient {
 
   async updateSessionModel(session: string, model: string): Promise<SessionInfo> {
     return this.request("PATCH", `/v1/sessions/${encodeURIComponent(session)}`, { model })
+  }
+
+  /** `UpdateSession` (`PATCH /v1/sessions/:id`) for the fields `/rename` and `/agent` change. */
+  async updateSession(session: string, patch: { title?: string; agent?: string }): Promise<SessionInfo> {
+    return this.request("PATCH", `/v1/sessions/${encodeURIComponent(session)}`, patch)
+  }
+
+  /** `CompactSession`: compact the session's context now (`/compact`). */
+  async compactSession(session: string): Promise<{ compactedUntilSeq?: string; strategy?: string }> {
+    return this.request("POST", `/v1/sessions/${encodeURIComponent(session)}/compact`, {})
+  }
+
+  /** `SummarizeSession`: generate a summary message for the session (`/summarize`). */
+  async summarizeSession(session: string): Promise<{ summaryMessage?: string }> {
+    return this.request("POST", `/v1/sessions/${encodeURIComponent(session)}/summarize`, {})
+  }
+
+  /** `GetSessionTodo` (`/todos`). */
+  async getSessionTodo(session: string): Promise<TodoItem[]> {
+    const result = await this.request<{ items?: TodoItem[] }>("GET", `/v1/sessions/${encodeURIComponent(session)}/todo`)
+    return result.items ?? []
   }
 
   async cancelTurn(session: string, turn: string): Promise<unknown> {

@@ -11,10 +11,11 @@ highlighted code blocks; reasoning is collapsed to one `Thinking` line (see
 [Messages](#messages)). Models, Workflows, and saved provider keys have
 dedicated views; the API command view exposes the other HTTP/JSON operations
 in `hya.v1`. The input is a multi-line editor with input history; it also
-runs `!command` shell turns and completes `@file` references (see
-[Composer](#composer)). Tab completes slash commands using the TUI and server
-command catalogs. One persistent instruction line stays below the input at the
-bottom of the screen and changes with the current view.
+runs `!command` shell turns, completes `@file` references, and opens a
+command menu on `/` (see [Composer](#composer)). Tab completes slash commands
+using the TUI and server command catalogs. One persistent instruction line
+stays below the input at the bottom of the screen and changes with the
+current view.
 If a backend predates the saved-key list endpoint, the main TUI still opens and
 shows that key listing needs a backend restart with an updated binary.
 
@@ -75,13 +76,16 @@ backend is running.
 | Up / Down | On the input's first / last line: the previous / next submitted input. |
 | `!<command>` + Enter | Run the command as a shell turn in the current session (see [Shell turns](#shell-turns)). |
 | `@<text>` | Show matching file paths; Up/Down select, Tab or Enter inserts `@<path>`, Esc closes (see [File references](#file-references)). |
-| Esc | Close the file list; else cancel the running turn; else clear the input. |
+| `/` at the start of the input | Open the command menu; fuzzy-filters as you type the name (see [Command menu](#command-menu)). |
+| Esc | Close the command menu or the file list; else cancel the running turn; else clear the input. |
 | Ctrl+C | Clear the input and show `Press Ctrl+C again to quit`; a second Ctrl+C within 2 s quits. |
 | Ctrl+D | Quit when the input is empty (otherwise delete the character under the cursor). |
 | `/exit`, `/quit` | Quit. |
 | `/new [agent] [model]` | Create a session in `--dir`, using the first visible agent and its model by default. |
 | `/sessions`, `/open <id or number>` | Refresh or switch sessions. |
-| `/models`, `/model <provider/model>` | View catalog or change the selected session model. |
+| `/models`, `/model [provider/model]` | View catalog or change the selected session model; with no argument, shows the current model and the available list. |
+| `/agent [name]` | Change the selected session's agent, or with no argument show the current agent and the available list. |
+| `/rename <title>` | Rename the current session (`UpdateSession`). |
 | `/keys` | List configured providers and provider IDs with saved credentials; never display key values. |
 | `/key set <provider>`, `/login <provider>` | Open concealed entry for a provider API key; Enter saves, Esc cancels. |
 | `/key remove <provider>` | Delete the provider's saved credential. |
@@ -90,13 +94,19 @@ backend is running.
 | `/approve <id>`, `/deny <id>` | Respond to a permission request for this run only (`persist: false`). |
 | `/answer <id> <text>` | Answer a question request. |
 | `/cancel` or Esc | Cancel the running turn: the status line shows `Cancelling…`, then `Cancelled · Ready`. |
-| `/refresh` or Ctrl+R | Reload sessions, messages, interactions, models, and Workflows. |
+| `/refresh` or Ctrl+R | Reload sessions, messages, interactions, models, Workflows, and the command catalog (commands and skills). |
 | `/sidebar [on\|off]` or Ctrl+B | Show or hide the sidebar. Without an argument it toggles what is visible now. |
 | `/thinking [on\|off]` or Ctrl+O | Expand or collapse every reasoning (`Thinking`) block. |
+| `/compact` | Compact the session's context now (`CompactSession`); the status line shows `Compacting…`, then `Compacted · <strategy>`. |
+| `/summarize` | Summarize the session into a new message (`SummarizeSession`). |
+| `/todos` | Show the session's todo list (`GetSessionTodo`) in the main panel. |
+| `/status` | Show the server URL, backend version, directory, session, agent, model, and permission mode. |
+| `/init`, `/review` | Server built-in commands from the backend command catalog, run as `CommandTurn`s. |
+| `/<skill> [args]` | Run a discovered skill as a `CommandTurn` (see [Skill commands](#skill-commands)). |
 | `/api` | List the HTTP operations from the generated OpenAPI catalog. |
 | `/api METHOD /v1/path [JSON]` | Send a scoped HTTP/JSON request and show its JSON response. |
-| `/help` | Show command help. |
-| Tab | Complete a slash command or supported argument; repeat Tab to cycle matches. |
+| `/help` | Show command help, including server and skill commands. |
+| Tab | Complete a slash command name (or, in the command menu, the highlighted entry) or a supported argument; repeat Tab to cycle argument matches. |
 | PgUp / PgDn | Scroll the transcript one page (the view height minus two rows). |
 | Ctrl+Home / Ctrl+End | Jump to the top of the transcript / to the newest line, which the view then follows again. Plain Home / End do the same while the input is empty; with text in the input they move the cursor. |
 | Mouse wheel | Scroll the transcript. |
@@ -110,11 +120,13 @@ input. Status updates and completion suggestions can change without erasing
 the next-step instruction.
 
 Other slash commands are forwarded to the backend as `CommandTurn`s, so
-custom commands from the server catalog remain usable in this frontend. Tab
-suggestions also use that catalog. Argument completion covers agents, sessions,
-models, Workflows, pending interaction IDs, provider IDs, saved key names, and
-HTTP operations from the generated OpenAPI catalog. Suggestions are refreshed
-with `/refresh` or Ctrl+R.
+custom commands and skills from the server catalog (`ListCommands`, which
+already includes skills tagged `source: "skill"`) remain usable in this
+frontend. Tab suggestions and the command menu also use that catalog.
+Argument completion covers agents, sessions, models, Workflows, pending
+interaction IDs, provider IDs, saved key names, and HTTP operations from the
+generated OpenAPI catalog. Suggestions are refreshed with `/refresh` or
+Ctrl+R, and whenever the session or directory changes.
 
 The API command accepts `GET`, `POST`, `PUT`, `PATCH`, and `DELETE`; the optional
 body must be JSON. `GET` has no body. Include query parameters directly in the
@@ -399,6 +411,51 @@ The reference is plain text: the prompt carries `@src/main.rs` as typed, and
 nothing is attached (`PromptTurn` is text only). The agent reads the file
 with its tools if it needs it.
 
+### Command menu
+
+Typing `/` at the start of the input (before any other character) opens a
+`Commands` box above it, the same overlay position and key handling as the
+`@file` list. Each row shows the name, its argument hint, its description
+(truncated to width), and its source in brackets: `[local]` (this TUI's own
+registry), `[command]` (a custom or built-in server command, `/init` and
+`/review` among them), or `[skill]` (a discovered skill — see
+[Skill commands](#skill-commands) below). The list is fuzzy-filtered as you
+keep typing the name: an exact match ranks first, then a prefix match, then a
+substring match, then any name whose letters appear in order (a subsequence
+match); ties break alphabetically. Up/Down move the highlight; Esc closes the
+menu and keeps the typed text.
+
+Tab always completes the highlighted name and a trailing space, so you keep
+typing its arguments. Enter's behavior depends on the highlighted command's
+argument hint: with no hint, or one written `[in brackets]` (an optional
+argument, for example `/new [agent] [model]` or `/sidebar [on|off]`), Enter
+runs the command as is. Any other hint (`/open <id|number>`, `/key
+set|remove <provider>`) names a required first argument, so Enter behaves
+like Tab: it completes the name and waits for you to type the argument.
+
+Local and backend (command or skill) names are merged and deduplicated by
+name; a local name always wins a clash with a backend name (the registry
+looks up local commands before falling back to the backend, so a local
+command is what actually runs either way). The list refreshes with
+`/refresh`/Ctrl+R and whenever the session or directory changes, the same as
+Tab completion.
+
+### Skill commands
+
+A discovered skill runs as `/<skill> [args]`, the same as any other backend
+command: the TUI sends `{command: {command, arguments}}` (`CommandTurn`);
+the backend catalog (`crates/hya-server/src/support/command_catalog.rs`)
+resolves the name against custom commands and skills together, expands the
+skill's template with the arguments (`$1`, `$ARGUMENTS`) server-side, and
+runs the result as a normal prompt turn. The transcript shows what you typed,
+`/<skill> args`, in place of the backend's expanded prompt text — the same
+idea as a `!command` shell turn showing `!<command>` (see
+[Shell turns](#shell-turns)) — then the agent's streamed reply as usual.
+`CreateTurn` returns the user message id as the turn id for a command turn
+(unlike a shell turn), so the TUI remembers the typed `/name args` by that id
+(`state/store.ts` `commandDisplay`, `state/messages.ts`
+`commandUserView`) and shows it once the projection carries that message.
+
 ## Interface definitions
 
 The frontend uses the existing HTTP/JSON+SSE transport. Every request carries
@@ -411,9 +468,12 @@ string encoded 64-bit values, and the error envelope documented in the
 | `GET /v1/bootstrap` | No body | `Bootstrap` (`location`, `agents`, `models`, `interactions`) |
 | `GET /v1/sessions` | No body | `ListSessionsResponse.sessions: SessionInfo[]` |
 | `POST /v1/sessions` | `{agent: string, model: string, workdir: string}` | `CreateSessionResponse.session: SessionInfo` |
-| `GET /v1/sessions/{id}` | No body | `SessionInfo` |
-| `PATCH /v1/sessions/{id}` | `{model: string}` | `SessionInfo` |
+| `GET /v1/sessions/{id}` | No body | `SessionInfo` (including `permissionMode`, read by `/status`) |
+| `PATCH /v1/sessions/{id}` | `{title?: string, model?: string, agent?: string}` (`UpdateSession`; `/model`, `/agent`, `/rename` each send one field) | `SessionInfo` |
 | `GET /v1/sessions/{id}/messages` | No body | `ListMessagesResponse.messages: MessageInfo[]` |
+| `POST /v1/sessions/{id}/compact` | `{}` (`CompactSession`) | `CompactSessionResponse {compactedUntilSeq, strategy}` for `/compact` |
+| `POST /v1/sessions/{id}/summarize` | No body (`SummarizeSession`) | `SummarizeSessionResponse {summaryMessage}` for `/summarize` |
+| `GET /v1/sessions/{id}/todo` | No body (`GetSessionTodo`) | `TodoList.items: TodoItem[]` for `/todos` |
 | `POST /v1/sessions/{id}/turns` | `{prompt: {text: string}}` | `CreateTurnResponse.turn: TurnInfo` |
 | `POST /v1/sessions/{id}/turns` | `{command: {command: string, arguments: string}}` for other slash commands | `CreateTurnResponse.turn: TurnInfo` |
 | `POST /v1/sessions/{id}/turns` | `{shell: {command: string, agent: string, model?: {providerId: string, modelId: string}}}` for `!command` (the session's agent and model) | `CreateTurnResponse.turn: TurnInfo` once the command has finished; `id` is the shell turn's assistant message. |
@@ -426,7 +486,7 @@ string encoded 64-bit values, and the error envelope documented in the
 | `POST /v1/interactions/{id}/respond` | `{permission: {allowed: boolean, persist: false}}` or `{question: {answer: string}}` | `RespondInteractionResponse.applied` |
 | `GET /v1/models` | No body | `ListModelsResponse.models: ModelSummary[]` |
 | `GET /v1/providers` | No body | `ListProvidersResponse.providers: ProviderSummary[]` for key suggestions. |
-| `GET /v1/commands` | No body | `ListCommandsResponse.commands: CommandSummary[]` for slash completion. |
+| `GET /v1/commands` | No body | `ListCommandsResponse.commands: CommandSummary[]` (includes skills, tagged `source: "skill"`) for slash completion and the command menu. |
 | `GET /v1/auth` | No body | `ListProviderAuthResponse.providerIds: string[]` (saved provider IDs only; empty field omitted). A 404 marks key listing unavailable without blocking startup. |
 | `PUT /v1/auth/{provider_id}` | `{apiKey: string}` | `SetProviderAuthResponse.status: AuthStatus`; key value is sent only to the backend. |
 | `DELETE /v1/auth/{provider_id}` | No body | `RemoveProviderAuthResponse` (empty). |
@@ -439,7 +499,7 @@ from the current view; it makes no HTTP request:
 
 | View or state | Bottom instruction |
 | --- | --- |
-| Chat | `Enter a prompt · /new creates a session · /help lists commands` |
+| Chat | `Enter a prompt · /new creates a session · /help lists commands · / opens the command menu` |
 | Models | `Next: /model <provider/model> to switch this session · /help` |
 | Workflows | `Next: /workflow select <name> or /workflow run [name]` |
 | Interactions | `Next: /approve <id>, /deny <id>, or /answer <id> <text>` |
@@ -448,6 +508,8 @@ from the current view; it makes no HTTP request:
 | Concealed key entry | `Paste API key · Enter saves · Esc cancels` |
 | API | `Next: /api GET /v1/health · /help for command syntax` |
 | Help | `Enter a prompt or choose a /command · Tab completes` |
+| Todos | `Next: /refresh to reload the list · /help` |
+| Status | `Next: /model, /agent, or /rename to change what's shown · /help` |
 
 ### Stream frames and the transcript
 
@@ -524,7 +586,7 @@ together.
 | `src/main.ts` | Entry. Registers the Solid JSX transform (`@opentui/solid/preload`), parses flags, then dynamically imports the app. |
 | `src/cli.ts` | `--server`, `--dir`, `--help` parsing and the usage line. |
 | `src/client.ts` | Typed v1 HTTP/JSON+SSE client (`HyaClient`, `SseDecoder`, `parseApiCommand`). |
-| `src/state/store.ts` | `createAppStore()`: the single store. It holds the server projection (sessions, messages, interactions, models, agents, providers, workflows, saved key names, backend commands, stream cursor), the published streaming overlay, the prompt queue, the turn state (`running`, `turnId`), and UI state (view, status, key-entry provider and mask, sidebar mode, terminal columns, the reasoning switch and per-part toggles, the jump-to-bottom tick). Each field is a Solid signal, and only the store's mutation methods change it. |
+| `src/state/store.ts` | `createAppStore()`: the single store. It holds the server projection (sessions, messages, interactions, models, agents, providers, workflows, saved key names, backend commands, todos, stream cursor), the published streaming overlay, the prompt queue, the turn state (`running`, `turnId`), and UI state (view, status, key-entry provider and mask, sidebar mode, terminal columns, the reasoning switch and per-part toggles, the jump-to-bottom tick, the `/status` text, the backend version from bootstrap, the `/name args` display text of command turns by user message id). Each field is a Solid signal, and only the store's mutation methods change it. |
 | `src/state/overlay.ts` | `TranscriptOverlay`: the pure fold of stream frames by message and part id (seq filter, live/durable handover, `resync` handling, turn-end lookup). `mergeTranscript()` merges it over the projection. |
 | `src/state/messages.ts` | The transcript view model: `transcriptViews()` (projection + overlay + waiting queued prompts), `messageView()` (role, agent/model, typed blocks, finish notice; cached per message object), `finishNotice()`, `reasoningLabel()`, `reasoningExpanded()`. |
 | `src/state/layout.ts` | Sidebar rules: `layoutBreakpoints`, `sidebarVisible()`, `toggledSidebar()`, `sidebarWidth()`, and `parseSwitch()` for `on`/`off` arguments. |
@@ -533,9 +595,9 @@ together.
 | `src/app/controller.ts` | `createController()`: refreshes, the session SSE loop (subscribe, `ListEvents` gap-fill, `resync`), batched overlay flushes, the debounced projection re-read (`app/debounce.ts`), session creation, prompt submission, command dispatch, and concealed key entry. It writes results into the store. |
 | `src/app/turns.ts` | `createTurnRunner()`: the client-side prompt queue, `409 session_busy` retry, and turn-end detection and status text. |
 | `src/app/App.tsx`, `src/app/run.tsx`, `src/app/context.ts` | Root layout (main column + sidebar), renderer startup, and the `AppContext` (store, controller, server URL, and `ui` handles such as the transcript's scroll actions) that components read with `useApp()`. |
-| `src/components/` | `Header`, `MainPanel` (transcript or view panel), `Transcript` (scrollbox, follow/hint), `MessageView` (`MessageItem`, user/assistant messages, blocks, reasoning, tool lines with shell command and output, `KeyedFor`), `Markdown` (the `<markdown>` wrapper, `SyntaxStyle`, code-block boxes), `Panel`, `PendingBlock`, `Sidebar`, `StatusLine`, `Composer` (the `<textarea>` editor, its height, history, Esc / Ctrl+C / Ctrl+D, the shell-mode border, the `@file` list, Tab completion, key actions, concealed key entry), `Footer`. |
+| `src/components/` | `Header`, `MainPanel` (transcript or view panel), `Transcript` (scrollbox, follow/hint), `MessageView` (`MessageItem`, user/assistant messages, blocks, reasoning, tool lines with shell command and output, `KeyedFor`), `Markdown` (the `<markdown>` wrapper, `SyntaxStyle`, code-block boxes), `Panel`, `PendingBlock`, `Sidebar`, `StatusLine`, `Composer` (the `<textarea>` editor, its height, history, Esc / Ctrl+C / Ctrl+D, the shell-mode border, the `@file` list, the `/` command menu, Tab completion, key actions, concealed key entry), `Footer`. |
 | `src/composer/` | Pure composer logic: `history.ts` (`InputHistory`), `quit.ts` (`createQuitGuard`, the Ctrl+C double press), `escape.ts` (`escapeAction`), `shell.ts` (`shellCommand`, `isShellInput`), `mention.ts` (`mentionAt`, `insertMention`, `findPattern`, `rankPaths`). |
-| `src/commands/` | The slash-command registry (`registry.ts`), the built-in commands (`native.ts`), and the `/help` text (`help.ts`). |
+| `src/commands/` | The slash-command registry (`registry.ts`), the built-in commands (`native.ts`), the `/help` text (`help.ts`), and the command menu's merge/fuzzy-filter/argument-hint logic (`menu.ts`: `mergeCommandEntries`, `filterCommands`, `requiresArgument`). |
 | `src/keys/bindings.ts` | The global key binding table (`keyBindings`) and the textarea overrides (`composerKeyBindings`: Enter submits; Ctrl+J, Shift+Enter, Alt+Enter insert a newline; Home/End). |
 | `src/completion.ts`, `src/instructions.ts`, `src/api.ts`, `src/theme.ts` | Tab completion and `SecretEntry`, footer instructions, the OpenAPI operation catalog, and the palette (`colors`, `syntaxColors`, and `syntaxStyles`, the Markdown/tree-sitter scope styles). |
 
@@ -561,9 +623,14 @@ To add a slash command, add a `CommandSpec` to `nativeCommandSpecs` in
 }
 ```
 
-The name becomes Tab-completable automatically. Add a line to
-`src/commands/help.ts` and a row to the command table above. Unregistered
-`/names` still go to the backend as `CommandTurn`s. To add a key, append a
+The name becomes Tab-completable and appears in the command menu
+automatically (source `[local]`; it wins a name clash with a backend
+command). An `argumentHint` written `[in brackets]` is optional (the command
+menu's Enter runs it as is); anything else is treated as required (Enter
+completes the name and waits). Add a line to `src/commands/help.ts` and a row
+to the command table above. Unregistered `/names` still go to the backend as
+`CommandTurn`s (custom commands and skills; see
+[Skill commands](#skill-commands)). To add a key, append a
 `KeyBinding` to `src/keys/bindings.ts` and handle its action in
 `components/Composer.tsx`. A binding's `matches(key, context)` may depend on
 `context.composerEmpty` (plain Home/End scroll only while the input is
@@ -594,8 +661,12 @@ covers user and assistant styling, Markdown and code highlighting, reasoning
 scrolling (PgUp/PgDn, End, Ctrl+End, the wheel, the new-messages hint).
 `e2e/hya-tui-streaming.spec.ts` uses the fake model to cover streaming text,
 queued prompts, and the turn status line (`Ready`, provider errors).
-`e2e/hya-tui-composer.spec.ts` covers the composer: Ctrl+J / Alt+Enter
-newlines and box growth up to 8 rows, Shift+Enter in the browser, bracketed
-paste, cursor editing, history, Esc (clear, and cancel of a hanging fake-model
-turn), Ctrl+C once and twice, Ctrl+D, `/exit`, `!echo hello`, and `@file`
+`e2e/hya-tui-commands-menu.spec.ts` covers the `/` command menu (open,
+fuzzy filter, sources, Up/Down, Tab, Esc, Enter's argument-hint rule), skill
+commands (a fixture `SKILL.md` under `.hya/skills/<name>/`), `/compact`,
+`/rename`, and `/status`. `e2e/hya-tui-composer.spec.ts` covers the composer:
+Ctrl+J / Alt+Enter newlines and box growth up to 8 rows, Shift+Enter in the
+browser, bracketed paste, cursor editing, history, Esc (clear, and cancel of
+a hanging fake-model turn), Ctrl+C once and twice, Ctrl+D, `/exit`,
+`!echo hello`, and `@file`
 suggestions at the default width and about 80 columns.

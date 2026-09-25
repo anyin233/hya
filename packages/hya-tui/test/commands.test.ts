@@ -71,11 +71,99 @@ test("unknown slash commands become backend command turns", async () => {
     },
   })
   store.openSession({ id: "hysec_1", agent: "build", workdir: "/w" })
-  await run("/compact  now please")
-  expect(sent).toEqual(["hysec_1 compact now please"])
+  await run("/deploy  now please")
+  expect(sent).toEqual(["hysec_1 deploy now please"])
   expect(store.state.turnId).toBe("msg_c")
-  expect(store.state.status).toBe("Command compact · turn_state_running")
+  expect(store.state.status).toBe("Command deploy · turn_state_running")
   expect(calls).toEqual(["scheduleRefresh"])
+})
+
+test("a backend command turn's user message shows the /name args the user typed", async () => {
+  const { store, run } = harness({
+    createCommandTurn: async () => ({ id: "msg_u1", state: "TURN_STATE_RUNNING" }),
+  })
+  store.openSession({ id: "hysec_1", agent: "build", workdir: "/w" })
+  await run("/review  src/main.ts")
+  expect(store.state.commandDisplay.get("msg_u1")).toBe("/review  src/main.ts")
+})
+
+test("/model and /agent with no argument show the current value and the available list", async () => {
+  const { store, run } = harness()
+  store.applyCatalog({ sessions: [], interactions: [], models: [{ id: "openai/gpt" }], workflows: [], providers: [], savedKeys: [], commands: [] })
+  store.openSession({ id: "hysec_1", agent: "build", workdir: "/w", model: { providerId: "openai", modelId: "gpt" } })
+  await run("/model")
+  expect(store.state.status).toBe("Model openai/gpt · available: openai/gpt")
+  await run("/agent")
+  expect(store.state.status).toBe("Agent build · available: none")
+})
+
+test("/model and /agent with an argument switch the session", async () => {
+  const { store, run } = harness({
+    updateSessionModel: async (session, model) => ({ id: session, agent: "build", workdir: "/w", model: { providerId: model.split("/")[0], modelId: model.split("/")[1] } }),
+    updateSession: async (session, patch) => ({ id: session, agent: patch.agent ?? "build", workdir: "/w" }),
+  })
+  store.openSession({ id: "hysec_1", agent: "build", workdir: "/w" })
+  await run("/model anthropic/claude")
+  expect(store.state.selected?.model).toEqual({ providerId: "anthropic", modelId: "claude" })
+  await run("/agent review")
+  expect(store.state.selected?.agent).toBe("review")
+})
+
+test("/rename updates the session title", async () => {
+  const { store, run } = harness({
+    updateSession: async (session, patch) => ({ id: session, agent: "build", workdir: "/w", title: patch.title }),
+  })
+  store.openSession({ id: "hysec_1", agent: "build", workdir: "/w" })
+  await run("/rename New title")
+  expect(store.state.selected?.title).toBe("New title")
+  expect(store.state.status).toBe("Renamed to New title")
+  await expect(run("/rename   ")).rejects.toThrow("Usage: /rename <title> in a session")
+})
+
+test("/compact shows a compacting status then the outcome", async () => {
+  const statuses: string[] = []
+  const { store, run } = harness({
+    compactSession: async () => ({ compactedUntilSeq: "10", strategy: "shake" }),
+  })
+  store.openSession({ id: "hysec_1", agent: "build", workdir: "/w" })
+  const original = store.setStatus
+  store.setStatus = (text: string) => { statuses.push(text); original(text) }
+  await run("/compact")
+  expect(statuses).toEqual(["Compacting…", "Compacted · shake"])
+})
+
+test("/summarize refreshes messages after summarizing", async () => {
+  const { store, calls, run } = harness({
+    summarizeSession: async () => ({ summaryMessage: "msg_s" }),
+  })
+  store.openSession({ id: "hysec_1", agent: "build", workdir: "/w" })
+  await run("/summarize")
+  expect(store.state.status).toBe("Summarized")
+  expect(calls).toEqual(["refreshMessages"])
+})
+
+test("/todos loads the session todo list into the todos view", async () => {
+  const { store, run } = harness({
+    getSessionTodo: async () => [{ id: "t1", content: "Write tests", status: "TODO_STATUS_PENDING" }],
+  })
+  store.openSession({ id: "hysec_1", agent: "build", workdir: "/w" })
+  await run("/todos")
+  expect(store.state.view).toBe("todos")
+  expect(store.state.todos).toEqual([{ id: "t1", content: "Write tests", status: "TODO_STATUS_PENDING" }])
+})
+
+test("/status shows server, version, directory, session, agent, model, and mode", async () => {
+  const { store, run } = harness()
+  store.applyBootstrap({ location: { version: "0.42.0" } })
+  store.openSession({ id: "hysec_1", agent: "build", workdir: "/w", title: "Fix bug", model: { providerId: "openai", modelId: "gpt" }, permissionMode: "yolo" })
+  await run("/status")
+  expect(store.state.view).toBe("status")
+  const text = store.state.statusText
+  expect(text).toContain("Version     0.42.0")
+  expect(text).toContain("Session     Fix bug")
+  expect(text).toContain("Agent       build")
+  expect(text).toContain("Model       openai/gpt")
+  expect(text).toContain("Mode        yolo")
 })
 
 test("argument completion comes from the command's own completer", () => {

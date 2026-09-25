@@ -54,6 +54,9 @@
 - The input is a multi-line editor. Enter sends; Ctrl+J or Alt+Enter insert a newline. Shift+Enter also inserts one in terminals that report it, but in the browser WebUI it sends, because xterm.js has no kitty keyboard support. Pasted text never sends. The box grows to 8 rows, and Up/Down recall earlier inputs.
 - Esc cancels the running turn (`Cancelling…`, then `Cancelled · Ready`); with no turn running it clears the input. Ctrl+C clears the input and quits on a second press within 2 seconds. Ctrl+D on an empty input and the new `/exit` and `/quit` commands also quit.
 - `!command` runs a shell turn, shown as `!command`, `↳ bash`, `$ command`. Typing `@` suggests files from the work directory (`FindFiles`) and inserts `@path` into the prompt.
+- Typing `/` opens a command menu with fuzzy filtering. It merges local commands with the backend's command and skill catalog (tagged `[local]`, `[command]`, or `[skill]`); a local command wins when names clash. Up/Down select and Tab completes the name. Enter runs the command when its arguments are optional, and otherwise completes it and waits for arguments. Esc closes the menu.
+- Skill and server commands (`/<skill> args`, `/init`, `/review`) show what you typed in the transcript, not the expanded template.
+- New commands: `/agent`, `/rename <title>`, `/compact`, `/summarize`, `/todos`, and `/status` (server, version, directory, session, agent, model, and permission mode). With no argument, `/model` and `/agent` show the current value and the available choices.
 
 ## List saved provider keys over the v1 API
 

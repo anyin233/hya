@@ -198,6 +198,18 @@ function shellUserView(view: MessageView, command: string): MessageView {
   return replaced
 }
 
+const commandUserViews = new WeakMap<MessageView, { text: string; view: MessageView }>()
+
+/** A command turn's user view with the `/name args` the user typed in place of the backend's expanded template. */
+function commandUserView(view: MessageView, text: string): MessageView {
+  const cached = commandUserViews.get(view)
+  if (cached?.text === text) return cached.view
+  const first = view.blocks[0]
+  const replaced: MessageView = { ...view, blocks: [{ kind: "text", id: first?.id ?? view.id, text }] }
+  commandUserViews.set(view, { text, view: replaced })
+  return replaced
+}
+
 const queuedViews = new WeakMap<QueuedPrompt, MessageView>()
 
 export function queuedView(item: QueuedPrompt): MessageView {
@@ -228,9 +240,12 @@ export function transcriptViews(state: AppState): MessageView[] {
     }
   }
   const views = messages.map((message) => messageView(message, fallback, commands.get(message.id)))
-  // The user message of a shell turn shows the command the user typed.
+  // The user message of a shell turn shows the command the user typed; a
+  // command turn's user message shows the `/name args` the user typed.
   const shown = views.map((view, index) => {
     if (view.role !== "user") return view
+    const invocation = state.commandDisplay.get(view.id)
+    if (invocation !== undefined) return commandUserView(view, invocation)
     const next = messages[index + 1]
     const known = index === pendingUser ? state.pendingShell : next ? commands.get(next.id) : undefined
     const text = view.blocks.length === 1 && view.blocks[0]!.kind === "text" ? view.blocks[0]!.text : undefined

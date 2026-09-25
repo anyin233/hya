@@ -1,6 +1,7 @@
 /** The built-in slash commands. Add a command by appending a `CommandSpec` here. */
 import { brief, operations } from "../api"
 import { parseApiCommand } from "../client"
+import { modelReference } from "../state/format"
 import { parseSwitch, sidebarVisible } from "../state/layout"
 import { CommandRegistry, matchValues, type CommandContext, type CommandInvocation, type CommandSpec } from "./registry"
 
@@ -29,6 +30,10 @@ export async function backendCommand(context: CommandContext, invocation: Comman
   if (!selected) throw new Error("Session creation failed")
   const name = invocation.name.slice(1)
   const turn = await client.createCommandTurn(selected.id, name, invocation.argumentsText)
+  // `CreateTurn` returns the user message id as the turn id for a command
+  // turn (same as a prompt turn); the transcript shows what the user typed
+  // instead of the backend's expanded template text (state/messages.ts).
+  store.rememberCommand(turn.id, invocation.text)
   store.setTurn(turn.id)
   store.setStatus(turn.id ? `Command ${name} · ${turn.state.toLowerCase()}` : `Command ${name} finished`)
   actions.scheduleRefresh()
@@ -81,14 +86,97 @@ export const nativeCommandSpecs: CommandSpec[] = [
   },
   {
     name: "/model",
-    description: "Change current session model",
-    argumentHint: "<provider/model>",
+    description: "Change current session model, or show the current model and available models with no argument",
+    argumentHint: "[provider/model]",
     complete: ({ words, current, head }, context) => words.length === 1 ? matchValues(head, current, context.models) : [],
     run: async ({ store, client, actions }, { args }) => {
       const selected = store.state.selected
-      if (!selected || !args[0]) throw new Error("Usage: /model <provider/model> in a session")
+      if (!selected) throw new Error("Usage: /model [provider/model] in a session")
+      if (!args[0]) {
+        store.setStatus(`Model ${modelReference(selected) || "default"} · available: ${store.state.models.map((model) => model.id).join(", ") || "none"}`)
+        return
+      }
       store.setSelected(await client.updateSessionModel(selected.id, args[0]))
       await actions.refresh()
+    },
+  },
+  {
+    name: "/agent",
+    description: "Change current session agent, or show the current agent and available agents with no argument",
+    argumentHint: "[name]",
+    complete: ({ words, current, head }, context) => words.length === 1 ? matchValues(head, current, context.agents) : [],
+    run: async ({ store, client, actions }, { args }) => {
+      const selected = store.state.selected
+      if (!selected) throw new Error("Usage: /agent [name] in a session")
+      if (!args[0]) {
+        store.setStatus(`Agent ${selected.agent} · available: ${store.state.agents.filter((agent) => !agent.hidden).map((agent) => agent.name).join(", ") || "none"}`)
+        return
+      }
+      store.setSelected(await client.updateSession(selected.id, { agent: args[0] }))
+      await actions.refresh()
+    },
+  },
+  {
+    name: "/rename",
+    description: "Rename the current session",
+    argumentHint: "<title>",
+    run: async ({ store, client }, { argumentsText }) => {
+      const selected = store.state.selected
+      const title = argumentsText.trim()
+      if (!selected || !title) throw new Error("Usage: /rename <title> in a session")
+      store.setSelected(await client.updateSession(selected.id, { title }))
+      store.setStatus(`Renamed to ${title}`)
+    },
+  },
+  {
+    name: "/compact",
+    description: "Compact the session's context now",
+    run: async ({ store, client }) => {
+      const selected = store.state.selected
+      if (!selected) throw new Error("Usage: /compact in a session")
+      store.setStatus("Compacting…")
+      const result = await client.compactSession(selected.id)
+      store.setStatus(`Compacted · ${result.strategy || "done"}`)
+    },
+  },
+  {
+    name: "/summarize",
+    description: "Summarize the session into a new message",
+    run: async ({ store, client, actions }) => {
+      const selected = store.state.selected
+      if (!selected) throw new Error("Usage: /summarize in a session")
+      store.setStatus("Summarizing…")
+      await client.summarizeSession(selected.id)
+      store.setStatus("Summarized")
+      await actions.refreshMessages()
+    },
+  },
+  {
+    name: "/todos",
+    description: "Show the session's todo list",
+    run: async ({ store, client }) => {
+      const selected = store.state.selected
+      if (!selected) throw new Error("Usage: /todos in a session")
+      store.setView("todos")
+      store.setTodos(await client.getSessionTodo(selected.id))
+    },
+  },
+  {
+    name: "/status",
+    description: "Show connection, backend version, directory, session, agent, model, and permission mode",
+    run: ({ store, client }) => {
+      const selected = store.state.selected
+      const lines = [
+        `Server      ${client.baseUrl}`,
+        `Version     ${store.state.serverVersion || "unknown"}`,
+        `Directory   ${client.directory}`,
+        `Session     ${selected ? (selected.title || selected.id) : "none"}`,
+        `Agent       ${selected?.agent ?? "none"}`,
+        `Model       ${selected ? (modelReference(selected) || "default") : "none"}`,
+        `Mode        ${selected?.permissionMode || "manual"}`,
+      ]
+      store.setStatusText(lines.join("\n"))
+      store.setView("status")
     },
   },
   {

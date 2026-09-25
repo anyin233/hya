@@ -1,6 +1,14 @@
 export { backendCommand, createCommandRegistry, nativeCommandSpecs } from "./native"
 export { helpText } from "./help"
 export {
+  commandSuggestionLimit,
+  filterCommands,
+  mergeCommandEntries,
+  requiresArgument,
+  type CommandEntry,
+  type CommandSource,
+} from "./menu"
+export {
   CommandRegistry,
   matchValues,
   type AppActions,
