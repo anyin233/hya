@@ -16,15 +16,25 @@
  * - After a `resync` (`markLiveLost`), live deltas of parts that were already
  *   streaming are dropped until the durable `partReplaced` sets their text,
  *   so a gap never garbles the text.
+ * - Tool calls (docs/protocol/README.md "Tool calls", all durable):
+ *   `partStarted{kind: "tool_call", tool, callId}` starts a pending tool
+ *   part, each `partAppended` appends an argument fragment to its input,
+ *   and `toolStateChanged` sets the state and every field it carries
+ *   (`inputJson` replaces the fragments), keeping the fields it does not.
+ *   An overwrite frame (empty `callId`) keeps the part's call id. When the
+ *   projection has the same part, the more advanced state wins the merge.
  *
  * Pure TypeScript (no Solid): the store wraps it and publishes snapshots.
  */
-import type { MessageError, MessageInfo, MessagePart, StreamEvent } from "../client"
+import type { MessageError, MessageInfo, MessagePart, StreamEvent, ToolCallPart } from "../client"
 
 interface OverlayPart {
   id: string
-  kind: "text" | "reasoning"
+  kind: "text" | "reasoning" | "tool_call"
+  /** Text, reasoning, or (tool calls) the argument fragments so far. */
   text: string
+  /** Tool calls: the folded state (`inputJson` once the arguments are complete). */
+  tool?: ToolCallPart
   /** Text was set by a durable frame; later live deltas are late duplicates. */
   durable: boolean
   /** Live deltas were lost (resync) before the durable text arrived. */
@@ -115,11 +125,14 @@ export class TranscriptOverlay {
       }
     }
     if (event.partStarted) {
-      const { message: id, part: partId, kind } = event.partStarted
-      if (kind !== "text" && kind !== "reasoning") return base
+      const { message: id, part: partId, kind, tool, callId } = event.partStarted
+      if (kind !== "text" && kind !== "reasoning" && kind !== "tool_call") return base
       const message = this.message(id, durable ? undefined : assistantRole)
       if (message.parts.some((part) => part.id === partId)) return base
-      message.parts.push({ id: partId, kind, text: "", durable: false, liveLost: false })
+      message.parts.push({
+        id: partId, kind, text: "", durable: false, liveLost: false,
+        ...(kind === "tool_call" ? { tool: { tool: tool ?? "", ...(callId ? { callId } : {}), state: "TOOL_EXECUTION_STATE_PENDING" } } : {}),
+      })
       message.view = undefined
       return { ...base, changed: true }
     }
@@ -129,6 +142,21 @@ export class TranscriptOverlay {
       if (!found || !textDelta) return base
       if (!durable && (found.part.durable || found.part.liveLost)) return base
       found.part.text += textDelta
+      found.message.view = undefined
+      return { ...base, changed: true }
+    }
+    if (event.toolStateChanged) {
+      const { message: id, part: partId, ...fields } = event.toolStateChanged
+      let found = this.part(id, partId)
+      if (!found) {
+        // An overwrite of a part this overlay never saw starts it.
+        const message = this.message(id, assistantRole)
+        const part: OverlayPart = { id: partId, kind: "tool_call", text: "", durable: true, liveLost: false, tool: { tool: "" } }
+        message.parts.push(part)
+        found = { message, part }
+      }
+      const known = Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined && value !== ""))
+      found.part.tool = { ...(found.part.tool ?? { tool: "" }), ...known }
       found.message.view = undefined
       return { ...base, changed: true }
     }
@@ -209,7 +237,23 @@ export class TranscriptOverlay {
 }
 
 function toPart(part: OverlayPart): MessagePart {
+  if (part.kind === "tool_call") {
+    const tool = part.tool ?? { tool: "" }
+    // Until `toolStateChanged` carries the parsed input, the fragments are the input.
+    return { id: part.id, toolCall: { ...tool, inputJson: tool.inputJson ?? part.text } }
+  }
   return part.kind === "text" ? { id: part.id, text: { text: part.text } } : { id: part.id, reasoning: { text: part.text } }
+}
+
+const toolRank: Record<string, number> = {
+  TOOL_EXECUTION_STATE_PENDING: 0, TOOL_EXECUTION_STATE_RUNNING: 1, TOOL_EXECUTION_STATE_OK: 2, TOOL_EXECUTION_STATE_ERROR: 2,
+}
+
+/** The overlay's tool part wins only when its state is further along than the projection's. */
+function mergeTool(projected: ToolCallPart, live: ToolCallPart): ToolCallPart {
+  if ((toolRank[live.state ?? ""] ?? 0) <= (toolRank[projected.state ?? ""] ?? 0)) return projected
+  const known = Object.fromEntries(Object.entries(live).filter(([, value]) => value !== undefined && value !== ""))
+  return { ...projected, ...known }
 }
 
 function toMessageInfo(message: OverlayMessage): MessageInfo {
@@ -239,6 +283,10 @@ function mergeMessage(projected: MessageInfo, overlay: MessageInfo): MessageInfo
   const parts = (projected.parts ?? []).map((part) => {
     projectedIds.add(part.id)
     const live = overlayParts.get(part.id)
+    if (part.toolCall && live?.toolCall) {
+      const tool = mergeTool(part.toolCall, live.toolCall)
+      return tool === part.toolCall ? part : { ...part, toolCall: tool }
+    }
     const text = live && partText(live)
     return text !== undefined && text !== partText(part) ? withText(part, text) : part
   })

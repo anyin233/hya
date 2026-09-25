@@ -57,6 +57,9 @@
 - Typing `/` opens a command menu with fuzzy filtering. It merges local commands with the backend's command and skill catalog (tagged `[local]`, `[command]`, or `[skill]`); a local command wins when names clash. Up/Down select and Tab completes the name. Enter runs the command when its arguments are optional, and otherwise completes it and waits for arguments. Esc closes the menu.
 - Skill and server commands (`/<skill> args`, `/init`, `/review`) show what you typed in the transcript, not the expanded template.
 - New commands: `/agent`, `/rename <title>`, `/compact`, `/summarize`, `/todos`, and `/status` (server, version, directory, session, agent, model, and permission mode). With no argument, `/model` and `/agent` show the current value and the available choices.
+- Tool calls render as cards with a state icon: pending, a running spinner, awaiting approval, done, or failed. Each card shows a per-tool summary and the duration. Edit, write, and patch cards show colored diffs, and long output is cut to its head and tail. Ctrl+G or `/tools [on|off]` expands or collapses all cards; clicking a card header toggles that card. `!command` shell turns use the bash card and show their output.
+- `task` cards show the subagent's status and latest activity. Clicking a card or `/open <child>` opens the child session read-only, with a banner, and Esc returns to the parent. The sidebar nests subagent sessions under their parent.
+- The browser test fixture gains a `model.permission` option (`default`, `allow`, or `danger`).
 
 ## List saved provider keys over the v1 API
 

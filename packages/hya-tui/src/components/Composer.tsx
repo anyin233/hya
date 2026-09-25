@@ -2,6 +2,7 @@ import type { KeyEvent, PasteEvent, TextareaRenderable } from "@opentui/core"
 import { useKeyboard, usePaste, useTerminalDimensions } from "@opentui/solid"
 import { createEffect, createSignal, For, onCleanup, Show } from "solid-js"
 import { useApp } from "../app/context"
+import { readOnlyStatus } from "../app/controller"
 import { commandSuggestionLimit, filterCommands, requiresArgument, type CommandEntry } from "../commands"
 import { escapeAction } from "../composer/escape"
 import { InputHistory } from "../composer/history"
@@ -67,6 +68,8 @@ export function Composer() {
   let lookupTicket = 0
   let hintTimer: ReturnType<typeof setTimeout> | undefined
   const entering = () => store.state.secretProvider !== undefined
+  /** A subagent's session is open: prompts are disabled, slash commands still run. */
+  const readOnly = () => Boolean(store.state.selected?.parent)
   const shell = () => isShellInput(value())
 
   onCleanup(() => {
@@ -216,6 +219,11 @@ export function Composer() {
     if (!editor || entering()) return
     const text = editor.plainText
     if (!text.trim()) return
+    if (readOnly() && !text.trim().startsWith("/")) {
+      // Keep the text: it can be sent once back in the parent.
+      store.setStatus(readOnlyStatus)
+      return
+    }
     history.push(text)
     closeMenu()
     closeCmdMenu()
@@ -308,12 +316,13 @@ export function Composer() {
     switch (action) {
       case "interrupt": {
         consume()
-        const escape = escapeAction({ menuOpen: open !== undefined || cmdOpen !== undefined, running: store.state.running, inputEmpty: !value() })
+        const escape = escapeAction({ menuOpen: open !== undefined || cmdOpen !== undefined, running: store.state.running, inputEmpty: !value(), childView: readOnly() })
         if (escape === "closeMenu") {
           dismissed = open ? `${open.token.start}:${open.token.query}` : undefined
           closeMenu()
           closeCmdMenu()
-        } else if (escape === "cancelTurn") controller.cancelTurn()
+        } else if (escape === "returnToParent") controller.returnToParent()
+        else if (escape === "cancelTurn") controller.cancelTurn()
         else if (escape === "clearInput") replace("")
         return
       }
@@ -351,6 +360,13 @@ export function Composer() {
         store.setThinking(!store.state.thinking)
         store.setStatus(`Reasoning ${store.state.thinking ? "expanded" : "collapsed"} · Ctrl+O toggles`)
         return
+      case "toggleTools": {
+        consume()
+        const expanded = !(store.state.tools ?? false)
+        store.setTools(expanded)
+        store.setStatus(`Tool calls ${expanded ? "expanded" : "collapsed"} · Ctrl+G toggles`)
+        return
+      }
       case "pageUp":
       case "pageDown":
         consume()
@@ -424,7 +440,7 @@ export function Composer() {
           ref={(element: TextareaRenderable) => (editor = element)}
           width="100%"
           height={rows()}
-          placeholder="Message, /command, !shell, or @file"
+          placeholder={readOnly() ? "Read-only subagent view · /commands work · Esc returns" : "Message, /command, !shell, or @file"}
           textColor={colors.fg}
           focusedTextColor={colors.fg}
           cursorColor={colors.accent}

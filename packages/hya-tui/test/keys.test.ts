@@ -14,6 +14,8 @@ test("maps Tab to completion and Ctrl+R to refresh", () => {
 test("maps the layout, reasoning, and transcript scrolling keys", () => {
   expect(resolveBinding(key("b", { ctrl: true }))).toBe("toggleSidebar")
   expect(resolveBinding(key("o", { ctrl: true }))).toBe("toggleThinking")
+  expect(resolveBinding(key("g", { ctrl: true }))).toBe("toggleTools")
+  expect(resolveBinding(key("g"))).toBeUndefined()
   expect(resolveBinding(key("b"))).toBeUndefined()
   expect(resolveBinding(key("pageup"))).toBe("pageUp")
   expect(resolveBinding(key("pagedown"))).toBe("pageDown")
@@ -39,14 +41,14 @@ test("every binding is documented and reachable without a browser-reserved short
     expect(binding.label.length).toBeGreaterThan(0)
   }
   const probes = [
-    key("tab"), key("r", { ctrl: true }), key("b", { ctrl: true }), key("o", { ctrl: true }),
+    key("tab"), key("r", { ctrl: true }), key("b", { ctrl: true }), key("o", { ctrl: true }), key("g", { ctrl: true }),
     key("pageup"), key("pagedown"), key("home", { ctrl: true }), key("end", { ctrl: true }),
     key("escape"), key("c", { ctrl: true }), key("d", { ctrl: true }),
   ]
   const reachable = new Set(probes.filter((probe) => !browserReserved.some((reserved) => reserved(probe)))
     .map((probe) => resolveBinding(probe, { composerEmpty: probe.name === "d" })))
   expect([...new Set(keyBindings.map((binding) => binding.action))].sort())
-    .toEqual(["complete", "eof", "interrupt", "pageDown", "pageUp", "quit", "refresh", "scrollBottom", "scrollTop", "toggleSidebar", "toggleThinking"])
+    .toEqual(["complete", "eof", "interrupt", "pageDown", "pageUp", "quit", "refresh", "scrollBottom", "scrollTop", "toggleSidebar", "toggleThinking", "toggleTools"])
   for (const binding of keyBindings) expect(reachable.has(binding.action)).toBe(true)
 })
 

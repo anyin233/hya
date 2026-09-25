@@ -20,6 +20,7 @@ export type KeyAction =
   | "refresh"
   | "toggleSidebar"
   | "toggleThinking"
+  | "toggleTools"
   | "pageUp"
   | "pageDown"
   | "scrollTop"
@@ -54,7 +55,7 @@ export const keyBindings: readonly KeyBinding[] = [
   {
     action: "interrupt",
     label: "Esc",
-    description: "Close the @file list, else cancel the running turn, else clear the input",
+    description: "Close the open list, else return from a subagent view, else cancel the running turn, else clear the input",
     matches: (key) => key.name === "escape" && !key.ctrl && !key.shift,
   },
   {
@@ -92,6 +93,12 @@ export const keyBindings: readonly KeyBinding[] = [
     label: "Ctrl+O",
     description: "Expand or collapse every reasoning (Thinking) block",
     matches: (key) => key.ctrl && !key.meta && key.name === "o",
+  },
+  {
+    action: "toggleTools",
+    label: "Ctrl+G",
+    description: "Expand or collapse every tool call card",
+    matches: (key) => key.ctrl && !key.meta && key.name === "g",
   },
   {
     action: "pageUp",

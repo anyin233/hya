@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import type { MessageInfo } from "../src/client"
-import { finishNotice, messageView, queuedView, reasoningLabel, shellMarker, toolOutputText, transcriptViews } from "../src/state/messages"
+import { finishNotice, messageView, queuedView, reasoningLabel, shellMarker, toolExpanded, transcriptViews } from "../src/state/messages"
 import { createAppStore } from "../src/state/store"
 
 const fallback = { agent: "build", model: "fake/model" }
@@ -55,10 +55,10 @@ test("reasoning, tool, and attachment parts become typed blocks", () => {
       { id: "e", text: { text: "" } },
     ],
   }, fallback)
-  expect(view.blocks).toEqual([
+  expect(view.blocks).toMatchObject([
     { kind: "reasoning", id: "r", text: "let me think about this", words: 5, active: false },
-    { kind: "tool", id: "t", tool: "bash", state: "ok" },
-    { kind: "tool", id: "x", tool: "read", state: "error", error: "missing" },
+    { kind: "tool", id: "t", card: { tool: "bash", status: "done" } },
+    { kind: "tool", id: "x", card: { tool: "read", status: "failed", error: "missing" } },
     { kind: "attachment", id: "f", name: "notes.md" },
   ])
 })
@@ -111,19 +111,39 @@ test("a bash tool call shows its command and output when the part carries them",
     id: "a", role: "ROLE_ASSISTANT", finish: "FINISH_REASON_STOP",
     parts: [{ id: "t", toolCall: { tool: "bash", state: "TOOL_EXECUTION_STATE_OK", inputJson: "{\"command\":\"echo hello\"}", outputJson: "{\"output\":\"hello\\n\"}" } }],
   }, fallback)
-  expect(view.blocks).toEqual([{ kind: "tool", id: "t", tool: "bash", state: "ok", command: "echo hello", output: "hello" }])
+  expect(view.blocks).toMatchObject([{ kind: "tool", id: "t", card: { tool: "bash", summary: "echo hello", body: [{ text: "$ echo hello" }, { text: "hello" }] } }])
+  expect(view.blocks[0]).not.toHaveProperty("shell")
 })
 
-test("tool output text is taken from a string, a known field, or pretty JSON, and long output is cut", () => {
-  expect(toolOutputText("\"plain\"")).toBe("plain")
-  expect(toolOutputText("{\"stdout\":\"out\"}")).toBe("out")
-  expect(toolOutputText("not json")).toBe("not json")
-  expect(toolOutputText("{\"a\":1}")).toBe("{\n  \"a\": 1\n}")
-  expect(toolOutputText("")).toBeUndefined()
-  const long = Array.from({ length: 30 }, (_, index) => `line ${index + 1}`).join("\n")
-  const cut = toolOutputText(JSON.stringify(long))!
-  expect(cut.split("\n")).toHaveLength(13)
-  expect(cut.endsWith("… 18 more lines")).toBe(true)
+test("tool cards are collapsed by default; /tools and a click expand them; shell turns start expanded", () => {
+  const store = createAppStore()
+  const card = { kind: "tool" as const, id: "t", card: { tool: "read", status: "done" as const, summary: "a", body: [] } }
+  expect(toolExpanded(store.state, card)).toBe(false)
+  expect(toolExpanded(store.state, { ...card, shell: true })).toBe(true)
+  store.toggleTool("t", false)
+  expect(toolExpanded(store.state, card)).toBe(true)
+  store.setTools(false)
+  expect(toolExpanded(store.state, card)).toBe(false)
+  store.setTools(true)
+  expect(toolExpanded(store.state, card)).toBe(true)
+  // The global switch forgets per-card choices, like /thinking.
+  store.toggleTool("t", true)
+  expect(toolExpanded(store.state, card)).toBe(false)
+  store.setTools(false)
+  expect(toolExpanded(store.state, { ...card, shell: true })).toBe(false)
+})
+
+test("member frames and SessionInfo.members fold into the store", () => {
+  const store = createAppStore()
+  store.openSession({ id: "hysec_1", agent: "build", workdir: "/w", members: [{ member: "mbr_1", child: "hysec_c", agent: "scout", status: "MEMBER_STATUS_SPAWNING" }] })
+  expect(store.state.members).toHaveLength(1)
+  const effect = store.applyEvent({ seq: "4", session: "hysec_1", memberUpdated: { member: "mbr_1", status: "MEMBER_STATUS_DONE", summary: "ok" } })
+  expect(effect.durable).toBe(true)
+  expect(store.state.members[0]).toMatchObject({ agent: "scout", status: "MEMBER_STATUS_DONE", summary: "ok" })
+  store.setChild("hysec_c", { busy: true, activity: "read a.txt" })
+  expect(store.state.children.get("hysec_c")).toEqual({ busy: true, activity: "read a.txt" })
+  store.openSession({ id: "hysec_2", agent: "build", workdir: "/w" })
+  expect(store.state.members).toEqual([])
 })
 
 test("a shell turn run from this TUI shows its command on both messages", () => {
@@ -136,7 +156,7 @@ test("a shell turn run from this TUI shows its command on both messages", () => 
   store.rememberShell("m_a", "echo hello")
   const views = transcriptViews(store.state)
   expect(views[0]!.blocks).toEqual([{ kind: "text", id: "p_u", text: "!echo hello" }])
-  expect(views[1]!.blocks).toEqual([{ kind: "tool", id: "p_t", tool: "bash", state: "ok", command: "echo hello" }])
+  expect(views[1]!.blocks).toMatchObject([{ kind: "tool", id: "p_t", shell: true, card: { tool: "bash", status: "done", summary: "echo hello", command: "echo hello" } }])
 })
 
 test("a recorded shell turn shows its command from the tool input after a reload", () => {
@@ -148,6 +168,7 @@ test("a recorded shell turn shows its command from the tool input after a reload
   ])
   const views = transcriptViews(store.state)
   expect(views[0]!.blocks).toEqual([{ kind: "text", id: "p_u", text: "!pwd" }])
+  expect(views[1]!.blocks).toMatchObject([{ kind: "tool", shell: true, card: { summary: "pwd" } }])
 })
 
 test("the running shell turn shows its command before CreateTurn returns", () => {
@@ -162,5 +183,5 @@ test("the running shell turn shows its command before CreateTurn returns", () =>
     { id: "m_u", role: "ROLE_USER", finish: "FINISH_REASON_STOP", parts: [{ id: "p_u", text: { text: shellMarker } }] },
     { id: "m_a", role: "ROLE_ASSISTANT", parts: [{ id: "p_t", toolCall: { tool: "bash", state: "TOOL_EXECUTION_STATE_RUNNING" } }] },
   ])
-  expect(transcriptViews(store.state)[1]!.blocks).toEqual([{ kind: "tool", id: "p_t", tool: "bash", state: "running", command: "sleep 5" }])
+  expect(transcriptViews(store.state)[1]!.blocks).toMatchObject([{ kind: "tool", id: "p_t", shell: true, card: { status: "running", command: "sleep 5" } }])
 })

@@ -1,8 +1,10 @@
 /** One persistent instruction line for the current TUI view. */
 export type View = "chat" | "models" | "workflows" | "interactions" | "keys" | "api" | "help" | "todos" | "status"
 
-export function footerInstruction(view: View, savedKeysAvailable: boolean, enteringKey = false): string {
+/** `childView`: a subagent's session is open read-only (chat view only). */
+export function footerInstruction(view: View, savedKeysAvailable: boolean, enteringKey = false, childView = false): string {
   if (enteringKey) return "Paste API key · Enter saves · Esc cancels"
+  if (childView && view === "chat") return "Read-only subagent view · Esc returns to the parent · click a task card or /open <n> to switch"
 
   switch (view) {
     case "chat": return "Enter a prompt · /new creates a session · /help lists commands · / opens the command menu"

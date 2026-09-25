@@ -26,15 +26,60 @@ export function headerText(state: AppState, server: string): string {
   return `hya ${selected ? `· ${selected.title || selected.id} · ${selected.agent} ${modelReference(selected)}` : "· no session"} · ${server}`
 }
 
-/** The sidebar's session list; `width` cuts each line to the sidebar. */
+export interface SessionRow {
+  session: SessionInfo
+  /** 0 for a top-level session, 1 for its subagents, 2 for theirs. */
+  depth: number
+}
+
+/**
+ * Sessions as a tree, in list order: each top-level session followed by its
+ * subagent sessions (`SessionInfo.parent`), depth first. A child whose parent
+ * is not listed counts as top-level. `/open <number>` counts in this order.
+ */
+export function sessionTree(sessions: readonly SessionInfo[]): SessionRow[] {
+  const ids = new Set(sessions.map((session) => session.id))
+  const children = new Map<string, SessionInfo[]>()
+  for (const session of sessions) {
+    if (session.parent && ids.has(session.parent) && session.parent !== session.id) {
+      children.set(session.parent, [...(children.get(session.parent) ?? []), session])
+    }
+  }
+  const rows: SessionRow[] = []
+  const seen = new Set<string>()
+  const visit = (session: SessionInfo, depth: number): void => {
+    if (seen.has(session.id)) return
+    seen.add(session.id)
+    rows.push({ session, depth })
+    for (const child of children.get(session.id) ?? []) visit(child, depth + 1)
+  }
+  for (const session of sessions) if (!(session.parent && ids.has(session.parent))) visit(session, 0)
+  for (const session of sessions) visit(session, 0)
+  return rows
+}
+
+/**
+ * The sidebar's session list; `width` cuts each line to the sidebar. A
+ * top-level session is two lines (title, agent) with a blank line between
+ * groups; a subagent session is one indented `↳ N. agent` line under it.
+ */
 export function sessionListText(state: AppState, width?: number): string {
   if (!state.ready) return "Loading…"
-  return state.sessions.length
-    ? state.sessions.map((session, index) => [
-      truncate(`${session.id === state.selected?.id ? "▸" : " "} ${index + 1}. ${session.title || session.id}`, width),
-      truncate(`   ${session.agent}${session.busy ? " · running" : ""}`, width),
-    ].join("\n")).join("\n\n")
-    : "No sessions. Type a prompt or /new."
+  if (!state.sessions.length) return "No sessions. Type a prompt or /new."
+  const groups: string[][] = []
+  sessionTree(state.sessions).forEach(({ session, depth }, index) => {
+    const mark = session.id === state.selected?.id ? "▸" : " "
+    const running = session.busy ? " · running" : ""
+    if (depth === 0) {
+      groups.push([
+        truncate(`${mark} ${index + 1}. ${session.title || session.id}`, width),
+        truncate(`   ${session.agent}${running}`, width),
+      ])
+    } else {
+      groups.at(-1)!.push(truncate(`${mark}  ${"  ".repeat(depth - 1)}↳ ${index + 1}. ${session.title || session.agent}${running}`, width))
+    }
+  })
+  return groups.map((lines) => lines.join("\n")).join("\n\n")
 }
 
 /** One line per pending interaction: `! title · id` for permissions, `? title · id` for questions. */

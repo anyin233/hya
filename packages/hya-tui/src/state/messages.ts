@@ -12,14 +12,19 @@ import type { MessageInfo, MessagePart } from "../client"
 import { modelReference } from "./format"
 import { mergeTranscript } from "./overlay"
 import type { AppState, QueuedPrompt } from "./store"
+import { toolCard, type ToolCardView } from "./tools"
 
 export type Role = "user" | "assistant" | "system" | "tool" | "unknown"
 
 export type Block =
   | { kind: "text"; id: string; text: string }
   | { kind: "reasoning"; id: string; text: string; words: number; active: boolean }
-  /** `command` / `output`: a shell command and its output text, when known (the part's input/output JSON or this TUI's own shell turn). */
-  | { kind: "tool"; id: string; tool: string; state: string; error?: string; command?: string; output?: string }
+  /**
+   * A tool call card (state/tools.ts). `callId` links a `task` card to its
+   * member; `shell` marks the tool call of a `!command` shell turn (its card
+   * starts expanded).
+   */
+  | { kind: "tool"; id: string; callId?: string; card: ToolCardView; shell?: boolean }
   | { kind: "attachment"; id: string; name: string }
 
 export interface Notice {
@@ -64,68 +69,17 @@ function words(text: string): number {
  */
 export const shellMarker = "The following tool was executed by the user"
 
-/** Longest tool output shown under a tool line, in lines. */
-export const toolOutputLines = 12
-
-function parseJson(text: string | undefined): unknown {
-  if (!text) return undefined
-  try {
-    return JSON.parse(text) as unknown
-  } catch {
-    return text
-  }
-}
-
-/** The `command` string of a tool input (the shell tool's argument), if any. */
-function inputCommand(inputJson: string | undefined): string | undefined {
-  const input = parseJson(inputJson)
-  if (input && typeof input === "object" && typeof (input as { command?: unknown }).command === "string") {
-    return (input as { command: string }).command
-  }
-  return undefined
-}
-
-/**
- * Readable text of a tool's output JSON: a JSON string as is, else its
- * `output`, `stdout`, `text`, or `content` string field, else pretty JSON
- * (non-JSON text as is). Trailing white space is dropped and more than
- * `toolOutputLines` lines are cut with a `… N more lines` line.
- */
-export function toolOutputText(outputJson: string | undefined): string | undefined {
-  const value = parseJson(outputJson)
-  if (value === undefined || value === null) return undefined
-  let text: string
-  if (typeof value === "string") text = value
-  else {
-    const record = value as Record<string, unknown>
-    const field = ["output", "stdout", "text", "content"].map((name) => record[name]).find((item) => typeof item === "string")
-    text = typeof field === "string" ? field : JSON.stringify(value, null, 2)
-  }
-  const lines = text.replace(/\s+$/, "").split("\n")
-  if (!lines.join("")) return undefined
-  if (lines.length <= toolOutputLines) return lines.join("\n")
-  return [...lines.slice(0, toolOutputLines), `… ${lines.length - toolOutputLines} more lines`].join("\n")
-}
-
-/** `TOOL_EXECUTION_STATE_OK` → `ok`. */
-function toolState(state: string | undefined): string {
-  return (state ?? "").replace(/^[A-Z_]*STATE_/, "").toLowerCase()
-}
-
-function block(part: MessagePart, active: boolean): Block | undefined {
+function block(part: MessagePart, active: boolean, shell: string | undefined, shellTurn: boolean): Block | undefined {
   if (part.text) return part.text.text ? { kind: "text", id: part.id, text: part.text.text } : undefined
   if (part.reasoning) return { kind: "reasoning", id: part.id, text: part.reasoning.text, words: words(part.reasoning.text), active }
   if (part.toolCall) {
-    const error = part.toolCall.errorMessage
-    const command = inputCommand(part.toolCall.inputJson)
-    const output = toolOutputText(part.toolCall.outputJson)
-    return {
-      kind: "tool", id: part.id, tool: part.toolCall.tool, state: toolState(part.toolCall.state),
-      ...(error ? { error } : {}), ...(command !== undefined ? { command } : {}), ...(output !== undefined ? { output } : {}),
-    }
+    const card = toolCard(part.toolCall, shell !== undefined ? { command: shell } : {})
+    return { kind: "tool", id: part.id, ...(part.toolCall.callId ? { callId: part.toolCall.callId } : {}), card, ...(shellTurn ? { shell: true } : {}) }
   }
   if (part.toolResult) {
-    return { kind: "tool", id: part.id, tool: "result", state: part.toolResult.errorMessage ? "error" : "ok", ...(part.toolResult.errorMessage ? { error: part.toolResult.errorMessage } : {}) }
+    // Not emitted by v1 servers (the output is on the tool call); kept for older data.
+    const card = toolCard({ tool: "result", state: part.toolResult.errorMessage ? "TOOL_EXECUTION_STATE_ERROR" : "TOOL_EXECUTION_STATE_OK", outputJson: JSON.stringify(part.toolResult.output), ...(part.toolResult.errorMessage ? { errorMessage: part.toolResult.errorMessage } : {}) })
+    return { kind: "tool", id: part.id, card }
   }
   if (part.attachment) return { kind: "attachment", id: part.id, name: part.attachment.name }
   return undefined
@@ -145,15 +99,14 @@ export function finishNotice(message: MessageInfo): Notice | undefined {
   }
 }
 
-function build(message: MessageInfo, fallback: Attribution, shell: string | undefined): MessageView {
+function build(message: MessageInfo, fallback: Attribution, shell: string | undefined, shellTurn: boolean): MessageView {
   const role = roles[message.role] ?? "unknown"
   const streaming = role === "assistant" && !message.finish
   const parts = message.parts ?? []
-  let blocks = parts
-    .map((part, index) => block(part, streaming && index === parts.length - 1))
-    .filter((item): item is Block => item !== undefined)
   // A shell turn run from this TUI: its command is known even when the part has no input.
-  if (shell !== undefined) blocks = blocks.map((item) => item.kind === "tool" && item.command === undefined ? { ...item, command: shell } : item)
+  const blocks = parts
+    .map((part, index) => block(part, streaming && index === parts.length - 1, shell, shellTurn))
+    .filter((item): item is Block => item !== undefined)
   const notice = finishNotice(message)
   return {
     id: message.id,
@@ -169,12 +122,16 @@ function build(message: MessageInfo, fallback: Attribution, shell: string | unde
 
 const views = new WeakMap<MessageInfo, { key: string; view: MessageView }>()
 
-/** `shell`: the command of this TUI's shell turn whose assistant message this is. */
-export function messageView(message: MessageInfo, fallback: Attribution, shell?: string): MessageView {
-  const key = `${fallback.agent}\u0000${fallback.model}\u0000${shell ?? "\u0001"}`
+/**
+ * `shell`: the command of this TUI's shell turn whose assistant message this
+ * is. `shellTurn`: the message answers a shell turn's user message (its tool
+ * cards start expanded); implied by `shell`.
+ */
+export function messageView(message: MessageInfo, fallback: Attribution, shell?: string, shellTurn = shell !== undefined): MessageView {
+  const key = `${fallback.agent}\u0000${fallback.model}\u0000${shell ?? "\u0001"}\u0000${shellTurn}`
   const cached = views.get(message)
   if (cached?.key === key) return cached.view
-  const view = build(message, fallback, shell)
+  const view = build(message, fallback, shell, shellTurn)
   views.set(message, { key, view })
   return view
 }
@@ -183,7 +140,7 @@ export function messageView(message: MessageInfo, fallback: Attribution, shell?:
 function shellCommandOf(view: MessageView | undefined): string | undefined {
   if (view?.role !== "assistant") return undefined
   const tool = view.blocks.find((item) => item.kind === "tool")
-  return tool?.kind === "tool" ? tool.command : undefined
+  return tool?.kind === "tool" ? tool.card.command : undefined
 }
 
 const shellUserViews = new WeakMap<MessageView, { command: string; view: MessageView }>()
@@ -239,7 +196,11 @@ export function transcriptViews(state: AppState): MessageView[] {
       if (reply) commands.set(reply.id, state.pendingShell)
     }
   }
-  const views = messages.map((message) => messageView(message, fallback, commands.get(message.id)))
+  const markerAt = (index: number): boolean => {
+    const message = messages[index]
+    return message !== undefined && roles[message.role] === "user" && message.parts?.map((part) => part.text?.text ?? "").join("") === shellMarker
+  }
+  const views = messages.map((message, index) => messageView(message, fallback, commands.get(message.id), commands.has(message.id) || markerAt(index - 1)))
   // The user message of a shell turn shows the command the user typed; a
   // command turn's user message shows the `/name args` the user typed.
   const shown = views.map((view, index) => {
@@ -253,6 +214,11 @@ export function transcriptViews(state: AppState): MessageView[] {
     return command === undefined ? view : shellUserView(view, command)
   })
   return [...shown, ...state.queued.filter((item) => item.state === "queued").map(queuedView)]
+}
+
+/** Whether a tool card is expanded: its own toggle, else the global `/tools` switch, else only shell-turn cards. */
+export function toolExpanded(state: Pick<AppState, "tools" | "toolToggles">, block: Extract<Block, { kind: "tool" }>): boolean {
+  return state.toolToggles.get(block.id) ?? state.tools ?? block.shell === true
 }
 
 /** Whether a reasoning part is expanded: its own toggle, else the global `/thinking` switch. */

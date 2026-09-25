@@ -180,3 +180,55 @@ test("snapshots reuse unchanged message objects so formatting can be cached", ()
   expect(second[0]).toBe(first[0]!)
   expect(second[1]).not.toBe(first[1]!)
 })
+
+// ---- tool calls ---------------------------------------------------------
+
+const toolStarted = (message: string, part: string, tool: string, callId: string) => ({ partStarted: { message, part, kind: "tool_call", tool, callId } })
+const toolState = (message: string, part: string, fields: Record<string, string>) => ({ toolStateChanged: { message, part, ...fields } })
+const toolOf = (messages: MessageInfo[], id: string) => messages.find((message) => message.id === id)?.parts?.find((part) => part.toolCall)?.toolCall
+
+test("a tool call folds from its start, argument fragments, and state changes", () => {
+  const overlay = new TranscriptOverlay("0")
+  overlay.apply(ev(1, started("m_a", "ROLE_ASSISTANT")))
+  const effect = overlay.apply(ev(2, toolStarted("m_a", "p_t", "bash", "call_1")))
+  expect(effect.changed).toBe(true)
+  expect(toolOf(overlay.messages(), "m_a")).toEqual({ tool: "bash", callId: "call_1", state: "TOOL_EXECUTION_STATE_PENDING", inputJson: "" })
+  overlay.apply(ev(3, appended("m_a", "p_t", "{\"command\":")))
+  overlay.apply(ev(4, appended("m_a", "p_t", "\"ls\"}")))
+  expect(toolOf(overlay.messages(), "m_a")?.inputJson).toBe("{\"command\":\"ls\"}")
+  overlay.apply(ev(5, toolState("m_a", "p_t", { callId: "call_1", state: "TOOL_EXECUTION_STATE_RUNNING", tool: "bash", inputJson: "{\"command\": \"ls\"}" })))
+  expect(toolOf(overlay.messages(), "m_a")).toMatchObject({ state: "TOOL_EXECUTION_STATE_RUNNING", inputJson: "{\"command\": \"ls\"}" })
+  overlay.apply(ev(6, toolState("m_a", "p_t", { callId: "call_1", state: "TOOL_EXECUTION_STATE_OK", outputJson: "{\"output\":\"a\"}", durationMs: "42" })))
+  expect(toolOf(overlay.messages(), "m_a")).toEqual({
+    tool: "bash", callId: "call_1", state: "TOOL_EXECUTION_STATE_OK", inputJson: "{\"command\": \"ls\"}", outputJson: "{\"output\":\"a\"}", durationMs: "42",
+  })
+})
+
+test("a failed tool call keeps its error code and message", () => {
+  const overlay = new TranscriptOverlay("0")
+  overlay.apply(ev(1, toolStarted("m_a", "p_t", "read", "call_1")))
+  overlay.apply(ev(2, toolState("m_a", "p_t", { callId: "call_1", state: "TOOL_EXECUTION_STATE_ERROR", errorCode: "input", errorMessage: "missing path" })))
+  expect(toolOf(overlay.messages(), "m_a")).toMatchObject({ state: "TOOL_EXECUTION_STATE_ERROR", errorCode: "input", errorMessage: "missing path" })
+})
+
+test("a direct part overwrite (empty callId) updates the part and keeps its call id", () => {
+  const overlay = new TranscriptOverlay("0")
+  overlay.apply(ev(1, toolStarted("m_a", "p_t", "bash", "call_1")))
+  overlay.apply(ev(2, toolState("m_a", "p_t", { state: "TOOL_EXECUTION_STATE_RUNNING", inputJson: "{\"command\":\"x\"}", outputJson: "\"progress\"" })))
+  expect(toolOf(overlay.messages(), "m_a")).toMatchObject({ tool: "bash", callId: "call_1", state: "TOOL_EXECUTION_STATE_RUNNING", outputJson: "\"progress\"" })
+  // An overwrite for a part the overlay never saw starts it.
+  overlay.apply(ev(3, toolState("m_b", "p_u", { state: "TOOL_EXECUTION_STATE_OK", inputJson: "{}" })))
+  expect(toolOf(overlay.messages(), "m_b")).toMatchObject({ state: "TOOL_EXECUTION_STATE_OK" })
+})
+
+test("the more advanced tool state wins the merge; the projection wins a tie", () => {
+  const projected: MessageInfo[] = [{ id: "m_a", role: "ROLE_ASSISTANT", parts: [{ id: "p_t", toolCall: { tool: "bash", callId: "call_1", state: "TOOL_EXECUTION_STATE_RUNNING", inputJson: "{\"command\":\"ls\"}" } }] }]
+  const overlay = new TranscriptOverlay("0")
+  overlay.apply(ev(1, toolStarted("m_a", "p_t", "bash", "call_1")))
+  // Overlay behind the projection: the projection's part stays.
+  expect(toolOf(mergeTranscript(projected, overlay.messages()), "m_a")?.state).toBe("TOOL_EXECUTION_STATE_RUNNING")
+  overlay.apply(ev(2, toolState("m_a", "p_t", { callId: "call_1", state: "TOOL_EXECUTION_STATE_OK", outputJson: "\"done\"", durationMs: "5" })))
+  expect(toolOf(mergeTranscript(projected, overlay.messages()), "m_a")).toEqual({
+    tool: "bash", callId: "call_1", state: "TOOL_EXECUTION_STATE_OK", inputJson: "{\"command\":\"ls\"}", outputJson: "\"done\"", durationMs: "5",
+  })
+})

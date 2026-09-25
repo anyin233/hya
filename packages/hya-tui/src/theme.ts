@@ -12,6 +12,25 @@ export const colors = {
   warning: "#e5c07b",
 } as const
 
+/**
+ * Tool call cards (components/MessageView.tsx): the state icon of a finished
+ * call is `done` (the palette's green, the same as the string token color);
+ * a failed one uses `colors.error`, a running spinner `colors.accent`, a
+ * pending call `colors.muted`, one waiting for a permission answer
+ * `colors.warning`.
+ */
+export const toolColors = {
+  done: "#a5d6a7",
+} as const
+
+/** Diff rows in edit / write / patch cards: added green, removed red, hunk headers blue, context muted. */
+export const diffColors = {
+  add: "#a5d6a7",
+  remove: "#f07878",
+  hunk: "#82aaff",
+  context: "#9caab9",
+} as const
+
 /** Token colors for Markdown and highlighted code blocks (tree-sitter capture names in syntaxStyles). */
 export const syntaxColors = {
   keyword: "#c792ea",

@@ -79,6 +79,12 @@ test("Esc closes the file menu, then cancels a running turn, then clears the inp
   expect(escapeAction({ menuOpen: false, running: false, inputEmpty: true })).toBe("none")
 })
 
+test("Esc in a subagent's read-only view returns to the parent once no list is open", () => {
+  expect(escapeAction({ menuOpen: true, running: false, inputEmpty: true, childView: true })).toBe("closeMenu")
+  expect(escapeAction({ menuOpen: false, running: false, inputEmpty: false, childView: true })).toBe("returnToParent")
+  expect(escapeAction({ menuOpen: false, running: true, inputEmpty: true, childView: true })).toBe("returnToParent")
+})
+
 test("an @ token at the cursor is a file mention", () => {
   expect(mentionAt("look at @src/ma", 15)).toEqual({ start: 8, end: 15, query: "src/ma" })
   // The token runs past the cursor up to the next white space.

@@ -15,13 +15,21 @@
  * gap-fill with `ListEvents` before reading frames, on every (re)connect.
  * A `resync` marks interrupted live parts and gap-fills again. Opening a
  * session aborts the old stream and resets the overlay.
+ *
+ * Subagents: the open session's child sessions (its members and `task`
+ * outputs; state/members.ts) are re-read — `GetSession` for `busy`,
+ * `ListMessages` for the latest activity — after every projection read and
+ * member frame, and every `childPollMs` while a child is busy or this
+ * client's turn runs. No child stream is subscribed.
  */
-import type { HyaClient, SessionInfo, StreamEvent, StreamFrame } from "../client"
+import type { HyaClient, MessageInfo, SessionInfo, StreamEvent, StreamFrame } from "../client"
 import { completeCommand, SecretEntry } from "../completion"
 import { createCommandRegistry, mergeCommandEntries, type AppActions, type CommandEntry, type CommandRegistry } from "../commands"
 import { findPattern, rankPaths } from "../composer/mention"
 import { shellCommand } from "../composer/shell"
 import type { KeyLike } from "../keys/bindings"
+import { sessionTree } from "../state/format"
+import { childActivity, childSessionIds } from "../state/members"
 import type { AppStore } from "../state/store"
 import { createDebounce } from "./debounce"
 import { createTurnRunner, turnEndStatus } from "./turns"
@@ -33,6 +41,8 @@ const refreshWaitMs = 120
 const refreshMaxWaitMs = 400
 /** Longest wait for the session stream before a prompt is admitted anyway. */
 const streamWaitMs = 3000
+/** Child-session re-read interval while a child is busy or a turn runs. */
+export const childPollMs = 1500
 
 export interface ControllerOptions {
   client: HyaClient
@@ -56,6 +66,12 @@ export function createController({ client, store, directory, registry = createCo
   /** Projection reads in flight complete out of order; only the newest one is applied. */
   let readsStarted = 0
   let readApplied = 0
+  /** Child polling: bumped on session switch so stale reads are dropped. */
+  let childGeneration = 0
+  let childTimer: ReturnType<typeof setTimeout> | undefined
+  let childReading = false
+  let childAgain = false
+  let lastChildRead = 0
   const secret = new SecretEntry()
   const status = (text: string): void => store.setStatus(text)
   const turns = createTurnRunner({ store, client })
@@ -78,6 +94,7 @@ export function createController({ client, store, directory, registry = createCo
     if (ticket < readApplied) return
     readApplied = ticket
     store.setMessages(selected.id, rows)
+    trackChildren()
     // A failed turn whose error text was not on the stream: take it from the projection.
     if (store.state.status === "Error · turn failed") {
       const failed = [...store.state.messages].reverse().find((message) => message.error)
@@ -103,8 +120,59 @@ export function createController({ client, store, directory, registry = createCo
     }, flushMs)
   }
 
+  /** Read one child session: its busy flag, agent, latest activity, and whether its newest reply failed. */
+  async function readChild(id: string): Promise<void> {
+    const [session, messages] = await Promise.all([
+      client.request<SessionInfo>("GET", `/v1/sessions/${encodeURIComponent(id)}`),
+      client.listMessages(id),
+    ])
+    const last = [...messages].reverse().find((message: MessageInfo) => message.role === "ROLE_ASSISTANT")
+    const activity = childActivity(messages)
+    store.setChild(id, {
+      busy: session.busy === true,
+      agent: session.agent,
+      ...(activity ? { activity } : {}),
+      ...(last?.error || last?.finish === "FINISH_REASON_ERROR" ? { failed: true } : {}),
+    })
+  }
+
+  /**
+   * Re-read the open session's child sessions: at once when the last round
+   * is older than `childPollMs`, else when it is due (at most one round per
+   * `childPollMs`). Rounds repeat while a child is busy or this client's
+   * turn runs.
+   */
+  function trackChildren(): void {
+    if (childReading) {
+      childAgain = true
+      return
+    }
+    if (childTimer || closing) return
+    childTimer = setTimeout(readChildren, Math.max(0, lastChildRead + childPollMs - Date.now()))
+  }
+
+  function readChildren(): void {
+    childTimer = undefined
+    const ids = childSessionIds(store.state.members, store.state.messages)
+    if (!ids.length) return
+    const generation = childGeneration
+    childReading = true
+    childAgain = false
+    lastChildRead = Date.now()
+    void Promise.all([
+      ...ids.map((id) => readChild(id).catch(() => undefined)),
+      client.listSessions().then((rows) => generation === childGeneration && store.setSessions(rows)).catch(() => undefined),
+    ]).then(() => {
+      if (generation !== childGeneration) return
+      childReading = false
+      const busy = ids.some((id) => store.state.children.get(id)?.busy)
+      if (childAgain || busy || store.state.running) trackChildren()
+    })
+  }
+
   function applyEvent(event: StreamEvent): void {
     const effect = store.applyEvent(event)
+    if (event.memberUpdated && effect.durable) trackChildren()
     if (effect.changed) scheduleFlush()
     // Text deltas only feed the overlay. Other durable frames (message and
     // part boundaries, tool state, errors) and live interaction frames
@@ -169,9 +237,23 @@ export function createController({ client, store, directory, registry = createCo
         if (listed) return listed
         throw error
       })
+    childGeneration++
+    if (childTimer) clearTimeout(childTimer)
+    childTimer = undefined
+    childReading = false
+    childAgain = false
+    lastChildRead = 0
     store.openSession(session)
     await refreshMessages()
     startStream(session.id)
+  }
+
+  /** Leave a subagent's read-only view: open its parent session. */
+  async function returnToParent(): Promise<void> {
+    const parent = store.state.selected?.parent
+    if (!parent) return
+    await openSession(parent)
+    status("Back to the parent session")
   }
 
   async function newSession(agentArg?: string, modelArg?: string): Promise<void> {
@@ -210,6 +292,10 @@ export function createController({ client, store, directory, registry = createCo
     try {
       if (text.startsWith("/")) {
         await registry.dispatch(text, { store, client, actions })
+        return
+      }
+      if (store.state.selected?.parent) {
+        status(readOnlyStatus)
         return
       }
       const command = shellCommand(text)
@@ -280,7 +366,8 @@ export function createController({ client, store, directory, registry = createCo
       const bootstrap = await client.bootstrap()
       store.applyBootstrap(bootstrap)
       await refresh()
-      const first = store.state.sessions[0]
+      // The newest top-level session; subagent sessions are opened from their parent.
+      const first = sessionTree(store.state.sessions)[0]?.session
       if (first) await openSession(first.id)
       const version = bootstrap.location?.version ?? ""
       status(store.state.savedKeysAvailable
@@ -296,6 +383,7 @@ export function createController({ client, store, directory, registry = createCo
   function dispose(): void {
     closing = true
     streamAbort?.abort()
+    if (childTimer) clearTimeout(childTimer)
     refreshLater.cancel()
     if (flushTimer) clearTimeout(flushTimer)
     secret.clear()
@@ -310,6 +398,7 @@ export function createController({ client, store, directory, registry = createCo
     ...actions,
     registry,
     submit,
+    returnToParent: () => void returnToParent().catch((error: unknown) => status(`Open failed: ${String(error)}`)),
     cancelTurn,
     findFiles,
     complete: (input: string) => completeCommand(input, store.completionContext(), registry),
@@ -323,3 +412,6 @@ export function createController({ client, store, directory, registry = createCo
 }
 
 export type Controller = ReturnType<typeof createController>
+
+/** Status shown when a prompt is submitted in a subagent's read-only view. */
+export const readOnlyStatus = "Read-only: this is a subagent's session · Esc returns to the parent"

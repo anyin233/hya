@@ -8,6 +8,9 @@
  * through `ui.transcript` (app/context.ts). When new content arrives below a
  * scrolled-up view, a `↓ New messages below` hint shows until the bottom is
  * reached again (state/scroll.ts).
+ *
+ * A subagent's session (one with a parent) shows a one-line banner above the
+ * messages, `Viewing subagent <agent> · Esc returns`; its input is read-only.
  */
 import type { ScrollBoxRenderable } from "@opentui/core"
 import { useRenderer } from "@opentui/solid"
@@ -64,6 +67,14 @@ export function Transcript() {
 
   return (
     <box width="100%" flexGrow={1} flexBasis={0} flexDirection="column" backgroundColor={colors.bg}>
+      <Show when={store.state.selected?.parent}>
+        <box width="100%" height={1} flexShrink={0} backgroundColor={colors.panel} paddingX={1}>
+          <text height={1} wrapMode="none">
+            <span style={{ fg: colors.warning }}>{`Viewing subagent ${store.state.selected?.agent ?? ""}`}</span>
+            <span style={{ fg: colors.muted }}> · Esc returns · read-only</span>
+          </text>
+        </box>
+      </Show>
       <scrollbox
         ref={(element: ScrollBoxRenderable) => (scroll = element)}
         width="100%"

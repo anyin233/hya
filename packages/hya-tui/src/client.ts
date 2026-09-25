@@ -9,6 +9,44 @@ export interface SessionInfo {
   lastSeq?: string
   /** `manual`, `yolo`, or a `<bundle-id>/<mode-id>`; empty when the server leaves it unset. */
   permissionMode?: string
+  /** Parent session id when this is a subagent's session. */
+  parent?: string
+  /** Subagents this session spawned (folded rows; the live counterpart is `memberUpdated`). */
+  members?: MemberInfo[]
+}
+
+/** A subagent (member) spawned by a session (`MemberInfo`, docs/protocol/README.md "Subagents"). */
+export interface MemberInfo {
+  member: string
+  /** Child session id when known. */
+  child?: string
+  /** Subagent type (agent name). */
+  agent?: string
+  description?: string
+  /** `MEMBER_STATUS_SPAWNING`, `_RUNNING`, `_DONE`, `_FAILED`, `_CANCELLED`. */
+  status?: string
+  /** Bounded finish summary. */
+  summary?: string
+  /** `ToolCallPart.callId` of the spawning `task` call; empty for resident spawns. */
+  callId?: string
+  depth?: number
+}
+
+/** `ToolCallPart` (docs/protocol/README.md "Tool calls"). */
+export interface ToolCallPart {
+  tool: string
+  /** `TOOL_EXECUTION_STATE_PENDING` (arguments streaming), `_RUNNING`, `_OK`, `_ERROR`. */
+  state?: string
+  callId?: string
+  /** Arguments as JSON text; empty while they still stream. */
+  inputJson?: string
+  /** Stored output as JSON text (`OK`). */
+  outputJson?: string
+  /** Wall time in ms (`OK`), a decimal string; omitted when zero. */
+  durationMs?: string
+  /** `ERROR`: the structured `error.type` (`unknown` when absent). */
+  errorCode?: string
+  errorMessage?: string
 }
 
 export interface TurnInfo {
@@ -28,8 +66,7 @@ export interface MessagePart {
   id: string
   text?: { text: string }
   reasoning?: { text: string }
-  /** `inputJson` / `outputJson` / `callId` are filled by backends that expose tool input and output (empty otherwise). */
-  toolCall?: { tool: string; state?: string; callId?: string; inputJson?: string; outputJson?: string; errorCode?: string; errorMessage?: string }
+  toolCall?: ToolCallPart
   toolResult?: { output: string; errorMessage?: string }
   attachment?: { name: string; path?: string }
 }
@@ -60,6 +97,8 @@ export interface Interaction {
   title: string
   detail?: string
   options?: string[]
+  /** Permission requests: `{action, resource, always, messageId, callId, tool, input}`; `callId` matches the waiting tool card. */
+  payload?: { callId?: string; [key: string]: unknown }
 }
 
 export interface ModelSummary {
@@ -112,12 +151,16 @@ export interface StreamEvent {
   session?: string
   messageStarted?: { message: string; role?: string }
   messageFinished?: { message: string; finish?: string; cause?: string }
-  partStarted?: { message: string; part: string; kind?: string }
+  /** `tool` and `callId` are set for `kind: "tool_call"`. */
+  partStarted?: { message: string; part: string; kind?: string; tool?: string; callId?: string }
   partAppended?: { message: string; part: string; textDelta?: string }
   partReplaced?: { message: string; part: string; text?: string }
   partCompleted?: { message: string; part: string }
   errorReported?: { message?: string; code?: string; errorMessage?: string }
-  toolStateChanged?: unknown
+  /** A tool part's state; fields it does not carry are empty (fold without clearing). An empty `callId` marks a direct part overwrite. */
+  toolStateChanged?: { message: string; part: string } & Partial<ToolCallPart>
+  /** A member (subagent) spawn or status change on the parent session; partial frames fold by `member`. */
+  memberUpdated?: MemberInfo
   permissionRequested?: { interaction?: Interaction }
   questionRequested?: { interaction?: Interaction }
   interactionResolved?: { request?: string }

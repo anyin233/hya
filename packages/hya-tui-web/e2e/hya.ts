@@ -30,7 +30,10 @@ export const fakeModelRef = "fake/model"
 /** hya provider kind that speaks each fake-model protocol. */
 const providerKinds: Record<Protocol, string> = { chat: "openai-compatible", responses: "openai-response" }
 
-async function startBackend(root: string, fakeModel: FakeModel | undefined, protocol: Protocol): Promise<{ child: ChildProcess; backend: Backend }> {
+/** `permission.model` written to the backend config when a fake model is used. */
+export type PermissionModel = "default" | "allow" | "danger"
+
+async function startBackend(root: string, fakeModel: FakeModel | undefined, protocol: Protocol, permission: PermissionModel): Promise<{ child: ChildProcess; backend: Backend }> {
   const dir = join(root, "work")
   const env: Record<string, string> = {}
   for (const name of ["home", "config", "data", "state", "cache"]) {
@@ -54,7 +57,7 @@ async function startBackend(root: string, fakeModel: FakeModel | undefined, prot
         "mcp: {}\n" +
         "plugins: {}\n" +
         "permission:\n" +
-        "  model: default\n" +
+        `  model: ${permission}\n` +
         "  rules: []\n",
     )
     await writeFile(join(hyaCfgDir, "auth", "fake.yaml"), "token: e2e-test-key\n")
@@ -102,6 +105,14 @@ export type FakeModelOption = {
    * streams reasoning, so `reasoningStep` renders thinking only there.
    */
   protocol?: Protocol
+  /**
+   * `permission.model` of the backend config (default `default`, where
+   * `bash`, `edit`, and `write` ask first and create pending permission
+   * requests). `allow` approves resource checks unless a rule denies them;
+   * `danger` bypasses every check. Specs that exercise tools without
+   * answering prompts use `allow`.
+   */
+  permission?: PermissionModel
 }
 
 type Fixtures = { backend: Backend; fakeModel: FakeModel | undefined }
@@ -131,7 +142,7 @@ export const test = base.extend<Fixtures & Options>({
       throw new Error(`hya binary not found at ${hyaBin}; run \`cargo build -p hya-backend --bin hya\` or set HYA_BIN`)
     }
     const root = await mkdtemp(join(tmpdir(), "hya-tui-web-"))
-    const { child, backend } = await startBackend(root, fakeModel, model?.protocol ?? "chat")
+    const { child, backend } = await startBackend(root, fakeModel, model?.protocol ?? "chat", model?.permission ?? "default")
     await use(backend)
     if (child.exitCode === null) {
       const exited = new Promise((resolve) => child.once("exit", resolve))

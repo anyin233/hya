@@ -7,8 +7,10 @@ permissions. The screen is one main column (the transcript of the open
 session, pending interactions, the status line, and the input) plus a
 sidebar with the session list, todos, and session context that you can show
 or hide (see [Layout](#layout)). Assistant replies render as Markdown with
-highlighted code blocks; reasoning is collapsed to one `Thinking` line (see
-[Messages](#messages)). Models, Workflows, and saved provider keys have
+highlighted code blocks; reasoning is collapsed to one `Thinking` line; each
+tool call is a card with its state, a one-line summary, and an expandable
+body; a subagent's `task` card shows the child's status and opens its session
+read-only (see [Messages](#messages)). Models, Workflows, and saved provider keys have
 dedicated views; the API command view exposes the other HTTP/JSON operations
 in `hya.v1`. The input is a multi-line editor with input history; it also
 runs `!command` shell turns, completes `@file` references, and opens a
@@ -77,12 +79,12 @@ backend is running.
 | `!<command>` + Enter | Run the command as a shell turn in the current session (see [Shell turns](#shell-turns)). |
 | `@<text>` | Show matching file paths; Up/Down select, Tab or Enter inserts `@<path>`, Esc closes (see [File references](#file-references)). |
 | `/` at the start of the input | Open the command menu; fuzzy-filters as you type the name (see [Command menu](#command-menu)). |
-| Esc | Close the command menu or the file list; else cancel the running turn; else clear the input. |
+| Esc | Close the command menu or the file list; else, in a subagent's read-only view, return to the parent session; else cancel the running turn; else clear the input. |
 | Ctrl+C | Clear the input and show `Press Ctrl+C again to quit`; a second Ctrl+C within 2 s quits. |
 | Ctrl+D | Quit when the input is empty (otherwise delete the character under the cursor). |
 | `/exit`, `/quit` | Quit. |
 | `/new [agent] [model]` | Create a session in `--dir`, using the first visible agent and its model by default. |
-| `/sessions`, `/open <id or number>` | Refresh or switch sessions. |
+| `/sessions`, `/open <id or number>` | Refresh or switch sessions. Numbers count in the sidebar's order (subagent sessions under their parent). Opening a subagent's session shows it read-only (see [Subagents](#subagents)). |
 | `/models`, `/model [provider/model]` | View catalog or change the selected session model; with no argument, shows the current model and the available list. |
 | `/agent [name]` | Change the selected session's agent, or with no argument show the current agent and the available list. |
 | `/rename <title>` | Rename the current session (`UpdateSession`). |
@@ -97,6 +99,7 @@ backend is running.
 | `/refresh` or Ctrl+R | Reload sessions, messages, interactions, models, Workflows, and the command catalog (commands and skills). |
 | `/sidebar [on\|off]` or Ctrl+B | Show or hide the sidebar. Without an argument it toggles what is visible now. |
 | `/thinking [on\|off]` or Ctrl+O | Expand or collapse every reasoning (`Thinking`) block. |
+| `/tools [on\|off]` or Ctrl+G | Expand or collapse every tool call card (see [Tool calls](#tool-calls)). |
 | `/compact` | Compact the session's context now (`CompactSession`); the status line shows `Compacting…`, then `Compacted · <strategy>`. |
 | `/summarize` | Summarize the session into a new message (`SummarizeSession`). |
 | `/todos` | Show the session's todo list (`GetSessionTodo`) in the main panel. |
@@ -111,6 +114,7 @@ backend is running.
 | Ctrl+Home / Ctrl+End | Jump to the top of the transcript / to the newest line, which the view then follows again. Plain Home / End do the same while the input is empty; with text in the input they move the cursor. |
 | Mouse wheel | Scroll the transcript. |
 | Click on a `Thinking` line | Expand or collapse that one reasoning block. |
+| Click on a tool card | Expand or collapse that one card; on a `task` card, open the subagent's session read-only. |
 
 `/sessions` also shows the sidebar when the terminal is too narrow for it, so
 the list it refreshes is on screen.
@@ -173,7 +177,8 @@ current view: models, Workflows, keys, API, help), the pending block, the
 status line, the bordered input, and the instruction line.
 
 - **Sidebar.** Three titled boxes on the right: `Sessions` (the list; `▸`
-  marks the open one), `Todos` (a placeholder until the todo panel lands),
+  marks the open one; a subagent's session is one `↳ N. <agent>` line nested
+  under its parent, `· running` while it works), `Todos` (a placeholder until the todo panel lands),
   and `Context` (session, agent, model, projected message count, directory,
   server). It is 32 columns wide (at most 40% of a narrow terminal, at least
   20). By default it follows the width: shown at 110 columns or more, hidden
@@ -185,13 +190,13 @@ status line, the bordered input, and the instruction line.
   a `Pending (N)` box appears above the status line with up to three of them
   (`! <title> · <id>`) and the commands that answer them. `/interactions`
   lists every detail. It disappears when nothing is pending.
-- **Keys and the browser.** Ctrl+B and Ctrl+O are not reserved by browsers,
-  so they also work in the WebUI (`packages/hya-tui-web`). Ctrl+B is tmux's
+- **Keys and the browser.** Ctrl+B, Ctrl+O, and Ctrl+G are not reserved by
+  browsers, so they also work in the WebUI (`packages/hya-tui-web`). Ctrl+B is tmux's
   default prefix; inside tmux press it twice (tmux passes the second one
   through) or use `/sidebar`. Ctrl+B would otherwise move the input cursor
   left; the Left arrow still does.
 - **Focus.** The input keeps the keyboard focus. Mouse clicks (on the
-  transcript, a `Thinking` line, or the sidebar) never move it (the renderer
+  transcript, a `Thinking` line, a tool card, or the sidebar) never move it (the renderer
   runs with `autoFocus: false`).
 
 The colors are fixed in `src/theme.ts`:
@@ -206,6 +211,12 @@ The colors are fixed in `src/theme.ts`:
 | `border` | `#405366` | Box borders and titles. |
 | `error` | `#f07878` | Error notices and failed tool calls. |
 | `warning` | `#e5c07b` | Length-limit and cancel notices. |
+
+Tool cards add `toolColors.done` `#a5d6a7` (the ✓ of a finished call and an
+idle or done subagent) and `diffColors`: added rows `#a5d6a7`, removed rows
+`#f07878`, hunk and file headers `#82aaff`, context rows `#9caab9` (muted).
+A running spinner uses `accent`, a failed call `error`, a call waiting for a
+permission answer `warning`, a pending one `muted`.
 
 Code block tokens use `syntaxColors` (keyword `#c792ea`, string `#a5d6a7`,
 number `#f78c6c`, comment `#7a8a9c`, function `#82aaff`, type `#ffcb6b`,
@@ -228,7 +239,7 @@ Each message in the transcript is drawn by role:
 | --- | --- |
 | Text | Markdown (below). |
 | Reasoning | One muted line, `▸ Thinking · N words` (`Thinking…` while it is the part still streaming). Expanded: `▾ Thinking · N words`, then the text in muted italics beside a bar. |
-| Tool call | One muted line, `↳ <tool> · <state>` (`running`, `ok`, …); a failed call is `↳ <tool> · error: <message>` in the error color. When the command of a shell call is known, `$ <command>` follows, indented, and then its output (muted, at most 12 lines, then `… N more lines`). See [Shell turns](#shell-turns). |
+| Tool call | A card: `<icon> <tool>  <summary>` and the duration on the right, collapsed by default. See [Tool calls](#tool-calls). A `task` call is a subagent card; see [Subagents](#subagents). |
 | Attachment | `↳ attachment · <name>`. |
 | `FINISH_REASON_STOP`, `FINISH_REASON_TOOL_CALLS` | Nothing: a normal finish is not noteworthy. |
 | `FINISH_REASON_LENGTH` | `! Reply stopped at the output length limit` (warning color). |
@@ -267,6 +278,108 @@ jumps` hint appears at the bottom right. End (with an empty input), Ctrl+End,
 or scrolling back to the bottom clears the hint and resumes following.
 Submitting a prompt jumps to the bottom. Opening a session starts at its
 bottom. The transcript shows the newest 200 messages.
+
+### Tool calls
+
+Every tool call of an assistant message is a card. The header is one line:
+
+```text
+✓ read  src/main.rs · lines 1-40 of 212                          3ms
+⠹ bash  cargo test -p hya-core
+◌ bash  rm -rf target · awaiting approval
+✗ read  missing.txt
+  File not found: /work/missing.txt
+```
+
+- **State icon.** `○` pending (the model is still streaming the
+  arguments), a spinner (`⠋⠙⠹…`, accent) while it runs, `◌` (warning color)
+  while a permission request for this call waits (its interaction's
+  `payload.callId` is the card's call id), `✓` (green) done, `✗` (error
+  color) failed.
+- **Tool name** in bold, then a **summary** (muted) that depends on the tool
+  (below), clipped to the width, and the **duration** on the right once the
+  call is done (`42ms`, `1.5s`, `12s`, `1m 5s`).
+- A failed call adds its error message on the next line in the error color,
+  collapsed or not.
+
+**Expanding.** Cards are collapsed by default; expanded, the body shows under
+the header beside a bar. Ctrl+G or `/tools` expands or collapses all of them
+(`/tools on`, `/tools off`; with no argument it toggles) and forgets
+per-card choices, like `/thinking`. A click on one card toggles just that
+card; the input keeps the focus. The cards of a `!command` shell turn start
+expanded, so you see the output you asked for. A body longer than 12 lines
+keeps its first 5 and last 6 lines around a `… N lines hidden` row.
+
+| Tool (canonical name) | Summary | Expanded body |
+| --- | --- | --- |
+| `bash` (hidden alias `shell`) | The command (first line), then `· exit N` for a non-zero exit and `· timed out` | `$ <command>`, the output (muted), the exit status (error color) |
+| `read` | `<path> · lines A-B of N` (from the output's display metadata; before that, from `offset` / `limit`) | The text with line numbers |
+| `edit` | `<path> · +A -D` | The diff: the output's `metadata.diff` (unified diff), else rows derived from the arguments (`edits[].oldText`/`newText`, `lines`; compat `oldString`/`newString`) |
+| `write` | `<path> · N lines` | The content, every row an addition |
+| `apply_patch` (alias `patch`) | The files, `· +A -D` | The patch envelope: file headers, `@@` hunks, `+`/`-`/context rows |
+| `grep` | `"<pattern>" in <path> (<glob>) · N matches` | `file:line: text` per match |
+| `glob`, `find` | `<pattern> in <path> · N files` | The paths |
+| `ls` | `<path> · N entries` | The listing |
+| `lsp` | `<operation> <file>:<line>:<character>` | The output |
+| `todo__read`, `todo__update_status`, `todo__update_content` (and older `todo*`) | `N todos · D done` | The list, `☐` pending, `▸` in progress, `!` blocked, `✓` completed |
+| `webfetch` (alias `fetch`) | The URL | The output |
+| `websearch` (alias `search`) | `"<query>"` | The output |
+| `skill` | The skill name | — |
+| `ask_user` (alias `question`) | `<header>: <question>` of the first question | The answers |
+| `task` | `<subagent_type> · <description>` | A subagent card (below) |
+| anything else (MCP `server__tool`, plugin tools) | The arguments as compact JSON | The output text |
+
+Diff rows are colored: `+` added (green), `-` removed (red), hunk and file
+headers blue, context muted. While a call's arguments still stream (state
+`PENDING`, `inputJson` not complete), the summary reads the main string field
+(`command`, `path`, `pattern`, `url`, `query`, …) out of the partial JSON.
+
+Cards appear and update as the stream frames arrive, before the projection
+is re-read (see [Stream frames and the transcript](#stream-frames-and-the-transcript)).
+
+### Subagents
+
+A `task` call spawns a subagent in its own child session. Its card shows the
+child's status and what it last did, and it always shows these lines:
+
+```text
+✓ task  general · survey the repo                                  7ms
+│ ⠹ running  ↳ read notes.txt · lines 1-1 of 1
+│ click to view · /open hysec_…
+```
+
+- **Link.** The card finds its member (`MemberInfo`) by the tool call's
+  `callId` (`memberUpdated.callId`), else by the child session in the task
+  output (`outputJson.metadata.sessionId`). Resident spawns record no call
+  id, so the second rule is the one that usually applies.
+- **Status.** A finished member status wins (`✓ done`, `✗ failed`,
+  `! cancelled`). Otherwise the child session's `busy` flag says `running`
+  (spinner) or `idle` (`✓`, its turn ended; a resident subagent waits for
+  mail). Before anything is known it is `○ starting`. `✗ failed` also shows
+  when the child's newest reply failed.
+- **Latest activity** after `↳`: the member's finish `summary` when it has
+  one, else the child's newest tool call (`<tool> <summary>`) or the first
+  line of its newest text.
+- **Source.** The TUI reads each child of the open session (its members and
+  the children named by `task` outputs) with `GET /v1/sessions/{child}`
+  (`busy`, `agent`) and `GET /v1/sessions/{child}/messages` (activity). It
+  reads them after every projection read and `memberUpdated` frame, at most
+  once per 1.5 s, and repeats every 1.5 s while a child is busy or this
+  client's turn runs. It does not subscribe to child streams. The same round
+  re-reads the session list, so the sidebar's nesting and `· running` stay
+  current.
+
+**Child view.** A click on the task card, `/open <child session id>`, or
+`/open <number>` of its sidebar row opens the child session read-only: a
+`Viewing subagent <agent> · Esc returns · read-only` banner sits above its
+transcript, and the input's placeholder and the footer say so. Enter on a
+prompt or `!command` keeps the text and shows
+`Read-only: this is a subagent's session · Esc returns to the parent`;
+slash commands still run. Esc, when no list is open, opens the parent session
+again (status `Back to the parent session`); the text you typed stays, and a
+second Esc clears it. Opening another session this way resets the parent's
+overlay and prompt queue like any session switch; the parent's turn keeps
+running on the server, and its transcript is re-read on return.
 
 ## Streaming, queued prompts, and turn status
 
@@ -338,7 +451,9 @@ line shows the next one, and past the newest entry it restores what you were
 typing before. Any edit ends history navigation. Repeated sends of the same
 input are stored once.
 
-**Esc.** Esc closes the file list if it is open. Otherwise, while a turn
+**Esc.** Esc closes the file list if it is open. In a subagent's read-only
+view it then returns to the parent session (see [Subagents](#subagents)).
+Otherwise, while a turn
 admitted by this TUI runs, it cancels that turn (like `/cancel`): the status
 shows `Cancelling…`, then `Cancelled · Ready`, and the transcript shows
 `! Cancelled`. Text you typed meanwhile stays. With no turn running, Esc
@@ -377,22 +492,28 @@ reads `Running shell · <command>`.
 The backend records the turn as two messages: a user message with the fixed
 text `The following tool was executed by the user`, and an assistant message
 with one `bash` tool call. The transcript shows the user message as
-`!<command>` and the tool call with the command below it:
+`!<command>` and the tool call as a `bash` card (see
+[Tool calls](#tool-calls)) that starts expanded:
 
 ```text
 ┃ !echo hello
 
 ● build · openai/gpt-5
-↳ bash · ok
-  $ echo hello
-  hello
+◌ bash  echo hello · awaiting approval
 ```
 
-The command comes from this TUI's own shell turns, or from the tool call's
-`inputJson` (`{"command": …}`) when the server fills it. The output line
-needs `ToolCallPart.outputJson`; servers that leave it empty show only the
-command. Esc cancels a running shell command; the turn then reads
-`Cancelled · Ready`.
+and, once approved and finished:
+
+```text
+✓ bash  echo hello                                               4ms
+│ $ echo hello
+│ hello
+```
+
+The command comes from this TUI's own shell turns (before the part carries
+its input), or from the tool call's `inputJson` (`{"command": …}`); the
+output is the tool call's `outputJson`. Esc cancels a running shell command;
+the turn then reads `Cancelled · Ready`.
 
 ### File references
 
@@ -466,11 +587,11 @@ string encoded 64-bit values, and the error envelope documented in the
 | Method and route | Request | Response read by the TUI |
 | --- | --- | --- |
 | `GET /v1/bootstrap` | No body | `Bootstrap` (`location`, `agents`, `models`, `interactions`) |
-| `GET /v1/sessions` | No body | `ListSessionsResponse.sessions: SessionInfo[]` |
+| `GET /v1/sessions` | No body | `ListSessionsResponse.sessions: SessionInfo[]` (every session of the directory, subagent sessions included; `parent` nests them in the sidebar, `busy` marks `· running`). Re-read with each child-session round (see [Subagents](#subagents)). |
 | `POST /v1/sessions` | `{agent: string, model: string, workdir: string}` | `CreateSessionResponse.session: SessionInfo` |
-| `GET /v1/sessions/{id}` | No body | `SessionInfo` (including `permissionMode`, read by `/status`) |
+| `GET /v1/sessions/{id}` | No body | `SessionInfo` (including `permissionMode`, read by `/status`; `parent`, which makes the view read-only; `members: MemberInfo[]`, the subagent rows the task cards link to). For a child session: `busy` and `agent` for its task card. |
 | `PATCH /v1/sessions/{id}` | `{title?: string, model?: string, agent?: string}` (`UpdateSession`; `/model`, `/agent`, `/rename` each send one field) | `SessionInfo` |
-| `GET /v1/sessions/{id}/messages` | No body | `ListMessagesResponse.messages: MessageInfo[]` |
+| `GET /v1/sessions/{id}/messages` | No body | `ListMessagesResponse.messages: MessageInfo[]`; tool cards read `parts[].toolCall` (`ToolCallPart {callId, tool, state, inputJson, outputJson, durationMs, errorCode, errorMessage}`). For a child session: its latest activity. |
 | `POST /v1/sessions/{id}/compact` | `{}` (`CompactSession`) | `CompactSessionResponse {compactedUntilSeq, strategy}` for `/compact` |
 | `POST /v1/sessions/{id}/summarize` | No body (`SummarizeSession`) | `SummarizeSessionResponse {summaryMessage}` for `/summarize` |
 | `GET /v1/sessions/{id}/todo` | No body (`GetSessionTodo`) | `TodoList.items: TodoItem[]` for `/todos` |
@@ -482,7 +603,7 @@ string encoded 64-bit values, and the error envelope documented in the
 | `GET /v1/sessions/{id}` | No body | `SessionInfo.lastSeq` when a session is opened (the stream's first `sinceSeq`). |
 | `GET /v1/sessions/{id}/events/stream?sinceSeq=N` | SSE | `StreamFrame` with `event` or `resync`; `N` is the last applied durable seq. |
 | `GET /v1/sessions/{id}/events?sinceSeq=N&limit=500` | No body | `ListEventsResponse.events` / `nextSeq`, paged, to fill the gap after each stream (re)connect and `resync`. |
-| `GET /v1/interactions` | No body | `ListInteractionsResponse.interactions: Interaction[]` |
+| `GET /v1/interactions` | No body | `ListInteractionsResponse.interactions: Interaction[]`; a permission's `payload.callId` marks the waiting tool card (`◌ … · awaiting approval`). |
 | `POST /v1/interactions/{id}/respond` | `{permission: {allowed: boolean, persist: false}}` or `{question: {answer: string}}` | `RespondInteractionResponse.applied` |
 | `GET /v1/models` | No body | `ListModelsResponse.models: ModelSummary[]` |
 | `GET /v1/providers` | No body | `ListProvidersResponse.providers: ProviderSummary[]` for key suggestions. |
@@ -506,6 +627,7 @@ from the current view; it makes no HTTP request:
 | Saved keys | `Next: /key set <provider> to add · /key remove <provider> to delete · Tab completes` |
 | Saved keys when `GET /v1/auth` is unavailable | `Next: restart backend 0.41.0+ to list saved keys · /help` |
 | Concealed key entry | `Paste API key · Enter saves · Esc cancels` |
+| Chat in a subagent's session | `Read-only subagent view · Esc returns to the parent · click a task card or /open <n> to switch` |
 | API | `Next: /api GET /v1/health · /help for command syntax` |
 | Help | `Enter a prompt or choose a /command · Tab completes` |
 | Todos | `Next: /refresh to reload the list · /help` |
@@ -524,7 +646,10 @@ rules follow the protocol guide's
 | --- | --- | --- |
 | `messageStarted {message, role}` | durable | Overlay message with its role; projection re-read (debounced: 120 ms after the last such frame, but at least every 400 ms while frames keep coming). |
 | `partStarted {message, part, kind}` (`text`, `reasoning`) | live or durable | Overlay part. A part id the overlay already has is not a new part. |
-| `partAppended {message, part, textDelta}` | live (assistant text) or durable (reasoning, tool arguments, user text) | Appends `textDelta` to the part. No projection re-read. |
+| `partStarted {message, part, kind: "tool_call", tool, callId}` | durable | Overlay tool part in state `PENDING` (a `○` card). |
+| `partAppended {message, part, textDelta}` | live (assistant text) or durable (reasoning, tool arguments, user text) | Appends `textDelta` to the part (for a tool part, to its argument JSON so far). No projection re-read. |
+| `toolStateChanged {message, part, callId, state, tool, inputJson, outputJson, durationMs, errorCode, errorMessage}` | durable | Sets the tool part's state and every field the frame carries, keeping the others (`inputJson` replaces the appended fragments). An empty `callId` is a direct part overwrite; the part keeps its call id. A part the overlay never saw is started. Merged with the projection by part id: the overlay's part is shown only while its state is further along (`PENDING` < `RUNNING` < `OK`/`ERROR`). |
+| `memberUpdated {member, child, agent, description, status, summary, callId, depth}` | durable (parent session) | Folded into the open session's member rows by `member` (partial frames keep known fields); triggers a child-session round. |
 | `partReplaced {message, part, text}` | live (plugin rewrite) or durable (end of round) | Sets the part's whole text, replacing the live deltas. |
 | `partCompleted {message, part}` | live or durable | No overlay change; a durable one triggers a projection re-read. |
 | `errorReported {message, code, errorMessage}` | durable | Stored as the message's error. Shown in the transcript and, at turn end, in the status line. |
@@ -586,16 +711,18 @@ together.
 | `src/main.ts` | Entry. Registers the Solid JSX transform (`@opentui/solid/preload`), parses flags, then dynamically imports the app. |
 | `src/cli.ts` | `--server`, `--dir`, `--help` parsing and the usage line. |
 | `src/client.ts` | Typed v1 HTTP/JSON+SSE client (`HyaClient`, `SseDecoder`, `parseApiCommand`). |
-| `src/state/store.ts` | `createAppStore()`: the single store. It holds the server projection (sessions, messages, interactions, models, agents, providers, workflows, saved key names, backend commands, todos, stream cursor), the published streaming overlay, the prompt queue, the turn state (`running`, `turnId`), and UI state (view, status, key-entry provider and mask, sidebar mode, terminal columns, the reasoning switch and per-part toggles, the jump-to-bottom tick, the `/status` text, the backend version from bootstrap, the `/name args` display text of command turns by user message id). Each field is a Solid signal, and only the store's mutation methods change it. |
+| `src/state/store.ts` | `createAppStore()`: the single store. It holds the server projection (sessions, messages, interactions, models, agents, providers, workflows, saved key names, backend commands, todos, stream cursor, the open session's subagent members, what was last read about each child session), the published streaming overlay, the prompt queue, the turn state (`running`, `turnId`), and UI state (view, status, key-entry provider and mask, sidebar mode, terminal columns, the reasoning switch and per-part toggles, the tool-card switch and per-card toggles, the jump-to-bottom tick, the `/status` text, the backend version from bootstrap, the `/name args` display text of command turns by user message id). Each field is a Solid signal, and only the store's mutation methods change it. |
 | `src/state/overlay.ts` | `TranscriptOverlay`: the pure fold of stream frames by message and part id (seq filter, live/durable handover, `resync` handling, turn-end lookup). `mergeTranscript()` merges it over the projection. |
-| `src/state/messages.ts` | The transcript view model: `transcriptViews()` (projection + overlay + waiting queued prompts), `messageView()` (role, agent/model, typed blocks, finish notice; cached per message object), `finishNotice()`, `reasoningLabel()`, `reasoningExpanded()`. |
+| `src/state/messages.ts` | The transcript view model: `transcriptViews()` (projection + overlay + waiting queued prompts), `messageView()` (role, agent/model, typed blocks, finish notice; cached per message object), `finishNotice()`, `reasoningLabel()`, `reasoningExpanded()`, `toolExpanded()`. |
+| `src/state/tools.ts` | The tool-card view model: `toolCard()` (status, per-tool summary, body lines with tones, duration, error, task info), `toolStatus()`, `formatDuration()`, `clipLines()`, `diffLines()`, `partialField()`. |
+| `src/state/members.ts` | Subagents: `foldMember()`, `taskLink()` (card → member and child session), `childStatus()`, `childActivity()`, `childSessionIds()`. |
 | `src/state/layout.ts` | Sidebar rules: `layoutBreakpoints`, `sidebarVisible()`, `toggledSidebar()`, `sidebarWidth()`, and `parseSwitch()` for `on`/`off` arguments. |
 | `src/state/scroll.ts` | `ScrollFollow` (the "new messages below" hint), `atBottom()`, `pageStep()`. |
-| `src/state/format.ts` | Pure text for the header, sidebar (session list, context box), pending lines, and the non-chat views. |
-| `src/app/controller.ts` | `createController()`: refreshes, the session SSE loop (subscribe, `ListEvents` gap-fill, `resync`), batched overlay flushes, the debounced projection re-read (`app/debounce.ts`), session creation, prompt submission, command dispatch, and concealed key entry. It writes results into the store. |
+| `src/state/format.ts` | Pure text for the header, sidebar (session list with `sessionTree()` nesting, context box), pending lines, and the non-chat views. |
+| `src/app/controller.ts` | `createController()`: refreshes, the session SSE loop (subscribe, `ListEvents` gap-fill, `resync`), batched overlay flushes, the debounced projection re-read (`app/debounce.ts`), child-session rounds for subagent cards, `returnToParent()`, session creation, prompt submission (refused in a subagent's read-only view), command dispatch, and concealed key entry. It writes results into the store. |
 | `src/app/turns.ts` | `createTurnRunner()`: the client-side prompt queue, `409 session_busy` retry, and turn-end detection and status text. |
 | `src/app/App.tsx`, `src/app/run.tsx`, `src/app/context.ts` | Root layout (main column + sidebar), renderer startup, and the `AppContext` (store, controller, server URL, and `ui` handles such as the transcript's scroll actions) that components read with `useApp()`. |
-| `src/components/` | `Header`, `MainPanel` (transcript or view panel), `Transcript` (scrollbox, follow/hint), `MessageView` (`MessageItem`, user/assistant messages, blocks, reasoning, tool lines with shell command and output, `KeyedFor`), `Markdown` (the `<markdown>` wrapper, `SyntaxStyle`, code-block boxes), `Panel`, `PendingBlock`, `Sidebar`, `StatusLine`, `Composer` (the `<textarea>` editor, its height, history, Esc / Ctrl+C / Ctrl+D, the shell-mode border, the `@file` list, the `/` command menu, Tab completion, key actions, concealed key entry), `Footer`. |
+| `src/components/` | `Header`, `MainPanel` (transcript or view panel), `Transcript` (scrollbox, follow/hint), `MessageView` (`MessageItem`, user/assistant messages, blocks, reasoning, tool cards and `task` subagent cards, `KeyedFor`), `Spinner` (the shared spinner clock), `Markdown` (the `<markdown>` wrapper, `SyntaxStyle`, code-block boxes), `Panel`, `PendingBlock`, `Sidebar`, `StatusLine`, `Composer` (the `<textarea>` editor, its height, history, Esc / Ctrl+C / Ctrl+D, the shell-mode border, the `@file` list, the `/` command menu, Tab completion, key actions, concealed key entry), `Footer`. |
 | `src/composer/` | Pure composer logic: `history.ts` (`InputHistory`), `quit.ts` (`createQuitGuard`, the Ctrl+C double press), `escape.ts` (`escapeAction`), `shell.ts` (`shellCommand`, `isShellInput`), `mention.ts` (`mentionAt`, `insertMention`, `findPattern`, `rankPaths`). |
 | `src/commands/` | The slash-command registry (`registry.ts`), the built-in commands (`native.ts`), the `/help` text (`help.ts`), and the command menu's merge/fuzzy-filter/argument-hint logic (`menu.ts`: `mergeCommandEntries`, `filterCommands`, `requiresArgument`). |
 | `src/keys/bindings.ts` | The global key binding table (`keyBindings`) and the textarea overrides (`composerKeyBindings`: Enter submits; Ctrl+J, Shift+Enter, Alt+Enter insert a newline; Home/End). |
@@ -664,9 +791,13 @@ queued prompts, and the turn status line (`Ready`, provider errors).
 `e2e/hya-tui-commands-menu.spec.ts` covers the `/` command menu (open,
 fuzzy filter, sources, Up/Down, Tab, Esc, Enter's argument-hint rule), skill
 commands (a fixture `SKILL.md` under `.hya/skills/<name>/`), `/compact`,
-`/rename`, and `/status`. `e2e/hya-tui-composer.spec.ts` covers the composer:
+`/rename`, and `/status`. `e2e/hya-tui-tools.spec.ts` covers tool cards (read, bash, edit/write diff
+colors, a failed call, the running spinner, Ctrl+G, `/tools`, a click) and a
+`task` subagent card (child status and activity, sidebar nesting, the
+read-only child view, Esc back, `/open`), also at about 80 columns.
+`e2e/hya-tui-composer.spec.ts` covers the composer:
 Ctrl+J / Alt+Enter newlines and box growth up to 8 rows, Shift+Enter in the
 browser, bracketed paste, cursor editing, history, Esc (clear, and cancel of
 a hanging fake-model turn), Ctrl+C once and twice, Ctrl+D, `/exit`,
-`!echo hello`, and `@file`
+`!echo hello` (the waiting card, then its output), and `@file`
 suggestions at the default width and about 80 columns.
