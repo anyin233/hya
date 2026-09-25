@@ -19,6 +19,13 @@ itself. `e2e/hya-tui.spec.ts` drives the real TUI against an isolated
 the host, because rendering never moves into `hya serve` (see
 [ADR-0018](adr/0018-browser-rendered-tui-test-environment.md)).
 
+The offline echo model only ever echoes the prompt back, so it cannot
+exercise streamed text chunks, tool calls, or a busy/working state. For specs
+that need those, `e2e/fake-model.ts` runs a small scriptable OpenAI-compatible
+Chat Completions server in the Playwright process itself, and the `backend`
+fixture can wire the isolated `hya serve` to it instead of the offline model.
+See "The fake model" below.
+
 ## Usage
 
 Requires Bun 1.4.2 (native `Bun.spawn({ terminal })` PTYs; macOS and Linux).
@@ -96,6 +103,91 @@ test("echoes a prompt", async ({ tui }) => {
   expect((await term.cell(at.row, at.col))?.fg).toBe("#73c8e8")
 })
 ```
+
+### The fake model
+
+`e2e/fake-model.ts` (`startFakeModel(steps)`) serves `POST /v1/chat/completions`
+as scripted OpenAI-compatible SSE, one `Step` consumed per model request. It
+mirrors the process-level Rust reference (`crates/hya-e2e/src/fake_llm.rs`)
+but runs inside the Playwright/Node process, so a spec needs no extra binary.
+It only emits what hya's `openai-compatible` decoder
+(`crates/hya-provider/src/openai/decoder.rs`) actually reads — text deltas,
+tool-call deltas, `finish_reason`, and a trailing `usage` object — so there is
+no reasoning/thinking step type: that decoder does not read
+`reasoning_content` (reasoning streaming only exists for the separate
+`openai-response` route), and a scripted reasoning chunk would silently be
+dropped, not rendered.
+
+Step types (`e2e/fake-model.ts`):
+
+| Step | Fields | Effect |
+| --- | --- | --- |
+| `textStep(text, opts?)` | `text: string`; `opts.chunkSize?: number` (default: whole string); `opts.delayMs?: number` (default `0`) | Streams `text` as one or more `delta.content` chunks, then finishes `stop`. |
+| `toolStep(name, args)` / `toolsStep(calls)` | `name: string`, `args: unknown`; or `calls: { name, arguments }[]` | Streams one or more `delta.tool_calls` (id, name, then JSON arguments), then finishes `tool_calls`. |
+| `httpErrorStep(status)` | `status: number` | Responds with that HTTP status before any stream opens. |
+| `hangStep(ms?)` | `ms?: number` | Holds the connection open with no bytes written (observe a busy/working state, or test cancellation) until `fake.release()` is called, or `ms` elapses and it finishes as an empty `stop` reply. |
+
+`startFakeModel(initial: Step[] = [])` returns:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `baseUrl` | `string` | `http://127.0.0.1:<port>/v1`, for a provider's `base_url`. |
+| `requests()` | `unknown[]` | Recorded request bodies (unrouted, or matched by no route), in arrival order. |
+| `push(steps)` | `(Step[]) => void` | Append more steps to the shared (unrouted) queue. |
+| `route(marker, steps)` | `(string, Step[]) => void` | Pin `steps` to requests whose concatenated `system`-role content contains `marker`, so independent flows can be scripted for concurrent agents. An exhausted route does not fall back to the shared queue. |
+| `routeRequests(marker)` | `(string) => unknown[] \| undefined` | Recorded bodies for one route, or `undefined` if never registered. |
+| `setUsage({ prompt, completion, reasoning })` | `(Usage) => void` | Attach a `usage` object to every finishing chunk from now on. |
+| `release()` | `() => void` | Release the oldest pending `hangStep`. |
+| `pendingHangs()` | `() => number` | Count of hangs currently holding a connection open. |
+| `stop()` | `() => Promise<void>` | Stop the server. |
+
+The `backend` fixture (`e2e/hya.ts`) gains a `model` test option that wires
+the isolated `hya serve` to a fake model instead of the offline echo model:
+
+```ts
+import { expect, hyaTui, textStep, test } from "./hya"
+
+test.describe("streamed reply", () => {
+  test.use({ model: { steps: [textStep("hi from the fake model", { chunkSize: 4, delayMs: 20 })] } })
+
+  test("shows the reply", async ({ tui, backend, fakeModel }) => {
+    const term = await tui(hyaTui(backend))
+    await term.waitForText("Connected to hya")
+    await term.type("hello")
+    await term.press("Enter")
+    await term.waitForText("hi from the fake model")
+    expect(fakeModel!.requests().length).toBe(1)
+  })
+})
+```
+
+`model` takes `{ steps: Step[] } | undefined` (wrapped, not a bare array —
+Playwright's fixture-option machinery parametrizes a test per array element
+for a bare array "option" value, silently dropping steps past the first).
+Leaving `model` unset keeps the existing offline echo model, so specs that
+predate the fake model are unaffected. When `model` is set, the `backend`
+fixture starts the fake model before `hya serve` and writes
+`$XDG_CONFIG_HOME/hya/config.yaml` selecting it:
+
+```yaml
+default_model: fake/model
+providers:
+  fake:
+    kind: openai-compatible
+    base_url: http://127.0.0.1:<port>/v1
+    api_key: e2e-test-key
+    models:
+      - id: model
+mcp: {}
+plugins: {}
+permission:
+  model: default
+  rules: []
+```
+
+A spec that only needs to assert on the v1 HTTP API (no TUI rendering) can
+skip `tui()` and use `fetch` directly against `backend.url` with the
+`x-hya-directory: <backend.dir>` header; see `e2e/fake-model.spec.ts`.
 
 ## Interfaces
 
