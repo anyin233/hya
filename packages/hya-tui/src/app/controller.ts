@@ -20,14 +20,23 @@
  * outputs; state/members.ts) are re-read — `GetSession` for `busy`,
  * `ListMessages` for the latest activity — after every projection read and
  * member frame, and every `childPollMs` while a child is busy or this
- * client's turn runs. No child stream is subscribed, so the same round
- * re-reads the pending interactions: a subagent's ask (its child session id)
- * reaches the parent's prompt within one round.
+ * client's turn runs. That is the only polling left: it feeds the task
+ * cards' status and activity (durable child events stay on the child's own
+ * stream).
  *
- * Prompts: `answer()` responds to a permission or question prompt
- * (app/prompts.ts); live `permissionRequested` / `questionRequested` /
- * `interactionResolved` frames of the open session update the pending list
- * at once (state/store.ts), and the listing is re-read after them.
+ * Prompts: the open session's stream is subscribed with
+ * `includeDescendants=true`, so the live `permissionRequested` /
+ * `questionRequested` / `interactionResolved` frames of the open session and
+ * of every subagent below it update the pending list at once (state/store.ts
+ * `applyAsk`; state/prompts.ts `askFrameRoute`). Frames sent before the
+ * subscription are not replayed, so `GET /v1/interactions` is read once
+ * after every (re)subscribe and after a `resync`, besides the full catalog
+ * refreshes (start, Ctrl+R). `answer()` responds to a prompt
+ * (app/prompts.ts).
+ *
+ * Usage and todos: `tokensRecorded`, `todoUpdated`, and `compactionApplied`
+ * fold in the store; a `tokensRecorded` also re-reads the open session
+ * (debounced) for its authoritative `SessionInfo.usage` total.
  */
 import type { HyaClient, Interaction, MessageInfo, SessionInfo, StreamEvent, StreamFrame } from "../client"
 import { completeCommand, SecretEntry } from "../completion"
@@ -35,10 +44,11 @@ import { createCommandRegistry, mergeCommandEntries, type AppActions, type Comma
 import { findPattern, rankPaths } from "../composer/mention"
 import { shellCommand } from "../composer/shell"
 import type { KeyLike } from "../keys/bindings"
-import { sessionTree } from "../state/format"
+import { helpPickerHint, helpPickerRows } from "../commands"
+import { initialSessionId } from "../launch"
 import { childActivity, childSessionIds } from "../state/members"
 import { createPicker, pickerKey as pickerKeyOutcome, type PickerRow, type PickerSpec } from "../state/picker"
-import type { PromptChoice } from "../state/prompts"
+import { askFrameRoute, type PromptChoice } from "../state/prompts"
 import type { AppStore } from "../state/store"
 import { createModeSwitcher } from "./modes"
 import { answerPrompt } from "./prompts"
@@ -64,13 +74,20 @@ export interface ControllerOptions {
   registry?: CommandRegistry
   /** Leave the TUI (destroys the renderer, which restores the terminal). */
   quit?: () => void
+  /** Which session to open at start (`--continue`, `--session`; src/launch.ts `initialSessionId`). Default: none. */
+  startup?: { continue: boolean; session?: string }
+  /** Appended to the status line when the backend cannot be reached. */
+  connectionHint?: string
 }
+
+/** Rows the help overlay shows at once (bounded by the terminal height, components/Picker.tsx). */
+const helpMaxRows = 40
 
 /** Paths requested per `@file` lookup; the best `fileSuggestionLimit` are shown. */
 const fileLookupLimit = 50
 export const fileSuggestionLimit = 8
 
-export function createController({ client, store, directory, registry = createCommandRegistry(), quit = () => undefined }: ControllerOptions) {
+export function createController({ client, store, directory, registry = createCommandRegistry(), quit = () => undefined, startup = { continue: false }, connectionHint = "start hya serve" }: ControllerOptions) {
   let streamAbort: AbortController | undefined
   let flushTimer: ReturnType<typeof setTimeout> | undefined
   let streamReady: Promise<void> = Promise.resolve()
@@ -130,8 +147,26 @@ export function createController({ client, store, directory, registry = createCo
     store.setGitBranch(branch)
   }
 
+  /** Re-read the open session's row: `SessionInfo.usage` after a `tokensRecorded` (E22). */
+  async function refreshSession(): Promise<void> {
+    const selected = store.state.selected
+    if (!selected) return
+    const row = await client.request<SessionInfo>("GET", `/v1/sessions/${encodeURIComponent(selected.id)}`)
+    const current = store.state.selected
+    if (current?.id === row.id) store.setSelected({ ...current, ...row })
+  }
+
+  /** `GET /v1/interactions` into the pending list (after a (re)subscribe or `resync`: frames before it are not replayed). */
+  async function refreshInteractions(): Promise<void> {
+    store.setInteractions(await client.listInteractions())
+  }
+
+  let sessionDue = false
   const refreshLater = createDebounce(() => {
-    void Promise.all([refreshMessages(), refreshTodos(), client.listInteractions().then((rows) => store.setInteractions(rows))])
+    const session = sessionDue
+    sessionDue = false
+    // Todos arrive as `todoUpdated` frames and asks as live frames, so only the transcript (and, after billing, the session row) is re-read.
+    void Promise.all([refreshMessages(), session ? refreshSession() : undefined])
       .catch((error: unknown) => status(`Refresh failed: ${String(error)}`))
   }, { wait: refreshWaitMs, maxWait: refreshMaxWaitMs })
 
@@ -190,8 +225,6 @@ export function createController({ client, store, directory, registry = createCo
     void Promise.all([
       ...ids.map((id) => readChild(id).catch(() => undefined)),
       client.listSessions().then((rows) => generation === childGeneration && store.setSessions(rows)).catch(() => undefined),
-      // Child streams are not subscribed: their asks come from the listing.
-      client.listInteractions().then((rows) => generation === childGeneration && store.setInteractions(rows)).catch(() => undefined),
     ]).then(() => {
       if (generation !== childGeneration) return
       childReading = false
@@ -208,7 +241,10 @@ export function createController({ client, store, directory, registry = createCo
     // part boundaries, tool state, errors) and live interaction frames
     // change the projection or the pending list: re-read them.
     const delta = event.partAppended || event.partReplaced || (!effect.durable && (event.partStarted || event.partCompleted))
-    if (!delta && (effect.durable || !event.seq)) scheduleRefresh()
+    // Ask frames change only the pending list, which the store already updated.
+    const ask = event.permissionRequested || event.questionRequested || event.interactionResolved
+    if (event.tokensRecorded && effect.durable) sessionDue = true
+    if (!delta && !ask && (effect.durable || !event.seq)) scheduleRefresh()
     // A turn ended: the working directory's git status may have changed (E22).
     if (effect.finished) void refreshVcs()
     turns.observe(effect)
@@ -227,12 +263,16 @@ export function createController({ client, store, directory, registry = createCo
     if (frame.resync) {
       store.markLiveLost()
       await gapFill(sessionId)
+      // Live ask frames in the gap are lost too.
+      await refreshInteractions().catch(() => undefined)
       scheduleRefresh()
       return
     }
     const event = frame.event
-    if (!event || (event.session && event.session !== sessionId)) return
-    applyEvent(event)
+    if (!event) return
+    const route = askFrameRoute(event, sessionId)
+    if (route === "own") applyEvent(event)
+    else if (route === "descendantAsk") store.applyAsk(event)
   }
 
   function startStream(sessionId: string): void {
@@ -249,10 +289,12 @@ export function createController({ client, store, directory, registry = createCo
             // Subscribed: frames after this point are buffered by the
             // connection while the gap since the last applied seq is filled.
             await gapFill(sessionId)
+            // Asks raised before this subscription are not replayed: list them once.
+            await refreshInteractions().catch(() => undefined)
             store.setConnected(true)
             if (connections++ > 0) scheduleRefresh()
             ready()
-          })
+          }, true)
         } catch (error) {
           if (!controller.signal.aborted) {
             store.setConnected(false)
@@ -364,8 +406,20 @@ export function createController({ client, store, directory, registry = createCo
     else if (outcome.type === "commit") commitPickerAction(outcome.id, outcome.row, outcome.value)
   }
 
+  /** The key and command help overlay (G29): the picker over `helpPickerRows`, filterable, Esc closes. */
+  function openHelp(): void {
+    openPicker({
+      title: "Help · keys and commands",
+      rows: helpPickerRows(commandEntries()),
+      hint: helpPickerHint,
+      maxRows: helpMaxRows,
+      detailPane: true,
+      onSelect: () => undefined,
+    })
+  }
+
   const actions: AppActions = {
-    refresh, refreshMessages, openSession, newSession, beginKeyEntry, scheduleRefresh,
+    refresh, refreshMessages, openSession, newSession, beginKeyEntry, scheduleRefresh, openHelp,
     cancelTurn: () => turns.cancel(),
     quit,
     openPicker,
@@ -454,23 +508,29 @@ export function createController({ client, store, directory, registry = createCo
     void refresh().then(refreshMessages).catch((error: unknown) => status(`Refresh failed: ${String(error)}`))
   }
 
-  /** Initial load: bootstrap, catalogs, open the newest session. */
+  /**
+   * Initial load: bootstrap, catalogs, then the session `startup` names
+   * (`--session <id>`, or `--continue`: the most recent top-level session of
+   * `--dir`); without either no session is open until the first prompt or
+   * `/new` creates one.
+   */
   async function start(): Promise<void> {
     try {
       const bootstrap = await client.bootstrap()
       store.applyBootstrap(bootstrap)
       await refresh()
       void refreshVcs()
-      // The newest top-level session; subagent sessions are opened from their parent.
-      const first = sessionTree(store.state.sessions)[0]?.session
-      if (first) await openSession(first.id)
+      const target = initialSessionId(store.state.sessions, startup, directory)
+      let missing = ""
+      if (target) await openSession(target).catch(() => { missing = ` · session ${target} not found` })
+      else if (startup.continue) missing = " · no earlier session in this directory"
       const version = bootstrap.location?.version ?? ""
       const mismatch = version && version !== tuiVersion ? ` · backend ${version} ≠ tui ${tuiVersion}` : ""
       status(store.state.savedKeysAvailable
-        ? `Connected to hya ${version} · /help for commands${mismatch}`
-        : `Connected to hya ${version} · key listing needs backend 0.41.0+${mismatch}`)
+        ? `Connected to hya ${version} · ? or /help for keys and commands${missing}${mismatch}`
+        : `Connected to hya ${version} · key listing needs backend 0.41.0+${missing}${mismatch}`)
     } catch (error) {
-      status(`Connection failed: ${String(error)} · start hya serve`)
+      status(`Connection failed: ${String(error)} · ${connectionHint}`)
       store.setView("help")
       store.markReady()
     }

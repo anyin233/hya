@@ -1,5 +1,5 @@
 export { backendCommand, createCommandRegistry, nativeCommandSpecs } from "./native"
-export { helpText } from "./help"
+export { helpPickerHint, helpPickerRows, helpRows, keyHelpText } from "./help"
 export {
   commandSuggestionLimit,
   filterCommands,

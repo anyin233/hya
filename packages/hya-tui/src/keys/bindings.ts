@@ -26,6 +26,7 @@ export type KeyAction =
   | "pageDown"
   | "scrollTop"
   | "scrollBottom"
+  | "help"
 
 /** The subset of OpenTUI's KeyEvent a binding looks at. */
 export interface KeyLike {
@@ -131,6 +132,12 @@ export const keyBindings: readonly KeyBinding[] = [
     label: "Ctrl+End",
     description: "Jump to the newest line and follow it (plain End when the composer is empty)",
     matches: (key, context) => key.name === "end" && (key.ctrl || (plain(key) && context.composerEmpty === true)),
+  },
+  {
+    action: "help",
+    label: "?",
+    description: "Show every key and command (when the input is empty; otherwise types ?)",
+    matches: (key, context) => key.sequence === "?" && !key.ctrl && !key.meta && context.composerEmpty === true,
   },
 ]
 

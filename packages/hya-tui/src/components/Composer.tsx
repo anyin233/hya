@@ -373,7 +373,8 @@ export function Composer() {
       }
     }
     if (arrow(key, consume)) return
-    const action = resolveBinding(key, { composerEmpty: !value() })
+    // The editor's text, not the `value()` mirror: it can lag one render behind fast typing (`a?` must type `?`).
+    const action = resolveBinding(key, { composerEmpty: !(editor?.plainText ?? value()) })
     if (action !== "quit") quitGuard.disarm()
     if (!action) return
     const transcript = store.state.view === "chat" ? ui.transcript : undefined
@@ -449,6 +450,10 @@ export function Composer() {
       case "scrollBottom":
         consume()
         transcript?.bottom()
+        return
+      case "help":
+        consume()
+        controller.openHelp()
         return
     }
   })

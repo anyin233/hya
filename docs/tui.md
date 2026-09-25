@@ -1,9 +1,10 @@
 # OpenTUI frontend
 
-The `packages/hya-tui` frontend is a basic terminal client for a running
-`hya serve` process. It uses OpenTUI for display and input while the
-backend remains the owner of sessions, event history, tool execution, and
-permissions. The screen is one main column (the transcript of the open
+The `packages/hya-tui` frontend is the terminal client of hya. One command
+starts it together with its own `hya serve` backend (or it connects to a
+running one with `--server`; see [Start it](#start-it)). It uses OpenTUI for
+display and input while the backend remains the owner of sessions, event
+history, tool execution, and permissions. The screen is one main column (the transcript of the open
 session, pending interactions, the status line, and the input) plus a
 sidebar with the session list, todos, and session context that you can show
 or hide (see [Layout](#layout)). Assistant replies render as Markdown with
@@ -24,7 +25,8 @@ runs `!command` shell turns, completes `@file` references, and opens a
 command menu on `/` (see [Composer](#composer)). Tab completes slash commands
 using the TUI and server command catalogs. One persistent instruction line
 stays below the input at the bottom of the screen and changes with the
-current view.
+current view. `?` on an empty input (or `/help`) lists every key and
+command (see [Key help](#key-help)).
 If a backend predates the saved-key list endpoint, the main TUI still opens and
 shows that key listing needs a backend restart with an updated binary.
 
@@ -37,17 +39,67 @@ cd packages/hya-tui
 bun install --frozen-lockfile
 ```
 
-Run these in separate terminals from the repository root:
+Then, from the repository root, one command starts the TUI and its backend:
+
+```sh
+cargo build -p hya-backend --bin hya        # once; or put a released hya on PATH
+HYA_BIN=target/debug/hya bun packages/hya-tui/src/main.ts --dir "$PWD"
+```
+
+Without `--server` the TUI starts its own backend: it finds the `hya`
+binary, runs `hya serve --bind 127.0.0.1:0 --db <db>` in `--dir` with the
+TUI's environment, reads the URL from the server's readiness line
+(`hya server listening on <url>`, see [`hya serve`](cli.md#hya-serve)),
+connects, and stops the server when the TUI exits — Ctrl+C twice, Ctrl+D,
+`/exit`, or a signal (SIGINT, SIGTERM, SIGHUP, which is also what the WebUI
+host sends when its browser tab closes). Stopping sends SIGTERM (the server
+drains running turns for up to 5 s) and SIGKILL after 6 s, and the TUI
+waits for the process to exit, so no `hya serve` is left behind. The
+server's stdout and stderr never reach the screen; `/status` shows the
+started backend's pid, binary, and database.
+
+The binary is looked up in this order:
+
+1. `--hya <path>`
+2. the `HYA_BIN` environment variable
+3. `hya` on `PATH`
+
+A path given by `--hya` or `HYA_BIN` must exist; the TUI does not fall back
+to the next source then. If no binary is found, or the server exits (or
+prints no readiness line within 60 s) before it is ready, the TUI prints the
+reason and the last lines of the server's output, and exits with status 1
+before it takes over the terminal, for example:
+
+```text
+hya-tui: could not start the backend: hya serve exited with code 1 before it was ready
+--- hya serve output (last lines) ---
+Error: invalid config: ...
+```
+
+To use a backend you run yourself (another machine, a shared server, or a
+custom `hya serve` command line), pass its URL; the TUI then starts nothing
+and stops nothing:
 
 ```sh
 cargo run --locked -p hya-backend --bin hya -- serve --bind 127.0.0.1:8080 --db "$HOME/hya-sessions.db"
 bun packages/hya-tui/src/main.ts --server http://127.0.0.1:8080 --dir "$PWD"
 ```
 
-`--server` is the backend base HTTP URL (default `http://127.0.0.1:8080`).
-`--dir` is the absolute directory scope sent as `x-hya-directory` (default:
-the frontend process's working directory). `--help` prints the launch syntax.
-The backend's offline echo model is sufficient for a first run; configure a
+| Flag | Meaning |
+| --- | --- |
+| `--server <url>` | Base HTTP URL of a running `hya serve`. Without it the TUI starts its own backend. |
+| `--dir <path>` | Workspace directory: the `x-hya-directory` scope of every request and the started backend's working directory. Default: the TUI's working directory. |
+| `--hya <path>` | `hya` binary to start (first in the lookup order above). Only without `--server`. |
+| `--db <path>` | SQLite database of the started backend. Default: `$XDG_STATE_HOME/hya/sessions.db`, else `~/.local/state/hya/sessions.db` — the store `hya sessions` reads, so sessions survive restarts. Only without `--server`. |
+| `-c`, `--continue` | Open the most recently updated top-level session of `--dir` (subagent sessions are opened from their parent). |
+| `-s`, `--session <id>` | Open that session. Cannot be combined with `--continue`. |
+| `-h`, `--help` | Print the flags and the binary lookup order. |
+
+Without `--continue` or `--session` no session is open at start; the first
+prompt (or `/new`) creates one, and `/sessions` (or the sidebar) reaches the
+earlier ones. Two TUIs that each start a backend on the same default
+database share its sessions; give one `--db` for a separate store. The
+backend's offline echo model is sufficient for a first run; configure a
 provider in the backend for live model calls.
 
 Type a plain prompt and press Enter. The frontend creates a session when none
@@ -56,7 +108,12 @@ transcript as it arrives (see [Streaming, queued prompts, and turn
 status](#streaming-queued-prompts-and-turn-status)). For example, type `summarize this repository`,
 then `/models` to inspect available routes, and `/open 1` to return to the
 first session. Press Ctrl+C twice (or Ctrl+D on an empty input, or type
-`/exit`) to exit and restore the terminal.
+`/exit`) to exit and restore the terminal; a backend the TUI started stops
+with it. Next time, `--continue` picks the conversation up again:
+
+```sh
+HYA_BIN=target/debug/hya bun packages/hya-tui/src/main.ts --dir "$PWD" --continue
+```
 
 To set a provider API key, type `/key set anthropic`, paste the key into the
 concealed prompt, and press Enter. The prompt draws bullets only and clears its
@@ -71,9 +128,10 @@ add or replace a key and `/key remove <provider>` to delete one. During
 concealed entry, the row changes to `Paste API key · Enter saves · Esc cancels`.
 
 If `/keys` says key listing is unavailable, restart the backend with hya
-0.41.0 or newer and run the same frontend command again. For example, a
-frontend on `127.0.0.1:22103` can reconnect after restarting the backend on
-that port; sessions and other main views remain available while its older
+0.41.0 or newer and run the same frontend command again (a backend the TUI
+started restarts with it). For example, a frontend started with `--server`
+on `127.0.0.1:22103` can reconnect after restarting the backend on that
+port; sessions and other main views remain available while its older
 backend is running.
 
 ## Commands and keys
@@ -114,12 +172,12 @@ backend is running.
 | `/compact` | Compact the session's context now (`CompactSession`); the status line shows `Compacting…`, then `Compacted · <strategy>`. |
 | `/summarize` | Summarize the session into a new message (`SummarizeSession`). |
 | `/todos` | Show the session's todo list (`GetSessionTodo`) in the main panel. |
-| `/status` | Show the server URL, backend version, directory, session, agent, model, and permission mode. |
+| `/status` | Show the server URL, backend version, directory, session, agent, model, permission mode, and the backend (started by this TUI with its pid, binary, and database, or external with `--server`). |
 | `/init`, `/review` | Server built-in commands from the backend command catalog, run as `CommandTurn`s. |
 | `/<skill> [args]` | Run a discovered skill as a `CommandTurn` (see [Skill commands](#skill-commands)). |
 | `/api` | List the HTTP operations from the generated OpenAPI catalog. |
 | `/api METHOD /v1/path [JSON]` | Send a scoped HTTP/JSON request and show its JSON response. |
-| `/help` | Show command help, including server and skill commands. |
+| `/help`, `?` | Open the key and command help overlay (`?` only on an empty input; with text it types `?`). See [Key help](#key-help). |
 | Tab | Complete a slash command name (or, in the command menu, the highlighted entry) or a supported argument; repeat Tab to cycle argument matches. |
 | PgUp / PgDn | Scroll the transcript one page (the view height minus two rows). |
 | Ctrl+Home / Ctrl+End | Jump to the top of the transcript / to the newest line, which the view then follows again. Plain Home / End do the same while the input is empty; with text in the input they move the cursor. |
@@ -159,6 +217,32 @@ client to another origin. The catalog marks server-streaming operations with
 SSE is connected automatically when a session is open. PTY WebSocket sessions
 need a WebSocket client; the command view can still call their JSON setup
 routes. See the [protocol guide](protocol/README.md) for those frames.
+
+## Key help
+
+`?` on an empty input, or `/help`, opens a help overlay over the screen: a
+filterable list of every key and command, one row each, grouped and tagged —
+`[composer]`, `[transcript]`, `[turns]`, `[prompts]`, `[modes]`, `[pickers]`,
+`[views]`, `[app]` for keys, then every slash command tagged by where it
+comes from: `[local]` (this TUI), `[server]` (the backend's command
+catalog), or `[skill]`. The highlighted row's full description shows,
+wrapped, under the list. Type to filter (a key such as `ctrl+b`, a command
+such as `/compact`, a group such as `views`, or any word of a description);
+Up/Down scroll; Esc (or Enter) closes it and the input has the focus again.
+With text in the input, `?` types a question mark.
+
+The rows are generated from the key binding tables (`keyBindings` and the
+input's `composerKeyBindings` in `src/keys/bindings.ts`, the `/sessions`
+picker's row actions) and the merged command list, so the overlay cannot
+list a key the TUI does not have or miss one it does; the prompt and picker
+keys come from `src/commands/help.ts` next to those state machines. Keys
+that only a real terminal can send are marked: Shift+Enter reads
+`terminal only` because xterm.js (the WebUI) and terminals without the
+kitty keyboard protocol or modifyOtherKeys send a plain Enter for it — use
+Ctrl+J or Alt+Enter there.
+
+When the TUI cannot reach its backend, the main panel shows the same key
+list as plain text instead.
 
 ## Layout
 
@@ -278,33 +362,46 @@ alive before the working line's own elapsed clock is very interesting.
 
 **Status bar.** One muted line under the header: the permission mode
 (`mode <mode>`, from `SessionInfo.permissionMode`, colored per mode — see
-[Permission modes](#permission-modes)), the workspace directory
+[Permission modes](#permission-modes)), the context occupancy (`ctx 42%`),
+the session's token total (`12.3k tok`), the workspace directory
 (shortened, keeping the tail), the git branch (`GetVcsStatus`, refreshed
 when a session opens and after a turn ends; omitted when unknown or the
 directory is not a repository), a compact todo count (`Todos <completed>/
 <total>`) shown only while the sidebar is hidden (the sidebar's own `Todos`
-box already lists them), and `reconnecting` while the session event stream
-is down. Segments with no data are omitted rather than shown empty; on a
-narrow terminal the least essential segments (from the end) drop first, then
-the whole line clips, so it always fits the terminal width. The header line
-above it already carries agent, model, session, and server, so the status
-bar does not repeat them.
+box already lists them), and `reconnecting` (warning color) while the
+session event stream is down. Segments with no data are omitted rather than
+shown empty; on a narrow terminal the least essential segments (from the
+end) drop first, then the whole line clips, so it always fits the terminal
+width. The header line above it already carries agent, model, session, and
+server, so the status bar does not repeat them.
 
-Context-usage percent and a session token total are part of the Tier 1
-design (latest assistant usage vs. the model's context limit; the sum of
-recorded token usage) but are not on the `hya.v1` wire yet: `ModelSummary`
-has no context-limit field, and `MessageInfo` carries no usage — the
-`TokensRecorded` event is not mapped onto the `StreamEvent` stream either.
-Both fields are always omitted here (the same "hide if unknown" rule the
-design gives context percent); a later backend change can add them without
-another TUI change once the fields exist.
+- **`ctx N%`** is the prompt the latest provider round sent against the
+  context window of the model that served it (the rule in the protocol
+  guide's [Usage and context occupancy](protocol/README.md#usage-and-context-occupancy)):
+  `roundUsage.input + roundUsage.cacheRead + roundUsage.cacheWrite` of the
+  newest assistant message that has `roundUsage`, divided by the
+  `ModelSummary.contextLimit` of its `model`; while a turn runs, the newest
+  `tokensRecorded` frame with a non-empty `message` replaces it at once.
+  Rounded to a whole percent; muted below 80 %, the warning color from 80 %,
+  the error color from 95 %. Hidden when the model's limit is unknown
+  (`contextLimit` `0` or absent — set `limit.context` for the model in the
+  backend config, see [Model limits](configuration.md#model-limits)) or no
+  round has reported usage.
+- **`<n> tok`** is `SessionInfo.usage` summed — `input + cacheRead +
+  cacheWrite + output` (everything billed for the session, title and summary
+  side calls included). The open session is re-read after a `tokensRecorded`
+  frame (debounced like the transcript) to keep it current. Counts are
+  `uint64` decimal strings on the wire; they show as `950`, `12.3k`, `123k`,
+  `1.2M`. Hidden while the total is zero or unknown.
+
+The sidebar's `Context` box repeats both when known: `Context  42% ·
+42k/100k` (prompt tokens / window) and `Tokens   42.3k`.
 
 **Todo panel.** The sidebar's `Todos` box is seeded from `GetSessionTodo`
-when a session opens and kept current by the same debounced refresh that
-re-reads messages and interactions after a durable stream frame (so a
-`todo__update_status` or `todo__update_content` tool call's completion
-refreshes it, typically within a few hundred ms — there is no `TodoUpdated`
-stream frame yet; see the note above). Each item is one line, a status
+when a session opens and then kept current by the session stream: every
+todo tool call that changes the list (`todo__update_status`,
+`todo__update_content`, …) sends a durable `todoUpdated { items }` frame
+with the whole new list, which replaces the box's rows at once (no re-read). Each item is one line, a status
 glyph and its text: pending `○` (muted), in progress `◐` (accent),
 completed `✓` (green), blocked `✗` (muted — the `TodoStatus` enum has no
 `cancelled` status, so `blocked` takes the glyph and color that status would
@@ -314,15 +411,27 @@ still opens the full-panel view (same glyphs) for a longer list.
 
 ## Notices
 
-**Compaction.** A `CompactionApplied` event renders as a muted transcript
-divider, `── context compacted · <strategy> ──`, spliced in right after the
-message that was newest in the transcript when it fired (or at the end if
-that message is no longer in the rendered window). The event carries a
-watermark sequence and the strategy that fired (`shake`, `remote`, `soft`,
-`snap_compact`, `handoff`), not a message count, so the divider does not
-report one. Only the engine's automatic mid-turn compaction strategies emit
-this event; the manual `/compact` command (`CompactSession`) injects a
-system message instead and does not produce a divider.
+**Compaction.** A `compactionApplied { untilSeq, strategy, message,
+foldedCount, manual }` frame renders as a muted transcript divider,
+`── context compacted · 12 messages · manual ──`: the number of messages
+folded behind the summary (omitted when the event has none), then `manual`
+for `/compact` (`CompactSession`) or `/summarize`, else the strategy that
+fired mid-turn (`Native`, `SnapCompact`, `Handoff`, …). The divider sits
+right before `message`, the system message that holds the summary, once the
+transcript has it (until then, right after the newest message); the summary
+follows it as a muted notice, without the internal `HYA_COMPACTED_CONTEXT`
+marker line. For example, `/compact` after a short exchange shows:
+
+```text
+── context compacted · 2 messages · manual ──
+
+Summary: the user asked for …
+```
+
+Dividers come from the stream (and the `ListEvents` gap-fill after a
+reconnect), so they show for compactions that happen while the session is
+open; reopening a session later shows the summary message but not the
+divider.
 
 **Engine system messages.** A message with the system role (for example a
 `TEAM QUIESCED …` coordination notice) renders as a muted notice line, not
@@ -824,16 +933,29 @@ comes back with `Answer failed: …`.
 
 ### Subagent asks
 
-A subagent runs in a child session and asks in its own name. The open
-session's prompt queue holds the asks of the open session and of every
-session below it (children by `SessionInfo.parent`, and the open session's
+A subagent runs in a child session and asks in its own name. The TUI
+subscribes to the open session's stream with `includeDescendants=true`, so
+a subagent's `permissionRequested` / `questionRequested` /
+`interactionResolved` frames (any depth, `event.session` = the asking
+session) arrive on it the moment they are raised — there is no polling
+delay. Frames sent before the subscription are not replayed, so the TUI
+reads `GET /v1/interactions` once after every (re)subscribe and after a
+`resync`; other listings happen only with a full refresh (start, Ctrl+R).
+The open session's prompt queue holds the asks of the open session and of
+every session below it (children by `SessionInfo.parent`, and the open session's
 members and `task` outputs before the session list knows them), so a
 subagent's ask appears in the parent view, labelled `asked by subagent
 <agent> · <task>`. The subagent's `task` card shows `◌ waiting for
 approval`, and its sidebar row `· ◌ waiting`. Opening the subagent's
 read-only view shows the same prompt there (only that subtree's asks); you
 can answer in either view. Asks of unrelated sessions stay in the
-[pending block](#layout).
+[pending block](#layout); they are not on the open session's stream, so
+they appear with the next listing (session open, reconnect, Ctrl+R).
+
+The only polling left is the child-session round for `task` cards (their
+status and latest activity, `GetSession` + `ListMessages` of each child,
+every 1.5 s while a child is busy or a turn runs): durable child events stay
+on the child's own stream.
 
 The keyboard commands keep working as a fallback: `/approve <id>`,
 `/deny <id>`, `/answer <id> <text>`, and `/interactions` (the prompt's hint
@@ -1033,15 +1155,15 @@ string encoded 64-bit values, and the error envelope documented in the
 | `GET /v1/bootstrap` | No body | `Bootstrap` (`location`, `agents`, `models`, `interactions`) |
 | `GET /v1/sessions` | No body | `ListSessionsResponse.sessions: SessionInfo[]` (every session of the directory, subagent sessions included; `parent` nests them in the sidebar and the `/sessions` picker, `busy` marks `· running`, `timeUpdated` feeds the picker's relative time). Re-read with each child-session round (see [Subagents](#subagents)). |
 | `POST /v1/sessions` | `{agent: string, model: string, workdir: string}` | `CreateSessionResponse.session: SessionInfo` |
-| `GET /v1/sessions/{id}` | No body | `SessionInfo` (including `permissionMode`, read by `/status`; `parent`, which makes the view read-only; `members: MemberInfo[]`, the subagent rows the task cards link to). For a child session: `busy` and `agent` for its task card. |
+| `GET /v1/sessions/{id}` | No body | `SessionInfo` (including `permissionMode`, read by `/status`; `parent`, which makes the view read-only; `members: MemberInfo[]`, the subagent rows the task cards link to; `usage: TokenUsage`, the status bar's token total, re-read after `tokensRecorded`). For a child session: `busy` and `agent` for its task card. |
 | `PATCH /v1/sessions/{id}` | `{title?: string, model?: string, agent?: string, permissionMode?: string}` (`UpdateSession`; `/model`, `/agent`, `/rename`, the `/sessions` picker's F2, and a permission mode switch each send one field; `permissionMode` is `manual`, `yolo`, or `<bundle-id>/<mode-id>`) | `SessionInfo`; after a switch its `permissionMode` is the mode shown. An unknown or unavailable mode fails with `invalid_argument`. |
 | `DELETE /v1/sessions/{id}` | No body (`DeleteSession`; the `/sessions` picker's Ctrl+D, confirmed first) | Empty response; the TUI re-reads the session list and, if the deleted session was open, opens the next top-level one. |
 | `GET /v1/agents` | No body (`ListAgents`; read with the catalogs and by `/agent`) | `ListAgentsResponse.agents: AgentSummary[]` (`name`, `model`, `description`, `hidden`); the `/agent` picker drops `hidden` rows. |
 | `GET /v1/permission-modes` | No body (`ListPermissionModes`; read with the catalogs and by `/permissions`; a `404` from an older backend counts as an empty list) | `ListPermissionModesResponse.modes: [{id, title, description, source}]` — built-ins first; `source` is `builtin` or the bundle id. Feeds the Shift+Tab cycle, the picker rows, and bundle mode titles. |
-| `GET /v1/sessions/{id}/messages` | No body | `ListMessagesResponse.messages: MessageInfo[]`; tool cards read `parts[].toolCall` (`ToolCallPart {callId, tool, state, inputJson, outputJson, durationMs, errorCode, errorMessage}`). For a child session: its latest activity. |
+| `GET /v1/sessions/{id}/messages` | No body | `ListMessagesResponse.messages: MessageInfo[]` (`roundUsage` and `model` of the newest assistant message give the status bar's `ctx N%`); tool cards read `parts[].toolCall` (`ToolCallPart {callId, tool, state, inputJson, outputJson, durationMs, errorCode, errorMessage}`). For a child session: its latest activity. |
 | `POST /v1/sessions/{id}/compact` | `{}` (`CompactSession`) | `CompactSessionResponse {compactedUntilSeq, strategy}` for `/compact` |
 | `POST /v1/sessions/{id}/summarize` | No body (`SummarizeSession`) | `SummarizeSessionResponse {summaryMessage}` for `/summarize` |
-| `GET /v1/sessions/{id}/todo` | No body (`GetSessionTodo`) | `TodoList.items: TodoItem[]` for `/todos` and the sidebar's live `Todos` box (seeded on session open, kept current by the same debounced refresh as messages and interactions). |
+| `GET /v1/sessions/{id}/todo` | No body (`GetSessionTodo`) | `TodoList.items: TodoItem[]` for `/todos` and to seed the sidebar's `Todos` box when a session opens; `todoUpdated` frames keep it current. |
 | `GET /v1/vcs?directory=<--dir>` | No body (`GetVcsStatus`) | `VcsStatus.branch` for the status bar's git branch; read when a session opens and after a turn ends. Never errors on a non-repository directory (`branch` comes back empty, so the segment is omitted). |
 | `POST /v1/sessions/{id}/turns` | `{prompt: {text: string}}` | `CreateTurnResponse.turn: TurnInfo` |
 | `POST /v1/sessions/{id}/turns` | `{command: {command: string, arguments: string}}` for other slash commands | `CreateTurnResponse.turn: TurnInfo` |
@@ -1049,11 +1171,11 @@ string encoded 64-bit values, and the error envelope documented in the
 | `POST /v1/sessions/{id}/turns/{turn}/cancel` | `{}` | `TurnInfo`. Esc and `/cancel` send the admitted turn id (the user message id). The server cancels whatever runs in the session, so a shell turn whose id is not known yet is sent as `current`. |
 | `GET /v1/fs/find?pattern=**/*<text>*&limit=50` | No body (`FindFiles`, scoped by `x-hya-directory`) | `FindFilesResponse.paths: string[]` (relative paths) for `@file` suggestions. |
 | `GET /v1/sessions/{id}` | No body | `SessionInfo.lastSeq` when a session is opened (the stream's first `sinceSeq`). |
-| `GET /v1/sessions/{id}/events/stream?sinceSeq=N` | SSE | `StreamFrame` with `event` or `resync`; `N` is the last applied durable seq. |
+| `GET /v1/sessions/{id}/events/stream?sinceSeq=N&includeDescendants=true` | SSE | `StreamFrame` with `event` or `resync`; `N` is the last applied durable seq. `includeDescendants=true` adds the ask frames of every subagent session below (see [Subagent asks](#subagent-asks)). |
 | `GET /v1/sessions/{id}/events?sinceSeq=N&limit=500` | No body | `ListEventsResponse.events` / `nextSeq`, paged, to fill the gap after each stream (re)connect and `resync`. |
-| `GET /v1/interactions` | No body (every type, every session; read at start, on refresh, after interaction frames, and in each child-session round) | `ListInteractionsResponse.interactions: Interaction[]`, oldest first. The TUI reads `id`, `session` (the asking session, a subagent's child session included), `type` (`INTERACTION_TYPE_PERMISSION` / `_QUESTION`), `title`, `detail` (a question's header), `options` (a question's option labels), and a permission's `payload`: `action`, `resource`, `always` (what Always allow covers), `callId` (marks the waiting tool card, `◌ … · awaiting approval`), `tool` and `input` (the prompt's details). A listed question has no options or header; the TUI keeps those from its live `questionRequested` frame, else reads them from the waiting `ask_user` call in the transcript. |
+| `GET /v1/interactions` | No body (every type, every session; read at start, on a full refresh, after every stream (re)subscribe and `resync`, and after a permission mode switch — never polled) | `ListInteractionsResponse.interactions: Interaction[]`, oldest first. The TUI reads `id`, `session` (the asking session, a subagent's child session included), `type` (`INTERACTION_TYPE_PERMISSION` / `_QUESTION`), `title`, `detail` (a question's header), `options` (a question's option labels), and a permission's `payload`: `action`, `resource`, `always` (what Always allow covers), `callId` (marks the waiting tool card, `◌ … · awaiting approval`), `tool` and `input` (the prompt's details). A listed question has no options or header; the TUI keeps those from its live `questionRequested` frame, else reads them from the waiting `ask_user` call in the transcript. |
 | `POST /v1/interactions/{id}/respond` | Prompt: `{permission: {allowed: boolean, persist: boolean}}`, `{question: {answer: string}}`, or `{question: {rejected: true}}`. `/approve`, `/deny`: `persist: false`. | `RespondInteractionResponse.applied` (`false`: already resolved elsewhere) |
-| `GET /v1/models` | No body | `ListModelsResponse.models: ModelSummary[]` (`id`, `providerId`, `modelId`, `displayName`, `contextLimit`); the `/model` picker tags rows by `providerId`. |
+| `GET /v1/models` | No body | `ListModelsResponse.models: ModelSummary[]` (`id`, `providerId`, `modelId`, `displayName`, `contextLimit`); the `/model` picker tags rows by `providerId`; `contextLimit` (a uint64 string, `0`/absent = unknown) is the status bar's `ctx N%` denominator. |
 | `GET /v1/providers` | No body | `ListProvidersResponse.providers: ProviderSummary[]` for key suggestions. |
 | `GET /v1/commands` | No body | `ListCommandsResponse.commands: CommandSummary[]` (includes skills, tagged `source: "skill"`) for slash completion and the command menu. |
 | `GET /v1/auth` | No body | `ListProviderAuthResponse.providerIds: string[]` (saved provider IDs only; empty field omitted). A 404 marks key listing unavailable without blocking startup. |
@@ -1102,11 +1224,13 @@ rules follow the protocol guide's
 | `partCompleted {message, part}` | live or durable | No overlay change; a durable one triggers a projection re-read. |
 | `errorReported {message, code, errorMessage}` | durable | Stored as the message's error. Shown in the transcript and, at turn end, in the status line. |
 | `messageFinished {message, finish, cause}` | durable | The turn ends at the first assistant `messageFinished` after the turn's user message whose `finish` is not `FINISH_REASON_TOOL_CALLS`. Then the projection is re-read. |
-| `permissionRequested {interaction}`, `questionRequested {interaction}` | live | The ask is added to the pending list at once (a prompt appears); its options and header are remembered by id; then the listing is re-read. Only the open session's own asks arrive here; subagent asks come from the listing. |
-| `interactionResolved {request}` | live | The ask is removed at once (its prompt closes); then the listing is re-read. |
+| `permissionRequested {interaction}`, `questionRequested {interaction}` | live | The ask is added to the pending list at once (a prompt appears); its options and header are remembered by id. With `includeDescendants=true` a subagent's asks arrive here too (`event.session` = the child): they change only the pending list, never the open session's transcript. Other frames of another session are ignored. |
+| `interactionResolved {request}` | live | The ask is removed at once (its prompt closes); also for a subagent's ask. |
 | `sessionUpdated {permissionMode}` | durable (root session) | The tree's mode changed (this TUI's switch echoed, or another client's): the open session's `permissionMode` is updated, and a `Permission mode → …` notice is added unless the transcript already announced that mode. |
 | `sessionUpdated {title, agent, model}` | durable | Patches the session's row (and, if it is the open one, the header and sidebar) at once — a `/rename`/`/model`/`/agent` from another client, or the backend's auto-generated title (see [Session titles](#session-titles)) — instead of waiting for the next catalog refresh. |
-| `compactionApplied {untilSeq, strategy}` | durable | Appended to `state.dividers`, spliced into the transcript right after the message that was newest at the time (see [Notices](#notices)); replayed by `ListEvents` like any other durable event, so reopening a session that had one restores its divider. |
+| `compactionApplied {untilSeq, strategy, message, foldedCount, manual}` | durable | Appended to `state.dividers` (once per seq) and spliced into the transcript right before `message`, the summary, or right after the message that was newest at the time until the summary is read (see [Notices](#notices)). |
+| `tokensRecorded {message, model, usage}` | durable | With a non-empty `message`: the newest round, the live source of `ctx N%` (`state.liveRound`). Any `tokensRecorded` also re-reads the open session (debounced) for `SessionInfo.usage`. |
+| `todoUpdated {items}` | durable | Replaces the sidebar's todo list with `items` (the whole list). |
 | `resync {lastSeq}` | — | Live parts that were mid-stream stop taking deltas until their durable `partReplaced`; `ListEvents` fills the gap; the projection is re-read. |
 
 - **Sequence numbers.** The client keeps the last applied durable `seq` as a
@@ -1161,7 +1285,8 @@ together.
 | Path | Role |
 | --- | --- |
 | `src/main.ts` | Entry. Registers the Solid JSX transform (`@opentui/solid/preload`), parses flags, then dynamically imports the app. |
-| `src/cli.ts` | `--server`, `--dir`, `--help` parsing and the usage line. |
+| `src/cli.ts` | `parseArguments()` (`--server`, `--dir`, `--hya`, `--db`, `--continue`, `--session`, `--help`) and the `usage` text. |
+| `src/launch.ts` | One-command launch: `resolveHyaBinary()` (`--hya`, `HYA_BIN`, `PATH`), `parseReadyLine()`, `defaultDatabase()`, `startBackend()` (spawn `hya serve`, drain its output, wait for readiness, `stop()` with SIGTERM then SIGKILL), `initialSessionId()` (`--continue` / `--session`), `BackendError`. |
 | `src/client.ts` | Typed v1 HTTP/JSON+SSE client (`HyaClient`, `SseDecoder`, `parseApiCommand`). |
 | `src/state/store.ts` | `createAppStore()`: the single store. It holds the server projection (sessions, messages, interactions, models, agents, providers, workflows, saved key names, backend commands, todos, stream cursor, the open session's subagent members, what was last read about each child session), the published streaming overlay, the prompt queue, the turn state (`running`, `turnId`), and UI state (view, status, key-entry provider and mask, sidebar mode, terminal columns, the reasoning switch and per-part toggles, the tool-card switch and per-card toggles, the highlighted prompt option (`promptSelection`, by ask id), whether the input holds text (`draft`), the jump-to-bottom tick, the `/status` text, the backend version from bootstrap, the `/name args` display text of command turns by user message id). Each field is a Solid signal, and only the store's mutation methods change it. |
 | `src/state/overlay.ts` | `TranscriptOverlay`: the pure fold of stream frames by message and part id (seq filter, live/durable handover, `resync` handling, turn-end lookup). `mergeTranscript()` merges it over the projection. |
@@ -1176,13 +1301,13 @@ together.
 | `src/state/members.ts` | Subagents: `foldMember()`, `taskLink()` (card → member and child session), `childStatus()`, `childActivity()`, `childSessionIds()`. |
 | `src/state/layout.ts` | Sidebar rules: `layoutBreakpoints`, `sidebarVisible()`, `toggledSidebar()`, `sidebarWidth()`, and `parseSwitch()` for `on`/`off` arguments. |
 | `src/state/scroll.ts` | `ScrollFollow` (the "new messages below" hint), `atBottom()`, `pageStep()`. |
-| `src/state/format.ts` | Pure text for the header, sidebar (session list with `sessionTree()` nesting, context box), pending lines, and the non-chat views. |
+| `src/state/format.ts` | Pure text for the header, sidebar (session list with `sessionTree()` nesting, context box), pending lines, the status bar (`statusBarSegments()`, `contextUsage()`, `sessionTokens()`, `formatTokens()`), the compaction divider (`compactionText()`), and the non-chat views. |
 | `src/app/controller.ts` | `createController()`: refreshes, the session SSE loop (subscribe, `ListEvents` gap-fill, `resync`), batched overlay flushes, the debounced projection re-read (`app/debounce.ts`), child-session rounds for subagent cards, `returnToParent()`, session creation, prompt submission (refused in a subagent's read-only view), command dispatch, and concealed key entry. It writes results into the store. |
 | `src/app/turns.ts` | `createTurnRunner()`: the client-side prompt queue, `409 session_busy` retry, and turn-end detection and status text. |
-| `src/app/App.tsx`, `src/app/run.tsx`, `src/app/context.ts` | Root layout (main column + sidebar), renderer startup, and the `AppContext` (store, controller, server URL, and `ui` handles such as the transcript's scroll actions) that components read with `useApp()`. |
+| `src/app/App.tsx`, `src/app/run.tsx`, `src/app/context.ts` | Root layout (main column + sidebar), startup (the started backend, then the renderer) and the single `shutdown()` every exit path runs (restore the terminal, stop the backend, exit), and the `AppContext` (store, controller, server URL, and `ui` handles such as the transcript's scroll actions) that components read with `useApp()`. |
 | `src/components/` | `Header`, `MainPanel` (transcript or view panel), `Transcript` (scrollbox, follow/hint), `MessageView` (`MessageItem`, user/assistant messages, blocks, reasoning, tool cards and `task` subagent cards, `KeyedFor`), `Spinner` (the shared spinner clock), `Markdown` (the `<markdown>` wrapper, `SyntaxStyle`, code-block boxes), `Panel`, `PendingBlock` (other sessions' asks), `PromptDock` (the permission / question prompt), `ModeConfirm` (the one-line yolo confirmation), `Picker` (the modal picker), `Sidebar`, `StatusLine`, `Composer` (the `<textarea>` editor, its height, history, Esc / Ctrl+C / Ctrl+D, the shell-mode border, the `@file` list, the `/` command menu, Tab completion, key actions, concealed key entry), `Footer`. |
 | `src/composer/` | Pure composer logic: `history.ts` (`InputHistory`), `quit.ts` (`createQuitGuard`, the Ctrl+C double press), `escape.ts` (`escapeAction`), `shell.ts` (`shellCommand`, `isShellInput`), `mention.ts` (`mentionAt`, `insertMention`, `findPattern`, `rankPaths`). |
-| `src/commands/` | The slash-command registry (`registry.ts`), the built-in commands (`native.ts`), the `/help` text (`help.ts`), and the command menu's merge/fuzzy-filter/argument-hint logic (`menu.ts`: `mergeCommandEntries`, `filterCommands`, `requiresArgument`). |
+| `src/commands/` | The slash-command registry (`registry.ts`), the built-in commands (`native.ts`), the key and command help (`help.ts`: `helpRows()`, `helpPickerRows()`, `composerKeyLabel()`, `keyHelpText()`, generated from the binding tables), and the command menu's merge/fuzzy-filter/argument-hint logic (`menu.ts`: `mergeCommandEntries`, `filterCommands`, `requiresArgument`). |
 | `src/keys/bindings.ts` | The global key binding table (`keyBindings`, including `cycleMode` on Shift+Tab / CSI Z) and the textarea overrides (`composerKeyBindings`: Enter submits; Ctrl+J, Shift+Enter, Alt+Enter insert a newline; Home/End). |
 | `src/completion.ts`, `src/instructions.ts`, `src/api.ts`, `src/theme.ts` | Tab completion and `SecretEntry`, footer instructions, the OpenAPI operation catalog, and the palette (`colors`, `syntaxColors`, and `syntaxStyles`, the Markdown/tree-sitter scope styles). |
 
@@ -1266,16 +1391,16 @@ To add a slash command, add a `CommandSpec` to `nativeCommandSpecs` in
 }
 ```
 
-The name becomes Tab-completable and appears in the command menu
-automatically (source `[local]`; it wins a name clash with a backend
-command). An `argumentHint` written `[in brackets]` is optional (the command
+The name becomes Tab-completable and appears in the command menu and the
+help overlay automatically (source `[local]`; it wins a name clash with a
+backend command). An `argumentHint` written `[in brackets]` is optional (the command
 menu's Enter runs it as is); anything else is treated as required (Enter
-completes the name and waits). Add a line to `src/commands/help.ts` and a row
-to the command table above. Unregistered `/names` still go to the backend as
+completes the name and waits). Add a row to the command table above. Unregistered `/names` still go to the backend as
 `CommandTurn`s (custom commands and skills; see
 [Skill commands](#skill-commands)). To add a key, append a
-`KeyBinding` to `src/keys/bindings.ts` and handle its action in
-`components/Composer.tsx`. A binding's `matches(key, context)` may depend on
+`KeyBinding` to `src/keys/bindings.ts`, handle its action in
+`components/Composer.tsx`, and give the action a help group in
+`src/commands/help.ts` (`actionGroups`; the build fails until it has one). A binding's `matches(key, context)` may depend on
 `context.composerEmpty` (plain Home/End scroll only while the input is
 empty). Do not bind a core action only to a
 browser-reserved shortcut (see `docs/tui-web.md`). The renderer runs with
@@ -1333,3 +1458,15 @@ focus back to the input, `/permissions <mode>`), Shift+Tab in the command
 menu, a mode chosen before the session exists, a bundle mode from a project
 bundle whose Bun `permission.approve` hook allows `echo` and defers `ls`,
 and about 80 columns.
+`e2e/hya-tui-launch.spec.ts` covers the one-command launch: no `--server`
+(`HYA_BIN` = the binary under test, an isolated HOME/XDG from the
+`workspace` fixture), a prompt end to end, `/exit` and a closed tab
+(SIGHUP) leaving no `hya serve` process (checked by pid), `--continue`, a
+fresh start, a missing binary, and a server that fails to start.
+`e2e/hya-tui-help.spec.ts` covers the help overlay (`?`, `/help`, filter,
+Esc, `?` inside text, about 80 columns). `e2e/hya-tui-status.spec.ts` also
+covers `ctx N%` and the token total (fake-model usage and a
+`contextLimit`), `todoUpdated` (no todo re-read, through the logging proxy
+in `e2e/proxy.ts`), and the `/compact` divider; `e2e/hya-tui-prompts.spec.ts`
+checks that a subagent's ask arrives on the `includeDescendants` stream
+with no interactions listing in between.

@@ -113,7 +113,10 @@ test.describe("command menu", () => {
     await term.type("/help")
     await term.waitForText("▸ /help")
     await term.press("Enter")
-    await term.waitForText("Enter a prompt or choose a /command")
+    // /help opens the key and command help overlay; Esc closes it.
+    await term.waitForText("Help · keys and commands")
+    await term.press("Escape")
+    await expect.poll(() => term.find("Help · keys and commands")).toBeNull()
 
     await term.type("/open")
     await term.waitForText("▸ /open")

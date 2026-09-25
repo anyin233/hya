@@ -48,9 +48,11 @@ ADR-0018). All TUI preview and testing goes through that browser rendering.
 - **Preview in the browser, not a terminal multiplexer.** Do not use tmux,
   `script`, or terminal scraping to check TUI output. To look at the TUI, serve
   it and open the printed URL, for example:
-  `bun packages/hya-tui-web/src/main.ts --port 7681 -- bun packages/hya-tui/src/main.ts --server http://127.0.0.1:8080`
-  against `hya serve --bind 127.0.0.1:8080`. The offline echo model is
-  enough; do not spend real provider calls on UI checks.
+  `HYA_BIN=target/debug/hya bun packages/hya-tui-web/src/main.ts --port 7681 -- bun packages/hya-tui/src/main.ts --dir "$PWD"`
+  (the TUI starts and stops its own `hya serve`), or add
+  `--server http://127.0.0.1:8080` to the TUI command to use a
+  `hya serve --bind 127.0.0.1:8080` you run yourself. The offline echo model
+  is enough; do not spend real provider calls on UI checks.
 - **Every user-visible TUI change gets a Playwright spec** under
   `packages/hya-tui-web/e2e/`. Use the `tui()` fixture from `e2e/harness.ts`,
   and follow the TDD gate: the spec fails before the change. Cover layout,

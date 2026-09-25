@@ -30,7 +30,8 @@ async function render(text: () => string, streaming: () => boolean = () => false
 
 /** Render until `predicate` holds for the frame (tree-sitter highlighting is asynchronous). */
 async function until(predicate: () => boolean, what: string): Promise<void> {
-  for (let pass = 0; pass < 100; pass++) {
+  // Up to ~5 s: the first highlight loads the tree-sitter worker, slow on a cold or busy machine.
+  for (let pass = 0; pass < 250; pass++) {
     await setup!.renderOnce()
     if (predicate()) return
     await Bun.sleep(20)

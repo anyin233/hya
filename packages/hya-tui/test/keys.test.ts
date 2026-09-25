@@ -44,11 +44,12 @@ test("every binding is documented and reachable without a browser-reserved short
     key("tab"), key("r", { ctrl: true }), key("b", { ctrl: true }), key("o", { ctrl: true }), key("g", { ctrl: true }),
     key("pageup"), key("pagedown"), key("home", { ctrl: true }), key("end", { ctrl: true }),
     key("escape"), key("c", { ctrl: true }), key("d", { ctrl: true }), key("tab", { shift: true, sequence: "\x1b[Z" }),
+    key("?", { shift: true, sequence: "?" }),
   ]
   const reachable = new Set(probes.filter((probe) => !browserReserved.some((reserved) => reserved(probe)))
-    .map((probe) => resolveBinding(probe, { composerEmpty: probe.name === "d" })))
+    .map((probe) => resolveBinding(probe, { composerEmpty: probe.name === "d" || probe.name === "?" })))
   expect([...new Set(keyBindings.map((binding) => binding.action))].sort())
-    .toEqual(["complete", "cycleMode", "eof", "interrupt", "pageDown", "pageUp", "quit", "refresh", "scrollBottom", "scrollTop", "toggleSidebar", "toggleThinking", "toggleTools"])
+    .toEqual(["complete", "cycleMode", "eof", "help", "interrupt", "pageDown", "pageUp", "quit", "refresh", "scrollBottom", "scrollTop", "toggleSidebar", "toggleThinking", "toggleTools"])
   for (const binding of keyBindings) expect(reachable.has(binding.action)).toBe(true)
 })
 

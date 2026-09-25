@@ -9,6 +9,7 @@ import { writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import type { Tui } from "./harness"
 import { expect, hangStep, hyaTui, test, textStep, toolStep } from "./hya"
+import { startProxy } from "./proxy"
 
 const colors = { fg: "#e8edf3", muted: "#9caab9", accent: "#73c8e8", error: "#f07878", warning: "#e5c07b", add: "#a5d6a7", remove: "#f07878" }
 
@@ -281,6 +282,31 @@ test.describe("subagent asks", () => {
     await promptGone(term)
     await term.waitForText(/↳ bash echo from-child/, 15_000)
     expect(await term.find("waiting for approval")).toBeNull()
+  })
+
+  test("a subagent's ask arrives on the parent's stream (includeDescendants), not by polling the interactions listing", async ({ tui, backend, fakeModel }) => {
+    fakeModel!.route("NEVER call `report`", [
+      toolStep("task", { description: "survey the repo", prompt: "list the files", subagent_type: "general" }),
+      textStep("Spawned a helper."),
+    ])
+    fakeModel!.route("Finish your task with `report`", [toolStep("bash", { command: "echo from-child" }), hangStep(20_000)])
+    const proxy = await startProxy(backend.url)
+    const term = await tui(hyaTui({ ...backend, url: proxy.url }))
+    await term.waitForText("Connected to hya")
+    await prompt(term, "delegate the survey")
+    await promptShown(term)
+    await term.waitForText(/asked by subagent general/)
+    const shown = Date.now()
+    const turn = proxy.log.findIndex((entry) => entry.method === "POST" && /\/turns$/.test(entry.path))
+    expect(turn).toBeGreaterThan(0)
+    // The stream was subscribed with the opt-in before the turn was admitted.
+    const stream = proxy.log.findLast((entry, index) => index < turn && entry.path.includes("/events/stream"))
+    expect(stream?.path).toContain("includeDescendants=true")
+    // Between admitting the turn and showing the child's ask, the listing was never read.
+    const listed = proxy.log.filter((entry, index) => index > turn && entry.at <= shown && entry.method === "GET" && entry.path.startsWith("/v1/interactions"))
+    expect(listed).toEqual([])
+    await term.press("1")
+    await promptGone(term)
   })
 })
 

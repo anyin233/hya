@@ -31,12 +31,21 @@ export function Picker() {
     <Show when={store.state.picker}>
       {(open: () => ActivePicker) => {
         const rows = () => pickerRows(open())
+        // Box chrome: 2 border rows, the filter and hint rows, and the 2-row top offset, plus the composer below.
+        const visibleRows = () => Math.max(3, Math.min(open().maxRows ?? pickerMaxRows, size().height - (open().detailPane ? 14 : 10)))
+        const highlighted = () => rows()[open().index]
         const shown = () => {
-          const window = pickerWindow(rows().length, open().index, pickerMaxRows)
+          const window = pickerWindow(rows().length, open().index, visibleRows())
           return rows().slice(window.start, window.end).map((row, offset) => ({ row, at: window.start + offset }))
         }
         const labelWidth = () => Math.min(28, Math.max(0, ...rows().map((row) => Bun.stringWidth(row.label))))
         const pad = (text: string) => text + " ".repeat(Math.max(0, labelWidth() - Bun.stringWidth(text)))
+        // Tags line up too, so the details start in one column.
+        const tagWidth = () => Math.min(14, Math.max(0, ...rows().map((row) => (row.tag ? Bun.stringWidth(row.tag) + 2 : 0))))
+        const padTag = (tag: string | undefined) => {
+          const text = tag ? `[${tag}]` : ""
+          return text + " ".repeat(Math.max(0, tagWidth() - Bun.stringWidth(text)))
+        }
         return (
           <box
             position="absolute"
@@ -83,7 +92,7 @@ export function Picker() {
                       <span style={{ fg: highlighted() ? colors.accent : colors.fg }}>{`${highlighted() ? "▸" : " "} `}</span>
                       <span style={{ fg: colors.accent }}>{item.row.current ? "● " : "  "}</span>
                       <span style={{ fg: highlighted() ? colors.accent : colors.fg }}>{pad(item.row.label)}</span>
-                      <span style={{ fg: colors.muted }}>{item.row.tag ? `  [${item.row.tag}]` : ""}</span>
+                      <span style={{ fg: colors.muted }}>{tagWidth() ? `  ${padTag(item.row.tag)}` : ""}</span>
                       <span style={{ fg: colors.muted }}>{item.row.detail ? `  ${item.row.detail}` : ""}</span>
                     </text>
                   )
@@ -91,6 +100,12 @@ export function Picker() {
               </For>
               <Show when={rows().length === 0}>
                 <text height={1} wrapMode="none" fg={colors.muted}>No match · Backspace widens the filter</text>
+              </Show>
+              <Show when={open().detailPane && highlighted()?.detail}>
+                <text width="100%" wrapMode="word" fg={colors.fg} marginTop={1}>
+                  <span style={{ fg: colors.accent }}>{`${highlighted()!.label}  `}</span>
+                  {highlighted()!.detail!}
+                </text>
               </Show>
               <text height={1} wrapMode="none" fg={colors.muted}>
                 {open().hint ?? (open().actions?.length ? `${defaultPickerHint} · ${open().actions!.map((action) => action.label).join(" · ")}` : defaultPickerHint)}

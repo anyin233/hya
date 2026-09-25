@@ -98,6 +98,14 @@
 - New `/model` and `/agent` pickers: rows are tagged with the provider or default model, and the current value is marked. The direct forms (`/model <provider/model>`, `/agent <name>`) still work. A choice made before any session exists is applied to the next session.
 - A `/sessions` picker lists a New session row, then the sessions with subagents nested under their parent, each with its last update time. F2 renames the highlighted session. Ctrl+D deletes it after a confirmation.
 - Session titles in the header, sidebar, and pickers update live from `sessionUpdated`, not only on refresh.
+- One-command launch. Without `--server`, the TUI starts its own `hya serve` and stops it on every exit path.
+  - The `hya` binary comes from `--hya`, then `HYA_BIN`, then `PATH`. The durable default database is `$XDG_STATE_HOME/hya/sessions.db`.
+  - New flags: `--continue`, `--session <id>`, `--hya`, and `--db`.
+  - Without `--continue` or `--session`, no session is opened at start; the first prompt or `/new` creates one.
+- A key and command help overlay opens with `?` on an empty input, or with `/help`. It is generated from the key binding tables, grouped by area, and filterable. Commands are tagged local, server, or skill.
+- The status bar shows context occupancy (`ctx N%`, in the warning color from 80% and the error color from 95%) and the session token total. The todo panel updates live from `todoUpdated`. `/compact` and automatic compaction show a `── context compacted · N messages · manual ──` divider before the summary.
+- Subagent permission and question prompts arrive at once on the parent session's stream (`includeDescendants=true`). The interactions listing is no longer polled.
+- The browser test fake model answers background session-title requests on its own, so they don't consume scripted steps.
 
 ## List saved provider keys over the v1 API
 
