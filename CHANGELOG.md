@@ -1,9 +1,9 @@
-# 0.37.7
+# 0.37.8
 
-## OpenTUI startup with an older backend
+## Contextual instructions in OpenTUI
 
-The OpenTUI frontend now remains usable when a backend predating `GET /v1/auth`
-returns 404 during startup. The `/keys` view states that key listing is
-unavailable until the backend is updated and restarted. Empty or non-JSON HTTP
-error bodies now show the failing method, path, and status instead of a null
-object exception.
+The OpenTUI frontend now keeps a one-line instruction at the bottom of the
+screen, below the command input. The line follows the current view: `/keys`
+shows the commands to add or remove a provider key, an unavailable key list
+explains the backend version needed, and concealed key entry shows Enter and
+Esc actions. Other views show their next useful command.

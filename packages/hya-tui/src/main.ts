@@ -12,6 +12,7 @@ import type { PasteEvent } from "@opentui/core"
 import { resolve } from "node:path"
 import openapi from "../../../docs/protocol/openapi.json"
 import { completeCommand, SecretEntry, type CompletionContext } from "./completion"
+import { footerInstruction, type View } from "./instructions"
 import {
   HyaClient,
   parseApiCommand,
@@ -25,8 +26,6 @@ import {
   type StreamFrame,
   type WorkflowSummary,
 } from "./client"
-
-type View = "chat" | "models" | "workflows" | "interactions" | "keys" | "api" | "help"
 
 function argumentsFrom(argv: string[]): { server: string; directory: string } | null {
   let server = "http://127.0.0.1:8080"
@@ -112,12 +111,14 @@ async function main(): Promise<void> {
   const inputPanel = new BoxRenderable(renderer, { height: 3, border: true, borderColor: colors.border, backgroundColor: colors.panel, paddingX: 1 })
   const input = new InputRenderable(renderer, { width: "100%", maxLength: 10_000, placeholder: "Message or /command", textColor: colors.fg, cursorColor: colors.accent })
   const secretText = new TextRenderable(renderer, { content: "", width: "100%", fg: colors.accent, visible: false })
+  const footer = new TextRenderable(renderer, { content: footerInstruction("chat", true), width: "100%", height: 1, fg: colors.muted })
   inputPanel.add(input)
   inputPanel.add(secretText)
   root.add(header)
   root.add(body)
   root.add(status)
   root.add(inputPanel)
+  root.add(footer)
   renderer.root.add(root)
   const adaptLayout = (): void => {
     sessionPanel.visible = renderer.width >= 58
@@ -170,10 +171,12 @@ async function main(): Promise<void> {
     secretText.visible = false
     input.visible = true
     input.focus()
+    footer.content = footerInstruction(view, savedKeysAvailable)
   }
 
   function showStatus(text: string): void { status.content = text }
   function repaint(): void {
+    footer.content = footerInstruction(view, savedKeysAvailable, secretProvider !== undefined)
     header.content = `hya ${selected ? `· ${selected.title || selected.id} · ${selected.agent} ${modelReference(selected)}` : "· no session"} · ${options.server}`
     sessionText.content = sessions.length
       ? sessions.map((session, index) => `${session.id === selected?.id ? "▸" : " "} ${index + 1}. ${session.title || session.id}\n   ${session.agent}${session.busy ? " · running" : ""}`).join("\n\n")
@@ -346,6 +349,7 @@ async function main(): Promise<void> {
             input.visible = false
             secretText.visible = true
             secretText.content = "Key: "
+            footer.content = footerInstruction(view, savedKeysAvailable, true)
             showStatus(`Enter API key for ${provider} · Enter saves · Esc cancels`)
           }
           break

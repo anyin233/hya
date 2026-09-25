@@ -7,6 +7,8 @@ permissions. The screen shows a session list, the selected transcript, and
 pending interactions. Models, Workflows, and saved provider keys have dedicated
 views; the API command view exposes the other HTTP/JSON operations in `hya.v1`.
 Tab completes slash commands using the TUI and server command catalogs.
+One persistent instruction line stays below the input at the bottom of the
+screen and changes with the current view.
 If a backend predates the saved-key list endpoint, the main TUI still opens and
 shows that key listing needs a backend restart with an updated binary.
 
@@ -46,6 +48,9 @@ stores the key in its user auth directory; it never sends existing key values
 back to the TUI. Configure that provider's model route in the backend config,
 then restart the backend after adding or removing a key so the route resolves
 the new credentials. OAuth login remains available through the backend CLI.
+After typing `/keys`, read the bottom row: it shows `/key set <provider>` to
+add or replace a key and `/key remove <provider>` to delete one. During
+concealed entry, the row changes to `Paste API key · Enter saves · Esc cancels`.
 
 If `/keys` says key listing is unavailable, restart the backend with hya
 0.37.6 or newer and run the same frontend command again. For example, a
@@ -74,6 +79,10 @@ backend is running.
 | `/api METHOD /v1/path [JSON]` | Send a scoped HTTP/JSON request and show its JSON response. |
 | `/help` | Show command help. |
 | Tab | Complete a slash command or supported argument; repeat Tab to cycle matches. |
+
+The bottom instruction row is separate from the status message above the
+input. Status updates and completion suggestions can change without erasing
+the next-step instruction.
 
 Other slash commands are forwarded to the backend as `CommandTurn`s, so
 custom commands from the server catalog remain usable in this frontend. Tab
@@ -130,6 +139,21 @@ string encoded 64-bit values, and the error envelope documented in the
 | `GET /v1/workflows` | No body | `ListWorkflowsResponse.workflows: WorkflowSummary[]` |
 | `GET /v1/sessions/{id}/workflow` | No body | `WorkflowState` |
 | `POST /v1/sessions/{id}/workflow` | `{select: {name: string}}` or `{run: {name: string}}` | `SubmitWorkflowCommandResponse` |
+
+The one-row footer sits directly below the input panel. Its content is selected
+from the current view; it makes no HTTP request:
+
+| View or state | Bottom instruction |
+| --- | --- |
+| Chat | `Enter a prompt · /new creates a session · /help lists commands` |
+| Models | `Next: /model <provider/model> to switch this session · /help` |
+| Workflows | `Next: /workflow select <name> or /workflow run [name]` |
+| Interactions | `Next: /approve <id>, /deny <id>, or /answer <id> <text>` |
+| Saved keys | `Next: /key set <provider> to add · /key remove <provider> to delete · Tab completes` |
+| Saved keys when `GET /v1/auth` is unavailable | `Next: restart backend 0.37.6+ to list saved keys · /help` |
+| Concealed key entry | `Paste API key · Enter saves · Esc cancels` |
+| API | `Next: /api GET /v1/health · /help for command syntax` |
+| Help | `Enter a prompt or choose a /command · Tab completes` |
 
 The transcript is read from projected `MessageInfo.parts` after event
 notifications. The TUI does not derive a competing durable state model from
