@@ -1895,6 +1895,9 @@
           },
           "error_reported": {
             "$ref": "#/components/schemas/ErrorReported"
+          },
+          "member_updated": {
+            "$ref": "#/components/schemas/MemberInfo"
           }
         }
       },
@@ -1985,6 +1988,12 @@
           },
           "kind": {
             "type": "string"
+          },
+          "tool": {
+            "type": "string"
+          },
+          "call_id": {
+            "type": "string"
           }
         }
       },
@@ -2062,6 +2071,22 @@
             "$ref": "#/components/schemas/ToolExecutionState"
           },
           "error_code": {
+            "type": "string"
+          },
+          "error_message": {
+            "type": "string"
+          },
+          "input_json": {
+            "type": "string"
+          },
+          "output_json": {
+            "type": "string"
+          },
+          "duration_ms": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "tool": {
             "type": "string"
           }
         }
@@ -2751,7 +2776,7 @@
       },
       "ToolCallPart": {
         "type": "object",
-        "description": "A tool invocation requested by the model.",
+        "description": "A tool invocation requested by the model. One part covers the whole call: arguments, execution state, and (once finished) its output or error.",
         "properties": {
           "call_id": {
             "type": "string"
@@ -2770,6 +2795,13 @@
           },
           "error_message": {
             "type": "string"
+          },
+          "output_json": {
+            "type": "string"
+          },
+          "duration_ms": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },
@@ -2977,6 +3009,37 @@
             "items": {
               "$ref": "#/components/schemas/TodoItem"
             }
+          }
+        }
+      },
+      "MemberInfo": {
+        "type": "object",
+        "description": "A subagent (member) spawned by a session, as recorded on the parent's log.",
+        "properties": {
+          "member": {
+            "type": "string"
+          },
+          "child": {
+            "type": "string"
+          },
+          "agent": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/MemberStatus"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "call_id": {
+            "type": "string"
+          },
+          "depth": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },
@@ -3547,6 +3610,12 @@
           },
           "permission_mode": {
             "type": "string"
+          },
+          "members": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MemberInfo"
+            }
           }
         }
       },
@@ -4348,6 +4417,18 @@
           "TODO_STATUS_IN_PROGRESS",
           "TODO_STATUS_COMPLETED",
           "TODO_STATUS_BLOCKED"
+        ]
+      },
+      "MemberStatus": {
+        "type": "string",
+        "description": "Lifecycle status of a spawned subagent (member).",
+        "enum": [
+          "MEMBER_STATUS_UNSPECIFIED",
+          "MEMBER_STATUS_SPAWNING",
+          "MEMBER_STATUS_RUNNING",
+          "MEMBER_STATUS_DONE",
+          "MEMBER_STATUS_FAILED",
+          "MEMBER_STATUS_CANCELLED"
         ]
       },
       "VcsFileStatus": {

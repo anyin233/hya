@@ -112,20 +112,30 @@ message ReasoningPart {
   string variant = 2;
 }
 
-// A tool invocation requested by the model.
+// A tool invocation requested by the model. One part covers the whole call:
+// arguments, execution state, and (once finished) its output or error.
 message ToolCallPart {
-  // Engine-issued call id used to match the result part.
+  // Engine-issued call id. It is `MemberInfo.call_id` of a subagent the call
+  // spawned.
   string call_id = 1;
   // Canonical tool name.
   string tool = 2;
-  // Tool input as a JSON object.
+  // Tool input as JSON text, in every state (empty while the arguments are
+  // still streaming and unparsed).
   string input_json = 3;
   // Execution state of the call.
   ToolExecutionState state = 4;
   // Stable structured error type when the call failed (e.g. `unknown`).
   string error_code = 5;
-  // Structured error message when the call failed.
+  // Error text when the call failed, denied, or was blocked.
   string error_message = 6;
+  // Tool output as JSON text when the call finished OK: the stored output,
+  // under the same size cap the model saw. For the `task` tool it is
+  // `{title, metadata: {sessionId, parentSessionId, subagent_type, status},
+  // output}`; `metadata.sessionId` is the child session.
+  string output_json = 7;
+  // Wall time of a finished OK call in milliseconds.
+  uint64 duration_ms = 8;
 }
 
 // Execution state of one tool call.
@@ -292,4 +302,41 @@ message GetSessionTodoRequest {
 message TodoList {
   // Ordered todo items.
   repeated TodoItem items = 1;
+}
+
+// Lifecycle status of a spawned subagent (member).
+enum MemberStatus {
+  // Unset sentinel; never emitted by the server.
+  MEMBER_STATUS_UNSPECIFIED = 0;
+  // The child session is being created or admitted.
+  MEMBER_STATUS_SPAWNING = 1;
+  // The child is running a turn.
+  MEMBER_STATUS_RUNNING = 2;
+  // The child finished successfully.
+  MEMBER_STATUS_DONE = 3;
+  // The child failed.
+  MEMBER_STATUS_FAILED = 4;
+  // The child was cancelled.
+  MEMBER_STATUS_CANCELLED = 5;
+}
+
+// A subagent (member) spawned by a session, as recorded on the parent's log.
+message MemberInfo {
+  // Member id within the parent session.
+  string member = 1;
+  // Child session id when known.
+  string child = 2;
+  // Subagent type (agent name) of the spawn.
+  string agent = 3;
+  // Short description of the delegated task.
+  string description = 4;
+  // Latest lifecycle status.
+  MemberStatus status = 5;
+  // Bounded finish summary; empty until the member finished.
+  string summary = 6;
+  // Tool call (`ToolCallPart.call_id`) that spawned the member; empty for
+  // members started without a tool call.
+  string call_id = 7;
+  // Depth in the subagent tree (children of a root session are 1).
+  uint32 depth = 8;
 }

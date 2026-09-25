@@ -14179,6 +14179,304 @@ impl<'de> serde::Deserialize<'de> for McpServerStatus {
         deserializer.deserialize_struct("hya.v1.McpServerStatus", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for MemberInfo {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.member.is_empty() {
+            len += 1;
+        }
+        if !self.child.is_empty() {
+            len += 1;
+        }
+        if !self.agent.is_empty() {
+            len += 1;
+        }
+        if !self.description.is_empty() {
+            len += 1;
+        }
+        if self.status != 0 {
+            len += 1;
+        }
+        if !self.summary.is_empty() {
+            len += 1;
+        }
+        if !self.call_id.is_empty() {
+            len += 1;
+        }
+        if self.depth != 0 {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("hya.v1.MemberInfo", len)?;
+        if !self.member.is_empty() {
+            struct_ser.serialize_field("member", &self.member)?;
+        }
+        if !self.child.is_empty() {
+            struct_ser.serialize_field("child", &self.child)?;
+        }
+        if !self.agent.is_empty() {
+            struct_ser.serialize_field("agent", &self.agent)?;
+        }
+        if !self.description.is_empty() {
+            struct_ser.serialize_field("description", &self.description)?;
+        }
+        if self.status != 0 {
+            let v = MemberStatus::try_from(self.status)
+                .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.status)))?;
+            struct_ser.serialize_field("status", &v)?;
+        }
+        if !self.summary.is_empty() {
+            struct_ser.serialize_field("summary", &self.summary)?;
+        }
+        if !self.call_id.is_empty() {
+            struct_ser.serialize_field("callId", &self.call_id)?;
+        }
+        if self.depth != 0 {
+            struct_ser.serialize_field("depth", &self.depth)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for MemberInfo {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "member",
+            "child",
+            "agent",
+            "description",
+            "status",
+            "summary",
+            "call_id",
+            "callId",
+            "depth",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Member,
+            Child,
+            Agent,
+            Description,
+            Status,
+            Summary,
+            CallId,
+            Depth,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "member" => Ok(GeneratedField::Member),
+                            "child" => Ok(GeneratedField::Child),
+                            "agent" => Ok(GeneratedField::Agent),
+                            "description" => Ok(GeneratedField::Description),
+                            "status" => Ok(GeneratedField::Status),
+                            "summary" => Ok(GeneratedField::Summary),
+                            "callId" | "call_id" => Ok(GeneratedField::CallId),
+                            "depth" => Ok(GeneratedField::Depth),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = MemberInfo;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct hya.v1.MemberInfo")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<MemberInfo, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut member__ = None;
+                let mut child__ = None;
+                let mut agent__ = None;
+                let mut description__ = None;
+                let mut status__ = None;
+                let mut summary__ = None;
+                let mut call_id__ = None;
+                let mut depth__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Member => {
+                            if member__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("member"));
+                            }
+                            member__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Child => {
+                            if child__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("child"));
+                            }
+                            child__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Agent => {
+                            if agent__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("agent"));
+                            }
+                            agent__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Description => {
+                            if description__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("description"));
+                            }
+                            description__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Status => {
+                            if status__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("status"));
+                            }
+                            status__ = Some(map_.next_value::<MemberStatus>()? as i32);
+                        }
+                        GeneratedField::Summary => {
+                            if summary__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("summary"));
+                            }
+                            summary__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::CallId => {
+                            if call_id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("callId"));
+                            }
+                            call_id__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Depth => {
+                            if depth__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("depth"));
+                            }
+                            depth__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                    }
+                }
+                Ok(MemberInfo {
+                    member: member__.unwrap_or_default(),
+                    child: child__.unwrap_or_default(),
+                    agent: agent__.unwrap_or_default(),
+                    description: description__.unwrap_or_default(),
+                    status: status__.unwrap_or_default(),
+                    summary: summary__.unwrap_or_default(),
+                    call_id: call_id__.unwrap_or_default(),
+                    depth: depth__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("hya.v1.MemberInfo", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for MemberStatus {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let variant = match self {
+            Self::Unspecified => "MEMBER_STATUS_UNSPECIFIED",
+            Self::Spawning => "MEMBER_STATUS_SPAWNING",
+            Self::Running => "MEMBER_STATUS_RUNNING",
+            Self::Done => "MEMBER_STATUS_DONE",
+            Self::Failed => "MEMBER_STATUS_FAILED",
+            Self::Cancelled => "MEMBER_STATUS_CANCELLED",
+        };
+        serializer.serialize_str(variant)
+    }
+}
+impl<'de> serde::Deserialize<'de> for MemberStatus {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "MEMBER_STATUS_UNSPECIFIED",
+            "MEMBER_STATUS_SPAWNING",
+            "MEMBER_STATUS_RUNNING",
+            "MEMBER_STATUS_DONE",
+            "MEMBER_STATUS_FAILED",
+            "MEMBER_STATUS_CANCELLED",
+        ];
+
+        struct GeneratedVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = MemberStatus;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(formatter, "expected one of: {:?}", &FIELDS)
+            }
+
+            fn visit_i64<E>(self, v: i64) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                i32::try_from(v)
+                    .ok()
+                    .and_then(|x| x.try_into().ok())
+                    .ok_or_else(|| {
+                        serde::de::Error::invalid_value(serde::de::Unexpected::Signed(v), &self)
+                    })
+            }
+
+            fn visit_u64<E>(self, v: u64) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                i32::try_from(v)
+                    .ok()
+                    .and_then(|x| x.try_into().ok())
+                    .ok_or_else(|| {
+                        serde::de::Error::invalid_value(serde::de::Unexpected::Unsigned(v), &self)
+                    })
+            }
+
+            fn visit_str<E>(self, value: &str) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                match value {
+                    "MEMBER_STATUS_UNSPECIFIED" => Ok(MemberStatus::Unspecified),
+                    "MEMBER_STATUS_SPAWNING" => Ok(MemberStatus::Spawning),
+                    "MEMBER_STATUS_RUNNING" => Ok(MemberStatus::Running),
+                    "MEMBER_STATUS_DONE" => Ok(MemberStatus::Done),
+                    "MEMBER_STATUS_FAILED" => Ok(MemberStatus::Failed),
+                    "MEMBER_STATUS_CANCELLED" => Ok(MemberStatus::Cancelled),
+                    _ => Err(serde::de::Error::unknown_variant(value, FIELDS)),
+                }
+            }
+        }
+        deserializer.deserialize_any(GeneratedVisitor)
+    }
+}
 impl serde::Serialize for MessageError {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -16050,6 +16348,12 @@ impl serde::Serialize for PartStarted {
         if !self.kind.is_empty() {
             len += 1;
         }
+        if !self.tool.is_empty() {
+            len += 1;
+        }
+        if !self.call_id.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("hya.v1.PartStarted", len)?;
         if !self.message.is_empty() {
             struct_ser.serialize_field("message", &self.message)?;
@@ -16059,6 +16363,12 @@ impl serde::Serialize for PartStarted {
         }
         if !self.kind.is_empty() {
             struct_ser.serialize_field("kind", &self.kind)?;
+        }
+        if !self.tool.is_empty() {
+            struct_ser.serialize_field("tool", &self.tool)?;
+        }
+        if !self.call_id.is_empty() {
+            struct_ser.serialize_field("callId", &self.call_id)?;
         }
         struct_ser.end()
     }
@@ -16073,6 +16383,9 @@ impl<'de> serde::Deserialize<'de> for PartStarted {
             "message",
             "part",
             "kind",
+            "tool",
+            "call_id",
+            "callId",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -16080,6 +16393,8 @@ impl<'de> serde::Deserialize<'de> for PartStarted {
             Message,
             Part,
             Kind,
+            Tool,
+            CallId,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -16104,6 +16419,8 @@ impl<'de> serde::Deserialize<'de> for PartStarted {
                             "message" => Ok(GeneratedField::Message),
                             "part" => Ok(GeneratedField::Part),
                             "kind" => Ok(GeneratedField::Kind),
+                            "tool" => Ok(GeneratedField::Tool),
+                            "callId" | "call_id" => Ok(GeneratedField::CallId),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -16126,6 +16443,8 @@ impl<'de> serde::Deserialize<'de> for PartStarted {
                 let mut message__ = None;
                 let mut part__ = None;
                 let mut kind__ = None;
+                let mut tool__ = None;
+                let mut call_id__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Message => {
@@ -16146,12 +16465,26 @@ impl<'de> serde::Deserialize<'de> for PartStarted {
                             }
                             kind__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::Tool => {
+                            if tool__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("tool"));
+                            }
+                            tool__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::CallId => {
+                            if call_id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("callId"));
+                            }
+                            call_id__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(PartStarted {
                     message: message__.unwrap_or_default(),
                     part: part__.unwrap_or_default(),
                     kind: kind__.unwrap_or_default(),
+                    tool: tool__.unwrap_or_default(),
+                    call_id: call_id__.unwrap_or_default(),
                 })
             }
         }
@@ -20130,6 +20463,9 @@ impl serde::Serialize for SessionInfo {
         if !self.permission_mode.is_empty() {
             len += 1;
         }
+        if !self.members.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("hya.v1.SessionInfo", len)?;
         if !self.id.is_empty() {
             struct_ser.serialize_field("id", &self.id)?;
@@ -20169,6 +20505,9 @@ impl serde::Serialize for SessionInfo {
         if !self.permission_mode.is_empty() {
             struct_ser.serialize_field("permissionMode", &self.permission_mode)?;
         }
+        if !self.members.is_empty() {
+            struct_ser.serialize_field("members", &self.members)?;
+        }
         struct_ser.end()
     }
 }
@@ -20195,6 +20534,7 @@ impl<'de> serde::Deserialize<'de> for SessionInfo {
             "busy",
             "permission_mode",
             "permissionMode",
+            "members",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -20211,6 +20551,7 @@ impl<'de> serde::Deserialize<'de> for SessionInfo {
             LastSeq,
             Busy,
             PermissionMode,
+            Members,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -20244,6 +20585,7 @@ impl<'de> serde::Deserialize<'de> for SessionInfo {
                             "lastSeq" | "last_seq" => Ok(GeneratedField::LastSeq),
                             "busy" => Ok(GeneratedField::Busy),
                             "permissionMode" | "permission_mode" => Ok(GeneratedField::PermissionMode),
+                            "members" => Ok(GeneratedField::Members),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -20275,6 +20617,7 @@ impl<'de> serde::Deserialize<'de> for SessionInfo {
                 let mut last_seq__ = None;
                 let mut busy__ = None;
                 let mut permission_mode__ = None;
+                let mut members__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Id => {
@@ -20351,6 +20694,12 @@ impl<'de> serde::Deserialize<'de> for SessionInfo {
                             }
                             permission_mode__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::Members => {
+                            if members__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("members"));
+                            }
+                            members__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(SessionInfo {
@@ -20366,6 +20715,7 @@ impl<'de> serde::Deserialize<'de> for SessionInfo {
                     last_seq: last_seq__.unwrap_or_default(),
                     busy: busy__.unwrap_or_default(),
                     permission_mode: permission_mode__.unwrap_or_default(),
+                    members: members__.unwrap_or_default(),
                 })
             }
         }
@@ -21935,6 +22285,9 @@ impl serde::Serialize for StreamEvent {
                 stream_event::Payload::ErrorReported(v) => {
                     struct_ser.serialize_field("errorReported", v)?;
                 }
+                stream_event::Payload::MemberUpdated(v) => {
+                    struct_ser.serialize_field("memberUpdated", v)?;
+                }
             }
         }
         struct_ser.end()
@@ -21987,6 +22340,8 @@ impl<'de> serde::Deserialize<'de> for StreamEvent {
             "partReplaced",
             "error_reported",
             "errorReported",
+            "member_updated",
+            "memberUpdated",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -22012,6 +22367,7 @@ impl<'de> serde::Deserialize<'de> for StreamEvent {
             SessionDeleted,
             PartReplaced,
             ErrorReported,
+            MemberUpdated,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -22054,6 +22410,7 @@ impl<'de> serde::Deserialize<'de> for StreamEvent {
                             "sessionDeleted" | "session_deleted" => Ok(GeneratedField::SessionDeleted),
                             "partReplaced" | "part_replaced" => Ok(GeneratedField::PartReplaced),
                             "errorReported" | "error_reported" => Ok(GeneratedField::ErrorReported),
+                            "memberUpdated" | "member_updated" => Ok(GeneratedField::MemberUpdated),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -22223,6 +22580,13 @@ impl<'de> serde::Deserialize<'de> for StreamEvent {
                                 return Err(serde::de::Error::duplicate_field("errorReported"));
                             }
                             payload__ = map_.next_value::<::std::option::Option<_>>()?.map(stream_event::Payload::ErrorReported)
+;
+                        }
+                        GeneratedField::MemberUpdated => {
+                            if payload__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("memberUpdated"));
+                            }
+                            payload__ = map_.next_value::<::std::option::Option<_>>()?.map(stream_event::Payload::MemberUpdated)
 ;
                         }
                     }
@@ -24193,6 +24557,12 @@ impl serde::Serialize for ToolCallPart {
         if !self.error_message.is_empty() {
             len += 1;
         }
+        if !self.output_json.is_empty() {
+            len += 1;
+        }
+        if self.duration_ms != 0 {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("hya.v1.ToolCallPart", len)?;
         if !self.call_id.is_empty() {
             struct_ser.serialize_field("callId", &self.call_id)?;
@@ -24214,6 +24584,14 @@ impl serde::Serialize for ToolCallPart {
         if !self.error_message.is_empty() {
             struct_ser.serialize_field("errorMessage", &self.error_message)?;
         }
+        if !self.output_json.is_empty() {
+            struct_ser.serialize_field("outputJson", &self.output_json)?;
+        }
+        if self.duration_ms != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("durationMs", ToString::to_string(&self.duration_ms).as_str())?;
+        }
         struct_ser.end()
     }
 }
@@ -24234,6 +24612,10 @@ impl<'de> serde::Deserialize<'de> for ToolCallPart {
             "errorCode",
             "error_message",
             "errorMessage",
+            "output_json",
+            "outputJson",
+            "duration_ms",
+            "durationMs",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -24244,6 +24626,8 @@ impl<'de> serde::Deserialize<'de> for ToolCallPart {
             State,
             ErrorCode,
             ErrorMessage,
+            OutputJson,
+            DurationMs,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -24271,6 +24655,8 @@ impl<'de> serde::Deserialize<'de> for ToolCallPart {
                             "state" => Ok(GeneratedField::State),
                             "errorCode" | "error_code" => Ok(GeneratedField::ErrorCode),
                             "errorMessage" | "error_message" => Ok(GeneratedField::ErrorMessage),
+                            "outputJson" | "output_json" => Ok(GeneratedField::OutputJson),
+                            "durationMs" | "duration_ms" => Ok(GeneratedField::DurationMs),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -24296,6 +24682,8 @@ impl<'de> serde::Deserialize<'de> for ToolCallPart {
                 let mut state__ = None;
                 let mut error_code__ = None;
                 let mut error_message__ = None;
+                let mut output_json__ = None;
+                let mut duration_ms__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::CallId => {
@@ -24334,6 +24722,20 @@ impl<'de> serde::Deserialize<'de> for ToolCallPart {
                             }
                             error_message__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::OutputJson => {
+                            if output_json__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("outputJson"));
+                            }
+                            output_json__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::DurationMs => {
+                            if duration_ms__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("durationMs"));
+                            }
+                            duration_ms__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
                     }
                 }
                 Ok(ToolCallPart {
@@ -24343,6 +24745,8 @@ impl<'de> serde::Deserialize<'de> for ToolCallPart {
                     state: state__.unwrap_or_default(),
                     error_code: error_code__.unwrap_or_default(),
                     error_message: error_message__.unwrap_or_default(),
+                    output_json: output_json__.unwrap_or_default(),
+                    duration_ms: duration_ms__.unwrap_or_default(),
                 })
             }
         }
@@ -24600,6 +25004,21 @@ impl serde::Serialize for ToolStateChanged {
         if !self.error_code.is_empty() {
             len += 1;
         }
+        if !self.error_message.is_empty() {
+            len += 1;
+        }
+        if !self.input_json.is_empty() {
+            len += 1;
+        }
+        if !self.output_json.is_empty() {
+            len += 1;
+        }
+        if self.duration_ms != 0 {
+            len += 1;
+        }
+        if !self.tool.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("hya.v1.ToolStateChanged", len)?;
         if !self.message.is_empty() {
             struct_ser.serialize_field("message", &self.message)?;
@@ -24618,6 +25037,23 @@ impl serde::Serialize for ToolStateChanged {
         if !self.error_code.is_empty() {
             struct_ser.serialize_field("errorCode", &self.error_code)?;
         }
+        if !self.error_message.is_empty() {
+            struct_ser.serialize_field("errorMessage", &self.error_message)?;
+        }
+        if !self.input_json.is_empty() {
+            struct_ser.serialize_field("inputJson", &self.input_json)?;
+        }
+        if !self.output_json.is_empty() {
+            struct_ser.serialize_field("outputJson", &self.output_json)?;
+        }
+        if self.duration_ms != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("durationMs", ToString::to_string(&self.duration_ms).as_str())?;
+        }
+        if !self.tool.is_empty() {
+            struct_ser.serialize_field("tool", &self.tool)?;
+        }
         struct_ser.end()
     }
 }
@@ -24635,6 +25071,15 @@ impl<'de> serde::Deserialize<'de> for ToolStateChanged {
             "state",
             "error_code",
             "errorCode",
+            "error_message",
+            "errorMessage",
+            "input_json",
+            "inputJson",
+            "output_json",
+            "outputJson",
+            "duration_ms",
+            "durationMs",
+            "tool",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -24644,6 +25089,11 @@ impl<'de> serde::Deserialize<'de> for ToolStateChanged {
             CallId,
             State,
             ErrorCode,
+            ErrorMessage,
+            InputJson,
+            OutputJson,
+            DurationMs,
+            Tool,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -24670,6 +25120,11 @@ impl<'de> serde::Deserialize<'de> for ToolStateChanged {
                             "callId" | "call_id" => Ok(GeneratedField::CallId),
                             "state" => Ok(GeneratedField::State),
                             "errorCode" | "error_code" => Ok(GeneratedField::ErrorCode),
+                            "errorMessage" | "error_message" => Ok(GeneratedField::ErrorMessage),
+                            "inputJson" | "input_json" => Ok(GeneratedField::InputJson),
+                            "outputJson" | "output_json" => Ok(GeneratedField::OutputJson),
+                            "durationMs" | "duration_ms" => Ok(GeneratedField::DurationMs),
+                            "tool" => Ok(GeneratedField::Tool),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -24694,6 +25149,11 @@ impl<'de> serde::Deserialize<'de> for ToolStateChanged {
                 let mut call_id__ = None;
                 let mut state__ = None;
                 let mut error_code__ = None;
+                let mut error_message__ = None;
+                let mut input_json__ = None;
+                let mut output_json__ = None;
+                let mut duration_ms__ = None;
+                let mut tool__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Message => {
@@ -24726,6 +25186,38 @@ impl<'de> serde::Deserialize<'de> for ToolStateChanged {
                             }
                             error_code__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::ErrorMessage => {
+                            if error_message__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("errorMessage"));
+                            }
+                            error_message__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::InputJson => {
+                            if input_json__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("inputJson"));
+                            }
+                            input_json__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::OutputJson => {
+                            if output_json__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("outputJson"));
+                            }
+                            output_json__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::DurationMs => {
+                            if duration_ms__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("durationMs"));
+                            }
+                            duration_ms__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::Tool => {
+                            if tool__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("tool"));
+                            }
+                            tool__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(ToolStateChanged {
@@ -24734,6 +25226,11 @@ impl<'de> serde::Deserialize<'de> for ToolStateChanged {
                     call_id: call_id__.unwrap_or_default(),
                     state: state__.unwrap_or_default(),
                     error_code: error_code__.unwrap_or_default(),
+                    error_message: error_message__.unwrap_or_default(),
+                    input_json: input_json__.unwrap_or_default(),
+                    output_json: output_json__.unwrap_or_default(),
+                    duration_ms: duration_ms__.unwrap_or_default(),
+                    tool: tool__.unwrap_or_default(),
                 })
             }
         }

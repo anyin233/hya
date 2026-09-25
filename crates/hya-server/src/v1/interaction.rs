@@ -41,28 +41,15 @@ async fn list_interactions(
         .ok()
         .filter(|kind| *kind != pb::InteractionType::Unspecified);
 
-    for view in st.permission_requests.list().await {
+    for view in st.permission_requests.list_legacy().await {
         let entry = serde_json::to_value(&view).unwrap_or(Value::Null);
         if let Some(want) = want_session
             && field(&entry, "sessionID") != want.to_string()
-            && field(&entry, "session") != want.to_string()
         {
             continue;
         }
         if matches_type(want_type, pb::InteractionType::Permission) {
-            interactions.push(pb::Interaction {
-                id: field(&entry, "id"),
-                session: field(&entry, "sessionID")
-                    .parse::<SessionId>()
-                    .map(|id| id.to_string())
-                    .unwrap_or_default(),
-                r#type: pb::InteractionType::Permission as i32,
-                title: format!("{} {}", field(&entry, "action"), field(&entry, "resource")),
-                detail: String::new(),
-                options: Vec::new(),
-                payload: None,
-                time_created: None,
-            });
+            interactions.push(super::events::permission_interaction(&entry));
         }
     }
     for view in st.question_requests.list().await {

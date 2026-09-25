@@ -272,6 +272,10 @@ leaking child transcripts. They carry only bounded metadata + a short summary.
 `MemberRunStatus` wire values: `spawning`, `running`, `done`, `failed`,
 `cancelled`.
 
+v1 exposes these as the durable `memberUpdated` stream event on the parent
+session and folds `MemberProjection` rows into `SessionInfo.members`
+([protocol guide](../protocol/README.md#subagents)).
+
 **Log placement:** member lifecycle events live on the **parent** log.
 `AgentRegistered` / `AgentActivityChanged` / `MailSent` / channel events live
 on the **team-root** log. Those are different logs whenever the parent is not

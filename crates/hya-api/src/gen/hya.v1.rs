@@ -3128,7 +3128,13 @@ pub struct Interaction {
     /// Selectable option labels when the request is multiple-choice.
     #[prost(string, repeated, tag = "6")]
     pub options: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
-    /// Structured payload (tool input, question metadata) as a JSON object.
+    /// Structured payload as a JSON object. For a permission request:
+    /// `action` (permission action, e.g. `bash`, `edit`), `resource` (the
+    /// pattern being decided, e.g. the command or path), `always` (patterns an
+    /// "always" reply saves), and, when the ask is correlated with a tool call,
+    /// `messageId`, `callId`, `tool` (tool name), and `input` (the call's
+    /// parsed arguments object exactly as recorded on the tool part: e.g.
+    /// `command` for bash; the path and old/new text or patch for edit tools).
     #[prost(message, optional, tag = "7")]
     pub payload: ::core::option::Option<::pbjson_types::Struct>,
     /// When the request was created.
@@ -3924,16 +3930,19 @@ pub struct ReasoningPart {
     #[prost(string, tag = "2")]
     pub variant: ::prost::alloc::string::String,
 }
-/// A tool invocation requested by the model.
+/// A tool invocation requested by the model. One part covers the whole call:
+/// arguments, execution state, and (once finished) its output or error.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ToolCallPart {
-    /// Engine-issued call id used to match the result part.
+    /// Engine-issued call id. It is `MemberInfo.call_id` of a subagent the call
+    /// spawned.
     #[prost(string, tag = "1")]
     pub call_id: ::prost::alloc::string::String,
     /// Canonical tool name.
     #[prost(string, tag = "2")]
     pub tool: ::prost::alloc::string::String,
-    /// Tool input as a JSON object.
+    /// Tool input as JSON text, in every state (empty while the arguments are
+    /// still streaming and unparsed).
     #[prost(string, tag = "3")]
     pub input_json: ::prost::alloc::string::String,
     /// Execution state of the call.
@@ -3942,9 +3951,18 @@ pub struct ToolCallPart {
     /// Stable structured error type when the call failed (e.g. `unknown`).
     #[prost(string, tag = "5")]
     pub error_code: ::prost::alloc::string::String,
-    /// Structured error message when the call failed.
+    /// Error text when the call failed, denied, or was blocked.
     #[prost(string, tag = "6")]
     pub error_message: ::prost::alloc::string::String,
+    /// Tool output as JSON text when the call finished OK: the stored output,
+    /// under the same size cap the model saw. For the `task` tool it is
+    /// `{title, metadata: {sessionId, parentSessionId, subagent_type, status},
+    /// output}`; `metadata.sessionId` is the child session.
+    #[prost(string, tag = "7")]
+    pub output_json: ::prost::alloc::string::String,
+    /// Wall time of a finished OK call in milliseconds.
+    #[prost(uint64, tag = "8")]
+    pub duration_ms: u64,
 }
 /// The outcome of a tool invocation.
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -4129,6 +4147,35 @@ pub struct TodoList {
     /// Ordered todo items.
     #[prost(message, repeated, tag = "1")]
     pub items: ::prost::alloc::vec::Vec<TodoItem>,
+}
+/// A subagent (member) spawned by a session, as recorded on the parent's log.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct MemberInfo {
+    /// Member id within the parent session.
+    #[prost(string, tag = "1")]
+    pub member: ::prost::alloc::string::String,
+    /// Child session id when known.
+    #[prost(string, tag = "2")]
+    pub child: ::prost::alloc::string::String,
+    /// Subagent type (agent name) of the spawn.
+    #[prost(string, tag = "3")]
+    pub agent: ::prost::alloc::string::String,
+    /// Short description of the delegated task.
+    #[prost(string, tag = "4")]
+    pub description: ::prost::alloc::string::String,
+    /// Latest lifecycle status.
+    #[prost(enumeration = "MemberStatus", tag = "5")]
+    pub status: i32,
+    /// Bounded finish summary; empty until the member finished.
+    #[prost(string, tag = "6")]
+    pub summary: ::prost::alloc::string::String,
+    /// Tool call (`ToolCallPart.call_id`) that spawned the member; empty for
+    /// members started without a tool call.
+    #[prost(string, tag = "7")]
+    pub call_id: ::prost::alloc::string::String,
+    /// Depth in the subagent tree (children of a root session are 1).
+    #[prost(uint32, tag = "8")]
+    pub depth: u32,
 }
 /// Terminal reason of an assistant message.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
@@ -4352,6 +4399,51 @@ impl TodoStatus {
             "TODO_STATUS_IN_PROGRESS" => Some(Self::InProgress),
             "TODO_STATUS_COMPLETED" => Some(Self::Completed),
             "TODO_STATUS_BLOCKED" => Some(Self::Blocked),
+            _ => None,
+        }
+    }
+}
+/// Lifecycle status of a spawned subagent (member).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum MemberStatus {
+    /// Unset sentinel; never emitted by the server.
+    Unspecified = 0,
+    /// The child session is being created or admitted.
+    Spawning = 1,
+    /// The child is running a turn.
+    Running = 2,
+    /// The child finished successfully.
+    Done = 3,
+    /// The child failed.
+    Failed = 4,
+    /// The child was cancelled.
+    Cancelled = 5,
+}
+impl MemberStatus {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "MEMBER_STATUS_UNSPECIFIED",
+            Self::Spawning => "MEMBER_STATUS_SPAWNING",
+            Self::Running => "MEMBER_STATUS_RUNNING",
+            Self::Done => "MEMBER_STATUS_DONE",
+            Self::Failed => "MEMBER_STATUS_FAILED",
+            Self::Cancelled => "MEMBER_STATUS_CANCELLED",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "MEMBER_STATUS_UNSPECIFIED" => Some(Self::Unspecified),
+            "MEMBER_STATUS_SPAWNING" => Some(Self::Spawning),
+            "MEMBER_STATUS_RUNNING" => Some(Self::Running),
+            "MEMBER_STATUS_DONE" => Some(Self::Done),
+            "MEMBER_STATUS_FAILED" => Some(Self::Failed),
+            "MEMBER_STATUS_CANCELLED" => Some(Self::Cancelled),
             _ => None,
         }
     }
@@ -5733,7 +5825,7 @@ pub struct StreamEvent {
     /// Event payload; exactly one kind is set.
     #[prost(
         oneof = "stream_event::Payload",
-        tags = "4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21"
+        tags = "4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22"
     )]
     pub payload: ::core::option::Option<stream_event::Payload>,
 }
@@ -5798,6 +5890,13 @@ pub mod stream_event {
         /// drove that message failed (`MessageInfo.error`).
         #[prost(message, tag = "21")]
         ErrorReported(super::ErrorReported),
+        /// A subagent spawned by this session was created or changed status
+        /// (durable, on the parent session's stream). `member` is always set;
+        /// the spawn frame carries every field, later frames carry `status`
+        /// (and `summary`/`child` on finish) and leave the rest empty, so fold
+        /// by `member`.
+        #[prost(message, tag = "22")]
+        MemberUpdated(super::MemberInfo),
     }
 }
 /// A session was created.
@@ -5885,6 +5984,12 @@ pub struct PartStarted {
     /// Part kind discriminator matching `PartInfo.kind`.
     #[prost(string, tag = "3")]
     pub kind: ::prost::alloc::string::String,
+    /// Tool name when `kind` is `tool_call`.
+    #[prost(string, tag = "4")]
+    pub tool: ::prost::alloc::string::String,
+    /// Tool call id when `kind` is `tool_call`.
+    #[prost(string, tag = "5")]
+    pub call_id: ::prost::alloc::string::String,
 }
 /// Streaming delta appended to a part. Assistant text deltas are live-only
 /// (`seq = 0`); reasoning and legacy text deltas are durable.
@@ -5896,7 +6001,8 @@ pub struct PartAppended {
     /// Part identifier.
     #[prost(string, tag = "2")]
     pub part: ::prost::alloc::string::String,
-    /// Incremental text delta for text/reasoning parts.
+    /// Incremental delta: text for text/reasoning parts, a raw argument JSON
+    /// fragment for `tool_call` parts (append to `ToolCallPart.input_json`).
     #[prost(string, tag = "3")]
     pub text_delta: ::prost::alloc::string::String,
 }
@@ -5947,7 +6053,7 @@ pub struct ToolStateChanged {
     /// Part identifier of the tool call.
     #[prost(string, tag = "2")]
     pub part: ::prost::alloc::string::String,
-    /// Matching call id.
+    /// Matching call id (empty on a direct part overwrite).
     #[prost(string, tag = "3")]
     pub call_id: ::prost::alloc::string::String,
     /// New execution state.
@@ -5956,6 +6062,22 @@ pub struct ToolStateChanged {
     /// Stable error code when the call failed.
     #[prost(string, tag = "5")]
     pub error_code: ::prost::alloc::string::String,
+    /// Error text when the call failed, was denied, or was blocked.
+    #[prost(string, tag = "6")]
+    pub error_message: ::prost::alloc::string::String,
+    /// Full parsed arguments as JSON text; set when the call is requested
+    /// (`RUNNING`) and replaces the streamed argument fragments.
+    #[prost(string, tag = "7")]
+    pub input_json: ::prost::alloc::string::String,
+    /// Output as JSON text when the call finished OK (same cap as stored).
+    #[prost(string, tag = "8")]
+    pub output_json: ::prost::alloc::string::String,
+    /// Wall time in milliseconds when the call finished OK.
+    #[prost(uint64, tag = "9")]
+    pub duration_ms: u64,
+    /// Tool name when known (set on `RUNNING`).
+    #[prost(string, tag = "10")]
+    pub tool: ::prost::alloc::string::String,
 }
 /// A permission decision is pending.
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -11560,6 +11682,11 @@ pub struct SessionInfo {
     /// `permission.model: danger`, else `manual`) when none was set.
     #[prost(string, tag = "12")]
     pub permission_mode: ::prost::alloc::string::String,
+    /// Subagents this session spawned, in spawn order, with their latest
+    /// status (folded from the session's own log). The live counterpart is
+    /// the `memberUpdated` stream event.
+    #[prost(message, repeated, tag = "13")]
+    pub members: ::prost::alloc::vec::Vec<MemberInfo>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CreateSessionRequest {

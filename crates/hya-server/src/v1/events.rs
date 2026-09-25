@@ -191,6 +191,58 @@ fn is_live(envelope: &hya_proto::Envelope) -> bool {
     envelope.seq.0 == 0
 }
 
+/// Wire view of one pending permission ask from its `permission.asked`
+/// properties (the same view the listing serializes). The payload names the
+/// decision (`action`, `resource`, `always`) and, when the ask is correlated
+/// with a tool call, the call (`messageId`, `callId`, `tool`, `input`).
+pub(crate) fn permission_interaction(properties: &Value) -> pb::Interaction {
+    let patterns: Vec<&str> = properties
+        .get("patterns")
+        .and_then(Value::as_array)
+        .map(|rows| rows.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+    let action = field_str(properties, "permission");
+    let resource = patterns.join(" ");
+    let mut payload = serde_json::Map::new();
+    payload.insert("action".into(), Value::String(action.clone()));
+    payload.insert("resource".into(), Value::String(resource.clone()));
+    if let Some(always) = properties.get("always").filter(|always| always.is_array()) {
+        payload.insert("always".into(), always.clone());
+    }
+    if let Some(tool) = properties.get("tool") {
+        for (from, to) in [
+            ("messageID", "messageId"),
+            ("callID", "callId"),
+            ("name", "tool"),
+        ] {
+            if let Some(text) = tool
+                .get(from)
+                .and_then(Value::as_str)
+                .filter(|text| !text.is_empty())
+            {
+                payload.insert(to.into(), Value::String(text.to_owned()));
+            }
+        }
+        if let Some(input) = tool.get("input") {
+            payload.insert("input".into(), input.clone());
+        }
+    }
+    let session = field_str(properties, "sessionID");
+    pb::Interaction {
+        id: field_str(properties, "id"),
+        session: session
+            .parse::<SessionId>()
+            .map(|id| id.to_string())
+            .unwrap_or(session),
+        r#type: pb::InteractionType::Permission as i32,
+        title: format!("{action} {resource}").trim().to_owned(),
+        detail: String::new(),
+        options: Vec::new(),
+        payload: Some(super::convert::to_struct(Value::Object(payload))),
+        time_created: None,
+    }
+}
+
 /// Map one pending-plane broadcast value onto a live frame, honoring the
 /// session filter for session-scoped streams.
 fn interaction_frame(
@@ -211,31 +263,7 @@ fn interaction_frame(
     }
     let event = match kind {
         "permission.asked" => {
-            let interaction = pb::Interaction {
-                id: field_str(properties, "id"),
-                session: frame_session.clone(),
-                r#type: pb::InteractionType::Permission as i32,
-                title: format!(
-                    "{} {}",
-                    field_str(properties, "permission"),
-                    properties
-                        .get("patterns")
-                        .and_then(Value::as_array)
-                        .map(|rows| {
-                            rows.iter()
-                                .filter_map(Value::as_str)
-                                .collect::<Vec<_>>()
-                                .join(" ")
-                        })
-                        .unwrap_or_default()
-                )
-                .trim()
-                .to_owned(),
-                detail: String::new(),
-                options: Vec::new(),
-                payload: None,
-                time_created: None,
-            };
+            let interaction = permission_interaction(properties);
             pb::stream_event::Payload::PermissionRequested(pb::PermissionRequested {
                 request: interaction.id.clone(),
                 interaction: Some(interaction),

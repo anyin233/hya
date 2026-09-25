@@ -153,8 +153,10 @@ While a provider round streams, each assistant text part arrives live as
 `partCompleted`. When the round's stream ends, the durable log records the
 same part once, with the **same** message and part ids: `partStarted`,
 `partReplaced` (`text` = the final full text), `partCompleted`. Reasoning
-deltas, tool-call argument deltas, and user-message text are durable
-`partStarted` / `partAppended` / `partCompleted` events. A `text_complete`
+deltas and user-message text are durable `partStarted` / `partAppended` /
+`partCompleted` events; tool-call arguments are durable `partStarted` /
+`partAppended` followed by `toolStateChanged` (see [Tool calls](#tool-calls)).
+A `text_complete`
 plugin may rewrite a finished part: the rewrite arrives as a live
 `partReplaced` and is what the durable `partReplaced` records.
 
@@ -185,6 +187,67 @@ re-read the projection (`ListMessages`) — or replay
 with the stream. A part whose live deltas were lost is completed by its
 durable `partReplaced`. The v1 SDK's `V1SessionMirror` implements these
 rules.
+
+## Tool calls
+
+A tool call is one `ToolCallPart` (`PartInfo.toolCall`) for its whole life;
+there is no separate result part. On a transcript read it carries:
+
+| Field | Set when |
+| --- | --- |
+| `callId`, `tool` | always |
+| `state` | always: `TOOL_EXECUTION_STATE_PENDING` (arguments streaming), `_RUNNING`, `_OK`, `_ERROR` |
+| `inputJson` | the call's arguments as JSON text, in every state once known (empty while still streaming) |
+| `outputJson`, `durationMs` | `OK`: the stored output as JSON text (the same size-capped value the model saw) and the wall time; protojson omits a zero `durationMs` |
+| `errorCode`, `errorMessage` | `ERROR`: the structured `error.type` (`unknown` when absent; e.g. `input`, `permission`) and the error text |
+
+The stream carries the same data as durable events, in order:
+
+1. `partStarted` with `kind: "tool_call"`, `tool`, and `callId`.
+2. `partAppended` per argument fragment; `textDelta` is raw JSON text to
+   append to `inputJson`.
+3. `toolStateChanged` `RUNNING` with `callId`, `tool`, and the parsed
+   `inputJson`, which replaces the appended fragments.
+4. `toolStateChanged` `OK` with `outputJson` and `durationMs`, or `ERROR`
+   with `errorCode` and `errorMessage`.
+
+Fields a frame does not carry are empty; fold them into the part by
+`part` id without clearing what you already have. A direct part
+overwrite (fork copy, out-of-band progress) arrives as `toolStateChanged`
+with the full state and an empty `callId`.
+
+```json
+{ "event": { "seq": "14", "session": "hysec_...", "partStarted": { "message": "msg_...", "part": "part_...", "kind": "tool_call", "tool": "bash", "callId": "call_..." } } }
+{ "event": { "seq": "15", "session": "hysec_...", "partAppended": { "message": "msg_...", "part": "part_...", "textDelta": "{\"command\":\"ls\"}" } } }
+{ "event": { "seq": "16", "session": "hysec_...", "toolStateChanged": { "message": "msg_...", "part": "part_...", "callId": "call_...", "state": "TOOL_EXECUTION_STATE_RUNNING", "inputJson": "{\"command\":\"ls\"}", "tool": "bash" } } }
+{ "event": { "seq": "19", "session": "hysec_...", "toolStateChanged": { "message": "msg_...", "part": "part_...", "callId": "call_...", "state": "TOOL_EXECUTION_STATE_OK", "outputJson": "{...}", "durationMs": "42" } } }
+```
+
+## Subagents
+
+A subagent spawn (the `task` tool, or a resident member) is recorded on the
+**parent** session and streams there as durable `memberUpdated` events
+(`MemberInfo`): `member`, `child` (child session id), `agent` (subagent
+type), `description`, `status` (`MEMBER_STATUS_SPAWNING`, `_RUNNING`,
+`_DONE`, `_FAILED`, `_CANCELLED`), `summary` (bounded, on finish),
+`callId`, and `depth`. The spawn frame carries every field; a status
+change carries `member` and `status`; a finish adds `summary` and `child`.
+Fold by `member`. `GET /v1/sessions/{id}` (`SessionInfo.members`) returns
+the folded rows, so a client that reconnects mid-task still has them, and
+`GET /v1/sessions?parent={id}` lists the child sessions.
+
+Link a tool card to its child:
+
+- live: `memberUpdated.callId` equals the spawning `ToolCallPart.callId`,
+  and `memberUpdated.child` is the child session;
+- after the call: the `task` tool's `outputJson` is
+  `{title, metadata: {sessionId, parentSessionId, subagent_type, status}, output}`;
+  `metadata.sessionId` is the child session id.
+
+```json
+{ "event": { "seq": "21", "session": "hysec_parent", "memberUpdated": { "member": "mem_...", "child": "hysec_child", "agent": "general", "description": "survey the repo", "status": "MEMBER_STATUS_SPAWNING", "callId": "call_...", "depth": 1 } } }
+{ "event": { "seq": "40", "session": "hysec_parent", "memberUpdated": { "member": "mem_...", "child": "hysec_child", "status": "MEMBER_STATUS_DONE", "summary": "found 3 crates" } } }
+```
 
 ## Errors of a failed turn
 
@@ -217,6 +280,21 @@ Answer with
 `{permission: {allowed, persist}}` or `{question: {answer}}` /
 `{question: {rejected: true}}`. The response's `applied` is `false` when
 the request was already resolved (idempotent replay).
+
+A permission `Interaction` has `title` `"<action> <resource>"` and a
+`payload` object a prompt can render:
+
+| Key | Value |
+| --- | --- |
+| `action` | permission action (`bash`, `edit`, `read`, `tool`, ...) |
+| `resource` | the pattern being decided (the command, the path, the tool name) |
+| `always` | patterns an "always" answer (`persist: true`) saves |
+| `messageId`, `callId` | the assistant message and tool call that asked (when correlated) |
+| `tool` | the tool name of that call |
+| `input` | that call's arguments object as recorded on its tool part (`command` for bash; the path and old/new text or patch for edit tools). Numbers arrive as doubles (`Struct`). |
+
+`callId` matches the `ToolCallPart.callId` of the waiting tool card. The
+payload exposes only what the transcript's tool part already holds.
 
 ## Permission modes
 
