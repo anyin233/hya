@@ -11,9 +11,11 @@ a browser with xterm.js. It has two jobs:
   WebUI ship as one frontend.
 
 The host is terminal-program agnostic: it runs one fixed command per browser
-connection. It pairs with the Bun/OpenTUI frontend (`packages/hya-tui`). Until
-that frontend lands in this repository, the test suite exercises an OpenTUI
-probe fixture (`e2e/fixtures/opentui-probe.ts`). The backend stays unaware of
+connection. It pairs with the Bun/OpenTUI frontend (`packages/hya-tui`,
+[ADR-0019](adr/0019-adopt-opentui-frontend.md)). The suite has two parts. An
+OpenTUI probe fixture (`e2e/fixtures/opentui-probe.ts`) checks the renderer
+itself. `e2e/hya-tui.spec.ts` drives the real TUI against an isolated
+`hya serve` running the offline echo model. The backend stays unaware of
 the host, because rendering never moves into `hya serve` (see
 [ADR-0018](adr/0018-browser-rendered-tui-test-environment.md)).
 
@@ -61,6 +63,14 @@ bun run typecheck
 bun test ./test          # codec + host unit tests (bun run test)
 bunx playwright test     # browser E2E (bun run test:e2e)
 ```
+
+`e2e/hya-tui.spec.ts` needs a built backend. Run
+`cargo build -p hya-backend --bin hya` first, or set `HYA_BIN` to another
+`hya` binary. The `backend` fixture (`e2e/hya.ts`) starts `hya serve` on a
+free port. It uses a throwaway `--db` and a temporary `HOME` and `XDG_*`
+directories, so your own config and keys are never read. `hyaTui(backend)`
+returns the argv that runs `packages/hya-tui` against that backend. The TUI
+dependencies must be installed (`bun install` in `packages/hya-tui`).
 
 Playwright 1.63.0 uses the Chromium 1243 browser build. Run
 `bunx playwright install chromium` once if it is not already cached.
