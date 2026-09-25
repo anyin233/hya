@@ -1,13 +1,15 @@
-// hya-specific fixtures: an isolated `hya serve` on the offline echo model and
-// the argv that runs packages/hya-tui against it. The host itself stays
-// generic; only these specs know about hya.
+// hya-specific fixtures: an isolated `hya serve` on the offline echo model
+// (or, when a spec opts in, a scripted fake OpenAI-compatible model) and the
+// argv that runs packages/hya-tui against it. The host itself stays generic;
+// only these specs know about hya.
 
 import { spawn, type ChildProcess } from "node:child_process"
 import { existsSync } from "node:fs"
-import { mkdir, mkdtemp, rm } from "node:fs/promises"
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
+import { startFakeModel, type FakeModel, type Step } from "./fake-model"
 import { test as base, type Tui } from "./harness"
 
 const repoRoot = fileURLToPath(new URL("../../..", import.meta.url))
@@ -21,7 +23,10 @@ export type Backend = {
   dir: string
 }
 
-async function startBackend(root: string): Promise<{ child: ChildProcess; backend: Backend }> {
+/** Provider/model id the fake model is registered under when `model` is set. */
+export const fakeModelRef = "fake/model"
+
+async function startBackend(root: string, fakeModel: FakeModel | undefined): Promise<{ child: ChildProcess; backend: Backend }> {
   const dir = join(root, "work")
   const env: Record<string, string> = {}
   for (const name of ["home", "config", "data", "state", "cache"]) {
@@ -29,6 +34,27 @@ async function startBackend(root: string): Promise<{ child: ChildProcess; backen
     await mkdir(env[name]!, { recursive: true })
   }
   await mkdir(dir, { recursive: true })
+  if (fakeModel) {
+    const hyaCfgDir = join(env.config!, "hya")
+    await mkdir(join(hyaCfgDir, "auth"), { recursive: true })
+    await writeFile(
+      join(hyaCfgDir, "config.yaml"),
+      `default_model: ${fakeModelRef}\n` +
+        "providers:\n" +
+        "  fake:\n" +
+        "    kind: openai-compatible\n" +
+        `    base_url: ${fakeModel.baseUrl}\n` +
+        "    api_key: e2e-test-key\n" +
+        "    models:\n" +
+        "      - id: model\n" +
+        "mcp: {}\n" +
+        "plugins: {}\n" +
+        "permission:\n" +
+        "  model: default\n" +
+        "  rules: []\n",
+    )
+    await writeFile(join(hyaCfgDir, "auth", "fake.yaml"), "token: e2e-test-key\n")
+  }
   const { HYA_MODEL: _model, ...inherited } = process.env
   const child = spawn(hyaBin, ["serve", "--bind", "127.0.0.1:0", "--db", join(root, "hya.db")], {
     cwd: dir,
@@ -56,13 +82,43 @@ async function startBackend(root: string): Promise<{ child: ChildProcess; backen
   })
 }
 
-export const test = base.extend<{ backend: Backend }>({
-  backend: async ({}, use) => {
+/**
+ * Wraps the step list so the "option" fixture's value is a plain object, not
+ * a bare array. Playwright's fixture-option machinery treats an array *value*
+ * on an "option" fixture as a set of values to parametrize the test across
+ * (one run per array element), which silently drops steps beyond the first;
+ * wrapping sidesteps that.
+ */
+export type FakeModelOption = { steps: Step[] }
+
+type Fixtures = { backend: Backend; fakeModel: FakeModel | undefined }
+type Options = {
+  /**
+   * Scripted steps for a fake OpenAI-compatible model backing the isolated
+   * backend (`test.use({ model: { steps: [textStep("hi")] } })`), consumed by
+   * `startFakeModel`. Unset (the default) keeps the existing offline echo
+   * model, so pre-existing specs are unaffected.
+   */
+  model: FakeModelOption | undefined
+}
+
+export const test = base.extend<Fixtures & Options>({
+  model: [undefined, { option: true }],
+  fakeModel: async ({ model }, use) => {
+    if (!model) {
+      await use(undefined)
+      return
+    }
+    const fake = await startFakeModel(model.steps)
+    await use(fake)
+    await fake.stop()
+  },
+  backend: async ({ fakeModel }, use) => {
     if (!existsSync(hyaBin)) {
       throw new Error(`hya binary not found at ${hyaBin}; run \`cargo build -p hya-backend --bin hya\` or set HYA_BIN`)
     }
     const root = await mkdtemp(join(tmpdir(), "hya-tui-web-"))
-    const { child, backend } = await startBackend(root)
+    const { child, backend } = await startBackend(root, fakeModel)
     await use(backend)
     if (child.exitCode === null) {
       const exited = new Promise((resolve) => child.once("exit", resolve))
@@ -84,6 +140,7 @@ export const test = base.extend<{ backend: Backend }>({
 })
 
 export { expect } from "./harness"
+export { hangStep, httpErrorStep, textStep, toolStep, toolsStep, type FakeModel, type Step } from "./fake-model"
 
 /** argv that runs packages/hya-tui against `backend`. */
 export function hyaTui(backend: Backend): string[] {
