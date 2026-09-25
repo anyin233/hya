@@ -1,16 +1,9 @@
-# 0.37.6
+# 0.37.7
 
-## Provider keys and command completion in OpenTUI
+## OpenTUI startup with an older backend
 
-The OpenTUI frontend now lists saved provider credential names with `/keys`,
-accepts API keys through a concealed `/key set <provider>` or `/login <provider>`
-prompt, and removes credentials with `/key remove <provider>`. It never renders
-or reads back saved key values. Tab completes native and backend slash commands
-plus available session, model, Workflow, provider, interaction, and API route
-arguments.
-
-The `hya.v1` Auth service now includes `ListProviderAuth` over
-`GET /v1/auth`, returning only sorted provider IDs with saved credentials.
-The server writes new and replacement API-key files with owner-only
-permissions on Unix. Restart the backend after a credential change to apply it
-to configured provider routes.
+The OpenTUI frontend now remains usable when a backend predating `GET /v1/auth`
+returns 404 during startup. The `/keys` view states that key listing is
+unavailable until the backend is updated and restarted. Empty or non-JSON HTTP
+error bodies now show the failing method, path, and status instead of a null
+object exception.

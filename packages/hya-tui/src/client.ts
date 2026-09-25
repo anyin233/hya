@@ -134,6 +134,14 @@ export interface ApiCommand {
 
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>
 
+/** An HTTP failure with its status preserved for optional v1 capabilities. */
+export class HttpError extends Error {
+  constructor(readonly status: number, method: string, path: string, detail: string) {
+    super(`${method} ${path}: ${detail}`)
+    this.name = "HttpError"
+  }
+}
+
 /** Parse one command-view request; never allow a remote URL or non-v1 path. */
 export function parseApiCommand(input: string): ApiCommand {
   const match = /^\/api\s+(GET|POST|PUT|PATCH|DELETE)\s+(\/v1\/\S+)(?:\s+([\s\S]+))?$/i.exec(input.trim())
@@ -172,10 +180,24 @@ export class HyaClient {
       await response.body?.cancel()
       throw new Error("This endpoint streams events; open a session to view its live updates")
     }
-    const payload: unknown = await response.json()
+    const bodyText = await response.text()
+    let payload: unknown = null
+    if (bodyText) {
+      try {
+        payload = JSON.parse(bodyText) as unknown
+      } catch {
+        if (response.ok) throw new Error(`${method} ${path}: invalid JSON response`)
+      }
+    }
     if (!response.ok) {
-      const error = payload as { error?: { code?: string; message?: string } }
-      throw new Error(`${error.error?.code ?? response.status}: ${error.error?.message ?? response.statusText}`)
+      const envelope = payload && typeof payload === "object"
+        ? payload as { error?: { code?: string; message?: string } }
+        : null
+      const error = envelope?.error
+      const detail = error?.code
+        ? `${error.code}: ${error.message ?? response.statusText}`
+        : `HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ""}`
+      throw new HttpError(response.status, method, path, detail)
     }
     return payload as T
   }
@@ -250,9 +272,14 @@ export class HyaClient {
     return this.listAll("/v1/commands", "commands")
   }
 
-  async listSavedKeys(): Promise<string[]> {
-    const response = await this.request<{ providerIds?: string[] }>("GET", "/v1/auth")
-    return response.providerIds ?? []
+  async listSavedKeys(): Promise<string[] | null> {
+    try {
+      const response = await this.request<{ providerIds?: string[] }>("GET", "/v1/auth")
+      return response.providerIds ?? []
+    } catch (error) {
+      if (error instanceof HttpError && error.status === 404) return null
+      throw error
+    }
   }
 
   async setProviderKey(provider: string, key: string): Promise<void> {

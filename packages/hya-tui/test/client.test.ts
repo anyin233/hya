@@ -98,3 +98,17 @@ test("lists saved provider names and stores/removes a key without returning its 
     { method: "DELETE", path: "http://127.0.0.1:8080/v1/auth/anthropic", body: undefined },
   ])
 })
+
+test("treats a missing auth list as unavailable and reports empty HTTP errors", async () => {
+  const missing = new HyaClient("http://127.0.0.1:8080", "/work", async () =>
+    new Response(null, { status: 404, statusText: "Not Found" }))
+  expect(await missing.listSavedKeys()).toBeNull()
+
+  const failed = new HyaClient("http://127.0.0.1:8080", "/work", async () =>
+    new Response(null, { status: 503, statusText: "Service Unavailable" }))
+  await expect(failed.bootstrap()).rejects.toThrow("GET /v1/bootstrap: HTTP 503 Service Unavailable")
+
+  const invalid = new HyaClient("http://127.0.0.1:8080", "/work", async () =>
+    new Response("gateway error", { status: 502, statusText: "Bad Gateway" }))
+  await expect(invalid.bootstrap()).rejects.toThrow("GET /v1/bootstrap: HTTP 502 Bad Gateway")
+})

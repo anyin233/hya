@@ -7,6 +7,8 @@ permissions. The screen shows a session list, the selected transcript, and
 pending interactions. Models, Workflows, and saved provider keys have dedicated
 views; the API command view exposes the other HTTP/JSON operations in `hya.v1`.
 Tab completes slash commands using the TUI and server command catalogs.
+If a backend predates the saved-key list endpoint, the main TUI still opens and
+shows that key listing needs a backend restart with an updated binary.
 
 ## Start it
 
@@ -44,6 +46,12 @@ stores the key in its user auth directory; it never sends existing key values
 back to the TUI. Configure that provider's model route in the backend config,
 then restart the backend after adding or removing a key so the route resolves
 the new credentials. OAuth login remains available through the backend CLI.
+
+If `/keys` says key listing is unavailable, restart the backend with hya
+0.37.6 or newer and run the same frontend command again. For example, a
+frontend on `127.0.0.1:22103` can reconnect after restarting the backend on
+that port; sessions and other main views remain available while its older
+backend is running.
 
 ## Commands and keys
 
@@ -116,7 +124,7 @@ string encoded 64-bit values, and the error envelope documented in the
 | `GET /v1/models` | No body | `ListModelsResponse.models: ModelSummary[]` |
 | `GET /v1/providers` | No body | `ListProvidersResponse.providers: ProviderSummary[]` for key suggestions. |
 | `GET /v1/commands` | No body | `ListCommandsResponse.commands: CommandSummary[]` for slash completion. |
-| `GET /v1/auth` | No body | `ListProviderAuthResponse.providerIds: string[]` (saved provider IDs only; empty field omitted). |
+| `GET /v1/auth` | No body | `ListProviderAuthResponse.providerIds: string[]` (saved provider IDs only; empty field omitted). A 404 marks key listing unavailable without blocking startup. |
 | `PUT /v1/auth/{provider_id}` | `{apiKey: string}` | `SetProviderAuthResponse.status: AuthStatus`; key value is sent only to the backend. |
 | `DELETE /v1/auth/{provider_id}` | No body | `RemoveProviderAuthResponse` (empty). |
 | `GET /v1/workflows` | No body | `ListWorkflowsResponse.workflows: WorkflowSummary[]` |
@@ -130,6 +138,9 @@ SSE deltas. List requests follow the server's `page.nextCursor` using the
 names-only list. The generic `/api` command sends the supplied JSON unchanged to
 the named `/v1` route; its full request and response schemas are in the
 [generated API reference](protocol/api-reference.md).
+For non-2xx responses with an empty or invalid JSON body, the frontend reports
+`METHOD /v1/path: HTTP <status> <status text>`; a structured error envelope
+continues to show its code and message.
 
 ## Verify locally
 

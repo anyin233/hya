@@ -134,6 +134,7 @@ async function main(): Promise<void> {
   let models: ModelSummary[] = []
   let providers: ProviderSummary[] = []
   let savedKeys: string[] = []
+  let savedKeysAvailable = true
   let backendCommands: CommandSummary[] = []
   let workflows: WorkflowSummary[] = []
   let workflowState: Record<string, unknown> | undefined
@@ -197,7 +198,9 @@ async function main(): Promise<void> {
         break
       case "keys": {
         const ids = [...new Set([...providers.map((provider) => provider.id), ...savedKeys])].sort()
-        mainText.content = ids.length
+        mainText.content = !savedKeysAvailable
+          ? "Key listing is unavailable on this backend. Restart with hya 0.37.6 or newer."
+          : ids.length
           ? ids.map((id) => `${savedKeys.includes(id) ? "● saved" : "○ no saved key"}  ${id}`).join("\n")
           : "No providers or saved keys. Use /key set <provider> to add one."
         break
@@ -217,7 +220,8 @@ async function main(): Promise<void> {
     models = modelRows
     workflows = workflowRows
     providers = providerRows
-    savedKeys = keyRows
+    savedKeysAvailable = keyRows !== null
+    savedKeys = keyRows ?? []
     backendCommands = commandRows
     if (selected) selected = sessions.find((row) => row.id === selected?.id) ?? selected
     repaint()
@@ -518,7 +522,9 @@ async function main(): Promise<void> {
     interactions = bootstrap.interactions ?? []
     await refresh()
     if (sessions[0]) await openSession(sessions[0].id)
-    showStatus(`Connected to hya ${bootstrap.location?.version ?? ""} · /help for commands`)
+    showStatus(savedKeysAvailable
+      ? `Connected to hya ${bootstrap.location?.version ?? ""} · /help for commands`
+      : `Connected to hya ${bootstrap.location?.version ?? ""} · key listing needs backend 0.37.6+`)
   } catch (error) {
     showStatus(`Connection failed: ${String(error)} · start hya-backend serve`)
     view = "help"
