@@ -356,15 +356,50 @@ call never returns the same news twice:
 | Nothing new before the deadline | `woke_by: timeout` (`timeout_secs: 0`: the current state at once) |
 
 When several apply at one evaluation the order is `members`, `mail`,
-`stalled`, `nothing_to_wait_for`, `timeout`. The result is
-`{title, output, metadata}` where `metadata` is:
+`stalled`, `nothing_to_wait_for`, `timeout`.
+
+**Result shape and budget.** The result is `{title, output, metadata}`, and
+the wait budgets it itself: the whole envelope, serialized, stays within
+`WAIT_RESULT_BUDGET` = 4500 characters, under the generic 5000-character tool
+output cap, so the cap never cuts it and `metadata` always arrives intact.
+`output` always starts with a compact header, then the previews:
+
+```text
+Subagents finished.
+- main/hya-implementer-exusiai [reported] done
+- main/scout-suzuran [already reported] done
+Still running: main/hya-reviewer-texas
+1 new mail message(s), now marked read (history: read channel://<id>?last=N).
+
+Report from main/hya-implementer-exusiai (done):
+Implemented the parser …
+[… 2693 more chars; full text: read channel://DM-rgli51cb]
+
+Report from main/scout-suzuran (done):
+Entry points: src/cli.rs:12, src/lib.rs:40
+
+Mail from main/hya-reviewer-texas @DM-k2m9x0qa:
+Found two issues …
+```
+
+The header has the reason it woke, one line per finished/already-finished
+target (handle, state, outcome), idle targets, the still-running handles, and
+the new-mail count. Every report (or archive note) and mail body then gets a
+preview. Short bodies are shown whole, and the budget left over is shared
+equally by the longer ones. A cut preview ends with the omitted size and,
+when the caller can read the full text, `read channel://<DM id>`. That is the
+parent's DM with the member, where the report mail lives, or the channel the
+mail came on. No pointer is printed when there is no such channel (for
+example, a grandchild's report mailed to its own parent).
+
+`metadata` carries the structure without the bodies:
 
 ```json
 {"woke_by": "members", "waited_ms": 5210,
- "finished": [{"handle": "main/hya-worker-exusiai", "session": "hysec_…", "state": "reported", "outcome": "done", "report": "…"}],
- "already_finished": [{"handle": "main/scout-suzuran", "session": "hysec_…", "state": "reported", "outcome": "done", "report": "…"}],
- "running":  [{"handle": "main/hya-worker-texas", "session": "hysec_…", "state": "working"}],
- "mail": []}
+ "finished": [{"handle": "main/hya-implementer-exusiai", "session": "hysec_…", "state": "reported", "outcome": "done", "channel": "DM-rgli51cb", "report_chars": 3028, "report_truncated": true}],
+ "already_finished": [{"handle": "main/scout-suzuran", "session": "hysec_…", "state": "reported", "outcome": "done", "channel": "DM-x81ka0ld", "report_chars": 44, "report_truncated": false}],
+ "running":  [{"handle": "main/hya-reviewer-texas", "session": "hysec_…", "state": "working"}],
+ "mail": [{"from": "main/hya-reviewer-texas", "channel": "DM-k2m9x0qa", "chars": 212}]}
 ```
 
 `woke_by` is `members`, `mail`, `stalled`, `timeout`, or `nothing_to_wait_for`
@@ -372,9 +407,13 @@ When several apply at one evaluation the order is `members`, `mail`,
 finished; a subagent with the mail-aware wait and no subagents instead waits
 for mail). `state` is `reported` or `archived` (in `finished` /
 `already_finished`) and `working` or `idle` (in `running`); `outcome` is
-`done`/`failed` for a report and `cancelled` for an archive; `report` carries
-the report or the archive note (≤ 600 chars) and is omitted otherwise — a
-working or idle member's in-progress text is never surfaced as a report.
+`done`/`failed` for a report and `cancelled` for an archive. `report_chars`
+and `report_truncated` describe the report or archive note (the output shows
+its preview) and are omitted when there is none — a working or idle member's
+in-progress text is never surfaced as a report. `channel` is the DM holding
+the report, present only when the caller is the target's parent. A mail
+entry's `chars` is the length of its body as received (at most 600, the
+`[NEW MAIL]` bound).
 `already_finished` and `mail` are omitted when empty. The wait runs inside the
 caller's turn and is woken through the engine bus (team-lifecycle events on the
 root or caller log), never by a resident wake of the caller — that would queue
@@ -391,9 +430,10 @@ hya/extended-tools` in its exposure policy, see
 [Tool-family presets](../base-tools.md#overrides)) and also returns when new
 mail reaches the caller — from a subagent, the parent, or the harness
 (`LEADER FAILED` wrap-up notices included) — with `woke_by: mail` and
-`mail: [{from, channel?, preview}]` (`preview` is the body, bounded to 600
-chars like the `[NEW MAIL]` notice; history stays readable with
-`read channel://<id>`). Mail is **new** only past the caller's durable inbox
+each message previewed in `output` (the body is bounded to 600 chars like the
+`[NEW MAIL]` notice, then to the shared budget; history stays readable with
+`read channel://<id>`) and listed in `metadata.mail` as `{from, channel?,
+chars}`. Mail is **new** only past the caller's durable inbox
 cursor — the same `MailConsumed` cursor in-turn steering and resident wakes
 use — and a wait that returns commits the cursor through the mail it
 accounted for: the channel-aware wait through the whole inbox, the

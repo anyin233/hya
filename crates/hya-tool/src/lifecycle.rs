@@ -251,11 +251,23 @@ pub struct WaitMember {
     /// `done` / `failed` for a report, `cancelled` for an archive, when known.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub outcome: Option<String>,
-    /// The report text (reported) or the archive note, bounded. Never an idle
-    /// or working member's in-progress text.
+    /// The full report text (reported) or the archive note. Never an idle or
+    /// working member's in-progress text. The tool result shows a bounded
+    /// preview of it (see [`WaitOutcome::to_tool_result`]).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub report: Option<String>,
+    /// The DM channel id between the caller and this member, when the
+    /// caller is its parent: the report mail lives there, so the full text
+    /// stays readable with `read channel://<id>`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub channel: Option<String>,
 }
+
+/// Most serialized characters one `wait` tool result may take — the whole
+/// `{title, output, metadata}` envelope as the generic output cap measures it
+/// — kept well under [`crate::MAX_TOOL_OUTPUT_CHARS`] so the cap never
+/// replaces the result with its tail.
+pub const WAIT_RESULT_BUDGET: usize = 4500;
 
 /// One new mail message returned by a channel-aware `wait`. Each message is
 /// returned once: the wait advances the caller's durable inbox cursor
@@ -293,10 +305,87 @@ pub struct WaitOutcome {
     pub waited_ms: u64,
 }
 
+/// One report or mail body shown in the preview section.
+struct PreviewBody<'a> {
+    /// The member whose report this is (`None` for mail).
+    member: Option<&'a str>,
+    heading: String,
+    text: &'a str,
+    /// `read channel://<id>` target holding the full text, if readable.
+    channel: Option<&'a str>,
+}
+
 impl WaitOutcome {
-    /// Tool result JSON: `{title, output, metadata}` with a readable summary.
+    /// Tool result JSON: `{title, output, metadata}`.
+    ///
+    /// Self-budgeted to [`WAIT_RESULT_BUDGET`] serialized characters so the
+    /// generic output cap never cuts it. `output` leads with a compact header
+    /// — why the wait woke, one line per target (handle, state, outcome),
+    /// the still-running handles, and the new-mail count — then bounded
+    /// previews of every report and mail body, sharing what is left of the
+    /// budget; a cut preview ends with where the full text is readable
+    /// (`read channel://<DM id>`) when the caller can read it. `metadata`
+    /// carries the structured outcome without the bodies (`report_chars` and
+    /// `report_truncated` instead of the text).
     #[must_use]
     pub fn to_tool_result(&self) -> Value {
+        let bodies = self.preview_bodies();
+        let lengths: Vec<usize> = bodies
+            .iter()
+            .map(|body| body.text.chars().count())
+            .collect();
+        let size = |result: &Value| result.to_string().chars().count();
+        // Everything but the body text (header, headings, pointers, metadata).
+        let bare = size(&self.render(&bodies, &vec![0; bodies.len()]));
+        let mut budget = WAIT_RESULT_BUDGET
+            .saturating_sub(bare)
+            .min(lengths.iter().sum());
+        loop {
+            let result = self.render(&bodies, &water_fill(&lengths, budget));
+            // JSON escaping can grow the text past its char count: shrink
+            // until the whole envelope fits.
+            if budget == 0 || size(&result) <= WAIT_RESULT_BUDGET {
+                return result;
+            }
+            budget = budget * 9 / 10;
+        }
+    }
+
+    fn preview_bodies(&self) -> Vec<PreviewBody<'_>> {
+        let mut bodies = Vec::new();
+        for member in self.finished.iter().chain(&self.already_finished) {
+            if let Some(report) = &member.report {
+                let heading = match (&member.outcome, member.state) {
+                    (Some(outcome), WaitMemberState::Reported) => {
+                        format!("Report from {} ({outcome}):", member.handle)
+                    }
+                    (_, WaitMemberState::Reported) => format!("Report from {}:", member.handle),
+                    _ => format!("Archive note for {}:", member.handle),
+                };
+                bodies.push(PreviewBody {
+                    member: Some(member.handle.as_str()),
+                    heading,
+                    text: report.as_str(),
+                    channel: member.channel.as_deref(),
+                });
+            }
+        }
+        for mail in &self.mail {
+            let channel = mail
+                .channel
+                .as_ref()
+                .map_or(String::new(), |id| format!(" @{id}"));
+            bodies.push(PreviewBody {
+                member: None,
+                heading: format!("Mail from {}{channel}:", mail.from),
+                text: mail.preview.as_str(),
+                channel: mail.channel.as_deref(),
+            });
+        }
+        bodies
+    }
+
+    fn render(&self, bodies: &[PreviewBody<'_>], shown: &[usize]) -> Value {
         let mut lines = Vec::new();
         let headline = match self.woke_by {
             WaitWake::Members => "Subagents finished.",
@@ -317,9 +406,6 @@ impl WaitOutcome {
             let mut line = format!("- {} [{tag}]", member.handle);
             if let Some(outcome) = &member.outcome {
                 line.push_str(&format!(" {outcome}"));
-            }
-            if let Some(report) = &member.report {
-                line.push_str(&format!(": {report}"));
             }
             line
         };
@@ -347,19 +433,81 @@ impl WaitOutcome {
         if !working.is_empty() {
             lines.push(format!("Still running: {}", working.join(", ")));
         }
-        for mail in &self.mail {
-            let channel = mail
-                .channel
-                .as_ref()
-                .map_or(String::new(), |id| format!(" @{id}"));
+        if !self.mail.is_empty() {
             lines.push(format!(
-                "- mail from {}{channel}: {}",
-                mail.from, mail.preview
+                "{} new mail message(s), now marked read (history: read channel://<id>?last=N).",
+                self.mail.len()
             ));
         }
+        for (body, &limit) in bodies.iter().zip(shown) {
+            lines.push(String::new());
+            lines.push(body.heading.clone());
+            let total = body.text.chars().count();
+            if limit >= total {
+                lines.push(body.text.to_string());
+                continue;
+            }
+            let cut: String = body.text.chars().take(limit).collect();
+            let omitted = total - limit;
+            let pointer = body.channel.map_or(String::new(), |id| {
+                format!("; full text: read channel://{id}")
+            });
+            lines.push(format!("{cut}\n[… {omitted} more chars{pointer}]"));
+        }
+
+        let member_meta = |member: &WaitMember| {
+            let mut meta = json!({
+                "handle": member.handle,
+                "session": member.session,
+                "state": member.state,
+            });
+            if let Some(outcome) = &member.outcome {
+                meta["outcome"] = json!(outcome);
+            }
+            if let Some(channel) = &member.channel {
+                meta["channel"] = json!(channel);
+            }
+            if let Some(report) = &member.report {
+                let chars = report.chars().count();
+                let shown = bodies
+                    .iter()
+                    .zip(shown)
+                    .find(|(body, _)| body.member == Some(member.handle.as_str()))
+                    .map_or(chars, |(_, shown)| *shown);
+                meta["report_chars"] = json!(chars);
+                meta["report_truncated"] = json!(shown < chars);
+            }
+            meta
+        };
+        let mut metadata = json!({
+            "woke_by": self.woke_by,
+            "finished": self.finished.iter().map(member_meta).collect::<Vec<_>>(),
+            "running": self.running.iter().map(member_meta).collect::<Vec<_>>(),
+            "waited_ms": self.waited_ms,
+        });
+        if !self.already_finished.is_empty() {
+            metadata["already_finished"] = json!(
+                self.already_finished
+                    .iter()
+                    .map(member_meta)
+                    .collect::<Vec<_>>()
+            );
+        }
         if !self.mail.is_empty() {
-            lines.push(
-                "(this mail is now marked read; history: read channel://<id>?last=N)".to_string(),
+            metadata["mail"] = json!(
+                self.mail
+                    .iter()
+                    .map(|mail| {
+                        let mut meta = json!({
+                            "from": mail.from,
+                            "chars": mail.preview.chars().count(),
+                        });
+                        if let Some(channel) = &mail.channel {
+                            meta["channel"] = json!(channel);
+                        }
+                        meta
+                    })
+                    .collect::<Vec<_>>()
             );
         }
         json!({
@@ -371,9 +519,24 @@ impl WaitOutcome {
                 WaitWake::NothingToWaitFor => "nothing to wait for",
             }),
             "output": lines.join("\n"),
-            "metadata": self,
+            "metadata": metadata,
         })
     }
+}
+
+/// Split `budget` characters across bodies of `lengths`: short bodies are
+/// shown whole, and what they leave is shared equally by the longer ones.
+fn water_fill(lengths: &[usize], budget: usize) -> Vec<usize> {
+    let mut shown = vec![0; lengths.len()];
+    let mut order: Vec<usize> = (0..lengths.len()).collect();
+    order.sort_by_key(|&index| lengths[index]);
+    let mut remaining = budget;
+    for (position, &index) in order.iter().enumerate() {
+        let share = remaining / (order.len() - position);
+        shown[index] = lengths[index].min(share);
+        remaining -= shown[index];
+    }
+    shown
 }
 
 fn state_label(state: WaitMemberState) -> &'static str {
@@ -787,7 +950,127 @@ mod tests {
             state,
             outcome: (state == WaitMemberState::Reported).then(|| "done".to_string()),
             report: report.map(str::to_string),
+            channel: None,
         }
+    }
+
+    /// Run 6 (seq 173427): four reports overflowed the generic cap, which
+    /// kept only the tail. The rendered result budgets itself: the header
+    /// (why it woke, every target, the mail count) always leads, every report
+    /// gets a bounded preview ending in a readable pointer, and the whole
+    /// envelope fits under the cap so its metadata survives intact.
+    #[test]
+    fn a_wait_with_four_long_reports_keeps_its_header_and_metadata_under_the_cap() {
+        let report = |n: usize| format!("REPORT_{n}_START {} REPORT_{n}_END", "x".repeat(3000));
+        let finished: Vec<WaitMember> = (1..=4)
+            .map(|n| WaitMember {
+                channel: Some(format!("DM-0000000{n}")),
+                ..member(
+                    &format!("main/dev-worker-{n}"),
+                    WaitMemberState::Reported,
+                    Some(&report(n)),
+                )
+            })
+            .collect();
+        let outcome = WaitOutcome {
+            woke_by: WaitWake::Members,
+            finished,
+            already_finished: vec![member(
+                "main/scout-a",
+                WaitMemberState::Reported,
+                Some("SHORT_REPORT"),
+            )],
+            running: vec![member("main/reviewer-b", WaitMemberState::Working, None)],
+            mail: vec![WaitMail {
+                from: "main/reviewer-b".to_string(),
+                channel: Some("DM-0000000b".to_string()),
+                preview: "m".repeat(600),
+            }],
+            waited_ms: 7,
+        };
+        let result = outcome.to_tool_result();
+        let serialized = result.to_string().chars().count();
+        assert!(
+            serialized <= WAIT_RESULT_BUDGET && WAIT_RESULT_BUDGET < crate::MAX_TOOL_OUTPUT_CHARS,
+            "{serialized} chars"
+        );
+        assert_eq!(
+            crate::cap_tool_output(result.clone()),
+            result,
+            "the generic cap leaves the wait result untouched"
+        );
+
+        let output = result["output"].as_str().unwrap();
+        assert!(output.starts_with("Subagents finished.\n"), "{output}");
+        let header_end = output.find("REPORT_1_START").unwrap();
+        let header = &output[..header_end];
+        for n in 1..=4 {
+            assert!(
+                header.contains(&format!("- main/dev-worker-{n} [reported] done")),
+                "{header}"
+            );
+            assert!(output.contains(&format!("REPORT_{n}_START")), "{output}");
+            assert!(
+                output.contains(&format!("read channel://DM-0000000{n}")),
+                "every truncated preview names where the full report is: {output}"
+            );
+        }
+        assert!(header.contains("- main/scout-a [already reported] done"));
+        assert!(
+            header.contains("Still running: main/reviewer-b"),
+            "{header}"
+        );
+        assert!(header.contains("1 new mail message"), "{header}");
+        assert!(
+            output.contains("SHORT_REPORT"),
+            "a short report is shown whole"
+        );
+        assert!(
+            !output.contains("REPORT_1_END"),
+            "long reports are previews"
+        );
+
+        let metadata = &result["metadata"];
+        assert_eq!(metadata["woke_by"], "members");
+        assert_eq!(metadata["waited_ms"], 7);
+        assert_eq!(metadata["finished"].as_array().unwrap().len(), 4);
+        let first = &metadata["finished"][0];
+        assert_eq!(first["handle"], "main/dev-worker-1");
+        assert_eq!(first["state"], "reported");
+        assert_eq!(first["outcome"], "done");
+        assert_eq!(first["channel"], "DM-00000001");
+        assert_eq!(first["report_chars"], report(1).chars().count());
+        assert_eq!(first["report_truncated"], true);
+        assert!(
+            first.get("report").is_none(),
+            "report bodies live in output"
+        );
+        assert_eq!(metadata["already_finished"][0]["report_truncated"], false);
+        assert_eq!(metadata["running"][0]["state"], "working");
+        assert_eq!(metadata["mail"][0]["from"], "main/reviewer-b");
+        assert_eq!(metadata["mail"][0]["channel"], "DM-0000000b");
+    }
+
+    /// Without a DM channel the preview does not invent a pointer.
+    #[test]
+    fn a_truncated_report_without_a_readable_channel_names_no_pointer() {
+        let outcome = WaitOutcome {
+            woke_by: WaitWake::Members,
+            finished: vec![member(
+                "main/deep-a",
+                WaitMemberState::Reported,
+                Some(&"y".repeat(9000)),
+            )],
+            already_finished: Vec::new(),
+            running: Vec::new(),
+            mail: Vec::new(),
+            waited_ms: 0,
+        };
+        let result = outcome.to_tool_result();
+        assert!(result.to_string().chars().count() <= WAIT_RESULT_BUDGET);
+        let output = result["output"].as_str().unwrap();
+        assert!(!output.contains("channel://"), "{output}");
+        assert!(output.contains("more chars"), "{output}");
     }
 
     #[test]
@@ -804,7 +1087,11 @@ mod tests {
         let output = already["output"].as_str().unwrap();
         assert!(output.contains("every target already finished"), "{output}");
         assert!(
-            output.contains("- main/a-1 [already reported] done: A"),
+            output.contains("- main/a-1 [already reported] done\n"),
+            "{output}"
+        );
+        assert!(
+            output.contains("Report from main/a-1 (done):\nA"),
             "{output}"
         );
         assert_eq!(already["metadata"]["woke_by"], "nothing_to_wait_for");

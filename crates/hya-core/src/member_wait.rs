@@ -48,13 +48,14 @@ use hya_proto::{
 };
 use hya_tool::{WaitMail, WaitMember, WaitMemberState, WaitMode, WaitOutcome, WaitSpec, WaitWake};
 
-use crate::engine::SessionEngine;
+use crate::engine::{SessionEngine, dm_channel_between};
 use crate::error::CoreError;
 use crate::resident::{ResidentSupervisor, resolve_member_target};
 
 /// Backstop re-evaluation interval when no bus event arrives.
 const RECHECK: Duration = Duration::from_secs(5);
-/// Bound on report/mail bodies in the outcome (the steer notice's bound).
+/// Bound on mail bodies in the outcome (the steer notice's bound). Reports
+/// are passed whole; the tool result budgets their previews.
 const PREVIEW_CHARS: usize = 600;
 
 /// One waited-on subagent and where it stood when the call began.
@@ -132,7 +133,15 @@ pub(crate) async fn wait_for_members(
     loop {
         // Shared cached fold: each wake folds only the root's new events.
         let projection = engine.read_projection_shared(root).await?;
-        let standing = evaluate(engine, supervisor, root, &projection, &targets).await;
+        let standing = evaluate(
+            engine,
+            supervisor,
+            root,
+            &projection,
+            &caller_path,
+            &targets,
+        )
+        .await;
         let inbox = scan_inbox(
             supervisor,
             root,
@@ -279,6 +288,7 @@ async fn evaluate(
     supervisor: &ResidentSupervisor,
     root: SessionId,
     projection: &Projection,
+    caller_path: &str,
     targets: &[Target],
 ) -> Standing {
     let mut standing = Standing::default();
@@ -315,6 +325,7 @@ async fn evaluate(
                 state,
                 outcome: None,
                 report: None,
+                channel: None,
             });
             continue;
         }
@@ -360,10 +371,17 @@ async fn evaluate(
             session: target.session,
             state,
             outcome,
+            // The full text: the tool result budgets its own previews.
             report: full
                 .as_deref()
-                .filter(|text| !text.trim().is_empty())
-                .map(preview),
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+                .map(str::to_string),
+            // The report mail sits on the parent's DM with the member; only
+            // the parent can read it there.
+            channel: (scope::parent_path(&target.handle) == Some(caller_path))
+                .then(|| dm_channel_between(projection, &target.handle, caller_path))
+                .flatten(),
         };
         let fresh = !target.done_at_start
             || handoff_generation(engine, target.session).await > target.generation;

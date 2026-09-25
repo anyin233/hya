@@ -267,6 +267,11 @@ async fn wait_returns_when_a_member_reports_inside_the_lead_turn_with_mail(mail:
     assert_eq!(member.state, WaitMemberState::Reported, "{outcome:?}");
     assert_eq!(member.outcome.as_deref(), Some("done"));
     assert_eq!(member.report.as_deref(), Some("UNIT_SHIPPED"));
+    assert_eq!(
+        member.channel,
+        Some(dm_channel(&team, &handle).await),
+        "the full report stays readable on the parent's DM with the member"
+    );
     assert!(
         outcome.mail.is_empty(),
         "the report mail is the member's finish, not separate mail: {outcome:?}"
