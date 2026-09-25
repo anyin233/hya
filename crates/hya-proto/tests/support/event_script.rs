@@ -101,7 +101,7 @@ impl Script {
 
     fn step(&mut self) -> Event {
         let session = self.session;
-        match self.rng.below(22) {
+        match self.rng.below(23) {
             0 | 1 => {
                 let message = MessageId::from_uuid(self.uuid());
                 self.messages.push((message, Vec::new()));
@@ -339,6 +339,12 @@ impl Script {
                     child: None,
                 }
             }
+            22 => Event::Error {
+                session: Some(session),
+                code: "provider_error".to_string(),
+                message: "http status 400: rejected".to_string(),
+                failed_message: self.message().map(|(message, _)| message),
+            },
             21 => Event::SessionPermissionModeSet {
                 session,
                 mode: ["manual", "yolo", "acme/approver/careful"][self.rng.below(3)].to_string(),

@@ -1889,6 +1889,12 @@
           },
           "session_deleted": {
             "$ref": "#/components/schemas/SessionDeleted"
+          },
+          "part_replaced": {
+            "$ref": "#/components/schemas/PartReplaced"
+          },
+          "error_reported": {
+            "$ref": "#/components/schemas/ErrorReported"
           }
         }
       },
@@ -1984,7 +1990,7 @@
       },
       "PartAppended": {
         "type": "object",
-        "description": "Streaming delta appended to a part.",
+        "description": "Streaming delta appended to a part. Assistant text deltas are live-only (`seq = 0`); reasoning and legacy text deltas are durable.",
         "properties": {
           "message": {
             "type": "string"
@@ -2005,6 +2011,36 @@
             "type": "string"
           },
           "part": {
+            "type": "string"
+          }
+        }
+      },
+      "PartReplaced": {
+        "type": "object",
+        "description": "A text or reasoning part's text was replaced wholesale. Clients set the part's text to `text` (not append); it supersedes any live deltas they accumulated for the same part id.",
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "part": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          }
+        }
+      },
+      "ErrorReported": {
+        "type": "object",
+        "description": "A runtime error was recorded.",
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "error_message": {
             "type": "string"
           }
         }
@@ -2836,6 +2872,21 @@
           },
           "finish_cause": {
             "$ref": "#/components/schemas/FinishCause"
+          },
+          "error": {
+            "$ref": "#/components/schemas/MessageError"
+          }
+        }
+      },
+      "MessageError": {
+        "type": "object",
+        "description": "Recorded failure of the turn behind an assistant message.",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
           }
         }
       },
@@ -3766,7 +3817,7 @@
       },
       "TurnInfo": {
         "type": "object",
-        "description": "Projection snapshot of one admitted turn. The turn id is the id of the assistant message the engine drives for that turn.",
+        "description": "Projection snapshot of one admitted turn. For prompt and command turns the turn id is the id of the admitted **user** message; the assistant message(s) the engine drives for it arrive on the event stream (`messageStarted` with `ROLE_ASSISTANT`). For shell turns it is the id of the synthetic assistant message. Slash commands intercepted by workflow features return an empty id.",
         "properties": {
           "id": {
             "type": "string"

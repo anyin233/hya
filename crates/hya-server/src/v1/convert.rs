@@ -171,6 +171,10 @@ pub(crate) fn message(message: &MessageProjection) -> pb::MessageInfo {
         time_created: None,
         time_updated: None,
         finish_cause: finish_cause(message.cause),
+        error: message.error.as_ref().map(|error| pb::MessageError {
+            code: error.code.clone(),
+            message: error.message.clone(),
+        }),
     }
 }
 
@@ -227,7 +231,10 @@ fn part(part: &PartProjection) -> Option<pb::PartInfo> {
 /// Project one envelope onto the curated wire event stream.
 ///
 /// Returns `None` for internal-only events that the v1 surface does not
-/// expose. Both transports serialize the result identically.
+/// expose. Both transports serialize the result identically. Live-only
+/// envelopes (`seq == 0`, the assistant text of an in-flight round) map the
+/// same way and keep `seq: 0`; their ids match the durable events the round
+/// later records.
 pub(crate) fn stream_event(envelope: &Envelope) -> Option<pb::StreamEvent> {
     use hya_api::v1::stream_event::Payload as P;
     let session = envelope
@@ -306,6 +313,22 @@ pub(crate) fn stream_event(envelope: &Envelope) -> Option<pb::StreamEvent> {
             part: part.to_string(),
             text_delta: delta.clone(),
         }),
+        Event::TextReplace {
+            message,
+            part,
+            text,
+            ..
+        }
+        | Event::ReasoningReplace {
+            message,
+            part,
+            text,
+            ..
+        } => P::PartReplaced(pb::PartReplaced {
+            message: message.to_string(),
+            part: part.to_string(),
+            text: text.clone(),
+        }),
         Event::TextEnd { message, part, .. } => P::PartCompleted(pb::PartCompleted {
             message: message.to_string(),
             part: part.to_string(),
@@ -355,6 +378,19 @@ pub(crate) fn stream_event(envelope: &Envelope) -> Option<pb::StreamEvent> {
             call_id: String::new(),
             state: pb::ToolExecutionState::Error as i32,
             error_code: "tool_error".to_owned(),
+        }),
+        Event::Error {
+            code,
+            message: text,
+            failed_message,
+            ..
+        } => P::ErrorReported(pb::ErrorReported {
+            message: failed_message
+                .as_ref()
+                .map(ToString::to_string)
+                .unwrap_or_default(),
+            code: code.clone(),
+            error_message: text.clone(),
         }),
         Event::ContextCompacted { strategy, .. } => P::CompactionApplied(pb::CompactionApplied {
             until_seq: envelope.seq.0,

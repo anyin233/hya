@@ -916,13 +916,7 @@ impl SessionEngine {
                     // A provider/tool error after MessageStarted must still close the
                     // assistant message, else clients wait forever for a finish event.
                     let _ = self
-                        .close_turn_message(
-                            actor_claim,
-                            session,
-                            message,
-                            FinishReason::Error,
-                            super::turn_end::error_cause(error),
-                        )
+                        .fail_turn_message(actor_claim, session, message, error)
                         .await;
                 }
                 Ok(_) => {}

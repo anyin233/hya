@@ -166,6 +166,19 @@ pub struct MessageProjection {
     pub agents: Vec<serde_json::Value>,
     /// Ordered content parts (text / reasoning / tool only — no media).
     pub parts: Vec<PartProjection>,
+    /// Why the turn driving this message failed, folded from an `Error`
+    /// event naming it in `failed_message`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<MessageError>,
+}
+
+/// Recorded failure of the turn that drove an assistant message.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MessageError {
+    /// Machine-readable code (for example `provider_error`).
+    pub code: String,
+    /// Human-readable error text as the engine recorded it.
+    pub message: String,
 }
 
 /// Projected content part (wire tag `kind`). No media variant — media does not survive fold.
@@ -652,7 +665,7 @@ pub struct HandoffProjection {
 /// different projection, or when `Projection` (or anything it contains)
 /// changes shape; the `reducer_fingerprint_pins_the_version` test fails until
 /// the bump is recorded.
-pub const PROJECTION_REDUCER_VERSION: u32 = 2;
+pub const PROJECTION_REDUCER_VERSION: u32 = 3;
 
 /// Durable snapshot encoding: the wire projection plus replay-only reducer
 /// state the wire form deliberately omits.
@@ -1002,6 +1015,7 @@ impl Projection {
                         files: Vec::new(),
                         agents: Vec::new(),
                         parts: Vec::new(),
+                        error: None,
                     });
                 }
             }
@@ -1522,7 +1536,10 @@ impl Projection {
             | Event::CommandExecuted { .. }
             | Event::StepStarted { .. }
             | Event::StepFinished { .. }
-            | Event::Error { .. }
+            | Event::Error {
+                failed_message: None,
+                ..
+            }
             // Observability record, not a state transition: the folded messages
             // stay in the log and the marker System message carries the output.
             | Event::ContextCompacted { .. }
@@ -1530,6 +1547,19 @@ impl Projection {
             | Event::Unknown => {}
             Event::SessionForked { source, .. } => {
                 self.session.forked_from = Some(*source);
+            }
+            Event::Error {
+                failed_message: Some(message),
+                code,
+                message: text,
+                ..
+            } => {
+                if let Some(m) = self.message_mut(*message) {
+                    m.error = Some(MessageError {
+                        code: code.clone(),
+                        message: text.clone(),
+                    });
+                }
             }
             // Billed stays billed: session totals only ever grow.
             Event::UsageRecorded {
@@ -2312,6 +2342,65 @@ mod usage_fold_tests {
             tokens,
             cause: None,
         }
+    }
+
+    #[test]
+    fn a_turn_error_folds_onto_its_message_and_other_errors_do_not() {
+        let session = SessionId::new();
+        let message = MessageId::new();
+        let other = MessageId::new();
+        let log = envs(vec![
+            created(session),
+            started(session, message),
+            started(session, other),
+            Event::Error {
+                session: Some(session),
+                code: "global".to_string(),
+                message: "not tied to a message".to_string(),
+                failed_message: None,
+            },
+            Event::Error {
+                session: Some(session),
+                code: "provider_error".to_string(),
+                message: "http status 400: bad request".to_string(),
+                failed_message: Some(message),
+            },
+            Event::MessageFinished {
+                session,
+                message,
+                role: Role::Assistant,
+                finish: FinishReason::Error,
+                tokens: None,
+                cause: Some(FinishCause::ProviderError),
+            },
+        ]);
+        let projection = Projection::from_events(&log);
+        let failed = &projection.session.messages[0];
+        assert_eq!(
+            failed.error,
+            Some(MessageError {
+                code: "provider_error".to_string(),
+                message: "http status 400: bad request".to_string(),
+            })
+        );
+        assert_eq!(projection.session.messages[1].error, None);
+        // Old logs: the field is absent on the wire and in snapshots.
+        let json = serde_json::to_value(&projection.session.messages[1]).unwrap();
+        assert!(json.get("error").is_none(), "{json}");
+        let legacy: Event = serde_json::from_value(serde_json::json!({
+            "type": "error",
+            "session": session,
+            "code": "x",
+            "message": "y",
+        }))
+        .unwrap();
+        assert!(matches!(
+            legacy,
+            Event::Error {
+                failed_message: None,
+                ..
+            }
+        ));
     }
 
     #[test]

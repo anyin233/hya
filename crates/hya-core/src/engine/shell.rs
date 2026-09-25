@@ -292,16 +292,14 @@ impl SessionEngine {
         };
         if let Err(error) = &outcome {
             // Never leave the shell turn's message open (no-op when it never started).
-            let (finish, cause) = match error {
-                CoreError::Cancelled => (
-                    FinishReason::Cancelled,
-                    self.turn_gate.cancel_cause(session),
-                ),
-                other => (FinishReason::Error, super::turn_end::error_cause(other)),
+            let _ = match error {
+                CoreError::Cancelled => {
+                    let cause = self.turn_gate.cancel_cause(session);
+                    self.close_turn_message(None, session, message, FinishReason::Cancelled, cause)
+                        .await
+                }
+                other => self.fail_turn_message(None, session, message, other).await,
             };
-            let _ = self
-                .close_turn_message(None, session, message, finish, cause)
-                .await;
         }
         drop(lease);
         outcome

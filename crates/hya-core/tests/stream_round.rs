@@ -263,6 +263,7 @@ async fn forked_reasoning_provider_data_reaches_next_request() {
                     reason: Some("high".to_string()),
                     provider_data: Some(provider_data.clone()),
                 }],
+                error: None,
                 cause: None,
             }],
             ..SessionProjection::default()

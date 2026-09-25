@@ -4043,6 +4043,21 @@ pub struct MessageInfo {
     /// Harness cause of the finish (cancel, shutdown, crash recovery, provider failure).
     #[prost(enumeration = "FinishCause", tag = "10")]
     pub finish_cause: i32,
+    /// Why the turn that drove this assistant message failed; set only when
+    /// the engine recorded an error for it (`finish` is then
+    /// `FINISH_REASON_ERROR`).
+    #[prost(message, optional, tag = "11")]
+    pub error: ::core::option::Option<MessageError>,
+}
+/// Recorded failure of the turn behind an assistant message.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct MessageError {
+    /// Stable machine code (for example `provider_error`).
+    #[prost(string, tag = "1")]
+    pub code: ::prost::alloc::string::String,
+    /// Human-readable error text as the engine recorded it.
+    #[prost(string, tag = "2")]
+    pub message: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListMessagesRequest {
@@ -5655,7 +5670,8 @@ pub struct StreamSessionEventsRequest {
     /// Session identifier to stream.
     #[prost(string, tag = "1")]
     pub session: ::prost::alloc::string::String,
-    /// Emit events after this watermark first, then continue live.
+    /// Skip durable events with `seq` at or below this watermark. Live-only
+    /// frames (`seq = 0`) are always delivered. No history is replayed.
     #[prost(uint64, tag = "2")]
     pub since_seq: u64,
 }
@@ -5664,7 +5680,8 @@ pub struct StreamGlobalEventsRequest {
     /// Directory scope; empty means the process default directory.
     #[prost(string, tag = "1")]
     pub directory: ::prost::alloc::string::String,
-    /// Emit events after this watermark first, then continue live.
+    /// Skip durable events with `seq` at or below this watermark. Live-only
+    /// frames (`seq = 0`) are always delivered. No history is replayed.
     #[prost(uint64, tag = "2")]
     pub since_seq: u64,
 }
@@ -5691,15 +5708,16 @@ pub mod stream_frame {
 /// Typed lag signal replacing the legacy SSE `resync` event name.
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct ResyncFrame {
-    /// Highest sequence number the server guarantees delivered; resume with
-    /// `since_seq = last_seq`.
+    /// The watermark the stream was opened with (`since_seq`); a client that
+    /// tracks its own last applied durable `seq` should replay from that.
     #[prost(uint64, tag = "1")]
     pub last_seq: u64,
 }
 /// One curated projected event from the event log.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct StreamEvent {
-    /// Monotonic sequence number within the session.
+    /// Monotonic sequence number within the session; 0 (omitted in protojson)
+    /// for live-only frames, which `ListEvents` never returns.
     #[prost(uint64, tag = "1")]
     pub seq: u64,
     /// Owning session identifier.
@@ -5711,7 +5729,7 @@ pub struct StreamEvent {
     /// Event payload; exactly one kind is set.
     #[prost(
         oneof = "stream_event::Payload",
-        tags = "4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19"
+        tags = "4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21"
     )]
     pub payload: ::core::option::Option<stream_event::Payload>,
 }
@@ -5768,6 +5786,14 @@ pub mod stream_event {
         /// A session was deleted.
         #[prost(message, tag = "19")]
         SessionDeleted(super::SessionDeleted),
+        /// A text or reasoning part's whole text was set (the durable record of
+        /// a streamed text part, or a plugin rewrite of it).
+        #[prost(message, tag = "20")]
+        PartReplaced(super::PartReplaced),
+        /// A runtime error was recorded; when it names a message, the turn that
+        /// drove that message failed (`MessageInfo.error`).
+        #[prost(message, tag = "21")]
+        ErrorReported(super::ErrorReported),
     }
 }
 /// A session was created.
@@ -5854,7 +5880,8 @@ pub struct PartStarted {
     #[prost(string, tag = "3")]
     pub kind: ::prost::alloc::string::String,
 }
-/// Streaming delta appended to a part.
+/// Streaming delta appended to a part. Assistant text deltas are live-only
+/// (`seq = 0`); reasoning and legacy text deltas are durable.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PartAppended {
     /// Owning message identifier.
@@ -5876,6 +5903,34 @@ pub struct PartCompleted {
     /// Part identifier.
     #[prost(string, tag = "2")]
     pub part: ::prost::alloc::string::String,
+}
+/// A text or reasoning part's text was replaced wholesale. Clients set the
+/// part's text to `text` (not append); it supersedes any live deltas they
+/// accumulated for the same part id.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PartReplaced {
+    /// Owning message identifier.
+    #[prost(string, tag = "1")]
+    pub message: ::prost::alloc::string::String,
+    /// Part identifier.
+    #[prost(string, tag = "2")]
+    pub part: ::prost::alloc::string::String,
+    /// Full text of the part.
+    #[prost(string, tag = "3")]
+    pub text: ::prost::alloc::string::String,
+}
+/// A runtime error was recorded.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ErrorReported {
+    /// Message whose turn failed; empty for errors not tied to a message.
+    #[prost(string, tag = "1")]
+    pub message: ::prost::alloc::string::String,
+    /// Stable machine code (for example `provider_error`).
+    #[prost(string, tag = "2")]
+    pub code: ::prost::alloc::string::String,
+    /// Human-readable error text as the engine recorded it.
+    #[prost(string, tag = "3")]
+    pub error_message: ::prost::alloc::string::String,
 }
 /// A tool call's execution state changed.
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -6075,7 +6130,11 @@ pub mod events_client {
             self.inner.unary(req, path, codec).await
         }
         /// Live stream for one session; server-streaming over gRPC and SSE over
-        /// HTTP. Emits `resync` when the consumer lags and must re-replay.
+        /// HTTP. Delivers durable events and live-only (`seq = 0`) frames as they
+        /// happen; it does not replay history (read `ListEvents` for that). Emits
+        /// `resync` when the consumer lags: frames in the gap (live deltas
+        /// included) are lost, so re-read the projection (`ListMessages`) or
+        /// replay `ListEvents` from the last durable `seq` applied.
         ///
         /// hya.http: GET /v1/sessions/{session}/events/stream
         pub async fn stream_session_events(
@@ -6161,7 +6220,11 @@ pub mod events_server {
             + std::marker::Send
             + 'static;
         /// Live stream for one session; server-streaming over gRPC and SSE over
-        /// HTTP. Emits `resync` when the consumer lags and must re-replay.
+        /// HTTP. Delivers durable events and live-only (`seq = 0`) frames as they
+        /// happen; it does not replay history (read `ListEvents` for that). Emits
+        /// `resync` when the consumer lags: frames in the gap (live deltas
+        /// included) are lost, so re-read the projection (`ListMessages`) or
+        /// replay `ListEvents` from the last durable `seq` applied.
         ///
         /// hya.http: GET /v1/sessions/{session}/events/stream
         async fn stream_session_events(
@@ -12666,11 +12729,15 @@ pub struct CreateTurnResponse {
     #[prost(message, optional, tag = "1")]
     pub turn: ::core::option::Option<TurnInfo>,
 }
-/// Projection snapshot of one admitted turn. The turn id is the id of the
-/// assistant message the engine drives for that turn.
+/// Projection snapshot of one admitted turn. For prompt and command turns
+/// the turn id is the id of the admitted **user** message; the assistant
+/// message(s) the engine drives for it arrive on the event stream
+/// (`messageStarted` with `ROLE_ASSISTANT`). For shell turns it is the id of
+/// the synthetic assistant message. Slash commands intercepted by workflow
+/// features return an empty id.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct TurnInfo {
-    /// Turn identifier (assistant message id).
+    /// Turn identifier (user message id for prompt/command turns).
     #[prost(string, tag = "1")]
     pub id: ::prost::alloc::string::String,
     /// Owning session identifier.
@@ -12682,10 +12749,12 @@ pub struct TurnInfo {
     /// Terminal finish reason once state is FINISHED.
     #[prost(enumeration = "FinishReason", tag = "4")]
     pub finish: i32,
-    /// Stable error code when state is FAILED.
+    /// Stable error code when state is FAILED and the engine recorded an
+    /// error for the failed assistant message (for example `provider_error`).
     #[prost(string, tag = "5")]
     pub error_code: ::prost::alloc::string::String,
-    /// Human-readable error message when state is FAILED.
+    /// Human-readable error message when state is FAILED (same source as
+    /// `MessageInfo.error`).
     #[prost(string, tag = "6")]
     pub error_message: ::prost::alloc::string::String,
 }
@@ -12857,7 +12926,10 @@ pub mod turn_client {
             self
         }
         /// Admit one turn into a session: a user prompt, a slash command, or a
-        /// direct shell execution. Returns as soon as the turn is admitted.
+        /// direct shell execution. Returns as soon as the turn is admitted. There
+        /// is no server-side prompt queue: while another run owns the session the
+        /// call fails with `session_busy` (HTTP 409); clients queue follow-ups
+        /// themselves and submit after the assistant `messageFinished`.
         ///
         /// hya.http: POST /v1/sessions/{session}/turns
         pub async fn create_turn(
@@ -12960,7 +13032,10 @@ pub mod turn_server {
     #[async_trait]
     pub trait Turn: std::marker::Send + std::marker::Sync + 'static {
         /// Admit one turn into a session: a user prompt, a slash command, or a
-        /// direct shell execution. Returns as soon as the turn is admitted.
+        /// direct shell execution. Returns as soon as the turn is admitted. There
+        /// is no server-side prompt queue: while another run owns the session the
+        /// call fails with `session_busy` (HTTP 409); clients queue follow-ups
+        /// themselves and submit after the assistant `messageFinished`.
         ///
         /// hya.http: POST /v1/sessions/{session}/turns
         async fn create_turn(

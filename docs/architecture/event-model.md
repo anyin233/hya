@@ -50,6 +50,18 @@ contiguous.
 round). Those envelopes are applied by the projection reducer without advancing
 `last_seq` (see [Projection::apply](#projectionapply)).
 
+Assistant text of a provider round is live-only while it streams:
+`text_start`, each `text_delta`, `text_end` (and a `text_replace` when the
+`text_complete` hook rewrote the part) are published with `seq: 0`. When the
+round's stream ends, the engine appends one durable `text_start` +
+`text_replace` (the final text) + `text_end` per text part, with the same
+message and part ids. The v1 streams deliver both (live frames bypass the
+`sinceSeq` filter); `ListEvents` and replay only see the durable ones.
+Reasoning, tool-input, and user-message deltas are durable. The durable text
+part is appended at the end of its round, so its position among the round's
+other parts can differ from the live arrival order; the projection order is
+authoritative.
+
 ## Events and Envelopes
 
 [`event.rs`](../../crates/hya-proto/src/event.rs) defines `Event`, the
@@ -188,8 +200,8 @@ is not recorded.
 | Wire `type` | Payload fields | Reducer |
 | --- | --- | --- |
 | `text_start` | `session`, `message`, `part: PartId` | Fold: empty `PartProjection::Text` |
-| `text_delta` | `session`, `message`, `part`, `delta: String` | Fold: append delta |
-| `text_replace` | `session`, `message`, `part`, `text: String` | Fold: wholesale overwrite. Live path used when the `text_complete` plugin hook rewrites text. |
+| `text_delta` | `session`, `message`, `part`, `delta: String` | Fold: append delta. Assistant deltas are live-only (`seq: 0`); user-message text and logs written before the live split are durable. |
+| `text_replace` | `session`, `message`, `part`, `text: String` | Fold: wholesale overwrite. The durable record of every assistant text part (final text), and live when the `text_complete` plugin hook rewrites text. v1: `partReplaced`. |
 | `text_end` | `session`, `message`, `part` | **no-op** — text is already accumulated |
 
 Field name for streaming chunks is **`delta`**, not `text`.
@@ -297,7 +309,7 @@ from one request.
 
 | Wire `type` | Payload fields | Reducer |
 | --- | --- | --- |
-| `error` | `session: Option<SessionId>`, `code: String`, `message: String` | **no-op** for projection. `session` optional so a global error is expressible; `Event::session()` returns `None` when absent. The deleted Compat surface bridged it to `session.error`. |
+| `error` | `session: Option<SessionId>`, `code: String`, `message: String`, `failed_message: Option<MessageId>` | Fold only with `failed_message`: sets `MessageProjection.error = {code, message}` on that message; otherwise **no-op**. The engine appends it when a turn fails (`code`: `provider_error`, `tool_error`, `store_error`, …; `message`: the error's display text, at most 2000 bytes) immediately before the message's `message_finished { finish: error }`. `session` optional so a global error is expressible; `Event::session()` returns `None` when absent. v1: `errorReported`, `MessageInfo.error`, `TurnInfo.errorCode`/`errorMessage`. `failed_message` is absent in logs written before 0.41.0 (projection reducer version 3). |
 | `unknown` | (unit; original payload dropped on typed decode) | **no-op**. `#[serde(other)]` catch-all so older binaries can deserialize newer tags without failing. Lossless forwarding must keep raw JSON. |
 
 ### Events the reducer does not fold
@@ -313,7 +325,7 @@ but `Projection::apply_event` ignores them:
 - `tool_input_delta`
 - `context_compacted`
 - `context_evicted`
-- `error`
+- `error` without `failed_message`
 - `unknown`
 
 ## Pending permission plane (server-side)
@@ -558,6 +570,7 @@ Projection {
 | `usage` | `usage_recorded` with this `message`: `MessageUsage { model /* latest round */, tokens /* sum */, rounds }` (omitted when `None`) |
 | `files`, `agents` | `user_prompt_context_recorded` |
 | `parts` | text / reasoning / tool events |
+| `error` | `error` with `failed_message` = this message: `MessageError { code, message }` (omitted when `None`) |
 
 ### `PartProjection` — no media arm
 

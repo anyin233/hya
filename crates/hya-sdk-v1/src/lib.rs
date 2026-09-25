@@ -360,9 +360,22 @@ impl V1Sdk {
 ///
 /// Seed with [`V1Sdk::list_messages`], then [`apply`](Self::apply) every
 /// live frame; on `resync`, re-seed from the server.
+///
+/// Folding rules (the v1 stream contract):
+/// - Parts are keyed by id: a `partStarted` for a known part id (the durable
+///   record of a part first seen live) does not add a second part.
+/// - Live `partAppended` frames (`seq == 0`) grow a part only until the
+///   part is durable (seeded from a read, or a durable `partStarted` /
+///   `partReplaced` was applied); after that they are stale and ignored.
+/// - `partReplaced` sets the part's whole text, superseding live deltas.
+/// - Durable frames at or below [`last_seq`](Self::last_seq) are ignored.
+///   A seed does not know its watermark: set `last_seq` to the seq the seed
+///   read reflects, or durable deltas it already contains apply again.
 #[derive(Default)]
 pub struct V1SessionMirror {
     messages: BTreeMap<String, pb::MessageInfo>,
+    /// Part ids whose text is durable (seeded or confirmed by the log).
+    durable_parts: std::collections::BTreeSet<String>,
     /// Highest applied sequence number.
     pub last_seq: u64,
 }
@@ -373,6 +386,9 @@ impl V1SessionMirror {
     pub fn from_messages(messages: &[pb::MessageInfo]) -> Self {
         let mut mirror = Self::default();
         for message in messages {
+            for part in &message.parts {
+                mirror.durable_parts.insert(part.id.clone());
+            }
             mirror.messages.insert(message.id.clone(), message.clone());
         }
         mirror
@@ -386,7 +402,12 @@ impl V1SessionMirror {
                 true
             }
             Some(pb::stream_frame::Frame::Event(event)) => {
-                self.last_seq = self.last_seq.max(event.seq);
+                if event.seq != 0 {
+                    if event.seq <= self.last_seq {
+                        return false;
+                    }
+                    self.last_seq = event.seq;
+                }
                 self.apply_event(event);
                 false
             }
@@ -396,35 +417,75 @@ impl V1SessionMirror {
 
     fn apply_event(&mut self, event: &pb::StreamEvent) {
         use hya_api::v1::stream_event::Payload as P;
+        let durable = event.seq != 0;
         match &event.payload {
             Some(P::MessageStarted(started)) => {
-                self.messages.entry(started.message.clone()).or_default();
+                let message = self.messages.entry(started.message.clone()).or_default();
+                message.id.clone_from(&started.message);
+                message.role = started.role;
+                if message.session.is_empty() {
+                    message.session.clone_from(&event.session);
+                }
             }
             Some(P::MessageFinished(finished)) => {
                 if let Some(message) = self.messages.get_mut(&finished.message) {
                     message.finish = finished.finish;
+                    message.finish_cause = finished.cause;
                 }
             }
             Some(P::PartStarted(started)) => {
-                if let Some(message) = self.messages.get_mut(&started.message) {
+                if durable {
+                    self.durable_parts.insert(started.part.clone());
+                }
+                if let Some(message) = self.messages.get_mut(&started.message)
+                    && !message.parts.iter().any(|part| part.id == started.part)
+                {
                     message.parts.push(pb::PartInfo {
                         id: started.part.clone(),
-                        kind: None,
+                        kind: empty_part_kind(&started.kind),
                     });
                 }
             }
             Some(P::PartAppended(appended)) => {
-                if let Some(message) = self.messages.get_mut(&appended.message)
-                    && let Some(part) = message
-                        .parts
-                        .iter_mut()
-                        .find(|part| part.id == appended.part)
-                    && let Some(pb::part_info::Kind::Text(text)) = part.kind.as_mut()
-                {
-                    text.text.push_str(&appended.text_delta);
+                if !durable && self.durable_parts.contains(&appended.part) {
+                    return;
+                }
+                if let Some(text) = self.part_text_mut(&appended.message, &appended.part) {
+                    text.push_str(&appended.text_delta);
+                }
+            }
+            Some(P::PartReplaced(replaced)) => {
+                if durable {
+                    self.durable_parts.insert(replaced.part.clone());
+                }
+                if let Some(text) = self.part_text_mut(&replaced.message, &replaced.part) {
+                    text.clone_from(&replaced.text);
+                }
+            }
+            Some(P::ErrorReported(reported)) => {
+                if let Some(message) = self.messages.get_mut(&reported.message) {
+                    message.error = Some(pb::MessageError {
+                        code: reported.code.clone(),
+                        message: reported.error_message.clone(),
+                    });
                 }
             }
             _ => {}
+        }
+    }
+
+    /// The text buffer of a text or reasoning part.
+    fn part_text_mut(&mut self, message: &str, part: &str) -> Option<&mut String> {
+        let part = self
+            .messages
+            .get_mut(message)?
+            .parts
+            .iter_mut()
+            .find(|candidate| candidate.id == part)?;
+        match part.kind.as_mut()? {
+            pb::part_info::Kind::Text(text) => Some(&mut text.text),
+            pb::part_info::Kind::Reasoning(reasoning) => Some(&mut reasoning.text),
+            _ => None,
         }
     }
 
@@ -432,5 +493,149 @@ impl V1SessionMirror {
     #[must_use]
     pub fn messages(&self) -> Vec<&pb::MessageInfo> {
         self.messages.values().collect()
+    }
+}
+
+/// An empty part body for a `partStarted.kind` discriminator.
+fn empty_part_kind(kind: &str) -> Option<pb::part_info::Kind> {
+    match kind {
+        "text" => Some(pb::part_info::Kind::Text(pb::TextPart::default())),
+        "reasoning" => Some(pb::part_info::Kind::Reasoning(pb::ReasoningPart::default())),
+        "tool_call" => Some(pb::part_info::Kind::ToolCall(pb::ToolCallPart::default())),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::*;
+    use hya_api::v1::stream_event::Payload as P;
+
+    fn frame(seq: u64, payload: P) -> pb::StreamFrame {
+        pb::StreamFrame {
+            frame: Some(pb::stream_frame::Frame::Event(pb::StreamEvent {
+                seq,
+                session: "s".into(),
+                time_recorded: None,
+                payload: Some(payload),
+            })),
+        }
+    }
+
+    fn started(part: &str) -> P {
+        P::PartStarted(pb::PartStarted {
+            message: "m".into(),
+            part: part.into(),
+            kind: "text".into(),
+        })
+    }
+
+    fn appended(part: &str, delta: &str) -> P {
+        P::PartAppended(pb::PartAppended {
+            message: "m".into(),
+            part: part.into(),
+            text_delta: delta.into(),
+        })
+    }
+
+    fn text_of(mirror: &V1SessionMirror) -> Vec<(String, String)> {
+        mirror.messages()[0]
+            .parts
+            .iter()
+            .map(|part| {
+                let text = match part.kind.as_ref() {
+                    Some(pb::part_info::Kind::Text(text)) => text.text.clone(),
+                    _ => String::new(),
+                };
+                (part.id.clone(), text)
+            })
+            .collect()
+    }
+
+    /// Live deltas build the part; the durable start for the same id does
+    /// not add a second part.
+    #[test]
+    fn live_then_durable_part_started_folds_into_one_part() {
+        let mut mirror = V1SessionMirror::default();
+        mirror.apply(&frame(
+            3,
+            P::MessageStarted(pb::MessageStarted {
+                message: "m".into(),
+                role: pb::Role::Assistant as i32,
+                ..Default::default()
+            }),
+        ));
+        mirror.apply(&frame(0, started("p")));
+        mirror.apply(&frame(0, appended("p", "Hel")));
+        mirror.apply(&frame(0, appended("p", "lo")));
+        assert_eq!(text_of(&mirror), vec![("p".into(), "Hello".into())]);
+        mirror.apply(&frame(5, started("p")));
+        assert_eq!(text_of(&mirror), vec![("p".into(), "Hello".into())]);
+        let message = mirror.messages()[0];
+        assert_eq!(message.id, "m");
+        assert_eq!(message.role, pb::Role::Assistant as i32);
+        // The durable full text replaces (never appends to) the live text;
+        // a late live delta for the now-durable part is stale.
+        mirror.apply(&frame(
+            6,
+            P::PartReplaced(pb::PartReplaced {
+                message: "m".into(),
+                part: "p".into(),
+                text: "Hello, world".into(),
+            }),
+        ));
+        mirror.apply(&frame(0, appended("p", "lo")));
+        // An already-applied durable frame is ignored.
+        mirror.apply(&frame(6, appended("p", "!!")));
+        assert_eq!(text_of(&mirror), vec![("p".into(), "Hello, world".into())]);
+        mirror.apply(&frame(
+            7,
+            P::ErrorReported(pb::ErrorReported {
+                message: "m".into(),
+                code: "provider_error".into(),
+                error_message: "http status 400: nope".into(),
+            }),
+        ));
+        mirror.apply(&frame(
+            8,
+            P::MessageFinished(pb::MessageFinished {
+                message: "m".into(),
+                finish: pb::FinishReason::Error as i32,
+                usage: None,
+                cause: pb::FinishCause::ProviderError as i32,
+            }),
+        ));
+        let message = mirror.messages()[0];
+        assert_eq!(message.finish, pb::FinishReason::Error as i32);
+        assert_eq!(message.finish_cause, pb::FinishCause::ProviderError as i32);
+        assert_eq!(
+            message.error.as_ref().map(|error| error.message.as_str()),
+            Some("http status 400: nope")
+        );
+        assert_eq!(mirror.last_seq, 8);
+    }
+
+    /// A part seeded from the projection is final: stale live deltas for it
+    /// (the subscription buffered them before the read) do not double it.
+    #[test]
+    fn live_deltas_for_a_seeded_part_are_ignored() {
+        let mut mirror = V1SessionMirror::from_messages(&[pb::MessageInfo {
+            id: "m".into(),
+            role: pb::Role::Assistant as i32,
+            parts: vec![pb::PartInfo {
+                id: "p".into(),
+                kind: Some(pb::part_info::Kind::Text(pb::TextPart {
+                    text: "Hello".into(),
+                })),
+            }],
+            ..Default::default()
+        }]);
+        mirror.apply(&frame(0, started("p")));
+        mirror.apply(&frame(0, appended("p", "Hel")));
+        mirror.apply(&frame(0, appended("p", "lo")));
+        mirror.apply(&frame(9, started("p")));
+        assert_eq!(text_of(&mirror), vec![("p".into(), "Hello".into())]);
     }
 }

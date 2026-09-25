@@ -113,10 +113,18 @@ fn session_stream(
 
 /// The shared live frame producer backing both SSE and gRPC streams.
 ///
-/// Merges three feeds: the engine event bus (durable events), the pending
-/// permission plane, and the pending question plane. Permission and
-/// question frames are live-only (`seq == 0`): the pending queues are the
-/// authoritative listing, the streams are delivery.
+/// Merges three feeds: the engine event bus, the pending permission plane,
+/// and the pending question plane. Permission and question frames are
+/// live-only (`seq == 0`): the pending queues are the authoritative
+/// listing, the streams are delivery.
+///
+/// The bus carries durable envelopes (`seq > 0`, filtered by `since_seq`)
+/// and live-only ones (`seq == 0`: assistant text deltas of an in-flight
+/// provider round), which always pass: they are never persisted, so no
+/// watermark can have covered them. A subscriber that falls more than the
+/// bus capacity behind gets one `resync` frame per lag and loses the
+/// frames in the gap, live deltas included; the durable log (and so the
+/// projection) is unaffected.
 pub(crate) fn frame_stream(
     st: ServerState,
     session: Option<SessionId>,
@@ -131,7 +139,7 @@ pub(crate) fn frame_stream(
                     {
                         return None;
                     }
-                    if envelope.seq.0 <= since_seq {
+                    if !is_live(&envelope) && envelope.seq.0 <= since_seq {
                         return None;
                     }
                     let frame = match stream_event(&envelope) {
@@ -176,6 +184,11 @@ pub(crate) fn frame_stream(
         Box<dyn Stream<Item = Result<pb::StreamFrame, tonic::Status>> + Send>,
     > = Box::pin(question);
     futures::stream::select_all([engine, permission, question])
+}
+
+/// Live-only envelopes are published with `seq == 0` and never persisted.
+fn is_live(envelope: &hya_proto::Envelope) -> bool {
+    envelope.seq.0 == 0
 }
 
 /// Map one pending-plane broadcast value onto a live frame, honoring the

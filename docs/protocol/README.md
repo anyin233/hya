@@ -75,13 +75,21 @@ parameters. Events use the monotonic `sinceSeq` watermark instead.
    one round trip at startup.
 3. `POST /v1/sessions/{id}/turns` admits work — body is a `oneof` of
    `prompt`, `command`, or `shell` — and returns a `RUNNING` turn handle
-   immediately. Slash commands that route to workflow features execute
-   synchronously and return a `FINISHED` turn with an empty id.
+   immediately. For prompt and command turns the turn id is the id of the
+   admitted **user** message; the assistant message arrives on the stream
+   as `messageStarted` with `ROLE_ASSISTANT`. Slash commands that route to
+   workflow features execute synchronously and return a `FINISHED` turn
+   with an empty id. There is no server-side prompt queue: while a turn
+   runs, another `CreateTurn` fails with `409 session_busy`; queue
+   follow-up prompts client-side and submit them after the assistant
+   `messageFinished`.
 4. Subscribe to `GET /v1/sessions/{id}/events/stream` (SSE) or
-   `GET /v1/events/stream` (global). Every projection change arrives as a
-   `StreamFrame` JSON object; terminal state arrives as `messageFinished`
-   and `turnFinished`-derivable events. On lag the server sends a
-   `resync` frame — resume with `ListEvents` from `lastSeq`.
+   `GET /v1/events/stream` (global) **before** admitting the turn: the
+   streams deliver from the moment of subscription and do not replay
+   history (`sinceSeq` only skips durable events at or below it). Every
+   projection change arrives as a `StreamFrame` JSON object; the turn ends
+   with the assistant `messageFinished`. On lag the server sends a
+   `resync` frame — see [Live and durable frames](#live-and-durable-frames).
 5. Synchronous clients may poll `GET /v1/sessions/{id}/turns/{turn}` or use
    `POST .../turns/{turn}/wait` with `timeoutMs`. `POST .../cancel`
    requests a cooperative abort.
@@ -110,11 +118,84 @@ server/run stop), `FINISH_CAUSE_LEADER_FAILED`, `FINISH_CAUSE_INTERRUPTED`
 { "event": { "seq": "31", "session": "hysec_...", "messageFinished": { "message": "msg_...", "finish": "FINISH_REASON_CANCELLED", "cause": "FINISH_CAUSE_SHUTDOWN" } } }
 ```
 
+## Live and durable frames
+
+Stream events come in two kinds:
+
+- **Durable** events carry their log `seq` (a string, `"12"`). They are in
+  the event log, `ListEvents` replays them, and the projection
+  (`ListMessages`, `GetMessage`) folds them.
+- **Live-only** events carry no `seq` (it is `0`, which protojson omits).
+  They are never persisted and `ListEvents` never returns them: the
+  assistant text of an in-flight provider round, and the pending
+  interaction frames (`permissionRequested`, `questionRequested`,
+  `interactionResolved`; `GET /v1/interactions` is their listing).
+
+While a provider round streams, each assistant text part arrives live as
+`partStarted` (`kind: "text"`), one `partAppended` per delta, and
+`partCompleted`. When the round's stream ends, the durable log records the
+same part once, with the **same** message and part ids: `partStarted`,
+`partReplaced` (`text` = the final full text), `partCompleted`. Reasoning
+deltas, tool-call argument deltas, and user-message text are durable
+`partStarted` / `partAppended` / `partCompleted` events. A `text_complete`
+plugin may rewrite a finished part: the rewrite arrives as a live
+`partReplaced` and is what the durable `partReplaced` records.
+
+A client that renders streaming text folds frames **by id**:
+
+1. `partStarted` for a part id it already has is not a new part (the live
+   and the durable start of one part).
+2. `partAppended` appends `textDelta` to that part.
+3. `partReplaced` sets the part's whole text; it supersedes the live deltas.
+4. The durable text part is recorded at the end of its round, so its
+   position among the round's other parts in the projection can differ from
+   the live arrival order. After the assistant `messageFinished`, re-read the
+   message (`GET /v1/sessions/{id}/messages`) and render the projection; it
+   is authoritative.
+
+```json
+{ "event": { "session": "hysec_...", "timeRecorded": "...", "partAppended": { "message": "msg_...", "part": "part_...", "textDelta": "Hel" } } }
+{ "event": { "seq": "41", "session": "hysec_...", "timeRecorded": "...", "partReplaced": { "message": "msg_...", "part": "part_...", "text": "Hello!" } } }
+```
+
+**Lag and reconnect.** The engine bus buffers 8192 envelopes (configurable)
+per subscriber. A subscriber that falls further behind receives one
+`resync` frame per lag and loses the frames in the gap, live deltas
+included; nothing is dropped from the durable log. `resync.lastSeq` is the
+`sinceSeq` the stream was opened with. After a `resync` or a reconnect,
+re-read the projection (`ListMessages`) — or replay
+`ListEvents(sinceSeq = <last durable seq you applied>)` — and continue
+with the stream. A part whose live deltas were lost is completed by its
+durable `partReplaced`. The v1 SDK's `V1SessionMirror` implements these
+rules.
+
+## Errors of a failed turn
+
+When a turn fails (for example a non-retryable provider error), the engine
+appends a durable `errorReported` event naming the assistant message just
+before that message's `messageFinished` (`finish: FINISH_REASON_ERROR`,
+`cause: FINISH_CAUSE_PROVIDER_ERROR` for provider failures):
+
+```json
+{ "event": { "seq": "52", "session": "hysec_...", "errorReported": { "message": "msg_...", "code": "provider_error", "errorMessage": "http status 400: ..." } } }
+```
+
+The same `{code, message}` is on the message (`MessageInfo.error`) and on
+the turn (`TurnInfo.errorCode` / `errorMessage` once `state` is
+`TURN_STATE_FAILED`). Codes: `provider_error`, `tool_error`,
+`store_error`, `bundle_error`, `runtime_refresh_error`,
+`agent_definition_missing`, `invalid`, `turn_already_active`. The message
+text is the engine's error display text, at most 2000 bytes (a provider
+HTTP error carries a bounded excerpt of the response body). Turns that
+failed before 0.41.0 have no recorded error.
+
 ## Interactions (permissions and questions)
 
 Pending permission and question requests arrive as `permissionRequested` /
 `questionRequested` events (carrying an `Interaction` summary) and are
-listed by `GET /v1/interactions`. Answer with
+listed by `GET /v1/interactions` (every type unless `type` is given;
+`type=INTERACTION_TYPE_PERMISSION` or `INTERACTION_TYPE_QUESTION` filters).
+Answer with
 `POST /v1/interactions/{id}/respond` — body is a `oneof` of
 `{permission: {allowed, persist}}` or `{question: {answer}}` /
 `{question: {rejected: true}}`. The response's `applied` is `false` when
@@ -212,7 +293,7 @@ consolidation plan.
 3. POST /v1/sessions        {agent, model, workdir} → {session: {id}}
 4. GET  /v1/sessions/{id}/events/stream             → SSE subscribe
 5. POST /v1/sessions/{id}/turns {prompt: {text}}    → {turn: {id, state}}
-6. ... consume messageStarted / partAppended / messageFinished ...
+6. ... consume messageStarted / partStarted / partAppended / partReplaced / messageFinished ...
 7. POST /v1/interactions/{id}/respond               → when asked
 8. GET  /v1/sessions/{id}/messages                  → transcript reads
 ```

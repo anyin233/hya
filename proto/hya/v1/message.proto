@@ -209,6 +209,18 @@ message MessageInfo {
   google.protobuf.Timestamp time_updated = 9;
   // Harness cause of the finish (cancel, shutdown, crash recovery, provider failure).
   FinishCause finish_cause = 10;
+  // Why the turn that drove this assistant message failed; set only when
+  // the engine recorded an error for it (`finish` is then
+  // `FINISH_REASON_ERROR`).
+  MessageError error = 11;
+}
+
+// Recorded failure of the turn behind an assistant message.
+message MessageError {
+  // Stable machine code (for example `provider_error`).
+  string code = 1;
+  // Human-readable error text as the engine recorded it.
+  string message = 2;
 }
 
 message ListMessagesRequest {

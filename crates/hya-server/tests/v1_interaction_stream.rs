@@ -314,3 +314,75 @@ async fn question_asks_stream_and_reject_resolves() {
         "rejection must resolve: {resolved:?}"
     );
 }
+
+/// `GET /v1/interactions` without a `type` filter lists every pending
+/// interaction (unspecified means all types), over HTTP and gRPC.
+#[tokio::test]
+async fn list_interactions_without_a_type_filter_returns_every_type() {
+    use hya_api::v1 as pb;
+
+    let (ask_tx, ask_rx) = mpsc::unbounded_channel::<AskRequest>();
+    let state = base_state().await.with_permission_requests(ask_rx);
+    let app = router(state.clone());
+    let (reply_tx, _reply_rx) = tokio::sync::oneshot::channel();
+    let request_id = PermissionRequestId::new();
+    ask_tx
+        .send(AskRequest {
+            id: request_id,
+            session: Some(SessionId::new()),
+            message_id: None,
+            call_id: None,
+            action: Action::Bash,
+            resource: Resource::Command("ls".to_string()),
+            remember: RememberScope::LegacyAction,
+            reply: reply_tx,
+        })
+        .expect("ask should flow through the bridge");
+    let id = request_id.to_string();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let (status, typed) =
+            get_json(&app, "/v1/interactions?type=INTERACTION_TYPE_PERMISSION").await;
+        assert_eq!(status, StatusCode::OK, "{typed}");
+        if typed["interactions"][0]["id"] == json!(id) {
+            break;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "ask never arrived");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    let (status, body) = get_json(&app, "/v1/interactions").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["interactions"][0]["id"], json!(id), "{body}");
+    assert_eq!(
+        body["interactions"][0]["type"],
+        json!("INTERACTION_TYPE_PERMISSION")
+    );
+    let (status, body) = get_json(&app, "/v1/interactions?type=INTERACTION_TYPE_QUESTION").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body.get("interactions").is_none(), "{body}");
+
+    // gRPC: the unspecified type (0) is unfiltered too.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let serve = tonic::transport::Server::builder()
+        .add_service(pb::interactions_server::InteractionsServer::new(
+            hya_server::V1Grpc::new(state),
+        ))
+        .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener));
+    tokio::spawn(async move {
+        let _ = serve.await;
+    });
+    let channel = tonic::transport::Channel::from_shared(format!("http://{address}"))
+        .unwrap()
+        .connect()
+        .await
+        .unwrap();
+    let listed = pb::interactions_client::InteractionsClient::new(channel)
+        .list_interactions(pb::ListInteractionsRequest::default())
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(listed.interactions.len(), 1, "{listed:?}");
+    assert_eq!(listed.interactions[0].id, id);
+}

@@ -15,7 +15,10 @@ import "hya/v1/message.proto";
 // Turn admission and control surface.
 service Turn {
   // Admit one turn into a session: a user prompt, a slash command, or a
-  // direct shell execution. Returns as soon as the turn is admitted.
+  // direct shell execution. Returns as soon as the turn is admitted. There
+  // is no server-side prompt queue: while another run owns the session the
+  // call fails with `session_busy` (HTTP 409); clients queue follow-ups
+  // themselves and submit after the assistant `messageFinished`.
   //
   // hya.http: POST /v1/sessions/{session}/turns
   rpc CreateTurn(CreateTurnRequest) returns (CreateTurnResponse);
@@ -101,10 +104,14 @@ enum TurnState {
   TURN_STATE_CANCELLED = 5;
 }
 
-// Projection snapshot of one admitted turn. The turn id is the id of the
-// assistant message the engine drives for that turn.
+// Projection snapshot of one admitted turn. For prompt and command turns
+// the turn id is the id of the admitted **user** message; the assistant
+// message(s) the engine drives for it arrive on the event stream
+// (`messageStarted` with `ROLE_ASSISTANT`). For shell turns it is the id of
+// the synthetic assistant message. Slash commands intercepted by workflow
+// features return an empty id.
 message TurnInfo {
-  // Turn identifier (assistant message id).
+  // Turn identifier (user message id for prompt/command turns).
   string id = 1;
   // Owning session identifier.
   string session = 2;
@@ -112,9 +119,11 @@ message TurnInfo {
   TurnState state = 3;
   // Terminal finish reason once state is FINISHED.
   FinishReason finish = 4;
-  // Stable error code when state is FAILED.
+  // Stable error code when state is FAILED and the engine recorded an
+  // error for the failed assistant message (for example `provider_error`).
   string error_code = 5;
-  // Human-readable error message when state is FAILED.
+  // Human-readable error message when state is FAILED (same source as
+  // `MessageInfo.error`).
   string error_message = 6;
 }
 

@@ -210,7 +210,11 @@ Replay events of one session after a sequence watermark.
 ### `Events.StreamSessionEvents`
 
 Live stream for one session; server-streaming over gRPC and SSE over
-HTTP. Emits `resync` when the consumer lags and must re-replay.
+HTTP. Delivers durable events and live-only (`seq = 0`) frames as they
+happen; it does not replay history (read `ListEvents` for that). Emits
+`resync` when the consumer lags: frames in the gap (live deltas
+included) are lost, so re-read the projection (`ListMessages`) or
+replay `ListEvents` from the last durable `seq` applied.
 
 
 ### `Events.StreamGlobalEvents`
@@ -618,7 +622,10 @@ Turn admission and control surface.
 ### `Turn.CreateTurn`
 
 Admit one turn into a session: a user prompt, a slash command, or a
-direct shell execution. Returns as soon as the turn is admitted.
+direct shell execution. Returns as soon as the turn is admitted. There
+is no server-side prompt queue: while another run owns the session the
+call fails with `session_busy` (HTTP 409); clients queue follow-ups
+themselves and submit after the assistant `messageFinished`.
 
 
 ### `Turn.GetTurn`
@@ -1158,7 +1165,7 @@ Pagination outcome attached to every paginated response.
 | Field | Type | Description |
 |---|---|---|
 | `session` (1) | `string` | Session identifier to stream. |
-| `since_seq` (2) | `uint64` | Emit events after this watermark first, then continue live. |
+| `since_seq` (2) | `uint64` | Skip durable events with `seq` at or below this watermark. Live-only frames (`seq = 0`) are always delivered. No history is replayed. |
 
 ### `StreamGlobalEventsRequest`
 
@@ -1166,7 +1173,7 @@ Pagination outcome attached to every paginated response.
 | Field | Type | Description |
 |---|---|---|
 | `directory` (1) | `string` | Directory scope; empty means the process default directory. |
-| `since_seq` (2) | `uint64` | Emit events after this watermark first, then continue live. |
+| `since_seq` (2) | `uint64` | Skip durable events with `seq` at or below this watermark. Live-only frames (`seq = 0`) are always delivered. No history is replayed. |
 
 ### `StreamFrame`
 
@@ -1183,7 +1190,7 @@ Typed lag signal replacing the legacy SSE `resync` event name.
 
 | Field | Type | Description |
 |---|---|---|
-| `last_seq` (1) | `uint64` | Highest sequence number the server guarantees delivered; resume with `since_seq = last_seq`. |
+| `last_seq` (1) | `uint64` | The watermark the stream was opened with (`since_seq`); a client that tracks its own last applied durable `seq` should replay from that. |
 
 ### `StreamEvent`
 
@@ -1191,7 +1198,7 @@ One curated projected event from the event log.
 
 | Field | Type | Description |
 |---|---|---|
-| `seq` (1) | `uint64` | Monotonic sequence number within the session. |
+| `seq` (1) | `uint64` | Monotonic sequence number within the session; 0 (omitted in protojson) for live-only frames, which `ListEvents` never returns. |
 | `session` (2) | `string` | Owning session identifier. |
 | `time_recorded` (3) | `google.protobuf.Timestamp` | When the event was recorded. |
 | `session_started` (4) | `oneof `payload`: SessionStarted` | Event payload; exactly one kind is set. A session was created. |
@@ -1210,6 +1217,8 @@ One curated projected event from the event log.
 | `tokens_recorded` (17) | `oneof `payload`: TokensRecorded` | Token usage was recorded for a round. |
 | `compaction_applied` (18) | `oneof `payload`: CompactionApplied` | A compaction strategy was applied to the context. |
 | `session_deleted` (19) | `oneof `payload`: SessionDeleted` | A session was deleted. |
+| `part_replaced` (20) | `oneof `payload`: PartReplaced` | A text or reasoning part's whole text was set (the durable record of a streamed text part, or a plugin rewrite of it). |
+| `error_reported` (21) | `oneof `payload`: ErrorReported` | A runtime error was recorded; when it names a message, the turn that drove that message failed (`MessageInfo.error`). |
 
 ### `SessionStarted`
 
@@ -1269,7 +1278,8 @@ A part was appended to a message.
 
 ### `PartAppended`
 
-Streaming delta appended to a part.
+Streaming delta appended to a part. Assistant text deltas are live-only
+(`seq = 0`); reasoning and legacy text deltas are durable.
 
 | Field | Type | Description |
 |---|---|---|
@@ -1285,6 +1295,28 @@ A part reached its final form.
 |---|---|---|
 | `message` (1) | `string` | Owning message identifier. |
 | `part` (2) | `string` | Part identifier. |
+
+### `PartReplaced`
+
+A text or reasoning part's text was replaced wholesale. Clients set the
+part's text to `text` (not append); it supersedes any live deltas they
+accumulated for the same part id.
+
+| Field | Type | Description |
+|---|---|---|
+| `message` (1) | `string` | Owning message identifier. |
+| `part` (2) | `string` | Part identifier. |
+| `text` (3) | `string` | Full text of the part. |
+
+### `ErrorReported`
+
+A runtime error was recorded.
+
+| Field | Type | Description |
+|---|---|---|
+| `message` (1) | `string` | Message whose turn failed; empty for errors not tied to a message. |
+| `code` (2) | `string` | Stable machine code (for example `provider_error`). |
+| `error_message` (3) | `string` | Human-readable error text as the engine recorded it. |
 
 ### `ToolStateChanged`
 
@@ -1781,6 +1813,16 @@ Projection snapshot of one message.
 | `time_created` (8) | `google.protobuf.Timestamp` | When the message was created. |
 | `time_updated` (9) | `google.protobuf.Timestamp` | When the message projection last changed. |
 | `finish_cause` (10) | `FinishCause` | Harness cause of the finish (cancel, shutdown, crash recovery, provider failure). |
+| `error` (11) | `MessageError` | Why the turn that drove this assistant message failed; set only when the engine recorded an error for it (`finish` is then `FINISH_REASON_ERROR`). |
+
+### `MessageError`
+
+Recorded failure of the turn behind an assistant message.
+
+| Field | Type | Description |
+|---|---|---|
+| `code` (1) | `string` | Stable machine code (for example `provider_error`). |
+| `message` (2) | `string` | Human-readable error text as the engine recorded it. |
 
 ### `ListMessagesRequest`
 
@@ -2344,17 +2386,21 @@ no model round.
 
 ### `TurnInfo`
 
-Projection snapshot of one admitted turn. The turn id is the id of the
-assistant message the engine drives for that turn.
+Projection snapshot of one admitted turn. For prompt and command turns
+the turn id is the id of the admitted **user** message; the assistant
+message(s) the engine drives for it arrive on the event stream
+(`messageStarted` with `ROLE_ASSISTANT`). For shell turns it is the id of
+the synthetic assistant message. Slash commands intercepted by workflow
+features return an empty id.
 
 | Field | Type | Description |
 |---|---|---|
-| `id` (1) | `string` | Turn identifier (assistant message id). |
+| `id` (1) | `string` | Turn identifier (user message id for prompt/command turns). |
 | `session` (2) | `string` | Owning session identifier. |
 | `state` (3) | `TurnState` | Current lifecycle state. |
 | `finish` (4) | `FinishReason` | Terminal finish reason once state is FINISHED. |
-| `error_code` (5) | `string` | Stable error code when state is FAILED. |
-| `error_message` (6) | `string` | Human-readable error message when state is FAILED. |
+| `error_code` (5) | `string` | Stable error code when state is FAILED and the engine recorded an error for the failed assistant message (for example `provider_error`). |
+| `error_message` (6) | `string` | Human-readable error message when state is FAILED (same source as `MessageInfo.error`). |
 
 ### `GetTurnRequest`
 
