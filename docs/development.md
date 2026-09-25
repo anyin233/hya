@@ -99,7 +99,10 @@ bun test ./test
 bunx playwright test
 ```
 
-See [Browser-rendered TUI](tui-web.md) for the harness API.
+See [Browser-rendered TUI](tui-web.md) for the harness API. CI runs this same
+gate (plus the `packages/hya-tui` typecheck/test above) in the `tui` job of
+[`ci.yml`](../.github/workflows/ci.yml); see
+[tui-web.md#ci](tui-web.md#ci).
 
 ## Dev tasks (`xtask` package)
 

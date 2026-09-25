@@ -127,6 +127,25 @@ dependencies must be installed (`bun install` in `packages/hya-tui`).
 runs the specs against that TUI instead (for example an older revision, to
 show that a new spec fails without the change it covers).
 
+### CI
+
+`.github/workflows/ci.yml`'s `tui` job runs this suite on every push and pull
+request, alongside the Rust `check` job. It installs the pinned Bun (the same
+`bun-v1.4.2` install used by the release workflow), runs
+`bun install --frozen-lockfile` in both `packages/hya-tui` and
+`packages/hya-tui-web`, then `bun run typecheck && bun test` in `hya-tui` and
+`bun run typecheck && bun test ./test` in `hya-tui-web`. It builds `hya`
+(`cargo build --locked -p hya-backend --bin hya`) with the same Rust
+toolchain/cache actions as `check`, sets `HYA_BIN` to that binary, installs
+Chromium (`bunx playwright install --with-deps chromium`), and runs
+`bunx playwright test` from `packages/hya-tui-web`. On failure it uploads
+`packages/hya-tui-web/test-results/` as the `tui-web-test-results` artifact.
+
+Reproduce it locally with the commands in
+["Running the tests"](#running-the-tests) above; the only CI-specific pieces
+are the pinned Bun install and the Chromium install for a clean runner (a
+local checkout usually already has both).
+
 **A TUI that starts its own backend.** `launchTest` (from `e2e/hya.ts`) is
 `test` with a `workspace` fixture in place of `backend`: the same isolated
 HOME/`XDG_*` directories, config (`model`, `projectBundles` options), and
