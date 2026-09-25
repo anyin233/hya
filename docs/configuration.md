@@ -827,6 +827,14 @@ a hand-written one-line file still works.
 HTTP auth headers are marked sensitive and redirects are disabled so a secret is
 not forwarded to another host.
 
+Over the v1 API, `PUT /v1/auth/{providerId}` (`{"apiKey": "..."}`) writes a
+static key file with mode `0600` on Unix. `DELETE /v1/auth/{providerId}`
+removes it. `GET /v1/auth` (`ListProviderAuth`) answers
+`{"providerIds": ["anthropic", ...]}`: the sorted ids that have an
+`auth/<id>.yaml` file. It never returns secret values. A running backend
+resolves provider routes at startup, so restart it after adding or removing a
+key.
+
 ## Model Selection
 
 For a new session, an explicit `--model` or `HYA_MODEL` request is applied by

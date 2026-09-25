@@ -9,6 +9,11 @@ import "hya/v1/catalog.proto";
 // (per-provider credentials in the user auth directory); it does not cover
 // third-party service connectors, which are out of scope for v1.
 service Auth {
+  // List provider ids with saved credentials. Never returns secret values.
+  //
+  // hya.http: GET /v1/auth
+  rpc ListProviderAuth(ListProviderAuthRequest) returns (ListProviderAuthResponse);
+
   // Store an API key or refresh tokens for a provider.
   //
   // hya.http: PUT /v1/auth/{provider_id}
@@ -28,6 +33,13 @@ service Auth {
   //
   // hya.http: POST /v1/auth/{provider_id}/oauth/callback
   rpc CompleteOauth(CompleteOauthRequest) returns (CompleteOauthResponse);
+}
+
+message ListProviderAuthRequest {}
+
+message ListProviderAuthResponse {
+  // Sorted provider ids that have a stored credential file.
+  repeated string provider_ids = 1;
 }
 
 // OAuth tokens captured from a completed provider flow.

@@ -39,6 +39,17 @@
         "x-server-streaming": false
       }
     },
+    "/v1/auth": {
+      "get": {
+        "operationId": "Auth.ListProviderAuth",
+        "summary": "List provider ids with saved credentials. Never returns secret values.",
+        "tags": [
+          "Auth"
+        ],
+        "x-grpc-method": "hya.v1.Auth.ListProviderAuth",
+        "x-server-streaming": false
+      }
+    },
     "/v1/auth/{provider_id}": {
       "put": {
         "operationId": "Auth.SetProviderAuth",
@@ -1064,6 +1075,18 @@
           },
           "preference": {
             "$ref": "#/components/schemas/AgentModelSelection"
+          }
+        }
+      },
+      "ListProviderAuthResponse": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "provider_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         }
       },

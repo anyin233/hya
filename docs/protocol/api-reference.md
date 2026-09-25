@@ -64,10 +64,16 @@ third-party service connectors, which are out of scope for v1.
 
 | RPC | HTTP | gRPC | Request | Response |
 |---|---|---|---|---|
+| `ListProviderAuth` | `GET /v1/auth` | `hya.v1.Auth.ListProviderAuth` | `ListProviderAuthRequest` | `ListProviderAuthResponse` |
 | `SetProviderAuth` | `PUT /v1/auth/{provider_id}` | `hya.v1.Auth.SetProviderAuth` | `SetProviderAuthRequest` | `SetProviderAuthResponse` |
 | `RemoveProviderAuth` | `DELETE /v1/auth/{provider_id}` | `hya.v1.Auth.RemoveProviderAuth` | `RemoveProviderAuthRequest` | `RemoveProviderAuthResponse` |
 | `StartOauth` | `POST /v1/auth/{provider_id}/oauth/start` | `hya.v1.Auth.StartOauth` | `StartOauthRequest` | `StartOauthResponse` |
 | `CompleteOauth` | `POST /v1/auth/{provider_id}/oauth/callback` | `hya.v1.Auth.CompleteOauth` | `CompleteOauthRequest` | `CompleteOauthResponse` |
+
+### `Auth.ListProviderAuth`
+
+List provider ids with saved credentials. Never returns secret values.
+
 
 ### `Auth.SetProviderAuth`
 
@@ -734,6 +740,13 @@ Effective model state for one catalog agent.
 | `session` (2) | `string` | Bind against this session's runtime when non-empty. |
 | `agent_id` (3) | `string` | Stable catalog agent id whose preference is being set. |
 | `preference` (4) | `optional AgentModelSelection` | New remembered preference; absent/null clears it. |
+
+### `ListProviderAuthResponse`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `provider_ids` (1) | `repeated string` | Sorted provider ids that have a stored credential file. |
 
 ### `OauthTokens`
 
