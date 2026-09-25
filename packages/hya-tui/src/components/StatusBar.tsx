@@ -36,6 +36,7 @@ export function StatusBar() {
       branch: state.gitBranch,
       todos: shown ? undefined : todosCompactText(state.todos),
       connected: state.connected,
+      ...(state.web ? { web: state.web } : {}),
     }, state.columns)
   }
   const color = (tone: StatusTone): string => tone === "warning" ? colors.warning : tone === "error" ? colors.error : colors.muted

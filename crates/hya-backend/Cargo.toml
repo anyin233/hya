@@ -27,6 +27,7 @@ tokio-stream = { workspace = true }
 tokio = { workspace = true }
 tonic = { workspace = true }
 tokio-util = { workspace = true }
+libc = { workspace = true }
 axum = { workspace = true }
 clap = { workspace = true }
 anyhow = { workspace = true }

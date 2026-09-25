@@ -1,26 +1,82 @@
 # Troubleshooting
 
-## Bare `hya` Exits After Guidance
+## Bare `hya` Prints a Banner Instead of the TUI
 
-The `hya` binary bundles no interactive frontend: bare `hya` (no subcommand)
-prints a version banner plus guidance and exits. Run the backend headlessly, or
-start the OpenTUI frontend from a checkout; it starts (and stops) its own
-`hya serve`, found through `--hya <path>`, `HYA_BIN`, or `PATH`:
+Bare `hya` starts the TUI and the WebUI only when both stdin and stdout are
+terminals ([CLI reference](cli.md#bare-hya)). Piped, redirected, or run from
+a script, it prints a version banner plus guidance and exits 0. Run it
+directly in a terminal, or use a headless surface:
 
 ```sh
 hya exec "summarize this repo"
-
-# From the repository root
-bun packages/hya-tui/src/main.ts --dir "$PWD"
+hya serve --bind 127.0.0.1:8080   # then connect any v1 client
 ```
 
-Running the server yourself in a second terminal is optional — for a
-shared server, another machine, or custom `serve` flags:
+## Bare `hya` Says Bun or the TUI Is Missing
+
+Bare `hya` exits with status 1 before touching the terminal when it cannot
+run the frontends:
+
+- `Bun is required for the TUI and the WebUI but was not found on PATH` —
+  install Bun from <https://bun.sh> (the repository pins 1.4.2) or set
+  `BUN=/path/to/bun`. `Bun not found at <path> (the BUN environment variable)`
+  means `BUN` points at a missing file.
+- `the TUI is not installed: no src/main.ts in …` (or `the WebUI host …`) —
+  the message lists every place searched. A release archive or `install.sh`
+  puts the packages under `<prefix>/lib/hya/tui` and `lib/hya/tui-web`; if you
+  copied only `bin/hya`, reinstall, or point `HYA_TUI_DIR` / `HYA_TUI_WEB_DIR`
+  at the packages.
+- `HYA_TUI_DIR=<dir> has no src/main.ts` — the override is wrong; `hya` does
+  not fall back to other places when it is set.
+- `the TUI in <dir> has no dependencies` — run `bun install --frozen-lockfile`
+  in that directory; in a source checkout, in `packages/hya-tui` and
+  `packages/hya-tui-web`.
+
+Other subcommands (`serve`, `exec`, `sessions`, …) do not need Bun or the
+packages.
+
+## WebUI Unavailable: Port in Use
+
+`WebUI unavailable: port 3250 is in use · hya --port <N>` in the TUI's status
+line (and `WebUI unavailable` in the status bar) means another program, often
+another `hya`, already listens on the WebUI port. The TUI works normally
+without it. Pick another port, or let `hya` choose a free one and read the
+address from the status bar:
 
 ```sh
-# Terminal 1
+hya --port 3251
+hya --port 0
+lsof -nP -iTCP:3250 -sTCP:LISTEN   # who holds the port
+```
+
+Other reasons (`web host exited with code N: …`, `the web host printed no
+readiness line within 20 s`) come from the WebUI host itself; its output is
+in the log file below.
+
+## Where Bare `hya` Logs
+
+While the TUI owns the terminal, `hya` appends its own output (the server's
+notices, the WebUI host's lines prefixed `[webui] `, and the shutdown steps)
+to `$XDG_STATE_HOME/hya/hya.log`, else `~/.local/state/hya/hya.log`. At
+start a log over 4 MiB is moved to `hya.log.1`. Read it after a problem:
+
+```sh
+tail -n 50 "${XDG_STATE_HOME:-$HOME/.local/state}/hya/hya.log"
+```
+
+## Run the TUI Without Bare `hya`
+
+For development, a shared server, or custom `serve` flags, run the OpenTUI
+frontend from a checkout; it starts (and stops) its own `hya serve`, found
+through `--hya <path>`, `HYA_BIN`, or `PATH`, or it connects to one you run:
+
+```sh
+# From the repository root
+bun packages/hya-tui/src/main.ts --dir "$PWD"
+
+# Or: terminal 1
 hya serve --bind 127.0.0.1:8080
-# Terminal 2
+# terminal 2
 bun packages/hya-tui/src/main.ts --server http://127.0.0.1:8080
 ```
 

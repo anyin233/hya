@@ -32,6 +32,7 @@ import type {
   TokenUsage,
   WorkflowSummary,
 } from "../client"
+import type { WebInfo } from "../cli"
 import type { CompletionContext } from "../completion"
 import type { View } from "../instructions"
 import { toggledSidebar, type SidebarMode } from "./layout"
@@ -149,6 +150,8 @@ export interface AppState {
   readonly liveRound: LiveRound | undefined
   /** The backend this TUI started (one-command launch), for `/status`; `undefined` with `--server`. */
   readonly backend: BackendInfo | undefined
+  /** The WebUI bare `hya` serves next to this TUI (`--web-url` / `--web-error`); `undefined` otherwise. */
+  readonly web: WebInfo | undefined
 }
 
 /** One billed provider round (`tokensRecorded` with a non-empty `message`). */
@@ -252,6 +255,7 @@ function initialState(): { [K in keyof AppState]: AppState[K] } {
     picker: undefined,
     liveRound: undefined,
     backend: undefined,
+    web: undefined,
   }
 }
 
@@ -479,6 +483,8 @@ export function createAppStore() {
     applyAsk,
     /** The backend this TUI started (`/status`). */
     setBackend(info: BackendInfo | undefined): void { set("backend", info) },
+    /** The WebUI state from bare `hya` (status bar, sidebar, `/status`). */
+    setWeb(info: WebInfo | undefined): void { set("web", info) },
 
     /** Replace the member rows (a fresh `SessionInfo.members` read). */
     setMembers(rows: MemberInfo[]): void { set("members", rows) },

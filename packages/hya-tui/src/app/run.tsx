@@ -68,6 +68,7 @@ export async function run(options: Options): Promise<void> {
   const client = new HyaClient(server, options.directory)
   const store = createAppStore()
   if (backend) store.setBackend({ pid: backend.pid, bin: backend.bin, db: backend.db })
+  if (options.web) store.setWeb(options.web)
   controller = createController({
     client, store, directory: options.directory,
     quit: () => void shutdown(0),

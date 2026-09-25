@@ -1,6 +1,7 @@
 //! `hya` — the unified command-line entry point and the workspace's only
-//! shipped executable (built from the `hya-backend` package). Bare `hya` prints
-//! a guidance banner (no interactive frontend is bundled); subcommands select
+//! shipped executable (built from the `hya-backend` package). Bare `hya` on a
+//! terminal starts the Bun TUI and WebUI against an in-process server
+//! (`frontend.rs`; a guidance banner without a terminal); subcommands select
 //! the controlled area: headless `exec`, `-p` goal mode, HTTP/SSE `serve`,
 //! `tail-session`, auth, bundles, Workflows, models, sessions, and `update`
 //! for the self-update TCB.
@@ -16,6 +17,7 @@ mod auth_cmd;
 mod bundle_cmd;
 mod cli_args;
 mod exec_stream;
+mod frontend;
 mod models_cmd;
 mod rpc;
 mod serve;
@@ -63,6 +65,16 @@ fn resolve_interactive_db(cli_db: &str) -> String {
     if !cli_db.is_empty() {
         return cli_db.to_string();
     }
+    state_dir()
+        .join("sessions.db")
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// `$XDG_STATE_HOME/hya`, else `$HOME/.local/state/hya` (else
+/// `./.local/state/hya`), created if missing: the default database and the
+/// bare-`hya` log file live here.
+fn state_dir() -> std::path::PathBuf {
     let dir = std::env::var_os("XDG_STATE_HOME")
         .filter(|v| !v.is_empty())
         .map(std::path::PathBuf::from)
@@ -74,7 +86,7 @@ fn resolve_interactive_db(cli_db: &str) -> String {
         .unwrap_or_else(|| std::path::PathBuf::from(".local/state"))
         .join("hya");
     let _ = std::fs::create_dir_all(&dir);
-    dir.join("sessions.db").to_string_lossy().into_owned()
+    dir
 }
 
 async fn cmd_exec(
@@ -843,6 +855,7 @@ async fn cmd_sessions(db: String) -> anyhow::Result<()> {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    let web_port = cli_args::bare_web_port(&cli)?;
     let model = cli.model.clone();
     let yolo = cli.yolo;
     let pure = cli.pure;
@@ -860,16 +873,33 @@ async fn main() -> anyhow::Result<()> {
         .inspect_err(|error| eprintln!("goal error: {error:#}"));
     }
     match cli.command {
-        // No interactive frontend is bundled anymore: bare startup only points
-        // at the headless and server surfaces.
+        // Bare `hya` on a terminal starts the TUI and the WebUI next to an
+        // in-process server (frontend.rs); without a terminal it only points
+        // at the other surfaces.
         None => {
+            use std::io::IsTerminal as _;
+            if frontend::should_launch(
+                std::io::stdin().is_terminal(),
+                std::io::stdout().is_terminal(),
+            ) {
+                return frontend::run(frontend::LaunchRequest {
+                    port: web_port,
+                    db: resolve_interactive_db(&db),
+                    model,
+                    yolo,
+                    pure,
+                    state_dir: state_dir(),
+                })
+                .await;
+            }
             println!(
                 "hya {} — a multi-agent coding agent",
                 env!("CARGO_PKG_VERSION")
             );
             println!(
-                "No interactive frontend is bundled. Try `hya serve`, \
-                 `hya exec \"<prompt>\"`, `hya -p \"<goal>\"`, or `hya --help`."
+                "Run `hya` in a terminal to start the TUI and the WebUI \
+                 (http://127.0.0.1:{web_port}; needs Bun). Without a terminal, try \
+                 `hya serve`, `hya exec \"<prompt>\"`, `hya -p \"<goal>\"`, or `hya --help`."
             );
             Ok(())
         }

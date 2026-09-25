@@ -1,9 +1,10 @@
 # Getting Started
 
-This guide runs hya from the workspace. The only shipped binary is the backend
-CLI/API binary `hya`. The interactive OpenTUI frontend (`packages/hya-tui`)
-runs from source with Bun and starts its own `hya serve`; see
-[Run the TUI](#run-the-tui) and [OpenTUI frontend](tui.md).
+This guide runs hya from the workspace. The only shipped binary is `hya`.
+Running `hya` in a terminal starts the interactive OpenTUI frontend
+(`packages/hya-tui`) and the WebUI (`packages/hya-tui-web`) with Bun, next to
+a server inside the `hya` process; see [Run the TUI](#run-the-tui) and
+[OpenTUI frontend](tui.md).
 Other clients drive the backend over the `hya.v1` HTTP/SSE/WebSocket or gRPC
 contract.
 
@@ -57,8 +58,9 @@ Failures are easiest to diagnose if you know the order of operations
    tool-family libraries for the selected profile.
 4. **Stage runtimes.** Stages the `hya` binary, packages the twelve
    first-party bundles with `cargo run -p xtask -- stage-first-party-bundles`,
-   and stages the Bun adapter at `lib/hya/bun-adapter` with its pinned lockfile
-   by running `bun install --frozen-lockfile --production`.
+   and stages the Bun programs `lib/hya/bun-adapter`, `lib/hya/tui`, and
+   `lib/hya/tui-web`, each with its pinned lockfile, by running
+   `bun install --frozen-lockfile --production`.
 5. **Atomic swap.** Only complete staged artifacts reach the swap. The script
    uses `.tmp.$$` paths and moves any existing backend, adapter, and
    `bundles/hya-*.hyabundle` files to `.bak.$$`, then renames into place. Other
@@ -71,14 +73,15 @@ Failures are easiest to diagnose if you know the order of operations
    - Runs `hya --version` and `hya --help`.
    - Runs `hya bundle list` with an isolated `HOME` and requires every
      first-party bundle, which proves the installed backend loads them.
-   - Asserts the Bun adapter payload and its production dependencies exist
-     under `lib/hya/bun-adapter`.
+   - Asserts the Bun programs and their production dependencies exist under
+     `lib/hya/bun-adapter`, `lib/hya/tui`, and `lib/hya/tui-web`.
    - **Fails** if `command -v hya` does not resolve to the install path
      (usual cause: an older `hya` earlier on `PATH`).
 
 The installer produces the same layout as a release archive: `bin/hya`,
-`bundles/hya-*.hyabundle`, and `lib/hya/bun-adapter`. Bare `hya` (no subcommand)
-prints a guidance banner; see the
+`bundles/hya-*.hyabundle`, `lib/hya/bun-adapter`, `lib/hya/tui`, and
+`lib/hya/tui-web`. Bare `hya` (no subcommand) on a terminal starts the TUI and
+the WebUI; without a terminal it prints a guidance banner. See the
 [CLI Reference](cli.md#bare-hya).
 
 ## Run One Headless Turn
@@ -145,22 +148,38 @@ generated [API reference](protocol/api-reference.md).
 
 ## Run the TUI
 
-The TUI starts its own backend (a `hya serve` on a free local port, in
-`--dir`) and stops it when you quit. It finds the binary through `--hya
-<path>`, then `HYA_BIN`, then `hya` on `PATH`:
+Run `hya` in a terminal. It starts a server inside the `hya` process, the
+WebUI on `http://127.0.0.1:3250` (`--port <N>` to change it, `0` for a free
+port), and the TUI on the terminal. From a checkout, install the frontends'
+dependencies once:
 
 ```sh
-cargo build -p hya-backend --bin hya
 (cd packages/hya-tui && bun install --frozen-lockfile)
-HYA_BIN=target/debug/hya bun packages/hya-tui/src/main.ts --dir "$PWD"
+(cd packages/hya-tui-web && bun install --frozen-lockfile)
+cargo build -p hya-backend --bin hya
+target/debug/hya
 ```
 
 Type a prompt and press Enter; `?` shows every key and command, and Ctrl+C
-twice quits. Sessions are kept in `$XDG_STATE_HOME/hya/sessions.db` (else
-`~/.local/state/hya/sessions.db`); `--continue` reopens the most recent one
-in the directory and `--session <id>` a given one. To attach to the server
-from the previous section instead, pass `--server http://127.0.0.1:8080`.
-See [OpenTUI frontend](tui.md#start-it) for every flag.
+twice (or `/exit`) quits and stops the WebUI and the server. Open the address
+the status bar shows (`WebUI http://127.0.0.1:3250`) in a browser for the same
+TUI there; every tab shares the server and its sessions. Sessions are kept in
+`$XDG_STATE_HOME/hya/sessions.db` (else `~/.local/state/hya/sessions.db`), and
+the server's own output goes to `hya.log` in the same directory. See
+[Bare `hya`](cli.md#bare-hya).
+
+To run the TUI alone with Bun (development), it starts its own backend (a
+`hya serve` on a free local port, in `--dir`) and stops it when you quit. It
+finds the binary through `--hya <path>`, then `HYA_BIN`, then `hya` on `PATH`:
+
+```sh
+HYA_BIN=target/debug/hya bun packages/hya-tui/src/main.ts --dir "$PWD"
+```
+
+`--continue` reopens the most recent session in the directory and
+`--session <id>` a given one. To attach to the server from the previous
+section instead, pass `--server http://127.0.0.1:8080`. See
+[OpenTUI frontend](tui.md#start-it) for every flag.
 
 ## Replay a Session
 

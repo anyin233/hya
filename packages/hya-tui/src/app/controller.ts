@@ -46,6 +46,7 @@ import { shellCommand } from "../composer/shell"
 import type { KeyLike } from "../keys/bindings"
 import { helpPickerHint, helpPickerRows } from "../commands"
 import { initialSessionId } from "../launch"
+import { webNotice } from "../state/format"
 import { childActivity, childSessionIds } from "../state/members"
 import { createPicker, pickerKey as pickerKeyOutcome, type PickerRow, type PickerSpec } from "../state/picker"
 import { askFrameRoute, type PromptChoice } from "../state/prompts"
@@ -526,9 +527,10 @@ export function createController({ client, store, directory, registry = createCo
       else if (startup.continue) missing = " · no earlier session in this directory"
       const version = bootstrap.location?.version ?? ""
       const mismatch = version && version !== tuiVersion ? ` · backend ${version} ≠ tui ${tuiVersion}` : ""
-      status(store.state.savedKeysAvailable
+      // A WebUI that bare `hya` could not start is the one notice worth the status line.
+      status(webNotice(store.state.web) ?? (store.state.savedKeysAvailable
         ? `Connected to hya ${version} · ? or /help for keys and commands${missing}${mismatch}`
-        : `Connected to hya ${version} · key listing needs backend 0.41.0+${missing}${mismatch}`)
+        : `Connected to hya ${version} · key listing needs backend 0.41.0+${missing}${mismatch}`))
     } catch (error) {
       status(`Connection failed: ${String(error)} · ${connectionHint}`)
       store.setView("help")

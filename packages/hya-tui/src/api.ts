@@ -1,21 +1,31 @@
-/** The v1 HTTP operation catalog used by `/api` and its completion. */
-import openapi from "../../../docs/protocol/openapi.json"
+/**
+ * The v1 HTTP operation catalog used by `/api` and its completion.
+ *
+ * `operations.json` is generated next to `docs/protocol/openapi.json` by
+ * `cargo run -p xtask -- gen-api` (test/api-catalog.test.ts checks they
+ * agree). It lives inside the package because the TUI ships on its own under
+ * `lib/hya/tui`, where the repository's docs do not exist.
+ */
+import catalog from "./operations.json"
 
-type Paths = Record<string, Record<string, { operationId?: string; "x-server-streaming"?: boolean }>>
+interface Operation {
+  method: string
+  path: string
+  operationId: string
+  streaming: boolean
+}
+
+const catalogOperations = catalog as Operation[]
 
 /** One line per operation: method, path, operation id, streaming marker. */
 export function operations(): string {
-  const paths = openapi.paths as Paths
-  return Object.entries(paths).flatMap(([path, methods]) =>
-    Object.entries(methods).map(([method, detail]) =>
-      `${method.toUpperCase().padEnd(6)} ${path}  ${detail.operationId ?? ""}${detail["x-server-streaming"] ? " [stream]" : ""}`,
-    ),
+  return catalogOperations.map((op) =>
+    `${op.method.padEnd(6)} ${op.path}  ${op.operationId}${op.streaming ? " [stream]" : ""}`,
   ).sort().join("\n")
 }
 
 /** `METHOD /v1/path` names for completion. */
-export const apiOperationNames = Object.entries(openapi.paths as Record<string, Record<string, unknown>>)
-  .flatMap(([path, methods]) => Object.keys(methods).map((method) => `${method.toUpperCase()} ${path}`))
+export const apiOperationNames = catalogOperations.map((op) => `${op.method} ${op.path}`)
 
 /** Pretty JSON, truncated for display. */
 export function brief(value: unknown): string {

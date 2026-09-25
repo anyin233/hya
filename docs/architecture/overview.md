@@ -72,9 +72,12 @@ The event log is the source of truth. This gives hya a few useful properties:
 
 ## Current Runtime Surfaces
 
-- Bare `hya` prints a version banner plus guidance (serve / exec / -p);
-  no interactive frontend is bundled into the binary. The OpenTUI frontend
-  (`packages/hya-tui`) runs from source against `hya serve`.
+- Bare `hya` on a terminal runs the v1 server in-process and starts the Bun
+  frontends as child processes: the OpenTUI TUI (`packages/hya-tui`, shipped
+  as `lib/hya/tui`) on the terminal and the WebUI host
+  (`packages/hya-tui-web`, `lib/hya/tui-web`) on `127.0.0.1:3250`
+  (ADR-0020). Rendering stays in those Bun processes, not in the binary.
+  Without a terminal it prints a version banner plus guidance.
 - `hya exec` runs one turn and prints a transcript.
 - `hya run` is the headless prompt entry point.
 - `hya -p` runs goal mode with an independent model-backed evaluator.

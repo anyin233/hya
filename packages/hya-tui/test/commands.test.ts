@@ -191,6 +191,18 @@ test("/status shows server, version, directory, session, agent, model, and mode"
   expect(text).toContain("Agent       build")
   expect(text).toContain("Model       openai/gpt")
   expect(text).toContain("Mode        yolo")
+  expect(text).not.toContain("WebUI")
+})
+
+test("/status shows the WebUI that bare hya serves, or why it is unavailable", async () => {
+  const { store, run } = harness()
+  store.setWeb({ url: "http://127.0.0.1:3250/" })
+  await run("/status")
+  expect(store.state.statusText).toContain("WebUI       http://127.0.0.1:3250")
+  expect(store.state.statusText).toContain("Backend     in the hya process (bare hya)")
+  store.setWeb({ error: "port 3250 is in use" })
+  await run("/status")
+  expect(store.state.statusText).toContain("WebUI       unavailable: port 3250 is in use · hya --port <N>")
 })
 
 test("argument completion comes from the command's own completer", () => {

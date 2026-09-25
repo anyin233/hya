@@ -1,4 +1,5 @@
 /** Pure text for the header, sidebar, pending block, and non-chat views, derived from the store. */
+import type { WebInfo } from "../cli"
 import type { SessionInfo, TodoItem, TokenUsage } from "../client"
 import { keyHelpText } from "../commands/help"
 import type { View } from "../instructions"
@@ -99,7 +100,7 @@ export function contextText(state: AppState, server: string, width = 30): string
   const session = state.selected
   const row = (label: string, value: string) => `${label.padEnd(9)}${truncateStart(value, Math.max(4, width - 9))}`
   const host = server.replace(/^https?:\/\//, "").replace(/\/$/, "")
-  if (!session) return [row("Session", "none"), row("Server", host)].join("\n")
+  if (!session) return [row("Session", "none"), row("Server", host), ...webRows(state, row)].join("\n")
   // The merged transcript (projection + streaming overlay), not the raw
   // projection: a fresh turn's messages exist only in the overlay until the
   // next projection read, so `state.messages.length` alone under-counts.
@@ -115,7 +116,27 @@ export function contextText(state: AppState, server: string, width = 30): string
     ...(tokens !== undefined ? [row("Tokens", formatTokens(tokens))] : []),
     row("Dir", session.workdir),
     row("Server", host),
+    ...webRows(state, row),
   ].join("\n")
+}
+
+/** The context box's `WebUI` row: the address without the scheme, or `unavailable`. */
+function webRows(state: AppState, row: (label: string, value: string) => string): string[] {
+  const web = state.web
+  if (!web) return []
+  return [row("WebUI", web.url ? web.url.replace(/^https?:\/\//, "").replace(/\/$/, "") : "unavailable")]
+}
+
+/** `WebUI http://127.0.0.1:3250` (status bar), or `WebUI unavailable`; `undefined` without a WebUI. */
+export function webLabel(web: WebInfo | undefined): string | undefined {
+  if (!web) return undefined
+  return web.url ? `WebUI ${web.url.replace(/\/$/, "")}` : "WebUI unavailable"
+}
+
+/** The warning shown when bare `hya` could not start the WebUI; `undefined` otherwise. */
+export function webNotice(web: WebInfo | undefined): string | undefined {
+  if (!web || web.url || web.error === undefined) return undefined
+  return `WebUI unavailable: ${web.error} · hya --port <N>`
 }
 
 const titles: Record<View, string> = {
@@ -222,6 +243,8 @@ export interface StatusBarFields {
   /** Compact todo count (`Todos n/m`) shown only while the sidebar is hidden. */
   todos?: string
   connected: boolean
+  /** The WebUI bare `hya` serves (`WebUI <url>`), or `WebUI unavailable` in the warning color. */
+  web?: WebInfo
 }
 
 export type StatusTone = "muted" | "mode" | "warning" | "error"
@@ -237,7 +260,8 @@ export const contextAlarmPercent = 95
 
 /**
  * The status bar's segments in order: `mode <mode>`, `ctx N%`, `<n> tok`,
- * the directory, `⎇ <branch>`, `Todos n/m`, `reconnecting`. Segments with no
+ * the directory, `⎇ <branch>`, `WebUI <url>` (or `WebUI unavailable`),
+ * `Todos n/m`, `reconnecting`. Segments with no
  * data are omitted; the least essential (from the end) drop first so the
  * line fits `width`.
  */
@@ -249,6 +273,7 @@ export function statusBarSegments(fields: StatusBarFields, width: number): Statu
     fields.tokens ? { text: fields.tokens, tone: "muted" } : undefined,
     fields.directory ? { text: truncateStart(fields.directory, 24), tone: "muted" } : undefined,
     fields.branch ? { text: `⎇ ${fields.branch}`, tone: "muted" } : undefined,
+    fields.web ? { text: webLabel(fields.web)!, tone: fields.web.url ? "muted" : "warning" } : undefined,
     fields.todos ? { text: fields.todos, tone: "muted" } : undefined,
     fields.connected ? undefined : { text: "reconnecting", tone: "warning" },
   ]

@@ -1317,6 +1317,7 @@ dependencies = [
  "hya-server",
  "hya-store",
  "hya-updater",
+ "libc",
  "reqwest",
  "serde",
  "serde_json",

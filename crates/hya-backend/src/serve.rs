@@ -15,6 +15,69 @@ pub(crate) async fn cmd_serve(
     yolo: bool,
     pure: bool,
 ) -> anyhow::Result<()> {
+    let prepared = prepare_server(&bind, db, model_override, yolo, pure).await?;
+    // Install the termination handlers BEFORE announcing readiness. Callers that parse the
+    // listen line and then signal us (the e2e harness) would otherwise race handler setup,
+    // and losing that race means the default disposition kills the process outright —
+    // measured: SIGTERM 7ms after the listen line died by signal, 500ms after it exited 0.
+    let terminate = install_termination_signals().context("install termination handlers")?;
+    println!("hya server listening on {}", prepared.url);
+    emit_startup_mark("backend_listen", Some(&prepared.url));
+    // Without a shutdown future `axum::serve` never returns, so `built.shutdown()` would be
+    // unreachable and the process could only ever die by signal — skipping atexit handlers
+    // (and therefore any coverage/profile flush). Handing it SIGTERM/Ctrl-C makes the
+    // already-written teardown path run and lets `main` return normally.
+    serve_until(prepared, wait_for_termination(terminate)).await
+}
+
+/// A composed `hya serve` whose listener is bound but not yet serving.
+pub(crate) struct PreparedServer {
+    /// `http://<addr>` of the bound listener.
+    pub(crate) url: String,
+    listener: tokio::net::TcpListener,
+    router: axum::Router,
+    built: hya_app::BuiltSessionEngine,
+}
+
+/// Serve `prepared` until `stop` resolves, then drain and tear down.
+///
+/// On `stop`, drain first: every in-flight turn in every session (roots and
+/// members) is cancelled with cause `shutdown` and closes its messages within
+/// the drain deadline, members go terminal, and new turns are refused — so
+/// open turn requests finish and the HTTP server can complete its graceful
+/// shutdown. The spawn supervisor is shut down afterwards.
+pub(crate) async fn serve_until(
+    prepared: PreparedServer,
+    stop: impl std::future::Future<Output = ()> + Send + 'static,
+) -> anyhow::Result<()> {
+    let PreparedServer {
+        listener,
+        router,
+        mut built,
+        ..
+    } = prepared;
+    let supervisor = built.resident_supervisor();
+    let serve_result = axum::serve(listener, router)
+        .with_graceful_shutdown(async move {
+            stop.await;
+            supervisor
+                .drain(hya_proto::FinishCause::Shutdown, hya_core::DRAIN_DEADLINE)
+                .await;
+        })
+        .await
+        .context("serve http");
+    let shutdown_result = built.shutdown().await.context("shutdown spawn supervisor");
+    serve_result.and(shutdown_result)
+}
+
+/// Compose the runtime and bind `bind` (shared by `hya serve` and bare `hya`).
+pub(crate) async fn prepare_server(
+    bind: &str,
+    db: String,
+    model_override: Option<String>,
+    yolo: bool,
+    pure: bool,
+) -> anyhow::Result<PreparedServer> {
     emit_startup_mark("backend_start", None);
     super::first_run_config_bootstrap(false)?;
     let store = open_store(&db).await?;
@@ -122,39 +185,16 @@ pub(crate) async fn cmd_serve(
             }
         });
     }
-    let listener = tokio::net::TcpListener::bind(&bind)
+    let listener = tokio::net::TcpListener::bind(bind)
         .await
         .with_context(|| format!("bind {bind}"))?;
     let addr = listener.local_addr().context("read local addr")?;
-    let url = format!("http://{addr}");
-    // Install the termination handlers BEFORE announcing readiness. Callers that parse the
-    // listen line and then signal us (the e2e harness) would otherwise race handler setup,
-    // and losing that race means the default disposition kills the process outright —
-    // measured: SIGTERM 7ms after the listen line died by signal, 500ms after it exited 0.
-    let terminate = install_termination_signals().context("install termination handlers")?;
-    println!("hya server listening on {url}");
-    emit_startup_mark("backend_listen", Some(&url));
-    // Without a shutdown future `axum::serve` never returns, so `built.shutdown()` below
-    // would be unreachable and the process could only ever die by signal — skipping atexit
-    // handlers (and therefore any coverage/profile flush). Handing it SIGTERM/Ctrl-C makes
-    // the already-written teardown path run and lets `main` return normally.
-    // On a stop signal, drain first: every in-flight turn in every session
-    // (roots and members) is cancelled with cause `shutdown` and closes its
-    // messages within the drain deadline, members go terminal, and new turns
-    // are refused — so open turn requests finish and the HTTP server can
-    // complete its graceful shutdown.
-    let supervisor = built.resident_supervisor();
-    let serve_result = axum::serve(listener, server_router(state))
-        .with_graceful_shutdown(async move {
-            wait_for_termination(terminate).await;
-            supervisor
-                .drain(hya_proto::FinishCause::Shutdown, hya_core::DRAIN_DEADLINE)
-                .await;
-        })
-        .await
-        .context("serve http");
-    let shutdown_result = built.shutdown().await.context("shutdown spawn supervisor");
-    serve_result.and(shutdown_result)
+    Ok(PreparedServer {
+        url: format!("http://{addr}"),
+        listener,
+        router: server_router(state),
+        built,
+    })
 }
 
 fn spawn_provider_catalog_refresh(

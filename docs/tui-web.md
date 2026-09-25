@@ -8,7 +8,9 @@ a browser with xterm.js. It has two jobs:
   check per-cell colors and glyph widths, and attach screenshots, with no
   tmux scraping.
 - **WebUI.** The same host serves the TUI to any browser, so the TUI and the
-  WebUI ship as one frontend.
+  WebUI ship as one frontend. Running `hya` in a terminal starts it on
+  `http://127.0.0.1:3250` (`hya --port <N>` to change) next to the terminal
+  TUI; see [Served by `hya`](#served-by-hya).
 
 The host is terminal-program agnostic: it runs one fixed command per browser
 connection. It pairs with the Bun/OpenTUI frontend (`packages/hya-tui`,
@@ -25,6 +27,32 @@ For specs that need those, `e2e/fake-model.ts` runs a small scriptable OpenAI
 model server (Chat Completions and Responses API) in the Playwright process
 itself, and the `backend` fixture can wire the isolated `hya serve` to it
 instead of the offline model. See "The fake model" below.
+
+## Served by `hya`
+
+Bare `hya` on a terminal ([CLI reference](cli.md#bare-hya)) runs this host
+from `lib/hya/tui-web` next to the binary (a release archive or `install.sh`
+puts it there), else `HYA_TUI_WEB_DIR`, else the source checkout's
+`packages/hya-tui-web`:
+
+```text
+bun <tui-web>/src/main.ts --host 127.0.0.1 --port <port> --cwd <cwd> -- \
+  bun <tui>/src/main.ts --server <in-process server URL> --dir <cwd>
+```
+
+So every browser tab runs its own TUI against the server inside `hya`, the
+same one the terminal TUI uses: sessions, turns, and permission prompts are
+shared. `hya` reads the host's `hya-tui-web listening on <url>` line (stdout)
+to learn that it is up and passes the URL to the terminal TUI (`--web-url`),
+or the reason it failed (`--web-error`, for example `port 3250 is in use`).
+The host's output goes to `hya`'s log file (`[webui] ` lines). When the
+terminal TUI exits, `hya` sends the host SIGTERM; the host then ends every
+tab's process (below) before it exits. The host stays generic: `hya` only
+chooses the fixed command.
+
+Open `http://127.0.0.1:3250` in a browser on the same machine. The host binds
+loopback only; to reach it from elsewhere, tunnel it (for example
+`ssh -L 3250:127.0.0.1:3250 <host>`) rather than binding a public address.
 
 ## Usage
 
@@ -64,6 +92,11 @@ TUI owns its backend.
 Each browser tab gets its own process. Closing the tab sends the process
 SIGHUP. When the process exits, the page shows
 `[process exited with code N]`.
+
+SIGINT, SIGTERM, or SIGHUP to the host stops it: it sends every tab's
+process SIGHUP, SIGKILLs the process group of any still running after 3 s,
+waits for all of them, lets each open tab receive its exit frame, then
+closes the listener and exits 0. No tab process outlives the host.
 
 | Flag | Default | Meaning |
 | --- | --- | --- |
@@ -390,8 +423,10 @@ Teardown attaches the final screen and stops the host. `fixture(name)` returns
 
 ### Library
 
-`src/host.ts` exports `startHost({ command, cwd?, env?, hostname?, port? })`.
-It returns `{ url, stop() }`. The spawned command gets
+`src/host.ts` exports `startHost({ command, cwd?, env?, hostname?, port?, stopGraceMs? })`.
+It returns `{ url, stop() }`; `stop()` resolves once every PTY process has
+exited (SIGHUP, then SIGKILL to its process group after `stopGraceMs`,
+default 3000). The spawned command gets
 `TERM=xterm-256color` and `COLORTERM=truecolor`. `src/frames.ts` exports the
 frame codec (`encodeClientFrame`, `decodeClientFrame`, `encodeServerFrame`,
 `decodeServerFrame`).

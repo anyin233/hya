@@ -51,8 +51,11 @@ ADR-0018). All TUI preview and testing goes through that browser rendering.
   `HYA_BIN=target/debug/hya bun packages/hya-tui-web/src/main.ts --port 7681 -- bun packages/hya-tui/src/main.ts --dir "$PWD"`
   (the TUI starts and stops its own `hya serve`), or add
   `--server http://127.0.0.1:8080` to the TUI command to use a
-  `hya serve --bind 127.0.0.1:8080` you run yourself. The offline echo model
-  is enough; do not spend real provider calls on UI checks.
+  `hya serve --bind 127.0.0.1:8080` you run yourself. To preview bare `hya`
+  itself (TUI + WebUI), make it the host command:
+  `bun packages/hya-tui-web/src/main.ts --port 7681 -- target/debug/hya --port 0`.
+  The offline echo model is enough; do not spend real provider calls on UI
+  checks.
 - **Every user-visible TUI change gets a Playwright spec** under
   `packages/hya-tui-web/e2e/`. Use the `tui()` fixture from `e2e/harness.ts`,
   and follow the TDD gate: the spec fails before the change. Cover layout,
@@ -93,9 +96,10 @@ workspace: user prompts, model deltas, tool calls, permissions, token usage, and
 session lifecycle changes are appended as `Event`s, then replayed into a
 projection for the HTTP API and client surfaces. The interactive
 frontend is the Bun/OpenTUI TUI in `packages/hya-tui` (v1 HTTP/JSON+SSE
-client, run from source); `packages/hya-tui-web` renders the same TUI in a
-browser as the WebUI. `hya-sdk-v1`, `hya-client`, and gRPC are the other
-supported ways to drive a backend.
+client); `packages/hya-tui-web` renders the same TUI in a browser as the
+WebUI. Bare `hya` on a terminal starts both against an in-process server.
+`hya-sdk-v1`, `hya-client`, and gRPC are the other supported ways to drive a
+backend.
 
 The server exposes exactly one contract — `hya.v1` (17 services / 84 rpcs in
 `proto/hya/v1`) — over HTTP/JSON+SSE+WebSocket under `/v1` and, when
@@ -126,7 +130,7 @@ or verifiers; workers do not decide that their own objective is done.
 
 | Component | Feature |
 | --- | --- |
-| `crates/hya-backend` | Package for the unified `hya` executable — the only shipped binary and the single terminal entry point; subcommands select the controlled area. Bare `hya` prints a guidance banner (no interactive frontend is bundled). Subcommands cover `exec`/`run`, `-p/--prompt` goal mode, `loop`, `serve`, `tail-session`, `sessions`, `rpc`, `login`/`oauth`/`auth`, `agent`, `bundle`, `workflow`, `models`, and `update` (the self-update TCB from `hya-updater`, dispatched before any runtime composition). Runtime commands **compose** through `hya-app`. Build with `cargo build -p hya-backend --bin hya`. |
+| `crates/hya-backend` | Package for the unified `hya` executable — the only shipped binary and the single terminal entry point; subcommands select the controlled area. Bare `hya` on a terminal runs the v1 server in-process and starts the Bun TUI and the WebUI host as child processes (`src/frontend.rs`: asset/Bun resolution, lifecycle, log file; `--port`, default 3250; see `docs/cli.md` "Bare `hya`", ADR-0020); without a terminal it prints a guidance banner. Subcommands cover `exec`/`run`, `-p/--prompt` goal mode, `loop`, `serve`, `tail-session`, `sessions`, `rpc`, `login`/`oauth`/`auth`, `agent`, `bundle`, `workflow`, `models`, and `update` (the self-update TCB from `hya-updater`, dispatched before any runtime composition). Runtime commands **compose** through `hya-app`. Build with `cargo build -p hya-backend --bin hya`. |
 | `crates/hya-app` | Runtime composition library (not a binary). Config load, provider/auth resolution, MCP and plugin wiring, permission policy construction, session engine build, `WorkflowControl` admission/list/info/select/run/state, and installed-bundle catalog refresh. Prefer this crate over `hya-backend` when changing composition or Workflow control, not CLI surface. |
 | `crates/hya-bundle` | `AgentBundle` and `WorkflowBundle` prepare/validate/catalog types and package fixtures. Catalog builders and resource/agent/Workflow resolution used by install CLI and process E2E. Also the runtime loader for the twelve trusted first-party bundles (`first_party_bundle`; see `docs/bundle-runtime.md`). Prefer this crate for bundle authoring contracts and prepare semantics. |
 | `crates/hya-workflow` | Workflow source parsing, normalization, validation, and immutable compiled plans. Prefer this crate for authoring/compile contracts; execution belongs to `hya-core`. |
@@ -146,8 +150,8 @@ or verifiers; workers do not decide that their own objective is done.
 | `crates/hya-plugin-example` | Placeholder stub binary (`fn main() {}`); does **not** speak the plugin protocol. Reserved for a future deterministic native-plugin QA fixture. For a real ABI reference, see `docs/plugin-protocol.md`. |
 | `crates/xtask` | Dev-tooling entry point with working tasks: `startup-bench`, `matrix-check`, `package-bundle`, and `release-rehearsal`. |
 | `crates/hya-e2e` | Process-level agent E2E harness (Track P): real `hya` + FakeLlm. Matrix in `matrix.toml`; docs under `docs/testing/`. |
-| `packages/hya-tui` | Bun/OpenTUI TUI over the v1 HTTP/JSON+SSE contract: sessions, transcript, turns, pending interactions, models, Workflows, saved provider keys, slash completion, and a generic `/api` command view. Run from source (`bun packages/hya-tui/src/main.ts --server URL`); not in the release archive. See `docs/tui.md`. |
-| `packages/hya-tui-web` | Bun host that runs a terminal frontend on a real PTY and renders it in the browser with xterm.js (WebSocket frames reuse `hya.v1` `PtyClientFrame`/`PtyServerFrame`). Playwright harness for TUI visual/interaction tests and the WebUI host. See `docs/tui-web.md`. |
+| `packages/hya-tui` | Bun/OpenTUI TUI over the v1 HTTP/JSON+SSE contract: sessions, transcript, turns, pending interactions, models, Workflows, saved provider keys, slash completion, and a generic `/api` command view. Started by bare `hya` (`--server <in-process URL> --web-url|--web-error`); shipped as `lib/hya/tui` in the release archive and source install, so it must stay self-contained (no imports outside the package; the `/api` catalog `src/operations.json` is generated by `gen-api`). Also runs directly with Bun for development (`bun packages/hya-tui/src/main.ts`). See `docs/tui.md`. |
+| `packages/hya-tui-web` | Bun host that runs a terminal frontend on a real PTY and renders it in the browser with xterm.js (WebSocket frames reuse `hya.v1` `PtyClientFrame`/`PtyServerFrame`). Playwright harness for TUI visual/interaction tests and the WebUI host that bare `hya` starts (shipped as `lib/hya/tui-web`). See `docs/tui-web.md`. |
 | `.planning` | Local task plans, findings, and progress using `planning-with-files`; existing tasks remain separate. |
 | `docs/spec` | Project coding guidelines. Read the relevant layer's `index.md` before changing code. |
 | `docs/development-history` | Preserved task artifacts and developer journals for historical reference. |
@@ -164,7 +168,8 @@ or verifiers; workers do not decide that their own objective is done.
 - TUI work goes into `packages/hya-tui` (ADR-0019). Do not add another
   interactive frontend (a Rust TUI crate, ratatui frontend, or second
   TypeScript terminal frontend) or move rendering into the backend without an
-  explicit decision. The TUI reads the server projection over the v1 contract;
+  explicit decision. Bare `hya` only orchestrates the Bun processes
+  (ADR-0020); it never renders. The TUI reads the server projection over the v1 contract;
   it does not build a competing durable state model from SSE deltas.
 - Prefer existing planes (`PermissionPlane`, `InteractionPlane`, `SpawnerPlane`,
   `TodoPlane`, `SkillPlane`, `WebSearchPlane`, `LspPlane`) over adding another

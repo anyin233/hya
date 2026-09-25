@@ -65,4 +65,24 @@ describe("tui-web host", () => {
     })
     expect(response.status).toBe(403)
   })
+
+  test("stop() ends every PTY process, killing one that ignores SIGHUP after the grace period", async () => {
+    host = startHost({ command: ["sh", "-c", "trap '' HUP; echo pid:$$; while :; do sleep 1; done"], port: 0, stopGraceMs: 300 })
+    const ws = new WebSocket(`${host.url.replace("http", "ws")}pty?cols=80&rows=24`)
+    const state = collect(ws)
+    await until(() => /pid:\d+/.test(state.text))
+    const pid = Number(/pid:(\d+)/.exec(state.text)![1])
+    const alive = () => {
+      try {
+        process.kill(pid, 0)
+        return true
+      } catch {
+        return false
+      }
+    }
+    expect(alive()).toBe(true)
+    await host.stop()
+    host = undefined
+    expect(alive()).toBe(false)
+  })
 })
