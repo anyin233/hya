@@ -39,6 +39,42 @@ cross-session recovery, keep `task_plan.md`, `findings.md`, and `progress.md` in
 - Place the documentation using the boundary-to-page table in `docs/development.md`; a genuinely new surface gets a new page under `docs/` linked from `docs/README.md`.
 - Documentation is part of the feature's verification gate: do not commit or push feature work until the matching documentation is updated.
 
+## TUI Preview & Browser Test Rule
+
+The TUI and the WebUI are one frontend: `packages/hya-tui-web` runs the TUI on
+a real PTY and renders it in the browser with xterm.js (see `docs/tui-web.md`,
+ADR-0018). All TUI preview and testing goes through that browser rendering.
+
+- **Preview in the browser, not a terminal multiplexer.** Do not use tmux,
+  `script`, or terminal scraping to check TUI output. To look at the TUI, serve
+  it and open the printed URL, for example:
+  `bun packages/hya-tui-web/src/main.ts --port 7681 -- bun packages/hya-tui/src/main.ts --server http://127.0.0.1:8080`
+  against `hya serve --bind 127.0.0.1:8080`. The offline echo model is
+  enough; do not spend real provider calls on UI checks.
+- **Every user-visible TUI change gets a Playwright spec** under
+  `packages/hya-tui-web/e2e/`. Use the `tui()` fixture from `e2e/harness.ts`,
+  and follow the TDD gate: the spec fails before the change. Cover layout,
+  keys, resize, and exit paths the change touches.
+- **Assert on the terminal buffer, not pixels.** Use `waitForText`, `find`,
+  `cell` (color `#rrggbb`, glyph `width`, bold/inverse), and `size`. Do not
+  commit pixel-baseline screenshots, because fonts differ between machines.
+  Use `waitForText`/`expect.poll`, never fixed sleeps.
+- **Look at the result before reporting a visual change done.** Every test
+  writes `test-results/<test>/final-screen.png` and `final-screen.txt`. Open
+  the PNG (agents: read the image) at the default 1100×640 viewport. If the
+  change depends on size, also check a narrow viewport (about 80 columns).
+- **Keep keybindings browser-safe.** The WebUI runs inside a browser, which
+  reserves some shortcuts (Ctrl/Cmd+W, T, N, L, Tab, and Ctrl+Tab). Do not bind
+  core TUI actions only to these. Every binding must be reachable through
+  `press()` in a spec.
+- **Keep the host generic.** `packages/hya-tui-web` has no hya-specific logic
+  and runs only the fixed command it was started with. The WebUI shows exactly
+  what the TUI draws; a browser-only feature needs its own ADR. Rendering never
+  moves into `hya serve`.
+- **Frame contract.** The `/pty` WebSocket speaks the protojson
+  `hya.v1` `PtyClientFrame`/`PtyServerFrame` shapes. A change to that contract
+  updates `src/frames.ts`, its unit tests, and `docs/tui-web.md` together.
+
 ## Release & Changelog Rule
 
 - Before publishing a new version, the local agent must ensure `[workspace.package].version` in `Cargo.toml`, the `vX.Y.Z` release tag, and root `CHANGELOG.md` all describe the same version.
