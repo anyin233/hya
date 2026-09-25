@@ -8,7 +8,7 @@
 use std::path::PathBuf;
 
 use axum::extract::{Path as AxumPath, State};
-use axum::routing::put;
+use axum::routing::{get, put};
 use axum::{Json, Router};
 
 use crate::ServerState;
@@ -18,6 +18,7 @@ use super::V1Error;
 
 pub(crate) fn router() -> Router<ServerState> {
     Router::new()
+        .route("/v1/auth", get(list_provider_auth))
         .route(
             "/v1/auth/:provider_id",
             put(set_provider_auth).delete(remove_provider_auth),
@@ -30,6 +31,32 @@ pub(crate) fn router() -> Router<ServerState> {
             "/v1/auth/:provider_id/oauth/callback",
             axum::routing::post(complete_oauth),
         )
+}
+
+async fn list_provider_auth() -> Result<Json<pb::ListProviderAuthResponse>, V1Error> {
+    let dir = auth_dir().ok_or_else(|| V1Error::internal("no config directory"))?;
+    let mut provider_ids = Vec::new();
+    match std::fs::read_dir(dir) {
+        Ok(entries) => {
+            for entry in entries {
+                let path = entry
+                    .map_err(|error| V1Error::internal(error.to_string()))?
+                    .path();
+                if path.extension().and_then(|ext| ext.to_str()) != Some("yaml") {
+                    continue;
+                }
+                if let Some(id) = path.file_stem().and_then(|stem| stem.to_str())
+                    && !id.starts_with('.')
+                {
+                    provider_ids.push(id.to_owned());
+                }
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(V1Error::internal(error.to_string())),
+    }
+    provider_ids.sort();
+    Ok(Json(pb::ListProviderAuthResponse { provider_ids }))
 }
 
 async fn set_provider_auth(
@@ -112,7 +139,25 @@ fn auth_dir() -> Option<PathBuf> {
 fn save_token_in(dir: &std::path::Path, provider: &str, token: &str) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
     let body = format!("token: \"{}\"\n", yaml_escape(token.trim()));
-    std::fs::write(dir.join(format!("{provider}.yaml")), body)
+    let path = dir.join(format!("{provider}.yaml"));
+    #[cfg(unix)]
+    {
+        use std::io::Write as _;
+        use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
+
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        file.write_all(body.as_bytes())
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::write(path, body)
+    }
 }
 
 fn yaml_escape(s: &str) -> String {

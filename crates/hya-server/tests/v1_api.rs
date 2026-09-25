@@ -174,6 +174,19 @@ async fn v1_auth_stores_and_removes_provider_keys() {
     let stored = home.join("hya/auth/testprovider.yaml");
     let content = std::fs::read_to_string(&stored).unwrap();
     assert!(content.contains("secret-key"));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        assert_eq!(
+            std::fs::metadata(&stored).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+
+    let (status, listed) = send(app.clone(), Method::GET, "/v1/auth", Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    assert_eq!(listed["providerIds"], json!(["testprovider"]));
+    assert!(!listed.to_string().contains("secret-key"));
 
     let (status, _) = send(
         app.clone(),
@@ -184,6 +197,10 @@ async fn v1_auth_stores_and_removes_provider_keys() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert!(!stored.exists());
+
+    let (status, listed) = send(app.clone(), Method::GET, "/v1/auth", Value::Null).await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    assert!(listed.get("providerIds").is_none_or(Value::is_null));
 
     let (status, _body) = send(app, Method::PUT, "/v1/auth/bad..id", json!({"apiKey": "x"})).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);

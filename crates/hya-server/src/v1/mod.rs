@@ -177,13 +177,15 @@ pub(crate) fn scope_directory(
 /// parameters.
 ///
 /// GET/DELETE requests carry their fields as query parameters in protojson
-/// camelCase form; path variables override query values. String-encoded
-/// numbers follow protojson rules.
+/// camelCase form; `page.cursor` and `page.limit` populate the nested page
+/// message. Path variables override query values. String-encoded numbers
+/// follow protojson rules.
 pub(crate) fn query_request<T: DeserializeOwned>(
     path_vars: &[(&str, &str)],
     query: &BTreeMap<String, String>,
 ) -> Result<T, V1Error> {
     let mut map = serde_json::Map::new();
+    let mut page = serde_json::Map::new();
     for (key, value) in query {
         if value.is_empty() {
             continue;
@@ -195,7 +197,14 @@ pub(crate) fn query_request<T: DeserializeOwned>(
             "false" => Value::Bool(false),
             _ => Value::String(value.clone()),
         };
-        map.insert(key.clone(), json);
+        if let Some(field @ ("cursor" | "limit")) = key.strip_prefix("page.") {
+            page.insert(field.to_owned(), json);
+        } else {
+            map.insert(key.clone(), json);
+        }
+    }
+    if !page.is_empty() {
+        map.insert("page".to_owned(), Value::Object(page));
     }
     for (key, value) in path_vars {
         map.insert((*key).to_owned(), Value::String((*value).to_owned()));
@@ -205,3 +214,24 @@ pub(crate) fn query_request<T: DeserializeOwned>(
 }
 
 pub use grpc::V1Grpc;
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use hya_api::v1 as pb;
+
+    use super::query_request;
+
+    #[test]
+    fn query_request_decodes_page_fields_from_dotted_query_keys() {
+        let query = BTreeMap::from([
+            ("page.cursor".to_owned(), "next".to_owned()),
+            ("page.limit".to_owned(), "2".to_owned()),
+        ]);
+        let request: pb::ListSessionsRequest = query_request(&[], &query).unwrap_or_default();
+        let page = request.page;
+        assert_eq!(page.as_ref().map(|page| page.cursor.as_str()), Some("next"));
+        assert_eq!(page.as_ref().map(|page| page.limit), Some(2));
+    }
+}

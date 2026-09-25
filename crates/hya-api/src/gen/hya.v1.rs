@@ -1651,6 +1651,14 @@ pub mod catalog_server {
         const NAME: &'static str = SERVICE_NAME;
     }
 }
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct ListProviderAuthRequest {}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ListProviderAuthResponse {
+    /// Sorted provider ids that have a stored credential file.
+    #[prost(string, repeated, tag = "1")]
+    pub provider_ids: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+}
 /// OAuth tokens captured from a completed provider flow.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct OauthTokens {
@@ -1839,6 +1847,33 @@ pub mod auth_client {
             self.inner = self.inner.max_encoding_message_size(limit);
             self
         }
+        /// List provider ids with saved credentials. Never returns secret values.
+        ///
+        /// hya.http: GET /v1/auth
+        pub async fn list_provider_auth(
+            &mut self,
+            request: impl tonic::IntoRequest<super::ListProviderAuthRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ListProviderAuthResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/hya.v1.Auth/ListProviderAuth",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("hya.v1.Auth", "ListProviderAuth"));
+            self.inner.unary(req, path, codec).await
+        }
         /// Store an API key or refresh tokens for a provider.
         ///
         /// hya.http: PUT /v1/auth/{provider_id}
@@ -1958,6 +1993,16 @@ pub mod auth_server {
     /// Generated trait containing gRPC methods that should be implemented for use with AuthServer.
     #[async_trait]
     pub trait Auth: std::marker::Send + std::marker::Sync + 'static {
+        /// List provider ids with saved credentials. Never returns secret values.
+        ///
+        /// hya.http: GET /v1/auth
+        async fn list_provider_auth(
+            &self,
+            request: tonic::Request<super::ListProviderAuthRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ListProviderAuthResponse>,
+            tonic::Status,
+        >;
         /// Store an API key or refresh tokens for a provider.
         ///
         /// hya.http: PUT /v1/auth/{provider_id}
@@ -2078,6 +2123,51 @@ pub mod auth_server {
         }
         fn call(&mut self, req: http::Request<B>) -> Self::Future {
             match req.uri().path() {
+                "/hya.v1.Auth/ListProviderAuth" => {
+                    #[allow(non_camel_case_types)]
+                    struct ListProviderAuthSvc<T: Auth>(pub Arc<T>);
+                    impl<
+                        T: Auth,
+                    > tonic::server::UnaryService<super::ListProviderAuthRequest>
+                    for ListProviderAuthSvc<T> {
+                        type Response = super::ListProviderAuthResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::ListProviderAuthRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as Auth>::list_provider_auth(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = ListProviderAuthSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
                 "/hya.v1.Auth/SetProviderAuth" => {
                     #[allow(non_camel_case_types)]
                     struct SetProviderAuthSvc<T: Auth>(pub Arc<T>);

@@ -1,5 +1,11 @@
 # 0.41.0
 
+## List saved provider keys over the v1 API
+
+- New rpc `Auth.ListProviderAuth` (`GET /v1/auth`) answers `{"providerIds": [...]}`, the sorted provider ids with a saved `auth/<id>.yaml` credential. It never returns key values. The contract is now 17 services / 83 rpcs.
+- `PUT /v1/auth/{providerId}` now writes the key file with mode `0600` on Unix.
+- HTTP GET list routes read nested pagination from `page.cursor` and `page.limit` query parameters. Before this, these keys were ignored.
+
 ## Browser-rendered TUI test environment
 
 - New package `packages/hya-tui-web` runs a terminal program on a real PTY and renders it in the browser with xterm.js. Start it with `bun packages/hya-tui-web/src/main.ts [--host 127.0.0.1] [--port 7681] [--cwd DIR] -- <command...>`. Each browser connection gets its own process. Browser resizes reach the program as SIGWINCH. The host rejects cross-origin WebSocket upgrades and binds loopback by default.

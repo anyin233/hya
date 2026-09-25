@@ -330,6 +330,13 @@ impl pb::catalog_server::Catalog for V1Grpc {
 
 #[tonic::async_trait]
 impl pb::auth_server::Auth for V1Grpc {
+    async fn list_provider_auth(
+        &self,
+        request: GrpcRequest<pb::ListProviderAuthRequest>,
+    ) -> Result<GrpcResponse<pb::ListProviderAuthResponse>, Status> {
+        get_rpc!(self, "/v1/auth", request)
+    }
+
     async fn set_provider_auth(
         &self,
         request: GrpcRequest<pb::SetProviderAuthRequest>,

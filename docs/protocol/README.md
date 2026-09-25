@@ -63,9 +63,10 @@ Stable codes and their HTTP status / gRPC code:
 
 ## Pagination
 
-Every list rpc takes `page: {cursor, limit}` and answers
+Paginated list rpcs take `page: {cursor, limit}` and answer
 `page: {nextCursor, hasMore}`. Cursors are opaque; pass `nextCursor` back
-verbatim. Events use the monotonic `sinceSeq` watermark instead.
+verbatim. Over HTTP GET, send them as `page.cursor` and `page.limit` query
+parameters. Events use the monotonic `sinceSeq` watermark instead.
 
 ## The event-driven model
 
