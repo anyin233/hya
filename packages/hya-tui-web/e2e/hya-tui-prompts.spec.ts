@@ -3,7 +3,8 @@
 // permission model (bash, edit, and write ask), its option keys (1/2/3,
 // arrows + Enter, Esc denies), Always allow, queued asks (`1 of 2`), question
 // options / free text / reject from `ask_user`, a subagent's ask shown in the
-// parent, and a `!command` shell ask — all driven by the fake model.
+// parent — all driven by the fake model — and a `!command` shell turn that
+// never asks.
 
 import { writeFile } from "node:fs/promises"
 import { join } from "node:path"
@@ -310,17 +311,15 @@ test.describe("subagent asks", () => {
   })
 })
 
-test.describe("shell ask", () => {
-  test("!command asks through the prompt; 1 runs it", async ({ tui, backend }) => {
+test.describe("shell turns", () => {
+  test("the user's own !command never shows a prompt", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
     await term.waitForText("Connected to hya")
     await prompt(term, "!echo shell-prompt")
-    await promptShown(term)
-    await term.waitForText("│ $ echo shell-prompt")
-    await term.press("1")
+    await term.waitForText("│ $ echo shell-prompt", 20_000)
     await term.waitForText(/✓ bash\s+echo shell-prompt/, 20_000)
     await term.waitForText("│ shell-prompt")
-    await promptGone(term)
+    expect(await term.text()).not.toMatch(/asked by /)
   })
 })
 

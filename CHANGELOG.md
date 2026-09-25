@@ -1,5 +1,9 @@
 # 0.41.0
 
+## Your own `!` commands run without a permission prompt
+
+- A shell command you type yourself (`!cmd` in the TUI, or a v1 `ShellTurn`) no longer asks for permission in any mode: `manual`, `yolo`, or a bundle mode. Explicit deny rules still block it, a working directory outside the project still asks, and a plugin's `tool.execute.before` veto still applies. A plugin's `permission.ask` hook and a bundle mode's `permission.approve` approver are not consulted for it. Commands the model runs through `bash` ask as before. See [Configuration](docs/configuration.md).
+
 ## TUI themes and a preferences file
 
 - `/theme` opens a picker of the built-in themes: `hya` (the default look), `light`, `contrast`, and `ember`. Moving the highlight previews a theme live; Enter keeps it; Esc restores the previous one.

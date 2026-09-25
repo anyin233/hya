@@ -5,7 +5,7 @@
 import { writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import type { Tui } from "./harness"
-import { expect, hangStep, hyaTui, test } from "./hya"
+import { expect, hangStep, hyaTui, test, textStep, toolStep } from "./hya"
 
 const warning = "#e5c07b"
 const accent = "#73c8e8"
@@ -210,7 +210,7 @@ test.describe("Esc cancels a running turn", () => {
 })
 
 test.describe("shell turns", () => {
-  test("!command shows the shell indicator and runs as a shell turn", async ({ tui, backend }, testInfo) => {
+  test("!command shows the shell indicator and runs as a shell turn without a prompt", async ({ tui, backend }, testInfo) => {
     const term = await tui(hyaTui(backend))
     await connected(term)
     await term.type("!echo hello")
@@ -222,33 +222,47 @@ test.describe("shell turns", () => {
     // The user block shows what was typed; the assistant shows the command under the bash call.
     await term.waitForText("┃ !echo hello", 20_000)
     await term.waitForText("$ echo hello")
-    // The default permission policy asks before the shell tool runs, also for a user's shell turn;
-    // the card waits for the answer. `/approve <id>` still answers it (the prompt's keyboard fallback).
-    await term.waitForText(/perm_\w+/)
-    await term.waitForText(/◌ bash\s+echo hello · awaiting approval/)
-    expect((await term.cell((await term.find("◌ bash"))!.row, (await term.find("◌ bash"))!.col))?.fg).toBe(warning)
-    const id = /perm_\w+/.exec(await term.text())![0]
-    await term.type(`/approve ${id}`)
-    await term.press("Enter")
-    await term.waitForText(/✓ bash\s+echo hello/)
+    // The user typed the command, so it runs without a permission prompt even in manual mode.
+    await term.waitForText(/✓ bash\s+echo hello/, 20_000)
     await term.waitForText(/^Ready/m)
-    expect(await term.text()).not.toContain("The following tool was executed by the user")
+    const text = await term.text()
+    expect(text).not.toMatch(/asked by |perm_\w+|awaiting approval/)
+    expect(text).not.toContain("The following tool was executed by the user")
     const title = (await composer(term)).title
     expect(title).toBe("")
   })
 
   // A shell turn's bash card starts expanded: the command and its output show.
-  // The ask is answered through the permission prompt (1 = Allow once).
   test("!echo hello shows the command output", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
     await connected(term)
     await term.type("!echo hello")
     await term.press("Enter")
-    await term.waitForText("asked by build", 20_000)
-    await term.press("1")
     await term.waitForText("$ echo hello", 20_000)
     await term.waitForText(/✓ bash\s+echo hello/, 20_000)
     await term.waitForText("│ hello")
+  })
+})
+
+test.describe("/approve", () => {
+  test.use({ model: { steps: [toolStep("bash", { command: "echo approve-me" }), textStep("Approved by command.")] } })
+
+  // The model's bash call asks; the card waits, and `/approve <id>` (the
+  // prompt's keyboard fallback) answers it.
+  test("/approve <id> answers a pending ask", async ({ tui, backend }) => {
+    const term = await tui(hyaTui(backend))
+    await connected(term)
+    await term.type("run it")
+    await term.press("Enter")
+    await term.waitForText(/perm_\w+/, 20_000)
+    await term.waitForText(/◌ bash\s+echo approve-me · awaiting approval/)
+    const card = (await term.find("◌ bash"))!
+    expect((await term.cell(card.row, card.col))?.fg).toBe(warning)
+    const id = /perm_\w+/.exec(await term.text())![0]
+    await term.type(`/approve ${id}`)
+    await term.press("Enter")
+    await term.waitForText("Approved by command.", 20_000)
+    await term.waitForText(/✓ bash\s+echo approve-me/)
   })
 })
 

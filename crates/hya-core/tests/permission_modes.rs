@@ -467,47 +467,75 @@ async fn bundle_mode_approver_decides_and_defer_falls_back_to_the_user() {
     assert_eq!(seen.lock().unwrap().len(), 2);
 }
 
-#[tokio::test]
-async fn direct_shell_turns_follow_the_tree_mode() {
-    let dir = workdir();
-    let (engine, mut asks) = engine_with(&[], PermissionModel::Default, builtin_runtime()).await;
-    let root = create(&engine, None, &dir).await;
-    let child = create(&engine, Some(root), &dir).await;
-    engine.set_permission_mode(root, "yolo").await.unwrap();
+/// Run the user's own `command` as a direct shell turn, failing if it waits
+/// for an ask.
+async fn user_shell(
+    engine: &SessionEngine,
+    session: SessionId,
+    dir: &std::path::Path,
+    command: &str,
+) -> FinishReason {
     let (_message, finish) = tokio::time::timeout(
         Duration::from_secs(5),
         engine.run_shell(
-            child,
-            &agent(&dir),
-            "printf direct-yolo".to_string(),
+            session,
+            &agent(dir),
+            command.to_string(),
             CancellationToken::new(),
         ),
     )
     .await
-    .expect("yolo shell must not wait for an ask")
+    .expect("the user's own shell command must not wait for an ask")
     .unwrap();
-    assert_eq!(finish, FinishReason::Stop);
+    finish
+}
+
+#[tokio::test]
+async fn direct_shell_turns_never_ask_in_any_tree_mode() {
+    let dir = workdir();
+    let (engine, mut asks) = engine_with(&[], PermissionModel::Default, builtin_runtime()).await;
+    let root = create(&engine, None, &dir).await;
+    let child = create(&engine, Some(root), &dir).await;
+
+    engine.set_permission_mode(root, "yolo").await.unwrap();
+    assert_eq!(
+        user_shell(&engine, child, &dir, "printf direct-yolo").await,
+        FinishReason::Stop
+    );
     assert!(asks.try_recv().is_err(), "yolo shell must not ask");
 
     engine.set_permission_mode(root, "manual").await.unwrap();
-    let runner = Arc::clone(&engine);
-    let shell_agent = agent(&dir);
-    let task = tokio::spawn(async move {
-        runner
-            .run_shell(
-                child,
-                &shell_agent,
-                "printf direct-manual".to_string(),
-                CancellationToken::new(),
-            )
-            .await
-            .unwrap()
-            .1
-    });
-    next_ask(&mut asks)
+    assert_eq!(
+        user_shell(&engine, child, &dir, "printf direct-manual").await,
+        FinishReason::Stop
+    );
+    assert!(asks.try_recv().is_err(), "manual shell must not ask");
+}
+
+#[tokio::test]
+async fn direct_shell_turns_skip_the_bundle_mode_approver() {
+    let dir = workdir();
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let (engine, mut asks) = engine_with(
+        &[],
+        PermissionModel::Default,
+        approver_runtime(Arc::clone(&seen)),
+    )
+    .await;
+    let root = create(&engine, None, &dir).await;
+    engine
+        .set_permission_mode(root, "acme/approver/careful")
         .await
-        .reply
-        .send(Decision::AllowOnce)
         .unwrap();
-    assert_eq!(finished(task).await, FinishReason::Stop);
+
+    // The approver would defer on `printf other`; the user typed it, so it runs.
+    assert_eq!(
+        user_shell(&engine, root, &dir, "printf other").await,
+        FinishReason::Stop
+    );
+    assert!(asks.try_recv().is_err(), "bundle-mode shell must not ask");
+    assert!(
+        seen.lock().unwrap().is_empty(),
+        "the user's own command short-circuits before the mode approver"
+    );
 }
