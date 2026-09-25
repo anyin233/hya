@@ -61,16 +61,7 @@ async fn list_interactions(
             continue;
         }
         if matches_type(want_type, pb::InteractionType::Question) {
-            interactions.push(pb::Interaction {
-                id: field(&entry, "id"),
-                session: session_id,
-                r#type: pb::InteractionType::Question as i32,
-                title: field(&entry, "question"),
-                detail: String::new(),
-                options: Vec::new(),
-                payload: None,
-                time_created: None,
-            });
+            interactions.push(super::events::question_interaction(&entry));
         }
     }
     let (interactions, page) = super::catalog::paginate(interactions, &request.page);

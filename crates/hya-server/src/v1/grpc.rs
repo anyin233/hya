@@ -807,7 +807,7 @@ impl pb::events_server::Events for V1Grpc {
         }
         Ok(GrpcResponse::new(Box::pin(super::events::frame_stream(
             self.state.clone(),
-            Some(session),
+            super::events::StreamScope::session(session, inner.include_descendants),
             inner.since_seq,
         ))))
     }
@@ -822,7 +822,7 @@ impl pb::events_server::Events for V1Grpc {
         let inner = request.into_inner();
         Ok(GrpcResponse::new(Box::pin(super::events::frame_stream(
             self.state.clone(),
-            None,
+            super::events::StreamScope::Global,
             inner.since_seq,
         ))))
     }

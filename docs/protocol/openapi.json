@@ -1789,6 +1789,9 @@
           "since_seq": {
             "type": "integer",
             "format": "int64"
+          },
+          "include_descendants": {
+            "type": "boolean"
           }
         }
       },

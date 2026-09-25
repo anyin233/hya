@@ -5770,6 +5770,12 @@ pub struct StreamSessionEventsRequest {
     /// frames (`seq = 0`) are always delivered. No history is replayed.
     #[prost(uint64, tag = "2")]
     pub since_seq: u64,
+    /// Also deliver the live interaction frames (`permissionRequested`,
+    /// `questionRequested`, `interactionResolved`) of every descendant session
+    /// (subagents at any depth). Such a frame's `session` names the descendant
+    /// that asked, not the streamed session. Durable events stay per session.
+    #[prost(bool, tag = "3")]
+    pub include_descendants: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct StreamGlobalEventsRequest {

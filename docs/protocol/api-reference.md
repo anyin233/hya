@@ -1166,6 +1166,7 @@ Pagination outcome attached to every paginated response.
 |---|---|---|
 | `session` (1) | `string` | Session identifier to stream. |
 | `since_seq` (2) | `uint64` | Skip durable events with `seq` at or below this watermark. Live-only frames (`seq = 0`) are always delivered. No history is replayed. |
+| `include_descendants` (3) | `bool` | Also deliver the live interaction frames (`permissionRequested`, `questionRequested`, `interactionResolved`) of every descendant session (subagents at any depth). Such a frame's `session` names the descendant that asked, not the streamed session. Durable events stay per session. |
 
 ### `StreamGlobalEventsRequest`
 

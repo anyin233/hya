@@ -22838,6 +22838,9 @@ impl serde::Serialize for StreamSessionEventsRequest {
         if self.since_seq != 0 {
             len += 1;
         }
+        if self.include_descendants {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("hya.v1.StreamSessionEventsRequest", len)?;
         if !self.session.is_empty() {
             struct_ser.serialize_field("session", &self.session)?;
@@ -22846,6 +22849,9 @@ impl serde::Serialize for StreamSessionEventsRequest {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("sinceSeq", ToString::to_string(&self.since_seq).as_str())?;
+        }
+        if self.include_descendants {
+            struct_ser.serialize_field("includeDescendants", &self.include_descendants)?;
         }
         struct_ser.end()
     }
@@ -22860,12 +22866,15 @@ impl<'de> serde::Deserialize<'de> for StreamSessionEventsRequest {
             "session",
             "since_seq",
             "sinceSeq",
+            "include_descendants",
+            "includeDescendants",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Session,
             SinceSeq,
+            IncludeDescendants,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -22889,6 +22898,7 @@ impl<'de> serde::Deserialize<'de> for StreamSessionEventsRequest {
                         match value {
                             "session" => Ok(GeneratedField::Session),
                             "sinceSeq" | "since_seq" => Ok(GeneratedField::SinceSeq),
+                            "includeDescendants" | "include_descendants" => Ok(GeneratedField::IncludeDescendants),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -22910,6 +22920,7 @@ impl<'de> serde::Deserialize<'de> for StreamSessionEventsRequest {
             {
                 let mut session__ = None;
                 let mut since_seq__ = None;
+                let mut include_descendants__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Session => {
@@ -22926,11 +22937,18 @@ impl<'de> serde::Deserialize<'de> for StreamSessionEventsRequest {
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
+                        GeneratedField::IncludeDescendants => {
+                            if include_descendants__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("includeDescendants"));
+                            }
+                            include_descendants__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(StreamSessionEventsRequest {
                     session: session__.unwrap_or_default(),
                     since_seq: since_seq__.unwrap_or_default(),
+                    include_descendants: include_descendants__.unwrap_or_default(),
                 })
             }
         }

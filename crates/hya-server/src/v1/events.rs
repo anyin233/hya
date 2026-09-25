@@ -84,7 +84,8 @@ async fn stream_session(
     if !st.engine.session_exists(session).await? {
         return Err(V1Error::session_not_found(&request.session));
     }
-    Ok(session_stream(st, Some(session), request.since_seq).into_response())
+    let scope = StreamScope::session(session, request.include_descendants);
+    Ok(session_stream(st, scope, request.since_seq).into_response())
 }
 
 async fn stream_global(
@@ -92,16 +93,47 @@ async fn stream_global(
     Query(query): Query<BTreeMap<String, String>>,
 ) -> Result<Response, V1Error> {
     let request: pb::StreamGlobalEventsRequest = super::query_request(&[], &query)?;
-    Ok(session_stream(st, None, request.since_seq).into_response())
+    Ok(session_stream(st, StreamScope::Global, request.since_seq).into_response())
+}
+
+/// Which sessions a live stream serves.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum StreamScope {
+    /// Every session.
+    Global,
+    /// One session's frames; with `descendants`, also the live interaction
+    /// frames of every session below it in its tree.
+    Session {
+        /// The streamed session.
+        session: SessionId,
+        /// Deliver descendants' interaction frames too.
+        descendants: bool,
+    },
+}
+
+impl StreamScope {
+    pub(crate) fn session(session: SessionId, descendants: bool) -> Self {
+        Self::Session {
+            session,
+            descendants,
+        }
+    }
+
+    fn session_id(self) -> Option<SessionId> {
+        match self {
+            Self::Global => None,
+            Self::Session { session, .. } => Some(session),
+        }
+    }
 }
 
 /// Build the SSE stream shared by both scopes.
 fn session_stream(
     st: ServerState,
-    session: Option<SessionId>,
+    scope: StreamScope,
     since_seq: u64,
 ) -> Sse<impl Stream<Item = Result<SseEvent, Infallible>>> {
-    let events = frame_stream(st, session, since_seq).map(|frame| {
+    let events = frame_stream(st, scope, since_seq).map(|frame| {
         let event = match frame {
             Ok(frame) => SseEvent::default().json_data(frame).unwrap_or_default(),
             Err(status) => SseEvent::default().event("error").data(status.message()),
@@ -116,7 +148,9 @@ fn session_stream(
 /// Merges three feeds: the engine event bus, the pending permission plane,
 /// and the pending question plane. Permission and question frames are
 /// live-only (`seq == 0`): the pending queues are the authoritative
-/// listing, the streams are delivery.
+/// listing, the streams are delivery. A session scope with `descendants`
+/// also passes interaction frames whose session lies below the streamed one
+/// (walked up the parent chain), each still naming the asking session.
 ///
 /// The bus carries durable envelopes (`seq > 0`, filtered by `since_seq`)
 /// and live-only ones (`seq == 0`: assistant text deltas of an in-flight
@@ -127,9 +161,11 @@ fn session_stream(
 /// projection) is unaffected.
 pub(crate) fn frame_stream(
     st: ServerState,
-    session: Option<SessionId>,
+    scope: StreamScope,
     since_seq: u64,
 ) -> impl Stream<Item = Result<pb::StreamFrame, tonic::Status>> {
+    let session = scope.session_id();
+    let lineage = st.engine.clone();
     let engine =
         BroadcastStream::new(st.engine.bus().subscribe()).filter_map(move |result| async move {
             match result {
@@ -158,22 +194,29 @@ pub(crate) fn frame_stream(
     // Pending planes never error; the Result wrapper matches the merged
     // engine-stream item type (tonic::Status is large but never constructed
     // on these branches).
+    let permission_lineage = lineage.clone();
     #[allow(clippy::result_large_err)]
-    let permission = BroadcastStream::new(st.permission_requests.subscribe()).filter_map(
-        move |result| async move {
-            let Ok(value) = result else { return None };
-            interaction_frame(&value, session)
-                .map(|frame| Ok(pb::StreamFrame { frame: Some(frame) }))
-        },
-    );
+    let permission =
+        BroadcastStream::new(st.permission_requests.subscribe()).filter_map(move |result| {
+            let lineage = permission_lineage.clone();
+            async move {
+                let Ok(value) = result else { return None };
+                scoped_interaction_frame(&lineage, &value, scope)
+                    .await
+                    .map(|frame| Ok(pb::StreamFrame { frame: Some(frame) }))
+            }
+        });
     #[allow(clippy::result_large_err)]
-    let question = BroadcastStream::new(st.question_requests.subscribe()).filter_map(
-        move |result| async move {
-            let Ok(value) = result else { return None };
-            interaction_frame(&value, session)
-                .map(|frame| Ok(pb::StreamFrame { frame: Some(frame) }))
-        },
-    );
+    let question =
+        BroadcastStream::new(st.question_requests.subscribe()).filter_map(move |result| {
+            let lineage = lineage.clone();
+            async move {
+                let Ok(value) = result else { return None };
+                scoped_interaction_frame(&lineage, &value, scope)
+                    .await
+                    .map(|frame| Ok(pb::StreamFrame { frame: Some(frame) }))
+            }
+        });
     let engine: std::pin::Pin<
         Box<dyn Stream<Item = Result<pb::StreamFrame, tonic::Status>> + Send>,
     > = Box::pin(engine);
@@ -243,24 +286,107 @@ pub(crate) fn permission_interaction(properties: &Value) -> pb::Interaction {
     }
 }
 
-/// Map one pending-plane broadcast value onto a live frame, honoring the
-/// session filter for session-scoped streams.
-fn interaction_frame(
-    value: &serde_json::Value,
-    session: Option<SessionId>,
+/// Longest parent chain walked when matching a descendant's frame; subagent
+/// trees are far shallower (two layers below the lead).
+const MAX_LINEAGE_HOPS: usize = 32;
+
+/// `interaction_frame` under a stream scope: a session scope keeps its own
+/// session's frames (and frames with no session), plus — with `descendants`
+/// — frames of sessions whose parent chain reaches the streamed session.
+async fn scoped_interaction_frame(
+    engine: &hya_core::SessionEngine,
+    value: &Value,
+    scope: StreamScope,
 ) -> Option<pb::stream_frame::Frame> {
+    let frame = interaction_frame(value)?;
+    let StreamScope::Session {
+        session,
+        descendants,
+    } = scope
+    else {
+        return Some(frame);
+    };
+    let pb::stream_frame::Frame::Event(event) = &frame else {
+        return Some(frame);
+    };
+    if event.session.is_empty() || event.session == session.to_string() {
+        return Some(frame);
+    }
+    if !descendants {
+        return None;
+    }
+    let asking = event.session.parse::<SessionId>().ok()?;
+    is_descendant(engine, asking, session)
+        .await
+        .then_some(frame)
+}
+
+/// Whether `ancestor` is on `session`'s parent chain.
+async fn is_descendant(
+    engine: &hya_core::SessionEngine,
+    session: SessionId,
+    ancestor: SessionId,
+) -> bool {
+    let mut current = session;
+    for _ in 0..MAX_LINEAGE_HOPS {
+        let Ok(projection) = engine.read_projection_shared(current).await else {
+            return false;
+        };
+        match projection.session.parent {
+            Some(parent) if parent == ancestor => return true,
+            Some(parent) => current = parent,
+            None => return false,
+        }
+    }
+    false
+}
+
+/// Wire view of one pending question from its `question.asked` properties
+/// (the same view the listing serializes). The first question fills
+/// `title`, `detail` (its header), and `options` (its labels); `payload`
+/// carries every question as `{questions: [{question, header, options:
+/// [{label, description}], multiple?, custom?}]}`.
+pub(crate) fn question_interaction(properties: &Value) -> pb::Interaction {
+    let first = properties
+        .pointer("/questions/0")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let options: Vec<String> = first
+        .get("options")
+        .and_then(Value::as_array)
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|row| row.get("label").and_then(Value::as_str).map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default();
+    let questions = properties
+        .get("questions")
+        .filter(|questions| questions.is_array())
+        .cloned()
+        .unwrap_or_else(|| Value::Array(Vec::new()));
+    let mut payload = serde_json::Map::new();
+    payload.insert("questions".into(), questions);
+    pb::Interaction {
+        id: field_str(properties, "id"),
+        session: field_str(properties, "sessionID"),
+        r#type: pb::InteractionType::Question as i32,
+        title: field_str(&first, "question"),
+        detail: field_str(&first, "header"),
+        options,
+        payload: Some(super::convert::to_struct(Value::Object(payload))),
+        time_created: None,
+    }
+}
+
+/// Map one pending-plane broadcast value onto a live frame.
+fn interaction_frame(value: &serde_json::Value) -> Option<pb::stream_frame::Frame> {
     let kind = value
         .get("type")
         .and_then(Value::as_str)
         .unwrap_or_default();
     let properties = value.get("properties")?;
     let frame_session = field_str(properties, "sessionID");
-    if let Some(session) = session
-        && !frame_session.is_empty()
-        && frame_session != session.to_string()
-    {
-        return None;
-    }
     let event = match kind {
         "permission.asked" => {
             let interaction = permission_interaction(properties);
@@ -270,31 +396,7 @@ fn interaction_frame(
             })
         }
         "question.asked" => {
-            let first = properties
-                .pointer("/questions/0")
-                .cloned()
-                .unwrap_or(serde_json::Value::Null);
-            let options: Vec<String> = first
-                .get("options")
-                .and_then(Value::as_array)
-                .map(|rows| {
-                    rows.iter()
-                        .filter_map(|row| {
-                            row.get("label").and_then(Value::as_str).map(str::to_owned)
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
-            let interaction = pb::Interaction {
-                id: field_str(properties, "id"),
-                session: frame_session.clone(),
-                r#type: pb::InteractionType::Question as i32,
-                title: field_str(&first, "question"),
-                detail: field_str(&first, "header"),
-                options,
-                payload: None,
-                time_created: None,
-            };
+            let interaction = question_interaction(properties);
             pb::stream_event::Payload::QuestionRequested(pb::QuestionRequested {
                 request: interaction.id.clone(),
                 interaction: Some(interaction),

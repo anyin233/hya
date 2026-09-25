@@ -386,3 +386,284 @@ async fn list_interactions_without_a_type_filter_returns_every_type() {
     assert_eq!(listed.interactions.len(), 1, "{listed:?}");
     assert_eq!(listed.interactions[0].id, id);
 }
+
+fn select_question(
+    id: QuestionRequestId,
+    session: SessionId,
+) -> (
+    QuestionRequest,
+    tokio::sync::oneshot::Receiver<Vec<hya_tool::interaction::QuestionAnswer>>,
+) {
+    let info = hya_tool::interaction::QuestionInfo {
+        question: "Which branch?".to_string(),
+        header: "Branch".to_string(),
+        options: vec![
+            hya_tool::interaction::QuestionOption {
+                label: "main".to_string(),
+                description: "the default branch".to_string(),
+            },
+            hya_tool::interaction::QuestionOption {
+                label: "dev".to_string(),
+                description: String::new(),
+            },
+        ],
+        multiple: true,
+        custom: Some(false),
+    };
+    let kind = QuestionKind::Select {
+        options: vec!["main".to_string(), "dev".to_string()],
+        allow_custom: false,
+    };
+    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+    (
+        QuestionRequest {
+            id,
+            session: Some(session),
+            prompt: "Which branch?".to_string(),
+            info: info.clone(),
+            kind: kind.clone(),
+            questions: vec![hya_tool::interaction::QuestionPrompt::new(info, kind)],
+            reply: hya_tool::QuestionReply::Many(reply_tx),
+        },
+        reply_rx,
+    )
+}
+
+async fn grpc_channel(state: AppState) -> tonic::transport::Channel {
+    use hya_api::v1 as pb;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let grpc = hya_server::V1Grpc::new(state);
+    let serve = tonic::transport::Server::builder()
+        .add_service(pb::interactions_server::InteractionsServer::new(
+            grpc.clone(),
+        ))
+        .add_service(pb::events_server::EventsServer::new(grpc))
+        .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener));
+    tokio::spawn(async move {
+        let _ = serve.await;
+    });
+    tonic::transport::Channel::from_shared(format!("http://{address}"))
+        .unwrap()
+        .connect()
+        .await
+        .unwrap()
+}
+
+/// A pending question lists with the same interaction the live
+/// `questionRequested` frame carried: options, header as `detail`, and the
+/// full questions as `payload` — over HTTP and gRPC.
+#[tokio::test]
+async fn question_listing_matches_the_question_requested_frame() {
+    use hya_api::v1 as pb;
+
+    let (question_tx, question_rx) = mpsc::unbounded_channel::<QuestionRequest>();
+    let state = base_state().await.with_question_requests(question_rx);
+    let app = router(state.clone());
+    let stream_app = app.clone();
+    let collector = tokio::spawn(async move {
+        frames_until(&stream_app, "/v1/events/stream", |frame| {
+            frame["event"]
+                .get("questionRequested")
+                .is_some_and(Value::is_object)
+        })
+        .await
+    });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let id = QuestionRequestId::new();
+    let session = SessionId::new();
+    let (request, _reply_rx) = select_question(id, session);
+    question_tx.send(request).unwrap();
+    let frames = collector.await.unwrap();
+    let streamed = frames
+        .iter()
+        .find_map(|frame| frame["event"]["questionRequested"]["interaction"].as_object())
+        .cloned()
+        .map(Value::Object)
+        .expect("a questionRequested frame must arrive");
+    assert_eq!(streamed["options"], json!(["main", "dev"]), "{streamed}");
+    assert_eq!(streamed["detail"], json!("Branch"));
+    assert_eq!(
+        streamed["payload"],
+        json!({"questions": [{
+            "question": "Which branch?",
+            "header": "Branch",
+            "options": [
+                {"label": "main", "description": "the default branch"},
+                {"label": "dev", "description": ""},
+            ],
+            "multiple": true,
+            "custom": false,
+        }]}),
+        "{streamed}"
+    );
+
+    let (status, body) = get_json(&app, "/v1/interactions?type=INTERACTION_TYPE_QUESTION").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["interactions"][0], streamed, "{body}");
+
+    let listed = pb::interactions_client::InteractionsClient::new(grpc_channel(state).await)
+        .list_interactions(pb::ListInteractionsRequest::default())
+        .await
+        .unwrap()
+        .into_inner();
+    let question = &listed.interactions[0];
+    assert_eq!(question.id, id.to_string());
+    assert_eq!(question.session, session.to_string());
+    assert_eq!(
+        question.options,
+        vec!["main".to_string(), "dev".to_string()]
+    );
+    assert_eq!(question.detail, "Branch");
+    assert!(question.payload.is_some(), "{question:?}");
+}
+
+async fn session_tree(state: &AppState) -> (SessionId, SessionId, SessionId) {
+    let create = |parent| hya_core::CreateSession {
+        parent,
+        agent: AgentName::new("build"),
+        model: ModelRef::new("fake"),
+        workdir: std::env::temp_dir().to_string_lossy().into_owned(),
+    };
+    let root = state.engine.create(create(None)).await.unwrap();
+    let child = state.engine.create(create(Some(root))).await.unwrap();
+    let grandchild = state.engine.create(create(Some(child))).await.unwrap();
+    (root, child, grandchild)
+}
+
+/// With `includeDescendants=true`, a subagent's ask and its resolution arrive
+/// on an ancestor's session stream tagged with the asking session; without
+/// the opt-in the ancestor's stream stays per session.
+#[tokio::test]
+async fn descendant_interactions_reach_an_ancestor_stream_on_opt_in() {
+    let (ask_tx, ask_rx) = mpsc::unbounded_channel::<AskRequest>();
+    let state = base_state().await.with_permission_requests(ask_rx);
+    let (root, _child, grandchild) = session_tree(&state).await;
+    let app = router(state);
+
+    let opted = app.clone();
+    let opted_uri = format!("/v1/sessions/{root}/events/stream?includeDescendants=true");
+    let with_descendants = tokio::spawn(async move {
+        frames_until(&opted, &opted_uri, |frame| {
+            frame["event"]
+                .get("interactionResolved")
+                .is_some_and(Value::is_object)
+        })
+        .await
+    });
+    let plain = app.clone();
+    let plain_uri = format!("/v1/sessions/{root}/events/stream");
+    let without = tokio::spawn(async move {
+        frames_until(&plain, &plain_uri, |frame| {
+            frame["event"].get("permissionRequested").is_some()
+                || frame["event"].get("interactionResolved").is_some()
+        })
+        .await
+    });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+    let request_id = PermissionRequestId::new();
+    let id = request_id.to_string();
+    ask_tx
+        .send(AskRequest {
+            id: request_id,
+            session: Some(grandchild),
+            message_id: None,
+            call_id: None,
+            action: Action::Bash,
+            resource: Resource::Command("ls".to_string()),
+            remember: RememberScope::LegacyAction,
+            reply: reply_tx,
+        })
+        .unwrap();
+    // Answer once the ask is pending.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let (_, listed) = get_json(&app, "/v1/interactions").await;
+        if listed["interactions"][0]["id"] == json!(id) {
+            break;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "ask never arrived");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let (status, body) = respond(
+        &app,
+        &format!("/v1/interactions/{id}/respond"),
+        json!({"permission": {"allowed": true}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let _ = reply_rx.await;
+
+    let frames = with_descendants.await.unwrap();
+    let asked = frames
+        .iter()
+        .find(|frame| frame["event"]["permissionRequested"]["request"] == json!(id))
+        .unwrap_or_else(|| panic!("the descendant ask must arrive: {frames:#?}"));
+    assert_eq!(asked["event"]["session"], json!(grandchild.to_string()));
+    assert_eq!(
+        asked["event"]["permissionRequested"]["interaction"]["session"],
+        json!(grandchild.to_string())
+    );
+    let resolved = frames
+        .iter()
+        .find(|frame| frame["event"]["interactionResolved"]["request"] == json!(id))
+        .unwrap_or_else(|| panic!("the resolution must arrive: {frames:#?}"));
+    assert_eq!(resolved["event"]["session"], json!(grandchild.to_string()));
+
+    let plain_frames = without.await.unwrap();
+    assert!(
+        plain_frames.iter().all(|frame| {
+            frame["event"].get("permissionRequested").is_none()
+                && frame["event"].get("interactionResolved").is_none()
+        }),
+        "without the opt-in the root stream stays per session: {plain_frames:#?}"
+    );
+}
+
+/// gRPC `StreamSessionEvents { include_descendants: true }` delivers a child
+/// session's question to its parent's stream.
+#[tokio::test]
+async fn grpc_session_stream_delivers_descendant_questions_on_opt_in() {
+    use hya_api::v1 as pb;
+
+    let (question_tx, question_rx) = mpsc::unbounded_channel::<QuestionRequest>();
+    let state = base_state().await.with_question_requests(question_rx);
+    let (root, child, _grandchild) = session_tree(&state).await;
+    let channel = grpc_channel(state).await;
+    let mut stream = pb::events_client::EventsClient::new(channel)
+        .stream_session_events(pb::StreamSessionEventsRequest {
+            session: root.to_string(),
+            include_descendants: true,
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let id = QuestionRequestId::new();
+    let (request, _reply_rx) = select_question(id, child);
+    question_tx.send(request).unwrap();
+    let asked = tokio::time::timeout(Duration::from_secs(5), async {
+        while let Some(frame) = stream.next().await {
+            if let Some(pb::stream_frame::Frame::Event(event)) = frame.unwrap().frame
+                && let Some(pb::stream_event::Payload::QuestionRequested(asked)) = event.payload
+            {
+                return (event.session, asked);
+            }
+        }
+        panic!("stream ended");
+    })
+    .await
+    .expect("the child's question must reach the parent stream");
+    assert_eq!(asked.0, child.to_string());
+    assert_eq!(asked.1.request, id.to_string());
+    assert_eq!(
+        asked.1.interaction.unwrap().options,
+        vec!["main".to_string(), "dev".to_string()]
+    );
+}

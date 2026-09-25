@@ -317,6 +317,36 @@ A permission `Interaction` has `title` `"<action> <resource>"` and a
 `callId` matches the `ToolCallPart.callId` of the waiting tool card. The
 payload exposes only what the transcript's tool part already holds.
 
+A question `Interaction` has `title` = the first question, `detail` = its
+header, `options` = its option labels, and `payload`
+`{questions: [{question, header, options: [{label, description}], multiple?, custom?}]}`
+with every question of the request. The listing returns exactly the
+`Interaction` the `permissionRequested` / `questionRequested` frame carried,
+so a client that only sees an ask through `GET /v1/interactions` (or gRPC
+`ListInteractions`) can render the same prompt.
+
+### Subagent asks on a parent's stream
+
+Interaction frames are live-only (`seq = 0`, so protojson omits `seq`) and
+name the session that asked in both `event.session` and
+`interaction.session`. The global stream
+(`GET /v1/events/stream`, `StreamGlobalEvents`) carries every session's. A
+session stream carries only its own session's unless you opt in with
+`includeDescendants=true` (query parameter on
+`GET /v1/sessions/{id}/events/stream`; `include_descendants: true` on gRPC
+`StreamSessionEventsRequest`): it then also delivers the
+`permissionRequested`, `questionRequested`, and `interactionResolved` frames
+of every session below it (subagents at any depth), with `event.session` set
+to the asking descendant — answer them with the same
+`POST /v1/interactions/{id}/respond`. Durable events stay per session either
+way. Frames sent before you subscribe are not replayed: list
+`GET /v1/interactions` after subscribing to catch asks already pending.
+
+```json
+{ "event": { "session": "hysec_child", "questionRequested": { "request": "q_...", "interaction": { "id": "q_...", "session": "hysec_child", "type": "INTERACTION_TYPE_QUESTION", "title": "Which branch?", "detail": "Branch", "options": ["main", "dev"], "payload": { "questions": [ { "question": "Which branch?", "header": "Branch", "options": [ { "label": "main", "description": "the default branch" }, { "label": "dev", "description": "" } ], "multiple": true } ] } } } } }
+{ "event": { "session": "hysec_child", "interactionResolved": { "request": "q_..." } } }
+```
+
 ## Permission modes
 
 A session tree's permission mode decides whether asks reach the user at all.
