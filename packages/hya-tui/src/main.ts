@@ -8,21 +8,25 @@ import {
   createCliRenderer,
   type KeyEvent,
 } from "@opentui/core"
+import type { PasteEvent } from "@opentui/core"
 import { resolve } from "node:path"
 import openapi from "../../../docs/protocol/openapi.json"
+import { completeCommand, SecretEntry, type CompletionContext } from "./completion"
 import {
   HyaClient,
   parseApiCommand,
   type AgentSummary,
+  type CommandSummary,
   type Interaction,
   type MessageInfo,
   type ModelSummary,
+  type ProviderSummary,
   type SessionInfo,
   type StreamFrame,
   type WorkflowSummary,
 } from "./client"
 
-type View = "chat" | "models" | "workflows" | "interactions" | "api" | "help"
+type View = "chat" | "models" | "workflows" | "interactions" | "keys" | "api" | "help"
 
 function argumentsFrom(argv: string[]): { server: string; directory: string } | null {
   let server = "http://127.0.0.1:8080"
@@ -65,6 +69,9 @@ function operations(): string {
   ).sort().join("\n")
 }
 
+const apiOperationNames = Object.entries(openapi.paths as Record<string, Record<string, unknown>>)
+  .flatMap(([path, methods]) => Object.keys(methods).map((method) => `${method.toUpperCase()} ${path}`))
+
 function brief(value: unknown): string {
   const text = JSON.stringify(value, null, 2) ?? "null"
   return text.length > 20_000 ? `${text.slice(0, 20_000)}\n… output truncated` : text
@@ -104,7 +111,9 @@ async function main(): Promise<void> {
   const status = new TextRenderable(renderer, { content: "Enter prompt · /help commands · Ctrl+R refresh · Ctrl+C quit", height: 1, fg: colors.muted })
   const inputPanel = new BoxRenderable(renderer, { height: 3, border: true, borderColor: colors.border, backgroundColor: colors.panel, paddingX: 1 })
   const input = new InputRenderable(renderer, { width: "100%", maxLength: 10_000, placeholder: "Message or /command", textColor: colors.fg, cursorColor: colors.accent })
+  const secretText = new TextRenderable(renderer, { content: "", width: "100%", fg: colors.accent, visible: false })
   inputPanel.add(input)
+  inputPanel.add(secretText)
   root.add(header)
   root.add(body)
   root.add(status)
@@ -123,6 +132,9 @@ async function main(): Promise<void> {
   let interactions: Interaction[] = []
   let agents: AgentSummary[] = []
   let models: ModelSummary[] = []
+  let providers: ProviderSummary[] = []
+  let savedKeys: string[] = []
+  let backendCommands: CommandSummary[] = []
   let workflows: WorkflowSummary[] = []
   let workflowState: Record<string, unknown> | undefined
   let selected: SessionInfo | undefined
@@ -133,6 +145,31 @@ async function main(): Promise<void> {
   let streamAbort: AbortController | undefined
   let refreshTimer: ReturnType<typeof setTimeout> | undefined
   let closing = false
+  let secretProvider: string | undefined
+  const secretEntry = new SecretEntry()
+
+  function completionContext(): CompletionContext {
+    return {
+      backendCommands: backendCommands.map((command) => command.name),
+      providers: [...new Set([...providers.map((provider) => provider.id), ...savedKeys])],
+      savedKeys,
+      models: models.map((model) => model.id),
+      sessions: sessions.map((session) => session.id),
+      workflows: workflows.map((workflow) => workflow.name),
+      interactions: interactions.map((interaction) => interaction.id),
+      agents: agents.map((agent) => agent.name),
+      apiOperations: apiOperationNames,
+    }
+  }
+
+  function finishSecretEntry(): void {
+    secretProvider = undefined
+    secretEntry.clear()
+    secretText.content = ""
+    secretText.visible = false
+    input.visible = true
+    input.focus()
+  }
 
   function showStatus(text: string): void { status.content = text }
   function repaint(): void {
@@ -143,7 +180,7 @@ async function main(): Promise<void> {
     interactionText.content = interactions.length
       ? interactions.map((item) => `${item.type?.includes("QUESTION") ? "?" : "!"} ${item.title}\n${item.id}`).join("\n\n")
       : "No pending requests"
-    mainPanel.title = ({ chat: "Chat", models: "Models", workflows: "Workflows", interactions: "Interactions", api: "API commands", help: "Help" } as const)[view]
+    mainPanel.title = ({ chat: "Chat", models: "Models", workflows: "Workflows", interactions: "Interactions", keys: "Saved provider keys", api: "API commands", help: "Help" } as const)[view]
     switch (view) {
       case "chat":
         mainText.content = messages.length ? messages.slice(-50).map(formatMessage).join("\n\n") : "No messages yet. Type a prompt below."
@@ -158,19 +195,30 @@ async function main(): Promise<void> {
       case "interactions":
         mainText.content = interactions.length ? interactions.map((item) => `${item.type} · ${item.id}\n${item.title}\n${item.detail ?? ""}\n${(item.options ?? []).join(" | ")}`).join("\n\n") : "No pending interactions."
         break
+      case "keys": {
+        const ids = [...new Set([...providers.map((provider) => provider.id), ...savedKeys])].sort()
+        mainText.content = ids.length
+          ? ids.map((id) => `${savedKeys.includes(id) ? "● saved" : "○ no saved key"}  ${id}`).join("\n")
+          : "No providers or saved keys. Use /key set <provider> to add one."
+        break
+      }
       case "api": mainText.content = apiOutput; break
       case "help": mainText.content = helpText; break
     }
   }
 
   async function refresh(): Promise<void> {
-    const [sessionRows, interactionRows, modelRows, workflowRows] = await Promise.all([
+    const [sessionRows, interactionRows, modelRows, workflowRows, providerRows, keyRows, commandRows] = await Promise.all([
       client.listSessions(), client.listInteractions(), client.listModels(), client.listWorkflows(),
+      client.listProviders(), client.listSavedKeys(), client.listCommands(),
     ])
     sessions = sessionRows
     interactions = interactionRows
     models = modelRows
     workflows = workflowRows
+    providers = providerRows
+    savedKeys = keyRows
+    backendCommands = commandRows
     if (selected) selected = sessions.find((row) => row.id === selected?.id) ?? selected
     repaint()
   }
@@ -274,6 +322,30 @@ async function main(): Promise<void> {
           break
         }
         case "/models": view = "models"; await refresh(); break
+        case "/keys": view = "keys"; await refresh(); break
+        case "/login":
+        case "/key": {
+          const action = command === "/login" ? "set" : args[0]
+          const provider = command === "/login" ? args[0] : args[1]
+          if (!provider || !["set", "remove"].includes(action ?? "")) {
+            throw new Error("Usage: /key set|remove <provider> or /login <provider>")
+          }
+          if (action === "remove") {
+            await client.removeProviderKey(provider)
+            view = "keys"
+            await refresh()
+            showStatus(`Removed key for ${provider} · restart backend to apply`)
+          } else {
+            secretProvider = provider
+            secretEntry.clear()
+            input.blur()
+            input.visible = false
+            secretText.visible = true
+            secretText.content = "Key: "
+            showStatus(`Enter API key for ${provider} · Enter saves · Esc cancels`)
+          }
+          break
+        }
         case "/workflows":
           view = "workflows"
           await refresh()
@@ -352,26 +424,90 @@ async function main(): Promise<void> {
     "Other /commands are sent to the backend command catalog.",
     "", "/new [agent] [model]   Create a session", "/sessions             Refresh session list", "/open <id|number>     Open a session",
     "/models               List models", "/model <provider/model> Change current session model", "/workflows            List workflows",
+    "/keys                 List saved provider key names", "/key set <provider>   Enter a key in a concealed prompt",
+    "/login <provider>     Alias for /key set", "/key remove <provider> Delete a saved key",
     "/workflow select <name> | /workflow run [name]", "/interactions         Show pending permissions and questions",
     "/approve <id> | /deny <id> | /answer <id> <text>", "/cancel               Cancel current turn", "/refresh              Refresh all views",
-    "/api                  List all v1 HTTP operations", "/api METHOD /v1/path [JSON object]", "", "Ctrl+R refresh · Ctrl+C quit",
+    "/api                  List all v1 HTTP operations", "/api METHOD /v1/path [JSON object]", "", "Tab completes commands · Ctrl+R refresh · Ctrl+C quit",
   ].join("\n")
 
   input.on(InputRenderableEvents.ENTER, (value: string) => {
     input.value = ""
     void submit(value)
   })
+  input.on(InputRenderableEvents.INPUT, (value: string) => {
+    if (!value.startsWith("/")) return
+    const choices = completeCommand(value, completionContext())
+    if (choices.length) showStatus(`Tab: ${choices.slice(0, 5).join("  ")}${choices.length > 5 ? "  …" : ""}`)
+  })
+  let completionChoices: string[] = []
+  let completionIndex = -1
+  let completionCurrent = ""
   const onKey = (key: KeyEvent): void => {
+    if (secretProvider) {
+      key.preventDefault()
+      key.stopPropagation()
+      if (key.name === "escape" || key.name === "esc") {
+        finishSecretEntry()
+        showStatus("Key entry cancelled")
+      } else if (key.name === "backspace") {
+        secretEntry.backspace()
+        secretText.content = `Key: ${secretEntry.mask}`
+      } else if (key.name === "return" || key.name === "enter" || key.sequence === "\r") {
+        const provider = secretProvider
+        const value = secretEntry.take()
+        if (!value) {
+          showStatus("API key cannot be empty · Esc cancels")
+          return
+        }
+        finishSecretEntry()
+        void client.setProviderKey(provider, value)
+          .then(async () => {
+            view = "keys"
+            await refresh()
+            showStatus(`Saved key for ${provider} · restart backend to apply`)
+          })
+          .catch((error: unknown) => showStatus(`Key save failed: ${String(error)}`))
+      } else if (!key.ctrl && !key.meta && key.sequence.length === 1 && key.sequence >= " ") {
+        secretEntry.append(key.sequence)
+        secretText.content = `Key: ${secretEntry.mask}`
+      }
+      return
+    }
+    if (key.name === "tab" || key.sequence === "\t") {
+      key.preventDefault()
+      key.stopPropagation()
+      if (completionCurrent !== input.value) {
+        completionChoices = completeCommand(input.value, completionContext())
+        completionIndex = -1
+      }
+      if (completionChoices.length) {
+        completionIndex = (completionIndex + 1) % completionChoices.length
+        input.value = completionChoices[completionIndex] ?? input.value
+        completionCurrent = input.value
+        showStatus(`${completionIndex + 1}/${completionChoices.length} completion · Tab cycles`)
+      }
+      return
+    }
     if (key.ctrl && key.name === "r") {
       void refresh().then(refreshMessages).catch((error: unknown) => showStatus(`Refresh failed: ${String(error)}`))
     }
   }
+  const onPaste = (event: PasteEvent): void => {
+    if (!secretProvider) return
+    event.preventDefault()
+    event.stopPropagation()
+    secretEntry.append(new TextDecoder().decode(event.bytes))
+    secretText.content = `Key: ${secretEntry.mask}`
+  }
   renderer.keyInput.on("keypress", onKey)
+  renderer.keyInput.on("paste", onPaste)
   renderer.once("destroy", () => {
     closing = true
     streamAbort?.abort()
     if (refreshTimer) clearTimeout(refreshTimer)
     renderer.keyInput.off("keypress", onKey)
+    renderer.keyInput.off("paste", onPaste)
     renderer.off(CliRenderEvents.RESIZE, adaptLayout)
   })
 

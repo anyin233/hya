@@ -11,7 +11,7 @@ Google provider routes into one canonical event stream and executes tools behind
 a permission plane. Every client-facing surface speaks one consolidated contract
 — `hya.v1` — served identically over HTTP/JSON+SSE+WebSocket (`/v1`) and gRPC
 (`HYA_GRPC_BIND`); the legacy Compat and native HTTP routes are gone. There is
-an OpenTUI frontend lives in `packages/hya-tui` and connects to the server
+an OpenTUI frontend in `packages/hya-tui` that connects to the server
 through HTTP/JSON+SSE. Other clients use `hya-sdk-v1`, `hya-client`, or any
 `hya.v1` client.
 
@@ -22,7 +22,7 @@ keys while you set things up.
 
 ## Status
 
-hya is under active development (workspace version `0.37.5`,
+hya is under active development (workspace version `0.37.6`,
 `MIT OR Apache-2.0`). Build this checkout from source as described below.
 APIs, config, and command surfaces may still change between versions.
 
@@ -52,7 +52,8 @@ bun install --frozen-lockfile
 bun src/main.ts --server http://127.0.0.1:8080 --dir "$PWD/../.."
 ```
 
-See [OpenTUI frontend](docs/tui.md) for commands, keys, and the API command view.
+See [OpenTUI frontend](docs/tui.md) for commands, provider key setup,
+autocomplete, and the API command view.
 
 
 ## Configure a Provider and Log In

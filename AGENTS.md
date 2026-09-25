@@ -57,7 +57,7 @@ projection for the HTTP API and client surfaces. The OpenTUI frontend in
 TUI was removed. `hya-sdk-v1`, `hya-client`, and gRPC are other supported ways
 to drive a backend.
 
-The server exposes exactly one contract — `hya.v1` (16 services / 79 rpcs in
+The server exposes exactly one contract — `hya.v1` (16 services / 80 rpcs in
 `proto/hya/v1`) — over HTTP/JSON+SSE+WebSocket under `/v1` and, when
 `HYA_GRPC_BIND` is set, over gRPC through `hya_server::V1Grpc`, which dispatches
 through the same router. The legacy Compat `/api/*`, bare native routes, and

@@ -51,6 +51,18 @@ export interface ModelSummary {
   auth?: string
 }
 
+export interface ProviderSummary {
+  id: string
+  name?: string
+  auth?: string
+}
+
+export interface CommandSummary {
+  name: string
+  description?: string
+  argumentHint?: string
+}
+
 export interface AgentSummary {
   name: string
   model?: { providerId?: string; modelId?: string }
@@ -228,6 +240,27 @@ export class HyaClient {
 
   async listModels(): Promise<ModelSummary[]> {
     return this.listAll("/v1/models", "models")
+  }
+
+  async listProviders(): Promise<ProviderSummary[]> {
+    return this.listAll("/v1/providers", "providers")
+  }
+
+  async listCommands(): Promise<CommandSummary[]> {
+    return this.listAll("/v1/commands", "commands")
+  }
+
+  async listSavedKeys(): Promise<string[]> {
+    const response = await this.request<{ providerIds?: string[] }>("GET", "/v1/auth")
+    return response.providerIds ?? []
+  }
+
+  async setProviderKey(provider: string, key: string): Promise<void> {
+    await this.request("PUT", `/v1/auth/${encodeURIComponent(provider)}`, { apiKey: key })
+  }
+
+  async removeProviderKey(provider: string): Promise<void> {
+    await this.request("DELETE", `/v1/auth/${encodeURIComponent(provider)}`)
   }
 
   async listWorkflows(): Promise<WorkflowSummary[]> {

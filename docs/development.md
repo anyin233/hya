@@ -66,9 +66,13 @@ See [Testing](testing/README.md), [Process E2E](testing/process-e2e.md), and the
 [agent feature matrix](testing/agent-matrix.md). Optional CI wiring is sketched
 in [ci-agent-e2e-snippet.yml](testing/ci-agent-e2e-snippet.yml).
 
-There is currently no interactive TUI (the legacy TypeScript TUI was removed;
-a replacement built on `hya-sdk-v1` may be built later), so no frontend
-TypeScript gate exists.
+The Bun/OpenTUI frontend in `packages/hya-tui` has its own gate:
+
+```sh
+cd packages/hya-tui
+bun run typecheck
+bun test
+```
 
 ## Dev tasks (`xtask` package)
 

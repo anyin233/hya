@@ -59,7 +59,7 @@ Stable codes and their HTTP status / gRPC code:
 
 ## Pagination
 
-Every list rpc takes `page: {cursor, limit}` and answers
+Paginated list RPCs take `page: {cursor, limit}` and answer
 `page: {nextCursor, hasMore}`. Cursors are opaque; pass `nextCursor` back
 verbatim. On HTTP GET routes, send nested page fields as `page.cursor` and
 `page.limit` query parameters (for example,

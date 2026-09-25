@@ -80,3 +80,21 @@ test("forwards backend slash commands as command turns", async () => {
   expect(turn.id).toBe("msg_command")
   expect(body).toEqual({ command: { command: "compact", arguments: "now" } })
 })
+
+test("lists saved provider names and stores/removes a key without returning its value", async () => {
+  const calls: Array<{ method: string; path: string; body: unknown }> = []
+  const fetcher: FetchLike = async (path, init) => {
+    calls.push({ method: init?.method ?? "GET", path, body: init?.body ? JSON.parse(String(init.body)) : undefined })
+    if (path.endsWith("/v1/auth")) return Response.json({ providerIds: ["anthropic"] })
+    return Response.json({ status: "AUTH_STATUS_CREDENTIALED" })
+  }
+  const client = new HyaClient("http://127.0.0.1:8080", "/work", fetcher)
+  expect(await client.listSavedKeys()).toEqual(["anthropic"])
+  await client.setProviderKey("anthropic", "sk-secret")
+  await client.removeProviderKey("anthropic")
+  expect(calls).toEqual([
+    { method: "GET", path: "http://127.0.0.1:8080/v1/auth", body: undefined },
+    { method: "PUT", path: "http://127.0.0.1:8080/v1/auth/anthropic", body: { apiKey: "sk-secret" } },
+    { method: "DELETE", path: "http://127.0.0.1:8080/v1/auth/anthropic", body: undefined },
+  ])
+})
