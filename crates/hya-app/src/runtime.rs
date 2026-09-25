@@ -2204,11 +2204,12 @@ fn spawn_team_supervisor_with_environment(
                         } = resolved;
                         let _authorized_target = authorized_target;
                         match resident_supervisor
-                            .spawn_resident(
+                            .spawn_resident_named(
                                 parent,
                                 agent,
                                 (binding, agents, resources, sidecar_factory),
                                 member.prompt,
+                                member.name.as_deref(),
                                 actor_claim.as_ref(),
                                 guidance,
                             )
@@ -5486,6 +5487,7 @@ You are the installed resident agent.
                     category: case.inline_category.map(str::to_string),
                     ..InlineAgent::default()
                 }),
+                name: None,
             };
 
             let resolve_ctx = ResolveSpawnMemberCtx {

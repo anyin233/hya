@@ -42,6 +42,8 @@ mod coordination;
 pub mod engine;
 /// Shared error type for the core runtime.
 pub mod error;
+/// Subagent handle naming: `<prefix>-<operator>` leaves, never reused per team.
+pub mod handle_naming;
 /// Plugin/host hook dispatch contract and native payload types.
 pub mod hooks;
 /// Team mailbox service loop (event-sourced mail/channels).

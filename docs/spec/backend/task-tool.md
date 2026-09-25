@@ -13,6 +13,11 @@
   optional `task_id` parsed by the shared `SessionId` parser.
 - A non-empty `members` array selects batch mode. Each listed member supplies
   its own description, prompt, and subagent type.
+- An optional `name` (top level in single mode, per member in batch mode) is the
+  child handle's role prefix; `TaskTool` normalizes it with
+  `hya_tool::normalize_handle_prefix` into `SpawnMember::name` (`None` when
+  blank or omitted — the core then uses the agent id). Core mints the leaf
+  `<prefix>-<operator>` (`hya_core::handle_naming`).
 
 ### 3. Contracts
 
@@ -29,6 +34,9 @@
 - Single mode with missing required top-level fields -> input error before spawn.
 - Batch mode with any top-level `task_id` -> ignore it and validate the members.
 - Background mode with more than one normalized member -> input error.
+- An invalid `name` (not 1–32 chars of `[a-z0-9-]` after trim + lowercase, or
+  with a leading/trailing/doubled `-`) -> `ToolError::Input` naming the rule
+  and a sanitized suggestion, before anything reaches `SpawnerPlane`.
 
 ### 5. Good / Base / Bad Cases
 

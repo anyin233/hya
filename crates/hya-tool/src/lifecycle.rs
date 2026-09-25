@@ -115,7 +115,7 @@ impl WaitSpec {
                     let Some(text) = item.as_str().map(str::trim).filter(|text| !text.is_empty())
                     else {
                         return Err(ToolError::Input(
-                            "wait `targets` must be subagent handles or session ids as strings, e.g. [\"main/hya-worker-1\"]".to_string(),
+                            "wait `targets` must be subagent handles or session ids as strings, e.g. [\"main/hya-worker-exusiai\"]".to_string(),
                         ));
                     };
                     if !targets.iter().any(|known| known == text) {
@@ -183,7 +183,7 @@ pub fn wait_tool_schema(wake_on_mail: bool) -> ToolSchema {
                 "targets": {
                     "type": "array",
                     "items": { "type": "string" },
-                    "description": "Subagents to wait for: handles as returned by `task` (e.g. `main/hya-worker-1`, or the leaf `hya-worker-1`) or session ids. Omit to wait for all of your live direct subagents."
+                    "description": "Subagents to wait for: handles as returned by `task` (e.g. `main/hya-worker-exusiai`, or the leaf `hya-worker-exusiai`) or session ids. Omit to wait for all of your live direct subagents."
                 },
                 "mode": {
                     "type": "string",

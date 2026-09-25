@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use hya_proto::{
@@ -21,24 +21,17 @@ use crate::sidecar::{BoundSidecarFactory, SidecarHandle, SidecarStart};
 use crate::workflow::WorkflowTurnRoute;
 use crate::{AgentResourcePolicy, TurnBinding};
 
-/// Assign each member its **leaf** name (`{type}-{ordinal}`) within `lead_path`'s
-/// unit, in input order, continuing the per-type ordinal across earlier batches.
+/// Assign each member its **leaf** name within `lead_path`'s unit, in input
+/// order: `<agent id>-<operator>` from [`crate::handle_naming`] (the same
+/// minter the resident `task` path uses, with the agent id as the prefix).
 ///
-/// Ordinals count **per unit**, not per team, so `main/lead-1/reviewer-1` and
-/// `main/lead-2/reviewer-1` both exist and neither is a collision. That is the
-/// point of scoping: a unit's names are its own.
+/// A minted leaf is never the leaf of any handle the team ever registered
+/// (live or archived), so it differs from every sibling and from the parent's
+/// own leaf, and `send("<leaf>")` is never ambiguous. The minter reserves each
+/// leaf it hands out, so the members of one batch never share one either.
 ///
-/// Two rules from the PRD are enforced here, at spawn time rather than send time:
-/// a leaf must be unique among its siblings, and it must differ from its parent's
-/// leaf. The second one bites in practice — a `lead`-type agent at `main/lead-1`
-/// spawning a `lead`-type child would otherwise mint `lead-1` again, producing
-/// `main/lead-1/lead-1` and making `send("lead-1")` ambiguous. The minter skips
-/// to the next ordinal instead.
-///
-/// Determinism (required for replay stability): every choice is derived from the
-/// current roster and the batch's input order — no `rand`, no wall-clock.
-/// Assigning sequentially here, before the parallel spawn, prevents concurrent
-/// members from racing to the same ordinal.
+/// Replay stability does not depend on the draw: the leaf is recorded in the
+/// member's `AgentRegistered` event and read back from the log.
 ///
 /// Resume path: when a member reuses an existing child session that already has
 /// a roster binding, that leaf is returned as-is. Allocating a second handle for
@@ -47,7 +40,7 @@ use crate::{AgentResourcePolicy, TurnBinding};
 async fn assign_handles(
     engine: &SessionEngine,
     root: SessionId,
-    lead_path: &str,
+    _lead_path: &str,
     specs: &[MemberSpec],
 ) -> Vec<String> {
     let roster = engine
@@ -55,19 +48,6 @@ async fn assign_handles(
         .await
         .map(|p| p.team.roster)
         .unwrap_or_default();
-
-    // Only this unit's existing members shape the ordinals and the taken set.
-    let mut counts: BTreeMap<String, u32> = BTreeMap::new();
-    let mut taken: BTreeSet<String> = BTreeSet::new();
-    for (path, entry) in &roster {
-        if scope::parent_path(path) == Some(lead_path) {
-            *counts
-                .entry(entry.agent_type.as_str().to_string())
-                .or_insert(0) += 1;
-            taken.insert(scope::leaf(path).to_string());
-        }
-    }
-    let parent_leaf = scope::leaf(lead_path).to_string();
 
     let mut handles = Vec::with_capacity(specs.len());
     for spec in specs {
@@ -77,18 +57,8 @@ async fn assign_handles(
             handles.push(scope::leaf(&existing.handle).to_string());
             continue;
         }
-        let agent_type = spec.agent.name.as_str().to_string();
-        let ordinal = counts.entry(agent_type.clone()).or_insert(0);
-        // Terminates: `taken` is finite and the ordinal only ever grows.
-        let leaf = loop {
-            *ordinal += 1;
-            let candidate = format!("{agent_type}-{ordinal}");
-            if candidate != parent_leaf && !taken.contains(&candidate) {
-                break candidate;
-            }
-        };
-        taken.insert(leaf.clone());
-        handles.push(leaf);
+        let prefix = hya_tool::sanitize_handle_prefix(spec.agent.name.as_str());
+        handles.push(engine.mint_member_leaf(root, &prefix).await);
     }
     handles
 }
@@ -990,89 +960,88 @@ mod handle_tests {
             .unwrap();
     }
 
-    /// Ordinals count per unit, so two units independently start at `-1`. This is
-    /// what lets a unit own its own names (task 08-07, R1).
+    /// Always draws index 0: every leaf of one prefix collides.
+    struct Fixed;
+
+    impl crate::handle_naming::HandleRng for Fixed {
+        fn pick(&mut self, _bound: usize) -> usize {
+            0
+        }
+    }
+
+    fn operator(index: usize) -> &'static str {
+        crate::handle_naming::operator_names()[index]
+    }
+
+    /// A leaf is unique team-wide, not just per unit: another unit's
+    /// `worker-<name>` is never minted again.
     #[tokio::test]
-    async fn ordinals_restart_in_each_unit() {
-        let engine = engine().await;
+    async fn a_leaf_never_repeats_any_handle_of_the_team() {
+        let engine = engine().await.with_handle_rng(Box::new(Fixed));
         let root = root_team(&engine).await;
         register(&engine, root, "main", "lead-1", "lead").await;
         register(&engine, root, "main", "lead-2", "lead").await;
-        register(&engine, root, "main/lead-1", "worker-1", "worker").await;
+        let taken = format!("worker-{}", operator(0));
+        register(&engine, root, "main/lead-1", &taken, "worker").await;
 
-        // lead-1 already has a worker-1, so its next worker is worker-2 ...
-        let mine = assign_handles(&engine, root, "main/lead-1", &[spec(&engine, "worker")]).await;
-        assert_eq!(mine, vec!["worker-2".to_string()]);
-
-        // ... while lead-2's unit is empty and starts over at worker-1.
         let theirs = assign_handles(&engine, root, "main/lead-2", &[spec(&engine, "worker")]).await;
-        assert_eq!(theirs, vec!["worker-1".to_string()]);
-    }
-
-    /// A leaf may never equal its parent's leaf, or `send("lead-1")` from a child
-    /// would be ambiguous between its parent and its sibling (R2, AC3).
-    #[tokio::test]
-    async fn a_child_never_takes_its_parents_leaf() {
-        let engine = engine().await;
-        let root = root_team(&engine).await;
-        register(&engine, root, "main", "lead-1", "lead").await;
-
-        // A `lead`-type child of `main/lead-1` would naively mint `lead-1` again.
-        let handles = assign_handles(&engine, root, "main/lead-1", &[spec(&engine, "lead")]).await;
         assert_eq!(
-            handles,
-            vec!["lead-2".to_string()],
-            "the minter must skip the ordinal that collides with the parent"
+            theirs,
+            vec![format!("worker-{}-{}", operator(0), operator(1))]
         );
     }
 
-    /// Every leaf in one batch is distinct, and none collides with an existing
-    /// sibling (R2, AC3).
+    /// A leaf may never equal its parent's leaf, or `send(<leaf>)` from a child
+    /// would be ambiguous between its parent and its sibling (R2, AC3).
     #[tokio::test]
-    async fn a_batch_never_repeats_a_sibling_leaf() {
-        let engine = engine().await;
+    async fn a_child_never_takes_its_parents_leaf() {
+        let engine = engine().await.with_handle_rng(Box::new(Fixed));
+        let root = root_team(&engine).await;
+        let parent_leaf = format!("lead-{}", operator(0));
+        register(&engine, root, "main", &parent_leaf, "lead").await;
+
+        let parent = format!("main/{parent_leaf}");
+        let handles = assign_handles(&engine, root, &parent, &[spec(&engine, "lead")]).await;
+        assert_eq!(handles.len(), 1);
+        assert_ne!(handles[0], parent_leaf);
+    }
+
+    /// Every leaf in one batch is distinct, prefixed by the agent id, and
+    /// none collides with an existing member (R2, AC3).
+    #[tokio::test]
+    async fn a_batch_never_repeats_a_leaf() {
+        let engine = engine().await.with_handle_rng(Box::new(Fixed));
         let root = root_team(&engine).await;
         register(&engine, root, "main", "lead-1", "lead").await;
-        register(&engine, root, "main/lead-1", "worker-1", "worker").await;
-        register(&engine, root, "main/lead-1", "worker-3", "worker").await;
+        let existing = format!("worker-{}", operator(0));
+        register(&engine, root, "main/lead-1", &existing, "worker").await;
 
         let batch: Vec<MemberSpec> = (0..3).map(|_| spec(&engine, "worker")).collect();
         let handles = assign_handles(&engine, root, "main/lead-1", &batch).await;
 
-        let unique: BTreeSet<&String> = handles.iter().collect();
+        let unique: std::collections::BTreeSet<&String> = handles.iter().collect();
         assert_eq!(unique.len(), handles.len(), "no duplicate within the batch");
-        for existing in ["worker-1", "worker-3"] {
-            assert!(
-                !handles.iter().any(|handle| handle == existing),
-                "`{existing}` is already taken in this unit, got {handles:?}"
-            );
-        }
+        assert!(!handles.contains(&existing), "{handles:?}");
+        assert!(
+            handles.iter().all(|leaf| leaf.starts_with("worker-")),
+            "{handles:?}"
+        );
     }
 
-    /// Replay stability depends on this: the same roster and the same batch order
-    /// must always produce the same leaves (AC11).
+    /// A resumed member keeps the leaf its registration recorded; nothing is
+    /// re-derived (AC11).
     #[tokio::test]
-    async fn assignment_is_deterministic_across_runs() {
+    async fn a_resumed_member_keeps_its_recorded_leaf() {
         let engine = engine().await;
         let root = root_team(&engine).await;
         register(&engine, root, "main", "lead-1", "lead").await;
         register(&engine, root, "main/lead-1", "worker-1", "worker").await;
+        let session =
+            engine.read_projection(root).await.unwrap().team.roster["main/lead-1/worker-1"].session;
 
-        let batch: Vec<MemberSpec> = vec![
-            spec(&engine, "worker"),
-            spec(&engine, "reviewer"),
-            spec(&engine, "worker"),
-        ];
-        let first = assign_handles(&engine, root, "main/lead-1", &batch).await;
-        let second = assign_handles(&engine, root, "main/lead-1", &batch).await;
-        assert_eq!(first, second, "assignment must not depend on run order");
-        assert_eq!(
-            first,
-            vec![
-                "worker-2".to_string(),
-                "reviewer-1".to_string(),
-                "worker-3".to_string()
-            ]
-        );
+        let mut resumed = spec(&engine, "worker");
+        resumed.session = Some(session);
+        let handles = assign_handles(&engine, root, "main/lead-1", &[resumed]).await;
+        assert_eq!(handles, vec!["worker-1".to_string()]);
     }
 }

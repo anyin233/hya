@@ -11,13 +11,13 @@ use serde::{Deserialize, Serialize};
 /// A mail address: either a single agent's stable handle or a named channel.
 ///
 /// Adjacently tagged so the wire form is unambiguous and self-describing:
-/// `{"kind":"handle","id":"reviewer-3"}` / `{"kind":"channel","id":"build"}`.
+/// `{"kind":"handle","id":"reviewer-lappland"}` / `{"kind":"channel","id":"build"}`.
 /// Channel ids are stored without the leading `#`; the `#` is a UI/address
 /// convention parsed at the tool boundary.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "id", rename_all = "snake_case")]
 pub enum MailEndpoint {
-    /// A single agent, addressed by its team-scoped handle (e.g. `reviewer-3`).
+    /// A single agent, addressed by its team-scoped handle (e.g. `reviewer-lappland`).
     Handle(String),
     /// A named channel; every current subscriber receives the message.
     Channel(String),

@@ -5,7 +5,7 @@ use serde_json::{Map, Value, json};
 
 use hya_tool::tool::obj_schema;
 use hya_tool::{Action, Resource};
-use hya_tool::{InlineAgent, SpawnError, SpawnMember};
+use hya_tool::{InlineAgent, SpawnError, SpawnMember, normalize_handle_prefix};
 use hya_tool::{Tool, ToolCtx, ToolError};
 
 pub struct TaskTool;
@@ -58,6 +58,8 @@ struct TaskMemberInput {
     model: Option<String>,
     #[serde(default)]
     inline_agent: Option<InlineAgentInput>,
+    #[serde(default)]
+    name: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -78,6 +80,18 @@ struct TaskInput {
     inline_agent: Option<InlineAgentInput>,
     #[serde(default)]
     members: Vec<TaskMemberInput>,
+    #[serde(default)]
+    name: Option<String>,
+}
+
+/// Validate an optional `name` (handle role prefix); blank means "default".
+fn handle_prefix(raw: Option<String>) -> Result<Option<String>, ToolError> {
+    match raw {
+        Some(raw) if !raw.trim().is_empty() => normalize_handle_prefix(&raw)
+            .map(Some)
+            .map_err(ToolError::Input),
+        _ => Ok(None),
+    }
 }
 
 struct TaskResult {
@@ -99,7 +113,7 @@ impl Tool for TaskTool {
     fn schema(&self) -> ToolSchema {
         obj_schema(
             "task",
-            "Launch a specialized subagent (ADR-0015 episodic actor). Non-blocking: returns immediately with the agent's handle; results arrive later as its `report` mail. Continue the conversation, then check mail or wait for the report. Follow up on a finished agent by sending mail to its handle; archived agents are revived by that mail.",
+            "Launch a specialized subagent (ADR-0015 episodic actor). Non-blocking: returns immediately with the agent's handle; results arrive later as its `report` mail. Continue the conversation, then check mail or wait for the report. Follow up on a finished agent by sending mail to its handle; archived agents are revived by that mail. The handle is your `name` (a role prefix, default the subagent type) plus a random name the harness appends, under your own path: `name: \"scout\"` → `main/scout-suzuran`. Handles are never reused in a team.",
             json!({
                 "description": {
                     "type": "string",
@@ -112,6 +126,10 @@ impl Tool for TaskTool {
                 "subagent_type": {
                     "type": "string",
                     "description": "The type of specialized agent to use for this task"
+                },
+                "name": {
+                    "type": "string",
+                    "description": "Role prefix for the subagent's handle: lowercase letters, digits and single hyphens, at most 32 characters (e.g. `scout`, `dev`, `reviewer`). The harness appends a random name (`scout` → `main/scout-suzuran`). Defaults to the subagent type."
                 },
                 "category": {
                     "type": "string",
@@ -144,6 +162,7 @@ impl Tool for TaskTool {
                             "description": { "type": "string" },
                             "prompt": { "type": "string" },
                             "subagent_type": { "type": "string" },
+                            "name": { "type": "string", "description": "Role prefix for this member's handle (see top-level `name`)" },
                             "category": { "type": "string" },
                             "model": { "type": "string" },
                             "inline_agent": {
@@ -185,16 +204,17 @@ impl Tool for TaskTool {
                 let inline_agent = m
                     .inline_agent
                     .map(|inline| inline.into_inline(&subagent_type));
-                SpawnMember {
+                Ok(SpawnMember {
                     description: m.description,
                     prompt: m.prompt,
                     subagent_type,
                     model: m.model,
                     category: m.category,
                     inline_agent,
-                }
+                    name: handle_prefix(m.name)?,
+                })
             })
-            .collect();
+            .collect::<Result<_, ToolError>>()?;
         if members.is_empty() {
             if input.description.trim().is_empty() || input.prompt.trim().is_empty() {
                 return Err(ToolError::Input(
@@ -212,6 +232,7 @@ impl Tool for TaskTool {
                 model: input.model,
                 category: input.category,
                 inline_agent,
+                name: handle_prefix(input.name)?,
             });
         }
 

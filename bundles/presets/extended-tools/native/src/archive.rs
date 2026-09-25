@@ -19,7 +19,7 @@ impl Tool for ArchiveTool {
             json!({
                 "target": {
                     "type": "string",
-                    "description": "The subagent to archive: its handle as returned by `task` (e.g. `main/hya-worker-1`, or just the leaf `hya-worker-1` for your own subagent) or its session id (`hysec_...`)."
+                    "description": "The subagent to archive: its handle as returned by `task` (e.g. `main/hya-worker-exusiai`, or just the leaf `hya-worker-exusiai` for your own subagent) or its session id (`hysec_...`)."
                 },
                 "reason": {
                     "type": "string",
@@ -39,7 +39,7 @@ impl Tool for ArchiveTool {
             .filter(|text| !text.is_empty())
             .ok_or_else(|| {
                 ToolError::Input(
-                    "archive requires `target`: the subagent's handle (e.g. `main/hya-worker-1`) or session id from the `task` result".to_string(),
+                    "archive requires `target`: the subagent's handle (e.g. `main/hya-worker-exusiai`) or session id from the `task` result".to_string(),
                 )
             })?
             .to_string();

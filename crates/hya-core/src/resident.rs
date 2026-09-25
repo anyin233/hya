@@ -37,7 +37,7 @@
 //! "no pending work", quiescence can never fire while a turn is running or mail is
 //! queued, and it can never hang (the last resident to idle always runs the check).
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -372,6 +372,9 @@ struct ResidentSpawnContext {
     registration: ResidentRegistration,
     parent_claim: Option<ActorClaim>,
     guidance: Option<Arc<str>>,
+    /// Caller-chosen handle prefix (the `task` tool's `name`); `None` uses
+    /// the agent id.
+    name: Option<String>,
 }
 
 impl ResidentSpawnContext {
@@ -384,7 +387,13 @@ impl ResidentSpawnContext {
             registration,
             parent_claim: parent_claim.copied(),
             guidance,
+            name: None,
         }
+    }
+
+    fn named(mut self, name: Option<&str>) -> Self {
+        self.name = name.map(str::to_string);
+        self
     }
 }
 
@@ -2278,7 +2287,7 @@ pub(crate) struct MemberTarget {
 }
 
 /// Resolve a model-supplied subagent reference — canonical handle, a leaf
-/// relative to the caller (`hya-worker-1`), a unique leaf, or a session id
+/// relative to the caller (`hya-worker-exusiai`), a unique leaf, or a session id
 /// (`hysec_…`) — against the team's live roster and archive. The lead
 /// resolves too (`main` or the root session id); callers decide what that
 /// means. The error lists the caller's live subagents.
@@ -3475,6 +3484,42 @@ impl ResidentSupervisor {
         Ok((session, handle))
     }
 
+    /// [`spawn_resident`](Self::spawn_resident) with a caller-chosen handle
+    /// prefix (the `task` tool's `name`): the handle becomes
+    /// `<parent path>/<name>-<operator>`; `None` uses the agent id. See
+    /// [`crate::handle_naming`].
+    ///
+    /// # Errors
+    /// [`CoreError::Invalid`] (before anything is created) when `name` is not
+    /// a valid prefix, plus every [`spawn_resident`](Self::spawn_resident)
+    /// failure.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn spawn_resident_named(
+        &self,
+        parent: SessionId,
+        agent: AgentSpec,
+        resolved: ResolvedResidentRuntime,
+        directive: String,
+        name: Option<&str>,
+        parent_claim: Option<&ActorClaim>,
+        guidance: Option<Arc<str>>,
+    ) -> Result<(SessionId, String), CoreError> {
+        let (session, handle, _) = self
+            .spawn_resident_inner(
+                parent,
+                agent,
+                resolved,
+                ResidentSpawnContext::new(
+                    ResidentRegistration::Armed(directive),
+                    parent_claim,
+                    guidance,
+                )
+                .named(name),
+            )
+            .await?;
+        Ok((session, handle))
+    }
+
     /// Create and register one resident without an implicit first turn.
     ///
     /// The caller must deliver work through durable mail after this returns.
@@ -3513,7 +3558,13 @@ impl ResidentSupervisor {
             registration,
             parent_claim,
             guidance,
+            name,
         } = context;
+        // Validate the prefix before anything is created.
+        let prefix = match name.as_deref() {
+            Some(name) => hya_tool::normalize_handle_prefix(name).map_err(CoreError::Invalid)?,
+            None => hya_tool::sanitize_handle_prefix(agent.name.as_str()),
+        };
         let (registration_directive, initial) = match registration {
             ResidentRegistration::Armed(directive) => (directive.clone(), Some(directive)),
             ResidentRegistration::Parked(directive) => (directive, None),
@@ -3553,9 +3604,7 @@ impl ResidentSupervisor {
             .resolve_handle(root, parent)
             .await
             .unwrap_or_else(|_| scope::ROOT_HANDLE.to_string());
-        let leaf = self
-            .assign_handle(root, &parent_path, agent.name.as_str())
-            .await;
+        let leaf = self.engine.mint_member_leaf(root, &prefix).await;
         let handle = scope::join_path(&parent_path, &leaf);
         let member = MemberId::new();
         let description: String = registration_directive.chars().take(80).collect();
@@ -3994,44 +4043,5 @@ impl ResidentSupervisor {
             notify.notify_one();
         }
         Ok(())
-    }
-
-    /// Assign the next `{type}-{ordinal}` **leaf** for `agent_type` inside
-    /// `parent_path`'s unit, continuing the ordinal past that unit's existing
-    /// members of the same type.
-    ///
-    /// Counts per unit rather than per team, and skips a leaf that collides with
-    /// a sibling or with the parent's own leaf — the same two rules
-    /// `subagent::assign_handles` enforces, for the resident spawn path.
-    /// Deterministic (roster + type only) for replay stability.
-    async fn assign_handle(&self, root: SessionId, parent_path: &str, agent_type: &str) -> String {
-        let roster = self
-            .engine
-            .read_projection(root)
-            .await
-            .map(|p| p.team.roster)
-            .unwrap_or_default();
-        let siblings: Vec<&String> = roster
-            .keys()
-            .filter(|path| scope::parent_path(path) == Some(parent_path))
-            .collect();
-        let taken: BTreeSet<&str> = siblings.iter().map(|path| scope::leaf(path)).collect();
-        let mut ordinal = siblings
-            .iter()
-            .filter(|path| {
-                roster
-                    .get(**path)
-                    .is_some_and(|entry| entry.agent_type.as_str() == agent_type)
-            })
-            .count();
-        let parent_leaf = scope::leaf(parent_path);
-        // Terminates: `taken` is finite and the ordinal only ever grows.
-        loop {
-            ordinal += 1;
-            let candidate = format!("{agent_type}-{ordinal}");
-            if candidate != parent_leaf && !taken.contains(candidate.as_str()) {
-                return candidate;
-            }
-        }
     }
 }

@@ -80,7 +80,7 @@ paths. So a narrow bundle subagent can always read the mail its report gate
 names; the gate error says which channel and how:
 
 ```text
-report rejected: `main/scout-1` has 1 unread mail message(s) on #DM-rgli51cb (1); answer them first. Read it with `read channel://DM-rgli51cb` (`list_channel` lists every channel with unread counts), reply with `send` if the sender needs an answer, then call `report` again — or call `wait` to block until more mail arrives.
+report rejected: `main/scout-suzuran` has 1 unread mail message(s) on #DM-rgli51cb (1); answer them first. Read it with `read channel://DM-rgli51cb` (`list_channel` lists every channel with unread counts), reply with `send` if the sender needs an answer, then call `report` again — or call `wait` to block until more mail arrives.
 ```
 
 Mail also reaches a working agent as a `[NEW MAIL]` notice appended to its next
