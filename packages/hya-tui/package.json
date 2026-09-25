@@ -1,6 +1,6 @@
 {
   "name": "@hya/tui",
-  "version": "0.37.9",
+  "version": "0.37.10",
   "private": true,
   "type": "module",
   "scripts": {
@@ -9,6 +9,8 @@
     "test": "bun test"
   },
   "dependencies": {
+    "@grpc/grpc-js": "1.14.5",
+    "@grpc/proto-loader": "0.8.1",
     "@opentui/core": "0.5.12"
   },
   "devDependencies": {

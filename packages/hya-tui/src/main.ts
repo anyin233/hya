@@ -9,10 +9,11 @@ import {
   type KeyEvent,
 } from "@opentui/core"
 import type { PasteEvent } from "@opentui/core"
-import { resolve } from "node:path"
 import openapi from "../../../docs/protocol/openapi.json"
+import { argumentsFrom } from "./args"
 import { completeCommand, SecretEntry, type CompletionContext } from "./completion"
 import { footerInstruction, type View } from "./instructions"
+import { GrpcHyaClient } from "./grpc_client"
 import { customSetup, deepseekSetup } from "./provider_setup"
 import {
   HyaClient,
@@ -28,21 +29,6 @@ import {
   type StreamFrame,
   type WorkflowSummary,
 } from "./client"
-
-function argumentsFrom(argv: string[]): { server: string; directory: string } | null {
-  let server = "http://127.0.0.1:8080"
-  let directory = process.cwd()
-  for (let index = 0; index < argv.length; index++) {
-    const arg = argv[index]
-    if (arg === "--help" || arg === "-h") return null
-    if (arg === "--server" && argv[index + 1]) server = argv[++index]!
-    else if (arg === "--dir" && argv[index + 1]) directory = argv[++index]!
-    else throw new Error(`Unknown or incomplete option: ${arg}`)
-  }
-  const url = new URL(server)
-  if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error("--server needs an HTTP URL")
-  return { server: url.toString(), directory: resolve(directory) }
-}
 
 function modelReference(session: SessionInfo): string {
   const model = session.model
@@ -81,11 +67,13 @@ function brief(value: unknown): string {
 async function main(): Promise<void> {
   const parsedOptions = argumentsFrom(process.argv.slice(2))
   if (!parsedOptions) {
-    process.stdout.write("Usage: bun packages/hya-tui/src/main.ts [--server http://127.0.0.1:8080] [--dir PATH]\n")
+    process.stdout.write("Usage: bun packages/hya-tui/src/main.ts [--server http://127.0.0.1:8080 | --grpc 127.0.0.1:22104] [--dir PATH]\n")
     return
   }
   const options = parsedOptions
-  const client = new HyaClient(options.server, options.directory)
+  const client = options.grpc
+    ? new GrpcHyaClient(options.grpc, options.directory)
+    : new HyaClient(options.server, options.directory)
   const renderer = await createCliRenderer({ exitOnCtrlC: true, targetFps: 30 })
   const colors = { bg: "#11151b", panel: "#1c2530", fg: "#e8edf3", muted: "#9caab9", accent: "#73c8e8", border: "#405366" }
   const root = new BoxRenderable(renderer, { width: "100%", height: "100%", flexDirection: "column", backgroundColor: colors.bg })
@@ -578,6 +566,7 @@ async function main(): Promise<void> {
     renderer.keyInput.off("keypress", onKey)
     renderer.keyInput.off("paste", onPaste)
     renderer.off(CliRenderEvents.RESIZE, adaptLayout)
+    if (client instanceof GrpcHyaClient) client.close()
   })
 
   try {
@@ -591,7 +580,7 @@ async function main(): Promise<void> {
       ? `Connected to hya ${bootstrap.location?.version ?? ""} · /help for commands`
       : `Connected to hya ${bootstrap.location?.version ?? ""} · key listing needs backend 0.37.6+`)
   } catch (error) {
-    showStatus(`Connection failed: ${String(error)} · start hya-backend serve`)
+    showStatus(`Connection failed: ${String(error)} · ${options.grpc ? "set HYA_GRPC_BIND and start hya-backend serve" : "start hya-backend serve"}`)
     view = "help"
     repaint()
   }

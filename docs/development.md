@@ -113,7 +113,7 @@ Use this guide when deciding where a change belongs:
 | HTTP route or SSE behavior | `hya-server` |
 | `hya.v1` contract change (proto message/rpc, error code, HTTP binding) | `hya-api` — edit `proto/hya/v1/*.proto`, then regenerate with `cargo run -p xtask -- gen-api` |
 | Typed Rust HTTP integration | `hya-client`; Rust frontends use `hya-sdk-v1` |
-| Bun/OpenTUI frontend behavior | `packages/hya-tui` (v1 HTTP/JSON+SSE client) |
+| Bun/OpenTUI frontend behavior | `packages/hya-tui` (v1 HTTP/JSON+SSE or gRPC client) |
 | User-facing backend CLI command, config loading, server launch | `hya-backend` |
 | Process-level agent scenario (real backend + FakeLlm) | `hya-e2e` (+ matrix docs under `docs/testing/`) |
 | Dev tooling (matrix check, startup bench) | `xtask` |

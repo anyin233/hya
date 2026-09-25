@@ -2,7 +2,7 @@
 
 hya is an event-sourced coding agent. Rust owns the runtime, server, and
 persistence boundaries. The OpenTUI frontend under `packages/hya-tui` drives
-the backend through the `hya.v1` HTTP/JSON+SSE contract. Other clients use
+the backend through the `hya.v1` HTTP/JSON+SSE or gRPC contract. Other clients use
 `hya-sdk-v1`, `hya-client`, HTTP/WebSocket, or gRPC. Workflow compilation, durable
 execution, package models, and the consolidated `hya.v1` HTTP/gRPC contract
 are documented separately below.

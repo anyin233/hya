@@ -76,7 +76,9 @@ verbatim. On HTTP GET routes, send nested page fields as `page.cursor` and
    immediately. Slash commands that route to workflow features execute
    synchronously and return a `FINISHED` turn with an empty id.
 4. Subscribe to `GET /v1/sessions/{id}/events/stream` (SSE) or
-   `GET /v1/events/stream` (global). Every projection change arrives as a
+   `Events.StreamSessionEvents` (gRPC), or use the global stream for live
+   notifications. Session streams replay durable events after `sinceSeq`
+   before continuing live. Every projection change arrives as a
    `StreamFrame` JSON object; terminal state arrives as `messageFinished`
    and `turnFinished`-derivable events. On lag the server sends a
    `resync` frame — resume with `ListEvents` from `lastSeq`.

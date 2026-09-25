@@ -83,7 +83,8 @@ methods `Any`.
 - [`../../crates/hya-client`](../../crates/hya-client) — lean typed
   `reqwest` client (tooling, e2e harness).
 - [`../../packages/hya-tui`](../../packages/hya-tui) — Bun/OpenTUI client of
-  the same HTTP/JSON+SSE contract; [commands and route usage](../tui.md).
+  the same v1 contract over HTTP/JSON+SSE or native gRPC;
+  [commands and route usage](../tui.md).
 - gRPC through `V1Grpc` — same contract over tonic when `HYA_GRPC_BIND` is
   set.
 
@@ -95,5 +96,7 @@ removed.
 - `crates/hya-server/tests/v1_api.rs` — v1 HTTP integration suite.
 - `crates/hya-server/tests/v1_grpc_parity.rs` — dual-transport
   conformance over a real tonic listener.
+- `packages/hya-tui/test/grpc_process.test.ts` — optional process test that
+  drives a real backend over gRPC, including durable replay and live events.
 - `crates/hya-e2e` (Track P) — the process matrix drives real backends
   entirely through the v1 client.

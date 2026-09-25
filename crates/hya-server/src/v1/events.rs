@@ -5,6 +5,8 @@
 
 use std::collections::BTreeMap;
 use std::convert::Infallible;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use axum::extract::{Path as AxumPath, Query, State};
 use axum::response::sse::{Event as SseEvent, KeepAlive, Sse};
@@ -111,8 +113,11 @@ fn session_stream(
     Sse::new(events).keep_alive(KeepAlive::default())
 }
 
-/// The shared live frame producer backing both SSE and gRPC streams.
+/// The shared frame producer backing both SSE and gRPC streams.
 ///
+/// Session streams replay durable events after the cursor before joining the
+/// live bus. The bus subscription is opened first so replay cannot leave a
+/// gap, and the watermark suppresses events seen in both feeds.
 /// Merges three feeds: the engine event bus (durable events), the pending
 /// permission plane, and the pending question plane. Permission and
 /// question frames are live-only (`seq == 0`): the pending queues are the
@@ -122,8 +127,11 @@ pub(crate) fn frame_stream(
     session: Option<SessionId>,
     since_seq: u64,
 ) -> impl Stream<Item = Result<pb::StreamFrame, tonic::Status>> {
-    let engine =
-        BroadcastStream::new(st.engine.bus().subscribe()).filter_map(move |result| async move {
+    let cursor = Arc::new(AtomicU64::new(since_seq));
+    let live_cursor = Arc::clone(&cursor);
+    let live = BroadcastStream::new(st.engine.bus().subscribe()).filter_map(move |result| {
+        let cursor = Arc::clone(&live_cursor);
+        async move {
             match result {
                 Ok(envelope) => {
                     if let Some(session) = session
@@ -131,8 +139,16 @@ pub(crate) fn frame_stream(
                     {
                         return None;
                     }
-                    if envelope.seq.0 <= since_seq {
+                    let watermark = if session.is_some() {
+                        cursor.load(Ordering::Relaxed)
+                    } else {
+                        since_seq
+                    };
+                    if envelope.seq.0 <= watermark {
                         return None;
+                    }
+                    if session.is_some() {
+                        cursor.fetch_max(envelope.seq.0, Ordering::Relaxed);
                     }
                     let frame = match stream_event(&envelope) {
                         Some(event) => pb::stream_frame::Frame::Event(event),
@@ -142,11 +158,42 @@ pub(crate) fn frame_stream(
                 }
                 Err(_lagged) => Some(Ok(pb::StreamFrame {
                     frame: Some(pb::stream_frame::Frame::Resync(pb::ResyncFrame {
-                        last_seq: since_seq,
+                        last_seq: if session.is_some() {
+                            cursor.load(Ordering::Relaxed)
+                        } else {
+                            since_seq
+                        },
                     })),
                 })),
             }
-        });
+        }
+    });
+    let engine: std::pin::Pin<
+        Box<dyn Stream<Item = Result<pb::StreamFrame, tonic::Status>> + Send>,
+    > = if let Some(session) = session {
+        let replay_engine = Arc::clone(&st.engine);
+        let replay = futures::stream::once(async move {
+            match replay_engine.replay(session).await {
+                Ok(envelopes) => envelopes
+                    .into_iter()
+                    .filter(|envelope| envelope.seq.0 > since_seq)
+                    .filter_map(|envelope| {
+                        cursor.fetch_max(envelope.seq.0, Ordering::Relaxed);
+                        stream_event(&envelope).map(|event| {
+                            Ok(pb::StreamFrame {
+                                frame: Some(pb::stream_frame::Frame::Event(event)),
+                            })
+                        })
+                    })
+                    .collect::<Vec<_>>(),
+                Err(error) => vec![Err(tonic::Status::internal(error.to_string()))],
+            }
+        })
+        .flat_map(futures::stream::iter);
+        Box::pin(replay.chain(live))
+    } else {
+        Box::pin(live)
+    };
     // Pending planes never error; the Result wrapper matches the merged
     // engine-stream item type (tonic::Status is large but never constructed
     // on these branches).
@@ -166,9 +213,6 @@ pub(crate) fn frame_stream(
                 .map(|frame| Ok(pb::StreamFrame { frame: Some(frame) }))
         },
     );
-    let engine: std::pin::Pin<
-        Box<dyn Stream<Item = Result<pb::StreamFrame, tonic::Status>> + Send>,
-    > = Box::pin(engine);
     let permission: std::pin::Pin<
         Box<dyn Stream<Item = Result<pb::StreamFrame, tonic::Status>> + Send>,
     > = Box::pin(permission);

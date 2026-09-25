@@ -1,9 +1,11 @@
-# 0.37.9
+# 0.37.10
 
-## Provider connection in OpenTUI
+## Native gRPC connection for OpenTUI
 
-The TUI now guides provider setup with `/connect deepseek` and
-`/connect custom <id> <base-url> <model-id>`. A preview shows the endpoint,
-models, default model, and whether a matching key is saved. Enter saves the
-non-secret route through the new `Catalog.ConfigureProvider` v1 operation;
-Esc cancels. Restart the backend to load the route and use the saved key.
+The OpenTUI frontend can connect to the backend's separate `hya.v1` gRPC
+listener with `--grpc host:port`. Sessions, turns, catalogs, provider keys,
+workflows, interactions, and the API command view use the same frontend
+workflows over the selected transport. Session event streams now replay durable
+events after `sinceSeq` before continuing live, so reconnecting a frontend
+does not miss a completed turn. A real-backend process test covers unary calls,
+replay, and live event delivery.

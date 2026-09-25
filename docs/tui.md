@@ -3,9 +3,11 @@
 The `packages/hya-tui` frontend is a basic terminal client for a running
 `hya-backend serve` process. It uses OpenTUI for display and input while the
 backend remains the owner of sessions, event history, tool execution, and
-permissions. The screen shows a session list, the selected transcript, and
+permissions. It can use HTTP/JSON+SSE or native gRPC for the same v1 workflows;
+gRPC connects to the backend's separate listener. The screen shows a session
+list, the selected transcript, and
 pending interactions. Models, Workflows, and saved provider keys have dedicated
-views; the API command view exposes the other HTTP/JSON operations in `hya.v1`.
+views; the API command view exposes the other unary operations in `hya.v1`.
 Tab completes slash commands using the TUI and server command catalogs.
 One persistent instruction line stays below the input at the bottom of the
 screen and changes with the current view.
@@ -31,12 +33,25 @@ bun packages/hya-tui/src/main.ts --server http://127.0.0.1:8080 --dir "$PWD"
 `--server` is the backend base HTTP URL (default `http://127.0.0.1:8080`).
 `--dir` is the absolute directory scope sent as `x-hya-directory` (default:
 the frontend process's working directory). `--help` prints the launch syntax.
+To connect over gRPC instead, start the separate listener and use `--grpc`:
+
+```sh
+HYA_GRPC_BIND=127.0.0.1:22104 cargo run --locked -p hya-backend -- serve --bind 127.0.0.1:8080 --db "$HOME/hya-sessions.db"
+bun packages/hya-tui/src/main.ts --grpc 127.0.0.1:22104 --dir "$PWD"
+```
+
+Run those commands in separate terminals. `--grpc` accepts a `host:port`
+address and cannot be combined with `--server`; its port must match
+`HYA_GRPC_BIND`. The gRPC client uses a plaintext connection, so keep the
+listener on loopback or forward it through SSH when the frontend is remote.
+The TUI sends `--dir` in the gRPC request's `directory` field where that
+method defines one.
 The backend's offline echo model is sufficient for a first run. The `/connect`
 flow below configures a live provider from the TUI.
 
 Type a plain prompt and press Enter. The frontend creates a session when none
 is open, admits the prompt as a turn, and refreshes its transcript from the
-server as SSE frames arrive. For example, type `summarize this repository`,
+server as SSE or gRPC frames arrive. For example, type `summarize this repository`,
 then `/models` to inspect available routes, and `/open 1` to return to the
 first session. Press Ctrl+C to exit and restore the terminal.
 
@@ -103,8 +118,8 @@ backend is running.
 | `/answer <id> <text>` | Answer a question request. |
 | `/cancel` | Request cancellation of the turn admitted in this frontend. |
 | `/refresh` or Ctrl+R | Reload sessions, messages, interactions, models, and Workflows. |
-| `/api` | List the HTTP operations from the generated OpenAPI catalog. |
-| `/api METHOD /v1/path [JSON]` | Send a scoped HTTP/JSON request and show its JSON response. |
+| `/api` | List the v1 operations from the generated OpenAPI catalog. |
+| `/api METHOD /v1/path [JSON]` | Send a scoped v1 request using the selected transport and show its response. |
 | `/help` | Show command help. |
 | Tab | Complete a slash command or supported argument; repeat Tab to cycle matches. |
 
@@ -116,7 +131,7 @@ Other slash commands are forwarded to the backend as `CommandTurn`s, so
 custom commands from the server catalog remain usable in this frontend. Tab
 suggestions also use that catalog. Argument completion covers agents, sessions,
 models, Workflows, pending interaction IDs, provider IDs, saved key names, and
-HTTP operations from the generated OpenAPI catalog. Suggestions are refreshed
+v1 operations from the generated OpenAPI catalog. Suggestions are refreshed
 with `/refresh` or Ctrl+R.
 
 The API command accepts `GET`, `POST`, `PUT`, `PATCH`, and `DELETE`; the optional
@@ -130,18 +145,26 @@ path. For example:
 ```
 
 It only accepts paths beginning `/v1/`, so a command cannot redirect the
-client to another origin. The catalog marks server-streaming operations with
+client to another origin. In gRPC mode, the path and HTTP verb select the
+corresponding `Service.Method` RPC; path, query, and JSON body fields become
+the protobuf request. The catalog marks server-streaming operations with
 `[stream]`; the one-shot API command does not consume those streams. Session
-SSE is connected automatically when a session is open. PTY WebSocket sessions
+SSE or gRPC events are connected automatically when a session is open. PTY
+WebSocket sessions
 need a WebSocket client; the command view can still call their JSON setup
 routes. See the [protocol guide](protocol/README.md) for those frames.
 
 ## Interface definitions
 
-The frontend uses the existing HTTP/JSON+SSE transport. Every request carries
+The frontend uses HTTP/JSON+SSE with `--server` and native gRPC with `--grpc`.
+Every HTTP request carries
 `x-hya-directory: <absolute --dir path>`; JSON uses protojson lower camel case,
 string encoded 64-bit values, and the error envelope documented in the
-[protocol guide](protocol/README.md). These are the first-class calls:
+[protocol guide](protocol/README.md). gRPC uses the same lower camel case
+field names at the TUI boundary, with the `hya.v1` protobuf request and response
+messages as its wire contract. The table below gives each HTTP binding; gRPC
+maps each binding to the `Service.Method` in the
+[generated API reference](protocol/api-reference.md). These are the first-class calls:
 
 | Method and route | Request | Response read by the TUI |
 | --- | --- | --- |
@@ -188,7 +211,7 @@ from the current view; it makes no HTTP request:
 
 The transcript is read from projected `MessageInfo.parts` after event
 notifications. The TUI does not derive a competing durable state model from
-SSE deltas. List requests follow the server's `page.nextCursor` using the
+event deltas. List requests follow the server's `page.nextCursor` using the
 `page.cursor` and `page.limit` query keys. `GET /v1/auth` is an unpaginated
 names-only list. The generic `/api` command sends the supplied JSON unchanged to
 the named `/v1` route; its full request and response schemas are in the
@@ -197,10 +220,20 @@ For non-2xx responses with an empty or invalid JSON body, the frontend reports
 `METHOD /v1/path: HTTP <status> <status text>`; a structured error envelope
 continues to show its code and message.
 
+In gRPC mode, `Events.StreamSessionEvents` takes
+`{session: string, sinceSeq: string}` and yields `StreamFrame` values with
+`event` or `resync`. The server first replays durable session events with a
+sequence greater than `sinceSeq`, then continues with live events; a frame
+seen in both feeds is sent once. Permission and question frames remain live
+notifications with sequence zero. The TUI cancels the gRPC stream when it
+switches sessions or exits. Unary RPC errors map to the same user-facing
+HTTP status family used by the existing TUI workflows.
+
 ## Verify locally
 
 ```sh
 cd packages/hya-tui
 bun run typecheck
 bun test
+HYA_BACKEND_BIN=/absolute/path/to/hya-backend bun test test/grpc_process.test.ts
 ```

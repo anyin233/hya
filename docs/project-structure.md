@@ -31,7 +31,7 @@ hya-backend / hya-server
 | [`../rustfmt.toml`](../rustfmt.toml) | Workspace formatting configuration. |
 | [`../README.md`](../README.md) | Short public overview and quick command examples. |
 | [`../crates`](../crates) | Production crates. |
-| [`../packages/hya-tui`](../packages/hya-tui) | Bun/OpenTUI terminal client of the v1 HTTP/JSON+SSE server. |
+| [`../packages/hya-tui`](../packages/hya-tui) | Bun/OpenTUI terminal client of the v1 server over HTTP/JSON+SSE or gRPC. |
 | [`../crates/xtask`](../crates/xtask) | Developer tooling: `startup-bench`, `matrix-check`, deterministic `package-bundle`, and non-publishing `release-rehearsal`. |
 | [`../docs`](../docs) | Project documentation. |
 
