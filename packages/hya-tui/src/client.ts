@@ -25,7 +25,7 @@ export interface MessagePart {
   id: string
   text?: { text: string }
   reasoning?: { text: string }
-  toolCall?: { tool: string; state?: string; inputJson?: string }
+  toolCall?: { tool: string; state?: string; inputJson?: string; errorCode?: string; errorMessage?: string }
   toolResult?: { output: string; errorMessage?: string }
   attachment?: { name: string; path?: string }
 }
@@ -38,6 +38,10 @@ export interface MessageError {
 export interface MessageInfo {
   id: string
   role: string
+  /** Agent attributed to the message; empty when the server leaves it unset. */
+  agent?: string
+  /** `provider/model` that produced the message; empty when unset. */
+  model?: string
   parts?: MessagePart[]
   finish?: string
   finishCause?: string

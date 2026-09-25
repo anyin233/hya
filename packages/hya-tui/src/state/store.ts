@@ -31,6 +31,7 @@ import type {
 } from "../client"
 import type { CompletionContext } from "../completion"
 import type { View } from "../instructions"
+import { toggledSidebar, type SidebarMode } from "./layout"
 import { TranscriptOverlay, type OverlayEffect } from "./overlay"
 
 /** A prompt submitted while a turn runs; sent when the session is free. */
@@ -74,6 +75,16 @@ export interface AppState {
   /** Provider whose key is being entered; undefined outside key entry. */
   readonly secretProvider: string | undefined
   readonly secretMask: string
+  /** Sidebar mode (state/layout.ts): `auto` follows the terminal width. */
+  readonly sidebar: SidebarMode
+  /** Terminal width in columns, kept current by the root layout. */
+  readonly columns: number
+  /** Global reasoning switch (`/thinking`, Ctrl+O): expand every reasoning block. */
+  readonly thinking: boolean
+  /** Per-part reasoning expansion that overrides `thinking` (mouse click on a Thinking line). */
+  readonly reasoningToggles: ReadonlyMap<string, boolean>
+  /** Bumped when the transcript should jump to its newest line (a prompt was submitted). */
+  readonly followTick: number
 }
 
 /** Rows loaded by one full catalog refresh. `savedKeys: null` = listing unsupported. */
@@ -114,6 +125,11 @@ function initialState(): { [K in keyof AppState]: AppState[K] } {
     status: startupStatus,
     secretProvider: undefined,
     secretMask: "",
+    sidebar: "auto",
+    columns: 80,
+    thinking: false,
+    reasoningToggles: new Map(),
+    followTick: 0,
   }
 }
 
@@ -229,6 +245,30 @@ export function createAppStore() {
     setView(view: View): void { set("view", view) },
     setStatus(text: string): void { set("status", text) },
     setApiOutput(text: string): void { set("apiOutput", text) },
+
+    setColumns(columns: number): void {
+      if (columns !== state.columns) set("columns", columns)
+    },
+    setSidebar(mode: SidebarMode): void { set("sidebar", mode) },
+    /** Show the sidebar if it is hidden at the current width, else hide it. */
+    toggleSidebar(): void { set("sidebar", toggledSidebar(state.sidebar, state.columns)) },
+
+    /** Expand or collapse every reasoning block; forgets per-part toggles. */
+    setThinking(expanded: boolean): void {
+      batch(() => {
+        set("thinking", expanded)
+        set("reasoningToggles", new Map())
+      })
+    },
+    /** Flip one reasoning block against its current state. */
+    toggleReasoning(partId: string): void {
+      const next = new Map(state.reasoningToggles)
+      next.set(partId, !(state.reasoningToggles.get(partId) ?? state.thinking))
+      set("reasoningToggles", next)
+    },
+
+    /** Ask the transcript to jump to its newest line. */
+    followTranscript(): void { set("followTick", state.followTick + 1) },
 
     /** A prompt is being admitted: the session counts as running from now on. */
     beginTurn(): void {

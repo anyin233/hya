@@ -1,33 +1,42 @@
 import { useTerminalDimensions } from "@opentui/solid"
+import { createEffect, Show } from "solid-js"
 import { Composer } from "../components/Composer"
 import { Footer } from "../components/Footer"
 import { Header } from "../components/Header"
 import { MainPanel } from "../components/MainPanel"
-import { PendingPanel } from "../components/PendingPanel"
-import { SessionsPanel } from "../components/SessionsPanel"
+import { PendingBlock } from "../components/PendingBlock"
+import { Sidebar } from "../components/Sidebar"
 import { StatusLine } from "../components/StatusLine"
+import { sidebarVisible, sidebarWidth } from "../state/layout"
 import { colors } from "../theme"
+import { useApp } from "./context"
 
-/** Terminal widths below which the side panels hide. */
-export const layoutBreakpoints = { sessions: 58, pending: 105 } as const
+export { layoutBreakpoints } from "../state/layout"
 
 /**
- * Root layout: header, then Sessions | Chat | Pending, then status line,
- * bordered composer, and footer instruction.
+ * Root layout: one main column (header, transcript or view panel, pending
+ * block, status line, bordered composer, footer instruction) and, when
+ * shown, the sidebar on the right (state/layout.ts).
  */
 export function App() {
+  const { store } = useApp()
   const size = useTerminalDimensions()
+  createEffect(() => store.setColumns(size().width))
+  const shown = () => sidebarVisible(store.state.sidebar, size().width)
+  const side = () => sidebarWidth(size().width)
   return (
-    <box width="100%" height="100%" flexDirection="column" backgroundColor={colors.bg}>
-      <Header />
-      <box width="100%" flexGrow={1} flexDirection="row">
-        <SessionsPanel visible={size().width >= layoutBreakpoints.sessions} />
+    <box width="100%" height="100%" flexDirection="row" backgroundColor={colors.bg}>
+      <box height="100%" flexGrow={1} flexBasis={0} flexDirection="column" backgroundColor={colors.bg}>
+        <Header />
         <MainPanel />
-        <PendingPanel visible={size().width >= layoutBreakpoints.pending} />
+        <PendingBlock width={size().width - (shown() ? side() : 0)} />
+        <StatusLine />
+        <Composer />
+        <Footer />
       </box>
-      <StatusLine />
-      <Composer />
-      <Footer />
+      <Show when={shown()}>
+        <Sidebar width={side()} />
+      </Show>
     </box>
   )
 }

@@ -21,10 +21,14 @@ import { completeCommand, SecretEntry } from "../completion"
 import { createCommandRegistry, type AppActions, type CommandRegistry } from "../commands"
 import type { KeyLike } from "../keys/bindings"
 import type { AppStore } from "../state/store"
+import { createDebounce } from "./debounce"
 import { createTurnRunner, turnEndStatus } from "./turns"
 
 /** Overlay flush interval: coalesces stream deltas into one render per display frame. */
 const flushMs = 16
+/** Projection re-read debounce: after 120 ms of quiet, but at least every 400 ms while frames keep coming. */
+const refreshWaitMs = 120
+const refreshMaxWaitMs = 400
 /** Longest wait for the session stream before a prompt is admitted anyway. */
 const streamWaitMs = 3000
 
@@ -38,7 +42,6 @@ export interface ControllerOptions {
 
 export function createController({ client, store, directory, registry = createCommandRegistry() }: ControllerOptions) {
   let streamAbort: AbortController | undefined
-  let refreshTimer: ReturnType<typeof setTimeout> | undefined
   let flushTimer: ReturnType<typeof setTimeout> | undefined
   let streamReady: Promise<void> = Promise.resolve()
   let closing = false
@@ -74,12 +77,13 @@ export function createController({ client, store, directory, registry = createCo
     }
   }
 
+  const refreshLater = createDebounce(() => {
+    void Promise.all([refreshMessages(), client.listInteractions().then((rows) => store.setInteractions(rows))])
+      .catch((error: unknown) => status(`Refresh failed: ${String(error)}`))
+  }, { wait: refreshWaitMs, maxWait: refreshMaxWaitMs })
+
   function scheduleRefresh(): void {
-    if (refreshTimer) clearTimeout(refreshTimer)
-    refreshTimer = setTimeout(() => {
-      void Promise.all([refreshMessages(), client.listInteractions().then((rows) => store.setInteractions(rows))])
-        .catch((error: unknown) => status(`Refresh failed: ${String(error)}`))
-    }, 120)
+    refreshLater.schedule()
   }
 
   /** Publish the overlay at most once per `flushMs`, however many deltas arrived. */
@@ -197,6 +201,7 @@ export function createController({ client, store, directory, registry = createCo
         return
       }
       if (!store.state.selected) await newSession()
+      store.followTranscript()
       // Subscribe before CreateTurn, so no frame of the new turn is missed.
       await Promise.race([streamReady, Bun.sleep(streamWaitMs)])
       await turns.submit(text)
@@ -266,7 +271,7 @@ export function createController({ client, store, directory, registry = createCo
   function dispose(): void {
     closing = true
     streamAbort?.abort()
-    if (refreshTimer) clearTimeout(refreshTimer)
+    refreshLater.cancel()
     if (flushTimer) clearTimeout(flushTimer)
     secret.clear()
   }

@@ -1,5 +1,6 @@
 // hya-specific fixtures: an isolated `hya serve` on the offline echo model
-// (or, when a spec opts in, a scripted fake OpenAI-compatible model) and the
+// (or, when a spec opts in, a scripted fake OpenAI model on the Chat
+// Completions or Responses protocol) and the
 // argv that runs packages/hya-tui against it. The host itself stays generic;
 // only these specs know about hya.
 
@@ -9,7 +10,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
-import { startFakeModel, type FakeModel, type Step } from "./fake-model"
+import { startFakeModel, type FakeModel, type Protocol, type Step } from "./fake-model"
 import { test as base, type Tui } from "./harness"
 
 const repoRoot = fileURLToPath(new URL("../../..", import.meta.url))
@@ -26,7 +27,10 @@ export type Backend = {
 /** Provider/model id the fake model is registered under when `model` is set. */
 export const fakeModelRef = "fake/model"
 
-async function startBackend(root: string, fakeModel: FakeModel | undefined): Promise<{ child: ChildProcess; backend: Backend }> {
+/** hya provider kind that speaks each fake-model protocol. */
+const providerKinds: Record<Protocol, string> = { chat: "openai-compatible", responses: "openai-response" }
+
+async function startBackend(root: string, fakeModel: FakeModel | undefined, protocol: Protocol): Promise<{ child: ChildProcess; backend: Backend }> {
   const dir = join(root, "work")
   const env: Record<string, string> = {}
   for (const name of ["home", "config", "data", "state", "cache"]) {
@@ -42,7 +46,7 @@ async function startBackend(root: string, fakeModel: FakeModel | undefined): Pro
       `default_model: ${fakeModelRef}\n` +
         "providers:\n" +
         "  fake:\n" +
-        "    kind: openai-compatible\n" +
+        `    kind: ${providerKinds[protocol]}\n` +
         `    base_url: ${fakeModel.baseUrl}\n` +
         "    api_key: e2e-test-key\n" +
         "    models:\n" +
@@ -89,7 +93,16 @@ async function startBackend(root: string, fakeModel: FakeModel | undefined): Pro
  * (one run per array element), which silently drops steps beyond the first;
  * wrapping sidesteps that.
  */
-export type FakeModelOption = { steps: Step[] }
+export type FakeModelOption = {
+  steps: Step[]
+  /**
+   * Wire protocol hya uses to reach the fake: `chat` (default) registers it
+   * as an `openai-compatible` provider (`/chat/completions`); `responses`
+   * registers it as `openai-response` (`/responses`), the route whose decoder
+   * streams reasoning, so `reasoningStep` renders thinking only there.
+   */
+  protocol?: Protocol
+}
 
 type Fixtures = { backend: Backend; fakeModel: FakeModel | undefined }
 type Options = {
@@ -113,12 +126,12 @@ export const test = base.extend<Fixtures & Options>({
     await use(fake)
     await fake.stop()
   },
-  backend: async ({ fakeModel }, use) => {
+  backend: async ({ fakeModel, model }, use) => {
     if (!existsSync(hyaBin)) {
       throw new Error(`hya binary not found at ${hyaBin}; run \`cargo build -p hya-backend --bin hya\` or set HYA_BIN`)
     }
     const root = await mkdtemp(join(tmpdir(), "hya-tui-web-"))
-    const { child, backend } = await startBackend(root, fakeModel)
+    const { child, backend } = await startBackend(root, fakeModel, model?.protocol ?? "chat")
     await use(backend)
     if (child.exitCode === null) {
       const exited = new Promise((resolve) => child.once("exit", resolve))
@@ -140,7 +153,7 @@ export const test = base.extend<Fixtures & Options>({
 })
 
 export { expect } from "./harness"
-export { hangStep, httpErrorStep, textStep, toolStep, toolsStep, type FakeModel, type Step } from "./fake-model"
+export { hangStep, httpErrorStep, reasoningStep, textStep, toolStep, toolsStep, type FakeModel, type Protocol, type Step } from "./fake-model"
 
 /** argv that runs packages/hya-tui against `backend`. */
 export function hyaTui(backend: Backend): string[] {

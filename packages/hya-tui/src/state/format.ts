@@ -1,8 +1,7 @@
-/** Pure text for each panel, derived from the store. Components only lay it out. */
-import type { MessageInfo, SessionInfo } from "../client"
+/** Pure text for the header, sidebar, pending block, and non-chat views, derived from the store. */
+import type { SessionInfo } from "../client"
 import { helpText } from "../commands/help"
 import type { View } from "../instructions"
-import { mergeTranscript } from "./overlay"
 import type { AppState } from "./store"
 
 export function modelReference(session: SessionInfo): string {
@@ -10,46 +9,15 @@ export function modelReference(session: SessionInfo): string {
   return model?.providerId && model.modelId ? `${model.providerId}/${model.modelId}` : ""
 }
 
-export function formatMessage(message: MessageInfo): string {
-  const cached = formatted.get(message)
-  if (cached !== undefined) return cached
-  const text = formatUncached(message)
-  formatted.set(message, text)
-  return text
+/** Cut `text` to `width` columns with a trailing `…` (no-op when it fits or width is unset). */
+export function truncate(text: string, width?: number): string {
+  if (width === undefined || text.length <= width) return text
+  return width <= 1 ? "…".slice(0, width) : `${text.slice(0, width - 1)}…`
 }
 
-/**
- * Formatted text per message object. Projection rows and unchanged overlay
- * snapshots keep their identity between renders, so a streaming delta only
- * re-formats the message it touched.
- */
-const formatted = new WeakMap<MessageInfo, string>()
-
-function formatUncached(message: MessageInfo): string {
-  const role = message.role.replace(/^ROLE_/, "").toLowerCase()
-  const lines = (message.parts ?? []).map((part) => {
-    if (part.text) return part.text.text
-    if (part.toolCall) return `↳ ${part.toolCall.tool}  ${part.toolCall.state ?? ""}`
-    if (part.toolResult) return `  ${part.toolResult.errorMessage ?? part.toolResult.output}`
-    if (part.attachment) return `  attachment: ${part.attachment.name}`
-    return ""
-  }).filter(Boolean)
-  if (message.error) lines.push(`error · ${message.error.code ? `${message.error.code}: ` : ""}${message.error.message}`)
-  return `${role}${message.finish ? ` · ${message.finish.replace(/^FINISH_REASON_/, "").toLowerCase()}` : ""}\n${lines.join("\n") || "…"}`
-}
-
-/** The transcript shown in the chat view: the projection with the streaming overlay folded in. */
-export function transcript(state: AppState): MessageInfo[] {
-  return mergeTranscript(state.messages, state.overlay)
-}
-
-/** Prompts waiting for the running turn, shown dimmed below the transcript in the chat view. */
-export function queuedText(state: AppState): string {
-  if (state.view !== "chat") return ""
-  return state.queued
-    .filter((item) => item.state === "queued")
-    .map((item) => `user · queued\n${item.text}`)
-    .join("\n\n")
+/** Cut from the left, keeping the end (paths): `…/work`. */
+export function truncateStart(text: string, width: number): string {
+  return text.length <= width ? text : `…${text.slice(text.length - width + 1)}`
 }
 
 export function headerText(state: AppState, server: string): string {
@@ -58,18 +26,36 @@ export function headerText(state: AppState, server: string): string {
   return `hya ${selected ? `· ${selected.title || selected.id} · ${selected.agent} ${modelReference(selected)}` : "· no session"} · ${server}`
 }
 
-export function sessionListText(state: AppState): string {
+/** The sidebar's session list; `width` cuts each line to the sidebar. */
+export function sessionListText(state: AppState, width?: number): string {
   if (!state.ready) return "Loading…"
   return state.sessions.length
-    ? state.sessions.map((session, index) => `${session.id === state.selected?.id ? "▸" : " "} ${index + 1}. ${session.title || session.id}\n   ${session.agent}${session.busy ? " · running" : ""}`).join("\n\n")
+    ? state.sessions.map((session, index) => [
+      truncate(`${session.id === state.selected?.id ? "▸" : " "} ${index + 1}. ${session.title || session.id}`, width),
+      truncate(`   ${session.agent}${session.busy ? " · running" : ""}`, width),
+    ].join("\n")).join("\n\n")
     : "No sessions. Type a prompt or /new."
 }
 
-export function pendingText(state: AppState): string {
-  if (!state.ready) return ""
-  return state.interactions.length
-    ? state.interactions.map((item) => `${item.type?.includes("QUESTION") ? "?" : "!"} ${item.title}\n${item.id}`).join("\n\n")
-    : "No pending requests"
+/** One line per pending interaction: `! title · id` for permissions, `? title · id` for questions. */
+export function pendingLines(state: AppState, width?: number): string[] {
+  return state.interactions.map((item) => truncate(`${item.type?.includes("QUESTION") ? "?" : "!"} ${item.title} · ${item.id}`, width))
+}
+
+/** The sidebar's context box: the open session, its agent and model, message count, directory, server. */
+export function contextText(state: AppState, server: string, width = 30): string {
+  const session = state.selected
+  const row = (label: string, value: string) => `${label.padEnd(9)}${truncateStart(value, Math.max(4, width - 9))}`
+  const host = server.replace(/^https?:\/\//, "").replace(/\/$/, "")
+  if (!session) return [row("Session", "none"), row("Server", host)].join("\n")
+  return [
+    row("Session", session.title || session.id),
+    row("Agent", session.agent),
+    row("Model", modelReference(session) || "default"),
+    row("Messages", String(state.messages.length)),
+    row("Dir", session.workdir),
+    row("Server", host),
+  ].join("\n")
 }
 
 const titles: Record<View, string> = {
@@ -82,11 +68,9 @@ export function mainTitle(view: View): string { return titles[view] }
 export function mainContent(state: AppState): string {
   if (!state.ready) return ""
   switch (state.view) {
-    case "chat": {
-      const messages = transcript(state)
-      if (messages.length) return messages.slice(-50).map(formatMessage).join("\n\n")
-      return state.queued.length ? "" : "No messages yet. Type a prompt below."
-    }
+    case "chat":
+      // The transcript itself is rendered per message (components/Transcript.tsx).
+      return state.messages.length || state.overlay.length || state.queued.length ? "" : "No messages yet. Type a prompt below."
     case "models":
       return state.models.length ? state.models.map((model) => `${model.id}  ${model.displayName ?? ""}  ${model.auth ?? ""}`).join("\n") : "No models returned by server."
     case "workflows": {

@@ -103,3 +103,29 @@ test("notifies Solid computations when state changes", () => {
     dispose()
   })
 })
+
+test("reasoning is collapsed by default; the global switch and per-part toggles expand it", async () => {
+  const { reasoningExpanded } = await import("../src/state/messages")
+  const store = createAppStore()
+  expect(store.state.thinking).toBe(false)
+  expect(reasoningExpanded(store.state, "r1")).toBe(false)
+  store.toggleReasoning("r1")
+  expect(reasoningExpanded(store.state, "r1")).toBe(true)
+  expect(reasoningExpanded(store.state, "r2")).toBe(false)
+  // The global switch expands everything and forgets per-part choices.
+  store.setThinking(true)
+  expect(reasoningExpanded(store.state, "r1")).toBe(true)
+  expect(reasoningExpanded(store.state, "r2")).toBe(true)
+  store.toggleReasoning("r2")
+  expect(reasoningExpanded(store.state, "r2")).toBe(false)
+  store.setThinking(false)
+  expect(reasoningExpanded(store.state, "r2")).toBe(false)
+  expect(reasoningExpanded(store.state, "r1")).toBe(false)
+})
+
+test("submitting a prompt asks the transcript to jump to the newest line", () => {
+  const store = createAppStore()
+  const before = store.state.followTick
+  store.followTranscript()
+  expect(store.state.followTick).toBe(before + 1)
+})

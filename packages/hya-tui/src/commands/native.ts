@@ -1,9 +1,11 @@
 /** The built-in slash commands. Add a command by appending a `CommandSpec` here. */
 import { brief, operations } from "../api"
 import { parseApiCommand } from "../client"
+import { parseSwitch, sidebarVisible } from "../state/layout"
 import { CommandRegistry, matchValues, type CommandContext, type CommandInvocation, type CommandSpec } from "./registry"
 
 const workflowActions = ["select", "run"]
+const switchValues = ["on", "off"]
 
 function keyUsage(): Error { return new Error("Usage: /key set|remove <provider> or /login <provider>") }
 
@@ -40,9 +42,11 @@ export const nativeCommandSpecs: CommandSpec[] = [
   },
   {
     name: "/sessions",
-    description: "Refresh session list",
+    description: "Refresh the session list and show the sidebar",
     run: async ({ store, actions }) => {
       store.setView("chat")
+      // The list lives in the sidebar; show it when the width hides it.
+      if (!sidebarVisible(store.state.sidebar, store.state.columns)) store.setSidebar("open")
       await actions.refresh()
       store.setStatus("Use /open <id> or /open <number>")
     },
@@ -199,6 +203,28 @@ export const nativeCommandSpecs: CommandSpec[] = [
     name: "/refresh",
     description: "Refresh all views",
     run: async ({ actions }) => { await actions.refresh(); await actions.refreshMessages() },
+  },
+  {
+    name: "/sidebar",
+    description: "Show or hide the sidebar (Ctrl+B)",
+    argumentHint: "[on|off]",
+    complete: ({ words, current, head }) => words.length === 1 ? matchValues(head, current, switchValues) : [],
+    run: ({ store }, { args }) => {
+      const shown = parseSwitch(args[0], sidebarVisible(store.state.sidebar, store.state.columns), "Usage: /sidebar [on|off]")
+      store.setSidebar(shown ? "open" : "closed")
+      store.setStatus(`Sidebar ${shown ? "shown" : "hidden"} · Ctrl+B toggles`)
+    },
+  },
+  {
+    name: "/thinking",
+    description: "Expand or collapse reasoning blocks (Ctrl+O)",
+    argumentHint: "[on|off]",
+    complete: ({ words, current, head }) => words.length === 1 ? matchValues(head, current, switchValues) : [],
+    run: ({ store }, { args }) => {
+      const expanded = parseSwitch(args[0], store.state.thinking, "Usage: /thinking [on|off]")
+      store.setThinking(expanded)
+      store.setStatus(`Reasoning ${expanded ? "expanded" : "collapsed"} · Ctrl+O toggles`)
+    },
   },
   {
     name: "/api",

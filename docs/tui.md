@@ -3,12 +3,16 @@
 The `packages/hya-tui` frontend is a basic terminal client for a running
 `hya serve` process. It uses OpenTUI for display and input while the
 backend remains the owner of sessions, event history, tool execution, and
-permissions. The screen shows a session list, the selected transcript, and
-pending interactions. Models, Workflows, and saved provider keys have dedicated
-views; the API command view exposes the other HTTP/JSON operations in `hya.v1`.
-Tab completes slash commands using the TUI and server command catalogs.
-One persistent instruction line stays below the input at the bottom of the
-screen and changes with the current view.
+permissions. The screen is one main column (the transcript of the open
+session, pending interactions, the status line, and the input) plus a
+sidebar with the session list, todos, and session context that you can show
+or hide (see [Layout](#layout)). Assistant replies render as Markdown with
+highlighted code blocks; reasoning is collapsed to one `Thinking` line (see
+[Messages](#messages)). Models, Workflows, and saved provider keys have
+dedicated views; the API command view exposes the other HTTP/JSON operations
+in `hya.v1`. Tab completes slash commands using the TUI and server command
+catalogs. One persistent instruction line stays below the input at the bottom
+of the screen and changes with the current view.
 If a backend predates the saved-key list endpoint, the main TUI still opens and
 shows that key listing needs a backend restart with an updated binary.
 
@@ -76,10 +80,19 @@ backend is running.
 | `/answer <id> <text>` | Answer a question request. |
 | `/cancel` | Request cancellation of the turn admitted in this frontend; the status line then shows `Cancelled · Ready`. |
 | `/refresh` or Ctrl+R | Reload sessions, messages, interactions, models, and Workflows. |
+| `/sidebar [on\|off]` or Ctrl+B | Show or hide the sidebar. Without an argument it toggles what is visible now. |
+| `/thinking [on\|off]` or Ctrl+O | Expand or collapse every reasoning (`Thinking`) block. |
 | `/api` | List the HTTP operations from the generated OpenAPI catalog. |
 | `/api METHOD /v1/path [JSON]` | Send a scoped HTTP/JSON request and show its JSON response. |
 | `/help` | Show command help. |
 | Tab | Complete a slash command or supported argument; repeat Tab to cycle matches. |
+| PgUp / PgDn | Scroll the transcript one page (the view height minus two rows). |
+| Ctrl+Home / Ctrl+End | Jump to the top of the transcript / to the newest line, which the view then follows again. Plain Home / End do the same while the input is empty; with text in the input they move the cursor. |
+| Mouse wheel | Scroll the transcript. |
+| Click on a `Thinking` line | Expand or collapse that one reasoning block. |
+
+`/sessions` also shows the sidebar when the terminal is too narrow for it, so
+the list it refreshes is on screen.
 
 The bottom instruction row is separate from the status message above the
 input. Status updates and completion suggestions can change without erasing
@@ -109,6 +122,129 @@ SSE is connected automatically when a session is open. PTY WebSocket sessions
 need a WebSocket client; the command view can still call their JSON setup
 routes. See the [protocol guide](protocol/README.md) for those frames.
 
+## Layout
+
+```text
+hya · <session> · <agent> <provider/model> · <server>   ┌─Sessions───────────┐
+                                                        │▸ 1. Review         │
+┃ your prompt                                           │   build            │
+                                                        │                    │
+● build · fake/model                                    └────────────────────┘
+The reply, rendered as Markdown.                        ┌─Todos──────────────┐
+                                                        │No todos yet        │
+                                                        └────────────────────┘
+┌─Pending (1)────────────────────────────────────────┐  ┌─Context────────────┐
+│! bash · perm_…                                     │  │Session  hysec_…    │
+│/approve <id> · /deny <id> · /answer <id> <text> · …│  │Agent    build      │
+└────────────────────────────────────────────────────┘  │Model    fake/model │
+Ready                                                   │Messages 2          │
+┌────────────────────────────────────────────────────┐  │Dir      …/work     │
+│ Message or /command                                │  │Server   127.0.0.1:…│
+└────────────────────────────────────────────────────┘  └────────────────────┘
+Enter a prompt · /new creates a session · /help …
+```
+
+The main column holds, from top to bottom: the header line (session, agent,
+model, server, in the accent color), the transcript (or the panel of the
+current view: models, Workflows, keys, API, help), the pending block, the
+status line, the bordered input, and the instruction line.
+
+- **Sidebar.** Three titled boxes on the right: `Sessions` (the list; `▸`
+  marks the open one), `Todos` (a placeholder until the todo panel lands),
+  and `Context` (session, agent, model, projected message count, directory,
+  server). It is 32 columns wide (at most 40% of a narrow terminal, at least
+  20). By default it follows the width: shown at 110 columns or more, hidden
+  below, so an 80-column terminal gets the full width for the transcript.
+  Ctrl+B or `/sidebar` pins it shown or hidden at any width; `/sidebar on` and
+  `/sidebar off` set it explicitly. The status line confirms the change
+  (`Sidebar shown · Ctrl+B toggles`).
+- **Pending block.** While permission requests (`!`) or questions (`?`) wait,
+  a `Pending (N)` box appears above the status line with up to three of them
+  (`! <title> · <id>`) and the commands that answer them. `/interactions`
+  lists every detail. It disappears when nothing is pending.
+- **Keys and the browser.** Ctrl+B and Ctrl+O are not reserved by browsers,
+  so they also work in the WebUI (`packages/hya-tui-web`). Ctrl+B is tmux's
+  default prefix; inside tmux press it twice (tmux passes the second one
+  through) or use `/sidebar`. Ctrl+B would otherwise move the input cursor
+  left; the Left arrow still does.
+- **Focus.** The input keeps the keyboard focus. Mouse clicks (on the
+  transcript, a `Thinking` line, or the sidebar) never move it (the renderer
+  runs with `autoFocus: false`).
+
+The colors are fixed in `src/theme.ts`:
+
+| Name | Value | Used for |
+| --- | --- | --- |
+| `bg` | `#11151b` | Screen and transcript background. |
+| `panel` | `#1c2530` | Boxes, user message blocks, code blocks, the input. |
+| `fg` | `#e8edf3` | Text. |
+| `muted` | `#9caab9` | Status line, instructions, `Thinking` lines, model names, queued prompts. |
+| `accent` | `#73c8e8` | Header, user message bar, assistant name, headings, list markers. |
+| `border` | `#405366` | Box borders and titles. |
+| `error` | `#f07878` | Error notices and failed tool calls. |
+| `warning` | `#e5c07b` | Length-limit and cancel notices. |
+
+Code block tokens use `syntaxColors` (keyword `#c792ea`, string `#a5d6a7`,
+number `#f78c6c`, comment `#7a8a9c`, function `#82aaff`, type `#ffcb6b`,
+operator `#89ddff`) and inline code `#f2a97a`.
+
+## Messages
+
+Each message in the transcript is drawn by role:
+
+- **User** prompts are panel-colored blocks with a heavy accent bar (`┃`) on
+  the left. A queued prompt (see below) uses a muted bar and text and a
+  `queued` tag on its right.
+- **Assistant** messages start with a header, `● <agent> · <provider/model>`:
+  the agent name in the accent color, the model muted. The v1 server does not
+  fill `MessageInfo.agent` and `.model` yet, so the header shows the open
+  session's agent and model. Then come the parts, in order, and at most one
+  notice.
+
+| Part or finish | Shown as |
+| --- | --- |
+| Text | Markdown (below). |
+| Reasoning | One muted line, `▸ Thinking · N words` (`Thinking…` while it is the part still streaming). Expanded: `▾ Thinking · N words`, then the text in muted italics beside a bar. |
+| Tool call | One muted line, `↳ <tool> · <state>` (`running`, `ok`, …); a failed call is `↳ <tool> · error: <message>` in the error color. |
+| Attachment | `↳ attachment · <name>`. |
+| `FINISH_REASON_STOP`, `FINISH_REASON_TOOL_CALLS` | Nothing: a normal finish is not noteworthy. |
+| `FINISH_REASON_LENGTH` | `! Reply stopped at the output length limit` (warning color). |
+| `FINISH_REASON_CANCELLED` | `! Cancelled` (warning color). |
+| `FINISH_REASON_ERROR` or an `error` on the message | `✗ <code>: <message>` (error color), for example `✗ provider_error: http status 400: bad request`; `✗ Turn failed` when no error text was recorded. The error shows as soon as `errorReported` arrives. |
+
+**Markdown.** Assistant text is rendered by OpenTUI's built-in `<markdown>`
+renderable (`@opentui/core` 0.5.12): headings (accent, bold, `#` hidden),
+**bold**, *italic*, strikethrough, `inline code`, links (the label followed by
+the URL in parentheses, since terminals may not support hyperlinks), bullet
+and numbered lists with nested indentation, task lists, block quotes (a bar on
+the left), tables, horizontal rules, and fenced code blocks. A fenced block is
+a panel-colored box with the language name on its first row; its tokens are
+highlighted by tree-sitter in OpenTUI's parser worker. Highlighting covers the
+grammars bundled with `@opentui/core`: TypeScript, JavaScript (and their JSX
+variants), Markdown, and Zig. Other languages render as plain text on the
+panel color. Nothing is downloaded at run time.
+
+While a reply streams, the renderer keeps its last blocks provisional, so an
+unclosed code fence shows its lines as code so far and an unclosed `**` shows
+as plain text until it closes. When the reply finishes, its final text is
+parsed again from the start.
+
+**Reasoning.** Reasoning parts arrive as `reasoning` parts (durable deltas;
+see the protocol guide). They are collapsed by default. Ctrl+O or `/thinking`
+expands or collapses all of them (and forgets per-block choices); a click on
+one `Thinking` line toggles just that block. The word count is the reasoning
+text split on white space. Only provider routes that stream reasoning produce
+these parts (for example `openai-response`; the `openai-compatible` decoder
+ignores reasoning).
+
+**Scrolling.** The transcript follows the newest line while you are at the
+bottom. Scroll up (PgUp, the mouse wheel, Ctrl+Home) and it stays where you
+left it; when more content arrives below, a `↓ New messages below · End
+jumps` hint appears at the bottom right. End (with an empty input), Ctrl+End,
+or scrolling back to the bottom clears the hint and resumes following.
+Submitting a prompt jumps to the bottom. Opening a session starts at its
+bottom. The transcript shows the newest 200 messages.
+
 ## Streaming, queued prompts, and turn status
 
 The assistant reply appears chunk by chunk while the model streams it. When
@@ -116,8 +252,7 @@ the reply is complete, the transcript shows the server's stored copy of it;
 the text does not repeat or flicker when that happens.
 
 You can type the next prompt while a turn is running. Press Enter and the
-prompt appears dimmed at the end of the transcript under a `user · queued`
-header. The status line counts the waiting prompts
+prompt appears dimmed at the end of the transcript, tagged `queued`. The status line counts the waiting prompts
 (`Running · msg_… · 1 queued`). When the running turn ends, the frontend sends
 the oldest queued prompt; several queued prompts go one per turn, in the
 order you typed them. The server has no prompt queue of its own. It rejects
@@ -142,11 +277,11 @@ The status line above the input shows the turn state:
 | `Error · <code>: <message>` | The turn failed, for example `Error · provider_error: http status 400: …`. `Error · turn failed` when the backend recorded no error text. |
 
 A failed assistant message also shows its error in the transcript, as a line
-under its `assistant · error` header:
+under its header, in the error color:
 
 ```text
-assistant · error
-error · provider_error: http status 400: bad request
+● build · openai/gpt-5
+✗ provider_error: http status 400: bad request
 ```
 
 ## Interface definitions
@@ -208,7 +343,7 @@ rules follow the protocol guide's
 
 | Frame (`StreamEvent` field) | Kind | Effect in the TUI |
 | --- | --- | --- |
-| `messageStarted {message, role}` | durable | Overlay message with its role; projection re-read (debounced 120 ms). |
+| `messageStarted {message, role}` | durable | Overlay message with its role; projection re-read (debounced: 120 ms after the last such frame, but at least every 400 ms while frames keep coming). |
 | `partStarted {message, part, kind}` (`text`, `reasoning`) | live or durable | Overlay part. A part id the overlay already has is not a new part. |
 | `partAppended {message, part, textDelta}` | live (assistant text) or durable (reasoning, tool arguments, user text) | Appends `textDelta` to the part. No projection re-read. |
 | `partReplaced {message, part, text}` | live (plugin rewrite) or durable (end of round) | Sets the part's whole text, replacing the live deltas. |
@@ -244,10 +379,12 @@ rules follow the protocol guide's
   are ignored.
 - **Rendering cost.** Frames are folded at once, but the overlay is published
   to the store at most once per 16 ms. A fast delta stream therefore renders
-  about once per display frame, not once per chunk. Formatted message text is
-  cached per message object. Projected messages and unchanged overlay
-  messages keep their identity, so a delta re-formats only the message it
-  changed.
+  about once per display frame, not once per chunk. Each message's view model
+  (`state/messages.ts`) is cached per message object; projected messages and
+  unchanged overlay messages keep their identity, so a delta rebuilds only the
+  view of the message it changed. Messages and their parts are components
+  keyed by id: a delta updates the existing Markdown renderable of that part
+  instead of recreating it.
 
 List requests follow the server's `page.nextCursor` using the
 `page.cursor` and `page.limit` query keys. `GET /v1/auth` is an unpaginated
@@ -270,16 +407,19 @@ together.
 | `src/main.ts` | Entry. Registers the Solid JSX transform (`@opentui/solid/preload`), parses flags, then dynamically imports the app. |
 | `src/cli.ts` | `--server`, `--dir`, `--help` parsing and the usage line. |
 | `src/client.ts` | Typed v1 HTTP/JSON+SSE client (`HyaClient`, `SseDecoder`, `parseApiCommand`). |
-| `src/state/store.ts` | `createAppStore()`: the single store. It holds the server projection (sessions, messages, interactions, models, agents, providers, workflows, saved key names, backend commands, stream cursor), the published streaming overlay, the prompt queue, the turn state (`running`, `turnId`), and UI state (view, status, key-entry provider and mask). Each field is a Solid signal, and only the store's mutation methods change it. |
+| `src/state/store.ts` | `createAppStore()`: the single store. It holds the server projection (sessions, messages, interactions, models, agents, providers, workflows, saved key names, backend commands, stream cursor), the published streaming overlay, the prompt queue, the turn state (`running`, `turnId`), and UI state (view, status, key-entry provider and mask, sidebar mode, terminal columns, the reasoning switch and per-part toggles, the jump-to-bottom tick). Each field is a Solid signal, and only the store's mutation methods change it. |
 | `src/state/overlay.ts` | `TranscriptOverlay`: the pure fold of stream frames by message and part id (seq filter, live/durable handover, `resync` handling, turn-end lookup). `mergeTranscript()` merges it over the projection. |
-| `src/state/format.ts` | Pure text for each panel (header, session list, pending list, main view, the merged transcript, queued prompts, message formatting with a per-message cache). |
-| `src/app/controller.ts` | `createController()`: refreshes, the session SSE loop (subscribe, `ListEvents` gap-fill, `resync`), batched overlay flushes, session creation, prompt submission, command dispatch, and concealed key entry. It writes results into the store. |
+| `src/state/messages.ts` | The transcript view model: `transcriptViews()` (projection + overlay + waiting queued prompts), `messageView()` (role, agent/model, typed blocks, finish notice; cached per message object), `finishNotice()`, `reasoningLabel()`, `reasoningExpanded()`. |
+| `src/state/layout.ts` | Sidebar rules: `layoutBreakpoints`, `sidebarVisible()`, `toggledSidebar()`, `sidebarWidth()`, and `parseSwitch()` for `on`/`off` arguments. |
+| `src/state/scroll.ts` | `ScrollFollow` (the "new messages below" hint), `atBottom()`, `pageStep()`. |
+| `src/state/format.ts` | Pure text for the header, sidebar (session list, context box), pending lines, and the non-chat views. |
+| `src/app/controller.ts` | `createController()`: refreshes, the session SSE loop (subscribe, `ListEvents` gap-fill, `resync`), batched overlay flushes, the debounced projection re-read (`app/debounce.ts`), session creation, prompt submission, command dispatch, and concealed key entry. It writes results into the store. |
 | `src/app/turns.ts` | `createTurnRunner()`: the client-side prompt queue, `409 session_busy` retry, and turn-end detection and status text. |
-| `src/app/App.tsx`, `src/app/run.tsx`, `src/app/context.ts` | Root layout, renderer startup, and the `AppContext` (store, controller, server URL) that components read with `useApp()`. |
-| `src/components/` | `Header`, `Panel`, `SessionsPanel`, `MainPanel`, `PendingPanel`, `StatusLine`, `Composer` (input, completion, concealed key entry), `Footer`. |
+| `src/app/App.tsx`, `src/app/run.tsx`, `src/app/context.ts` | Root layout (main column + sidebar), renderer startup, and the `AppContext` (store, controller, server URL, and `ui` handles such as the transcript's scroll actions) that components read with `useApp()`. |
+| `src/components/` | `Header`, `MainPanel` (transcript or view panel), `Transcript` (scrollbox, follow/hint), `MessageView` (`MessageItem`, user/assistant messages, blocks, reasoning, `KeyedFor`), `Markdown` (the `<markdown>` wrapper, `SyntaxStyle`, code-block boxes), `Panel`, `PendingBlock`, `Sidebar`, `StatusLine`, `Composer` (input, completion, key actions, concealed key entry), `Footer`. |
 | `src/commands/` | The slash-command registry (`registry.ts`), the built-in commands (`native.ts`), and the `/help` text (`help.ts`). |
 | `src/keys/bindings.ts` | The global key binding table. |
-| `src/completion.ts`, `src/instructions.ts`, `src/api.ts`, `src/theme.ts` | Tab completion and `SecretEntry`, footer instructions, the OpenAPI operation catalog, and the color palette. |
+| `src/completion.ts`, `src/instructions.ts`, `src/api.ts`, `src/theme.ts` | Tab completion and `SecretEntry`, footer instructions, the OpenAPI operation catalog, and the palette (`colors`, `syntaxColors`, and `syntaxStyles`, the Markdown/tree-sitter scope styles). |
 
 The Solid transform has two parts. `bunfig.toml` preloads
 `@opentui/solid/preload` for `bun test` and for `bun src/...` run inside the
@@ -307,7 +447,9 @@ The name becomes Tab-completable automatically. Add a line to
 `src/commands/help.ts` and a row to the command table above. Unregistered
 `/names` still go to the backend as `CommandTurn`s. To add a key, append a
 `KeyBinding` to `src/keys/bindings.ts` and handle its action in
-`components/Composer.tsx`. Do not bind a core action only to a
+`components/Composer.tsx`. A binding's `matches(key, context)` may depend on
+`context.composerEmpty` (plain Home/End scroll only while the input is
+empty). Do not bind a core action only to a
 browser-reserved shortcut (see `docs/tui-web.md`). Ctrl+C is handled by the
 renderer (`exitOnCtrlC`).
 
@@ -324,6 +466,11 @@ Then check the rendered TUI in the browser from `packages/hya-tui-web`
 (`bun run typecheck && bun test ./test && bunx playwright test`; see
 [tui-web.md](tui-web.md)). `e2e/hya-tui.spec.ts` and
 `e2e/hya-tui-commands.spec.ts` cover the layout, colors, commands, key
-entry, narrow widths, and Ctrl+C. `e2e/hya-tui-streaming.spec.ts` uses the
-fake model to cover streaming text, queued prompts, and the turn status
-line (`Ready`, provider errors).
+entry, narrow widths, and Ctrl+C. `e2e/hya-tui-layout.spec.ts` covers the
+main column and sidebar at the default viewport and at about 80 columns
+(Ctrl+B, `/sidebar`) and the pending block. `e2e/hya-tui-messages.spec.ts`
+covers user and assistant styling, Markdown and code highlighting, reasoning
+(Ctrl+O, `/thinking`, click), error, length, and cancel notices, and
+scrolling (PgUp/PgDn, End, Ctrl+End, the wheel, the new-messages hint).
+`e2e/hya-tui-streaming.spec.ts` uses the fake model to cover streaming text,
+queued prompts, and the turn status line (`Ready`, provider errors).
