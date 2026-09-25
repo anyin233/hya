@@ -69,7 +69,8 @@ pub(crate) async fn cmd_serve(
         .with_agent_model_control(agent_model_control)
         .with_workspace_adapters(plugin_host.workspace_adapters())
         .with_default_agent(runtime.default_agent.clone())
-        .with_pure_guidance(pure);
+        .with_pure_guidance(pure)
+        .with_auto_title(true);
     if yolo {
         eprintln!("hya: --yolo on serve auto-approves ALL tool actions for any client (RCE risk)");
     }

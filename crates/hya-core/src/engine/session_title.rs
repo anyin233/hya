@@ -11,7 +11,16 @@ use crate::error::CoreError;
 use crate::title;
 
 impl SessionEngine {
-    /// Generate and set an automatic title for a new session.
+    /// Generate and set an automatic title for a new root session.
+    ///
+    /// Titles only a root session whose transcript holds exactly one user
+    /// message (its first prompt) and that has no title yet (or only a
+    /// default/fallback one); returns `Ok(false)` otherwise, so calling it
+    /// after every prompt titles each session at most once — also across
+    /// restarts, since the title is on the log. One call to the fixed `title`
+    /// agent's model (the definition's model/category, else
+    /// `fallback_model`), billed as `purpose: title`. A title set while the
+    /// call ran (a manual rename) wins: the generated one is dropped.
     pub async fn auto_title_session(
         &self,
         session: SessionId,
@@ -62,6 +71,12 @@ impl SessionEngine {
         let Some(title) = title::clean_title_output(&generated) else {
             return Ok(false);
         };
+        let current = self.store.read_projection_shared(session).await?;
+        if let Some(current) = current.session.title.as_deref()
+            && !title::is_default_or_fallback_title(current)
+        {
+            return Ok(false);
+        }
         self.set_title(session, title).await?;
         Ok(true)
     }

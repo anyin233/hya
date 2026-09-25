@@ -73,3 +73,68 @@ async fn t1_11_session_list_and_resume_prompt() {
         env.diagnostics()
     );
 }
+
+/// T1.11 — the production backend titles a root session in the background
+/// after its first prompt (fixed `title` agent), once: the title call never
+/// consumes the turn's scripted steps, and a second prompt does not retitle.
+#[tokio::test]
+async fn t1_11_first_prompt_titles_the_session_once() {
+    let env = E2eEnvBuilder::new()
+        .scripts(vec![
+            text_step("TITLE_TURN_ONE"),
+            text_step("TITLE_TURN_TWO"),
+        ])
+        .build()
+        .await
+        .expect("e2e env");
+    env.fake
+        .set_title_reply("Widget audit")
+        .expect("title reply");
+
+    let session = env.create_session().await.expect("session");
+    let _ = env
+        .prompt(session, "audit the widget module")
+        .await
+        .expect("first prompt");
+    let url = format!("{}/v1/sessions/{session}", env.backend.url);
+    let mut title = serde_json::Value::Null;
+    for _ in 0..200 {
+        let info: serde_json::Value = reqwest::get(&url)
+            .await
+            .expect("get session")
+            .json()
+            .await
+            .expect("session json");
+        title = info["title"].clone();
+        if !title.is_null() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    assert_eq!(
+        title,
+        serde_json::json!("Widget audit"),
+        "{}",
+        env.diagnostics()
+    );
+
+    let _ = env
+        .prompt(session, "now the gadget module")
+        .await
+        .expect("second prompt");
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert_eq!(env.fake.title_requests().expect("title requests").len(), 1);
+    assert_eq!(
+        env.fake.remaining_scripts().expect("remaining"),
+        0,
+        "both turns consumed their own steps"
+    );
+    let titled = env
+        .events(session, None)
+        .await
+        .expect("events")
+        .into_iter()
+        .filter(|envelope| matches!(envelope.event, Event::SessionTitled { .. }))
+        .count();
+    assert_eq!(titled, 1, "{}", env.diagnostics());
+}

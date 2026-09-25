@@ -103,6 +103,9 @@ Agent model selection covers primary Agents, ordinary subagents, and hidden
 separate owners: user configuration files, remembered defaults in the backend
 Session database, and temporary overrides in the root Session event stream.
 Attached and remote clients update the backend's state, not the client's files.
+The `title` Agent's model is the one that titles new root sessions after
+their first prompt (see [Runtime — Session Titles](architecture/runtime.md#session-titles));
+with no model chosen for it, the session's own model is used.
 
 Model precedence is:
 

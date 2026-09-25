@@ -40,6 +40,9 @@
 - Todo lists are now recorded as events. A change made by a todo tool records `todos_updated`; `GetSessionTodo` reads the projection, and the stream carries `todoUpdated { items }`. Sessions created before this version still read their list from todo tool results until their next todo edit.
 - Fix: after a restart, the next todo edit builds on the recorded list instead of an empty one.
 - `/compact` (`CompactSession`, and `SummarizeSession`) now records the same compaction event as automatic compaction. `compactionApplied` gains `message` (the summary divider), `foldedCount`, and `manual`. The projection reducer version is now 5, so cached projections are rebuilt once on upgrade.
+- `hya serve` titles a root session automatically after its first prompt or command turn. The `title` agent generates the title in the background, using its configured model or else the session's model, so the turn is never delayed. The title streams as `sessionUpdated.title`, and the call is billed as `purpose: title`.
+  - Skipped for subagent sessions, for sessions given a title at creation or by rename, for later turns, after restarts, and for shell turns. A rename made while a title is being generated wins.
+  - Offline sessions get their prompt's first line as the title.
 
 ## Session permission modes
 

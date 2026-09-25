@@ -813,13 +813,28 @@ native summary shape.
 
 ## Session Titles
 
+**Trigger.** The v1 server (`hya serve` and the TUI's backend; opt-in
+`AppState::with_auto_title` for embedders) calls `auto_title_session` in a
+background task right after it admits a turn's user prompt — for `prompt`
+and `command` turns, not for shell turns, which admit no user prompt. The
+turn never waits for it, and a failure (no title agent, provider error,
+empty output) is logged at `warn` and dropped. Headless `hya exec` and the
+RPC loop do not title.
+
 `auto_title_session` issues a separate provider completion to generate a
 session title. Guards:
 
 1. **Root sessions only** — children (`parent.is_some()`) are skipped.
-2. Skips any session that already has a non-default / non-fallback title.
+2. Skips any session that already has a non-default / non-fallback title
+   (set at creation, by `UpdateSession`, or by an earlier auto title).
 3. Requires **exactly one** user message in the projection (multiple user
-   messages → no title).
+   messages → no title), so only the first prompt titles a session.
+
+Together these make titling idempotent: every later turn, a concurrent
+admission, and a restart find either a title on the log or more than one
+user message, and skip before any model call. A title set while the call is
+in flight (a manual rename) wins — the generated one is dropped. A title
+call that failed is not retried on later turns.
 
 It resolves the fixed `title` system agent from the bound catalog and calls
 the provider at `temperature: 0.0` with `max_output_tokens: 128`, honoring the
@@ -828,7 +843,11 @@ when the definition has none). Then it emits `SessionTitled`.
 
 This is an extra billed provider call per title generation, on the route
 resolved for that model; its usage is recorded as
-`UsageRecorded { purpose: title }` on the session being titled.
+`UsageRecorded { purpose: title }` on the session being titled. The title is
+the first non-empty line of the output (`<think>` blocks stripped), cut at
+100 characters. With the offline `hya/offline` echo model that line is the
+first line of the prompt, so offline sessions get a deterministic title
+without a special case.
 
 ### Fixed system agents
 
