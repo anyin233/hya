@@ -34,6 +34,7 @@ pub struct AppState {
     default_agent: Option<String>,
     catalog_updates: broadcast::Sender<Value>,
     pure_guidance: bool,
+    auto_title: bool,
 }
 
 impl AppState {
@@ -55,7 +56,25 @@ impl AppState {
             default_agent: None,
             catalog_updates,
             pure_guidance: false,
+            auto_title: false,
         }
+    }
+
+    /// Title root sessions automatically: the first prompt turn of a root
+    /// session without a title starts one background call to the fixed
+    /// `title` agent (see `SessionEngine::auto_title_session`). Off by
+    /// default so embedders and tests with scripted providers opt in; the
+    /// `hya` server and TUI backends turn it on.
+    #[must_use]
+    pub fn with_auto_title(mut self, enabled: bool) -> Self {
+        self.auto_title = enabled;
+        self
+    }
+
+    /// Whether prompt turns title their root session automatically.
+    #[must_use]
+    pub fn auto_title(&self) -> bool {
+        self.auto_title
     }
 
     /// `--pure`: per-turn guidance skips AGENTS/context discovery entirely.
@@ -169,6 +188,7 @@ pub(crate) struct ServerState {
     pub(crate) default_agent: Option<String>,
     pub(crate) catalog_updates: broadcast::Sender<Value>,
     pub(crate) pure_guidance: bool,
+    pub(crate) auto_title: bool,
 }
 
 impl ServerState {
@@ -190,6 +210,7 @@ impl ServerState {
             default_agent: app.default_agent,
             catalog_updates: app.catalog_updates,
             pure_guidance: app.pure_guidance,
+            auto_title: app.auto_title,
         }
     }
 

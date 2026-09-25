@@ -2920,7 +2920,8 @@ impl HyaRuntime {
             .with_workflow_control(workflow_control)
             .with_agent_model_control(agent_model_control)
             .with_workspace_adapters(plugin_host.workspace_adapters())
-            .with_default_agent(runtime.default_agent.clone());
+            .with_default_agent(runtime.default_agent.clone())
+            .with_auto_title(true);
         state = state.with_permission_requests(asks);
         let app_state = state.clone();
         let router = hya_server::router(state);

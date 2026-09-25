@@ -51,11 +51,21 @@ struct Route {
     requests: Vec<Value>,
 }
 
+/// Opening of the fixed `title` agent's system prompt (`core-agents`
+/// preset). The backend titles a root session in the background after its
+/// first prompt; those calls are answered here, off the script queues.
+const TITLE_AGENT_MARKER: &str = "You are a title generator.";
+
 #[derive(Clone, Debug, Default)]
 struct Shared {
     scripts: VecDeque<ScriptStep>,
     requests: Vec<Value>,
     routes: Vec<Route>,
+    /// Background session-title requests (never on `requests` or a queue).
+    title_requests: Vec<Value>,
+    /// Reply to title requests; `None` answers empty (the session stays
+    /// untitled).
+    title_reply: Option<String>,
     /// OpenAI `usage` object attached to every streamed response when set.
     usage: Option<Value>,
 }
@@ -81,6 +91,8 @@ impl FakeLlm {
             scripts: scripts.into(),
             requests: Vec::new(),
             routes: Vec::new(),
+            title_requests: Vec::new(),
+            title_reply: None,
             usage: None,
         }));
         let listener = TcpListener::bind("127.0.0.1:0")
@@ -150,6 +162,30 @@ impl FakeLlm {
             .lock()
             .map_err(|_| E2eError::Other("fake llm mutex poisoned".into()))?;
         Ok(guard.scripts.len())
+    }
+
+    /// Answer the backend's background title requests with `title`.
+    ///
+    /// Title calls (the fixed `title` agent) never consume the shared queue or
+    /// appear in [`Self::requests`], so scripted scenarios stay deterministic
+    /// whenever the title task runs; by default they get an empty reply and
+    /// the session stays untitled.
+    pub fn set_title_reply(&self, title: impl Into<String>) -> Result<(), E2eError> {
+        let mut guard = self
+            .shared
+            .lock()
+            .map_err(|_| E2eError::Other("fake llm mutex poisoned".into()))?;
+        guard.title_reply = Some(title.into());
+        Ok(())
+    }
+
+    /// Background title request bodies, in arrival order.
+    pub fn title_requests(&self) -> Result<Vec<Value>, E2eError> {
+        let guard = self
+            .shared
+            .lock()
+            .map_err(|_| E2eError::Other("fake llm mutex poisoned".into()))?;
+        Ok(guard.title_requests.clone())
     }
 
     /// Pin `steps` to the agent whose **system prompt** contains `marker`.
@@ -230,12 +266,27 @@ async fn chat_completions(
         let Ok(mut guard) = state.shared.lock() else {
             return (StatusCode::INTERNAL_SERVER_ERROR, "mutex poisoned").into_response();
         };
+        let system = system_text(&body.0);
+        if system.contains(TITLE_AGENT_MARKER)
+            && !guard
+                .routes
+                .iter()
+                .any(|route| system.contains(&route.marker))
+        {
+            guard.title_requests.push(body.0.clone());
+            let title = guard.title_reply.clone().unwrap_or_default();
+            drop(guard);
+            return sse_response(vec![
+                json!({"choices":[{"delta":{"role":"assistant","content": title},"finish_reason":null}]}),
+                json!({"choices":[{"delta":{},"finish_reason":"stop"}]}),
+                Value::String("[DONE]".into()),
+            ]);
+        }
         guard.requests.push(body.0.clone());
         let usage = guard.usage.clone();
         // Attribution is by marker alone. An exhausted route does NOT fall back
         // to the shared queue: a resident that ran out of script must stop, not
         // start eating the main agent's steps.
-        let system = system_text(&body.0);
         let step = match guard
             .routes
             .iter_mut()

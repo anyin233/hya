@@ -108,6 +108,23 @@ pub(crate) fn turn_info(
     }
 }
 
+/// Title the session in the background after a prompt was admitted, when
+/// enabled. `auto_title_session` decides (first prompt of an untitled root
+/// session only) and a failure is logged and dropped: titling never blocks
+/// or fails the turn.
+fn spawn_auto_title(st: &ServerState, session: hya_proto::SessionId, model: &hya_proto::ModelRef) {
+    if !st.auto_title {
+        return;
+    }
+    let engine = st.engine.clone();
+    let model = model.clone();
+    tokio::spawn(async move {
+        if let Err(error) = engine.auto_title_session(session, &model).await {
+            tracing::warn!(%session, "automatic session title failed: {error}");
+        }
+    });
+}
+
 async fn create_turn(
     State(st): State<ServerState>,
     AxumPath(id): AxumPath<String>,
@@ -122,6 +139,7 @@ async fn create_turn(
             let message = st.engine.admit_user_prompt(session, prompt.text).await?;
             let engine = st.engine.clone();
             let turn = crate::support::reference::session_agent_with_guidance(&st, session).await;
+            spawn_auto_title(&st, session, &turn.agent.model);
             let external_dirs =
                 crate::support::reference::external_directories_at(&st, &turn.agent.workdir).await;
             let agent = turn.agent.clone();
@@ -217,6 +235,7 @@ async fn create_turn(
                 .await?;
             let engine = st.engine.clone();
             let turn = crate::support::reference::session_agent_with_guidance(&st, session).await;
+            spawn_auto_title(&st, session, &turn.agent.model);
             let external_dirs =
                 crate::support::reference::external_directories_at(&st, &turn.agent.workdir).await;
             let agent = turn.agent.clone();

@@ -135,6 +135,17 @@ leave `agent` empty; clients fall back to the session binding there.
 { "event": { "seq": "31", "session": "hysec_...", "messageFinished": { "message": "msg_...", "finish": "FINISH_REASON_CANCELLED", "cause": "FINISH_CAUSE_SHUTDOWN" } } }
 ```
 
+## Session titles
+
+A root session without a title gets one automatically after its first
+prompt (or command) turn: the server asks the fixed `title` agent in the
+background and records it as `SessionTitled`, which streams as durable
+`sessionUpdated { title }` and shows in `SessionInfo.title` — usually shortly
+after the turn starts, never blocking it. Subagent (child) sessions, sessions
+created or renamed with a title (`CreateSession.title`, `UpdateSession`), and
+later turns are never titled; a manual rename always wins. The title call is
+billed to the session (`tokensRecorded` with an empty `message`).
+
 ## Usage and context occupancy
 
 `TokenUsage` follows one invariant on every provider
