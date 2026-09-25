@@ -17,6 +17,7 @@
  */
 import { batch, createSignal, type Accessor, type Setter } from "solid-js"
 import { apiOperationNames, operations } from "../api"
+import type { VimMode } from "../composer/vim"
 import type {
   AgentSummary,
   Bootstrap,
@@ -95,6 +96,12 @@ export interface AppState {
   readonly columns: number
   /** Global reasoning switch (`/thinking`, Ctrl+O): expand every reasoning block. */
   readonly thinking: boolean
+  /** Vim mode in the composer (`/vim`, the `vim` preference; composer/vim.ts). */
+  readonly vim: boolean
+  /** The composer's vim mode while `vim` is on. */
+  readonly vimMode: VimMode
+  /** A half-typed normal-mode command (`2d`, `g`), shown in the status bar. */
+  readonly vimPending: string
   /** Per-part reasoning expansion that overrides `thinking` (mouse click on a Thinking line). */
   readonly reasoningToggles: ReadonlyMap<string, boolean>
   /** Global tool-card switch (`/tools`, Ctrl+G); `undefined` = the defaults (collapsed, shell turns expanded). */
@@ -230,6 +237,9 @@ function initialState(): { [K in keyof AppState]: AppState[K] } {
     sidebar: "auto",
     columns: 80,
     thinking: false,
+    vim: false,
+    vimMode: "insert",
+    vimPending: "",
     reasoningToggles: new Map(),
     tools: undefined,
     toolToggles: new Map(),
@@ -536,6 +546,22 @@ export function createAppStore() {
     setSidebar(mode: SidebarMode): void { set("sidebar", mode) },
     /** Show the sidebar if it is hidden at the current width, else hide it. */
     toggleSidebar(): void { set("sidebar", toggledSidebar(state.sidebar, state.columns)) },
+
+    /** Turn vim mode on (starting in insert mode) or off. */
+    setVim(on: boolean): void {
+      batch(() => {
+        set("vim", on)
+        set("vimMode", "insert")
+        set("vimPending", "")
+      })
+    },
+    /** The composer's vim mode and half-typed command (components/Composer.tsx). */
+    setVimMode(mode: VimMode, pending = ""): void {
+      batch(() => {
+        set("vimMode", mode)
+        set("vimPending", pending)
+      })
+    },
 
     /** Expand or collapse every reasoning block; forgets per-part toggles. */
     setThinking(expanded: boolean): void {

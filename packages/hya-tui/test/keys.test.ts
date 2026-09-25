@@ -44,12 +44,14 @@ test("every binding is documented and reachable without a browser-reserved short
     key("tab"), key("r", { ctrl: true }), key("b", { ctrl: true }), key("o", { ctrl: true }), key("g", { ctrl: true }),
     key("pageup"), key("pagedown"), key("home", { ctrl: true }), key("end", { ctrl: true }),
     key("escape"), key("c", { ctrl: true }), key("d", { ctrl: true }), key("tab", { shift: true, sequence: "\x1b[Z" }),
-    key("?", { shift: true, sequence: "?" }),
+    key("?", { shift: true, sequence: "?" }), key("x", { ctrl: true }),
   ]
   const reachable = new Set(probes.filter((probe) => !browserReserved.some((reserved) => reserved(probe)))
     .map((probe) => resolveBinding(probe, { composerEmpty: probe.name === "d" || probe.name === "?" })))
+  // The second key of the Ctrl+X chord.
+  reachable.add(resolveBinding(key("e", { ctrl: true }), { chord: "ctrl+x" }))
   expect([...new Set(keyBindings.map((binding) => binding.action))].sort())
-    .toEqual(["complete", "cycleMode", "eof", "help", "interrupt", "pageDown", "pageUp", "quit", "refresh", "scrollBottom", "scrollTop", "toggleSidebar", "toggleThinking", "toggleTools"])
+    .toEqual(["chord", "complete", "cycleMode", "eof", "externalEditor", "help", "interrupt", "pageDown", "pageUp", "quit", "refresh", "scrollBottom", "scrollTop", "toggleSidebar", "toggleThinking", "toggleTools"])
   for (const binding of keyBindings) expect(reachable.has(binding.action)).toBe(true)
 })
 
@@ -79,4 +81,14 @@ test("the composer submits on Enter and inserts a newline on Ctrl+J, Shift+Enter
 test("Shift+Tab (CSI Z) cycles the permission mode; plain Tab still completes", () => {
   expect(resolveBinding(key("tab", { shift: true, sequence: "\x1b[Z" }))).toBe("cycleMode")
   expect(resolveBinding(key("tab", { sequence: "\t" }))).toBe("complete")
+})
+
+test("Ctrl+X starts a chord; Ctrl+E (or E) after it opens the external editor", () => {
+  expect(resolveBinding(key("x", { ctrl: true }))).toBe("chord")
+  expect(resolveBinding(key("e", { ctrl: true }), { chord: "ctrl+x" })).toBe("externalEditor")
+  expect(resolveBinding(key("e", { sequence: "e" }), { chord: "ctrl+x" })).toBe("externalEditor")
+  // Without the prefix Ctrl+E stays the editor's end-of-line key, and e types.
+  expect(resolveBinding(key("e", { ctrl: true }))).toBeUndefined()
+  expect(resolveBinding(key("e", { sequence: "e" }))).toBeUndefined()
+  expect(keyBindings.find((binding) => binding.action === "externalEditor")?.label).toBe("Ctrl+X Ctrl+E")
 })

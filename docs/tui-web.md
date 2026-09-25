@@ -416,7 +416,7 @@ Unknown or malformed client frames are ignored. `attach` is not used.
 
 | Field | Type | Meaning |
 | --- | --- | --- |
-| `term` | xterm.js `Terminal` | Live terminal; read `term.buffer.active`, `cols`, `rows`. |
+| `term` | xterm.js `Terminal` | Live terminal; read `term.buffer.active`, `cols`, `rows`. A spec can also observe escape sequences the program writes, e.g. `term.parser.registerOscHandler(52, (data) => …)` records OSC 52 clipboard writes (`e2e/hya-tui-clipboard.spec.ts`); return `true` to consume them. |
 | `connected` | `boolean` | WebSocket open. |
 | `exitCode` | `number \| null` | Child exit code once reported. |
 | `frames` | `number` | Output frames written so far. |

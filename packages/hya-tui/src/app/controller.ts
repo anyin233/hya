@@ -48,6 +48,7 @@ import { helpPickerHint, helpPickerRows } from "../commands"
 import { initialSessionId } from "../launch"
 import { webNotice } from "../state/format"
 import { childActivity, childSessionIds } from "../state/members"
+import { editText } from "../composer/editor"
 import { savePreferences } from "../prefs"
 import { createPicker, pickerHighlighted, pickerKey as pickerKeyOutcome, type PickerRow, type PickerSpec } from "../state/picker"
 import { askFrameRoute, type PromptChoice } from "../state/prompts"
@@ -82,6 +83,27 @@ export interface ControllerOptions {
   connectionHint?: string
   /** TUI preferences file (src/prefs.ts); unset = preference changes apply for this run only. */
   preferencesPath?: string
+  /** The terminal behind the renderer (app/run.tsx): clipboard and handing it to an external editor. */
+  terminal?: TerminalAccess
+  /** Environment for `$VISUAL` / `$EDITOR` (default `process.env`). */
+  env?: Record<string, string | undefined>
+}
+
+/** What the controller needs from the renderer (CliRenderer in app/run.tsx; a fake in tests). */
+export interface TerminalAccess {
+  /** Write `text` as an OSC 52 clipboard sequence; `false` when the terminal does not accept it. */
+  copy(text: string): boolean
+  /** Give the terminal to a child process (CliRenderer.suspend). */
+  suspend(): void
+  /** Take it back and repaint (CliRenderer.resume). */
+  resume(): void
+}
+
+/** The composer's input, registered by components/Composer.tsx for the external editor. */
+export interface ComposerAccess {
+  text(): string
+  /** Replace the input (cursor at the end); not sent. */
+  setText(text: string): void
 }
 
 /** Rows the help overlay shows at once (bounded by the terminal height, components/Picker.tsx). */
@@ -91,7 +113,7 @@ const helpMaxRows = 40
 const fileLookupLimit = 50
 export const fileSuggestionLimit = 8
 
-export function createController({ client, store, directory, registry = createCommandRegistry(), quit = () => undefined, startup = { continue: false }, connectionHint = "start hya serve", preferencesPath }: ControllerOptions) {
+export function createController({ client, store, directory, registry = createCommandRegistry(), quit = () => undefined, startup = { continue: false }, connectionHint = "start hya serve", preferencesPath, terminal, env = process.env }: ControllerOptions) {
   let streamAbort: AbortController | undefined
   let flushTimer: ReturnType<typeof setTimeout> | undefined
   let streamReady: Promise<void> = Promise.resolve()
@@ -440,8 +462,38 @@ export function createController({ client, store, directory, registry = createCo
     })
   }
 
+  let composer: ComposerAccess | undefined
+  let editing = false
+
+  /**
+   * `/editor`, Ctrl+X Ctrl+E: the input in the external editor
+   * (composer/editor.ts). The edited text replaces the input (not sent); on
+   * a failure the input keeps its text and the status line says why.
+   */
+  function openEditor(): void {
+    const input = composer
+    if (!input || !terminal) {
+      status("External editor unavailable: no terminal")
+      return
+    }
+    if (editing) return
+    editing = true
+    const original = input.text()
+    void editText(original, { env, suspend: () => terminal.suspend(), resume: () => terminal.resume() })
+      .then((result) => {
+        if (!result.ok) {
+          status(`${result.error} · input unchanged`)
+          return
+        }
+        input.setText(result.text)
+        status(result.text === original ? "Editor closed · input unchanged" : "Edited in the external editor · Enter sends")
+      })
+      .finally(() => { editing = false })
+  }
+
   const actions: AppActions = {
-    refresh, refreshMessages, openSession, newSession, beginKeyEntry, scheduleRefresh, openHelp,
+    refresh, refreshMessages, openSession, newSession, beginKeyEntry, scheduleRefresh, openHelp, openEditor,
+    copyText: (text) => terminal?.copy(text) ?? false,
     cancelTurn: () => turns.cancel(),
     quit,
     openPicker,
@@ -576,6 +628,11 @@ export function createController({ client, store, directory, registry = createCo
 
   return {
     ...actions,
+    /** Register the composer's input (components/Composer.tsx); returns the unregister function. */
+    attachComposer(access: ComposerAccess): () => void {
+      composer = access
+      return () => { if (composer === access) composer = undefined }
+    },
     registry,
     submit,
     returnToParent: () => void returnToParent().catch((error: unknown) => status(`Open failed: ${String(error)}`)),

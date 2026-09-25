@@ -21,7 +21,7 @@ test("the default theme is hya and keeps the historical palette", () => {
   expect(defaultThemeName).toBe("hya")
   expect(themeName()).toBe("hya")
   expect({ ...colors }).toEqual({
-    bg: "#11151b", panel: "#1c2530", fg: "#e8edf3", muted: "#9caab9", accent: "#73c8e8", border: "#405366", error: "#f07878", warning: "#e5c07b",
+    bg: "#11151b", panel: "#1c2530", fg: "#e8edf3", muted: "#9caab9", accent: "#73c8e8", border: "#405366", error: "#f07878", warning: "#e5c07b", selection: "#2f4d6b",
   })
   expect({ ...toolColors }).toEqual({ done: "#a5d6a7" })
   expect({ ...diffColors }).toEqual({ add: "#a5d6a7", remove: "#f07878", hunk: "#82aaff", context: "#9caab9" })

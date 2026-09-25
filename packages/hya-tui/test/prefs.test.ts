@@ -61,3 +61,13 @@ test("saving over a corrupt file replaces it", () => {
   savePreferences(path, { theme: "ember" })
   expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ theme: "ember" })
 })
+
+test("vim is a boolean preference; another type is ignored", () => {
+  const path = join(temp(), "tui.json")
+  writeFileSync(path, JSON.stringify({ vim: true, theme: "light" }))
+  expect(loadPreferences(path).preferences).toEqual({ vim: true, theme: "light" })
+  writeFileSync(path, JSON.stringify({ vim: "yes" }))
+  expect(loadPreferences(path).preferences).toEqual({})
+  savePreferences(path, { vim: false })
+  expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ vim: false })
+})

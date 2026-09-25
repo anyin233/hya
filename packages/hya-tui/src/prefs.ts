@@ -2,7 +2,7 @@
  * TUI preferences (docs/tui.md "Preferences file"): a small JSON object in
  * `$HYA_TUI_CONFIG`, else `$XDG_CONFIG_HOME/hya/tui.json`, else
  * `~/.config/hya/tui.json`. The TUI reads it once at start and writes it
- * when a preference changes (`/theme`).
+ * when a preference changes (`/theme`, `/vim`).
  *
  * - Missing file: no preferences, no warning.
  * - Unreadable or corrupt file (not a JSON object): no preferences, and a
@@ -22,12 +22,15 @@ import { dirname, join } from "node:path"
 export interface TuiPreferences {
   /** Built-in theme name (`hya`, `light`, `contrast`, `ember`); default `hya`. */
   theme?: string
+  /** Vim mode in the composer (`/vim`); default off. */
+  vim?: boolean
 }
 
 type Validators = { [Key in keyof Required<TuiPreferences>]: (value: unknown) => value is TuiPreferences[Key] }
 
 const validators: Validators = {
   theme: (value): value is string => typeof value === "string" && value.length > 0,
+  vim: (value): value is boolean => typeof value === "boolean",
 }
 
 /** The environment variable that points the TUI at another preferences file (tests, several profiles). */

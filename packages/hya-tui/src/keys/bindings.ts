@@ -27,6 +27,8 @@ export type KeyAction =
   | "scrollTop"
   | "scrollBottom"
   | "help"
+  | "chord"
+  | "externalEditor"
 
 /** The subset of OpenTUI's KeyEvent a binding looks at. */
 export interface KeyLike {
@@ -41,6 +43,8 @@ export interface KeyLike {
 export interface KeyContext {
   /** The composer holds no text (plain Home/End then scroll the transcript). */
   composerEmpty?: boolean
+  /** The first key of a two-key chord was pressed (`Ctrl+X`); the next key completes or drops it. */
+  chord?: "ctrl+x"
 }
 
 export interface KeyBinding {
@@ -54,6 +58,19 @@ export interface KeyBinding {
 const plain = (key: KeyLike): boolean => !key.ctrl && !key.meta && !key.shift
 
 export const keyBindings: readonly KeyBinding[] = [
+  // The second key of a Ctrl+X chord comes first: while the chord is armed it wins over every other binding.
+  {
+    action: "externalEditor",
+    label: "Ctrl+X Ctrl+E",
+    description: "Edit the input in $VISUAL / $EDITOR (fallback vi); the edited text comes back into the input, not sent (also /editor; Ctrl+X E works too)",
+    matches: (key, context) => context.chord === "ctrl+x" && !key.meta && key.name === "e",
+  },
+  {
+    action: "chord",
+    label: "Ctrl+X",
+    description: "Start a two-key chord (Ctrl+X Ctrl+E: external editor); any other next key cancels it",
+    matches: (key, context) => key.ctrl && !key.meta && !key.shift && key.name === "x" && context.chord === undefined,
+  },
   {
     action: "interrupt",
     label: "Esc",
