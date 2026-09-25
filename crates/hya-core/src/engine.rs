@@ -365,6 +365,8 @@ pub struct SessionEngine {
     workflows: BoundWorkflowSender,
     mailbox: MailboxPlane,
     lifecycle: LifecyclePlane,
+    /// Mints subagent handle leaves (`<prefix>-<operator>`); injectable RNG.
+    handle_namer: Arc<crate::handle_naming::HandleNamer>,
     todo: TodoPlane,
     websearch: WebSearchPlane,
     /// User-registered `artifact://` post-processing, carried to every tool call.
@@ -425,6 +427,7 @@ impl Clone for SessionEngine {
             workflows: self.workflows.clone(),
             mailbox: self.mailbox.clone(),
             lifecycle: self.lifecycle.clone(),
+            handle_namer: self.handle_namer.clone(),
             todo: self.todo.clone(),
             websearch: self.websearch.clone(),
             artifacts: self.artifacts.clone(),
@@ -526,6 +529,7 @@ impl SessionEngine {
             workflows,
             mailbox,
             lifecycle,
+            handle_namer: Arc::new(crate::handle_naming::HandleNamer::default()),
             todo,
             websearch,
             artifacts: ArtifactPlane::default(),
@@ -668,6 +672,27 @@ impl SessionEngine {
     pub fn with_lifecycle(mut self, lifecycle: LifecyclePlane) -> Self {
         self.lifecycle = lifecycle;
         self
+    }
+
+    /// Replace the random source of subagent handle names (tests seed or
+    /// force it; see [`crate::handle_naming`]). The default draws from process
+    /// entropy, or from the `HYA_HANDLE_SEED` seed when that is set.
+    #[must_use]
+    pub fn with_handle_rng(self, rng: Box<dyn crate::handle_naming::HandleRng>) -> Self {
+        self.handle_namer.set_rng(rng);
+        self
+    }
+
+    /// Mint a fresh handle leaf `<prefix>-<operator>` for a new member of
+    /// `root`'s team: never the leaf of any handle the team ever registered
+    /// (live or archived) nor one this process already minted for it.
+    pub(crate) async fn mint_member_leaf(&self, root: SessionId, prefix: &str) -> String {
+        let taken = self
+            .read_projection_shared(root)
+            .await
+            .map(|projection| crate::handle_naming::team_leaves(&projection))
+            .unwrap_or_default();
+        self.handle_namer.mint(root, prefix, taken)
     }
 
     /// Install the archive-revival seam (ADR-0015). Without it, mail to an

@@ -95,11 +95,25 @@ fall back to `general`.
 | `description` | Short label (required with single-member form). |
 | `prompt` | Work for the agent (required). |
 | `subagent_type` | Agent id; empty/omitted normalizes to `"general"`. |
+| `name` | Optional role prefix of the child's handle (also per member). Trimmed and lowercased, then 1–32 characters of `[a-z0-9-]`, no leading/trailing/doubled `-`, no `/`; invalid values fail the call with an `input` error suggesting a valid spelling. The harness appends one random operator name: `"name": "scout"` → `main/scout-suzuran`. Omitted, the prefix is the agent id (`main/hya-worker-exusiai`). |
 | `category` | Logical model-category override. |
 | `model` | Concrete provider/model override (wins over category). |
 | `command` | Optional command that triggered the task. |
 | `inline_agent` | Request-scoped overlay. Published fields are `name`, `prompt`, `category`, and `model`; nested `description` is not advertised. |
 | `members[]` | Fan one call out to several subagents (each needs `prompt`; optional per-member overrides). |
+
+Handles are never reused within a team (live or archived members), so a bare
+leaf always names one member and mail to an archived member's handle wakes
+that member. The naming rules, the name list's provenance, and replay
+behavior are specified in
+[subagent-orchestration.md §2.1](subagent-orchestration.md#21-handles-role-prefix--operator-name-0410).
+Example:
+
+```json
+{"description": "map the parser", "prompt": "find every entry point", "subagent_type": "explore", "name": "scout"}
+```
+
+returns `Resident main/scout-suzuran is live; results arrive as its report.`
 
 Removed fields: `task_id` (resume is superseded by mail revival of archived
 agents), `background` (every spawn is non-blocking), and `resident` (every
@@ -249,7 +263,7 @@ counts as read. The unread-mail rejection names every channel holding unread
 mail and the exact read call, for example:
 
 ```text
-report rejected: `main/scout-1` has 2 unread mail message(s) on #DM-rgli51cb (2); answer them first. Read it with `read channel://DM-rgli51cb?last=2` (`list_channel` lists every channel with unread counts), reply with `send` if the sender needs an answer, then call `report` again — or call `wait` to block until more mail arrives.
+report rejected: `main/scout-suzuran` has 2 unread mail message(s) on #DM-rgli51cb (2); answer them first. Read it with `read channel://DM-rgli51cb?last=2` (`list_channel` lists every channel with unread counts), reply with `send` if the sender needs an answer, then call `report` again — or call `wait` to block until more mail arrives.
 ```
 
 Handle-addressed mail is attributed to the DM channel shared with its sender;
@@ -279,11 +293,11 @@ the returned handle to revive.
 removed in 0.41.0): required `target`, optional `reason`.
 
 ```json
-{"target": "main/hya-worker-1", "reason": "superseded by the new plan"}
+{"target": "main/hya-worker-exusiai", "reason": "superseded by the new plan"}
 ```
 
 `target` is the subagent's canonical handle, a leaf relative to the caller
-(`hya-worker-1`), or its session id (`hysec_…`) — the `task` result's
+(`hya-worker-exusiai`), or its session id (`hysec_…`) — the `task` result's
 `member`/`session`. The target must be a live descendant of the caller. Its
 own live subagents are archived first (deepest first). For each member an
 in-flight turn is cancelled (`MessageFinished { finish: cancelled, cause:
@@ -308,7 +322,7 @@ Errors (`ToolError::Input`, actionable text):
 calling turn until subagents finish, bounded by a timeout.
 
 ```json
-{"targets": ["main/hya-worker-1", "main/hya-worker-2"], "mode": "any", "timeout_secs": 300}
+{"targets": ["main/hya-worker-exusiai", "main/hya-worker-texas"], "mode": "any", "timeout_secs": 300}
 ```
 
 | Field | Type | Contract |
@@ -342,9 +356,9 @@ When several apply at one evaluation the order is `members`, `mail`,
 
 ```json
 {"woke_by": "members", "waited_ms": 5210,
- "finished": [{"handle": "main/hya-worker-1", "session": "hysec_…", "state": "reported", "outcome": "done", "report": "…"}],
- "already_finished": [{"handle": "main/scout-1", "session": "hysec_…", "state": "reported", "outcome": "done", "report": "…"}],
- "running":  [{"handle": "main/hya-worker-2", "session": "hysec_…", "state": "working"}],
+ "finished": [{"handle": "main/hya-worker-exusiai", "session": "hysec_…", "state": "reported", "outcome": "done", "report": "…"}],
+ "already_finished": [{"handle": "main/scout-suzuran", "session": "hysec_…", "state": "reported", "outcome": "done", "report": "…"}],
+ "running":  [{"handle": "main/hya-worker-texas", "session": "hysec_…", "state": "working"}],
  "mail": []}
 ```
 

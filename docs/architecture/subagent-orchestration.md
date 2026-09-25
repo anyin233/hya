@@ -113,6 +113,56 @@ Depth is a constant `MAX_SUBAGENT_DEPTH = 2` in `hya-core`
 (`crates/hya-core/src/lib.rs` re-export). The `subagent.max_depth` config key
 is removed; `SubagentLimits` keeps concurrency/budget fields only.
 
+### 2.1 Handles: role prefix + operator name (0.41.0)
+
+A member's canonical handle is its parent's path plus a **leaf**
+`<prefix>-<operator>`:
+
+- `prefix` is the role name the spawning agent passes as the `task` tool's
+  `name` (`scout`, `dev`, `reviewer`, …); omitted, it is the spawned agent id
+  (`hya-worker`, `hya-implementer`, `explore`). A prefix is trimmed and
+  lowercased, then must be 1–32 characters of `[a-z0-9-]` with no leading,
+  trailing, or doubled `-` (so never a `/`); anything else is an actionable
+  `task` error that suggests a valid spelling (`dev/team` → `dev-team`).
+  Agent ids used as the default are sanitized the same way.
+- `operator` is ONE name drawn uniformly at random from the checked-in
+  Arknights operator list `crates/hya-core/src/handle_names.txt` (419 names,
+  1–26 characters, lowercase ASCII, `^[a-z0-9]+(-[a-z0-9]+)*$`), embedded
+  with `include_str!` — no network access at build or run time.
+
+Examples: `main/scout-suzuran`, `main/dev-exusiai`,
+`main/dev-exusiai/general-amiya`, `main/reviewer-blue-poison`.
+
+**Name list provenance.** Snapshot of the prts.wiki operator list (干员一览,
+the `data-en` attribute of every operator) taken 2026-09-25, normalized
+NFKD→ASCII, lowercased, apostrophes dropped (`Ch'en` → `chen`), every other
+non-alphanumeric run turned into `-` (`Blue Poison` → `blue-poison`,
+`Skadi the Corrupting Heart` → `skadi-the-corrupting-heart`), deduplicated and
+sorted. Nothing is filtered out.
+
+**Never reused within a team.** A candidate leaf is rejected when it equals
+the leaf of any handle the team ever registered — live roster, archived rows,
+inbox owners, and channel members (all durable, read from the root
+projection) — or one this process already minted for the team (which also
+keeps concurrent spawns apart), plus the reserved `main` and `harness`. On a
+collision the draw is retried; after 16 failed single-name draws the leaf
+falls back to two distinct operator names (`scout-suzuran-amiya`), then to a
+deterministic sweep of every pair. Because leaves are team-unique, a bare leaf
+always names one member, and mail to an archived member's handle wakes that
+member — never a newer one.
+
+**Replay.** The draw is random (SplitMix64 seeded from process entropy;
+`HYA_HANDLE_SEED=<u64>` seeds it for reproducible runs, and
+`SessionEngine::with_handle_rng` injects a generator in tests), but the minted
+handle is recorded in `AgentRegistered` and replay reads it back — nothing
+re-derives a handle. Logs from earlier releases keep their counter handles
+(`main/scout-1`, `main/hya-implementer-2`); they replay and resolve unchanged
+and are never migrated. Handles are opaque strings: operator names contain
+`-`, so code never parses a leaf back into prefix and name.
+
+Workflow Stage members without an `actor` key (the one-shot runner, §10) use
+the same minter with the agent id as the prefix.
+
 ## 3. Report, handoff, archive
 
 ### 3.1 The report gate
@@ -385,7 +435,8 @@ channel minted after a long lead turn began is steered too. Full contract:
 [Agent tool surface](agent-tool-surface.md).
 
 `task` schema: `resident` and `background` fields are removed; `members[]`
-fan-out remains; the result carries, per member, handle + session + DM
+fan-out remains; the optional `name` (top level or per member) is the handle's
+role prefix (§2.1); the result carries, per member, handle + session + DM
 channel id. `task_id` resume is removed (revival supersedes it).
 
 ## 7. Archive index and search_agent

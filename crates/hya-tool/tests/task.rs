@@ -424,3 +424,91 @@ async fn task_returns_immediately_with_running_handles() {
         out["output"]
     );
 }
+
+#[tokio::test]
+async fn task_forwards_a_normalized_name_prefix_per_member() {
+    let parent = SessionId::new();
+    let (spawner, mut rx) = SpawnerPlane::new();
+    let ctx = ctx_with_session(vec![allow(Action::Task, "*")], spawner, parent);
+    let tool = ToolRegistry::builtins().get("task").unwrap();
+    let handle = tokio::spawn(async move {
+        tool.execute(
+            &ctx,
+            json!({
+                "members": [
+                    {"prompt": "scan", "subagent_type": "explore", "name": "  Scout "},
+                    {"prompt": "build", "subagent_type": "general"}
+                ]
+            }),
+        )
+        .await
+    });
+    let req = rx.recv().await.expect("spawn request");
+    assert_eq!(req.members[0].name.as_deref(), Some("scout"));
+    assert_eq!(
+        req.members[1].name, None,
+        "an omitted name defaults to the agent id downstream"
+    );
+    req.reply
+        .send(Ok(vec![
+            MemberOutcome {
+                member: "main/scout-suzuran".to_string(),
+                session: "ses_a".to_string(),
+                status: "running".to_string(),
+                summary: "live".to_string(),
+            },
+            MemberOutcome {
+                member: "main/general-amiya".to_string(),
+                session: "ses_b".to_string(),
+                status: "running".to_string(),
+                summary: "live".to_string(),
+            },
+        ]))
+        .unwrap();
+    handle.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn task_rejects_an_invalid_name_with_a_valid_suggestion() {
+    let parent = SessionId::new();
+    let (spawner, mut rx) = SpawnerPlane::new();
+    let ctx = ctx_with_session(vec![allow(Action::Task, "*")], spawner, parent);
+    let tool = ToolRegistry::builtins().get("task").unwrap();
+    for bad in ["dev/team", "-dev", "dev--x", "dev_team!", &"x".repeat(33)] {
+        let error = tool
+            .execute(
+                &ctx,
+                json!({"description": "d", "prompt": "p", "subagent_type": "explore", "name": bad}),
+            )
+            .await
+            .unwrap_err();
+        let ToolError::Input(message) = error else {
+            panic!("`{bad}` must be an input error, got {error:?}");
+        };
+        assert!(
+            message.contains("lowercase letters, digits and single hyphens")
+                && message.contains("e.g. `"),
+            "{message}"
+        );
+    }
+    assert!(
+        hya_tool::normalize_handle_prefix("dev/team")
+            .unwrap_err()
+            .contains("e.g. `dev-team`")
+    );
+    assert!(rx.try_recv().is_err(), "nothing was spawned");
+}
+
+#[test]
+fn task_schema_advertises_the_name_prefix() {
+    let tool = ToolRegistry::builtins().get("task").unwrap();
+    let schema = tool.schema();
+    let props = &schema.input_schema["properties"];
+    assert!(
+        props["name"]["description"]
+            .as_str()
+            .unwrap()
+            .contains("Role prefix")
+    );
+    assert!(props["members"]["items"]["properties"]["name"].is_object());
+}

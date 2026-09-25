@@ -101,8 +101,9 @@ pub use skill_catalog::{
     merge_skill_catalog, parse_skill, skill_dirs_for_workdir, skills_section,
 };
 pub use spawn::{
-    InlineAgent, MemberOutcome, SpawnError, SpawnMember, SpawnRequest, SpawnRequestSendError,
-    SpawnRequestSink, SpawnerPlane,
+    HANDLE_PREFIX_MAX_LEN, InlineAgent, MemberOutcome, SpawnError, SpawnMember, SpawnRequest,
+    SpawnRequestSendError, SpawnRequestSink, SpawnerPlane, normalize_handle_prefix,
+    sanitize_handle_prefix,
 };
 pub use todo::{SessionTodos, TodoItem, TodoPlane, TodoStatus};
 pub use tool::{
