@@ -14,6 +14,9 @@ import { mergeTranscript } from "./overlay"
 import type { AppState, QueuedPrompt } from "./store"
 import { toolCard, type ToolCardView } from "./tools"
 
+/** First line of the system message a compaction appends (docs/compaction.md); the summary follows it. */
+export const compactedMarker = "HYA_COMPACTED_CONTEXT"
+
 /** `divider` is synthetic (a `CompactionApplied` notice), never a server role. */
 export type Role = "user" | "assistant" | "system" | "tool" | "unknown" | "divider"
 
@@ -108,6 +111,10 @@ function build(message: MessageInfo, fallback: Attribution, shell: string | unde
   const blocks = parts
     .map((part, index) => block(part, streaming && index === parts.length - 1, shell, shellTurn))
     .filter((item): item is Block => item !== undefined)
+    // A compaction summary: the divider above it already says so, so its internal marker line is not shown.
+    .map((item) => role === "system" && item.kind === "text" && item.text.startsWith(compactedMarker)
+      ? { ...item, text: item.text.slice(compactedMarker.length).replace(/^\s*\n/, "") }
+      : item)
   const notice = finishNotice(message)
   return {
     id: message.id,
@@ -187,9 +194,11 @@ export function dividerView(divider: { id: string; text: string }): MessageView 
 
 /**
  * Splice transcript notices (compaction dividers, permission mode switches)
- * into `views` right after the message that was newest when each happened;
- * one from an empty transcript goes first; one whose message fell out of the
- * rendered window (or was never seen) goes at the end, before queued prompts.
+ * into `views`: a compaction divider right before its summary message
+ * (`beforeMessageId`) once the transcript has it; otherwise right after the
+ * message that was newest when it happened; one from an empty transcript
+ * goes first; one whose message fell out of the rendered window (or was
+ * never seen) goes at the end, before queued prompts.
  */
 function withDividers(views: MessageView[], dividers: AppState["dividers"]): MessageView[] {
   if (!dividers.length) return views
@@ -198,6 +207,11 @@ function withDividers(views: MessageView[], dividers: AppState["dividers"]): Mes
   let leading = 0
   for (const divider of dividers) {
     const view = dividerView(divider)
+    const before = divider.beforeMessageId ? result.findIndex((candidate) => candidate.id === divider.beforeMessageId) : -1
+    if (before >= 0) {
+      result.splice(before, 0, view)
+      continue
+    }
     if (divider.afterMessageId === "") {
       result.splice(leading++, 0, view)
       continue

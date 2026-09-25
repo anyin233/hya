@@ -9,7 +9,7 @@ import type { PickerAction } from "../state/picker"
 import { CommandRegistry, matchValues, type CommandContext, type CommandInvocation, type CommandSpec } from "./registry"
 
 /** `/sessions` picker row actions (C13): F2 renames, Ctrl+D deletes (never Ctrl+R — that key means refresh). */
-const sessionPickerActions: readonly PickerAction[] = [
+export const sessionPickerActions: readonly PickerAction[] = [
   { id: "rename", key: "f2", label: "F2 rename", prompt: "value" },
   { id: "delete", key: "d", ctrl: true, label: "Ctrl+D delete", prompt: "confirm", confirmText: 'Delete "{label}"? This cannot be undone · Enter confirms · Esc cancels' },
 ]
@@ -87,8 +87,8 @@ export async function backendCommand(context: CommandContext, invocation: Comman
 export const nativeCommandSpecs: CommandSpec[] = [
   {
     name: "/help",
-    description: "Show commands and keys",
-    run: ({ store }) => { store.setView("help") },
+    description: "Show every key and command in a filterable overlay (also ? on an empty input)",
+    run: ({ actions }) => { actions.openHelp() },
   },
   {
     name: "/sessions",
@@ -258,6 +258,7 @@ export const nativeCommandSpecs: CommandSpec[] = [
         `Agent       ${selected?.agent ?? "none"}`,
         `Model       ${selected ? (modelReference(selected) || "default") : "none"}`,
         `Mode        ${selected?.permissionMode || "manual"}`,
+        `Backend     ${store.state.backend ? `started by this TUI · pid ${store.state.backend.pid} · ${store.state.backend.bin} · db ${store.state.backend.db}` : "external (--server)"}`,
       ]
       store.setStatusText(lines.join("\n"))
       store.setView("status")

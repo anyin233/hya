@@ -2,7 +2,8 @@
 
 This guide runs hya from the workspace. The only shipped binary is the backend
 CLI/API binary `hya`. The interactive OpenTUI frontend (`packages/hya-tui`)
-runs from source with Bun against `hya serve`; see [OpenTUI frontend](tui.md).
+runs from source with Bun and starts its own `hya serve`; see
+[Run the TUI](#run-the-tui) and [OpenTUI frontend](tui.md).
 Other clients drive the backend over the `hya.v1` HTTP/SSE/WebSocket or gRPC
 contract.
 
@@ -141,6 +142,25 @@ permission/question interactions, Workflow, files, project/VCS/worktrees, MCP,
 PTY, and logs. Setting `HYA_GRPC_BIND=<host:port>` additionally serves the same
 contract over gRPC. See the [Protocol guide](protocol/README.md) and the
 generated [API reference](protocol/api-reference.md).
+
+## Run the TUI
+
+The TUI starts its own backend (a `hya serve` on a free local port, in
+`--dir`) and stops it when you quit. It finds the binary through `--hya
+<path>`, then `HYA_BIN`, then `hya` on `PATH`:
+
+```sh
+cargo build -p hya-backend --bin hya
+(cd packages/hya-tui && bun install --frozen-lockfile)
+HYA_BIN=target/debug/hya bun packages/hya-tui/src/main.ts --dir "$PWD"
+```
+
+Type a prompt and press Enter; `?` shows every key and command, and Ctrl+C
+twice quits. Sessions are kept in `$XDG_STATE_HOME/hya/sessions.db` (else
+`~/.local/state/hya/sessions.db`); `--continue` reopens the most recent one
+in the directory and `--session <id>` a given one. To attach to the server
+from the previous section instead, pass `--server http://127.0.0.1:8080`.
+See [OpenTUI frontend](tui.md#start-it) for every flag.
 
 ## Replay a Session
 

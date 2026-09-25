@@ -28,7 +28,8 @@ test.describe("hya TUI in the browser", () => {
     expect(text).not.toContain("user · stop")
     // The offline model echoes the prompt back, so it shows up in both messages.
     expect(text.match(/hello from the browser/g)?.length ?? 0).toBeGreaterThanOrEqual(2)
-    expect(text).toMatch(/hya · hysec_\w+ · build hya\/offline/)
+    // The header names the session: its id, or the generated title once the backend's title task ran (the echo model echoes the prompt).
+    expect(text).toMatch(/hya · (hysec_\w+|hello from the browser) · build hya\/offline/)
   })
 
   test("Tab completes slash commands", async ({ tui, backend }) => {

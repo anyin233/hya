@@ -11,9 +11,12 @@ import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { startFakeModel, type FakeModel, type Protocol, type Step } from "./fake-model"
-import { test as base, type Tui } from "./harness"
+import { test as base, type LaunchOptions, type Tui } from "./harness"
 
 const repoRoot = fileURLToPath(new URL("../../..", import.meta.url))
+
+/** TUI entry under test: `HYA_TUI_MAIN` (e.g. an older checkout, to show a spec fails without a change), else this repository's. */
+export const tuiMain = process.env.HYA_TUI_MAIN ?? join(repoRoot, "packages/hya-tui/src/main.ts")
 
 /** `hya` binary under test: `HYA_BIN`, else the workspace debug build. */
 export const hyaBin = process.env.HYA_BIN ?? join(repoRoot, "target/debug/hya")
@@ -82,7 +85,23 @@ async function writeProjectBundles(dir: string, bundles: Record<string, BundleFi
   }
 }
 
-async function startBackend(root: string, fakeModel: FakeModel | undefined, protocol: Protocol, permission: PermissionModel, bundles: Record<string, BundleFiles> | undefined, modelIds: string[] = ["model"]): Promise<{ child: ChildProcess; backend: Backend }> {
+/** Settings of the isolated backend (the `model` and `projectBundles` options). */
+type BackendSetup = {
+  fakeModel: FakeModel | undefined
+  protocol: Protocol
+  permission: PermissionModel
+  bundles: Record<string, BundleFiles> | undefined
+  modelIds?: string[]
+  contextLimit?: number
+}
+
+/**
+ * Create the isolated HOME/XDG directories, the workspace `dir`, project
+ * bundles, and (with a fake model) the backend config under `root`; returns
+ * the environment a `hya` process needs to use them.
+ */
+async function prepareBackend(root: string, setup: BackendSetup): Promise<{ dir: string; env: Record<string, string> }> {
+  const { fakeModel, protocol, permission, bundles, modelIds = ["model"], contextLimit } = setup
   const dir = join(root, "work")
   const env: Record<string, string> = {}
   for (const name of ["home", "config", "data", "state", "cache"]) {
@@ -94,7 +113,8 @@ async function startBackend(root: string, fakeModel: FakeModel | undefined, prot
   if (fakeModel) {
     const hyaCfgDir = join(env.config!, "hya")
     await mkdir(join(hyaCfgDir, "auth"), { recursive: true })
-    const modelsYaml = modelIds.map((id) => `      - id: ${id}\n`).join("")
+    const limit = contextLimit ? `        limit: { context: ${contextLimit} }\n` : ""
+    const modelsYaml = modelIds.map((id) => `      - id: ${id}\n${limit}`).join("")
     await writeFile(
       join(hyaCfgDir, "config.yaml"),
       `default_model: ${fakeModelRef}\n` +
@@ -113,17 +133,18 @@ async function startBackend(root: string, fakeModel: FakeModel | undefined, prot
     )
     await writeFile(join(hyaCfgDir, "auth", "fake.yaml"), "token: e2e-test-key\n")
   }
+  return {
+    dir,
+    env: { HOME: env.home!, XDG_CONFIG_HOME: env.config!, XDG_DATA_HOME: env.data!, XDG_STATE_HOME: env.state!, XDG_CACHE_HOME: env.cache! },
+  }
+}
+
+async function startBackend(root: string, setup: BackendSetup): Promise<{ child: ChildProcess; backend: Backend }> {
+  const { dir, env } = await prepareBackend(root, setup)
   const { HYA_MODEL: _model, ...inherited } = process.env
   const child = spawn(hyaBin, ["serve", "--bind", "127.0.0.1:0", "--db", join(root, "hya.db")], {
     cwd: dir,
-    env: {
-      ...inherited,
-      HOME: env.home!,
-      XDG_CONFIG_HOME: env.config!,
-      XDG_DATA_HOME: env.data!,
-      XDG_STATE_HOME: env.state!,
-      XDG_CACHE_HOME: env.cache!,
-    },
+    env: { ...inherited, ...env },
     stdio: ["ignore", "pipe", "pipe"],
   })
   return new Promise((resolve, reject) => {
@@ -171,6 +192,27 @@ export type FakeModelOption = {
    * compatible with specs that do not set it.
    */
   models?: string[]
+  /**
+   * `limit.context` of every fake model entry (object-form model entries in
+   * the backend config), so `ModelSummary.contextLimit` is known and the
+   * status bar can show `ctx N%` (E22). Unset (the default) writes plain
+   * entries, backward compatible.
+   */
+  contextLimit?: number
+}
+
+/**
+ * An isolated workspace for a TUI that starts its own backend (one-command
+ * launch, G31): the same HOME/XDG directories, config, and project bundles
+ * as `backend`, but no running server. Launch with
+ * `tui(...selfLaunch(workspace))`.
+ */
+export type Workspace = {
+  root: string
+  /** Workspace directory, passed to the TUI as `--dir`. */
+  dir: string
+  /** Environment for the TUI (and so its `hya serve`): isolated HOME/XDG, `HYA_BIN`. */
+  env: Record<string, string>
 }
 
 type Fixtures = { backend: Backend; fakeModel: FakeModel | undefined }
@@ -192,7 +234,22 @@ type Options = {
   projectBundles: Record<string, BundleFiles> | undefined
 }
 
-export const test = base.extend<Fixtures & Options>({
+const setupOf = (fakeModel: FakeModel | undefined, model: FakeModelOption | undefined, projectBundles: Record<string, BundleFiles> | undefined): BackendSetup => ({
+  fakeModel,
+  protocol: model?.protocol ?? "chat",
+  permission: model?.permission ?? "default",
+  bundles: projectBundles,
+  ...(model?.models ? { modelIds: model.models } : {}),
+  ...(model?.contextLimit ? { contextLimit: model.contextLimit } : {}),
+})
+
+function requireHya(): void {
+  if (!existsSync(hyaBin)) {
+    throw new Error(`hya binary not found at ${hyaBin}; run \`cargo build -p hya-backend --bin hya\` or set HYA_BIN`)
+  }
+}
+
+const withOptions = base.extend<{ fakeModel: FakeModel | undefined } & Options>({
   model: [undefined, { option: true }],
   projectBundles: [undefined, { option: true }],
   fakeModel: async ({ model }, use) => {
@@ -204,12 +261,34 @@ export const test = base.extend<Fixtures & Options>({
     await use(fake)
     await fake.stop()
   },
+})
+
+/**
+ * Specs of a TUI that starts its own backend (no `--server`): the
+ * `workspace` fixture replaces `backend`; the same `model` and
+ * `projectBundles` options apply.
+ */
+export const launchTest = withOptions.extend<{ workspace: Workspace }>({
+  workspace: async ({ fakeModel, model, projectBundles }, use) => {
+    requireHya()
+    const root = await mkdtemp(join(tmpdir(), "hya-tui-launch-"))
+    const { dir, env } = await prepareBackend(root, setupOf(fakeModel, model, projectBundles))
+    await use({ root, dir, env: { ...env, HYA_BIN: hyaBin, ...(fakeModel ? { HYA_MODEL: fakeModelRef } : {}) } })
+    await rm(root, { recursive: true, force: true })
+  },
+  // Capture the final screen while the fake model (a workspace dependency) still runs.
+  tui: async ({ tui, workspace: _workspace }, use, testInfo) => {
+    let last: Tui | undefined
+    await use(async (command, options) => (last = await tui(command, options)))
+    if (last) await last.attach(testInfo, "final-screen").catch(() => {})
+  },
+})
+
+export const test = withOptions.extend<Fixtures>({
   backend: async ({ fakeModel, model, projectBundles }, use) => {
-    if (!existsSync(hyaBin)) {
-      throw new Error(`hya binary not found at ${hyaBin}; run \`cargo build -p hya-backend --bin hya\` or set HYA_BIN`)
-    }
+    requireHya()
     const root = await mkdtemp(join(tmpdir(), "hya-tui-web-"))
-    const { child, backend } = await startBackend(root, fakeModel, model?.protocol ?? "chat", model?.permission ?? "default", projectBundles, model?.models)
+    const { child, backend } = await startBackend(root, setupOf(fakeModel, model, projectBundles))
     await use(backend)
     if (child.exitCode === null) {
       const exited = new Promise((resolve) => child.once("exit", resolve))
@@ -235,7 +314,21 @@ export { hangStep, httpErrorStep, reasoningStep, textStep, toolStep, toolsStep, 
 
 /** argv that runs packages/hya-tui against `backend`. */
 export function hyaTui(backend: Backend): string[] {
-  return ["bun", join(repoRoot, "packages/hya-tui/src/main.ts"), "--server", backend.url, "--dir", backend.dir]
+  return ["bun", tuiMain, "--server", backend.url, "--dir", backend.dir]
+}
+
+/**
+ * `tui()` arguments that run packages/hya-tui with no `--server`, so it
+ * starts its own `hya serve` (`HYA_BIN` = the binary under test) in
+ * `workspace.dir` with the workspace's isolated environment: its default
+ * database lands under the workspace's `XDG_STATE_HOME`, so `--continue`
+ * sees the sessions of earlier launches in the same test.
+ */
+export function selfLaunch(workspace: Workspace, extra: string[] = [], options: LaunchOptions = {}): [string[], LaunchOptions] {
+  return [
+    ["bun", tuiMain, "--dir", workspace.dir, ...extra],
+    { ...options, env: { ...workspace.env, ...options.env } },
+  ]
 }
 
 /** Init a git repo with one commit in `dir` (E22 status bar git branch). */

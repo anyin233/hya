@@ -144,8 +144,19 @@ export type FakeModel = {
    * `marker`. An exhausted route does not fall back to the shared queue.
    */
   route(marker: string, steps: Step[]): void
-  /** Attach `usage` to every streamed response's finishing chunk from now on. */
+  /** Attach `usage` to every streamed response's finishing chunk from now on (title replies excepted). */
   setUsage(usage: Usage): void
+  /**
+   * Reply to the backend's background session-title requests (the fixed
+   * `title` agent, recognized by its system prompt) with `title`. Title
+   * requests never consume the shared queue or a route, never appear in
+   * `requests()`, and carry no usage, so scripted specs stay deterministic
+   * whenever the title task runs; by default they get an empty reply and the
+   * session stays untitled.
+   */
+  setTitleReply(title: string): void
+  /** Background title request bodies, in arrival order. */
+  titleRequests(): unknown[]
   /** Release the oldest pending `hang` step across all in-flight requests. */
   release(): void
   /** Number of pending (unreleased) hangs currently holding a connection open. */
@@ -181,6 +192,9 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+/** Opening of the fixed `title` agent's system prompt (the `core-agents` preset). */
+export const titleAgentMarker = "You are a title generator."
+
 /** Start the fake model server. `initial` seeds the shared (unrouted) queue. */
 export async function startFakeModel(initial: Step[] = []): Promise<FakeModel> {
   const scripts: Step[] = [...initial]
@@ -188,6 +202,10 @@ export async function startFakeModel(initial: Step[] = []): Promise<FakeModel> {
   const routes: Route[] = []
   let usage: Usage | undefined
   const hangs: Array<() => void> = []
+  const titleRequests: unknown[] = []
+  let titleReply = ""
+  /** Responses that carry no usage (title replies). */
+  const noUsage = new WeakSet<ServerResponse>()
 
   function popStep(body: unknown): { step: Step | undefined; route: Route | undefined } {
     const system = systemText(body)
@@ -203,8 +221,8 @@ export async function startFakeModel(initial: Step[] = []): Promise<FakeModel> {
     res.write(`data: ${JSON.stringify(frame)}\n\n`)
   }
 
-  function withUsage(frame: Record<string, unknown>): Record<string, unknown> {
-    if (!usage) return frame
+  function withUsage(res: ServerResponse, frame: Record<string, unknown>): Record<string, unknown> {
+    if (!usage || noUsage.has(res)) return frame
     return {
       ...frame,
       usage: {
@@ -219,7 +237,7 @@ export async function startFakeModel(initial: Step[] = []): Promise<FakeModel> {
   // ---- Chat Completions (`/v1/chat/completions`) -------------------------
 
   function chatFinish(res: ServerResponse, finish: string): void {
-    writeSse(res, withUsage({ choices: [{ delta: {}, finish_reason: finish }] }))
+    writeSse(res, withUsage(res, { choices: [{ delta: {}, finish_reason: finish }] }))
     res.write("data: [DONE]\n\n")
   }
 
@@ -260,8 +278,8 @@ export async function startFakeModel(initial: Step[] = []): Promise<FakeModel> {
 
   // ---- Responses API (`/v1/responses`) -----------------------------------
 
-  function responsesUsage(): Record<string, unknown> | undefined {
-    if (!usage) return undefined
+  function responsesUsage(res: ServerResponse): Record<string, unknown> | undefined {
+    if (!usage || noUsage.has(res)) return undefined
     return {
       input_tokens: usage.prompt,
       output_tokens: usage.completion,
@@ -271,7 +289,7 @@ export async function startFakeModel(initial: Step[] = []): Promise<FakeModel> {
   }
 
   function responsesFinish(res: ServerResponse, finish: "stop" | "length"): void {
-    const response = { id: "resp_fake", status: finish === "length" ? "incomplete" : "completed", usage: responsesUsage() }
+    const response = { id: "resp_fake", status: finish === "length" ? "incomplete" : "completed", usage: responsesUsage(res) }
     writeSse(res, { type: finish === "length" ? "response.incomplete" : "response.completed", response })
   }
 
@@ -349,6 +367,14 @@ export async function startFakeModel(initial: Step[] = []): Promise<FakeModel> {
     } catch {
       body = {}
     }
+    if (systemText(body).includes(titleAgentMarker)) {
+      titleRequests.push(body)
+      noUsage.add(res)
+      res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" })
+      await streamStep(res, protocol, { type: "text", text: titleReply })
+      res.end()
+      return
+    }
     requests.push(body)
     const { step } = popStep(body)
     if (step?.type === "httpError") {
@@ -387,6 +413,10 @@ export async function startFakeModel(initial: Step[] = []): Promise<FakeModel> {
     setUsage: (next) => {
       usage = next
     },
+    setTitleReply: (title) => {
+      titleReply = title
+    },
+    titleRequests: () => [...titleRequests],
     release: () => {
       hangs.shift()?.()
     },

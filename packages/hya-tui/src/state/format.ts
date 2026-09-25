@@ -1,6 +1,6 @@
 /** Pure text for the header, sidebar, pending block, and non-chat views, derived from the store. */
-import type { SessionInfo, TodoItem } from "../client"
-import { helpText } from "../commands/help"
+import type { SessionInfo, TodoItem, TokenUsage } from "../client"
+import { keyHelpText } from "../commands/help"
 import type { View } from "../instructions"
 import { mergeTranscript } from "./overlay"
 import { promptQueue, waitingKind } from "./prompts"
@@ -94,7 +94,7 @@ export function pendingLines(state: AppState, width?: number): string[] {
   return state.interactions.filter((item) => !prompted.has(item.id)).map((item) => truncate(`${item.type?.includes("QUESTION") ? "?" : "!"} ${item.title} · ${item.id}`, width))
 }
 
-/** The sidebar's context box: the open session, its agent and model, message count, directory, server. */
+/** The sidebar's context box: the open session, its agent and model, message count, context occupancy and session tokens (when known), directory, server. */
 export function contextText(state: AppState, server: string, width = 30): string {
   const session = state.selected
   const row = (label: string, value: string) => `${label.padEnd(9)}${truncateStart(value, Math.max(4, width - 9))}`
@@ -104,11 +104,15 @@ export function contextText(state: AppState, server: string, width = 30): string
   // projection: a fresh turn's messages exist only in the overlay until the
   // next projection read, so `state.messages.length` alone under-counts.
   const messageCount = mergeTranscript(state.messages, state.overlay).length
+  const usage = contextUsage(state)
+  const tokens = sessionTokens(session.usage)
   return [
     row("Session", session.title || session.id),
     row("Agent", session.agent),
     row("Model", modelReference(session) || "default"),
     row("Messages", String(messageCount)),
+    ...(usage ? [row("Context", `${usage.percent}% · ${formatTokens(usage.tokens)}/${formatTokens(usage.limit)}`)] : []),
+    ...(tokens !== undefined ? [row("Tokens", formatTokens(tokens))] : []),
     row("Dir", session.workdir),
     row("Server", host),
   ].join("\n")
@@ -141,18 +145,77 @@ export function todosCompactText(items: readonly TodoItem[]): string | undefined
 }
 
 /**
- * A `CompactionApplied` transcript divider. The event carries only the
- * strategy and the watermark sequence, not a message count, so the divider
- * reads the strategy; `docs/tui.md` notes the deviation from a message count.
+ * A `CompactionApplied` transcript divider:
+ * `── context compacted · 12 messages · manual ──` for a `/compact` (or
+ * `/summarize`), the strategy (`Native`, `SnapCompact`, …) in place of
+ * `manual` for a mid-turn compaction; the count is omitted when the event
+ * does not carry one.
  */
-export function compactionText(payload: { untilSeq?: string; strategy?: string }): string {
-  return `── context compacted · ${payload.strategy || "unknown"} ──`
+export function compactionText(payload: { untilSeq?: string; strategy?: string; foldedCount?: number | string; manual?: boolean }): string {
+  const count = Number(payload.foldedCount ?? 0)
+  const folded = count > 0 ? ` · ${count} message${count === 1 ? "" : "s"}` : ""
+  return `── context compacted${folded} · ${payload.manual ? "manual" : payload.strategy || "unknown"} ──`
+}
+
+/** A uint64 count (a decimal string) as a number; exact up to 2^53, which token counts never reach. */
+const count = (value: string | number | undefined): number => Number(value ?? 0) || 0
+
+/** `950`, `12.3k`, `123k`, `1.2M` for a token count (a uint64 decimal string or a number). */
+export function formatTokens(value: string | number): string {
+  const n = count(value)
+  if (n < 1000) return String(n)
+  if (n < 100_000) return `${(Math.floor(n / 100) / 10).toFixed(1).replace(/\.0$/, "")}k`
+  if (n < 1_000_000) return `${Math.floor(n / 1000)}k`
+  return `${(Math.floor(n / 100_000) / 10).toFixed(1).replace(/\.0$/, "")}M`
+}
+
+/** Prompt tokens of one round: `input + cacheRead + cacheWrite` (`input` excludes the cache). */
+export function promptTokens(usage: TokenUsage | undefined): number {
+  return count(usage?.input) + count(usage?.cacheRead) + count(usage?.cacheWrite)
+}
+
+/** Everything billed for a session (`SessionInfo.usage`): prompt tokens plus output; `undefined` when unknown or zero. */
+export function sessionTokens(usage: TokenUsage | undefined): number | undefined {
+  const total = promptTokens(usage) + count(usage?.output)
+  return total > 0 ? total : undefined
+}
+
+export interface ContextUsage {
+  /** Rounded percentage of the context window the latest round's prompt used. */
+  percent: number
+  tokens: number
+  limit: number
+}
+
+/**
+ * Context occupancy (E22; docs/protocol/README.md "Usage and context
+ * occupancy"): the prompt of the latest provider round against the context
+ * limit of the model that served it. Live, the newest `tokensRecorded` with
+ * a message (`state.liveRound`); otherwise the newest assistant message with
+ * `roundUsage`. `undefined` when the model's limit or the usage is unknown.
+ */
+export function contextUsage(state: Pick<AppState, "liveRound" | "messages" | "overlay" | "models">): ContextUsage | undefined {
+  let round = state.liveRound
+  if (!round) {
+    const message = [...mergeTranscript(state.messages, state.overlay)].reverse()
+      .find((candidate) => candidate.role === "ROLE_ASSISTANT" && candidate.roundUsage)
+    if (message) round = { message: message.id, model: message.model ?? "", usage: message.roundUsage! }
+  }
+  if (!round) return undefined
+  const limit = count(state.models.find((model) => model.id === round.model)?.contextLimit)
+  const tokens = promptTokens(round.usage)
+  if (!limit || !tokens) return undefined
+  return { percent: Math.round((tokens * 100) / limit), tokens, limit }
 }
 
 /** Status bar fields (E22); `statusBarText` renders them with graceful truncation at `width`. */
 export interface StatusBarFields {
   /** Permission mode label (state/modes.ts `modeDisplay`: `manual`, `⚠ yolo`, or a bundle mode's title); StatusBar colors it. */
   mode: string
+  /** Context occupancy percent (`contextUsage`); omitted when unknown. */
+  context?: number
+  /** Session token total, formatted (`12.3k tok`); omitted when unknown. */
+  tokens?: string
   directory: string
   /** Current git branch; "" when unknown or not a repository. */
   branch: string
@@ -161,21 +224,42 @@ export interface StatusBarFields {
   connected: boolean
 }
 
+export type StatusTone = "muted" | "mode" | "warning" | "error"
+
+export interface StatusSegment {
+  text: string
+  tone: StatusTone
+}
+
+/** Context percent from which the status bar warns (warning color) and alarms (error color). */
+export const contextWarnPercent = 80
+export const contextAlarmPercent = 95
+
 /**
- * One line: `mode <mode> · <directory> · ⎇ <branch> · Todos n/m · reconnecting`.
- * Segments with no data are omitted; the least essential segments (from the
- * end) are dropped first so the line always fits `width`.
+ * The status bar's segments in order: `mode <mode>`, `ctx N%`, `<n> tok`,
+ * the directory, `⎇ <branch>`, `Todos n/m`, `reconnecting`. Segments with no
+ * data are omitted; the least essential (from the end) drop first so the
+ * line fits `width`.
  */
+export function statusBarSegments(fields: StatusBarFields, width: number): StatusSegment[] {
+  const context = fields.context
+  const segments: (StatusSegment | undefined)[] = [
+    { text: `mode ${fields.mode}`, tone: "mode" },
+    context !== undefined ? { text: `ctx ${context}%`, tone: context >= contextAlarmPercent ? "error" : context >= contextWarnPercent ? "warning" : "muted" } : undefined,
+    fields.tokens ? { text: fields.tokens, tone: "muted" } : undefined,
+    fields.directory ? { text: truncateStart(fields.directory, 24), tone: "muted" } : undefined,
+    fields.branch ? { text: `⎇ ${fields.branch}`, tone: "muted" } : undefined,
+    fields.todos ? { text: fields.todos, tone: "muted" } : undefined,
+    fields.connected ? undefined : { text: "reconnecting", tone: "warning" },
+  ]
+  const shown = segments.filter((segment): segment is StatusSegment => Boolean(segment))
+  while (shown.length > 1 && shown.map((segment) => segment.text).join(" · ").length > width) shown.pop()
+  return shown
+}
+
+/** The status bar as one line (`statusBarSegments` joined with ` · `, clipped to `width`). */
 export function statusBarText(fields: StatusBarFields, width: number): string {
-  const segments = [
-    `mode ${fields.mode}`,
-    fields.directory ? truncateStart(fields.directory, 24) : undefined,
-    fields.branch ? `⎇ ${fields.branch}` : undefined,
-    fields.todos,
-    fields.connected ? undefined : "reconnecting",
-  ].filter((segment): segment is string => Boolean(segment))
-  while (segments.length > 1 && segments.join(" · ").length > width) segments.pop()
-  return truncate(segments.join(" · "), width)
+  return truncate(statusBarSegments(fields, width).map((segment) => segment.text).join(" · "), width)
 }
 
 /** One line per todo item: a status glyph and its content. */
@@ -212,7 +296,7 @@ export function mainContent(state: AppState): string {
         : "No providers or saved keys. Use /key set <provider> to add one."
     }
     case "api": return state.apiOutput
-    case "help": return helpText
+    case "help": return keyHelpText()
     case "todos": return todosText(state.todos)
     case "status": return state.statusText
   }

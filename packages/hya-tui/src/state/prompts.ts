@@ -21,7 +21,7 @@
  *
  * Pure TypeScript (no Solid).
  */
-import type { Interaction, MemberInfo, MessageInfo, SessionInfo } from "../client"
+import type { Interaction, MemberInfo, MessageInfo, SessionInfo, StreamEvent } from "../client"
 import type { KeyLike } from "../keys/bindings"
 import { childSessionIds } from "./members"
 import { toolCard, type ToolLine } from "./tools"
@@ -318,4 +318,18 @@ export function currentPrompt(state: PromptContext & { interactions: readonly In
   const queue = promptQueue(state.interactions, state)
   const interaction = queue[0]
   return interaction ? { interaction, view: promptView(interaction, state, 0, queue.length) } : undefined
+}
+
+/**
+ * How the controller routes one frame of the open session's stream, which
+ * is subscribed with `includeDescendants=true`: `own` frames (the open
+ * session's, or with no session) are folded as usual; a descendant's
+ * (subagent's) `permissionRequested` / `questionRequested` /
+ * `interactionResolved` is `descendantAsk` (only the pending list changes);
+ * any other frame of another session is ignored.
+ */
+export function askFrameRoute(event: StreamEvent, sessionId: string): "own" | "descendantAsk" | "ignore" {
+  if (!event.session || event.session === sessionId) return "own"
+  if (event.permissionRequested || event.questionRequested || event.interactionResolved) return "descendantAsk"
+  return "ignore"
 }

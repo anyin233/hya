@@ -4,16 +4,44 @@
 
 The `hya` binary bundles no interactive frontend: bare `hya` (no subcommand)
 prints a version banner plus guidance and exits. Run the backend headlessly, or
-start the server and the OpenTUI frontend from a checkout in two terminals:
+start the OpenTUI frontend from a checkout; it starts (and stops) its own
+`hya serve`, found through `--hya <path>`, `HYA_BIN`, or `PATH`:
 
 ```sh
 hya exec "summarize this repo"
 
-# Terminal 1, from the repository root
+# From the repository root
+bun packages/hya-tui/src/main.ts --dir "$PWD"
+```
+
+Running the server yourself in a second terminal is optional — for a
+shared server, another machine, or custom `serve` flags:
+
+```sh
+# Terminal 1
 hya serve --bind 127.0.0.1:8080
-# Terminal 2, from the repository root
+# Terminal 2
 bun packages/hya-tui/src/main.ts --server http://127.0.0.1:8080
 ```
+
+## TUI Cannot Start Its Backend
+
+Without `--server` the TUI starts `hya serve` itself. If that fails it
+prints the reason and the last lines of the server's output, then exits
+with status 1:
+
+- `hya binary not found: …` — no `--hya`, no `HYA_BIN`, and no `hya` on
+  `PATH`, or the path given does not exist. Build one
+  (`cargo build -p hya-backend --bin hya`) and pass
+  `--hya target/debug/hya`, or connect to a running server with `--server`.
+- `hya serve exited with code N before it was ready` — the server failed
+  at startup; the output lines below it say why (a config error, an
+  unusable `--db` path, …). Run `hya serve --bind 127.0.0.1:0` in the same
+  directory to see the full output.
+- `hya serve did not print its readiness line within 60 s` — the server
+  hung during startup; see [Diagnosing Slow Startup](#diagnosing-slow-startup).
+
+`/status` in the TUI shows the backend it started (pid, binary, database).
 
 See the [TUI guide](tui.md), [CLI Reference](cli.md), and
 [Protocol guide](protocol/README.md).

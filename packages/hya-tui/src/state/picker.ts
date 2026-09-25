@@ -59,6 +59,10 @@ export interface PickerState {
   hint?: string
   /** Row actions available on the highlighted row (F2 rename, Ctrl+D delete, …). */
   actions?: readonly PickerAction[]
+  /** Most rows shown at once (default `pickerMaxRows`); the terminal height bounds it too (the help overlay asks for more). */
+  maxRows?: number
+  /** Show the highlighted row's whole `detail`, wrapped, under the list (rows clip it to one line). */
+  detailPane?: boolean
   /** `"list"` (default) browses; `"rename"`/`"confirm"` are a row action in progress. */
   mode?: PickerMode
   /** `id` of the row a `"rename"`/`"confirm"` mode targets. */
@@ -88,7 +92,7 @@ function currentIndex(rows: PickerRow[]): number {
   return Math.max(0, rows.findIndex((row) => row.current))
 }
 
-export function createPicker(options: { title: string; rows: PickerRow[]; hint?: string; actions?: readonly PickerAction[] }): PickerState {
+export function createPicker(options: { title: string; rows: PickerRow[]; hint?: string; actions?: readonly PickerAction[]; maxRows?: number; detailPane?: boolean }): PickerState {
   return {
     title: options.title,
     rows: options.rows,
@@ -97,6 +101,8 @@ export function createPicker(options: { title: string; rows: PickerRow[]; hint?:
     mode: "list",
     ...(options.hint ? { hint: options.hint } : {}),
     ...(options.actions ? { actions: options.actions } : {}),
+    ...(options.maxRows ? { maxRows: options.maxRows } : {}),
+    ...(options.detailPane ? { detailPane: true } : {}),
   }
 }
 
@@ -200,6 +206,10 @@ export interface PickerSpec {
   rows: PickerRow[]
   hint?: string
   actions?: readonly PickerAction[]
+  /** Most rows shown at once (default `pickerMaxRows`). */
+  maxRows?: number
+  /** Show the highlighted row's whole detail under the list. */
+  detailPane?: boolean
   /** Runs after the picker closed (focus is back on the composer). */
   onSelect(row: PickerRow): void | Promise<void>
   /** Runs after a row action committed (`id` is the `PickerAction.id`; `value` is the edited text for `prompt: "value"`). */

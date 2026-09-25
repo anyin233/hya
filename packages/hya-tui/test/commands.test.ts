@@ -20,6 +20,7 @@ function harness(client: Partial<HyaClient> = {}) {
     quit: () => { calls.push("quit") },
     openPicker: (picker) => { pickers.push(picker) },
     requestPermissionMode: async (mode) => { calls.push(`mode ${mode}`) },
+    openHelp: () => { calls.push("help") },
   }
   const registry = createCommandRegistry()
   const context = { store, client: client as HyaClient, actions }
@@ -40,13 +41,14 @@ test("parses a command line into name, words, and the raw argument text", () => 
   })
 })
 
-test("view commands switch the main panel", async () => {
+test("view commands switch the main panel; /help opens the help overlay", async () => {
   const { store, calls, run } = harness()
   await run("/help")
-  expect(store.state.view).toBe("help")
+  expect(store.state.view).toBe("chat")
+  expect(calls).toEqual(["help"])
   await run("/models")
   expect(store.state.view).toBe("models")
-  expect(calls).toEqual(["refresh"])
+  expect(calls).toEqual(["help", "refresh"])
 })
 
 test("/open resolves list numbers and /login starts concealed key entry", async () => {

@@ -26,6 +26,8 @@ export interface AppActions {
   quit(): void
   /** Open the modal picker (components/Picker.tsx); the choice runs `spec.onSelect`. */
   openPicker(spec: PickerSpec): void
+  /** Open the key and command help overlay (`/help`, `?`; commands/help.ts). */
+  openHelp(): void
   /** Switch the session tree's permission mode (app/modes.ts): yolo asks first once per process; no session → applied on creation. */
   requestPermissionMode(mode: string): Promise<void>
 }

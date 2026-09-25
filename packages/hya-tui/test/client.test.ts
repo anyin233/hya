@@ -153,3 +153,17 @@ test("admits a shell turn and finds files through scoped v1 requests", async () 
     { url: "http://h/v1/fs/find?pattern=**%2F*ma%20in*&limit=20", method: "GET", directory: "/work", body: undefined },
   ])
 })
+
+test("streamSession opts in to descendant ask frames with includeDescendants=true", async () => {
+  const urls: string[] = []
+  const client = new HyaClient("http://127.0.0.1:1", "/w", async (input) => {
+    urls.push(input)
+    return new Response("", { headers: { "content-type": "text/event-stream" } })
+  })
+  await client.streamSession("hysec_1", "4", () => undefined, new AbortController().signal, undefined, true)
+  await client.streamSession("hysec_1", "4", () => undefined, new AbortController().signal)
+  expect(urls).toEqual([
+    "http://127.0.0.1:1/v1/sessions/hysec_1/events/stream?sinceSeq=4&includeDescendants=true",
+    "http://127.0.0.1:1/v1/sessions/hysec_1/events/stream?sinceSeq=4",
+  ])
+})

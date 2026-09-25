@@ -42,12 +42,24 @@ bun src/main.ts --port 7681 -- bun e2e/fixtures/opentui-probe.ts
 # hya-tui-web listening on http://127.0.0.1:7681/
 ```
 
-To serve the hya TUI against a running backend (`hya serve --bind 127.0.0.1:8080`):
+To serve the hya TUI, let it start its own backend (one-command launch; the
+TUI finds `hya` through `--hya`, `HYA_BIN`, or `PATH` and stops the server
+when its tab closes — see [tui.md](tui.md#start-it)):
+
+```sh
+HYA_BIN=target/debug/hya bun packages/hya-tui-web/src/main.ts -- \
+  bun packages/hya-tui/src/main.ts --dir "$PWD"
+```
+
+Or against a backend you run yourself (`hya serve --bind 127.0.0.1:8080`):
 
 ```sh
 bun packages/hya-tui-web/src/main.ts -- \
   bun packages/hya-tui/src/main.ts --server http://127.0.0.1:8080 --dir "$PWD"
 ```
+
+The host stays generic either way: it runs the one fixed command, and the
+TUI owns its backend.
 
 Each browser tab gets its own process. Closing the tab sends the process
 SIGHUP. When the process exits, the page shows
@@ -78,6 +90,39 @@ free port. It uses a throwaway `--db` and a temporary `HOME` and `XDG_*`
 directories, so your own config and keys are never read. `hyaTui(backend)`
 returns the argv that runs `packages/hya-tui` against that backend. The TUI
 dependencies must be installed (`bun install` in `packages/hya-tui`).
+`HYA_TUI_MAIN=<path to another checkout's packages/hya-tui/src/main.ts>`
+runs the specs against that TUI instead (for example an older revision, to
+show that a new spec fails without the change it covers).
+
+**A TUI that starts its own backend.** `launchTest` (from `e2e/hya.ts`) is
+`test` with a `workspace` fixture in place of `backend`: the same isolated
+HOME/`XDG_*` directories, config (`model`, `projectBundles` options), and
+workspace directory, but no running server. `selfLaunch(workspace, extra?,
+options?)` returns the `tui()` arguments that run the TUI with no
+`--server` and `HYA_BIN` set to the binary under test, so the TUI starts
+(and must stop) `hya serve` itself; its default database lands under the
+workspace's `XDG_STATE_HOME`, so a second launch in the same test sees the
+first one's sessions (`--continue`). See `e2e/hya-tui-launch.spec.ts`:
+
+```ts
+import { expect, launchTest as test, selfLaunch, textStep } from "./hya"
+
+test.use({ model: { steps: [textStep("hi")] } })
+test("launches", async ({ tui, workspace }) => {
+  const term = await tui(...selfLaunch(workspace))
+  await term.waitForText("Connected to hya", 30_000)
+  await term.type("/exit")
+  await term.press("Enter")
+  expect(await term.waitForExit()).toBe(0)
+})
+```
+
+**A request log.** `startProxy(target)` (`e2e/proxy.ts`) is a logging HTTP
+pass-through: point the TUI's `--server` at `proxy.url`
+(`hyaTui({ ...backend, url: proxy.url })`) and read `proxy.log`
+(`{ method, path, at }[]`) to assert which requests the TUI made — for
+example that a live frame, not a re-read, updated the screen. SSE streams
+pass through unbuffered.
 
 Playwright 1.63.0 uses the Chromium 1243 browser build. Run
 `bunx playwright install chromium` once if it is not already cached.
@@ -155,7 +200,9 @@ When the steps run out, a request gets an empty `stop` reply.
 | `push(steps)` | `(Step[]) => void` | Append more steps to the shared (unrouted) queue. |
 | `route(marker, steps)` | `(string, Step[]) => void` | Pin `steps` to requests whose system text contains `marker` (chat: `system`-role messages; responses: `instructions` and `system` input items), so independent flows can be scripted for concurrent agents. An exhausted route does not fall back to the shared queue. |
 | `routeRequests(marker)` | `(string) => unknown[] \| undefined` | Recorded bodies for one route, or `undefined` if never registered. |
-| `setUsage({ prompt, completion, reasoning })` | `(Usage) => void` | Attach a `usage` object to every finishing chunk from now on. |
+| `setUsage({ prompt, completion, reasoning })` | `(Usage) => void` | Attach a `usage` object to every finishing chunk from now on (title replies excepted). |
+| `setTitleReply(title)` | `(string) => void` | Answer the backend's background session-title requests with `title` (default: an empty reply, so the session stays untitled). |
+| `titleRequests()` | `() => unknown[]` | Title request bodies, in arrival order. |
 | `release()` | `() => void` | Release the oldest pending `hangStep`. |
 | `pendingHangs()` | `() => number` | Count of hangs currently holding a connection open. |
 | `stop()` | `() => Promise<void>` | Stop the server. |
@@ -180,7 +227,7 @@ test.describe("streamed reply", () => {
 })
 ```
 
-`model` takes `{ steps: Step[]; protocol?: "chat" | "responses"; permission?: "default" | "allow" | "danger" } | undefined`
+`model` takes `{ steps: Step[]; protocol?: "chat" | "responses"; permission?: "default" | "allow" | "danger"; models?: string[]; contextLimit?: number } | undefined`
 (wrapped, not a bare array — Playwright's fixture-option machinery
 parametrizes a test per array element for a bare array "option" value,
 silently dropping steps past the first). `protocol` defaults to `chat`. `permission` is the backend's `permission.model`
@@ -189,8 +236,19 @@ leave a pending permission request, shown by the TUI as a permission
 prompt); specs that run those tools without answering a prompt use `allow`,
 and specs that answer the prompt (`e2e/hya-tui-prompts.spec.ts`: press `1`,
 `2`, or `3`) keep `default`.
-Leaving `model` unset keeps the existing offline echo model, so specs that
-predate the fake model are unaffected. When `model` is set, the `backend`
+`models` lists the provider model ids registered (default `["model"]`, each
+reachable as `fake/<id>`). `contextLimit` writes each model entry in object
+form with `limit: { context: N }`, so `ModelSummary.contextLimit` is known
+(the TUI's `ctx N%`); keep it well above the scripted prompts so no
+automatic compaction fires. Leaving `model` unset keeps the existing offline
+echo model, so specs that predate the fake model are unaffected.
+
+**Session titles.** After a root session's first prompt the backend asks
+the fixed `title` agent for a title in the background. The fake model
+recognizes those requests by the title agent's system prompt
+(`titleAgentMarker`, `"You are a title generator."`) and answers them apart
+from the step queue and routes, with no usage, so a spec's steps are never
+consumed by a title call whenever it happens. When `model` is set, the `backend`
 fixture starts the fake model before `hya serve` and writes
 `$XDG_CONFIG_HOME/hya/config.yaml` selecting it. `kind` is
 `openai-compatible` for `chat` and `openai-response` for `responses`:

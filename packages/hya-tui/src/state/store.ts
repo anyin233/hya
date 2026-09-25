@@ -29,6 +29,7 @@ import type {
   ProviderSummary,
   SessionInfo,
   TodoItem,
+  TokenUsage,
   WorkflowSummary,
 } from "../client"
 import type { CompletionContext } from "../completion"
@@ -144,14 +145,40 @@ export interface AppState {
   readonly modeConfirm: ModeConfirm | undefined
   /** The open modal picker (components/Picker.tsx), if any. */
   readonly picker: ActivePicker | undefined
+  /** The open session's newest billed round with a message (`tokensRecorded`), for live context occupancy (E22). */
+  readonly liveRound: LiveRound | undefined
+  /** The backend this TUI started (one-command launch), for `/status`; `undefined` with `--server`. */
+  readonly backend: BackendInfo | undefined
 }
 
-/** A transcript notice (a compaction divider or a mode switch): shown right after the message that was newest when it happened. */
+/** One billed provider round (`tokensRecorded` with a non-empty `message`). */
+export interface LiveRound {
+  message: string
+  /** `provider/model` that served it. */
+  model: string
+  usage: TokenUsage
+}
+
+/** A backend started by this TUI (src/launch.ts). */
+export interface BackendInfo {
+  pid: number
+  bin: string
+  db: string
+}
+
+/**
+ * A transcript notice (a compaction divider or a mode switch): shown right
+ * before `beforeMessageId` when that message is in the transcript (a
+ * compaction's summary message), else right after the message that was
+ * newest when it happened.
+ */
 export interface Divider {
   id: string
   text: string
   /** The message that was newest when it happened; `""` = the transcript was empty (shown first); omitted = at the end. */
   afterMessageId?: string
+  /** A compaction's summary system message (`compactionApplied.message`): the divider sits right before it. */
+  beforeMessageId?: string
 }
 
 /** Rows loaded by one full catalog refresh. `savedKeys: null` = listing unsupported. */
@@ -223,6 +250,8 @@ function initialState(): { [K in keyof AppState]: AppState[K] } {
     pendingAgent: undefined,
     modeConfirm: undefined,
     picker: undefined,
+    liveRound: undefined,
+    backend: undefined,
   }
 }
 
@@ -255,9 +284,10 @@ export function createAppStore() {
   /** The mode the transcript last announced (or the opened session's mode): a switch to it adds no second notice. */
   let noticedMode = manualMode
   let noticeIds = 0
-  const addNotice = (text: string, id: string): void => {
+  const addNotice = (text: string, id: string, beforeMessageId?: string): void => {
+    if (state.dividers.some((divider) => divider.id === id)) return
     const afterMessageId = mergeTranscript(state.messages, fold.messages()).at(-1)?.id ?? ""
-    set("dividers", [...state.dividers, { id, text, afterMessageId }])
+    set("dividers", [...state.dividers, { id, text, afterMessageId, ...(beforeMessageId ? { beforeMessageId } : {}) }])
   }
   /** The open session's tree now runs in `mode`: update the session row and announce a change once. */
   const applyPermissionMode = (mode: string): void => {
@@ -298,6 +328,12 @@ export function createAppStore() {
   const dropAsk = (id: string): void => {
     liveAsks.delete(id)
     if (state.interactions.some((row) => row.id === id)) set("interactions", state.interactions.filter((row) => row.id !== id))
+  }
+  /** A live ask frame (`permissionRequested` / `questionRequested` / `interactionResolved`), the open session's or a descendant's. */
+  const applyAsk = (event: StreamEvent): void => {
+    const asked = event.permissionRequested?.interaction ?? event.questionRequested?.interaction
+    if (asked) upsertAsk({ ...asked, ...(asked.session ? {} : event.session ? { session: event.session } : {}), type: asked.type || (event.questionRequested ? "INTERACTION_TYPE_QUESTION" : "INTERACTION_TYPE_PERMISSION") })
+    if (event.interactionResolved?.request) dropAsk(event.interactionResolved.request)
   }
 
   return {
@@ -356,6 +392,7 @@ export function createAppStore() {
         set("members", session.members ?? [])
         set("children", new Map())
         set("dividers", [])
+        set("liveRound", undefined)
       })
     },
 
@@ -411,11 +448,16 @@ export function createAppStore() {
       if (effect.durable) set("cursor", fold.lastSeq)
       // Members fold here, not in the overlay: they are session state, not transcript parts.
       if (event.memberUpdated?.member && (effect.durable || !event.seq)) set("members", foldMember(state.members, event.memberUpdated))
-      // Pending asks are live frames: shown at once, before the listing is re-read.
-      const asked = event.permissionRequested?.interaction ?? event.questionRequested?.interaction
-      if (asked) upsertAsk({ ...asked, ...(asked.session ? {} : event.session ? { session: event.session } : {}), type: asked.type || (event.questionRequested ? "INTERACTION_TYPE_QUESTION" : "INTERACTION_TYPE_PERMISSION") })
-      if (event.interactionResolved?.request) dropAsk(event.interactionResolved.request)
-      if (event.compactionApplied) addNotice(compactionText(event.compactionApplied), `divider-${event.seq ?? state.dividers.length}`)
+      // Pending asks are live frames: shown at once.
+      applyAsk(event)
+      // Durable session state below: skip a replayed duplicate (effect.durable is false for it).
+      const compaction = event.compactionApplied
+      if (compaction && effect.durable) addNotice(compactionText(compaction), `divider-${event.seq}`, compaction.message)
+      // The whole list after a todo tool changed it (E23).
+      if (event.todoUpdated && effect.durable) set("todos", event.todoUpdated.items ?? [])
+      // A billed round of a message: the live context occupancy source (E22). Side calls have no message.
+      const tokens = event.tokensRecorded
+      if (tokens?.message && tokens.usage && effect.durable) set("liveRound", { message: tokens.message, model: tokens.model ?? "", usage: tokens.usage })
       // The tree's mode changed (another client, or this one's own switch echoed): the root's stream carries it.
       const mode = event.sessionUpdated?.permissionMode
       if (mode && (!event.session || event.session === state.selected?.id)) applyPermissionMode(mode)
@@ -428,6 +470,15 @@ export function createAppStore() {
       }
       return effect
     },
+
+    /**
+     * A descendant's (subagent's) ask frame from the open session's stream
+     * (`includeDescendants=true`): only the pending list changes; its
+     * transcript is not folded into this session's.
+     */
+    applyAsk,
+    /** The backend this TUI started (`/status`). */
+    setBackend(info: BackendInfo | undefined): void { set("backend", info) },
 
     /** Replace the member rows (a fresh `SessionInfo.members` read). */
     setMembers(rows: MemberInfo[]): void { set("members", rows) },

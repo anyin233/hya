@@ -17,6 +17,23 @@ export interface SessionInfo {
   members?: MemberInfo[]
   /** When the session projection last changed (RFC 3339); the `/sessions` picker's relative time (state/catalog.ts). */
   timeUpdated?: string
+  /** Everything billed for the session (turn rounds and side calls); the status bar's token total. */
+  usage?: TokenUsage
+}
+
+/**
+ * `TokenUsage` (docs/protocol/README.md "Usage and context occupancy"):
+ * uint64 counts as decimal strings, zero fields omitted. `input` excludes the
+ * cache, so the prompt is `input + cacheRead + cacheWrite`; `output`
+ * includes `reasoning`.
+ */
+export interface TokenUsage {
+  input?: string
+  output?: string
+  reasoning?: string
+  cacheRead?: string
+  cacheWrite?: string
+  reasoningUnknown?: boolean
 }
 
 /** A subagent (member) spawned by a session (`MemberInfo`, docs/protocol/README.md "Subagents"). */
@@ -92,6 +109,10 @@ export interface MessageInfo {
   finishCause?: string
   /** Why the turn that drove this assistant message failed. */
   error?: MessageError
+  /** Billed usage of an assistant message (all its rounds). */
+  usage?: TokenUsage
+  /** Its latest provider round alone, served by `model`: the context occupancy source. */
+  roundUsage?: TokenUsage
 }
 
 export interface Interaction {
@@ -115,6 +136,8 @@ export interface ModelSummary {
   modelId?: string
   /** Context window in tokens, a decimal string; "0" or omitted when unknown. */
   contextLimit?: string
+  /** Output ceiling in tokens, a decimal string; "0" or omitted when unknown. */
+  outputLimit?: string
 }
 
 export interface ProviderSummary {
@@ -188,8 +211,17 @@ export interface StreamEvent {
   workflowUpdated?: unknown
   /** Session metadata changed; `permissionMode` is set (root session only) when the tree's mode changed. */
   sessionUpdated?: { title?: string; model?: string; agent?: string; background?: boolean; permissionMode?: string }
-  /** A compaction strategy fired (`docs/tui.md` "Notices"); rendered as a transcript divider. */
-  compactionApplied?: { untilSeq?: string; strategy?: string }
+  /**
+   * Part of the context was folded behind a summary (`docs/tui.md` "Notices"):
+   * `message` is the summary system message (the divider sits right before
+   * it), `foldedCount` the messages folded, `manual` a `/compact` (or
+   * `/summarize`) rather than a mid-turn threshold.
+   */
+  compactionApplied?: { untilSeq?: string; strategy?: string; message?: string; foldedCount?: number | string; manual?: boolean }
+  /** One provider call was billed (durable); `message` is empty for side calls (titles, summaries). */
+  tokensRecorded?: { message?: string; model?: string; usage?: TokenUsage }
+  /** The session's whole todo list after a todo tool changed it (durable). */
+  todoUpdated?: { items?: TodoItem[] }
 }
 
 export interface StreamFrame {
@@ -533,8 +565,15 @@ export class HyaClient {
     signal: AbortSignal,
     /** Runs once the stream is subscribed, before any frame is read (gap-fill hook). */
     onOpen?: () => void | Promise<void>,
+    /**
+     * `includeDescendants=true`: also deliver the permission/question frames
+     * of every session below this one (subagents), with `event.session` set
+     * to the asking session (docs/protocol/README.md "Subagent asks on a
+     * parent's stream"). Durable events stay per session.
+     */
+    includeDescendants = false,
   ): Promise<void> {
-    const path = `/v1/sessions/${encodeURIComponent(session)}/events/stream?sinceSeq=${encodeURIComponent(sinceSeq)}`
+    const path = `/v1/sessions/${encodeURIComponent(session)}/events/stream?sinceSeq=${encodeURIComponent(sinceSeq)}${includeDescendants ? "&includeDescendants=true" : ""}`
     const response = await this.fetcher(`${this.base}${path}`, {
       headers: { "x-hya-directory": this.directory, accept: "text/event-stream" },
       signal,

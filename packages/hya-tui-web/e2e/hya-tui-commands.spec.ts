@@ -27,15 +27,17 @@ test.describe("hya TUI commands and look", () => {
     expect(footer.row).toBeGreaterThan(status.row)
   })
 
-  test("/help, /models, and /api switch the main panel", async ({ tui, backend }) => {
+  test("/help opens the help overlay; /models and /api switch the main panel", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
     await term.waitForText("Connected to hya")
 
     await term.type("/help")
     await term.press("Enter")
-    await term.waitForText("Help")
-    await term.waitForText("/key set <provider>   Enter a key in a concealed prompt")
-    await term.waitForText("Enter a prompt or choose a /command · Tab completes")
+    await term.waitForText("Help · keys and commands")
+    await term.type("/key")
+    await term.waitForText(/\/key set\|remove <provider>\s+\[local\]/)
+    await term.press("Escape")
+    await expect.poll(() => term.find("Help · keys and commands")).toBeNull()
 
     await term.type("/models")
     await term.press("Enter")

@@ -12,7 +12,8 @@ a permission plane. Every client-facing surface speaks one consolidated contract
 — `hya.v1` — served identically over HTTP/JSON+SSE+WebSocket (`/v1`) and gRPC
 (`HYA_GRPC_BIND`); the legacy Compat and native HTTP routes are gone. The
 interactive frontend is the Bun/OpenTUI TUI in `packages/hya-tui`, run from
-source against `hya serve`. The same TUI renders in a browser as the WebUI
+source; one command starts it together with its own `hya serve` (see
+[Run the TUI](#run-the-tui)). The same TUI renders in a browser as the WebUI
 through `packages/hya-tui-web`. Other clients use `hya-sdk-v1`, `hya-client`,
 or any `hya.v1` client.
 
@@ -50,6 +51,19 @@ dependencies. Release archives use the same layout; each first-party bundle is
 also published as a standalone release asset (see
 [first-party bundles](docs/bundle-runtime.md#release-assets)).
 
+
+## Run the TUI
+
+From the checkout, with `hya` on `PATH` (or `HYA_BIN` pointing at a build):
+
+```sh
+(cd packages/hya-tui && bun install --frozen-lockfile)
+bun packages/hya-tui/src/main.ts --dir "$PWD"            # starts and stops its own hya serve
+bun packages/hya-tui/src/main.ts --dir "$PWD" --continue # reopen the last session
+```
+
+`?` lists every key and command. Pass `--server <url>` to use a backend you
+run yourself instead. See the [TUI guide](docs/tui.md#start-it).
 
 ## Configure a Provider and Log In
 

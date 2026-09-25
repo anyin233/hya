@@ -1,16 +1,16 @@
-// The working indicator, status bar, and live todo panel (docs/tui.md
-// "Working indicator", "Status bar", "Todo panel"; Tier 1 E21-E23), driven
-// against the scripted fake model. E24's `CompactionApplied` divider is
-// covered by unit tests only (state/messages.test.ts,
-// packages/hya-tui/test/messages.test.ts): the manual `/compact` command
-// (`CompactSession`) injects a system-message marker, it does not emit a
-// `CompactionApplied` event — only the engine's automatic mid-turn
-// compaction strategies do, which this harness cannot trigger deterministically.
+// The working indicator, status bar, live todo panel, and compaction
+// divider (docs/tui.md "Working indicator", "Status bar", "Todo panel",
+// "Notices"; Tier 1 E21-E24), driven against the scripted fake model: the
+// status bar's `ctx N%` and token total from reported usage and a model
+// context limit, `todoUpdated` frames (no todo re-reads, checked through a
+// logging proxy), and the `/compact` divider.
 
 import type { Tui } from "./harness"
 import { expect, hyaTui, initGitRepo, test, textStep, toolStep, toolsStep } from "./hya"
+import { startProxy } from "./proxy"
 
 const spinner = /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/
+const colors = { fg: "#e8edf3", muted: "#9caab9", warning: "#e5c07b", error: "#f07878" }
 
 async function prompt(term: Tui, text: string): Promise<void> {
   await term.type(text)
@@ -136,7 +136,9 @@ test.describe("live todo panel", () => {
   })
 
   test("the sidebar Todos box updates live from a real todo tool call; hiding the sidebar shows a compact count", async ({ tui, backend }) => {
-    const term = await tui(hyaTui(backend))
+    // Through a logging proxy: the list must come from the `todoUpdated` frame, not a `GetSessionTodo` re-read.
+    const proxy = await startProxy(backend.url)
+    const term = await tui(hyaTui({ ...backend, url: proxy.url }))
     await term.waitForText("Connected to hya")
     await prompt(term, "track a todo")
     await term.waitForText("Added a todo.", 20_000)
@@ -144,6 +146,8 @@ test.describe("live todo panel", () => {
 
     // Sidebar shown (default viewport, >=110 cols): the live item, pending glyph.
     await term.waitForText("○ write tests", 20_000)
+    // One `GetSessionTodo`: the seed when the new session opened (empty then); the item came on the stream.
+    expect(proxy.log.filter((entry) => entry.method === "GET" && /\/todo$/.test(entry.path))).toHaveLength(1)
     // Sidebar Context box: the merged transcript's message count (user + assistant).
     await term.waitForText("Messages 2")
     expect(await term.find("Todos 0/1")).toBeNull()
@@ -152,5 +156,54 @@ test.describe("live todo panel", () => {
     await term.press("Control+b")
     await term.waitForText("Todos 0/1", 20_000)
     expect(await term.find("write tests")).toBeNull()
+  })
+})
+
+test.describe("status bar context and tokens", () => {
+  test.use({ model: { steps: [textStep("usage reply"), textStep("second usage reply")], contextLimit: 100_000 } })
+
+  test("shows ctx N% of the model's context limit and the session token total after a reply", async ({ tui, backend, fakeModel }, testInfo) => {
+    fakeModel!.setUsage({ prompt: 42_000, completion: 300, reasoning: 0 })
+    const term = await tui(hyaTui(backend))
+    await term.waitForText("Connected to hya")
+    // Unknown before any reply: hidden, not `ctx 0%`.
+    expect(await term.find("ctx ")).toBeNull()
+    await prompt(term, "hi")
+    await term.waitForText("usage reply", 20_000)
+    await term.waitForText(/^Ready/m)
+    await term.waitForText(/mode manual · ctx 42% · 42\.3k tok/)
+    const ctx = await at(term, "ctx 42%")
+    expect((await term.cell(ctx.row, ctx.col))?.fg).toBe(colors.muted)
+    // The sidebar's Context box shows the same, with the window size.
+    await term.waitForText("Context  42% · 42k/100k")
+    await term.waitForText("Tokens   42.3k")
+    await term.attach(testInfo, "usage")
+
+    // A fuller prompt crosses 80 %: the segment turns the warning color.
+    fakeModel!.setUsage({ prompt: 85_000, completion: 100, reasoning: 0 })
+    await prompt(term, "again")
+    await term.waitForText("second usage reply", 20_000)
+    await term.waitForText("ctx 85%")
+    const warn = await at(term, "ctx 85%")
+    expect((await term.cell(warn.row, warn.col))?.fg).toBe(colors.warning)
+    await term.waitForText("127k tok")
+  })
+})
+
+test.describe("compaction divider", () => {
+  test.use({ model: { steps: [textStep("First answer before compaction."), textStep("Summary: the user said hi.")] } })
+
+  test("/compact shows a manual divider with the folded message count before the summary", async ({ tui, backend }, testInfo) => {
+    const term = await tui(hyaTui(backend))
+    await term.waitForText("Connected to hya")
+    await prompt(term, "hi there")
+    await term.waitForText("First answer before compaction.", 20_000)
+    await term.waitForText(/^Ready/m)
+    await prompt(term, "/compact")
+    await term.waitForText(/── context compacted · \d+ messages? · manual ──/, 20_000)
+    const divider = await match(term, /── context compacted/)
+    expect(divider.row).toBeGreaterThan((await at(term, "First answer before compaction.")).row)
+    expect((await term.cell(divider.row, divider.col))?.fg).toBe(colors.muted)
+    await term.attach(testInfo, "compacted")
   })
 })
