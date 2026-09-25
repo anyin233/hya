@@ -30,6 +30,8 @@
   - A revived member goes back to `running`.
   - Hosts that embed `hya-core` must now pass a `TaskSpawnOrigin` to `spawn_resident_typed` instead of the subagent type string.
 - Fix: cancelling or crash-recovering a parent turn no longer marks subagents whose `task` call already returned as cancelled.
+- `GET /v1/interactions` and gRPC `ListInteractions` now return question interactions with the same `options`, `detail` (header), and `payload` as the live `questionRequested` frame. The frame's `payload` now carries every question: `{questions: [{question, header, options: [{label, description}], multiple?, custom?}]}`.
+- Session event streams take an opt-in `includeDescendants=true` (gRPC `StreamSessionEventsRequest.include_descendants`). With it, permission and question asks from subagent sessions at any depth, and their resolutions, arrive on an ancestor's stream, tagged with the asking session. Without it, a stream behaves as before.
 
 ## Session permission modes
 

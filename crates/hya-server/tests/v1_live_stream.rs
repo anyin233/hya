@@ -456,6 +456,7 @@ async fn grpc_session_stream_delivers_live_assistant_deltas() {
         .stream_session_events(pb::StreamSessionEventsRequest {
             session: session.clone(),
             since_seq: 0,
+            include_descendants: false,
         })
         .await
         .unwrap()
