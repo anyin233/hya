@@ -1,13 +1,15 @@
-import type { JSX } from "solid-js"
+import { Show, type JSX } from "solid-js"
 import { colors } from "../theme"
 
-/** A bordered, titled panel with one word-wrapped scrolling text body. */
+/** A bordered, titled panel with a word-wrapped scrolling text body and an optional muted trailer. */
 export function Panel(props: {
   title: string
   text: string
   width?: number
   background?: string
   visible?: boolean
+  /** Muted text below the body (queued prompts in the transcript). */
+  trailer?: string
   /** Keep the view pinned to the newest line (the transcript). */
   sticky?: boolean
   scrollRef?: (scroll: import("@opentui/core").ScrollBoxRenderable) => void
@@ -34,6 +36,9 @@ export function Panel(props: {
         stickyStart={props.sticky ? "bottom" : undefined}
       >
         <text width="100%" wrapMode="word" fg={colors.fg}>{props.text}</text>
+        <Show when={props.trailer}>
+          <text width="100%" wrapMode="word" fg={colors.muted} marginTop={props.text ? 1 : 0}>{props.trailer}</text>
+        </Show>
       </scrollbox>
     </box>
   )

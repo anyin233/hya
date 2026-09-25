@@ -2,6 +2,7 @@
 import type { MessageInfo, SessionInfo } from "../client"
 import { helpText } from "../commands/help"
 import type { View } from "../instructions"
+import { mergeTranscript } from "./overlay"
 import type { AppState } from "./store"
 
 export function modelReference(session: SessionInfo): string {
@@ -10,6 +11,21 @@ export function modelReference(session: SessionInfo): string {
 }
 
 export function formatMessage(message: MessageInfo): string {
+  const cached = formatted.get(message)
+  if (cached !== undefined) return cached
+  const text = formatUncached(message)
+  formatted.set(message, text)
+  return text
+}
+
+/**
+ * Formatted text per message object. Projection rows and unchanged overlay
+ * snapshots keep their identity between renders, so a streaming delta only
+ * re-formats the message it touched.
+ */
+const formatted = new WeakMap<MessageInfo, string>()
+
+function formatUncached(message: MessageInfo): string {
   const role = message.role.replace(/^ROLE_/, "").toLowerCase()
   const lines = (message.parts ?? []).map((part) => {
     if (part.text) return part.text.text
@@ -18,7 +34,22 @@ export function formatMessage(message: MessageInfo): string {
     if (part.attachment) return `  attachment: ${part.attachment.name}`
     return ""
   }).filter(Boolean)
+  if (message.error) lines.push(`error · ${message.error.code ? `${message.error.code}: ` : ""}${message.error.message}`)
   return `${role}${message.finish ? ` · ${message.finish.replace(/^FINISH_REASON_/, "").toLowerCase()}` : ""}\n${lines.join("\n") || "…"}`
+}
+
+/** The transcript shown in the chat view: the projection with the streaming overlay folded in. */
+export function transcript(state: AppState): MessageInfo[] {
+  return mergeTranscript(state.messages, state.overlay)
+}
+
+/** Prompts waiting for the running turn, shown dimmed below the transcript in the chat view. */
+export function queuedText(state: AppState): string {
+  if (state.view !== "chat") return ""
+  return state.queued
+    .filter((item) => item.state === "queued")
+    .map((item) => `user · queued\n${item.text}`)
+    .join("\n\n")
 }
 
 export function headerText(state: AppState, server: string): string {
@@ -51,8 +82,11 @@ export function mainTitle(view: View): string { return titles[view] }
 export function mainContent(state: AppState): string {
   if (!state.ready) return ""
   switch (state.view) {
-    case "chat":
-      return state.messages.length ? state.messages.slice(-50).map(formatMessage).join("\n\n") : "No messages yet. Type a prompt below."
+    case "chat": {
+      const messages = transcript(state)
+      if (messages.length) return messages.slice(-50).map(formatMessage).join("\n\n")
+      return state.queued.length ? "" : "No messages yet. Type a prompt below."
+    }
     case "models":
       return state.models.length ? state.models.map((model) => `${model.id}  ${model.displayName ?? ""}  ${model.auth ?? ""}`).join("\n") : "No models returned by server."
     case "workflows": {

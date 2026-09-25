@@ -35,8 +35,9 @@ The backend's offline echo model is sufficient for a first run; configure a
 provider in the backend for live model calls.
 
 Type a plain prompt and press Enter. The frontend creates a session when none
-is open, admits the prompt as a turn, and refreshes its transcript from the
-server as SSE frames arrive. For example, type `summarize this repository`,
+is open, admits the prompt as a turn, and streams the reply into the
+transcript as it arrives (see [Streaming, queued prompts, and turn
+status](#streaming-queued-prompts-and-turn-status)). For example, type `summarize this repository`,
 then `/models` to inspect available routes, and `/open 1` to return to the
 first session. Press Ctrl+C to exit and restore the terminal.
 
@@ -73,7 +74,7 @@ backend is running.
 | `/interactions` | View pending permissions and questions. |
 | `/approve <id>`, `/deny <id>` | Respond to a permission request for this run only (`persist: false`). |
 | `/answer <id> <text>` | Answer a question request. |
-| `/cancel` | Request cancellation of the turn admitted in this frontend. |
+| `/cancel` | Request cancellation of the turn admitted in this frontend; the status line then shows `Cancelled · Ready`. |
 | `/refresh` or Ctrl+R | Reload sessions, messages, interactions, models, and Workflows. |
 | `/api` | List the HTTP operations from the generated OpenAPI catalog. |
 | `/api METHOD /v1/path [JSON]` | Send a scoped HTTP/JSON request and show its JSON response. |
@@ -108,6 +109,46 @@ SSE is connected automatically when a session is open. PTY WebSocket sessions
 need a WebSocket client; the command view can still call their JSON setup
 routes. See the [protocol guide](protocol/README.md) for those frames.
 
+## Streaming, queued prompts, and turn status
+
+The assistant reply appears chunk by chunk while the model streams it. When
+the reply is complete, the transcript shows the server's stored copy of it;
+the text does not repeat or flicker when that happens.
+
+You can type the next prompt while a turn is running. Press Enter and the
+prompt appears dimmed at the end of the transcript under a `user · queued`
+header. The status line counts the waiting prompts
+(`Running · msg_… · 1 queued`). When the running turn ends, the frontend sends
+the oldest queued prompt; several queued prompts go one per turn, in the
+order you typed them. The server has no prompt queue of its own. It rejects
+a prompt with `409 session_busy` while a turn runs, and it releases the
+session shortly after the reply finishes. So the frontend retries a busy
+prompt a few times with a short backoff (about 100 ms growing to 1 s). If the
+session is still busy after that (for example, another client started a
+turn), the prompt stays queued and is sent after the next turn end seen on the
+stream. Opening another session drops the queued prompts of the previous one.
+A queued prompt is still sent after a cancelled or failed turn.
+
+The status line above the input shows the turn state:
+
+| Status | Meaning |
+| --- | --- |
+| `Sending prompt…` | The prompt is being admitted (`CreateTurn` in flight). |
+| `Session busy · retrying (N)` | The server answered `409 session_busy`; the prompt is retried. |
+| `Running · <turn id>[ · N queued]` | The turn runs; `N` prompts wait. |
+| `Session busy · N queued prompt(s) wait(s) for the running turn` | Retries ran out; the prompts wait for the next turn end. |
+| `Ready` | The turn finished. `Ready · reply stopped at the length limit` when the model hit its output limit. |
+| `Cancelled · Ready` | The turn was cancelled (`/cancel`). |
+| `Error · <code>: <message>` | The turn failed, for example `Error · provider_error: http status 400: …`. `Error · turn failed` when the backend recorded no error text. |
+
+A failed assistant message also shows its error in the transcript, as a line
+under its `assistant · error` header:
+
+```text
+assistant · error
+error · provider_error: http status 400: bad request
+```
+
 ## Interface definitions
 
 The frontend uses the existing HTTP/JSON+SSE transport. Every request carries
@@ -126,8 +167,9 @@ string encoded 64-bit values, and the error envelope documented in the
 | `POST /v1/sessions/{id}/turns` | `{prompt: {text: string}}` | `CreateTurnResponse.turn: TurnInfo` |
 | `POST /v1/sessions/{id}/turns` | `{command: {command: string, arguments: string}}` for other slash commands | `CreateTurnResponse.turn: TurnInfo` |
 | `POST /v1/sessions/{id}/turns/{turn}/cancel` | `{}` | `CancelTurnResponse` |
-| `GET /v1/sessions/{id}/events/stream?sinceSeq=N` | SSE | `StreamFrame` with `event` or `resync` |
-| `GET /v1/sessions/{id}/events?sinceSeq=N` | No body | `ListEventsResponse` on stream resync |
+| `GET /v1/sessions/{id}` | No body | `SessionInfo.lastSeq` when a session is opened (the stream's first `sinceSeq`). |
+| `GET /v1/sessions/{id}/events/stream?sinceSeq=N` | SSE | `StreamFrame` with `event` or `resync`; `N` is the last applied durable seq. |
+| `GET /v1/sessions/{id}/events?sinceSeq=N&limit=500` | No body | `ListEventsResponse.events` / `nextSeq`, paged, to fill the gap after each stream (re)connect and `resync`. |
 | `GET /v1/interactions` | No body | `ListInteractionsResponse.interactions: Interaction[]` |
 | `POST /v1/interactions/{id}/respond` | `{permission: {allowed: boolean, persist: false}}` or `{question: {answer: string}}` | `RespondInteractionResponse.applied` |
 | `GET /v1/models` | No body | `ListModelsResponse.models: ModelSummary[]` |
@@ -155,9 +197,59 @@ from the current view; it makes no HTTP request:
 | API | `Next: /api GET /v1/health · /help for command syntax` |
 | Help | `Enter a prompt or choose a /command · Tab completes` |
 
-The transcript is read from projected `MessageInfo.parts` after event
-notifications. The TUI does not derive a competing durable state model from
-SSE deltas. List requests follow the server's `page.nextCursor` using the
+### Stream frames and the transcript
+
+The server projection (`ListMessages`, `MessageInfo.parts`) is the
+authoritative transcript. Stream frames feed a transient overlay that shows
+what the projection cannot show yet, mainly the live text of the in-flight
+round. The overlay is never persisted and is rebuilt from the stream. The
+rules follow the protocol guide's
+[Live and durable frames](protocol/README.md#live-and-durable-frames):
+
+| Frame (`StreamEvent` field) | Kind | Effect in the TUI |
+| --- | --- | --- |
+| `messageStarted {message, role}` | durable | Overlay message with its role; projection re-read (debounced 120 ms). |
+| `partStarted {message, part, kind}` (`text`, `reasoning`) | live or durable | Overlay part. A part id the overlay already has is not a new part. |
+| `partAppended {message, part, textDelta}` | live (assistant text) or durable (reasoning, tool arguments, user text) | Appends `textDelta` to the part. No projection re-read. |
+| `partReplaced {message, part, text}` | live (plugin rewrite) or durable (end of round) | Sets the part's whole text, replacing the live deltas. |
+| `partCompleted {message, part}` | live or durable | No overlay change; a durable one triggers a projection re-read. |
+| `errorReported {message, code, errorMessage}` | durable | Stored as the message's error. Shown in the transcript and, at turn end, in the status line. |
+| `messageFinished {message, finish, cause}` | durable | The turn ends at the first assistant `messageFinished` after the turn's user message whose `finish` is not `FINISH_REASON_TOOL_CALLS`. Then the projection is re-read. |
+| `permissionRequested`, `questionRequested`, `interactionResolved` | live | Pending list re-read. |
+| `resync {lastSeq}` | — | Live parts that were mid-stream stop taking deltas until their durable `partReplaced`; `ListEvents` fills the gap; the projection is re-read. |
+
+- **Sequence numbers.** The client keeps the last applied durable `seq` as a
+  decimal string and compares with `BigInt`, so 64-bit values stay exact. A
+  durable frame at or below it is a duplicate and is ignored. Live frames have
+  no `seq` and are always applied.
+- **(Re)connect.** The stream is subscribed with
+  `sinceSeq = last applied seq`. Before any frame is read, `ListEvents` pages
+  are replayed through the same fold. The stream does not replay history, so
+  this fills the gap. After a reconnect, the projection is re-read too. A
+  prompt is admitted only once the stream is subscribed (up to 3 s wait), so
+  no frame of its turn is missed.
+- **Handover.** The displayed transcript is the projection with the overlay
+  merged by message id and part id. The overlay's text wins for a part that is
+  still streaming. Overlay parts and messages that are not in the projection
+  yet follow the projected ones. A projected message with a `finish` is shown
+  exactly as projected, and the overlay drops it in the same store update. The
+  live text and the durable text are identical, so the handover does not
+  flicker. Projection reads complete in order: an older read never replaces a
+  newer one.
+- **Turn id.** `CreateTurn` returns the user message id as `TurnInfo.id`. It
+  is used for `/cancel` and to find the turn's end. A reply that finishes
+  before `CreateTurn` returns ends the turn as soon as the response arrives.
+- **Session switch.** Opening a session aborts the old stream and resets the
+  overlay, the prompt queue, and the turn state. Frames of any other session
+  are ignored.
+- **Rendering cost.** Frames are folded at once, but the overlay is published
+  to the store at most once per 16 ms. A fast delta stream therefore renders
+  about once per display frame, not once per chunk. Formatted message text is
+  cached per message object. Projected messages and unchanged overlay
+  messages keep their identity, so a delta re-formats only the message it
+  changed.
+
+List requests follow the server's `page.nextCursor` using the
 `page.cursor` and `page.limit` query keys. `GET /v1/auth` is an unpaginated
 names-only list. The generic `/api` command sends the supplied JSON unchanged to
 the named `/v1` route; its full request and response schemas are in the
@@ -178,9 +270,11 @@ together.
 | `src/main.ts` | Entry. Registers the Solid JSX transform (`@opentui/solid/preload`), parses flags, then dynamically imports the app. |
 | `src/cli.ts` | `--server`, `--dir`, `--help` parsing and the usage line. |
 | `src/client.ts` | Typed v1 HTTP/JSON+SSE client (`HyaClient`, `SseDecoder`, `parseApiCommand`). |
-| `src/state/store.ts` | `createAppStore()`: the single store. It holds the server projection (sessions, messages, interactions, models, agents, providers, workflows, saved key names, backend commands, stream cursor) and UI state (view, status, key-entry provider and mask). Each field is a Solid signal, and only the store's mutation methods change it. |
-| `src/state/format.ts` | Pure text for each panel (header, session list, pending list, main view, message formatting). |
-| `src/app/controller.ts` | `createController()`: refreshes, the session SSE loop, session creation, prompt submission, command dispatch, and concealed key entry. It writes results into the store. |
+| `src/state/store.ts` | `createAppStore()`: the single store. It holds the server projection (sessions, messages, interactions, models, agents, providers, workflows, saved key names, backend commands, stream cursor), the published streaming overlay, the prompt queue, the turn state (`running`, `turnId`), and UI state (view, status, key-entry provider and mask). Each field is a Solid signal, and only the store's mutation methods change it. |
+| `src/state/overlay.ts` | `TranscriptOverlay`: the pure fold of stream frames by message and part id (seq filter, live/durable handover, `resync` handling, turn-end lookup). `mergeTranscript()` merges it over the projection. |
+| `src/state/format.ts` | Pure text for each panel (header, session list, pending list, main view, the merged transcript, queued prompts, message formatting with a per-message cache). |
+| `src/app/controller.ts` | `createController()`: refreshes, the session SSE loop (subscribe, `ListEvents` gap-fill, `resync`), batched overlay flushes, session creation, prompt submission, command dispatch, and concealed key entry. It writes results into the store. |
+| `src/app/turns.ts` | `createTurnRunner()`: the client-side prompt queue, `409 session_busy` retry, and turn-end detection and status text. |
 | `src/app/App.tsx`, `src/app/run.tsx`, `src/app/context.ts` | Root layout, renderer startup, and the `AppContext` (store, controller, server URL) that components read with `useApp()`. |
 | `src/components/` | `Header`, `Panel`, `SessionsPanel`, `MainPanel`, `PendingPanel`, `StatusLine`, `Composer` (input, completion, concealed key entry), `Footer`. |
 | `src/commands/` | The slash-command registry (`registry.ts`), the built-in commands (`native.ts`), and the `/help` text (`help.ts`). |
@@ -230,4 +324,6 @@ Then check the rendered TUI in the browser from `packages/hya-tui-web`
 (`bun run typecheck && bun test ./test && bunx playwright test`; see
 [tui-web.md](tui-web.md)). `e2e/hya-tui.spec.ts` and
 `e2e/hya-tui-commands.spec.ts` cover the layout, colors, commands, key
-entry, narrow widths, and Ctrl+C.
+entry, narrow widths, and Ctrl+C. `e2e/hya-tui-streaming.spec.ts` uses the
+fake model to cover streaming text, queued prompts, and the turn status
+line (`Ready`, provider errors).

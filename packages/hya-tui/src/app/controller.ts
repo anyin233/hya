@@ -4,15 +4,29 @@
  * entry. It writes results into the store; components only read the store and
  * call controller methods.
  *
- * The TUI reads the server projection (sessions, transcript, interactions);
- * stream frames only trigger a debounced re-read. A transient streaming
- * overlay belongs next to `onFrame`, never in place of the projection.
+ * The TUI reads the server projection (sessions, transcript, interactions).
+ * Stream frames are folded into the store's transient streaming overlay
+ * (state/overlay.ts), published at most once per display frame, and
+ * durable/interaction frames trigger a debounced projection re-read; the
+ * projection stays authoritative. Prompt admission and the prompt queue
+ * live in turns.ts.
+ *
+ * Stream lifecycle: subscribe (`sinceSeq` = last applied durable seq), then
+ * gap-fill with `ListEvents` before reading frames, on every (re)connect.
+ * A `resync` marks interrupted live parts and gap-fills again. Opening a
+ * session aborts the old stream and resets the overlay.
  */
-import type { HyaClient, SessionInfo, StreamFrame } from "../client"
+import type { HyaClient, SessionInfo, StreamEvent, StreamFrame } from "../client"
 import { completeCommand, SecretEntry } from "../completion"
 import { createCommandRegistry, type AppActions, type CommandRegistry } from "../commands"
 import type { KeyLike } from "../keys/bindings"
 import type { AppStore } from "../state/store"
+import { createTurnRunner, turnEndStatus } from "./turns"
+
+/** Overlay flush interval: coalesces stream deltas into one render per display frame. */
+const flushMs = 16
+/** Longest wait for the session stream before a prompt is admitted anyway. */
+const streamWaitMs = 3000
 
 export interface ControllerOptions {
   client: HyaClient
@@ -25,9 +39,15 @@ export interface ControllerOptions {
 export function createController({ client, store, directory, registry = createCommandRegistry() }: ControllerOptions) {
   let streamAbort: AbortController | undefined
   let refreshTimer: ReturnType<typeof setTimeout> | undefined
+  let flushTimer: ReturnType<typeof setTimeout> | undefined
+  let streamReady: Promise<void> = Promise.resolve()
   let closing = false
+  /** Projection reads in flight complete out of order; only the newest one is applied. */
+  let readsStarted = 0
+  let readApplied = 0
   const secret = new SecretEntry()
   const status = (text: string): void => store.setStatus(text)
+  const turns = createTurnRunner({ store, client })
 
   async function refresh(): Promise<void> {
     const [sessions, interactions, models, workflows, providers, savedKeys, commands] = await Promise.all([
@@ -40,7 +60,18 @@ export function createController({ client, store, directory, registry = createCo
   async function refreshMessages(): Promise<void> {
     const selected = store.state.selected
     if (!selected) return
-    store.setMessages(selected.id, await client.listMessages(selected.id))
+    const ticket = ++readsStarted
+    const rows = await client.listMessages(selected.id)
+    // An older read must not replace a newer one: the newer one may already
+    // have pruned the overlay text the older snapshot lacks.
+    if (ticket < readApplied) return
+    readApplied = ticket
+    store.setMessages(selected.id, rows)
+    // A failed turn whose error text was not on the stream: take it from the projection.
+    if (store.state.status === "Error · turn failed") {
+      const failed = [...store.state.messages].reverse().find((message) => message.error)
+      if (failed) status(turnEndStatus({ message: failed.id, role: failed.role, finish: failed.finish }, failed.error))
+    }
   }
 
   function scheduleRefresh(): void {
@@ -51,42 +82,81 @@ export function createController({ client, store, directory, registry = createCo
     }, 120)
   }
 
-  async function onFrame(frame: StreamFrame): Promise<void> {
-    const selected = store.state.selected
-    if (frame.resync && selected) {
-      const replay = await client.listEvents(selected.id, store.state.cursor)
-      store.setCursor(replay.nextSeq ?? store.state.cursor)
+  /** Publish the overlay at most once per `flushMs`, however many deltas arrived. */
+  function scheduleFlush(): void {
+    if (flushTimer) return
+    flushTimer = setTimeout(() => {
+      flushTimer = undefined
+      store.flushOverlay()
+    }, flushMs)
+  }
+
+  function applyEvent(event: StreamEvent): void {
+    const effect = store.applyEvent(event)
+    if (effect.changed) scheduleFlush()
+    // Text deltas only feed the overlay. Other durable frames (message and
+    // part boundaries, tool state, errors) and live interaction frames
+    // change the projection or the pending list: re-read them.
+    const delta = event.partAppended || event.partReplaced || (!effect.durable && (event.partStarted || event.partCompleted))
+    if (!delta && (effect.durable || !event.seq)) scheduleRefresh()
+    turns.observe(effect)
+  }
+
+  /** Replay durable events after the last applied seq (ListEvents), then drop what the projection shows finished. */
+  async function gapFill(sessionId: string): Promise<void> {
+    const events = await client.listEventsSince(sessionId, store.fold.lastSeq)
+    if (store.state.selected?.id !== sessionId) return
+    for (const event of events) applyEvent(event)
+    store.setMessages(sessionId, store.state.messages)
+  }
+
+  async function onFrame(frame: StreamFrame, sessionId: string): Promise<void> {
+    if (store.state.selected?.id !== sessionId) return
+    if (frame.resync) {
+      store.markLiveLost()
+      await gapFill(sessionId)
       scheduleRefresh()
       return
     }
     const event = frame.event
-    if (!event) return
-    if (event.seq) store.advanceCursor(event.seq)
-    if (event.messageFinished && store.finishTurn(event.messageFinished.message)) {
-      status(`Turn finished · ${event.messageFinished.finish ?? "done"}`)
-    }
-    scheduleRefresh()
+    if (!event || (event.session && event.session !== sessionId)) return
+    applyEvent(event)
   }
 
   function startStream(sessionId: string): void {
     streamAbort?.abort()
     const controller = new AbortController()
     streamAbort = controller
+    let connections = 0
+    let ready!: () => void
+    streamReady = new Promise((resolve) => (ready = resolve))
     void (async () => {
       while (!closing && !controller.signal.aborted) {
         try {
-          await client.streamSession(sessionId, store.state.cursor, onFrame, controller.signal)
+          await client.streamSession(sessionId, store.fold.lastSeq, (frame) => onFrame(frame, sessionId), controller.signal, async () => {
+            // Subscribed: frames after this point are buffered by the
+            // connection while the gap since the last applied seq is filled.
+            await gapFill(sessionId)
+            if (connections++ > 0) scheduleRefresh()
+            ready()
+          })
         } catch (error) {
           if (!controller.signal.aborted) status(`Stream reconnecting: ${String(error)}`)
         }
+        ready()
         if (!controller.signal.aborted) await Bun.sleep(800)
       }
     })()
   }
 
   async function openSession(sessionId: string): Promise<void> {
-    const session = store.state.sessions.find((row) => row.id === sessionId)
-      ?? await client.request<SessionInfo>("GET", `/v1/sessions/${encodeURIComponent(sessionId)}`)
+    const listed = store.state.sessions.find((row) => row.id === sessionId)
+    // A fresh read gives the current `lastSeq`, so the stream gap-fill stays small.
+    const session = await client.request<SessionInfo>("GET", `/v1/sessions/${encodeURIComponent(sessionId)}`)
+      .catch((error: unknown) => {
+        if (listed) return listed
+        throw error
+      })
     store.openSession(session)
     await refreshMessages()
     startStream(session.id)
@@ -127,12 +197,9 @@ export function createController({ client, store, directory, registry = createCo
         return
       }
       if (!store.state.selected) await newSession()
-      const selected = store.state.selected
-      if (!selected) throw new Error("Session creation failed")
-      const turn = await client.createTurn(selected.id, text)
-      store.setTurn(turn.id)
-      status(`Turn ${turn.state.toLowerCase()} · ${turn.id}`)
-      scheduleRefresh()
+      // Subscribe before CreateTurn, so no frame of the new turn is missed.
+      await Promise.race([streamReady, Bun.sleep(streamWaitMs)])
+      await turns.submit(text)
     } catch (error) {
       status(`Error: ${String(error)}`)
     }
@@ -200,6 +267,7 @@ export function createController({ client, store, directory, registry = createCo
     closing = true
     streamAbort?.abort()
     if (refreshTimer) clearTimeout(refreshTimer)
+    if (flushTimer) clearTimeout(flushTimer)
     secret.clear()
   }
 
