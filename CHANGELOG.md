@@ -1,5 +1,11 @@
 # 0.41.0
 
+## TUI themes and a preferences file
+
+- `/theme` opens a picker of the built-in themes: `hya` (the default look), `light`, `contrast`, and `ember`. Moving the highlight previews a theme live; Enter keeps it; Esc restores the previous one.
+- The chosen theme is saved in the TUI preferences file, `$XDG_CONFIG_HOME/hya/tui.json` (else `~/.config/hya/tui.json`). Set `HYA_TUI_CONFIG` to use another path. A missing or corrupt file falls back to the defaults, and the TUI shows a warning in the status line. See [TUI](docs/tui.md#themes).
+- CI now runs the TUI unit tests and the browser TUI suite.
+
 ## `hya` starts the TUI and the WebUI
 
 - Running `hya` in a terminal now starts three things: a server inside the `hya` process, the TUI in the terminal, and the WebUI at `http://127.0.0.1:3250`. Pick another port with `hya --port <N>`; `0` picks a free port.

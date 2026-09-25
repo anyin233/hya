@@ -121,6 +121,11 @@ export function pickerRows(state: PickerState): PickerRow[] {
   return pickerMatches(state.rows, state.query)
 }
 
+/** The highlighted row of the filtered list; `undefined` when the filter matches nothing. */
+export function pickerHighlighted(state: PickerState): PickerRow | undefined {
+  return pickerRows(state)[state.index]
+}
+
 function withQuery(state: PickerState, query: string): PickerState {
   // An empty filter shows the whole list again, highlighting the current row.
   return { ...state, query, index: query ? 0 : currentIndex(state.rows) }
@@ -214,10 +219,16 @@ export interface PickerSpec {
   onSelect(row: PickerRow): void | Promise<void>
   /** Runs after a row action committed (`id` is the `PickerAction.id`; `value` is the edited text for `prompt: "value"`). */
   onAction?(id: string, row: PickerRow, value?: string): void | Promise<void>
+  /** Runs when the highlight moves to another row (a live preview, e.g. `/theme`); not on open. */
+  onHighlight?(row: PickerRow): void
+  /** Runs when the picker closes without a choice (Esc, Ctrl+C); undo a preview here. */
+  onCancel?(): void
 }
 
 /** An open picker: its list state plus what choosing a row (or committing an action) does. */
 export interface ActivePicker extends PickerState {
   onSelect(row: PickerRow): void | Promise<void>
   onAction?(id: string, row: PickerRow, value?: string): void | Promise<void>
+  onHighlight?(row: PickerRow): void
+  onCancel?(): void
 }

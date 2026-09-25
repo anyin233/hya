@@ -8,6 +8,7 @@
  */
 import type { HyaClient } from "../client"
 import type { CompletionContext } from "../completion"
+import type { TuiPreferences } from "../prefs"
 import type { PickerSpec } from "../state/picker"
 import type { AppStore } from "../state/store"
 
@@ -30,6 +31,8 @@ export interface AppActions {
   openHelp(): void
   /** Switch the session tree's permission mode (app/modes.ts): yolo asks first once per process; no session → applied on creation. */
   requestPermissionMode(mode: string): Promise<void>
+  /** Merge `patch` into the TUI preferences file (src/prefs.ts); throws when it cannot be written. */
+  savePreferences(patch: Partial<TuiPreferences>): void
 }
 
 export interface CommandContext {

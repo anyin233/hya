@@ -302,9 +302,14 @@ export const test = withOptions.extend<Fixtures>({
   // Capture the final screen here, while `backend` is still running. The base
   // fixture tears down after the backend, so its capture would show the TUI's
   // reconnect error instead of the state under test.
-  tui: async ({ tui, backend: _backend }, use, testInfo) => {
+  //
+  // The TUI inherits the runner's environment, so its preferences file
+  // (theme) would be the developer's own `~/.config/hya/tui.json`; point it
+  // at the backend's isolated config directory unless the spec sets one.
+  tui: async ({ tui, backend }, use, testInfo) => {
     let last: Tui | undefined
-    await use(async (command, options) => (last = await tui(command, options)))
+    const isolated = { HYA_TUI_CONFIG: join(dirname(backend.dir), "config", "hya", "tui.json") }
+    await use(async (command, options = {}) => (last = await tui(command, { ...options, env: { ...isolated, ...options.env } })))
     if (last) await last.attach(testInfo, "final-screen").catch(() => {})
   },
 })

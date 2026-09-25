@@ -48,7 +48,8 @@ import { helpPickerHint, helpPickerRows } from "../commands"
 import { initialSessionId } from "../launch"
 import { webNotice } from "../state/format"
 import { childActivity, childSessionIds } from "../state/members"
-import { createPicker, pickerKey as pickerKeyOutcome, type PickerRow, type PickerSpec } from "../state/picker"
+import { savePreferences } from "../prefs"
+import { createPicker, pickerHighlighted, pickerKey as pickerKeyOutcome, type PickerRow, type PickerSpec } from "../state/picker"
 import { askFrameRoute, type PromptChoice } from "../state/prompts"
 import type { AppStore } from "../state/store"
 import { createModeSwitcher } from "./modes"
@@ -79,6 +80,8 @@ export interface ControllerOptions {
   startup?: { continue: boolean; session?: string }
   /** Appended to the status line when the backend cannot be reached. */
   connectionHint?: string
+  /** TUI preferences file (src/prefs.ts); unset = preference changes apply for this run only. */
+  preferencesPath?: string
 }
 
 /** Rows the help overlay shows at once (bounded by the terminal height, components/Picker.tsx). */
@@ -88,7 +91,7 @@ const helpMaxRows = 40
 const fileLookupLimit = 50
 export const fileSuggestionLimit = 8
 
-export function createController({ client, store, directory, registry = createCommandRegistry(), quit = () => undefined, startup = { continue: false }, connectionHint = "start hya serve" }: ControllerOptions) {
+export function createController({ client, store, directory, registry = createCommandRegistry(), quit = () => undefined, startup = { continue: false }, connectionHint = "start hya serve", preferencesPath }: ControllerOptions) {
   let streamAbort: AbortController | undefined
   let flushTimer: ReturnType<typeof setTimeout> | undefined
   let streamReady: Promise<void> = Promise.resolve()
@@ -368,19 +371,32 @@ export function createController({ client, store, directory, registry = createCo
 
   /** Open the modal picker; keys go to it (components/Composer.tsx) until a row is chosen, a row action commits, or Esc closes it. */
   function openPicker(spec: PickerSpec): void {
-    store.setPicker({ ...createPicker(spec), onSelect: spec.onSelect, ...(spec.onAction ? { onAction: spec.onAction } : {}) })
+    store.setPicker({
+      ...createPicker(spec),
+      onSelect: spec.onSelect,
+      ...(spec.onAction ? { onAction: spec.onAction } : {}),
+      ...(spec.onHighlight ? { onHighlight: spec.onHighlight } : {}),
+      ...(spec.onCancel ? { onCancel: spec.onCancel } : {}),
+    })
   }
 
-  /** Close the picker; focus returns to the composer. */
-  function closePicker(): void {
+  /** Remove the picker; focus returns to the composer. */
+  function dismissPicker(): void {
     store.setPicker(undefined)
+  }
+
+  /** Close the picker without a choice (Esc, Ctrl+C): runs its `onCancel` (undoing a live preview). */
+  function closePicker(): void {
+    const open = store.state.picker
+    dismissPicker()
+    open?.onCancel?.()
   }
 
   /** Choose a picker row (Enter or a click): close first, then run the choice. */
   function choosePickerRow(row: PickerRow): void {
     const open = store.state.picker
     if (!open) return
-    closePicker()
+    dismissPicker()
     void Promise.resolve()
       .then(() => open.onSelect(row))
       .catch((error: unknown) => status(`Error: ${String(error)}`))
@@ -390,7 +406,7 @@ export function createController({ client, store, directory, registry = createCo
   function commitPickerAction(id: string, row: PickerRow, value?: string): void {
     const open = store.state.picker
     if (!open?.onAction) return
-    closePicker()
+    dismissPicker()
     void Promise.resolve()
       .then(() => open.onAction!(id, row, value))
       .catch((error: unknown) => status(`Error: ${String(error)}`))
@@ -401,7 +417,12 @@ export function createController({ client, store, directory, registry = createCo
     const open = store.state.picker
     if (!open) return
     const outcome = pickerKeyOutcome(open, key)
-    if (outcome.type === "update") store.updatePicker(outcome.state)
+    if (outcome.type === "update") {
+      const before = pickerHighlighted(open)
+      store.updatePicker(outcome.state)
+      const after = pickerHighlighted(outcome.state)
+      if (after && after.id !== before?.id) open.onHighlight?.(after)
+    }
     else if (outcome.type === "close") closePicker()
     else if (outcome.type === "select") choosePickerRow(outcome.row)
     else if (outcome.type === "commit") commitPickerAction(outcome.id, outcome.row, outcome.value)
@@ -425,6 +446,7 @@ export function createController({ client, store, directory, registry = createCo
     quit,
     openPicker,
     requestPermissionMode: (mode) => modes.request(mode),
+    savePreferences: (patch) => { if (preferencesPath) savePreferences(preferencesPath, patch) },
   }
 
   /** Submit one composer input: a prompt, a `!command` shell turn, a native command, or a backend command. */

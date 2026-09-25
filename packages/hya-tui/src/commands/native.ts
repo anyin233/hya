@@ -6,6 +6,7 @@ import { modelReference, sessionTree } from "../state/format"
 import { parseSwitch, sidebarVisible } from "../state/layout"
 import { effectiveMode, modeRows } from "../state/modes"
 import type { PickerAction } from "../state/picker"
+import { setTheme, themeName, themes, type ThemeDefinition } from "../theme"
 import { CommandRegistry, matchValues, type CommandContext, type CommandInvocation, type CommandSpec } from "./registry"
 
 /** `/sessions` picker row actions (C13): F2 renames, Ctrl+D deletes (never Ctrl+R — that key means refresh). */
@@ -45,6 +46,34 @@ function openSessionsPicker(context: CommandContext): void {
           else store.clearSelected()
         }
         store.setStatus(`Deleted session ${row.id}`)
+      }
+    },
+  })
+}
+
+/**
+ * Open the `/theme` picker: one row per built-in theme (tag `dark`/`light`),
+ * the theme in effect marked. Moving the highlight previews a theme; Enter
+ * keeps it and saves it as `theme` in the preferences file (src/prefs.ts);
+ * Esc restores the theme in effect when the picker opened.
+ */
+function openThemePicker({ store, actions }: CommandContext): void {
+  const previous = themeName()
+  actions.openPicker({
+    title: "Theme",
+    rows: (Object.values(themes) as ThemeDefinition[]).map((theme) => ({
+      id: theme.name, label: theme.label, tag: theme.kind, detail: theme.description, current: theme.name === previous,
+    })),
+    hint: "↑↓ previews · Enter keeps and saves · Esc restores · type to filter",
+    onHighlight: (row) => { setTheme(row.id) },
+    onCancel: () => { setTheme(previous) },
+    onSelect: (row) => {
+      if (!setTheme(row.id)) throw new Error(`Unknown theme ${row.id}`)
+      try {
+        actions.savePreferences({ theme: row.id })
+        store.setStatus(`Theme → ${row.label}`)
+      } catch (error) {
+        store.setStatus(`Theme → ${row.label} · not saved: ${error instanceof Error ? error.message : String(error)}`)
       }
     },
   })
@@ -425,6 +454,11 @@ export const nativeCommandSpecs: CommandSpec[] = [
       store.setTools(expanded)
       store.setStatus(`Tool calls ${expanded ? "expanded" : "collapsed"} · Ctrl+G toggles`)
     },
+  },
+  {
+    name: "/theme",
+    description: "Pick the color theme (live preview while moving; Enter keeps and saves it, Esc restores)",
+    run: (context) => { openThemePicker(context) },
   },
   {
     name: "/exit",

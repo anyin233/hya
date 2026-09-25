@@ -3,12 +3,13 @@ import type { RGBA } from "@opentui/core"
 import { testRender } from "@opentui/solid"
 import { batch, createSignal } from "solid-js"
 import { Markdown } from "../src/components/Markdown"
-import { colors, syntaxColors } from "../src/theme"
+import { colors, defaultThemeName, setTheme, syntaxColors, themes } from "../src/theme"
 
 type Setup = Awaited<ReturnType<typeof testRender>>
 let setup: Setup | undefined
 
 afterEach(() => {
+  setTheme(defaultThemeName)
   setup?.renderer.destroy()
   setup = undefined
 })
@@ -131,4 +132,15 @@ test("a reply whose stream ends with the last delta re-parses: an unclosed fence
     setup!.renderer.destroy()
     setup = undefined
   }
+})
+
+test("switching the theme re-renders rendered Markdown: headings, highlighted code, and the code panel", async () => {
+  await render(() => "# Title\n\n```ts\nconst answer = 1\n```\n\nAfter")
+  await until(() => hex(span("const")?.fg) === themes.hya.syntaxColors.keyword, "hya keyword")
+  await until(() => hex(span("Title")?.fg) === themes.hya.colors.accent, "hya heading")
+  setTheme("light")
+  await until(() => hex(span("const")?.fg) === themes.light.syntaxColors.keyword, "light keyword")
+  await until(() => hex(span("Title")?.fg) === themes.light.colors.accent, "light heading")
+  await until(() => hex(span("After")?.fg) === themes.light.colors.fg, "light paragraph")
+  expect(hex(span("const")?.bg)).toBe(themes.light.colors.panel)
 })
