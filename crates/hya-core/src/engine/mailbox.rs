@@ -792,7 +792,7 @@ fn handoff_section(doc: &str, heading: &str) -> String {
 ///
 /// Channel ids are their own keys (`DM-<8>`), members carry canonical paths,
 /// and the first minted pair wins — the same rule steer's `dm_by_peer` uses.
-fn dm_channel_between(
+pub(crate) fn dm_channel_between(
     projection: &hya_proto::Projection,
     from: &str,
     parent: &str,

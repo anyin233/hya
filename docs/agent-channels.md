@@ -51,12 +51,26 @@ declaration in its exposure policy ([Tool-family presets](base-tools.md#override
 Besides returning when subagents finish (they report or are archived — idle
 is never finished), it returns as soon as new mail reaches the caller's inbox —
 on a DM or group channel, or harness mail such as the `LEADER FAILED` wrap-up
-notice, which bypasses channel policy — with `woke_by: "mail"` and each
-message's body (bounded to 600 chars, like the `[NEW MAIL]` notice):
+notice, which bypasses channel policy — with `woke_by: "mail"`. The output
+shows each message's body (bounded to 600 chars, like the `[NEW MAIL]`
+notice, and to the result's shared preview budget). The metadata lists the
+messages without their bodies:
+
+```text
+Mail arrived for you.
+1 new mail message(s), now marked read (history: read channel://<id>?last=N).
+
+Mail from harness:
+LEADER FAILED: …
+```
 
 ```json
-{"woke_by": "mail", "mail": [{"from": "harness", "preview": "LEADER FAILED: …"}], "finished": [], "running": [], "waited_ms": 812}
+{"woke_by": "mail", "mail": [{"from": "harness", "chars": 64}], "finished": [], "running": [], "waited_ms": 812}
 ```
+
+The whole result stays under the tool output cap. A report or mail preview
+that had to be cut ends with `read channel://<id>`, which names where the
+full text is ([Agent tool surface](architecture/agent-tool-surface.md)).
 
 Mail is returned **once**. "New" means past the caller's durable inbox cursor
 (the `MailConsumed` cursor that in-turn steering and resident wakes share), and

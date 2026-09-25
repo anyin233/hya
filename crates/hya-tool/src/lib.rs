@@ -74,8 +74,8 @@ pub use interaction::{
 };
 pub use lifecycle::{
     ArchiveReceipt, LifecyclePlane, LifecycleRequest, REPORT_ALREADY_ACCEPTED, ReportLatch,
-    WAIT_DEFAULT_TIMEOUT_SECS, WAIT_MAX_TIMEOUT_SECS, WaitMail, WaitMember, WaitMemberState,
-    WaitMode, WaitOutcome, WaitSpec, WaitWake, wait_tool_schema,
+    WAIT_DEFAULT_TIMEOUT_SECS, WAIT_MAX_TIMEOUT_SECS, WAIT_RESULT_BUDGET, WaitMail, WaitMember,
+    WaitMemberState, WaitMode, WaitOutcome, WaitSpec, WaitWake, wait_tool_schema,
 };
 pub use lsp_plane::{LspError, LspOperation, LspPlane, LspProvider, LspRequest};
 pub use mailbox::{

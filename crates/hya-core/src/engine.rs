@@ -62,6 +62,7 @@ mod admission;
 mod fork;
 mod handoff;
 mod mailbox;
+pub(crate) use mailbox::dm_channel_between;
 mod members;
 pub(crate) use members::MemberSpawnRecord;
 mod session_cleanup;

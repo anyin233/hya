@@ -160,7 +160,25 @@ After a successful builtin, MCP, or plugin call, the engine passes the result
 through `hya_tool::cap_tool_output_with_policy`. Post-tool hooks may replace the
 result, so the direct execution path reapplies the same cap immediately before
 emitting `Event::ToolResult`. The default for unrelated results remains
-`MAX_TOOL_OUTPUT_CHARS = 5000` characters.
+`MAX_TOOL_OUTPUT_CHARS = 5000` characters. An ordinary result over that limit
+becomes a string that keeps both ends: a notice line, the first
+`TRUNCATED_HEAD_CHARS = 2000` characters, a marker naming the omitted size
+and the artifact holding the complete result, then the last
+`TRUNCATED_TAIL_CHARS = 2500` characters:
+
+```text
+[tool output truncated: original 9120 chars; showing first 2000 and last 2500 chars. Full output: artifact://01J… — read that handle for the rest]
+<first 2000 chars>
+[… 4620 chars omitted; full output: artifact://01J… …]
+<last 2500 chars>
+```
+
+Before 0.41.0 only the last 5000 characters were kept, which dropped
+headers and leading JSON keys. An object result is measured and cut as its
+serialized JSON, `metadata` included. A tool whose structure must survive
+bounds itself below the cap, as `wait` does. Coding-policy results
+(`read`, `grep`, `bash`, …) are not affected: they keep their own
+structured caps.
 Coding-tool results use a structurally idempotent policy: each nested row/group
 is serialized once for byte accounting, bounded Read/Write/Grep/Bash envelopes
 and Edit diff metadata remain objects, and independent hard limits set explicit

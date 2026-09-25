@@ -41,7 +41,10 @@ fn oversized_default_output_spills_and_names_its_handle() {
     // Given
     let root = tempdir();
     let store = ArtifactStore::new(&root);
-    let body = "x".repeat(MAX_TOOL_OUTPUT_CHARS * 2);
+    let body = format!(
+        "HEAD_LINE\n{}\nTAIL_LINE",
+        "x".repeat(MAX_TOOL_OUTPUT_CHARS * 2)
+    );
 
     // When
     let capped = cap_tool_output_spilling(
@@ -56,6 +59,22 @@ fn oversized_default_output_spills_and_names_its_handle() {
     assert!(notice.contains("truncated"), "{notice}");
     let stored = std::fs::read_to_string(root.join(handle_in(notice))).unwrap();
     assert_eq!(stored, body, "the spilled artifact is the complete output");
+    // Head and tail both survive; the marker between them names the omitted
+    // size and the same artifact.
+    assert!(notice.contains("\nHEAD_LINE\n"), "{notice}");
+    assert!(notice.ends_with("\nTAIL_LINE"), "{notice}");
+    let marker = notice
+        .lines()
+        .find(|line| line.starts_with("[… ") && line.contains("chars omitted"))
+        .expect("a marker between head and tail");
+    assert!(
+        marker.contains(&format!("artifact://{}", handle_in(notice))),
+        "{marker}"
+    );
+    assert!(
+        notice.chars().count() <= MAX_TOOL_OUTPUT_CHARS + 200,
+        "{notice}"
+    );
     let _ = std::fs::remove_dir_all(&root);
 }
 

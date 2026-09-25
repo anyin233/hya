@@ -9,8 +9,14 @@ use crate::handle::ArtifactStore;
 use crate::tool::ToolResultPolicy;
 use serde_json::{Map, Value, json};
 
-/// Maximum characters of ordinary tool output kept for the model (last N chars).
+/// Maximum characters of ordinary tool output before it is truncated.
 pub const MAX_TOOL_OUTPUT_CHARS: usize = 5000;
+/// Characters kept from the start of a truncated ordinary result (headers,
+/// summaries, and the leading JSON keys usually live there).
+pub const TRUNCATED_HEAD_CHARS: usize = 2000;
+/// Characters kept from the end of a truncated ordinary result (the latest
+/// lines of a log or command output).
+pub const TRUNCATED_TAIL_CHARS: usize = 2500;
 
 /// Maximum raw UTF-8 bytes retained in a coding tool's model-facing output.
 pub const MAX_CODING_OUTPUT_BYTES: usize = 50 * 1024;
@@ -126,11 +132,13 @@ enum TruncationKind {
     Metadata,
 }
 
-/// Cap a successful tool `output` value using the historical arbitrary-value policy.
+/// Cap a successful tool `output` value using the arbitrary-value policy.
 ///
 /// Under the limit the original [`Value`] is returned unchanged (shape preserved).
-/// Over the limit the result becomes a string notice plus the **last**
-/// [`MAX_TOOL_OUTPUT_CHARS`] characters of the display text.
+/// Over the limit the result becomes a string: a notice, the **first**
+/// [`TRUNCATED_HEAD_CHARS`] and the **last** [`TRUNCATED_TAIL_CHARS`]
+/// characters of the display text, with a marker between them naming the
+/// omitted size.
 #[must_use]
 pub fn cap_tool_output(output: Value) -> Value {
     let text = value_as_display_text(&output);
@@ -138,10 +146,25 @@ pub fn cap_tool_output(output: Value) -> Value {
     if n <= MAX_TOOL_OUTPUT_CHARS {
         return output;
     }
-    let kept = last_n_chars(&text, MAX_TOOL_OUTPUT_CHARS);
-    Value::String(format!(
-        "[tool output truncated: original {n} chars; showing last {MAX_TOOL_OUTPUT_CHARS} chars]\n{kept}"
-    ))
+    Value::String(head_and_tail(&text, n, None))
+}
+
+/// The truncated view of `text` (`n` characters): notice, head, a marker
+/// naming the omitted size (and the artifact holding everything), tail.
+fn head_and_tail(text: &str, n: usize, artifact: Option<&str>) -> String {
+    let head: String = text.chars().take(TRUNCATED_HEAD_CHARS).collect();
+    let tail = last_n_chars(text, TRUNCATED_TAIL_CHARS);
+    let omitted = n.saturating_sub(TRUNCATED_HEAD_CHARS + TRUNCATED_TAIL_CHARS);
+    let (full, marker) = match artifact {
+        Some(id) => (
+            format!(" Full output: artifact://{id} — read that handle for the rest"),
+            format!("[… {omitted} chars omitted; full output: artifact://{id} …]"),
+        ),
+        None => (String::new(), format!("[… {omitted} chars omitted …]")),
+    };
+    format!(
+        "[tool output truncated: original {n} chars; showing first {TRUNCATED_HEAD_CHARS} and last {TRUNCATED_TAIL_CHARS} chars.{full}]\n{head}\n{marker}\n{tail}"
+    )
 }
 
 /// Cap a successful result according to the executing tool's policy.
@@ -190,12 +213,7 @@ pub fn cap_tool_output_spilling(
     let Ok(meta) = store.store(tool, "text/plain", text.as_bytes()) else {
         return cap_tool_output(output);
     };
-    let kept = last_n_chars(&text, MAX_TOOL_OUTPUT_CHARS);
-    Value::String(format!(
-        "[tool output truncated: original {n} chars; showing last {MAX_TOOL_OUTPUT_CHARS}. \
-         Full output: artifact://{} — read that handle for the rest]\n{kept}",
-        meta.id
-    ))
+    Value::String(head_and_tail(&text, n, Some(&meta.id.to_string())))
 }
 
 /// Bound one coding envelope while retaining semantic fields needed by the TUI.
@@ -2055,30 +2073,53 @@ mod tests {
         assert_eq!(capped, original);
     }
 
-    #[test]
-    fn over_limit_returns_notice_and_last_chars() {
-        let body = "x".repeat(MAX_TOOL_OUTPUT_CHARS + 100);
-        let capped = cap_tool_output(Value::String(body.clone()));
-        let text = capped.as_str().expect("string");
-        assert!(text.starts_with("[tool output truncated: original "));
-        assert!(text.contains(&format!("{n} chars", n = body.chars().count())));
-        assert!(text.contains(&format!("showing last {MAX_TOOL_OUTPUT_CHARS} chars")));
-        let tail = text
-            .split_once('\n')
-            .map(|(_, rest)| rest)
-            .expect("notice + body");
-        assert_eq!(tail.chars().count(), MAX_TOOL_OUTPUT_CHARS);
-        assert_eq!(tail, &body[body.len() - MAX_TOOL_OUTPUT_CHARS..]);
+    /// Split a truncated view into (notice, head, marker, tail).
+    fn parts(text: &str) -> (&str, &str, &str, &str) {
+        let (notice, rest) = text.split_once('\n').unwrap();
+        let marker_at = rest.find("\n[… ").expect("marker between head and tail");
+        let head = &rest[..marker_at];
+        let after = &rest[marker_at + 1..];
+        let (marker, tail) = after.split_once('\n').expect("marker + tail");
+        (notice, head, marker, tail)
     }
 
     #[test]
-    fn last_n_handles_multibyte_chars() {
+    fn over_limit_keeps_the_head_and_the_tail_with_a_marker() {
+        let body = format!(
+            "HEADER {}{} FOOTER",
+            "a".repeat(3000),
+            "b".repeat(MAX_TOOL_OUTPUT_CHARS)
+        );
+        let n = body.chars().count();
+        let capped = cap_tool_output(Value::String(body.clone()));
+        let text = capped.as_str().expect("string");
+        let (notice, head, marker, tail) = parts(text);
+        assert!(notice.starts_with("[tool output truncated: original "));
+        assert!(notice.contains(&format!("{n} chars")), "{notice}");
+        assert!(
+            notice.contains(&format!(
+                "showing first {TRUNCATED_HEAD_CHARS} and last {TRUNCATED_TAIL_CHARS} chars"
+            )),
+            "{notice}"
+        );
+        assert_eq!(head, &body[..TRUNCATED_HEAD_CHARS]);
+        assert!(head.starts_with("HEADER "));
+        assert_eq!(tail, &body[body.len() - TRUNCATED_TAIL_CHARS..]);
+        assert!(tail.ends_with(" FOOTER"));
+        let omitted = n - TRUNCATED_HEAD_CHARS - TRUNCATED_TAIL_CHARS;
+        assert_eq!(marker, format!("[… {omitted} chars omitted …]"));
+        assert!(text.chars().count() <= MAX_TOOL_OUTPUT_CHARS);
+    }
+
+    #[test]
+    fn head_and_tail_handle_multibyte_chars() {
         let body: String = "你".repeat(MAX_TOOL_OUTPUT_CHARS + 10);
         let capped = cap_tool_output(Value::String(body));
         let text = capped.as_str().unwrap();
-        let tail = text.split_once('\n').unwrap().1;
-        assert_eq!(tail.chars().count(), MAX_TOOL_OUTPUT_CHARS);
-        assert!(tail.chars().all(|c| c == '你'));
+        let (_, head, _, tail) = parts(text);
+        assert_eq!(head.chars().count(), TRUNCATED_HEAD_CHARS);
+        assert_eq!(tail.chars().count(), TRUNCATED_TAIL_CHARS);
+        assert!(head.chars().chain(tail.chars()).all(|c| c == '你'));
     }
 
     #[test]
@@ -2088,8 +2129,9 @@ mod tests {
         assert!(capped.is_string());
         let text = capped.as_str().unwrap();
         assert!(text.starts_with("[tool output truncated:"));
-        let tail = text.split_once('\n').unwrap().1;
-        assert_eq!(tail.chars().count(), MAX_TOOL_OUTPUT_CHARS);
+        let (_, head, _, tail) = parts(text);
+        assert!(head.starts_with("{\"blob\":\"yyy"), "{head}");
+        assert_eq!(tail.chars().count(), TRUNCATED_TAIL_CHARS);
     }
 
     #[test]
