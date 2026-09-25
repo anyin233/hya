@@ -452,7 +452,10 @@ endpoints per bundle.
 Other rules enforced at prepare: declaring any endpoint without an explicit
 `extensions.process` is rejected (an implicit JavaScript Plugin process
 cannot serve endpoints); declarations are emitted sorted by id in the prepared
-catalog document.
+catalog document. The explicit `command` runs exactly as written (no Bun
+adapter is injected), so `notes.ts` speaks
+[plugin protocol v1](plugin-protocol.md) itself, like the `permission_modes:`
+example below.
 
 At runtime the process must list exactly the declared ids in its initialize
 reply `apis` (otherwise the bundle fails to start, like a tool or hook
@@ -494,21 +497,61 @@ permission_modes:
     description: Approve read-only shell commands; ask for everything else
 ```
 
-With the Bun adapter, the process handles the hook like any other
-(`approver.ts` is loaded with `--bundle-extension`):
+`hooks/permission-approve.json` is a hook resource descriptor; `{}` is
+enough. An explicit `command` runs exactly as written — the `hya-plugin-bun`
+adapter is **not** injected (it only wraps implicit JavaScript Plugins, which
+cannot declare modes) — so `approver.ts` speaks
+[plugin protocol v1](plugin-protocol.md) itself: newline-delimited JSON-RPC
+2.0 on stdin/stdout, answering `initialize` (registering the hook, with
+`plugin.id` equal to the bundle's namespace — the last segment of its id,
+here `approver`) and `hook/permission.approve`:
 
 ```ts
-export default {
-  id: "approver",
-  server: async () => ({
-    "permission.approve": async ({ mode, action, resource }) => {
-      if (mode !== "careful" || action !== "bash") return "defer"
-      return /^(git (status|diff|log)|ls|cat) /.test(`${resource.value} `)
-        ? "allow_once"
-        : "defer"
-    },
-  }),
+// approver.ts — a self-contained plugin protocol v1 process.
+import { createInterface } from "node:readline"
+
+const READ_ONLY = /^(git (status|diff|log)|ls|cat) /
+
+function approve(params) {
+  const { mode, action, resource } = params ?? {}
+  if (mode !== "careful" || action !== "bash") return { outcome: "defer" }
+  return READ_ONLY.test(`${resource?.value ?? ""} `)
+    ? { outcome: "allow_once" }
+    : { outcome: "defer" }
 }
+
+function reply(id, result) {
+  process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id, result })}\n`)
+}
+
+for await (const line of createInterface({ input: process.stdin })) {
+  let message
+  try {
+    message = JSON.parse(line)
+  } catch {
+    continue // not a frame; nothing to answer
+  }
+  if (message.id === undefined || message.id === null) continue // notification
+  if (message.method === "initialize") {
+    reply(message.id, {
+      protocol_version: 1,
+      plugin: { id: "approver", version: "1.0.0", kind: "bun" },
+      hooks: [{ name: "permission.approve" }],
+      tools: [],
+    })
+  } else if (message.method === "hook/permission.approve") {
+    reply(message.id, approve(message.params))
+  } else {
+    reply(message.id, {}) // `shutdown` and anything else
+  }
+}
+```
+
+On the wire (`resource` is `{ type, value }` as for `permission.ask`):
+
+```json
+{"jsonrpc":"2.0","id":7,"method":"hook/permission.approve","params":{"session":"hysec_…","root_session":"hysec_…","agent":"build","mode":"careful","action":"bash","resource":{"type":"command","value":"git status"}}}
+{"jsonrpc":"2.0","id":7,"result":{"outcome":"allow_once"}}
 ```
 
 Select it with `PATCH /v1/sessions/{session}` and

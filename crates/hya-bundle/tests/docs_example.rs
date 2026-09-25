@@ -1,5 +1,6 @@
-//! Prove the repository documentation example is prepare-valid through the
-//! production v1 Markdown preparer.
+//! Prove the repository documentation examples are prepare-valid through the
+//! production preparers (and that the authoring guide's protocol script
+//! actually speaks plugin protocol v1).
 
 use std::path::{Path, PathBuf};
 
@@ -534,4 +535,180 @@ fn bun_disjoint_example_is_prepare_valid_and_captures_the_agent_closure() {
     let event = find_resource(bundle.hooks(), "event");
     assert_eq!(event.stable_id, "bundle:hya/docs-bun-disjoint/hook/event");
     assert_matches_extension(event);
+}
+
+/// The `index`-th fenced block of `language` after `heading` in `doc`.
+fn fenced_block(doc: &str, heading: &str, language: &str, index: usize) -> String {
+    let start = doc
+        .find(heading)
+        .unwrap_or_else(|| panic!("heading `{heading}` must exist"));
+    let fence = format!("```{language}\n");
+    let mut rest = &doc[start..];
+    for _ in 0..index {
+        let skip = rest.find(&fence).unwrap_or_else(|| panic!("missing block"));
+        rest = &rest[skip + fence.len()..];
+    }
+    let open = rest
+        .find(&fence)
+        .unwrap_or_else(|| panic!("no ```{language} block after `{heading}`"));
+    let body = &rest[open + fence.len()..];
+    let close = body
+        .find("\n```")
+        .unwrap_or_else(|| panic!("unterminated ```{language} block after `{heading}`"));
+    body[..=close].to_string()
+}
+
+fn authoring_doc() -> String {
+    std::fs::read_to_string(repository_root().join("docs/agent-bundle-authoring.md"))
+        .unwrap_or_else(|error| panic!("docs/agent-bundle-authoring.md must exist: {error}"))
+}
+
+#[test]
+fn authoring_api_endpoint_example_prepares() {
+    let doc = authoring_doc();
+    let manifest = fenced_block(&doc, "### API endpoints (`apis:`)", "yaml", 0);
+    let catalog = prepare_package(BundleSource::new(
+        "notes",
+        vec![
+            SourceFile::new("bundle.yaml", manifest),
+            SourceFile::new("notes.ts", "// protocol process\n"),
+            SourceFile::new("schemas/note.json", "{\"type\":\"object\"}"),
+        ],
+    ))
+    .unwrap_or_else(|error| panic!("the `apis:` example must prepare: {error:?}"));
+    let ids: Vec<&str> = catalog
+        .bundle_apis("acme/notes")
+        .iter()
+        .map(|api| api.id.as_str())
+        .collect();
+    assert_eq!(ids, ["put-note", "usage"]);
+}
+
+/// The `permission_modes:` example prepares, and its `approver.ts` really
+/// speaks plugin protocol v1: it answers `initialize` with the bundle's
+/// namespace and the `permission.approve` hook, then decides asks. The
+/// process half runs only where `bun` is installed.
+#[test]
+fn authoring_permission_mode_example_prepares_and_answers_the_hook() {
+    use std::io::{BufRead, BufReader, Write};
+
+    let doc = authoring_doc();
+    let heading = "### Permission modes (`permission_modes:`)";
+    let manifest = fenced_block(&doc, heading, "yaml", 0);
+    let script = fenced_block(&doc, heading, "ts", 0);
+    let catalog = prepare_package(BundleSource::new(
+        "approver",
+        vec![
+            SourceFile::new("bundle.yaml", manifest),
+            SourceFile::new("approver.ts", script.clone()),
+            SourceFile::new("hooks/permission-approve.json", "{}"),
+        ],
+    ))
+    .unwrap_or_else(|error| panic!("the `permission_modes:` example must prepare: {error:?}"));
+    let modes = catalog.bundle_permission_modes("acme/approver");
+    assert_eq!(modes.len(), 1);
+    assert_eq!(modes[0].id, "careful");
+    let namespace = catalog.bundles()[0].namespace().to_string();
+
+    if !std::process::Command::new("bun")
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success())
+    {
+        eprintln!("bun not installed: skipping the approver.ts protocol round trip");
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!(
+        "hya-docs-approver-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.as_nanos())
+    ));
+    std::fs::create_dir_all(&dir).unwrap_or_else(|error| panic!("temp dir: {error}"));
+    std::fs::write(dir.join("approver.ts"), &script)
+        .unwrap_or_else(|error| panic!("write approver.ts: {error}"));
+    let mut child = std::process::Command::new("bun")
+        .arg("run")
+        .arg(dir.join("approver.ts"))
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap_or_else(|error| panic!("spawn bun: {error}"));
+    let ask = |id: u64, mode: &str, action: &str, command: &str| {
+        serde_json::json!({
+            "jsonrpc": "2.0", "id": id, "method": "hook/permission.approve",
+            "params": {
+                "session": "hysec_a", "root_session": "hysec_a", "agent": "build",
+                "mode": mode, "action": action,
+                "resource": {"type": "command", "value": command}
+            }
+        })
+    };
+    let requests = [
+        serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {"protocol_version": 1, "host": {"name": "hya", "version": "test"}}}),
+        serde_json::json!({"jsonrpc": "2.0", "method": "event", "params": {}}),
+        ask(2, "careful", "bash", "git status"),
+        ask(3, "careful", "bash", "rm -rf build"),
+        ask(4, "careful", "edit", "src/main.rs"),
+        ask(5, "other", "bash", "ls"),
+        serde_json::json!({"jsonrpc": "2.0", "id": 6, "method": "shutdown", "params": {}}),
+    ];
+    {
+        let mut stdin = child.stdin.take().unwrap_or_else(|| panic!("stdin"));
+        for request in &requests {
+            writeln!(stdin, "{request}").unwrap_or_else(|error| panic!("write: {error}"));
+        }
+    }
+    let stdout = child.stdout.take().unwrap_or_else(|| panic!("stdout"));
+    let replies: Vec<serde_json::Value> = BufReader::new(stdout)
+        .lines()
+        .map(|line| {
+            serde_json::from_str(&line.unwrap_or_else(|error| panic!("read: {error}")))
+                .unwrap_or_else(|error| panic!("reply must be JSON: {error}"))
+        })
+        .collect();
+    let _ = child.wait();
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert_eq!(
+        replies.len(),
+        6,
+        "one reply per request, none for the notification: {replies:?}"
+    );
+    let init = &replies[0]["result"];
+    assert_eq!(replies[0]["id"], 1);
+    assert_eq!(init["protocol_version"], 1);
+    assert_eq!(init["plugin"]["id"], serde_json::json!(namespace));
+    assert_eq!(init["plugin"]["kind"], "bun");
+    assert_eq!(
+        init["hooks"],
+        serde_json::json!([{"name": "permission.approve"}])
+    );
+    let outcomes: Vec<(u64, String)> = replies[1..5]
+        .iter()
+        .map(|reply| {
+            (
+                reply["id"].as_u64().unwrap_or_default(),
+                reply["result"]["outcome"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        outcomes,
+        [
+            (2, "allow_once".to_string()),
+            (3, "defer".to_string()),
+            (4, "defer".to_string()),
+            (5, "defer".to_string()),
+        ]
+    );
+    assert_eq!(
+        replies[5],
+        serde_json::json!({"jsonrpc": "2.0", "id": 6, "result": {}})
+    );
 }
