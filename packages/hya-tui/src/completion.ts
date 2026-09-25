@@ -1,10 +1,10 @@
 /** Command completion and concealed key entry for the OpenTUI frontend. */
 
-export const nativeCommands = [
-  "/new", "/sessions", "/open", "/models", "/model", "/workflows", "/workflow",
-  "/interactions", "/approve", "/deny", "/answer", "/cancel", "/refresh",
-  "/api", "/help", "/keys", "/key", "/login",
-]
+import { createCommandRegistry, nativeCommandSpecs } from "./commands/native"
+import { matchValues, type CommandRegistry } from "./commands/registry"
+
+/** Names of the built-in slash commands (from the command registry). */
+export const nativeCommands = nativeCommandSpecs.map((spec) => spec.name)
 
 export interface CompletionContext {
   backendCommands: string[]
@@ -18,66 +18,22 @@ export interface CompletionContext {
   apiOperations: string[]
 }
 
-function matches(head: string, prefix: string, values: string[]): string[] {
-  return [...new Set(values)]
-    .filter((value) => value.toLowerCase().startsWith(prefix.toLowerCase()))
-    .sort((a, b) => a.localeCompare(b))
-    .map((value) => `${head}${value}`)
-}
+const defaultRegistry = createCommandRegistry()
 
-/** Return full replacement values for the current command line. */
-export function completeCommand(input: string, context: CompletionContext): string[] {
+/**
+ * Return full replacement values for the current command line: command names
+ * (native and backend) before the first space, else the command's own
+ * argument completer from the registry.
+ */
+export function completeCommand(input: string, context: CompletionContext, registry: CommandRegistry = defaultRegistry): string[] {
   if (!input.startsWith("/")) return []
-  const space = input.indexOf(" ")
-  if (space < 0) {
-    return matches("", input, [
-      ...nativeCommands,
+  if (input.indexOf(" ") < 0) {
+    return matchValues("", input, [
+      ...registry.names(),
       ...context.backendCommands.map((name) => `/${name}`),
     ])
   }
-  const command = input.slice(0, space)
-  const rest = input.slice(space + 1)
-  const words = rest.split(" ")
-  const current = words.at(-1) ?? ""
-  const head = input.slice(0, input.length - current.length)
-  switch (command) {
-    case "/key":
-      if (words.length === 1) return matches(head, current, ["set", "remove"])
-      if (words.length === 2 && words[0] === "set") return matches(head, current, context.providers)
-      if (words.length === 2 && words[0] === "remove") return matches(head, current, context.savedKeys)
-      return []
-    case "/login": return words.length === 1 ? matches(head, current, context.providers) : []
-    case "/model": return words.length === 1 ? matches(head, current, context.models) : []
-    case "/open": return words.length === 1 ? matches(head, current, context.sessions) : []
-    case "/new":
-      if (words.length === 1) return matches(head, current, context.agents)
-      if (words.length === 2) return matches(head, current, context.models)
-      return []
-    case "/workflow":
-      if (words.length === 1) return matches(head, current, ["select", "run"])
-      if (words.length === 2 && ["select", "run"].includes(words[0] ?? "")) {
-        return matches(head, current, context.workflows)
-      }
-      return []
-    case "/approve":
-    case "/deny":
-    case "/answer":
-      return words.length === 1 ? matches(head, current, context.interactions) : []
-    case "/api": {
-      if (words.length === 1) return matches(head, current, ["GET", "POST", "PUT", "PATCH", "DELETE"])
-      if (words.length === 2) {
-        const method = words[0]?.toUpperCase()
-        return context.apiOperations
-          .filter((operation) => operation.startsWith(`${method} `))
-          .map((operation) => operation.slice(method.length + 1))
-          .filter((path) => path.toLowerCase().startsWith(current.toLowerCase()))
-          .sort()
-          .map((path) => `${head}${path}`)
-      }
-      return []
-    }
-    default: return []
-  }
+  return registry.complete(input, context)
 }
 
 /** Holds a provider key outside any renderable or command string. */

@@ -14,7 +14,7 @@ shows that key listing needs a backend restart with an updated binary.
 
 ## Start it
 
-Requires Bun 1.3 or newer and a terminal supported by OpenTUI. From a clone:
+Requires Bun 1.4.2 (the version the repository pins; the Solid setup is verified on it) and a terminal supported by OpenTUI. From a clone:
 
 ```sh
 cd packages/hya-tui
@@ -166,10 +166,68 @@ For non-2xx responses with an empty or invalid JSON body, the frontend reports
 `METHOD /v1/path: HTTP <status> <status text>`; a structured error envelope
 continues to show its code and message.
 
+## Code layout
+
+The frontend is written with [`@opentui/solid`](https://github.com/anomalyco/opentui)
+(Solid JSX over `@opentui/core`). `@opentui/core`, `@opentui/solid`, and
+`solid-js` are pinned to exact versions in `package.json` and must move
+together.
+
+| Path | Role |
+| --- | --- |
+| `src/main.ts` | Entry. Registers the Solid JSX transform (`@opentui/solid/preload`), parses flags, then dynamically imports the app. |
+| `src/cli.ts` | `--server`, `--dir`, `--help` parsing and the usage line. |
+| `src/client.ts` | Typed v1 HTTP/JSON+SSE client (`HyaClient`, `SseDecoder`, `parseApiCommand`). |
+| `src/state/store.ts` | `createAppStore()`: the single store. It holds the server projection (sessions, messages, interactions, models, agents, providers, workflows, saved key names, backend commands, stream cursor) and UI state (view, status, key-entry provider and mask). Each field is a Solid signal, and only the store's mutation methods change it. |
+| `src/state/format.ts` | Pure text for each panel (header, session list, pending list, main view, message formatting). |
+| `src/app/controller.ts` | `createController()`: refreshes, the session SSE loop, session creation, prompt submission, command dispatch, and concealed key entry. It writes results into the store. |
+| `src/app/App.tsx`, `src/app/run.tsx`, `src/app/context.ts` | Root layout, renderer startup, and the `AppContext` (store, controller, server URL) that components read with `useApp()`. |
+| `src/components/` | `Header`, `Panel`, `SessionsPanel`, `MainPanel`, `PendingPanel`, `StatusLine`, `Composer` (input, completion, concealed key entry), `Footer`. |
+| `src/commands/` | The slash-command registry (`registry.ts`), the built-in commands (`native.ts`), and the `/help` text (`help.ts`). |
+| `src/keys/bindings.ts` | The global key binding table. |
+| `src/completion.ts`, `src/instructions.ts`, `src/api.ts`, `src/theme.ts` | Tab completion and `SecretEntry`, footer instructions, the OpenAPI operation catalog, and the color palette. |
+
+The Solid transform has two parts. `bunfig.toml` preloads
+`@opentui/solid/preload` for `bun test` and for `bun src/...` run inside the
+package. `tsconfig.json` sets `"jsx": "preserve"` and
+`"jsxImportSource": "@opentui/solid"`. Bun reads `bunfig.toml` only from the
+directory it runs in, so `src/main.ts` imports the preload itself. It then
+loads `.tsx` modules and `solid-js` with a dynamic `import()`. Keep static
+imports in `main.ts` free of Solid code. Without the preload, Bun resolves
+`solid-js` to its non-reactive server build.
+
+To add a slash command, add a `CommandSpec` to `nativeCommandSpecs` in
+`src/commands/native.ts`:
+
+```ts
+{
+  name: "/title",
+  description: "Rename the current session",
+  argumentHint: "<text>",
+  complete: ({ words, current, head }, context) => [],   // optional argument completion
+  run: async ({ store, client, actions }, { args, argumentsText }) => { /* … */ },
+}
+```
+
+The name becomes Tab-completable automatically. Add a line to
+`src/commands/help.ts` and a row to the command table above. Unregistered
+`/names` still go to the backend as `CommandTurn`s. To add a key, append a
+`KeyBinding` to `src/keys/bindings.ts` and handle its action in
+`components/Composer.tsx`. Do not bind a core action only to a
+browser-reserved shortcut (see `docs/tui-web.md`). Ctrl+C is handled by the
+renderer (`exitOnCtrlC`).
+
 ## Verify locally
 
 ```sh
 cd packages/hya-tui
+bun install --frozen-lockfile
 bun run typecheck
 bun test
 ```
+
+Then check the rendered TUI in the browser from `packages/hya-tui-web`
+(`bun run typecheck && bun test ./test && bunx playwright test`; see
+[tui-web.md](tui-web.md)). `e2e/hya-tui.spec.ts` and
+`e2e/hya-tui-commands.spec.ts` cover the layout, colors, commands, key
+entry, narrow widths, and Ctrl+C.
