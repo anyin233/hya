@@ -17,9 +17,10 @@ use hya_core::{
     BoundWorkflowRequest, BoundWorkflowSender, CategoryRegistry, CompactionConfig, CoreError,
     DRAIN_DEADLINE, EventBus, ModelSummarizer, PromptEnv, ResidentSupervisor, RuntimeRegistry,
     RuntimeSourceKind, SessionEngine, SidecarEnvironment, SidecarHandle, SidecarLifecycle,
-    SidecarStart, SpawnAdmissionOutcome, SubagentGovernor, Summarizer, TokenAccounting,
-    TurnBinding, TurnDrainReport, apply_agent_model_preference, apply_spawn_model_policy,
-    build_system_prompt, resolve_dispatch_model, run_lifecycle_service, run_mailbox_service,
+    SidecarStart, SpawnAdmissionOutcome, SubagentGovernor, Summarizer, TaskSpawnOrigin,
+    TokenAccounting, TurnBinding, TurnDrainReport, apply_agent_model_preference,
+    apply_spawn_model_policy, build_system_prompt, resolve_dispatch_model, run_lifecycle_service,
+    run_mailbox_service,
 };
 
 // Single discovery/date implementation lives in hya-core; re-export for callers.
@@ -2112,8 +2113,9 @@ fn spawn_team_supervisor_with_environment(
             let operation_id = req.operation.operation_id();
             let actor_claim = req.operation.actor_claim();
             // Anchors every spawn edge to the `task` call that produced it, so an
-            // offline call graph does not have to infer it from event ordering.
-            let _source_tool_call = req.operation.source_tool_call_id();
+            // offline call graph does not have to infer it from event ordering
+            // and a client links the member row to its tool card.
+            let source_tool_call = req.operation.source_tool_call_id();
             let admission = engine
                 .begin_spawn_admission(
                     req.parent,
@@ -2210,7 +2212,11 @@ fn spawn_team_supervisor_with_environment(
                                 agent,
                                 (binding, agents, resources, sidecar_factory),
                                 member.prompt,
-                                authorized_target.as_str(),
+                                TaskSpawnOrigin {
+                                    subagent_type: authorized_target.as_str().to_string(),
+                                    description: member.description,
+                                    tool_call: Some(source_tool_call),
+                                },
                                 actor_claim.as_ref(),
                                 guidance,
                             )

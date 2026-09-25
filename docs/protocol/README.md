@@ -236,6 +236,26 @@ Fold by `member`. `GET /v1/sessions/{id}` (`SessionInfo.members`) returns
 the folded rows, so a client that reconnects mid-task still has them, and
 `GET /v1/sessions?parent={id}` lists the child sessions.
 
+Every subagent is a resident with one task at a time (ADR-0015), so the
+statuses mean:
+
+| Status | Meaning |
+| --- | --- |
+| `MEMBER_STATUS_SPAWNING` | Registered; its first turn has not started. |
+| `MEMBER_STATUS_RUNNING` | Its task is open: working on a turn **or idle** waiting for mail. Sent once when a turn starts, not on every wake; use the child's `SessionInfo.busy` to tell working from idle. |
+| `MEMBER_STATUS_DONE` | It reported success; `summary` is the report. |
+| `MEMBER_STATUS_FAILED` | It reported failure, a turn failed (the engine files the failure report), it was killed (team budget), or its root session was deleted; `summary` is the reason. |
+| `MEMBER_STATUS_CANCELLED` | It was archived by its parent, stopped, or archived by a shutdown drain. |
+
+Mail from its parent revives a finished member: its row goes back to
+`MEMBER_STATUS_RUNNING` when the new episode's turn starts. For a `task`
+spawn, `description` is the call's `description` and `callId` its call id;
+members started without a tool call (Workflow Stages) have an empty
+`callId` and a description cut from their directive. The spawn frame is
+written before the `task` result, and the first `_RUNNING` may land before or
+after it. Cancelling the parent's turn after `task` returned does not cancel
+the member.
+
 Link a tool card to its child:
 
 - live: `memberUpdated.callId` equals the spawning `ToolCallPart.callId`,
@@ -246,6 +266,7 @@ Link a tool card to its child:
 
 ```json
 { "event": { "seq": "21", "session": "hysec_parent", "memberUpdated": { "member": "mem_...", "child": "hysec_child", "agent": "general", "description": "survey the repo", "status": "MEMBER_STATUS_SPAWNING", "callId": "call_...", "depth": 1 } } }
+{ "event": { "seq": "25", "session": "hysec_parent", "memberUpdated": { "member": "mem_...", "status": "MEMBER_STATUS_RUNNING" } } }
 { "event": { "seq": "40", "session": "hysec_parent", "memberUpdated": { "member": "mem_...", "child": "hysec_child", "status": "MEMBER_STATUS_DONE", "summary": "found 3 crates" } } }
 ```
 

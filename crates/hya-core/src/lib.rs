@@ -138,7 +138,7 @@ pub use prompt::{
     PromptEnv, build_system_prompt, context_file_reads, discover_context_files,
     render_environment_and_context, today,
 };
-pub use resident::{ResidentRecovery, ResidentRecoveryReport, ResidentSupervisor};
+pub use resident::{ResidentRecovery, ResidentRecoveryReport, ResidentSupervisor, TaskSpawnOrigin};
 pub use runtime_registry::{
     AgentModelConfiguration, AgentResourcePolicy, RuntimeCandidate, RuntimeEffectiveManifest,
     RuntimeRefreshError, RuntimeRegistry, RuntimeSource, RuntimeSourceExport, RuntimeSourceId,

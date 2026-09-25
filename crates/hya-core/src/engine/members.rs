@@ -4,7 +4,7 @@
 //! `emit`. They append member lifecycle events to the PARENT session's log, which
 //! is how a live agent tree becomes observable without leaking child transcripts.
 
-use hya_proto::{AgentName, Event, MemberId, MemberRunStatus, SessionId};
+use hya_proto::{AgentName, Event, MemberId, MemberRunStatus, SessionId, ToolCallId};
 
 use crate::engine::SessionEngine;
 use crate::error::CoreError;
@@ -23,6 +23,9 @@ pub(crate) struct MemberSpawnRecord {
     pub depth: u32,
     /// Verbatim directive defining the member's purpose.
     pub directive: String,
+    /// `task` tool call that caused the spawn; `None` for spawns the engine or
+    /// a Workflow Stage starts without one.
+    pub tool_call: Option<ToolCallId>,
 }
 
 impl SessionEngine {
@@ -39,6 +42,7 @@ impl SessionEngine {
             description,
             depth,
             directive,
+            tool_call,
         } = record;
         self.emit(
             parent,
@@ -50,8 +54,25 @@ impl SessionEngine {
                 description,
                 depth,
                 directive,
-                // Resident members are started by the supervisor, not by a tool call.
-                tool_call: None,
+                tool_call,
+            },
+        )
+        .await
+    }
+
+    /// Record a member's non-terminal run status on the parent log.
+    pub(crate) async fn record_member_status(
+        &self,
+        parent: SessionId,
+        member: MemberId,
+        status: MemberRunStatus,
+    ) -> Result<(), CoreError> {
+        self.emit(
+            parent,
+            Event::MemberStatusChanged {
+                session: parent,
+                member,
+                status,
             },
         )
         .await

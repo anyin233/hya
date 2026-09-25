@@ -3,7 +3,8 @@
 //!
 //! Invariant: every assistant message ends with exactly one `MessageFinished`,
 //! every non-terminal tool part reaches a terminal state, and every member row
-//! reaches a terminal status. A process that died mid-turn breaks that
+//! the turn owns reaches a terminal status (a resident whose `task` call
+//! already returned outlives the turn; see [`open_turn_terminal_events`]). A process that died mid-turn breaks that
 //! invariant in its log; the next runtime owner repairs it here before any
 //! turn runs. The `open_assistant_message` index (maintained on append) names
 //! the sessions to repair, so the pass costs O(sessions left mid-turn), not a
@@ -11,7 +12,7 @@
 
 use hya_proto::{
     Envelope, Event, FinishCause, FinishReason, MemberRunStatus, OwnerRunId, PartProjection,
-    Projection, Role, SessionId, ToolPartState,
+    Projection, Role, SessionId, ToolCallId, ToolPartState,
 };
 use sqlx::Row as _;
 
@@ -33,7 +34,8 @@ pub struct InterruptedTurnRecovery {
 
 /// Terminal events that close every open assistant message of `session`:
 /// `ToolError` for each pending/running tool part, `MemberFinished
-/// { Cancelled }` for each spawning/running member row, then one
+/// { Cancelled }` for each spawning/running member row with no spawning call
+/// or whose spawning call is still open, then one
 /// `MessageFinished { Cancelled }` per open assistant message carrying `cause`.
 pub(crate) fn open_turn_terminal_events(
     session: SessionId,
@@ -43,11 +45,32 @@ pub(crate) fn open_turn_terminal_events(
     cause: Option<FinishCause>,
 ) -> Vec<Event> {
     let mut events = Vec::new();
+    // Tool calls the dying turn still had open. A member spawned by a call
+    // that already returned is a resident (ADR-0015) that outlives this turn
+    // and is recovered on its own, so its row stays open.
+    let open_calls: Vec<ToolCallId> = projection
+        .session
+        .messages
+        .iter()
+        .filter(|message| message.role == Role::Assistant && message.finish.is_none())
+        .flat_map(|message| message.parts.iter())
+        .filter_map(|part| match part {
+            PartProjection::Tool {
+                call,
+                state: ToolPartState::Pending { .. } | ToolPartState::Running { .. },
+                ..
+            } => Some(*call),
+            _ => None,
+        })
+        .collect();
     for member in &projection.session.members {
         if matches!(
             member.status,
             MemberRunStatus::Spawning | MemberRunStatus::Running
-        ) {
+        ) && member
+            .tool_call
+            .is_none_or(|call| open_calls.contains(&call))
+        {
             events.push(Event::MemberFinished {
                 session,
                 member: member.member,

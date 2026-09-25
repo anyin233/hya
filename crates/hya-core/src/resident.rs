@@ -45,7 +45,7 @@ use hya_bundle::{ChannelCapability, ChannelParticipantRole, ChannelTemplateKind}
 use hya_proto::{
     ActorClaim, ActorEpoch, ArchiveReason, ChannelKind, Event, FinishCause, MailEndpoint, MailKind,
     MemberId, MemberRunStatus, ModelRef, OwnerRunId, ReportOutcome, RosterStatus, SessionId,
-    SubagentMode, scope,
+    SubagentMode, ToolCallId, scope,
 };
 use hya_tool::{AgentDef, ArchiveReceipt, ResolvedTool};
 use tokio::sync::{Notify, oneshot};
@@ -367,14 +367,31 @@ struct ResidentActivation {
     sidecar_factory: Option<Arc<dyn BoundSidecarFactory>>,
 }
 
+/// What a `task` tool call contributes to a resident spawn.
+///
+/// Spawns without one (engine-initiated residents, Workflow Stages) name the
+/// handle after the spec's agent, describe the member row with the start of
+/// the directive, and record no `MemberSpawned.tool_call`.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct TaskSpawnOrigin {
+    /// The agent id the call named (`subagent_type`, resolved); the handle
+    /// prefix is its sanitized form.
+    pub subagent_type: String,
+    /// The call's short description, shown on the member row instead of the
+    /// prompt. Empty falls back to the start of the directive.
+    pub description: String,
+    /// The spawning `task` call, recorded on `MemberSpawned.tool_call` so a
+    /// client links the member row to its tool card.
+    pub tool_call: Option<ToolCallId>,
+}
+
 /// Owned registration context for one resident creation operation.
 struct ResidentSpawnContext {
     registration: ResidentRegistration,
     parent_claim: Option<ActorClaim>,
     guidance: Option<Arc<str>>,
-    /// The agent id the `task` call named (`subagent_type`, resolved); the
-    /// handle prefix is its sanitized form. `None` uses the spec's agent name.
-    subagent_type: Option<String>,
+    /// The `task` call behind the spawn, when there is one.
+    task: Option<TaskSpawnOrigin>,
 }
 
 impl ResidentSpawnContext {
@@ -387,12 +404,12 @@ impl ResidentSpawnContext {
             registration,
             parent_claim: parent_claim.copied(),
             guidance,
-            subagent_type: None,
+            task: None,
         }
     }
 
-    fn typed(mut self, subagent_type: &str) -> Self {
-        self.subagent_type = Some(subagent_type.to_string());
+    fn with_task(mut self, task: TaskSpawnOrigin) -> Self {
+        self.task = Some(task);
         self
     }
 }
@@ -968,6 +985,11 @@ impl TeamActor {
             )
             .await
             .is_ok();
+            // A shutdown cancels the member row; close it before the
+            // failure fallback, which would otherwise close it `failed`.
+            if !archived {
+                self.cancel_member_row(session, reason).await;
+            }
             // An archive that could not commit still leaves the member
             // terminal, as before archiving existed.
             let finalized = archived
@@ -992,9 +1014,59 @@ impl TeamActor {
             if finalized {
                 self.mark_kill_finalized(session, &handle, claim.as_ref());
             }
-            if !archived {
-                self.cancel_member_row(session, reason).await;
+        }
+    }
+
+    /// Open `session`'s member row on its parent's log (`running`) as its
+    /// turn starts, unless the row already is: one transition per episode
+    /// (the first turn after the spawn, or after a revival reopened a row a
+    /// report or archive closed), not one per wake. The row folds from the
+    /// log, so a restart re-reads it instead of re-emitting. Observability
+    /// only: a failed append is logged and never fails the turn.
+    async fn mark_member_running(&self, session: SessionId, claim: Option<&ActorClaim>) {
+        let Ok(child_projection) = self.engine.read_projection_shared(session).await else {
+            return;
+        };
+        let Some(parent) = child_projection.session.parent else {
+            return;
+        };
+        let Ok(parent_projection) = self.engine.read_projection_shared(parent).await else {
+            return;
+        };
+        let Some(row) = parent_projection
+            .session
+            .members
+            .iter()
+            .find(|row| row.child == Some(session))
+        else {
+            return;
+        };
+        if row.status == MemberRunStatus::Running {
+            return;
+        }
+        let member = row.member;
+        let result = match claim {
+            Some(claim) => {
+                self.engine
+                    .commit_resident_mutation(
+                        claim,
+                        parent,
+                        vec![Event::MemberStatusChanged {
+                            session: parent,
+                            member,
+                            status: MemberRunStatus::Running,
+                        }],
+                    )
+                    .await
             }
+            None => {
+                self.engine
+                    .record_member_status(parent, member, MemberRunStatus::Running)
+                    .await
+            }
+        };
+        if let Err(error) = result {
+            tracing::warn!("resident member row stayed {:?}: {error}", row.status);
         }
     }
 
@@ -1148,6 +1220,9 @@ impl TeamActor {
         } else {
             self.record_activity(None, handle.clone(), RosterStatus::Busy, Some(task_label))
                 .await?;
+        }
+        if !is_main {
+            self.mark_member_running(session, claim.as_ref()).await;
         }
         // Harness heartbeat at the turn boundary: liveness is visible the
         // moment work starts, before any engine event lands on the bus.
@@ -3489,6 +3564,7 @@ impl ResidentSupervisor {
     /// named, see [`hya_tool::sanitize_handle_prefix`]) rather than the spec's
     /// agent name, which an inline overlay may replace. The handle becomes
     /// `<parent path>/<subagent_type>-<operator>`; see [`crate::handle_naming`].
+    /// The member row on the parent log carries the call's description and id.
     ///
     /// # Errors
     /// Every [`spawn_resident`](Self::spawn_resident) failure.
@@ -3499,7 +3575,7 @@ impl ResidentSupervisor {
         agent: AgentSpec,
         resolved: ResolvedResidentRuntime,
         directive: String,
-        subagent_type: &str,
+        task: TaskSpawnOrigin,
         parent_claim: Option<&ActorClaim>,
         guidance: Option<Arc<str>>,
     ) -> Result<(SessionId, String), CoreError> {
@@ -3513,7 +3589,7 @@ impl ResidentSupervisor {
                     parent_claim,
                     guidance,
                 )
-                .typed(subagent_type),
+                .with_task(task),
             )
             .await?;
         Ok((session, handle))
@@ -3557,10 +3633,11 @@ impl ResidentSupervisor {
             registration,
             parent_claim,
             guidance,
-            subagent_type,
+            task,
         } = context;
         let prefix = hya_tool::sanitize_handle_prefix(
-            subagent_type.as_deref().unwrap_or(agent.name.as_str()),
+            task.as_ref()
+                .map_or(agent.name.as_str(), |task| task.subagent_type.as_str()),
         );
         let (registration_directive, initial) = match registration {
             ResidentRegistration::Armed(directive) => (directive.clone(), Some(directive)),
@@ -3604,7 +3681,15 @@ impl ResidentSupervisor {
         let leaf = self.engine.mint_member_leaf(root, &prefix).await;
         let handle = scope::join_path(&parent_path, &leaf);
         let member = MemberId::new();
-        let description: String = registration_directive.chars().take(80).collect();
+        let description = task
+            .as_ref()
+            .map(|task| task.description.trim())
+            .filter(|description| !description.is_empty())
+            .map_or_else(
+                || registration_directive.chars().take(80).collect(),
+                ToString::to_string,
+            );
+        let tool_call = task.as_ref().and_then(|task| task.tool_call);
         match parent_claim.as_ref() {
             Some(claim) => {
                 self.engine
@@ -3619,7 +3704,7 @@ impl ResidentSupervisor {
                             description,
                             depth: parent_depth.saturating_add(1),
                             directive: registration_directive.clone(),
-                            tool_call: None,
+                            tool_call,
                         }],
                     )
                     .await?;
@@ -3635,6 +3720,7 @@ impl ResidentSupervisor {
                             description,
                             depth: parent_depth.saturating_add(1),
                             directive: registration_directive,
+                            tool_call,
                         },
                     )
                     .await?;

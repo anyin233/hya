@@ -497,6 +497,18 @@ updated, not relaxed).
 inside archive/kill transactions (keeps the existing tree projection
 semantics); `MemberStatusChanged` is retained for running transitions.
 
+Member row on the parent log, per resident: `MemberSpawned` in the
+registration step (a `task` spawn carries the call's `description` and
+`tool_call`) → `MemberStatusChanged { running }` at turn start when the row is
+not already running (fenced by the resident's claim; once per episode, so an
+idle resident stays `running`) → `SubagentReported` (report, or the turn-error
+failure report), `MemberFinished { cancelled }` (archive, drain, stop), or
+`MemberFinished { failed }` (budget kill and other failure finalization,
+written in the claim-release transaction). Every terminal write checks the
+folded row, so retries and restarts append nothing twice; a revival's first
+turn reopens the row as `running`. Closing the parent's turn — cancel or crash
+recovery — leaves rows whose `task` call already returned open.
+
 ## 10. Workflow integration
 
 Per [ADR-0017](../adr/0017-workflow-on-unified-substrate.md): control plane

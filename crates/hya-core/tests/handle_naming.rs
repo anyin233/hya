@@ -154,7 +154,10 @@ async fn spawn(
                     agent,
                     resolved,
                     "work".to_string(),
-                    subagent_type,
+                    hya_core::TaskSpawnOrigin {
+                        subagent_type: subagent_type.to_string(),
+                        ..Default::default()
+                    },
                     None,
                     None,
                 )

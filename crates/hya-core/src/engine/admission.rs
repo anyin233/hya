@@ -1,7 +1,7 @@
-use hya_proto::{Event, FinishReason, MessageId, OperationId, PartId, Role, SessionId};
+use hya_proto::{Envelope, Event, FinishReason, MessageId, OperationId, PartId, Role, SessionId};
 use hya_store::{
-    ActorClaim, AdmissionClaim, AdmissionClaimOutcome, AdmissionStartOutcome, AdmissionState,
-    AdmissionTerminal, RecoveredActorClaim,
+    ActorClaim, AdmissionClaim, AdmissionClaimOutcome, AdmissionRecord, AdmissionStartOutcome,
+    AdmissionState, AdmissionTerminal, RecoveredActorClaim,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -354,16 +354,24 @@ impl SessionEngine {
         Ok(())
     }
 
+    /// Stop a resident (reason `resident stopped`; its member row closes
+    /// `cancelled`) and publish the committed effects.
     pub(crate) async fn finalize_resident_stop(
         &self,
         claim: &ActorClaim,
         root: SessionId,
         handle: &str,
     ) -> Result<(), CoreError> {
-        self.finalize_resident_failure(claim, root, handle, "resident stopped")
-            .await
+        let finalized = self
+            .store
+            .finalize_resident_stop(claim, root, handle)
+            .await?;
+        self.publish_resident_finalization(finalized);
+        Ok(())
     }
 
+    /// Fail a resident with `reason` (its member row closes `failed`) and
+    /// publish the committed effects.
     pub(crate) async fn finalize_resident_failure(
         &self,
         claim: &ActorClaim,
@@ -371,10 +379,18 @@ impl SessionEngine {
         handle: &str,
         reason: &str,
     ) -> Result<(), CoreError> {
-        let (envelopes, admissions) = self
+        let finalized = self
             .store
             .finalize_resident_failure(claim, root, handle, reason)
             .await?;
+        self.publish_resident_finalization(finalized);
+        Ok(())
+    }
+
+    fn publish_resident_finalization(
+        &self,
+        (envelopes, admissions): (Vec<Envelope>, Vec<AdmissionRecord>),
+    ) {
         for envelope in envelopes {
             self.publish_envelope(envelope);
         }
@@ -385,7 +401,6 @@ impl SessionEngine {
                 }
             }
         }
-        Ok(())
     }
 
     /// Append a system message to the session transcript.

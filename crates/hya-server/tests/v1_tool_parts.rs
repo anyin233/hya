@@ -21,8 +21,8 @@ use http_body_util::BodyExt;
 use hya_api::v1 as pb;
 use hya_core::{AgentSpec, EventBus, SessionEngine};
 use hya_proto::{
-    AgentName, Envelope, Event, FinishReason, MemberId, MemberRunStatus, ModelRef, SessionId,
-    ToolCallId,
+    AgentName, Envelope, Event, FinishReason, MemberId, MemberRunStatus, ModelRef, ReportOutcome,
+    SessionId, ToolCallId,
 };
 use hya_provider::{FakeProvider, FakeStep, ProviderRouter};
 use hya_server::{AppState, V1Grpc, router};
@@ -555,6 +555,96 @@ async fn member_updates_stream_on_the_parent_and_fold_into_session_info() {
             "depth": 1,
         }]),
         "{info:#}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A resident member's terminal report (`SubagentReported`, the ADR-0015
+/// report marker) streams as `memberUpdated` with the outcome and the report,
+/// and folds into `SessionInfo.members`.
+#[tokio::test(flavor = "multi_thread")]
+async fn resident_report_streams_as_a_terminal_member_update() {
+    let dir = tempdir("member-report");
+    let provider = FakeProvider::scripted(vec![]);
+    let (state, _asks, engine) =
+        state_with(provider, PermissionRules::default(), dir.clone()).await;
+    let app = router(state);
+    let parent_id = create_session(&app, &dir).await;
+    let parent: SessionId = parent_id.parse().unwrap();
+
+    let collector = tokio::spawn(sse_frames_until(
+        app.clone(),
+        format!("/v1/sessions/{parent_id}/events/stream"),
+        |frame| frame["event"]["memberUpdated"]["status"] == json!("MEMBER_STATUS_FAILED"),
+    ));
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let member = MemberId::new();
+    let child = SessionId::new();
+    let call_id = ToolCallId::new();
+    for event in [
+        Event::MemberSpawned {
+            session: parent,
+            member,
+            child: Some(child),
+            subagent_type: AgentName::new("general"),
+            description: "survey the repo".to_string(),
+            depth: 1,
+            directive: "look around".to_string(),
+            tool_call: Some(call_id),
+        },
+        Event::MemberStatusChanged {
+            session: parent,
+            member,
+            status: MemberRunStatus::Running,
+        },
+        Event::SubagentReported {
+            session: parent,
+            member,
+            child,
+            handle: "main/general-exusiai".to_string(),
+            outcome: ReportOutcome::Failed,
+            report: "turn error: model exploded".to_string(),
+        },
+    ] {
+        let (seq, ts_millis) = engine.store().append_event(parent, &event).await.unwrap();
+        engine.bus().publish(Envelope {
+            seq,
+            ts_millis,
+            event,
+        });
+    }
+
+    let frames = collector.await.unwrap();
+    let members: Vec<Value> = payloads(&frames)
+        .into_iter()
+        .filter(|(kind, _, _)| kind == "memberUpdated")
+        .map(|(_, value, _)| value)
+        .collect();
+    assert_eq!(members.len(), 3, "{frames:#?}");
+    assert_eq!(
+        members[2],
+        json!({
+            "member": member.to_string(),
+            "child": child.to_string(),
+            "status": "MEMBER_STATUS_FAILED",
+            "summary": "turn error: model exploded",
+        })
+    );
+
+    let (status, info) = call(
+        &app,
+        Method::GET,
+        &format!("/v1/sessions/{parent_id}"),
+        Value::Null,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{info}");
+    assert_eq!(info["members"][0]["status"], json!("MEMBER_STATUS_FAILED"));
+    assert_eq!(info["members"][0]["callId"], json!(call_id.to_string()));
+    assert_eq!(
+        info["members"][0]["summary"],
+        json!("turn error: model exploded")
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
