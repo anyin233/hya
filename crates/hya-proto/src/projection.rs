@@ -46,6 +46,12 @@ pub struct SessionProjection {
     /// projections when empty for compatibility with older clients.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub agent_model_overrides: BTreeMap<String, ModelRef>,
+    /// Permission mode of this root Session tree (`manual`, `yolo`, or
+    /// `<bundle-id>/<mode-id>`), folded from the newest
+    /// `SessionPermissionModeSet` on the root log. `None` means the process
+    /// default applies. Omitted from serialized projections when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_mode: Option<String>,
     /// Display title when set.
     pub title: Option<String>,
     /// Opaque session metadata object.
@@ -646,7 +652,7 @@ pub struct HandoffProjection {
 /// different projection, or when `Projection` (or anything it contains)
 /// changes shape; the `reducer_fingerprint_pins_the_version` test fails until
 /// the bump is recorded.
-pub const PROJECTION_REDUCER_VERSION: u32 = 1;
+pub const PROJECTION_REDUCER_VERSION: u32 = 2;
 
 /// Durable snapshot encoding: the wire projection plus replay-only reducer
 /// state the wire form deliberately omits.
@@ -788,6 +794,9 @@ impl Projection {
                 None => {
                     self.session.agent_model_overrides.remove(agent.as_str());
                 }
+            }
+            Event::SessionPermissionModeSet { mode, .. } => {
+                self.session.permission_mode = Some(mode.clone());
             }
             Event::SessionMoved { workdir, .. } => {
                 self.session.workdir = Some(workdir.clone());

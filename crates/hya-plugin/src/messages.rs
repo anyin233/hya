@@ -66,6 +66,10 @@ pub enum HookName {
     /// Intercept a permission ask; may allow, reject, or defer to the user.
     #[serde(rename = "permission.ask")]
     PermissionAsk,
+    /// Approver of a bundle-declared session permission mode; called only on
+    /// the declaring bundle, after every `permission.ask` hook deferred.
+    #[serde(rename = "permission.approve")]
+    PermissionApprove,
     /// Goal-mode evaluator hook.
     #[serde(rename = "goal.evaluate")]
     GoalEvaluate,
@@ -114,6 +118,7 @@ impl HookName {
             HookName::ToolExecuteBefore => "tool.execute.before",
             HookName::ToolExecuteAfter => "tool.execute.after",
             HookName::PermissionAsk => "permission.ask",
+            HookName::PermissionApprove => "permission.approve",
             HookName::GoalEvaluate => "goal.evaluate",
             HookName::LoopVerifier => "loop.verifier",
             HookName::LoopPlanner => "loop.planner",
@@ -145,6 +150,7 @@ impl HookName {
             "tool.execute.before" => HookName::ToolExecuteBefore,
             "tool.execute.after" => HookName::ToolExecuteAfter,
             "permission.ask" => HookName::PermissionAsk,
+            "permission.approve" => HookName::PermissionApprove,
             "goal.evaluate" => HookName::GoalEvaluate,
             "loop.verifier" => HookName::LoopVerifier,
             "loop.planner" => HookName::LoopPlanner,
@@ -161,7 +167,8 @@ impl HookName {
 
     /// Default failure policy when the registration omits posture.
     ///
-    /// `permission.ask` and `tool.execute.before` default to [`HookPosture::Safe`];
+    /// `permission.ask`, `permission.approve`, and `tool.execute.before`
+    /// default to [`HookPosture::Safe`];
     /// all other hooks default to [`HookPosture::Open`]. The five injection-point
     /// hooks added for bundles (`compaction.before`/`compaction.after`,
     /// `session.start`/`session.end`, `agent.spawn`) are enrichment/observation
@@ -171,7 +178,9 @@ impl HookName {
     #[must_use]
     pub fn default_posture(self) -> HookPosture {
         match self {
-            HookName::PermissionAsk | HookName::ToolExecuteBefore => HookPosture::Safe,
+            HookName::PermissionAsk | HookName::PermissionApprove | HookName::ToolExecuteBefore => {
+                HookPosture::Safe
+            }
             _ => HookPosture::Open,
         }
     }
@@ -883,6 +892,26 @@ pub struct PermissionAskParams {
     pub resource: WireResource,
 }
 
+/// Params for `hook/permission.approve` (session permission mode approver).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PermissionApproveParams {
+    /// Session whose tool call triggered the ask (a subagent session for
+    /// subagent asks).
+    pub session: SessionId,
+    /// Root of the session tree that owns the permission mode.
+    pub root_session: SessionId,
+    /// Stable id of the agent bound to `session`, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<AgentName>,
+    /// Bundle-local id of the active mode (the declaring `permission_modes:`
+    /// entry's `id`).
+    pub mode: String,
+    /// Permission action being requested.
+    pub action: Action,
+    /// Subject of the ask.
+    pub resource: WireResource,
+}
+
 /// Outcome for `message.user.before` (only continue-with-text is defined).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "outcome", rename_all = "snake_case")]
@@ -954,7 +983,7 @@ pub enum ToolAfterOutcomeWire {
     },
 }
 
-/// Outcome for `permission.ask`.
+/// Outcome for `permission.ask` and `permission.approve`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "outcome", rename_all = "snake_case")]
 pub enum PermissionOutcomeWire {

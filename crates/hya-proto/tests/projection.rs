@@ -244,3 +244,75 @@ fn session_agent_model_overrides_replay_replace_and_clear() {
     );
     assert_eq!(projection.last_seq, 5);
 }
+
+#[test]
+fn session_permission_mode_replays_last_write_wins() {
+    let session = SessionId::new();
+    let events = vec![
+        env(
+            1,
+            Event::SessionCreated {
+                session,
+                parent: None,
+                agent: AgentName::new("build"),
+                model: ModelRef::new("provider/base"),
+                workdir: "/tmp".to_string(),
+            },
+        ),
+        env(
+            2,
+            Event::SessionPermissionModeSet {
+                session,
+                mode: "yolo".to_string(),
+            },
+        ),
+        env(
+            3,
+            Event::SessionPermissionModeSet {
+                session,
+                mode: "acme/approver/careful".to_string(),
+            },
+        ),
+    ];
+    let bytes = serde_json::to_vec(&events).expect("serialize mode log");
+    let text = String::from_utf8(bytes.clone()).expect("utf8");
+    assert!(text.contains(r#""type":"session_permission_mode_set""#));
+    let replayed: Vec<Envelope> = serde_json::from_slice(&bytes).expect("replay mode log");
+    assert_eq!(replayed, events);
+    let projection = Projection::from_events(&replayed);
+    assert_eq!(
+        projection.session.permission_mode.as_deref(),
+        Some("acme/approver/careful")
+    );
+    assert_eq!(events[1].event.session(), Some(session));
+}
+
+#[test]
+fn session_permission_mode_is_omitted_from_the_wire_until_set() {
+    let session = SessionId::new();
+    let projection = Projection::from_events(&[env(
+        1,
+        Event::SessionCreated {
+            session,
+            parent: None,
+            agent: AgentName::new("build"),
+            model: ModelRef::new("provider/base"),
+            workdir: "/tmp".to_string(),
+        },
+    )]);
+    assert_eq!(projection.session.permission_mode, None);
+    let encoded = serde_json::to_string(&projection).expect("encode projection");
+    assert!(!encoded.contains("permission_mode"), "{encoded}");
+    // Projections written before the field existed still decode.
+    let decoded: Projection = serde_json::from_str(&encoded).expect("decode projection");
+    assert_eq!(decoded, projection);
+}
+
+/// An older binary folds the new variant as `Unknown` (a no-op), so a log
+/// written by a newer binary still replays.
+#[test]
+fn permission_mode_event_is_opaque_to_the_unknown_fallback() {
+    let json = r#"{"type":"session_permission_mode_set_v2","session":"ses_00000000000000000000000000000001","mode":"yolo"}"#;
+    let event: Event = serde_json::from_str(json).expect("unknown future variant decodes");
+    assert_eq!(event, Event::Unknown);
+}

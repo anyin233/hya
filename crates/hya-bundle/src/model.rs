@@ -746,6 +746,36 @@ pub struct PreparedBundleApis {
     pub apis: Vec<PreparedApi>,
 }
 
+/// One prepared session permission mode (manifest `permission_modes:`).
+///
+/// Modes exist only for bundles with an explicit `extensions.process` that
+/// declares the `permission.approve` hook; the runtime publishes them as
+/// `<bundle-id>/<id>`.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PreparedPermissionMode {
+    /// Mode id, unique within the bundle.
+    pub id: String,
+    /// Short human-readable name.
+    pub title: String,
+    /// Longer description (empty when not declared).
+    pub description: String,
+}
+
+/// Per-bundle permission-mode list in a prepared catalog document.
+///
+/// A document-level section like `apis:`, skipped entirely when no bundle
+/// declares a mode, so documents written before the section stay
+/// byte-identical and decodable.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PreparedBundlePermissionModes {
+    /// Bundle identity id the modes belong to.
+    pub bundle_id: String,
+    /// Declared modes, sorted by id.
+    pub modes: Vec<PreparedPermissionMode>,
+}
+
 /// Runtime kind that executes a bundle's declared process extension.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -820,6 +850,7 @@ pub struct PreparedCatalog {
     pub(crate) schemas: Vec<PreparedBundleSchemas>,
     pub(crate) process_extensions: Vec<PreparedBundleProcess>,
     pub(crate) apis: Vec<PreparedBundleApis>,
+    pub(crate) permission_modes: Vec<PreparedBundlePermissionModes>,
     pub(crate) bytes: Vec<u8>,
     pub(crate) digest: String,
 }
@@ -884,6 +915,22 @@ impl PreparedCatalog {
             .unwrap_or(&[])
     }
 
+    /// Per-bundle permission-mode declarations, sorted by bundle id.
+    #[must_use]
+    pub fn permission_modes(&self) -> &[PreparedBundlePermissionModes] {
+        &self.permission_modes
+    }
+
+    /// The permission modes one bundle declares, or an empty slice.
+    #[must_use]
+    pub fn bundle_permission_modes(&self, bundle_id: &str) -> &[PreparedPermissionMode] {
+        self.permission_modes
+            .iter()
+            .find(|row| row.bundle_id == bundle_id)
+            .map(|row| row.modes.as_slice())
+            .unwrap_or(&[])
+    }
+
     /// Canonical JSON bytes of the prepared document (what the registry stores).
     #[must_use]
     pub fn bytes(&self) -> &[u8] {
@@ -914,6 +961,10 @@ pub(crate) struct PreparedDocument<'a> {
     /// for the same byte-layout reason.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub apis: Vec<PreparedBundleApis>,
+    /// Per-bundle `permission_modes:` declarations; skipped when no bundle
+    /// declares any, for the same byte-layout reason.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub permission_modes: Vec<PreparedBundlePermissionModes>,
 }
 
 #[derive(Deserialize)]
@@ -928,4 +979,6 @@ pub(crate) struct PreparedDocumentOwned {
     pub extensions_process: Vec<PreparedBundleProcess>,
     #[serde(default)]
     pub apis: Vec<PreparedBundleApis>,
+    #[serde(default)]
+    pub permission_modes: Vec<PreparedBundlePermissionModes>,
 }

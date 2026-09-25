@@ -370,7 +370,10 @@ impl SessionEngine {
         let started = std::time::Instant::now();
         let result = match resources.resolve_tool(&tool) {
             Some(resolved) => {
-                let mut permission = self.permission.for_session(session);
+                let mut permission = self
+                    .mode_permission_plane(binding, session, Some(&agent.name))
+                    .await?
+                    .for_session(session);
                 if let Some(hooks) = activation_hook_for(session) {
                     permission = permission.prepend_interceptor(Arc::new(
                         crate::bundle_hooks::BundlePermissionInterceptor::new(hooks),

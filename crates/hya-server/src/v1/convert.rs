@@ -88,6 +88,9 @@ pub(crate) fn session_info(
         time_created: timestamp(started_millis),
         time_updated: timestamp(updated_millis),
         last_seq: projection.last_seq,
+        // Effective (root-inherited) mode; filled in by the caller, which
+        // can walk the lineage.
+        permission_mode: String::new(),
     }
 }
 
@@ -250,18 +253,28 @@ pub(crate) fn stream_event(envelope: &Envelope) -> Option<pb::StreamEvent> {
             model: None,
             agent: None,
             background: None,
+            permission_mode: None,
         }),
         Event::AgentSwitched { agent, .. } => P::SessionUpdated(pb::SessionUpdated {
             title: None,
             model: None,
             agent: Some(agent.to_string()),
             background: None,
+            permission_mode: None,
         }),
         Event::ModelSwitched { model, .. } => P::SessionUpdated(pb::SessionUpdated {
             title: None,
             model: Some(model.to_string()),
             agent: None,
             background: None,
+            permission_mode: None,
+        }),
+        Event::SessionPermissionModeSet { mode, .. } => P::SessionUpdated(pb::SessionUpdated {
+            title: None,
+            model: None,
+            agent: None,
+            background: None,
+            permission_mode: Some(mode.clone()),
         }),
         Event::MessageStarted { message, role, .. } => P::MessageStarted(pb::MessageStarted {
             message: message.to_string(),

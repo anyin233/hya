@@ -339,6 +339,10 @@ impl Script {
                     child: None,
                 }
             }
+            21 => Event::SessionPermissionModeSet {
+                session,
+                mode: ["manual", "yolo", "acme/approver/careful"][self.rng.below(3)].to_string(),
+            },
             _ => self.title(),
         }
     }

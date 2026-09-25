@@ -11,6 +11,7 @@ import {
   type ModelFallbackOutcome,
   type ModelFallbackParams,
 } from "./model_fallback_hooks"
+import { runPermissionApproveHooks, type PermissionApproveParams } from "./permission_approve"
 import { runPermissionAskHooks, type PermissionAskParams, type PermissionOutcome } from "./permission_hooks"
 import { ERROR_CODES, errorResponse, okResponse, type JsonRpcRequest } from "./protocol"
 import { runTextHooks, type TextOutcome } from "./text_hooks"
@@ -105,6 +106,21 @@ export async function handlePermissionAsk(
     return invalidParams(request.id, params.message)
   }
   const outcome: PermissionOutcome = await runPermissionAskHooks(context.hooks, params.value)
+  return {
+    response: okResponse(request.id, outcome),
+    shouldExit: false,
+  }
+}
+
+export async function handlePermissionApprove(
+  request: JsonRpcRequest,
+  context: RequestContext,
+): Promise<HandledRequest> {
+  const params = validatePermissionApproveParams(request.params)
+  if (!params.ok) {
+    return invalidParams(request.id, params.message)
+  }
+  const outcome: PermissionOutcome = await runPermissionApproveHooks(context.hooks, params.value)
   return {
     response: okResponse(request.id, outcome),
     shouldExit: false,
@@ -251,6 +267,36 @@ function validatePermissionParams(
     return ok({ ...outcome, session: params.value.session as string })
   }
   return ok(outcome)
+}
+
+function validatePermissionApproveParams(
+  value: unknown,
+): ValidationResult<PermissionApproveParams> {
+  const params = recordWithStrings(value, ["session", "root_session", "mode", "action"], ["agent"])
+  if (!params.ok) {
+    return params
+  }
+  const resource = params.value.resource
+  if (!isRecord(resource) || !isNonEmptyString(resource.type)) {
+    return { ok: false, message: "params.resource must be an object with a type" }
+  }
+  if (resource.value !== undefined && typeof resource.value !== "string") {
+    return { ok: false, message: "params.resource.value must be a string" }
+  }
+  const approve: PermissionApproveParams = {
+    session: params.value.session as string,
+    root_session: params.value.root_session as string,
+    mode: params.value.mode as string,
+    action: params.value.action as string,
+    resource:
+      resource.value === undefined
+        ? { type: resource.type }
+        : { type: resource.type, value: resource.value },
+  }
+  if (params.value.agent !== undefined) {
+    return ok({ ...approve, agent: params.value.agent as string })
+  }
+  return ok(approve)
 }
 
 function validateToolExecuteBeforeParams(

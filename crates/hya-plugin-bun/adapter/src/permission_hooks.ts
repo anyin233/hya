@@ -46,7 +46,7 @@ export async function runPermissionAskHooks(
   return { outcome: "defer" }
 }
 
-function outcomeFrom(returned: unknown): PermissionOutcome | undefined {
+export function outcomeFrom(returned: unknown): PermissionOutcome | undefined {
   if (isPermissionStatus(returned)) {
     return { outcome: returned }
   }

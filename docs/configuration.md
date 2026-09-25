@@ -971,7 +971,53 @@ checks auto-approve unless a snapshot rule explicitly denies them.
 
 Server mode forwards asks to the pending-interaction API for connected clients.
 Headless `exec`, RPC, and goal modes reject unresolved asks.
-`--yolo` replaces the effective model with `danger` before engine construction.
+`--yolo` replaces the effective model with `danger` before engine construction,
+which also makes `yolo` the default [session permission mode](#session-permission-modes).
+
+### Session permission modes
+
+A **permission mode** switches how one session tree (a root session and all
+of its subagent sessions) answers permission checks at runtime, without
+restarting the backend or editing `config.yaml`. The configured `permission`
+block above stays the process policy; the mode only selects how each tool
+call's check is derived from it.
+
+| Mode | Behavior |
+| --- | --- |
+| `manual` | Asks go to the user (the TUI or another v1 client). Uses the configured model, except that a process-level `danger` (`--yolo` or `model: danger`) is treated as `default`, so `manual` really asks. |
+| `yolo` | Allow immediately, bypassing every check including explicit Deny rules — the same as `danger`/`--yolo`, for this session tree only. |
+| `<bundle-id>/<mode-id>` | `manual`, plus an approver: after the `permission.ask` hooks all defer, the declaring bundle's `permission.approve` hook answers the ask; `defer`, an error, or a timeout falls through to the user ask. Bundles declare these modes with `permission_modes:` (see [Agent bundle authoring](agent-bundle-authoring.md#permission-modes-permission_modes)). |
+
+**Default.** A tree without a recorded mode uses `yolo` when the process runs
+with `--yolo` or `permission.model: danger`, and `manual` otherwise.
+
+**Switching.** Set the mode on any session of the tree; it is recorded on the
+root session as a `session_permission_mode_set` event, so it survives replay
+and restarts and every subagent session inherits it:
+
+```sh
+# HTTP (the same call is Session.UpdateSession over gRPC)
+curl -X PATCH http://127.0.0.1:8080/v1/sessions/$SESSION \
+  -H 'content-type: application/json' -d '{"permissionMode":"yolo"}'
+# List the selectable modes (built-ins first, then bundle modes)
+curl http://127.0.0.1:8080/v1/permission-modes
+```
+
+The mode is read at every permission check, so a switch applies to the next
+tool call of every session in the tree, including turns that are already
+running. A tool call that was already authorized keeps running under the
+decision it got. Switching to `yolo` also allows (once) every permission ask
+of the tree that is still waiting for an answer, so blocked turns continue.
+An unknown mode, or a bundle mode that no installed bundle declares, is
+rejected with `invalid_argument`. If a recorded bundle mode's bundle is later
+removed, the tree behaves as `manual` until the mode is changed.
+
+Interfaces: `UpdateSessionRequest.permission_mode` (optional string),
+`SessionInfo.permission_mode` (the effective mode; children report the root's
+mode), `SessionUpdated.permission_mode` on the root session's event stream,
+and `Catalog.ListPermissionModes` (`GET /v1/permission-modes`, rows
+`{id, title, description, source}` with `source` = `builtin` or the bundle
+id). See [`docs/protocol/api-reference.md`](protocol/api-reference.md).
 
 Omitting `permission` is equivalent to `model: default` with no rules. A
 permission-only config remains active while hya uses the offline provider **only
@@ -1354,8 +1400,8 @@ To install a Claude Code plugin permanently as a hya bundle, use
 
 A plugin may declare these hook names in its initialize handshake
 ([`crates/hya-plugin/src/messages.rs`](../crates/hya-plugin/src/messages.rs)).
-Default posture when the plugin omits one: **Safe** for `permission.ask` and
-`tool.execute.before`; **Open** for all others.
+Default posture when the plugin omits one: **Safe** for `permission.ask`,
+`permission.approve`, and `tool.execute.before`; **Open** for all others.
 
 | Hook name | Default posture |
 | --- | --- |
@@ -1367,6 +1413,7 @@ Default posture when the plugin omits one: **Safe** for `permission.ask` and
 | `tool.execute.before` | Safe |
 | `tool.execute.after` | Open |
 | `permission.ask` | Safe |
+| `permission.approve` | Safe (failures defer to the user ask; only called on the bundle that declared the active [permission mode](#session-permission-modes)) |
 | `model.fallback` | Open (always fail-open) |
 
 These three names also parse and may appear in `plugin.toml` / initialize, but

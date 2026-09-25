@@ -16,6 +16,7 @@ export const HOOK_NAMES = [
   "tool.execute.before",
   "tool.execute.after",
   "permission.ask",
+  "permission.approve",
   "model.fallback",
 ] as const
 

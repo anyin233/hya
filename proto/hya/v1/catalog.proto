@@ -42,6 +42,13 @@ service Catalog {
   //
   // hya.http: GET /v1/tools
   rpc ListTools(ListToolsRequest) returns (ListToolsResponse);
+
+  // Session permission modes accepted by `UpdateSession.permission_mode`:
+  // the built-in `manual` and `yolo`, then every installed bundle's
+  // `permission_modes:` as `<bundle-id>/<mode-id>`.
+  //
+  // hya.http: GET /v1/permission-modes
+  rpc ListPermissionModes(ListPermissionModesRequest) returns (ListPermissionModesResponse);
 }
 
 // Provider/model identity pair. `model_id` is provider-local.
@@ -263,4 +270,24 @@ message ListToolsResponse {
   repeated ToolSummary tools = 1;
   // Pagination outcome.
   PageInfo page = 2;
+}
+
+message ListPermissionModesRequest {}
+
+// One selectable session permission mode.
+message PermissionModeSummary {
+  // Mode id for `UpdateSession.permission_mode` (`manual`, `yolo`, or
+  // `<bundle-id>/<mode-id>`).
+  string id = 1;
+  // Short human-readable name.
+  string title = 2;
+  // Longer description; empty when the bundle declares none.
+  string description = 3;
+  // `builtin` or the id of the bundle that declares the mode.
+  string source = 4;
+}
+
+message ListPermissionModesResponse {
+  // Built-in modes first, then bundle modes sorted by bundle and mode id.
+  repeated PermissionModeSummary modes = 1;
 }

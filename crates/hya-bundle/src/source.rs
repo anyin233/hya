@@ -171,6 +171,9 @@ pub(crate) struct SourceAgentManifest {
     /// HTTP endpoints served by the explicit `extensions.process`.
     #[serde(default)]
     pub apis: Vec<SourceApi>,
+    /// Session permission modes approved by the explicit `extensions.process`.
+    #[serde(default)]
+    pub permission_modes: Vec<SourcePermissionMode>,
     /// The one Agent this bundle defines.
     pub agent: SourceAgent,
     /// Keys removed with the single-agent format. Captured only so prepare can
@@ -200,6 +203,9 @@ pub(crate) struct SourceAgentSetManifest {
     /// HTTP endpoints served by the explicit `extensions.process`.
     #[serde(default)]
     pub apis: Vec<SourceApi>,
+    /// Session permission modes approved by the explicit `extensions.process`.
+    #[serde(default)]
+    pub permission_modes: Vec<SourcePermissionMode>,
     /// The complete Agent set this bundle defines.
     #[serde(default)]
     pub agents: Vec<SourceAgent>,
@@ -224,6 +230,9 @@ pub(crate) struct SourcePluginManifest {
     /// HTTP endpoints served by the explicit `extensions.process`.
     #[serde(default)]
     pub apis: Vec<SourceApi>,
+    /// Session permission modes approved by the explicit `extensions.process`.
+    #[serde(default)]
+    pub permission_modes: Vec<SourcePermissionMode>,
 }
 
 /// Strict source manifest shape for a WorkflowBundle.
@@ -250,6 +259,9 @@ pub(crate) struct SourceWorkflowManifest {
     /// HTTP endpoints served by the explicit `extensions.process`.
     #[serde(default)]
     pub apis: Vec<SourceApi>,
+    /// Session permission modes approved by the explicit `extensions.process`.
+    #[serde(default)]
+    pub permission_modes: Vec<SourcePermissionMode>,
 }
 
 /// One `apis:` entry: an HTTP endpoint the bundle's explicit
@@ -274,6 +286,20 @@ pub(crate) struct SourceApi {
     /// Declared extension file holding the response body's JSON Schema.
     #[serde(default)]
     pub response_schema: Option<String>,
+}
+
+/// One `permission_modes:` entry: a session permission mode whose asks the
+/// bundle's explicit `extensions.process` answers through `permission.approve`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SourcePermissionMode {
+    /// Mode id (`[A-Za-z0-9._-]`, at most 64 bytes, starting alphanumeric).
+    pub id: String,
+    /// Short human-readable name shown in mode pickers.
+    pub title: String,
+    /// Optional longer description.
+    #[serde(default)]
+    pub description: String,
 }
 
 /// One `schemas:` entry: an external URI scheme served by a bundle-local tool.

@@ -100,6 +100,7 @@ Reducer effects:
 | --- | --- | --- |
 | `session_created` | `session: SessionId`, `parent: Option<SessionId>`, `agent: AgentName`, `model: ModelRef`, `workdir: String` | Fold: sets session id, parent, agent, model, workdir. `parent` is the link `session_lineage` walks toward the team root. |
 | `session_agent_model_override_set` | `session`, `agent: AgentName`, `model: Option<ModelRef>` | Fold: insert or remove one Agent entry in `agent_model_overrides`. `None` clears that Agent; unrelated entries remain. |
+| `session_permission_mode_set` | `session`, `mode: String` | Fold: `permission_mode` (last write wins). Emitted only on the lineage root; subagent sessions inherit the root's mode. `mode` is `manual`, `yolo`, or `<bundle-id>/<mode-id>`; see [Session permission modes](../configuration.md#session-permission-modes). Older binaries fold it as `unknown` (no-op). The v1 stream maps it to `sessionUpdated.permissionMode`. |
 | `session_moved` | `session`, `workdir: String` | Fold: workdir |
 | `session_titled` | `session`, `title: String` | Fold: title |
 | `session_metadata_set` | `session`, `metadata: Value` | Fold: replaces metadata |
@@ -344,6 +345,14 @@ them.
 
 An `always` reply may also persist a saved permission; `once` does not cascade.
 
+**Switching a tree to `yolo`** (`UpdateSession.permission_mode`) resolves
+every pending request whose session's lineage root is that tree's root as
+`once`, after the `session_permission_mode_set` event is durable, and
+publishes the usual replied notification for each. An ask that reaches the
+plane after the switch (a call that read the mode just before it changed) is
+allowed on arrival: the arrival check and the sweep take the same pending
+lock, so no ask of a `yolo` tree stays pending.
+
 ## Messages and Parts
 
 [`message.rs`](../../crates/hya-proto/src/message.rs) defines the model-facing
@@ -526,6 +535,7 @@ Projection {
 | --- | --- |
 | `id`, `parent`, `agent`, `model`, `workdir` | `session_created` (+ switch/move) |
 | `agent_model_overrides` | `session_agent_model_override_set` (`None` model removes that Agent) |
+| `permission_mode` | `session_permission_mode_set` on the root (omitted when `None`; `None` means the process default: `yolo` under `--yolo`/`model: danger`, else `manual`) |
 | `title` | `session_titled` |
 | `metadata` | `session_metadata_set` |
 | `permission` | `session_permission_set` (replace) |

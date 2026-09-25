@@ -50,6 +50,16 @@ pub trait HookDispatcher: Send + Sync {
         let _ = (session, action, resource);
         None
     }
+    /// Ask the approver of a bundle-declared session permission mode.
+    ///
+    /// Consulted only after every `permission.ask` interceptor deferred, and
+    /// only on the dispatcher of the bundle that declared the active mode.
+    /// `None` (defer, error, timeout, or no registered hook) falls through to
+    /// the normal user ask. The default defers.
+    async fn permission_approve(&self, input: PermissionApproveInput) -> Option<Decision> {
+        let _ = input;
+        None
+    }
     /// Rewrite shell/command text before execution.
     async fn command_execute_before(
         &self,
@@ -243,6 +253,15 @@ impl HookDispatcher for HookChain {
     ) -> Option<Decision> {
         for dispatcher in &self.dispatchers {
             if let Some(decision) = dispatcher.permission_ask(session, action, resource).await {
+                return Some(decision);
+            }
+        }
+        None
+    }
+
+    async fn permission_approve(&self, input: PermissionApproveInput) -> Option<Decision> {
+        for dispatcher in &self.dispatchers {
+            if let Some(decision) = dispatcher.permission_approve(input.clone()).await {
                 return Some(decision);
             }
         }
@@ -581,6 +600,25 @@ pub(crate) fn replace_activation_hooks(session: SessionId, hooks: Option<Arc<dyn
                 .unwrap_or_else(std::sync::PoisonError::into_inner) = hooks;
         }
     });
+}
+
+/// Input to `permission_approve`: one permission ask under a bundle-declared
+/// session permission mode.
+#[derive(Clone, Debug)]
+pub struct PermissionApproveInput {
+    /// Session whose tool call triggered the ask (a subagent session for
+    /// subagent asks).
+    pub session: SessionId,
+    /// Root of the session tree that owns the permission mode.
+    pub root_session: SessionId,
+    /// Stable id of the agent bound to `session`, when known.
+    pub agent: Option<AgentName>,
+    /// Bundle-local mode id (the `id` of the `permission_modes:` entry).
+    pub mode: String,
+    /// Permission action being requested.
+    pub action: Action,
+    /// Subject of the ask.
+    pub resource: Resource,
 }
 
 /// Input to `command_execute_before`.

@@ -5,8 +5,8 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use hya_bundle::{
-    PreparedApi, PreparedInstallableBundle, PreparedProcessExtension, PreparedProcessKind,
-    PreparedSchema,
+    PreparedApi, PreparedInstallableBundle, PreparedPermissionMode, PreparedProcessExtension,
+    PreparedProcessKind, PreparedSchema,
 };
 use hya_core::{CoreError, RuntimeSource, RuntimeSourceExport, RuntimeSourceId};
 use hya_mcp::{McpServerConfig, PreparedMcpServer};
@@ -92,11 +92,18 @@ pub(crate) fn fingerprint(
     process: Option<&PreparedProcessExtension>,
     schemas: &[PreparedSchema],
     apis: &[PreparedApi],
+    permission_modes: &[PreparedPermissionMode],
     config: &BundleRuntimeConfig,
 ) -> Result<[u8; 32], CoreError> {
     let config = config.watched.then_some(config);
-    let bytes = serde_json::to_vec(&(bundle, process, schemas, apis, config))
-        .map_err(|error| CoreError::Invalid(format!("encode bundle runtime identity: {error}")))?;
+    // Without modes the encoding is unchanged, so bundles that declare none
+    // keep their runtime identity (and the Workflow request hashes built on it).
+    let bytes = if permission_modes.is_empty() {
+        serde_json::to_vec(&(bundle, process, schemas, apis, config))
+    } else {
+        serde_json::to_vec(&(bundle, process, schemas, apis, config, permission_modes))
+    }
+    .map_err(|error| CoreError::Invalid(format!("encode bundle runtime identity: {error}")))?;
     Ok(Sha256::digest(bytes).into())
 }
 
@@ -246,6 +253,8 @@ pub(crate) struct BundleRuntimeParts<'a> {
     pub(crate) schemas: &'a [PreparedSchema],
     /// Declared API endpoints (explicit process only).
     pub(crate) apis: &'a [PreparedApi],
+    /// Declared session permission modes (explicit process only).
+    pub(crate) permission_modes: &'a [PreparedPermissionMode],
     /// Read-only host services behind the process's capabilities.
     pub(crate) reads: Option<Arc<dyn hya_core::HostSessionReads>>,
 }
@@ -304,11 +313,12 @@ pub(crate) async fn prepare_source(
         process,
         schemas,
         apis,
+        permission_modes,
         reads,
     } = parts;
     let bundle_config = config.location();
     let id = &bundle.identity().id;
-    let fingerprint = fingerprint(bundle, process, schemas, apis, config)?;
+    let fingerprint = fingerprint(bundle, process, schemas, apis, permission_modes, config)?;
     // A shared JavaScript Plugin has no agent activation to own a Bun sidecar.
     // Promote its explicit executable entrypoints to a generation-owned process.
     let implicit_process = if process.is_none() && bundle.plugin_bundle().is_some() {
@@ -575,6 +585,19 @@ pub(crate) async fn prepare_source(
     .with_schemas(claims);
     if let Some(hooks) = hooks {
         source = source.with_hooks(hooks);
+        // Prepare accepts modes only with an explicit process that declares
+        // `permission.approve`, and the process's hooks must equal the
+        // declared hook resources, so these hooks answer the modes.
+        source = source.with_permission_modes(
+            permission_modes
+                .iter()
+                .map(|mode| hya_core::RuntimePermissionMode {
+                    id: mode.id.clone(),
+                    title: mode.title.clone(),
+                    description: mode.description.clone(),
+                })
+                .collect(),
+        );
     }
     if let Some(provider) = api_provider {
         source = source.with_apis(source_apis(bundle, apis)?, provider);
@@ -653,6 +676,7 @@ for line in sys.stdin:
                 process: prepared.bundle_process("acme/mcp-env"),
                 schemas: &[],
                 apis: &[],
+                permission_modes: &[],
                 reads: None,
             },
             &BundleRuntimeConfig::capture(
@@ -703,15 +727,15 @@ for line in sys.stdin:
             let location = test_config(id);
             let absent = BundleRuntimeConfig::capture(bundle, process, location.clone());
             assert_eq!(absent.watched(), watched);
-            let before = fingerprint(bundle, process, &[], &[], &absent).unwrap();
+            let before = fingerprint(bundle, process, &[], &[], &[], &absent).unwrap();
             std::fs::create_dir_all(location.dir()).unwrap();
             std::fs::write(location.file(), "key: value\n").unwrap();
             let present = BundleRuntimeConfig::capture(bundle, process, location.clone());
-            let after = fingerprint(bundle, process, &[], &[], &present).unwrap();
+            let after = fingerprint(bundle, process, &[], &[], &[], &present).unwrap();
             assert_eq!(before != after, watched, "{id}");
             std::fs::write(location.file(), "key: other\n").unwrap();
             let edited = BundleRuntimeConfig::capture(bundle, process, location.clone());
-            let edited = fingerprint(bundle, process, &[], &[], &edited).unwrap();
+            let edited = fingerprint(bundle, process, &[], &[], &[], &edited).unwrap();
             assert_eq!(after != edited, watched, "{id}");
             let _ = std::fs::remove_dir_all(location.dir());
         }
@@ -788,6 +812,7 @@ for line in sys.stdin:
                 process: prepared.bundle_process("acme/undeclared"),
                 schemas: &[],
                 apis: &[],
+                permission_modes: &[],
                 reads: None,
             },
             &BundleRuntimeConfig::capture(
@@ -835,6 +860,7 @@ for line in sys.stdin:
                 process: prepared.bundle_process("acme/apis"),
                 schemas: &[],
                 apis: prepared.bundle_apis("acme/apis"),
+                permission_modes: &[],
                 reads: None,
             },
             &BundleRuntimeConfig::capture(
@@ -878,6 +904,80 @@ for line in sys.stdin:
         assert!(
             matches!(result, Err(CoreError::Invalid(ref detail)) if detail.contains("API endpoints differ")),
             "a process may not serve undeclared endpoints"
+        );
+    }
+
+    /// A process-backed bundle's `permission_modes:` publish on its runtime
+    /// source together with the process hooks that approve them; a bundle
+    /// without modes keeps the pre-modes runtime fingerprint.
+    #[tokio::test]
+    async fn bundle_permission_modes_publish_on_the_runtime_source() {
+        let script = r#"import json,sys
+for line in sys.stdin:
+ r=json.loads(line)
+ result={'protocol_version':1,'plugin':{'id':'approver','version':'1.0.0','kind':'bun'},'hooks':[{'name':'permission.approve'}],'tools':[]} if r.get('method') == 'initialize' else {'outcome':'defer'}
+ if 'id' in r: print(json.dumps({'jsonrpc':'2.0','id':r['id'],'result':result}),flush=True)
+"#;
+        let prepared = prepare_package(BundleSource::new(
+            "approver",
+            vec![
+                SourceFile::new(
+                    "bundle.yaml",
+                    "kind: Plugin\nidentity: { id: acme/approver, version: 1.0.0, publisher: acme }\nextensions:\n  process: { kind: bun, command: [python3, '${BUNDLE_ROOT}/runtime.py'] }\n  files: [{ id: runtime, path: runtime.py }]\nresources:\n  hooks: [{ id: permission.approve, path: hooks/approve.json }]\npermission_modes:\n  - { id: careful, title: Careful, description: Approves reads }\n",
+                ),
+                SourceFile::new("runtime.py", script),
+                SourceFile::new("hooks/approve.json", "{}"),
+            ],
+        ))
+        .unwrap();
+        let bundle = &prepared.bundles()[0];
+        let process = prepared.bundle_process("acme/approver");
+        let modes = prepared.bundle_permission_modes("acme/approver");
+        assert_eq!(modes.len(), 1);
+        let config = BundleRuntimeConfig::capture(bundle, process, test_config("acme/approver"));
+        let cached = prepare_source(
+            bundle,
+            BundleRuntimeParts {
+                process,
+                schemas: &[],
+                apis: &[],
+                permission_modes: modes,
+                reads: None,
+            },
+            &config,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            cached.source.permission_modes(),
+            [hya_core::RuntimePermissionMode {
+                id: "careful".to_string(),
+                title: "Careful".to_string(),
+                description: "Approves reads".to_string(),
+            }]
+        );
+        assert_ne!(
+            fingerprint(bundle, process, &[], &[], modes, &config).unwrap(),
+            fingerprint(bundle, process, &[], &[], &[], &config).unwrap(),
+            "declared modes are part of the runtime fingerprint"
+        );
+        let legacy = {
+            let config = config.watched.then_some(&config);
+            Sha256::digest(
+                serde_json::to_vec(&(
+                    bundle,
+                    process,
+                    &[] as &[PreparedSchema],
+                    &[] as &[PreparedApi],
+                    config,
+                ))
+                .unwrap(),
+            )
+        };
+        assert_eq!(
+            fingerprint(bundle, process, &[], &[], &[], &config).unwrap(),
+            <[u8; 32]>::from(legacy),
+            "a bundle without modes keeps its previous fingerprint"
         );
     }
 }

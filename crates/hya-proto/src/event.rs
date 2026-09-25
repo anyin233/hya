@@ -57,6 +57,18 @@ pub enum Event {
         /// Temporary model, or `None` to clear it.
         model: Option<ModelRef>,
     },
+    /// Set the permission mode of the owning root Session tree.
+    ///
+    /// Appended to the lineage root; descendants (subagent sessions) inherit
+    /// it. `mode` is `manual`, `yolo`, or `<bundle-id>/<mode-id>` for a mode
+    /// declared by an installed bundle's `permission_modes:`. The last write
+    /// wins. Older binaries fold this variant as `Unknown`.
+    SessionPermissionModeSet {
+        /// Root Session whose descendant tree uses this mode.
+        session: SessionId,
+        /// Mode identifier (`manual`, `yolo`, or `<bundle-id>/<mode-id>`).
+        mode: String,
+    },
     /// Session workdir changed.
     SessionMoved {
         /// Session this event belongs to.
@@ -1017,6 +1029,7 @@ impl Event {
         match self {
             Event::SessionCreated { session, .. }
             | Event::SessionAgentModelOverrideSet { session, .. }
+            | Event::SessionPermissionModeSet { session, .. }
             | Event::SessionMoved { session, .. }
             | Event::SessionTitled { session, .. }
             | Event::SessionMetadataSet { session, .. }

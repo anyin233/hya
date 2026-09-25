@@ -56,6 +56,9 @@ mod member_wait;
 pub mod model_tokenizers;
 /// Subagent concurrency governor and team budgets.
 pub mod orchestrator;
+
+/// Session permission modes (`manual`, `yolo`, bundle-declared approvers).
+pub mod permission_mode;
 /// System prompt construction and context file discovery.
 pub mod prompt;
 /// Long-lived resident actors and recovery.
@@ -130,6 +133,7 @@ pub use loop_mode::{
 };
 pub use mailbox::run_mailbox_service;
 pub use orchestrator::{OperationReservation, SubagentGovernor, SubagentLimits, TeamBudget};
+pub use permission_mode::{PublishedPermissionMode, RuntimePermissionMode, SessionPermissionMode};
 pub use prompt::{
     PromptEnv, build_system_prompt, context_file_reads, discover_context_files,
     render_environment_and_context, today,

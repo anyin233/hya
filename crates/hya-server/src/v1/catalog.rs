@@ -1,5 +1,5 @@
 //! `/v1` catalog domain: agents, models, providers, commands, skills,
-//! tools, and saved permission rules.
+//! tools, permission modes, and saved permission rules.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -24,6 +24,7 @@ pub(crate) fn router() -> Router<ServerState> {
         .route("/v1/commands", get(list_commands))
         .route("/v1/skills", get(list_skills))
         .route("/v1/tools", get(list_tools))
+        .route("/v1/permission-modes", get(list_permission_modes))
         .route("/v1/runtime/schemas", get(list_runtime_schemas))
         .route("/v1/permissions/rules", get(list_saved_rules))
         .route("/v1/permissions/rules/:rule", delete(delete_saved_rule))
@@ -329,6 +330,24 @@ async fn list_tools(
         tools,
         page: Some(page),
     }))
+}
+
+async fn list_permission_modes(
+    State(st): State<ServerState>,
+) -> Result<Json<pb::ListPermissionModesResponse>, V1Error> {
+    let modes = st
+        .engine
+        .permission_modes()
+        .await
+        .into_iter()
+        .map(|mode| pb::PermissionModeSummary {
+            id: mode.id,
+            title: mode.title,
+            description: mode.description,
+            source: mode.source,
+        })
+        .collect();
+    Ok(Json(pb::ListPermissionModesResponse { modes }))
 }
 
 /// Tool rows shared with the bootstrap snapshot.

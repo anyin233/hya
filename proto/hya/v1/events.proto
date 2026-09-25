@@ -161,6 +161,9 @@ message SessionUpdated {
   optional string agent = 3;
   // New background flag when changed.
   optional bool background = 4;
+  // New permission mode of the session tree when changed (emitted on the
+  // root session only).
+  optional string permission_mode = 5;
 }
 
 // A session was deleted.

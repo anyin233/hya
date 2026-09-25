@@ -1,5 +1,19 @@
 # 0.41.0
 
+## Session permission modes
+
+- Each session tree now has a permission mode, switchable at runtime:
+  - `manual`: approval requests go to the user.
+  - `yolo`: every tool action is allowed, the same as `--yolo`, but for this session tree only.
+  - Bundle-declared modes, selected as `<bundle-id>/<mode-id>`.
+- Setting and listing modes: set one with `PATCH /v1/sessions/{id}` `{"permissionMode": "yolo"}` (`Session.UpdateSession`). List the available modes with `GET /v1/permission-modes` (`Catalog.ListPermissionModes`). The contract now has 84 rpcs.
+- Scope and default: the mode is stored as a `session_permission_mode_set` event on the root session, so it survives restarts, and subagent sessions inherit it. Without a recorded mode, a session is `yolo` when the server runs with `--yolo` or `permission.model: danger`, and `manual` otherwise.
+- When a switch takes effect: from the next permission check, including checks inside turns that are already running. Switching to `yolo` allows the tree's pending permission requests once.
+- `SessionInfo.permissionMode` reports the effective mode. `SessionUpdated.permissionMode` is streamed on the root session.
+- A server started with `--yolo` or `permission.model: danger` now really asks for sessions switched to `manual`. Sessions that are never switched behave as before.
+- Bundles can declare approval modes with `permission_modes: [{id, title, description?}]`. Such a bundle also needs `extensions.process` and a `permission.approve` hook resource. While a bundle's mode is active, its new `permission.approve` hook (params `{session, root_session, agent?, mode, action, resource}`) answers `allow_once`, `allow_always`, `reject`, or `defer`. A `defer` answer, an error, or a timeout falls through to the user. The Bun adapter supports the hook, and `hya bundle info` prints one `permission_mode=` line per mode. See [Configuration](docs/configuration.md) and [AgentBundle authoring](docs/agent-bundle-authoring.md).
+- `PROJECTION_REDUCER_VERSION` is now 2, so stored projection snapshots are rebuilt once from the event log. Older binaries fold the new event as `unknown`.
+
 ## Bun/OpenTUI frontend
 
 - New interactive TUI in `packages/hya-tui`, adopted from a contributor fork ([ADR-0019](docs/adr/0019-adopt-opentui-frontend.md)). It is a Bun/OpenTUI client over the v1 HTTP/JSON+SSE contract. The screen shows sessions, the selected transcript, and pending interactions, plus views for models, Workflows, saved provider keys (`/keys`, `/key set|remove <provider>` with concealed entry), and a generic `/api METHOD /v1/path [JSON]` command. Tab completes slash commands and their arguments, and a footer row shows the next step for the current view. Run it from source with `bun packages/hya-tui/src/main.ts --server http://127.0.0.1:8080 --dir "$PWD"` against `hya serve`. It is not in the release archive. See [OpenTUI frontend](docs/tui.md).

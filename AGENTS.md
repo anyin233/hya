@@ -95,7 +95,7 @@ client, run from source); `packages/hya-tui-web` renders the same TUI in a
 browser as the WebUI. `hya-sdk-v1`, `hya-client`, and gRPC are the other
 supported ways to drive a backend.
 
-The server exposes exactly one contract — `hya.v1` (17 services / 83 rpcs in
+The server exposes exactly one contract — `hya.v1` (17 services / 84 rpcs in
 `proto/hya/v1`) — over HTTP/JSON+SSE+WebSocket under `/v1` and, when
 `HYA_GRPC_BIND` is set, over gRPC through `hya_server::V1Grpc`, which dispatches
 through the same router. The legacy Compat `/api/*`, bare native routes, and

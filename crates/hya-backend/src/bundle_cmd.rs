@@ -681,6 +681,7 @@ fn info_file(package: &Path) -> anyhow::Result<()> {
                 inspection.prepared.bundle_schemas(&identity.id),
                 inspection.prepared.bundle_process(&identity.id),
                 inspection.prepared.bundle_apis(&identity.id),
+                inspection.prepared.bundle_permission_modes(&identity.id),
             );
             Ok(())
         }
@@ -1039,6 +1040,7 @@ async fn info_installed(bundle_id: &str) -> anyhow::Result<bool> {
         prepared.bundle_schemas(bundle_id),
         prepared.bundle_process(bundle_id),
         prepared.bundle_apis(bundle_id),
+        prepared.bundle_permission_modes(bundle_id),
     );
     Ok(true)
 }
@@ -1064,6 +1066,7 @@ fn info_project(bundle: &ProjectBundle) {
         prepared.bundle_schemas(&identity.id),
         prepared.bundle_process(&identity.id),
         prepared.bundle_apis(&identity.id),
+        prepared.bundle_permission_modes(&identity.id),
     );
 }
 
@@ -1093,6 +1096,7 @@ fn info_first_party(bundle_id: &str) -> anyhow::Result<()> {
             prepared.bundle_schemas(&identity.id),
             prepared.bundle_process(&identity.id),
             prepared.bundle_apis(&identity.id),
+            prepared.bundle_permission_modes(&identity.id),
         );
         return Ok(());
     }
@@ -1350,6 +1354,7 @@ fn print_static_info(
     schemas: &[hya_bundle::PreparedSchema],
     process: Option<&hya_bundle::PreparedProcessExtension>,
     apis: &[hya_bundle::PreparedApi],
+    permission_modes: &[hya_bundle::PreparedPermissionMode],
 ) {
     println!("kind{separator}{}", bundle.kind().as_str());
     if let Some(workflow) = bundle.workflow() {
@@ -1407,6 +1412,20 @@ fn print_static_info(
         }
         if !api.description.is_empty() {
             line.push_str(&format!(" description={}", api.description));
+        }
+        println!("{line}");
+    }
+    // One line per mode: `permission_mode=<bundle-id>/<id> title=<title>`
+    // plus (last, since it may contain spaces) the description.
+    for mode in permission_modes {
+        let mut line = format!(
+            "permission_mode{separator}{bundle}/{id} title={title}",
+            bundle = bundle.identity().id,
+            id = mode.id,
+            title = mode.title
+        );
+        if !mode.description.is_empty() {
+            line.push_str(&format!(" description={}", mode.description));
         }
         println!("{line}");
     }

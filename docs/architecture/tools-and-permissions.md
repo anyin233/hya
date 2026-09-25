@@ -251,6 +251,7 @@ they are not rewritten or retried.
 | `Decision` | User or interceptor response: allow once, allow always, or reject with optional feedback. |
 | `PermissionPlane` | Invocation policy, resource rules, remembered grants, optional interceptor, and ask channel. |
 | `PermissionInterceptor` | Optional async hook consulted after remembered grants and before the user ask. |
+| `SessionPermissionMode` (hya-core) | Per-session-tree mode (`manual`, `yolo`, bundle mode) from which each call's plane is derived. |
 
 ### Action (fourteen values)
 
@@ -334,8 +335,11 @@ When an action evaluates to `Ask`:
    (`authorize`) and the resource gate (`assert`). Returning `Some(Decision)`
    short-circuits the prompt; returning `None` defers to the normal ask channel.
    The interceptor contributes its own identity to `semantic_identity_v1`, so
-   swapping interceptors changes the policy fingerprint. The only shipped
-   implementation is the plugin `PermissionBridge`.
+   swapping interceptors changes the policy fingerprint. The process-wide
+   interceptor is the plugin `PermissionBridge`; per call the engine prepends
+   the bundle activation's `permission.ask` hooks and, under a bundle
+   permission mode, appends that bundle's `permission.approve` approver (see
+   [Session permission modes](#session-permission-modes)).
 3. If still unresolved, it sends an `AskRequest` containing action, resource,
    and a reply channel.
 4. The caller answers with a `Decision`.
@@ -459,6 +463,44 @@ first-class. `permission` errors are protected from rewriting by
 `tool.execute.after` hooks; other outcomes may be rewritten by those hooks
 ([`turn.rs`](../../crates/hya-core/src/engine/turn.rs)).
 
+### Session permission modes
+
+Each session tree has a permission mode (`manual`, `yolo`, or a
+bundle-declared `<bundle-id>/<mode-id>`), recorded on the root session by
+`session_permission_mode_set` and folded into `SessionProjection.permission_mode`
+(user-facing contract: [Configuration — Session permission
+modes](../configuration.md#session-permission-modes)). The engine never
+mutates the process-wide `PermissionPlane`. Instead, for **every tool call**
+(model tool calls in `engine/turn.rs` and direct shell turns in
+`engine/shell.rs`, including subagent and resident turns) it reads the
+root's mode and derives that call's plane (`permission_mode::derive_plane`):
+
+| Mode | Derived plane |
+| --- | --- |
+| `yolo` | `PermissionPlane::with_invocation_model(Danger)`: allow immediately, including explicit Deny rules. |
+| `manual` | The process plane; a process-level `Danger` (`--yolo`, `model: danger`) is lowered to `Default` so asks really reach the user. |
+| bundle mode | `manual`, plus `PermissionPlane::append_interceptor(ModeApprover)`: after the activation `permission.ask` hooks and the plugin `PermissionBridge` defer, the declaring bundle's `permission.approve` hook answers; `None` (defer, failure) falls through to the user ask. A mode whose bundle no longer publishes it behaves as `manual`. |
+
+A tree without a recorded mode uses `yolo` when the process invocation model
+is `Danger`, else `manual`. The derived plane shares the process plane's
+rules, remembered grants, and ask channel, so an Allow Always given under one
+mode still applies after a switch.
+
+**In-flight semantics.** Because the mode is read at each call's permission
+check, a switch applies to the next check of every session in the tree,
+including turns already running; a call that was already authorized keeps
+running (its tool-internal resource checks use the plane it was authorized
+with). Switching to `yolo` through the v1 API additionally resolves the
+tree's pending asks as allow-once (see
+[event-model.md — Pending permission plane](event-model.md#pending-permission-plane-server-side)).
+
+**Fingerprints.** `TurnBinding::semantic_fingerprint_v1` (and so the Workflow
+request hash) keeps using the process plane's `semantic_identity_v1`: the
+mode is mutable session state, not part of a runtime or request identity, so
+a mode switch does not make a retried Workflow run look like a different
+request. A bundle's declared modes are part of its runtime source identity
+only when it declares any, so bundles without modes keep their fingerprint.
+
 ## CLI Defaults
 
 Under the default invocation model, local read-only tools and `task` allow;
@@ -466,7 +508,8 @@ standard built-ins, plugins, network reads, MCP calls, and Bash commands ask.
 The existing resource rules still auto-allow `Read`, `Glob`, and `Grep`, while
 mutating, external-directory, subagent, and process-spawning actions remain
 covered by their existing checks. `--yolo` changes the invocation model to
-`danger` before the engine is built.
+`danger` before the engine is built, which makes `yolo` the default session
+permission mode; a session switched to `manual` still asks.
 
 ## Engine Integration
 

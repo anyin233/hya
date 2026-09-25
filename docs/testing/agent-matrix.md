@@ -29,7 +29,7 @@ cargo test -p hya-e2e -- --test-threads=1
 | T1.3 | Multi-round tool loop | `tests/p02_tool_loop_fs.rs` | Sequential write → read → shell |
 | T1.4 | read/write | `tests/p02_tool_loop_fs.rs` | Disk file content |
 | T1.5 | shell | `tests/p02_tool_loop_fs.rs` | Disk file from shell |
-| T1.7 | Permissions once/reject | `tests/p03_permissions.rs` | File created only after `once` |
+| T1.7 | Permissions once/reject, `yolo` mode switch | `tests/p03_permissions.rs` | File created only after `once`; switching to `yolo` unblocks the pending ask and later calls do not ask |
 | T1.8 | Questions + reply | `tests/p04_questions.rs` | Turn continues after question reply |
 | T1.9 | Skills load | `tests/p05_skills.rs` | `GET /v1/skills` lists skill; follow-up FakeLlm has body marker |
 | T1.10 | MCP tool call | `tests/p06_mcp.rs` | `/mcp` connected; follow-up has `echo:…` result |
