@@ -54,6 +54,7 @@
 - A server started with `--yolo` or `permission.model: danger` now really asks for sessions switched to `manual`. Sessions that are never switched behave as before.
 - Bundles can declare approval modes with `permission_modes: [{id, title, description?}]`. Such a bundle also needs `extensions.process` and a `permission.approve` hook resource. While a bundle's mode is active, its new `permission.approve` hook (params `{session, root_session, agent?, mode, action, resource}`) answers `allow_once`, `allow_always`, `reject`, or `defer`. A `defer` answer, an error, or a timeout falls through to the user. The Bun adapter supports the hook, and `hya bundle info` prints one `permission_mode=` line per mode. See [Configuration](docs/configuration.md) and [AgentBundle authoring](docs/agent-bundle-authoring.md).
 - `PROJECTION_REDUCER_VERSION` is now 2, so stored projection snapshots are rebuilt once from the event log. Older binaries fold the new event as `unknown`.
+- The `permission_modes:` example in the bundle authoring guide now includes a working `approver.ts`. The script speaks plugin protocol v1 itself, because an explicit `extensions.process` command runs as written, without the Bun adapter. The guide's `apis:` and `permission_modes:` examples are now tested; the test runs the example script under Bun where Bun is installed.
 
 ## Bun/OpenTUI frontend
 
