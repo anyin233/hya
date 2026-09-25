@@ -1,5 +1,11 @@
 # 0.41.0
 
+## Browser-rendered TUI test environment
+
+- New package `packages/hya-tui-web` runs a terminal program on a real PTY and renders it in the browser with xterm.js. Start it with `bun packages/hya-tui-web/src/main.ts [--host 127.0.0.1] [--port 7681] [--cwd DIR] -- <command...>`. Each browser connection gets its own process. Browser resizes reach the program as SIGWINCH. The host rejects cross-origin WebSocket upgrades and binds loopback by default.
+- The `/pty` WebSocket speaks the protojson form of the `hya.v1` `PtyClientFrame`/`PtyServerFrame` messages (`input`, `resize`, `ping` / `output`, `exit`, `pong`).
+- A Playwright harness (`e2e/harness.ts`) drives TUIs in Chromium. It reads the screen text and per-cell color and width, sends keys, resizes the viewport, waits for the exit code, and attaches a screenshot for every test. An OpenTUI probe fixture checks borders, truecolor, wide glyphs, input, resize, and Ctrl+C. See [Browser-rendered TUI](docs/tui-web.md) and [ADR-0018](docs/adr/0018-browser-rendered-tui-test-environment.md).
+
 ## Every bundle has one `config.yml`
 
 - Each bundle now reads its configuration from one file. For bundles installed for the user, and for the builtin first-party bundles, the file is `<hya config dir>/bundles/<percent-encoded-bundle-id>/config.yml`. The `<hya config dir>` is the directory that holds the active `config.yaml`. For example, `hya/plan-impl-review` reads `~/.config/hya/bundles/hya%2Fplan-impl-review/config.yml`. A project bundle (`hya bundle install --project`) reads `config.yml` in its own `.hya/bundles/<dir>/` source directory.
