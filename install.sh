@@ -13,9 +13,10 @@ Usage: ./install.sh [OPTIONS]
 Build and install hya from this source checkout.
 
 Options:
-  --prefix DIR                 Install into DIR/bin and DIR/bundles (default: /usr/local)
+  --prefix DIR                 Install into DIR/bin, DIR/bundles, and DIR/lib/hya (default: /usr/local)
   --bin-dir DIR                Install the backend into DIR, which must be named bin;
-                               bundles go to DIR/../bundles. Overrides --prefix
+                               bundles go to DIR/../bundles and Bun programs to
+                               DIR/../lib/hya. Overrides --prefix
   --profile release|dev|debug  Cargo build profile (default: release)
   --dry-run                    Print actions without building or installing
   -h, --help                   Show this help
@@ -24,6 +25,11 @@ Installs the release layout:
   bin/hya                   unified CLI: exec, serve, login, bundles, models, update, ...
   bundles/hya-*.hyabundle   the twelve trusted first-party bundles it loads at startup
   lib/hya/bun-adapter       Bun adapter for JavaScript bundle extensions
+  lib/hya/tui               terminal UI that bare `hya` starts
+  lib/hya/tui-web           WebUI host that serves the TUI to the browser
+
+Requires Bun on PATH: each lib/hya program gets its production dependencies
+from `bun install --frozen-lockfile --production`.
 USAGE
 }
 
@@ -106,28 +112,56 @@ fi
 root_dir="$(dirname "$bin_dir")"
 lib_dir="$root_dir/lib/hya"
 bundles_dir="$root_dir/bundles"
-adapter_source="$(pwd -P)/crates/hya-plugin-bun/adapter"
+source_dir="$(pwd -P)"
+
+# Bun programs installed under lib/hya: name, source directory, top-level
+# files, and recursively copied directories (the release archive layout).
+lib_names=(bun-adapter tui tui-web)
+lib_sources=(
+  "$source_dir/crates/hya-plugin-bun/adapter"
+  "$source_dir/packages/hya-tui"
+  "$source_dir/packages/hya-tui-web"
+)
+lib_files=(
+  "package.json bun.lock"
+  "package.json bun.lock bunfig.toml tsconfig.json"
+  "package.json bun.lock tsconfig.json"
+)
+lib_dirs=("src" "src" "src web")
+had_lib=(0 0 0)
+placed_lib=(0 0 0)
+
+lib_tmp() {
+  printf '%s\n' "$lib_dir/.$1.tmp.$$"
+}
+
+lib_bak() {
+  printf '%s\n' "$lib_dir/.$1.bak.$$"
+}
 
 tmp_backend="$bin_dir/.hya.tmp.$$"
-tmp_adapter="$lib_dir/.bun-adapter.tmp.$$"
 tmp_bundles="$bundles_dir/.hya-bundles.tmp.$$"
 bak_backend="$bin_dir/.hya.bak.$$"
-bak_adapter="$lib_dir/.bun-adapter.bak.$$"
 bak_bundles="$bundles_dir/.hya-bundles.bak.$$"
 rollback_enabled=0
 install_complete=0
 had_backend=0
-had_adapter=0
 placed_backend=0
-placed_adapter=0
 placed_bundles=()
 
 cleanup_leftovers() {
+  local name
   rm -f "$tmp_backend"
-  rm -rf "$tmp_adapter" "$tmp_bundles"
+  rm -rf "$tmp_bundles"
+  for name in "${lib_names[@]}"; do
+    rm -rf "$(lib_tmp "$name")"
+  done
   if [[ "$install_complete" -eq 1 ]]; then
     rm -f "$bak_backend"
-    rm -rf "$bak_adapter" "$bak_bundles"
+    rm -rf "$bak_bundles"
+    for name in "${lib_names[@]}"; do
+      rm -rf "$(lib_bak "$name")"
+    done
   fi
 }
 
@@ -139,9 +173,12 @@ restore_install() {
   if [[ "$placed_backend" -eq 1 ]]; then
     rm -f "$bin_dir/hya"
   fi
-  if [[ "$placed_adapter" -eq 1 ]]; then
-    rm -rf "$lib_dir/bun-adapter"
-  fi
+  local index
+  for index in "${!lib_names[@]}"; do
+    if [[ "${placed_lib[$index]}" -eq 1 ]]; then
+      rm -rf "$lib_dir/${lib_names[$index]}"
+    fi
+  done
   local bundle
   for bundle in ${placed_bundles[@]+"${placed_bundles[@]}"}; do
     rm -f "$bundles_dir/$bundle"
@@ -149,9 +186,13 @@ restore_install() {
   if [[ "$had_backend" -eq 1 && -e "$bak_backend" ]]; then
     mv -f "$bak_backend" "$bin_dir/hya"
   fi
-  if [[ "$had_adapter" -eq 1 && -e "$bak_adapter" ]]; then
-    mv "$bak_adapter" "$lib_dir/bun-adapter"
-  fi
+  for index in "${!lib_names[@]}"; do
+    local bak
+    bak=$(lib_bak "${lib_names[$index]}")
+    if [[ "${had_lib[$index]}" -eq 1 && -e "$bak" ]]; then
+      mv "$bak" "$lib_dir/${lib_names[$index]}"
+    fi
+  done
   if [[ -d "$bak_bundles" ]]; then
     for bundle in "$bak_bundles"/hya-*.hyabundle; do
       if [[ -e "$bundle" ]]; then
@@ -191,11 +232,30 @@ preflight_path() {
   fi
 }
 
+# Copy one lib/hya program into its temporary directory and install its
+# production dependencies there, so the live install is replaced by a rename.
+stage_lib() {
+  local index=$1 name=${lib_names[$1]} source=${lib_sources[$1]} tmp file dir
+  tmp=$(lib_tmp "$name")
+  run mkdir -p "$tmp"
+  for file in ${lib_files[$index]}; do
+    run cp "$source/$file" "$tmp/"
+  done
+  for dir in ${lib_dirs[$index]}; do
+    run mkdir -p "$tmp/$dir"
+    run cp -R "$source/$dir/." "$tmp/$dir/"
+  done
+  say "+ (cd $tmp && bun install --frozen-lockfile --production)"
+  if [[ "$dry_run" -eq 0 ]]; then
+    (cd "$tmp" && bun install --frozen-lockfile --production)
+  fi
+}
+
 trap on_error ERR INT TERM
 say "Installing hya to $bin_dir"
 say "Installing first-party bundles to $bundles_dir"
-say "Installing Bun adapter to $lib_dir/bun-adapter"
-say "Rollback backup paths: $bak_backend $bak_bundles $bak_adapter"
+say "Installing Bun adapter, TUI, and WebUI host to $lib_dir/{bun-adapter,tui,tui-web}"
+say "Rollback backup paths: $bak_backend $bak_bundles $(lib_bak '{bun-adapter,tui,tui-web}')"
 say "Permission preflight: $bin_dir $bundles_dir $lib_dir"
 preflight_path "$bin_dir"
 preflight_path "$bundles_dir"
@@ -204,24 +264,24 @@ say "Bun preflight: bun"
 run bun --version
 run cargo build --locked ${profile_args[@]+"${profile_args[@]}"} -p hya-backend --bins
 run cargo build --locked ${profile_args[@]+"${profile_args[@]}"} "${tool_libraries[@]}" --lib
-run mkdir -p "$bin_dir" "$lib_dir" "$bundles_dir" "$tmp_adapter/src"
+run mkdir -p "$bin_dir" "$lib_dir" "$bundles_dir"
 run install -m 0755 "$target_dir/hya" "$tmp_backend"
 run cargo run --locked -p xtask -- stage-first-party-bundles --library-dir "$target_dir" --package-root "$tmp_bundles"
-run cp "$adapter_source/package.json" "$adapter_source/bun.lock" "$tmp_adapter/"
-run cp -R "$adapter_source/src/." "$tmp_adapter/src/"
-say "+ (cd $tmp_adapter && bun install --frozen-lockfile --production)"
-if [[ "$dry_run" -eq 0 ]]; then
-  (cd "$tmp_adapter" && bun install --frozen-lockfile --production)
-fi
+for index in "${!lib_names[@]}"; do
+  stage_lib "$index"
+done
 [[ "$dry_run" -ne 0 ]] || rollback_enabled=1
 if [[ -e "$bin_dir/hya" ]]; then
   had_backend=1
   run mv -f "$bin_dir/hya" "$bak_backend"
 fi
-if [[ -e "$lib_dir/bun-adapter" ]]; then
-  had_adapter=1
-  run mv "$lib_dir/bun-adapter" "$bak_adapter"
-fi
+for index in "${!lib_names[@]}"; do
+  name=${lib_names[$index]}
+  if [[ -e "$lib_dir/$name" ]]; then
+    had_lib[index]=1
+    run mv "$lib_dir/$name" "$(lib_bak "$name")"
+  fi
+done
 run mkdir -p "$bak_bundles"
 if [[ "$dry_run" -eq 0 ]]; then
   for bundle in "$bundles_dir"/hya-*.hyabundle; do
@@ -240,8 +300,11 @@ else
 fi
 placed_backend=1
 run mv -f "$tmp_backend" "$bin_dir/hya"
-placed_adapter=1
-run mv "$tmp_adapter" "$lib_dir/bun-adapter"
+for index in "${!lib_names[@]}"; do
+  name=${lib_names[$index]}
+  placed_lib[index]=1
+  run mv "$(lib_tmp "$name")" "$lib_dir/$name"
+done
 
 verify_home="${TMPDIR:-/tmp}/hya-install-verify.$$"
 first_party=(base-tools extended-tools network-tools channel-tools todo-tools core-skills core-commands core-agents agent-channels goal-loop plan-impl-review subagents)
@@ -260,6 +323,15 @@ if [[ "$dry_run" -eq 0 ]]; then
   test -f "$lib_dir/bun-adapter/bun.lock"
   test -f "$lib_dir/bun-adapter/src/main.ts"
   test -d "$lib_dir/bun-adapter/node_modules"
+  test -f "$lib_dir/tui/src/main.ts"
+  test -d "$lib_dir/tui/node_modules/@opentui/core"
+  test -f "$lib_dir/tui-web/src/main.ts"
+  test -f "$lib_dir/tui-web/web/index.html"
+  test -d "$lib_dir/tui-web/node_modules/@xterm/xterm"
+  mkdir -p "$verify_home"
+  (cd "$verify_home" && env -u HYA_TUI_DIR -u HYA_TUI_WEB_DIR bun "$lib_dir/tui/src/main.ts" --help >/dev/null)
+  (cd "$verify_home" && env -u HYA_TUI_DIR -u HYA_TUI_WEB_DIR bun "$lib_dir/tui-web/src/main.ts" --help >/dev/null)
+  rm -rf "$verify_home"
   resolved=$(command -v hya 2>/dev/null || true)
   if [[ "$resolved" != "$bin_dir/hya" ]]; then
     echo "hya is not first on PATH. Add this to your shell profile: export PATH=\"$bin_dir:\$PATH\"" >&2
@@ -283,6 +355,9 @@ else
   say "+ test -f $lib_dir/bun-adapter/bun.lock"
   say "+ test -f $lib_dir/bun-adapter/src/main.ts"
   say "+ test -d $lib_dir/bun-adapter/node_modules"
+  say "+ test -f $lib_dir/tui/src/main.ts; test -d $lib_dir/tui/node_modules/@opentui/core"
+  say "+ test -f $lib_dir/tui-web/src/main.ts $lib_dir/tui-web/web/index.html; test -d $lib_dir/tui-web/node_modules/@xterm/xterm"
+  say "+ bun $lib_dir/tui/src/main.ts --help; bun $lib_dir/tui-web/src/main.ts --help (outside the checkout)"
   say "+ PATH check: command -v hya must resolve to $bin_dir/hya"
   say "+ rm -f $bin_dir/hya-backend (legacy executable name, if present)"
 fi

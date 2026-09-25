@@ -11,6 +11,11 @@ use std::process::{Command, Output};
 const TARGET: &str = "x86_64-unknown-linux-gnu";
 const WORKFLOW_CONTRACTS: &[&str] = &[
     "cp -R crates/hya-plugin-bun/adapter/src/. \"$bun_adapter/src/\"",
+    "cp -R packages/hya-tui/src/. \"$tui/src/\"",
+    "(cd \"$tui\" && \"$HOME/.bun/bin/bun\" install --frozen-lockfile --production)",
+    "cp -R packages/hya-tui-web/src/. \"$tui_web/src/\"",
+    "cp -R packages/hya-tui-web/web/. \"$tui_web/web/\"",
+    "(cd \"$tui_web\" && \"$HOME/.bun/bin/bun\" install --frozen-lockfile --production)",
     "cargo run --locked -p xtask -- stage-first-party-bundles --target \"$TARGET\" --version \"$version\" --library-dir \"target/$TARGET/release\" --package-root \"dist/$package_dir\" --assets dist",
     "(cd dist && shasum -a 256 \"$archive\" hya-*.hyabundle > \"SHA256SUMS-$TARGET\")",
 ];
