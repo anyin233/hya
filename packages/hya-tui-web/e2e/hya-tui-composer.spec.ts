@@ -222,21 +222,23 @@ test.describe("shell turns", () => {
     // The user block shows what was typed; the assistant shows the command under the bash call.
     await term.waitForText("┃ !echo hello", 20_000)
     await term.waitForText("$ echo hello")
-    // The default permission policy asks before the shell tool runs, also for a user's shell turn.
+    // The default permission policy asks before the shell tool runs, also for a user's shell turn;
+    // the card waits for the answer.
     await term.waitForText(/perm_\w+/)
+    await term.waitForText(/◌ bash\s+echo hello · awaiting approval/)
+    expect((await term.cell((await term.find("◌ bash"))!.row, (await term.find("◌ bash"))!.col))?.fg).toBe(warning)
     const id = /perm_\w+/.exec(await term.text())![0]
     await term.type(`/approve ${id}`)
     await term.press("Enter")
-    await term.waitForText("↳ bash · ok")
+    await term.waitForText(/✓ bash\s+echo hello/)
     await term.waitForText(/^Ready/m)
     expect(await term.text()).not.toContain("The following tool was executed by the user")
     const title = (await composer(term)).title
     expect(title).toBe("")
   })
 
-  // The v1 projection does not carry tool output until the backend fills
-  // `ToolCallPart.output_json` (plan step S6a); the TUI renders it once present.
-  test.fixme("!echo hello shows the command output", async ({ tui, backend }) => {
+  // A shell turn's bash card starts expanded: the command and its output show.
+  test("!echo hello shows the command output", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
     await connected(term)
     await term.type("!echo hello")
@@ -245,7 +247,8 @@ test.describe("shell turns", () => {
     await term.type(`/approve ${/perm_\w+/.exec(await term.text())![0]}`)
     await term.press("Enter")
     await term.waitForText("$ echo hello", 20_000)
-    await term.waitForText(/^\s*hello$/m)
+    await term.waitForText(/✓ bash\s+echo hello/, 20_000)
+    await term.waitForText("│ hello")
   })
 })
 

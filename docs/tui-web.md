@@ -176,10 +176,13 @@ test.describe("streamed reply", () => {
 })
 ```
 
-`model` takes `{ steps: Step[]; protocol?: "chat" | "responses" } | undefined`
+`model` takes `{ steps: Step[]; protocol?: "chat" | "responses"; permission?: "default" | "allow" | "danger" } | undefined`
 (wrapped, not a bare array — Playwright's fixture-option machinery
 parametrizes a test per array element for a bare array "option" value,
-silently dropping steps past the first). `protocol` defaults to `chat`.
+silently dropping steps past the first). `protocol` defaults to `chat`. `permission` is the backend's `permission.model`
+(default `default`, under which `bash`, `edit`, and `write` ask first and
+leave a pending permission request); specs that run those tools without
+answering a prompt use `allow`.
 Leaving `model` unset keeps the existing offline echo model, so specs that
 predate the fake model are unaffected. When `model` is set, the `backend`
 fixture starts the fake model before `hya serve` and writes
@@ -198,8 +201,22 @@ providers:
 mcp: {}
 plugins: {}
 permission:
-  model: default
+  model: default              # the `permission` option
   rules: []
+```
+
+To script a subagent, route the parent's and the child's requests by their
+system prompts: the main agent's contains ``NEVER call `report` `` and a
+subagent's ``Finish your task with `report` `` (see
+`e2e/hya-tui-tools.spec.ts`):
+
+```ts
+test.use({ model: { steps: [] } })
+test("subagent", async ({ fakeModel }) => {
+  fakeModel!.route("NEVER call `report`", [toolStep("task", { description: "survey", prompt: "list files", subagent_type: "general" }), textStep("spawned")])
+  fakeModel!.route("Finish your task with `report`", [toolStep("read", { path: "notes.txt" }), hangStep(20_000)])
+  // …
+})
 ```
 
 To script thinking, select the Responses route:

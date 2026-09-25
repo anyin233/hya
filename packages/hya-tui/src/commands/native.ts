@@ -1,7 +1,7 @@
 /** The built-in slash commands. Add a command by appending a `CommandSpec` here. */
 import { brief, operations } from "../api"
 import { parseApiCommand } from "../client"
-import { modelReference } from "../state/format"
+import { modelReference, sessionTree } from "../state/format"
 import { parseSwitch, sidebarVisible } from "../state/layout"
 import { CommandRegistry, matchValues, type CommandContext, type CommandInvocation, type CommandSpec } from "./registry"
 
@@ -74,7 +74,8 @@ export const nativeCommandSpecs: CommandSpec[] = [
     complete: ({ words, current, head }, context) => words.length === 1 ? matchValues(head, current, context.sessions) : [],
     run: async ({ store, actions }, { args }) => {
       const target = args[0]
-      const id = target && /^\d+$/.test(target) ? store.state.sessions[Number(target) - 1]?.id : target
+      // Numbers count in the sidebar's order (subagent sessions nested under their parent).
+      const id = target && /^\d+$/.test(target) ? sessionTree(store.state.sessions)[Number(target) - 1]?.session.id : target
       if (!id) throw new Error("Usage: /open <session id or number>")
       await actions.openSession(id)
     },
@@ -307,6 +308,17 @@ export const nativeCommandSpecs: CommandSpec[] = [
       const expanded = parseSwitch(args[0], store.state.thinking, "Usage: /thinking [on|off]")
       store.setThinking(expanded)
       store.setStatus(`Reasoning ${expanded ? "expanded" : "collapsed"} · Ctrl+O toggles`)
+    },
+  },
+  {
+    name: "/tools",
+    description: "Expand or collapse tool call cards (Ctrl+G)",
+    argumentHint: "[on|off]",
+    complete: ({ words, current, head }) => words.length === 1 ? matchValues(head, current, switchValues) : [],
+    run: ({ store }, { args }) => {
+      const expanded = parseSwitch(args[0], store.state.tools ?? false, "Usage: /tools [on|off]")
+      store.setTools(expanded)
+      store.setStatus(`Tool calls ${expanded ? "expanded" : "collapsed"} · Ctrl+G toggles`)
     },
   },
   {

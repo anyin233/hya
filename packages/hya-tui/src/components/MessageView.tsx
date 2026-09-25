@@ -4,9 +4,9 @@
  * - user: a panel-colored block with a heavy accent bar on the left; queued
  *   prompts use a muted bar and text and a `queued` tag.
  * - assistant (and other roles): an `● agent · provider/model` header, the
- *   blocks (Markdown text, collapsible reasoning, one-line tool calls with a
- *   shell command and its output indented below when known), and at most one
- *   finish notice (error, cancelled, length limit).
+ *   blocks (Markdown text, collapsible reasoning, tool call cards — a `task`
+ *   card links to its subagent), and at most one finish notice (error,
+ *   cancelled, length limit).
  *
  * Blocks are keyed by part id, so a streaming delta updates the existing
  * Markdown renderable instead of rebuilding it.
@@ -14,9 +14,12 @@
 import { TextAttributes } from "@opentui/core"
 import { createMemo, For, Match, Show, Switch, type JSX } from "solid-js"
 import { useApp } from "../app/context"
-import { reasoningExpanded, reasoningLabel, type Block, type MessageView } from "../state/messages"
-import { colors } from "../theme"
+import { childStatus, taskLink, type ChildStatus } from "../state/members"
+import { reasoningExpanded, reasoningLabel, toolExpanded, type Block, type MessageView } from "../state/messages"
+import type { TaskInfo, Tone, ToolStatus } from "../state/tools"
+import { colors, diffColors, toolColors } from "../theme"
 import { Markdown } from "./Markdown"
+import { useSpinner } from "./Spinner"
 
 /** `<For>` over items keyed by id: children stay mounted while their item changes. */
 export function KeyedFor<T extends { id: string }>(props: { each: T[]; children: (item: () => T, index: () => number) => JSX.Element }) {
@@ -82,7 +85,11 @@ function AssistantMessage(props: { view: MessageView }) {
         <span style={{ fg: colors.muted }}>{model() ? ` · ${model()}` : ""}</span>
       </text>
       <KeyedFor each={props.view.blocks}>
-        {(block) => <BlockView block={block()} streaming={props.view.streaming} />}
+        {(block, index) => (
+          <box width="100%" flexDirection="column" marginTop={cardGap(props.view.blocks[index() - 1], block()) ? 1 : 0}>
+            <BlockView block={block()} streaming={props.view.streaming} />
+          </box>
+        )}
       </KeyedFor>
       <Show when={props.view.notice}>
         {(notice) => (
@@ -91,6 +98,12 @@ function AssistantMessage(props: { view: MessageView }) {
       </Show>
     </box>
   )
+}
+
+/** A blank row between a run of tool cards and the text before or after it. */
+function cardGap(previous: Block | undefined, block: Block): boolean {
+  if (!previous) return false
+  return (previous.kind === "tool") !== (block.kind === "tool") && (previous.kind === "text" || block.kind === "text")
 }
 
 function BlockView(props: { block: Block; streaming: boolean }) {
@@ -103,7 +116,7 @@ function BlockView(props: { block: Block; streaming: boolean }) {
         {(block) => <Reasoning block={block()} />}
       </Match>
       <Match when={props.block.kind === "tool" && props.block}>
-        {(block) => <ToolLine block={block()} />}
+        {(block) => <ToolCard block={block()} />}
       </Match>
       <Match when={props.block.kind === "attachment" && props.block}>
         {(block) => <text fg={colors.muted}>{`↳ attachment · ${block().name}`}</text>}
@@ -128,21 +141,148 @@ function Reasoning(props: { block: Extract<Block, { kind: "reasoning" }> }) {
   )
 }
 
-/** `↳ tool · state`; a shell command (`$ command`) and its output text indented below when known. */
-function ToolLine(props: { block: Extract<Block, { kind: "tool" }> }) {
-  const block = () => props.block
+/** Color of a body line's tone. */
+function toneColor(tone: Tone): string {
+  switch (tone) {
+    case "add": return diffColors.add
+    case "remove": return diffColors.remove
+    case "hunk": return diffColors.hunk
+    case "error": return colors.error
+    case "fg": return colors.fg
+    default: return colors.muted
+  }
+}
+
+/** The state icon of a card: a spinner while running, ✓ done, ✗ failed, ○ pending, ◌ waiting for a permission answer. */
+function StatusIcon(props: { status: ToolStatus | "waiting" }) {
   return (
-    <box width="100%" flexDirection="column">
-      <text wrapMode="word" fg={block().state === "error" ? colors.error : colors.muted}>
-        {`↳ ${block().tool} · ${block().state || "pending"}${block().error ? `: ${block().error}` : ""}`}
-      </text>
-      <Show when={block().command !== undefined || block().output !== undefined}>
-        <box width="100%" flexDirection="column" paddingLeft={2}>
-          <Show when={block().command !== undefined}>
-            <text wrapMode="word" fg={colors.fg}>{`$ ${block().command}`}</text>
+    <Switch>
+      <Match when={props.status === "running"}>
+        <RunningIcon />
+      </Match>
+      <Match when={props.status !== "running"}>
+        <span style={{ fg: iconColor(props.status) }}>{iconGlyph(props.status)}</span>
+      </Match>
+    </Switch>
+  )
+}
+
+function RunningIcon() {
+  const frame = useSpinner()
+  return <span style={{ fg: colors.accent }}>{frame()}</span>
+}
+
+function iconGlyph(status: ToolStatus | "waiting"): string {
+  return status === "done" ? "✓" : status === "failed" ? "✗" : status === "waiting" ? "◌" : "○"
+}
+
+function iconColor(status: ToolStatus | "waiting"): string {
+  return status === "done" ? toolColors.done : status === "failed" ? colors.error : status === "waiting" ? colors.warning : colors.muted
+}
+
+/**
+ * A tool call card: one header line (state icon, tool name, muted summary,
+ * duration on the right), the error line of a failed call, and, when
+ * expanded, the body lines beside a bar. A click on the card toggles it; a
+ * `task` card opens its child session instead (see `TaskCard`).
+ */
+function ToolCard(props: { block: Extract<Block, { kind: "tool" }> }) {
+  const { store } = useApp()
+  const card = () => props.block.card
+  const expanded = () => toolExpanded(store.state, props.block)
+  const waiting = () => card().status !== "done" && card().status !== "failed" && props.block.callId !== undefined
+    && store.state.interactions.some((item) => item.payload?.callId === props.block.callId)
+  return (
+    <Switch>
+      <Match when={card().task}>
+        {(task) => <TaskCard block={props.block} task={task()} />}
+      </Match>
+      <Match when={!card().task}>
+        <box width="100%" flexDirection="column" onMouseDown={() => store.toggleTool(props.block.id, expanded())}>
+          <CardHeader status={waiting() ? "waiting" : card().status} tool={card().tool} summary={`${card().summary}${waiting() ? " · awaiting approval" : ""}`} duration={card().duration} />
+          <Show when={card().error}>
+            <box width="100%" paddingLeft={2}>
+              <text width="100%" wrapMode="word" fg={colors.error}>{card().error}</text>
+            </box>
           </Show>
-          <Show when={block().output !== undefined}>
-            <text wrapMode="word" fg={colors.muted}>{block().output}</text>
+          <Show when={expanded() && card().body.length > 0}>
+            <box width="100%" flexDirection="column" border={["left"]} borderColor={colors.border} paddingLeft={1}>
+              <For each={card().body}>
+                {(line) => <text width="100%" height={1} wrapMode="none" fg={toneColor(line.tone)}>{line.text || " "}</text>}
+              </For>
+            </box>
+          </Show>
+        </box>
+      </Match>
+    </Switch>
+  )
+}
+
+function CardHeader(props: { status: ToolStatus | "waiting"; tool: string; summary: string; duration?: string | undefined }) {
+  return (
+    <box width="100%" height={1} flexDirection="row">
+      <text flexShrink={0} height={1} wrapMode="none">
+        <StatusIcon status={props.status} />
+        <span style={{ fg: colors.fg }}> </span>
+        <b style={{ fg: colors.fg }}>{props.tool}</b>
+        <span style={{ fg: colors.fg }}>{"  "}</span>
+      </text>
+      <text flexGrow={1} flexShrink={1} height={1} wrapMode="none" fg={colors.muted}>{props.summary}</text>
+      <text flexShrink={0} height={1} wrapMode="none" fg={colors.muted}>{props.duration ? ` ${props.duration}` : ""}</text>
+    </box>
+  )
+}
+
+const childLabels: Record<ChildStatus, string> = {
+  starting: "starting", running: "running", idle: "idle", done: "done", failed: "failed", cancelled: "cancelled",
+}
+
+/**
+ * A `task` card: the header (`task  agent · description`) and, always shown,
+ * the child's status with its latest activity (or the member's finish
+ * summary) and how to open it. A click opens the child session read-only.
+ */
+function TaskCard(props: { block: Extract<Block, { kind: "tool" }>; task: TaskInfo }) {
+  const { store, controller } = useApp()
+  const link = () => taskLink({ ...(props.block.callId ? { callId: props.block.callId } : {}), ...(props.task.child ? { child: props.task.child } : {}) }, store.state.members)
+  const child = () => {
+    const id = link().child
+    return id ? store.state.children.get(id) : undefined
+  }
+  const status = () => childStatus(link().member, child())
+  const detail = () => link().member?.summary || child()?.activity
+  const open = () => {
+    const id = link().child
+    if (id) void controller.openSession(id).catch((error: unknown) => store.setStatus(`Open failed: ${String(error)}`))
+  }
+  const statusColor = () => {
+    switch (status()) {
+      case "running": return colors.accent
+      case "idle": case "done": return toolColors.done
+      case "failed": return colors.error
+      case "cancelled": return colors.warning
+      default: return colors.muted
+    }
+  }
+  return (
+    <box width="100%" flexDirection="column" onMouseDown={open}>
+      <CardHeader status={props.block.card.status} tool={props.block.card.tool} summary={props.block.card.summary} duration={props.block.card.duration} />
+      <Show when={props.block.card.error}>
+        <box width="100%" paddingLeft={2}>
+              <text width="100%" wrapMode="word" fg={colors.error}>{props.block.card.error}</text>
+            </box>
+      </Show>
+      <Show when={props.block.card.status !== "failed"}>
+        <box width="100%" flexDirection="column" border={["left"]} borderColor={colors.border} paddingLeft={1}>
+          <text width="100%" height={1} wrapMode="none">
+            <Show when={status() === "running"} fallback={<span style={{ fg: statusColor() }}>{status() === "failed" ? "✗" : status() === "cancelled" ? "!" : status() === "starting" ? "○" : "✓"}</span>}>
+              <RunningIcon />
+            </Show>
+            <span style={{ fg: statusColor() }}>{` ${childLabels[status()]}`}</span>
+            <span style={{ fg: colors.muted }}>{detail() ? `  ↳ ${detail()}` : ""}</span>
+          </text>
+          <Show when={link().child}>
+            {(id) => <text width="100%" height={1} wrapMode="none" fg={colors.muted}>{`click to view · /open ${id()}`}</text>}
           </Show>
         </box>
       </Show>

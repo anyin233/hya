@@ -22,6 +22,7 @@ import type {
   Bootstrap,
   CommandSummary,
   Interaction,
+  MemberInfo,
   MessageInfo,
   ModelSummary,
   StreamEvent,
@@ -33,6 +34,7 @@ import type {
 import type { CompletionContext } from "../completion"
 import type { View } from "../instructions"
 import { toggledSidebar, type SidebarMode } from "./layout"
+import { foldMember, type ChildState } from "./members"
 import { TranscriptOverlay, type OverlayEffect } from "./overlay"
 
 /** A prompt submitted while a turn runs; sent when the session is free. */
@@ -87,6 +89,14 @@ export interface AppState {
   readonly thinking: boolean
   /** Per-part reasoning expansion that overrides `thinking` (mouse click on a Thinking line). */
   readonly reasoningToggles: ReadonlyMap<string, boolean>
+  /** Global tool-card switch (`/tools`, Ctrl+G); `undefined` = the defaults (collapsed, shell turns expanded). */
+  readonly tools: boolean | undefined
+  /** Per-card expansion that overrides `tools` (a click on the card header), by part id. */
+  readonly toolToggles: ReadonlyMap<string, boolean>
+  /** Subagents of the open session (`SessionInfo.members` + `memberUpdated` frames, folded by member). */
+  readonly members: MemberInfo[]
+  /** What the controller last read about each child session, by session id. */
+  readonly children: ReadonlyMap<string, ChildState>
   /** Bumped when the transcript should jump to its newest line (a prompt was submitted). */
   readonly followTick: number
   /** Commands of the shell turns run from this TUI, by the turn's assistant message id. */
@@ -150,6 +160,10 @@ function initialState(): { [K in keyof AppState]: AppState[K] } {
     columns: 80,
     thinking: false,
     reasoningToggles: new Map(),
+    tools: undefined,
+    toolToggles: new Map(),
+    members: [],
+    children: new Map(),
     followTick: 0,
     shellCommands: new Map(),
     pendingShell: undefined,
@@ -225,10 +239,22 @@ export function createAppStore() {
         set("queued", [])
         set("running", false)
         set("turnId", "")
+        set("members", session.members ?? [])
+        set("children", new Map())
       })
     },
 
     setSelected(session: SessionInfo): void { set("selected", session) },
+
+    /** A fresh session list (sidebar nesting and `busy` flags); keeps the open session's row current. */
+    setSessions(rows: SessionInfo[]): void {
+      batch(() => {
+        set("sessions", rows)
+        const selected = state.selected
+        const row = selected && rows.find((candidate) => candidate.id === selected.id)
+        if (row) set("selected", { ...selected, ...row })
+      })
+    },
 
     /**
      * Store a projection read; ignored (returns false) when another session is
@@ -249,8 +275,15 @@ export function createAppStore() {
     applyEvent(event: StreamEvent): OverlayEffect {
       const effect = fold.apply(event)
       if (effect.durable) set("cursor", fold.lastSeq)
+      // Members fold here, not in the overlay: they are session state, not transcript parts.
+      if (event.memberUpdated?.member && (effect.durable || !event.seq)) set("members", foldMember(state.members, event.memberUpdated))
       return effect
     },
+
+    /** Replace the member rows (a fresh `SessionInfo.members` read). */
+    setMembers(rows: MemberInfo[]): void { set("members", rows) },
+    /** Record what was read about one child session. */
+    setChild(id: string, child: ChildState): void { set("children", new Map(state.children).set(id, child)) },
 
     /** Publish the overlay's current snapshot. */
     flushOverlay(): void { set("overlay", fold.messages()) },
@@ -293,6 +326,18 @@ export function createAppStore() {
       const next = new Map(state.reasoningToggles)
       next.set(partId, !(state.reasoningToggles.get(partId) ?? state.thinking))
       set("reasoningToggles", next)
+    },
+
+    /** Expand (`true`) or collapse every tool card; forgets per-card toggles. */
+    setTools(expanded: boolean): void {
+      batch(() => {
+        set("tools", expanded)
+        set("toolToggles", new Map())
+      })
+    },
+    /** Flip one tool card against its current state (`expanded`, as shown now). */
+    toggleTool(partId: string, expanded: boolean): void {
+      set("toolToggles", new Map(state.toolToggles).set(partId, !expanded))
     },
 
     /** Remember the command of a shell turn (its assistant message id) for the transcript. */

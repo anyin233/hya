@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { contextText, headerText, mainContent, mainTitle, pendingLines, sessionListText, truncate, truncateStart } from "../src/state/format"
+import { contextText, headerText, mainContent, mainTitle, pendingLines, sessionListText, sessionTree, truncate, truncateStart } from "../src/state/format"
 import { createAppStore } from "../src/state/store"
 
 const server = "http://127.0.0.1:8080/"
@@ -71,4 +71,27 @@ test("the chat view's text is only the empty-state hint; messages render per com
   expect(mainContent(store.state)).toBe("No messages yet. Type a prompt below.")
   store.enqueue("next question", "hysec_1")
   expect(mainContent(store.state)).toBe("")
+})
+
+test("child sessions nest under their parent in the session list, numbered in that order", () => {
+  const store = createAppStore()
+  const parent = { id: "hysec_p", agent: "build", workdir: "/w", title: "Parent" }
+  const child = { id: "hysec_c", agent: "scout", workdir: "/w", parent: "hysec_p", busy: true }
+  const grandchild = { id: "hysec_g", agent: "general", workdir: "/w", parent: "hysec_c" }
+  const other = { id: "hysec_o", agent: "plan", workdir: "/w", title: "Other" }
+  const orphan = { id: "hysec_x", agent: "general", workdir: "/w", parent: "hysec_gone" }
+  // The server lists newest first, so children come before their parent.
+  const sessions = [grandchild, child, other, parent, orphan]
+  expect(sessionTree(sessions).map((row) => [row.session.id, row.depth])).toEqual([
+    ["hysec_o", 0], ["hysec_p", 0], ["hysec_c", 1], ["hysec_g", 2], ["hysec_x", 0],
+  ])
+  store.applyCatalog({ sessions, interactions: [], models: [], workflows: [], providers: [], savedKeys: [], commands: [] })
+  store.openSession(child)
+  expect(sessionListText(store.state)).toBe([
+    "  1. Other", "   plan", "",
+    "  2. Parent", "   build",
+    "▸  ↳ 3. scout · running",
+    "     ↳ 4. general", "",
+    "  5. hysec_x", "   general",
+  ].join("\n"))
 })
