@@ -46,12 +46,24 @@ export function MessageItem(props: { view: MessageView; first: boolean }) {
         <Match when={props.view.role === "user"}>
           <UserMessage view={props.view} />
         </Match>
-        <Match when={props.view.role !== "user"}>
+        <Match when={props.view.role === "system" || props.view.role === "divider"}>
+          <NoticeMessage view={props.view} />
+        </Match>
+        <Match when={props.view.role !== "user" && props.view.role !== "system" && props.view.role !== "divider"}>
           <AssistantMessage view={props.view} />
         </Match>
       </Switch>
     </box>
   )
+}
+
+/**
+ * An engine system message (e.g. `TEAM QUIESCED …`) or a `CompactionApplied`
+ * divider: a muted notice line, not an assistant header block (E24).
+ */
+function NoticeMessage(props: { view: MessageView }) {
+  const text = () => props.view.blocks.map((block) => (block.kind === "text" ? block.text : "")).filter(Boolean).join("\n")
+  return <text width="100%" wrapMode="word" fg={colors.muted}>{text()}</text>
 }
 
 function UserMessage(props: { view: MessageView }) {
@@ -78,10 +90,17 @@ function UserMessage(props: { view: MessageView }) {
 function AssistantMessage(props: { view: MessageView }) {
   const name = () => props.view.role === "assistant" ? props.view.agent || "assistant" : props.view.role
   const model = () => props.view.role === "assistant" ? props.view.model : ""
+  // E21: while the message streams with no body content yet (the working
+  // indicator line has not shown any of it as a card or text yet), the
+  // header's marker spins in place of the static bullet.
+  const waitingForBody = () => props.view.streaming && props.view.blocks.length === 0
   return (
     <box width="100%" flexDirection="column">
       <text height={1} wrapMode="none">
-        <span style={{ fg: colors.accent }}>● </span>
+        <Show when={waitingForBody()} fallback={<span style={{ fg: colors.accent }}>● </span>}>
+          <RunningIcon />
+          <span style={{ fg: colors.accent }}> </span>
+        </Show>
         <b style={{ fg: colors.accent }}>{name()}</b>
         <span style={{ fg: colors.muted }}>{model() ? ` · ${model()}` : ""}</span>
       </text>

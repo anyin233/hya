@@ -14,7 +14,8 @@ import { mergeTranscript } from "./overlay"
 import type { AppState, QueuedPrompt } from "./store"
 import { toolCard, type ToolCardView } from "./tools"
 
-export type Role = "user" | "assistant" | "system" | "tool" | "unknown"
+/** `divider` is synthetic (a `CompactionApplied` notice), never a server role. */
+export type Role = "user" | "assistant" | "system" | "tool" | "unknown" | "divider"
 
 export type Block =
   | { kind: "text"; id: string; text: string }
@@ -179,7 +180,29 @@ export function queuedView(item: QueuedPrompt): MessageView {
   return view
 }
 
-/** The chat transcript: projection + overlay, then prompts still waiting in the queue. */
+/** A `CompactionApplied` divider (state/store.ts `Divider`) as a synthetic view. */
+export function dividerView(divider: { id: string; text: string }): MessageView {
+  return { id: divider.id, role: "divider", agent: "", model: "", blocks: [{ kind: "text", id: divider.id, text: divider.text }], streaming: false, queued: false }
+}
+
+/**
+ * Splice compaction dividers into `views` right after the message that was
+ * newest when each fired; a divider whose message fell out of the rendered
+ * window (or was never seen) goes at the end, just before queued prompts.
+ */
+function withDividers(views: MessageView[], dividers: AppState["dividers"]): MessageView[] {
+  if (!dividers.length) return views
+  const result = [...views]
+  for (const divider of dividers) {
+    const at = divider.afterMessageId ? result.findIndex((view) => view.id === divider.afterMessageId) : -1
+    const view = dividerView(divider)
+    if (at >= 0) result.splice(at + 1, 0, view)
+    else result.push(view)
+  }
+  return result
+}
+
+/** The chat transcript: projection + overlay, dividers, then prompts still waiting in the queue. */
 export function transcriptViews(state: AppState): MessageView[] {
   const session = state.selected
   const fallback = { agent: session?.agent ?? "", model: session ? modelReference(session) : "" }
@@ -213,7 +236,7 @@ export function transcriptViews(state: AppState): MessageView[] {
     const command = known ?? (text === shellMarker ? shellCommandOf(views[index + 1]) : undefined)
     return command === undefined ? view : shellUserView(view, command)
   })
-  return [...shown, ...state.queued.filter((item) => item.state === "queued").map(queuedView)]
+  return [...withDividers(shown, state.dividers), ...state.queued.filter((item) => item.state === "queued").map(queuedView)]
 }
 
 /** Whether a tool card is expanded: its own toggle, else the global `/tools` switch, else only shell-turn cards. */

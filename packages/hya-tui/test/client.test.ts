@@ -39,6 +39,18 @@ test("creates a session and admits a prompt through scoped v1 requests", async (
   ])
 })
 
+test("getVcsStatus scopes GetVcsStatus to the client's directory", async () => {
+  const calls: string[] = []
+  const fetcher: FetchLike = async (input) => {
+    calls.push(String(input))
+    return Response.json({ branch: "main", dirty: 2 })
+  }
+  const client = new HyaClient("http://127.0.0.1:8080/", "/work/dir", fetcher)
+  const status = await client.getVcsStatus()
+  expect(status).toEqual({ branch: "main", dirty: 2 })
+  expect(calls).toEqual(["http://127.0.0.1:8080/v1/vcs?directory=%2Fwork%2Fdir"])
+})
+
 test("decodes SSE frames split across transport chunks", () => {
   const decoder = new SseDecoder()
   expect(decoder.push(": keepalive\n\ndata: {\"event\":{\"seq\":\"12\",\"session\":\"s\"}}\n\n")).toEqual([

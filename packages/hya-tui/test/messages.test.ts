@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import type { MessageInfo } from "../src/client"
-import { finishNotice, messageView, queuedView, reasoningLabel, shellMarker, toolExpanded, transcriptViews } from "../src/state/messages"
+import { dividerView, finishNotice, messageView, queuedView, reasoningLabel, shellMarker, toolExpanded, transcriptViews } from "../src/state/messages"
 import { createAppStore } from "../src/state/store"
 
 const fallback = { agent: "build", model: "fake/model" }
@@ -104,6 +104,35 @@ test("the transcript merges the overlay and appends only waiting queued prompts"
   expect(views.map((view) => [view.role, view.queued, view.blocks[0]?.kind === "text" ? view.blocks[0].text : ""]))
     .toEqual([["user", false, "hi"], ["assistant", false, "Hel"], ["user", true, "later"]])
   expect(views[1]).toMatchObject({ agent: "build", model: "fake/model", streaming: true })
+})
+
+test("an engine system message gets the system role, not assistant", () => {
+  const view = messageView({ id: "s", role: "ROLE_SYSTEM", parts: [{ id: "p", text: { text: "TEAM QUIESCED" } }] }, fallback)
+  expect(view.role).toBe("system")
+})
+
+test("a divider view carries its text as a single text block under the divider role", () => {
+  const view = dividerView({ id: "divider-1", text: "── context compacted · shake ──" })
+  expect(view).toMatchObject({ id: "divider-1", role: "divider", blocks: [{ kind: "text", text: "── context compacted · shake ──" }] })
+})
+
+test("a compaction divider is spliced right after the message that was newest when it fired", () => {
+  const store = createAppStore()
+  store.openSession({ id: "hysec_1", agent: "build", workdir: "/w" })
+  store.setMessages("hysec_1", [
+    { id: "m1", role: "ROLE_USER", finish: "FINISH_REASON_STOP", parts: [{ id: "p1", text: { text: "hi" } }] },
+    { id: "m2", role: "ROLE_ASSISTANT", finish: "FINISH_REASON_STOP", parts: [{ id: "p2", text: { text: "hello" } }] },
+  ])
+  store.applyEvent({ seq: "1", session: "hysec_1", compactionApplied: { untilSeq: "1", strategy: "shake" } })
+  const views = transcriptViews(store.state)
+  expect(views.map((view) => view.role)).toEqual(["user", "assistant", "divider"])
+  expect(views[2]!.blocks[0]).toMatchObject({ text: "── context compacted · shake ──" })
+  // A later message after the divider stays after it too.
+  store.setMessages("hysec_1", [
+    ...store.state.messages,
+    { id: "m3", role: "ROLE_USER", finish: "FINISH_REASON_STOP", parts: [{ id: "p3", text: { text: "more" } }] },
+  ])
+  expect(transcriptViews(store.state).map((view) => view.role)).toEqual(["user", "assistant", "divider", "user"])
 })
 
 test("a bash tool call shows its command and output when the part carries them", () => {

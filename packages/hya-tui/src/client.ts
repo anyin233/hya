@@ -140,6 +140,15 @@ export interface WorkflowSummary {
   stageCount?: number
 }
 
+/** `VcsStatus` (`GET /v1/vcs`): the status bar reads only `branch`. */
+export interface VcsStatus {
+  branch?: string
+  head?: string
+  dirty?: number
+  ahead?: number
+  behind?: number
+}
+
 export interface Bootstrap {
   location?: { version?: string; directory?: string }
   agents?: AgentSummary[]
@@ -167,6 +176,8 @@ export interface StreamEvent {
   interactionResolved?: { request?: string }
   workflowUpdated?: unknown
   sessionUpdated?: unknown
+  /** A compaction strategy fired (`docs/tui.md` "Notices"); rendered as a transcript divider. */
+  compactionApplied?: { untilSeq?: string; strategy?: string }
 }
 
 export interface StreamFrame {
@@ -425,6 +436,11 @@ export class HyaClient {
   async getSessionTodo(session: string): Promise<TodoItem[]> {
     const result = await this.request<{ items?: TodoItem[] }>("GET", `/v1/sessions/${encodeURIComponent(session)}/todo`)
     return result.items ?? []
+  }
+
+  /** `GetVcsStatus` (`GET /v1/vcs`) scoped to the client's `--dir`; status bar git branch. */
+  async getVcsStatus(): Promise<VcsStatus> {
+    return this.request("GET", `/v1/vcs?directory=${encodeURIComponent(this.directory)}`)
   }
 
   async cancelTurn(session: string, turn: string): Promise<unknown> {

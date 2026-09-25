@@ -170,3 +170,15 @@ export { hangStep, httpErrorStep, reasoningStep, textStep, toolStep, toolsStep, 
 export function hyaTui(backend: Backend): string[] {
   return ["bun", join(repoRoot, "packages/hya-tui/src/main.ts"), "--server", backend.url, "--dir", backend.dir]
 }
+
+/** Init a git repo with one commit in `dir` (E22 status bar git branch). */
+export async function initGitRepo(dir: string, branch = "main"): Promise<void> {
+  const run = (args: string[]): Promise<void> =>
+    new Promise((resolve, reject) => {
+      const child = spawn("git", args, { cwd: dir, stdio: "ignore" })
+      child.once("exit", (code) => (code === 0 ? resolve() : reject(new Error(`git ${args.join(" ")} exited ${code}`))))
+      child.once("error", reject)
+    })
+  await run(["init", "-q", "-b", branch])
+  await run(["-c", "user.email=e2e@hya.test", "-c", "user.name=e2e", "commit", "-q", "--allow-empty", "-m", "init"])
+}

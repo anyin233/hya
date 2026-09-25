@@ -7,7 +7,9 @@ import { MainPanel } from "../components/MainPanel"
 import { PendingBlock } from "../components/PendingBlock"
 import { PromptDock } from "../components/PromptDock"
 import { Sidebar } from "../components/Sidebar"
+import { StatusBar } from "../components/StatusBar"
 import { StatusLine } from "../components/StatusLine"
+import { WorkingIndicator } from "../components/WorkingIndicator"
 import { sidebarVisible, sidebarWidth } from "../state/layout"
 import { colors } from "../theme"
 import { useApp } from "./context"
@@ -15,9 +17,11 @@ import { useApp } from "./context"
 export { layoutBreakpoints } from "../state/layout"
 
 /**
- * Root layout: one main column (header, transcript or view panel, pending
- * block for other sessions' asks, the permission/question prompt, status line, bordered composer, footer instruction) and, when
- * shown, the sidebar on the right (state/layout.ts).
+ * Root layout: one main column (header, status bar, transcript or view
+ * panel, the working indicator for a running turn, pending block for other
+ * sessions' asks, the permission/question prompt, status line, bordered
+ * composer, footer instruction) and, when shown, the sidebar on the right
+ * (state/layout.ts).
  */
 export function App() {
   const { store } = useApp()
@@ -29,7 +33,9 @@ export function App() {
     <box width="100%" height="100%" flexDirection="row" backgroundColor={colors.bg}>
       <box height="100%" flexGrow={1} flexBasis={0} flexDirection="column" backgroundColor={colors.bg}>
         <Header />
+        <StatusBar />
         <MainPanel />
+        <WorkingIndicator />
         <PendingBlock width={size().width - (shown() ? side() : 0)} />
         <PromptDock />
         <StatusLine />
