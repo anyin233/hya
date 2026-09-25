@@ -112,3 +112,23 @@ test("treats a missing auth list as unavailable and reports empty HTTP errors", 
     new Response("gateway error", { status: 502, statusText: "Bad Gateway" }))
   await expect(invalid.bootstrap()).rejects.toThrow("GET /v1/bootstrap: HTTP 502 Bad Gateway")
 })
+
+test("configures a provider route without sending the saved key", async () => {
+  const calls: Array<{ method: string; path: string; body: unknown }> = []
+  const client = new HyaClient("http://127.0.0.1:8080", "/work", async (path, init) => {
+    calls.push({ method: init?.method ?? "GET", path, body: JSON.parse(String(init?.body)) })
+    return Response.json({ providerId: "deepseek", modelRef: "deepseek/deepseek-flash", restartRequired: true })
+  })
+
+  const result = await client.configureProvider({
+    providerId: "deepseek", kind: "openai-compatible", baseUrl: "https://api.deepseek.com",
+    modelIds: ["deepseek-flash", "deepseek-v4-pro"], makeDefault: true,
+  })
+
+  expect(result.restartRequired).toBe(true)
+  expect(calls).toEqual([{
+    method: "PUT", path: "http://127.0.0.1:8080/v1/providers/deepseek/setup",
+    body: { kind: "openai-compatible", baseUrl: "https://api.deepseek.com", modelIds: ["deepseek-flash", "deepseek-v4-pro"], makeDefault: true },
+  }])
+  expect(JSON.stringify(calls)).not.toContain("sk-")
+})

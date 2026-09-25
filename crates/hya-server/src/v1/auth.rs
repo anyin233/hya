@@ -116,7 +116,7 @@ async fn complete_oauth(
     )))
 }
 
-fn validate_provider_id(provider_id: &str) -> Result<(), V1Error> {
+pub(super) fn validate_provider_id(provider_id: &str) -> Result<(), V1Error> {
     let valid = provider_id
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')

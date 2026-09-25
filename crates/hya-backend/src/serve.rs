@@ -63,6 +63,17 @@ pub(crate) async fn cmd_serve(
         .with_mcp_control(mcp_control)
         .with_workflow_control(workflow_control)
         .with_agent_model_control(agent_model_control)
+        .with_provider_setup_control(Arc::new(|setup: hya_server::ProviderSetupSpec| {
+            hya_app::config::upsert_provider_setup(
+                &hya_app::config::active_config_path(),
+                &setup.provider_id,
+                &setup.kind,
+                &setup.base_url,
+                &setup.model_ids,
+                setup.make_default,
+            )
+            .map_err(|error| error.to_string())
+        }))
         .with_workspace_adapters(plugin_host.workspace_adapters())
         .with_default_agent(runtime.default_agent.clone())
         .with_pure_guidance(pure);

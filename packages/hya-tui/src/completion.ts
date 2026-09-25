@@ -3,7 +3,7 @@
 export const nativeCommands = [
   "/new", "/sessions", "/open", "/models", "/model", "/workflows", "/workflow",
   "/interactions", "/approve", "/deny", "/answer", "/cancel", "/refresh",
-  "/api", "/help", "/keys", "/key", "/login",
+  "/api", "/help", "/keys", "/key", "/login", "/connect",
 ]
 
 export interface CompletionContext {
@@ -41,6 +41,7 @@ export function completeCommand(input: string, context: CompletionContext): stri
   const current = words.at(-1) ?? ""
   const head = input.slice(0, input.length - current.length)
   switch (command) {
+    case "/connect": return words.length === 1 ? matches(head, current, ["deepseek", "custom"]) : []
     case "/key":
       if (words.length === 1) return matches(head, current, ["set", "remove"])
       if (words.length === 2 && words[0] === "set") return matches(head, current, context.providers)

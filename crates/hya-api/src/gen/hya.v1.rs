@@ -700,6 +700,36 @@ pub struct ProviderInfo {
     pub supports_oauth: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ConfigureProviderRequest {
+    /// Provider id, also used to match a saved auth credential.
+    #[prost(string, tag = "1")]
+    pub provider_id: ::prost::alloc::string::String,
+    /// Hya provider kind, for example `openai-compatible`.
+    #[prost(string, tag = "2")]
+    pub kind: ::prost::alloc::string::String,
+    /// Upstream API base URL; the selected protocol appends its route path.
+    #[prost(string, tag = "3")]
+    pub base_url: ::prost::alloc::string::String,
+    /// Provider-local model ids to make selectable after restart.
+    #[prost(string, repeated, tag = "4")]
+    pub model_ids: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    /// Set the first model as the default for new sessions after restart.
+    #[prost(bool, tag = "5")]
+    pub make_default: bool,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ConfigureProviderResponse {
+    /// Provider id whose config was saved.
+    #[prost(string, tag = "1")]
+    pub provider_id: ::prost::alloc::string::String,
+    /// First configured provider/model reference.
+    #[prost(string, tag = "2")]
+    pub model_ref: ::prost::alloc::string::String,
+    /// True because live provider routes are assembled at startup.
+    #[prost(bool, tag = "3")]
+    pub restart_required: bool,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListCommandsRequest {
     /// Directory whose command catalog should be listed.
     #[prost(string, tag = "1")]
@@ -875,8 +905,7 @@ pub mod catalog_client {
     )]
     use tonic::codegen::*;
     use tonic::codegen::http::Uri;
-    /// Read-only catalog surface used by pickers, completion UIs, and setup
-    /// flows.
+    /// Catalog surface used by pickers, completion UIs, and provider setup.
     #[derive(Debug, Clone)]
     pub struct CatalogClient<T> {
         inner: tonic::client::Grpc<T>,
@@ -1060,6 +1089,33 @@ pub mod catalog_client {
                 .insert(GrpcMethod::new("hya.v1.Catalog", "GetProvider"));
             self.inner.unary(req, path, codec).await
         }
+        /// Save a non-secret provider route in the backend config. A restart applies it.
+        ///
+        /// hya.http: PUT /v1/providers/{provider_id}/setup
+        pub async fn configure_provider(
+            &mut self,
+            request: impl tonic::IntoRequest<super::ConfigureProviderRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ConfigureProviderResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/hya.v1.Catalog/ConfigureProvider",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("hya.v1.Catalog", "ConfigureProvider"));
+            self.inner.unary(req, path, codec).await
+        }
         /// Slash-command catalog entries.
         ///
         /// hya.http: GET /v1/commands
@@ -1189,6 +1245,16 @@ pub mod catalog_server {
             &self,
             request: tonic::Request<super::GetProviderRequest>,
         ) -> std::result::Result<tonic::Response<super::ProviderInfo>, tonic::Status>;
+        /// Save a non-secret provider route in the backend config. A restart applies it.
+        ///
+        /// hya.http: PUT /v1/providers/{provider_id}/setup
+        async fn configure_provider(
+            &self,
+            request: tonic::Request<super::ConfigureProviderRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ConfigureProviderResponse>,
+            tonic::Status,
+        >;
         /// Slash-command catalog entries.
         ///
         /// hya.http: GET /v1/commands
@@ -1220,8 +1286,7 @@ pub mod catalog_server {
             tonic::Status,
         >;
     }
-    /// Read-only catalog surface used by pickers, completion UIs, and setup
-    /// flows.
+    /// Catalog surface used by pickers, completion UIs, and provider setup.
     #[derive(Debug)]
     pub struct CatalogServer<T> {
         inner: Arc<T>,
@@ -1463,6 +1528,51 @@ pub mod catalog_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = GetProviderSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/hya.v1.Catalog/ConfigureProvider" => {
+                    #[allow(non_camel_case_types)]
+                    struct ConfigureProviderSvc<T: Catalog>(pub Arc<T>);
+                    impl<
+                        T: Catalog,
+                    > tonic::server::UnaryService<super::ConfigureProviderRequest>
+                    for ConfigureProviderSvc<T> {
+                        type Response = super::ConfigureProviderResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::ConfigureProviderRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as Catalog>::configure_provider(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = ConfigureProviderSvc(inner);
                         let codec = tonic::codec::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(

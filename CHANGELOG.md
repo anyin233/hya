@@ -1,9 +1,9 @@
-# 0.37.8
+# 0.37.9
 
-## Contextual instructions in OpenTUI
+## Provider connection in OpenTUI
 
-The OpenTUI frontend now keeps a one-line instruction at the bottom of the
-screen, below the command input. The line follows the current view: `/keys`
-shows the commands to add or remove a provider key, an unavailable key list
-explains the backend version needed, and concealed key entry shows Enter and
-Esc actions. Other views show their next useful command.
+The TUI now guides provider setup with `/connect deepseek` and
+`/connect custom <id> <base-url> <model-id>`. A preview shows the endpoint,
+models, default model, and whether a matching key is saved. Enter saves the
+non-secret route through the new `Catalog.ConfigureProvider` v1 operation;
+Esc cancels. Restart the backend to load the route and use the saved key.

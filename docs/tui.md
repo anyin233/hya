@@ -31,8 +31,8 @@ bun packages/hya-tui/src/main.ts --server http://127.0.0.1:8080 --dir "$PWD"
 `--server` is the backend base HTTP URL (default `http://127.0.0.1:8080`).
 `--dir` is the absolute directory scope sent as `x-hya-directory` (default:
 the frontend process's working directory). `--help` prints the launch syntax.
-The backend's offline echo model is sufficient for a first run; configure a
-provider in the backend for live model calls.
+The backend's offline echo model is sufficient for a first run. The `/connect`
+flow below configures a live provider from the TUI.
 
 Type a plain prompt and press Enter. The frontend creates a session when none
 is open, admits the prompt as a turn, and refreshes its transcript from the
@@ -45,12 +45,38 @@ concealed prompt, and press Enter. The prompt draws bullets only and clears its
 buffer after submission; Esc cancels. `/keys` lists saved provider IDs, and
 `/key remove anthropic` deletes that provider's saved credential. The backend
 stores the key in its user auth directory; it never sends existing key values
-back to the TUI. Configure that provider's model route in the backend config,
-then restart the backend after adding or removing a key so the route resolves
-the new credentials. OAuth login remains available through the backend CLI.
-After typing `/keys`, read the bottom row: it shows `/key set <provider>` to
-add or replace a key and `/key remove <provider>` to delete one. During
+back to the TUI. OAuth login remains available through the backend CLI.
+After typing `/keys`, read the bottom row for the `/connect deepseek` next step.
+During
 concealed entry, the row changes to `Paste API key · Enter saves · Esc cancels`.
+
+### Connect DeepSeek from the TUI
+
+The connection flow saves a non-secret provider route on the backend. It
+connects the route to a saved key by matching the provider ID; it does not
+copy the key into `config.yaml`. For the official DeepSeek OpenAI-format API,
+enter these commands in the TUI:
+
+```text
+/key set deepseek
+<paste your key into the concealed entry and press Enter>
+/connect deepseek
+<review the endpoint, models, default model, and saved-key status; press Enter>
+```
+
+The preset uses `https://api.deepseek.com` and offers `deepseek-flash` and
+`deepseek-v4-pro`, with `deepseek/deepseek-flash` as the default. See
+[DeepSeek's model catalog](https://api-docs.deepseek.com/quick_start/pricing/)
+for current model availability. Esc cancels the preview. Restart the backend
+after saving, reconnect the TUI, and type `/models` to see the new routes.
+Then start a new session with `/new`, or select `deepseek/deepseek-flash` in an
+existing session with `/model deepseek/deepseek-flash`.
+
+For another OpenAI Chat Completions server, use
+`/connect custom <provider-id> <base-url> <model-id> [more-model-ids]`.
+For example, `/connect custom lab http://127.0.0.1:8000/v1 lab-model`.
+Save its key first with `/key set lab` if it requires one. The first model
+becomes the default after backend restart. `/connect` alone shows usage.
 
 If `/keys` says key listing is unavailable, restart the backend with hya
 0.37.6 or newer and run the same frontend command again. For example, a
@@ -69,6 +95,8 @@ backend is running.
 | `/keys` | List configured providers and provider IDs with saved credentials; never display key values. |
 | `/key set <provider>`, `/login <provider>` | Open concealed entry for a provider API key; Enter saves, Esc cancels. |
 | `/key remove <provider>` | Delete the provider's saved credential. |
+| `/connect deepseek` | Preview the official DeepSeek route; Enter saves it, Esc cancels. |
+| `/connect custom <id> <base-url> <model-id> [more-model-ids]` | Preview and save an OpenAI-compatible route. |
 | `/workflows`, `/workflow select <name>`, `/workflow run [name]` | View sources and selected state; select or start a Workflow in the selected session. |
 | `/interactions` | View pending permissions and questions. |
 | `/approve <id>`, `/deny <id>` | Respond to a permission request for this run only (`persist: false`). |
@@ -132,6 +160,7 @@ string encoded 64-bit values, and the error envelope documented in the
 | `POST /v1/interactions/{id}/respond` | `{permission: {allowed: boolean, persist: false}}` or `{question: {answer: string}}` | `RespondInteractionResponse.applied` |
 | `GET /v1/models` | No body | `ListModelsResponse.models: ModelSummary[]` |
 | `GET /v1/providers` | No body | `ListProvidersResponse.providers: ProviderSummary[]` for key suggestions. |
+| `PUT /v1/providers/{provider_id}/setup` | `{kind: "openai-compatible", baseUrl: string, modelIds: string[], makeDefault: boolean}`. The path ID matches the saved auth ID; an optional body `providerId` must match it. | `{providerId: string, modelRef: string, restartRequired: true}`. Saves `providers.<id>.kind`, `base_url`, and `models` in backend `config.yaml`; when `makeDefault` is true, saves `default_model` as the first model. The runtime applies it after restart. |
 | `GET /v1/commands` | No body | `ListCommandsResponse.commands: CommandSummary[]` for slash completion. |
 | `GET /v1/auth` | No body | `ListProviderAuthResponse.providerIds: string[]` (saved provider IDs only; empty field omitted). A 404 marks key listing unavailable without blocking startup. |
 | `PUT /v1/auth/{provider_id}` | `{apiKey: string}` | `SetProviderAuthResponse.status: AuthStatus`; key value is sent only to the backend. |
@@ -149,7 +178,9 @@ from the current view; it makes no HTTP request:
 | Models | `Next: /model <provider/model> to switch this session · /help` |
 | Workflows | `Next: /workflow select <name> or /workflow run [name]` |
 | Interactions | `Next: /approve <id>, /deny <id>, or /answer <id> <text>` |
-| Saved keys | `Next: /key set <provider> to add · /key remove <provider> to delete · Tab completes` |
+| Saved keys | `Next: /connect deepseek · /key set <provider> · /key remove <provider>` |
+| Connect preview | `Enter saves route · Esc cancels · /connect custom <id> <base-url> <model-id>` |
+| Connect help or saved result | `Next: /connect deepseek · /connect custom <id> <base-url> <model-id>` |
 | Saved keys when `GET /v1/auth` is unavailable | `Next: restart backend 0.37.6+ to list saved keys · /help` |
 | Concealed key entry | `Paste API key · Enter saves · Esc cancels` |
 | API | `Next: /api GET /v1/health · /help for command syntax` |

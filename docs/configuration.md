@@ -1,5 +1,12 @@
 # Configuration
 
+The OpenTUI frontend can configure an OpenAI-compatible provider without
+editing this file by hand: save its credential with `/key set <provider>`,
+then use `/connect deepseek` or `/connect custom <id> <base-url> <model-id>`.
+See [OpenTUI provider setup](tui.md#connect-deepseek-from-the-tui) for the
+worked example and exact HTTP contract. Restart the backend after saving the
+route because provider routing is composed at startup.
+
 hya reads its own YAML config from:
 
 1. `$XDG_CONFIG_HOME/hya/config.yaml` (when that file exists)
@@ -1547,4 +1554,3 @@ Example bag fragment:
   }
 }
 ```
-

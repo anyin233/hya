@@ -18,6 +18,8 @@ test("completes native and backend slash commands with current catalog arguments
   expect(completeCommand("/com", context)).toEqual(["/compact"])
   expect(completeCommand("/key s", context)).toEqual(["/key set"])
   expect(completeCommand("/key remove a", context)).toEqual(["/key remove anthropic"])
+  expect(completeCommand("/conn", context)).toEqual(["/connect"])
+  expect(completeCommand("/connect d", context)).toEqual(["/connect deepseek"])
   expect(completeCommand("/model anth", context)).toEqual(["/model anthropic/claude"])
   expect(completeCommand("/workflow run r", context)).toEqual(["/workflow run release"])
   expect(completeCommand("/api GET /v1/m", context)).toEqual(["/api GET /v1/models"])

@@ -589,6 +589,90 @@ pub fn upsert_oauth_provider(
     Ok(())
 }
 
+/// Save an OpenAI-compatible provider route without copying a credential into config.yaml.
+pub fn upsert_provider_setup(
+    config_path: &Path,
+    provider_id: &str,
+    kind: &str,
+    base_url: &str,
+    model_ids: &[String],
+    make_default: bool,
+) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        !provider_id.is_empty()
+            && provider_id
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'),
+        "invalid provider id"
+    );
+    anyhow::ensure!(kind == "openai-compatible", "unsupported provider kind");
+    let url = reqwest::Url::parse(base_url).context("invalid provider base URL")?;
+    anyhow::ensure!(
+        matches!(url.scheme(), "http" | "https")
+            && url.host_str().is_some()
+            && url.username().is_empty()
+            && url.password().is_none()
+            && url.query().is_none()
+            && url.fragment().is_none(),
+        "provider base URL must be an http(s) origin or path without credentials, query, or fragment"
+    );
+    anyhow::ensure!(
+        !model_ids.is_empty()
+            && model_ids.iter().all(|id| {
+                !id.is_empty() && id.len() <= 128 && !id.chars().any(char::is_whitespace)
+            }),
+        "at least one valid model id is required"
+    );
+
+    let existing = if config_path.exists() {
+        std::fs::read_to_string(config_path)
+            .with_context(|| format!("read {}", config_path.display()))?
+    } else {
+        DEFAULT_CONFIG_YAML.to_owned()
+    };
+    let mut root: Value = serde_norway::from_str(if existing.trim().is_empty() {
+        DEFAULT_CONFIG_YAML
+    } else {
+        &existing
+    })
+    .with_context(|| format!("parse {}", config_path.display()))?;
+    let map = root
+        .as_mapping_mut()
+        .ok_or_else(|| anyhow::anyhow!("config root must be a mapping"))?;
+    let providers = map
+        .entry(Value::String("providers".into()))
+        .or_insert_with(|| Value::Mapping(Mapping::new()))
+        .as_mapping_mut()
+        .ok_or_else(|| anyhow::anyhow!("providers must be a mapping"))?;
+    let provider = providers
+        .entry(Value::String(provider_id.into()))
+        .or_insert_with(|| Value::Mapping(Mapping::new()))
+        .as_mapping_mut()
+        .ok_or_else(|| anyhow::anyhow!("provider must be a mapping"))?;
+    provider.insert(Value::String("kind".into()), Value::String(kind.into()));
+    provider.insert(
+        Value::String("base_url".into()),
+        Value::String(base_url.trim_end_matches('/').into()),
+    );
+    provider.insert(
+        Value::String("models".into()),
+        Value::Sequence(model_ids.iter().cloned().map(Value::String).collect()),
+    );
+    if make_default {
+        map.insert(
+            Value::String("default_model".into()),
+            Value::String(format!("{provider_id}/{}", model_ids[0])),
+        );
+    }
+    let rendered = serde_norway::to_string(&root).context("render updated hya config.yaml")?;
+    if let Some(parent) = config_path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("create config dir {}", parent.display()))?;
+    }
+    std::fs::write(config_path, rendered)
+        .with_context(|| format!("write {}", config_path.display()))
+}
+
 /// Create the default hya config file if neither supported config path exists.
 ///
 /// Returns `Ok(Some(...))` only for the first creation. Existing configs are
@@ -2798,6 +2882,58 @@ providers:
             [ModelConfig::Id(id)] if id == "user-model"
         ));
         assert_eq!(parsed.default_model.as_deref(), Some("codex/user-model"));
+    }
+
+    #[test]
+    fn provider_setup_persists_route_without_a_key_and_preserves_unrelated_config() {
+        let path = std::env::temp_dir().join(format!(
+            "hya-provider-setup-{}-{}.yaml",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::write(
+            &path,
+            "default_model: hya/offline\nproviders: {}\nplugins: {}\n",
+        )
+        .unwrap();
+        upsert_provider_setup(
+            &path,
+            "deepseek",
+            "openai-compatible",
+            "https://api.deepseek.com",
+            &["deepseek-flash".into(), "deepseek-v4-pro".into()],
+            true,
+        )
+        .unwrap();
+        let rendered = std::fs::read_to_string(&path).unwrap();
+        let parsed = parse_config(&rendered).unwrap();
+        assert_eq!(
+            parsed.default_model.as_deref(),
+            Some("deepseek/deepseek-flash")
+        );
+        assert_eq!(parsed.providers["deepseek"].models.len(), 2);
+        assert_eq!(
+            parsed.providers["deepseek"].base_url,
+            "https://api.deepseek.com"
+        );
+        assert!(rendered.contains("plugins:"));
+        assert!(!rendered.contains("api_key:"));
+        assert!(
+            upsert_provider_setup(
+                &path,
+                "deepseek",
+                "openai-compatible",
+                "https://user:secret@example.com",
+                &["foo".into()],
+                true,
+            )
+            .is_err()
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), rendered);
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]

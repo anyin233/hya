@@ -6,9 +6,10 @@ use std::path::Path;
 
 use axum::extract::{Path as AxumPath, Query, State};
 use axum::http::HeaderMap;
-use axum::routing::{delete, get};
+use axum::routing::{delete, get, put};
 use axum::{Json, Router};
 
+use crate::ProviderSetupSpec;
 use crate::ServerState;
 use hya_api::v1 as pb;
 use serde_json::{Value, json};
@@ -21,12 +22,57 @@ pub(crate) fn router() -> Router<ServerState> {
         .route("/v1/models", get(list_models))
         .route("/v1/providers", get(list_providers))
         .route("/v1/providers/:provider_id", get(get_provider))
+        .route("/v1/providers/:provider_id/setup", put(configure_provider))
         .route("/v1/commands", get(list_commands))
         .route("/v1/skills", get(list_skills))
         .route("/v1/tools", get(list_tools))
         .route("/v1/runtime/schemas", get(list_runtime_schemas))
         .route("/v1/permissions/rules", get(list_saved_rules))
         .route("/v1/permissions/rules/:rule", delete(delete_saved_rule))
+}
+
+async fn configure_provider(
+    State(st): State<ServerState>,
+    AxumPath(provider_id): AxumPath<String>,
+    Json(request): Json<pb::ConfigureProviderRequest>,
+) -> Result<Json<pb::ConfigureProviderResponse>, V1Error> {
+    super::auth::validate_provider_id(&provider_id)?;
+    if !request.provider_id.is_empty() && request.provider_id != provider_id {
+        return Err(V1Error::invalid_argument("provider id does not match path"));
+    }
+    if request.kind != "openai-compatible" {
+        return Err(V1Error::invalid_argument("kind must be openai-compatible"));
+    }
+    if request.base_url.is_empty()
+        || request.model_ids.is_empty()
+        || request.model_ids.iter().any(|model| model.is_empty())
+    {
+        return Err(V1Error::invalid_argument(
+            "base URL and model ids are required",
+        ));
+    }
+    let Some(control) = st.provider_setup_control.clone() else {
+        return Err(V1Error::unavailable(
+            "provider setup is unavailable on this server",
+        ));
+    };
+    let model_ref = format!("{provider_id}/{}", request.model_ids[0]);
+    let setup = ProviderSetupSpec {
+        provider_id: provider_id.clone(),
+        kind: request.kind,
+        base_url: request.base_url,
+        model_ids: request.model_ids,
+        make_default: request.make_default,
+    };
+    tokio::task::spawn_blocking(move || control(setup))
+        .await
+        .map_err(|error| V1Error::internal(error.to_string()))?
+        .map_err(V1Error::invalid_argument)?;
+    Ok(Json(pb::ConfigureProviderResponse {
+        provider_id,
+        model_ref,
+        restart_required: true,
+    }))
 }
 
 async fn list_agents(

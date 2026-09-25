@@ -93,8 +93,7 @@ Complete a provider OAuth flow with the callback code.
 
 ## Service `Catalog`
 
-Read-only catalog surface used by pickers, completion UIs, and setup
-flows.
+Catalog surface used by pickers, completion UIs, and provider setup.
 
 | RPC | HTTP | gRPC | Request | Response |
 |---|---|---|---|---|
@@ -102,6 +101,7 @@ flows.
 | `ListModels` | `GET /v1/models` | `hya.v1.Catalog.ListModels` | `ListModelsRequest` | `ListModelsResponse` |
 | `ListProviders` | `GET /v1/providers` | `hya.v1.Catalog.ListProviders` | `ListProvidersRequest` | `ListProvidersResponse` |
 | `GetProvider` | `GET /v1/providers/{provider_id}` | `hya.v1.Catalog.GetProvider` | `GetProviderRequest` | `ProviderInfo` |
+| `ConfigureProvider` | `PUT /v1/providers/{provider_id}/setup` | `hya.v1.Catalog.ConfigureProvider` | `ConfigureProviderRequest` | `ConfigureProviderResponse` |
 | `ListCommands` | `GET /v1/commands` | `hya.v1.Catalog.ListCommands` | `ListCommandsRequest` | `ListCommandsResponse` |
 | `ListSkills` | `GET /v1/skills` | `hya.v1.Catalog.ListSkills` | `ListSkillsRequest` | `ListSkillsResponse` |
 | `ListTools` | `GET /v1/tools` | `hya.v1.Catalog.ListTools` | `ListToolsRequest` | `ListToolsResponse` |
@@ -124,6 +124,11 @@ Providers with their aggregate auth status.
 ### `Catalog.GetProvider`
 
 One provider's detail including its models.
+
+
+### `Catalog.ConfigureProvider`
+
+Save a non-secret provider route in the backend config. A restart applies it.
 
 
 ### `Catalog.ListCommands`
@@ -886,6 +891,26 @@ Provider detail with its model rows.
 | `models` (2) | `repeated ModelSummary` | Models exposed by this provider. |
 | `supports_api_key` (3) | `bool` | Whether an API-key auth method is supported. |
 | `supports_oauth` (4) | `bool` | Whether an OAuth flow is supported. |
+
+### `ConfigureProviderRequest`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `provider_id` (1) | `string` | Provider id, also used to match a saved auth credential. |
+| `kind` (2) | `string` | Hya provider kind, for example `openai-compatible`. |
+| `base_url` (3) | `string` | Upstream API base URL; the selected protocol appends its route path. |
+| `model_ids` (4) | `repeated string` | Provider-local model ids to make selectable after restart. |
+| `make_default` (5) | `bool` | Set the first model as the default for new sessions after restart. |
+
+### `ConfigureProviderResponse`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `provider_id` (1) | `string` | Provider id whose config was saved. |
+| `model_ref` (2) | `string` | First configured provider/model reference. |
+| `restart_required` (3) | `bool` | True because live provider routes are assembled at startup. |
 
 ### `ListCommandsRequest`
 

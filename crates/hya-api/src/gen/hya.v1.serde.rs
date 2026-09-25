@@ -2804,6 +2804,297 @@ impl<'de> serde::Deserialize<'de> for CompleteOauthResponse {
         deserializer.deserialize_struct("hya.v1.CompleteOauthResponse", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for ConfigureProviderRequest {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.provider_id.is_empty() {
+            len += 1;
+        }
+        if !self.kind.is_empty() {
+            len += 1;
+        }
+        if !self.base_url.is_empty() {
+            len += 1;
+        }
+        if !self.model_ids.is_empty() {
+            len += 1;
+        }
+        if self.make_default {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("hya.v1.ConfigureProviderRequest", len)?;
+        if !self.provider_id.is_empty() {
+            struct_ser.serialize_field("providerId", &self.provider_id)?;
+        }
+        if !self.kind.is_empty() {
+            struct_ser.serialize_field("kind", &self.kind)?;
+        }
+        if !self.base_url.is_empty() {
+            struct_ser.serialize_field("baseUrl", &self.base_url)?;
+        }
+        if !self.model_ids.is_empty() {
+            struct_ser.serialize_field("modelIds", &self.model_ids)?;
+        }
+        if self.make_default {
+            struct_ser.serialize_field("makeDefault", &self.make_default)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for ConfigureProviderRequest {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "provider_id",
+            "providerId",
+            "kind",
+            "base_url",
+            "baseUrl",
+            "model_ids",
+            "modelIds",
+            "make_default",
+            "makeDefault",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            ProviderId,
+            Kind,
+            BaseUrl,
+            ModelIds,
+            MakeDefault,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "providerId" | "provider_id" => Ok(GeneratedField::ProviderId),
+                            "kind" => Ok(GeneratedField::Kind),
+                            "baseUrl" | "base_url" => Ok(GeneratedField::BaseUrl),
+                            "modelIds" | "model_ids" => Ok(GeneratedField::ModelIds),
+                            "makeDefault" | "make_default" => Ok(GeneratedField::MakeDefault),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = ConfigureProviderRequest;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct hya.v1.ConfigureProviderRequest")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<ConfigureProviderRequest, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut provider_id__ = None;
+                let mut kind__ = None;
+                let mut base_url__ = None;
+                let mut model_ids__ = None;
+                let mut make_default__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::ProviderId => {
+                            if provider_id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("providerId"));
+                            }
+                            provider_id__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Kind => {
+                            if kind__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("kind"));
+                            }
+                            kind__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::BaseUrl => {
+                            if base_url__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("baseUrl"));
+                            }
+                            base_url__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::ModelIds => {
+                            if model_ids__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("modelIds"));
+                            }
+                            model_ids__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::MakeDefault => {
+                            if make_default__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("makeDefault"));
+                            }
+                            make_default__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(ConfigureProviderRequest {
+                    provider_id: provider_id__.unwrap_or_default(),
+                    kind: kind__.unwrap_or_default(),
+                    base_url: base_url__.unwrap_or_default(),
+                    model_ids: model_ids__.unwrap_or_default(),
+                    make_default: make_default__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("hya.v1.ConfigureProviderRequest", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for ConfigureProviderResponse {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.provider_id.is_empty() {
+            len += 1;
+        }
+        if !self.model_ref.is_empty() {
+            len += 1;
+        }
+        if self.restart_required {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("hya.v1.ConfigureProviderResponse", len)?;
+        if !self.provider_id.is_empty() {
+            struct_ser.serialize_field("providerId", &self.provider_id)?;
+        }
+        if !self.model_ref.is_empty() {
+            struct_ser.serialize_field("modelRef", &self.model_ref)?;
+        }
+        if self.restart_required {
+            struct_ser.serialize_field("restartRequired", &self.restart_required)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for ConfigureProviderResponse {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "provider_id",
+            "providerId",
+            "model_ref",
+            "modelRef",
+            "restart_required",
+            "restartRequired",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            ProviderId,
+            ModelRef,
+            RestartRequired,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "providerId" | "provider_id" => Ok(GeneratedField::ProviderId),
+                            "modelRef" | "model_ref" => Ok(GeneratedField::ModelRef),
+                            "restartRequired" | "restart_required" => Ok(GeneratedField::RestartRequired),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = ConfigureProviderResponse;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct hya.v1.ConfigureProviderResponse")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<ConfigureProviderResponse, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut provider_id__ = None;
+                let mut model_ref__ = None;
+                let mut restart_required__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::ProviderId => {
+                            if provider_id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("providerId"));
+                            }
+                            provider_id__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::ModelRef => {
+                            if model_ref__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("modelRef"));
+                            }
+                            model_ref__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::RestartRequired => {
+                            if restart_required__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("restartRequired"));
+                            }
+                            restart_required__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(ConfigureProviderResponse {
+                    provider_id: provider_id__.unwrap_or_default(),
+                    model_ref: model_ref__.unwrap_or_default(),
+                    restart_required: restart_required__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("hya.v1.ConfigureProviderResponse", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for ConnectMcpRequest {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>

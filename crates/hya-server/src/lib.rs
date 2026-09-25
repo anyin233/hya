@@ -18,6 +18,7 @@ use tower_http::cors::{AllowHeaders, AllowOrigin, Any, CorsLayer};
 mod agent_model_control;
 mod mcp_control;
 mod pending;
+mod provider_setup_control;
 mod runs;
 mod state;
 mod support;
@@ -34,6 +35,7 @@ pub use agent_model_control::{
 pub use hya_proto::WorkspaceAdapterInfo;
 pub use hya_tool::FormatterStatus;
 pub use mcp_control::McpControl;
+pub use provider_setup_control::{ProviderSetupControl, ProviderSetupSpec};
 pub use state::AppState;
 pub(crate) use state::ServerState;
 pub use v1::V1Grpc;

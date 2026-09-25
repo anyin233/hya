@@ -57,6 +57,20 @@ export interface ProviderSummary {
   auth?: string
 }
 
+export interface ConfigureProviderRequest {
+  providerId: string
+  kind: "openai-compatible"
+  baseUrl: string
+  modelIds: string[]
+  makeDefault: boolean
+}
+
+export interface ConfigureProviderResponse {
+  providerId: string
+  modelRef: string
+  restartRequired: boolean
+}
+
 export interface CommandSummary {
   name: string
   description?: string
@@ -266,6 +280,11 @@ export class HyaClient {
 
   async listProviders(): Promise<ProviderSummary[]> {
     return this.listAll("/v1/providers", "providers")
+  }
+
+  configureProvider(setup: ConfigureProviderRequest): Promise<ConfigureProviderResponse> {
+    const { providerId, ...body } = setup
+    return this.request("PUT", `/v1/providers/${encodeURIComponent(providerId)}/setup`, body)
   }
 
   async listCommands(): Promise<CommandSummary[]> {

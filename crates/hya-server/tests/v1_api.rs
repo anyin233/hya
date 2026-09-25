@@ -12,7 +12,7 @@ use http_body_util::BodyExt;
 use hya_core::{AgentSpec, EventBus, SessionEngine};
 use hya_proto::{AgentName, FinishReason, ModelRef};
 use hya_provider::{FakeProvider, FakeStep, ProviderRouter};
-use hya_server::{AppState, router};
+use hya_server::{AppState, ProviderSetupSpec, router};
 use hya_store::SessionStore;
 use hya_tool::{PermissionPlane, PermissionRules, ToolRegistry};
 use serde_json::{Value, json};
@@ -88,6 +88,48 @@ async fn create_session(app: &axum::Router) -> String {
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     body["session"]["id"].as_str().unwrap().to_owned()
+}
+
+#[tokio::test]
+async fn provider_setup_dispatches_non_secret_route_and_requires_restart() {
+    let saved = Arc::new(std::sync::Mutex::new(Vec::<ProviderSetupSpec>::new()));
+    let observed = Arc::clone(&saved);
+    let app = router(
+        state()
+            .await
+            .with_provider_setup_control(Arc::new(move |setup| {
+                observed.lock().unwrap().push(setup);
+                Ok(())
+            })),
+    );
+    let (status, body) = send(
+        app.clone(),
+        Method::PUT,
+        "/v1/providers/deepseek/setup",
+        json!({
+            "kind": "openai-compatible",
+            "baseUrl": "https://api.deepseek.com",
+            "modelIds": ["deepseek-flash", "deepseek-v4-pro"],
+            "makeDefault": true
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["modelRef"], "deepseek/deepseek-flash");
+    assert_eq!(body["restartRequired"], true);
+    assert_eq!(saved.lock().unwrap()[0].provider_id, "deepseek");
+    assert_eq!(saved.lock().unwrap()[0].model_ids.len(), 2);
+
+    let (status, _) = send(
+        app,
+        Method::PUT,
+        "/v1/providers/../setup",
+        json!({
+            "kind": "openai-compatible", "baseUrl": "https://api.deepseek.com", "modelIds": ["one"]
+        }),
+    )
+    .await;
+    assert_ne!(status, StatusCode::OK);
 }
 
 #[tokio::test]

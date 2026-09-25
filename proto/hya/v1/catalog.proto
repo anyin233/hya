@@ -5,8 +5,7 @@ package hya.v1;
 
 import "hya/v1/common.proto";
 
-// Read-only catalog surface used by pickers, completion UIs, and setup
-// flows.
+// Catalog surface used by pickers, completion UIs, and provider setup.
 service Catalog {
   // Agents that can be bound to a session.
   //
@@ -27,6 +26,11 @@ service Catalog {
   //
   // hya.http: GET /v1/providers/{provider_id}
   rpc GetProvider(GetProviderRequest) returns (ProviderInfo);
+
+  // Save a non-secret provider route in the backend config. A restart applies it.
+  //
+  // hya.http: PUT /v1/providers/{provider_id}/setup
+  rpc ConfigureProvider(ConfigureProviderRequest) returns (ConfigureProviderResponse);
 
   // Slash-command catalog entries.
   //
@@ -173,6 +177,28 @@ message ProviderInfo {
   bool supports_api_key = 3;
   // Whether an OAuth flow is supported.
   bool supports_oauth = 4;
+}
+
+message ConfigureProviderRequest {
+  // Provider id, also used to match a saved auth credential.
+  string provider_id = 1;
+  // Hya provider kind, for example `openai-compatible`.
+  string kind = 2;
+  // Upstream API base URL; the selected protocol appends its route path.
+  string base_url = 3;
+  // Provider-local model ids to make selectable after restart.
+  repeated string model_ids = 4;
+  // Set the first model as the default for new sessions after restart.
+  bool make_default = 5;
+}
+
+message ConfigureProviderResponse {
+  // Provider id whose config was saved.
+  string provider_id = 1;
+  // First configured provider/model reference.
+  string model_ref = 2;
+  // True because live provider routes are assembled at startup.
+  bool restart_required = 3;
 }
 
 message ListCommandsRequest {

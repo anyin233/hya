@@ -13,11 +13,13 @@ import { resolve } from "node:path"
 import openapi from "../../../docs/protocol/openapi.json"
 import { completeCommand, SecretEntry, type CompletionContext } from "./completion"
 import { footerInstruction, type View } from "./instructions"
+import { customSetup, deepseekSetup } from "./provider_setup"
 import {
   HyaClient,
   parseApiCommand,
   type AgentSummary,
   type CommandSummary,
+  type ConfigureProviderRequest,
   type Interaction,
   type MessageInfo,
   type ModelSummary,
@@ -148,6 +150,9 @@ async function main(): Promise<void> {
   let refreshTimer: ReturnType<typeof setTimeout> | undefined
   let closing = false
   let secretProvider: string | undefined
+  let connectionDraft: ConfigureProviderRequest | undefined
+  const connectionHelp = "Use /connect deepseek for the official DeepSeek route.\nFirst save a key with /key set deepseek.\n\nOther providers: /connect custom <id> <base-url> <model-id> [more-model-ids]."
+  let connectionResult = connectionHelp
   const secretEntry = new SecretEntry()
 
   function completionContext(): CompletionContext {
@@ -176,7 +181,9 @@ async function main(): Promise<void> {
 
   function showStatus(text: string): void { status.content = text }
   function repaint(): void {
-    footer.content = footerInstruction(view, savedKeysAvailable, secretProvider !== undefined)
+    footer.content = view === "connect" && !connectionDraft
+      ? "Next: /connect deepseek · /connect custom <id> <base-url> <model-id>"
+      : footerInstruction(view, savedKeysAvailable, secretProvider !== undefined)
     header.content = `hya ${selected ? `· ${selected.title || selected.id} · ${selected.agent} ${modelReference(selected)}` : "· no session"} · ${options.server}`
     sessionText.content = sessions.length
       ? sessions.map((session, index) => `${session.id === selected?.id ? "▸" : " "} ${index + 1}. ${session.title || session.id}\n   ${session.agent}${session.busy ? " · running" : ""}`).join("\n\n")
@@ -184,7 +191,7 @@ async function main(): Promise<void> {
     interactionText.content = interactions.length
       ? interactions.map((item) => `${item.type?.includes("QUESTION") ? "?" : "!"} ${item.title}\n${item.id}`).join("\n\n")
       : "No pending requests"
-    mainPanel.title = ({ chat: "Chat", models: "Models", workflows: "Workflows", interactions: "Interactions", keys: "Saved provider keys", api: "API commands", help: "Help" } as const)[view]
+    mainPanel.title = ({ chat: "Chat", models: "Models", workflows: "Workflows", interactions: "Interactions", keys: "Saved provider keys", connect: "Connect provider", api: "API commands", help: "Help" } as const)[view]
     switch (view) {
       case "chat":
         mainText.content = messages.length ? messages.slice(-50).map(formatMessage).join("\n\n") : "No messages yet. Type a prompt below."
@@ -206,6 +213,13 @@ async function main(): Promise<void> {
           : ids.length
           ? ids.map((id) => `${savedKeys.includes(id) ? "● saved" : "○ no saved key"}  ${id}`).join("\n")
           : "No providers or saved keys. Use /key set <provider> to add one."
+        break
+      }
+      case "connect": {
+        const draft = connectionDraft
+        mainText.content = draft
+          ? `Provider: ${draft.providerId}\nProtocol: OpenAI Chat Completions\nBase URL: ${draft.baseUrl}\nModels: ${draft.modelIds.join(", ")}\nDefault model: ${draft.providerId}/${draft.modelIds[0]}\nSaved key: ${savedKeys.includes(draft.providerId) ? "yes" : "no — use /key set " + draft.providerId}\n\nPress Enter to save this route on the backend. Restart the backend to load it. Press Esc to cancel.`
+          : connectionResult
         break
       }
       case "api": mainText.content = apiOutput; break
@@ -330,6 +344,21 @@ async function main(): Promise<void> {
         }
         case "/models": view = "models"; await refresh(); break
         case "/keys": view = "keys"; await refresh(); break
+        case "/connect": {
+          if (args.length === 0) {
+            connectionDraft = undefined
+            connectionResult = connectionHelp
+          } else if (args[0] === "deepseek" && args.length === 1) {
+            connectionDraft = deepseekSetup()
+          } else if (args[0] === "custom") {
+            connectionDraft = customSetup(args.slice(1))
+          } else {
+            throw new Error("Usage: /connect deepseek | /connect custom <provider> <base-url> <model-id> [more-model-ids]")
+          }
+          view = "connect"
+          repaint()
+          break
+        }
         case "/login":
         case "/key": {
           const action = command === "/login" ? "set" : args[0]
@@ -434,13 +463,34 @@ async function main(): Promise<void> {
     "/models               List models", "/model <provider/model> Change current session model", "/workflows            List workflows",
     "/keys                 List saved provider key names", "/key set <provider>   Enter a key in a concealed prompt",
     "/login <provider>     Alias for /key set", "/key remove <provider> Delete a saved key",
+    "/connect deepseek     Preview official DeepSeek route, Enter saves, Esc cancels",
+    "/connect custom <id> <base-url> <model-id> [more-model-ids]",
     "/workflow select <name> | /workflow run [name]", "/interactions         Show pending permissions and questions",
     "/approve <id> | /deny <id> | /answer <id> <text>", "/cancel               Cancel current turn", "/refresh              Refresh all views",
     "/api                  List all v1 HTTP operations", "/api METHOD /v1/path [JSON object]", "", "Tab completes commands · Ctrl+R refresh · Ctrl+C quit",
   ].join("\n")
 
+  function confirmConnection(): void {
+    const draft = connectionDraft
+    if (!draft) return
+    connectionDraft = undefined
+    void client.configureProvider(draft).then((result) => {
+      connectionResult = `Saved ${result.modelRef} on the backend.\nRestart the backend, reconnect the TUI, then use /new or /model ${result.modelRef}.\n${savedKeys.includes(result.providerId) ? "Saved key will be used after restart." : `Save its key with /key set ${result.providerId}.`}`
+      repaint()
+      showStatus(`Saved ${result.providerId} route · restart backend to apply`)
+    }).catch((error: unknown) => {
+      connectionDraft = draft
+      showStatus(`Provider setup failed: ${String(error)}`)
+      repaint()
+    })
+  }
+
   input.on(InputRenderableEvents.ENTER, (value: string) => {
     input.value = ""
+    if (view === "connect" && connectionDraft && !value.trim()) {
+      confirmConnection()
+      return
+    }
     void submit(value)
   })
   input.on(InputRenderableEvents.INPUT, (value: string) => {
@@ -481,6 +531,17 @@ async function main(): Promise<void> {
         secretText.content = `Key: ${secretEntry.mask}`
       }
       return
+    }
+    if (view === "connect" && connectionDraft && !input.value.trim()) {
+      if (key.name === "escape" || key.name === "esc") {
+        key.preventDefault()
+        key.stopPropagation()
+        connectionDraft = undefined
+        view = "keys"
+        repaint()
+        showStatus("Provider setup cancelled")
+        return
+      }
     }
     if (key.name === "tab" || key.sequence === "\t") {
       key.preventDefault()

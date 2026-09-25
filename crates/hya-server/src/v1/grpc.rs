@@ -301,6 +301,23 @@ impl pb::catalog_server::Catalog for V1Grpc {
         )
     }
 
+    async fn configure_provider(
+        &self,
+        request: GrpcRequest<pb::ConfigureProviderRequest>,
+    ) -> Result<GrpcResponse<pb::ConfigureProviderResponse>, Status> {
+        let inner = request.into_inner();
+        let provider_id = field(&inner, "providerId");
+        into_response(
+            self.dispatch::<_, _>(
+                "PUT",
+                &format!("/v1/providers/{provider_id}/setup"),
+                BTreeMap::new(),
+                &inner,
+            )
+            .await?,
+        )
+    }
+
     async fn list_commands(
         &self,
         request: GrpcRequest<pb::ListCommandsRequest>,

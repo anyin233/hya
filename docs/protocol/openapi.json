@@ -460,6 +460,17 @@
         "x-server-streaming": false
       }
     },
+    "/v1/providers/{provider_id}/setup": {
+      "put": {
+        "operationId": "Catalog.ConfigureProvider",
+        "summary": "Save a non-secret provider route in the backend config. A restart applies it.",
+        "tags": [
+          "Catalog"
+        ],
+        "x-grpc-method": "hya.v1.Catalog.ConfigureProvider",
+        "x-server-streaming": false
+      }
+    },
     "/v1/pty": {
       "post": {
         "operationId": "Pty.CreatePty",
@@ -1272,6 +1283,45 @@
             "type": "boolean"
           },
           "supports_oauth": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ConfigureProviderRequest": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "provider_id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "base_url": {
+            "type": "string"
+          },
+          "model_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "make_default": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ConfigureProviderResponse": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "provider_id": {
+            "type": "string"
+          },
+          "model_ref": {
+            "type": "string"
+          },
+          "restart_required": {
             "type": "boolean"
           }
         }

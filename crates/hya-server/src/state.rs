@@ -10,6 +10,7 @@ use tokio::sync::{broadcast, mpsc};
 
 use crate::agent_model_control::{AgentModelControl, EmptyAgentModelControl};
 use crate::mcp_control::{EmptyMcpControl, McpControl};
+use crate::provider_setup_control::ProviderSetupControl;
 use crate::support;
 use crate::workflow_control::{EmptyWorkflowControl, WorkflowControl};
 use crate::{pending, runs};
@@ -29,6 +30,7 @@ pub struct AppState {
     mcp_control: Arc<dyn McpControl>,
     agent_model_control: Arc<dyn AgentModelControl>,
     workflow_control: Arc<dyn WorkflowControl>,
+    provider_setup_control: Option<Arc<ProviderSetupControl>>,
     workspace_adapters: Vec<WorkspaceAdapterInfo>,
     formatter_status: Vec<FormatterStatus>,
     default_agent: Option<String>,
@@ -50,6 +52,7 @@ impl AppState {
             mcp_control: Arc::new(EmptyMcpControl),
             agent_model_control: Arc::new(EmptyAgentModelControl),
             workflow_control: Arc::new(EmptyWorkflowControl),
+            provider_setup_control: None,
             workspace_adapters: Vec::new(),
             formatter_status: Vec::new(),
             default_agent: None,
@@ -108,6 +111,13 @@ impl AppState {
         self
     }
 
+    /// Install the app-owned provider-config writer for v1 setup requests.
+    #[must_use]
+    pub fn with_provider_setup_control(mut self, control: Arc<ProviderSetupControl>) -> Self {
+        self.provider_setup_control = Some(control);
+        self
+    }
+
     /// Register plugin workspace adapters for experimental workspace routes.
     #[must_use]
     pub fn with_workspace_adapters(mut self, adapters: Vec<WorkspaceAdapterInfo>) -> Self {
@@ -163,6 +173,7 @@ pub(crate) struct ServerState {
     pub(crate) mcp_control: Arc<dyn McpControl>,
     pub(crate) agent_model_control: Arc<dyn AgentModelControl>,
     pub(crate) workflow_control: Arc<dyn WorkflowControl>,
+    pub(crate) provider_setup_control: Option<Arc<ProviderSetupControl>>,
     pub(crate) pty: support::pty_state::PtyState,
     pub(crate) workspace_adapters: Vec<WorkspaceAdapterInfo>,
     pub(crate) formatter_status: Vec<FormatterStatus>,
@@ -184,6 +195,7 @@ impl ServerState {
             mcp_control: app.mcp_control,
             agent_model_control: app.agent_model_control,
             workflow_control: app.workflow_control,
+            provider_setup_control: app.provider_setup_control,
             pty: support::pty_state::PtyState::new(),
             workspace_adapters: app.workspace_adapters,
             formatter_status: app.formatter_status,
