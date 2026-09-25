@@ -56,3 +56,54 @@ jobs:
       - name: agent process e2e (Track P)
         if: ${{ !cancelled() }}
         run: cargo test -p hya-e2e -- --test-threads=1
+
+  tui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      # Same pin used by the release workflow's packaging job.
+      - name: Install Bun 1.4.2
+        run: |
+          curl -fsSL https://bun.sh/install | bash -s "bun-v1.4.2"
+          test "$("$HOME/.bun/bin/bun" --version)" = "1.4.2"
+          echo "$HOME/.bun/bin" >> "$GITHUB_PATH"
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+      - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+      - name: hya-tui install
+        if: ${{ !cancelled() }}
+        working-directory: packages/hya-tui
+        run: bun install --frozen-lockfile
+      - name: hya-tui-web install
+        if: ${{ !cancelled() }}
+        working-directory: packages/hya-tui-web
+        run: bun install --frozen-lockfile
+      - name: hya-tui typecheck and unit tests
+        if: ${{ !cancelled() }}
+        working-directory: packages/hya-tui
+        run: bun run typecheck && bun test
+      - name: hya-tui-web typecheck and unit tests
+        if: ${{ !cancelled() }}
+        working-directory: packages/hya-tui-web
+        run: bun run typecheck && bun test ./test
+      # e2e/hya-tui.spec.ts and e2e/hya-tui-launch.spec.ts start this binary as
+      # the backend under test (see docs/tui-web.md#running-the-tests).
+      - name: build hya
+        if: ${{ !cancelled() }}
+        run: cargo build --locked -p hya-backend --bin hya
+      - name: install Playwright Chromium
+        if: ${{ !cancelled() }}
+        working-directory: packages/hya-tui-web
+        run: bunx playwright install --with-deps chromium
+      - name: hya-tui-web browser e2e
+        if: ${{ !cancelled() }}
+        working-directory: packages/hya-tui-web
+        env:
+          HYA_BIN: ${{ github.workspace }}/target/debug/hya
+        run: bunx playwright test
+      - name: upload playwright test-results on failure
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: tui-web-test-results
+          path: packages/hya-tui-web/test-results/
+          if-no-files-found: ignore
