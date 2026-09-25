@@ -2,7 +2,7 @@
 //!
 //! `script(seed, ...)` produces a plausible single-session event log mixing
 //! transcript streaming, usage records (per-round and legacy), message/part
-//! deletion (revert, compaction), compaction markers, forks, Workflow runs
+//! deletion (revert, compaction), compaction markers, todo lists, forks, Workflow runs
 //! (including a re-emitted `WorkflowRunStarted` for an already-seen run, which
 //! only replay-only reducer state can deduplicate), and team roster/mail
 //! traffic. The same seed always yields the same events, so a failing seed is
@@ -13,8 +13,8 @@
 use hya_proto::{
     AgentName, CompactionStrategy, Event, FinishReason, MailEndpoint, MailKind, MemberId,
     MemberRunStatus, MessageId, ModelRef, OwnerRunId, PartId, Role, RosterStatus, SessionId,
-    SubagentMode, TokenUsage, ToolCallId, UsagePurpose, WorkflowIdentity, WorkflowRevision,
-    WorkflowRunId, WorkflowRunStatus, WorkflowSourceId, WorkflowStagePlan,
+    SubagentMode, TodoItem, TodoStatus, TokenUsage, ToolCallId, UsagePurpose, WorkflowIdentity,
+    WorkflowRevision, WorkflowRunId, WorkflowRunStatus, WorkflowSourceId, WorkflowStagePlan,
 };
 use uuid::Uuid;
 
@@ -101,7 +101,7 @@ impl Script {
 
     fn step(&mut self) -> Event {
         let session = self.session;
-        match self.rng.below(23) {
+        match self.rng.below(25) {
             0 | 1 => {
                 let message = MessageId::from_uuid(self.uuid());
                 self.messages.push((message, Vec::new()));
@@ -361,6 +361,22 @@ impl Script {
                 session,
                 mode: ["manual", "yolo", "acme/approver/careful"][self.rng.below(3)].to_string(),
             },
+            23 => {
+                let count = self.rng.below(4);
+                let todos = (0..count)
+                    .map(|index| TodoItem {
+                        id: (index + 1).to_string(),
+                        content: format!("todo {}", self.rng.below(100)),
+                        status: [
+                            TodoStatus::Pending,
+                            TodoStatus::InProgress,
+                            TodoStatus::Blocked,
+                            TodoStatus::Completed,
+                        ][self.rng.below(4)],
+                    })
+                    .collect();
+                Event::TodosUpdated { session, todos }
+            }
             _ => self.title(),
         }
     }

@@ -310,7 +310,8 @@ the root.
 
 | Wire `type` | Payload fields | Reducer |
 | --- | --- | --- |
-| `context_compacted` | `session`, summary `message`, `strategy`, `from_message`, `to_message`, `folded_count`, `input_tokens_est`, `threshold` | **no-op** for projection; durable checkpoint marker. The system message carries summary output and the range points to the folded log entries. |
+| `context_compacted` | `session`, summary `message`, `strategy`, `from_message`, `to_message`, `folded_count`, `input_tokens_est`, `threshold` | **no-op** for projection; durable checkpoint marker. The system message carries summary output and the range points to the folded log entries. A manual compaction (`CompactSession` / `SummarizeSession`) records `strategy: local_summarizer` over the whole window it summarized, with `threshold: 0` (no threshold tripped); v1 maps it to `compactionApplied { manual: true }`. |
+| `todos_updated` | `session`, `todos: [TodoItem { id, content, status }]` | Fold: `SessionProjection.todos` = the full list. Appended by the engine right after a todo tool's `tool_result` whose `metadata.todos` differs from the folded list (reads and no-op writes append nothing). Sessions without it (logs before reducer version 5) read the latest todo tool result instead. |
 | `session_forked` | `session`, `source`, optional `before_message` | Fold: `SessionProjection.forked_from = source`. Records a fork edge separate from subagent `SessionCreated.parent`. Copied messages receive fresh ids; their copied `tokens` never count toward the fork's `usage`. |
 | `context_evicted` | `session`, `evicted_parts`, `tokens_before`, `tokens_after`, `threshold` | **no-op**; request-local tool-output reduction. The event log retains full outputs. |
 
@@ -577,6 +578,7 @@ Projection {
 | `context_status` | latest `context_status` |
 | `forked_from` | `session_forked` (omitted when `None`) |
 | `usage` | `usage_recorded` + legacy `message_finished.tokens` fallback (omitted when empty) |
+| `todos` | latest `todos_updated` (omitted when `None`) |
 
 ### `MessageProjection` fields
 
@@ -587,7 +589,7 @@ Projection {
 | `time_created`, `time_updated` | Envelope `ts_millis` (Unix ms): the message's `message_started`, and the newest event folded onto the message (lifecycle, part events including live `seq == 0` deltas, `usage_recorded`, `error` with `failed_message`, `message_finished`). Step markers do not move it. Omitted when `None`. |
 | `config_generation` | `turn_binding_recorded` |
 | `finish`, `cause`, `tokens` | `message_finished` (`cause` omitted when `None`) |
-| `usage` | `usage_recorded` with this `message`: `MessageUsage { model /* latest round */, tokens /* sum */, rounds }` (omitted when `None`) |
+| `usage` | `usage_recorded` with this `message`: `MessageUsage { model /* latest round */, tokens /* sum */, rounds, last_round /* latest round alone */ }` (omitted when `None`) |
 | `files`, `agents` | `user_prompt_context_recorded` |
 | `parts` | text / reasoning / tool events |
 | `error` | `error` with `failed_message` = this message: `MessageError { code, message }` (omitted when `None`) |

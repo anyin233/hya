@@ -96,6 +96,9 @@ message TokenUsage {
   uint64 cache_read = 4;
   // Prompt tokens written to cache (cache creation).
   uint64 cache_write = 5;
+  // The provider did not report the thinking share of `output` (for a sum:
+  // at least one summed call did not), so `reasoning` undercounts.
+  bool reasoning_unknown = 6;
 }
 
 // Text part of a message.
@@ -227,6 +230,15 @@ message MessageInfo {
   // the engine recorded an error for it (`finish` is then
   // `FINISH_REASON_ERROR`).
   MessageError error = 11;
+  // Billed usage of the assistant message: the sum of its provider rounds
+  // (`TokensRecorded`), or the finish total for messages recorded before
+  // per-round usage. Unset when no usage was reported.
+  TokenUsage usage = 12;
+  // Usage of the message's latest provider round (the request `model`
+  // served last). Its `input + cache_read + cache_write` is the prompt that
+  // round sent: the session's context occupancy against the model's
+  // `ModelSummary.context_limit`. Unset without per-round usage.
+  TokenUsage round_usage = 13;
 }
 
 // Recorded failure of the turn behind an assistant message.

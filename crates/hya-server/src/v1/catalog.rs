@@ -156,6 +156,8 @@ pub(crate) fn model_rows(st: &ServerState) -> Vec<pb::ModelSummary> {
             auth: *auth_by_provider
                 .get(&row.provider_id)
                 .unwrap_or(&(pb::AuthStatus::NotApplicable as i32)),
+            context_limit: u64::from(row.capabilities.max_context),
+            output_limit: u64::from(row.capabilities.max_output),
         })
         .collect()
 }

@@ -135,6 +135,71 @@ leave `agent` empty; clients fall back to the session binding there.
 { "event": { "seq": "31", "session": "hysec_...", "messageFinished": { "message": "msg_...", "finish": "FINISH_REASON_CANCELLED", "cause": "FINISH_CAUSE_SHUTDOWN" } } }
 ```
 
+## Usage and context occupancy
+
+`TokenUsage` follows one invariant on every provider
+([providers.md](../architecture/providers.md#token-usage-normalization)):
+`input` excludes the cache, so the whole prompt is
+`input + cacheRead + cacheWrite`; `output` includes thinking; `reasoning` is
+the thinking share of `output`, and `reasoningUnknown` says the provider did
+not report it (for a sum: some summed call did not). All counts are `uint64`,
+so protojson sends them as strings, and zero fields are omitted.
+
+- `ModelSummary.contextLimit` / `.outputLimit` (`GET /v1/models`): the
+  model's context window (configured `limit.context`, else the route's
+  advertised default) and output ceiling (`limit.output`); `0`/absent when
+  unknown.
+- `MessageInfo.usage`: billed usage of an assistant message, the sum of its
+  provider rounds (the finish total for messages recorded before per-round
+  usage). `MessageInfo.roundUsage`: its latest round alone, served by
+  `MessageInfo.model`.
+- `SessionInfo.usage`: everything billed for the session (turn rounds plus
+  title/summarizer side calls). It never decreases.
+- `tokensRecorded { message, model, usage }` (durable): one per provider call
+  as it is billed; `message` is empty for side calls.
+
+**Context occupancy** is the prompt the latest round sent:
+`roundUsage.input + roundUsage.cacheRead + roundUsage.cacheWrite` of the
+newest assistant message that has `roundUsage`, against the
+`contextLimit` of its `model`. Live, take the newest `tokensRecorded` with a
+non-empty `message` instead. For **session totals** read `SessionInfo.usage`
+(re-read it on `tokensRecorded`); summing messages would miss side calls.
+
+```json
+{ "event": { "seq": "18", "session": "hysec_...", "tokensRecorded": { "message": "msg_...", "model": "openai/gpt-5", "usage": { "input": "30", "output": "10", "cacheRead": "1150" } } } }
+```
+
+## Todos
+
+`GET /v1/sessions/{id}/todo` (`GetSessionTodo`) returns the session's todo
+list: `items[] { id, content, status }` with `TODO_STATUS_PENDING`,
+`_IN_PROGRESS`, `_BLOCKED`, or `_COMPLETED`. Whenever a todo tool changes
+it, the session stream carries the whole new list as durable
+`todoUpdated { items }` (same rows); a read that changes nothing sends none.
+Sessions whose list was last edited by an older hya have no `todoUpdated`
+record; the read still returns their list (taken from the todo tool results)
+until the next edit records one.
+
+```json
+{ "event": { "seq": "22", "session": "hysec_...", "todoUpdated": { "items": [ { "id": "1", "content": "write tests", "status": "TODO_STATUS_IN_PROGRESS" } ] } } }
+```
+
+## Compaction
+
+When part of the context is folded behind a summary, the session stream
+carries durable `compactionApplied { untilSeq, strategy, message,
+foldedCount, manual }`: `message` is the system message holding the summary
+(the transcript divider), `foldedCount` the number of messages folded behind
+it, and `manual` is true for a client-requested `CompactSession` (or
+`SummarizeSession`, which compacts the same way) and false when the context
+crossed its threshold mid-turn. `strategy` is `Native`, `LocalSummarizer`
+(also every manual compaction), `SnapCompact`, or `Handoff`. The record is
+in `ListEvents` too, so a transcript read can place the divider.
+
+```json
+{ "event": { "seq": "40", "session": "hysec_...", "compactionApplied": { "untilSeq": "40", "strategy": "LocalSummarizer", "message": "msg_...", "foldedCount": 12, "manual": true } } }
+```
+
 ## Live and durable frames
 
 Stream events come in two kinds:

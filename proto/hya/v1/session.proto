@@ -100,6 +100,10 @@ message SessionInfo {
   // status (folded from the session's own log). The live counterpart is
   // the `memberUpdated` stream event.
   repeated MemberInfo members = 13;
+  // Billed usage of the session: every provider call made for it (turn
+  // rounds plus title/summarizer side calls), summed. Never decreases
+  // (compaction, revert, and deletion keep billed usage). Unset when none.
+  TokenUsage usage = 14;
 }
 
 message CreateSessionRequest {

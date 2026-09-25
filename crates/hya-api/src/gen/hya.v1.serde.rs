@@ -2718,6 +2718,15 @@ impl serde::Serialize for CompactionApplied {
         if !self.strategy.is_empty() {
             len += 1;
         }
+        if !self.message.is_empty() {
+            len += 1;
+        }
+        if self.folded_count != 0 {
+            len += 1;
+        }
+        if self.manual {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("hya.v1.CompactionApplied", len)?;
         if self.until_seq != 0 {
             #[allow(clippy::needless_borrow)]
@@ -2726,6 +2735,15 @@ impl serde::Serialize for CompactionApplied {
         }
         if !self.strategy.is_empty() {
             struct_ser.serialize_field("strategy", &self.strategy)?;
+        }
+        if !self.message.is_empty() {
+            struct_ser.serialize_field("message", &self.message)?;
+        }
+        if self.folded_count != 0 {
+            struct_ser.serialize_field("foldedCount", &self.folded_count)?;
+        }
+        if self.manual {
+            struct_ser.serialize_field("manual", &self.manual)?;
         }
         struct_ser.end()
     }
@@ -2740,12 +2758,19 @@ impl<'de> serde::Deserialize<'de> for CompactionApplied {
             "until_seq",
             "untilSeq",
             "strategy",
+            "message",
+            "folded_count",
+            "foldedCount",
+            "manual",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             UntilSeq,
             Strategy,
+            Message,
+            FoldedCount,
+            Manual,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -2769,6 +2794,9 @@ impl<'de> serde::Deserialize<'de> for CompactionApplied {
                         match value {
                             "untilSeq" | "until_seq" => Ok(GeneratedField::UntilSeq),
                             "strategy" => Ok(GeneratedField::Strategy),
+                            "message" => Ok(GeneratedField::Message),
+                            "foldedCount" | "folded_count" => Ok(GeneratedField::FoldedCount),
+                            "manual" => Ok(GeneratedField::Manual),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -2790,6 +2818,9 @@ impl<'de> serde::Deserialize<'de> for CompactionApplied {
             {
                 let mut until_seq__ = None;
                 let mut strategy__ = None;
+                let mut message__ = None;
+                let mut folded_count__ = None;
+                let mut manual__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::UntilSeq => {
@@ -2806,11 +2837,34 @@ impl<'de> serde::Deserialize<'de> for CompactionApplied {
                             }
                             strategy__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::Message => {
+                            if message__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("message"));
+                            }
+                            message__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::FoldedCount => {
+                            if folded_count__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("foldedCount"));
+                            }
+                            folded_count__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::Manual => {
+                            if manual__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("manual"));
+                            }
+                            manual__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(CompactionApplied {
                     until_seq: until_seq__.unwrap_or_default(),
                     strategy: strategy__.unwrap_or_default(),
+                    message: message__.unwrap_or_default(),
+                    folded_count: folded_count__.unwrap_or_default(),
+                    manual: manual__.unwrap_or_default(),
                 })
             }
         }
@@ -14772,6 +14826,12 @@ impl serde::Serialize for MessageInfo {
         if self.error.is_some() {
             len += 1;
         }
+        if self.usage.is_some() {
+            len += 1;
+        }
+        if self.round_usage.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("hya.v1.MessageInfo", len)?;
         if !self.id.is_empty() {
             struct_ser.serialize_field("id", &self.id)?;
@@ -14812,6 +14872,12 @@ impl serde::Serialize for MessageInfo {
         if let Some(v) = self.error.as_ref() {
             struct_ser.serialize_field("error", v)?;
         }
+        if let Some(v) = self.usage.as_ref() {
+            struct_ser.serialize_field("usage", v)?;
+        }
+        if let Some(v) = self.round_usage.as_ref() {
+            struct_ser.serialize_field("roundUsage", v)?;
+        }
         struct_ser.end()
     }
 }
@@ -14836,6 +14902,9 @@ impl<'de> serde::Deserialize<'de> for MessageInfo {
             "finish_cause",
             "finishCause",
             "error",
+            "usage",
+            "round_usage",
+            "roundUsage",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -14851,6 +14920,8 @@ impl<'de> serde::Deserialize<'de> for MessageInfo {
             TimeUpdated,
             FinishCause,
             Error,
+            Usage,
+            RoundUsage,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -14883,6 +14954,8 @@ impl<'de> serde::Deserialize<'de> for MessageInfo {
                             "timeUpdated" | "time_updated" => Ok(GeneratedField::TimeUpdated),
                             "finishCause" | "finish_cause" => Ok(GeneratedField::FinishCause),
                             "error" => Ok(GeneratedField::Error),
+                            "usage" => Ok(GeneratedField::Usage),
+                            "roundUsage" | "round_usage" => Ok(GeneratedField::RoundUsage),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -14913,6 +14986,8 @@ impl<'de> serde::Deserialize<'de> for MessageInfo {
                 let mut time_updated__ = None;
                 let mut finish_cause__ = None;
                 let mut error__ = None;
+                let mut usage__ = None;
+                let mut round_usage__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Id => {
@@ -14981,6 +15056,18 @@ impl<'de> serde::Deserialize<'de> for MessageInfo {
                             }
                             error__ = map_.next_value()?;
                         }
+                        GeneratedField::Usage => {
+                            if usage__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("usage"));
+                            }
+                            usage__ = map_.next_value()?;
+                        }
+                        GeneratedField::RoundUsage => {
+                            if round_usage__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("roundUsage"));
+                            }
+                            round_usage__ = map_.next_value()?;
+                        }
                     }
                 }
                 Ok(MessageInfo {
@@ -14995,6 +15082,8 @@ impl<'de> serde::Deserialize<'de> for MessageInfo {
                     time_updated: time_updated__,
                     finish_cause: finish_cause__.unwrap_or_default(),
                     error: error__,
+                    usage: usage__,
+                    round_usage: round_usage__,
                 })
             }
         }
@@ -15298,6 +15387,12 @@ impl serde::Serialize for ModelSummary {
         if self.auth != 0 {
             len += 1;
         }
+        if self.context_limit != 0 {
+            len += 1;
+        }
+        if self.output_limit != 0 {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("hya.v1.ModelSummary", len)?;
         if !self.id.is_empty() {
             struct_ser.serialize_field("id", &self.id)?;
@@ -15319,6 +15414,16 @@ impl serde::Serialize for ModelSummary {
                 .map_err(|_| serde::ser::Error::custom(format!("Invalid variant {}", self.auth)))?;
             struct_ser.serialize_field("auth", &v)?;
         }
+        if self.context_limit != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("contextLimit", ToString::to_string(&self.context_limit).as_str())?;
+        }
+        if self.output_limit != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("outputLimit", ToString::to_string(&self.output_limit).as_str())?;
+        }
         struct_ser.end()
     }
 }
@@ -15338,6 +15443,10 @@ impl<'de> serde::Deserialize<'de> for ModelSummary {
             "displayName",
             "reasoning",
             "auth",
+            "context_limit",
+            "contextLimit",
+            "output_limit",
+            "outputLimit",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -15348,6 +15457,8 @@ impl<'de> serde::Deserialize<'de> for ModelSummary {
             DisplayName,
             Reasoning,
             Auth,
+            ContextLimit,
+            OutputLimit,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -15375,6 +15486,8 @@ impl<'de> serde::Deserialize<'de> for ModelSummary {
                             "displayName" | "display_name" => Ok(GeneratedField::DisplayName),
                             "reasoning" => Ok(GeneratedField::Reasoning),
                             "auth" => Ok(GeneratedField::Auth),
+                            "contextLimit" | "context_limit" => Ok(GeneratedField::ContextLimit),
+                            "outputLimit" | "output_limit" => Ok(GeneratedField::OutputLimit),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -15400,6 +15513,8 @@ impl<'de> serde::Deserialize<'de> for ModelSummary {
                 let mut display_name__ = None;
                 let mut reasoning__ = None;
                 let mut auth__ = None;
+                let mut context_limit__ = None;
+                let mut output_limit__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Id => {
@@ -15438,6 +15553,22 @@ impl<'de> serde::Deserialize<'de> for ModelSummary {
                             }
                             auth__ = Some(map_.next_value::<AuthStatus>()? as i32);
                         }
+                        GeneratedField::ContextLimit => {
+                            if context_limit__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("contextLimit"));
+                            }
+                            context_limit__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
+                        GeneratedField::OutputLimit => {
+                            if output_limit__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("outputLimit"));
+                            }
+                            output_limit__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
                     }
                 }
                 Ok(ModelSummary {
@@ -15447,6 +15578,8 @@ impl<'de> serde::Deserialize<'de> for ModelSummary {
                     display_name: display_name__.unwrap_or_default(),
                     reasoning: reasoning__.unwrap_or_default(),
                     auth: auth__.unwrap_or_default(),
+                    context_limit: context_limit__.unwrap_or_default(),
+                    output_limit: output_limit__.unwrap_or_default(),
                 })
             }
         }
@@ -20466,6 +20599,9 @@ impl serde::Serialize for SessionInfo {
         if !self.members.is_empty() {
             len += 1;
         }
+        if self.usage.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("hya.v1.SessionInfo", len)?;
         if !self.id.is_empty() {
             struct_ser.serialize_field("id", &self.id)?;
@@ -20508,6 +20644,9 @@ impl serde::Serialize for SessionInfo {
         if !self.members.is_empty() {
             struct_ser.serialize_field("members", &self.members)?;
         }
+        if let Some(v) = self.usage.as_ref() {
+            struct_ser.serialize_field("usage", v)?;
+        }
         struct_ser.end()
     }
 }
@@ -20535,6 +20674,7 @@ impl<'de> serde::Deserialize<'de> for SessionInfo {
             "permission_mode",
             "permissionMode",
             "members",
+            "usage",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -20552,6 +20692,7 @@ impl<'de> serde::Deserialize<'de> for SessionInfo {
             Busy,
             PermissionMode,
             Members,
+            Usage,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -20586,6 +20727,7 @@ impl<'de> serde::Deserialize<'de> for SessionInfo {
                             "busy" => Ok(GeneratedField::Busy),
                             "permissionMode" | "permission_mode" => Ok(GeneratedField::PermissionMode),
                             "members" => Ok(GeneratedField::Members),
+                            "usage" => Ok(GeneratedField::Usage),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -20618,6 +20760,7 @@ impl<'de> serde::Deserialize<'de> for SessionInfo {
                 let mut busy__ = None;
                 let mut permission_mode__ = None;
                 let mut members__ = None;
+                let mut usage__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Id => {
@@ -20700,6 +20843,12 @@ impl<'de> serde::Deserialize<'de> for SessionInfo {
                             }
                             members__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::Usage => {
+                            if usage__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("usage"));
+                            }
+                            usage__ = map_.next_value()?;
+                        }
                     }
                 }
                 Ok(SessionInfo {
@@ -20716,6 +20865,7 @@ impl<'de> serde::Deserialize<'de> for SessionInfo {
                     busy: busy__.unwrap_or_default(),
                     permission_mode: permission_mode__.unwrap_or_default(),
                     members: members__.unwrap_or_default(),
+                    usage: usage__,
                 })
             }
         }
@@ -24283,6 +24433,9 @@ impl serde::Serialize for TokenUsage {
         if self.cache_write != 0 {
             len += 1;
         }
+        if self.reasoning_unknown {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("hya.v1.TokenUsage", len)?;
         if self.input != 0 {
             #[allow(clippy::needless_borrow)]
@@ -24309,6 +24462,9 @@ impl serde::Serialize for TokenUsage {
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("cacheWrite", ToString::to_string(&self.cache_write).as_str())?;
         }
+        if self.reasoning_unknown {
+            struct_ser.serialize_field("reasoningUnknown", &self.reasoning_unknown)?;
+        }
         struct_ser.end()
     }
 }
@@ -24326,6 +24482,8 @@ impl<'de> serde::Deserialize<'de> for TokenUsage {
             "cacheRead",
             "cache_write",
             "cacheWrite",
+            "reasoning_unknown",
+            "reasoningUnknown",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -24335,6 +24493,7 @@ impl<'de> serde::Deserialize<'de> for TokenUsage {
             Reasoning,
             CacheRead,
             CacheWrite,
+            ReasoningUnknown,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -24361,6 +24520,7 @@ impl<'de> serde::Deserialize<'de> for TokenUsage {
                             "reasoning" => Ok(GeneratedField::Reasoning),
                             "cacheRead" | "cache_read" => Ok(GeneratedField::CacheRead),
                             "cacheWrite" | "cache_write" => Ok(GeneratedField::CacheWrite),
+                            "reasoningUnknown" | "reasoning_unknown" => Ok(GeneratedField::ReasoningUnknown),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -24385,6 +24545,7 @@ impl<'de> serde::Deserialize<'de> for TokenUsage {
                 let mut reasoning__ = None;
                 let mut cache_read__ = None;
                 let mut cache_write__ = None;
+                let mut reasoning_unknown__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Input => {
@@ -24427,6 +24588,12 @@ impl<'de> serde::Deserialize<'de> for TokenUsage {
                                 Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
                             ;
                         }
+                        GeneratedField::ReasoningUnknown => {
+                            if reasoning_unknown__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("reasoningUnknown"));
+                            }
+                            reasoning_unknown__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(TokenUsage {
@@ -24435,6 +24602,7 @@ impl<'de> serde::Deserialize<'de> for TokenUsage {
                     reasoning: reasoning__.unwrap_or_default(),
                     cache_read: cache_read__.unwrap_or_default(),
                     cache_write: cache_write__.unwrap_or_default(),
+                    reasoning_unknown: reasoning_unknown__.unwrap_or_default(),
                 })
             }
         }
@@ -24455,12 +24623,18 @@ impl serde::Serialize for TokensRecorded {
         if self.usage.is_some() {
             len += 1;
         }
+        if !self.model.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("hya.v1.TokensRecorded", len)?;
         if !self.message.is_empty() {
             struct_ser.serialize_field("message", &self.message)?;
         }
         if let Some(v) = self.usage.as_ref() {
             struct_ser.serialize_field("usage", v)?;
+        }
+        if !self.model.is_empty() {
+            struct_ser.serialize_field("model", &self.model)?;
         }
         struct_ser.end()
     }
@@ -24474,12 +24648,14 @@ impl<'de> serde::Deserialize<'de> for TokensRecorded {
         const FIELDS: &[&str] = &[
             "message",
             "usage",
+            "model",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Message,
             Usage,
+            Model,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -24503,6 +24679,7 @@ impl<'de> serde::Deserialize<'de> for TokensRecorded {
                         match value {
                             "message" => Ok(GeneratedField::Message),
                             "usage" => Ok(GeneratedField::Usage),
+                            "model" => Ok(GeneratedField::Model),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -24524,6 +24701,7 @@ impl<'de> serde::Deserialize<'de> for TokensRecorded {
             {
                 let mut message__ = None;
                 let mut usage__ = None;
+                let mut model__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Message => {
@@ -24538,11 +24716,18 @@ impl<'de> serde::Deserialize<'de> for TokensRecorded {
                             }
                             usage__ = map_.next_value()?;
                         }
+                        GeneratedField::Model => {
+                            if model__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("model"));
+                            }
+                            model__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(TokensRecorded {
                     message: message__.unwrap_or_default(),
                     usage: usage__,
+                    model: model__.unwrap_or_default(),
                 })
             }
         }

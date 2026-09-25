@@ -1412,6 +1412,14 @@
           },
           "auth": {
             "$ref": "#/components/schemas/AuthStatus"
+          },
+          "context_limit": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "output_limit": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },
@@ -2150,19 +2158,22 @@
       },
       "TokensRecorded": {
         "type": "object",
-        "description": "Token usage was recorded for a round.",
+        "description": "Billed usage of one provider call. Durable: one per streaming round of an assistant message, plus side calls (title, summarizer) made for the session, which carry no `message`.",
         "properties": {
           "message": {
             "type": "string"
           },
           "usage": {
             "$ref": "#/components/schemas/TokenUsage"
+          },
+          "model": {
+            "type": "string"
           }
         }
       },
       "CompactionApplied": {
         "type": "object",
-        "description": "A compaction strategy was applied to the context.",
+        "description": "A compaction folded part of the context behind a summary. Emitted by the automatic mid-turn strategies and by a manual `CompactSession`.",
         "properties": {
           "until_seq": {
             "type": "integer",
@@ -2170,6 +2181,16 @@
           },
           "strategy": {
             "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "folded_count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "manual": {
+            "type": "boolean"
           }
         }
       },
@@ -2753,6 +2774,9 @@
           "cache_write": {
             "type": "integer",
             "format": "int64"
+          },
+          "reasoning_unknown": {
+            "type": "boolean"
           }
         }
       },
@@ -2910,6 +2934,12 @@
           },
           "error": {
             "$ref": "#/components/schemas/MessageError"
+          },
+          "usage": {
+            "$ref": "#/components/schemas/TokenUsage"
+          },
+          "round_usage": {
+            "$ref": "#/components/schemas/TokenUsage"
           }
         }
       },
@@ -3619,6 +3649,9 @@
             "items": {
               "$ref": "#/components/schemas/MemberInfo"
             }
+          },
+          "usage": {
+            "$ref": "#/components/schemas/TokenUsage"
           }
         }
       },

@@ -23,6 +23,8 @@ pub mod projection_tree;
 /// Canonical agent paths, the parent/sibling/report scope rule, and
 /// unit-qualified channel keys (task 08-07).
 pub mod scope;
+/// Session todo rows (`TodosUpdated` event and projection).
+pub mod todo;
 /// Wire types for token accounting (mode and count provenance).
 pub mod tokens;
 /// Session-level billed-usage fold keyed by serving model and purpose.
@@ -57,6 +59,7 @@ pub use projection::{
 };
 pub use projection_tree::{RunTreeNode, build_run_tree};
 pub use scope::{ANNOUNCE_CHANNEL, HARNESS_HANDLE, ROOT_HANDLE, Relation, in_scope, relation};
+pub use todo::{TodoItem, TodoStatus};
 pub use usage::{MessageUsage, OutputSplit, SessionUsage, UNATTRIBUTED_MODEL, UsageTotals};
 pub use workflow::{
     WorkflowAvailability, WorkflowCommand, WorkflowCommandResult, WorkflowDelivery,

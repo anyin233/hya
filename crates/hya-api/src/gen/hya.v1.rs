@@ -627,6 +627,13 @@ pub struct ModelSummary {
     /// Auth state of the owning provider route.
     #[prost(enumeration = "AuthStatus", tag = "6")]
     pub auth: i32,
+    /// Context window of the route in tokens: the configured
+    /// `limit.context`, else the route's advertised default. 0 when unknown.
+    #[prost(uint64, tag = "7")]
+    pub context_limit: u64,
+    /// Maximum output tokens (`limit.output`); 0 when unknown.
+    #[prost(uint64, tag = "8")]
+    pub output_limit: u64,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListModelsResponse {
@@ -3912,6 +3919,10 @@ pub struct TokenUsage {
     /// Prompt tokens written to cache (cache creation).
     #[prost(uint64, tag = "5")]
     pub cache_write: u64,
+    /// The provider did not report the thinking share of `output` (for a sum:
+    /// at least one summed call did not), so `reasoning` undercounts.
+    #[prost(bool, tag = "6")]
+    pub reasoning_unknown: bool,
 }
 /// Text part of a message.
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -4070,6 +4081,17 @@ pub struct MessageInfo {
     /// `FINISH_REASON_ERROR`).
     #[prost(message, optional, tag = "11")]
     pub error: ::core::option::Option<MessageError>,
+    /// Billed usage of the assistant message: the sum of its provider rounds
+    /// (`TokensRecorded`), or the finish total for messages recorded before
+    /// per-round usage. Unset when no usage was reported.
+    #[prost(message, optional, tag = "12")]
+    pub usage: ::core::option::Option<TokenUsage>,
+    /// Usage of the message's latest provider round (the request `model`
+    /// served last). Its `input + cache_read + cache_write` is the prompt that
+    /// round sent: the session's context occupancy against the model's
+    /// `ModelSummary.context_limit`. Unset without per-round usage.
+    #[prost(message, optional, tag = "13")]
+    pub round_usage: ::core::option::Option<TokenUsage>,
 }
 /// Recorded failure of the turn behind an assistant message.
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -6115,7 +6137,7 @@ pub struct InteractionResolved {
 /// The session todo list changed.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct TodoUpdated {
-    /// Full replacement todo list.
+    /// Full replacement todo list (the same rows `GetSessionTodo` returns).
     #[prost(message, repeated, tag = "1")]
     pub items: ::prost::alloc::vec::Vec<TodoItem>,
 }
@@ -6126,26 +6148,42 @@ pub struct WorkflowUpdated {
     #[prost(message, optional, tag = "1")]
     pub state: ::core::option::Option<WorkflowState>,
 }
-/// Token usage was recorded for a round.
+/// Billed usage of one provider call. Durable: one per streaming round of an
+/// assistant message, plus side calls (title, summarizer) made for the
+/// session, which carry no `message`.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct TokensRecorded {
-    /// Message the round belongs to.
+    /// Assistant message the round belongs to; empty for a side call.
     #[prost(string, tag = "1")]
     pub message: ::prost::alloc::string::String,
-    /// Usage recorded for the round.
+    /// Usage of this one call (not a message sum).
     #[prost(message, optional, tag = "2")]
     pub usage: ::core::option::Option<TokenUsage>,
+    /// Model that served the call (`provider/model`).
+    #[prost(string, tag = "3")]
+    pub model: ::prost::alloc::string::String,
 }
-/// A compaction strategy was applied to the context.
+/// A compaction folded part of the context behind a summary. Emitted by the
+/// automatic mid-turn strategies and by a manual `CompactSession`.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CompactionApplied {
-    /// Watermark the context was compacted up to.
+    /// Sequence of this compaction record.
     #[prost(uint64, tag = "1")]
     pub until_seq: u64,
-    /// Strategy that fired (`shake`, `remote`, `soft`, `snap_compact`,
-    /// `handoff`).
+    /// Strategy that fired: `Native`, `LocalSummarizer`, `SnapCompact`, or
+    /// `Handoff` (a manual compaction reports `LocalSummarizer`).
     #[prost(string, tag = "2")]
     pub strategy: ::prost::alloc::string::String,
+    /// System message carrying the summary (the transcript divider).
+    #[prost(string, tag = "3")]
+    pub message: ::prost::alloc::string::String,
+    /// Number of messages folded behind the summary.
+    #[prost(uint32, tag = "4")]
+    pub folded_count: u32,
+    /// Whether a client asked for it (`CompactSession`) rather than the
+    /// context crossing its threshold.
+    #[prost(bool, tag = "5")]
+    pub manual: bool,
 }
 /// Generated client implementations.
 pub mod events_client {
@@ -11693,6 +11731,11 @@ pub struct SessionInfo {
     /// the `memberUpdated` stream event.
     #[prost(message, repeated, tag = "13")]
     pub members: ::prost::alloc::vec::Vec<MemberInfo>,
+    /// Billed usage of the session: every provider call made for it (turn
+    /// rounds plus title/summarizer side calls), summed. Never decreases
+    /// (compaction, revert, and deletion keep billed usage). Unset when none.
+    #[prost(message, optional, tag = "14")]
+    pub usage: ::core::option::Option<TokenUsage>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CreateSessionRequest {
