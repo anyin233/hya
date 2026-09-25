@@ -223,7 +223,7 @@ test.describe("shell turns", () => {
     await term.waitForText("┃ !echo hello", 20_000)
     await term.waitForText("$ echo hello")
     // The default permission policy asks before the shell tool runs, also for a user's shell turn;
-    // the card waits for the answer.
+    // the card waits for the answer. `/approve <id>` still answers it (the prompt's keyboard fallback).
     await term.waitForText(/perm_\w+/)
     await term.waitForText(/◌ bash\s+echo hello · awaiting approval/)
     expect((await term.cell((await term.find("◌ bash"))!.row, (await term.find("◌ bash"))!.col))?.fg).toBe(warning)
@@ -238,14 +238,14 @@ test.describe("shell turns", () => {
   })
 
   // A shell turn's bash card starts expanded: the command and its output show.
+  // The ask is answered through the permission prompt (1 = Allow once).
   test("!echo hello shows the command output", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
     await connected(term)
     await term.type("!echo hello")
     await term.press("Enter")
-    await term.waitForText(/perm_\w+/, 20_000)
-    await term.type(`/approve ${/perm_\w+/.exec(await term.text())![0]}`)
-    await term.press("Enter")
+    await term.waitForText("asked by build", 20_000)
+    await term.press("1")
     await term.waitForText("$ echo hello", 20_000)
     await term.waitForText(/✓ bash\s+echo hello/, 20_000)
     await term.waitForText("│ hello")

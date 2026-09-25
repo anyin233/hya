@@ -15,6 +15,7 @@ import { TextAttributes } from "@opentui/core"
 import { createMemo, For, Match, Show, Switch, type JSX } from "solid-js"
 import { useApp } from "../app/context"
 import { childStatus, taskLink, type ChildStatus } from "../state/members"
+import { waitingKind } from "../state/prompts"
 import { reasoningExpanded, reasoningLabel, toolExpanded, type Block, type MessageView } from "../state/messages"
 import type { TaskInfo, Tone, ToolStatus } from "../state/tools"
 import { colors, diffColors, toolColors } from "../theme"
@@ -142,7 +143,7 @@ function Reasoning(props: { block: Extract<Block, { kind: "reasoning" }> }) {
 }
 
 /** Color of a body line's tone. */
-function toneColor(tone: Tone): string {
+export function toneColor(tone: Tone): string {
   switch (tone) {
     case "add": return diffColors.add
     case "remove": return diffColors.remove
@@ -250,6 +251,11 @@ function TaskCard(props: { block: Extract<Block, { kind: "tool" }>; task: TaskIn
     return id ? store.state.children.get(id) : undefined
   }
   const status = () => childStatus(link().member, child())
+  /** The child waits for the user (a pending ask of its session): shown instead of `running`. */
+  const waiting = () => {
+    const id = link().child
+    return id ? waitingKind(store.state.interactions, id) : undefined
+  }
   const detail = () => link().member?.summary || child()?.activity
   const open = () => {
     const id = link().child
@@ -275,10 +281,12 @@ function TaskCard(props: { block: Extract<Block, { kind: "tool" }>; task: TaskIn
       <Show when={props.block.card.status !== "failed"}>
         <box width="100%" flexDirection="column" border={["left"]} borderColor={colors.border} paddingLeft={1}>
           <text width="100%" height={1} wrapMode="none">
-            <Show when={status() === "running"} fallback={<span style={{ fg: statusColor() }}>{status() === "failed" ? "✗" : status() === "cancelled" ? "!" : status() === "starting" ? "○" : "✓"}</span>}>
-              <RunningIcon />
+            <Show when={!waiting()} fallback={<span style={{ fg: colors.warning }}>◌</span>}>
+              <Show when={status() === "running"} fallback={<span style={{ fg: statusColor() }}>{status() === "failed" ? "✗" : status() === "cancelled" ? "!" : status() === "starting" ? "○" : "✓"}</span>}>
+                <RunningIcon />
+              </Show>
             </Show>
-            <span style={{ fg: statusColor() }}>{` ${childLabels[status()]}`}</span>
+            <span style={{ fg: waiting() ? colors.warning : statusColor() }}>{waiting() ? ` waiting for ${waiting() === "approval" ? "approval" : "an answer"}` : ` ${childLabels[status()]}`}</span>
             <span style={{ fg: colors.muted }}>{detail() ? `  ↳ ${detail()}` : ""}</span>
           </text>
           <Show when={link().child}>

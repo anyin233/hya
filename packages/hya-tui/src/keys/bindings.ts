@@ -55,7 +55,7 @@ export const keyBindings: readonly KeyBinding[] = [
   {
     action: "interrupt",
     label: "Esc",
-    description: "Close the open list, else return from a subagent view, else cancel the running turn, else clear the input",
+    description: "Close the open list, else deny/reject a shown prompt (empty input), else return from a subagent view, else cancel the running turn, else clear the input",
     matches: (key) => key.name === "escape" && !key.ctrl && !key.shift,
   },
   {

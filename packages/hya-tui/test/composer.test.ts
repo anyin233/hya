@@ -111,3 +111,12 @@ test("file queries become FindFiles globs and results rank by name", () => {
     .toEqual(["Main.md", "main.ts", "src/main.ts", "lib/domain.ts", "docs/x/remain.md"])
   expect(rankPaths(["a1", "a2", "a3"], "a", 2)).toEqual(["a1", "a2"])
 })
+
+test("Esc answers a shown prompt (deny / reject) after an open list, before leaving a subagent view or cancelling", () => {
+  expect(escapeAction({ menuOpen: true, running: true, inputEmpty: true, prompt: true })).toBe("closeMenu")
+  expect(escapeAction({ menuOpen: false, running: true, inputEmpty: true, prompt: true })).toBe("declinePrompt")
+  expect(escapeAction({ menuOpen: false, running: false, inputEmpty: true, childView: true, prompt: true })).toBe("declinePrompt")
+  // With text in the input the prompt does not take Esc: it cancels or clears as usual.
+  expect(escapeAction({ menuOpen: false, running: true, inputEmpty: false, prompt: true })).toBe("cancelTurn")
+  expect(escapeAction({ menuOpen: false, running: false, inputEmpty: false, prompt: true })).toBe("clearInput")
+})

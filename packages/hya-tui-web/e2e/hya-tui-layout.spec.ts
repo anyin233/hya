@@ -90,17 +90,25 @@ test.describe("layout", () => {
 test.describe("pending interactions", () => {
   test.use({ model: { steps: [toolStep("bash", { command: "echo pending-block" }), textStep("after the ask")] } })
 
-  test("a pending ask shows as a compact block above the composer", async ({ tui, backend }) => {
+  test("an ask of the open session is a prompt; another session's ask is a compact pending block", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
     await term.waitForText("Connected to hya")
     await prompt(term, "run something")
+    // The open session's ask: the permission prompt docked above the composer, no pending block.
+    await term.waitForText("asked by build", 20_000)
+    const dock = (await term.find("Permission"))!
+    const input = (await term.find("Message, /command, !shell, or @file"))!
+    expect(dock.row).toBeLessThan(input.row)
+    expect(await term.find("Pending (1)")).toBeNull()
+    // Open a new session: the first session's ask is now elsewhere, listed in the pending block.
+    await prompt(term, "/new")
     await term.waitForText(/Pending \(1\)/, 20_000)
     const block = (await term.find("Pending (1)"))!
-    const input = (await term.find("Message, /command, !shell, or @file"))!
-    expect(block.row).toBeLessThan(input.row)
+    expect(block.row).toBeLessThan((await term.find("Message, /command, !shell, or @file"))!.row)
     expect(block.col).toBeLessThan((await term.size()).cols / 2)
     expect((await term.cell(block.row, block.col - 1))?.fg).toBe(colors.border)
     await term.waitForText(/! .*bash/)
     await term.waitForText("/approve <id>")
+    expect(await term.find("asked by build")).toBeNull()
   })
 })

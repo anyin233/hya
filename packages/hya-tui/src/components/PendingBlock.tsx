@@ -1,7 +1,9 @@
 /**
- * Pending permission requests (!) and questions (?), as a compact titled box
- * above the status line while any are waiting. Shows up to three; the rest are
- * counted. Answer with `/approve`, `/deny`, or `/answer`; `/interactions`
+ * Pending permission requests (!) and questions (?) of other session trees
+ * (the open session's own asks and its subagents' are the prompt,
+ * components/PromptDock.tsx), as a compact titled box above the status line
+ * while any are waiting. Shows up to three; the rest are counted. Answer
+ * with `/approve`, `/deny`, or `/answer`, or open the session; `/interactions`
  * lists every detail.
  */
 import { useTerminalDimensions } from "@opentui/solid"

@@ -5,6 +5,7 @@ import { Footer } from "../components/Footer"
 import { Header } from "../components/Header"
 import { MainPanel } from "../components/MainPanel"
 import { PendingBlock } from "../components/PendingBlock"
+import { PromptDock } from "../components/PromptDock"
 import { Sidebar } from "../components/Sidebar"
 import { StatusLine } from "../components/StatusLine"
 import { sidebarVisible, sidebarWidth } from "../state/layout"
@@ -15,7 +16,7 @@ export { layoutBreakpoints } from "../state/layout"
 
 /**
  * Root layout: one main column (header, transcript or view panel, pending
- * block, status line, bordered composer, footer instruction) and, when
+ * block for other sessions' asks, the permission/question prompt, status line, bordered composer, footer instruction) and, when
  * shown, the sidebar on the right (state/layout.ts).
  */
 export function App() {
@@ -30,6 +31,7 @@ export function App() {
         <Header />
         <MainPanel />
         <PendingBlock width={size().width - (shown() ? side() : 0)} />
+        <PromptDock />
         <StatusLine />
         <Composer />
         <Footer />

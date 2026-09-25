@@ -10,6 +10,7 @@ import { insertMention, mentionAt, type MentionToken } from "../composer/mention
 import { createQuitGuard, quitWindowMs } from "../composer/quit"
 import { isShellInput } from "../composer/shell"
 import { composerKeyBindings, resolveBinding } from "../keys/bindings"
+import { currentPrompt, promptKey } from "../state/prompts"
 import { colors } from "../theme"
 
 /** Most input rows before the input scrolls. */
@@ -34,7 +35,13 @@ interface CmdMenu {
  * Ctrl+J / Alt+Enter (and Shift+Enter where the terminal reports it) insert a
  * newline; the box grows with its content up to `composerMaxRows` rows, then
  * scrolls. Up/Down on the first/last line walk the input history. Esc closes
- * the `@file` list, else cancels the running turn, else clears the input.
+ * the `@file` list, else declines a shown prompt, else cancels the running
+ * turn, else clears the input (composer/escape.ts).
+ *
+ * Permission/question prompts (components/PromptDock.tsx): after the lists,
+ * a shown prompt takes digits, Up/Down, Enter, and Esc while the input is
+ * empty; with text in the input a question takes Enter as its answer
+ * (state/prompts.ts `promptKey`). Other keys always reach the editor.
  * Ctrl+C clears (or hints) and quits on a second press within 2 s; Ctrl+D
  * quits on an empty input. `!command` input shows a shell-mode border; an
  * `@text` token opens a file suggestion list from `FindFiles`.
@@ -188,6 +195,7 @@ export function Composer() {
     if (!editor) return
     const text = editor.plainText
     setValue(text)
+    store.setDraft(text.length > 0)
     measure()
     if (text !== replaced) {
       replaced = undefined
@@ -308,6 +316,28 @@ export function Composer() {
       acceptMention()
       return
     }
+    // A shown permission/question prompt comes next (after the lists): with
+    // an empty input it takes digits, Up/Down, Enter, and Esc; with text, a
+    // question takes Enter as its answer. Other keys reach the input.
+    const shown = cmdOpen || open ? undefined : currentPrompt(store.state)
+    if (shown) {
+      const draft = editor?.plainText ?? value()
+      const result = promptKey(shown.view, { index: store.promptIndex(shown.view.id), draft }, key)
+      if (result.type !== "none") {
+        consume()
+        quitGuard.disarm()
+        if (result.type === "move") store.setPromptIndex(shown.view.id, result.index)
+        else {
+          if (draft.trim()) {
+            // The typed text was the answer: keep it in history, clear the input.
+            history.push(draft)
+            replace("")
+          }
+          controller.answer(shown.interaction, result.choice)
+        }
+        return
+      }
+    }
     if (arrow(key, consume)) return
     const action = resolveBinding(key, { composerEmpty: !value() })
     if (action !== "quit") quitGuard.disarm()
@@ -316,11 +346,13 @@ export function Composer() {
     switch (action) {
       case "interrupt": {
         consume()
-        const escape = escapeAction({ menuOpen: open !== undefined || cmdOpen !== undefined, running: store.state.running, inputEmpty: !value(), childView: readOnly() })
+        const escape = escapeAction({ menuOpen: open !== undefined || cmdOpen !== undefined, running: store.state.running, inputEmpty: !value(), childView: readOnly(), prompt: shown !== undefined })
         if (escape === "closeMenu") {
           dismissed = open ? `${open.token.start}:${open.token.query}` : undefined
           closeMenu()
           closeCmdMenu()
+        } else if (escape === "declinePrompt") {
+          if (shown) controller.answer(shown.interaction, shown.view.kind === "question" ? { kind: "reject" } : { kind: "deny" })
         } else if (escape === "returnToParent") controller.returnToParent()
         else if (escape === "cancelTurn") controller.cancelTurn()
         else if (escape === "clearInput") replace("")

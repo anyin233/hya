@@ -95,3 +95,25 @@ test("child sessions nest under their parent in the session list, numbered in th
     "  5. hysec_x", "   general",
   ].join("\n"))
 })
+
+test("asks of the open session tree are prompts, not pending lines; the sidebar marks sessions that wait", () => {
+  const store = createAppStore()
+  const parent = { id: "hysec_p", agent: "build", workdir: "/w", title: "Parent" }
+  const child = { id: "hysec_c", agent: "general", workdir: "/w", parent: "hysec_p", busy: true }
+  const other = { id: "hysec_o", agent: "plan", workdir: "/w", title: "Other" }
+  store.applyCatalog({
+    sessions: [other, parent, child],
+    interactions: [
+      { id: "perm_c", session: "hysec_c", type: "INTERACTION_TYPE_PERMISSION", title: "bash ls" },
+      { id: "que_o", session: "hysec_o", type: "INTERACTION_TYPE_QUESTION", title: "Why?" },
+    ],
+    models: [], workflows: [], providers: [], savedKeys: [], commands: [],
+  })
+  store.openSession(parent)
+  expect(pendingLines(store.state)).toEqual(["? Why? · que_o"])
+  expect(sessionListText(store.state)).toBe([
+    "  1. Other", "   plan · ◌ waiting", "",
+    "▸ 2. Parent", "   build",
+    "   ↳ 3. general · ◌ waiting",
+  ].join("\n"))
+})
