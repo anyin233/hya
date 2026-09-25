@@ -185,9 +185,9 @@ pub fn team_quick_reference(has: impl Fn(&str) -> bool, depth: u32) -> Option<St
         }
     } else if has("report") {
         lines.push(if has("archive") {
-            "- Finish your task with `report` (once, with your result for your parent). It is rejected while you have unread mail — read the channel the error names, answer if needed, then report again — or live subagents (`archive` them first)."
+            "- Finish your task with `report` (once, with your result for your parent; an accepted report ends your turn). It is rejected while you have unread mail — read the channel the error names, answer if needed, then report again — or live subagents (`archive` them first)."
         } else {
-            "- Finish your task with `report` (once, with your result for your parent). It is rejected while you have unread mail — read the channel the error names, answer if needed, then report again."
+            "- Finish your task with `report` (once, with your result for your parent; an accepted report ends your turn). It is rejected while you have unread mail — read the channel the error names, answer if needed, then report again."
         });
     }
     if mail && has("read") {

@@ -1090,6 +1090,9 @@ impl SessionEngine {
         // Root of this session's spawn tree, resolved on first hook use: the
         // parent chain is immutable, so one walk serves every round.
         let mut root_session_cache = None;
+        // Set when a `report` of this turn is accepted: the turn ends right
+        // after that tool round, and a second `report` is rejected.
+        let report_latch = hya_tool::ReportLatch::new();
         loop {
             self.validate_actor_claim(actor_claim).await?;
             if activation_hook_for(session).is_some_and(|hooks| !hooks.is_healthy()) {
@@ -1851,7 +1854,8 @@ impl SessionEngine {
                                     lifecycle: self
                                         .lifecycle
                                         .for_session(session)
-                                        .with_channel_policy(channel_policy),
+                                        .with_channel_policy(channel_policy)
+                                        .with_report_latch(report_latch.clone()),
                                     session: Some(session),
                                     parent_session: projection.session.parent,
                                     todo: self.todo.clone(),
@@ -1966,7 +1970,12 @@ impl SessionEngine {
                         // Steer (ADR-0016 follow-up): unread team mail rides the
                         // tail of this tool result so a long turn stays aware
                         // of new messages without breaking the model's flow.
-                        if let Some(notice) = steer.drain(self).await? {
+                        // Not once a report was accepted: this turn takes no
+                        // further round, so mail arriving now stays unread
+                        // and wakes the member for a new episode instead.
+                        if !report_latch.is_set()
+                            && let Some(notice) = steer.drain(self).await?
+                        {
                             append_steer_notice(&mut output, &notice);
                         }
                         let retains_artifact = artifact_guard.retained_by(&output);
@@ -2003,6 +2012,26 @@ impl SessionEngine {
                 } else {
                     artifact_guard.discard()?;
                 }
+            }
+
+            // An accepted `report` ends the member's episode: the round's
+            // other tool calls have completed and are recorded; no further
+            // model call is made.
+            if report_latch.is_set() {
+                self.emit_for_actor(
+                    actor_claim,
+                    session,
+                    Event::MessageFinished {
+                        session,
+                        message,
+                        role: Role::Assistant,
+                        finish: FinishReason::Stop,
+                        tokens: total_tokens,
+                        cause: None,
+                    },
+                )
+                .await?;
+                return Ok(FinishReason::Stop);
             }
 
             rounds += 1;

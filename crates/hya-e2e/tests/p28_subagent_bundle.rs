@@ -1,5 +1,6 @@
 //! T2.23 — the shipped subagent bundle's resident worker executes through a
-//! real backend: it mails its parent, reports, and is archived.
+//! real backend: it mails its parent, reports, and is archived. The accepted
+//! report ends the worker's turn: no model round follows it.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
 use std::time::Duration;
@@ -21,7 +22,7 @@ async fn t2_23_default_subagent_bundle_worker_mails_reports_and_archives() {
                     "report",
                     json!({"result": "WORKER_REPORT_OK", "outcome": "done"}),
                 ),
-                text_step("WORKER_MODEL_FOLLOWUP_OK"),
+                text_step("WORKER_MODEL_FOLLOWUP_MUST_NOT_RUN"),
             ],
         )
         .route(
@@ -57,17 +58,24 @@ async fn t2_23_default_subagent_bundle_worker_mails_reports_and_archives() {
     env.wait_route_contains(ROOT, "WORKER_REPORT_OK", timeout)
         .await
         .unwrap_or_else(|error| panic!("worker report missing: {error}; {}", env.diagnostics()));
-    env.wait_route_contains(WORKER, "Report accepted", timeout)
-        .await
-        .unwrap_or_else(|error| panic!("worker follow-up missing: {error}"));
+    // Give a (wrongly) continuing turn time to take its next round.
+    tokio::time::sleep(Duration::from_millis(500)).await;
     let requests = env
         .fake
         .route_requests(WORKER)
         .expect("route requests")
         .unwrap_or_default();
+    assert_eq!(
+        requests.len(),
+        2,
+        "the worker takes the send round and the report round, and no round after its accepted report: {}",
+        env.diagnostics()
+    );
     assert!(
-        requests.len() >= 2,
-        "missing model follow-up for the worker"
+        requests
+            .iter()
+            .all(|request| !request.to_string().contains("Report accepted")),
+        "no model request may follow the accepted report"
     );
     assert!(
         requests.iter().all(|request| request["model"] == "model"),

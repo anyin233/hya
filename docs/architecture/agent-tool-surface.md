@@ -257,6 +257,19 @@ harness notices with no channel are counted as `N harness notice(s)` and
 arrive with the next tool result as `[NEW MAIL]`. Reading any channel marks
 the whole inbox seen.
 
+An accepted report returns `{"title": "Report accepted", "output": "Report
+accepted; your turn ends now. You will be archived with a state handoff; mail
+from your parent can wake you later."}` and **ends the caller's turn** after
+the current tool round: the round's other tool calls complete and are
+recorded, then no further model call is made (`MessageFinished` with
+`finish: stop`). A second `report` in the same turn fails with:
+
+```text
+your report was already accepted in this episode and your turn ends after this tool round; do not call `report` again. If your parent mails you later you are woken for a new episode and may report once more.
+```
+
+See [subagent-orchestration.md §3.1](subagent-orchestration.md#an-accepted-report-ends-the-turn).
+
 **`search_agent`**: optional `query` (free text over the goal/pending digests
 of archived agents' final handoffs); lists the caller's own archived direct
 children with handle, agent type, digests, and a degraded flag. `send` to
