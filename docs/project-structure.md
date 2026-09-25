@@ -282,9 +282,17 @@ owner-gated activation) library, plus the `hya update` command surface
 `update` before composing any runtime. See
 [self-update.md](self-update.md).
 
-There is no interactive frontend in the workspace today: the legacy TypeScript
-TUI was removed, and a replacement TUI built on `hya-sdk-v1` may be built
-later. New clients integrate through `hya-sdk-v1` / `hya-client` on the v1
+The interactive frontend lives outside the Cargo workspace:
+
+- `packages/hya-tui` — Bun/OpenTUI TUI over the v1 HTTP/JSON+SSE contract
+  (`src/client.ts` API client, `src/completion.ts` slash completion,
+  `src/instructions.ts` footer hints, `src/main.ts` layout and commands). See
+  [tui.md](tui.md).
+- `packages/hya-tui-web` — browser host (real PTY + xterm.js) that serves the
+  TUI as the WebUI, plus the Playwright TUI test harness. See
+  [tui-web.md](tui-web.md).
+
+Rust clients integrate through `hya-sdk-v1` / `hya-client` on the v1
 contract.
 
 ## Tests

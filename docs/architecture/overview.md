@@ -73,7 +73,8 @@ The event log is the source of truth. This gives hya a few useful properties:
 ## Current Runtime Surfaces
 
 - Bare `hya` prints a version banner plus guidance (serve / exec / -p);
-  no interactive frontend is bundled.
+  no interactive frontend is bundled into the binary. The OpenTUI frontend
+  (`packages/hya-tui`) runs from source against `hya serve`.
 - `hya exec` runs one turn and prints a transcript.
 - `hya run` is the headless prompt entry point.
 - `hya -p` runs goal mode with an independent model-backed evaluator.
