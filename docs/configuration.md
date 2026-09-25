@@ -994,6 +994,16 @@ call's check is derived from it.
 **Default.** A tree without a recorded mode uses `yolo` when the process runs
 with `--yolo` or `permission.model: danger`, and `manual` otherwise.
 
+**The user's own shell commands never ask.** A direct shell turn (`!command`
+in the TUI, `CreateTurn` with `shell` in the v1 API) runs a command the user
+typed, so it is approved once without a prompt in every mode — `manual`,
+`yolo`, and bundle modes (the bundle's `permission.approve` approver and the
+`permission.ask` hooks are not consulted for it). An explicit Deny rule still
+blocks it (the call fails with a `permission` error, no prompt), a
+`tool.execute.before` hook can still veto it, and a check for a directory
+outside the working directory (`ExternalDirectory`) still asks. `bash` calls
+the model issues are unaffected and ask as the mode says.
+
 **Switching.** Set the mode on any session of the tree; it is recorded on the
 root session as a `session_permission_mode_set` event, so it survives replay
 and restarts and every subagent session inherits it:

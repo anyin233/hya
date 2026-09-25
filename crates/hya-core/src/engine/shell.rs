@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::os::unix::fs::MetadataExt;
 
 use hya_proto::{Event, FinishReason, MessageId, PartId, Role, SessionId, ToolCallId, ToolName};
-use hya_tool::{ToolCtx, ToolError};
+use hya_tool::{Action, Decision, PermissionInterceptor, Resource, ToolCtx, ToolError};
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
@@ -34,6 +34,35 @@ struct ShellPart {
     part: PartId,
     call: ToolCallId,
     name: ToolName,
+}
+
+/// Approves the user's own direct shell command once, without asking.
+///
+/// The user typed the command (`!cmd`), so an ask would only echo their own
+/// intent back at them. Prepended to the direct-shell plane only, and
+/// consulted only where the plane would otherwise ask: explicit Deny rules
+/// still win, and the `ToolExecuteBefore` veto runs before authorization.
+/// It short-circuits the plugin `permission.ask` bridge and a bundle mode's
+/// `permission.approve` approver, since neither may override the user's own
+/// decision. `ExternalDirectory` checks are deferred, so a command whose cwd
+/// leaves the workdir still asks. Model-issued `bash` calls never see it.
+struct UserShellApproval;
+
+#[async_trait::async_trait]
+impl PermissionInterceptor for UserShellApproval {
+    fn semantic_identity_v1(&self) -> Option<[u8; 32]> {
+        use sha2::Digest as _;
+        Some(sha2::Sha256::digest(b"hya.permission.user-shell-approval/v1").into())
+    }
+
+    async fn intercept(
+        &self,
+        _session: Option<SessionId>,
+        action: Action,
+        _resource: &Resource,
+    ) -> Option<Decision> {
+        matches!(action, Action::Bash | Action::Tool).then_some(Decision::AllowOnce)
+    }
 }
 
 /// One validated private Bash artifact held until its durable result publishes.
@@ -379,6 +408,8 @@ impl SessionEngine {
                         crate::bundle_hooks::BundlePermissionInterceptor::new(hooks),
                     ));
                 }
+                // Outermost: the user's own command never asks (Deny still wins).
+                let permission = permission.prepend_interceptor(Arc::new(UserShellApproval));
                 match authorize_tool_call(
                     &resolved,
                     &input,

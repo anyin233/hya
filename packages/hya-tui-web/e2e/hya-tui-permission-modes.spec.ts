@@ -3,7 +3,8 @@
 // mode colors, the transcript notice, yolo closing a pending ask, the
 // `/permissions` picker (a reusable modal list), a mode chosen before any
 // session exists, and a bundle mode whose Bun `permission.approve` hook
-// decides — all under the default permission model, where bash asks.
+// decides — all under the default permission model, where bash asks — and
+// the user's own `!command` shell turns, which never ask.
 
 import type { Tui } from "./harness"
 import { approverBundle, expect, hyaTui, test, textStep, toolStep, type Backend } from "./hya"
@@ -308,36 +309,33 @@ test.describe("bundle permission mode", () => {
   })
 })
 
-test.describe("!command shell turns follow the mode", () => {
-  test("manual asks before a !command; yolo runs it without a prompt; manual asks again", async ({ tui, backend }, testInfo) => {
+test.describe("!command shell turns never ask", () => {
+  test("the user's own !command runs unprompted in manual and in yolo", async ({ tui, backend }, testInfo) => {
     const term = await tui(hyaTui(backend))
     await newSession(term)
 
-    // Manual: the user's own shell command still asks, and 3 denies it.
+    // Manual: the user typed the command, so it runs without a prompt.
     await prompt(term, "!echo manual-shell")
-    await term.waitForText(/Permission/, 20_000)
-    await term.waitForText("│ $ echo manual-shell")
-    await term.press("3")
-    await promptGone(term)
+    await term.waitForText(/✓ bash\s+echo manual-shell/, 20_000)
+    await term.waitForText("manual-shell", 20_000)
+    expect(/asked by /.test(await term.text()), "no permission prompt in manual").toBe(false)
+    await term.attach(testInfo, "manual-shell")
 
-    // Yolo: the next !command runs straight through, no prompt appears.
+    // Yolo: same, no prompt.
     await term.press("Shift+Tab")
     await term.waitForText(confirmLine)
     await term.press("Enter")
     await term.waitForText("Permission mode → yolo")
     await prompt(term, "!echo yolo-shell")
     await term.waitForText(/✓ bash\s+echo yolo-shell/, 20_000)
-    await term.waitForText("yolo-shell", 20_000)
     expect(/asked by /.test(await term.text()), "no permission prompt in yolo").toBe(false)
-    await term.attach(testInfo, "yolo-shell")
 
-    // Back to manual: the next !command asks again.
+    // Back to manual: still no prompt.
     await term.press("Shift+Tab")
     await term.waitForText("Permission mode → manual")
     await prompt(term, "!echo manual-again")
-    await term.waitForText("│ $ echo manual-again", 20_000)
-    await term.waitForText(/asked by /)
-    await term.press("1")
     await term.waitForText(/✓ bash\s+echo manual-again/, 20_000)
+    expect(/asked by /.test(await term.text()), "no permission prompt back in manual").toBe(false)
+    await term.attach(testInfo, "manual-again")
   })
 })

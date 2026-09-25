@@ -339,7 +339,9 @@ When an action evaluates to `Ask`:
    interceptor is the plugin `PermissionBridge`; per call the engine prepends
    the bundle activation's `permission.ask` hooks and, under a bundle
    permission mode, appends that bundle's `permission.approve` approver (see
-   [Session permission modes](#session-permission-modes)).
+   [Session permission modes](#session-permission-modes)). A direct shell turn
+   additionally prepends `UserShellApproval` ahead of all of them (see
+   [Direct shell turns](#direct-shell-turns)).
 3. If still unresolved, it sends an `AskRequest` containing action, resource,
    and a reply channel.
 4. The caller answers with a `Decision`.
@@ -501,10 +503,29 @@ a mode switch does not make a retried Workflow run look like a different
 request. A bundle's declared modes are part of its runtime source identity
 only when it declares any, so bundles without modes keep their fingerprint.
 
+### Direct shell turns
+
+A direct shell turn (`SessionEngine::run_shell`, the v1 `ShellTurn` behind the
+TUI's `!command`) runs a command the user typed. Its call plane is derived as
+above and then gets `UserShellApproval`
+([`engine/shell.rs`](../../crates/hya-core/src/engine/shell.rs)) prepended as
+the outermost interceptor: it answers `AllowOnce` for `Bash` and `Tool`
+checks, so the user is never asked about their own command in any mode, and
+the activation `permission.ask` hooks, the plugin `PermissionBridge`, and a
+bundle mode's `permission.approve` approver are not consulted. Because
+interceptors run only where the plane would otherwise ask, an explicit Deny
+(invocation or resource rule) still fails the call, and the
+`tool.execute.before` veto runs before authorization. It defers on
+`ExternalDirectory`, so a check for a directory outside the working
+directory still asks. `AllowOnce` records no grant. Model-issued tool calls
+(`engine/turn.rs`) never get this interceptor.
+
 ## CLI Defaults
 
 Under the default invocation model, local read-only tools and `task` allow;
-standard built-ins, plugins, network reads, MCP calls, and Bash commands ask.
+standard built-ins, plugins, network reads, MCP calls, and Bash commands ask
+(the user's own direct shell commands excepted; see
+[Direct shell turns](#direct-shell-turns)).
 The existing resource rules still auto-allow `Read`, `Glob`, and `Grep`, while
 mutating, external-directory, subagent, and process-spawning actions remain
 covered by their existing checks. `--yolo` changes the invocation model to

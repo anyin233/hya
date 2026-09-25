@@ -22,8 +22,8 @@ use hya_proto::{
 use hya_provider::{FakeProvider, ProviderRouter};
 use hya_store::SessionStore;
 use hya_tool::{
-    Action, Decision, ExactSubject, InvocationPolicy, Mode, PermissionModel, PermissionPlane,
-    PermissionRules, PermissionTarget, RememberScope, Rule, ToolRegistry,
+    Action, InvocationPolicy, Mode, PermissionModel, PermissionPlane, PermissionRules,
+    PermissionTarget, Rule, ToolRegistry,
 };
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -171,14 +171,21 @@ async fn direct_shell_runs_command_and_records_tool_part() {
     assert_eq!(bindings, vec![generation]);
 }
 
-#[tokio::test]
-async fn direct_shell_authorizes_once_with_call_correlation() {
+/// Build an engine whose process plane uses `policy`, plus a session and agent.
+async fn policy_engine(
+    rules: PermissionRules,
+    policy: InvocationPolicy,
+) -> (
+    Arc<SessionEngine>,
+    tokio::sync::mpsc::UnboundedReceiver<hya_tool::AskRequest>,
+    hya_proto::SessionId,
+    AgentSpec,
+    TempDirGuard,
+) {
     let dir = tempdir();
+    let guard = TempDirGuard::new(&dir);
     let router = Arc::new(ProviderRouter::new().with(Arc::new(FakeProvider::scripted(vec![]))));
-    let (permission, mut asks) = PermissionPlane::new_with_policy(
-        PermissionRules::default(),
-        InvocationPolicy::compile(PermissionModel::Default, Vec::new()).unwrap(),
-    );
+    let (permission, asks) = PermissionPlane::new_with_policy(rules, policy);
     let engine = Arc::new(SessionEngine::new(
         SessionStore::connect_memory().await.unwrap(),
         router,
@@ -202,39 +209,135 @@ async fn direct_shell_authorizes_once_with_call_correlation() {
         workdir: dir,
         reasoning: None,
     };
-    let runner = engine.clone();
-    let task = tokio::spawn(async move {
-        runner
-            .run_shell(
-                session,
-                &agent,
-                "printf direct-policy".to_string(),
-                CancellationToken::new(),
-            )
-            .await
-    });
+    (engine, asks, session, agent, guard)
+}
 
-    let request = tokio::time::timeout(std::time::Duration::from_secs(1), asks.recv())
-        .await
-        .expect("permission request timeout")
-        .expect("permission request");
-    let correlation = (request.session, request.message_id, request.call_id);
-    let remember = request.remember.clone();
-    request.reply.send(Decision::AllowOnce).unwrap();
-    let (message, finish) = task.await.unwrap().unwrap();
+/// The tool part state recorded for the direct shell call on `message`.
+async fn shell_part_state(
+    engine: &SessionEngine,
+    session: hya_proto::SessionId,
+    message: hya_proto::MessageId,
+) -> ToolPartState {
+    let projection = engine.store().read_projection(session).await.unwrap();
+    projection
+        .session
+        .messages
+        .iter()
+        .find(|candidate| candidate.id == message)
+        .and_then(|candidate| {
+            candidate.parts.iter().find_map(|part| match part {
+                PartProjection::Tool { name, state, .. } if name.as_str() == "bash" => {
+                    Some(state.clone())
+                }
+                _ => None,
+            })
+        })
+        .expect("direct shell tool part")
+}
 
+#[tokio::test]
+async fn direct_shell_runs_unprompted_when_the_policy_would_ask() {
+    // Given: the default model asks for every command.
+    let (engine, mut asks, session, agent, _guard) = policy_engine(
+        PermissionRules::default(),
+        InvocationPolicy::compile(PermissionModel::Default, Vec::new()).unwrap(),
+    )
+    .await;
+
+    // When: the user runs their own command.
+    let (message, finish) = tokio::time::timeout(
+        Duration::from_secs(5),
+        engine.run_shell(
+            session,
+            &agent,
+            "printf direct-policy".to_string(),
+            CancellationToken::new(),
+        ),
+    )
+    .await
+    .expect("the user's own shell command must not wait for an ask")
+    .unwrap();
+
+    // Then: it ran and nobody was asked.
     assert_eq!(finish, FinishReason::Stop);
-    assert_eq!(correlation.0, Some(session));
-    assert_eq!(correlation.1, Some(message));
-    assert!(correlation.2.is_some());
-    assert_eq!(
-        remember,
-        RememberScope::Exact(ExactSubject::new(
-            PermissionTarget::Command,
-            "printf direct-policy",
-        ))
-    );
-    assert!(asks.try_recv().is_err(), "direct shell must prompt once");
+    assert!(asks.try_recv().is_err(), "direct shell must not prompt");
+    assert!(matches!(
+        shell_part_state(&engine, session, message).await,
+        ToolPartState::Completed { output, .. }
+            if output["output"].as_str().unwrap().contains("direct-policy")
+    ));
+}
+
+#[tokio::test]
+async fn direct_shell_still_honours_an_explicit_deny_rule() {
+    // Given: an explicit command Deny rule.
+    let (engine, mut asks, session, agent, _guard) = policy_engine(
+        PermissionRules::default(),
+        InvocationPolicy::compile(
+            PermissionModel::Default,
+            vec![hya_tool::InvocationRule::new(
+                PermissionTarget::Command,
+                "^printf ",
+                Mode::Deny,
+            )],
+        )
+        .unwrap(),
+    )
+    .await;
+
+    // When
+    let (message, finish) = tokio::time::timeout(
+        Duration::from_secs(5),
+        engine.run_shell(
+            session,
+            &agent,
+            "printf denied".to_string(),
+            CancellationToken::new(),
+        ),
+    )
+    .await
+    .expect("a denied shell command must not wait for an ask")
+    .unwrap();
+
+    // Then: it was blocked without asking.
+    assert_eq!(finish, FinishReason::Error);
+    assert!(asks.try_recv().is_err(), "deny must not prompt");
+    assert!(matches!(
+        shell_part_state(&engine, session, message).await,
+        ToolPartState::Error { .. }
+    ));
+}
+
+#[tokio::test]
+async fn direct_shell_still_honours_an_explicit_resource_deny_rule() {
+    // Given: a rules-level Bash Deny under the default model.
+    let (engine, mut asks, session, agent, _guard) = policy_engine(
+        PermissionRules::new(vec![Rule::new(Action::Bash, "printf *", Mode::Deny)]),
+        InvocationPolicy::compile(PermissionModel::Default, Vec::new()).unwrap(),
+    )
+    .await;
+
+    // When
+    let (message, finish) = tokio::time::timeout(
+        Duration::from_secs(5),
+        engine.run_shell(
+            session,
+            &agent,
+            "printf denied".to_string(),
+            CancellationToken::new(),
+        ),
+    )
+    .await
+    .expect("a denied shell command must not wait for an ask")
+    .unwrap();
+
+    // Then
+    assert_eq!(finish, FinishReason::Error);
+    assert!(asks.try_recv().is_err(), "deny must not prompt");
+    assert!(matches!(
+        shell_part_state(&engine, session, message).await,
+        ToolPartState::Error { .. }
+    ));
 }
 
 struct OversizedDirectResultHook;

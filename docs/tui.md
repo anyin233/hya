@@ -832,11 +832,12 @@ prompt, so it waits while a turn runs.
 
 The backend runs it as a `ShellTurn`: its builtin `bash` tool runs the command
 in the session's working directory, with no model round, under the session's
-agent and permission rules, including the session's permission mode. In
-`manual` the default permission policy asks before `bash` runs, so a
-permission prompt appears; press `1` to run the command once (or
-`/approve <id>`). In `yolo` the command runs without a prompt, like every
-other tool call; a bundle mode's approver decides first, as for any ask.
+agent. You typed the command, so it never asks: it runs without a permission
+prompt in every permission mode (`manual`, `yolo`, and bundle modes; a bundle
+mode's approver is not consulted). An explicit deny rule still blocks it
+(the card shows the error), and a plugin's `tool.execute.before` hook can
+still veto it. Commands the model runs through `bash` are unchanged: they ask
+as the mode says.
 `CreateTurn` returns only when the command has finished; meanwhile the status
 reads `Running shell · <command>`.
 
@@ -1561,15 +1562,16 @@ read-only child view, Esc back, `/open`), also at about 80 columns.
 Ctrl+J / Alt+Enter newlines and box growth up to 8 rows, Shift+Enter in the
 browser, bracketed paste, cursor editing, history, Esc (clear, and cancel of
 a hanging fake-model turn), Ctrl+C once and twice, Ctrl+D, `/exit`,
-`!echo hello` (the waiting card, `/approve`, then its output), and `@file`
-suggestions at the default width and about 80 columns.
+`!echo hello` (the shell indicator, running without a prompt, then its
+output), `/approve <id>` answering a model's pending bash ask (the waiting
+card), and `@file` suggestions at the default width and about 80 columns.
 `e2e/hya-tui-prompts.spec.ts` covers the permission and question prompts
 under the default permission model: a bash ask (`1`, arrows + Enter, typed
 digits going to the input), Always allow (`2`, a second identical call runs
 without asking), Deny (`3`) and Esc, an edit ask's diff, two queued asks
 (`1 of 2`), `ask_user` options, a free-text answer, and Reject, a subagent's
 ask in the parent view (its task card and sidebar row waiting), a
-`!command` shell ask, and about 80 columns.
+`!command` shell turn that shows no prompt, and about 80 columns.
 `e2e/hya-tui-permission-modes.spec.ts` covers permission modes: Shift+Tab
 through xterm.js, the yolo confirmation (Esc, Enter, no second ask), the
 status bar colors, the transcript notice, a bash call under `yolo` without a
@@ -1578,6 +1580,7 @@ prompt and under `manual` with one, a pending ask closed by switching to
 focus back to the input, `/permissions <mode>`), Shift+Tab in the command
 menu, a mode chosen before the session exists, a bundle mode from a project
 bundle whose Bun `permission.approve` hook allows `echo` and defers `ls`,
+`!command` shell turns running without a prompt in `manual` and `yolo`,
 and about 80 columns.
 `e2e/hya-tui-launch.spec.ts` covers the one-command launch: no `--server`
 (`HYA_BIN` = the binary under test, an isolated HOME/XDG from the
