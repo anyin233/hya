@@ -720,9 +720,11 @@ prompt, so it waits while a turn runs.
 
 The backend runs it as a `ShellTurn`: its builtin `bash` tool runs the command
 in the session's working directory, with no model round, under the session's
-agent and permission rules. The default permission policy asks before `bash`
-runs, so a permission prompt may appear; press `1` to run the command once
-(or `/approve <id>`).
+agent and permission rules, including the session's permission mode. In
+`manual` the default permission policy asks before `bash` runs, so a
+permission prompt appears; press `1` to run the command once (or
+`/approve <id>`). In `yolo` the command runs without a prompt, like every
+other tool call; a bundle mode's approver decides first, as for any ask.
 `CreateTurn` returns only when the command has finished; meanwhile the status
 reads `Running shell · <command>`.
 

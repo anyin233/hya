@@ -307,3 +307,37 @@ test.describe("bundle permission mode", () => {
     await term.waitForText(/^mode manual/m)
   })
 })
+
+test.describe("!command shell turns follow the mode", () => {
+  test("manual asks before a !command; yolo runs it without a prompt; manual asks again", async ({ tui, backend }, testInfo) => {
+    const term = await tui(hyaTui(backend))
+    await newSession(term)
+
+    // Manual: the user's own shell command still asks, and 3 denies it.
+    await prompt(term, "!echo manual-shell")
+    await term.waitForText(/Permission/, 20_000)
+    await term.waitForText("│ $ echo manual-shell")
+    await term.press("3")
+    await promptGone(term)
+
+    // Yolo: the next !command runs straight through, no prompt appears.
+    await term.press("Shift+Tab")
+    await term.waitForText(confirmLine)
+    await term.press("Enter")
+    await term.waitForText("Permission mode → yolo")
+    await prompt(term, "!echo yolo-shell")
+    await term.waitForText(/✓ bash\s+echo yolo-shell/, 20_000)
+    await term.waitForText("yolo-shell", 20_000)
+    expect(/asked by /.test(await term.text()), "no permission prompt in yolo").toBe(false)
+    await term.attach(testInfo, "yolo-shell")
+
+    // Back to manual: the next !command asks again.
+    await term.press("Shift+Tab")
+    await term.waitForText("Permission mode → manual")
+    await prompt(term, "!echo manual-again")
+    await term.waitForText("│ $ echo manual-again", 20_000)
+    await term.waitForText(/asked by /)
+    await term.press("1")
+    await term.waitForText(/✓ bash\s+echo manual-again/, 20_000)
+  })
+})
