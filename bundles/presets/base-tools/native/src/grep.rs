@@ -60,9 +60,9 @@ struct GrepInput {
     /// Treat `pattern` as literal text instead of a regex.
     #[serde(default)]
     literal: Option<bool>,
-    /// Number of surrounding context lines.
+    /// Number of surrounding context lines; clamped into `0..=MAX_CONTEXT`.
     #[serde(default)]
-    context: Option<usize>,
+    context: Option<i64>,
     /// Maximum number of matched lines to retain.
     #[serde(default)]
     limit: Option<usize>,
@@ -135,7 +135,7 @@ impl Tool for GrepTool {
                         "type": "integer",
                         "minimum": 0,
                         "maximum": 5,
-                        "description": "Number of context lines around each match"
+                        "description": "Number of context lines around each match (0–5, default 0); values outside the range are clamped and the result says so"
                     },
                     "limit": {
                         "type": "integer",
@@ -158,7 +158,7 @@ impl Tool for GrepTool {
         reject_null_fields(&input)?;
         let input: GrepInput =
             serde_json::from_value(input).map_err(|error| ToolError::Input(error.to_string()))?;
-        let context = validate_context(input.context)?;
+        let (context, context_note) = clamp_context(input.context);
         let limit = validate_limit(input.limit)?;
         validate_glob_pattern(input.glob.as_deref())?;
         let ignore_case = input.ignore_case.unwrap_or(false);
@@ -207,7 +207,7 @@ impl Tool for GrepTool {
         } else {
             search_root.clone()
         };
-        let search = run_native_search(SearchRequest {
+        let mut search = run_native_search(SearchRequest {
             search_root: search_root.clone(),
             explicit_file,
             ignore_base,
@@ -220,8 +220,15 @@ impl Tool for GrepTool {
         .await?;
         check_cancel(ctx)?;
 
+        if let Some(note) = &context_note {
+            search.warnings.insert(0, note.clone());
+        }
         if search.total == 0 {
-            return Ok(no_matches(&input.pattern, search.warnings));
+            return Ok(no_matches(
+                &input.pattern,
+                search.warnings,
+                context_note.as_deref(),
+            ));
         }
 
         let mut output_parts = Vec::new();
@@ -367,6 +374,9 @@ impl Tool for GrepTool {
         if display_truncated {
             summary.push_str(DISPLAY_TRUNCATION_NOTICE);
         }
+        if let Some(note) = &context_note {
+            summary.push_str(&format!(" ({note})"));
+        }
         let output = if output_parts.is_empty() {
             summary
         } else {
@@ -412,15 +422,17 @@ fn reject_null_fields(input: &Value) -> Result<(), ToolError> {
     Ok(())
 }
 
-/// Validate the bounded context argument and apply the pinned default.
-fn validate_context(context: Option<usize>) -> Result<usize, ToolError> {
-    let context = context.unwrap_or(0);
-    if context > MAX_CONTEXT {
-        return Err(ToolError::Input(format!(
-            "context must be between 0 and {MAX_CONTEXT}"
-        )));
-    }
-    Ok(context)
+/// Clamp the context argument into `0..=MAX_CONTEXT` (default 0); an
+/// out-of-range request yields a note for the result instead of an error.
+fn clamp_context(context: Option<i64>) -> (usize, Option<String>) {
+    let requested = context.unwrap_or(0);
+    let used =
+        usize::try_from(requested.max(0)).map_or(MAX_CONTEXT, |value| value.min(MAX_CONTEXT));
+    let in_range = usize::try_from(requested).is_ok_and(|value| value == used);
+    let note = (!in_range).then(|| {
+        format!("context clamped to {used}: requested {requested}, allowed 0–{MAX_CONTEXT}")
+    });
+    (used, note)
 }
 
 /// Validate the bounded match limit and apply the pinned default.
@@ -463,7 +475,7 @@ fn validate_glob_pattern(pattern: Option<&str>) -> Result<(), ToolError> {
 }
 
 /// Return the stable no-match result envelope, including bounded traversal warnings.
-fn no_matches(pattern: &str, warnings: Vec<String>) -> Value {
+fn no_matches(pattern: &str, warnings: Vec<String>, context_note: Option<&str>) -> Value {
     let mut metadata = json!({
         "matches": 0,
         "files": 0,
@@ -476,7 +488,10 @@ fn no_matches(pattern: &str, warnings: Vec<String>) -> Value {
     }
     json!({
         "title": pattern,
-        "output": format!("No matches found for {pattern}."),
+        "output": match context_note {
+            Some(note) => format!("No matches found for {pattern}. ({note})"),
+            None => format!("No matches found for {pattern}."),
+        },
         "metadata": metadata,
         "matches": [],
         "total": 0,

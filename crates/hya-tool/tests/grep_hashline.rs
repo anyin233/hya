@@ -541,19 +541,80 @@ async fn grep_rejects_unknown_fields() {
     assert!(matches!(error, ToolError::Input(_)));
 }
 
-/// Verify context values above the published maximum are rejected.
+/// Run 6: `context` above the range failed the call twice. Out-of-range
+/// values are clamped into 0..=5 and the result says so.
 #[tokio::test]
-async fn grep_rejects_context_above_bound() {
+async fn grep_clamps_out_of_range_context_with_a_note() {
     let workdir = tempdir();
+    let body: String = (1..=20)
+        .map(|n| {
+            if n == 10 {
+                "needle\n".to_string()
+            } else {
+                format!("line {n}\n")
+            }
+        })
+        .collect();
+    std::fs::write(workdir.join("notes.txt"), body).unwrap();
     let tool = ToolRegistry::builtins().get("grep").unwrap();
-    let ctx = ctx_with(workdir);
+    let ctx = ctx_with(workdir.clone());
 
-    let error = tool
-        .execute(&ctx, json!({ "pattern": "needle", "context": 6 }))
+    let high = tool
+        .execute(&ctx, json!({ "pattern": "needle", "context": 8 }))
         .await
-        .unwrap_err();
+        .unwrap();
+    let output = high["output"].as_str().unwrap();
+    assert!(output.contains("context clamped to 5"), "{output}");
+    assert!(
+        output.contains("line 5") && output.contains("line 15"),
+        "{output}"
+    );
+    assert!(
+        !output.contains("line 4\n") && !output.contains("line 16"),
+        "{output}"
+    );
+    let warnings = high["metadata"]["warnings"].to_string();
+    assert!(warnings.contains("context clamped to 5"), "{warnings}");
 
-    assert!(matches!(error, ToolError::Input(_)));
+    let negative = tool
+        .execute(&ctx, json!({ "pattern": "needle", "context": -2 }))
+        .await
+        .unwrap();
+    let output = negative["output"].as_str().unwrap();
+    assert!(output.contains("context clamped to 0"), "{output}");
+    assert!(!output.contains("line 9"), "{output}");
+
+    let none = tool
+        .execute(&ctx, json!({ "pattern": "absent-token", "context": 99 }))
+        .await
+        .unwrap();
+    assert!(
+        none["output"]
+            .as_str()
+            .unwrap()
+            .contains("context clamped to 5"),
+        "{none}"
+    );
+
+    let in_range = tool
+        .execute(&ctx, json!({ "pattern": "needle", "context": 2 }))
+        .await
+        .unwrap();
+    assert!(!in_range["output"].as_str().unwrap().contains("clamped"));
+    let _ = std::fs::remove_dir_all(&workdir);
+}
+
+#[test]
+fn grep_schema_states_the_context_range() {
+    let tool = ToolRegistry::builtins().get("grep").unwrap();
+    let schema = tool.schema();
+    let description = schema.input_schema["properties"]["context"]["description"]
+        .as_str()
+        .unwrap();
+    assert!(
+        description.contains("0–5") && description.contains("clamped"),
+        "{description}"
+    );
 }
 
 /// Verify a zero match limit is rejected by the positive lower bound.

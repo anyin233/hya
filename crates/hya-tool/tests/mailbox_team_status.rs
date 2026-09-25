@@ -59,6 +59,15 @@ fn canned_service(
                 MailboxRequest::TeamStatus { reply, .. } => {
                     let _ = reply.send(Ok(team.clone()));
                 }
+                // Echo the requested id back so reads can assert routing.
+                MailboxRequest::ReadChannel { channel, reply, .. } => {
+                    let _ = reply.send(Ok((
+                        channel.clone(),
+                        vec![("main/scout-a".to_string(), "HELLO".to_string())],
+                        0,
+                        Some(format!("served `{channel}`")),
+                    )));
+                }
                 // The tool only queries the two above; anything else drops its
                 // reply, which the tool surfaces as an error.
                 _ => {}
@@ -170,4 +179,24 @@ async fn list_channel_renders_a_child_without_any_heartbeat_yet() {
         "absent freshness must be legible: {output:?}"
     );
     assert_eq!(out["team"][0]["lastActiveSeconds"], serde_json::json!(null));
+}
+
+/// Run 6: the lead typed `read #main/scout-fartooth` (a member handle, no
+/// `channel://`). A `#…` path that names no file is served as a channel read,
+/// where the engine resolves a member handle to the caller's DM with it.
+#[tokio::test]
+async fn a_hash_path_that_names_no_file_is_read_as_a_channel() {
+    let session = SessionId::new();
+    let (plane, service) = canned_service(Vec::new(), Vec::new());
+    let ctx = ctx_with(plane, session);
+    let tool = ToolRegistry::builtins().get("read").unwrap();
+
+    let out = tool
+        .execute(&ctx, serde_json::json!({"filePath": "#main/scout-a"}))
+        .await
+        .unwrap();
+    let output = out["output"].as_str().unwrap();
+    assert!(output.contains("served `#main/scout-a`"), "{output}");
+    assert!(output.contains("[main/scout-a] HELLO"), "{output}");
+    service.abort();
 }

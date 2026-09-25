@@ -63,7 +63,8 @@ impl Tool for ChannelReadTool {
             description: concat!(
                 "Read team mail history. `path` is `channel://<id>` for the latest ",
                 "message or `channel://<id>?last=N` for the last N; channel ids come ",
-                "from `list_channel`, a `[NEW MAIL]` notice, or a rejected `report`. ",
+                "from `list_channel`, a `[NEW MAIL]` notice, or a rejected `report`; ",
+                "a member handle (`channel://main/scout-suzuran`) reads your DM with it. ",
                 "Reading marks your inbox seen. This agent has no file reading: any ",
                 "other path is refused."
             )
@@ -94,12 +95,105 @@ impl Tool for ChannelReadTool {
             .and_then(Value::as_str)
             .unwrap_or_default()
             .trim();
-        if !path.starts_with("channel://") {
-            return Err(ToolError::Input(format!(
-                "`{path}` is not a channel handle: this agent's `read` only serves team \
-                 mail — use `channel://<id>` (see `list_channel` for ids)"
-            )));
-        }
+        // `#<id>` / `#<member handle>`: the same channel read (this `read`
+        // serves no files, so a `#` path cannot mean one).
+        let path = match path.strip_prefix('#') {
+            Some(_) => format!("channel://{path}"),
+            None if path.starts_with("channel://") => path.to_string(),
+            None => {
+                return Err(ToolError::Input(format!(
+                    "`{path}` is not a channel handle: this agent's `read` only serves team \
+                     mail — use `channel://<id>` (see `list_channel` for ids) or \
+                     `channel://<member handle>` for your DM with that member"
+                )));
+            }
+        };
         self.inner.execute(ctx, json!({ "path": path })).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use std::path::PathBuf;
+
+    use hya_proto::{SessionId, ToolName};
+    use hya_tool::{
+        InteractionPlane, LspPlane, MailboxPlane, PermissionPlane, PermissionRules, SkillPlane,
+        SpawnerPlane, TodoPlane, WebSearchPlane, handle::ArtifactPlane,
+    };
+    use tokio_util::sync::CancellationToken;
+
+    use super::*;
+
+    /// Echoes the path it was handed.
+    struct Echo;
+
+    #[async_trait]
+    impl Tool for Echo {
+        fn name(&self) -> &str {
+            "read"
+        }
+        fn schema(&self) -> ToolSchema {
+            ToolSchema {
+                name: ToolName::new("read"),
+                description: String::new(),
+                input_schema: json!({}),
+                output_schema: None,
+            }
+        }
+        async fn execute(&self, _ctx: &ToolCtx, input: Value) -> Result<Value, ToolError> {
+            Ok(input["path"].clone())
+        }
+    }
+
+    fn ctx() -> ToolCtx {
+        let session = SessionId::new();
+        let (permission, _rx) = PermissionPlane::new(PermissionRules::new(vec![]));
+        let (spawner, _srx) = SpawnerPlane::new();
+        let (interaction, _irx) = InteractionPlane::new();
+        ToolCtx {
+            workflows: hya_tool::WorkflowPlane::disconnected(),
+            permission: permission.for_session(session),
+            interaction: interaction.for_session(session),
+            spawner,
+            operation: hya_tool::ToolOperation::from_tool_call(hya_proto::ToolCallId::new()),
+            mailbox: MailboxPlane::disconnected(),
+            lifecycle: hya_tool::LifecyclePlane::disconnected(),
+            session: Some(session),
+            parent_session: None,
+            todo: TodoPlane::default(),
+            skills: SkillPlane::default(),
+            artifacts: ArtifactPlane::default(),
+            websearch: WebSearchPlane::default(),
+            lsp: LspPlane::default(),
+            formatter: hya_tool::FormatterPlane::default(),
+            agents: Default::default(),
+            workdir: PathBuf::from("."),
+            cancel: CancellationToken::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn the_mail_only_read_serves_hash_paths_as_channel_reads() {
+        let tool = ChannelReadTool::new(Arc::new(Echo));
+        let ctx = ctx();
+        for (path, forwarded) in [
+            ("#main/scout-a", "channel://#main/scout-a"),
+            ("#DM-aB12Cd34", "channel://#DM-aB12Cd34"),
+            ("channel://main/scout-a", "channel://main/scout-a"),
+        ] {
+            let out = tool.execute(&ctx, json!({ "path": path })).await.unwrap();
+            assert_eq!(out, forwarded, "{path}");
+        }
+        let error = tool
+            .execute(&ctx, json!({ "path": "src/lib.rs" }))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&error, ToolError::Input(message) if message.contains("member handle")),
+            "{error:?}"
+        );
     }
 }

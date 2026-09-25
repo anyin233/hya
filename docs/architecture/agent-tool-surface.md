@@ -194,7 +194,7 @@ the bound catalog) and filtered by depth when each request is built:
 | `wait` | every agent | every depth; the mail-aware channel-tools `wait` when that family is loaded |
 | `task`, `archive` | agents with **spawn rights**: a built-in (ordinary spawn scope) or a bundle agent whose `can_spawn` names an installed agent | depth 0 and 1; hidden at the depth cap (`MAX_SUBAGENT_DEPTH` = 2) |
 | `send`, `list_channel` | every agent, when the channel family (`hya/channel-tools`) is loaded | every depth |
-| `read channel://<id>` | every agent, when the channel family is loaded | every depth; a view that does not select `read` gets a **mail-only** `read` that serves `channel://` handles and refuses every other path |
+| `read channel://<id>` | every agent, when the channel family is loaded | every depth; a view that does not select `read` gets a **mail-only** `read` that serves `channel://` handles (and `#<id>` / `#<member handle>`) and refuses every other path |
 
 Resulting sets (channel family loaded — the default builtin registry):
 
@@ -275,6 +275,27 @@ Handle-addressed mail is attributed to the DM channel shared with its sender;
 harness notices with no channel are counted as `N harness notice(s)` and
 arrive with the next tool result as `[NEW MAIL]`. Reading any channel marks
 the whole inbox seen.
+
+**`read channel://<id>`** accepts a channel id from `list_channel` (`DM-…`,
+`announce-…`, `<unit>#<name>`; leading `#`s and padding are stripped with a
+warning). It also accepts a **member handle**, canonical (`main/scout-suzuran`)
+or a leaf (`scout-suzuran`). A handle reads the caller's DM with that member,
+and the output starts with a warning that names the DM id:
+
+```text
+[warning] normalized channel id `#main/scout-suzuran` → `main/scout-suzuran`; `#main/scout-suzuran` is a member handle, not a channel: showing your DM with it, `DM-rgli51cb` (read it as `read channel://DM-rgli51cb`)
+```
+
+A real channel id always wins. Channel ids are minted `DM-…`/`announce-…`
+keys or `#`-qualified unit keys, never a bare member path, so a handle can
+never shadow a channel. A bare `read #<handle>` path that names no existing
+file is served the same way; a file whose name starts with `#` (an editor's
+`#draft#`) still reads as a file. When no such channel or DM exists, the error
+lists the caller's own channels (DM peers named) and points to `list_channel`:
+
+```text
+unknown channel `#main/nobody`; your channels: `DM-rgli51cb` (DM with main/scout-suzuran). Read one with `read channel://<id>`; `list_channel` lists them with unread counts.
+```
 
 An accepted report returns `{"title": "Report accepted", "output": "Report
 accepted; your turn ends now. You will be archived with a state handoff; mail
@@ -761,7 +782,11 @@ compile reports the `regex` crate's own diagnostic (which names the offending
 construct) plus, unless `literal` was already set, a hint to escape the
 construct or pass `literal: true` instead. Its closed schema requires
 `pattern` and accepts only `path`, `glob`, `ignoreCase`, `literal`, `context`
-(0..=5), and `limit` (1..=200) as optional fields:
+(0..=5), and `limit` (1..=200) as optional fields. An integer `context` outside
+0..=5 is clamped instead of failing the call. Negative values become 0 and
+values over 5 become 5. The result says so at the end of its summary line and
+as the first `metadata.warnings` entry, for example `3 matches in 1 file.
+(context clamped to 5: requested 8, allowed 0–5)`.
 
 ```json
 {
@@ -899,7 +924,8 @@ count and truncation metadata. FIND retains its compatibility-oriented
 ### GREP
 
 Grep requires a non-empty `pattern` and accepts only these optional fields:
-`path`, `glob`, `ignoreCase`, `literal`, `context` (0..=5), and `limit` (1..=200).
+`path`, `glob`, `ignoreCase`, `literal`, `context` (0..=5; out-of-range
+integers are clamped with a note), and `limit` (1..=200).
 The input object is closed and rejects unspecified keys.
 Regex and literal matching honor `ignoreCase`. Caller and ignore patterns share
 negated-class semantics. Traversal bounds ignore sources/rules, skips an
