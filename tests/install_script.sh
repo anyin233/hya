@@ -34,11 +34,15 @@ contains "$release_workflow" "examples/hya-argus-example.hyabundle"
 contains "$package_helper" "package-bundle"
 not_contains "$package_helper" "7z a"
 contains "$script" "set -Eeuo pipefail"
-contains "$script" 'cd "$tmp_adapter" && bun install --frozen-lockfile --production'
+contains "$script" '(cd "$tmp" && bun install --frozen-lockfile --production)'
 contains "$script" "crates/hya-plugin-bun/adapter"
+contains "$script" "packages/hya-tui"
+contains "$script" "packages/hya-tui-web"
 contains "$script" "stage-first-party-bundles"
 contains "$release_workflow" "crates/hya-plugin-bun/adapter"
 contains "$release_workflow" "lib/hya/bun-adapter"
+contains "$release_workflow" "lib/hya/tui"
+contains "$release_workflow" "lib/hya/tui-web"
 contains "$release_workflow" "stage-first-party-bundles"
 not_contains "$script" "compat"
 not_contains "$release_workflow" "compat-adapter"
@@ -62,6 +66,8 @@ contains "$help" "bin/hya "
 not_contains "$help" "hya-backend"
 contains "$help" "bundles/hya-*.hyabundle"
 contains "$help" "lib/hya/bun-adapter"
+contains "$help" "lib/hya/tui "
+contains "$help" "lib/hya/tui-web"
 not_contains "$help" "compat"
 
 dry_run=$(bash ./install.sh --dry-run --prefix /tmp/hya-install-test --profile debug)
@@ -75,11 +81,15 @@ not_contains "$dry_run" "--profile debug"
 contains "$dry_run" "/tmp/hya-install-test/bin/.hya.tmp"
 contains "$dry_run" "/tmp/hya-install-test/bin/.hya.bak"
 contains "$dry_run" "/tmp/hya-install-test/lib/hya/.bun-adapter.tmp"
-contains "$dry_run" "/tmp/hya-install-test/lib/hya/.bun-adapter.bak"
+contains "$dry_run" "/tmp/hya-install-test/lib/hya/.{bun-adapter,tui,tui-web}.bak"
+contains "$dry_run" "/tmp/hya-install-test/lib/hya/.tui.tmp"
+contains "$dry_run" "/tmp/hya-install-test/lib/hya/.tui-web.tmp"
 contains "$dry_run" "/tmp/hya-install-test/bundles/.hya-bundles.tmp"
 contains "$dry_run" "/tmp/hya-install-test/bundles/.hya-bundles.bak"
 contains "$dry_run" "/tmp/hya-install-test/bin/hya"
 contains "$dry_run" "/tmp/hya-install-test/lib/hya/bun-adapter"
+contains "$dry_run" "/tmp/hya-install-test/lib/hya/tui/src/main.ts"
+contains "$dry_run" "/tmp/hya-install-test/lib/hya/tui-web/src/main.ts"
 contains "$dry_run" "bundle list (isolated HOME) must list: ${first_party[*]}"
 contains "$dry_run" "PATH check: command -v hya must resolve to /tmp/hya-install-test/bin/hya"
 contains "$dry_run" "rm -f /tmp/hya-install-test/bin/hya-backend (legacy executable name, if present)"
@@ -154,14 +164,25 @@ if [[ "${1:-}" == "--version" ]]; then
   printf '%s\n' 1.4.2
   exit 0
 fi
+# The installer probes the installed TUI and WebUI host entry points.
+if [[ "${2:-}" == "--help" && "${1:-}" == */src/main.ts ]]; then
+  test -f "$1"
+  exit 0
+fi
 [[ "$*" == "install --frozen-lockfile --production" ]]
 test -f package.json
 test -f bun.lock
 if [[ "${HYA_FAIL_ADAPTER_INSTALL:-0}" == 1 ]]; then
   exit 1
 fi
-grep -Fq '"name": "@hya/bun-adapter"' package.json
 mkdir -p node_modules
+if grep -Fq '"name": "@hya/tui",' package.json; then
+  mkdir -p node_modules/@opentui/core
+elif grep -Fq '"name": "@hya/tui-web",' package.json; then
+  mkdir -p node_modules/@xterm/xterm
+else
+  grep -Fq '"name": "@hya/bun-adapter",' package.json
+fi
 FAKE_BUN
 chmod +x "$fake_bin/bun"
 
@@ -198,6 +219,12 @@ done
 bun_adapter="$install_root/lib/hya/bun-adapter"
 for path in package.json bun.lock src/main.ts node_modules; do
   [[ -e "$bun_adapter/$path" ]] || fail "missing installed Bun adapter path: $path"
+done
+for path in package.json bun.lock bunfig.toml tsconfig.json src/main.ts node_modules/@opentui/core; do
+  [[ -e "$install_root/lib/hya/tui/$path" ]] || fail "missing installed TUI path: $path"
+done
+for path in package.json bun.lock tsconfig.json src/main.ts web/index.html node_modules/@xterm/xterm; do
+  [[ -e "$install_root/lib/hya/tui-web/$path" ]] || fail "missing installed WebUI host path: $path"
 done
 no_leftovers "$install_root" || fail "installer left temporary or backup paths after a successful install"
 

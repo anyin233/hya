@@ -11,6 +11,9 @@
 - Bare `hya` writes server and WebUI output to `$XDG_STATE_HOME/hya/hya.log` instead of the terminal.
 - The WebUI host now ends every tab's process (SIGHUP, then SIGKILL) when it gets SIGINT, SIGTERM, or SIGHUP.
 - The TUI package is self-contained. `gen-api` now also generates its `/api` catalog into `packages/hya-tui/src/operations.json`. See [ADR-0020](docs/adr/0020-bundle-tui-and-webui-in-hya.md).
+- Release archives and `install.sh` now ship the TUI (`lib/hya/tui`, with the target's OpenTUI native package) and the WebUI host (`lib/hya/tui-web`), each with production dependencies only, so bare `hya` works from an installed layout.
+- The release smoke test and `xtask release-rehearsal` check the staged TUI and WebUI: required files and dependencies are present, no dev-only packages are included, `--help` runs from outside the checkout, and every import resolves inside the staged directories. The rehearsal also checks that the WebUI page and its assets are served.
+- Fix: `xtask release-rehearsal` built a package named `hya` that doesn't exist; it now builds `hya-backend`, like the release workflow.
 
 ## Live assistant text and turn errors on the v1 stream
 

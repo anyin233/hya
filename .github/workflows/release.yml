@@ -132,6 +132,20 @@ jobs:
             crates/hya-plugin-bun/adapter/bun.lock "$bun_adapter/"
           cp -R crates/hya-plugin-bun/adapter/src/. "$bun_adapter/src/"
           (cd "$bun_adapter" && "$HOME/.bun/bin/bun" install --frozen-lockfile --production)
+          # Bare `hya` runs the TUI and the WebUI host from these directories.
+          # Installing on this runner pulls the host's OpenTUI native package.
+          tui="dist/$package_dir/lib/hya/tui"
+          tui_web="dist/$package_dir/lib/hya/tui-web"
+          mkdir -p "$tui/src" "$tui_web/src" "$tui_web/web"
+          cp packages/hya-tui/package.json packages/hya-tui/bun.lock \
+            packages/hya-tui/bunfig.toml packages/hya-tui/tsconfig.json "$tui/"
+          cp -R packages/hya-tui/src/. "$tui/src/"
+          (cd "$tui" && "$HOME/.bun/bin/bun" install --frozen-lockfile --production)
+          cp packages/hya-tui-web/package.json packages/hya-tui-web/bun.lock \
+            packages/hya-tui-web/tsconfig.json "$tui_web/"
+          cp -R packages/hya-tui-web/src/. "$tui_web/src/"
+          cp -R packages/hya-tui-web/web/. "$tui_web/web/"
+          (cd "$tui_web" && "$HOME/.bun/bin/bun" install --frozen-lockfile --production)
           cargo run --locked -p xtask -- stage-first-party-bundles --target "$TARGET" --version "$version" --library-dir "target/$TARGET/release" --package-root "dist/$package_dir" --assets dist
           scripts/package-argus-example.sh bundles/examples/argus-example \
             "dist/$package_dir/examples/hya-argus-example.hyabundle"
@@ -198,6 +212,43 @@ jobs:
           grep -F '"hooks":[]' "$bun_output"
           grep -F '"tools":[]' "$bun_output"
           grep -F '"id":2,"result":{}' "$bun_output"
+          tui="$scratch/$package_dir/lib/hya/tui"
+          tui_web="$scratch/$package_dir/lib/hya/tui-web"
+          case "$TARGET" in
+            x86_64-unknown-linux-gnu) opentui_native=linux-x64 ;;
+            aarch64-unknown-linux-gnu) opentui_native=linux-arm64 ;;
+            aarch64-apple-darwin) opentui_native=darwin-arm64 ;;
+            *) echo "no OpenTUI native package is known for $TARGET" >&2; exit 1 ;;
+          esac
+          for path in package.json bun.lock bunfig.toml tsconfig.json src/main.ts \
+            node_modules/@opentui/core/package.json node_modules/@opentui/solid/package.json \
+            "node_modules/@opentui/core-$opentui_native/package.json" node_modules/solid-js/package.json; do
+            test -f "$tui/$path"
+          done
+          test ! -e "$tui/node_modules/bun-types"
+          for path in package.json bun.lock tsconfig.json src/main.ts src/frames.ts \
+            web/index.html web/client.ts web/style.css \
+            node_modules/@xterm/xterm/package.json node_modules/@xterm/xterm/css/xterm.css \
+            node_modules/@xterm/addon-fit/package.json; do
+            test -f "$tui_web/$path"
+          done
+          for dev_dependency in @playwright/test @opentui/core bun-types typescript; do
+            test ! -e "$tui_web/node_modules/$dev_dependency"
+          done
+          tui_probe="$scratch/tui-probe"
+          mkdir -p "$tui_probe"
+          (
+            cd "$tui_probe"
+            env -u HYA_TUI_DIR -u HYA_TUI_WEB_DIR "$HOME/.bun/bin/bun" "$tui/src/main.ts" --help > tui-help.txt
+            grep -F "Usage:" tui-help.txt
+            env -u HYA_TUI_DIR -u HYA_TUI_WEB_DIR "$HOME/.bun/bin/bun" "$tui_web/src/main.ts" --help > tui-web-help.txt
+            grep -F "Usage:" tui-web-help.txt
+            # `--help` skips lazily loaded modules; bundling resolves every import
+            # and fails on any that leaves the staged directory.
+            "$HOME/.bun/bin/bun" build --target=bun --external '@opentui/core-*' \
+              --outdir tui-build "$tui/src/main.ts" >/dev/null
+            "$HOME/.bun/bin/bun" build --target=bun --outdir tui-web-build "$tui_web/src/main.ts" >/dev/null
+          )
           example_archive="$scratch/$package_dir/examples/hya-argus-example.hyabundle"
           test -f "$example_archive"
           7z t "$example_archive" >/dev/null
@@ -214,6 +265,11 @@ jobs:
           grep -Fx "$package_dir/lib/hya/bun-adapter/bun.lock" "$scratch/archive.txt"
           grep -Fx "$package_dir/lib/hya/bun-adapter/src/main.ts" "$scratch/archive.txt"
           grep -F "$package_dir/lib/hya/bun-adapter/node_modules/" "$scratch/archive.txt" >/dev/null
+          grep -Fx "$package_dir/lib/hya/tui/src/main.ts" "$scratch/archive.txt"
+          grep -F "$package_dir/lib/hya/tui/node_modules/@opentui/core/" "$scratch/archive.txt" >/dev/null
+          grep -Fx "$package_dir/lib/hya/tui-web/src/main.ts" "$scratch/archive.txt"
+          grep -Fx "$package_dir/lib/hya/tui-web/web/index.html" "$scratch/archive.txt"
+          grep -F "$package_dir/lib/hya/tui-web/node_modules/@xterm/xterm/" "$scratch/archive.txt" >/dev/null
           for bundle in base-tools extended-tools network-tools channel-tools todo-tools core-skills core-commands core-agents agent-channels goal-loop plan-impl-review subagents; do
             grep -Fx "$package_dir/bundles/hya-$bundle.hyabundle" "$scratch/archive.txt"
           done

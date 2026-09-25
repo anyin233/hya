@@ -60,8 +60,12 @@ A release builds each supported target natively: `x86_64-unknown-linux-gnu`,
 `aarch64-unknown-linux-gnu`, and `aarch64-apple-darwin`. It publishes:
 
 - `hya-<version>-<target>.tar.gz` per target, containing `bin/hya`,
-  `bundles/hya-<name>.hyabundle` for all twelve bundles, and
-  `lib/hya/bun-adapter`. Extracting it gives a working installed layout.
+  `bundles/hya-<name>.hyabundle` for all twelve bundles, and three Bun
+  programs with their production `node_modules`: `lib/hya/bun-adapter`,
+  `lib/hya/tui` (the OpenTUI terminal UI bare `hya` starts, including the
+  target's `@opentui/core-<platform>` native package), and `lib/hya/tui-web`
+  (the WebUI host with its `web/` page and `@xterm/*`). Extracting it gives a
+  working installed layout; running the TUI and WebUI needs Bun on `PATH`.
 - One standalone asset per bundle, byte-identical to the archived copy:
   `hya-<name>-<version>-<target>.hyabundle` for the five native tool families
   on each target, and `hya-<name>-<version>.hyabundle` once for the seven
@@ -75,7 +79,11 @@ A release builds each supported target natively: `x86_64-unknown-linux-gnu`,
 `cargo run -p xtask -- stage-first-party-bundles` produces both the archived
 packages and the assets and refuses a release version that any bundle does not
 carry. The release smoke test checks each asset against the archive and runs
-`hya bundle list` from the extracted archive.
+`hya bundle list` from the extracted archive. It also checks the staged TUI and
+WebUI host: required files and production dependencies are present, dev-only
+packages (Playwright, `bun-types`) are not, both `--help` entry points run from
+outside the checkout, and `bun build` resolves every import inside the staged
+directories.
 
 The engine keeps safety-critical logic and its prompt contracts in Rust:
 admission, permissions, events, lifecycle, and the compaction and handoff

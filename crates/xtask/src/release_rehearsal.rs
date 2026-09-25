@@ -43,8 +43,13 @@ fn require_host_target(target: &str, host: &str) -> Result<()> {
 /// A newer Bun writes a lockfile version the release's pinned Bun rejects, which
 /// would only surface when `bun install --frozen-lockfile` runs during packaging.
 fn validate_bun_lockfile(root: &Path) -> Result<()> {
-    let lockfile = read_text(root, &format!("{BUN_ADAPTER}/bun.lock"))?;
-    require_supported_bun_lockfile(parse_bun_lockfile_version(&lockfile)?)
+    for runtime in PACKAGED_RUNTIMES {
+        let lockfile = read_text(root, &format!("{}/bun.lock", runtime.source))?;
+        let version = parse_bun_lockfile_version(&lockfile)
+            .with_context(|| format!("read {}/bun.lock", runtime.source))?;
+        require_supported_bun_lockfile(runtime.source, version)?;
+    }
+    Ok(())
 }
 
 /// Read `lockfileVersion` from Bun's text lockfile.
@@ -53,16 +58,16 @@ fn parse_bun_lockfile_version(lockfile: &str) -> Result<u64> {
         .lines()
         .find_map(|line| line.trim().strip_prefix("\"lockfileVersion\":"))
         .map(|value| value.trim().trim_end_matches(','))
-        .context("Bun adapter bun.lock has no lockfileVersion")?
+        .context("bun.lock has no lockfileVersion")?
         .parse()
-        .context("Bun adapter bun.lock lockfileVersion is not a number")
+        .context("bun.lock lockfileVersion is not a number")
 }
 
 /// Reject lockfile versions newer than the pinned Bun understands.
-fn require_supported_bun_lockfile(version: u64) -> Result<()> {
+fn require_supported_bun_lockfile(source: &str, version: u64) -> Result<()> {
     ensure!(
         version <= BUN_LOCKFILE_VERSION,
-        "{BUN_ADAPTER}/bun.lock uses lockfileVersion {version}, which Bun {BUN_VERSION} cannot \
+        "{source}/bun.lock uses lockfileVersion {version}, which Bun {BUN_VERSION} cannot \
          read; regenerate it with Bun {BUN_VERSION}"
     );
     Ok(())
@@ -93,9 +98,92 @@ const BUN_ADAPTER: &str = "crates/hya-plugin-bun/adapter";
 const ARGUS_PACKAGE_SCRIPT: &str = "scripts/package-argus-example.sh";
 const WORKFLOW_BUN_SOURCE_COPY: &str =
     "cp -R crates/hya-plugin-bun/adapter/src/. \"$bun_adapter/src/\"";
+const WORKFLOW_TUI_SOURCE_COPY: &str = "cp -R packages/hya-tui/src/. \"$tui/src/\"";
+const WORKFLOW_TUI_INSTALL: &str =
+    "(cd \"$tui\" && \"$HOME/.bun/bin/bun\" install --frozen-lockfile --production)";
+const WORKFLOW_TUI_WEB_SOURCE_COPY: &str = "cp -R packages/hya-tui-web/src/. \"$tui_web/src/\"";
+const WORKFLOW_TUI_WEB_PAGE_COPY: &str = "cp -R packages/hya-tui-web/web/. \"$tui_web/web/\"";
+const WORKFLOW_TUI_WEB_INSTALL: &str =
+    "(cd \"$tui_web\" && \"$HOME/.bun/bin/bun\" install --frozen-lockfile --production)";
 const WORKFLOW_FIRST_PARTY_STAGE: &str = "cargo run --locked -p xtask -- stage-first-party-bundles --target \"$TARGET\" --version \"$version\" --library-dir \"target/$TARGET/release\" --package-root \"dist/$package_dir\" --assets dist";
 const WORKFLOW_CHECKSUMS: &str =
     "(cd dist && shasum -a 256 \"$archive\" hya-*.hyabundle > \"SHA256SUMS-$TARGET\")";
+
+/// One Bun program the archive ships under `lib/hya` with production dependencies.
+struct BunRuntime {
+    /// Workspace directory the program is copied from.
+    source: &'static str,
+    /// Package-relative directory it is installed into.
+    destination: &'static str,
+    /// Top-level files copied as-is.
+    files: &'static [&'static str],
+    /// Directories copied recursively.
+    directories: &'static [&'static str],
+}
+
+/// The Bun extension adapter for `kind: bun` plugins.
+const BUN_ADAPTER_RUNTIME: BunRuntime = BunRuntime {
+    source: BUN_ADAPTER,
+    destination: "lib/hya/bun-adapter",
+    files: &["package.json", "bun.lock"],
+    directories: &["src"],
+};
+
+/// The OpenTUI terminal UI bare `hya` runs.
+const TUI_RUNTIME: BunRuntime = BunRuntime {
+    source: "packages/hya-tui",
+    destination: "lib/hya/tui",
+    files: &["package.json", "bun.lock", "bunfig.toml", "tsconfig.json"],
+    directories: &["src"],
+};
+
+/// The WebUI host that serves the TUI to the browser over a PTY.
+const TUI_WEB_RUNTIME: BunRuntime = BunRuntime {
+    source: "packages/hya-tui-web",
+    destination: "lib/hya/tui-web",
+    files: &["package.json", "bun.lock", "tsconfig.json"],
+    directories: &["src", "web"],
+};
+
+/// Every Bun program in the release archive, in staging order.
+const PACKAGED_RUNTIMES: [&BunRuntime; 3] = [&BUN_ADAPTER_RUNTIME, &TUI_RUNTIME, &TUI_WEB_RUNTIME];
+
+/// Production dependencies the staged TUI must contain (besides its native package).
+const TUI_DEPENDENCIES: [&str; 3] = ["@opentui/core", "@opentui/solid", "solid-js"];
+/// Development-only packages a production TUI install must not contain.
+const TUI_DEV_ONLY: [&str; 1] = ["bun-types"];
+/// Production dependencies the staged WebUI host must contain.
+const TUI_WEB_DEPENDENCIES: [&str; 2] = ["@xterm/xterm", "@xterm/addon-fit"];
+/// Development-only packages a production WebUI host install must not contain.
+const TUI_WEB_DEV_ONLY: [&str; 4] = [
+    "@playwright/test",
+    "@opentui/core",
+    "bun-types",
+    "typescript",
+];
+/// Files the staged programs load at runtime beyond their copied sources.
+const TUI_RUNTIME_FILES: [&str; 1] = ["src/main.ts"];
+const TUI_WEB_RUNTIME_FILES: [&str; 6] = [
+    "src/main.ts",
+    "src/frames.ts",
+    "web/index.html",
+    "web/client.ts",
+    "web/style.css",
+    "node_modules/@xterm/xterm/css/xterm.css",
+];
+
+/// Return the OpenTUI native package `bun install` selects on a release target.
+///
+/// `@opentui/core` loads its renderer from a per-platform optional dependency,
+/// so each release job must install on its own runner.
+fn opentui_native_package(target: &str) -> Result<&'static str> {
+    match target {
+        "x86_64-unknown-linux-gnu" => Ok("@opentui/core-linux-x64"),
+        "aarch64-unknown-linux-gnu" => Ok("@opentui/core-linux-arm64"),
+        "aarch64-apple-darwin" => Ok("@opentui/core-darwin-arm64"),
+        _ => bail!("no OpenTUI native package is known for release target `{target}`"),
+    }
+}
 
 /// Command-line options for one non-publishing rehearsal.
 #[derive(Debug)]
@@ -346,6 +434,30 @@ fn validate_workflow(workflow: &Value, target: &str) -> Result<Vec<String>> {
         WORKFLOW_BUN_SOURCE_COPY,
         "recursively copy the complete Bun adapter source tree",
     )?;
+    for (marker, purpose) in [
+        (
+            WORKFLOW_TUI_SOURCE_COPY,
+            "recursively copy the complete TUI source tree",
+        ),
+        (
+            WORKFLOW_TUI_INSTALL,
+            "install the TUI's production dependencies on the target runner",
+        ),
+        (
+            WORKFLOW_TUI_WEB_SOURCE_COPY,
+            "recursively copy the complete WebUI host source tree",
+        ),
+        (
+            WORKFLOW_TUI_WEB_PAGE_COPY,
+            "recursively copy the complete WebUI page tree",
+        ),
+        (
+            WORKFLOW_TUI_WEB_INSTALL,
+            "install the WebUI host's production dependencies",
+        ),
+    ] {
+        ensure_workflow_run_contract(&run_blocks, marker, purpose)?;
+    }
     ensure_workflow_run_contract(
         &run_blocks,
         WORKFLOW_FIRST_PARTY_STAGE,
@@ -797,13 +909,13 @@ fn prepare_and_build(root: &Path, target: &str) -> Result<()> {
         "--release".to_owned(),
         "--locked".to_owned(),
         "-p".to_owned(),
-        "hya".to_owned(),
+        "hya-backend".to_owned(),
         "--bins".to_owned(),
         "--target".to_owned(),
         target.to_owned(),
     ];
     run_checked(OsStr::new("cargo"), &args, root, &[], &[])
-        .context("run locked release build for hya")?;
+        .context("run locked release build for hya-backend")?;
     let mut libraries = arg_list(&["build", "--release", "--locked"]);
     for family in TOOL_FAMILY_CRATES {
         libraries.extend(["-p".to_owned(), family.to_owned()]);
@@ -830,9 +942,11 @@ fn rehearse_package(root: &Path, version: &str, target: &str) -> Result<()> {
     set_executable(&backend_destination)?;
     copy_file(&root.join("README.md"), &package_root.join("README.md"))?;
 
-    let bun_adapter = package_root.join("lib/hya/bun-adapter");
-    copy_bun_runtime(root, &bun_adapter)?;
-    install_runtime_dependencies(&bun_adapter)?;
+    for runtime in PACKAGED_RUNTIMES {
+        let destination = package_root.join(runtime.destination);
+        stage_bun_runtime(root, runtime, &destination)?;
+        install_runtime_dependencies(runtime, &destination)?;
+    }
 
     let example = package_root.join("examples/hya-argus-example.hyabundle");
     fs::create_dir_all(example.parent().context("example archive has no parent")?)
@@ -901,7 +1015,7 @@ fn rehearse_package(root: &Path, version: &str, target: &str) -> Result<()> {
 
     write_and_verify_checksums(&dist, target, &archive_name, &assets)?;
 
-    verify_package_layout(&package_root)?;
+    verify_package_layout(&package_root, target)?;
     let extract_root = scratch.path().join("extract");
     fs::create_dir_all(&extract_root)
         .with_context(|| format!("create {}", extract_root.display()))?;
@@ -919,7 +1033,7 @@ fn rehearse_package(root: &Path, version: &str, target: &str) -> Result<()> {
     )
     .context("extract release archive")?;
     let extracted = extract_root.join(&package_name);
-    verify_package_layout(&extracted)?;
+    verify_package_layout(&extracted, target)?;
     verify_archive_listing(root, &archive, &package_name, &scratch)?;
     smoke_packaged_release(&extracted, &scratch, version)?;
     for bundle in &staged {
@@ -939,30 +1053,34 @@ fn rehearse_package(root: &Path, version: &str, target: &str) -> Result<()> {
             asset.display()
         );
     }
+    verify_tui_imports_resolve(&extracted, &scratch)?;
     Ok(())
 }
 
-/// Copy the Bun adapter manifest and source tree into the package.
-fn copy_bun_runtime(root: &Path, bun_adapter: &Path) -> Result<()> {
-    let source = root.join(BUN_ADAPTER);
-    fs::create_dir_all(bun_adapter.join("src"))
-        .with_context(|| format!("create Bun adapter runtime {}", bun_adapter.display()))?;
-    for file in ["package.json", "bun.lock"] {
-        copy_file(&source.join(file), &bun_adapter.join(file))?;
+/// Copy one Bun program's manifest files and source trees into the package.
+fn stage_bun_runtime(root: &Path, runtime: &BunRuntime, destination: &Path) -> Result<()> {
+    let source = root.join(runtime.source);
+    fs::create_dir_all(destination)
+        .with_context(|| format!("create packaged runtime {}", destination.display()))?;
+    for file in runtime.files {
+        copy_file(&source.join(file), &destination.join(file))?;
     }
-    copy_directory_contents(&source.join("src"), &bun_adapter.join("src"))
+    for directory in runtime.directories {
+        copy_directory_contents(&source.join(directory), &destination.join(directory))?;
+    }
+    Ok(())
 }
 
-/// Install production dependencies in the packaged JavaScript runtime.
-fn install_runtime_dependencies(bun_adapter: &Path) -> Result<()> {
+/// Install production dependencies in one packaged Bun program.
+fn install_runtime_dependencies(runtime: &BunRuntime, destination: &Path) -> Result<()> {
     run_checked(
         OsStr::new("bun"),
         &arg_list(&["install", "--frozen-lockfile", "--production"]),
-        bun_adapter,
+        destination,
         &[],
         &[],
     )
-    .context("install Bun adapter runtime dependencies")?;
+    .with_context(|| format!("install {} production dependencies", runtime.destination))?;
     Ok(())
 }
 
@@ -1027,13 +1145,14 @@ fn verify_example_listing(listing: &str) -> Result<()> {
 }
 
 /// Verify required runtime files before archiving.
-fn verify_package_layout(package_root: &Path) -> Result<()> {
+fn verify_package_layout(package_root: &Path, target: &str) -> Result<()> {
     require_file(&package_root.join("bin").join("hya"), "packaged binary")?;
 
     let bun_adapter = package_root.join("lib/hya/bun-adapter");
     for path in ["package.json", "bun.lock", "src/main.ts"] {
         require_file(&bun_adapter.join(path), "packaged Bun adapter file")?;
     }
+    verify_tui_layout(package_root, target)?;
     for identity in hya_bundle::FIRST_PARTY_BUNDLES {
         let name = hya_bundle::first_party_package_name(identity)
             .with_context(|| format!("no package name for {identity}"))?;
@@ -1041,6 +1160,62 @@ fn verify_package_layout(package_root: &Path) -> Result<()> {
             &package_root.join("bundles").join(name),
             "packaged first-party bundle",
         )?;
+    }
+    Ok(())
+}
+
+/// Verify the staged TUI and WebUI host: sources, production dependencies
+/// (including the target's OpenTUI native package), and no dev-only packages.
+fn verify_tui_layout(package_root: &Path, target: &str) -> Result<()> {
+    let native = opentui_native_package(target)?;
+    let mut tui_dependencies = TUI_DEPENDENCIES.to_vec();
+    tui_dependencies.push(native);
+    verify_staged_program(
+        package_root,
+        &TUI_RUNTIME,
+        &TUI_RUNTIME_FILES,
+        &tui_dependencies,
+        &TUI_DEV_ONLY,
+    )?;
+    verify_staged_program(
+        package_root,
+        &TUI_WEB_RUNTIME,
+        &TUI_WEB_RUNTIME_FILES,
+        &TUI_WEB_DEPENDENCIES,
+        &TUI_WEB_DEV_ONLY,
+    )
+}
+
+/// Require one staged Bun program's files and dependencies, and reject its
+/// development-only packages.
+fn verify_staged_program(
+    package_root: &Path,
+    runtime: &BunRuntime,
+    runtime_files: &[&str],
+    dependencies: &[&str],
+    dev_only: &[&str],
+) -> Result<()> {
+    let directory = package_root.join(runtime.destination);
+    let label = runtime.destination;
+    for file in runtime.files.iter().chain(runtime_files) {
+        require_file(&directory.join(file), &format!("packaged {label} file"))?;
+    }
+    for dependency in dependencies {
+        require_file(
+            &directory
+                .join("node_modules")
+                .join(dependency)
+                .join("package.json"),
+            &format!("packaged {label} dependency {dependency}"),
+        )?;
+    }
+    for dependency in dev_only {
+        let path = directory.join("node_modules").join(dependency);
+        ensure!(
+            fs::symlink_metadata(&path).is_err(),
+            "packaged {label} contains development-only package {dependency} at {}",
+            path.display()
+        );
     }
     Ok(())
 }
@@ -1069,6 +1244,13 @@ fn verify_archive_listing(
         "lib/hya/bun-adapter/package.json",
         "lib/hya/bun-adapter/bun.lock",
         "lib/hya/bun-adapter/src/main.ts",
+        "lib/hya/tui/package.json",
+        "lib/hya/tui/bun.lock",
+        "lib/hya/tui/src/main.ts",
+        "lib/hya/tui-web/package.json",
+        "lib/hya/tui-web/bun.lock",
+        "lib/hya/tui-web/src/main.ts",
+        "lib/hya/tui-web/web/index.html",
         "examples/hya-argus-example.hyabundle",
     ] {
         require_listing_line(
@@ -1085,6 +1267,16 @@ fn verify_archive_listing(
             &format!("{package_name}/bundles/{name}"),
             "release tar listing",
         )?;
+    }
+    for prefix in [
+        "lib/hya/tui/node_modules/@opentui/core/",
+        "lib/hya/tui-web/node_modules/@xterm/xterm/",
+    ] {
+        let prefix = format!("{package_name}/{prefix}");
+        ensure!(
+            listing.lines().any(|line| line.starts_with(&prefix)),
+            "release tar listing lacks entries under `{prefix}`"
+        );
     }
     ensure!(
         !listing.contains(&format!("{package_name}/bundles/examples/argus-example")),
@@ -1122,6 +1314,7 @@ fn smoke_packaged_release(
     smoke_first_party_bundles(&backend, scratch, version)?;
 
     smoke_bun_adapter(&package_root.join("lib/hya/bun-adapter"), scratch)?;
+    smoke_tui_runtime(package_root, scratch)?;
     Ok(())
 }
 
@@ -1197,6 +1390,257 @@ fn smoke_bun_adapter(bun_adapter: &Path, scratch: &ScratchDirectory) -> Result<(
         ensure!(body.contains(marker), "adapter output lacks `{marker}`");
     }
     Ok(())
+}
+
+/// Environment overrides that would point `hya` away from the staged TUI.
+const TUI_OVERRIDES: [&str; 2] = ["HYA_TUI_DIR", "HYA_TUI_WEB_DIR"];
+
+/// Run the staged TUI and WebUI host from outside the repository.
+///
+/// Both `--help` entry points must start, and the WebUI host must serve its
+/// page together with the bundled client script and xterm stylesheet.
+fn smoke_tui_runtime(package_root: &Path, scratch: &ScratchDirectory) -> Result<()> {
+    let probe = scratch.path().join("tui-probe");
+    fs::create_dir_all(&probe).with_context(|| format!("create {}", probe.display()))?;
+    for runtime in [&TUI_RUNTIME, &TUI_WEB_RUNTIME] {
+        let script = package_root.join(runtime.destination).join("src/main.ts");
+        let output = run_checked(
+            OsStr::new("bun"),
+            &[script.display().to_string(), "--help".to_owned()],
+            &probe,
+            &[],
+            &TUI_OVERRIDES,
+        )
+        .with_context(|| format!("smoke packaged {} --help", runtime.destination))?;
+        ensure!(
+            String::from_utf8_lossy(&output.stdout).contains("Usage:"),
+            "packaged {} --help printed no usage",
+            runtime.destination
+        );
+    }
+    smoke_web_host(&package_root.join(TUI_WEB_RUNTIME.destination), &probe)
+}
+
+/// Stops the WebUI host child process when the smoke check returns.
+struct ChildGuard(std::process::Child);
+
+impl Drop for ChildGuard {
+    /// Kill and reap the host so the rehearsal never leaks a listener.
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// Start the staged WebUI host on a free port and fetch its page and assets.
+fn smoke_web_host(tui_web: &Path, probe: &Path) -> Result<()> {
+    use std::io::{BufRead as _, BufReader};
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let script = tui_web.join("src/main.ts");
+    let mut command = build_command(
+        OsStr::new("bun"),
+        &[
+            script.display().to_string(),
+            "--port".to_owned(),
+            "0".to_owned(),
+            "--".to_owned(),
+            "true".to_owned(),
+        ],
+        probe,
+        &[],
+        &TUI_OVERRIDES,
+    );
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    let mut child = ChildGuard(command.spawn().context("spawn packaged WebUI host")?);
+    let stdout = child.0.stdout.take().context("open WebUI host stdout")?;
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            let Ok(line) = line else { break };
+            if let Some(address) = parse_listen_address(&line) {
+                let _ = sender.send(address);
+                break;
+            }
+        }
+    });
+    let address = receiver
+        .recv_timeout(Duration::from_secs(30))
+        .context("packaged WebUI host did not report its listen address within 30s")?;
+
+    let page = http_get(&address, "/").context("fetch the WebUI page")?;
+    ensure!(
+        page.contains("id=\"terminal\""),
+        "packaged WebUI page lacks its terminal element"
+    );
+    let assets = page_asset_paths(&page);
+    ensure!(
+        assets.iter().any(|path| path.ends_with(".js"))
+            && assets.iter().any(|path| path.ends_with(".css")),
+        "packaged WebUI page references no bundled script and stylesheet: {assets:?}"
+    );
+    for path in &assets {
+        let body = http_get(&address, path).with_context(|| format!("fetch WebUI asset {path}"))?;
+        if path.ends_with(".css") {
+            ensure!(
+                body.contains(".xterm"),
+                "packaged WebUI stylesheet {path} lacks the xterm styles"
+            );
+        }
+    }
+    drop(child);
+    Ok(())
+}
+
+/// Return `host:port` from the WebUI host's `listening on http://…/` line.
+fn parse_listen_address(line: &str) -> Option<String> {
+    let url = line.split_once("listening on http://")?.1.trim();
+    let address = url.split('/').next()?;
+    (!address.is_empty()).then(|| address.to_owned())
+}
+
+/// Collect root-relative `src="/…"` and `href="/…"` references from a page.
+fn page_asset_paths(page: &str) -> Vec<String> {
+    let mut paths = Vec::new();
+    for attribute in ["src=\"/", "href=\"/"] {
+        let mut rest = page;
+        while let Some(start) = rest.find(attribute) {
+            let value = &rest[start + attribute.len() - 1..];
+            let Some(end) = value.find('"') else { break };
+            paths.push(value[..end].to_owned());
+            rest = &value[end..];
+        }
+    }
+    paths
+}
+
+/// Fetch one path over plain HTTP and return the body of a `200` response.
+fn http_get(address: &str, path: &str) -> Result<String> {
+    use std::io::Read as _;
+    use std::net::TcpStream;
+    use std::time::Duration;
+
+    let mut stream =
+        TcpStream::connect(address).with_context(|| format!("connect to {address}"))?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(30)))
+        .context("set HTTP read timeout")?;
+    write!(
+        stream,
+        "GET {path} HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n\r\n"
+    )
+    .context("send HTTP request")?;
+    let mut response = Vec::new();
+    stream
+        .read_to_end(&mut response)
+        .context("read HTTP response")?;
+    parse_http_response(&String::from_utf8_lossy(&response))
+}
+
+/// Split an HTTP/1.1 response, require status `200`, and decode a chunked body.
+fn parse_http_response(response: &str) -> Result<String> {
+    let (head, body) = response
+        .split_once("\r\n\r\n")
+        .context("HTTP response has no header terminator")?;
+    let status = head.lines().next().unwrap_or_default();
+    ensure!(
+        status.split_whitespace().nth(1) == Some("200"),
+        "HTTP response status is `{status}`"
+    );
+    let chunked = head.lines().any(|line| {
+        line.split_once(':').is_some_and(|(name, value)| {
+            name.trim().eq_ignore_ascii_case("transfer-encoding")
+                && value.trim().eq_ignore_ascii_case("chunked")
+        })
+    });
+    if !chunked {
+        return Ok(body.to_owned());
+    }
+    let mut decoded = String::new();
+    let mut rest = body;
+    loop {
+        let (size, after) = rest
+            .split_once("\r\n")
+            .context("chunked HTTP body lacks a size line")?;
+        let size = usize::from_str_radix(size.split(';').next().unwrap_or_default().trim(), 16)
+            .context("chunked HTTP body has an invalid chunk size")?;
+        if size == 0 {
+            return Ok(decoded);
+        }
+        let chunk = after
+            .get(..size)
+            .context("chunked HTTP body is truncated")?;
+        decoded.push_str(chunk);
+        rest = after[size..].trim_start_matches("\r\n");
+    }
+}
+
+/// Require every import of the staged TUI and WebUI host to resolve inside
+/// its own directory.
+///
+/// `--help` never loads the lazily imported app, so this bundles each entry
+/// point with Bun, which follows every static and dynamic import and fails on
+/// one that does not resolve — such as a relative path that leaves the
+/// package. OpenTUI's native packages for other platforms stay external.
+fn verify_tui_imports_resolve(package_root: &Path, scratch: &ScratchDirectory) -> Result<()> {
+    let probe = scratch.path().join("tui-resolve");
+    fs::create_dir_all(&probe).with_context(|| format!("create {}", probe.display()))?;
+    for (runtime, externals) in [
+        (&TUI_RUNTIME, &["@opentui/core-*"][..]),
+        (&TUI_WEB_RUNTIME, &[]),
+    ] {
+        let script = package_root.join(runtime.destination).join("src/main.ts");
+        let mut args = arg_list(&["build", "--target=bun"]);
+        for external in externals {
+            args.extend(["--external".to_owned(), (*external).to_owned()]);
+        }
+        let outdir = probe.join(runtime.destination.replace('/', "-"));
+        args.extend([
+            "--outdir".to_owned(),
+            outdir.display().to_string(),
+            script.display().to_string(),
+        ]);
+        let output = run_process(OsStr::new("bun"), &args, &probe, &[], &TUI_OVERRIDES)
+            .with_context(|| {
+                format!(
+                    "bundle packaged {} to resolve its imports",
+                    runtime.destination
+                )
+            })?;
+        ensure!(
+            output.status.success(),
+            "packaged {} has imports that do not resolve inside it:\n{}",
+            runtime.destination,
+            unresolved_imports(&combined_output(&output))
+        );
+    }
+    Ok(())
+}
+
+/// Keep only Bun's `Could not resolve` diagnostics and their locations.
+fn unresolved_imports(output: &str) -> String {
+    let lines: Vec<&str> = output.lines().collect();
+    let mut report = Vec::new();
+    for (index, line) in lines.iter().enumerate() {
+        if line.contains("Could not resolve") {
+            report.push(line.trim());
+            if let Some(location) = lines
+                .get(index + 1)
+                .filter(|next| next.trim().starts_with("at "))
+            {
+                report.push(location.trim());
+            }
+        }
+    }
+    if report.is_empty() {
+        "bun build failed without an unresolved-import diagnostic".to_owned()
+    } else {
+        report.join("\n")
+    }
 }
 
 /// Copy one source file and preserve a path-specific failure context.
@@ -1386,6 +1830,11 @@ mod tests {
     /// Exact-line packaging contracts that must stay in the checked-in workflow.
     const WORKFLOW_CONTRACTS: &[&str] = &[
         WORKFLOW_BUN_SOURCE_COPY,
+        WORKFLOW_TUI_SOURCE_COPY,
+        WORKFLOW_TUI_INSTALL,
+        WORKFLOW_TUI_WEB_SOURCE_COPY,
+        WORKFLOW_TUI_WEB_PAGE_COPY,
+        WORKFLOW_TUI_WEB_INSTALL,
         WORKFLOW_FIRST_PARTY_STAGE,
         WORKFLOW_CHECKSUMS,
     ];
@@ -1428,15 +1877,150 @@ mod tests {
         Ok(())
     }
 
-    /// The pinned Bun must be able to read the checked-in adapter lockfile.
+    /// The pinned Bun must be able to read every packaged program's lockfile.
     #[test]
-    fn adapter_lockfile_is_readable_by_the_pinned_bun() -> Result<()> {
+    fn packaged_lockfiles_are_readable_by_the_pinned_bun() -> Result<()> {
         validate_bun_lockfile(&repo_root()?)?;
         let error = parse_bun_lockfile_version("{\n  \"lockfileVersion\": 3,\n}")
-            .and_then(require_supported_bun_lockfile)
+            .and_then(|version| require_supported_bun_lockfile(TUI_RUNTIME.source, version))
             .expect_err("a lockfile from a newer Bun was accepted");
         assert!(error.to_string().contains(BUN_VERSION), "{error:#}");
+        assert!(error.to_string().contains(TUI_RUNTIME.source), "{error:#}");
         Ok(())
+    }
+
+    /// Every release target maps to the OpenTUI native package its runner installs.
+    #[test]
+    fn every_release_target_has_an_opentui_native_package() -> Result<()> {
+        for target in RELEASE_TARGETS {
+            let package = opentui_native_package(target)?;
+            ensure!(package.starts_with("@opentui/core-"), "{package}");
+            ensure!(
+                !package.contains("musl"),
+                "{target} is a glibc target: {package}"
+            );
+        }
+        assert_eq!(
+            opentui_native_package("aarch64-apple-darwin")?,
+            "@opentui/core-darwin-arm64"
+        );
+        assert!(opentui_native_package("x86_64-pc-windows-msvc").is_err());
+        Ok(())
+    }
+
+    /// Each packaged program's copied files and directories exist in the workspace.
+    #[test]
+    fn packaged_runtime_sources_exist() -> Result<()> {
+        let root = repo_root()?;
+        for runtime in PACKAGED_RUNTIMES {
+            for file in runtime.files {
+                require_file(&root.join(runtime.source).join(file), "runtime source file")?;
+            }
+            for directory in runtime.directories {
+                let path = root.join(runtime.source).join(directory);
+                ensure!(
+                    path.is_dir(),
+                    "runtime source directory {} is missing",
+                    path.display()
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// Write a minimal staged TUI/WebUI tree that passes [`verify_tui_layout`].
+    fn write_tui_fixture(package_root: &Path, target: &str) -> Result<()> {
+        let native = opentui_native_package(target)?;
+        let tui = package_root.join(TUI_RUNTIME.destination);
+        for file in TUI_RUNTIME.files.iter().chain(&TUI_RUNTIME_FILES) {
+            copy_or_write(&tui.join(file))?;
+        }
+        for dependency in TUI_DEPENDENCIES.iter().chain([&native]) {
+            copy_or_write(
+                &tui.join("node_modules")
+                    .join(dependency)
+                    .join("package.json"),
+            )?;
+        }
+        let web = package_root.join(TUI_WEB_RUNTIME.destination);
+        for file in TUI_WEB_RUNTIME.files.iter().chain(&TUI_WEB_RUNTIME_FILES) {
+            copy_or_write(&web.join(file))?;
+        }
+        for dependency in TUI_WEB_DEPENDENCIES {
+            copy_or_write(
+                &web.join("node_modules")
+                    .join(dependency)
+                    .join("package.json"),
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Create one empty fixture file and its parents.
+    fn copy_or_write(path: &Path) -> Result<()> {
+        fs::create_dir_all(path.parent().context("fixture path has no parent")?)?;
+        fs::write(path, b"{}").with_context(|| format!("write {}", path.display()))
+    }
+
+    /// The layout check requires the host's native package and rejects dev-only packages.
+    #[test]
+    fn tui_layout_requires_native_package_and_rejects_dev_dependencies() -> Result<()> {
+        let target = "aarch64-apple-darwin";
+        let scratch = ScratchDirectory::create()?;
+        let root = scratch.path();
+        write_tui_fixture(root, target)?;
+        verify_tui_layout(root, target)?;
+
+        let error = verify_tui_layout(root, "x86_64-unknown-linux-gnu")
+            .expect_err("a tree without the target's native package was accepted");
+        assert!(
+            error.to_string().contains("@opentui/core-linux-x64"),
+            "{error:#}"
+        );
+
+        let playwright = root.join("lib/hya/tui-web/node_modules/@playwright/test");
+        fs::create_dir_all(&playwright)?;
+        let error = verify_tui_layout(root, target).expect_err("Playwright was accepted");
+        assert!(error.to_string().contains("@playwright/test"), "{error:#}");
+        fs::remove_dir_all(&playwright)?;
+
+        fs::remove_file(root.join("lib/hya/tui-web/web/index.html"))?;
+        let error = verify_tui_layout(root, target).expect_err("a missing page was accepted");
+        assert!(error.to_string().contains("index.html"), "{error:#}");
+        Ok(())
+    }
+
+    /// The listen line and the page's bundled asset references parse as served by Bun.
+    #[test]
+    fn web_host_listen_line_and_page_assets_parse() {
+        assert_eq!(
+            parse_listen_address("hya-tui-web listening on http://127.0.0.1:49292/").as_deref(),
+            Some("127.0.0.1:49292")
+        );
+        assert_eq!(parse_listen_address("starting"), None);
+        let page = "<link rel=\"stylesheet\" crossorigin href=\"/chunk-a.css\"><script type=\"module\" crossorigin src=\"/chunk-b.js\"></script>";
+        assert_eq!(page_asset_paths(page), vec!["/chunk-b.js", "/chunk-a.css"]);
+    }
+
+    /// HTTP bodies are returned for `200` only and chunked encoding is decoded.
+    #[test]
+    fn http_responses_decode_chunked_bodies_and_reject_errors() -> Result<()> {
+        let plain = "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello";
+        assert_eq!(parse_http_response(plain)?, "hello");
+        let chunked = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n4\r\n.xte\r\n2\r\nrm\r\n0\r\n\r\n";
+        assert_eq!(parse_http_response(chunked)?, ".xterm");
+        assert!(parse_http_response("HTTP/1.1 404 Not Found\r\n\r\n").is_err());
+        Ok(())
+    }
+
+    /// Unresolved-import reports keep Bun's diagnostic and its location only.
+    #[test]
+    fn unresolved_import_report_keeps_diagnostics() {
+        let output = "2 | import openapi from \"../../../docs/protocol/openapi.json\"\n    ^\nerror: Could not resolve: \"../../../docs/protocol/openapi.json\"\n    at /x/lib/hya/tui/src/api.ts:2:21\n";
+        assert_eq!(
+            unresolved_imports(output),
+            "error: Could not resolve: \"../../../docs/protocol/openapi.json\"\nat /x/lib/hya/tui/src/api.ts:2:21"
+        );
     }
 
     /// A rehearsal builds and runs natively, so the target must be the host.
