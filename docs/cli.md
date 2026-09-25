@@ -8,6 +8,7 @@ standalone `hya-updater` binary are gone.
 
 | Area | Subcommands |
 | --- | --- |
+| Interactive TUI and WebUI | bare `hya` on a terminal (see [Bare `hya`](#bare-hya)) |
 | Headless agent runs | `exec`, `run`, `-p/--prompt` (goal mode), `loop` |
 | Server and wire protocols | `serve`, `rpc` |
 | Sessions | `sessions`, `tail-session` |
@@ -25,7 +26,7 @@ hya <subcommand> --help                # flags for one area
 
 ```text
 hya [--model <MODEL>] [--prompt <GOAL>] [--max-iterations <N>]
-     [--yolo] [--db <PATH>] [COMMAND]
+     [--port <PORT>] [--yolo] [--db <PATH>] [COMMAND]
 ```
 
 | Option | Meaning |
@@ -33,6 +34,7 @@ hya [--model <MODEL>] [--prompt <GOAL>] [--max-iterations <N>]
 | `--model <MODEL>` | Override `default_model` from hya config and `HYA_MODEL`. |
 | `-p, --prompt <GOAL>` | Run headless goal mode instead of a subcommand. |
 | `--max-iterations <N>` | Iteration cap for goal mode. Defaults to `6` in the CLI. |
+| `--port <PORT>` | WebUI port of [bare `hya`](#bare-hya) on `127.0.0.1`. Default `3250`; `0` picks a free port. Only valid without a subcommand and without `-p` (`hya --port 1 sessions` is an error); `hya serve --port` is the server's own flag. |
 | `--yolo` | Auto-approve every tool action. This applies to headless and server composition. |
 | `--db <PATH>` | SQLite database path. Semantics of an empty value depend on the command (see below). |
 | `--print-logs` | Compat-compatible global flag. Parsed, then ignored (no-op). |
@@ -44,7 +46,8 @@ lines are accepted unchanged. They are never read after clap parse. hya
 does not expose a CLI switch for verbose tracing today. Many operational notices
 go to stderr; the serve readiness line
 `hya server listening on <url>` is printed on **stdout** (see
-[`serve`](#hya-serve)).
+[`serve`](#hya-serve)). Bare `hya` on a terminal sends its stdout and
+stderr to a log file instead (see [Bare `hya`](#bare-hya)).
 
 ### `--db` empty-string semantics
 
@@ -53,7 +56,7 @@ Empty `--db` is **not** always in-memory:
 | Command path | Empty `--db` means |
 | --- | --- |
 | `exec`, `run`, `serve` | In-memory store (`open_store("")` → `SessionStore::connect_memory`). |
-| `sessions`, `tail-session` | Remapped to `$XDG_STATE_HOME/hya/sessions.db`, falling back to `$HOME/.local/state/hya/sessions.db` (or `./.local/state/hya/sessions.db` when neither is set). The directory is created if missing. |
+| bare `hya` (TUI + WebUI), `sessions`, `tail-session` | Remapped to `$XDG_STATE_HOME/hya/sessions.db`, falling back to `$HOME/.local/state/hya/sessions.db` (or `./.local/state/hya/sessions.db` when neither is set). The directory is created if missing. |
 
 `resolve_interactive_db` performs that remap so the session-backed subcommands
 see the same durable store across restarts. An explicit `--db ""` is **not**
@@ -374,17 +377,121 @@ activation time.
 
 ## Bare `hya`
 
-With no subcommand (and no `--prompt`), `hya` prints a guidance banner
-and exits. No interactive frontend is bundled:
+Run with no subcommand and no `--prompt` on a terminal, `hya` starts the
+interactive frontends: the terminal TUI ([OpenTUI frontend](tui.md)) and the
+WebUI ([browser-rendered TUI](tui-web.md)) on `http://127.0.0.1:3250`. Both
+talk to one server that runs inside the `hya` process, so a session started in
+the terminal shows up in every browser tab and the other way round.
+
+```sh
+hya                 # TUI here, WebUI on http://127.0.0.1:3250
+hya --port 8000     # WebUI on http://127.0.0.1:8000
+hya --port 0        # WebUI on a free port (the TUI shows which)
+hya --yolo --model anthropic/claude-sonnet-4-6 --db ~/work.db
+```
+
+The terminal TUI's status bar, its sidebar `Context` box, and `/status` show
+`WebUI http://127.0.0.1:<port>`. Open that address in a browser: each tab runs
+its own TUI process against the same server. Quit the terminal TUI (`/exit`,
+Ctrl+D, or Ctrl+C twice) to stop everything.
+
+**Requirements.** Bare `hya` starts the frontends only when both stdin and
+stdout are terminals. It needs [Bun](https://bun.sh) (`$BUN`, else `bun` on
+`PATH`) and the two Bun packages, which a release archive or `install.sh`
+places next to the binary. Without a terminal it prints a guidance banner and
+exits **0**, starting nothing:
 
 ```text
 hya <version> — a multi-agent coding agent
-No interactive frontend is bundled. Try `hya serve`, `hya exec "<prompt>"`, `hya -p "<goal>"`, or `hya --help`.
+Run `hya` in a terminal to start the TUI and the WebUI (http://127.0.0.1:3250; needs Bun). Without a terminal, try `hya serve`, `hya exec "<prompt>"`, `hya -p "<goal>"`, or `hya --help`.
 ```
 
-It exits **0** on both a TTY and a non-TTY stdout. Scripts that pipe
-`hya` with no arguments hit this branch and must not treat exit 0 as
-“interactive session ready.”
+Scripts that run `hya` with no arguments and no terminal get this banner and
+must not treat exit 0 as "interactive session ready."
+
+**What runs.**
+
+1. The v1 server, in the `hya` process, on `127.0.0.1:<free port>`. It is
+   composed exactly like [`hya serve`](#hya-serve) and honors the global
+   `--db`, `--model`, `--yolo`, and `--pure`. An empty `--db` means the
+   durable default `$XDG_STATE_HOME/hya/sessions.db` (as for `sessions`), so
+   sessions survive restarts and `hya sessions` lists them. It prints no
+   readiness line.
+2. The web host: `bun <tui-web>/src/main.ts --host 127.0.0.1 --port <port>
+   --cwd <cwd> -- bun <tui>/src/main.ts --server <server-url> --dir <cwd>`.
+   `hya` waits up to 20 s for its `hya-tui-web listening on <url>` line.
+   If the host fails (the port is in use, it crashes, or it prints nothing in
+   time), `hya` still starts the TUI and passes the reason on.
+3. The terminal TUI, attached to this terminal: `bun <tui>/src/main.ts
+   --server <server-url> --dir <cwd>` plus `--web-url <url>` or
+   `--web-error <reason>` (see [tui.md](tui.md#start-it)). A failed WebUI
+   shows `WebUI unavailable: <reason> · hya --port <N>` in the status line
+   and `/status`, and `WebUI unavailable` (warning color) in the status bar.
+
+`<cwd>` is the directory `hya` was started in: the workspace of both
+frontends.
+
+**Where the packages come from.** Each package is looked up in this order;
+the first directory that has `src/main.ts` wins:
+
+| Package | 1. Override | 2. Installed next to the binary | 3. Source checkout |
+| --- | --- | --- | --- |
+| TUI | `HYA_TUI_DIR` | `<prefix>/lib/hya/tui` for `<prefix>/bin/hya` | `packages/hya-tui` |
+| WebUI host | `HYA_TUI_WEB_DIR` | `<prefix>/lib/hya/tui-web` | `packages/hya-tui-web` |
+
+The installed location is checked for the path `hya` was started as and, if
+that is a symlink, for its target. The source checkout is the one the binary
+was built from. An override must contain `src/main.ts`; `hya` does not fall
+through to the next place then. The chosen directory must also have its
+dependencies installed (`node_modules/`); in a source checkout run
+`bun install --frozen-lockfile` in `packages/hya-tui` and
+`packages/hya-tui-web`.
+
+**Errors before start.** A missing Bun, a missing package, or missing
+dependencies stop `hya` with exit status **1** and one message on stderr,
+before it touches the terminal, for example:
+
+```text
+Error: Bun is required for the TUI and the WebUI but was not found on PATH: install it from https://bun.sh or set BUN=<path>. Other subcommands (`hya serve`, `hya exec`, …) do not need it.
+Error: HYA_TUI_DIR=/opt/tui has no src/main.ts (the TUI)
+```
+
+A server that fails to start (for example a broken config) is reported the
+same way, followed by `hya: see <log file> for the server and WebUI log`.
+
+**Log file.** While the TUI owns the terminal, `hya`'s own stdin reads
+`/dev/null` and its stdout and stderr are appended to
+`$XDG_STATE_HOME/hya/hya.log` (else `~/.local/state/hya/hya.log`), so server
+notices never draw over the TUI. The log gets a start line per run, the
+server URL (`hya: server listening on <url>`), every line the web host prints
+(prefixed `[webui] `), and the shutdown steps. Processes the server starts
+(MCP servers, plugins) inherit the log too. At start a log over 4 MiB is
+moved to `hya.log.1`.
+
+**Stopping.** When the terminal TUI exits, `hya` sends the web host SIGTERM
+(SIGKILL after 8 s) and waits for it. The web host sends SIGHUP to every
+browser tab's TUI and SIGKILLs any still running after 3 s. Then the server
+drains running turns (up to 5 s, as `serve` does on a signal) and shuts down.
+`hya` exits with the TUI's exit status. SIGINT, SIGTERM, or SIGHUP sent to
+`hya` (a closed terminal sends SIGHUP) first stop the TUI (SIGTERM, then
+SIGKILL after 8 s) and then do the same cleanup; `hya` exits with
+`128 + signal` (130, 143, 129). The web host runs in its own process group,
+so Ctrl+C in the terminal reaches only the TUI and `hya`.
+
+**Interfaces.**
+
+| Contract | Definition |
+| --- | --- |
+| `--port <PORT>` | `u16`, default `3250`, `0` = free port. Bare invocation only. |
+| `HYA_TUI_DIR`, `HYA_TUI_WEB_DIR` | Directory of the TUI / web host package (must contain `src/main.ts` and `node_modules/`). |
+| `BUN` | Bun executable; must exist when set. Else `bun` on `PATH`. |
+| TUI flags | `--server <url> --dir <cwd>` and exactly one of `--web-url <url>` / `--web-error <reason>` ([tui.md](tui.md#start-it)). |
+| Web host readiness | First stdout line matching `hya-tui-web listening on <url>` ([tui-web.md](tui-web.md#usage)). |
+| Log file | `<state dir>/hya/hya.log`, append-only; rotated once to `hya.log.1` above 4 MiB. |
+| Exit status | The TUI's status; `128 + signal` for a signal to `hya` or a TUI killed by one; **1** for an error before start. |
+
+To run the frontends by hand instead (development, a remote server), see
+[tui.md](tui.md#start-it) and [tui-web.md](tui-web.md#usage).
 
 ## `--pure`
 
@@ -703,4 +810,4 @@ flag list is in [Secure self-update](self-update.md).
 
 | Binary | Success | Failure / notes |
 | --- | --- | --- |
-| `hya` | **0** on success (including the bare guidance banner, `serve` graceful signal shutdown, and `tail-session` broken-pipe). **130** / **143** when `exec`/`run`/`-p`/`loop` was stopped by SIGINT / SIGTERM (after the drain). | **1** with the full `anyhow` error chain printed to stderr on any error — CLI validation failures use the same path. |
+| `hya` | **0** on success (including the bare guidance banner, `serve` graceful signal shutdown, and `tail-session` broken-pipe). **130** / **143** when `exec`/`run`/`-p`/`loop` was stopped by SIGINT / SIGTERM (after the drain). Bare `hya` on a terminal exits with the terminal TUI's status, or `128 + signal` (130 / 143 / 129) when `hya` was stopped by SIGINT / SIGTERM / SIGHUP. | **1** with the full `anyhow` error chain printed to stderr on any error — CLI validation failures use the same path. |

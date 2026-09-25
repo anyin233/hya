@@ -38,3 +38,14 @@ test("usage documents every flag and the binary lookup order", () => {
   expect(usage.indexOf("--hya")).toBeLessThan(usage.indexOf("HYA_BIN"))
   expect(usage.indexOf("HYA_BIN")).toBeLessThan(usage.indexOf("hya on PATH"))
 })
+
+test("--web-url and --web-error carry the WebUI state from bare hya", () => {
+  expect(parseArguments(["--server", "http://127.0.0.1:1", "--web-url", "http://127.0.0.1:3250/"], "/cwd")).toMatchObject({
+    server: "http://127.0.0.1:1/", web: { url: "http://127.0.0.1:3250/" },
+  })
+  expect(parseArguments(["--web-error", "port 3250 is in use"], "/cwd")).toMatchObject({ web: { error: "port 3250 is in use" } })
+  expect(parseArguments([], "/cwd")?.web).toBeUndefined()
+  expect(() => parseArguments(["--web-url", "http://x/", "--web-error", "y"], "/cwd")).toThrow("--web-url and --web-error cannot be combined")
+  expect(() => parseArguments(["--web-url", "ftp://x"], "/cwd")).toThrow("--web-url needs an HTTP URL")
+  for (const flag of ["--web-url", "--web-error"]) expect(usage).toContain(flag)
+})

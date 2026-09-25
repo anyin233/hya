@@ -9,7 +9,10 @@ use crate::bundle_cmd::BundleCommand;
     name = "hya",
     version,
     about = "hya — a multi-agent coding agent",
-    long_about = None
+    long_about = "hya — a multi-agent coding agent.\n\n\
+        Run bare `hya` in a terminal to start the TUI and the WebUI: an in-process \
+        server, the terminal TUI, and the WebUI on http://127.0.0.1:3250 (`--port` \
+        to change). Needs Bun. Subcommands select headless, server, and admin areas."
 )]
 pub(crate) struct Cli {
     /// Headless goal mode: iterate the agent until an independent evaluator
@@ -24,6 +27,10 @@ pub(crate) struct Cli {
     /// model judges (unless a plugin registers `goal.evaluate`).
     #[arg(long, value_name = "PROVIDER/MODEL")]
     pub(crate) evaluator_model: Option<String>,
+    /// Port of the WebUI that bare `hya` serves on 127.0.0.1 next to the
+    /// terminal TUI (default 3250; 0 picks a free port). Only for bare `hya`.
+    #[arg(long, value_name = "PORT")]
+    pub(crate) port: Option<u16>,
     /// Model id to use (overrides config `default_model` + `HYA_MODEL`).
     #[arg(long, global = true, value_name = "MODEL")]
     pub(crate) model: Option<String>,
@@ -36,8 +43,10 @@ pub(crate) struct Cli {
     pub(crate) log_level: Option<String>,
     #[arg(long, global = true)]
     pub(crate) pure: bool,
-    /// SQLite database path. Empty string uses an in-memory store. Applies to
-    /// headless exec/run persistence, serve, sessions, and replay.
+    /// SQLite database path. Applies to headless exec/run persistence, serve,
+    /// bare `hya`, sessions, and replay. Empty: an in-memory store for
+    /// exec/run/serve; `$XDG_STATE_HOME/hya/sessions.db` for bare `hya`,
+    /// sessions, and tail-session.
     #[arg(long, global = true, default_value = "")]
     pub(crate) db: String,
     #[command(subcommand)]
@@ -216,6 +225,23 @@ pub(crate) fn build_loop_predicate(
         ))),
         (None, None) => Ok(None),
     }
+}
+
+/// Default WebUI port of bare `hya` (`--port` overrides it).
+pub(crate) const DEFAULT_WEB_PORT: u16 = 3250;
+
+/// The WebUI port of bare `hya`: `--port`, else [`DEFAULT_WEB_PORT`].
+///
+/// `--port` is a top-level flag of the bare invocation only; with a
+/// subcommand or `-p` goal mode it is an error rather than silently ignored
+/// (`serve --port` is the serve subcommand's own flag).
+pub(crate) fn bare_web_port(cli: &Cli) -> anyhow::Result<u16> {
+    if cli.port.is_some() && (cli.command.is_some() || cli.prompt.is_some()) {
+        anyhow::bail!(
+            "--port only applies to bare `hya` (the WebUI port); use `hya serve --port` for the server"
+        );
+    }
+    Ok(cli.port.unwrap_or(DEFAULT_WEB_PORT))
 }
 
 pub(crate) fn serve_bind(
@@ -589,6 +615,51 @@ mod tests {
             }
             _ => panic!("expected run command"),
         }
+    }
+
+    #[test]
+    fn bare_port_defaults_to_3250_and_accepts_overrides() {
+        assert_eq!(super::bare_web_port(&parse(["hya"])).unwrap(), 3250);
+        assert_eq!(
+            super::bare_web_port(&parse(["hya", "--port", "8000"])).unwrap(),
+            8000
+        );
+        assert_eq!(
+            super::bare_web_port(&parse(["hya", "--port", "0"])).unwrap(),
+            0
+        );
+        assert!(Cli::try_parse_from(["hya", "--port", "70000"]).is_err());
+        assert!(Cli::try_parse_from(["hya", "--port", "web"]).is_err());
+    }
+
+    #[test]
+    fn bare_port_is_rejected_with_a_subcommand_or_goal_mode() {
+        let error = super::bare_web_port(&parse(["hya", "--port", "9000", "sessions"]))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("--port only applies to bare `hya`"),
+            "{error}"
+        );
+        let error = super::bare_web_port(&parse(["hya", "--port", "9000", "-p", "goal"]))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("--port only applies to bare `hya`"),
+            "{error}"
+        );
+        // `serve --port` stays the serve subcommand's own flag.
+        let cli = parse(["hya", "serve", "--port", "4096"]);
+        assert!(cli.port.is_none());
+        assert_eq!(super::bare_web_port(&cli).unwrap(), 3250);
+    }
+
+    #[test]
+    fn help_documents_the_bare_port_flag() {
+        let help = Cli::command().render_long_help().to_string();
+        assert!(help.contains("--port <PORT>"), "{help}");
+        assert!(help.contains("3250"), "{help}");
+        assert!(help.contains("WebUI"), "{help}");
     }
 
     #[test]

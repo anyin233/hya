@@ -247,7 +247,7 @@ export const nativeCommandSpecs: CommandSpec[] = [
   },
   {
     name: "/status",
-    description: "Show connection, backend version, directory, session, agent, model, and permission mode",
+    description: "Show connection, backend version, directory, session, agent, model, permission mode, and WebUI",
     run: ({ store, client }) => {
       const selected = store.state.selected
       const lines = [
@@ -258,8 +258,10 @@ export const nativeCommandSpecs: CommandSpec[] = [
         `Agent       ${selected?.agent ?? "none"}`,
         `Model       ${selected ? (modelReference(selected) || "default") : "none"}`,
         `Mode        ${selected?.permissionMode || "manual"}`,
-        `Backend     ${store.state.backend ? `started by this TUI · pid ${store.state.backend.pid} · ${store.state.backend.bin} · db ${store.state.backend.db}` : "external (--server)"}`,
+        `Backend     ${store.state.backend ? `started by this TUI · pid ${store.state.backend.pid} · ${store.state.backend.bin} · db ${store.state.backend.db}` : store.state.web ? "in the hya process (bare hya)" : "external (--server)"}`,
       ]
+      const web = store.state.web
+      if (web) lines.push(`WebUI       ${web.url ? web.url.replace(/\/$/, "") : `unavailable: ${web.error ?? ""} · hya --port <N>`}`)
       store.setStatusText(lines.join("\n"))
       store.setView("status")
     },

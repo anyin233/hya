@@ -6,6 +6,9 @@
 //!   `crates/hya-api/src/gen/` (committed; normal builds need no protoc),
 //! - `docs/protocol/api-reference.md` and `docs/protocol/openapi.json`
 //!   derived from the same sources,
+//! - `packages/hya-tui/src/operations.json`, the TUI's `/api` operation
+//!   catalog (method, path, operation id, streaming), so the TUI package is
+//!   self-contained when it ships under `lib/hya/tui`,
 //! - a coverage check that every rpc declares exactly one
 //!   `// hya.http: METHOD /path` mapping and that no mapping collides.
 //!
@@ -73,6 +76,14 @@ pub fn run(_args: Vec<String>) -> Result<()> {
     fs::create_dir_all(&docs_dir).context("create docs/protocol")?;
     write_api_reference(&docs_dir.join("api-reference.md"), &contract)?;
     write_openapi(&docs_dir.join("openapi.json"), &contract)?;
+    write_tui_operations(
+        &root
+            .join("packages")
+            .join("hya-tui")
+            .join("src")
+            .join("operations.json"),
+        &contract,
+    )?;
 
     let mut emitted: Vec<String> = Vec::new();
     for entry in fs::read_dir(&gen_dir).context("list gen dir")? {
@@ -688,6 +699,44 @@ fn write_openapi(path: &Path, contract: &Contract) -> Result<()> {
     });
     let rendered = serde_json::to_string_pretty(&doc).context("render openapi json")?;
     fs::write(path, rendered).with_context(|| format!("write {}", path.display()))?;
+    Ok(())
+}
+
+/// The TUI's `/api` catalog: one entry per HTTP operation, in the same
+/// expansion as `openapi.json` (an `ANY` mapping becomes five operations).
+fn tui_operations(contract: &Contract) -> Vec<serde_json::Value> {
+    let mut operations: Vec<(String, String, serde_json::Value)> = Vec::new();
+    for service in &contract.services {
+        for rpc in &service.rpcs {
+            let any = rpc.method == ANY_METHOD;
+            for method in expand_method(&rpc.method) {
+                let operation_id = if any {
+                    format!("{}.{}.{}", service.name, rpc.name, method.to_lowercase())
+                } else {
+                    format!("{}.{}", service.name, rpc.name)
+                };
+                operations.push((
+                    rpc.path.clone(),
+                    method.to_uppercase(),
+                    serde_json::json!({
+                        "method": method.to_uppercase(),
+                        "path": rpc.path,
+                        "operationId": operation_id,
+                        "streaming": rpc.server_streaming,
+                    }),
+                ));
+            }
+        }
+    }
+    operations.sort_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)));
+    operations.into_iter().map(|(_, _, op)| op).collect()
+}
+
+fn write_tui_operations(path: &Path, contract: &Contract) -> Result<()> {
+    let rendered = serde_json::to_string_pretty(&tui_operations(contract))
+        .context("render tui operations json")?;
+    fs::write(path, format!("{rendered}\n"))
+        .with_context(|| format!("write {}", path.display()))?;
     Ok(())
 }
 

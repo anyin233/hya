@@ -11,10 +11,10 @@ Google provider routes into one canonical event stream and executes tools behind
 a permission plane. Every client-facing surface speaks one consolidated contract
 — `hya.v1` — served identically over HTTP/JSON+SSE+WebSocket (`/v1`) and gRPC
 (`HYA_GRPC_BIND`); the legacy Compat and native HTTP routes are gone. The
-interactive frontend is the Bun/OpenTUI TUI in `packages/hya-tui`, run from
-source; one command starts it together with its own `hya serve` (see
-[Run the TUI](#run-the-tui)). The same TUI renders in a browser as the WebUI
-through `packages/hya-tui-web`. Other clients use `hya-sdk-v1`, `hya-client`,
+interactive frontend is the Bun/OpenTUI TUI in `packages/hya-tui`: running
+`hya` in a terminal starts it together with an in-process server and the
+WebUI, the same TUI rendered in a browser through `packages/hya-tui-web` (see
+[Run the TUI](#run-the-tui)). Other clients use `hya-sdk-v1`, `hya-client`,
 or any `hya.v1` client.
 
 
@@ -45,25 +45,38 @@ export PATH="$HOME/.local/bin:$PATH"
 hya serve
 ```
 
-The installer places `bin/hya`, the twelve first-party bundles it loads
-at startup under `bundles/`, and `lib/hya/bun-adapter/` with its production
-dependencies. Release archives use the same layout; each first-party bundle is
-also published as a standalone release asset (see
+The installer places `bin/hya`, the twelve first-party bundles it loads at
+startup under `bundles/`, and three Bun programs with their production
+dependencies under `lib/hya/`: `bun-adapter/` (JavaScript bundle extensions),
+`tui/` (the terminal UI bare `hya` starts), and `tui-web/` (the WebUI host).
+Bun must be on `PATH`. Release archives use the same layout; each first-party
+bundle is also published as a standalone release asset (see
 [first-party bundles](docs/bundle-runtime.md#release-assets)).
 
 
 ## Run the TUI
 
-From the checkout, with `hya` on `PATH` (or `HYA_BIN` pointing at a build):
+Run `hya` in a terminal (Bun must be on `PATH`):
+
+```sh
+hya                # the TUI here, the WebUI on http://127.0.0.1:3250
+hya --port 8000    # the WebUI on another port
+```
+
+The TUI and every browser tab of the WebUI share one server inside the `hya`
+process, and sessions are kept in `$XDG_STATE_HOME/hya/sessions.db`. `?` lists
+every key and command; `/exit` stops the TUI, the WebUI, and the server. See
+[Bare `hya`](docs/cli.md#bare-hya) and the [TUI guide](docs/tui.md#start-it).
+
+From a source checkout, install the frontends' dependencies once, or run the
+TUI directly with Bun for development:
 
 ```sh
 (cd packages/hya-tui && bun install --frozen-lockfile)
-bun packages/hya-tui/src/main.ts --dir "$PWD"            # starts and stops its own hya serve
-bun packages/hya-tui/src/main.ts --dir "$PWD" --continue # reopen the last session
+(cd packages/hya-tui-web && bun install --frozen-lockfile)
+cargo run -p hya-backend --bin hya                      # bare hya from the checkout
+bun packages/hya-tui/src/main.ts --dir "$PWD" --continue # the TUI alone; starts its own hya serve
 ```
-
-`?` lists every key and command. Pass `--server <url>` to use a backend you
-run yourself instead. See the [TUI guide](docs/tui.md#start-it).
 
 ## Configure a Provider and Log In
 

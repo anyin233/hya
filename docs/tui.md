@@ -1,8 +1,9 @@
 # OpenTUI frontend
 
-The `packages/hya-tui` frontend is the terminal client of hya. One command
-starts it together with its own `hya serve` backend (or it connects to a
-running one with `--server`; see [Start it](#start-it)). It uses OpenTUI for
+The `packages/hya-tui` frontend is the terminal client of hya. Running
+`hya` in a terminal starts it together with an in-process server and the
+WebUI (see [Start it](#start-it)); from a source checkout it can also start its
+own `hya serve` or connect to a running one with `--server`. It uses OpenTUI for
 display and input while the backend remains the owner of sessions, event
 history, tool execution, and permissions. The screen is one main column (the transcript of the open
 session, pending interactions, the status line, and the input) plus a
@@ -32,7 +33,33 @@ shows that key listing needs a backend restart with an updated binary.
 
 ## Start it
 
-Requires Bun 1.4.2 (the version the repository pins; the Solid setup is verified on it) and a terminal supported by OpenTUI. From a clone:
+Run `hya` in a terminal. It starts a server inside the `hya` process, the
+WebUI on `http://127.0.0.1:3250` (`hya --port <N>` picks another port, `0` a
+free one), and this TUI attached to the terminal. The TUI and every WebUI tab
+share the same server and sessions. Quitting the TUI stops the WebUI and the
+server. Bare `hya` needs Bun and finds the TUI under `lib/hya/tui` next to the
+binary (a release archive or `install.sh` puts it there) or in the source
+checkout it was built from. See [Bare `hya`](cli.md#bare-hya) for the lookup
+order, the log file, and signals.
+
+```sh
+hya                   # TUI + WebUI on http://127.0.0.1:3250
+hya --port 8000       # WebUI on another port
+```
+
+With a WebUI, the status bar shows `WebUI http://127.0.0.1:3250`, the
+sidebar's `Context` box shows `WebUI    127.0.0.1:3250`, and `/status` shows a
+`WebUI` row. If the WebUI could not start (for example because the port is
+taken), the TUI still works: the status line shows
+`WebUI unavailable: port 3250 is in use · hya --port <N>`, the status bar
+shows `WebUI unavailable` in the warning color, and `/status` repeats the
+reason. `/status` shows `Backend     in the hya process (bare hya)`.
+
+### Run it with Bun (development)
+
+For development, or to attach to a server elsewhere, run the TUI directly
+with Bun 1.4.2 (the version the repository pins; the Solid setup is verified
+on it) in a terminal supported by OpenTUI. From a clone:
 
 ```sh
 cd packages/hya-tui
@@ -93,6 +120,8 @@ bun packages/hya-tui/src/main.ts --server http://127.0.0.1:8080 --dir "$PWD"
 | `--db <path>` | SQLite database of the started backend. Default: `$XDG_STATE_HOME/hya/sessions.db`, else `~/.local/state/hya/sessions.db` — the store `hya sessions` reads, so sessions survive restarts. Only without `--server`. |
 | `-c`, `--continue` | Open the most recently updated top-level session of `--dir` (subagent sessions are opened from their parent). |
 | `-s`, `--session <id>` | Open that session. Cannot be combined with `--continue`. |
+| `--web-url <url>` | Show this WebUI address (status bar `WebUI <url>`, sidebar `Context` row, `/status`). Bare `hya` passes it; an HTTP(S) URL. |
+| `--web-error <reason>` | Show `WebUI unavailable: <reason> · hya --port <N>` in the status line and `/status`, and `WebUI unavailable` in the status bar. Bare `hya` passes it when the WebUI could not start. Cannot be combined with `--web-url`. |
 | `-h`, `--help` | Print the flags and the binary lookup order. |
 
 Without `--continue` or `--session` no session is open at start; the first
@@ -172,10 +201,10 @@ backend is running.
 | `/compact` | Compact the session's context now (`CompactSession`); the status line shows `Compacting…`, then `Compacted · <strategy>`. |
 | `/summarize` | Summarize the session into a new message (`SummarizeSession`). |
 | `/todos` | Show the session's todo list (`GetSessionTodo`) in the main panel. |
-| `/status` | Show the server URL, backend version, directory, session, agent, model, permission mode, and the backend (started by this TUI with its pid, binary, and database, or external with `--server`). |
+| `/status` | Show the server URL, backend version, directory, session, agent, model, permission mode, and the backend (started by this TUI with its pid, binary, and database, in the `hya` process under bare `hya`, or external with `--server`); under bare `hya` also the WebUI address or why it is unavailable. |
 | `/init`, `/review` | Server built-in commands from the backend command catalog, run as `CommandTurn`s. |
 | `/<skill> [args]` | Run a discovered skill as a `CommandTurn` (see [Skill commands](#skill-commands)). |
-| `/api` | List the HTTP operations from the generated OpenAPI catalog. |
+| `/api` | List the HTTP operations from the generated operation catalog (`src/operations.json`, written with `docs/protocol/openapi.json` by `cargo run -p xtask -- gen-api`). |
 | `/api METHOD /v1/path [JSON]` | Send a scoped HTTP/JSON request and show its JSON response. |
 | `/help`, `?` | Open the key and command help overlay (`?` only on an empty input; with text it types `?`). See [Key help](#key-help). |
 | Tab | Complete a slash command name (or, in the command menu, the highlighted entry) or a supported argument; repeat Tab to cycle argument matches. |
@@ -366,7 +395,9 @@ alive before the working line's own elapsed clock is very interesting.
 the session's token total (`12.3k tok`), the workspace directory
 (shortened, keeping the tail), the git branch (`GetVcsStatus`, refreshed
 when a session opens and after a turn ends; omitted when unknown or the
-directory is not a repository), a compact todo count (`Todos <completed>/
+directory is not a repository), the WebUI that bare `hya` serves
+(`WebUI http://127.0.0.1:3250`, or `WebUI unavailable` in the warning color;
+see [Start it](#start-it)), a compact todo count (`Todos <completed>/
 <total>`) shown only while the sidebar is hidden (the sidebar's own `Todos`
 box already lists them), and `reconnecting` (warning color) while the
 session event stream is down. Segments with no data are omitted rather than
@@ -395,7 +426,8 @@ server, so the status bar does not repeat them.
   `1.2M`. Hidden while the total is zero or unknown.
 
 The sidebar's `Context` box repeats both when known: `Context  42% ·
-42k/100k` (prompt tokens / window) and `Tokens   42.3k`.
+42k/100k` (prompt tokens / window) and `Tokens   42.3k`. Under bare `hya` it
+ends with a `WebUI` row: the address without the scheme, or `unavailable`.
 
 **Todo panel.** The sidebar's `Todos` box is seeded from `GetSessionTodo`
 when a session opens and then kept current by the session stream: every
@@ -1311,7 +1343,7 @@ together.
 | `src/composer/` | Pure composer logic: `history.ts` (`InputHistory`), `quit.ts` (`createQuitGuard`, the Ctrl+C double press), `escape.ts` (`escapeAction`), `shell.ts` (`shellCommand`, `isShellInput`), `mention.ts` (`mentionAt`, `insertMention`, `findPattern`, `rankPaths`). |
 | `src/commands/` | The slash-command registry (`registry.ts`), the built-in commands (`native.ts`), the key and command help (`help.ts`: `helpRows()`, `helpPickerRows()`, `composerKeyLabel()`, `keyHelpText()`, generated from the binding tables), and the command menu's merge/fuzzy-filter/argument-hint logic (`menu.ts`: `mergeCommandEntries`, `filterCommands`, `requiresArgument`). |
 | `src/keys/bindings.ts` | The global key binding table (`keyBindings`, including `cycleMode` on Shift+Tab / CSI Z) and the textarea overrides (`composerKeyBindings`: Enter submits; Ctrl+J, Shift+Enter, Alt+Enter insert a newline; Home/End). |
-| `src/completion.ts`, `src/instructions.ts`, `src/api.ts`, `src/theme.ts` | Tab completion and `SecretEntry`, footer instructions, the OpenAPI operation catalog, and the palette (`colors`, `syntaxColors`, and `syntaxStyles`, the Markdown/tree-sitter scope styles). |
+| `src/completion.ts`, `src/instructions.ts`, `src/api.ts`, `src/theme.ts` | Tab completion and `SecretEntry`, footer instructions, the `/api` operation catalog (reads `src/operations.json`, generated by `gen-api` so the package ships without the repository's docs; `test/api-catalog.test.ts` checks it matches `docs/protocol/openapi.json` and that no source file imports from outside the package), and the palette (`colors`, `syntaxColors`, and `syntaxStyles`, the Markdown/tree-sitter scope styles). |
 
 The Solid transform has two parts. `bunfig.toml` preloads
 `@opentui/solid/preload` for `bun test` and for `bun src/...` run inside the
@@ -1465,6 +1497,15 @@ and about 80 columns.
 `workspace` fixture), a prompt end to end, `/exit` and a closed tab
 (SIGHUP) leaving no `hya serve` process (checked by pid), `--continue`, a
 fresh start, a missing binary, and a server that fails to start.
+`e2e/hya-bare.spec.ts` runs bare `target/debug/hya --port <free port>` on the
+host's PTY (packages found in the workspace): the terminal TUI shows
+`WebUI http://127.0.0.1:<port>` (also at about 80 columns), a second page at
+that address runs a TUI on the same server (a session from the terminal is
+in its `/sessions`), a busy port shows the `WebUI unavailable` notice while
+prompts still work, `/exit`, SIGTERM, and SIGHUP (closed tab) leave no web
+host, tab TUI, or server behind (checked by pid and port), the log file
+holds the server and web host lines, and a missing TUI package or Bun exits
+1 with a clear message.
 `e2e/hya-tui-help.spec.ts` covers the help overlay (`?`, `/help`, filter,
 Esc, `?` inside text, about 80 columns). `e2e/hya-tui-status.spec.ts` also
 covers `ctx N%` and the token total (fake-model usage and a

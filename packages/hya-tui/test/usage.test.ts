@@ -122,3 +122,10 @@ test("a compaction summary message hides the HYA_COMPACTED_CONTEXT marker line",
   store.setMessages("hysec_1", [{ id: "sum", role: "ROLE_SYSTEM", finish: "FINISH_REASON_STOP", parts: [{ id: "p", text: { text: "HYA_COMPACTED_CONTEXT\nSummary: greeted" } }] }])
   expect(transcriptViews(store.state)[0]!.blocks).toEqual([{ kind: "text", id: "p", text: "Summary: greeted" }])
 })
+
+test("the status bar shows the WebUI address, or a warning when it is unavailable", () => {
+  const base = { mode: "manual", directory: "/w", branch: "main", connected: true }
+  expect(statusBarText({ ...base, web: { url: "http://127.0.0.1:3250/" } }, 80)).toBe("mode manual · /w · ⎇ main · WebUI http://127.0.0.1:3250")
+  const failed = statusBarSegments({ ...base, web: { error: "port 3250 is in use" } }, 80)
+  expect(failed.at(-1)).toEqual({ text: "WebUI unavailable", tone: "warning" })
+})

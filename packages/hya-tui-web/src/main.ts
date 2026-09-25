@@ -31,9 +31,17 @@ try {
   } else {
     const host = startHost(options)
     process.stdout.write(`hya-tui-web listening on ${host.url}\n`)
-    const stop = () => void host.stop().then(() => process.exit(0))
+    // SIGINT/SIGTERM/SIGHUP: stop serving and end every tab's process
+    // (SIGHUP, then SIGKILL after a grace period) before exiting.
+    let stopping = false
+    const stop = () => {
+      if (stopping) return
+      stopping = true
+      void host.stop().finally(() => process.exit(0))
+    }
     process.on("SIGINT", stop)
     process.on("SIGTERM", stop)
+    process.on("SIGHUP", stop)
   }
 } catch (error) {
   process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n${usage}`)

@@ -1,5 +1,17 @@
 # 0.41.0
 
+## `hya` starts the TUI and the WebUI
+
+- Running `hya` in a terminal now starts three things: a server inside the `hya` process, the TUI in the terminal, and the WebUI at `http://127.0.0.1:3250`. Pick another port with `hya --port <N>`; `0` picks a free port.
+  - The terminal TUI and every WebUI tab use the same server, so sessions show up in both at once.
+  - `--db`, `--yolo`, and `--model` apply as they do for `serve`. The default database is the durable `$XDG_STATE_HOME/hya/sessions.db`.
+  - Quitting the TUI (Ctrl+C twice, Ctrl+D, `/exit`, or a signal) stops the WebUI, its tabs, and the server.
+  - This needs Bun on `PATH`. Without a terminal, `hya` still prints the guidance banner.
+- The TUI shows the WebUI address in the status bar, the sidebar, and `/status`. When the WebUI can't start, for example because the port is taken, the TUI shows `WebUI unavailable: <reason> · hya --port <N>` and otherwise works as usual. New TUI flags: `--web-url` and `--web-error`.
+- Bare `hya` writes server and WebUI output to `$XDG_STATE_HOME/hya/hya.log` instead of the terminal.
+- The WebUI host now ends every tab's process (SIGHUP, then SIGKILL) when it gets SIGINT, SIGTERM, or SIGHUP.
+- The TUI package is self-contained. `gen-api` now also generates its `/api` catalog into `packages/hya-tui/src/operations.json`. See [ADR-0020](docs/adr/0020-bundle-tui-and-webui-in-hya.md).
+
 ## Live assistant text and turn errors on the v1 stream
 
 - v1 streams (SSE and gRPC, session and global) now deliver assistant text as it is generated. The live frames are `partStarted`, `partAppended`, and `partCompleted` with no `seq`, and they use the same message and part ids as the durable events. Before, text arrived only when the round finished. Each part's final text arrives as a durable `partReplaced` stream event, which is also sent when reasoning is replaced. Live frames cannot be replayed. Streams filter by `sinceSeq` but do not replay history, so after a reconnect a client re-reads the projection or calls `ListEvents`. See [Protocol guide](docs/protocol/README.md).

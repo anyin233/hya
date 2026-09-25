@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { compactionText, contextText, headerText, mainContent, mainTitle, pendingLines, sessionListText, sessionTree, statusBarText, todosCompactText, truncate, truncateStart } from "../src/state/format"
+import { compactionText, contextText, webLabel, webNotice, headerText, mainContent, mainTitle, pendingLines, sessionListText, sessionTree, statusBarText, todosCompactText, truncate, truncateStart } from "../src/state/format"
 import { createAppStore } from "../src/state/store"
 
 const server = "http://127.0.0.1:8080/"
@@ -151,4 +151,20 @@ test("asks of the open session tree are prompts, not pending lines; the sidebar 
     "▸ 2. Parent", "   build",
     "   ↳ 3. general · ◌ waiting",
   ].join("\n"))
+})
+
+test("the context box shows the WebUI address when bare hya serves one", () => {
+  const store = createAppStore()
+  store.setWeb({ url: "http://127.0.0.1:3250/" })
+  expect(contextText(store.state, server).split("\n")).toEqual(["Session  none", "Server   127.0.0.1:8080", "WebUI    127.0.0.1:3250"])
+  store.setWeb({ error: "port 3250 is in use" })
+  expect(contextText(store.state, server).split("\n").at(-1)).toBe("WebUI    unavailable")
+})
+
+test("the WebUI notice names the reason and the --port remedy", () => {
+  expect(webNotice(undefined)).toBeUndefined()
+  expect(webNotice({ url: "http://127.0.0.1:3250/" })).toBeUndefined()
+  expect(webNotice({ error: "port 3250 is in use" })).toBe("WebUI unavailable: port 3250 is in use · hya --port <N>")
+  expect(webLabel({ url: "http://127.0.0.1:3250/" })).toBe("WebUI http://127.0.0.1:3250")
+  expect(webLabel({ error: "x" })).toBe("WebUI unavailable")
 })

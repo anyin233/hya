@@ -17,6 +17,9 @@ builds on it.
   durable state.
 - It runs from source with Bun. It is not bundled into the `hya` binary or the
   release archive; packaging it is a separate decision.
+  *Amended by [ADR-0020](0020-bundle-tui-and-webui-in-hya.md): the release
+  archive now ships it as `lib/hya/tui`, and bare `hya` on a terminal starts it
+  with the WebUI. It is still a separate Bun program, not code in the binary.*
 - It is previewed and tested only through the browser rendering in
   `packages/hya-tui-web` (ADR-0018). That rendering is also the WebUI.
 

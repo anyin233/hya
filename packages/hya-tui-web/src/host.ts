@@ -17,11 +17,18 @@ export type HostOptions = {
   hostname?: string
   /** Bind port; 0 picks a free port (default 7681). */
   port?: number
+  /** `stop()`: wait after SIGHUP before SIGKILL for PTY processes still running (default 3000 ms). */
+  stopGraceMs?: number
 }
 
 export type Host = {
   /** Base URL with a trailing slash, e.g. `http://127.0.0.1:7681/`. */
   url: string
+  /**
+   * Stop listening and end every PTY process: SIGHUP (what closing a tab
+   * sends), then SIGKILL to the process group of any still running after
+   * `stopGraceMs`. Resolves once all of them have exited.
+   */
   stop(): Promise<void>
 }
 
@@ -44,6 +51,7 @@ function sameOrigin(request: Request): boolean {
 
 export function startHost(options: HostOptions): Host {
   const connections = new Set<ServerWebSocket<Connection>>()
+  const processes = new Set<Subprocess>()
   const env = { ...process.env, TERM: "xterm-256color", COLORTERM: "truecolor", ...options.env }
 
   function open(ws: ServerWebSocket<Connection>) {
@@ -60,7 +68,9 @@ export function startHost(options: HostOptions): Host {
       },
     })
     ws.data.proc = proc
+    processes.add(proc)
     void proc.exited.then(async (code) => {
+      processes.delete(proc)
       // Let the PTY reader flush the child's last output before reporting exit.
       await Bun.sleep(50)
       proc.terminal?.close()
@@ -106,6 +116,24 @@ export function startHost(options: HostOptions): Host {
     url: server.url.toString(),
     async stop() {
       for (const ws of connections) close(ws)
+      const running = [...processes]
+      for (const proc of running) if (proc.exitCode === null && proc.signalCode === null) proc.kill("SIGHUP")
+      const exited = Promise.all(running.map((proc) => proc.exited))
+      const grace = options.stopGraceMs ?? 3000
+      if (await Promise.race([exited.then(() => true), Bun.sleep(grace).then(() => false)]) === false) {
+        for (const proc of running) {
+          if (proc.exitCode !== null || proc.signalCode !== null) continue
+          try {
+            // The PTY child leads its own session and process group: end its children too.
+            process.kill(-proc.pid, "SIGKILL")
+          } catch {
+            proc.kill("SIGKILL")
+          }
+        }
+        await exited
+      }
+      // Let each tab receive its `exit` frame before the sockets close.
+      if (running.length > 0) await Bun.sleep(100)
       await server.stop(true)
     },
   }

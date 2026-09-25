@@ -14,6 +14,16 @@ export interface Options {
   continue: boolean
   /** Open this session (`--session <id>`). */
   session?: string
+  /** The WebUI bare `hya` serves next to this TUI (`--web-url`), or why it could not (`--web-error`). */
+  web?: WebInfo
+}
+
+/** The WebUI state bare `hya` passes to its terminal TUI: exactly one of the two is set. */
+export interface WebInfo {
+  /** `--web-url <url>`: the WebUI's address (shown in the status bar, sidebar, and `/status`). */
+  url?: string
+  /** `--web-error <reason>`: the WebUI could not start (shown as a warning notice). */
+  error?: string
 }
 
 export const usage = `Usage: bun packages/hya-tui/src/main.ts [options]
@@ -31,6 +41,10 @@ Options:
                     ~/.local/state/hya/sessions.db)
   -c, --continue    Open the most recent top-level session in --dir
   -s, --session ID  Open the session with this id
+  --web-url URL     Show this WebUI address (set by bare hya, which serves
+                    the WebUI next to this TUI)
+  --web-error TEXT  Show "WebUI unavailable: TEXT" (set by bare hya when the
+                    WebUI could not start)
   -h, --help        Show this help
 `
 
@@ -41,6 +55,8 @@ export function parseArguments(argv: string[], cwd = process.cwd()): Options | n
   let hya: string | undefined
   let db: string | undefined
   let session: string | undefined
+  let webUrl: string | undefined
+  let webError: string | undefined
   let resume = false
   for (let index = 0; index < argv.length; index++) {
     const arg = argv[index]
@@ -53,6 +69,8 @@ export function parseArguments(argv: string[], cwd = process.cwd()): Options | n
     else if (arg === "--hya") hya = argv[++index]!
     else if (arg === "--db") db = argv[++index]!
     else if (arg === "--session" || arg === "-s") session = argv[++index]!
+    else if (arg === "--web-url") webUrl = argv[++index]!
+    else if (arg === "--web-error") webError = argv[++index]!
     else throw new Error(`Unknown or incomplete option: ${arg}`)
   }
   if (resume && session) throw new Error("--continue and --session cannot be combined")
@@ -66,5 +84,12 @@ export function parseArguments(argv: string[], cwd = process.cwd()): Options | n
   if (hya !== undefined) options.hya = hya
   if (db !== undefined) options.db = db
   if (session !== undefined) options.session = session
+  if (webUrl !== undefined && webError !== undefined) throw new Error("--web-url and --web-error cannot be combined")
+  if (webUrl !== undefined) {
+    const url = new URL(webUrl)
+    if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error("--web-url needs an HTTP URL")
+    options.web = { url: url.toString() }
+  }
+  if (webError !== undefined) options.web = { error: webError }
   return options
 }
