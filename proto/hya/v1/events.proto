@@ -8,6 +8,19 @@
 // `StreamEvent` is a curated wire projection of the internal event log:
 // it exposes the categories clients consume, not the internal storage
 // encoding, and both transports serialize it identically (protojson).
+//
+// Durable vs live frames: a durable event carries its log `seq` (> 0) and
+// is replayable with `ListEvents`. Live-only frames carry `seq = 0`, which
+// protojson omits: the assistant text deltas of an in-flight provider round
+// (`partStarted` / `partAppended` / `partReplaced` / `partCompleted` for a
+// text part) and the pending-interaction frames (`permissionRequested`,
+// `questionRequested`, `interactionResolved`). Live frames are never
+// persisted and never replayed. When the round ends, the durable log
+// records each text part once as `partStarted` + `partReplaced` (full
+// text) + `partCompleted` with the same message and part ids the live
+// frames used, so a client folds both by id: an already-known part id on
+// `partStarted` is not a new part, and `partReplaced` sets the part's text.
+// Reasoning deltas and tool-call argument deltas are durable events.
 syntax = "proto3";
 
 package hya.v1;
@@ -25,7 +38,11 @@ service Events {
   rpc ListEvents(ListEventsRequest) returns (ListEventsResponse);
 
   // Live stream for one session; server-streaming over gRPC and SSE over
-  // HTTP. Emits `resync` when the consumer lags and must re-replay.
+  // HTTP. Delivers durable events and live-only (`seq = 0`) frames as they
+  // happen; it does not replay history (read `ListEvents` for that). Emits
+  // `resync` when the consumer lags: frames in the gap (live deltas
+  // included) are lost, so re-read the projection (`ListMessages`) or
+  // replay `ListEvents` from the last durable `seq` applied.
   //
   // hya.http: GET /v1/sessions/{session}/events/stream
   rpc StreamSessionEvents(StreamSessionEventsRequest) returns (stream StreamFrame);
@@ -65,14 +82,16 @@ message ListEventsResponse {
 message StreamSessionEventsRequest {
   // Session identifier to stream.
   string session = 1;
-  // Emit events after this watermark first, then continue live.
+  // Skip durable events with `seq` at or below this watermark. Live-only
+  // frames (`seq = 0`) are always delivered. No history is replayed.
   uint64 since_seq = 2;
 }
 
 message StreamGlobalEventsRequest {
   // Directory scope; empty means the process default directory.
   string directory = 1;
-  // Emit events after this watermark first, then continue live.
+  // Skip durable events with `seq` at or below this watermark. Live-only
+  // frames (`seq = 0`) are always delivered. No history is replayed.
   uint64 since_seq = 2;
 }
 
@@ -89,14 +108,15 @@ message StreamFrame {
 
 // Typed lag signal replacing the legacy SSE `resync` event name.
 message ResyncFrame {
-  // Highest sequence number the server guarantees delivered; resume with
-  // `since_seq = last_seq`.
+  // The watermark the stream was opened with (`since_seq`); a client that
+  // tracks its own last applied durable `seq` should replay from that.
   uint64 last_seq = 1;
 }
 
 // One curated projected event from the event log.
 message StreamEvent {
-  // Monotonic sequence number within the session.
+  // Monotonic sequence number within the session; 0 (omitted in protojson)
+  // for live-only frames, which `ListEvents` never returns.
   uint64 seq = 1;
   // Owning session identifier.
   string session = 2;
@@ -136,6 +156,12 @@ message StreamEvent {
     CompactionApplied compaction_applied = 18;
     // A session was deleted.
     SessionDeleted session_deleted = 19;
+    // A text or reasoning part's whole text was set (the durable record of
+    // a streamed text part, or a plugin rewrite of it).
+    PartReplaced part_replaced = 20;
+    // A runtime error was recorded; when it names a message, the turn that
+    // drove that message failed (`MessageInfo.error`).
+    ErrorReported error_reported = 21;
   }
 }
 
@@ -203,7 +229,8 @@ message PartStarted {
   string kind = 3;
 }
 
-// Streaming delta appended to a part.
+// Streaming delta appended to a part. Assistant text deltas are live-only
+// (`seq = 0`); reasoning and legacy text deltas are durable.
 message PartAppended {
   // Owning message identifier.
   string message = 1;
@@ -219,6 +246,28 @@ message PartCompleted {
   string message = 1;
   // Part identifier.
   string part = 2;
+}
+
+// A text or reasoning part's text was replaced wholesale. Clients set the
+// part's text to `text` (not append); it supersedes any live deltas they
+// accumulated for the same part id.
+message PartReplaced {
+  // Owning message identifier.
+  string message = 1;
+  // Part identifier.
+  string part = 2;
+  // Full text of the part.
+  string text = 3;
+}
+
+// A runtime error was recorded.
+message ErrorReported {
+  // Message whose turn failed; empty for errors not tied to a message.
+  string message = 1;
+  // Stable machine code (for example `provider_error`).
+  string code = 2;
+  // Human-readable error text as the engine recorded it.
+  string error_message = 3;
 }
 
 // A tool call's execution state changed.

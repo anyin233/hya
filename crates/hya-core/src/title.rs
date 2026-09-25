@@ -159,6 +159,7 @@ mod tests {
             agents: Vec::new(),
             parts: Vec::new(),
             cause: None,
+            error: None,
         });
         assert!(!is_empty_unnamed_session(&projection));
     }

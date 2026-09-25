@@ -69,15 +69,24 @@ pub(crate) fn turn_info(
         .messages
         .iter()
         .rev()
-        .find(|message| message.role == hya_proto::Role::Assistant && message.finish.is_some())
-        .and_then(|message| message.finish);
+        .find(|message| message.role == hya_proto::Role::Assistant && message.finish.is_some());
     let admitted = projection
         .session
         .messages
         .iter()
         .find(|message| message.id.to_string() == turn)
         .and_then(|message| message.finish);
-    let (state, finish) = match last_assistant.or(admitted) {
+    // A failed turn reports the error the engine recorded on the failed
+    // assistant message (`Event::Error { failed_message }`).
+    let (error_code, error_message) = last_assistant
+        .filter(|message| message.finish == Some(hya_proto::FinishReason::Error))
+        .and_then(|message| message.error.as_ref())
+        .map(|error| (error.code.clone(), error.message.clone()))
+        .unwrap_or_default();
+    let (state, finish) = match last_assistant
+        .and_then(|message| message.finish)
+        .or(admitted)
+    {
         Some(reason) => {
             let finish = super::convert::finish_reason(reason);
             let state = match reason {
@@ -94,8 +103,8 @@ pub(crate) fn turn_info(
         session: session.to_string(),
         state,
         finish,
-        error_code: String::new(),
-        error_message: String::new(),
+        error_code,
+        error_message,
     }
 }
 

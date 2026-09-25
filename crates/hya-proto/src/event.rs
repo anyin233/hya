@@ -899,7 +899,11 @@ pub enum Event {
     },
 
     // -------- errors --------
-    /// Runtime error frame; `session` optional for global errors; reducer no-op.
+    /// Runtime error frame; `session` optional for global errors.
+    ///
+    /// With `failed_message` set it records why a turn failed and folds onto
+    /// that message (`MessageProjection.error`); otherwise the reducer
+    /// ignores it.
     Error {
         /// Session scope when the error is session-local; `None` for global errors.
         session: Option<SessionId>,
@@ -907,6 +911,11 @@ pub enum Event {
         code: String,
         /// Human-readable error text.
         message: String,
+        /// Assistant message the error ended (a failed turn), appended just
+        /// before that message's `MessageFinished { finish: error }`. Absent
+        /// for errors not tied to a message and in logs written before 0.41.0.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        failed_message: Option<MessageId>,
     },
 
     /// Forward-compatibility catch-all: any event whose `type` tag is not one of

@@ -61,7 +61,88 @@ pub(crate) fn error_cause(error: &CoreError) -> Option<FinishCause> {
     }
 }
 
+/// Stable machine code recorded on the `Error` event of a failed turn.
+pub(crate) fn error_code(error: &CoreError) -> &'static str {
+    match error {
+        CoreError::Provider(_) => "provider_error",
+        CoreError::Tool(_) => "tool_error",
+        CoreError::Store(_) => "store_error",
+        CoreError::Bundle(_) => "bundle_error",
+        CoreError::RuntimeRefresh(_) => "runtime_refresh_error",
+        CoreError::Cancelled => "cancelled",
+        CoreError::AgentDefinitionMissing { .. } => "agent_definition_missing",
+        CoreError::Invalid(_) => "invalid",
+        CoreError::TurnAlreadyActive { .. } => "turn_already_active",
+    }
+}
+
+/// Upper bound on the recorded error text. Provider messages are already
+/// bounded (`ProviderError::HttpStatus` keeps a bounded body excerpt); this
+/// caps anything else that reaches a failed turn.
+const MAX_ERROR_TEXT: usize = 2_000;
+
+/// The error text recorded on the `Error` event of a failed turn: the
+/// error's display form, truncated on a char boundary.
+pub(crate) fn error_text(error: &CoreError) -> String {
+    let text = error.to_string();
+    if text.len() <= MAX_ERROR_TEXT {
+        return text;
+    }
+    let mut end = MAX_ERROR_TEXT;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &text[..end])
+}
+
 impl SessionEngine {
+    /// Close a turn's still-open assistant message after `error` failed the
+    /// turn: first a durable `Error { failed_message }` carrying the error's
+    /// code and text (folded onto the message as `MessageProjection.error`),
+    /// then `MessageFinished { finish: error, cause }`. No-op for a message
+    /// that never started or already finished.
+    pub(crate) async fn fail_turn_message(
+        &self,
+        actor_claim: Option<&ActorClaim>,
+        session: SessionId,
+        message: MessageId,
+        error: &CoreError,
+    ) -> Result<(), CoreError> {
+        let open = self
+            .store
+            .read_projection(session)
+            .await?
+            .session
+            .messages
+            .iter()
+            .any(|entry| entry.id == message && entry.finish.is_none());
+        if open
+            && let Err(record) = self
+                .emit_for_actor(
+                    actor_claim,
+                    session,
+                    Event::Error {
+                        session: Some(session),
+                        code: error_code(error).to_string(),
+                        message: error_text(error),
+                        failed_message: Some(message),
+                    },
+                )
+                .await
+        {
+            // The finish below is what clients wait for; never skip it.
+            tracing::warn!(%session, "turn error record was not appended: {record:#}");
+        }
+        self.close_turn_message(
+            actor_claim,
+            session,
+            message,
+            FinishReason::Error,
+            error_cause(error),
+        )
+        .await
+    }
+
     /// Cancel `session`'s in-flight turn and record `cause` on its closing
     /// `MessageFinished`. `false` when the session has no active turn.
     pub fn cancel_turn(&self, session: SessionId, cause: FinishCause) -> bool {

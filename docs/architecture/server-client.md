@@ -55,10 +55,30 @@ Semantics highlights:
 - **Event-driven execution**: `CreateTurn` admits and returns a handle;
   progress and terminal state arrive on the streams. `WaitTurn` is a
   convenience for synchronous clients. `SessionInfo.busy` derives from
-  the run registry. The engine additionally enforces one active turn per
-  session: a prompt/command turn queues behind a turn the engine is already
-  running for that session (for example a resident lead's synthesis turn),
-  and a shell turn in that state fails with `session_busy`.
+  the run registry. There is no server-side prompt queue: while a v1 run
+  owns the session (a turn admitted through `CreateTurn` is still
+  running), another `CreateTurn` fails with `session_busy` (HTTP 409);
+  clients queue follow-up prompts themselves and submit them after the
+  assistant `messageFinished`. The engine additionally enforces one active
+  turn per session: only when the run registry is free but the engine is
+  running a turn it started itself (for example a resident lead's synthesis
+  turn) does a prompt/command turn wait behind it; a shell turn in that
+  state fails with `session_busy`. `CreateTurn` returns the admitted
+  **user** message id as the turn id for prompt/command turns.
+- **Live deltas on the streams**: assistant text streams as live-only
+  frames (`seq = 0`, omitted in protojson) with the message and part ids
+  the durable events later use; the round's durable record is one
+  `partStarted` + `partReplaced` (full text) + `partCompleted` per text
+  part. `sinceSeq` filters durable frames only and the streams do not
+  replay history. A subscriber more than the bus capacity
+  (`DEFAULT_BUS_CAPACITY`, 8192 envelopes) behind gets a `resync` frame
+  and loses the frames in the gap; it recovers by re-reading the
+  projection. See the [protocol guide](../protocol/README.md#live-and-durable-frames).
+- **Turn failures carry their error**: a failed turn appends a durable
+  `error` event naming the failed assistant message before its
+  `messageFinished { finish: error }`; `TurnInfo.errorCode` /
+  `errorMessage`, `MessageInfo.error`, and the `errorReported` stream event
+  all expose it.
 - **Reads fold the shared projection**: transcript/todo reads come from
   the event log through `hya_proto::Projection` — no second read model.
   `ListEvents.include_raw` exposes the canonical envelope JSON lines for

@@ -36,7 +36,10 @@ async fn list_interactions(
                 .map_err(|_| V1Error::invalid_argument("invalid session id"))?,
         )
     };
-    let want_type = pb::InteractionType::try_from(request.r#type).ok();
+    // Unspecified (0) or an unknown value means "every type".
+    let want_type = pb::InteractionType::try_from(request.r#type)
+        .ok()
+        .filter(|kind| *kind != pb::InteractionType::Unspecified);
 
     for view in st.permission_requests.list().await {
         let entry = serde_json::to_value(&view).unwrap_or(Value::Null);

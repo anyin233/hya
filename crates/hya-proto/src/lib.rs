@@ -51,7 +51,7 @@ pub use message::{
 pub use model::{AgentName, ModelRef, ToolName, ToolSchema};
 pub use projection::{
     ArchivedEntry, ChannelProjection, ChannelResolveError, ContextStatusProjection,
-    HandoffProjection, MailMessage, MemberProjection, MessageProjection,
+    HandoffProjection, MailMessage, MemberProjection, MessageError, MessageProjection,
     PROJECTION_REDUCER_VERSION, PartProjection, Projection, ResidentWorkProjection, RosterEntry,
     ScopedRoster, SessionProjection, TeamProjection,
 };

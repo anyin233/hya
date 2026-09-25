@@ -1,5 +1,19 @@
 # 0.41.0
 
+## Live assistant text and turn errors on the v1 stream
+
+- v1 streams (SSE and gRPC, session and global) now deliver assistant text as it is generated. The live frames are `partStarted`, `partAppended`, and `partCompleted` with no `seq`, and they use the same message and part ids as the durable events. Before, text arrived only when the round finished. Each part's final text arrives as a durable `partReplaced` stream event, which is also sent when reasoning is replaced. Live frames cannot be replayed. Streams filter by `sinceSeq` but do not replay history, so after a reconnect a client re-reads the projection or calls `ListEvents`. See [Protocol guide](docs/protocol/README.md).
+- A failed turn now records its error. A durable `error` event names the failed message and streams as `errorReported {message, code, errorMessage}`. The same error appears in `MessageInfo.error {code, message}` and in `TurnInfo.errorCode` / `errorMessage`, for example `provider_error`. The projection reducer version is now 3.
+- `GET /v1/interactions` and gRPC `ListInteractions` without a `type` filter now list every pending interaction. Before, they returned nothing.
+- `hya-sdk-v1` `V1SessionMirror` now:
+  - de-duplicates parts by id;
+  - applies `partReplaced` and `errorReported`;
+  - ignores live deltas that are already covered by durable text;
+  - records the message role and finish cause.
+- Protocol docs now state that:
+  - the turn id returned by `CreateTurn` is the user message id;
+  - a prompt sent while a turn runs gets `409 session_busy`, because the server does not queue prompts.
+
 ## Session permission modes
 
 - Each session tree now has a permission mode, switchable at runtime:
