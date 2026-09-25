@@ -11,7 +11,8 @@ use sha2::{Digest, Sha256};
 
 use crate::host::PluginHost;
 use crate::messages::{
-    HookName, HookPosture, PermissionAskParams, PermissionOutcomeWire, WireResource,
+    HookName, HookPosture, PermissionApproveParams, PermissionAskParams, PermissionOutcomeWire,
+    WireResource,
 };
 
 const PERMISSION_BRIDGE_SEMANTIC_IDENTITY_DOMAIN_V1: &[u8] =
@@ -120,6 +121,64 @@ impl PluginHost {
                     return Some(Decision::Reject { feedback });
                 }
                 Ok(PermissionOutcomeWire::Defer) | Err(_) => continue,
+            }
+        }
+        None
+    }
+}
+
+impl PluginHost {
+    /// Ask the loaded plugins' `permission.approve` hooks in load order and
+    /// return the first non-defer decision.
+    ///
+    /// The engine calls this only on the host of the bundle that declared the
+    /// active session permission mode. Plugins without the hook are skipped;
+    /// `defer`, RPC failures, timeouts, and malformed replies continue, so an
+    /// all-defer result (`None`) falls through to the user ask.
+    pub async fn permission_approve(
+        &self,
+        input: hya_core::hooks::PermissionApproveInput,
+    ) -> Option<Decision> {
+        let params = PermissionApproveParams {
+            session: input.session,
+            root_session: input.root_session,
+            agent: input.agent,
+            mode: input.mode,
+            action: input.action,
+            resource: resource_to_wire(&input.resource),
+        };
+        let value = match serde_json::to_value(&params) {
+            Ok(value) => value,
+            Err(error) => {
+                tracing::warn!(%error, "permission.approve serialize failed");
+                return None;
+            }
+        };
+        for conn in self.plugins() {
+            if conn.posture(HookName::PermissionApprove).is_none() {
+                continue;
+            }
+            let reply = match conn
+                .call_hook(HookName::PermissionApprove, value.clone())
+                .await
+            {
+                Ok(reply) => reply,
+                Err(error) => {
+                    tracing::warn!(%error, plugin = %conn.id, "permission.approve failed; asking the user");
+                    continue;
+                }
+            };
+            match serde_json::from_value::<PermissionOutcomeWire>(reply) {
+                Ok(PermissionOutcomeWire::AllowOnce) => return Some(Decision::AllowOnce),
+                Ok(PermissionOutcomeWire::AllowAlways) => return Some(Decision::AllowAlways),
+                Ok(PermissionOutcomeWire::Reject { feedback }) => {
+                    return Some(Decision::Reject { feedback });
+                }
+                Ok(PermissionOutcomeWire::Defer) => continue,
+                Err(error) => {
+                    tracing::warn!(%error, plugin = %conn.id, "permission.approve reply malformed; asking the user");
+                    continue;
+                }
             }
         }
         None

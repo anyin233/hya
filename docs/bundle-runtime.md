@@ -208,6 +208,12 @@ Agent-bearing JavaScript bundles retain their activation-scoped sidecars.
 - Selected `permission.ask` hooks run through the turn's captured permission
   interceptor chain. A defer continues to configured interceptors and the normal
   user approval path; explicit deny rules cannot be overridden by a hook.
+- A process-backed bundle's `permission_modes:` publish on its runtime source
+  (they are part of the source identity, like `apis:`). When a session tree
+  runs in one of them, each tool call's permission plane appends an approver
+  after the `permission.ask` interceptors that calls only this bundle's
+  `permission.approve` hook, from the binding the call runs in; a removed
+  bundle or mode falls back to `manual`.
 - URI scheme claims retain bundle ownership. An agent-bearing bundle's scheme
   tool resolves through its selected local resource; a Plugin claim resolves
   through its namespaced runtime export.

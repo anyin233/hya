@@ -102,6 +102,7 @@ async fn projection_info_at(
     let projection = st.engine.read_projection_shared(session).await?;
     let mut info = session_info(&projection, started, updated);
     info.busy = st.is_busy(session);
+    info.permission_mode = st.engine.permission_mode(session).await?;
     Ok(info)
 }
 
@@ -152,6 +153,15 @@ async fn update_session(
 ) -> Result<Json<pb::SessionInfo>, V1Error> {
     let session = parse_session(&id)?;
     session_exists(&st, session).await?;
+    // Validate the mode before applying any other field, so an unknown mode
+    // leaves the session unchanged.
+    if let Some(mode) = request.permission_mode.as_deref()
+        && hya_core::SessionPermissionMode::parse(mode).is_none()
+    {
+        return Err(V1Error::invalid_argument(format!(
+            "unknown permission mode: {mode:?}"
+        )));
+    }
     if let Some(title) = request.title
         && !title.is_empty()
     {
@@ -170,6 +180,21 @@ async fn update_session(
         st.engine
             .switch_agent(session, hya_proto::AgentName::new(agent))
             .await?;
+    }
+    if let Some(mode) = request.permission_mode {
+        let root = st
+            .engine
+            .set_permission_mode(session, &mode)
+            .await
+            .map_err(|error| match error {
+                hya_core::CoreError::Invalid(message) => V1Error::invalid_argument(message),
+                other => V1Error::from(other),
+            })?;
+        if mode == hya_core::permission_mode::YOLO {
+            // The tree now bypasses every check: let the calls already
+            // waiting for an answer continue as if allowed once.
+            st.permission_requests.allow_tree_once(root).await;
+        }
     }
     Ok(Json(projection_info(&st, session).await?))
 }

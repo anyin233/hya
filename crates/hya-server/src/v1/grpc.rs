@@ -322,6 +322,13 @@ impl pb::catalog_server::Catalog for V1Grpc {
     ) -> Result<GrpcResponse<pb::ListToolsResponse>, Status> {
         get_rpc!(self, "/v1/tools", request)
     }
+
+    async fn list_permission_modes(
+        &self,
+        request: GrpcRequest<pb::ListPermissionModesRequest>,
+    ) -> Result<GrpcResponse<pb::ListPermissionModesResponse>, Status> {
+        get_rpc!(self, "/v1/permission-modes", request)
+    }
 }
 
 // ---------------------------------------------------------------------------

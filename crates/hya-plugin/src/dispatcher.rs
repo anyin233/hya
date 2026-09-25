@@ -52,6 +52,13 @@ impl HookDispatcher for PluginHost {
         PluginHost::permission_ask(self, session, action, resource).await
     }
 
+    async fn permission_approve(
+        &self,
+        input: hya_core::hooks::PermissionApproveInput,
+    ) -> Option<Decision> {
+        PluginHost::permission_approve(self, input).await
+    }
+
     async fn command_execute_before(
         &self,
         input: CommandExecuteBeforeInput,

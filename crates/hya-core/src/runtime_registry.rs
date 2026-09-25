@@ -137,6 +137,7 @@ pub struct RuntimeSource {
     schemas: Vec<SourceSchema>,
     hooks: Option<Arc<dyn crate::hooks::HookDispatcher>>,
     apis: Option<crate::bundle_apis::SourceApis>,
+    permission_modes: Vec<crate::permission_mode::RuntimePermissionMode>,
 }
 
 /// One external URI-scheme claim a runtime source makes.
@@ -572,6 +573,16 @@ impl RuntimeRegistry {
                     })
             })
             .collect()
+    }
+
+    /// Every published bundle's declared session permission modes, sorted
+    /// by bundle id then mode id.
+    #[must_use]
+    pub fn published_permission_modes(
+        &self,
+    ) -> Vec<crate::permission_mode::PublishedPermissionMode> {
+        let active = self.active();
+        published_permission_modes(&active)
     }
 
     #[must_use]
@@ -1395,6 +1406,7 @@ impl RuntimeSource {
             schemas: Vec::new(),
             hooks: None,
             apis: None,
+            permission_modes: Vec::new(),
         }
     }
 
@@ -1427,6 +1439,24 @@ impl RuntimeSource {
             _owner: Some(Arc::clone(&self.owner)),
         });
         self
+    }
+
+    /// Attach the session permission modes this source's process approves
+    /// through its `permission.approve` hook (sorted by id).
+    #[must_use]
+    pub fn with_permission_modes(
+        mut self,
+        mut modes: Vec<crate::permission_mode::RuntimePermissionMode>,
+    ) -> Self {
+        modes.sort_by(|left, right| left.id.cmp(&right.id));
+        self.permission_modes = modes;
+        self
+    }
+
+    /// The session permission modes this source declares.
+    #[must_use]
+    pub fn permission_modes(&self) -> &[crate::permission_mode::RuntimePermissionMode] {
+        &self.permission_modes
     }
 
     /// Attach process hooks retained by this immutable runtime generation.
@@ -1495,6 +1525,7 @@ fn sources_match(
                         _ => false,
                     }
                     && left.resources == right.resources
+                    && left.permission_modes == right.permission_modes
                     && left.schemas == right.schemas
                     && left.skills.len() == right.skills.len()
                     && left.skills.iter().zip(&right.skills).all(|(left, right)| {
@@ -1521,7 +1552,59 @@ fn sources_match(
         })
 }
 
+fn published_permission_modes(
+    snapshot: &RuntimeSnapshot,
+) -> Vec<crate::permission_mode::PublishedPermissionMode> {
+    snapshot
+        .sources
+        .iter()
+        .filter(|(id, _)| id.kind() == RuntimeSourceKind::Bundle)
+        .filter(|(id, _)| {
+            snapshot
+                .catalog
+                .bundles()
+                .bundles()
+                .iter()
+                .any(|bundle| bundle.identity().id == id.configured_id())
+        })
+        .flat_map(|(id, source)| {
+            let bundle = id.configured_id();
+            source.permission_modes.iter().map(move |mode| {
+                crate::permission_mode::PublishedPermissionMode {
+                    id: format!("{bundle}/{}", mode.id),
+                    title: mode.title.clone(),
+                    description: mode.description.clone(),
+                    source: bundle.to_string(),
+                }
+            })
+        })
+        .collect()
+}
+
 impl TurnBinding {
+    /// The declaring bundle's process hooks when `bundle_id` publishes the
+    /// session permission mode `mode` in this generation; `None` when the
+    /// bundle is gone, no longer declares the mode, or has no process.
+    #[must_use]
+    pub fn permission_mode_hooks(
+        &self,
+        bundle_id: &str,
+        mode: &str,
+    ) -> Option<Arc<dyn crate::hooks::HookDispatcher>> {
+        let source = self
+            .snapshot
+            .sources
+            .get(&RuntimeSourceId::bundle(bundle_id))?;
+        if !source
+            .permission_modes
+            .iter()
+            .any(|declared| declared.id == mode)
+        {
+            return None;
+        }
+        self.bundle_hooks(bundle_id)
+    }
+
     /// Retain one explicitly selected bundle's process hooks from this generation.
     #[must_use]
     pub fn bundle_hooks(&self, bundle_id: &str) -> Option<Arc<dyn crate::hooks::HookDispatcher>> {

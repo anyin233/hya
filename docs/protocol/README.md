@@ -120,6 +120,23 @@ listed by `GET /v1/interactions`. Answer with
 `{question: {rejected: true}}`. The response's `applied` is `false` when
 the request was already resolved (idempotent replay).
 
+## Permission modes
+
+A session tree's permission mode decides whether asks reach the user at all.
+`GET /v1/permission-modes` (`Catalog.ListPermissionModes`) lists the
+selectable modes as `{modes: [{id, title, description, source}]}`: the
+built-in `manual` and `yolo` (`source: "builtin"`), then each installed
+bundle's modes as `<bundle-id>/<mode-id>` (`source`: the bundle id). Set one
+with `PATCH /v1/sessions/{session}` and `{"permissionMode": "yolo"}`
+(`Session.UpdateSession`); an unknown or unavailable mode fails with
+`invalid_argument`. The mode is recorded on the root session and shared by
+its subagent sessions: `SessionInfo.permissionMode` reports the effective
+mode on every session of the tree, and the root's event stream carries a
+`sessionUpdated` event with `permissionMode`. Switching to `yolo` resolves the
+tree's pending permission interactions as allowed once (each emits the usual
+`interactionResolved` event). Semantics: [Configuration — Session permission
+modes](../configuration.md#session-permission-modes).
+
 ## Bundle API endpoints
 
 Installed bundles with an `extensions.process` may register their own HTTP

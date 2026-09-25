@@ -91,6 +91,13 @@ impl HookDispatcher for ScopedBundleHooks {
             None
         }
     }
+    async fn permission_approve(&self, input: PermissionApproveInput) -> Option<Decision> {
+        if self.has("permission.approve") {
+            self.dispatcher.permission_approve(input).await
+        } else {
+            None
+        }
+    }
     async fn command_execute_before(
         &self,
         input: CommandExecuteBeforeInput,

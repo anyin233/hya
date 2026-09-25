@@ -402,6 +402,17 @@
         "x-server-streaming": false
       }
     },
+    "/v1/permission-modes": {
+      "get": {
+        "operationId": "Catalog.ListPermissionModes",
+        "summary": "Session permission modes accepted by `UpdateSession.permission_mode`:",
+        "tags": [
+          "Catalog"
+        ],
+        "x-grpc-method": "hya.v1.Catalog.ListPermissionModes",
+        "x-server-streaming": false
+      }
+    },
     "/v1/permissions/rules": {
       "get": {
         "operationId": "Interactions.ListSavedRules",
@@ -1656,6 +1667,36 @@
           }
         }
       },
+      "PermissionModeSummary": {
+        "type": "object",
+        "description": "One selectable session permission mode.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          }
+        }
+      },
+      "ListPermissionModesResponse": {
+        "type": "object",
+        "description": "",
+        "properties": {
+          "modes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PermissionModeSummary"
+            }
+          }
+        }
+      },
       "Error": {
         "type": "object",
         "description": "Stable, machine-readable error returned by every failed v1 call.  HTTP bindings render `{\"error\": {\"code\": ..., \"message\": ...}}` with the status mapped from the code; gRPC bindings carry the same code in the trailer/status details.",
@@ -1884,6 +1925,9 @@
           },
           "background": {
             "type": "boolean"
+          },
+          "permission_mode": {
+            "type": "string"
           }
         }
       },
@@ -3449,6 +3493,9 @@
           },
           "busy": {
             "type": "boolean"
+          },
+          "permission_mode": {
+            "type": "string"
           }
         }
       },
@@ -3542,6 +3589,9 @@
           },
           "background": {
             "type": "boolean"
+          },
+          "permission_mode": {
+            "type": "string"
           }
         }
       },

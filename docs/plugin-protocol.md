@@ -304,14 +304,14 @@ Posture is the **per-hook failure policy**. Wire values (serde snake_case):
 
 | Posture | On hook call failure or timeout |
 | --- | --- |
-| **Safe** | For **`tool.execute.before` only**, the host converts transport/parse failure into a **veto** (`guard failed safe: …`). Other hooks that declare Safe (including `permission.ask`) do **not** get that conversion — see each hook. |
+| **Safe** | For **`tool.execute.before` only**, the host converts transport/parse failure into a **veto** (`guard failed safe: …`). Other hooks that declare Safe (including `permission.ask` and `permission.approve`) do **not** get that conversion — see each hook. |
 | **Open** | Failure is logged / skipped; the pipeline continues with the prior input. |
 
 **Defaults** (`HookName::default_posture`):
 
 | Hooks | Default |
 | --- | --- |
-| `permission.ask`, `tool.execute.before` | **Safe** |
+| `permission.ask`, `permission.approve`, `tool.execute.before` | **Safe** |
 | Every other hook | **Open** |
 
 **Tightening only:** `force_safer(declared, default)` ORs postures so that if
@@ -447,6 +447,38 @@ Example params for a subagent turn:
   (`GUARD_FAILED_SAFE` in
   [`dispatcher.rs`](../crates/hya-plugin/src/dispatcher.rs)).
 
+### `permission.approve` (session permission mode approver)
+
+Answers permission asks for a session tree that runs in one of the bundle's
+declared permission modes (manifest `permission_modes:`, see
+[AgentBundle authoring](agent-bundle-authoring.md#permission-modes-permission_modes)).
+
+- **Method:** `hook/permission.approve`
+- **Params:**
+  `{ "session", "root_session", "agent"?, "mode", "action", "resource" }` —
+  `session` is the session whose tool call asks (a subagent session for
+  subagent calls), `root_session` the tree root that owns the mode, `agent`
+  the stable id of the agent bound to `session`, and `mode` the bundle-local
+  mode id (the `permission_modes:` entry's `id`, not the
+  `<bundle-id>/<mode-id>` selector). `action` and `resource` are the same as
+  for `permission.ask`.
+- **Outcomes:** the `permission.ask` outcomes — `allow_once`, `allow_always`
+  (remembered like a user's Allow Always), `reject` with optional `feedback`,
+  `defer`.
+- **Who is asked:** only the process of the bundle that declared the active
+  mode, and only after every `permission.ask` interceptor deferred (the
+  approver is appended at the end of the chain). It is never called under
+  `manual` or `yolo`, and never for checks that rules already allow or deny.
+- **Default posture:** Safe (registration default only).
+- **Failure policy:** like `permission.ask` — a timeout, RPC error, or
+  undecodable reply counts as `defer`, and a final `defer` sends the ask to
+  the user. A failing approver therefore never allows anything.
+
+```json
+{"jsonrpc":"2.0","id":7,"method":"hook/permission.approve","params":{"session":"hysec_…","root_session":"hysec_…","agent":"build","mode":"careful","action":"bash","resource":{"type":"command","value":"git status"}}}
+{"jsonrpc":"2.0","id":7,"result":{"outcome":"allow_once"}}
+```
+
 ### `model.fallback` (choose the next model before a stream exists)
 
 Lets a plugin pick the next model when a provider fails **before** any event
@@ -562,6 +594,7 @@ handshake timing.
 | **Enrichment** (`command.execute.before`, `message.user.before`, `experimental.text.complete`, `chat.params`, `tool.execute.after`) | **Fold:** plugin *N*’s output becomes plugin *N+1*’s input. A failing Open-posture plugin is skipped; its input is passed through. |
 | **Guard** (`tool.execute.before`) | **Short-circuit:** first `veto` returns immediately. Safe-posture failures become `guard failed safe: <plugin> (<error>)`. |
 | **`permission.ask`** | First non-`defer` outcome wins. Serialize/RPC/decode failures **skip** that plugin (no Safe veto). All-defer **or** all-error falls through to the normal user-ask path. |
+| **`permission.approve`** | Only the declaring bundle's process is asked; within it, first non-`defer` outcome wins. Failures count as `defer`; all-defer falls through to the user ask. |
 | **`model.fallback`** | First `retry` wins. `give_up`, RPC/decode failures, and empty models **skip** that plugin (always fail-open). Configured plugins are asked first, then installed Plugin bundles, then the session agent's own bundle hooks: the same order as `chat.params`. All give-up surfaces the provider error. |
 
 ---

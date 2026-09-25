@@ -15,6 +15,7 @@ pub(crate) struct PermissionRequests {
     inner: Arc<Mutex<BTreeMap<String, PendingPermission>>>,
     saved: SavedPermissions,
     events: broadcast::Sender<Value>,
+    store: SessionStore,
 }
 
 struct PendingPermission {
@@ -72,8 +73,9 @@ impl PermissionRequests {
         let (events, _) = broadcast::channel(256);
         Self {
             inner: Arc::default(),
-            saved: SavedPermissions::new(store),
+            saved: SavedPermissions::new(store.clone()),
             events,
+            store,
         }
     }
 
@@ -96,8 +98,20 @@ impl PermissionRequests {
                     reply: req.reply,
                 };
                 let request_id = req.id.to_string();
+                // Decide under the pending lock: `allow_tree_once` runs after
+                // the mode event is durable and takes the same lock, so an ask
+                // racing a switch to `yolo` is either swept or allowed here.
+                let mut pending = inner.lock().await;
+                if let Some(session) = entry.session
+                    && tree_is_yolo(&store, session).await
+                {
+                    drop(pending);
+                    let _sent = entry.reply.send(Decision::AllowOnce);
+                    continue;
+                }
                 let asked = permission_asked_event(&request_id, &entry);
-                inner.lock().await.insert(request_id, entry);
+                pending.insert(request_id, entry);
+                drop(pending);
                 let _published = events.send(asked);
             }
         }));
@@ -281,6 +295,34 @@ impl PermissionRequests {
         Ok(ok)
     }
 
+    /// Allow once every pending ask whose session belongs to the tree rooted
+    /// at `root` (its lineage root is `root`), publishing the usual replied
+    /// notifications. Called after the tree switched to the `yolo` mode.
+    pub(crate) async fn allow_tree_once(&self, root: SessionId) -> usize {
+        let taken = {
+            let mut pending = self.inner.lock().await;
+            let mut ids = Vec::new();
+            for (id, entry) in pending.iter() {
+                if let Some(session) = entry.session
+                    && lineage_root(&self.store, session).await == Some(root)
+                {
+                    ids.push(id.clone());
+                }
+            }
+            ids.into_iter()
+                .filter_map(|id| pending.remove(&id).map(|entry| (id, entry)))
+                .collect::<Vec<_>>()
+        };
+        let mut allowed = 0;
+        for (id, entry) in taken {
+            if entry.reply.send(Decision::AllowOnce).is_ok() {
+                allowed += 1;
+                self.publish_replied(entry.session, &id, PermissionReply::Once);
+            }
+        }
+        allowed
+    }
+
     #[allow(dead_code)]
     pub(crate) async fn list_saved(
         &self,
@@ -293,6 +335,36 @@ impl PermissionRequests {
     pub(crate) async fn remove_saved(&self, id: &str) -> Result<(), StoreError> {
         self.saved.remove(id).await
     }
+}
+
+/// Lineage root of `session` (walks `parent` links), or `None` on a store
+/// failure. Bounded like the engine's lineage walk.
+async fn lineage_root(store: &SessionStore, session: SessionId) -> Option<SessionId> {
+    let mut current = session;
+    for _ in 0..1024 {
+        match store
+            .with_projection(current, |projection| projection.session.parent)
+            .await
+        {
+            Ok(Some(parent)) => current = parent,
+            Ok(None) => return Some(current),
+            Err(_) => return None,
+        }
+    }
+    Some(current)
+}
+
+/// Whether `session`'s tree records the `yolo` permission mode.
+async fn tree_is_yolo(store: &SessionStore, session: SessionId) -> bool {
+    let Some(root) = lineage_root(store, session).await else {
+        return false;
+    };
+    store
+        .with_projection(root, |projection| {
+            projection.session.permission_mode.as_deref() == Some(hya_core::permission_mode::YOLO)
+        })
+        .await
+        .unwrap_or(false)
 }
 
 fn take_related_for_reply(

@@ -209,6 +209,54 @@ async fn http_and_grpc_answers_match_across_representative_calls() {
 
     let session_id = grpc_session["session"]["id"].as_str().unwrap().to_owned();
 
+    // Permission modes: the catalog and the session mode match on both.
+    let grpc_modes: Value = serde_json::to_value(
+        catalog
+            .list_permission_modes(tonic::Request::new(pb::ListPermissionModesRequest {}))
+            .await
+            .unwrap()
+            .into_inner(),
+    )
+    .unwrap();
+    let (status, http_modes) =
+        http_json(&app, Method::GET, "/v1/permission-modes", Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(grpc_modes, http_modes);
+    assert_eq!(grpc_modes["modes"][1]["id"], json!("yolo"));
+    let grpc_updated: Value = serde_json::to_value(
+        session
+            .update_session(tonic::Request::new(pb::UpdateSessionRequest {
+                session: session_id.clone(),
+                permission_mode: Some("yolo".into()),
+                ..Default::default()
+            }))
+            .await
+            .unwrap()
+            .into_inner(),
+    )
+    .unwrap();
+    assert_eq!(grpc_updated["permissionMode"], json!("yolo"));
+    let (status, http_updated) = http_json(
+        &app,
+        Method::PATCH,
+        &format!("/v1/sessions/{session_id}"),
+        json!({"permissionMode": "manual"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{http_updated}");
+    assert_eq!(http_updated["permissionMode"], json!("manual"));
+    let grpc_invalid = session
+        .update_session(tonic::Request::new(pb::UpdateSessionRequest {
+            session: session_id.clone(),
+            permission_mode: Some("danger".into()),
+            ..Default::default()
+        }))
+        .await;
+    assert_eq!(
+        grpc_invalid.unwrap_err().code(),
+        tonic::Code::InvalidArgument
+    );
+
     // Turn through gRPC, then wait to terminal.
     let admitted = turn
         .create_turn(tonic::Request::new(pb::CreateTurnRequest {

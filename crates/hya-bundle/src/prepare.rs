@@ -8,10 +8,11 @@ use crate::error::BundleError;
 use crate::model::{
     BundleIdentity, ChannelParticipantRole, ChannelScope, ChannelTemplateKind, PreparedAgent,
     PreparedAgentBundle, PreparedAgentSetBundle, PreparedApi, PreparedBundleApis,
-    PreparedBundleIndex, PreparedBundleProcess, PreparedBundleSchemas, PreparedCatalog,
-    PreparedChannelParticipant, PreparedChannelTemplate, PreparedDocument, PreparedDocumentOwned,
-    PreparedInstallableBundle, PreparedPluginBundle, PreparedProcessExtension, PreparedResource,
-    PreparedSchema, PreparedWorkflow, PreparedWorkflowBundle,
+    PreparedBundleIndex, PreparedBundlePermissionModes, PreparedBundleProcess,
+    PreparedBundleSchemas, PreparedCatalog, PreparedChannelParticipant, PreparedChannelTemplate,
+    PreparedDocument, PreparedDocumentOwned, PreparedInstallableBundle, PreparedPermissionMode,
+    PreparedPluginBundle, PreparedProcessExtension, PreparedResource, PreparedSchema,
+    PreparedWorkflow, PreparedWorkflowBundle,
 };
 use crate::source::{
     BundleSource, ParsedSource, SourceAgent, SourceAgentManifest, SourceAgentSetManifest,
@@ -56,13 +57,20 @@ fn prepare_sources(sources: Vec<BundleSource>) -> Result<PreparedCatalog, Bundle
     let mut schemas = Vec::new();
     let mut process_extensions = Vec::new();
     let mut apis = Vec::new();
+    let mut permission_modes = Vec::new();
     for source in parsed {
         let bundle_id = manifest_identity(&source.manifest).id.clone();
         if !bundle_ids.insert(bundle_id.clone()) {
             return Err(BundleError::DuplicateBundleId { bundle_id });
         }
-        let (bundle, bundle_schemas, process, bundle_apis) =
+        let (bundle, bundle_schemas, process, bundle_apis, bundle_modes) =
             prepare_bundle(source, &mut stable_agent_ids)?;
+        if !bundle_modes.is_empty() {
+            permission_modes.push(PreparedBundlePermissionModes {
+                bundle_id: bundle.identity().id.clone(),
+                modes: bundle_modes,
+            });
+        }
         if !bundle_apis.is_empty() {
             apis.push(PreparedBundleApis {
                 bundle_id: bundle.identity().id.clone(),
@@ -95,6 +103,7 @@ fn prepare_sources(sources: Vec<BundleSource>) -> Result<PreparedCatalog, Bundle
         schemas: schemas.clone(),
         extensions_process: process_extensions.clone(),
         apis: apis.clone(),
+        permission_modes: permission_modes.clone(),
     })
     .map_err(|error| BundleError::PreparedEncode {
         detail: error.to_string(),
@@ -106,6 +115,7 @@ fn prepare_sources(sources: Vec<BundleSource>) -> Result<PreparedCatalog, Bundle
         schemas,
         process_extensions,
         apis,
+        permission_modes,
         bytes,
         digest,
     })
@@ -162,6 +172,11 @@ impl PreparedCatalog {
             &document.extensions_process,
             &document.apis,
         )?;
+        validate_prepared_permission_mode_rows(
+            &document.bundles,
+            &document.extensions_process,
+            &document.permission_modes,
+        )?;
         let expected_index = build_index(&document.bundles);
         if expected_index != document.index {
             return Err(BundleError::PreparedIndexMismatch);
@@ -172,6 +187,7 @@ impl PreparedCatalog {
             schemas: document.schemas,
             process_extensions: document.extensions_process,
             apis: document.apis,
+            permission_modes: document.permission_modes,
             bytes: bytes.to_vec(),
             digest: expected_digest.to_string(),
         })
@@ -676,6 +692,177 @@ fn validate_prepared_api_rows(
         )
         .map_err(|_| BundleError::NonCanonicalPreparedCatalog)?;
         if prepared != row.apis {
+            return Err(BundleError::NonCanonicalPreparedCatalog);
+        }
+    }
+    Ok(())
+}
+
+/// Maximum UTF-8 byte length of a permission mode id.
+const MAX_PERMISSION_MODE_ID_BYTES: usize = 64;
+
+/// Maximum UTF-8 byte length of a permission mode title.
+const MAX_PERMISSION_MODE_TITLE_BYTES: usize = 128;
+
+/// Maximum UTF-8 byte length of a permission mode description.
+const MAX_PERMISSION_MODE_DESCRIPTION_BYTES: usize = 1024;
+
+/// Maximum number of permission modes one bundle may declare.
+const MAX_PERMISSION_MODES_PER_BUNDLE: usize = 16;
+
+/// Built-in mode names a bundle may not reuse as a mode id.
+const RESERVED_PERMISSION_MODE_IDS: [&str; 2] = ["manual", "yolo"];
+
+/// Validate the manifest's `permission_modes:` declarations and return them
+/// sorted by id.
+///
+/// A mode's asks are answered by the bundle's explicit `extensions.process`
+/// through the `permission.approve` hook, so declaring any mode without that
+/// process or without a `permission.approve` hook resource is rejected. Ids
+/// are `[A-Za-z0-9._-]` tokens of at most 64 bytes that start with an
+/// alphanumeric character, are unique within the bundle, and are not the
+/// built-in `manual`/`yolo`; titles are 1–128 bytes and descriptions at most
+/// 1024 bytes, both without control characters; at most 16 modes.
+fn validate_declared_permission_modes(
+    bundle_id: &str,
+    modes: &[crate::source::SourcePermissionMode],
+    process: Option<&PreparedProcessExtension>,
+    hooks: &[PreparedResource],
+) -> Result<Vec<PreparedPermissionMode>, BundleError> {
+    let invalid = |detail: String| BundleError::InvalidManifest {
+        source_name: bundle_id.to_string(),
+        detail,
+    };
+    if modes.is_empty() {
+        return Ok(Vec::new());
+    }
+    if process.is_none() {
+        return Err(invalid(
+            "permission_modes: a bundle may declare permission modes only with an explicit \
+             `extensions.process` that approves them"
+                .to_string(),
+        ));
+    }
+    if !hooks
+        .iter()
+        .any(|hook| hook.local_id == "permission.approve")
+    {
+        return Err(invalid(
+            "permission_modes: a bundle that declares permission modes must declare the \
+             `permission.approve` hook under `resources.hooks`"
+                .to_string(),
+        ));
+    }
+    if modes.len() > MAX_PERMISSION_MODES_PER_BUNDLE {
+        return Err(invalid(format!(
+            "permission_modes: at most {MAX_PERMISSION_MODES_PER_BUNDLE} modes may be declared"
+        )));
+    }
+    let mut seen = BTreeSet::new();
+    let mut prepared = Vec::with_capacity(modes.len());
+    for mode in modes {
+        if !is_valid_permission_mode_id(&mode.id) {
+            return Err(invalid(format!(
+                "permission_modes: id `{}` must be a `[A-Za-z0-9._-]` token of at most \
+                 {MAX_PERMISSION_MODE_ID_BYTES} bytes starting with a letter or digit",
+                mode.id
+            )));
+        }
+        if RESERVED_PERMISSION_MODE_IDS.contains(&mode.id.as_str()) {
+            return Err(invalid(format!(
+                "permission_modes: id `{}` is reserved for a built-in mode",
+                mode.id
+            )));
+        }
+        if !seen.insert(mode.id.as_str()) {
+            return Err(invalid(format!(
+                "permission_modes: id `{}` is declared more than once",
+                mode.id
+            )));
+        }
+        if mode.title.trim().is_empty()
+            || mode.title.len() > MAX_PERMISSION_MODE_TITLE_BYTES
+            || mode.title.chars().any(char::is_control)
+        {
+            return Err(invalid(format!(
+                "permission_modes: title of `{}` must be 1 to {MAX_PERMISSION_MODE_TITLE_BYTES} \
+                 bytes without control characters",
+                mode.id
+            )));
+        }
+        if mode.description.len() > MAX_PERMISSION_MODE_DESCRIPTION_BYTES
+            || mode.description.chars().any(char::is_control)
+        {
+            return Err(invalid(format!(
+                "permission_modes: description of `{}` must be at most \
+                 {MAX_PERMISSION_MODE_DESCRIPTION_BYTES} bytes without control characters",
+                mode.id
+            )));
+        }
+        prepared.push(PreparedPermissionMode {
+            id: mode.id.clone(),
+            title: mode.title.clone(),
+            description: mode.description.clone(),
+        });
+    }
+    prepared.sort_by(|left, right| left.id.cmp(&right.id));
+    Ok(prepared)
+}
+
+/// Whether `id` is a publishable permission mode id (no `/`, so
+/// `<bundle-id>/<id>` splits unambiguously at the last `/`).
+fn is_valid_permission_mode_id(id: &str) -> bool {
+    id.len() <= MAX_PERMISSION_MODE_ID_BYTES
+        && id
+            .bytes()
+            .next()
+            .is_some_and(|byte| byte.is_ascii_alphanumeric())
+        && id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+}
+
+/// Validate the document-level `permission_modes` section of a decoded
+/// prepared catalog: rows strictly sorted by bundle id, every row naming a
+/// bundle in the document, and every row's declarations canonical (valid,
+/// strictly sorted by id, backed by the bundle's process and hook).
+fn validate_prepared_permission_mode_rows(
+    bundles: &[PreparedInstallableBundle],
+    processes: &[PreparedBundleProcess],
+    rows: &[PreparedBundlePermissionModes],
+) -> Result<(), BundleError> {
+    if !is_strictly_sorted(rows.iter().map(|row| row.bundle_id.as_str())) {
+        return Err(BundleError::NonCanonicalPreparedCatalog);
+    }
+    for row in rows {
+        let bundle = bundles
+            .iter()
+            .find(|bundle| bundle.identity().id == row.bundle_id)
+            .ok_or(BundleError::NonCanonicalPreparedCatalog)?;
+        if row.modes.is_empty()
+            || !is_strictly_sorted(row.modes.iter().map(|mode| mode.id.as_str()))
+        {
+            return Err(BundleError::NonCanonicalPreparedCatalog);
+        }
+        let process = processes
+            .iter()
+            .find(|process| process.bundle_id == row.bundle_id)
+            .map(|process| &process.process);
+        let prepared = validate_declared_permission_modes(
+            &row.bundle_id,
+            &row.modes
+                .iter()
+                .map(|mode| crate::source::SourcePermissionMode {
+                    id: mode.id.clone(),
+                    title: mode.title.clone(),
+                    description: mode.description.clone(),
+                })
+                .collect::<Vec<_>>(),
+            process,
+            bundle.hooks(),
+        )
+        .map_err(|_| BundleError::NonCanonicalPreparedCatalog)?;
+        if prepared != row.modes {
             return Err(BundleError::NonCanonicalPreparedCatalog);
         }
     }
@@ -1310,6 +1497,12 @@ fn prepare_plugin_bundle(
         prepare_resource_sets(&bundle_id, &files, manifest.resources, manifest.extensions)?;
     let schemas = validate_declared_schemas(&bundle_id, &manifest.schemas, &tools)?;
     let apis = validate_declared_apis(&bundle_id, &manifest.apis, process.as_ref(), &extensions)?;
+    let permission_modes = validate_declared_permission_modes(
+        &bundle_id,
+        &manifest.permission_modes,
+        process.as_ref(),
+        &hooks,
+    )?;
     let mut bundle = PreparedInstallableBundle::Plugin(Box::new(PreparedPluginBundle {
         format_version: PREPARED_FORMAT_VERSION,
         identity: manifest.identity,
@@ -1322,7 +1515,7 @@ fn prepare_plugin_bundle(
         extensions,
     }));
     set_bundle_digest(&mut bundle)?;
-    Ok((bundle, schemas, process, apis))
+    Ok((bundle, schemas, process, apis, permission_modes))
 }
 
 /// Reserved namespace tokens that contributed sources may not claim.
@@ -1408,6 +1601,12 @@ fn prepare_agent_bundle(
         prepare_resource_sets(&bundle_id, &files, manifest.resources, manifest.extensions)?;
     let schemas = validate_declared_schemas(&bundle_id, &manifest.schemas, &tools)?;
     let apis = validate_declared_apis(&bundle_id, &manifest.apis, process.as_ref(), &extensions)?;
+    let permission_modes = validate_declared_permission_modes(
+        &bundle_id,
+        &manifest.permission_modes,
+        process.as_ref(),
+        &hooks,
+    )?;
     let agent = prepare_agent(
         &bundle_id,
         &files,
@@ -1429,7 +1628,7 @@ fn prepare_agent_bundle(
         extensions,
     }));
     set_bundle_digest(&mut bundle)?;
-    Ok((bundle, schemas, process, apis))
+    Ok((bundle, schemas, process, apis, permission_modes))
 }
 
 fn prepare_agent_set_bundle(
@@ -1446,6 +1645,12 @@ fn prepare_agent_set_bundle(
         prepare_resource_sets(&bundle_id, &files, manifest.resources, manifest.extensions)?;
     let schemas = validate_declared_schemas(&bundle_id, &manifest.schemas, &tools)?;
     let apis = validate_declared_apis(&bundle_id, &manifest.apis, process.as_ref(), &extensions)?;
+    let permission_modes = validate_declared_permission_modes(
+        &bundle_id,
+        &manifest.permission_modes,
+        process.as_ref(),
+        &hooks,
+    )?;
     if manifest.agents.is_empty() && manifest.channels.is_empty() {
         return Err(BundleError::InvalidManifest {
             source_name: bundle_id,
@@ -1498,7 +1703,7 @@ fn prepare_agent_set_bundle(
         extensions,
     }));
     set_bundle_digest(&mut bundle)?;
-    Ok((bundle, schemas, process, apis))
+    Ok((bundle, schemas, process, apis, permission_modes))
 }
 
 fn prepare_channel_templates(
@@ -1625,6 +1830,12 @@ fn prepare_workflow_bundle(
         process.as_ref(),
         &extensions,
     )?;
+    let permission_modes = validate_declared_permission_modes(
+        &manifest.identity.id,
+        &manifest.permission_modes,
+        process.as_ref(),
+        &hooks,
+    )?;
     let mut source_agents = manifest.agents;
     for source_agent in &source_agents {
         if let Some(prompt) = &source_agent.prompt {
@@ -1681,16 +1892,18 @@ fn prepare_workflow_bundle(
         extensions,
     }));
     set_bundle_digest(&mut bundle)?;
-    Ok((bundle, schemas, process, apis))
+    Ok((bundle, schemas, process, apis, permission_modes))
 }
 
 /// One prepared bundle plus its document-level sections: schema claims, the
-/// optional explicit process extension, and HTTP endpoint declarations.
+/// optional explicit process extension, HTTP endpoint declarations, and
+/// session permission modes.
 type PreparedBundleParts = (
     PreparedInstallableBundle,
     Vec<PreparedSchema>,
     Option<PreparedProcessExtension>,
     Vec<PreparedApi>,
+    Vec<PreparedPermissionMode>,
 );
 
 /// Prepared resource vectors in tool, Skill, MCP, hook, and extension order.
@@ -2104,6 +2317,7 @@ pub(crate) fn validate_hook_local_id(bundle_id: &str, local_id: &str) -> Result<
             | "message.user.before"
             | "chat.params"
             | "permission.ask"
+            | "permission.approve"
             | "goal.evaluate"
             | "loop.verifier"
             | "loop.planner"

@@ -148,6 +148,7 @@ flows.
 | `ListCommands` | `GET /v1/commands` | `hya.v1.Catalog.ListCommands` | `ListCommandsRequest` | `ListCommandsResponse` |
 | `ListSkills` | `GET /v1/skills` | `hya.v1.Catalog.ListSkills` | `ListSkillsRequest` | `ListSkillsResponse` |
 | `ListTools` | `GET /v1/tools` | `hya.v1.Catalog.ListTools` | `ListToolsRequest` | `ListToolsResponse` |
+| `ListPermissionModes` | `GET /v1/permission-modes` | `hya.v1.Catalog.ListPermissionModes` | `ListPermissionModesRequest` | `ListPermissionModesResponse` |
 
 ### `Catalog.ListAgents`
 
@@ -182,6 +183,13 @@ Skill catalog entries.
 ### `Catalog.ListTools`
 
 Tool registry entries including hidden aliases.
+
+
+### `Catalog.ListPermissionModes`
+
+Session permission modes accepted by `UpdateSession.permission_mode`:
+the built-in `manual` and `yolo`, then every installed bundle's
+`permission_modes:` as `<bundle-id>/<mode-id>`.
 
 
 ## Service `Events`
@@ -1075,6 +1083,24 @@ One tool registry entry.
 | `tools` (1) | `repeated ToolSummary` | Tools visible in this directory. |
 | `page` (2) | `PageInfo` | Pagination outcome. |
 
+### `PermissionModeSummary`
+
+One selectable session permission mode.
+
+| Field | Type | Description |
+|---|---|---|
+| `id` (1) | `string` | Mode id for `UpdateSession.permission_mode` (`manual`, `yolo`, or `<bundle-id>/<mode-id>`). |
+| `title` (2) | `string` | Short human-readable name. |
+| `description` (3) | `string` | Longer description; empty when the bundle declares none. |
+| `source` (4) | `string` | `builtin` or the id of the bundle that declares the mode. |
+
+### `ListPermissionModesResponse`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `modes` (1) | `repeated PermissionModeSummary` | Built-in modes first, then bundle modes sorted by bundle and mode id. |
+
 ### `Error`
 
 Stable, machine-readable error returned by every failed v1 call.
@@ -1206,6 +1232,7 @@ Session metadata changed.
 | `model` (2) | `optional string` | New model reference string when changed. |
 | `agent` (3) | `optional string` | New agent name when changed. |
 | `background` (4) | `optional bool` | New background flag when changed. |
+| `permission_mode` (5) | `optional string` | New permission mode of the session tree when changed (emitted on the root session only). |
 
 ### `MessageStarted`
 
@@ -2143,6 +2170,7 @@ Projection summary of one session.
 | `time_updated` (9) | `google.protobuf.Timestamp` | When the session projection last changed. |
 | `last_seq` (10) | `uint64` | Highest event sequence number recorded for this session. |
 | `busy` (11) | `bool` | Whether a run currently owns the session's admission slot (derived from the process run registry, not the durable log). |
+| `permission_mode` (12) | `string` | Effective permission mode of the session tree: `manual`, `yolo`, or `<bundle-id>/<mode-id>`. Recorded on the root session (children report the root's mode); the process default (`yolo` under `--yolo` or `permission.model: danger`, else `manual`) when none was set. |
 
 ### `CreateSessionRequest`
 
@@ -2197,6 +2225,7 @@ Projection summary of one session.
 | `model` (3) | `optional string` | New model reference string when set. |
 | `agent` (4) | `optional string` | New agent name when set. |
 | `background` (5) | `optional bool` | New background flag when set. |
+| `permission_mode` (6) | `optional string` | New permission mode for the whole session tree when set: `manual`, `yolo`, or a `<bundle-id>/<mode-id>` listed by `ListPermissionModes`. Unknown or unavailable modes are rejected with `invalid_argument`. Switching to `yolo` also allows (once) every pending permission ask of the tree. |
 
 ### `DeleteSessionRequest`
 

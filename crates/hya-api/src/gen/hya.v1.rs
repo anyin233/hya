@@ -819,6 +819,31 @@ pub struct ListToolsResponse {
     #[prost(message, optional, tag = "2")]
     pub page: ::core::option::Option<PageInfo>,
 }
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct ListPermissionModesRequest {}
+/// One selectable session permission mode.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PermissionModeSummary {
+    /// Mode id for `UpdateSession.permission_mode` (`manual`, `yolo`, or
+    /// `<bundle-id>/<mode-id>`).
+    #[prost(string, tag = "1")]
+    pub id: ::prost::alloc::string::String,
+    /// Short human-readable name.
+    #[prost(string, tag = "2")]
+    pub title: ::prost::alloc::string::String,
+    /// Longer description; empty when the bundle declares none.
+    #[prost(string, tag = "3")]
+    pub description: ::prost::alloc::string::String,
+    /// `builtin` or the id of the bundle that declares the mode.
+    #[prost(string, tag = "4")]
+    pub source: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ListPermissionModesResponse {
+    /// Built-in modes first, then bundle modes sorted by bundle and mode id.
+    #[prost(message, repeated, tag = "1")]
+    pub modes: ::prost::alloc::vec::Vec<PermissionModeSummary>,
+}
 /// Authentication state of a provider route.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
@@ -1137,6 +1162,35 @@ pub mod catalog_client {
             req.extensions_mut().insert(GrpcMethod::new("hya.v1.Catalog", "ListTools"));
             self.inner.unary(req, path, codec).await
         }
+        /// Session permission modes accepted by `UpdateSession.permission_mode`:
+        /// the built-in `manual` and `yolo`, then every installed bundle's
+        /// `permission_modes:` as `<bundle-id>/<mode-id>`.
+        ///
+        /// hya.http: GET /v1/permission-modes
+        pub async fn list_permission_modes(
+            &mut self,
+            request: impl tonic::IntoRequest<super::ListPermissionModesRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ListPermissionModesResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/hya.v1.Catalog/ListPermissionModes",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("hya.v1.Catalog", "ListPermissionModes"));
+            self.inner.unary(req, path, codec).await
+        }
     }
 }
 /// Generated server implementations.
@@ -1217,6 +1271,18 @@ pub mod catalog_server {
             request: tonic::Request<super::ListToolsRequest>,
         ) -> std::result::Result<
             tonic::Response<super::ListToolsResponse>,
+            tonic::Status,
+        >;
+        /// Session permission modes accepted by `UpdateSession.permission_mode`:
+        /// the built-in `manual` and `yolo`, then every installed bundle's
+        /// `permission_modes:` as `<bundle-id>/<mode-id>`.
+        ///
+        /// hya.http: GET /v1/permission-modes
+        async fn list_permission_modes(
+            &self,
+            request: tonic::Request<super::ListPermissionModesRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ListPermissionModesResponse>,
             tonic::Status,
         >;
     }
@@ -1596,6 +1662,51 @@ pub mod catalog_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = ListToolsSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/hya.v1.Catalog/ListPermissionModes" => {
+                    #[allow(non_camel_case_types)]
+                    struct ListPermissionModesSvc<T: Catalog>(pub Arc<T>);
+                    impl<
+                        T: Catalog,
+                    > tonic::server::UnaryService<super::ListPermissionModesRequest>
+                    for ListPermissionModesSvc<T> {
+                        type Response = super::ListPermissionModesResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::ListPermissionModesRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as Catalog>::list_permission_modes(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = ListPermissionModesSvc(inner);
                         let codec = tonic::codec::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(
@@ -5690,6 +5801,10 @@ pub struct SessionUpdated {
     /// New background flag when changed.
     #[prost(bool, optional, tag = "4")]
     pub background: ::core::option::Option<bool>,
+    /// New permission mode of the session tree when changed (emitted on the
+    /// root session only).
+    #[prost(string, optional, tag = "5")]
+    pub permission_mode: ::core::option::Option<::prost::alloc::string::String>,
 }
 /// A session was deleted.
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
@@ -11370,6 +11485,12 @@ pub struct SessionInfo {
     /// from the process run registry, not the durable log).
     #[prost(bool, tag = "11")]
     pub busy: bool,
+    /// Effective permission mode of the session tree: `manual`, `yolo`, or
+    /// `<bundle-id>/<mode-id>`. Recorded on the root session (children report
+    /// the root's mode); the process default (`yolo` under `--yolo` or
+    /// `permission.model: danger`, else `manual`) when none was set.
+    #[prost(string, tag = "12")]
+    pub permission_mode: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CreateSessionRequest {
@@ -11442,6 +11563,13 @@ pub struct UpdateSessionRequest {
     /// New background flag when set.
     #[prost(bool, optional, tag = "5")]
     pub background: ::core::option::Option<bool>,
+    /// New permission mode for the whole session tree when set: `manual`,
+    /// `yolo`, or a `<bundle-id>/<mode-id>` listed by `ListPermissionModes`.
+    /// Unknown or unavailable modes are rejected with `invalid_argument`.
+    /// Switching to `yolo` also allows (once) every pending permission ask of
+    /// the tree.
+    #[prost(string, optional, tag = "6")]
+    pub permission_mode: ::core::option::Option<::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct DeleteSessionRequest {

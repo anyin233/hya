@@ -11224,6 +11224,168 @@ impl<'de> serde::Deserialize<'de> for ListModelsResponse {
         deserializer.deserialize_struct("hya.v1.ListModelsResponse", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for ListPermissionModesRequest {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let len = 0;
+        let struct_ser = serializer.serialize_struct("hya.v1.ListPermissionModesRequest", len)?;
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for ListPermissionModesRequest {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                            Err(serde::de::Error::unknown_field(value, FIELDS))
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = ListPermissionModesRequest;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct hya.v1.ListPermissionModesRequest")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<ListPermissionModesRequest, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                while map_.next_key::<GeneratedField>()?.is_some() {
+                    let _ = map_.next_value::<serde::de::IgnoredAny>()?;
+                }
+                Ok(ListPermissionModesRequest {
+                })
+            }
+        }
+        deserializer.deserialize_struct("hya.v1.ListPermissionModesRequest", FIELDS, GeneratedVisitor)
+    }
+}
+impl serde::Serialize for ListPermissionModesResponse {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.modes.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("hya.v1.ListPermissionModesResponse", len)?;
+        if !self.modes.is_empty() {
+            struct_ser.serialize_field("modes", &self.modes)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for ListPermissionModesResponse {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "modes",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Modes,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "modes" => Ok(GeneratedField::Modes),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = ListPermissionModesResponse;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct hya.v1.ListPermissionModesResponse")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<ListPermissionModesResponse, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut modes__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Modes => {
+                            if modes__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("modes"));
+                            }
+                            modes__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(ListPermissionModesResponse {
+                    modes: modes__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("hya.v1.ListPermissionModesResponse", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for ListProjectDirectoriesRequest {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -15620,6 +15782,148 @@ impl<'de> serde::Deserialize<'de> for PartStarted {
         deserializer.deserialize_struct("hya.v1.PartStarted", FIELDS, GeneratedVisitor)
     }
 }
+impl serde::Serialize for PermissionModeSummary {
+    #[allow(deprecated)]
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut len = 0;
+        if !self.id.is_empty() {
+            len += 1;
+        }
+        if !self.title.is_empty() {
+            len += 1;
+        }
+        if !self.description.is_empty() {
+            len += 1;
+        }
+        if !self.source.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("hya.v1.PermissionModeSummary", len)?;
+        if !self.id.is_empty() {
+            struct_ser.serialize_field("id", &self.id)?;
+        }
+        if !self.title.is_empty() {
+            struct_ser.serialize_field("title", &self.title)?;
+        }
+        if !self.description.is_empty() {
+            struct_ser.serialize_field("description", &self.description)?;
+        }
+        if !self.source.is_empty() {
+            struct_ser.serialize_field("source", &self.source)?;
+        }
+        struct_ser.end()
+    }
+}
+impl<'de> serde::Deserialize<'de> for PermissionModeSummary {
+    #[allow(deprecated)]
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        const FIELDS: &[&str] = &[
+            "id",
+            "title",
+            "description",
+            "source",
+        ];
+
+        #[allow(clippy::enum_variant_names)]
+        enum GeneratedField {
+            Id,
+            Title,
+            Description,
+            Source,
+        }
+        impl<'de> serde::Deserialize<'de> for GeneratedField {
+            fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct GeneratedVisitor;
+
+                impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+                    type Value = GeneratedField;
+
+                    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                        write!(formatter, "expected one of: {:?}", &FIELDS)
+                    }
+
+                    #[allow(unused_variables)]
+                    fn visit_str<E>(self, value: &str) -> std::result::Result<GeneratedField, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        match value {
+                            "id" => Ok(GeneratedField::Id),
+                            "title" => Ok(GeneratedField::Title),
+                            "description" => Ok(GeneratedField::Description),
+                            "source" => Ok(GeneratedField::Source),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+                deserializer.deserialize_identifier(GeneratedVisitor)
+            }
+        }
+        struct GeneratedVisitor;
+        impl<'de> serde::de::Visitor<'de> for GeneratedVisitor {
+            type Value = PermissionModeSummary;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("struct hya.v1.PermissionModeSummary")
+            }
+
+            fn visit_map<V>(self, mut map_: V) -> std::result::Result<PermissionModeSummary, V::Error>
+                where
+                    V: serde::de::MapAccess<'de>,
+            {
+                let mut id__ = None;
+                let mut title__ = None;
+                let mut description__ = None;
+                let mut source__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Id => {
+                            if id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("id"));
+                            }
+                            id__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Title => {
+                            if title__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("title"));
+                            }
+                            title__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Description => {
+                            if description__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("description"));
+                            }
+                            description__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::Source => {
+                            if source__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("source"));
+                            }
+                            source__ = Some(map_.next_value()?);
+                        }
+                    }
+                }
+                Ok(PermissionModeSummary {
+                    id: id__.unwrap_or_default(),
+                    title: title__.unwrap_or_default(),
+                    description: description__.unwrap_or_default(),
+                    source: source__.unwrap_or_default(),
+                })
+            }
+        }
+        deserializer.deserialize_struct("hya.v1.PermissionModeSummary", FIELDS, GeneratedVisitor)
+    }
+}
 impl serde::Serialize for PermissionRequested {
     #[allow(deprecated)]
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -19447,6 +19751,9 @@ impl serde::Serialize for SessionInfo {
         if self.busy {
             len += 1;
         }
+        if !self.permission_mode.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("hya.v1.SessionInfo", len)?;
         if !self.id.is_empty() {
             struct_ser.serialize_field("id", &self.id)?;
@@ -19483,6 +19790,9 @@ impl serde::Serialize for SessionInfo {
         if self.busy {
             struct_ser.serialize_field("busy", &self.busy)?;
         }
+        if !self.permission_mode.is_empty() {
+            struct_ser.serialize_field("permissionMode", &self.permission_mode)?;
+        }
         struct_ser.end()
     }
 }
@@ -19507,6 +19817,8 @@ impl<'de> serde::Deserialize<'de> for SessionInfo {
             "last_seq",
             "lastSeq",
             "busy",
+            "permission_mode",
+            "permissionMode",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -19522,6 +19834,7 @@ impl<'de> serde::Deserialize<'de> for SessionInfo {
             TimeUpdated,
             LastSeq,
             Busy,
+            PermissionMode,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -19554,6 +19867,7 @@ impl<'de> serde::Deserialize<'de> for SessionInfo {
                             "timeUpdated" | "time_updated" => Ok(GeneratedField::TimeUpdated),
                             "lastSeq" | "last_seq" => Ok(GeneratedField::LastSeq),
                             "busy" => Ok(GeneratedField::Busy),
+                            "permissionMode" | "permission_mode" => Ok(GeneratedField::PermissionMode),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -19584,6 +19898,7 @@ impl<'de> serde::Deserialize<'de> for SessionInfo {
                 let mut time_updated__ = None;
                 let mut last_seq__ = None;
                 let mut busy__ = None;
+                let mut permission_mode__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Id => {
@@ -19654,6 +19969,12 @@ impl<'de> serde::Deserialize<'de> for SessionInfo {
                             }
                             busy__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::PermissionMode => {
+                            if permission_mode__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("permissionMode"));
+                            }
+                            permission_mode__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(SessionInfo {
@@ -19668,6 +19989,7 @@ impl<'de> serde::Deserialize<'de> for SessionInfo {
                     time_updated: time_updated__,
                     last_seq: last_seq__.unwrap_or_default(),
                     busy: busy__.unwrap_or_default(),
+                    permission_mode: permission_mode__.unwrap_or_default(),
                 })
             }
         }
@@ -19927,6 +20249,9 @@ impl serde::Serialize for SessionUpdated {
         if self.background.is_some() {
             len += 1;
         }
+        if self.permission_mode.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("hya.v1.SessionUpdated", len)?;
         if let Some(v) = self.title.as_ref() {
             struct_ser.serialize_field("title", v)?;
@@ -19939,6 +20264,9 @@ impl serde::Serialize for SessionUpdated {
         }
         if let Some(v) = self.background.as_ref() {
             struct_ser.serialize_field("background", v)?;
+        }
+        if let Some(v) = self.permission_mode.as_ref() {
+            struct_ser.serialize_field("permissionMode", v)?;
         }
         struct_ser.end()
     }
@@ -19954,6 +20282,8 @@ impl<'de> serde::Deserialize<'de> for SessionUpdated {
             "model",
             "agent",
             "background",
+            "permission_mode",
+            "permissionMode",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -19962,6 +20292,7 @@ impl<'de> serde::Deserialize<'de> for SessionUpdated {
             Model,
             Agent,
             Background,
+            PermissionMode,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -19987,6 +20318,7 @@ impl<'de> serde::Deserialize<'de> for SessionUpdated {
                             "model" => Ok(GeneratedField::Model),
                             "agent" => Ok(GeneratedField::Agent),
                             "background" => Ok(GeneratedField::Background),
+                            "permissionMode" | "permission_mode" => Ok(GeneratedField::PermissionMode),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -20010,6 +20342,7 @@ impl<'de> serde::Deserialize<'de> for SessionUpdated {
                 let mut model__ = None;
                 let mut agent__ = None;
                 let mut background__ = None;
+                let mut permission_mode__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Title => {
@@ -20036,6 +20369,12 @@ impl<'de> serde::Deserialize<'de> for SessionUpdated {
                             }
                             background__ = map_.next_value()?;
                         }
+                        GeneratedField::PermissionMode => {
+                            if permission_mode__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("permissionMode"));
+                            }
+                            permission_mode__ = map_.next_value()?;
+                        }
                     }
                 }
                 Ok(SessionUpdated {
@@ -20043,6 +20382,7 @@ impl<'de> serde::Deserialize<'de> for SessionUpdated {
                     model: model__,
                     agent: agent__,
                     background: background__,
+                    permission_mode: permission_mode__,
                 })
             }
         }
@@ -24771,6 +25111,9 @@ impl serde::Serialize for UpdateSessionRequest {
         if self.background.is_some() {
             len += 1;
         }
+        if self.permission_mode.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("hya.v1.UpdateSessionRequest", len)?;
         if !self.session.is_empty() {
             struct_ser.serialize_field("session", &self.session)?;
@@ -24787,6 +25130,9 @@ impl serde::Serialize for UpdateSessionRequest {
         if let Some(v) = self.background.as_ref() {
             struct_ser.serialize_field("background", v)?;
         }
+        if let Some(v) = self.permission_mode.as_ref() {
+            struct_ser.serialize_field("permissionMode", v)?;
+        }
         struct_ser.end()
     }
 }
@@ -24802,6 +25148,8 @@ impl<'de> serde::Deserialize<'de> for UpdateSessionRequest {
             "model",
             "agent",
             "background",
+            "permission_mode",
+            "permissionMode",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -24811,6 +25159,7 @@ impl<'de> serde::Deserialize<'de> for UpdateSessionRequest {
             Model,
             Agent,
             Background,
+            PermissionMode,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -24837,6 +25186,7 @@ impl<'de> serde::Deserialize<'de> for UpdateSessionRequest {
                             "model" => Ok(GeneratedField::Model),
                             "agent" => Ok(GeneratedField::Agent),
                             "background" => Ok(GeneratedField::Background),
+                            "permissionMode" | "permission_mode" => Ok(GeneratedField::PermissionMode),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -24861,6 +25211,7 @@ impl<'de> serde::Deserialize<'de> for UpdateSessionRequest {
                 let mut model__ = None;
                 let mut agent__ = None;
                 let mut background__ = None;
+                let mut permission_mode__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Session => {
@@ -24893,6 +25244,12 @@ impl<'de> serde::Deserialize<'de> for UpdateSessionRequest {
                             }
                             background__ = map_.next_value()?;
                         }
+                        GeneratedField::PermissionMode => {
+                            if permission_mode__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("permissionMode"));
+                            }
+                            permission_mode__ = map_.next_value()?;
+                        }
                     }
                 }
                 Ok(UpdateSessionRequest {
@@ -24901,6 +25258,7 @@ impl<'de> serde::Deserialize<'de> for UpdateSessionRequest {
                     model: model__,
                     agent: agent__,
                     background: background__,
+                    permission_mode: permission_mode__,
                 })
             }
         }

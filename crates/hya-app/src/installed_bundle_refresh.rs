@@ -285,6 +285,15 @@ impl InstalledBundleRefresh {
                         .any(|candidate| &candidate.identity().id == id)
                 })
                 .map_or(&[][..], |catalog| catalog.bundle_apis(id));
+            let permission_modes = prepared_catalog_refs
+                .iter()
+                .find(|catalog| {
+                    catalog
+                        .bundles()
+                        .iter()
+                        .any(|candidate| &candidate.identity().id == id)
+                })
+                .map_or(&[][..], |catalog| catalog.bundle_permission_modes(id));
             let location = config_resolver.location(id).map_err(|error| {
                 CoreError::Invalid(format!("resolve bundle `{id}` configuration: {error}"))
             })?;
@@ -293,8 +302,14 @@ impl InstalledBundleRefresh {
             if config.watched() {
                 next_watched.push((config.location().file().to_path_buf(), config.digest()));
             }
-            let fingerprint =
-                crate::bundle_runtime::fingerprint(bundle, process, schemas, apis, &config)?;
+            let fingerprint = crate::bundle_runtime::fingerprint(
+                bundle,
+                process,
+                schemas,
+                apis,
+                permission_modes,
+                &config,
+            )?;
             let prepared = match source_cache.get(id) {
                 Some(cached) if cached.fingerprint == fingerprint => cached.clone(),
                 _ => {
@@ -304,6 +319,7 @@ impl InstalledBundleRefresh {
                             process,
                             schemas,
                             apis,
+                            permission_modes,
                             reads: self.host_reads.clone(),
                         },
                         &config,

@@ -276,6 +276,7 @@ kind: AgentBundle
 | `namespace` | no | Provider-facing namespace for the bundle's tools and schemas; defaults to the identity name segment (the part after `/`). Token rules: `[a-zA-Z0-9_-]`, no `__`, and the reserved tokens `mcp`, `harness`, `builtin`, `plugin` are rejected. |
 | `schemas` | no | External URI-scheme extensions this bundle provides (see [Schema extensions (`schemas:`)](#schema-extensions-schemas)). |
 | `apis` | no | HTTP endpoints served by `extensions.process` (see [API endpoints (`apis:`)](#api-endpoints-apis)). |
+| `permission_modes` | no | Session permission modes approved by `extensions.process` (see [Permission modes (`permission_modes:`)](#permission-modes-permission_modes)). |
 | `resources` | no | `tools`, `skills`, `mcp`, `hooks` resource lists. |
 | `extensions` | no | `js`, `files`, `rust` extension lists plus the optional `process` declaration. |
 | `agent` | yes | The single agent this bundle defines. |
@@ -463,6 +464,73 @@ as one segment (`acme%2Fnotes`). `hya bundle info <id>` prints one
 `api=<METHOD> <scope> <path> id=<id>` line per endpoint. The lifecycle,
 limits, and security notes are in
 [Bundle runtime](bundle-runtime.md#bundle-api-endpoints).
+
+### Permission modes (`permission_modes:`)
+
+A bundle can add its own **session permission modes** next to the built-in
+`manual` and `yolo` (see
+[Configuration — Session permission modes](configuration.md#session-permission-modes)).
+When a session tree runs in a bundle mode, every permission ask that the
+`permission.ask` hooks leave undecided goes to this bundle's
+`permission.approve` hook first, and only reaches the user when the hook
+answers `defer` (or fails). That lets a bundle implement policies such as
+"approve read-only shell commands, ask for the rest" without touching the
+user's config. Every bundle kind may declare modes, but only together with an
+explicit `extensions.process` that registers the `permission.approve` hook:
+
+```yaml
+kind: Plugin
+identity: { id: acme/approver, version: 1.0.0, publisher: acme }
+extensions:
+  process: { kind: bun, command: [bun, run, '${BUNDLE_ROOT}/approver.ts'] }
+  files:
+    - { id: approver, path: approver.ts }
+resources:
+  hooks:
+    - { id: permission.approve, path: hooks/permission-approve.json }
+permission_modes:
+  - id: careful
+    title: Careful
+    description: Approve read-only shell commands; ask for everything else
+```
+
+With the Bun adapter, the process handles the hook like any other
+(`approver.ts` is loaded with `--bundle-extension`):
+
+```ts
+export default {
+  id: "approver",
+  server: async () => ({
+    "permission.approve": async ({ mode, action, resource }) => {
+      if (mode !== "careful" || action !== "bash") return "defer"
+      return /^(git (status|diff|log)|ls|cat) /.test(`${resource.value} `)
+        ? "allow_once"
+        : "defer"
+    },
+  }),
+}
+```
+
+Select it with `PATCH /v1/sessions/{session}` and
+`{"permissionMode": "acme/approver/careful"}`; `GET /v1/permission-modes`
+lists it with `source: "acme/approver"`.
+
+| Field | Required | Meaning |
+| --- | --- | --- |
+| `id` | yes | Mode id: a `[A-Za-z0-9._-]` token of at most 64 bytes that starts with a letter or digit, unique in the bundle, and not `manual` or `yolo`. Clients select it as `<bundle-id>/<id>`; the hook receives the bare `id` as `mode`. |
+| `title` | yes | 1–128 bytes, no control characters; shown in mode pickers. |
+| `description` | no | At most 1024 bytes, no control characters. |
+
+Other rules enforced at prepare: declaring any mode without an explicit
+`extensions.process`, or without a `permission.approve` entry in
+`resources.hooks`, is rejected; at most 16 modes per bundle; declarations are
+emitted sorted by id in the prepared catalog document. At runtime the process
+must register exactly its declared hooks (as for every hook), and only the
+bundle that declared the active mode is asked. The hook contract (params and
+answers) is in [Plugin protocol](plugin-protocol.md#permissionapprove-session-permission-mode-approver).
+`hya bundle info <id>` prints one
+`permission_mode=<bundle-id>/<id> title=<title>[ description=<description>]`
+line per mode.
 
 ### Per-agent fields
 
@@ -800,7 +868,7 @@ union in the document shape:
 
 ```text
 { format_version, bundles: [Plugin | AgentBundle | AgentSetBundle | WorkflowBundle], index[],
-  schemas?, extensions_process?, apis? }
+  schemas?, extensions_process?, apis?, permission_modes? }
 ```
 
 `schemas` (per-bundle rows of `{bundle_id, schemas[]}` sorted by bundle id),
@@ -809,7 +877,10 @@ union in the document shape:
 description, request_schema?, response_schema?}]}`, rows sorted by bundle id
 and endpoints strictly by id; a row requires the bundle's `extensions_process`
 row, and decode re-validates the templates, the overlap rule, and the schema
-files) are document-level sections skipped entirely when no
+files), and `permission_modes` (per-bundle rows of `{bundle_id, modes: [{id,
+title, description}]}`, rows sorted by bundle id and modes strictly by id;
+decode re-validates them against the bundle's process and `permission.approve`
+hook) are document-level sections skipped entirely when no
 bundle declares any, so documents written before those sections keep their
 exact byte layout and stay decodable.
 

@@ -42,7 +42,7 @@ timeout_secs = 90
 
 [[scenario]]
 id = "T1.7"
-title = "permissions ask/once/reject"
+title = "permissions ask/once/reject + yolo mode switch"
 track = "P"
 path = "crates/hya-e2e/tests/p03_permissions.rs"
 tags = ["pr", "permissions"]

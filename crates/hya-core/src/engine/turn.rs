@@ -1813,8 +1813,13 @@ impl SessionEngine {
                 let (result, result_policy) = match resources.resolve_tool(&tc.name) {
                     Some(resolved) => {
                         let result_policy = resolved.tool.result_policy();
+                        // Read the tree's permission mode at every call, so a
+                        // switch applies to the next check even mid-turn.
+                        let mode_plane = self
+                            .mode_permission_plane(binding, session, Some(&live_agent.name))
+                            .await?;
                         let mut permission =
-                            permission_for_session(&self.permission, session, external_dirs);
+                            permission_for_session(&mode_plane, session, external_dirs);
                         if let Some(hooks) = &activation_hooks {
                             permission = permission.prepend_interceptor(Arc::new(
                                 crate::bundle_hooks::BundlePermissionInterceptor::new(Arc::clone(

@@ -668,6 +668,48 @@ impl PermissionPlane {
         self
     }
 
+    /// Append an interceptor that runs only after every existing interceptor
+    /// deferred (for example a session permission mode's approver).
+    #[must_use]
+    pub fn append_interceptor(mut self, interceptor: Arc<dyn PermissionInterceptor>) -> Self {
+        self.interceptor = Some(match self.interceptor.take() {
+            Some(first) => Arc::new(PrependInterceptor {
+                first,
+                next: interceptor,
+            }),
+            None => interceptor,
+        });
+        self
+    }
+
+    /// Active invocation model, or `None` for a rules-only plane.
+    #[must_use]
+    pub fn invocation_model(&self) -> Option<PermissionModel> {
+        self.invocation_policy.as_ref().map(|policy| policy.model)
+    }
+
+    /// Derive a plane whose invocation model is `model`.
+    ///
+    /// Only the derived plane changes: the source plane's compiled policy is
+    /// shared, not mutated, while rules, remembered grants, interceptors, and
+    /// the ask channel stay shared. A rules-only plane gets an empty policy
+    /// with `model`.
+    #[must_use]
+    pub fn with_invocation_model(&self, model: PermissionModel) -> Self {
+        let mut plane = self.clone();
+        if plane.invocation_model() == Some(model) {
+            return plane;
+        }
+        let policy = self
+            .invocation_policy
+            .as_deref()
+            .cloned()
+            .unwrap_or_default()
+            .with_model(model);
+        plane.invocation_policy = Some(Arc::new(policy));
+        plane
+    }
+
     /// Scope asks and grants to a session id.
     #[must_use]
     pub fn for_session(&self, session: SessionId) -> Self {
@@ -1211,5 +1253,114 @@ mod tests {
                 .await,
             Err(PermissionError::Denied { .. })
         ));
+    }
+
+    #[tokio::test]
+    async fn appended_interceptor_runs_after_the_existing_interceptor() {
+        let (plane, mut rx) = PermissionPlane::new(PermissionRules::default());
+        // The existing interceptor answers first, so the appended one never
+        // gets to reject.
+        let plane = plane
+            .with_interceptor(Arc::new(AlwaysInterceptor(Some(Decision::AllowOnce))))
+            .append_interceptor(Arc::new(AlwaysInterceptor(Some(Decision::Reject {
+                feedback: None,
+            }))));
+        plane
+            .assert(Action::Bash, Resource::Command("ls".to_string()))
+            .await
+            .expect("existing interceptor decides before the appended one");
+        assert!(rx.try_recv().is_err());
+
+        // When the existing interceptor defers, the appended one decides.
+        let (plane, mut rx) = PermissionPlane::new(PermissionRules::default());
+        let plane = plane
+            .with_interceptor(Arc::new(AlwaysInterceptor(None)))
+            .append_interceptor(Arc::new(AlwaysInterceptor(Some(Decision::AllowOnce))));
+        plane
+            .assert(Action::Bash, Resource::Command("ls".to_string()))
+            .await
+            .expect("appended interceptor decides after a defer");
+        assert!(rx.try_recv().is_err());
+
+        // Without an existing interceptor the appended one is the only one.
+        let (plane, _rx) = PermissionPlane::new(PermissionRules::default());
+        let plane = plane.append_interceptor(Arc::new(AlwaysInterceptor(Some(Decision::Reject {
+            feedback: None,
+        }))));
+        assert!(
+            plane
+                .assert(Action::Bash, Resource::Command("ls".to_string()))
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn invocation_model_override_is_local_to_the_derived_plane() {
+        let rules = PermissionRules::new(vec![Rule::new(Action::Bash, "*", Mode::Deny)]);
+        let policy = InvocationPolicy::compile(PermissionModel::Default, Vec::new())
+            .expect("compile default policy");
+        let (plane, mut rx) = PermissionPlane::new_with_policy(rules, policy);
+        assert_eq!(plane.invocation_model(), Some(PermissionModel::Default));
+
+        let danger = plane.with_invocation_model(PermissionModel::Danger);
+        assert_eq!(danger.invocation_model(), Some(PermissionModel::Danger));
+        // Danger bypasses even the explicit deny and never asks.
+        danger
+            .assert(Action::Bash, Resource::Command("rm -rf x".to_string()))
+            .await
+            .expect("danger bypasses deny");
+        danger
+            .authorize(&Invocation::tool("write", Mode::Ask))
+            .await
+            .expect("danger allows asks");
+        assert!(rx.try_recv().is_err());
+
+        // The source plane (and so the process-wide policy) is unchanged.
+        assert_eq!(plane.invocation_model(), Some(PermissionModel::Default));
+        assert!(
+            plane
+                .assert(Action::Bash, Resource::Command("rm -rf x".to_string()))
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            plane.semantic_identity_v1(),
+            PermissionPlane::new_with_policy(
+                PermissionRules::new(vec![Rule::new(Action::Bash, "*", Mode::Deny)]),
+                InvocationPolicy::compile(PermissionModel::Default, Vec::new()).expect("policy"),
+            )
+            .0
+            .semantic_identity_v1()
+        );
+    }
+
+    #[tokio::test]
+    async fn invocation_model_override_installs_a_policy_on_a_rules_only_plane() {
+        let (plane, mut rx) = PermissionPlane::new(PermissionRules::default());
+        assert_eq!(plane.invocation_model(), None);
+        let danger = plane.with_invocation_model(PermissionModel::Danger);
+        danger
+            .assert(Action::Bash, Resource::Command("ls".to_string()))
+            .await
+            .expect("danger allows");
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn derived_default_plane_asks_even_when_the_process_runs_danger() {
+        let policy = InvocationPolicy::compile(PermissionModel::Danger, Vec::new())
+            .expect("compile danger policy");
+        let (plane, mut rx) = PermissionPlane::new_with_policy(PermissionRules::default(), policy);
+        let manual = plane.with_invocation_model(PermissionModel::Default);
+        let task = tokio::spawn(async move {
+            manual
+                .authorize(&Invocation::tool("write", Mode::Ask))
+                .await
+                .map(|_| ())
+        });
+        let req = rx.recv().await.expect("manual plane asks");
+        req.reply.send(Decision::AllowOnce).expect("reply");
+        task.await.expect("join").expect("allowed once");
     }
 }

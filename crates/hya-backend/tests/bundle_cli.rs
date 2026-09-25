@@ -1115,6 +1115,12 @@ apis:
     path: /items/{id}
     request_schema: schemas/item.json
     response_schema: schemas/item.json
+permission_modes:
+  - id: careful
+    title: Careful
+    description: Approves read-only commands
+  - id: ci
+    title: CI
 resources:
   tools:
     - id: query
@@ -1122,6 +1128,9 @@ resources:
   mcp:
     - id: vecdb
       path: mcp/vecdb.json
+  hooks:
+    - id: permission.approve
+      path: hooks/permission-approve.json
 extensions:
   js:
     - id: runtime
@@ -1143,6 +1152,7 @@ agent:
             ),
             hya_bundle::SourceFile::new("extensions/runtime.js", b"export default {}".to_vec()),
             hya_bundle::SourceFile::new("schemas/item.json", br#"{"type":"object"}"#.to_vec()),
+            hya_bundle::SourceFile::new("hooks/permission-approve.json", b"{}".to_vec()),
             hya_bundle::SourceFile::new(
                 "mcp/vecdb.json",
                 br#"{"command": ["python3", "vecdb.py"]}"#.to_vec(),
@@ -1154,8 +1164,8 @@ agent:
     Ok(package)
 }
 
-/// `bundle info` reports declared schemas, the process extension, API endpoints, and
-/// mcp entries — and prints none of those lines when the bundle declares none.
+/// `bundle info` reports declared schemas, the process extension, API endpoints,
+/// permission modes, and mcp entries — and prints none of those lines when the bundle declares none.
 #[test]
 fn bundle_info_reports_schema_process_and_mcp_declarations()
 -> Result<(), Box<dyn std::error::Error>> {
@@ -1180,6 +1190,8 @@ fn bundle_info_reports_schema_process_and_mcp_declarations()
         "mcp=bundle:hya/decl-demo/mcp/vecdb",
         "api=PUT global /items/{id} id=put-item request_schema=schemas/item.json response_schema=schemas/item.json",
         "api=GET session /usage id=usage description=Token usage",
+        "permission_mode=hya/decl-demo/careful title=Careful description=Approves read-only commands",
+        "permission_mode=hya/decl-demo/ci title=CI",
     ] {
         assert!(
             lines.contains(&expected),
@@ -1194,7 +1206,7 @@ fn bundle_info_reports_schema_process_and_mcp_declarations()
     let plain_ok = plain.status.success();
     if plain_ok {
         let plain_stdout = String::from_utf8(plain.stdout)?;
-        for fragment in ["schema=", "process=", "mcp=", "api="] {
+        for fragment in ["schema=", "process=", "mcp=", "api=", "permission_mode="] {
             assert!(
                 !plain_stdout.lines().any(|line| line.starts_with(fragment)),
                 "plain bundle info must not print {fragment:?} lines:\n{plain_stdout}"

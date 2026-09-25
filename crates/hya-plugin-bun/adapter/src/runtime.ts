@@ -20,6 +20,7 @@ import {
   handleCommandExecuteBefore,
   handleMessageUserBefore,
   handleModelFallback,
+  handlePermissionApprove,
   handlePermissionAsk,
   handleTextComplete,
   handleToolExecuteAfter,
@@ -39,6 +40,7 @@ const METHOD_CHAT_PARAMS = "hook/chat.params"
 const METHOD_COMMAND_EXECUTE_BEFORE = "hook/command.execute.before"
 const METHOD_TEXT_COMPLETE = "hook/experimental.text.complete"
 const METHOD_PERMISSION_ASK = "hook/permission.ask"
+const METHOD_PERMISSION_APPROVE = "hook/permission.approve"
 const METHOD_MODEL_FALLBACK = "hook/model.fallback"
 const METHOD_TOOL_EXECUTE_BEFORE = "hook/tool.execute.before"
 const METHOD_TOOL_EXECUTE_AFTER = "hook/tool.execute.after"
@@ -97,6 +99,8 @@ function handleRequestWithResponse(
       return handleTextComplete(request, context)
     case METHOD_PERMISSION_ASK:
       return handlePermissionAsk(request, context)
+    case METHOD_PERMISSION_APPROVE:
+      return handlePermissionApprove(request, context)
     case METHOD_MODEL_FALLBACK:
       return handleModelFallback(request, context)
     case METHOD_TOOL_EXECUTE_BEFORE:

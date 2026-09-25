@@ -90,6 +90,11 @@ message SessionInfo {
   // Whether a run currently owns the session's admission slot (derived
   // from the process run registry, not the durable log).
   bool busy = 11;
+  // Effective permission mode of the session tree: `manual`, `yolo`, or
+  // `<bundle-id>/<mode-id>`. Recorded on the root session (children report
+  // the root's mode); the process default (`yolo` under `--yolo` or
+  // `permission.model: danger`, else `manual`) when none was set.
+  string permission_mode = 12;
 }
 
 message CreateSessionRequest {
@@ -144,6 +149,12 @@ message UpdateSessionRequest {
   optional string agent = 4;
   // New background flag when set.
   optional bool background = 5;
+  // New permission mode for the whole session tree when set: `manual`,
+  // `yolo`, or a `<bundle-id>/<mode-id>` listed by `ListPermissionModes`.
+  // Unknown or unavailable modes are rejected with `invalid_argument`.
+  // Switching to `yolo` also allows (once) every pending permission ask of
+  // the tree.
+  optional string permission_mode = 6;
 }
 
 message DeleteSessionRequest {
