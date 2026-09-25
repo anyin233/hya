@@ -102,8 +102,7 @@ pub use skill_catalog::{
 };
 pub use spawn::{
     HANDLE_PREFIX_MAX_LEN, InlineAgent, MemberOutcome, SpawnError, SpawnMember, SpawnRequest,
-    SpawnRequestSendError, SpawnRequestSink, SpawnerPlane, normalize_handle_prefix,
-    sanitize_handle_prefix,
+    SpawnRequestSendError, SpawnRequestSink, SpawnerPlane, sanitize_handle_prefix,
 };
 pub use todo::{SessionTodos, TodoItem, TodoPlane, TodoStatus};
 pub use tool::{

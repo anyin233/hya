@@ -1,6 +1,6 @@
 //! Subagent handles (0.41.0): `<prefix>-<operator>` leaves.
 //!
-//! The spawner supplies a role prefix (default: the agent id) and the harness
+//! The prefix is the sanitized `subagent_type` (the agent id) and the harness
 //! appends one random Arknights operator name; a leaf is never reused within
 //! a team (live or archived), and old counter handles (`scout-1`) from earlier
 //! logs keep resolving.
@@ -134,26 +134,38 @@ async fn team(rng: Option<Box<dyn HandleRng>>) -> Team {
     }
 }
 
+/// Spawn `agent`; `subagent_type` is the agent id the `task` call named
+/// (it may differ from the spec's name, e.g. under an inline overlay).
 async fn spawn(
     team: &Team,
     parent: SessionId,
     agent: &str,
-    name: Option<&str>,
+    subagent_type: Option<&str>,
 ) -> Result<(SessionId, String), CoreError> {
     let agent = spec(agent);
     let binding = team.engine.bind_runtime(&agent.workdir).unwrap();
     let resources = binding.agent_resource_policy("explore").unwrap();
-    team.supervisor
-        .spawn_resident_named(
-            parent,
-            agent,
-            (binding, Arc::from([]), resources, None),
-            "work".to_string(),
-            name,
-            None,
-            None,
-        )
-        .await
+    let resolved = (binding, Arc::from([]), resources, None);
+    match subagent_type {
+        Some(subagent_type) => {
+            team.supervisor
+                .spawn_resident_typed(
+                    parent,
+                    agent,
+                    resolved,
+                    "work".to_string(),
+                    subagent_type,
+                    None,
+                    None,
+                )
+                .await
+        }
+        None => {
+            team.supervisor
+                .spawn_resident(parent, agent, resolved, "work".to_string(), None, None)
+                .await
+        }
+    }
 }
 
 /// `main/<prefix>-<one listed operator name>`.
@@ -179,9 +191,10 @@ async fn the_default_prefix_is_the_agent_id() {
 }
 
 #[tokio::test]
-async fn an_explicit_prefix_names_the_handle() {
+async fn the_subagent_type_names_the_handle() {
     let team = team(None).await;
-    let (child, handle) = spawn(&team, team.root, "explore", Some("scout"))
+    // The spec's name is an inline overlay's; the handle follows the type.
+    let (child, handle) = spawn(&team, team.root, "overlay", Some("scout"))
         .await
         .unwrap();
     assert_named(&handle, "main", "scout");
@@ -196,13 +209,16 @@ async fn an_explicit_prefix_names_the_handle() {
 }
 
 #[tokio::test]
-async fn an_invalid_prefix_is_rejected_with_a_valid_spelling() {
+async fn a_bundle_agent_id_is_sanitized_into_the_prefix() {
     let team = team(None).await;
-    let error = spawn(&team, team.root, "explore", Some("dev/team"))
+    let (_, handle) = spawn(&team, team.root, "explore", Some("Acme_Scout.v2"))
         .await
-        .unwrap_err();
-    let message = error.to_string();
-    assert!(message.contains("e.g. `dev-team`"), "{message}");
+        .unwrap();
+    assert_named(&handle, "main", "acme-scout-v2");
+    let (_, handle) = spawn(&team, team.root, "explore", Some("__"))
+        .await
+        .unwrap();
+    assert_named(&handle, "main", "agent");
 }
 
 #[tokio::test]

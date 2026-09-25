@@ -1,10 +1,10 @@
 //! Subagent handle naming (0.41.0): a leaf is `<prefix>-<operator>`.
 //!
-//! The spawning agent supplies the role prefix (the `task` tool's `name`,
-//! defaulting to the agent id; see [`hya_tool::normalize_handle_prefix`]) and
+//! The prefix is the sanitized agent id the `task` call named with
+//! `subagent_type` (see [`hya_tool::sanitize_handle_prefix`]) and
 //! the harness appends ONE randomly chosen Arknights operator name from
 //! [`operator_names`], e.g. `scout-suzuran`; the canonical handle keeps the
-//! parent path (`main/scout-suzuran`, `main/dev-exusiai/general-amiya`).
+//! parent path (`main/scout-suzuran`, `main/hya-implementer-exusiai/general-amiya`).
 //!
 //! A leaf is never reused within a team: every candidate is checked against
 //! the leaf of every handle the team ever registered (live roster, archived

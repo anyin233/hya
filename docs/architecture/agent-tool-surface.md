@@ -94,8 +94,7 @@ fall back to `general`.
 | --- | --- |
 | `description` | Short label (required with single-member form). |
 | `prompt` | Work for the agent (required). |
-| `subagent_type` | Agent id; empty/omitted normalizes to `"general"`. |
-| `name` | Optional role prefix of the child's handle (also per member). Trimmed and lowercased, then 1–32 characters of `[a-z0-9-]`, no leading/trailing/doubled `-`, no `/`; invalid values fail the call with an `input` error suggesting a valid spelling. The harness appends one random operator name: `"name": "scout"` → `main/scout-suzuran`. Omitted, the prefix is the agent id (`main/hya-worker-exusiai`). |
+| `subagent_type` | Agent id — the only way to choose the agent (also per member); empty/omitted normalizes to `"general"`. It also names the member: the handle leaf is `<subagent_type>-<operator>`, where the resolved agent id is sanitized (lowercased; other characters → `-`; at most 32 characters) and the harness appends one random operator name (`"subagent_type": "scout"` → `main/scout-suzuran`; omitted → `main/general-amiya`). |
 | `category` | Logical model-category override. |
 | `model` | Concrete provider/model override (wins over category). |
 | `command` | Optional command that triggered the task. |
@@ -106,14 +105,20 @@ Handles are never reused within a team (live or archived members), so a bare
 leaf always names one member and mail to an archived member's handle wakes
 that member. The naming rules, the name list's provenance, and replay
 behavior are specified in
-[subagent-orchestration.md §2.1](subagent-orchestration.md#21-handles-role-prefix--operator-name-0410).
+[subagent-orchestration.md §2.1](subagent-orchestration.md#21-handles-agent-type--operator-name-0410).
 Example:
 
 ```json
-{"description": "map the parser", "prompt": "find every entry point", "subagent_type": "explore", "name": "scout"}
+{"description": "map the parser", "prompt": "find every entry point", "subagent_type": "scout"}
 ```
 
 returns `Resident main/scout-suzuran is live; results arrive as its report.`
+
+**Removed `name` (0.41.0, breaking).** `task` no longer takes a `name` (top
+level or per member). A call that still passes one fails with an `input`
+error — "`name` was removed; the handle is derived from `subagent_type`. …" —
+and spawns nothing, because a caller that meant `name` to pick the agent would
+otherwise silently get `general`.
 
 Removed fields: `task_id` (resume is superseded by mail revival of archived
 agents), `background` (every spawn is non-blocking), and `resident` (every

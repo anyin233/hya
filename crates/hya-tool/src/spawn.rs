@@ -29,47 +29,16 @@ pub struct SpawnMember {
     /// prompt + name and folds into the model/category precedence chain; never
     /// a catalog or Bundle definition authority.
     pub inline_agent: Option<InlineAgent>,
-    /// Role prefix of the child's handle (the `task` tool's `name`), already
-    /// normalized by [`normalize_handle_prefix`]; `None` defaults to the agent
-    /// id. The harness appends one random operator name: `scout-suzuran`.
-    /// Omitted from serialization when absent so spawn-admission fingerprints
-    /// of requests without it are unchanged.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
 }
 
-/// Longest accepted handle prefix (the `task` tool's `name`).
+/// Longest handle prefix: the sanitized agent id is capped to this length.
 pub const HANDLE_PREFIX_MAX_LEN: usize = 32;
 
-/// Normalize and validate a handle prefix: trimmed, ASCII-lowercased, then it
-/// must be 1..=[`HANDLE_PREFIX_MAX_LEN`] characters of `[a-z0-9-]` with no
-/// leading, trailing, or doubled `-` (so never a `/`).
-///
-/// # Errors
-/// An actionable message naming the rule and a valid spelling.
-pub fn normalize_handle_prefix(raw: &str) -> Result<String, String> {
-    let prefix = raw.trim().to_ascii_lowercase();
-    let well_formed = !prefix.is_empty()
-        && prefix.len() <= HANDLE_PREFIX_MAX_LEN
-        && prefix
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-        && !prefix.starts_with('-')
-        && !prefix.ends_with('-')
-        && !prefix.contains("--");
-    if well_formed {
-        return Ok(prefix);
-    }
-    Err(format!(
-        "invalid `name` {raw:?}: a subagent name is a role prefix of lowercase letters, digits and single hyphens (no `/`, no leading or trailing `-`), at most {HANDLE_PREFIX_MAX_LEN} characters — e.g. `{}`. The harness appends a random name to it (`scout` → `main/scout-suzuran`).",
-        sanitize_handle_prefix(raw)
-    ))
-}
-
-/// Best-effort prefix from arbitrary text (an agent id, or the suggestion in
-/// a [`normalize_handle_prefix`] error): lowercase ASCII alphanumerics, every
-/// other run collapsed to one `-`, trimmed of `-`, capped at
-/// [`HANDLE_PREFIX_MAX_LEN`]; `agent` when nothing is left.
+/// The handle prefix for an agent id (the `task` tool's `subagent_type`,
+/// resolved): deterministic, lowercase ASCII alphanumerics, every other run
+/// (`_`, `.`, `/`, spaces, non-ASCII) collapsed to one `-`, trimmed of `-`,
+/// capped at [`HANDLE_PREFIX_MAX_LEN`]; `agent` when nothing is left. The
+/// harness appends one random operator name: `scout` → `scout-suzuran`.
 #[must_use]
 pub fn sanitize_handle_prefix(raw: &str) -> String {
     let mut prefix = String::new();
@@ -366,7 +335,6 @@ mod tests {
                         model: None,
                         category: None,
                         inline_agent: None,
-                        name: None,
                     }],
                     CancellationToken::new(),
                 )
@@ -414,19 +382,6 @@ mod tests {
     }
 
     #[test]
-    fn handle_prefixes_normalize_or_explain() {
-        assert_eq!(normalize_handle_prefix(" Scout ").unwrap(), "scout");
-        assert_eq!(normalize_handle_prefix("dev-2").unwrap(), "dev-2");
-        let max = "a".repeat(HANDLE_PREFIX_MAX_LEN);
-        assert_eq!(normalize_handle_prefix(&max).unwrap(), max);
-        for bad in ["", "  ", "-dev", "dev-", "de--v", "dev/x", "dev_x", "dév"] {
-            let error = normalize_handle_prefix(bad).unwrap_err();
-            assert!(error.contains("e.g. `"), "{bad}: {error}");
-        }
-        assert!(normalize_handle_prefix(&"a".repeat(HANDLE_PREFIX_MAX_LEN + 1)).is_err());
-    }
-
-    #[test]
     fn sanitized_prefixes_are_always_valid() {
         for raw in [
             "hya-implementer",
@@ -434,15 +389,24 @@ mod tests {
             "__",
             "",
             "acme/scout",
+            "Acme_Scout.v2",
+            "dév",
             &"long-".repeat(20),
         ] {
             let prefix = sanitize_handle_prefix(raw);
-            assert_eq!(
-                normalize_handle_prefix(&prefix).as_deref(),
-                Ok(prefix.as_str()),
+            assert!(
+                !prefix.is_empty()
+                    && prefix.len() <= HANDLE_PREFIX_MAX_LEN
+                    && prefix.bytes().all(|byte| byte.is_ascii_lowercase()
+                        || byte.is_ascii_digit()
+                        || byte == b'-')
+                    && !prefix.starts_with('-')
+                    && !prefix.ends_with('-')
+                    && !prefix.contains("--"),
                 "{raw:?} → {prefix:?}"
             );
         }
+        assert_eq!(sanitize_handle_prefix("Acme_Scout.v2"), "acme-scout-v2");
         assert_eq!(sanitize_handle_prefix("hya-implementer"), "hya-implementer");
         assert_eq!(sanitize_handle_prefix("Dev Team/X"), "dev-team-x");
         assert_eq!(sanitize_handle_prefix("__"), "agent");
