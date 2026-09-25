@@ -186,16 +186,23 @@ export function dividerView(divider: { id: string; text: string }): MessageView 
 }
 
 /**
- * Splice compaction dividers into `views` right after the message that was
- * newest when each fired; a divider whose message fell out of the rendered
- * window (or was never seen) goes at the end, just before queued prompts.
+ * Splice transcript notices (compaction dividers, permission mode switches)
+ * into `views` right after the message that was newest when each happened;
+ * one from an empty transcript goes first; one whose message fell out of the
+ * rendered window (or was never seen) goes at the end, before queued prompts.
  */
 function withDividers(views: MessageView[], dividers: AppState["dividers"]): MessageView[] {
   if (!dividers.length) return views
   const result = [...views]
+  // Notices from an empty transcript go first, in order.
+  let leading = 0
   for (const divider of dividers) {
-    const at = divider.afterMessageId ? result.findIndex((view) => view.id === divider.afterMessageId) : -1
     const view = dividerView(divider)
+    if (divider.afterMessageId === "") {
+      result.splice(leading++, 0, view)
+      continue
+    }
+    const at = divider.afterMessageId ? result.findIndex((candidate) => candidate.id === divider.afterMessageId) : -1
     if (at >= 0) result.splice(at + 1, 0, view)
     else result.push(view)
   }

@@ -1,3 +1,4 @@
+import type { PermissionModeInfo } from "./state/modes"
 import type { RespondBody } from "./state/prompts"
 /** Small HTTP/JSON client for the shared hya.v1 server contract. */
 export interface SessionInfo {
@@ -175,7 +176,8 @@ export interface StreamEvent {
   questionRequested?: { interaction?: Interaction }
   interactionResolved?: { request?: string }
   workflowUpdated?: unknown
-  sessionUpdated?: unknown
+  /** Session metadata changed; `permissionMode` is set (root session only) when the tree's mode changed. */
+  sessionUpdated?: { title?: string; model?: string; agent?: string; background?: boolean; permissionMode?: string }
   /** A compaction strategy fired (`docs/tui.md` "Notices"); rendered as a transcript divider. */
   compactionApplied?: { untilSeq?: string; strategy?: string }
 }
@@ -417,9 +419,24 @@ export class HyaClient {
     return this.request("PATCH", `/v1/sessions/${encodeURIComponent(session)}`, { model })
   }
 
-  /** `UpdateSession` (`PATCH /v1/sessions/:id`) for the fields `/rename` and `/agent` change. */
-  async updateSession(session: string, patch: { title?: string; agent?: string }): Promise<SessionInfo> {
+  /**
+   * `UpdateSession` (`PATCH /v1/sessions/:id`) for the fields `/rename`,
+   * `/agent`, and the permission mode switch change (one field per call).
+   * An unknown or unavailable `permissionMode` fails with `invalid_argument`.
+   */
+  async updateSession(session: string, patch: { title?: string; agent?: string; permissionMode?: string }): Promise<SessionInfo> {
     return this.request("PATCH", `/v1/sessions/${encodeURIComponent(session)}`, patch)
+  }
+
+  /** `ListPermissionModes` (`GET /v1/permission-modes`): built-ins first, then bundle modes; `[]` on a backend without the route. */
+  async listPermissionModes(): Promise<PermissionModeInfo[]> {
+    try {
+      const result = await this.request<{ modes?: PermissionModeInfo[] }>("GET", "/v1/permission-modes")
+      return result.modes ?? []
+    } catch (error) {
+      if (error instanceof HttpError && error.status === 404) return []
+      throw error
+    }
   }
 
   /** `CompactSession`: compact the session's context now (`/compact`). */

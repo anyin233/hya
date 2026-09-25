@@ -77,6 +77,12 @@
 - While a turn runs, a working line shows a spinner, the elapsed time, and the current activity: `Thinking…`, `Writing…`, `Running <tool> <summary>`, waiting for approval, an answer, or a subagent, plus any queued prompts. It ends with an Esc hint. A status bar under the header shows the permission mode, the directory, the git branch, and the connection state.
 - The sidebar's Todos box is live and marks each todo's status with a glyph. When the sidebar is hidden, the status bar shows a compact `Todos n/m`. The sidebar's message count no longer sticks at 0.
 - `CompactionApplied` renders as a transcript divider, and engine system messages render as muted notices instead of assistant blocks. The TUI shows a notice on connect when the backend version differs from its own.
+- Switch the session's permission mode with Shift+Tab, which cycles manual → yolo → bundle modes, or with the `/permissions` picker; `/permissions <mode>` switches directly.
+  - The first switch to yolo in a TUI process asks for a one-line confirmation.
+  - Switching to yolo closes pending asks immediately.
+  - A mode chosen before a session exists is applied when the session is created.
+- The status bar colors the mode: `⚠ yolo` in red, and bundle modes by their title in the accent color. Each switch adds a `Permission mode → …` notice to the transcript, and the permission prompt's hint names the current mode. The status line no longer repeats `Running · msg_…` while the working line is shown.
+- A reusable modal picker (filterable, keyboard and mouse). The browser test fixture gains `projectBundles` and `approverBundle()` for bundle-provided permission modes.
 
 ## List saved provider keys over the v1 API
 

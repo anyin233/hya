@@ -3,10 +3,12 @@ import type { HyaClient } from "../src/client"
 import { nativeCommands } from "../src/completion"
 import { createCommandRegistry, type AppActions } from "../src/commands"
 import { createAppStore } from "../src/state/store"
+import type { PickerSpec } from "../src/state/picker"
 
 function harness(client: Partial<HyaClient> = {}) {
   const store = createAppStore()
   const calls: string[] = []
+  const pickers: PickerSpec[] = []
   const actions: AppActions = {
     refresh: async () => { calls.push("refresh") },
     refreshMessages: async () => { calls.push("refreshMessages") },
@@ -16,10 +18,12 @@ function harness(client: Partial<HyaClient> = {}) {
     scheduleRefresh: () => { calls.push("scheduleRefresh") },
     cancelTurn: async () => { calls.push("cancel") },
     quit: () => { calls.push("quit") },
+    openPicker: (picker) => { pickers.push(picker) },
+    requestPermissionMode: async (mode) => { calls.push(`mode ${mode}`) },
   }
   const registry = createCommandRegistry()
   const context = { store, client: client as HyaClient, actions }
-  return { store, calls, registry, run: (text: string) => registry.dispatch(text, context) }
+  return { store, calls, pickers, registry, run: (text: string) => registry.dispatch(text, context) }
 }
 
 test("registers every native slash command with a description", () => {
@@ -202,4 +206,27 @@ test("/exit and /quit quit; /cancel cancels the running turn", async () => {
   await run("/quit")
   await run("/cancel")
   expect(calls).toEqual(["quit", "quit", "cancel"])
+})
+
+test("/permissions opens the mode picker from the backend listing; /permissions <mode> switches directly", async () => {
+  const modes = [
+    { id: "manual", title: "Manual", description: "Ask the user", source: "builtin" },
+    { id: "yolo", title: "Yolo", description: "Allow everything", source: "builtin" },
+    { id: "acme/approver/careful", title: "Careful", description: "Read-only commands", source: "acme/approver" },
+  ]
+  const { store, calls, pickers, run } = harness({ listPermissionModes: async () => modes })
+  store.openSession({ id: "hysec_1", agent: "build", workdir: "/w", permissionMode: "acme/approver/careful" })
+  await run("/permissions")
+  expect(store.state.permissionModes).toEqual(modes)
+  expect(pickers).toHaveLength(1)
+  const picker = pickers[0]!
+  expect(picker.title).toBe("Permission mode")
+  expect(picker.rows.map((row) => [row.id, row.label, row.tag, row.current])).toEqual([
+    ["manual", "Manual", "builtin", false],
+    ["yolo", "Yolo", "builtin", false],
+    ["acme/approver/careful", "Careful", "acme/approver", true],
+  ])
+  await picker.onSelect(picker.rows[1]!)
+  await run("/permissions manual")
+  expect(calls).toEqual(["mode yolo", "mode manual"])
 })

@@ -38,6 +38,8 @@ import { foldMember, type ChildState } from "./members"
 import { mergeTranscript, TranscriptOverlay, type OverlayEffect } from "./overlay"
 import { mergeInteractions } from "./prompts"
 import { compactionText } from "./format"
+import { manualMode, modeCycle, modeNotice, type ModeConfirm, type PermissionModeInfo } from "./modes"
+import type { ActivePicker, PickerState } from "./picker"
 
 /** A prompt submitted while a turn runs; sent when the session is free. */
 export interface QueuedPrompt {
@@ -128,14 +130,23 @@ export interface AppState {
   readonly gitBranch: string
   /** The session event stream is connected (status bar "connection state"). */
   readonly connected: boolean
-  /** `CompactionApplied` events rendered as transcript dividers, oldest first. */
+  /** `CompactionApplied` events and permission mode switches rendered as transcript notices, oldest first. */
   readonly dividers: readonly Divider[]
+  /** Selectable permission modes (`GET /v1/permission-modes`); empty until read or on an older backend. */
+  readonly permissionModes: PermissionModeInfo[]
+  /** A mode chosen before any session exists; applied right after the session is created (app/modes.ts). */
+  readonly pendingMode: string | undefined
+  /** The one-line yolo confirmation, while it is shown. */
+  readonly modeConfirm: ModeConfirm | undefined
+  /** The open modal picker (components/Picker.tsx), if any. */
+  readonly picker: ActivePicker | undefined
 }
 
-/** A compaction divider (E24): shown right after the message that was newest when it fired. */
+/** A transcript notice (a compaction divider or a mode switch): shown right after the message that was newest when it happened. */
 export interface Divider {
   id: string
   text: string
+  /** The message that was newest when it happened; `""` = the transcript was empty (shown first); omitted = at the end. */
   afterMessageId?: string
 }
 
@@ -148,6 +159,8 @@ export interface Catalog {
   providers: ProviderSummary[]
   savedKeys: string[] | null
   commands: CommandSummary[]
+  /** `GET /v1/permission-modes`; omitted keeps the rows read before. */
+  permissionModes?: PermissionModeInfo[]
 }
 
 export const startupStatus = "Enter prompt · /help commands · Ctrl+R refresh · Ctrl+C quit"
@@ -198,6 +211,10 @@ function initialState(): { [K in keyof AppState]: AppState[K] } {
     gitBranch: "",
     connected: true,
     dividers: [],
+    permissionModes: [],
+    pendingMode: undefined,
+    modeConfirm: undefined,
+    picker: undefined,
   }
 }
 
@@ -226,6 +243,25 @@ export function createAppStore() {
     const rows = state.interactions
     const at = rows.findIndex((row) => row.id === interaction.id)
     set("interactions", at < 0 ? [...rows, interaction] : rows.map((row, index) => index === at ? { ...row, ...interaction } : row))
+  }
+  /** The mode the transcript last announced (or the opened session's mode): a switch to it adds no second notice. */
+  let noticedMode = manualMode
+  let noticeIds = 0
+  const addNotice = (text: string, id: string): void => {
+    const afterMessageId = mergeTranscript(state.messages, fold.messages()).at(-1)?.id ?? ""
+    set("dividers", [...state.dividers, { id, text, afterMessageId }])
+  }
+  /** The open session's tree now runs in `mode`: update the session row and announce a change once. */
+  const applyPermissionMode = (mode: string): void => {
+    const selected = state.selected
+    if (!selected || !mode) return
+    batch(() => {
+      if (selected.permissionMode !== mode) set("selected", { ...selected, permissionMode: mode })
+      if (mode !== noticedMode) {
+        noticedMode = mode
+        addNotice(modeNotice(mode, state.permissionModes), `mode-${++noticeIds}`)
+      }
+    })
   }
   const dropAsk = (id: string): void => {
     liveAsks.delete(id)
@@ -256,6 +292,7 @@ export function createAppStore() {
         set("savedKeysAvailable", catalog.savedKeys !== null)
         set("savedKeys", catalog.savedKeys ?? [])
         set("backendCommands", catalog.commands)
+        if (catalog.permissionModes) set("permissionModes", catalog.permissionModes)
         const selected = state.selected
         if (selected) set("selected", catalog.sessions.find((row) => row.id === selected.id) ?? selected)
         set("ready", true)
@@ -272,6 +309,7 @@ export function createAppStore() {
      */
     openSession(session: SessionInfo): void {
       fold.reset(session.lastSeq ?? "0")
+      noticedMode = session.permissionMode || manualMode
       batch(() => {
         set("selected", session)
         set("view", "chat")
@@ -289,6 +327,19 @@ export function createAppStore() {
     },
 
     setSelected(session: SessionInfo): void { set("selected", session) },
+
+    /** The open session's tree runs in `mode` now (a switch or a `sessionUpdated` frame); adds the transcript notice once per change. */
+    applyPermissionMode,
+    setPermissionModes(rows: PermissionModeInfo[]): void { set("permissionModes", rows) },
+    setPendingMode(mode: string | undefined): void { set("pendingMode", mode) },
+    setModeConfirm(confirm: ModeConfirm | undefined): void { set("modeConfirm", confirm) },
+    /** Show a modal picker (or replace the open one's state); `undefined` closes it. */
+    setPicker(picker: ActivePicker | undefined): void { set("picker", picker) },
+    /** Replace the open picker's list state, keeping its selection callback. */
+    updatePicker(next: PickerState): void {
+      const open = state.picker
+      if (open) set("picker", { ...open, ...next })
+    },
 
     /** A fresh session list (sidebar nesting and `busy` flags); keeps the open session's row current. */
     setSessions(rows: SessionInfo[]): void {
@@ -325,14 +376,10 @@ export function createAppStore() {
       const asked = event.permissionRequested?.interaction ?? event.questionRequested?.interaction
       if (asked) upsertAsk({ ...asked, ...(asked.session ? {} : event.session ? { session: event.session } : {}), type: asked.type || (event.questionRequested ? "INTERACTION_TYPE_QUESTION" : "INTERACTION_TYPE_PERMISSION") })
       if (event.interactionResolved?.request) dropAsk(event.interactionResolved.request)
-      if (event.compactionApplied) {
-        const afterMessageId = mergeTranscript(state.messages, fold.messages()).at(-1)?.id
-        set("dividers", [...state.dividers, {
-          id: `divider-${event.seq ?? state.dividers.length}`,
-          text: compactionText(event.compactionApplied),
-          ...(afterMessageId ? { afterMessageId } : {}),
-        }])
-      }
+      if (event.compactionApplied) addNotice(compactionText(event.compactionApplied), `divider-${event.seq ?? state.dividers.length}`)
+      // The tree's mode changed (another client, or this one's own switch echoed): the root's stream carries it.
+      const mode = event.sessionUpdated?.permissionMode
+      if (mode && (!event.session || event.session === state.selected?.id)) applyPermissionMode(mode)
       return effect
     },
 
@@ -488,6 +535,7 @@ export function createAppStore() {
         interactions: state.interactions.map((interaction) => interaction.id),
         agents: state.agents.map((agent) => agent.name),
         apiOperations: apiOperationNames,
+        permissionModes: modeCycle(state.permissionModes),
       }
     },
   }

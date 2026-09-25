@@ -107,7 +107,11 @@ test("echoes a prompt", async ({ tui }) => {
 **What xterm.js sends.** Keys reach the program as xterm.js 6.0 encodes
 them, and xterm.js does not implement the kitty keyboard protocol or
 modifyOtherKeys. So `press("Shift+Enter")` sends a plain CR, the same as
-Enter; `press("Alt+Enter")` sends ESC CR; `press("Control+j")` sends LF. A
+Enter; `press("Alt+Enter")` sends ESC CR; `press("Control+j")` sends LF;
+`press("Shift+Tab")` sends CSI Z (`ESC [ Z`) — xterm.js keeps the key, the
+browser does not move focus — which OpenTUI reports as a shifted `tab`.
+After `press("Escape")`, wait for its effect before the next key: a lone ESC
+followed at once by another key can be read as Alt+that key. A
 program that needs a distinct "newline" key in the browser must accept LF or
 ESC CR (the hya TUI does; see [tui.md](tui.md#composer)). To paste, call
 `page.evaluate(() => window.hyaTerm.term.paste(text))`: xterm.js turns line
@@ -228,6 +232,47 @@ test.use({
   model: { protocol: "responses", steps: [reasoningStep("weigh the options", "The answer is 7.")] },
 })
 ```
+
+**Project bundles.** A second option, `projectBundles`, installs bundles
+into the isolated backend: `Record<string, BundleFiles>` (an object, not an
+array, for the same fixture-option reason), mapping a directory name to the
+bundle's files (`BundleFiles = Record<string, string>`, path relative to the
+bundle root → content). The `backend` fixture writes each one to
+`<backend.dir>/.hya/bundles/<name>/` before `hya serve` starts; the server
+runs in `backend.dir`, so it loads them as project bundles (the same place
+`hya bundle install --project` puts a bundle). Leaving it unset writes
+nothing, so existing specs are unaffected.
+
+`approverBundle({ id, modes, approve })` (`e2e/hya.ts`) builds such a
+bundle for [permission modes](tui.md#permission-modes): a `kind: Plugin`
+bundle with `permission_modes:` (`modes: { id, title, description? }[]`), a
+`permission.approve` hook resource, and an `extensions.process` of kind
+`bun` that runs the repository's Bun adapter
+(`crates/hya-plugin-bun/adapter/src/main.ts`, exported as `bunAdapterMain`)
+with `approver.ts` as a `--bundle-extension`. `approve` is the JS source of
+the hook handler; it gets `{ session, root_session, agent, mode, action,
+resource }` and returns `allow_once`, `allow_always`, `reject`, or `defer`.
+The modes are selectable as `<id>/<mode id>`:
+
+```ts
+import { approverBundle, test, textStep, toolStep } from "./hya"
+
+test.use({
+  projectBundles: {
+    approver: approverBundle({
+      id: "e2e/approver",
+      modes: [{ id: "echo-only", title: "Echo only" }],
+      approve: `async ({ mode, action, resource }) =>
+        mode === "echo-only" && action === "bash" && /^echo /.test(String(resource?.value ?? "")) ? "allow_once" : "defer"`,
+    }),
+  },
+  model: { steps: [toolStep("bash", { command: "echo hi" }), textStep("done")] },
+})
+// GET /v1/permission-modes now lists e2e/approver/echo-only (source "e2e/approver").
+```
+
+The bundle process needs `bun` on `PATH` (the same Bun that runs the
+specs). See `e2e/hya-tui-permission-modes.spec.ts`.
 
 A spec that only needs to assert on the v1 HTTP API (no TUI rendering) can
 skip `tui()` and use `fetch` directly against `backend.url` with the

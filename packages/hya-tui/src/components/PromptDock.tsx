@@ -10,11 +10,13 @@
  */
 import { Show, For } from "solid-js"
 import { useApp } from "../app/context"
+import { effectiveMode, modeDisplay } from "../state/modes"
 import { currentPrompt, type PromptView } from "../state/prompts"
 import { colors } from "../theme"
 import { toneColor } from "./MessageView"
 
-function hint(view: PromptView, draft: boolean): string {
+/** The hint row; a permission prompt's ends with the permission mode (Shift+Tab switches it), after the id so a narrow box clips the mode, not the id. */
+function hint(view: PromptView, draft: boolean, mode: string): string {
   const count = view.options.length
   if (draft) {
     return view.kind === "question"
@@ -23,7 +25,7 @@ function hint(view: PromptView, draft: boolean): string {
   }
   return view.kind === "question"
     ? `1-${count} or ↑↓ Enter · type an answer + Enter · Esc rejects · ${view.id}`
-    : `1-${count} or ↑↓ Enter · Esc denies · ${view.id}`
+    : `1-${count} or ↑↓ Enter · Esc denies · ${view.id} · mode ${mode}`
 }
 
 export function PromptDock() {
@@ -65,7 +67,7 @@ export function PromptDock() {
                 </text>
               )}
             </For>
-            <text height={1} wrapMode="none" fg={colors.muted}>{hint(view(), store.state.draft)}</text>
+            <text height={1} wrapMode="none" fg={colors.muted}>{hint(view(), store.state.draft, modeDisplay(effectiveMode(store.state), store.state.permissionModes).text)}</text>
           </box>
         )
       }}

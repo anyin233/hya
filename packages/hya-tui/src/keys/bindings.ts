@@ -17,6 +17,7 @@ export type KeyAction =
   | "quit"
   | "eof"
   | "complete"
+  | "cycleMode"
   | "refresh"
   | "toggleSidebar"
   | "toggleThinking"
@@ -69,6 +70,13 @@ export const keyBindings: readonly KeyBinding[] = [
     label: "Ctrl+D",
     description: "Quit when the input is empty (otherwise delete the character under the cursor)",
     matches: (key, context) => key.ctrl && !key.meta && !key.shift && key.name === "d" && context.composerEmpty === true,
+  },
+  {
+    action: "cycleMode",
+    label: "Shift+Tab",
+    description: "Cycle the session's permission mode (manual → yolo → bundle modes); yolo asks to confirm the first time",
+    // xterm.js (the WebUI) and most terminals send CSI Z for Shift+Tab; OpenTUI reports it as a shifted `tab`.
+    matches: (key) => (key.name === "tab" && key.shift && !key.ctrl && !key.meta) || key.sequence === "\x1b[Z",
   },
   {
     action: "complete",

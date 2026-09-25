@@ -14,6 +14,9 @@ read-only (see [Messages](#messages)). When the agent or one of its subagents
 needs a permission decision or asks a question, a prompt docked above the
 input shows the call and its options; press `1`, `2`, or `3` (see
 [Permission and question prompts](#permission-and-question-prompts)).
+Shift+Tab or `/permissions` switches the session's permission mode
+(`manual`, `yolo`, or a mode an installed bundle provides); the status bar
+shows the mode in effect (see [Permission modes](#permission-modes)).
 Models, Workflows, and saved provider keys have
 dedicated views; the API command view exposes the other HTTP/JSON operations
 in `hya.v1`. The input is a multi-line editor with input history; it also
@@ -93,6 +96,8 @@ backend is running.
 | `/models`, `/model [provider/model]` | View catalog or change the selected session model; with no argument, shows the current model and the available list. |
 | `/agent [name]` | Change the selected session's agent, or with no argument show the current agent and the available list. |
 | `/rename <title>` | Rename the current session (`UpdateSession`). |
+| `/permissions [mode]` | Open the permission mode picker, or with a mode id switch to it directly (see [Permission modes](#permission-modes)). |
+| Shift+Tab | Switch to the next permission mode: `manual` → `yolo` → bundle modes → `manual`. Switching to `yolo` asks for a confirmation the first time. In an open list (the command menu, the file list, a picker) it moves the highlight up instead. |
 | `/keys` | List configured providers and provider IDs with saved credentials; never display key values. |
 | `/key set <provider>`, `/login <provider>` | Open concealed entry for a provider API key; Enter saves, Esc cancels. |
 | `/key remove <provider>` | Delete the provider's saved credential. |
@@ -173,9 +178,9 @@ mode manual · …/work · ⎇ main                           │▸ 1. Review  
 │▸ 1  Allow once                                     │  │Messages 2          │
 │  2  Always allow  bash: cargo test                 │  │Dir      …/work     │
 │  3  Deny                                           │  │Server   127.0.0.1:…│
-│1-3 or ↑↓ Enter · Esc denies · perm_…               │  └────────────────────┘
+│1-3 or ↑↓ Enter · Esc denies · perm_… · mode manual │  └────────────────────┘
 └────────────────────────────────────────────────────┘
-Running · msg_…
+Connected to hya 0.41.0 · /help for commands
 ┌────────────────────────────────────────────────────┐
 │ Message, /command, !shell, or @file                │
 └────────────────────────────────────────────────────┘
@@ -190,7 +195,9 @@ connection state — see
 the transcript (or the panel of the current view: models, Workflows, keys,
 API, help), the working indicator while a turn this client admitted runs,
 the pending block (asks of other sessions), the permission or question
-prompt, the status line, the bordered input, and the instruction line.
+prompt, the one-line yolo confirmation while it is asked, the status line,
+the bordered input, and the instruction line. The permission mode picker
+(`/permissions`) is drawn over the screen near the top while it is open.
 
 - **Sidebar.** Three titled boxes on the right: `Sessions` (the list; `▸`
   marks the open one; a subagent's session is one `↳ N. <agent>` line nested
@@ -269,8 +276,8 @@ marker is the spinner too, so a slow first token still shows the turn is
 alive before the working line's own elapsed clock is very interesting.
 
 **Status bar.** One muted line under the header: the permission mode
-(`SessionInfo.permissionMode`, placeholder text only — switching and colors
-are `/permissions` and Shift+Tab, not yet wired), the workspace directory
+(`mode <mode>`, from `SessionInfo.permissionMode`, colored per mode — see
+[Permission modes](#permission-modes)), the workspace directory
 (shortened, keeping the tail), the git branch (`GetVcsStatus`, refreshed
 when a session opens and after a turn ends; omitted when unknown or the
 directory is not a repository), a compact todo count (`Todos <completed>/
@@ -498,8 +505,8 @@ the reply is complete, the transcript shows the server's stored copy of it;
 the text does not repeat or flicker when that happens.
 
 You can type the next prompt while a turn is running. Press Enter and the
-prompt appears dimmed at the end of the transcript, tagged `queued`. The status line counts the waiting prompts
-(`Running · msg_… · 1 queued`). When the running turn ends, the frontend sends
+prompt appears dimmed at the end of the transcript, tagged `queued`. The working line counts the waiting prompts
+(`Queued 1`). When the running turn ends, the frontend sends
 the oldest queued prompt; several queued prompts go one per turn, in the
 order you typed them. The server has no prompt queue of its own. It rejects
 a prompt with `409 session_busy` while a turn runs, and it releases the
@@ -510,13 +517,18 @@ turn), the prompt stays queued and is sent after the next turn end seen on the
 stream. Opening another session drops the queued prompts of the previous one.
 A queued prompt is still sent after a cancelled or failed turn.
 
-The status line above the input shows the turn state:
+The status line above the input shows the turn state. While the
+[working line](#working-indicator-status-bar-and-todo-panel) shows a
+running turn, the progress texts that repeat it (`Sending prompt…`,
+`Running · <turn id>…`, `Running shell · …`, `Queued · N waiting`) are left
+out of the status line, which stays empty until another message (a command
+result, an error, `Ready`) arrives:
 
 | Status | Meaning |
 | --- | --- |
 | `Sending prompt…` | The prompt is being admitted (`CreateTurn` in flight). |
 | `Session busy · retrying (N)` | The server answered `409 session_busy`; the prompt is retried. |
-| `Running · <turn id>[ · N queued]` | The turn runs; `N` prompts wait. |
+| `Running · <turn id>[ · N queued]` | The turn runs; `N` prompts wait. Hidden while the working line shows. |
 | `Session busy · N queued prompt(s) wait(s) for the running turn` | Retries ran out; the prompts wait for the next turn end. |
 | `Ready` | The turn finished. `Ready · reply stopped at the length limit` when the model hit its output limit. |
 | `Cancelling…` | Esc or `/cancel` sent `CancelTurn`; the turn has not ended yet. |
@@ -712,7 +724,7 @@ without typing its id. The agent's turn waits until you answer.
 │▸ 1  Allow once                                               │
 │  2  Always allow  tool: edit                                 │
 │  3  Deny                                                     │
-│1-3 or ↑↓ Enter · Esc denies · perm_…                         │
+│1-3 or ↑↓ Enter · Esc denies · perm_… · mode manual           │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -775,14 +787,18 @@ is shown and after you answer it.
 
 Key order, first match wins:
 
-1. An open list (the `/` command menu or the `@file` list) takes Up/Down,
-   Tab, Enter, and Esc.
-2. The prompt, with an empty input: `1`–`9` choose that option at once;
+1. The permission mode picker, while open, takes every key but Ctrl+C; the
+   one-line yolo confirmation takes Enter, Esc, and Shift+Tab (see
+   [Permission modes](#permission-modes)), so they never answer the prompt.
+2. An open list (the `/` command menu or the `@file` list) takes Up/Down,
+   Tab, Shift+Tab (highlight up), Enter, and Esc.
+3. The prompt, with an empty input: `1`–`9` choose that option at once;
    Up/Down move the highlight (`▸`, accent color); Enter chooses the
    highlighted option; Esc declines. With text in the input, a question takes
    Enter as its answer.
-3. The composer: history, sending, Esc's other meanings (return from a
-   subagent view, cancel the turn, clear the input).
+4. The composer: history, sending, Esc's other meanings (return from a
+   subagent view, cancel the turn, clear the input), and Shift+Tab (switch
+   the permission mode, also while a prompt is shown).
 
 **Esc declines, it never approves.** On a permission prompt Esc is Deny
 (`allowed: false`, not saved); on a question it is Reject. Denying is the
@@ -822,6 +838,110 @@ The keyboard commands keep working as a fallback: `/approve <id>`,
 `/deny <id>`, `/answer <id> <text>`, and `/interactions` (the prompt's hint
 row shows the id).
 
+## Permission modes
+
+A permission mode decides how the open session tree (the session and its
+subagents) answers permission checks: `manual` asks you (the
+[permission prompt](#permission-prompt)), `yolo` allows every tool call
+without asking (including calls a rule denies), and a bundle mode lets an
+installed bundle's approver answer first and asks you only for what it
+leaves open. The mode lives on the backend, on the root session; see
+[Configuration — Session permission modes](configuration.md#session-permission-modes)
+for the semantics. The TUI switches it without a restart, shows it in the
+status bar, and notes every switch in the transcript.
+
+### Switching
+
+- **Shift+Tab** switches to the next mode: `manual` → `yolo` → the bundle
+  modes in the backend's listing order → `manual`. The listing is read with
+  the other catalogs at start and on `/refresh`; without it (an older
+  backend) the cycle is `manual` ↔ `yolo`. Shift+Tab also works while a
+  permission prompt is shown. In an open list (the `/` command menu, the
+  `@file` list, the picker) it moves the highlight up instead and the mode
+  does not change.
+- **`/permissions`** opens a picker with every mode from
+  `GET /v1/permission-modes`: its title, `[source]` (`builtin`, or the id
+  of the bundle that declares it), and description; `●` marks the mode in
+  effect, which is also highlighted. Type to filter (every word must match
+  the title, id, source, or description), Up/Down (or Shift+Tab/Tab) move,
+  Enter switches, Esc closes; a click on a row switches too. While the
+  picker is open the input does not take keys; closing it gives the input
+  the focus back.
+- **`/permissions <mode>`** switches directly (Tab completes the mode ids),
+  for example `/permissions yolo` or `/permissions acme/approver/careful`.
+
+```text
+┌─Permission mode──────────────────────────────────────────────────────┐
+│ Filter ▏  3 of 3                                                     │
+│ ▸ ● Manual     [builtin]       Ask the user before actions that need │
+│     Yolo       [builtin]       Allow every action without asking, in │
+│     Echo only  [e2e/approver]  Approve echo commands; ask for the re │
+│ ↑↓ select · Enter chooses · Esc closes · type to filter              │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+**Confirming yolo.** The first switch to `yolo` in a TUI process shows one
+line above the status line and waits:
+
+```text
+⚠ Enable yolo? Every tool call runs without asking · Enter confirms · Esc cancels
+```
+
+Enter switches; Esc keeps the current mode (`Permission mode unchanged ·
+manual`); Shift+Tab skips `yolo` and goes on to the next mode of the cycle
+(with only the built-ins, that is where you started, so nothing changes);
+any other key cancels and then does what it normally does, so you cannot
+type into `yolo` by accident. This line takes Enter and Esc before a shown
+permission prompt does. After one confirmed switch, later switches to `yolo`
+in the same process do not ask again. Shift+Tab never lands in `yolo`
+without this confirmation.
+
+**Pending asks.** Switching to `yolo` makes the backend allow (once) every
+permission ask of the tree that is still waiting, so the prompt closes and
+the tool runs: the TUI re-reads the pending interactions right after the
+switch instead of waiting for the `interactionResolved` frames. The switch
+applies from the next permission check, including in a turn that is
+already running.
+
+**No session yet.** Before any session exists (a fresh directory), the
+choice is remembered — the status bar shows it and the status line reads
+`Permission mode → <mode> · applies when the session is created` — and it
+is sent right after the next session is created (the first prompt, `/new`,
+or a command that creates one), before the prompt is admitted. Opening an
+existing session instead shows that session's own mode.
+
+### Display
+
+| Mode | Status bar | Color |
+| --- | --- | --- |
+| `manual` | `mode manual` | normal text (`fg`) |
+| `yolo` | `mode ⚠ yolo` | `error` (`#f07878`) |
+| bundle mode | `mode <title>` (the listing's title, else the id) | `accent` (`#73c8e8`) |
+
+The `mode` word and the rest of the status bar stay muted. Every switch —
+from this TUI or another client (a `sessionUpdated` frame with
+`permissionMode`) — adds one muted notice line to the transcript,
+`Permission mode → yolo` (a bundle mode: `Permission mode → <title>
+(<id>)`), and the status line confirms it (`Permission mode → ⚠ yolo ·
+Shift+Tab cycles · /permissions lists`). A permission prompt's hint row ends
+with the mode (`… · perm_… · mode manual`). An unknown or unavailable mode
+leaves the mode unchanged and shows `Permission mode failed: …
+invalid_argument: …`.
+
+### Bundle modes
+
+A bundle declares modes with `permission_modes:` and answers them with a
+`permission.approve` hook (see
+[Agent bundle authoring — Permission modes](agent-bundle-authoring.md#permission-modes-permission_modes)).
+Installed (for example `hya bundle install --project -y approver.hyabundle`,
+or a source directory under `.hya/bundles/<dir>/` where `hya serve` runs),
+its modes appear in the picker as `<title> [<bundle id>]` and in the
+Shift+Tab cycle after `yolo`. With one active, the approver decides first;
+when it defers, the TUI shows the usual permission prompt. Worked example:
+a bundle `e2e/approver` whose mode `echo-only` allows `echo …` commands —
+`/permissions`, type `echo`, Enter: the status bar reads `mode Echo only`,
+a model's `echo hi` call runs without a prompt, and its `ls` call asks.
+
 ## Interface definitions
 
 The frontend uses the existing HTTP/JSON+SSE transport. Every request carries
@@ -835,7 +955,8 @@ string encoded 64-bit values, and the error envelope documented in the
 | `GET /v1/sessions` | No body | `ListSessionsResponse.sessions: SessionInfo[]` (every session of the directory, subagent sessions included; `parent` nests them in the sidebar, `busy` marks `· running`). Re-read with each child-session round (see [Subagents](#subagents)). |
 | `POST /v1/sessions` | `{agent: string, model: string, workdir: string}` | `CreateSessionResponse.session: SessionInfo` |
 | `GET /v1/sessions/{id}` | No body | `SessionInfo` (including `permissionMode`, read by `/status`; `parent`, which makes the view read-only; `members: MemberInfo[]`, the subagent rows the task cards link to). For a child session: `busy` and `agent` for its task card. |
-| `PATCH /v1/sessions/{id}` | `{title?: string, model?: string, agent?: string}` (`UpdateSession`; `/model`, `/agent`, `/rename` each send one field) | `SessionInfo` |
+| `PATCH /v1/sessions/{id}` | `{title?: string, model?: string, agent?: string, permissionMode?: string}` (`UpdateSession`; `/model`, `/agent`, `/rename`, and a permission mode switch each send one field; `permissionMode` is `manual`, `yolo`, or `<bundle-id>/<mode-id>`) | `SessionInfo`; after a switch its `permissionMode` is the mode shown. An unknown or unavailable mode fails with `invalid_argument`. |
+| `GET /v1/permission-modes` | No body (`ListPermissionModes`; read with the catalogs and by `/permissions`; a `404` from an older backend counts as an empty list) | `ListPermissionModesResponse.modes: [{id, title, description, source}]` — built-ins first; `source` is `builtin` or the bundle id. Feeds the Shift+Tab cycle, the picker rows, and bundle mode titles. |
 | `GET /v1/sessions/{id}/messages` | No body | `ListMessagesResponse.messages: MessageInfo[]`; tool cards read `parts[].toolCall` (`ToolCallPart {callId, tool, state, inputJson, outputJson, durationMs, errorCode, errorMessage}`). For a child session: its latest activity. |
 | `POST /v1/sessions/{id}/compact` | `{}` (`CompactSession`) | `CompactSessionResponse {compactedUntilSeq, strategy}` for `/compact` |
 | `POST /v1/sessions/{id}/summarize` | No body (`SummarizeSession`) | `SummarizeSessionResponse {summaryMessage}` for `/summarize` |
@@ -902,6 +1023,7 @@ rules follow the protocol guide's
 | `messageFinished {message, finish, cause}` | durable | The turn ends at the first assistant `messageFinished` after the turn's user message whose `finish` is not `FINISH_REASON_TOOL_CALLS`. Then the projection is re-read. |
 | `permissionRequested {interaction}`, `questionRequested {interaction}` | live | The ask is added to the pending list at once (a prompt appears); its options and header are remembered by id; then the listing is re-read. Only the open session's own asks arrive here; subagent asks come from the listing. |
 | `interactionResolved {request}` | live | The ask is removed at once (its prompt closes); then the listing is re-read. |
+| `sessionUpdated {permissionMode}` | durable (root session) | The tree's mode changed (this TUI's switch echoed, or another client's): the open session's `permissionMode` is updated, and a `Permission mode → …` notice is added unless the transcript already announced that mode. Other `sessionUpdated` fields are left to the next session read. |
 | `compactionApplied {untilSeq, strategy}` | durable | Appended to `state.dividers`, spliced into the transcript right after the message that was newest at the time (see [Notices](#notices)); replayed by `ListEvents` like any other durable event, so reopening a session that had one restores its divider. |
 | `resync {lastSeq}` | — | Live parts that were mid-stream stop taking deltas until their durable `partReplaced`; `ListEvents` fills the gap; the projection is re-read. |
 
@@ -963,6 +1085,9 @@ together.
 | `src/state/overlay.ts` | `TranscriptOverlay`: the pure fold of stream frames by message and part id (seq filter, live/durable handover, `resync` handling, turn-end lookup). `mergeTranscript()` merges it over the projection. |
 | `src/state/messages.ts` | The transcript view model: `transcriptViews()` (projection + overlay + waiting queued prompts), `messageView()` (role, agent/model, typed blocks, finish notice; cached per message object), `finishNotice()`, `reasoningLabel()`, `reasoningExpanded()`, `toolExpanded()`. |
 | `src/state/tools.ts` | The tool-card view model: `toolCard()` (status, per-tool summary, body lines with tones, duration, error, task info), `toolStatus()`, `formatDuration()`, `clipLines()`, `diffLines()`, `partialField()`. |
+| `src/state/modes.ts` | Permission modes: `modeCycle()` (Shift+Tab order), `nextMode()`, `requestMode()` and `confirmKey()` (the yolo confirmation state machine), `modeDisplay()` (status bar text and tone), `modeNotice()`, `modeRows()` (picker rows), `effectiveMode()`, `isShiftTab()`. |
+| `src/state/picker.ts` | The reusable modal picker's pure state (API below): `createPicker()`, `pickerMatches()`, `pickerRows()`, `pickerKey()`, `pickerWindow()`, and the `PickerRow` / `PickerSpec` / `ActivePicker` types. |
+| `src/app/modes.ts` | `createModeSwitcher()`: `cycle()` (Shift+Tab), `request(mode)`, `key()` (the confirmation's keys), `applyPending()` (a mode chosen before any session, sent after `CreateSession`); sends `UpdateSession {permissionMode}`, re-lists interactions, reports in the status line. |
 | `src/state/prompts.ts` | Permission and question prompts: `promptQueue()` (asks of the open session's tree), `treeSessionIds()`, `promptView()` (headline, asker, details from `toolCard()`, options), `currentPrompt()`, `promptKey()` (option keys), `respondBody()`, `mergeInteractions()` (listing + live frames + answered ids), `waitingKind()`. |
 | `src/app/prompts.ts` | `answerPrompt()`: send a choice's `RespondInteraction`, hide the ask, report the outcome in the status line. |
 | `src/state/members.ts` | Subagents: `foldMember()`, `taskLink()` (card → member and child session), `childStatus()`, `childActivity()`, `childSessionIds()`. |
@@ -972,10 +1097,10 @@ together.
 | `src/app/controller.ts` | `createController()`: refreshes, the session SSE loop (subscribe, `ListEvents` gap-fill, `resync`), batched overlay flushes, the debounced projection re-read (`app/debounce.ts`), child-session rounds for subagent cards, `returnToParent()`, session creation, prompt submission (refused in a subagent's read-only view), command dispatch, and concealed key entry. It writes results into the store. |
 | `src/app/turns.ts` | `createTurnRunner()`: the client-side prompt queue, `409 session_busy` retry, and turn-end detection and status text. |
 | `src/app/App.tsx`, `src/app/run.tsx`, `src/app/context.ts` | Root layout (main column + sidebar), renderer startup, and the `AppContext` (store, controller, server URL, and `ui` handles such as the transcript's scroll actions) that components read with `useApp()`. |
-| `src/components/` | `Header`, `MainPanel` (transcript or view panel), `Transcript` (scrollbox, follow/hint), `MessageView` (`MessageItem`, user/assistant messages, blocks, reasoning, tool cards and `task` subagent cards, `KeyedFor`), `Spinner` (the shared spinner clock), `Markdown` (the `<markdown>` wrapper, `SyntaxStyle`, code-block boxes), `Panel`, `PendingBlock` (other sessions' asks), `PromptDock` (the permission / question prompt), `Sidebar`, `StatusLine`, `Composer` (the `<textarea>` editor, its height, history, Esc / Ctrl+C / Ctrl+D, the shell-mode border, the `@file` list, the `/` command menu, Tab completion, key actions, concealed key entry), `Footer`. |
+| `src/components/` | `Header`, `MainPanel` (transcript or view panel), `Transcript` (scrollbox, follow/hint), `MessageView` (`MessageItem`, user/assistant messages, blocks, reasoning, tool cards and `task` subagent cards, `KeyedFor`), `Spinner` (the shared spinner clock), `Markdown` (the `<markdown>` wrapper, `SyntaxStyle`, code-block boxes), `Panel`, `PendingBlock` (other sessions' asks), `PromptDock` (the permission / question prompt), `ModeConfirm` (the one-line yolo confirmation), `Picker` (the modal picker), `Sidebar`, `StatusLine`, `Composer` (the `<textarea>` editor, its height, history, Esc / Ctrl+C / Ctrl+D, the shell-mode border, the `@file` list, the `/` command menu, Tab completion, key actions, concealed key entry), `Footer`. |
 | `src/composer/` | Pure composer logic: `history.ts` (`InputHistory`), `quit.ts` (`createQuitGuard`, the Ctrl+C double press), `escape.ts` (`escapeAction`), `shell.ts` (`shellCommand`, `isShellInput`), `mention.ts` (`mentionAt`, `insertMention`, `findPattern`, `rankPaths`). |
 | `src/commands/` | The slash-command registry (`registry.ts`), the built-in commands (`native.ts`), the `/help` text (`help.ts`), and the command menu's merge/fuzzy-filter/argument-hint logic (`menu.ts`: `mergeCommandEntries`, `filterCommands`, `requiresArgument`). |
-| `src/keys/bindings.ts` | The global key binding table (`keyBindings`) and the textarea overrides (`composerKeyBindings`: Enter submits; Ctrl+J, Shift+Enter, Alt+Enter insert a newline; Home/End). |
+| `src/keys/bindings.ts` | The global key binding table (`keyBindings`, including `cycleMode` on Shift+Tab / CSI Z) and the textarea overrides (`composerKeyBindings`: Enter submits; Ctrl+J, Shift+Enter, Alt+Enter insert a newline; Home/End). |
 | `src/completion.ts`, `src/instructions.ts`, `src/api.ts`, `src/theme.ts` | Tab completion and `SecretEntry`, footer instructions, the OpenAPI operation catalog, and the palette (`colors`, `syntaxColors`, and `syntaxStyles`, the Markdown/tree-sitter scope styles). |
 
 The Solid transform has two parts. `bunfig.toml` preloads
@@ -986,6 +1111,44 @@ directory it runs in, so `src/main.ts` imports the preload itself. It then
 loads `.tsx` modules and `solid-js` with a dynamic `import()`. Keep static
 imports in `main.ts` free of Solid code. Without the preload, Bun resolves
 `solid-js` to its non-reactive server build.
+
+**The picker.** `components/Picker.tsx` is a reusable modal list for
+choosing one value (`/permissions` uses it; `/model`, `/agent`, and
+`/sessions` pickers are meant to reuse it). Open one from a command handler
+with `actions.openPicker(spec)` (or `controller.openPicker`):
+
+```ts
+interface PickerRow {
+  id: string          // value handed to onSelect (a mode id, model id, session id, …)
+  label: string       // main text
+  detail?: string     // muted text after the tag (a description)
+  tag?: string        // shown as [tag] (a source, a provider, a kind)
+  current?: boolean   // the value in effect: marked ●, highlighted when the picker opens
+}
+interface PickerSpec {
+  title: string       // box title
+  rows: PickerRow[]
+  hint?: string       // bottom row; default "↑↓ select · Enter chooses · Esc closes · type to filter"
+  onSelect(row: PickerRow): void | Promise<void>   // runs after the picker closed; a throw shows "Error: …"
+}
+
+actions.openPicker({
+  title: "Permission mode",
+  rows: modeRows(modes, effectiveMode(store.state)),
+  onSelect: (row) => actions.requestPermissionMode(row.id),
+})
+```
+
+While a picker is open (`store.state.picker`), the composer's editor is
+unfocused and its key handler sends every key but Ctrl+C to
+`controller.pickerKey()`, which applies `pickerKey(state, key)` from
+`state/picker.ts`: printable characters extend the filter (Backspace
+shortens it, Ctrl+U clears it; an empty filter highlights the current row
+again), Up/Down and Shift+Tab/Tab move with wrap-around, Enter selects, Esc
+closes. At most `pickerMaxRows` (10) rows show; the window follows the
+highlight. A click on a row selects it (`controller.choosePickerRow`).
+Ctrl+C closes the picker and keeps its quit meaning. Selecting or closing
+returns the focus to the input.
 
 To add a slash command, add a `CommandSpec` to `nativeCommandSpecs` in
 `src/commands/native.ts`:
@@ -1058,3 +1221,12 @@ without asking), Deny (`3`) and Esc, an edit ask's diff, two queued asks
 (`1 of 2`), `ask_user` options, a free-text answer, and Reject, a subagent's
 ask in the parent view (its task card and sidebar row waiting), a
 `!command` shell ask, and about 80 columns.
+`e2e/hya-tui-permission-modes.spec.ts` covers permission modes: Shift+Tab
+through xterm.js, the yolo confirmation (Esc, Enter, no second ask), the
+status bar colors, the transcript notice, a bash call under `yolo` without a
+prompt and under `manual` with one, a pending ask closed by switching to
+`yolo`, the `/permissions` picker (sources, filter, Up/Down, Shift+Tab, Esc,
+focus back to the input, `/permissions <mode>`), Shift+Tab in the command
+menu, a mode chosen before the session exists, a bundle mode from a project
+bundle whose Bun `permission.approve` hook allows `echo` and defers `ls`,
+and about 80 columns.
