@@ -91,6 +91,9 @@
   - A mode chosen before a session exists is applied when the session is created.
 - The status bar colors the mode: `⚠ yolo` in red, and bundle modes by their title in the accent color. Each switch adds a `Permission mode → …` notice to the transcript, and the permission prompt's hint names the current mode. The status line no longer repeats `Running · msg_…` while the working line is shown.
 - A reusable modal picker (filterable, keyboard and mouse). The browser test fixture gains `projectBundles` and `approverBundle()` for bundle-provided permission modes.
+- New `/model` and `/agent` pickers: rows are tagged with the provider or default model, and the current value is marked. The direct forms (`/model <provider/model>`, `/agent <name>`) still work. A choice made before any session exists is applied to the next session.
+- A `/sessions` picker lists a New session row, then the sessions with subagents nested under their parent, each with its last update time. F2 renames the highlighted session. Ctrl+D deletes it after a confirmation.
+- Session titles in the header, sidebar, and pickers update live from `sessionUpdated`, not only on refresh.
 
 ## List saved provider keys over the v1 API
 

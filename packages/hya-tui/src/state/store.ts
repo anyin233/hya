@@ -136,6 +136,10 @@ export interface AppState {
   readonly permissionModes: PermissionModeInfo[]
   /** A mode chosen before any session exists; applied right after the session is created (app/modes.ts). */
   readonly pendingMode: string | undefined
+  /** A `/model` choice made before any session exists; applied at the next `CreateSession` (C11, app/controller.ts `newSession`). */
+  readonly pendingModel: string | undefined
+  /** A `/agent` choice made before any session exists; applied at the next `CreateSession` (C12). */
+  readonly pendingAgent: string | undefined
   /** The one-line yolo confirmation, while it is shown. */
   readonly modeConfirm: ModeConfirm | undefined
   /** The open modal picker (components/Picker.tsx), if any. */
@@ -155,6 +159,8 @@ export interface Catalog {
   sessions: SessionInfo[]
   interactions: Interaction[]
   models: ModelSummary[]
+  /** `GET /v1/agents`; kept current so the `/agent` picker (C12) reflects catalog changes, not just bootstrap. Omitted keeps the rows read before. */
+  agents?: AgentSummary[]
   workflows: WorkflowSummary[]
   providers: ProviderSummary[]
   savedKeys: string[] | null
@@ -213,6 +219,8 @@ function initialState(): { [K in keyof AppState]: AppState[K] } {
     dividers: [],
     permissionModes: [],
     pendingMode: undefined,
+    pendingModel: undefined,
+    pendingAgent: undefined,
     modeConfirm: undefined,
     picker: undefined,
   }
@@ -263,6 +271,30 @@ export function createAppStore() {
       }
     })
   }
+  /** `"provider/model[#variant]"` → `SessionInfo.model`; empty/unparsable stays unset. */
+  const parseModelRef = (reference: string): SessionInfo["model"] | undefined => {
+    const [providerId, rest] = reference.split(/\/(.+)/, 2)
+    if (!providerId || !rest) return undefined
+    const [modelId, variant] = rest.split("#", 2)
+    return { providerId, modelId, ...(variant ? { variant } : {}) }
+  }
+  /** A `sessionUpdated` title/agent/model frame (G30): patch the row in `sessions` and, if it is the open one, `selected` too. */
+  const applySessionMeta = (sessionId: string, patch: { title?: string; agent?: string; model?: string }): void => {
+    const changes: Partial<SessionInfo> = {}
+    if (patch.title !== undefined) changes.title = patch.title
+    if (patch.agent !== undefined) changes.agent = patch.agent
+    if (patch.model !== undefined) {
+      const model = parseModelRef(patch.model)
+      if (model) changes.model = model
+    }
+    if (!Object.keys(changes).length) return
+    batch(() => {
+      if (state.sessions.some((row) => row.id === sessionId)) {
+        set("sessions", state.sessions.map((row) => row.id === sessionId ? { ...row, ...changes } : row))
+      }
+      if (state.selected?.id === sessionId) set("selected", { ...state.selected, ...changes })
+    })
+  }
   const dropAsk = (id: string): void => {
     liveAsks.delete(id)
     if (state.interactions.some((row) => row.id === id)) set("interactions", state.interactions.filter((row) => row.id !== id))
@@ -287,6 +319,7 @@ export function createAppStore() {
         set("sessions", catalog.sessions)
         set("interactions", mergeInteractions(catalog.interactions, liveAsks, answered))
         set("models", catalog.models)
+        if (catalog.agents) set("agents", catalog.agents)
         set("workflows", catalog.workflows)
         set("providers", catalog.providers)
         set("savedKeysAvailable", catalog.savedKeys !== null)
@@ -332,6 +365,12 @@ export function createAppStore() {
     applyPermissionMode,
     setPermissionModes(rows: PermissionModeInfo[]): void { set("permissionModes", rows) },
     setPendingMode(mode: string | undefined): void { set("pendingMode", mode) },
+    /** A `/model` choice made before any session exists (C11); `undefined` clears it (applied or cancelled). */
+    setPendingModel(model: string | undefined): void { set("pendingModel", model) },
+    /** A `/agent` choice made before any session exists (C12); `undefined` clears it. */
+    setPendingAgent(agent: string | undefined): void { set("pendingAgent", agent) },
+    /** No session is open (after deleting the open one with none left to switch to). */
+    clearSelected(): void { set("selected", undefined) },
     setModeConfirm(confirm: ModeConfirm | undefined): void { set("modeConfirm", confirm) },
     /** Show a modal picker (or replace the open one's state); `undefined` closes it. */
     setPicker(picker: ActivePicker | undefined): void { set("picker", picker) },
@@ -380,6 +419,13 @@ export function createAppStore() {
       // The tree's mode changed (another client, or this one's own switch echoed): the root's stream carries it.
       const mode = event.sessionUpdated?.permissionMode
       if (mode && (!event.session || event.session === state.selected?.id)) applyPermissionMode(mode)
+      // A title/agent/model change (a `/rename`, `/agent`, `/model` from elsewhere, or the backend's
+      // auto-generated title after the first turn, G30): keep the header, sidebar, and `/sessions`
+      // picker current without waiting for the next catalog refresh.
+      const updated = event.sessionUpdated
+      if (updated && event.session && (updated.title !== undefined || updated.agent !== undefined || updated.model !== undefined)) {
+        applySessionMeta(event.session, updated)
+      }
       return effect
     },
 

@@ -91,14 +91,35 @@ test("a backend command turn's user message shows the /name args the user typed"
   expect(store.state.commandDisplay.get("msg_u1")).toBe("/review  src/main.ts")
 })
 
-test("/model and /agent with no argument show the current value and the available list", async () => {
-  const { store, run } = harness()
-  store.applyCatalog({ sessions: [], interactions: [], models: [{ id: "openai/gpt" }], workflows: [], providers: [], savedKeys: [], commands: [] })
+test("/model and /agent with no argument open a picker of the catalog, the session's current value marked", async () => {
+  const { store, pickers, run } = harness()
+  store.applyCatalog({
+    sessions: [], interactions: [], models: [{ id: "openai/gpt", providerId: "openai", modelId: "gpt" }],
+    agents: [{ name: "build", description: "Default agent" }], workflows: [], providers: [], savedKeys: [], commands: [],
+  })
   store.openSession({ id: "hysec_1", agent: "build", workdir: "/w", model: { providerId: "openai", modelId: "gpt" } })
   await run("/model")
-  expect(store.state.status).toBe("Model openai/gpt · available: openai/gpt")
+  expect(pickers.at(-1)?.title).toBe("Model")
+  expect(pickers.at(-1)?.rows).toEqual([{ id: "openai/gpt", label: "gpt", tag: "openai", detail: "", current: true }])
   await run("/agent")
-  expect(store.state.status).toBe("Agent build · available: none")
+  expect(pickers.at(-1)?.title).toBe("Agent")
+  expect(pickers.at(-1)?.rows).toEqual([{ id: "build", label: "build", tag: "", detail: "Default agent", current: true }])
+})
+
+test("/model and /agent with no session and no argument remember the picker choice for the next session", async () => {
+  const { store, calls, pickers, run } = harness()
+  store.applyCatalog({
+    sessions: [], interactions: [], models: [{ id: "openai/gpt", providerId: "openai", modelId: "gpt" }],
+    agents: [{ name: "review" }], workflows: [], providers: [], savedKeys: [], commands: [],
+  })
+  await run("/model")
+  await pickers.at(-1)?.onSelect({ id: "openai/gpt", label: "gpt" })
+  expect(store.state.pendingModel).toBe("openai/gpt")
+  expect(store.state.status).toContain("applies when the session is created")
+  await run("/agent")
+  await pickers.at(-1)?.onSelect({ id: "review", label: "review" })
+  expect(store.state.pendingAgent).toBe("review")
+  expect(calls).toEqual([])
 })
 
 test("/model and /agent with an argument switch the session", async () => {
@@ -229,4 +250,52 @@ test("/permissions opens the mode picker from the backend listing; /permissions 
   await picker.onSelect(picker.rows[1]!)
   await run("/permissions manual")
   expect(calls).toEqual(["mode yolo", "mode manual"])
+})
+
+test("/sessions opens a picker with a New session row first, then the tree, the open session marked", async () => {
+  const { store, calls, pickers, run } = harness()
+  store.openSession({ id: "hysec_1", agent: "build", workdir: "/w", title: "Top" })
+  store.applyCatalog({
+    sessions: [
+      { id: "hysec_1", agent: "build", workdir: "/w", title: "Top" },
+      { id: "hysec_2", agent: "review", workdir: "/w", parent: "hysec_1" },
+    ],
+    interactions: [], models: [], workflows: [], providers: [], savedKeys: [], commands: [],
+  })
+  await run("/sessions")
+  expect(calls).toContain("refresh")
+  const picker = pickers.at(-1)!
+  expect(picker.title).toBe("Sessions")
+  expect(picker.rows.map((row) => row.id)).toEqual(["__new__", "hysec_1", "hysec_2"])
+  expect(picker.rows[1]?.current).toBe(true)
+  expect(picker.actions?.map((action) => action.id)).toEqual(["rename", "delete"])
+  // Enter on a row opens it; on the New session row it creates one.
+  await picker.onSelect(picker.rows[2]!)
+  expect(calls).toContain("open hysec_2")
+  await picker.onSelect(picker.rows[0]!)
+  expect(calls).toContain("new")
+})
+
+test("/sessions row actions: F2 renames (UpdateSession title), Ctrl+D deletes (DeleteSession) with confirmation already applied by the picker", async () => {
+  const updateCalls: Array<{ id: string; patch: unknown }> = []
+  const deleteCalls: string[] = []
+  const { store, pickers, run } = harness({
+    updateSession: async (id, patch) => { updateCalls.push({ id, patch }); return { id, agent: "build", workdir: "/w", title: (patch as { title?: string }).title } },
+    deleteSession: async (id) => { deleteCalls.push(id) },
+  })
+  store.openSession({ id: "hysec_1", agent: "build", workdir: "/w", title: "Top" })
+  store.applyCatalog({
+    sessions: [{ id: "hysec_1", agent: "build", workdir: "/w", title: "Top" }],
+    interactions: [], models: [], workflows: [], providers: [], savedKeys: [], commands: [],
+  })
+  await run("/sessions")
+  const picker = pickers.at(-1)!
+  await picker.onAction?.("rename", picker.rows[1]!, "New title")
+  expect(updateCalls).toEqual([{ id: "hysec_1", patch: { title: "New title" } }])
+  expect(store.state.selected?.title).toBe("New title")
+  // Renaming reopens the picker so browsing continues.
+  expect(pickers.length).toBeGreaterThan(1)
+
+  await picker.onAction?.("delete", picker.rows[1]!)
+  expect(deleteCalls).toEqual(["hysec_1"])
 })

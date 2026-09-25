@@ -189,6 +189,27 @@ test("interaction frames add, enrich, and resolve pending asks; answered ids sta
   expect(store.state.interactions.map((row) => row.id)).toEqual(["que_1"])
 })
 
+test("a sessionUpdated title/agent/model frame updates the open session and its sessions row live (G30)", () => {
+  const store = createAppStore()
+  store.openSession(session("hysec_1", { title: "old" }))
+  store.applyCatalog({
+    sessions: [session("hysec_1", { title: "old" }), session("hysec_2", { title: "other" })],
+    interactions: [], models: [], workflows: [], providers: [], savedKeys: [], commands: [],
+  })
+  // The backend's auto-generated title (no user action): the header/sidebar (state/format.ts) read `selected`/`sessions`.
+  store.applyEvent({ seq: "1", session: "hysec_1", sessionUpdated: { title: "Fix the flaky test" } })
+  expect(store.state.selected?.title).toBe("Fix the flaky test")
+  expect(store.state.sessions.find((row) => row.id === "hysec_1")?.title).toBe("Fix the flaky test")
+  // A model switch from elsewhere folds `provider/model` into `SessionInfo.model`.
+  store.applyEvent({ seq: "2", session: "hysec_1", sessionUpdated: { model: "anthropic/claude#thinking", agent: "review" } })
+  expect(store.state.selected?.model).toEqual({ providerId: "anthropic", modelId: "claude", variant: "thinking" })
+  expect(store.state.selected?.agent).toBe("review")
+  // A frame for another session updates only that row, not the open one.
+  store.applyEvent({ seq: "3", session: "hysec_2", sessionUpdated: { title: "Renamed elsewhere" } })
+  expect(store.state.selected?.title).toBe("Fix the flaky test")
+  expect(store.state.sessions.find((row) => row.id === "hysec_2")?.title).toBe("Renamed elsewhere")
+})
+
 test("the highlighted prompt option belongs to one ask; the draft flag follows the input", () => {
   const store = createAppStore()
   expect(store.promptIndex("perm_1")).toBe(0)
