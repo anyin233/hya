@@ -18,7 +18,7 @@
  */
 import type { HyaClient, SessionInfo, StreamEvent, StreamFrame } from "../client"
 import { completeCommand, SecretEntry } from "../completion"
-import { createCommandRegistry, type AppActions, type CommandRegistry } from "../commands"
+import { createCommandRegistry, mergeCommandEntries, type AppActions, type CommandEntry, type CommandRegistry } from "../commands"
 import { findPattern, rankPaths } from "../composer/mention"
 import { shellCommand } from "../composer/shell"
 import type { KeyLike } from "../keys/bindings"
@@ -301,6 +301,11 @@ export function createController({ client, store, directory, registry = createCo
     secret.clear()
   }
 
+  /** Merged, deduplicated command list for the `/` command menu (commands/menu.ts). */
+  function commandEntries(): CommandEntry[] {
+    return mergeCommandEntries(registry.list(), store.state.backendCommands)
+  }
+
   return {
     ...actions,
     registry,
@@ -308,6 +313,7 @@ export function createController({ client, store, directory, registry = createCo
     cancelTurn,
     findFiles,
     complete: (input: string) => completeCommand(input, store.completionContext(), registry),
+    commandEntries,
     secretKey,
     secretPaste,
     refreshAll,

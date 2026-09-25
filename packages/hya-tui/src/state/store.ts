@@ -27,6 +27,7 @@ import type {
   StreamEvent,
   ProviderSummary,
   SessionInfo,
+  TodoItem,
   WorkflowSummary,
 } from "../client"
 import type { CompletionContext } from "../completion"
@@ -92,6 +93,19 @@ export interface AppState {
   readonly shellCommands: ReadonlyMap<string, string>
   /** Command of the shell turn running now (its message ids are not known until it returns). */
   readonly pendingShell: string | undefined
+  /**
+   * `/name args` invocation text of command turns run from this TUI, by the
+   * turn's user message id (`CreateTurn` returns the user message id as the
+   * turn id for a `CommandTurn`, same as a prompt turn). The transcript shows
+   * this instead of the backend's expanded template text.
+   */
+  readonly commandDisplay: ReadonlyMap<string, string>
+  /** Backend version from bootstrap (`/status`). */
+  readonly serverVersion: string
+  /** The open session's todo list (`/todos`, `GetSessionTodo`). */
+  readonly todos: TodoItem[]
+  /** Text of the `/status` view. */
+  readonly statusText: string
 }
 
 /** Rows loaded by one full catalog refresh. `savedKeys: null` = listing unsupported. */
@@ -139,6 +153,10 @@ function initialState(): { [K in keyof AppState]: AppState[K] } {
     followTick: 0,
     shellCommands: new Map(),
     pendingShell: undefined,
+    commandDisplay: new Map(),
+    serverVersion: "",
+    todos: [],
+    statusText: "",
   }
 }
 
@@ -168,6 +186,7 @@ export function createAppStore() {
         set("agents", bootstrap.agents ?? [])
         set("models", bootstrap.models ?? [])
         set("interactions", bootstrap.interactions ?? [])
+        set("serverVersion", bootstrap.location?.version ?? "")
       })
     },
 
@@ -283,6 +302,15 @@ export function createAppStore() {
     },
     /** The shell turn now running (or `undefined` once it returned). */
     setPendingShell(command: string | undefined): void { set("pendingShell", command) },
+
+    /** Remember the `/name args` display text of a command turn, by its user message id. */
+    rememberCommand(messageId: string, text: string): void {
+      if (!messageId) return
+      set("commandDisplay", new Map(state.commandDisplay).set(messageId, text))
+    },
+
+    setTodos(items: TodoItem[]): void { set("todos", items) },
+    setStatusText(text: string): void { set("statusText", text) },
 
     /** Ask the transcript to jump to its newest line. */
     followTranscript(): void { set("followTick", state.followTick + 1) },

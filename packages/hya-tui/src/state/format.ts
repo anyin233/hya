@@ -60,7 +60,25 @@ export function contextText(state: AppState, server: string, width = 30): string
 
 const titles: Record<View, string> = {
   chat: "Chat", models: "Models", workflows: "Workflows", interactions: "Interactions",
-  keys: "Saved provider keys", api: "API commands", help: "Help",
+  keys: "Saved provider keys", api: "API commands", help: "Help", todos: "Todos", status: "Status",
+}
+
+/** `TODO_STATUS_IN_PROGRESS` → `in_progress`, etc. */
+function todoStatusText(status: string): string {
+  return status.replace(/^[A-Z_]*STATUS_/, "").toLowerCase() || "pending"
+}
+
+const todoGlyphs: Record<string, string> = {
+  pending: "☐", in_progress: "▸", blocked: "!", completed: "✓",
+}
+
+/** One line per todo item: a status glyph and its content. */
+export function todosText(items: { content: string; status: string }[]): string {
+  if (!items.length) return "No todos for this session."
+  return items.map((item) => {
+    const status = todoStatusText(item.status)
+    return `${todoGlyphs[status] ?? "·"} ${item.content}`
+  }).join("\n")
 }
 
 export function mainTitle(view: View): string { return titles[view] }
@@ -89,5 +107,7 @@ export function mainContent(state: AppState): string {
     }
     case "api": return state.apiOutput
     case "help": return helpText
+    case "todos": return todosText(state.todos)
+    case "status": return state.statusText
   }
 }
