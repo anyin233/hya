@@ -77,9 +77,19 @@ when you change such a bundle, run them from its directory:
 cd bundles/extra/jev-model-router && bun test
 ```
 
-There is currently no interactive TUI (the legacy TypeScript TUI was removed;
-a replacement built on `hya-sdk-v1` may be built later), so no frontend
-TypeScript gate exists.
+### Browser-rendered TUI tests
+
+`packages/hya-tui-web` renders a terminal frontend in Chromium through a real
+PTY and xterm.js. When you change it or a TUI it drives, run from that
+directory:
+
+```sh
+bun run typecheck
+bun test ./test
+bunx playwright test
+```
+
+See [Browser-rendered TUI](tui-web.md) for the harness API.
 
 ## Dev tasks (`xtask` package)
 
@@ -174,6 +184,7 @@ When changing a boundary, update the nearest docs page:
 | Optional `hya-extra/*` distribution bundles | [Extra bundles](extra-bundles.md) |
 | Goal/loop intelligence | [Goal and Loop Authoring](goal-loop-authoring.md) |
 | Agent process E2E / matrix | [Testing](testing/README.md), [Agent matrix](testing/agent-matrix.md) |
+| Browser-rendered TUI, WebUI host, TUI browser tests | [Browser-rendered TUI](tui-web.md) |
 
 Every new or modified feature ships with its documentation in the same change.
 The feature's documentation must state, at minimum:

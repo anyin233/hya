@@ -17,6 +17,8 @@ architecture notes.
   on both).
 - [API reference](protocol/api-reference.md) — generated per-rpc reference.
 - [OpenAPI](protocol/openapi.json) — generated HTTP schema.
+- [Browser-rendered TUI](tui-web.md) — serve a terminal frontend to a browser
+  on a real PTY; the Playwright environment for TUI tests and the WebUI host.
 
 ## Reading Paths
 

@@ -1,0 +1,14 @@
+@import "@xterm/xterm/css/xterm.css";
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: #11151b;
+  overflow: hidden;
+}
+
+#terminal {
+  position: absolute;
+  inset: 0;
+}
