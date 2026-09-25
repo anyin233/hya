@@ -9,6 +9,8 @@
 //! family is loaded, see `overrides` in the family exposure policy) also wakes
 //! on new mail for the caller and marks the mail it returns as read.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use hya_proto::{ReportOutcome, SessionId, ToolSchema};
@@ -396,12 +398,44 @@ pub struct ArchiveReceipt {
     pub descendants: Vec<String>,
 }
 
+/// Rejection text for a second `report` inside the turn whose report was
+/// already accepted.
+pub const REPORT_ALREADY_ACCEPTED: &str = "your report was already accepted in this episode and your turn ends after this tool round; do not call `report` again. If your parent mails you later you are woken for a new episode and may report once more.";
+
+/// Turn-scoped marker the engine hands to every `report` call of one turn.
+///
+/// It is set when a `report` is accepted; the engine then ends the turn right
+/// after the current tool round (no further model call), and a second
+/// `report` in the same turn is rejected with [`REPORT_ALREADY_ACCEPTED`]
+/// without reaching the supervisor.
+#[derive(Clone, Debug, Default)]
+pub struct ReportLatch(Arc<AtomicBool>);
+
+impl ReportLatch {
+    /// A fresh, unset latch (one per turn).
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Whether a `report` was accepted in this turn.
+    #[must_use]
+    pub fn is_set(&self) -> bool {
+        self.0.load(Ordering::SeqCst)
+    }
+
+    fn set(&self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+}
+
 /// Session-scoped facade tools use to request lifecycle transitions.
 #[derive(Clone)]
 pub struct LifecyclePlane {
     tx: Option<mpsc::UnboundedSender<LifecycleRequest>>,
     session: Option<SessionId>,
     channel_policy: Option<ChannelPolicySnapshot>,
+    report_latch: Option<ReportLatch>,
 }
 
 impl Default for LifecyclePlane {
@@ -420,6 +454,7 @@ impl LifecyclePlane {
                 tx: Some(tx),
                 session: None,
                 channel_policy: None,
+                report_latch: None,
             },
             rx,
         )
@@ -432,6 +467,7 @@ impl LifecyclePlane {
             tx: None,
             session: None,
             channel_policy: None,
+            report_latch: None,
         }
     }
 
@@ -450,6 +486,15 @@ impl LifecyclePlane {
         self
     }
 
+    /// Attach the turn's report latch: an accepted `report` sets it (the
+    /// engine ends the turn after the round) and a second `report` in the
+    /// same turn is rejected.
+    #[must_use]
+    pub fn with_report_latch(mut self, latch: ReportLatch) -> Self {
+        self.report_latch = Some(latch);
+        self
+    }
+
     fn session(&self) -> Result<SessionId, ToolError> {
         self.session
             .ok_or_else(|| ToolError::Other("lifecycle tool requires a session".to_string()))
@@ -461,11 +506,16 @@ impl LifecyclePlane {
         })
     }
 
-    /// Submit a terminal report (ADR-0015).
+    /// Submit a terminal report (ADR-0015). Once accepted, the turn's
+    /// [`ReportLatch`] is set so the engine ends the turn after this round.
     ///
     /// # Errors
-    /// Gate rejections surface as [`ToolError::Input`].
+    /// Gate rejections, and a second report in a turn whose report was
+    /// already accepted, surface as [`ToolError::Input`].
     pub async fn report(&self, outcome: ReportOutcome, report: String) -> Result<(), ToolError> {
+        if self.report_latch.as_ref().is_some_and(ReportLatch::is_set) {
+            return Err(ToolError::Input(REPORT_ALREADY_ACCEPTED.to_string()));
+        }
         let session = self.session()?;
         let (reply_tx, reply_rx) = oneshot::channel();
         self.tx()?
@@ -477,7 +527,11 @@ impl LifecyclePlane {
                 reply: reply_tx,
             })
             .map_err(|_| ToolError::Other("lifecycle service unavailable".to_string()))?;
-        flatten(reply_rx).await
+        flatten(reply_rx).await?;
+        if let Some(latch) = &self.report_latch {
+            latch.set();
+        }
+        Ok(())
     }
 
     /// Stop and archive one of the caller's subagents.
@@ -584,6 +638,53 @@ mod tests {
         }
         let error = task.await.unwrap().unwrap_err();
         assert!(matches!(error, ToolError::Input(message) if message.contains("unread")));
+    }
+
+    #[tokio::test]
+    async fn an_accepted_report_sets_the_latch_and_a_second_is_rejected_locally() {
+        let (plane, mut rx) = LifecyclePlane::new();
+        let latch = ReportLatch::new();
+        let plane = plane
+            .for_session(SessionId::new())
+            .with_report_latch(latch.clone());
+        let rejected_plane = plane.clone();
+        let task =
+            tokio::spawn(
+                async move { plane.report(ReportOutcome::Done, "first".to_string()).await },
+            );
+        if let LifecycleRequest::Report { reply, .. } = rx.recv().await.expect("request") {
+            reply.send(Ok(())).unwrap();
+        }
+        task.await.unwrap().expect("accepted");
+        assert!(latch.is_set());
+        let error = rejected_plane
+            .report(ReportOutcome::Done, "second".to_string())
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&error, ToolError::Input(message) if message == REPORT_ALREADY_ACCEPTED),
+            "{error:?}"
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "the second report never reaches the supervisor"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_rejected_report_leaves_the_latch_unset() {
+        let (plane, mut rx) = LifecyclePlane::new();
+        let latch = ReportLatch::new();
+        let plane = plane
+            .for_session(SessionId::new())
+            .with_report_latch(latch.clone());
+        let task =
+            tokio::spawn(async move { plane.report(ReportOutcome::Done, "x".to_string()).await });
+        if let LifecycleRequest::Report { reply, .. } = rx.recv().await.expect("request") {
+            reply.send(Err("unread mail".to_string())).unwrap();
+        }
+        assert!(task.await.unwrap().is_err());
+        assert!(!latch.is_set(), "a gate rejection must not end the turn");
     }
 
     #[tokio::test]

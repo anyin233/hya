@@ -16,7 +16,7 @@ impl Tool for ReportTool {
     fn schema(&self) -> hya_proto::ToolSchema {
         obj_schema(
             "report",
-            "Deliver your terminal report and end your episode. The engine checks you have no unread mail and no live children (answer or archive them first), writes your state handoff, delivers this report to your parent, and archives you. A follow-up from your parent can revive you with that handoff context.",
+            "Deliver your terminal report and end your episode. The engine checks you have no unread mail and no live children (answer or archive them first). Once accepted, your turn ends right after this tool round (no further model call); the engine writes your state handoff, delivers this report to your parent, and archives you. Call it once: a second report in the same episode is rejected. Mail from your parent can wake you later for a new episode with that handoff context.",
             json!({
                 "result": {
                     "type": "string",
@@ -46,7 +46,7 @@ impl Tool for ReportTool {
         ctx.lifecycle.report(outcome, result).await?;
         Ok(json!({
             "title": "Report accepted",
-            "output": "Report accepted. Your episode ends when this turn completes; you will be archived with a state handoff. Your parent can revive you later.",
+            "output": "Report accepted; your turn ends now. You will be archived with a state handoff; mail from your parent can wake you later.",
         }))
     }
 }

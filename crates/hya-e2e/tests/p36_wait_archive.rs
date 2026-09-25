@@ -30,13 +30,10 @@ async fn t2_31_wait_returns_when_the_worker_reports_inside_the_lead_turn() {
     let env = E2eEnvBuilder::new()
         .route(
             WORKER,
-            vec![
-                tool_step(
-                    "report",
-                    json!({"result": "WAITED_REPORT_OK", "outcome": "done"}),
-                ),
-                text_step("WORKER_FOLLOWUP"),
-            ],
+            vec![tool_step(
+                "report",
+                json!({"result": "WAITED_REPORT_OK", "outcome": "done"}),
+            )],
         )
         .route(
             ROOT,

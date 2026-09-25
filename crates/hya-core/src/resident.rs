@@ -1323,6 +1323,14 @@ impl TeamActor {
             .collect()
     }
 
+    /// Whether the slot holds an accepted report not yet executed.
+    fn has_pending_archive(&self, session: SessionId) -> bool {
+        self.lock()
+            .residents
+            .get(&session)
+            .is_some_and(|slot| slot.pending_archive.is_some())
+    }
+
     /// Take the slot's accepted report for execution (ADR-0015). The slot is
     /// marked archiving until the report commits (or is restored), so it owes
     /// no turn meanwhile and a `wait` keeps seeing it as finishing.
@@ -1952,6 +1960,13 @@ async fn resident_task(team: Arc<TeamActor>, session: SessionId, notify: Arc<Not
                             let _ = team.remove_slot(session);
                             return;
                         }
+                    }
+                    // An accepted report executes at rest before any
+                    // follow-up turn: mail the turn already steered in owes
+                    // no new episode, and genuinely unread mail fails the
+                    // at-rest gate re-check, which re-arms the wake.
+                    if team.has_pending_archive(session) {
+                        break;
                     }
                 }
                 Action::StopResident { terminate, reply } => {

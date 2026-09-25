@@ -135,6 +135,36 @@ call, and the `send` / `wait` paths. Every agent can satisfy the gate because
 the harness allocates the mail tools to every agent regardless of its bundle
 `resource_view` (see the [coordination tools](agent-tool-surface.md#coordination-tools-allocated-at-startup)).
 
+#### An accepted report ends the turn
+
+Once a `report` is accepted, the engine ends the member's turn right after
+the tool round that contained it: the other tool calls of that round
+(before or after the `report`) still run and their results are recorded,
+then the assistant message closes with exactly one `MessageFinished`
+(`finish: stop`, no `cause`) and **no further model call** is made. The tool
+result reads `Report accepted; your turn ends now. …` — it no longer invites
+the model to continue. (Before 0.41.0 the turn kept going and one model
+re-reported 43 times in one turn.)
+
+- **One report per episode.** A second `report` in the same turn is rejected
+  at the tool plane with an actionable `ToolError` ("already accepted … do not
+  call `report` again") and never reaches the supervisor, so an episode
+  produces exactly one `SubagentReported`. Mechanism: the turn loop hands a
+  turn-scoped `hya_tool::ReportLatch` to every `report` call; an accepted
+  report sets it.
+- **Mail during the report round** is not steered into that round's tool
+  results (the member gets no round to act on it). It stays unread, so the
+  archive re-check at rest fails, the report stays parked, and the mail wakes
+  a new episode in which the member may `report` again (the new report
+  replaces the parked one; still one `SubagentReported`).
+- **At rest first.** After a turn that accepted a report, the resident loop
+  executes the parked report before any follow-up turn, so mail the turn
+  already surfaced does not buy a fresh model round.
+- A member woken later (mail to its handle or DM after the archive) starts a
+  new episode and may report once more.
+- The lead never reports (the supervisor rejects `report` from `main`), so its
+  turns are unaffected.
+
 ### 3.2 Handoff pipeline
 
 The handoff call is the existing compaction handoff machinery with a
