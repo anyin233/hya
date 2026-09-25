@@ -92,6 +92,10 @@ pub struct SessionProjection {
     /// revert, or compaction.
     #[serde(default, skip_serializing_if = "SessionUsage::is_empty")]
     pub usage: SessionUsage,
+    /// Latest todo list, folded from `TodosUpdated`. `None` when the session
+    /// never recorded one (including sessions that predate the event).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub todos: Option<Vec<crate::TodoItem>>,
 }
 
 /// Latest window-occupancy report, mirroring the newest `ContextStatus` event.
@@ -693,7 +697,7 @@ pub struct HandoffProjection {
 /// different projection, or when `Projection` (or anything it contains)
 /// changes shape; the `reducer_fingerprint_pins_the_version` test fails until
 /// the bump is recorded.
-pub const PROJECTION_REDUCER_VERSION: u32 = 4;
+pub const PROJECTION_REDUCER_VERSION: u32 = 5;
 
 /// Durable snapshot encoding: the wire projection plus replay-only reducer
 /// state the wire form deliberately omits.
@@ -1662,6 +1666,10 @@ impl Projection {
                         None => m.usage = Some(MessageUsage::first(model, tokens)),
                     }
                 }
+            }
+            // Full replacement: the event carries the whole list.
+            Event::TodosUpdated { todos, .. } => {
+                self.session.todos = Some(todos.clone());
             }
             // Latest occupancy wins: clients read one current figure, not a history.
             Event::ContextStatus {

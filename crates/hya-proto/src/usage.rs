@@ -233,6 +233,10 @@ pub struct MessageUsage {
     pub tokens: TokenUsage,
     /// Number of recorded rounds.
     pub rounds: u32,
+    /// Usage of the latest recorded round alone: its `input + cache_read +
+    /// cache_write` is the prompt that round sent (context occupancy).
+    #[serde(default)]
+    pub last_round: TokenUsage,
 }
 
 impl MessageUsage {
@@ -243,6 +247,7 @@ impl MessageUsage {
             model: model.clone(),
             tokens: *tokens,
             rounds: 1,
+            last_round: *tokens,
         }
     }
 
@@ -251,6 +256,7 @@ impl MessageUsage {
         self.model = model.clone();
         self.tokens.add(*tokens);
         self.rounds = self.rounds.saturating_add(1);
+        self.last_round = *tokens;
     }
 }
 

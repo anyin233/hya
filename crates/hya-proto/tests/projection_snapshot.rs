@@ -153,7 +153,7 @@ fn reducer_fingerprint_pins_the_version() {
     let fingerprint = fnv1a(&encoded);
     assert_eq!(
         (PROJECTION_REDUCER_VERSION, fingerprint),
-        (4, 0x4a86_bcf7_42cd_2654),
+        (5, 0xed98_2213_1a20_c560),
         "reducer output changed: bump PROJECTION_REDUCER_VERSION and record \
          the new fingerprint {fingerprint:#018x}"
     );

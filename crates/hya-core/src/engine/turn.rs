@@ -1841,6 +1841,10 @@ impl SessionEngine {
                 }
                 let input_for_after =
                     (self.hooks.is_some() || activation_hooks.is_some()).then(|| tc.input.clone());
+                let todo_tool = super::todos::is_todo_tool(tc.name.as_str());
+                if todo_tool {
+                    self.restore_todo_plane(session).await;
+                }
                 let started = std::time::Instant::now();
                 let (result, result_policy) = match resources.resolve_tool(&tc.name) {
                     Some(resolved) => {
@@ -2043,7 +2047,23 @@ impl SessionEngine {
                         )
                     }
                 };
+                let todo_output = match &event {
+                    Event::ToolResult { output, .. } if todo_tool => Some(output.clone()),
+                    _ => None,
+                };
                 self.emit_for_actor(actor_claim, session, event).await?;
+                // A todo tool's result carries the whole list; record the
+                // change so the projection (and `todoUpdated`) follow it.
+                if let Some(output) = todo_output
+                    && let Some(todos) = self.changed_todos(session, &output).await
+                {
+                    self.emit_for_actor(
+                        actor_claim,
+                        session,
+                        Event::TodosUpdated { session, todos },
+                    )
+                    .await?;
+                }
                 if retains_artifact {
                     artifact_guard.disarm();
                 } else {

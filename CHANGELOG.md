@@ -32,6 +32,14 @@
 - Fix: cancelling or crash-recovering a parent turn no longer marks subagents whose `task` call already returned as cancelled.
 - `GET /v1/interactions` and gRPC `ListInteractions` now return question interactions with the same `options`, `detail` (header), and `payload` as the live `questionRequested` frame. The frame's `payload` now carries every question: `{questions: [{question, header, options: [{label, description}], multiple?, custom?}]}`.
 - Session event streams take an opt-in `includeDescendants=true` (gRPC `StreamSessionEventsRequest.include_descendants`). With it, permission and question asks from subagent sessions at any depth, and their resolutions, arrive on an ancestor's stream, tagged with the asking session. Without it, a stream behaves as before.
+- `ModelSummary` reports each model's `contextLimit` and `outputLimit`.
+- New usage fields, and a stream event per provider call:
+  - `MessageInfo.usage` is the message's billed sum. `MessageInfo.roundUsage` is its latest round, used for context occupancy: `input + cacheRead + cacheWrite` against the model's `contextLimit`.
+  - `SessionInfo.usage` is the session total, including title and summarizer calls. `TokenUsage` gains `reasoningUnknown`.
+  - Each billed provider call streams as a durable `tokensRecorded { message, model, usage }`.
+- Todo lists are now recorded as events. A change made by a todo tool records `todos_updated`; `GetSessionTodo` reads the projection, and the stream carries `todoUpdated { items }`. Sessions created before this version still read their list from todo tool results until their next todo edit.
+- Fix: after a restart, the next todo edit builds on the recorded list instead of an empty one.
+- `/compact` (`CompactSession`, and `SummarizeSession`) now records the same compaction event as automatic compaction. `compactionApplied` gains `message` (the summary divider), `foldedCount`, and `manual`. The projection reducer version is now 5, so cached projections are rebuilt once on upgrade.
 
 ## Session permission modes
 

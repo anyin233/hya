@@ -8,46 +8,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use hya_proto::SessionId;
-use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
-/// One todo row stored for a session.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct TodoItem {
-    /// Stable item identifier assigned by the plane (never reused).
-    pub id: String,
-    /// Human-readable task text.
-    pub content: String,
-    /// Lifecycle status of the item.
-    pub status: TodoStatus,
-}
-
-/// Lifecycle status of a [`TodoItem`].
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TodoStatus {
-    /// Not started.
-    Pending,
-    /// Currently being worked on.
-    InProgress,
-    /// Waiting on an external unblock (dependency, user input, review).
-    Blocked,
-    /// Done.
-    Completed,
-}
-
-impl TodoStatus {
-    /// Borrow the wire spelling of the status.
-    #[must_use]
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Pending => "pending",
-            Self::InProgress => "in_progress",
-            Self::Blocked => "blocked",
-            Self::Completed => "completed",
-        }
-    }
-}
+pub use hya_proto::{TodoItem, TodoStatus};
 
 /// Mutable per-session todo state guarded by the plane's lock.
 #[derive(Default)]
@@ -85,5 +48,22 @@ impl TodoPlane {
     /// Return a clone of the current list (empty if never written).
     pub async fn get(&self, session: SessionId) -> Vec<TodoItem> {
         self.apply(session, |state| state.items.clone()).await
+    }
+
+    /// Restore a session's list recorded on its log (after a restart the
+    /// plane starts empty) unless this process already holds state for it.
+    /// The id counter resumes after the highest numeric id, so restored ids
+    /// are never drawn again.
+    pub async fn restore(&self, session: SessionId, items: Vec<TodoItem>) {
+        let mut guard = self.todos.lock().await;
+        if guard.contains_key(&session) || items.is_empty() {
+            return;
+        }
+        let next_id = items
+            .iter()
+            .filter_map(|item| item.id.parse::<u64>().ok())
+            .max()
+            .unwrap_or(0);
+        guard.insert(session, SessionTodos { items, next_id });
     }
 }

@@ -908,6 +908,21 @@ pub enum Event {
         tokens: TokenUsage,
     },
 
+    // -------- todos --------
+    /// The session's todo list changed: the full list after a todo tool call.
+    ///
+    /// Appended by the engine right after the `ToolResult` of a todo tool
+    /// whose result carries a list different from the folded one (reads that
+    /// change nothing append nothing). Folds into `SessionProjection.todos`.
+    /// Sessions that predate this event have none; their list is read from
+    /// the todo tools' results instead. An older binary folds it as `Unknown`.
+    TodosUpdated {
+        /// Session whose todo list changed.
+        session: SessionId,
+        /// Full replacement list, in order.
+        todos: Vec<crate::TodoItem>,
+    },
+
     // -------- errors --------
     /// Runtime error frame; `session` optional for global errors.
     ///
@@ -1109,7 +1124,8 @@ impl Event {
             | Event::SessionForked { session, .. }
             | Event::ContextEvicted { session, .. }
             | Event::ContextStatus { session, .. }
-            | Event::UsageRecorded { session, .. } => Some(*session),
+            | Event::UsageRecorded { session, .. }
+            | Event::TodosUpdated { session, .. } => Some(*session),
             Event::Error { session, .. } => *session,
             Event::Unknown => None,
         }

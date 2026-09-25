@@ -1,6 +1,6 @@
 use hya_proto::{
-    AgentName, Message, MessageId, ModelRef, Part, PartProjection, Projection, Role, SessionId,
-    UsagePurpose,
+    AgentName, CompactionStrategy, Event, Message, MessageId, ModelRef, Part, PartProjection,
+    Projection, Role, SessionId, UsagePurpose,
 };
 
 use super::SessionEngine;
@@ -60,8 +60,30 @@ impl SessionEngine {
         // Behind the marker, not merely appended. Without it `compacted_messages`
         // never finds a cut point, so the summarized history stays in the
         // transcript and `/compact` *grows* the context it was asked to shrink.
-        self.inject_system_message(session, format!("{COMPACT_CONTEXT_MARKER}\n{summary}"))
-            .await
+        let marker = self
+            .inject_system_message(session, format!("{COMPACT_CONTEXT_MARKER}\n{summary}"))
+            .await?;
+        // The same record the automatic strategies append: a summarizer fold
+        // with no retained tail, so the range is the whole window it saw.
+        // `threshold: 0` marks it manual (no threshold tripped).
+        if let (Some(first), Some(last)) = (messages.first(), messages.last()) {
+            self.emit(
+                session,
+                Event::ContextCompacted {
+                    session,
+                    message: marker,
+                    strategy: CompactionStrategy::LocalSummarizer,
+                    from_message: first.id(),
+                    to_message: last.id(),
+                    folded_count: u32::try_from(messages.len()).unwrap_or(u32::MAX),
+                    input_tokens_est: u64::try_from(self.token_accounting.estimate(&messages))
+                        .unwrap_or(u64::MAX),
+                    threshold: 0,
+                },
+            )
+            .await?;
+        }
+        Ok(marker)
     }
 }
 

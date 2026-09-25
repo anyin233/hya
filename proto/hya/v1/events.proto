@@ -342,7 +342,7 @@ message InteractionResolved {
 
 // The session todo list changed.
 message TodoUpdated {
-  // Full replacement todo list.
+  // Full replacement todo list (the same rows `GetSessionTodo` returns).
   repeated TodoItem items = 1;
 }
 
@@ -352,19 +352,31 @@ message WorkflowUpdated {
   WorkflowState state = 1;
 }
 
-// Token usage was recorded for a round.
+// Billed usage of one provider call. Durable: one per streaming round of an
+// assistant message, plus side calls (title, summarizer) made for the
+// session, which carry no `message`.
 message TokensRecorded {
-  // Message the round belongs to.
+  // Assistant message the round belongs to; empty for a side call.
   string message = 1;
-  // Usage recorded for the round.
+  // Usage of this one call (not a message sum).
   TokenUsage usage = 2;
+  // Model that served the call (`provider/model`).
+  string model = 3;
 }
 
-// A compaction strategy was applied to the context.
+// A compaction folded part of the context behind a summary. Emitted by the
+// automatic mid-turn strategies and by a manual `CompactSession`.
 message CompactionApplied {
-  // Watermark the context was compacted up to.
+  // Sequence of this compaction record.
   uint64 until_seq = 1;
-  // Strategy that fired (`shake`, `remote`, `soft`, `snap_compact`,
-  // `handoff`).
+  // Strategy that fired: `Native`, `LocalSummarizer`, `SnapCompact`, or
+  // `Handoff` (a manual compaction reports `LocalSummarizer`).
   string strategy = 2;
+  // System message carrying the summary (the transcript divider).
+  string message = 3;
+  // Number of messages folded behind the summary.
+  uint32 folded_count = 4;
+  // Whether a client asked for it (`CompactSession`) rather than the
+  // context crossing its threshold.
+  bool manual = 5;
 }

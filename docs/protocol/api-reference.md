@@ -947,6 +947,8 @@ One selectable model.
 | `display_name` (4) | `string` | Display name when the provider publishes one. |
 | `reasoning` (5) | `bool` | Whether the route supports reasoning effort variants. |
 | `auth` (6) | `AuthStatus` | Auth state of the owning provider route. |
+| `context_limit` (7) | `uint64` | Context window of the route in tokens: the configured `limit.context`, else the route's advertised default. 0 when unknown. |
+| `output_limit` (8) | `uint64` | Maximum output tokens (`limit.output`); 0 when unknown. |
 
 ### `ListModelsResponse`
 
@@ -1371,7 +1373,7 @@ The session todo list changed.
 
 | Field | Type | Description |
 |---|---|---|
-| `items` (1) | `repeated TodoItem` | Full replacement todo list. |
+| `items` (1) | `repeated TodoItem` | Full replacement todo list (the same rows `GetSessionTodo` returns). |
 
 ### `WorkflowUpdated`
 
@@ -1383,21 +1385,28 @@ The workflow projection changed.
 
 ### `TokensRecorded`
 
-Token usage was recorded for a round.
+Billed usage of one provider call. Durable: one per streaming round of an
+assistant message, plus side calls (title, summarizer) made for the
+session, which carry no `message`.
 
 | Field | Type | Description |
 |---|---|---|
-| `message` (1) | `string` | Message the round belongs to. |
-| `usage` (2) | `TokenUsage` | Usage recorded for the round. |
+| `message` (1) | `string` | Assistant message the round belongs to; empty for a side call. |
+| `usage` (2) | `TokenUsage` | Usage of this one call (not a message sum). |
+| `model` (3) | `string` | Model that served the call (`provider/model`). |
 
 ### `CompactionApplied`
 
-A compaction strategy was applied to the context.
+A compaction folded part of the context behind a summary. Emitted by the
+automatic mid-turn strategies and by a manual `CompactSession`.
 
 | Field | Type | Description |
 |---|---|---|
-| `until_seq` (1) | `uint64` | Watermark the context was compacted up to. |
-| `strategy` (2) | `string` | Strategy that fired (`shake`, `remote`, `soft`, `snap_compact`, `handoff`). |
+| `until_seq` (1) | `uint64` | Sequence of this compaction record. |
+| `strategy` (2) | `string` | Strategy that fired: `Native`, `LocalSummarizer`, `SnapCompact`, or `Handoff` (a manual compaction reports `LocalSummarizer`). |
+| `message` (3) | `string` | System message carrying the summary (the transcript divider). |
+| `folded_count` (4) | `uint32` | Number of messages folded behind the summary. |
+| `manual` (5) | `bool` | Whether a client asked for it (`CompactSession`) rather than the context crossing its threshold. |
 
 ### `ReadFileRequest`
 
@@ -1740,6 +1749,7 @@ Token accounting for one model round.
 | `reasoning` (3) | `uint64` | Thinking tokens within `output` when the provider reports them; 0 when it does not (the thinking split is then unknown, never estimated). |
 | `cache_read` (4) | `uint64` | Prompt tokens served from cache. |
 | `cache_write` (5) | `uint64` | Prompt tokens written to cache (cache creation). |
+| `reasoning_unknown` (6) | `bool` | The provider did not report the thinking share of `output` (for a sum: at least one summed call did not), so `reasoning` undercounts. |
 
 ### `TextPart`
 
@@ -1826,6 +1836,8 @@ Projection snapshot of one message.
 | `time_updated` (9) | `google.protobuf.Timestamp` | When the message projection last changed (parts, live deltas, usage, error, finish). |
 | `finish_cause` (10) | `FinishCause` | Harness cause of the finish (cancel, shutdown, crash recovery, provider failure). |
 | `error` (11) | `MessageError` | Why the turn that drove this assistant message failed; set only when the engine recorded an error for it (`finish` is then `FINISH_REASON_ERROR`). |
+| `usage` (12) | `TokenUsage` | Billed usage of the assistant message: the sum of its provider rounds (`TokensRecorded`), or the finish total for messages recorded before per-round usage. Unset when no usage was reported. |
+| `round_usage` (13) | `TokenUsage` | Usage of the message's latest provider round (the request `model` served last). Its `input + cache_read + cache_write` is the prompt that round sent: the session's context occupancy against the model's `ModelSummary.context_limit`. Unset without per-round usage. |
 
 ### `MessageError`
 
@@ -2241,6 +2253,7 @@ Projection summary of one session.
 | `busy` (11) | `bool` | Whether a run currently owns the session's admission slot (derived from the process run registry, not the durable log). |
 | `permission_mode` (12) | `string` | Effective permission mode of the session tree: `manual`, `yolo`, or `<bundle-id>/<mode-id>`. Recorded on the root session (children report the root's mode); the process default (`yolo` under `--yolo` or `permission.model: danger`, else `manual`) when none was set. |
 | `members` (13) | `repeated MemberInfo` | Subagents this session spawned, in spawn order, with their latest status (folded from the session's own log). The live counterpart is the `memberUpdated` stream event. |
+| `usage` (14) | `TokenUsage` | Billed usage of the session: every provider call made for it (turn rounds plus title/summarizer side calls), summed. Never decreases (compaction, revert, and deletion keep billed usage). Unset when none. |
 
 ### `CreateSessionRequest`
 

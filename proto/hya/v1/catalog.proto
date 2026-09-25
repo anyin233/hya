@@ -126,6 +126,11 @@ message ModelSummary {
   bool reasoning = 5;
   // Auth state of the owning provider route.
   AuthStatus auth = 6;
+  // Context window of the route in tokens: the configured
+  // `limit.context`, else the route's advertised default. 0 when unknown.
+  uint64 context_limit = 7;
+  // Maximum output tokens (`limit.output`); 0 when unknown.
+  uint64 output_limit = 8;
 }
 
 message ListModelsResponse {

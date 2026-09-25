@@ -85,6 +85,7 @@ impl TextPartAccumulator {
             | Event::ContextEvicted { .. }
             | Event::ContextStatus { .. }
             | Event::UsageRecorded { .. }
+            | Event::TodosUpdated { .. }
             | Event::Error { .. }
             | Event::Unknown => None,
         }

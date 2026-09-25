@@ -178,6 +178,7 @@ pub(crate) fn session_info(
         // can walk the lineage.
         permission_mode: String::new(),
         members: session.members.iter().map(member_info).collect(),
+        usage: (!session.usage.is_empty()).then(|| usage_totals(&session.usage.total())),
     }
 }
 
@@ -269,6 +270,42 @@ pub(crate) fn message(message: &MessageProjection) -> pb::MessageInfo {
             code: error.code.clone(),
             message: error.message.clone(),
         }),
+        // Attributed rounds when recorded; the legacy finish total otherwise.
+        usage: message
+            .usage
+            .as_ref()
+            .map(|usage| usage.tokens)
+            .or(message.tokens)
+            .as_ref()
+            .map(token_usage),
+        round_usage: message
+            .usage
+            .as_ref()
+            .map(|usage| token_usage(&usage.last_round)),
+    }
+}
+
+/// Map one domain usage (a call, or a sum of calls) to the wire.
+pub(crate) fn token_usage(tokens: &hya_proto::TokenUsage) -> pb::TokenUsage {
+    pb::TokenUsage {
+        input: tokens.input,
+        output: tokens.output,
+        reasoning: tokens.reasoning,
+        cache_read: tokens.cache_read,
+        cache_write: tokens.cache_write,
+        reasoning_unknown: tokens.reasoning_unknown,
+    }
+}
+
+/// Map folded session totals to the wire usage shape.
+fn usage_totals(totals: &hya_proto::UsageTotals) -> pb::TokenUsage {
+    pb::TokenUsage {
+        input: totals.input,
+        output: totals.output,
+        reasoning: totals.reasoning,
+        cache_read: totals.cache_read,
+        cache_write: totals.cache_write,
+        reasoning_unknown: totals.reasoning_unknown_output > 0,
     }
 }
 
@@ -592,9 +629,36 @@ pub(crate) fn stream_event(envelope: &Envelope) -> Option<pb::StreamEvent> {
             code: code.clone(),
             error_message: text.clone(),
         }),
-        Event::ContextCompacted { strategy, .. } => P::CompactionApplied(pb::CompactionApplied {
+        Event::ContextCompacted {
+            strategy,
+            message,
+            folded_count,
+            threshold,
+            ..
+        } => P::CompactionApplied(pb::CompactionApplied {
             until_seq: envelope.seq.0,
             strategy: format!("{strategy:?}"),
+            message: message.to_string(),
+            folded_count: *folded_count,
+            // Automatic strategies record the threshold that tripped; a
+            // manual `CompactSession` records none.
+            manual: *threshold == 0,
+        }),
+        Event::UsageRecorded {
+            message,
+            model,
+            tokens,
+            ..
+        } => P::TokensRecorded(pb::TokensRecorded {
+            message: message
+                .as_ref()
+                .map(ToString::to_string)
+                .unwrap_or_default(),
+            usage: Some(token_usage(tokens)),
+            model: model.to_string(),
+        }),
+        Event::TodosUpdated { todos, .. } => P::TodoUpdated(pb::TodoUpdated {
+            items: super::message::todo_list(todos).items,
         }),
         Event::WorkflowSelected { .. }
         | Event::WorkflowRunStarted { .. }
