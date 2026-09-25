@@ -160,7 +160,7 @@ pub fn team_quick_reference(has: impl Fn(&str) -> bool, depth: u32) -> Option<St
     let mut lines: Vec<&str> = Vec::new();
     if has("task") {
         lines.push(
-            "- `task` is non-blocking: it returns the child's handle immediately (its optional name parameter is the handle's role prefix: scout becomes scout-suzuran under your path). Results arrive later as mail — watch for `[NEW MAIL]` notices appended to tool results.",
+            "- `task` is non-blocking: it returns the child's handle immediately (choose the agent with its subagent_type parameter; the harness names the member <subagent_type>-<operator>, so subagent_type scout becomes scout-suzuran under your path). Results arrive later as mail — watch for `[NEW MAIL]` notices appended to tool results.",
         );
     }
     if mail {
@@ -399,6 +399,17 @@ mod tests {
             None,
             "no coordination tool, no reference"
         );
+    }
+
+    #[test]
+    fn team_reference_chooses_the_agent_by_subagent_type() {
+        let out = reference(&FULL_TOOLS, 0);
+        assert!(
+            out.contains("choose the agent with its subagent_type parameter")
+                && out.contains("<subagent_type>-<operator>"),
+            "{out}"
+        );
+        assert!(!out.contains("name parameter"), "{out}");
     }
 
     #[test]

@@ -5,7 +5,7 @@ use serde_json::{Map, Value, json};
 
 use hya_tool::tool::obj_schema;
 use hya_tool::{Action, Resource};
-use hya_tool::{InlineAgent, SpawnError, SpawnMember, normalize_handle_prefix};
+use hya_tool::{InlineAgent, SpawnError, SpawnMember};
 use hya_tool::{Tool, ToolCtx, ToolError};
 
 pub struct TaskTool;
@@ -58,8 +58,10 @@ struct TaskMemberInput {
     model: Option<String>,
     #[serde(default)]
     inline_agent: Option<InlineAgentInput>,
+    /// Removed in 0.41.0; present only so a call that still sends it fails
+    /// with [`REMOVED_NAME`] instead of being silently ignored.
     #[serde(default)]
-    name: Option<String>,
+    name: Option<Value>,
 }
 
 #[derive(Deserialize)]
@@ -80,17 +82,18 @@ struct TaskInput {
     inline_agent: Option<InlineAgentInput>,
     #[serde(default)]
     members: Vec<TaskMemberInput>,
+    /// Removed in 0.41.0; see [`TaskMemberInput::name`].
     #[serde(default)]
-    name: Option<String>,
+    name: Option<Value>,
 }
 
-/// Validate an optional `name` (handle role prefix); blank means "default".
-fn handle_prefix(raw: Option<String>) -> Result<Option<String>, ToolError> {
-    match raw {
-        Some(raw) if !raw.trim().is_empty() => normalize_handle_prefix(&raw)
-            .map(Some)
-            .map_err(ToolError::Input),
-        _ => Ok(None),
+/// Input error for a call that still passes the removed `name` parameter.
+const REMOVED_NAME: &str = "`name` was removed; the handle is derived from `subagent_type`. Choose the agent with `subagent_type` (e.g. `\"subagent_type\": \"scout\"`) and drop `name`: the harness names the member `<subagent_type>-<operator>` (`main/scout-suzuran`).";
+
+fn reject_removed_name(name: Option<&Value>) -> Result<(), ToolError> {
+    match name {
+        Some(_) => Err(ToolError::Input(REMOVED_NAME.to_string())),
+        None => Ok(()),
     }
 }
 
@@ -113,7 +116,7 @@ impl Tool for TaskTool {
     fn schema(&self) -> ToolSchema {
         obj_schema(
             "task",
-            "Launch a specialized subagent (ADR-0015 episodic actor). Non-blocking: returns immediately with the agent's handle; results arrive later as its `report` mail. Continue the conversation, then check mail or wait for the report. Follow up on a finished agent by sending mail to its handle; archived agents are revived by that mail. The handle is your `name` (a role prefix, default the subagent type) plus a random name the harness appends, under your own path: `name: \"scout\"` → `main/scout-suzuran`. Handles are never reused in a team.",
+            "Launch a specialized subagent (ADR-0015 episodic actor). Non-blocking: returns immediately with the agent's handle; results arrive later as its `report` mail. Continue the conversation, then check mail or wait for the report. Follow up on a finished agent by sending mail to its handle; archived agents are revived by that mail. Choose the agent with `subagent_type`; the harness names the member `<subagent_type>-<operator>` under your own path (`subagent_type: \"scout\"` → `main/scout-suzuran`). Handles are never reused in a team.",
             json!({
                 "description": {
                     "type": "string",
@@ -125,11 +128,7 @@ impl Tool for TaskTool {
                 },
                 "subagent_type": {
                     "type": "string",
-                    "description": "The type of specialized agent to use for this task"
-                },
-                "name": {
-                    "type": "string",
-                    "description": "Role prefix for the subagent's handle: lowercase letters, digits and single hyphens, at most 32 characters (e.g. `scout`, `dev`, `reviewer`). The harness appends a random name (`scout` → `main/scout-suzuran`). Defaults to the subagent type."
+                    "description": "The agent id to spawn (chooses the agent; it also names the member `<subagent_type>-<operator>`). Omitted or empty spawns `general`."
                 },
                 "category": {
                     "type": "string",
@@ -162,7 +161,6 @@ impl Tool for TaskTool {
                             "description": { "type": "string" },
                             "prompt": { "type": "string" },
                             "subagent_type": { "type": "string" },
-                            "name": { "type": "string", "description": "Role prefix for this member's handle (see top-level `name`)" },
                             "category": { "type": "string" },
                             "model": { "type": "string" },
                             "inline_agent": {
@@ -195,11 +193,13 @@ impl Tool for TaskTool {
             .session
             .ok_or_else(|| ToolError::Other("task tool requires a session".to_string()))?
             .to_string();
+        reject_removed_name(input.name.as_ref())?;
 
         let mut members: Vec<SpawnMember> = input
             .members
             .into_iter()
             .map(|m| {
+                reject_removed_name(m.name.as_ref())?;
                 let subagent_type = normalized_agent_target(&m.subagent_type);
                 let inline_agent = m
                     .inline_agent
@@ -211,7 +211,6 @@ impl Tool for TaskTool {
                     model: m.model,
                     category: m.category,
                     inline_agent,
-                    name: handle_prefix(m.name)?,
                 })
             })
             .collect::<Result<_, ToolError>>()?;
@@ -232,7 +231,6 @@ impl Tool for TaskTool {
                 model: input.model,
                 category: input.category,
                 inline_agent,
-                name: handle_prefix(input.name)?,
             });
         }
 

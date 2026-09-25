@@ -113,25 +113,30 @@ Depth is a constant `MAX_SUBAGENT_DEPTH = 2` in `hya-core`
 (`crates/hya-core/src/lib.rs` re-export). The `subagent.max_depth` config key
 is removed; `SubagentLimits` keeps concurrency/budget fields only.
 
-### 2.1 Handles: role prefix + operator name (0.41.0)
+### 2.1 Handles: agent type + operator name (0.41.0)
 
 A member's canonical handle is its parent's path plus a **leaf**
 `<prefix>-<operator>`:
 
-- `prefix` is the role name the spawning agent passes as the `task` tool's
-  `name` (`scout`, `dev`, `reviewer`, …); omitted, it is the spawned agent id
-  (`hya-worker`, `hya-implementer`, `explore`). A prefix is trimmed and
-  lowercased, then must be 1–32 characters of `[a-z0-9-]` with no leading,
-  trailing, or doubled `-` (so never a `/`); anything else is an actionable
-  `task` error that suggests a valid spelling (`dev/team` → `dev-team`).
-  Agent ids used as the default are sanitized the same way.
+- `prefix` is derived from the `task` tool's `subagent_type` — the only way a
+  caller chooses the agent. It is the resolved agent id (so
+  `bundle:hya-extra/scout/agent/scout` and `scout` both give `scout`),
+  sanitized deterministically: ASCII-lowercased, every run of other
+  characters (`_`, `.`, `/`, spaces, non-ASCII) collapsed to one `-`, trimmed
+  of `-`, capped at 32 characters, `agent` when nothing is left
+  (`Acme_Scout.v2` → `acme-scout-v2`). An omitted or empty `subagent_type`
+  spawns `general`, so its prefix is `general`. An `inline_agent` overlay's
+  `name` does not change the prefix. The caller cannot pick a prefix: the
+  `name` parameter was removed and a call that still passes it fails with an
+  `input` error.
 - `operator` is ONE name drawn uniformly at random from the checked-in
   Arknights operator list `crates/hya-core/src/handle_names.txt` (419 names,
   1–26 characters, lowercase ASCII, `^[a-z0-9]+(-[a-z0-9]+)*$`), embedded
   with `include_str!` — no network access at build or run time.
 
-Examples: `main/scout-suzuran`, `main/dev-exusiai`,
-`main/dev-exusiai/general-amiya`, `main/reviewer-blue-poison`.
+Examples: `main/scout-suzuran`, `main/hya-implementer-exusiai`,
+`main/hya-implementer-exusiai/general-amiya`,
+`main/hya-reviewer-blue-poison`.
 
 **Name list provenance.** Snapshot of the prts.wiki operator list (干员一览,
 the `data-en` attribute of every operator) taken 2026-09-25, normalized
@@ -435,8 +440,9 @@ channel minted after a long lead turn began is steered too. Full contract:
 [Agent tool surface](agent-tool-surface.md).
 
 `task` schema: `resident` and `background` fields are removed; `members[]`
-fan-out remains; the optional `name` (top level or per member) is the handle's
-role prefix (§2.1); the result carries, per member, handle + session + DM
+fan-out remains; `subagent_type` chooses the agent and names the handle
+`<subagent_type>-<operator>` (§2.1; the former `name` parameter is removed and
+rejected); the result carries, per member, handle + session + DM
 channel id. `task_id` resume is removed (revival supersedes it).
 
 ## 7. Archive index and search_agent

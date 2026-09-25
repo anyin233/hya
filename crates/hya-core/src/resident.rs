@@ -372,9 +372,9 @@ struct ResidentSpawnContext {
     registration: ResidentRegistration,
     parent_claim: Option<ActorClaim>,
     guidance: Option<Arc<str>>,
-    /// Caller-chosen handle prefix (the `task` tool's `name`); `None` uses
-    /// the agent id.
-    name: Option<String>,
+    /// The agent id the `task` call named (`subagent_type`, resolved); the
+    /// handle prefix is its sanitized form. `None` uses the spec's agent name.
+    subagent_type: Option<String>,
 }
 
 impl ResidentSpawnContext {
@@ -387,12 +387,12 @@ impl ResidentSpawnContext {
             registration,
             parent_claim: parent_claim.copied(),
             guidance,
-            name: None,
+            subagent_type: None,
         }
     }
 
-    fn named(mut self, name: Option<&str>) -> Self {
-        self.name = name.map(str::to_string);
+    fn typed(mut self, subagent_type: &str) -> Self {
+        self.subagent_type = Some(subagent_type.to_string());
         self
     }
 }
@@ -3484,23 +3484,22 @@ impl ResidentSupervisor {
         Ok((session, handle))
     }
 
-    /// [`spawn_resident`](Self::spawn_resident) with a caller-chosen handle
-    /// prefix (the `task` tool's `name`): the handle becomes
-    /// `<parent path>/<name>-<operator>`; `None` uses the agent id. See
-    /// [`crate::handle_naming`].
+    /// [`spawn_resident`](Self::spawn_resident) for a `task` spawn: the handle
+    /// prefix is the sanitized `subagent_type` (the resolved agent id the call
+    /// named, see [`hya_tool::sanitize_handle_prefix`]) rather than the spec's
+    /// agent name, which an inline overlay may replace. The handle becomes
+    /// `<parent path>/<subagent_type>-<operator>`; see [`crate::handle_naming`].
     ///
     /// # Errors
-    /// [`CoreError::Invalid`] (before anything is created) when `name` is not
-    /// a valid prefix, plus every [`spawn_resident`](Self::spawn_resident)
-    /// failure.
+    /// Every [`spawn_resident`](Self::spawn_resident) failure.
     #[allow(clippy::too_many_arguments)]
-    pub async fn spawn_resident_named(
+    pub async fn spawn_resident_typed(
         &self,
         parent: SessionId,
         agent: AgentSpec,
         resolved: ResolvedResidentRuntime,
         directive: String,
-        name: Option<&str>,
+        subagent_type: &str,
         parent_claim: Option<&ActorClaim>,
         guidance: Option<Arc<str>>,
     ) -> Result<(SessionId, String), CoreError> {
@@ -3514,7 +3513,7 @@ impl ResidentSupervisor {
                     parent_claim,
                     guidance,
                 )
-                .named(name),
+                .typed(subagent_type),
             )
             .await?;
         Ok((session, handle))
@@ -3558,13 +3557,11 @@ impl ResidentSupervisor {
             registration,
             parent_claim,
             guidance,
-            name,
+            subagent_type,
         } = context;
-        // Validate the prefix before anything is created.
-        let prefix = match name.as_deref() {
-            Some(name) => hya_tool::normalize_handle_prefix(name).map_err(CoreError::Invalid)?,
-            None => hya_tool::sanitize_handle_prefix(agent.name.as_str()),
-        };
+        let prefix = hya_tool::sanitize_handle_prefix(
+            subagent_type.as_deref().unwrap_or(agent.name.as_str()),
+        );
         let (registration_directive, initial) = match registration {
             ResidentRegistration::Armed(directive) => (directive.clone(), Some(directive)),
             ResidentRegistration::Parked(directive) => (directive, None),

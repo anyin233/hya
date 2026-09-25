@@ -1010,9 +1010,9 @@ folded by `hya-proto::Projection` (see
 
 Reach is **hierarchy-scoped**: an agent addresses only its parent, its
 same-parent siblings, and its direct reports. Handles are canonical paths
-(`main/lead-amiya/worker-texas`; leaves are `<prefix>-<operator>`, see
-[subagent-orchestration.md §2.1](subagent-orchestration.md#21-handles-role-prefix--operator-name-0410))
-and channels belong to one unit (`main/lead-amiya#build`). The rule itself is pure path arithmetic in
+(`main/hya-planner-amiya/hya-worker-texas`; leaves are `<subagent_type>-<operator>`, see
+[subagent-orchestration.md §2.1](subagent-orchestration.md#21-handles-agent-type--operator-name-0410))
+and channels belong to one unit (`main/hya-planner-amiya#build`). The rule itself is pure path arithmetic in
 `hya-proto::scope`, enforced at a write gate in `hya-store` and a read filter in
 `hya-core` (see
 [ADR 0011](../adr/0011-hierarchy-scoped-mailbox.md)).

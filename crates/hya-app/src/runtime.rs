@@ -2202,14 +2202,15 @@ fn spawn_team_supervisor_with_environment(
                             sidecar_factory,
                             ..
                         } = resolved;
-                        let _authorized_target = authorized_target;
+                        // The handle prefix is the resolved agent id the
+                        // call named (not an inline overlay's name).
                         match resident_supervisor
-                            .spawn_resident_named(
+                            .spawn_resident_typed(
                                 parent,
                                 agent,
                                 (binding, agents, resources, sidecar_factory),
                                 member.prompt,
-                                member.name.as_deref(),
+                                authorized_target.as_str(),
                                 actor_claim.as_ref(),
                                 guidance,
                             )
@@ -5487,7 +5488,6 @@ You are the installed resident agent.
                     category: case.inline_category.map(str::to_string),
                     ..InlineAgent::default()
                 }),
-                name: None,
             };
 
             let resolve_ctx = ResolveSpawnMemberCtx {
