@@ -158,21 +158,23 @@ routes. See the [protocol guide](protocol/README.md) for those frames.
 
 ```text
 hya · <session> · <agent> <provider/model> · <server>   ┌─Sessions───────────┐
-                                                        │▸ 1. Review         │
-┃ your prompt                                           │   build · ◌ waiting│
-                                                        │                    │
-● build · fake/model                                    └────────────────────┘
-◌ bash  cargo test · awaiting approval                  ┌─Todos──────────────┐
-                                                        │No todos yet        │
-┌─Permission─────────────────────────────────────────┐  └────────────────────┘
-│bash  cargo test                                    │  ┌─Context────────────┐
-│asked by build                                      │  │Session  hysec_…    │
-││ $ cargo test                                      │  │Agent    build      │
-│▸ 1  Allow once                                     │  │Model    fake/model │
-│  2  Always allow  bash: cargo test                 │  │Messages 2          │
-│  3  Deny                                           │  │Dir      …/work     │
-│1-3 or ↑↓ Enter · Esc denies · perm_…               │  │Server   127.0.0.1:…│
-└────────────────────────────────────────────────────┘  └────────────────────┘
+mode manual · …/work · ⎇ main                           │▸ 1. Review         │
+                                                        │   build · ◌ waiting│
+┃ your prompt                                           │                    │
+                                                        └────────────────────┘
+● build · fake/model                                    ┌─Todos──────────────┐
+◌ bash  cargo test · awaiting approval                  │○ write tests       │
+⠹ 0:07 · Running bash cargo test · Esc to interrupt     │◐ fix the bug       │
+                                                        └────────────────────┘
+┌─Permission─────────────────────────────────────────┐  ┌─Context────────────┐
+│bash  cargo test                                    │  │Session  hysec_…    │
+│asked by build                                      │  │Agent    build      │
+││ $ cargo test                                      │  │Model    fake/model │
+│▸ 1  Allow once                                     │  │Messages 2          │
+│  2  Always allow  bash: cargo test                 │  │Dir      …/work     │
+│  3  Deny                                           │  │Server   127.0.0.1:…│
+│1-3 or ↑↓ Enter · Esc denies · perm_…               │  └────────────────────┘
+└────────────────────────────────────────────────────┘
 Running · msg_…
 ┌────────────────────────────────────────────────────┐
 │ Message, /command, !shell, or @file                │
@@ -181,22 +183,28 @@ Enter a prompt · /new creates a session · /help …
 ```
 
 The main column holds, from top to bottom: the header line (session, agent,
-model, server, in the accent color), the transcript (or the panel of the
-current view: models, Workflows, keys, API, help), the pending block (asks
-of other sessions), the permission or question prompt, the status line, the
-bordered input, and the instruction line.
+model, server, in the accent color), the status bar (permission mode,
+directory, git branch, a compact todo count while the sidebar is hidden,
+connection state — see
+[Working indicator, status bar, and todo panel](#working-indicator-status-bar-and-todo-panel)),
+the transcript (or the panel of the current view: models, Workflows, keys,
+API, help), the working indicator while a turn this client admitted runs,
+the pending block (asks of other sessions), the permission or question
+prompt, the status line, the bordered input, and the instruction line.
 
 - **Sidebar.** Three titled boxes on the right: `Sessions` (the list; `▸`
   marks the open one; a subagent's session is one `↳ N. <agent>` line nested
   under its parent, `· running` while it works, `· ◌ waiting` while a
-  permission or question of that session waits for an answer), `Todos` (a placeholder until the todo panel lands),
-  and `Context` (session, agent, model, projected message count, directory,
-  server). It is 32 columns wide (at most 40% of a narrow terminal, at least
-  20). By default it follows the width: shown at 110 columns or more, hidden
-  below, so an 80-column terminal gets the full width for the transcript.
-  Ctrl+B or `/sidebar` pins it shown or hidden at any width; `/sidebar on` and
-  `/sidebar off` set it explicitly. The status line confirms the change
-  (`Sidebar shown · Ctrl+B toggles`).
+  permission or question of that session waits for an answer), `Todos` (the
+  live todo list — see
+  [Working indicator, status bar, and todo panel](#working-indicator-status-bar-and-todo-panel)),
+  and `Context` (session, agent, model, the merged transcript's message
+  count, directory, server). It is 32 columns wide (at most 40% of a narrow
+  terminal, at least 20). By default it follows the width: shown at 110
+  columns or more, hidden below, so an 80-column terminal gets the full
+  width for the transcript. Ctrl+B or `/sidebar` pins it shown or hidden at
+  any width; `/sidebar on` and `/sidebar off` set it explicitly. The status
+  line confirms the change (`Sidebar shown · Ctrl+B toggles`).
 - **Prompt.** A pending permission request or question of the open session
   or one of its subagent sessions is a prompt box (warning-colored border)
   above the status line; see
@@ -238,6 +246,85 @@ permission answer `warning`, a pending one `muted`.
 Code block tokens use `syntaxColors` (keyword `#c792ea`, string `#a5d6a7`,
 number `#f78c6c`, comment `#7a8a9c`, function `#82aaff`, type `#ffcb6b`,
 operator `#89ddff`) and inline code `#f2a97a`.
+
+## Working indicator, status bar, and todo panel
+
+**Working indicator.** While a turn this client admitted runs, one muted
+line sits below the transcript, above the pending block and the
+permission/question prompt dock (so the dock a pending ask needs still gets
+the last word before the input): a spinner, the elapsed time (`m:ss`, or
+`h:mm:ss` past an hour), the current activity, an optional `Queued N`, and
+`Esc to interrupt`. The activity, highest priority first:
+
+| Activity | When |
+| --- | --- |
+| `Waiting for approval` / `Waiting for an answer` | A permission or question prompt of the open session's tree is pending (the same ask the prompt dock shows). |
+| `Waiting for subagent <agent>` | The streaming message's last block is a `task` card whose child session is starting or running, with no ask of its own yet. |
+| `Running <tool> <summary>` | The last block is a tool call still running (or its arguments still streaming); the summary is the same one-line summary as its tool card. |
+| `Thinking…` | The last block is reasoning still streaming, or the message has no blocks yet (between the turn's start and its first part). |
+| `Writing…` | The last block is answer text still streaming. |
+
+While a streaming assistant message has no blocks yet, its header's `●`
+marker is the spinner too, so a slow first token still shows the turn is
+alive before the working line's own elapsed clock is very interesting.
+
+**Status bar.** One muted line under the header: the permission mode
+(`SessionInfo.permissionMode`, placeholder text only — switching and colors
+are `/permissions` and Shift+Tab, not yet wired), the workspace directory
+(shortened, keeping the tail), the git branch (`GetVcsStatus`, refreshed
+when a session opens and after a turn ends; omitted when unknown or the
+directory is not a repository), a compact todo count (`Todos <completed>/
+<total>`) shown only while the sidebar is hidden (the sidebar's own `Todos`
+box already lists them), and `reconnecting` while the session event stream
+is down. Segments with no data are omitted rather than shown empty; on a
+narrow terminal the least essential segments (from the end) drop first, then
+the whole line clips, so it always fits the terminal width. The header line
+above it already carries agent, model, session, and server, so the status
+bar does not repeat them.
+
+Context-usage percent and a session token total are part of the Tier 1
+design (latest assistant usage vs. the model's context limit; the sum of
+recorded token usage) but are not on the `hya.v1` wire yet: `ModelSummary`
+has no context-limit field, and `MessageInfo` carries no usage — the
+`TokensRecorded` event is not mapped onto the `StreamEvent` stream either.
+Both fields are always omitted here (the same "hide if unknown" rule the
+design gives context percent); a later backend change can add them without
+another TUI change once the fields exist.
+
+**Todo panel.** The sidebar's `Todos` box is seeded from `GetSessionTodo`
+when a session opens and kept current by the same debounced refresh that
+re-reads messages and interactions after a durable stream frame (so a
+`todo__update_status` or `todo__update_content` tool call's completion
+refreshes it, typically within a few hundred ms — there is no `TodoUpdated`
+stream frame yet; see the note above). Each item is one line, a status
+glyph and its text: pending `○` (muted), in progress `◐` (accent),
+completed `✓` (green), blocked `✗` (muted — the `TodoStatus` enum has no
+`cancelled` status, so `blocked` takes the glyph and color that status would
+otherwise use). The box shows at most 6 items, then a `+N more` row, so a
+long list cannot push the `Context` box below the visible area. `/todos`
+still opens the full-panel view (same glyphs) for a longer list.
+
+## Notices
+
+**Compaction.** A `CompactionApplied` event renders as a muted transcript
+divider, `── context compacted · <strategy> ──`, spliced in right after the
+message that was newest in the transcript when it fired (or at the end if
+that message is no longer in the rendered window). The event carries a
+watermark sequence and the strategy that fired (`shake`, `remote`, `soft`,
+`snap_compact`, `handoff`), not a message count, so the divider does not
+report one. Only the engine's automatic mid-turn compaction strategies emit
+this event; the manual `/compact` command (`CompactSession`) injects a
+system message instead and does not produce a divider.
+
+**Engine system messages.** A message with the system role (for example a
+`TEAM QUIESCED …` coordination notice) renders as a muted notice line, not
+an assistant header block — no `●`, no agent or model.
+
+**Connection and version.** A lost stream connection shows `Stream
+reconnecting: <error>` in the status line while it retries (also reflected
+in the status bar's `reconnecting`); a version mismatch between this TUI and
+the backend's bootstrap version appends `backend <version> ≠ tui <version>`
+to the initial `Connected to hya …` status.
 
 ## Messages
 
@@ -752,7 +839,8 @@ string encoded 64-bit values, and the error envelope documented in the
 | `GET /v1/sessions/{id}/messages` | No body | `ListMessagesResponse.messages: MessageInfo[]`; tool cards read `parts[].toolCall` (`ToolCallPart {callId, tool, state, inputJson, outputJson, durationMs, errorCode, errorMessage}`). For a child session: its latest activity. |
 | `POST /v1/sessions/{id}/compact` | `{}` (`CompactSession`) | `CompactSessionResponse {compactedUntilSeq, strategy}` for `/compact` |
 | `POST /v1/sessions/{id}/summarize` | No body (`SummarizeSession`) | `SummarizeSessionResponse {summaryMessage}` for `/summarize` |
-| `GET /v1/sessions/{id}/todo` | No body (`GetSessionTodo`) | `TodoList.items: TodoItem[]` for `/todos` |
+| `GET /v1/sessions/{id}/todo` | No body (`GetSessionTodo`) | `TodoList.items: TodoItem[]` for `/todos` and the sidebar's live `Todos` box (seeded on session open, kept current by the same debounced refresh as messages and interactions). |
+| `GET /v1/vcs?directory=<--dir>` | No body (`GetVcsStatus`) | `VcsStatus.branch` for the status bar's git branch; read when a session opens and after a turn ends. Never errors on a non-repository directory (`branch` comes back empty, so the segment is omitted). |
 | `POST /v1/sessions/{id}/turns` | `{prompt: {text: string}}` | `CreateTurnResponse.turn: TurnInfo` |
 | `POST /v1/sessions/{id}/turns` | `{command: {command: string, arguments: string}}` for other slash commands | `CreateTurnResponse.turn: TurnInfo` |
 | `POST /v1/sessions/{id}/turns` | `{shell: {command: string, agent: string, model?: {providerId: string, modelId: string}}}` for `!command` (the session's agent and model) | `CreateTurnResponse.turn: TurnInfo` once the command has finished; `id` is the shell turn's assistant message. |
@@ -814,6 +902,7 @@ rules follow the protocol guide's
 | `messageFinished {message, finish, cause}` | durable | The turn ends at the first assistant `messageFinished` after the turn's user message whose `finish` is not `FINISH_REASON_TOOL_CALLS`. Then the projection is re-read. |
 | `permissionRequested {interaction}`, `questionRequested {interaction}` | live | The ask is added to the pending list at once (a prompt appears); its options and header are remembered by id; then the listing is re-read. Only the open session's own asks arrive here; subagent asks come from the listing. |
 | `interactionResolved {request}` | live | The ask is removed at once (its prompt closes); then the listing is re-read. |
+| `compactionApplied {untilSeq, strategy}` | durable | Appended to `state.dividers`, spliced into the transcript right after the message that was newest at the time (see [Notices](#notices)); replayed by `ListEvents` like any other durable event, so reopening a session that had one restores its divider. |
 | `resync {lastSeq}` | — | Live parts that were mid-stream stop taking deltas until their durable `partReplaced`; `ListEvents` fills the gap; the projection is re-read. |
 
 - **Sequence numbers.** The client keeps the last applied durable `seq` as a

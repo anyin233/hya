@@ -66,6 +66,39 @@ test("advances the stream cursor only forward and tracks the turn state", () => 
   expect(store.state.turnId).toBe("")
 })
 
+test("beginTurn stamps turnStartedAt; endTurn and a session switch clear it", () => {
+  const store = createAppStore()
+  store.openSession(session("hysec_1"))
+  expect(store.state.turnStartedAt).toBeUndefined()
+  store.beginTurn()
+  expect(typeof store.state.turnStartedAt).toBe("number")
+  store.endTurn()
+  expect(store.state.turnStartedAt).toBeUndefined()
+  store.beginTurn()
+  store.openSession(session("hysec_2"))
+  expect(store.state.turnStartedAt).toBeUndefined()
+})
+
+test("git branch and connection state are plain mutations for the status bar", () => {
+  const store = createAppStore()
+  expect(store.state.gitBranch).toBe("")
+  expect(store.state.connected).toBe(true)
+  store.setGitBranch("main")
+  expect(store.state.gitBranch).toBe("main")
+  store.setConnected(false)
+  expect(store.state.connected).toBe(false)
+})
+
+test("a compaction divider folds into state.dividers and resets on a session switch", () => {
+  const store = createAppStore()
+  store.openSession(session("hysec_1"))
+  store.applyEvent({ seq: "1", session: "hysec_1", compactionApplied: { strategy: "shake" } })
+  expect(store.state.dividers).toHaveLength(1)
+  expect(store.state.dividers[0]).toMatchObject({ text: "── context compacted · shake ──" })
+  store.openSession(session("hysec_2"))
+  expect(store.state.dividers).toEqual([])
+})
+
 test("tracks concealed key entry by provider and mask only", () => {
   const store = createAppStore()
   store.beginSecret("openai")

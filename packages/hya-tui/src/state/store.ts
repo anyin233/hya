@@ -35,8 +35,9 @@ import type { CompletionContext } from "../completion"
 import type { View } from "../instructions"
 import { toggledSidebar, type SidebarMode } from "./layout"
 import { foldMember, type ChildState } from "./members"
-import { TranscriptOverlay, type OverlayEffect } from "./overlay"
+import { mergeTranscript, TranscriptOverlay, type OverlayEffect } from "./overlay"
 import { mergeInteractions } from "./prompts"
+import { compactionText } from "./format"
 
 /** A prompt submitted while a turn runs; sent when the session is free. */
 export interface QueuedPrompt {
@@ -74,6 +75,8 @@ export interface AppState {
   readonly running: boolean
   /** Turn id (= user message id) of the turn this client admitted, or "". */
   readonly turnId: string
+  /** `Date.now()` when the running turn was admitted (the working indicator's elapsed clock); `undefined` when none runs. */
+  readonly turnStartedAt: number | undefined
   /** Last durable event sequence applied from the session stream. */
   readonly cursor: string
   readonly view: View
@@ -121,6 +124,19 @@ export interface AppState {
   readonly promptSelection: { id: string; index: number } | undefined
   /** The composer holds text (a prompt then leaves its keys to the input). */
   readonly draft: boolean
+  /** Current git branch of the workspace directory (`GetVcsStatus`); "" when unknown or not a repository. */
+  readonly gitBranch: string
+  /** The session event stream is connected (status bar "connection state"). */
+  readonly connected: boolean
+  /** `CompactionApplied` events rendered as transcript dividers, oldest first. */
+  readonly dividers: readonly Divider[]
+}
+
+/** A compaction divider (E24): shown right after the message that was newest when it fired. */
+export interface Divider {
+  id: string
+  text: string
+  afterMessageId?: string
 }
 
 /** Rows loaded by one full catalog refresh. `savedKeys: null` = listing unsupported. */
@@ -155,6 +171,7 @@ function initialState(): { [K in keyof AppState]: AppState[K] } {
     queued: [],
     running: false,
     turnId: "",
+    turnStartedAt: undefined,
     cursor: "0",
     view: "chat",
     apiOutput: "Use /api METHOD /v1/path [JSON object] to call any HTTP/JSON endpoint.\n\n" + operations(),
@@ -178,6 +195,9 @@ function initialState(): { [K in keyof AppState]: AppState[K] } {
     statusText: "",
     promptSelection: undefined,
     draft: false,
+    gitBranch: "",
+    connected: true,
+    dividers: [],
   }
 }
 
@@ -261,8 +281,10 @@ export function createAppStore() {
         set("queued", [])
         set("running", false)
         set("turnId", "")
+        set("turnStartedAt", undefined)
         set("members", session.members ?? [])
         set("children", new Map())
+        set("dividers", [])
       })
     },
 
@@ -303,6 +325,14 @@ export function createAppStore() {
       const asked = event.permissionRequested?.interaction ?? event.questionRequested?.interaction
       if (asked) upsertAsk({ ...asked, ...(asked.session ? {} : event.session ? { session: event.session } : {}), type: asked.type || (event.questionRequested ? "INTERACTION_TYPE_QUESTION" : "INTERACTION_TYPE_PERMISSION") })
       if (event.interactionResolved?.request) dropAsk(event.interactionResolved.request)
+      if (event.compactionApplied) {
+        const afterMessageId = mergeTranscript(state.messages, fold.messages()).at(-1)?.id
+        set("dividers", [...state.dividers, {
+          id: `divider-${event.seq ?? state.dividers.length}`,
+          text: compactionText(event.compactionApplied),
+          ...(afterMessageId ? { afterMessageId } : {}),
+        }])
+      }
       return effect
     },
 
@@ -400,6 +430,15 @@ export function createAppStore() {
     setTodos(items: TodoItem[]): void { set("todos", items) },
     setStatusText(text: string): void { set("statusText", text) },
 
+    /** Current git branch of the workspace (`GetVcsStatus`); "" when unknown or not a repository. */
+    setGitBranch(branch: string): void {
+      if (branch !== state.gitBranch) set("gitBranch", branch)
+    },
+    /** The session event stream's connection state (status bar). */
+    setConnected(value: boolean): void {
+      if (value !== state.connected) set("connected", value)
+    },
+
     /** Ask the transcript to jump to its newest line. */
     followTranscript(): void { set("followTick", state.followTick + 1) },
 
@@ -408,6 +447,7 @@ export function createAppStore() {
       batch(() => {
         set("running", true)
         set("turnId", "")
+        set("turnStartedAt", Date.now())
       })
     },
 
@@ -419,6 +459,7 @@ export function createAppStore() {
       batch(() => {
         set("running", false)
         set("turnId", "")
+        set("turnStartedAt", undefined)
       })
     },
 

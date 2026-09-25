@@ -1,7 +1,8 @@
 /** Pure text for the header, sidebar, pending block, and non-chat views, derived from the store. */
-import type { SessionInfo } from "../client"
+import type { SessionInfo, TodoItem } from "../client"
 import { helpText } from "../commands/help"
 import type { View } from "../instructions"
+import { mergeTranscript } from "./overlay"
 import { promptQueue, waitingKind } from "./prompts"
 import type { AppState } from "./store"
 
@@ -99,11 +100,15 @@ export function contextText(state: AppState, server: string, width = 30): string
   const row = (label: string, value: string) => `${label.padEnd(9)}${truncateStart(value, Math.max(4, width - 9))}`
   const host = server.replace(/^https?:\/\//, "").replace(/\/$/, "")
   if (!session) return [row("Session", "none"), row("Server", host)].join("\n")
+  // The merged transcript (projection + streaming overlay), not the raw
+  // projection: a fresh turn's messages exist only in the overlay until the
+  // next projection read, so `state.messages.length` alone under-counts.
+  const messageCount = mergeTranscript(state.messages, state.overlay).length
   return [
     row("Session", session.title || session.id),
     row("Agent", session.agent),
     row("Model", modelReference(session) || "default"),
-    row("Messages", String(state.messages.length)),
+    row("Messages", String(messageCount)),
     row("Dir", session.workdir),
     row("Server", host),
   ].join("\n")
@@ -115,12 +120,62 @@ const titles: Record<View, string> = {
 }
 
 /** `TODO_STATUS_IN_PROGRESS` → `in_progress`, etc. */
-function todoStatusText(status: string): string {
+export function todoStatusText(status: string): string {
   return status.replace(/^[A-Z_]*STATUS_/, "").toLowerCase() || "pending"
 }
 
-const todoGlyphs: Record<string, string> = {
-  pending: "☐", in_progress: "▸", blocked: "!", completed: "✓",
+/**
+ * Status glyphs for the todo panel (sidebar "Todos" box and the `/todos`
+ * view): pending `○`, in progress `◐`, completed `✓`, blocked `✗` (the
+ * `TodoStatus` enum has no `cancelled` status; `blocked` takes its glyph).
+ */
+export const todoGlyphs: Record<string, string> = {
+  pending: "○", in_progress: "◐", blocked: "✗", completed: "✓",
+}
+
+/** `Todos <completed>/<total>`, the sidebar's compact form when it is hidden; `undefined` with no todos. */
+export function todosCompactText(items: readonly TodoItem[]): string | undefined {
+  if (!items.length) return undefined
+  const completed = items.filter((item) => todoStatusText(item.status) === "completed").length
+  return `Todos ${completed}/${items.length}`
+}
+
+/**
+ * A `CompactionApplied` transcript divider. The event carries only the
+ * strategy and the watermark sequence, not a message count, so the divider
+ * reads the strategy; `docs/tui.md` notes the deviation from a message count.
+ */
+export function compactionText(payload: { untilSeq?: string; strategy?: string }): string {
+  return `── context compacted · ${payload.strategy || "unknown"} ──`
+}
+
+/** Status bar fields (E22); `statusBarText` renders them with graceful truncation at `width`. */
+export interface StatusBarFields {
+  /** Permission mode placeholder text (`SessionInfo.permissionMode`; S12 adds switching and colors). */
+  mode: string
+  directory: string
+  /** Current git branch; "" when unknown or not a repository. */
+  branch: string
+  /** Compact todo count (`Todos n/m`) shown only while the sidebar is hidden. */
+  todos?: string
+  connected: boolean
+}
+
+/**
+ * One line: `mode <mode> · <directory> · ⎇ <branch> · Todos n/m · reconnecting`.
+ * Segments with no data are omitted; the least essential segments (from the
+ * end) are dropped first so the line always fits `width`.
+ */
+export function statusBarText(fields: StatusBarFields, width: number): string {
+  const segments = [
+    `mode ${fields.mode}`,
+    fields.directory ? truncateStart(fields.directory, 24) : undefined,
+    fields.branch ? `⎇ ${fields.branch}` : undefined,
+    fields.todos,
+    fields.connected ? undefined : "reconnecting",
+  ].filter((segment): segment is string => Boolean(segment))
+  while (segments.length > 1 && segments.join(" · ").length > width) segments.pop()
+  return truncate(segments.join(" · "), width)
 }
 
 /** One line per todo item: a status glyph and its content. */

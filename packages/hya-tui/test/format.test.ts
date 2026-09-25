@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { contextText, headerText, mainContent, mainTitle, pendingLines, sessionListText, sessionTree, truncate, truncateStart } from "../src/state/format"
+import { compactionText, contextText, headerText, mainContent, mainTitle, pendingLines, sessionListText, sessionTree, statusBarText, todosCompactText, truncate, truncateStart } from "../src/state/format"
 import { createAppStore } from "../src/state/store"
 
 const server = "http://127.0.0.1:8080/"
@@ -55,6 +55,41 @@ test("the context box lists the open session, agent, model, message count, direc
     "Dir      …/very/long/workspace",
     "Server   127.0.0.1:8080",
   ])
+})
+
+test("the context box's Messages count reflects the merged transcript, not the raw projection", () => {
+  const store = createAppStore()
+  store.openSession({ id: "hysec_1", agent: "build", workdir: "/w" })
+  store.setMessages("hysec_1", [{ id: "m1", role: "ROLE_USER", finish: "FINISH_REASON_STOP" }])
+  expect(contextText(store.state, server, 30).split("\n")[3]).toBe("Messages 1")
+  // A fresh turn's message exists only in the overlay until the next projection read.
+  store.applyEvent({ seq: "1", session: "hysec_1", messageStarted: { message: "m2", role: "ROLE_ASSISTANT" } })
+  store.flushOverlay()
+  expect(contextText(store.state, server, 30).split("\n")[3]).toBe("Messages 2")
+})
+
+test("the status bar shows mode, directory, branch, todos, and connection state, truncating gracefully", () => {
+  const fields = { mode: "manual", directory: "/home/me/projects/very/long/workspace", branch: "main", todos: "Todos 1/3", connected: true }
+  expect(statusBarText(fields, 80)).toBe("mode manual · …cts/very/long/workspace · ⎇ main · Todos 1/3")
+  expect(statusBarText({ ...fields, connected: false }, 80)).toBe("mode manual · …cts/very/long/workspace · ⎇ main · Todos 1/3 · reconnecting")
+  // No branch, no todos: those segments are omitted, not shown empty.
+  expect(statusBarText({ mode: "yolo", directory: "", branch: "", connected: true }, 80)).toBe("mode yolo")
+  // Too narrow: the least essential segments drop first, then the whole line clips.
+  expect(statusBarText(fields, 20)).toBe("mode manual")
+})
+
+test("a compact todo count is `completed/total`, or undefined with no todos", () => {
+  expect(todosCompactText([])).toBeUndefined()
+  expect(todosCompactText([
+    { id: "1", content: "a", status: "TODO_STATUS_COMPLETED" },
+    { id: "2", content: "b", status: "TODO_STATUS_PENDING" },
+    { id: "3", content: "c", status: "TODO_STATUS_IN_PROGRESS" },
+  ])).toBe("Todos 1/3")
+})
+
+test("a compaction divider reads the strategy; the payload carries no message count", () => {
+  expect(compactionText({ strategy: "shake", untilSeq: "42" })).toBe("── context compacted · shake ──")
+  expect(compactionText({})).toBe("── context compacted · unknown ──")
 })
 
 test("truncates from either end", () => {

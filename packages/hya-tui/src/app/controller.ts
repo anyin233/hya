@@ -42,6 +42,7 @@ import type { AppStore } from "../state/store"
 import { answerPrompt } from "./prompts"
 import { createDebounce } from "./debounce"
 import { createTurnRunner, turnEndStatus } from "./turns"
+import { tuiVersion } from "../version"
 
 /** Overlay flush interval: coalesces stream deltas into one render per display frame. */
 const flushMs = 16
@@ -111,8 +112,21 @@ export function createController({ client, store, directory, registry = createCo
     }
   }
 
+  /** `GetSessionTodo` for the live sidebar todo panel (E23); silent on failure (an offline backend still shows messages). */
+  async function refreshTodos(): Promise<void> {
+    const selected = store.state.selected
+    if (!selected) return
+    store.setTodos(await client.getSessionTodo(selected.id).catch(() => store.state.todos))
+  }
+
+  /** `GetVcsStatus` for the status bar's git branch (E22); refreshed on session open and after turns. */
+  async function refreshVcs(): Promise<void> {
+    const branch = await client.getVcsStatus().then((status) => status.branch ?? "").catch(() => "")
+    store.setGitBranch(branch)
+  }
+
   const refreshLater = createDebounce(() => {
-    void Promise.all([refreshMessages(), client.listInteractions().then((rows) => store.setInteractions(rows))])
+    void Promise.all([refreshMessages(), refreshTodos(), client.listInteractions().then((rows) => store.setInteractions(rows))])
       .catch((error: unknown) => status(`Refresh failed: ${String(error)}`))
   }, { wait: refreshWaitMs, maxWait: refreshMaxWaitMs })
 
@@ -190,6 +204,8 @@ export function createController({ client, store, directory, registry = createCo
     // change the projection or the pending list: re-read them.
     const delta = event.partAppended || event.partReplaced || (!effect.durable && (event.partStarted || event.partCompleted))
     if (!delta && (effect.durable || !event.seq)) scheduleRefresh()
+    // A turn ended: the working directory's git status may have changed (E22).
+    if (effect.finished) void refreshVcs()
     turns.observe(effect)
   }
 
@@ -228,11 +244,15 @@ export function createController({ client, store, directory, registry = createCo
             // Subscribed: frames after this point are buffered by the
             // connection while the gap since the last applied seq is filled.
             await gapFill(sessionId)
+            store.setConnected(true)
             if (connections++ > 0) scheduleRefresh()
             ready()
           })
         } catch (error) {
-          if (!controller.signal.aborted) status(`Stream reconnecting: ${String(error)}`)
+          if (!controller.signal.aborted) {
+            store.setConnected(false)
+            status(`Stream reconnecting: ${String(error)}`)
+          }
         }
         ready()
         if (!controller.signal.aborted) await Bun.sleep(800)
@@ -256,6 +276,8 @@ export function createController({ client, store, directory, registry = createCo
     lastChildRead = 0
     store.openSession(session)
     await refreshMessages()
+    void refreshTodos()
+    void refreshVcs()
     startStream(session.id)
   }
 
@@ -384,13 +406,15 @@ export function createController({ client, store, directory, registry = createCo
       const bootstrap = await client.bootstrap()
       store.applyBootstrap(bootstrap)
       await refresh()
+      void refreshVcs()
       // The newest top-level session; subagent sessions are opened from their parent.
       const first = sessionTree(store.state.sessions)[0]?.session
       if (first) await openSession(first.id)
       const version = bootstrap.location?.version ?? ""
+      const mismatch = version && version !== tuiVersion ? ` · backend ${version} ≠ tui ${tuiVersion}` : ""
       status(store.state.savedKeysAvailable
-        ? `Connected to hya ${version} · /help for commands`
-        : `Connected to hya ${version} · key listing needs backend 0.41.0+`)
+        ? `Connected to hya ${version} · /help for commands${mismatch}`
+        : `Connected to hya ${version} · key listing needs backend 0.41.0+${mismatch}`)
     } catch (error) {
       status(`Connection failed: ${String(error)} · start hya serve`)
       store.setView("help")
