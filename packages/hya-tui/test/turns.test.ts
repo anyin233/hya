@@ -7,10 +7,12 @@ const S = "hysec_1"
 
 type Reply = TurnInfo | HttpError | Error
 
-function harness(replies: Reply[] = []) {
+function harness(replies: Reply[] = [], shell: (command: string) => Promise<TurnInfo> = async () => ({ id: "msg_shell", state: "TURN_STATE_FINISHED", finish: "FINISH_REASON_STOP" })) {
   const store = createAppStore()
-  store.openSession({ id: S, agent: "build", workdir: "/w" })
+  store.openSession({ id: S, agent: "build", workdir: "/w", model: { providerId: "fake", modelId: "model" } })
   const sent: string[] = []
+  const shells: Array<{ command: string; agent: string; model: unknown }> = []
+  const cancels: string[][] = []
   const delays: number[] = []
   let seq = 0
   let userCount = 0
@@ -23,6 +25,14 @@ function harness(replies: Reply[] = []) {
         const next = queue.shift() ?? { id: `msg_u${++userCount}`, state: "TURN_STATE_RUNNING" }
         if (next instanceof Error) throw next
         return next
+      },
+      createShellTurn: (_session: string, command: string, agent: string, model?: { providerId?: string; modelId?: string }) => {
+        shells.push({ command, agent, model })
+        return shell(command)
+      },
+      cancelTurn: async (session: string, turn: string) => {
+        cancels.push([session, turn])
+        return {}
       },
     },
     sleep: async (ms) => { delays.push(ms) },
@@ -43,7 +53,7 @@ function harness(replies: Reply[] = []) {
       emit({ messageFinished: { message: id, finish } })
     })
   }
-  return { store, runner, sent, delays, emit, turn }
+  return { store, runner, sent, shells, cancels, delays, emit, turn }
 }
 
 const busy = () => new HttpError(409, "POST", `/v1/sessions/${S}/turns`, "session_busy: session busy")
@@ -173,4 +183,75 @@ test("opening another session clears the queue and the turn state", async () => 
   expect(store.state.running).toBe(false)
   expect(store.state.turnId).toBe("")
   expect(store.state.overlay).toEqual([])
+})
+
+test("a shell turn runs the command with the session's agent and model and ends when CreateTurn returns", async () => {
+  const { store, runner, sent, shells } = harness()
+  await runner.submit("echo hello", { shell: true })
+  expect(sent).toEqual([])
+  expect(shells).toEqual([{ command: "echo hello", agent: "build", model: { providerId: "fake", modelId: "model" } }])
+  expect(store.state.running).toBe(false)
+  expect(store.state.queued).toEqual([])
+  expect(store.state.status).toBe("Ready")
+  // The transcript can show the command on the shell turn's assistant message.
+  expect(store.state.shellCommands.get("msg_shell")).toBe("echo hello")
+})
+
+test("a shell command submitted during a running turn waits in the queue like a prompt", async () => {
+  const { store, runner, sent, shells, turn } = harness()
+  await runner.submit("first")
+  await runner.submit("ls", { shell: true })
+  expect(shells).toEqual([])
+  expect(store.state.queued.map((item) => [item.text, item.shell ?? false])).toEqual([["ls", true]])
+  turn("msg_u1", ["FINISH_REASON_STOP"])
+  await runner.idle()
+  expect(sent).toEqual(["first"])
+  expect(shells.map((item) => item.command)).toEqual(["ls"])
+  expect(store.state.queued).toEqual([])
+})
+
+test("cancel requests CancelTurn for the running turn and shows Cancelling… until it ends", async () => {
+  const { store, runner, cancels, turn } = harness()
+  await runner.submit("stop me")
+  await runner.cancel()
+  expect(cancels).toEqual([[S, "msg_u1"]])
+  expect(store.state.status).toBe("Cancelling…")
+  expect(store.state.running).toBe(true)
+  turn("msg_u1", ["FINISH_REASON_CANCELLED"])
+  await runner.idle()
+  expect(store.state.status).toBe("Cancelled · Ready")
+})
+
+test("cancelling a shell turn reports it cancelled even though CreateTurn finishes normally", async () => {
+  let finish!: (turn: TurnInfo) => void
+  const { store, runner, cancels } = harness([], () => new Promise((resolve) => (finish = resolve)))
+  const pending = runner.submit("sleep 30", { shell: true })
+  await Bun.sleep(0)
+  expect(store.state.running).toBe(true)
+  expect(store.state.status).toBe("Running shell · sleep 30")
+  await runner.cancel()
+  // A shell turn has no id before CreateTurn returns; the cancel route stops the session's run.
+  expect(cancels.length).toBe(1)
+  expect(cancels[0]![0]).toBe(S)
+  finish({ id: "msg_shell", state: "TURN_STATE_FINISHED", finish: "FINISH_REASON_STOP" })
+  await pending
+  expect(store.state.running).toBe(false)
+  expect(store.state.status).toBe("Cancelled · Ready")
+})
+
+test("a shell turn that fails after a cancel request is reported cancelled", async () => {
+  let fail!: (error: Error) => void
+  const { store, runner } = harness([], () => new Promise((_resolve, reject) => (fail = reject)))
+  const pending = runner.submit("sleep 30", { shell: true })
+  await Bun.sleep(0)
+  await runner.cancel()
+  fail(new HttpError(500, "POST", "/v1/sessions/x/turns", "cancelled: turn cancelled"))
+  await pending
+  expect(store.state.running).toBe(false)
+  expect(store.state.status).toBe("Cancelled · Ready")
+})
+
+test("cancel without a running turn is an error", async () => {
+  const { runner } = harness()
+  await expect(runner.cancel()).rejects.toThrow("No active turn")
 })

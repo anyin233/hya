@@ -10,9 +10,11 @@ or hide (see [Layout](#layout)). Assistant replies render as Markdown with
 highlighted code blocks; reasoning is collapsed to one `Thinking` line (see
 [Messages](#messages)). Models, Workflows, and saved provider keys have
 dedicated views; the API command view exposes the other HTTP/JSON operations
-in `hya.v1`. Tab completes slash commands using the TUI and server command
-catalogs. One persistent instruction line stays below the input at the bottom
-of the screen and changes with the current view.
+in `hya.v1`. The input is a multi-line editor with input history; it also
+runs `!command` shell turns and completes `@file` references (see
+[Composer](#composer)). Tab completes slash commands using the TUI and server
+command catalogs. One persistent instruction line stays below the input at the
+bottom of the screen and changes with the current view.
 If a backend predates the saved-key list endpoint, the main TUI still opens and
 shows that key listing needs a backend restart with an updated binary.
 
@@ -43,7 +45,8 @@ is open, admits the prompt as a turn, and streams the reply into the
 transcript as it arrives (see [Streaming, queued prompts, and turn
 status](#streaming-queued-prompts-and-turn-status)). For example, type `summarize this repository`,
 then `/models` to inspect available routes, and `/open 1` to return to the
-first session. Press Ctrl+C to exit and restore the terminal.
+first session. Press Ctrl+C twice (or Ctrl+D on an empty input, or type
+`/exit`) to exit and restore the terminal.
 
 To set a provider API key, type `/key set anthropic`, paste the key into the
 concealed prompt, and press Enter. The prompt draws bullets only and clears its
@@ -68,6 +71,14 @@ backend is running.
 | Input | Effect |
 | --- | --- |
 | Plain text + Enter | Admit a prompt in the current session; create one if needed. |
+| Ctrl+J, Alt+Enter, Shift+Enter | Insert a newline instead of sending (Shift+Enter only where the terminal reports it; see [Composer](#composer)). |
+| Up / Down | On the input's first / last line: the previous / next submitted input. |
+| `!<command>` + Enter | Run the command as a shell turn in the current session (see [Shell turns](#shell-turns)). |
+| `@<text>` | Show matching file paths; Up/Down select, Tab or Enter inserts `@<path>`, Esc closes (see [File references](#file-references)). |
+| Esc | Close the file list; else cancel the running turn; else clear the input. |
+| Ctrl+C | Clear the input and show `Press Ctrl+C again to quit`; a second Ctrl+C within 2 s quits. |
+| Ctrl+D | Quit when the input is empty (otherwise delete the character under the cursor). |
+| `/exit`, `/quit` | Quit. |
 | `/new [agent] [model]` | Create a session in `--dir`, using the first visible agent and its model by default. |
 | `/sessions`, `/open <id or number>` | Refresh or switch sessions. |
 | `/models`, `/model <provider/model>` | View catalog or change the selected session model. |
@@ -78,7 +89,7 @@ backend is running.
 | `/interactions` | View pending permissions and questions. |
 | `/approve <id>`, `/deny <id>` | Respond to a permission request for this run only (`persist: false`). |
 | `/answer <id> <text>` | Answer a question request. |
-| `/cancel` | Request cancellation of the turn admitted in this frontend; the status line then shows `Cancelled · Ready`. |
+| `/cancel` or Esc | Cancel the running turn: the status line shows `Cancelling…`, then `Cancelled · Ready`. |
 | `/refresh` or Ctrl+R | Reload sessions, messages, interactions, models, and Workflows. |
 | `/sidebar [on\|off]` or Ctrl+B | Show or hide the sidebar. Without an argument it toggles what is visible now. |
 | `/thinking [on\|off]` or Ctrl+O | Expand or collapse every reasoning (`Thinking`) block. |
@@ -139,7 +150,7 @@ The reply, rendered as Markdown.                        ┌─Todos────�
 └────────────────────────────────────────────────────┘  │Model    fake/model │
 Ready                                                   │Messages 2          │
 ┌────────────────────────────────────────────────────┐  │Dir      …/work     │
-│ Message or /command                                │  │Server   127.0.0.1:…│
+│ Message, /command, !shell, or @file                │  │Server   127.0.0.1:…│
 └────────────────────────────────────────────────────┘  └────────────────────┘
 Enter a prompt · /new creates a session · /help …
 ```
@@ -205,7 +216,7 @@ Each message in the transcript is drawn by role:
 | --- | --- |
 | Text | Markdown (below). |
 | Reasoning | One muted line, `▸ Thinking · N words` (`Thinking…` while it is the part still streaming). Expanded: `▾ Thinking · N words`, then the text in muted italics beside a bar. |
-| Tool call | One muted line, `↳ <tool> · <state>` (`running`, `ok`, …); a failed call is `↳ <tool> · error: <message>` in the error color. |
+| Tool call | One muted line, `↳ <tool> · <state>` (`running`, `ok`, …); a failed call is `↳ <tool> · error: <message>` in the error color. When the command of a shell call is known, `$ <command>` follows, indented, and then its output (muted, at most 12 lines, then `… N more lines`). See [Shell turns](#shell-turns). |
 | Attachment | `↳ attachment · <name>`. |
 | `FINISH_REASON_STOP`, `FINISH_REASON_TOOL_CALLS` | Nothing: a normal finish is not noteworthy. |
 | `FINISH_REASON_LENGTH` | `! Reply stopped at the output length limit` (warning color). |
@@ -273,7 +284,10 @@ The status line above the input shows the turn state:
 | `Running · <turn id>[ · N queued]` | The turn runs; `N` prompts wait. |
 | `Session busy · N queued prompt(s) wait(s) for the running turn` | Retries ran out; the prompts wait for the next turn end. |
 | `Ready` | The turn finished. `Ready · reply stopped at the length limit` when the model hit its output limit. |
-| `Cancelled · Ready` | The turn was cancelled (`/cancel`). |
+| `Cancelling…` | Esc or `/cancel` sent `CancelTurn`; the turn has not ended yet. |
+| `Cancelled · Ready` | The turn was cancelled (Esc or `/cancel`). |
+| `Running shell · <command>` | A `!command` shell turn runs. |
+| `Press Ctrl+C again to quit` | The first Ctrl+C; it goes back to the previous status after 2 s. |
 | `Error · <code>: <message>` | The turn failed, for example `Error · provider_error: http status 400: …`. `Error · turn failed` when the backend recorded no error text. |
 
 A failed assistant message also shows its error in the transcript, as a line
@@ -283,6 +297,107 @@ under its header, in the error color:
 ● build · openai/gpt-5
 ✗ provider_error: http status 400: bad request
 ```
+
+## Composer
+
+The input at the bottom of the main column is a multi-line editor (OpenTUI's
+built-in `<textarea>`). It keeps the keyboard focus. Its placeholder is
+`Message, /command, !shell, or @file`.
+
+**Writing.** Enter sends the whole input: a prompt, a `/command`, or a
+`!command`. Ctrl+J inserts a newline in every terminal and in the WebUI;
+Alt+Enter does too. Shift+Enter inserts a newline only in terminals that
+report it as a separate key (the kitty keyboard protocol, which OpenTUI
+requests at startup, or modifyOtherKeys). xterm.js, and so the
+WebUI, sends a plain Enter for Shift+Enter, so there it sends the input. A
+bracketed paste inserts its text, line breaks included, and never sends it.
+The box grows with its content up to 8 rows (wrapped lines count), then
+scrolls. Newlines stay in the prompt text, so the transcript shows the lines
+as typed. Editing keys: Left/Right, Up/Down between lines, Home/End to the
+start/end of the current line, Ctrl+Left/Right or Alt+Left/Right by word,
+Ctrl+A / Ctrl+E to the start/end of the logical line, Backspace, Delete,
+Alt+Backspace deletes the previous word (Ctrl+W too, outside a browser, which
+reserves it), Ctrl+U / Ctrl+K delete to the line start/end, Ctrl+- undo.
+
+**History.** Every sent input (prompts, `!commands`, `/commands`) is kept for
+the life of the TUI process, up to 200 entries; it is not saved to disk.
+Up on the first line of the input shows the previous entry; Down on the last
+line shows the next one, and past the newest entry it restores what you were
+typing before. Any edit ends history navigation. Repeated sends of the same
+input are stored once.
+
+**Esc.** Esc closes the file list if it is open. Otherwise, while a turn
+admitted by this TUI runs, it cancels that turn (like `/cancel`): the status
+shows `Cancelling…`, then `Cancelled · Ready`, and the transcript shows
+`! Cancelled`. Text you typed meanwhile stays. With no turn running, Esc
+clears the input.
+
+**Quitting.** The renderer does not quit on Ctrl+C by itself. The first
+Ctrl+C clears the input (on an empty input it only arms) and shows
+`Press Ctrl+C again to quit`; a second Ctrl+C within 2 s quits. Any other key
+in between disarms it. Ctrl+D on an empty input quits; with text it deletes
+the character under the cursor. `/exit` and `/quit` quit. Quitting destroys
+the renderer, which restores the terminal, and exits with code 0.
+
+Example:
+
+```text
+explain these two functions:          ← Ctrl+J
+- parse_args                          ← Ctrl+J
+- run                                 ← Enter sends all three lines
+```
+
+### Shell turns
+
+An input that starts with `!` runs the rest of the line as a shell command in
+the open session (a session is created first if none is open). The input box
+shows the shell mode while you type: its border turns the warning color and
+its title reads `! shell`. The command goes through the prompt queue like a
+prompt, so it waits while a turn runs.
+
+The backend runs it as a `ShellTurn`: its builtin `bash` tool runs the command
+in the session's working directory, with no model round, under the session's
+agent and permission rules. The default permission policy asks before `bash`
+runs, so a pending request may appear; answer it with `/approve <id>`.
+`CreateTurn` returns only when the command has finished; meanwhile the status
+reads `Running shell · <command>`.
+
+The backend records the turn as two messages: a user message with the fixed
+text `The following tool was executed by the user`, and an assistant message
+with one `bash` tool call. The transcript shows the user message as
+`!<command>` and the tool call with the command below it:
+
+```text
+┃ !echo hello
+
+● build · openai/gpt-5
+↳ bash · ok
+  $ echo hello
+  hello
+```
+
+The command comes from this TUI's own shell turns, or from the tool call's
+`inputJson` (`{"command": …}`) when the server fills it. The output line
+needs `ToolCallPart.outputJson`; servers that leave it empty show only the
+command. Esc cancels a running shell command; the turn then reads
+`Cancelled · Ready`.
+
+### File references
+
+Type `@` and at least one character (at the start of the input or after a
+space) to see up to 8 files and directories under `--dir` whose relative
+path contains the text. The list is a `Files` box above the input; the
+selected row is marked `▸` in the accent color. Up/Down move the selection;
+Tab or Enter replaces the `@text` token with `@<relative path>` and a space;
+Esc closes the list until you edit the token again. The lookup runs 120 ms
+after the last keystroke. Matching is case-sensitive (the server's glob), and
+the best matches come first: file name starts with the text, then file name
+contains it, then only the path does; shorter paths first. Slash-command lines
+(`/…`) have no file references.
+
+The reference is plain text: the prompt carries `@src/main.rs` as typed, and
+nothing is attached (`PromptTurn` is text only). The agent reads the file
+with its tools if it needs it.
 
 ## Interface definitions
 
@@ -301,7 +416,9 @@ string encoded 64-bit values, and the error envelope documented in the
 | `GET /v1/sessions/{id}/messages` | No body | `ListMessagesResponse.messages: MessageInfo[]` |
 | `POST /v1/sessions/{id}/turns` | `{prompt: {text: string}}` | `CreateTurnResponse.turn: TurnInfo` |
 | `POST /v1/sessions/{id}/turns` | `{command: {command: string, arguments: string}}` for other slash commands | `CreateTurnResponse.turn: TurnInfo` |
-| `POST /v1/sessions/{id}/turns/{turn}/cancel` | `{}` | `CancelTurnResponse` |
+| `POST /v1/sessions/{id}/turns` | `{shell: {command: string, agent: string, model?: {providerId: string, modelId: string}}}` for `!command` (the session's agent and model) | `CreateTurnResponse.turn: TurnInfo` once the command has finished; `id` is the shell turn's assistant message. |
+| `POST /v1/sessions/{id}/turns/{turn}/cancel` | `{}` | `TurnInfo`. Esc and `/cancel` send the admitted turn id (the user message id). The server cancels whatever runs in the session, so a shell turn whose id is not known yet is sent as `current`. |
+| `GET /v1/fs/find?pattern=**/*<text>*&limit=50` | No body (`FindFiles`, scoped by `x-hya-directory`) | `FindFilesResponse.paths: string[]` (relative paths) for `@file` suggestions. |
 | `GET /v1/sessions/{id}` | No body | `SessionInfo.lastSeq` when a session is opened (the stream's first `sinceSeq`). |
 | `GET /v1/sessions/{id}/events/stream?sinceSeq=N` | SSE | `StreamFrame` with `event` or `resync`; `N` is the last applied durable seq. |
 | `GET /v1/sessions/{id}/events?sinceSeq=N&limit=500` | No body | `ListEventsResponse.events` / `nextSeq`, paged, to fill the gap after each stream (re)connect and `resync`. |
@@ -416,9 +533,10 @@ together.
 | `src/app/controller.ts` | `createController()`: refreshes, the session SSE loop (subscribe, `ListEvents` gap-fill, `resync`), batched overlay flushes, the debounced projection re-read (`app/debounce.ts`), session creation, prompt submission, command dispatch, and concealed key entry. It writes results into the store. |
 | `src/app/turns.ts` | `createTurnRunner()`: the client-side prompt queue, `409 session_busy` retry, and turn-end detection and status text. |
 | `src/app/App.tsx`, `src/app/run.tsx`, `src/app/context.ts` | Root layout (main column + sidebar), renderer startup, and the `AppContext` (store, controller, server URL, and `ui` handles such as the transcript's scroll actions) that components read with `useApp()`. |
-| `src/components/` | `Header`, `MainPanel` (transcript or view panel), `Transcript` (scrollbox, follow/hint), `MessageView` (`MessageItem`, user/assistant messages, blocks, reasoning, `KeyedFor`), `Markdown` (the `<markdown>` wrapper, `SyntaxStyle`, code-block boxes), `Panel`, `PendingBlock`, `Sidebar`, `StatusLine`, `Composer` (input, completion, key actions, concealed key entry), `Footer`. |
+| `src/components/` | `Header`, `MainPanel` (transcript or view panel), `Transcript` (scrollbox, follow/hint), `MessageView` (`MessageItem`, user/assistant messages, blocks, reasoning, tool lines with shell command and output, `KeyedFor`), `Markdown` (the `<markdown>` wrapper, `SyntaxStyle`, code-block boxes), `Panel`, `PendingBlock`, `Sidebar`, `StatusLine`, `Composer` (the `<textarea>` editor, its height, history, Esc / Ctrl+C / Ctrl+D, the shell-mode border, the `@file` list, Tab completion, key actions, concealed key entry), `Footer`. |
+| `src/composer/` | Pure composer logic: `history.ts` (`InputHistory`), `quit.ts` (`createQuitGuard`, the Ctrl+C double press), `escape.ts` (`escapeAction`), `shell.ts` (`shellCommand`, `isShellInput`), `mention.ts` (`mentionAt`, `insertMention`, `findPattern`, `rankPaths`). |
 | `src/commands/` | The slash-command registry (`registry.ts`), the built-in commands (`native.ts`), and the `/help` text (`help.ts`). |
-| `src/keys/bindings.ts` | The global key binding table. |
+| `src/keys/bindings.ts` | The global key binding table (`keyBindings`) and the textarea overrides (`composerKeyBindings`: Enter submits; Ctrl+J, Shift+Enter, Alt+Enter insert a newline; Home/End). |
 | `src/completion.ts`, `src/instructions.ts`, `src/api.ts`, `src/theme.ts` | Tab completion and `SecretEntry`, footer instructions, the OpenAPI operation catalog, and the palette (`colors`, `syntaxColors`, and `syntaxStyles`, the Markdown/tree-sitter scope styles). |
 
 The Solid transform has two parts. `bunfig.toml` preloads
@@ -450,8 +568,10 @@ The name becomes Tab-completable automatically. Add a line to
 `components/Composer.tsx`. A binding's `matches(key, context)` may depend on
 `context.composerEmpty` (plain Home/End scroll only while the input is
 empty). Do not bind a core action only to a
-browser-reserved shortcut (see `docs/tui-web.md`). Ctrl+C is handled by the
-renderer (`exitOnCtrlC`).
+browser-reserved shortcut (see `docs/tui-web.md`). The renderer runs with
+`exitOnCtrlC: false`; Ctrl+C is the composer's `quit` action (the double
+press in `src/composer/quit.ts`). Editing keys of the input are
+`composerKeyBindings`, merged over OpenTUI's textarea defaults by key.
 
 ## Verify locally
 
@@ -474,3 +594,8 @@ covers user and assistant styling, Markdown and code highlighting, reasoning
 scrolling (PgUp/PgDn, End, Ctrl+End, the wheel, the new-messages hint).
 `e2e/hya-tui-streaming.spec.ts` uses the fake model to cover streaming text,
 queued prompts, and the turn status line (`Ready`, provider errors).
+`e2e/hya-tui-composer.spec.ts` covers the composer: Ctrl+J / Alt+Enter
+newlines and box growth up to 8 rows, Shift+Enter in the browser, bracketed
+paste, cursor editing, history, Esc (clear, and cancel of a hanging fake-model
+turn), Ctrl+C once and twice, Ctrl+D, `/exit`, `!echo hello`, and `@file`
+suggestions at the default width and about 80 columns.

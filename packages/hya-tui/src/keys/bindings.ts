@@ -1,13 +1,21 @@
 /**
- * Global key bindings (outside concealed key entry).
+ * Key bindings (outside concealed key entry).
  *
- * Add a binding by appending a row and handling its action in the composer's
- * key handler (components/Composer.tsx). Keep bindings browser-safe: never
- * bind a core action only to Ctrl/Cmd+W, T, N, L, Tab, or Ctrl+Tab (the WebUI
- * host runs inside a browser). Ctrl+C quit is handled by the renderer itself.
+ * `keyBindings` are the global actions. Add one by appending a row and
+ * handling its action in the composer's key handler
+ * (components/Composer.tsx). `composerKeyBindings` override the editing keys
+ * of OpenTUI's textarea (Enter submits, Ctrl+J / Shift+Enter / Alt+Enter
+ * insert a newline). Keep bindings browser-safe: never bind a core action
+ * only to Ctrl/Cmd+W, T, N, L, Tab, or Ctrl+Tab (the WebUI host runs inside a
+ * browser). The renderer runs with `exitOnCtrlC: false`; Ctrl+C is the
+ * `quit` action here.
  */
+import type { TextareaAction } from "@opentui/core"
 
 export type KeyAction =
+  | "interrupt"
+  | "quit"
+  | "eof"
   | "complete"
   | "refresh"
   | "toggleSidebar"
@@ -43,6 +51,24 @@ export interface KeyBinding {
 const plain = (key: KeyLike): boolean => !key.ctrl && !key.meta && !key.shift
 
 export const keyBindings: readonly KeyBinding[] = [
+  {
+    action: "interrupt",
+    label: "Esc",
+    description: "Close the @file list, else cancel the running turn, else clear the input",
+    matches: (key) => key.name === "escape" && !key.ctrl && !key.shift,
+  },
+  {
+    action: "quit",
+    label: "Ctrl+C",
+    description: "Clear the input; press again within 2 s to quit",
+    matches: (key) => key.ctrl && !key.meta && key.name === "c",
+  },
+  {
+    action: "eof",
+    label: "Ctrl+D",
+    description: "Quit when the input is empty (otherwise delete the character under the cursor)",
+    matches: (key, context) => key.ctrl && !key.meta && !key.shift && key.name === "d" && context.composerEmpty === true,
+  },
   {
     action: "complete",
     label: "Tab",
@@ -96,3 +122,32 @@ export const keyBindings: readonly KeyBinding[] = [
 export function resolveBinding(key: KeyLike, context: KeyContext = {}, bindings: readonly KeyBinding[] = keyBindings): KeyAction | undefined {
   return bindings.find((binding) => binding.matches(key, context))?.action
 }
+
+/** One textarea binding: a key (with modifiers) and the OpenTUI editing action it runs. */
+export interface ComposerKeyBinding {
+  name: string
+  ctrl?: boolean
+  shift?: boolean
+  meta?: boolean
+  action: TextareaAction
+}
+
+/**
+ * Overrides for OpenTUI's default textarea bindings (merged by key). Enter
+ * submits. Ctrl+J (a line feed) inserts a newline in every terminal and in
+ * the browser; Shift+Enter only where the terminal reports it (kitty
+ * keyboard protocol or modifyOtherKeys; xterm.js sends a plain CR for it, so
+ * the WebUI treats it as Enter); Alt+Enter (ESC CR) works in xterm.js too.
+ * Home/End move to the start/end of the current (wrapped) line and stay there.
+ */
+export const composerKeyBindings: readonly ComposerKeyBinding[] = [
+  { name: "return", action: "submit" },
+  { name: "kpenter", action: "submit" },
+  { name: "linefeed", action: "newline" },
+  { name: "j", ctrl: true, action: "newline" },
+  { name: "return", shift: true, action: "newline" },
+  { name: "return", meta: true, action: "newline" },
+  { name: "kpenter", meta: true, action: "newline" },
+  { name: "home", action: "visual-line-home" },
+  { name: "end", action: "visual-line-end" },
+]

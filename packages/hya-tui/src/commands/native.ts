@@ -191,13 +191,8 @@ export const nativeCommandSpecs: CommandSpec[] = [
   },
   {
     name: "/cancel",
-    description: "Cancel current turn",
-    run: async ({ store, client }) => {
-      const selected = store.state.selected
-      if (!selected || !store.state.turnId) throw new Error("No active turn")
-      await client.cancelTurn(selected.id, store.state.turnId)
-      store.setStatus("Cancellation requested")
-    },
+    description: "Cancel current turn (Esc)",
+    run: ({ actions }) => actions.cancelTurn(),
   },
   {
     name: "/refresh",
@@ -225,6 +220,16 @@ export const nativeCommandSpecs: CommandSpec[] = [
       store.setThinking(expanded)
       store.setStatus(`Reasoning ${expanded ? "expanded" : "collapsed"} · Ctrl+O toggles`)
     },
+  },
+  {
+    name: "/exit",
+    description: "Quit the TUI (Ctrl+C twice, Ctrl+D on an empty input)",
+    run: ({ actions }) => { actions.quit() },
+  },
+  {
+    name: "/quit",
+    description: "Alias for /exit",
+    run: ({ actions }) => { actions.quit() },
   },
   {
     name: "/api",

@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import type { MessageInfo } from "../src/client"
-import { finishNotice, messageView, queuedView, reasoningLabel, transcriptViews } from "../src/state/messages"
+import { finishNotice, messageView, queuedView, reasoningLabel, shellMarker, toolOutputText, transcriptViews } from "../src/state/messages"
 import { createAppStore } from "../src/state/store"
 
 const fallback = { agent: "build", model: "fake/model" }
@@ -104,4 +104,63 @@ test("the transcript merges the overlay and appends only waiting queued prompts"
   expect(views.map((view) => [view.role, view.queued, view.blocks[0]?.kind === "text" ? view.blocks[0].text : ""]))
     .toEqual([["user", false, "hi"], ["assistant", false, "Hel"], ["user", true, "later"]])
   expect(views[1]).toMatchObject({ agent: "build", model: "fake/model", streaming: true })
+})
+
+test("a bash tool call shows its command and output when the part carries them", () => {
+  const view = messageView({
+    id: "a", role: "ROLE_ASSISTANT", finish: "FINISH_REASON_STOP",
+    parts: [{ id: "t", toolCall: { tool: "bash", state: "TOOL_EXECUTION_STATE_OK", inputJson: "{\"command\":\"echo hello\"}", outputJson: "{\"output\":\"hello\\n\"}" } }],
+  }, fallback)
+  expect(view.blocks).toEqual([{ kind: "tool", id: "t", tool: "bash", state: "ok", command: "echo hello", output: "hello" }])
+})
+
+test("tool output text is taken from a string, a known field, or pretty JSON, and long output is cut", () => {
+  expect(toolOutputText("\"plain\"")).toBe("plain")
+  expect(toolOutputText("{\"stdout\":\"out\"}")).toBe("out")
+  expect(toolOutputText("not json")).toBe("not json")
+  expect(toolOutputText("{\"a\":1}")).toBe("{\n  \"a\": 1\n}")
+  expect(toolOutputText("")).toBeUndefined()
+  const long = Array.from({ length: 30 }, (_, index) => `line ${index + 1}`).join("\n")
+  const cut = toolOutputText(JSON.stringify(long))!
+  expect(cut.split("\n")).toHaveLength(13)
+  expect(cut.endsWith("… 18 more lines")).toBe(true)
+})
+
+test("a shell turn run from this TUI shows its command on both messages", () => {
+  const store = createAppStore()
+  store.openSession({ id: "hysec_1", agent: "build", workdir: "/w" })
+  store.setMessages("hysec_1", [
+    { id: "m_u", role: "ROLE_USER", finish: "FINISH_REASON_STOP", parts: [{ id: "p_u", text: { text: shellMarker } }] },
+    { id: "m_a", role: "ROLE_ASSISTANT", finish: "FINISH_REASON_STOP", parts: [{ id: "p_t", toolCall: { tool: "bash", state: "TOOL_EXECUTION_STATE_OK" } }] },
+  ])
+  store.rememberShell("m_a", "echo hello")
+  const views = transcriptViews(store.state)
+  expect(views[0]!.blocks).toEqual([{ kind: "text", id: "p_u", text: "!echo hello" }])
+  expect(views[1]!.blocks).toEqual([{ kind: "tool", id: "p_t", tool: "bash", state: "ok", command: "echo hello" }])
+})
+
+test("a recorded shell turn shows its command from the tool input after a reload", () => {
+  const store = createAppStore()
+  store.openSession({ id: "hysec_1", agent: "build", workdir: "/w" })
+  store.setMessages("hysec_1", [
+    { id: "m_u", role: "ROLE_USER", finish: "FINISH_REASON_STOP", parts: [{ id: "p_u", text: { text: shellMarker } }] },
+    { id: "m_a", role: "ROLE_ASSISTANT", finish: "FINISH_REASON_STOP", parts: [{ id: "p_t", toolCall: { tool: "bash", state: "TOOL_EXECUTION_STATE_OK", inputJson: "{\"command\":\"pwd\"}" } }] },
+  ])
+  const views = transcriptViews(store.state)
+  expect(views[0]!.blocks).toEqual([{ kind: "text", id: "p_u", text: "!pwd" }])
+})
+
+test("the running shell turn shows its command before CreateTurn returns", () => {
+  const store = createAppStore()
+  store.openSession({ id: "hysec_1", agent: "build", workdir: "/w" })
+  store.setPendingShell("sleep 5")
+  store.setMessages("hysec_1", [
+    { id: "m_u", role: "ROLE_USER", finish: "FINISH_REASON_STOP", parts: [{ id: "p_u", text: { text: shellMarker } }] },
+  ])
+  expect(transcriptViews(store.state)[0]!.blocks).toEqual([{ kind: "text", id: "p_u", text: "!sleep 5" }])
+  store.setMessages("hysec_1", [
+    { id: "m_u", role: "ROLE_USER", finish: "FINISH_REASON_STOP", parts: [{ id: "p_u", text: { text: shellMarker } }] },
+    { id: "m_a", role: "ROLE_ASSISTANT", parts: [{ id: "p_t", toolCall: { tool: "bash", state: "TOOL_EXECUTION_STATE_RUNNING" } }] },
+  ])
+  expect(transcriptViews(store.state)[1]!.blocks).toEqual([{ kind: "tool", id: "p_t", tool: "bash", state: "running", command: "sleep 5" }])
 })
