@@ -1,23 +1,30 @@
 import type { ScrollBoxRenderable } from "@opentui/core"
-import { createEffect } from "solid-js"
+import { createEffect, createMemo } from "solid-js"
 import { useApp } from "../app/context"
-import { mainContent, mainTitle } from "../state/format"
+import { mainContent, mainTitle, queuedText } from "../state/format"
 import { colors } from "../theme"
 import { Panel } from "./Panel"
 
-/** Center panel: the transcript in the chat view, otherwise the current view's text. */
+/**
+ * Center panel: the transcript (projection + streaming overlay) and the dimmed
+ * queued prompts in the chat view, otherwise the current view's text.
+ */
 export function MainPanel() {
   const { store } = useApp()
   let scroll: ScrollBoxRenderable | undefined
-  const content = () => mainContent(store.state)
+  // Memoized: the effect and the panel read the same text; compute it once per change.
+  const content = createMemo(() => mainContent(store.state))
+  const queued = createMemo(() => queuedText(store.state))
   createEffect(() => {
     content()
+    queued()
     if (store.state.view === "chat" && scroll) scroll.scrollTop = scroll.scrollHeight
   })
   return (
     <Panel
       title={mainTitle(store.state.view)}
       text={content()}
+      trailer={queued()}
       background={colors.bg}
       sticky
       scrollRef={(element) => (scroll = element)}

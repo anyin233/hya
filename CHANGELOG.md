@@ -34,6 +34,9 @@
 - `packages/hya-tui-web` gains `e2e/hya-tui.spec.ts`: Playwright drives the real TUI in Chromium against an isolated `hya serve` on the offline model. The spec checks the connection, panel layout, prompt admission and reply, and Tab completion.
 - The TUI now uses `@opentui/solid` 0.5.12 (`solid-js` 1.9.12) and requires Bun 1.4.2. The code is split into a state store, a controller, a slash-command registry, a key-binding table, and Solid components. The look, commands, keys, and CLI flags are unchanged. A new browser spec (`e2e/hya-tui-commands.spec.ts`) locks the colors, `/help`, `/models`, `/api`, concealed `/key set` with Esc, narrow widths, and Ctrl+C.
 - Browser specs can script the model. `packages/hya-tui-web/e2e/fake-model.ts` is a fake OpenAI-compatible server that streams text in timed chunks and can emit tool calls, HTTP errors, and hangs you release later. The `backend` fixture's `model: { steps: [...] }` option points the isolated `hya serve` at it. Without the option, specs keep using the offline echo model.
+- The TUI streams assistant replies into the transcript chunk by chunk. When the round ends it switches to the server's stored copy without doubling or flicker. After a resync or reconnect it fills the gap from `ListEvents`.
+- Prompts typed while a turn runs are queued, shown dimmed under `user · queued`, and sent in order after the turn ends. The TUI retries `409 session_busy` with a short backoff.
+- After a turn, the status line shows `Ready`, `Cancelled · Ready`, or `Error · <code>: <message>`, instead of staying on `turn_state_running`. A failed assistant message shows its error in the transcript.
 
 ## List saved provider keys over the v1 API
 

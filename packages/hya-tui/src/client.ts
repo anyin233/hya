@@ -12,6 +12,7 @@ export interface SessionInfo {
 export interface TurnInfo {
   id: string
   state: string
+  errorCode?: string
   errorMessage?: string
 }
 
@@ -29,11 +30,19 @@ export interface MessagePart {
   attachment?: { name: string; path?: string }
 }
 
+export interface MessageError {
+  code: string
+  message: string
+}
+
 export interface MessageInfo {
   id: string
   role: string
   parts?: MessagePart[]
   finish?: string
+  finishCause?: string
+  /** Why the turn that drove this assistant message failed. */
+  error?: MessageError
 }
 
 export interface Interaction {
@@ -86,8 +95,13 @@ export interface StreamEvent {
   seq?: string
   session?: string
   messageStarted?: { message: string; role?: string }
-  messageFinished?: { message: string; finish?: string }
+  messageFinished?: { message: string; finish?: string; cause?: string }
+  partStarted?: { message: string; part: string; kind?: string }
   partAppended?: { message: string; part: string; textDelta?: string }
+  partReplaced?: { message: string; part: string; text?: string }
+  partCompleted?: { message: string; part: string }
+  errorReported?: { message?: string; code?: string; errorMessage?: string }
+  toolStateChanged?: unknown
   permissionRequested?: { interaction?: Interaction }
   questionRequested?: { interaction?: Interaction }
   interactionResolved?: { request?: string }
@@ -322,10 +336,29 @@ export class HyaClient {
     })
   }
 
-  async listEvents(session: string, sinceSeq: string): Promise<{ events?: StreamEvent[]; nextSeq?: string }> {
+  async listEvents(session: string, sinceSeq: string, limit?: number): Promise<{ events?: StreamEvent[]; nextSeq?: string }> {
     return this.request(
-      "GET", `/v1/sessions/${encodeURIComponent(session)}/events?sinceSeq=${encodeURIComponent(sinceSeq)}`,
+      "GET",
+      `/v1/sessions/${encodeURIComponent(session)}/events?sinceSeq=${encodeURIComponent(sinceSeq)}${limit ? `&limit=${limit}` : ""}`,
     )
+  }
+
+  /**
+   * Every durable event after `sinceSeq`, page by page, in sequence order
+   * (`ListEvents` gap-fill after a stream (re)connect or `resync`).
+   */
+  async listEventsSince(session: string, sinceSeq: string, pageSize = 500): Promise<StreamEvent[]> {
+    const events: StreamEvent[] = []
+    let since = sinceSeq
+    for (let pageNumber = 0; pageNumber < 1000; pageNumber++) {
+      const page = await this.listEvents(session, since, pageSize)
+      const rows = page.events ?? []
+      events.push(...rows)
+      const next = page.nextSeq ?? rows.at(-1)?.seq
+      if (rows.length < pageSize || !next || BigInt(next) <= BigInt(since)) return events
+      since = next
+    }
+    throw new Error("Too many event pages")
   }
 
   async streamSession(
@@ -333,6 +366,8 @@ export class HyaClient {
     sinceSeq: string,
     onFrame: (frame: StreamFrame) => void | Promise<void>,
     signal: AbortSignal,
+    /** Runs once the stream is subscribed, before any frame is read (gap-fill hook). */
+    onOpen?: () => void | Promise<void>,
   ): Promise<void> {
     const path = `/v1/sessions/${encodeURIComponent(session)}/events/stream?sinceSeq=${encodeURIComponent(sinceSeq)}`
     const response = await this.fetcher(`${this.base}${path}`, {
@@ -340,6 +375,14 @@ export class HyaClient {
       signal,
     })
     if (!response.ok || !response.body) throw new Error(`Event stream: HTTP ${response.status}`)
+    if (onOpen) {
+      try {
+        await onOpen()
+      } catch (error) {
+        await response.body.cancel().catch(() => undefined)
+        throw error
+      }
+    }
     const reader = response.body.getReader()
     const decoder = new TextDecoder()
     const sse = new SseDecoder()

@@ -50,15 +50,19 @@ test("opening a session resets the transcript and resumes from its last sequence
   expect(store.state.messages).toEqual([])
 })
 
-test("advances the stream cursor only forward and finishes only the active turn", () => {
+test("advances the stream cursor only forward and tracks the turn state", () => {
   const store = createAppStore()
-  store.advanceCursor("10")
-  store.advanceCursor("9")
+  store.openSession(session("hysec_1"))
+  store.applyEvent({ seq: "10", session: "hysec_1", messageStarted: { message: "m1", role: "ROLE_USER" } })
+  store.applyEvent({ seq: "9", session: "hysec_1", messageStarted: { message: "m0", role: "ROLE_USER" } })
+  store.applyEvent({ session: "hysec_1", partStarted: { message: "m2", part: "p", kind: "text" } })
   expect(store.state.cursor).toBe("10")
+  store.beginTurn()
+  expect(store.state.running).toBe(true)
   store.setTurn("msg_1")
-  expect(store.finishTurn("msg_other")).toBe(false)
   expect(store.state.turnId).toBe("msg_1")
-  expect(store.finishTurn("msg_1")).toBe(true)
+  store.endTurn()
+  expect(store.state.running).toBe(false)
   expect(store.state.turnId).toBe("")
 })
 

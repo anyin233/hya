@@ -6,6 +6,12 @@
  * concealed key entry). Every field is a Solid signal, so components re-render
  * when a mutation runs; mutations are the only way to change state.
  *
+ * Streaming: `fold` (a `TranscriptOverlay`) folds stream frames as they
+ * arrive; `flushOverlay()` publishes its snapshot to `state.overlay`. The
+ * controller flushes at most once per frame, so fast delta streams do not
+ * re-render per chunk. `messages` stays the projection; format.ts merges the
+ * two for display.
+ *
  * The store never holds a secret: key entry keeps only the provider id and the
  * bullet mask here; the key itself stays in `SecretEntry` (see completion.ts).
  */
@@ -18,12 +24,23 @@ import type {
   Interaction,
   MessageInfo,
   ModelSummary,
+  StreamEvent,
   ProviderSummary,
   SessionInfo,
   WorkflowSummary,
 } from "../client"
 import type { CompletionContext } from "../completion"
 import type { View } from "../instructions"
+import { TranscriptOverlay, type OverlayEffect } from "./overlay"
+
+/** A prompt submitted while a turn runs; sent when the session is free. */
+export interface QueuedPrompt {
+  id: number
+  session: string
+  text: string
+  /** `sending` while its CreateTurn is in flight (hidden from the transcript). */
+  state: "queued" | "sending"
+}
 
 export interface AppState {
   /** False until the first catalog refresh (or connection failure) lands. */
@@ -41,9 +58,15 @@ export interface AppState {
   readonly workflows: WorkflowSummary[]
   readonly workflowState: Record<string, unknown> | undefined
   readonly selected: SessionInfo | undefined
-  /** Message id of the turn this client admitted, or "". */
+  /** Snapshot of the streaming overlay (see overlay.ts), merged over `messages` for display. */
+  readonly overlay: MessageInfo[]
+  /** Prompts waiting for the running turn to end, oldest first. */
+  readonly queued: QueuedPrompt[]
+  /** A turn admitted (or being admitted) by this client is running. */
+  readonly running: boolean
+  /** Turn id (= user message id) of the turn this client admitted, or "". */
   readonly turnId: string
-  /** Last event sequence seen on the session stream. */
+  /** Last durable event sequence applied from the session stream. */
   readonly cursor: string
   readonly view: View
   readonly apiOutput: string
@@ -81,6 +104,9 @@ function initialState(): { [K in keyof AppState]: AppState[K] } {
     workflows: [],
     workflowState: undefined,
     selected: undefined,
+    overlay: [],
+    queued: [],
+    running: false,
     turnId: "",
     cursor: "0",
     view: "chat",
@@ -104,9 +130,13 @@ export function createAppStore() {
   const set = <K extends keyof AppState>(key: K, value: AppState[K]): void => {
     (signals[key][1] as (value: AppState[K]) => void)(value)
   }
+  const fold = new TranscriptOverlay()
+  let queueIds = 0
 
   return {
     state,
+    /** The streaming fold; mutate it only through `applyEvent`. */
+    fold,
 
     applyBootstrap(bootstrap: Bootstrap): void {
       batch(() => {
@@ -135,44 +165,88 @@ export function createAppStore() {
     /** Mark the UI as painted without data (connection failure). */
     markReady(): void { set("ready", true) },
 
-    /** Select a session: chat view, empty transcript, stream resumes from its last sequence. */
+    /**
+     * Select a session: chat view, empty transcript, stream resumes from its
+     * last sequence. The overlay, prompt queue, and turn state belong to the
+     * previous session and are dropped.
+     */
     openSession(session: SessionInfo): void {
+      fold.reset(session.lastSeq ?? "0")
       batch(() => {
         set("selected", session)
         set("view", "chat")
-        set("cursor", session.lastSeq ?? "0")
+        set("cursor", fold.lastSeq)
         set("messages", [])
+        set("overlay", [])
+        set("queued", [])
+        set("running", false)
+        set("turnId", "")
       })
     },
 
     setSelected(session: SessionInfo): void { set("selected", session) },
 
-    /** Store a transcript page; ignored (returns false) when another session is selected. */
+    /**
+     * Store a projection read; ignored (returns false) when another session is
+     * selected. Overlay messages the projection shows finished are dropped in
+     * the same batch, so the handover never shows a message twice.
+     */
     setMessages(sessionId: string, rows: MessageInfo[]): boolean {
       if (state.selected?.id !== sessionId) return false
-      set("messages", rows)
+      fold.prune(rows)
+      batch(() => {
+        set("messages", rows)
+        set("overlay", fold.messages())
+      })
       return true
     },
+
+    /** Fold one stream event into the overlay (not yet visible; see `flushOverlay`). */
+    applyEvent(event: StreamEvent): OverlayEffect {
+      const effect = fold.apply(event)
+      if (effect.durable) set("cursor", fold.lastSeq)
+      return effect
+    },
+
+    /** Publish the overlay's current snapshot. */
+    flushOverlay(): void { set("overlay", fold.messages()) },
+
+    /** A `resync` dropped frames: see `TranscriptOverlay.markLiveLost`. */
+    markLiveLost(): void { fold.markLiveLost() },
+
+    enqueue(text: string, session: string): QueuedPrompt {
+      const item: QueuedPrompt = { id: ++queueIds, session, text, state: "queued" }
+      set("queued", [...state.queued, item])
+      return item
+    },
+    setQueuedState(id: number, value: QueuedPrompt["state"]): void {
+      set("queued", state.queued.map((item) => item.id === id ? { ...item, state: value } : item))
+    },
+    dequeue(id: number): void { set("queued", state.queued.filter((item) => item.id !== id)) },
 
     setInteractions(rows: Interaction[]): void { set("interactions", rows) },
     setWorkflowState(value: Record<string, unknown> | undefined): void { set("workflowState", value) },
     setView(view: View): void { set("view", view) },
     setStatus(text: string): void { set("status", text) },
     setApiOutput(text: string): void { set("apiOutput", text) },
-    setCursor(seq: string): void { set("cursor", seq) },
 
-    /** Move the stream cursor forward; older sequences are ignored. */
-    advanceCursor(seq: string): void {
-      if (BigInt(seq) > BigInt(state.cursor)) set("cursor", seq)
+    /** A prompt is being admitted: the session counts as running from now on. */
+    beginTurn(): void {
+      batch(() => {
+        set("running", true)
+        set("turnId", "")
+      })
     },
 
+    /** Record the admitted turn id (the user message id); used by /cancel and turn-end matching. */
     setTurn(id: string): void { set("turnId", id) },
 
-    /** Clear the active turn when `messageId` is it; returns whether it was. */
-    finishTurn(messageId: string): boolean {
-      if (!state.turnId || messageId !== state.turnId) return false
-      set("turnId", "")
-      return true
+    /** The turn ended (final assistant `messageFinished`) or was never admitted. */
+    endTurn(): void {
+      batch(() => {
+        set("running", false)
+        set("turnId", "")
+      })
     },
 
     beginSecret(provider: string): void {

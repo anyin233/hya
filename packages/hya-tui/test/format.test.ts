@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { formatMessage, headerText, mainContent, mainTitle, pendingText, sessionListText } from "../src/state/format"
+import { formatMessage, headerText, mainContent, mainTitle, pendingText, queuedText, sessionListText } from "../src/state/format"
 import { createAppStore } from "../src/state/store"
 
 const server = "http://127.0.0.1:8080/"
@@ -46,4 +46,29 @@ test("formats a transcript message with role, finish reason, and parts", () => {
     id: "m", role: "ROLE_ASSISTANT", finish: "FINISH_REASON_STOP",
     parts: [{ id: "p1", text: { text: "hi" } }, { id: "p2", toolCall: { tool: "bash", state: "done" } }],
   })).toBe("assistant · stop\nhi\n↳ bash  done")
+})
+
+test("renders the recorded error of a failed assistant message", () => {
+  expect(formatMessage({
+    id: "m", role: "ROLE_ASSISTANT", finish: "FINISH_REASON_ERROR",
+    error: { code: "provider_error", message: "http status 400: bad request" },
+  })).toBe("assistant · error\nerror · provider_error: http status 400: bad request")
+})
+
+test("the chat transcript merges streaming text over the projection and lists queued prompts", () => {
+  const store = createAppStore()
+  store.applyCatalog({ sessions: [], interactions: [], models: [], workflows: [], providers: [], savedKeys: [], commands: [] })
+  store.openSession({ id: "hysec_1", agent: "build", workdir: "/w" })
+  store.setMessages("hysec_1", [{ id: "m_u", role: "ROLE_USER", finish: "FINISH_REASON_STOP", parts: [{ id: "p_u", text: { text: "hi" } }] }])
+  store.applyEvent({ seq: "5", session: "hysec_1", messageStarted: { message: "m_a", role: "ROLE_ASSISTANT" } })
+  store.applyEvent({ session: "hysec_1", partStarted: { message: "m_a", part: "p_a", kind: "text" } })
+  store.applyEvent({ session: "hysec_1", partAppended: { message: "m_a", part: "p_a", textDelta: "Hel" } })
+  // Deltas are folded immediately but only shown after a flush (batched rendering).
+  expect(mainContent(store.state)).toBe("user · stop\nhi")
+  store.flushOverlay()
+  expect(mainContent(store.state)).toBe("user · stop\nhi\n\nassistant\nHel")
+  store.enqueue("next question", "hysec_1")
+  expect(queuedText(store.state)).toBe("user · queued\nnext question")
+  store.setView("help")
+  expect(queuedText(store.state)).toBe("")
 })
