@@ -1,17 +1,22 @@
 # Troubleshooting
 
-## There Is No Interactive Command
+## Bare `hya` Exits After Guidance
 
-There is currently no interactive TUI: the legacy TypeScript TUI was removed,
-and bare `hya` (no subcommand) prints a version banner plus guidance
-and exits. Drive the backend headlessly or over the API instead:
+The `hya` binary bundles no interactive frontend: bare `hya` (no subcommand)
+prints a version banner plus guidance and exits. Run the backend headlessly, or
+start the server and the OpenTUI frontend from a checkout in two terminals:
 
 ```sh
 hya exec "summarize this repo"
+
+# Terminal 1, from the repository root
 hya serve --bind 127.0.0.1:8080
+# Terminal 2, from the repository root
+bun packages/hya-tui/src/main.ts --server http://127.0.0.1:8080
 ```
 
-See the [CLI Reference](cli.md) and the [Protocol guide](protocol/README.md).
+See the [TUI guide](tui.md), [CLI Reference](cli.md), and
+[Protocol guide](protocol/README.md).
 
 ## Diagnosing Slow Startup
 

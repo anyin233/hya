@@ -1,5 +1,9 @@
 # 0.41.0
 
+## Bun/OpenTUI frontend
+
+- New interactive TUI in `packages/hya-tui`, adopted from a contributor fork ([ADR-0019](docs/adr/0019-adopt-opentui-frontend.md)). It is a Bun/OpenTUI client over the v1 HTTP/JSON+SSE contract. The screen shows sessions, the selected transcript, and pending interactions, plus views for models, Workflows, saved provider keys (`/keys`, `/key set|remove <provider>` with concealed entry), and a generic `/api METHOD /v1/path [JSON]` command. Tab completes slash commands and their arguments, and a footer row shows the next step for the current view. Run it from source with `bun packages/hya-tui/src/main.ts --server http://127.0.0.1:8080 --dir "$PWD"` against `hya serve`. It is not in the release archive. See [OpenTUI frontend](docs/tui.md).
+
 ## List saved provider keys over the v1 API
 
 - New rpc `Auth.ListProviderAuth` (`GET /v1/auth`) answers `{"providerIds": [...]}`, the sorted provider ids with a saved `auth/<id>.yaml` credential. It never returns key values. The contract is now 17 services / 83 rpcs.

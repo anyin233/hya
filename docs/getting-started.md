@@ -1,9 +1,10 @@
 # Getting Started
 
 This guide runs hya from the workspace. The only shipped binary is the backend
-CLI/API binary `hya`; there is currently no interactive TUI (a
-replacement built on `hya-sdk-v1` may be built later). Clients drive the
-backend over the `hya.v1` HTTP/SSE/WebSocket or gRPC contract.
+CLI/API binary `hya`. The interactive OpenTUI frontend (`packages/hya-tui`)
+runs from source with Bun against `hya serve`; see [OpenTUI frontend](tui.md).
+Other clients drive the backend over the `hya.v1` HTTP/SSE/WebSocket or gRPC
+contract.
 
 ## Prerequisites
 

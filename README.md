@@ -10,9 +10,11 @@ runtime: it normalizes OpenAI Chat/Responses/Codex, Grok Build, Anthropic, and
 Google provider routes into one canonical event stream and executes tools behind
 a permission plane. Every client-facing surface speaks one consolidated contract
 — `hya.v1` — served identically over HTTP/JSON+SSE+WebSocket (`/v1`) and gRPC
-(`HYA_GRPC_BIND`); the legacy Compat and native HTTP routes are gone. There is
-currently no bundled interactive TUI; clients drive the backend through
-`hya-sdk-v1`, `hya-client`, or any `hya.v1` client.
+(`HYA_GRPC_BIND`); the legacy Compat and native HTTP routes are gone. The
+interactive frontend is the Bun/OpenTUI TUI in `packages/hya-tui`, run from
+source against `hya serve`. The same TUI renders in a browser as the WebUI
+through `packages/hya-tui-web`. Other clients use `hya-sdk-v1`, `hya-client`,
+or any `hya.v1` client.
 
 
 If no provider is configured, hya still runs: it falls back to an offline
@@ -118,6 +120,8 @@ inspected and installed with `hya bundle info -f example.hyabundle` and
 | [docs/README.md](docs/README.md) | Documentation index and reading paths. |
 | [docs/getting-started.md](docs/getting-started.md) | Zero-to-running: build, headless turns, goal mode, server, and a first live provider. |
 | [docs/configuration.md](docs/configuration.md) | Config file, first-run/offline behavior, `HYA_*` env vars, providers/auth, MCP, plugins, formatter, custom commands. |
+| [docs/tui.md](docs/tui.md) | OpenTUI frontend setup, commands, and v1 interface contracts. |
+| [docs/tui-web.md](docs/tui-web.md) | Browser-rendered TUI (WebUI host) and the Playwright TUI test harness. |
 | [docs/cli.md](docs/cli.md) | `hya` commands, flags, and exit codes. |
 | [docs/workflows.md](docs/workflows.md) | Workflow document format, governance, CLI/tool execution, and WorkflowBundle packaging. |
 | [docs/troubleshooting.md](docs/troubleshooting.md) | Common local, provider, permission, and server issues. |

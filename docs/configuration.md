@@ -833,7 +833,8 @@ removes it. `GET /v1/auth` (`ListProviderAuth`) answers
 `{"providerIds": ["anthropic", ...]}`: the sorted ids that have an
 `auth/<id>.yaml` file. It never returns secret values. A running backend
 resolves provider routes at startup, so restart it after adding or removing a
-key.
+key. The OpenTUI frontend's `/keys` and `/key set|remove` commands use these
+routes (see [TUI](tui.md)).
 
 ## Model Selection
 

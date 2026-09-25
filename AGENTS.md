@@ -89,9 +89,11 @@ ADR-0018). All TUI preview and testing goes through that browser rendering.
 `hya` is a Rust multi-agent coding agent. It is built as an event-sourced
 workspace: user prompts, model deltas, tool calls, permissions, token usage, and
 session lifecycle changes are appended as `Event`s, then replayed into a
-projection for the HTTP API and client surfaces. There is no bundled
-interactive TUI; the legacy TypeScript TUI was removed, and `hya-sdk-v1`,
-`hya-client`, and the gRPC surface are the supported ways to drive a backend.
+projection for the HTTP API and client surfaces. The interactive
+frontend is the Bun/OpenTUI TUI in `packages/hya-tui` (v1 HTTP/JSON+SSE
+client, run from source); `packages/hya-tui-web` renders the same TUI in a
+browser as the WebUI. `hya-sdk-v1`, `hya-client`, and gRPC are the other
+supported ways to drive a backend.
 
 The server exposes exactly one contract — `hya.v1` (17 services / 83 rpcs in
 `proto/hya/v1`) — over HTTP/JSON+SSE+WebSocket under `/v1` and, when
@@ -142,6 +144,7 @@ or verifiers; workers do not decide that their own objective is done.
 | `crates/hya-plugin-example` | Placeholder stub binary (`fn main() {}`); does **not** speak the plugin protocol. Reserved for a future deterministic native-plugin QA fixture. For a real ABI reference, see `docs/plugin-protocol.md`. |
 | `crates/xtask` | Dev-tooling entry point with working tasks: `startup-bench`, `matrix-check`, `package-bundle`, and `release-rehearsal`. |
 | `crates/hya-e2e` | Process-level agent E2E harness (Track P): real `hya` + FakeLlm. Matrix in `matrix.toml`; docs under `docs/testing/`. |
+| `packages/hya-tui` | Bun/OpenTUI TUI over the v1 HTTP/JSON+SSE contract: sessions, transcript, turns, pending interactions, models, Workflows, saved provider keys, slash completion, and a generic `/api` command view. Run from source (`bun packages/hya-tui/src/main.ts --server URL`); not in the release archive. See `docs/tui.md`. |
 | `packages/hya-tui-web` | Bun host that runs a terminal frontend on a real PTY and renders it in the browser with xterm.js (WebSocket frames reuse `hya.v1` `PtyClientFrame`/`PtyServerFrame`). Playwright harness for TUI visual/interaction tests and the WebUI host. See `docs/tui-web.md`. |
 | `.planning` | Local task plans, findings, and progress using `planning-with-files`; existing tasks remain separate. |
 | `docs/spec` | Project coding guidelines. Read the relevant layer's `index.md` before changing code. |
@@ -156,11 +159,11 @@ or verifiers; workers do not decide that their own objective is done.
 - Preserve the event-sourced architecture: append events, replay with the shared
   projection, and avoid parallel read-model logic that can drift from replay.
 - Keep `hya-proto` free of heavy runtime dependencies.
-- Do not add an interactive TUI frontend (a Rust TUI crate, ratatui frontend,
-  backend-owned terminal renderer, or a new TypeScript terminal frontend)
-  without an explicit decision; clients drive the backend through `hya-sdk-v1`,
-  `hya-client`, and the gRPC surface. A replacement TUI on `hya-sdk-v1` may be
-  designed later.
+- TUI work goes into `packages/hya-tui` (ADR-0019). Do not add another
+  interactive frontend (a Rust TUI crate, ratatui frontend, or second
+  TypeScript terminal frontend) or move rendering into the backend without an
+  explicit decision. The TUI reads the server projection over the v1 contract;
+  it does not build a competing durable state model from SSE deltas.
 - Prefer existing planes (`PermissionPlane`, `InteractionPlane`, `SpawnerPlane`,
   `TodoPlane`, `SkillPlane`, `WebSearchPlane`, `LspPlane`) over adding another
   cross-cutting runtime channel.
@@ -202,7 +205,15 @@ bun run typecheck
 bun test
 ```
 
-For browser-rendered TUI changes, also run from `packages/hya-tui-web`:
+For OpenTUI frontend changes, run from `packages/hya-tui`:
+
+```sh
+bun run typecheck
+bun test
+```
+
+For OpenTUI frontend and browser-rendered TUI changes, also run from
+`packages/hya-tui-web`:
 
 ```sh
 bun run typecheck

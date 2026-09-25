@@ -77,6 +77,16 @@ when you change such a bundle, run them from its directory:
 cd bundles/extra/jev-model-router && bun test
 ```
 
+### OpenTUI frontend
+
+The Bun/OpenTUI frontend in `packages/hya-tui` has its own gate:
+
+```sh
+cd packages/hya-tui
+bun run typecheck
+bun test
+```
+
 ### Browser-rendered TUI tests
 
 `packages/hya-tui-web` renders a terminal frontend in Chromium through a real
@@ -137,7 +147,8 @@ Use this guide when deciding where a change belongs:
 | Turn-loop behavior, goal/loop/team/worktree runtime logic | `hya-core` |
 | HTTP route or SSE behavior | `hya-server` |
 | `hya.v1` contract change (proto message/rpc, error code, HTTP binding) | `hya-api` — edit `proto/hya/v1/*.proto`, then regenerate with `cargo run -p xtask -- gen-api` |
-| Typed HTTP integration | `hya-client`; new frontend integrations use `hya-sdk-v1` |
+| Typed Rust HTTP integration | `hya-client`; Rust frontends use `hya-sdk-v1` |
+| Bun/OpenTUI frontend behavior | `packages/hya-tui` (v1 HTTP/JSON+SSE client) |
 | User-facing backend CLI command, config loading, server launch | `hya` |
 | Process-level agent scenario (real backend + FakeLlm) | `hya-e2e` (+ matrix docs under `docs/testing/`) |
 | Dev tooling (matrix check, startup bench) | `xtask` |
@@ -184,6 +195,7 @@ When changing a boundary, update the nearest docs page:
 | Optional `hya-extra/*` distribution bundles | [Extra bundles](extra-bundles.md) |
 | Goal/loop intelligence | [Goal and Loop Authoring](goal-loop-authoring.md) |
 | Agent process E2E / matrix | [Testing](testing/README.md), [Agent matrix](testing/agent-matrix.md) |
+| OpenTUI frontend | [OpenTUI frontend](tui.md) |
 | Browser-rendered TUI, WebUI host, TUI browser tests | [Browser-rendered TUI](tui-web.md) |
 
 Every new or modified feature ships with its documentation in the same change.
