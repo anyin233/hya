@@ -11,6 +11,9 @@ function count(text: string, needle: string): number {
   return text.split(needle).length - 1
 }
 
+/** The status line reads exactly `Ready` (the sidebar may share its screen row). */
+const readyLine = /^Ready(?! ·)/m
+
 async function prompt(term: Tui, text: string): Promise<void> {
   await term.type(text)
   await term.press("Enter")
@@ -31,11 +34,11 @@ test.describe("streamed reply", () => {
     expect(partial).toContain("Running ·")
     await term.attach(testInfo, "streaming-screen")
     await term.waitForText(reply)
-    await term.waitForText("assistant · stop")
-    await term.waitForText(/^Ready\s*$/m)
+    await term.waitForText("● build · fake/model")
+    await term.waitForText(readyLine)
     const final = await term.text()
     expect(count(final, reply)).toBe(1)
-    expect(count(final, "assistant · stop")).toBe(1)
+    expect(count(final, "● build · fake/model")).toBe(1)
     expect(final).not.toContain("turn_state_running")
   })
 })
@@ -49,18 +52,20 @@ test.describe("queued prompt", () => {
     await prompt(term, "first prompt")
     await expect.poll(() => fakeModel!.pendingHangs(), { timeout: 20_000 }).toBe(1)
     await prompt(term, "second prompt")
-    await term.waitForText("user · queued")
+    // The queued prompt is a dimmed user block with a `queued` tag at its right.
+    await term.waitForText(/second prompt\s+queued/)
     await term.waitForText("1 queued")
-    const label = (await term.find("user · queued"))!
-    expect((await term.cell(label.row, label.col))?.fg).toBe(muted)
     const queuedPrompt = (await term.find("second prompt"))!
     expect((await term.cell(queuedPrompt.row, queuedPrompt.col))?.fg).toBe(muted)
+    expect((await term.cell(queuedPrompt.row, queuedPrompt.col - 2))?.fg).toBe(muted)
+    const label = (await term.lines())[queuedPrompt.row]!.lastIndexOf("queued")
+    expect((await term.cell(queuedPrompt.row, label))?.fg).toBe(muted)
     expect(fakeModel!.requests().length).toBe(1)
     await term.attach(testInfo, "queued-screen")
 
     fakeModel!.release()
     await term.waitForText("second reply marker q2", 20_000)
-    await term.waitForText(/^Ready\s*$/m)
+    await term.waitForText(readyLine)
     const text = await term.text()
     expect(text).not.toContain("queued")
     expect(count(text, "second prompt")).toBe(1)
@@ -78,8 +83,10 @@ test.describe("failed turn", () => {
     await term.waitForText("Connected to hya")
     await prompt(term, "please fail")
     await term.waitForText("Error · provider_error: http status 400", 20_000)
-    await term.waitForText("error · provider_error: http status 400")
-    await term.waitForText("assistant · error")
+    // The failed assistant message carries the error line under its header.
+    await term.waitForText("✗ provider_error: http status 400")
+    const header = (await term.find("● build · fake/model"))!
+    expect((await term.find("✗ provider_error"))!.row).toBe(header.row + 1)
     expect(await term.text()).not.toContain("Running ·")
   })
 })

@@ -10,7 +10,7 @@ import { colors } from "../theme"
  * entry, so the key never enters the input, the store, or the screen.
  */
 export function Composer() {
-  const { store, controller } = useApp()
+  const { store, controller, ui } = useApp()
   let input: InputRenderable | undefined
   let choices: string[] = []
   let index = -1
@@ -37,14 +37,42 @@ export function Composer() {
       controller.secretKey(key)
       return
     }
-    switch (resolveBinding(key)) {
+    const action = resolveBinding(key, { composerEmpty: !input?.value })
+    if (!action) return
+    const consume = (): void => {
+      key.preventDefault()
+      key.stopPropagation()
+    }
+    const transcript = store.state.view === "chat" ? ui.transcript : undefined
+    switch (action) {
       case "complete":
-        key.preventDefault()
-        key.stopPropagation()
+        consume()
         complete()
         return
       case "refresh":
         controller.refreshAll()
+        return
+      case "toggleSidebar":
+        consume()
+        store.toggleSidebar()
+        return
+      case "toggleThinking":
+        consume()
+        store.setThinking(!store.state.thinking)
+        store.setStatus(`Reasoning ${store.state.thinking ? "expanded" : "collapsed"} · Ctrl+O toggles`)
+        return
+      case "pageUp":
+      case "pageDown":
+        consume()
+        transcript?.page(action === "pageUp" ? -1 : 1)
+        return
+      case "scrollTop":
+        consume()
+        transcript?.top()
+        return
+      case "scrollBottom":
+        consume()
+        transcript?.bottom()
         return
     }
   })

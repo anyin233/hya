@@ -1,44 +1,21 @@
-import { Show, type JSX } from "solid-js"
+import type { JSX } from "solid-js"
 import { colors } from "../theme"
 
-/** A bordered, titled panel with a word-wrapped scrolling text body and an optional muted trailer. */
-export function Panel(props: {
-  title: string
-  text: string
-  width?: number
-  background?: string
-  visible?: boolean
-  /** Muted text below the body (queued prompts in the transcript). */
-  trailer?: string
-  /** Keep the view pinned to the newest line (the transcript). */
-  sticky?: boolean
-  scrollRef?: (scroll: import("@opentui/core").ScrollBoxRenderable) => void
-}): JSX.Element {
-  const grows = () => props.width === undefined
+/** A bordered, titled panel with a word-wrapped scrolling text body (the non-chat views). */
+export function Panel(props: { title: string; text: string; background?: string }): JSX.Element {
   return (
     <box
-      width={props.width}
-      flexGrow={grows() ? 1 : undefined}
-      flexBasis={grows() ? 0 : undefined}
-      flexShrink={grows() ? undefined : 1}
-      visible={props.visible ?? true}
+      width="100%"
+      flexGrow={1}
+      flexBasis={0}
       border
       borderColor={colors.border}
       title={props.title}
       backgroundColor={props.background ?? colors.panel}
       flexDirection="column"
     >
-      <scrollbox
-        ref={props.scrollRef}
-        width="100%"
-        flexGrow={1}
-        stickyScroll={props.sticky}
-        stickyStart={props.sticky ? "bottom" : undefined}
-      >
+      <scrollbox width="100%" flexGrow={1}>
         <text width="100%" wrapMode="word" fg={colors.fg}>{props.text}</text>
-        <Show when={props.trailer}>
-          <text width="100%" wrapMode="word" fg={colors.muted} marginTop={props.text ? 1 : 0}>{props.trailer}</text>
-        </Show>
       </scrollbox>
     </box>
   )

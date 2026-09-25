@@ -12,10 +12,12 @@ export async function run(options: Options): Promise<void> {
   const client = new HyaClient(options.server, options.directory)
   const store = createAppStore()
   const controller = createController({ client, store, directory: options.directory })
-  const renderer = await createCliRenderer({ exitOnCtrlC: true, targetFps: 30 })
+  // autoFocus off: a click (on the transcript, a Thinking line, the sidebar)
+  // must not move focus from the one input to a scrollbox.
+  const renderer = await createCliRenderer({ exitOnCtrlC: true, targetFps: 30, autoFocus: false })
   renderer.once("destroy", () => controller.dispose())
   await render(() => (
-    <AppContext.Provider value={{ store, controller, server: options.server }}>
+    <AppContext.Provider value={{ store, controller, server: options.server, ui: {} }}>
       <App />
     </AppContext.Provider>
   ), renderer)

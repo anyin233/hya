@@ -1,13 +1,22 @@
-// Scriptable OpenAI-compatible Chat Completions fake for browser TUI specs.
+// Scriptable OpenAI model fake for browser TUI specs. It speaks two wire
+// protocols, chosen per request by its path:
 //
-// hya's `openai-compatible` provider route only decodes what
-// `crates/hya-provider/src/openai/decoder.rs` (`OpenAiChatDecoder`) reads
-// from each SSE chunk: `choices[0].delta.content`, `choices[0].delta.tool_calls`
-// (`index`/`id`/`function.name`/`function.arguments`), `choices[0].finish_reason`,
-// and a trailing `usage` object (`completion_tokens_details.reasoning_tokens`
-// for the thinking split). It does not read `reasoning_content` or any other
-// reasoning field, so this fake has no reasoning/thinking step type — a
-// scripted "reasoning" chunk would silently be dropped by hya, not rendered.
+// - `POST /v1/chat/completions` — OpenAI Chat Completions, for hya's
+//   `openai-compatible` provider kind. hya only decodes what
+//   `crates/hya-provider/src/openai/decoder.rs` (`OpenAiChatDecoder`) reads
+//   from each SSE chunk: `choices[0].delta.content`, `choices[0].delta.tool_calls`
+//   (`index`/`id`/`function.name`/`function.arguments`), `choices[0].finish_reason`,
+//   and a trailing `usage` object. It does not read `reasoning_content`, so a
+//   `reasoningStep` on this protocol streams only its answer text.
+// - `POST /v1/responses` — the OpenAI Responses API, for hya's
+//   `openai-response` provider kind. `OpenAiResponsesDecoder`
+//   (`crates/hya-provider/src/openai/response_decoder.rs`) reads
+//   `response.reasoning_summary_text.delta`, `response.output_item.added/done`
+//   (reasoning and function_call items), `response.function_call_arguments.delta`,
+//   `response.output_text.delta/done`, and the typed terminal
+//   `response.completed` / `response.incomplete` (length). Reasoning is
+//   therefore only rendered on this protocol. The stream must end with a typed
+//   terminal event; `[DONE]` is never sent.
 //
 // This mirrors the Rust reference implementation
 // (`crates/hya-e2e/src/fake_llm.rs`): an ordered queue of `Step`s consumed one
@@ -26,6 +35,23 @@ export type TextStep = {
   /** Split `text` into chunks of this many UTF-16 units per SSE delta (default: one delta for the whole string). */
   chunkSize?: number
   /** Delay in ms before each chunk (including the first), so streaming is observable. Default: 0. */
+  delayMs?: number
+  /** Finish reason. `length` ends the reply as if it hit the output limit. Default: `stop`. */
+  finish?: "stop" | "length"
+}
+
+/**
+ * Stream reasoning (thinking) text, then the answer text, then finish `stop`.
+ * Reasoning is only decoded by hya on the Responses protocol; the chat
+ * protocol streams just `text`.
+ */
+export type ReasoningStep = {
+  type: "reasoning"
+  reasoning: string
+  text: string
+  /** Chunk size for both the reasoning and the answer (default: whole strings). */
+  chunkSize?: number
+  /** Delay in ms before each chunk. Default: 0. */
   delayMs?: number
 }
 
@@ -61,11 +87,19 @@ export type HangStep = {
   ms?: number
 }
 
-export type Step = TextStep | ToolCallsStep | HttpErrorStep | HangStep
+export type Step = TextStep | ReasoningStep | ToolCallsStep | HttpErrorStep | HangStep
+
+/** Wire protocol of one request, chosen by its path. */
+export type Protocol = "chat" | "responses"
 
 /** Build a text step. */
-export function textStep(text: string, options?: { chunkSize?: number; delayMs?: number }): TextStep {
+export function textStep(text: string, options?: { chunkSize?: number; delayMs?: number; finish?: "stop" | "length" }): TextStep {
   return { type: "text", text, ...options }
+}
+
+/** Build a reasoning step: thinking text first, then the answer. */
+export function reasoningStep(reasoning: string, text: string, options?: { chunkSize?: number; delayMs?: number }): ReasoningStep {
+  return { type: "reasoning", reasoning, text, ...options }
 }
 
 /** Build a single-tool-call step. */
@@ -120,15 +154,27 @@ export type FakeModel = {
   stop(): Promise<void>
 }
 
+/** System text of a request: chat `system` messages, or Responses `instructions` and `system` input items. */
 function systemText(body: unknown): string {
   if (typeof body !== "object" || body === null) return ""
-  const messages = (body as Record<string, unknown>).messages
-  if (!Array.isArray(messages)) return ""
-  return messages
-    .filter((m) => m && typeof m === "object" && (m as Record<string, unknown>).role === "system")
-    .map((m) => (m as Record<string, unknown>).content)
-    .filter((c): c is string => typeof c === "string")
-    .join("\n")
+  const record = body as Record<string, unknown>
+  const instructions = typeof record.instructions === "string" ? [record.instructions] : []
+  const messages = Array.isArray(record.messages) ? record.messages : Array.isArray(record.input) ? record.input : []
+  return [
+    ...instructions,
+    ...messages
+      .filter((m) => m && typeof m === "object" && (m as Record<string, unknown>).role === "system")
+      .map((m) => (m as Record<string, unknown>).content)
+      .filter((c): c is string => typeof c === "string"),
+  ].join("\n")
+}
+
+function chunked(text: string, size: number | undefined): string[] {
+  const step = Math.max(size ?? text.length, 1)
+  if (text.length === 0) return [""]
+  const chunks: string[] = []
+  for (let at = 0; at < text.length; at += step) chunks.push(text.slice(at, at + step))
+  return chunks
 }
 
 function sleep(ms: number): Promise<void> {
@@ -170,21 +216,23 @@ export async function startFakeModel(initial: Step[] = []): Promise<FakeModel> {
     }
   }
 
-  async function streamText(res: ServerResponse, step: TextStep): Promise<void> {
-    writeSse(res, { choices: [{ delta: { role: "assistant", content: "" }, finish_reason: null }] })
-    const chunkSize = Math.max(step.chunkSize ?? step.text.length, 1)
-    const delay = step.delayMs ?? 0
-    const chunks = step.text.length > 0 ? Math.ceil(step.text.length / chunkSize) : 1
-    for (let chunk = 0; chunk < chunks; chunk++) {
-      if (delay > 0) await sleep(delay)
-      const text = step.text.slice(chunk * chunkSize, (chunk + 1) * chunkSize)
-      writeSse(res, { choices: [{ delta: { content: text }, finish_reason: null }] })
-    }
-    writeSse(res, withUsage({ choices: [{ delta: {}, finish_reason: "stop" }] }))
+  // ---- Chat Completions (`/v1/chat/completions`) -------------------------
+
+  function chatFinish(res: ServerResponse, finish: string): void {
+    writeSse(res, withUsage({ choices: [{ delta: {}, finish_reason: finish }] }))
     res.write("data: [DONE]\n\n")
   }
 
-  function streamToolCalls(res: ServerResponse, step: ToolCallsStep): void {
+  async function chatText(res: ServerResponse, text: string, options: { chunkSize?: number; delayMs?: number; finish?: string }): Promise<void> {
+    writeSse(res, { choices: [{ delta: { role: "assistant", content: "" }, finish_reason: null }] })
+    for (const chunk of chunked(text, options.chunkSize)) {
+      if (options.delayMs) await sleep(options.delayMs)
+      writeSse(res, { choices: [{ delta: { content: chunk }, finish_reason: null }] })
+    }
+    chatFinish(res, options.finish ?? "stop")
+  }
+
+  function chatToolCalls(res: ServerResponse, step: ToolCallsStep): void {
     step.calls.forEach((call, index) => {
       writeSse(res, {
         choices: [
@@ -207,22 +255,89 @@ export async function startFakeModel(initial: Step[] = []): Promise<FakeModel> {
         ],
       })
     })
-    writeSse(res, withUsage({ choices: [{ delta: {}, finish_reason: "tool_calls" }] }))
-    res.write("data: [DONE]\n\n")
+    chatFinish(res, "tool_calls")
   }
 
-  async function handleHang(res: ServerResponse, step: HangStep): Promise<void> {
+  // ---- Responses API (`/v1/responses`) -----------------------------------
+
+  function responsesUsage(): Record<string, unknown> | undefined {
+    if (!usage) return undefined
+    return {
+      input_tokens: usage.prompt,
+      output_tokens: usage.completion,
+      total_tokens: usage.prompt + usage.completion,
+      output_tokens_details: { reasoning_tokens: usage.reasoning },
+    }
+  }
+
+  function responsesFinish(res: ServerResponse, finish: "stop" | "length"): void {
+    const response = { id: "resp_fake", status: finish === "length" ? "incomplete" : "completed", usage: responsesUsage() }
+    writeSse(res, { type: finish === "length" ? "response.incomplete" : "response.completed", response })
+  }
+
+  async function responsesText(res: ServerResponse, index: number, text: string, options: { chunkSize?: number; delayMs?: number }): Promise<void> {
+    for (const chunk of chunked(text, options.chunkSize)) {
+      if (options.delayMs) await sleep(options.delayMs)
+      writeSse(res, { type: "response.output_text.delta", output_index: index, content_index: 0, delta: chunk })
+    }
+    writeSse(res, { type: "response.output_text.done", output_index: index, content_index: 0, text })
+  }
+
+  async function responsesReasoning(res: ServerResponse, step: ReasoningStep): Promise<void> {
+    writeSse(res, { type: "response.output_item.added", output_index: 0, item: { type: "reasoning", id: "rs_fake", summary: [] } })
+    for (const chunk of chunked(step.reasoning, step.chunkSize)) {
+      if (step.delayMs) await sleep(step.delayMs)
+      writeSse(res, { type: "response.reasoning_summary_text.delta", output_index: 0, summary_index: 0, delta: chunk })
+    }
+    writeSse(res, {
+      type: "response.output_item.done",
+      output_index: 0,
+      item: { type: "reasoning", id: "rs_fake", summary: [{ type: "summary_text", text: step.reasoning }] },
+    })
+    await responsesText(res, 1, step.text, step)
+    responsesFinish(res, "stop")
+  }
+
+  function responsesToolCalls(res: ServerResponse, step: ToolCallsStep): void {
+    step.calls.forEach((call, index) => {
+      const item = { type: "function_call", id: `fc_${index}`, call_id: `call_${index}`, name: call.name, arguments: "" }
+      const args = JSON.stringify(call.arguments)
+      writeSse(res, { type: "response.output_item.added", output_index: index, item })
+      writeSse(res, { type: "response.function_call_arguments.delta", output_index: index, delta: args })
+      writeSse(res, { type: "response.output_item.done", output_index: index, item: { ...item, arguments: args } })
+    })
+    responsesFinish(res, "stop")
+  }
+
+  // ---- Steps ---------------------------------------------------------------
+
+  async function streamStep(res: ServerResponse, protocol: Protocol, step: Exclude<Step, HttpErrorStep | HangStep>): Promise<void> {
+    if (protocol === "chat") {
+      if (step.type === "text") await chatText(res, step.text, step)
+      else if (step.type === "reasoning") await chatText(res, step.text, step)
+      else chatToolCalls(res, step)
+      return
+    }
+    if (step.type === "text") {
+      await responsesText(res, 0, step.text, step)
+      responsesFinish(res, step.finish ?? "stop")
+    } else if (step.type === "reasoning") await responsesReasoning(res, step)
+    else responsesToolCalls(res, step)
+  }
+
+  async function handleHang(res: ServerResponse, protocol: Protocol, step: HangStep): Promise<void> {
     await new Promise<void>((resolve) => {
       hangs.push(resolve)
       if (step.ms !== undefined) setTimeout(resolve, step.ms)
     })
-    writeSse(res, { choices: [{ delta: { role: "assistant", content: "" }, finish_reason: null }] })
-    writeSse(res, withUsage({ choices: [{ delta: {}, finish_reason: "stop" }] }))
-    res.write("data: [DONE]\n\n")
+    await streamStep(res, protocol, { type: "text", text: "" })
   }
 
+  const paths: Record<string, Protocol> = { "/v1/chat/completions": "chat", "/v1/responses": "responses" }
+
   async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    if (req.method !== "POST" || req.url !== "/v1/chat/completions") {
+    const protocol = paths[req.url ?? ""]
+    if (req.method !== "POST" || !protocol) {
       res.writeHead(404).end()
       return
     }
@@ -236,23 +351,15 @@ export async function startFakeModel(initial: Step[] = []): Promise<FakeModel> {
     }
     requests.push(body)
     const { step } = popStep(body)
-    if (!step) {
-      // Scripts exhausted: terminate the turn cleanly instead of hanging.
-      res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" })
-      writeSse(res, { choices: [{ delta: { content: "" }, finish_reason: null }] })
-      writeSse(res, withUsage({ choices: [{ delta: {}, finish_reason: "stop" }] }))
-      res.write("data: [DONE]\n\n")
-      res.end()
-      return
-    }
-    if (step.type === "httpError") {
+    if (step?.type === "httpError") {
       res.writeHead(step.status, { "content-type": "text/plain" }).end("scripted pre-stream failure")
       return
     }
     res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" })
-    if (step.type === "text") await streamText(res, step)
-    else if (step.type === "toolCalls") streamToolCalls(res, step)
-    else await handleHang(res, step)
+    // Scripts exhausted: terminate the turn cleanly (empty reply) instead of hanging.
+    if (!step) await streamStep(res, protocol, { type: "text", text: "" })
+    else if (step.type === "hang") await handleHang(res, protocol, step)
+    else await streamStep(res, protocol, step)
     res.end()
   }
 

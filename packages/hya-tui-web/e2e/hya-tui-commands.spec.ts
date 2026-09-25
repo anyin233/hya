@@ -16,8 +16,9 @@ test.describe("hya TUI commands and look", () => {
     expect(corner?.fg).toBe("#405366")
     expect((await term.cell(sessions.row + 1, sessions.col))?.bg).toBe("#1c2530")
 
-    const chat = (await term.find("Chat"))!
-    expect((await term.cell(chat.row + 1, chat.col))?.bg).toBe("#11151b")
+    // The transcript (no box since the single-column layout) sits on the base background.
+    const transcript = (await term.find("No messages yet"))!
+    expect((await term.cell(transcript.row, transcript.col))?.bg).toBe("#11151b")
 
     const status = (await term.find("Connected to hya"))!
     expect((await term.cell(status.row, status.col))?.fg).toBe("#9caab9")
@@ -65,14 +66,15 @@ test.describe("hya TUI commands and look", () => {
     expect(await term.text()).not.toContain("Key: ")
   })
 
-  test("narrow terminals hide the side panels", async ({ tui, backend }) => {
+  test("narrow terminals hide the sidebar until Ctrl+B shows it", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend), { viewport: { width: 760, height: 640 } })
     await term.waitForText("Connected to hya")
     const { cols } = await term.size()
-    expect(cols).toBeLessThan(105)
+    expect(cols).toBeLessThan(110)
     expect(cols).toBeGreaterThanOrEqual(58)
+    expect(await term.text()).not.toContain("Sessions")
+    await term.press("Control+b")
     await term.waitForText("Sessions")
-    expect(await term.text()).not.toContain("Pending")
   })
 
   test("Ctrl+C quits the TUI", async ({ tui, backend }) => {

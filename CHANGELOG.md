@@ -37,6 +37,10 @@
 - The TUI streams assistant replies into the transcript chunk by chunk. When the round ends it switches to the server's stored copy without doubling or flicker. After a resync or reconnect it fills the gap from `ListEvents`.
 - Prompts typed while a turn runs are queued, shown dimmed under `user · queued`, and sent in order after the turn ends. The TUI retries `409 session_busy` with a short backoff.
 - After a turn, the status line shows `Ready`, `Cancelled · Ready`, or `Error · <code>: <message>`, instead of staying on `turn_state_running`. A failed assistant message shows its error in the transcript.
+- New layout: a single main column with a toggleable sidebar holding Sessions, Todos, and Context. The sidebar shows automatically at 110 columns or wider; Ctrl+B or `/sidebar [on|off]` pins it. Pending interactions appear as a compact block above the input.
+- Messages render by role: user messages as blocks with an accent bar, assistant messages under an `agent · model` header. Assistant text renders as Markdown, using OpenTUI's `<markdown>`, with syntax-highlighted code blocks. Errors, cancellations, and length-limit stops show as colored notices.
+- Reasoning collapses to a `Thinking` line; Ctrl+O, `/thinking [on|off]`, or a click expands it. The transcript scrolls with PgUp/PgDn, Ctrl+Home/End, and the mouse wheel, and shows a "new messages below" hint when scrolled up. The projection is re-read at least every 400 ms while frames keep arriving.
+- The browser test fake model also speaks the OpenAI Responses API (`model: { steps, protocol: "responses" }`), with `reasoningStep` and `textStep(..., { finish: "length" })`.
 
 ## List saved provider keys over the v1 API
 
