@@ -4,6 +4,7 @@ import { nativeCommands } from "../src/completion"
 import { createCommandRegistry, type AppActions } from "../src/commands"
 import { createAppStore } from "../src/state/store"
 import type { PickerSpec } from "../src/state/picker"
+import { colors, defaultThemeName, setTheme, themeName, themes } from "../src/theme"
 
 function harness(client: Partial<HyaClient> = {}) {
   const store = createAppStore()
@@ -21,6 +22,7 @@ function harness(client: Partial<HyaClient> = {}) {
     openPicker: (picker) => { pickers.push(picker) },
     requestPermissionMode: async (mode) => { calls.push(`mode ${mode}`) },
     openHelp: () => { calls.push("help") },
+    savePreferences: (patch) => { calls.push(`prefs ${JSON.stringify(patch)}`) },
   }
   const registry = createCommandRegistry()
   const context = { store, client: client as HyaClient, actions }
@@ -312,4 +314,39 @@ test("/sessions row actions: F2 renames (UpdateSession title), Ctrl+D deletes (D
 
   await picker.onAction?.("delete", picker.rows[1]!)
   expect(deleteCalls).toEqual(["hysec_1"])
+})
+
+test("/theme opens a picker of the built-in themes with live preview; Enter persists, Esc restores", async () => {
+  const { calls, pickers, run, store } = harness()
+  try {
+    await run("/theme")
+    const picker = pickers.at(-1)!
+    expect(picker.title).toBe("Theme")
+    expect(picker.rows.map((row) => row.id)).toEqual(Object.keys(themes))
+    expect(picker.rows.find((row) => row.current)?.id).toBe("hya")
+    expect(picker.rows.find((row) => row.id === "light")?.tag).toBe("light")
+
+    // Moving the highlight previews; Esc (cancel) restores the theme in effect before.
+    picker.onHighlight!(picker.rows.find((row) => row.id === "light")!)
+    expect(themeName()).toBe("light")
+    expect(colors.bg).toBe(themes.light.colors.bg)
+    picker.onCancel!()
+    expect(themeName()).toBe("hya")
+    expect(calls.filter((call) => call.startsWith("prefs"))).toEqual([])
+
+    // Enter keeps the theme and saves it to the preferences file.
+    await run("/theme")
+    const again = pickers.at(-1)!
+    again.onHighlight!(again.rows.find((row) => row.id === "contrast")!)
+    await again.onSelect(again.rows.find((row) => row.id === "light")!)
+    expect(themeName()).toBe("light")
+    expect(calls).toContain('prefs {"theme":"light"}')
+    expect(store.state.status).toContain("Theme → Light")
+
+    // The next picker marks the theme now in effect.
+    await run("/theme")
+    expect(pickers.at(-1)!.rows.find((row) => row.current)?.id).toBe("light")
+  } finally {
+    setTheme(defaultThemeName)
+  }
 })

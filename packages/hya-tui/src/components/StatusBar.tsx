@@ -19,7 +19,8 @@ import { contextUsage, formatTokens, sessionTokens, statusBarSegments, todosComp
 import { effectiveMode, modeDisplay, type ModeTone } from "../state/modes"
 import { colors } from "../theme"
 
-const modeColors: Record<ModeTone, string> = { normal: colors.fg, error: colors.error, accent: colors.accent }
+/** A function, not a table: the palette is reactive (theme.ts), so read it where it is used. */
+const modeColor = (tone: ModeTone): string => tone === "error" ? colors.error : tone === "accent" ? colors.accent : colors.fg
 
 export function StatusBar() {
   const { store } = useApp()
@@ -46,7 +47,7 @@ export function StatusBar() {
     const out: { text: string; fg: string }[] = []
     segments().forEach((segment, index) => {
       const pieces = segment.tone === "mode"
-        ? [{ text: "mode ", fg: colors.muted }, { text: segment.text.slice(5), fg: modeColors[mode().tone] }]
+        ? [{ text: "mode ", fg: colors.muted }, { text: segment.text.slice(5), fg: modeColor(mode().tone) }]
         : [{ text: segment.text, fg: color(segment.tone) }]
       if (index > 0) pieces.unshift({ text: " · ", fg: colors.muted })
       for (const piece of pieces) {

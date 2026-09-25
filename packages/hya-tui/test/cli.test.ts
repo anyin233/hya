@@ -49,3 +49,8 @@ test("--web-url and --web-error carry the WebUI state from bare hya", () => {
   expect(() => parseArguments(["--web-url", "ftp://x"], "/cwd")).toThrow("--web-url needs an HTTP URL")
   for (const flag of ["--web-url", "--web-error"]) expect(usage).toContain(flag)
 })
+
+test("usage names the preferences file and its HYA_TUI_CONFIG override", () => {
+  expect(usage).toContain("HYA_TUI_CONFIG")
+  expect(usage).toContain("hya/tui.json")
+})

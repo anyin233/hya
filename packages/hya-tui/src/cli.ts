@@ -46,6 +46,10 @@ Options:
   --web-error TEXT  Show "WebUI unavailable: TEXT" (set by bare hya when the
                     WebUI could not start)
   -h, --help        Show this help
+
+Environment:
+  HYA_TUI_CONFIG    TUI preferences file (theme); default
+                    $XDG_CONFIG_HOME/hya/tui.json, else ~/.config/hya/tui.json
 `
 
 /** Parse the flags above; returns null for `--help`. */

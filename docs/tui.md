@@ -198,6 +198,7 @@ backend is running.
 | `/sidebar [on\|off]` or Ctrl+B | Show or hide the sidebar. Without an argument it toggles what is visible now. |
 | `/thinking [on\|off]` or Ctrl+O | Expand or collapse every reasoning (`Thinking`) block. |
 | `/tools [on\|off]` or Ctrl+G | Expand or collapse every tool call card (see [Tool calls](#tool-calls)). |
+| `/theme` | Pick the color theme: moving the highlight previews it, Enter keeps it and saves it to the preferences file, Esc restores the previous one (see [Themes](#themes)). |
 | `/compact` | Compact the session's context now (`CompactSession`); the status line shows `Compacting…`, then `Compacted · <strategy>`. |
 | `/summarize` | Summarize the session into a new message (`SummarizeSession`). |
 | `/todos` | Show the session's todo list (`GetSessionTodo`) in the main panel. |
@@ -345,7 +346,8 @@ the bordered input, and the instruction line. The permission mode picker
   transcript, a `Thinking` line, a tool card, or the sidebar) never move it (the renderer
   runs with `autoFocus: false`).
 
-The colors are fixed in `src/theme.ts`:
+The colors come from the theme in effect (see [Themes](#themes)). The
+default `hya` theme:
 
 | Name | Value | Used for |
 | --- | --- | --- |
@@ -367,6 +369,84 @@ permission answer `warning`, a pending one `muted`.
 Code block tokens use `syntaxColors` (keyword `#c792ea`, string `#a5d6a7`,
 number `#f78c6c`, comment `#7a8a9c`, function `#82aaff`, type `#ffcb6b`,
 operator `#89ddff`) and inline code `#f2a97a`.
+
+## Themes
+
+The TUI ships four built-in color themes, so it stays readable on light
+terminals and for users who need more contrast. The choice is saved in the
+TUI preferences file and used by every later start (including the TUI bare
+`hya` starts). A WebUI tab runs its own TUI process, which reads the same
+file when it starts.
+
+| Name | Kind | Look |
+| --- | --- | --- |
+| `hya` | dark | The default: slate background, cyan accent (the palette in [Layout](#layout)). |
+| `light` | light | Light background (`#f7f9fb`) with dark text (`#1f2933`), for bright terminals. |
+| `contrast` | dark | Black background, white text, saturated accents. |
+| `ember` | dark | Warm dark theme: brown background, amber accent. |
+
+**Usage.** `/theme` (no arguments) opens the [picker](#pickers) with one
+row per theme, `[dark]`/`[light]` tagged; `●` marks the theme in effect.
+Moving the highlight (Up/Down, Tab/Shift+Tab, typing a filter) repaints the
+whole screen in the highlighted theme at once — the transcript, Markdown,
+highlighted code, tool cards, boxes, and the status line. Enter keeps it,
+writes it to the preferences file, and shows `Theme → <label>`; Esc (or
+Ctrl+C) closes the picker and restores the theme in effect when it opened,
+writing nothing. If the file cannot be written, the theme still applies for
+this run and the status line says `Theme → <label> · not saved: <reason>`.
+
+```text
+/theme            # ↓ previews Light, Enter keeps it
+cat ~/.config/hya/tui.json
+{
+  "theme": "light"
+}
+```
+
+### Preferences file
+
+The TUI keeps its own settings (not the backend's `config.yaml`) in one
+JSON object:
+
+| Location (first that applies) | |
+| --- | --- |
+| `$HYA_TUI_CONFIG` | A full file path; overrides the default (tests, several profiles). |
+| `$XDG_CONFIG_HOME/hya/tui.json` | When `XDG_CONFIG_HOME` is set and not empty. |
+| `~/.config/hya/tui.json` | Otherwise. |
+
+```ts
+interface TuiPreferences {
+  theme?: string   // a built-in theme name: "hya" (default), "light", "contrast", "ember"
+}
+```
+
+- The file is read once at start, before the first frame. A missing file
+  means the defaults. An unreadable file, invalid JSON, or a JSON value that
+  is not an object is ignored, and the status line says
+  `Ignored unreadable TUI preferences <path>`; an unknown theme name says
+  `Unknown theme <name> in <path>; using hya`. A key whose value has the
+  wrong type is ignored.
+- A change (`/theme`'s Enter) merges the changed key into what is on disk —
+  keys this TUI does not know are kept — and writes a temporary file in the
+  same directory, then renames it over the file, so a crash never leaves a
+  half-written file. The directory is created when missing.
+
+**Interfaces for components.** `src/theme.ts` exports the palette of the
+theme in effect as Solid stores: `colors` (`bg`, `panel`, `fg`, `muted`,
+`accent`, `border`, `error`, `warning`), `toolColors` (`done`), `diffColors`
+(`add`, `remove`, `hunk`, `context`), and `syntaxColors` (`keyword`,
+`string`, `number`, `comment`, `function`, `type`, `operator`,
+`inlineCode`). Read them where they are used — in JSX (`fg={colors.muted}`),
+a function called from JSX, a memo, or an effect — so a theme switch
+repaints; a module-level copy (`const c = colors.fg`) is a snapshot that
+never updates. `themeName()` is the reactive name of the theme in effect,
+`currentTheme()` its `ThemeDefinition`, `setTheme(name)` switches (returns
+`false` for an unknown name), `themes` lists the built-ins, and
+`syntaxStylesFor(theme)` gives the Markdown/tree-sitter scope styles.
+`components/Markdown.tsx` keeps one OpenTUI `SyntaxStyle` per theme and, on
+a switch, sets it and rebuilds the blocks so fenced-code boxes repaint too.
+A new theme is one more `ThemeDefinition` entry in `themes` with every key
+of the four groups (`test/theme.test.ts` checks it).
 
 ## Working indicator, status bar, and todo panel
 
@@ -1319,7 +1399,8 @@ together.
 | Path | Role |
 | --- | --- |
 | `src/main.ts` | Entry. Registers the Solid JSX transform (`@opentui/solid/preload`), parses flags, then dynamically imports the app. |
-| `src/cli.ts` | `parseArguments()` (`--server`, `--dir`, `--hya`, `--db`, `--continue`, `--session`, `--help`) and the `usage` text. |
+| `src/cli.ts` | `parseArguments()` (`--server`, `--dir`, `--hya`, `--db`, `--continue`, `--session`, `--help`) and the `usage` text (which also names `HYA_TUI_CONFIG`). |
+| `src/prefs.ts` | The TUI preferences file ([Themes — Preferences file](#preferences-file)): `preferencesPath()` (`HYA_TUI_CONFIG`, XDG, home), `loadPreferences()` (never throws; `warning` for an unusable file), `savePreferences()` (merge + atomic rename), `TuiPreferences`. |
 | `src/launch.ts` | One-command launch: `resolveHyaBinary()` (`--hya`, `HYA_BIN`, `PATH`), `parseReadyLine()`, `defaultDatabase()`, `startBackend()` (spawn `hya serve`, drain its output, wait for readiness, `stop()` with SIGTERM then SIGKILL), `initialSessionId()` (`--continue` / `--session`), `BackendError`. |
 | `src/client.ts` | Typed v1 HTTP/JSON+SSE client (`HyaClient`, `SseDecoder`, `parseApiCommand`). |
 | `src/state/store.ts` | `createAppStore()`: the single store. It holds the server projection (sessions, messages, interactions, models, agents, providers, workflows, saved key names, backend commands, todos, stream cursor, the open session's subagent members, what was last read about each child session), the published streaming overlay, the prompt queue, the turn state (`running`, `turnId`), and UI state (view, status, key-entry provider and mask, sidebar mode, terminal columns, the reasoning switch and per-part toggles, the tool-card switch and per-card toggles, the highlighted prompt option (`promptSelection`, by ask id), whether the input holds text (`draft`), the jump-to-bottom tick, the `/status` text, the backend version from bootstrap, the `/name args` display text of command turns by user message id). Each field is a Solid signal, and only the store's mutation methods change it. |
@@ -1327,7 +1408,7 @@ together.
 | `src/state/messages.ts` | The transcript view model: `transcriptViews()` (projection + overlay + waiting queued prompts), `messageView()` (role, agent/model, typed blocks, finish notice; cached per message object), `finishNotice()`, `reasoningLabel()`, `reasoningExpanded()`, `toolExpanded()`. |
 | `src/state/tools.ts` | The tool-card view model: `toolCard()` (status, per-tool summary, body lines with tones, duration, error, task info), `toolStatus()`, `formatDuration()`, `clipLines()`, `diffLines()`, `partialField()`. |
 | `src/state/modes.ts` | Permission modes: `modeCycle()` (Shift+Tab order), `nextMode()`, `requestMode()` and `confirmKey()` (the yolo confirmation state machine), `modeDisplay()` (status bar text and tone), `modeNotice()`, `modeRows()` (picker rows), `effectiveMode()`, `isShiftTab()`. |
-| `src/state/picker.ts` | The reusable modal picker's pure state (API below): `createPicker()`, `pickerMatches()`, `pickerRows()`, `pickerKey()`, `pickerWindow()`, and the `PickerRow` / `PickerAction` / `PickerSpec` / `ActivePicker` types; `"rename"`/`"confirm"` row-action modes (F2/Ctrl+D on `/sessions`, [Pickers — Row actions](#row-actions)). |
+| `src/state/picker.ts` | The reusable modal picker's pure state (API below): `createPicker()`, `pickerMatches()`, `pickerRows()`, `pickerHighlighted()`, `pickerKey()`, `pickerWindow()`, and the `PickerRow` / `PickerAction` / `PickerSpec` / `ActivePicker` types; `"rename"`/`"confirm"` row-action modes (F2/Ctrl+D on `/sessions`, [Pickers — Row actions](#row-actions)). |
 | `src/state/catalog.ts` | `/model`/`/agent`/`/sessions` picker row builders: `modelRows()` (tagged by provider), `agentRows()` (visible agents, tagged by default model), `sessionRows()` (the `New session` row + `sessionTree()`, relative time), `relativeTime()`. |
 | `src/app/modes.ts` | `createModeSwitcher()`: `cycle()` (Shift+Tab), `request(mode)`, `key()` (the confirmation's keys), `applyPending()` (a mode chosen before any session, sent after `CreateSession`); sends `UpdateSession {permissionMode}`, re-lists interactions, reports in the status line. |
 | `src/state/prompts.ts` | Permission and question prompts: `promptQueue()` (asks of the open session's tree), `treeSessionIds()`, `promptView()` (headline, asker, details from `toolCard()`, options), `currentPrompt()`, `promptKey()` (option keys), `respondBody()`, `mergeInteractions()` (listing + live frames + answered ids), `waitingKind()`. |
@@ -1336,14 +1417,14 @@ together.
 | `src/state/layout.ts` | Sidebar rules: `layoutBreakpoints`, `sidebarVisible()`, `toggledSidebar()`, `sidebarWidth()`, and `parseSwitch()` for `on`/`off` arguments. |
 | `src/state/scroll.ts` | `ScrollFollow` (the "new messages below" hint), `atBottom()`, `pageStep()`. |
 | `src/state/format.ts` | Pure text for the header, sidebar (session list with `sessionTree()` nesting, context box), pending lines, the status bar (`statusBarSegments()`, `contextUsage()`, `sessionTokens()`, `formatTokens()`), the compaction divider (`compactionText()`), and the non-chat views. |
-| `src/app/controller.ts` | `createController()`: refreshes, the session SSE loop (subscribe, `ListEvents` gap-fill, `resync`), batched overlay flushes, the debounced projection re-read (`app/debounce.ts`), child-session rounds for subagent cards, `returnToParent()`, session creation, prompt submission (refused in a subagent's read-only view), command dispatch, and concealed key entry. It writes results into the store. |
+| `src/app/controller.ts` | `createController()`: refreshes, the session SSE loop (subscribe, `ListEvents` gap-fill, `resync`), batched overlay flushes, the debounced projection re-read (`app/debounce.ts`), child-session rounds for subagent cards, `returnToParent()`, session creation, prompt submission (refused in a subagent's read-only view), command dispatch, concealed key entry, and `savePreferences` (the `preferencesPath` option; `actions.savePreferences(patch)` for commands). It writes results into the store. |
 | `src/app/turns.ts` | `createTurnRunner()`: the client-side prompt queue, `409 session_busy` retry, and turn-end detection and status text. |
-| `src/app/App.tsx`, `src/app/run.tsx`, `src/app/context.ts` | Root layout (main column + sidebar), startup (the started backend, then the renderer) and the single `shutdown()` every exit path runs (restore the terminal, stop the backend, exit), and the `AppContext` (store, controller, server URL, and `ui` handles such as the transcript's scroll actions) that components read with `useApp()`. |
+| `src/app/App.tsx`, `src/app/run.tsx`, `src/app/context.ts` | Root layout (main column + sidebar), startup (the started backend, the preferences file and saved theme, then the renderer) and the single `shutdown()` every exit path runs (restore the terminal, stop the backend, exit), and the `AppContext` (store, controller, server URL, and `ui` handles such as the transcript's scroll actions) that components read with `useApp()`. |
 | `src/components/` | `Header`, `MainPanel` (transcript or view panel), `Transcript` (scrollbox, follow/hint), `MessageView` (`MessageItem`, user/assistant messages, blocks, reasoning, tool cards and `task` subagent cards, `KeyedFor`), `Spinner` (the shared spinner clock), `Markdown` (the `<markdown>` wrapper, `SyntaxStyle`, code-block boxes), `Panel`, `PendingBlock` (other sessions' asks), `PromptDock` (the permission / question prompt), `ModeConfirm` (the one-line yolo confirmation), `Picker` (the modal picker), `Sidebar`, `StatusLine`, `Composer` (the `<textarea>` editor, its height, history, Esc / Ctrl+C / Ctrl+D, the shell-mode border, the `@file` list, the `/` command menu, Tab completion, key actions, concealed key entry), `Footer`. |
 | `src/composer/` | Pure composer logic: `history.ts` (`InputHistory`), `quit.ts` (`createQuitGuard`, the Ctrl+C double press), `escape.ts` (`escapeAction`), `shell.ts` (`shellCommand`, `isShellInput`), `mention.ts` (`mentionAt`, `insertMention`, `findPattern`, `rankPaths`). |
 | `src/commands/` | The slash-command registry (`registry.ts`), the built-in commands (`native.ts`), the key and command help (`help.ts`: `helpRows()`, `helpPickerRows()`, `composerKeyLabel()`, `keyHelpText()`, generated from the binding tables), and the command menu's merge/fuzzy-filter/argument-hint logic (`menu.ts`: `mergeCommandEntries`, `filterCommands`, `requiresArgument`). |
 | `src/keys/bindings.ts` | The global key binding table (`keyBindings`, including `cycleMode` on Shift+Tab / CSI Z) and the textarea overrides (`composerKeyBindings`: Enter submits; Ctrl+J, Shift+Enter, Alt+Enter insert a newline; Home/End). |
-| `src/completion.ts`, `src/instructions.ts`, `src/api.ts`, `src/theme.ts` | Tab completion and `SecretEntry`, footer instructions, the `/api` operation catalog (reads `src/operations.json`, generated by `gen-api` so the package ships without the repository's docs; `test/api-catalog.test.ts` checks it matches `docs/protocol/openapi.json` and that no source file imports from outside the package), and the palette (`colors`, `syntaxColors`, and `syntaxStyles`, the Markdown/tree-sitter scope styles). |
+| `src/completion.ts`, `src/instructions.ts`, `src/api.ts`, `src/theme.ts` | Tab completion and `SecretEntry`, footer instructions, the `/api` operation catalog (reads `src/operations.json`, generated by `gen-api` so the package ships without the repository's docs; `test/api-catalog.test.ts` checks it matches `docs/protocol/openapi.json` and that no source file imports from outside the package), and the themes: the reactive palette (`colors`, `toolColors`, `diffColors`, `syntaxColors`), `themes`, `themeName()`, `currentTheme()`, `setTheme()`, and `syntaxStylesFor()`, the Markdown/tree-sitter scope styles ([Themes](#themes)). |
 
 The Solid transform has two parts. `bunfig.toml` preloads
 `@opentui/solid/preload` for `bun test` and for `bun src/...` run inside the
@@ -1382,6 +1463,8 @@ interface PickerSpec {
   actions?: PickerAction[]   // row actions on the highlighted row (S9: /sessions F2/Ctrl+D)
   onSelect(row: PickerRow): void | Promise<void>   // runs after the picker closed; a throw shows "Error: …"
   onAction?(id: string, row: PickerRow, value?: string): void | Promise<void>   // after a row action committed
+  onHighlight?(row: PickerRow): void   // the highlight moved to another row (a live preview, /theme); not on open
+  onCancel?(): void                    // closed without a choice (Esc, Ctrl+C); undo a preview here
 }
 
 actions.openPicker({
@@ -1400,7 +1483,11 @@ again), Up/Down and Shift+Tab/Tab move with wrap-around, Enter selects, Esc
 closes. At most `pickerMaxRows` (10) rows show; the window follows the
 highlight. A click on a row selects it (`controller.choosePickerRow`).
 Ctrl+C closes the picker and keeps its quit meaning. Selecting or closing
-returns the focus to the input.
+returns the focus to the input. When a key moves the highlight to another
+row (`pickerHighlighted(state)` changes), the controller calls
+`spec.onHighlight(row)`; Esc and Ctrl+C (`controller.closePicker`) call
+`spec.onCancel()`, a selection or a committed row action does not. `/theme`
+uses the pair for its live preview.
 
 A key matching one of `spec.actions` switches the picker into `"rename"`
 (`prompt: "value"`: an editable line seeded with the row's label; Enter
@@ -1507,7 +1594,13 @@ host, tab TUI, or server behind (checked by pid and port), the log file
 holds the server and web host lines, and a missing TUI package or Bun exits
 1 with a clear message.
 `e2e/hya-tui-help.spec.ts` covers the help overlay (`?`, `/help`, filter,
-Esc, `?` inside text, about 80 columns). `e2e/hya-tui-status.spec.ts` also
+Esc, `?` inside text, about 80 columns). `e2e/hya-tui-theme.spec.ts` covers
+`/theme` (rows, the live preview, Esc restoring, Enter saving to a
+`HYA_TUI_CONFIG` temp file, a restarted TUI starting in the saved theme, an
+existing transcript repainting, about 80 columns); the `hya.ts` `tui`
+fixture points every TUI at the backend's isolated config directory unless
+a spec sets `HYA_TUI_CONFIG`, so a developer's own `tui.json` never changes
+a spec's colors. `e2e/hya-tui-status.spec.ts` also
 covers `ctx N%` and the token total (fake-model usage and a
 `contextLimit`), `todoUpdated` (no todo re-read, through the logging proxy
 in `e2e/proxy.ts`), and the `/compact` divider; `e2e/hya-tui-prompts.spec.ts`

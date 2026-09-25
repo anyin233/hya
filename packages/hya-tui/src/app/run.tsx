@@ -1,7 +1,8 @@
 /**
  * Start the TUI: the backend (one-command launch, src/launch.ts) unless
- * `--server` names one, then the renderer, store, controller, Solid tree,
- * and the initial load.
+ * `--server` names one, the preferences file (src/prefs.ts: the saved
+ * theme), then the renderer, store, controller, Solid tree, and the
+ * initial load.
  *
  * Lifecycle: every way out — Ctrl+C twice, Ctrl+D, `/exit`, or a signal
  * (SIGINT, SIGTERM, SIGHUP; the WebUI host sends SIGHUP when its tab
@@ -16,6 +17,8 @@ import { render } from "@opentui/solid"
 import type { Options } from "../cli"
 import { HyaClient } from "../client"
 import { BackendError, defaultDatabase, resolveHyaBinary, startBackend, type Backend } from "../launch"
+import { loadPreferences, preferencesPath } from "../prefs"
+import { setTheme } from "../theme"
 import { createAppStore } from "../state/store"
 import { App } from "./App"
 import { AppContext } from "./context"
@@ -65,6 +68,14 @@ export async function run(options: Options): Promise<void> {
     })
   }
 
+  // Preferences first, so the first frame already uses the saved theme.
+  const prefsPath = preferencesPath(process.env)
+  const loaded = loadPreferences(prefsPath)
+  const warnings = loaded.warning ? [loaded.warning] : []
+  if (loaded.preferences.theme && !setTheme(loaded.preferences.theme)) {
+    warnings.push(`Unknown theme ${loaded.preferences.theme} in ${prefsPath}; using hya`)
+  }
+
   const client = new HyaClient(server, options.directory)
   const store = createAppStore()
   if (backend) store.setBackend({ pid: backend.pid, bin: backend.bin, db: backend.db })
@@ -74,6 +85,7 @@ export async function run(options: Options): Promise<void> {
     quit: () => void shutdown(0),
     startup: { continue: options.continue, ...(options.session ? { session: options.session } : {}) },
     connectionHint: backend ? "the started backend did not answer" : "start hya serve or drop --server",
+    preferencesPath: prefsPath,
   })
   // autoFocus off: a click (on the transcript, a Thinking line, the sidebar)
   // must not move focus from the one input to a scrollbox. Ctrl+C is the
@@ -88,4 +100,5 @@ export async function run(options: Options): Promise<void> {
     </AppContext.Provider>
   ), renderer)
   await controller.start()
+  if (warnings.length) store.setStatus([store.state.status, ...warnings].filter(Boolean).join(" · "))
 }

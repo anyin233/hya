@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { createPicker, pickerKey, pickerMatches, pickerRows, pickerWindow, type PickerRow, type PickerState } from "../src/state/picker"
+import { createPicker, pickerHighlighted, pickerKey, pickerMatches, pickerRows, pickerWindow, type PickerRow, type PickerState } from "../src/state/picker"
 
 const key = (name: string, extra: Partial<{ ctrl: boolean; meta: boolean; shift: boolean; sequence: string }> = {}) =>
   ({ name, ctrl: false, meta: false, shift: false, sequence: name.length === 1 ? name : "", ...extra })
@@ -119,4 +119,13 @@ test("an action key with no matching action falls through to the plain filter/li
   const filtered = update(state, "h")
   expect(filtered.mode).toBe("list")
   expect(filtered.query).toBe("h")
+})
+
+test("pickerHighlighted is the highlighted row of the filtered list (what a live preview shows)", () => {
+  let state = createPicker({ title: "x", rows })
+  expect(pickerHighlighted(state)?.id).toBe("yolo")
+  state = update(state, "down")
+  expect(pickerHighlighted(state)?.id).toBe("e2e/approver/echo-only")
+  state = update(state, "z")
+  expect(pickerHighlighted(state)).toBeUndefined()
 })

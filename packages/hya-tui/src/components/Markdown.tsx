@@ -2,7 +2,8 @@
  * Assistant Markdown, rendered by OpenTUI's built-in `<markdown>` renderable
  * (`marked` block parsing plus tree-sitter highlighting in OpenTUI's parser
  * worker). This wrapper supplies the palette as a `SyntaxStyle` and draws
- * fenced code blocks as a panel-colored box with a language label.
+ * fenced code blocks as a panel-colored box with a language label. A theme
+ * switch (theme.ts `setTheme`) swaps the style and rebuilds the blocks.
  *
  * `streaming` keeps the trailing block unstable while deltas arrive, so an
  * unclosed fence or emphasis renders as plain text until it closes.
@@ -10,14 +11,20 @@
  * JavaScript, Markdown, Zig); other languages render unhighlighted.
  */
 import { BoxRenderable, SyntaxStyle, TextRenderable, type CodeRenderable, type MarkdownOptions, type MarkdownRenderable } from "@opentui/core"
-import { createEffect } from "solid-js"
-import { colors, syntaxStyles } from "../theme"
+import { createEffect, on } from "solid-js"
+import { colors, currentTheme, syntaxStylesFor, themeName } from "../theme"
 
-let shared: SyntaxStyle | undefined
+const shared = new Map<string, SyntaxStyle>()
 
-/** The one SyntaxStyle every Markdown block shares (native object; created on first use). */
+/**
+ * The SyntaxStyle every Markdown block of the theme in effect shares (a
+ * native object per theme, created on first use; reactive via `themeName`).
+ */
 export function markdownSyntaxStyle(): SyntaxStyle {
-  return (shared ??= SyntaxStyle.fromStyles(syntaxStyles))
+  const theme = currentTheme()
+  let style = shared.get(theme.name)
+  if (!style) shared.set(theme.name, (style = SyntaxStyle.fromStyles(syntaxStylesFor(theme))))
+  return style
 }
 
 /** Fenced code: the default code renderable inside a panel box, below a muted language label. */
@@ -62,6 +69,14 @@ export function Markdown(props: { text: string; streaming?: boolean }) {
     }
     view.streaming = streaming
   })
+  // A theme switch: the new style, then every block rebuilt, so fenced code
+  // boxes (drawn by `renderNode` with the palette of their time) repaint too.
+  createEffect(on(themeName, () => {
+    if (!view) return
+    view.syntaxStyle = markdownSyntaxStyle()
+    view.fg = colors.fg
+    view.clearCache()
+  }, { defer: true }))
   return (
     // The style and the code-block renderer are in place before the effect
     // above sets the first content.
