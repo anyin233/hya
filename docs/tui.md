@@ -92,10 +92,11 @@ backend is running.
 | Ctrl+D | Quit when the input is empty (otherwise delete the character under the cursor). |
 | `/exit`, `/quit` | Quit. |
 | `/new [agent] [model]` | Create a session in `--dir`, using the first visible agent and its model by default. |
-| `/sessions`, `/open <id or number>` | Refresh or switch sessions. Numbers count in the sidebar's order (subagent sessions under their parent). Opening a subagent's session shows it read-only (see [Subagents](#subagents)). |
-| `/models`, `/model [provider/model]` | View catalog or change the selected session model; with no argument, shows the current model and the available list. |
-| `/agent [name]` | Change the selected session's agent, or with no argument show the current agent and the available list. |
-| `/rename <title>` | Rename the current session (`UpdateSession`). |
+| `/sessions` | Open the sessions picker: a `New session` row, then every session (subagent sessions nested under their parent); Enter opens, F2 renames, Ctrl+D deletes with confirmation (see [Pickers](#pickers)). |
+| `/open <id or number>` | Switch sessions directly. Numbers count in the sidebar's order (subagent sessions under their parent). Opening a subagent's session shows it read-only (see [Subagents](#subagents)). |
+| `/models`, `/model [provider/model]` | View catalog, or open the model picker (rows tagged by provider); `/model <provider/model>` switches directly. With no session yet, a picker or direct choice is remembered for the next one (see [Pickers](#pickers)). |
+| `/agent [name]` | Open the agent picker (visible agents, tagged with their default model); `/agent <name>` switches directly. With no session yet, the choice is remembered for the next one. |
+| `/rename <title>` | Rename the current session (`UpdateSession`); see also the sessions picker's F2 (see [Session titles](#session-titles)). |
 | `/permissions [mode]` | Open the permission mode picker, or with a mode id switch to it directly (see [Permission modes](#permission-modes)). |
 | Shift+Tab | Switch to the next permission mode: `manual` → `yolo` → bundle modes → `manual`. Switching to `yolo` asks for a confirmation the first time. In an open list (the command menu, the file list, a picker) it moves the highlight up instead. |
 | `/keys` | List configured providers and provider IDs with saved credentials; never display key values. |
@@ -942,6 +943,84 @@ a bundle `e2e/approver` whose mode `echo-only` allows `echo …` commands —
 `/permissions`, type `echo`, Enter: the status bar reads `mode Echo only`,
 a model's `echo hi` call runs without a prompt, and its `ls` call asks.
 
+## Pickers
+
+`/model`, `/agent`, and `/sessions` (with no argument) open the same
+reusable modal picker `/permissions` uses (see
+[Permission modes — Switching](#switching) for the shared filter/move/select
+keys). Rows are loaded from the catalog already held by the TUI (`refresh()`
+at start and `/refresh`/Ctrl+R), so a picker opens with no loading state.
+
+- **`/model`** lists every model from `GET /v1/models`, `[tag]`ged with its
+  provider id and, when the route advertises one, its context window
+  (`128k ctx`); `●` marks the open session's model. Enter sends
+  `UpdateSession {model}` and shows `Model → <provider>/<model>`.
+  `/model <provider/model>` still switches directly, with Tab completion.
+- **`/agent`** lists visible (non-`hidden`) agents from `GET /v1/agents`,
+  tagged with the agent's default `provider/model` and its one-line
+  description; `●` marks the open session's agent. Enter sends
+  `UpdateSession {agent}` and shows `Agent → <name>`. `/agent <name>` still
+  switches directly.
+- **No session yet.** Before any session exists, a `/model`/`/agent` choice
+  (picker or direct form) is remembered — the status line reads
+  `Model → <id> · applies when the session is created` (`Agent → …` for the
+  agent) — and is used for the next `CreateSession` in place of the usual
+  default, the same way a chosen [permission mode](#permission-modes)
+  applies once the session exists.
+- **`/sessions`** opens a picker with a `New session` row first, then every
+  session as a tree (top-level sessions, subagent sessions nested under
+  their parent and `[subagent]` tagged — see [Subagents](#subagents)),
+  showing the agent, model, and a relative update time (`3m`, `2h`) in the
+  detail column, and `● running` while busy. `●` marks the open session.
+  Enter on the `New session` row runs `/new`; Enter on any other row opens
+  it.
+
+```text
+┌─Sessions──────────────────────────────────────────────────────────────┐
+│ Filter ▏  3 of 3                                                      │
+│ ▸   New session          [new]       Create a session with the curr… │
+│   ● Fix the flaky test              build · fake/model · 3m           │
+│       ↳ Explore the auth code [subagent]  explore · fake/model · 1m  │
+│ Enter opens · F2 renames · Ctrl+D deletes · Esc closes · type to fil… │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+### Row actions
+
+The `/sessions` picker's highlighted row also takes two keys the plain
+filter never sees (never Ctrl+R, which means refresh):
+
+- **F2** renames it: the picker switches to a one-line editable field seeded
+  with the row's current label (`New title <text>▏`); type to edit, Enter
+  sends `UpdateSession {title}` and shows `Renamed to <title>` (an empty
+  title cancels with a status message), Esc returns to the list without
+  changing anything. A rename reopens the picker so browsing continues, its
+  row already showing the new title.
+- **Ctrl+D** deletes it: the picker switches to a one-line confirmation
+  (`Delete "<title>"? Enter confirms · Esc cancels`); Enter sends
+  `DeleteSession` and shows `Deleted session <id>`, Esc returns to the list
+  with nothing changed. Deleting the open session opens the next top-level
+  session (or shows no session, if none is left); the confirmation applies
+  the same way whether or not the row is the open session, so the open
+  session is never deleted without it.
+
+`state/picker.ts`'s `PickerAction` (`{id, key, ctrl?, label, prompt: "value"
+| "confirm", confirmText?}`) and the `"rename"`/`"confirm"` picker modes are
+a small, backward-compatible extension of the picker used by `/permissions`:
+a picker with no `actions` behaves exactly as before. See
+[Code layout — The picker](#code-layout) for the API.
+
+### Session titles
+
+The header (`hya · <title or id> · <agent> <provider/model> · <server>`),
+the sidebar's `Sessions` box, and the `/sessions` picker all show the
+session's `title` when the backend has set one (`/rename`, the picker's F2,
+or the backend's own auto-generated title once it lands), falling back to
+the raw id. A `sessionUpdated {title}` frame (see
+[Stream frames and the transcript](#stream-frames-and-the-transcript))
+updates all three live, with no extra refresh — including a title set by
+another client or generated by the backend after the first turn.
+
 ## Interface definitions
 
 The frontend uses the existing HTTP/JSON+SSE transport. Every request carries
@@ -952,10 +1031,12 @@ string encoded 64-bit values, and the error envelope documented in the
 | Method and route | Request | Response read by the TUI |
 | --- | --- | --- |
 | `GET /v1/bootstrap` | No body | `Bootstrap` (`location`, `agents`, `models`, `interactions`) |
-| `GET /v1/sessions` | No body | `ListSessionsResponse.sessions: SessionInfo[]` (every session of the directory, subagent sessions included; `parent` nests them in the sidebar, `busy` marks `· running`). Re-read with each child-session round (see [Subagents](#subagents)). |
+| `GET /v1/sessions` | No body | `ListSessionsResponse.sessions: SessionInfo[]` (every session of the directory, subagent sessions included; `parent` nests them in the sidebar and the `/sessions` picker, `busy` marks `· running`, `timeUpdated` feeds the picker's relative time). Re-read with each child-session round (see [Subagents](#subagents)). |
 | `POST /v1/sessions` | `{agent: string, model: string, workdir: string}` | `CreateSessionResponse.session: SessionInfo` |
 | `GET /v1/sessions/{id}` | No body | `SessionInfo` (including `permissionMode`, read by `/status`; `parent`, which makes the view read-only; `members: MemberInfo[]`, the subagent rows the task cards link to). For a child session: `busy` and `agent` for its task card. |
-| `PATCH /v1/sessions/{id}` | `{title?: string, model?: string, agent?: string, permissionMode?: string}` (`UpdateSession`; `/model`, `/agent`, `/rename`, and a permission mode switch each send one field; `permissionMode` is `manual`, `yolo`, or `<bundle-id>/<mode-id>`) | `SessionInfo`; after a switch its `permissionMode` is the mode shown. An unknown or unavailable mode fails with `invalid_argument`. |
+| `PATCH /v1/sessions/{id}` | `{title?: string, model?: string, agent?: string, permissionMode?: string}` (`UpdateSession`; `/model`, `/agent`, `/rename`, the `/sessions` picker's F2, and a permission mode switch each send one field; `permissionMode` is `manual`, `yolo`, or `<bundle-id>/<mode-id>`) | `SessionInfo`; after a switch its `permissionMode` is the mode shown. An unknown or unavailable mode fails with `invalid_argument`. |
+| `DELETE /v1/sessions/{id}` | No body (`DeleteSession`; the `/sessions` picker's Ctrl+D, confirmed first) | Empty response; the TUI re-reads the session list and, if the deleted session was open, opens the next top-level one. |
+| `GET /v1/agents` | No body (`ListAgents`; read with the catalogs and by `/agent`) | `ListAgentsResponse.agents: AgentSummary[]` (`name`, `model`, `description`, `hidden`); the `/agent` picker drops `hidden` rows. |
 | `GET /v1/permission-modes` | No body (`ListPermissionModes`; read with the catalogs and by `/permissions`; a `404` from an older backend counts as an empty list) | `ListPermissionModesResponse.modes: [{id, title, description, source}]` — built-ins first; `source` is `builtin` or the bundle id. Feeds the Shift+Tab cycle, the picker rows, and bundle mode titles. |
 | `GET /v1/sessions/{id}/messages` | No body | `ListMessagesResponse.messages: MessageInfo[]`; tool cards read `parts[].toolCall` (`ToolCallPart {callId, tool, state, inputJson, outputJson, durationMs, errorCode, errorMessage}`). For a child session: its latest activity. |
 | `POST /v1/sessions/{id}/compact` | `{}` (`CompactSession`) | `CompactSessionResponse {compactedUntilSeq, strategy}` for `/compact` |
@@ -972,7 +1053,7 @@ string encoded 64-bit values, and the error envelope documented in the
 | `GET /v1/sessions/{id}/events?sinceSeq=N&limit=500` | No body | `ListEventsResponse.events` / `nextSeq`, paged, to fill the gap after each stream (re)connect and `resync`. |
 | `GET /v1/interactions` | No body (every type, every session; read at start, on refresh, after interaction frames, and in each child-session round) | `ListInteractionsResponse.interactions: Interaction[]`, oldest first. The TUI reads `id`, `session` (the asking session, a subagent's child session included), `type` (`INTERACTION_TYPE_PERMISSION` / `_QUESTION`), `title`, `detail` (a question's header), `options` (a question's option labels), and a permission's `payload`: `action`, `resource`, `always` (what Always allow covers), `callId` (marks the waiting tool card, `◌ … · awaiting approval`), `tool` and `input` (the prompt's details). A listed question has no options or header; the TUI keeps those from its live `questionRequested` frame, else reads them from the waiting `ask_user` call in the transcript. |
 | `POST /v1/interactions/{id}/respond` | Prompt: `{permission: {allowed: boolean, persist: boolean}}`, `{question: {answer: string}}`, or `{question: {rejected: true}}`. `/approve`, `/deny`: `persist: false`. | `RespondInteractionResponse.applied` (`false`: already resolved elsewhere) |
-| `GET /v1/models` | No body | `ListModelsResponse.models: ModelSummary[]` |
+| `GET /v1/models` | No body | `ListModelsResponse.models: ModelSummary[]` (`id`, `providerId`, `modelId`, `displayName`, `contextLimit`); the `/model` picker tags rows by `providerId`. |
 | `GET /v1/providers` | No body | `ListProvidersResponse.providers: ProviderSummary[]` for key suggestions. |
 | `GET /v1/commands` | No body | `ListCommandsResponse.commands: CommandSummary[]` (includes skills, tagged `source: "skill"`) for slash completion and the command menu. |
 | `GET /v1/auth` | No body | `ListProviderAuthResponse.providerIds: string[]` (saved provider IDs only; empty field omitted). A 404 marks key listing unavailable without blocking startup. |
@@ -1023,7 +1104,8 @@ rules follow the protocol guide's
 | `messageFinished {message, finish, cause}` | durable | The turn ends at the first assistant `messageFinished` after the turn's user message whose `finish` is not `FINISH_REASON_TOOL_CALLS`. Then the projection is re-read. |
 | `permissionRequested {interaction}`, `questionRequested {interaction}` | live | The ask is added to the pending list at once (a prompt appears); its options and header are remembered by id; then the listing is re-read. Only the open session's own asks arrive here; subagent asks come from the listing. |
 | `interactionResolved {request}` | live | The ask is removed at once (its prompt closes); then the listing is re-read. |
-| `sessionUpdated {permissionMode}` | durable (root session) | The tree's mode changed (this TUI's switch echoed, or another client's): the open session's `permissionMode` is updated, and a `Permission mode → …` notice is added unless the transcript already announced that mode. Other `sessionUpdated` fields are left to the next session read. |
+| `sessionUpdated {permissionMode}` | durable (root session) | The tree's mode changed (this TUI's switch echoed, or another client's): the open session's `permissionMode` is updated, and a `Permission mode → …` notice is added unless the transcript already announced that mode. |
+| `sessionUpdated {title, agent, model}` | durable | Patches the session's row (and, if it is the open one, the header and sidebar) at once — a `/rename`/`/model`/`/agent` from another client, or the backend's auto-generated title (see [Session titles](#session-titles)) — instead of waiting for the next catalog refresh. |
 | `compactionApplied {untilSeq, strategy}` | durable | Appended to `state.dividers`, spliced into the transcript right after the message that was newest at the time (see [Notices](#notices)); replayed by `ListEvents` like any other durable event, so reopening a session that had one restores its divider. |
 | `resync {lastSeq}` | — | Live parts that were mid-stream stop taking deltas until their durable `partReplaced`; `ListEvents` fills the gap; the projection is re-read. |
 
@@ -1086,7 +1168,8 @@ together.
 | `src/state/messages.ts` | The transcript view model: `transcriptViews()` (projection + overlay + waiting queued prompts), `messageView()` (role, agent/model, typed blocks, finish notice; cached per message object), `finishNotice()`, `reasoningLabel()`, `reasoningExpanded()`, `toolExpanded()`. |
 | `src/state/tools.ts` | The tool-card view model: `toolCard()` (status, per-tool summary, body lines with tones, duration, error, task info), `toolStatus()`, `formatDuration()`, `clipLines()`, `diffLines()`, `partialField()`. |
 | `src/state/modes.ts` | Permission modes: `modeCycle()` (Shift+Tab order), `nextMode()`, `requestMode()` and `confirmKey()` (the yolo confirmation state machine), `modeDisplay()` (status bar text and tone), `modeNotice()`, `modeRows()` (picker rows), `effectiveMode()`, `isShiftTab()`. |
-| `src/state/picker.ts` | The reusable modal picker's pure state (API below): `createPicker()`, `pickerMatches()`, `pickerRows()`, `pickerKey()`, `pickerWindow()`, and the `PickerRow` / `PickerSpec` / `ActivePicker` types. |
+| `src/state/picker.ts` | The reusable modal picker's pure state (API below): `createPicker()`, `pickerMatches()`, `pickerRows()`, `pickerKey()`, `pickerWindow()`, and the `PickerRow` / `PickerAction` / `PickerSpec` / `ActivePicker` types; `"rename"`/`"confirm"` row-action modes (F2/Ctrl+D on `/sessions`, [Pickers — Row actions](#row-actions)). |
+| `src/state/catalog.ts` | `/model`/`/agent`/`/sessions` picker row builders: `modelRows()` (tagged by provider), `agentRows()` (visible agents, tagged by default model), `sessionRows()` (the `New session` row + `sessionTree()`, relative time), `relativeTime()`. |
 | `src/app/modes.ts` | `createModeSwitcher()`: `cycle()` (Shift+Tab), `request(mode)`, `key()` (the confirmation's keys), `applyPending()` (a mode chosen before any session, sent after `CreateSession`); sends `UpdateSession {permissionMode}`, re-lists interactions, reports in the status line. |
 | `src/state/prompts.ts` | Permission and question prompts: `promptQueue()` (asks of the open session's tree), `treeSessionIds()`, `promptView()` (headline, asker, details from `toolCard()`, options), `currentPrompt()`, `promptKey()` (option keys), `respondBody()`, `mergeInteractions()` (listing + live frames + answered ids), `waitingKind()`. |
 | `src/app/prompts.ts` | `answerPrompt()`: send a choice's `RespondInteraction`, hide the ask, report the outcome in the status line. |
@@ -1113,9 +1196,9 @@ imports in `main.ts` free of Solid code. Without the preload, Bun resolves
 `solid-js` to its non-reactive server build.
 
 **The picker.** `components/Picker.tsx` is a reusable modal list for
-choosing one value (`/permissions` uses it; `/model`, `/agent`, and
-`/sessions` pickers are meant to reuse it). Open one from a command handler
-with `actions.openPicker(spec)` (or `controller.openPicker`):
+choosing one value (`/permissions`, `/model`, `/agent`, and `/sessions` all
+use it). Open one from a command handler with `actions.openPicker(spec)`
+(or `controller.openPicker`):
 
 ```ts
 interface PickerRow {
@@ -1125,11 +1208,21 @@ interface PickerRow {
   tag?: string        // shown as [tag] (a source, a provider, a kind)
   current?: boolean   // the value in effect: marked ●, highlighted when the picker opens
 }
+interface PickerAction {
+  id: string           // outcome id passed to onAction, e.g. "rename", "delete"
+  key: string           // OpenTUI key name, e.g. "f2", "d" — never a plain printable character
+  ctrl?: boolean
+  label: string         // hint text, e.g. "F2 rename"
+  prompt: "value" | "confirm"   // "value" edits the row's label inline; "confirm" shows a yes/no line
+  confirmText?: string  // "confirm" only; "{label}" is replaced by the row's label
+}
 interface PickerSpec {
   title: string       // box title
   rows: PickerRow[]
   hint?: string       // bottom row; default "↑↓ select · Enter chooses · Esc closes · type to filter"
+  actions?: PickerAction[]   // row actions on the highlighted row (S9: /sessions F2/Ctrl+D)
   onSelect(row: PickerRow): void | Promise<void>   // runs after the picker closed; a throw shows "Error: …"
+  onAction?(id: string, row: PickerRow, value?: string): void | Promise<void>   // after a row action committed
 }
 
 actions.openPicker({
@@ -1149,6 +1242,16 @@ closes. At most `pickerMaxRows` (10) rows show; the window follows the
 highlight. A click on a row selects it (`controller.choosePickerRow`).
 Ctrl+C closes the picker and keeps its quit meaning. Selecting or closing
 returns the focus to the input.
+
+A key matching one of `spec.actions` switches the picker into `"rename"`
+(`prompt: "value"`: an editable line seeded with the row's label; Enter
+commits, Esc returns to the list) or `"confirm"` (`prompt: "confirm"`: a
+one-line yes/no; Enter commits, Esc returns to the list) mode instead of
+extending the filter. Committing (`controller.pickerKey()` sees a `"commit"`
+outcome) closes the picker and runs `spec.onAction(id, row, value)`, the
+same way selecting runs `onSelect`; the handler can call
+`actions.openPicker` again to keep browsing (`/sessions`' F2 does, so a
+rename reopens the picker on the updated row).
 
 To add a slash command, add a `CommandSpec` to `nativeCommandSpecs` in
 `src/commands/native.ts`:

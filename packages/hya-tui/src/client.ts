@@ -15,6 +15,8 @@ export interface SessionInfo {
   parent?: string
   /** Subagents this session spawned (folded rows; the live counterpart is `memberUpdated`). */
   members?: MemberInfo[]
+  /** When the session projection last changed (RFC 3339); the `/sessions` picker's relative time (state/catalog.ts). */
+  timeUpdated?: string
 }
 
 /** A subagent (member) spawned by a session (`MemberInfo`, docs/protocol/README.md "Subagents"). */
@@ -107,6 +109,12 @@ export interface ModelSummary {
   id: string
   displayName?: string
   auth?: string
+  /** Provider id (`/model` picker's provider tag/group, state/catalog.ts `modelRows`). */
+  providerId?: string
+  /** Provider-local model id. */
+  modelId?: string
+  /** Context window in tokens, a decimal string; "0" or omitted when unknown. */
+  contextLimit?: string
 }
 
 export interface ProviderSummary {
@@ -132,6 +140,8 @@ export interface TodoItem {
 export interface AgentSummary {
   name: string
   model?: { providerId?: string; modelId?: string }
+  /** One-line description shown in the `/agent` picker. */
+  description?: string
   hidden?: boolean
 }
 
@@ -377,6 +387,11 @@ export class HyaClient {
     return this.listAll("/v1/models", "models")
   }
 
+  /** `ListAgents` (`GET /v1/agents`): the `/agent` picker's rows (state/catalog.ts `agentRows`). */
+  async listAgents(): Promise<AgentSummary[]> {
+    return this.listAll("/v1/agents", "agents")
+  }
+
   async listProviders(): Promise<ProviderSummary[]> {
     return this.listAll("/v1/providers", "providers")
   }
@@ -426,6 +441,11 @@ export class HyaClient {
    */
   async updateSession(session: string, patch: { title?: string; agent?: string; permissionMode?: string }): Promise<SessionInfo> {
     return this.request("PATCH", `/v1/sessions/${encodeURIComponent(session)}`, patch)
+  }
+
+  /** `DeleteSession` (`DELETE /v1/sessions/:id`): the `/sessions` picker's delete row action (Ctrl+D). */
+  async deleteSession(session: string): Promise<void> {
+    await this.request("DELETE", `/v1/sessions/${encodeURIComponent(session)}`)
   }
 
   /** `ListPermissionModes` (`GET /v1/permission-modes`): built-ins first, then bundle modes; `[]` on a backend without the route. */

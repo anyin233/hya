@@ -78,3 +78,45 @@ test("the visible window keeps the highlight in view", () => {
   expect(pickerWindow(20, 7, 5)).toEqual({ start: 3, end: 8 })
   expect(pickerWindow(20, 19, 5)).toEqual({ start: 15, end: 20 })
 })
+
+const sessionRows: PickerRow[] = [
+  { id: "hysec_1", label: "Refactor auth", current: true },
+  { id: "hysec_2", label: "hysec_2" },
+]
+const sessionActions = [
+  { id: "rename", key: "f2", label: "F2 rename", prompt: "value" as const },
+  { id: "delete", key: "d", ctrl: true, label: "Ctrl+D delete", prompt: "confirm" as const, confirmText: 'Delete "{label}"? Enter confirms · Esc cancels' },
+]
+
+test("F2 on the highlighted row enters rename mode seeded with its label; typing edits, Enter commits, Esc backs out", () => {
+  let state = createPicker({ title: "Sessions", rows: sessionRows, actions: sessionActions })
+  state = update(state, "f2")
+  expect(state.mode).toBe("rename")
+  expect(state.editValue).toBe("Refactor auth")
+  expect(state.actionRow).toBe("hysec_1")
+  state = update(state, "backspace")
+  state = update(state, "!")
+  expect(state.editValue).toBe("Refactor aut!")
+  expect(pickerKey(state, key("return"))).toEqual({ type: "commit", id: "rename", row: sessionRows[0]!, value: "Refactor aut!" })
+  const cancelled = update(state, "escape")
+  expect(cancelled.mode).toBe("list")
+  expect(cancelled.editValue).toBeUndefined()
+})
+
+test("Ctrl+D on the highlighted row shows a confirm line; Enter commits delete, Esc backs out", () => {
+  let state = createPicker({ title: "Sessions", rows: sessionRows, actions: sessionActions })
+  state = update(state, "d", { ctrl: true })
+  expect(state.mode).toBe("confirm")
+  expect(state.confirmText).toBe('Delete "Refactor auth"? Enter confirms · Esc cancels')
+  expect(pickerKey(state, key("return"))).toEqual({ type: "commit", id: "delete", row: sessionRows[0]! })
+  const cancelled = update(state, "escape")
+  expect(cancelled.mode).toBe("list")
+})
+
+test("an action key with no matching action falls through to the plain filter/list handling", () => {
+  const state = createPicker({ title: "Sessions", rows: sessionRows })
+  expect(pickerKey(state, key("f2"))).toEqual({ type: "none" })
+  const filtered = update(state, "h")
+  expect(filtered.mode).toBe("list")
+  expect(filtered.query).toBe("h")
+})

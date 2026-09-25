@@ -7,6 +7,11 @@
  * composer's editor is unfocused and every key but Ctrl+C goes to the picker
  * (components/Composer.tsx); a click on a row chooses it. Choosing or Esc
  * closes it and the input has the focus again.
+ *
+ * A row action (S9, C13: `/sessions` F2 rename, Ctrl+D delete) switches the
+ * box into a one-line `"rename"` (an editable `New title` row) or
+ * `"confirm"` (the confirmation text) mode in place of the list; Esc there
+ * returns to the list without closing the picker.
  */
 import { useTerminalDimensions } from "@opentui/solid"
 import { For, Show } from "solid-js"
@@ -46,30 +51,51 @@ export function Picker() {
             flexDirection="column"
             paddingX={1}
           >
-            <text height={1} wrapMode="none">
-              <span style={{ fg: colors.muted }}>Filter </span>
-              <span style={{ fg: colors.fg }}>{open().query}</span>
-              <span style={{ fg: colors.accent }}>▏</span>
-              <span style={{ fg: colors.muted }}>{`  ${rows().length} of ${open().rows.length}`}</span>
-            </text>
-            <For each={shown()}>
-              {(item) => {
-                const highlighted = () => item.at === open().index
-                return (
-                  <text height={1} wrapMode="none" onMouseDown={() => controller.choosePickerRow(item.row)}>
-                    <span style={{ fg: highlighted() ? colors.accent : colors.fg }}>{`${highlighted() ? "▸" : " "} `}</span>
-                    <span style={{ fg: colors.accent }}>{item.row.current ? "● " : "  "}</span>
-                    <span style={{ fg: highlighted() ? colors.accent : colors.fg }}>{pad(item.row.label)}</span>
-                    <span style={{ fg: colors.muted }}>{item.row.tag ? `  [${item.row.tag}]` : ""}</span>
-                    <span style={{ fg: colors.muted }}>{item.row.detail ? `  ${item.row.detail}` : ""}</span>
-                  </text>
-                )
-              }}
-            </For>
-            <Show when={rows().length === 0}>
-              <text height={1} wrapMode="none" fg={colors.muted}>No match · Backspace widens the filter</text>
+            <Show
+              when={open().mode === "list" || !open().mode}
+              fallback={
+                <>
+                  <Show when={open().mode === "rename"}>
+                    <text height={1} wrapMode="none">
+                      <span style={{ fg: colors.muted }}>New title </span>
+                      <span style={{ fg: colors.fg }}>{open().editValue ?? ""}</span>
+                      <span style={{ fg: colors.accent }}>▏</span>
+                    </text>
+                    <text height={1} wrapMode="none" fg={colors.muted}>Enter renames · Esc cancels</text>
+                  </Show>
+                  <Show when={open().mode === "confirm"}>
+                    <text height={1} wrapMode="none" fg={colors.fg}>{open().confirmText ?? ""}</text>
+                  </Show>
+                </>
+              }
+            >
+              <text height={1} wrapMode="none">
+                <span style={{ fg: colors.muted }}>Filter </span>
+                <span style={{ fg: colors.fg }}>{open().query}</span>
+                <span style={{ fg: colors.accent }}>▏</span>
+                <span style={{ fg: colors.muted }}>{`  ${rows().length} of ${open().rows.length}`}</span>
+              </text>
+              <For each={shown()}>
+                {(item) => {
+                  const highlighted = () => item.at === open().index
+                  return (
+                    <text height={1} wrapMode="none" onMouseDown={() => controller.choosePickerRow(item.row)}>
+                      <span style={{ fg: highlighted() ? colors.accent : colors.fg }}>{`${highlighted() ? "▸" : " "} `}</span>
+                      <span style={{ fg: colors.accent }}>{item.row.current ? "● " : "  "}</span>
+                      <span style={{ fg: highlighted() ? colors.accent : colors.fg }}>{pad(item.row.label)}</span>
+                      <span style={{ fg: colors.muted }}>{item.row.tag ? `  [${item.row.tag}]` : ""}</span>
+                      <span style={{ fg: colors.muted }}>{item.row.detail ? `  ${item.row.detail}` : ""}</span>
+                    </text>
+                  )
+                }}
+              </For>
+              <Show when={rows().length === 0}>
+                <text height={1} wrapMode="none" fg={colors.muted}>No match · Backspace widens the filter</text>
+              </Show>
+              <text height={1} wrapMode="none" fg={colors.muted}>
+                {open().hint ?? (open().actions?.length ? `${defaultPickerHint} · ${open().actions!.map((action) => action.label).join(" · ")}` : defaultPickerHint)}
+              </text>
             </Show>
-            <text height={1} wrapMode="none" fg={colors.muted}>{open().hint ?? defaultPickerHint}</text>
           </box>
         )
       }}

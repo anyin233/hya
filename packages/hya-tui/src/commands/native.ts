@@ -1,10 +1,54 @@
 /** The built-in slash commands. Add a command by appending a `CommandSpec` here. */
 import { brief, operations } from "../api"
 import { parseApiCommand } from "../client"
+import { agentRows, modelRows, sessionRows } from "../state/catalog"
 import { modelReference, sessionTree } from "../state/format"
 import { parseSwitch, sidebarVisible } from "../state/layout"
 import { effectiveMode, modeRows } from "../state/modes"
+import type { PickerAction } from "../state/picker"
 import { CommandRegistry, matchValues, type CommandContext, type CommandInvocation, type CommandSpec } from "./registry"
+
+/** `/sessions` picker row actions (C13): F2 renames, Ctrl+D deletes (never Ctrl+R — that key means refresh). */
+const sessionPickerActions: readonly PickerAction[] = [
+  { id: "rename", key: "f2", label: "F2 rename", prompt: "value" },
+  { id: "delete", key: "d", ctrl: true, label: "Ctrl+D delete", prompt: "confirm", confirmText: 'Delete "{label}"? This cannot be undone · Enter confirms · Esc cancels' },
+]
+
+/** Open the `/sessions` picker (C13): a `New session` row first, then the tree; Enter opens, F2 renames, Ctrl+D deletes with confirmation. */
+function openSessionsPicker(context: CommandContext): void {
+  const { store, client, actions } = context
+  actions.openPicker({
+    title: "Sessions",
+    rows: sessionRows(store.state.sessions, store.state.selected?.id),
+    hint: "Enter opens · F2 renames · Ctrl+D deletes · Esc closes · type to filter",
+    actions: sessionPickerActions,
+    onSelect: async (row) => {
+      if (row.id === "__new__") { await actions.newSession(); return }
+      await actions.openSession(row.id)
+    },
+    onAction: async (id, row, value) => {
+      if (id === "rename") {
+        const title = (value ?? "").trim()
+        if (!title) { store.setStatus("Rename cancelled: title cannot be empty"); return }
+        const info = await client.updateSession(row.id, { title })
+        if (store.state.selected?.id === row.id) store.setSelected(info)
+        await actions.refresh()
+        store.setStatus(`Renamed to ${title}`)
+        openSessionsPicker(context)
+      } else if (id === "delete") {
+        await client.deleteSession(row.id)
+        const wasOpen = store.state.selected?.id === row.id
+        await actions.refresh()
+        if (wasOpen) {
+          const next = sessionTree(store.state.sessions)[0]?.session
+          if (next) await actions.openSession(next.id)
+          else store.clearSelected()
+        }
+        store.setStatus(`Deleted session ${row.id}`)
+      }
+    },
+  })
+}
 
 const workflowActions = ["select", "run"]
 const switchValues = ["on", "off"]
@@ -48,13 +92,14 @@ export const nativeCommandSpecs: CommandSpec[] = [
   },
   {
     name: "/sessions",
-    description: "Refresh the session list and show the sidebar",
-    run: async ({ store, actions }) => {
+    description: "Pick a session (open, rename with F2, or delete with Ctrl+D), and show the sidebar",
+    run: async (context) => {
+      const { store, actions } = context
       store.setView("chat")
       // The list lives in the sidebar; show it when the width hides it.
       if (!sidebarVisible(store.state.sidebar, store.state.columns)) store.setSidebar("open")
       await actions.refresh()
-      store.setStatus("Use /open <id> or /open <number>")
+      openSessionsPicker(context)
     },
   },
   {
@@ -88,34 +133,71 @@ export const nativeCommandSpecs: CommandSpec[] = [
   },
   {
     name: "/model",
-    description: "Change current session model, or show the current model and available models with no argument",
+    description: "Pick a session model (models grouped by provider), or set one directly; with no session the choice is remembered for the next one",
     argumentHint: "[provider/model]",
     complete: ({ words, current, head }, context) => words.length === 1 ? matchValues(head, current, context.models) : [],
     run: async ({ store, client, actions }, { args }) => {
       const selected = store.state.selected
-      if (!selected) throw new Error("Usage: /model [provider/model] in a session")
-      if (!args[0]) {
-        store.setStatus(`Model ${modelReference(selected) || "default"} · available: ${store.state.models.map((model) => model.id).join(", ") || "none"}`)
+      if (args[0]) {
+        if (!selected) {
+          store.setPendingModel(args[0])
+          store.setStatus(`Model → ${args[0]} · applies when the session is created`)
+          return
+        }
+        store.setSelected(await client.updateSessionModel(selected.id, args[0]))
+        store.setStatus(`Model → ${modelReference(store.state.selected!) || args[0]}`)
+        await actions.refresh()
         return
       }
-      store.setSelected(await client.updateSessionModel(selected.id, args[0]))
-      await actions.refresh()
+      // Rows are loaded from the catalog already in `state.models` (no async loading state in the picker itself).
+      actions.openPicker({
+        title: "Model",
+        rows: modelRows(store.state.models, selected ? modelReference(selected) : (store.state.pendingModel ?? "")),
+        onSelect: async (row) => {
+          if (!selected) {
+            store.setPendingModel(row.id)
+            store.setStatus(`Model → ${row.id} · applies when the session is created`)
+            return
+          }
+          store.setSelected(await client.updateSessionModel(selected.id, row.id))
+          store.setStatus(`Model → ${row.id}`)
+          await actions.refresh()
+        },
+      })
     },
   },
   {
     name: "/agent",
-    description: "Change current session agent, or show the current agent and available agents with no argument",
+    description: "Pick a visible session agent, or set one directly; with no session the choice is remembered for the next one",
     argumentHint: "[name]",
     complete: ({ words, current, head }, context) => words.length === 1 ? matchValues(head, current, context.agents) : [],
     run: async ({ store, client, actions }, { args }) => {
       const selected = store.state.selected
-      if (!selected) throw new Error("Usage: /agent [name] in a session")
-      if (!args[0]) {
-        store.setStatus(`Agent ${selected.agent} · available: ${store.state.agents.filter((agent) => !agent.hidden).map((agent) => agent.name).join(", ") || "none"}`)
+      if (args[0]) {
+        if (!selected) {
+          store.setPendingAgent(args[0])
+          store.setStatus(`Agent → ${args[0]} · applies when the session is created`)
+          return
+        }
+        store.setSelected(await client.updateSession(selected.id, { agent: args[0] }))
+        store.setStatus(`Agent → ${args[0]}`)
+        await actions.refresh()
         return
       }
-      store.setSelected(await client.updateSession(selected.id, { agent: args[0] }))
-      await actions.refresh()
+      actions.openPicker({
+        title: "Agent",
+        rows: agentRows(store.state.agents, selected ? selected.agent : (store.state.pendingAgent ?? "")),
+        onSelect: async (row) => {
+          if (!selected) {
+            store.setPendingAgent(row.id)
+            store.setStatus(`Agent → ${row.id} · applies when the session is created`)
+            return
+          }
+          store.setSelected(await client.updateSession(selected.id, { agent: row.id }))
+          store.setStatus(`Agent → ${row.id}`)
+          await actions.refresh()
+        },
+      })
     },
   },
   {

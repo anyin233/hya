@@ -90,13 +90,13 @@ export function createController({ client, store, directory, registry = createCo
   const modes = createModeSwitcher({ store, client })
 
   async function refresh(): Promise<void> {
-    const [sessions, interactions, models, workflows, providers, savedKeys, commands, permissionModes] = await Promise.all([
-      client.listSessions(), client.listInteractions(), client.listModels(), client.listWorkflows(),
+    const [sessions, interactions, models, agents, workflows, providers, savedKeys, commands, permissionModes] = await Promise.all([
+      client.listSessions(), client.listInteractions(), client.listModels(), client.listAgents(), client.listWorkflows(),
       client.listProviders(), client.listSavedKeys(), client.listCommands(),
       // Optional: the Shift+Tab cycle falls back to the built-ins without it.
       client.listPermissionModes().catch(() => undefined),
     ])
-    store.applyCatalog({ sessions, interactions, models, workflows, providers, savedKeys, commands, ...(permissionModes ? { permissionModes } : {}) })
+    store.applyCatalog({ sessions, interactions, models, agents, workflows, providers, savedKeys, commands, ...(permissionModes ? { permissionModes } : {}) })
   }
 
   async function refreshMessages(): Promise<void> {
@@ -296,11 +296,15 @@ export function createController({ client, store, directory, registry = createCo
 
   async function newSession(agentArg?: string, modelArg?: string): Promise<void> {
     const { agents, models } = store.state
-    const agent = agentArg ?? agents.find((item) => !item.hidden)?.name ?? "build"
+    // A `/model`/`/agent` choice made before any session existed (state/picker.ts, C11/C12) applies to
+    // the next `CreateSession` the same way an explicit argument would.
+    const agent = agentArg ?? store.state.pendingAgent ?? agents.find((item) => !item.hidden)?.name ?? "build"
     const preferred = agents.find((item) => item.name === agent)?.model
-    const model = modelArg ?? (preferred?.providerId && preferred.modelId ? `${preferred.providerId}/${preferred.modelId}` : models[0]?.id)
+    const model = modelArg ?? store.state.pendingModel ?? (preferred?.providerId && preferred.modelId ? `${preferred.providerId}/${preferred.modelId}` : models[0]?.id)
     if (!model) throw new Error("No model is available; configure a provider on the backend")
     const session = await client.createSession(agent, model, directory)
+    store.setPendingAgent(undefined)
+    store.setPendingModel(undefined)
     await refresh()
     await openSession(session.id)
     status(`Created ${session.id}`)
@@ -319,9 +323,9 @@ export function createController({ client, store, directory, registry = createCo
     store.endSecret()
   }
 
-  /** Open the modal picker; keys go to it (components/Composer.tsx) until a row is chosen or Esc closes it. */
+  /** Open the modal picker; keys go to it (components/Composer.tsx) until a row is chosen, a row action commits, or Esc closes it. */
   function openPicker(spec: PickerSpec): void {
-    store.setPicker({ ...createPicker(spec), onSelect: spec.onSelect })
+    store.setPicker({ ...createPicker(spec), onSelect: spec.onSelect, ...(spec.onAction ? { onAction: spec.onAction } : {}) })
   }
 
   /** Close the picker; focus returns to the composer. */
@@ -339,6 +343,16 @@ export function createController({ client, store, directory, registry = createCo
       .catch((error: unknown) => status(`Error: ${String(error)}`))
   }
 
+  /** Commit a row action (rename/delete, F2/Ctrl+D): close first, then run it. */
+  function commitPickerAction(id: string, row: PickerRow, value?: string): void {
+    const open = store.state.picker
+    if (!open?.onAction) return
+    closePicker()
+    void Promise.resolve()
+      .then(() => open.onAction!(id, row, value))
+      .catch((error: unknown) => status(`Error: ${String(error)}`))
+  }
+
   /** One key while the picker is open (it takes every key but Ctrl+C). */
   function pickerKey(key: KeyLike): void {
     const open = store.state.picker
@@ -347,6 +361,7 @@ export function createController({ client, store, directory, registry = createCo
     if (outcome.type === "update") store.updatePicker(outcome.state)
     else if (outcome.type === "close") closePicker()
     else if (outcome.type === "select") choosePickerRow(outcome.row)
+    else if (outcome.type === "commit") commitPickerAction(outcome.id, outcome.row, outcome.value)
   }
 
   const actions: AppActions = {

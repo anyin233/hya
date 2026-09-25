@@ -82,7 +82,7 @@ async function writeProjectBundles(dir: string, bundles: Record<string, BundleFi
   }
 }
 
-async function startBackend(root: string, fakeModel: FakeModel | undefined, protocol: Protocol, permission: PermissionModel, bundles: Record<string, BundleFiles> | undefined): Promise<{ child: ChildProcess; backend: Backend }> {
+async function startBackend(root: string, fakeModel: FakeModel | undefined, protocol: Protocol, permission: PermissionModel, bundles: Record<string, BundleFiles> | undefined, modelIds: string[] = ["model"]): Promise<{ child: ChildProcess; backend: Backend }> {
   const dir = join(root, "work")
   const env: Record<string, string> = {}
   for (const name of ["home", "config", "data", "state", "cache"]) {
@@ -94,6 +94,7 @@ async function startBackend(root: string, fakeModel: FakeModel | undefined, prot
   if (fakeModel) {
     const hyaCfgDir = join(env.config!, "hya")
     await mkdir(join(hyaCfgDir, "auth"), { recursive: true })
+    const modelsYaml = modelIds.map((id) => `      - id: ${id}\n`).join("")
     await writeFile(
       join(hyaCfgDir, "config.yaml"),
       `default_model: ${fakeModelRef}\n` +
@@ -103,7 +104,7 @@ async function startBackend(root: string, fakeModel: FakeModel | undefined, prot
         `    base_url: ${fakeModel.baseUrl}\n` +
         "    api_key: e2e-test-key\n" +
         "    models:\n" +
-        "      - id: model\n" +
+        modelsYaml +
         "mcp: {}\n" +
         "plugins: {}\n" +
         "permission:\n" +
@@ -163,6 +164,13 @@ export type FakeModelOption = {
    * answering prompts use `allow`.
    */
   permission?: PermissionModel
+  /**
+   * Provider model ids registered for the fake model, each reachable as
+   * `fake/<id>` (S9: two lets a spec exercise the `/model` picker's rows and
+   * a session model switch). Default `["model"]` (`fakeModelRef`), backward
+   * compatible with specs that do not set it.
+   */
+  models?: string[]
 }
 
 type Fixtures = { backend: Backend; fakeModel: FakeModel | undefined }
@@ -201,7 +209,7 @@ export const test = base.extend<Fixtures & Options>({
       throw new Error(`hya binary not found at ${hyaBin}; run \`cargo build -p hya-backend --bin hya\` or set HYA_BIN`)
     }
     const root = await mkdtemp(join(tmpdir(), "hya-tui-web-"))
-    const { child, backend } = await startBackend(root, fakeModel, model?.protocol ?? "chat", model?.permission ?? "default", projectBundles)
+    const { child, backend } = await startBackend(root, fakeModel, model?.protocol ?? "chat", model?.permission ?? "default", projectBundles, model?.models)
     await use(backend)
     if (child.exitCode === null) {
       const exited = new Promise((resolve) => child.once("exit", resolve))
