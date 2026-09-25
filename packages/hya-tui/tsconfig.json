@@ -5,9 +5,11 @@
     "moduleResolution": "Bundler",
     "lib": ["ESNext", "DOM"],
     "types": ["bun-types"],
+    "jsx": "preserve",
+    "jsxImportSource": "@opentui/solid",
     "strict": true,
     "skipLibCheck": true,
     "noEmit": true
   },
-  "include": ["src/**/*.ts", "test/**/*.ts"]
+  "include": ["src/**/*.ts", "src/**/*.tsx", "test/**/*.ts", "test/**/*.tsx"]
 }

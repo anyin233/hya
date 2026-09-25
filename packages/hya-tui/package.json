@@ -9,7 +9,9 @@
     "test": "bun test"
   },
   "dependencies": {
-    "@opentui/core": "0.5.12"
+    "@opentui/core": "0.5.12",
+    "@opentui/solid": "0.5.12",
+    "solid-js": "1.9.12"
   },
   "devDependencies": {
     "bun-types": "1.4.2",

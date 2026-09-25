@@ -4,6 +4,7 @@
 
 - New interactive TUI in `packages/hya-tui`, adopted from a contributor fork ([ADR-0019](docs/adr/0019-adopt-opentui-frontend.md)). It is a Bun/OpenTUI client over the v1 HTTP/JSON+SSE contract. The screen shows sessions, the selected transcript, and pending interactions, plus views for models, Workflows, saved provider keys (`/keys`, `/key set|remove <provider>` with concealed entry), and a generic `/api METHOD /v1/path [JSON]` command. Tab completes slash commands and their arguments, and a footer row shows the next step for the current view. Run it from source with `bun packages/hya-tui/src/main.ts --server http://127.0.0.1:8080 --dir "$PWD"` against `hya serve`. It is not in the release archive. See [OpenTUI frontend](docs/tui.md).
 - `packages/hya-tui-web` gains `e2e/hya-tui.spec.ts`: Playwright drives the real TUI in Chromium against an isolated `hya serve` on the offline model. The spec checks the connection, panel layout, prompt admission and reply, and Tab completion.
+- The TUI now uses `@opentui/solid` 0.5.12 (`solid-js` 1.9.12) and requires Bun 1.4.2. The code is split into a state store, a controller, a slash-command registry, a key-binding table, and Solid components. The look, commands, keys, and CLI flags are unchanged. A new browser spec (`e2e/hya-tui-commands.spec.ts`) locks the colors, `/help`, `/models`, `/api`, concealed `/key set` with Esc, narrow widths, and Ctrl+C.
 
 ## List saved provider keys over the v1 API
 

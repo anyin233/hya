@@ -1,0 +1,23 @@
+/** Start the TUI: renderer, store, controller, Solid tree, then the initial load. */
+import { createCliRenderer } from "@opentui/core"
+import { render } from "@opentui/solid"
+import type { Options } from "../cli"
+import { HyaClient } from "../client"
+import { createAppStore } from "../state/store"
+import { App } from "./App"
+import { AppContext } from "./context"
+import { createController } from "./controller"
+
+export async function run(options: Options): Promise<void> {
+  const client = new HyaClient(options.server, options.directory)
+  const store = createAppStore()
+  const controller = createController({ client, store, directory: options.directory })
+  const renderer = await createCliRenderer({ exitOnCtrlC: true, targetFps: 30 })
+  renderer.once("destroy", () => controller.dispose())
+  await render(() => (
+    <AppContext.Provider value={{ store, controller, server: options.server }}>
+      <App />
+    </AppContext.Provider>
+  ), renderer)
+  await controller.start()
+}

@@ -1,0 +1,7 @@
+# Solid JSX transform (and the client build of solid-js) for `bun test` and
+# `bun src/...` run from this package. src/main.ts also registers it itself,
+# so the TUI starts from any working directory.
+preload = ["@opentui/solid/preload"]
+
+[test]
+preload = ["@opentui/solid/preload"]
