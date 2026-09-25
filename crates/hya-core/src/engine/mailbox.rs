@@ -616,19 +616,31 @@ impl SessionEngine {
         // exact) and echo the correction so the right spelling is learned
         // in-turn instead of failing the read.
         let normalized = channel.trim().trim_start_matches('#');
-        let warning = (normalized != channel)
+        let mut warning = (normalized != channel)
             .then(|| format!("normalized channel id `{channel}` → `{normalized}`"));
-        let channel_state = projection
-            .team
-            .channels
-            .get(normalized)
-            .ok_or_else(|| CoreError::Invalid(format!("unknown channel `#{normalized}`")))?;
-        if !channel_state.members.contains(&handle) {
+        // A real channel id always wins. Channel ids are minted `DM-…` /
+        // `announce-…` keys or qualified `<unit>#<name>` keys, never a bare
+        // member path, so a handle alias cannot shadow one.
+        let (normalized, channel_state) = match projection.team.channels.get(normalized) {
+            Some(state) if state.members.contains(&handle) => (normalized.to_string(), state),
             // Unknown and not-a-member are deliberately indistinguishable.
-            return Err(CoreError::Invalid(format!(
-                "unknown channel `#{normalized}`"
-            )));
-        }
+            Some(_) => return Err(unknown_channel(&projection, &handle, normalized)),
+            None => {
+                // A member handle (canonical, or a leaf) names the caller's
+                // DM with that member.
+                let Some((id, state)) = dm_with_handle(&projection, &handle, normalized) else {
+                    return Err(unknown_channel(&projection, &handle, normalized));
+                };
+                let alias = format!(
+                    "`#{normalized}` is a member handle, not a channel: showing your DM with it, `{id}` (read it as `read channel://{id}`)"
+                );
+                warning = Some(match warning {
+                    Some(earlier) => format!("{earlier}; {alias}"),
+                    None => alias,
+                });
+                (id, state)
+            }
+        };
         let last_n = last.unwrap_or(1).clamp(1, 50);
         // Newest-first: the most recent message leads, matching how a chat
         // backlog is scanned.
@@ -662,7 +674,7 @@ impl SessionEngine {
             .await?;
         }
         Ok(ChannelHistoryRead {
-            channel: normalized.to_string(),
+            channel: normalized,
             messages,
             unread_remaining: 0,
             warning,
@@ -786,6 +798,61 @@ fn handoff_section(doc: &str, heading: &str) -> String {
         }
     }
     out.trim().chars().take(200).collect()
+}
+
+/// The caller's DM channel with the member `raw` names (canonical handle, or
+/// a leaf resolved team-wide or under the caller), if one exists.
+fn dm_with_handle<'a>(
+    projection: &'a hya_proto::Projection,
+    caller: &str,
+    raw: &str,
+) -> Option<(String, &'a hya_proto::ChannelProjection)> {
+    let mut candidates = vec![projection.team.canonical_member(raw)];
+    if !raw.contains(scope::PATH_SEPARATOR) {
+        candidates.push(scope::join_path(caller, raw));
+    }
+    candidates
+        .iter()
+        .filter(|peer| peer.as_str() != caller)
+        .find_map(|peer| dm_channel_between(projection, caller, peer))
+        .and_then(|id| {
+            let state = projection.team.channels.get(&id)?;
+            Some((id, state))
+        })
+}
+
+/// "Unknown channel" for a `channel://` read, naming the caller's own
+/// channels (never anyone else's) and `list_channel`.
+fn unknown_channel(projection: &hya_proto::Projection, caller: &str, raw: &str) -> CoreError {
+    const LISTED: usize = 8;
+    let mut mine: Vec<String> = projection
+        .team
+        .channels
+        .iter()
+        .filter(|(_, channel)| channel.members.iter().any(|member| member == caller))
+        .map(|(id, channel)| {
+            let peer = (channel.kind == hya_proto::ChannelKind::Dm)
+                .then(|| channel.members.iter().find(|member| *member != caller))
+                .flatten();
+            match peer {
+                Some(peer) => format!("`{id}` (DM with {peer})"),
+                None => format!("`{id}`"),
+            }
+        })
+        .collect();
+    mine.sort();
+    let more = mine.len().saturating_sub(LISTED);
+    mine.truncate(LISTED);
+    let yours = if mine.is_empty() {
+        "you have no channels".to_string()
+    } else if more > 0 {
+        format!("your channels: {} and {more} more", mine.join(", "))
+    } else {
+        format!("your channels: {}", mine.join(", "))
+    };
+    CoreError::Invalid(format!(
+        "unknown channel `#{raw}`; {yours}. Read one with `read channel://<id>`; `list_channel` lists them with unread counts."
+    ))
 }
 
 /// The DM channel registration minted between `from` and `parent`, if any.

@@ -89,8 +89,10 @@ When the channel family is loaded, the harness allocates `send`,
 `list_channel`, `wait`, and `read channel://<id>` (plus `report` for
 subagents) to **every** agent at startup — built-in or bundle, root or member —
 whatever its bundle `resource_view` selects. A view that does not select `read`
-gets a mail-only `read` that serves `channel://` handles and refuses file
-paths. So a narrow bundle subagent can always read the mail its report gate
+gets a mail-only `read` that serves `channel://` handles (and `#<id>`) and
+refuses file paths. Both reads also take a member handle
+(`read channel://main/scout-suzuran`) and show the caller's DM with that
+member, with a warning that names the DM id. So a narrow bundle subagent can always read the mail its report gate
 names; the gate error says which channel and how:
 
 ```text

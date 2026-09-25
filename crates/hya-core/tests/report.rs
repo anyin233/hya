@@ -1095,6 +1095,61 @@ async fn channel_read_normalizes_channel_id_spellings_with_warning() {
     assert!(unknown.is_err(), "an unknown channel id must still error");
 }
 
+/// Run 6: the lead read `#main/scout-fartooth` — a member handle — to see its
+/// DM with that member and got "unknown channel". A member handle (canonical,
+/// `#`-prefixed, or a bare leaf) resolves to the caller's DM with that member,
+/// with a warning naming the DM id; a real channel id still reads silently;
+/// with no such DM the error names the caller's channels and `list_channel`.
+#[tokio::test]
+async fn channel_read_by_member_handle_opens_the_callers_dm_with_it() {
+    let engine = engine().await;
+    let root = root_team(&engine).await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    ensure_main(&supervisor, &engine, root).await;
+    let (_child, handle) = spawn_idle_resident(&supervisor, &engine, root, "explore").await;
+    let projection = engine.read_projection(root).await.unwrap();
+    let dm = projection
+        .team
+        .channels
+        .iter()
+        .find(|(_, channel)| {
+            channel.kind == hya_proto::ChannelKind::Dm
+                && channel.members.contains(&handle)
+                && channel.members.contains("main")
+        })
+        .map(|(id, _)| id.clone())
+        .expect("registration mints the parent-child DM");
+
+    let leaf = hya_proto::scope::leaf(&handle).to_string();
+    for spelling in [format!("#{handle}"), handle.clone(), leaf] {
+        let read = engine
+            .read_channel_history(root, &spelling, None)
+            .await
+            .unwrap_or_else(|error| panic!("`{spelling}`: {error}"));
+        assert_eq!(read.channel, dm, "`{spelling}` reads the caller's DM");
+        let warning = read.warning.unwrap_or_default();
+        assert!(
+            warning.contains("member handle") && warning.contains(&dm),
+            "`{spelling}`: {warning}"
+        );
+    }
+    let direct = engine.read_channel_history(root, &dm, None).await.unwrap();
+    assert_eq!(direct.channel, dm);
+    assert_eq!(direct.warning, None, "a real channel id reads silently");
+
+    let error = engine
+        .read_channel_history(root, "#main/nobody-here", None)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("unknown channel `#main/nobody-here`")
+            && error.contains(&dm)
+            && error.contains("list_channel"),
+        "{error}"
+    );
+}
+
 /// Harness heartbeats (ADR-0002 liveness): a resident's turn boundaries leave
 /// a durable heartbeat on its roster row, so the parent can tell a busy child
 /// that is progressing from one that has stalled without polling its DMs.

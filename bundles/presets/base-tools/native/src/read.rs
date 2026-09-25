@@ -69,7 +69,8 @@ impl Tool for ReadTool {
                 "`path` also accepts an internal handle naming an agent-owned resource: ",
                 "`artifact://<id>` for tool output spilled out of the transcript, ",
                 "`skill://<name>` for a skill body, `local://<path>` for a scratch payload, ",
-                "`channel://<id>` for team mail history (add `?last=N` for N messages). ",
+                "`channel://<id>` for team mail history (add `?last=N` for N messages; ",
+                "a member handle such as `channel://main/scout-suzuran` reads your DM with it). ",
                 "A handle may carry one projection so you retrieve a slice instead of the ",
                 "whole body: `?lines=N`, `?lines=N-M`, `?head=N`, `?tail=N`, ",
                 "`?grep=<pattern>`, or `?q=<.dotted.path>` against a JSON body.\n\n",
@@ -126,6 +127,23 @@ impl Tool for ReadTool {
         }
 
         let workdir = normalize(&absolutize(&ctx.workdir));
+        // `#<member handle>` (or any `#…` that names no file, so an editor's
+        // `#draft#` file still reads): a channel read, where the engine
+        // resolves a member handle to the caller's DM with that member.
+        if file_path.trim_start().starts_with('#')
+            && !tokio::fs::try_exists(workdir.join(file_path.trim()))
+                .await
+                .unwrap_or(false)
+        {
+            return execute_channel_read(
+                ctx,
+                ChannelReadControl {
+                    channel: file_path.trim().to_string(),
+                    last: None,
+                },
+            )
+            .await;
+        }
         let path = resolve_read_target(ctx, &workdir, file_path)?;
         check_cancel(ctx)?;
         let external_result = assert_external_path(ctx, &workdir, &path).await;
