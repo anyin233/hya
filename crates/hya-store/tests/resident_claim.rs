@@ -745,3 +745,98 @@ async fn resident_stop_finalizer_rolls_back_at_each_write_boundary_and_is_exactl
         );
     }
 }
+
+/// A resident with a member row on its parent's log: stopping it closes that
+/// row `cancelled`, failing it closes it `failed` — inside the same
+/// finalization transaction, once.
+#[tokio::test]
+async fn resident_finalization_closes_its_member_row_on_the_parent_log() {
+    for (stop, expected) in [
+        (true, MemberRunStatus::Cancelled),
+        (false, MemberRunStatus::Failed),
+    ] {
+        let store = SessionStore::connect_memory().await.unwrap();
+        let root = SessionId::new();
+        let actor = SessionId::new();
+        let member = MemberId::new();
+        for (session, parent) in [(root, None), (actor, Some(root))] {
+            store
+                .append_event(
+                    session,
+                    &Event::SessionCreated {
+                        session,
+                        parent,
+                        agent: AgentName::new("resident"),
+                        model: hya_proto::ModelRef::new("fake"),
+                        workdir: "/tmp".to_string(),
+                    },
+                )
+                .await
+                .unwrap();
+        }
+        for event in [
+            Event::AgentRegistered {
+                session: root,
+                agent_session: actor,
+                handle: "resident-1".to_string(),
+                parent: None,
+                agent_type: AgentName::new("resident"),
+                mode: SubagentMode::Resident,
+            },
+            Event::MemberSpawned {
+                session: root,
+                member,
+                child: Some(actor),
+                subagent_type: AgentName::new("resident"),
+                description: "worker".to_string(),
+                depth: 1,
+                directive: String::new(),
+                tool_call: Some(ToolCallId::new()),
+            },
+            Event::MemberStatusChanged {
+                session: root,
+                member,
+                status: MemberRunStatus::Running,
+            },
+        ] {
+            store.append_event(root, &event).await.unwrap();
+        }
+        let claim = store.try_claim_new(actor, OwnerRunId::new()).await.unwrap();
+
+        let (events, _) = if stop {
+            store
+                .finalize_resident_stop(&claim, root, "resident-1")
+                .await
+                .unwrap()
+        } else {
+            store
+                .finalize_resident_failure(&claim, root, "resident-1", "team budget exceeded")
+                .await
+                .unwrap()
+        };
+        let finishes: Vec<_> = events
+            .iter()
+            .filter_map(|envelope| match &envelope.event {
+                Event::MemberFinished {
+                    session,
+                    member: row,
+                    status,
+                    child,
+                    ..
+                } if *row == member => Some((*session, *status, *child)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(finishes, vec![(root, expected, Some(actor))], "stop={stop}");
+        let row = store
+            .read_projection(root)
+            .await
+            .unwrap()
+            .session
+            .members
+            .into_iter()
+            .find(|row| row.member == member)
+            .unwrap();
+        assert_eq!(row.status, expected);
+    }
+}

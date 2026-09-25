@@ -272,9 +272,20 @@ leaking child transcripts. They carry only bounded metadata + a short summary.
 `MemberRunStatus` wire values: `spawning`, `running`, `done`, `failed`,
 `cancelled`.
 
-v1 exposes these as the durable `memberUpdated` stream event on the parent
-session and folds `MemberProjection` rows into `SessionInfo.members`
-([protocol guide](../protocol/README.md#subagents)).
+A resident member's row (ADR-0015) moves through: `member_spawned`
+(`spawning`; a `task` spawn records the call's `description` and
+`tool_call`) → `member_status_changed { running }` when a turn starts and the
+row is not already running (once per episode: the first turn after the spawn
+or after a revival, never once per wake; idle between wakes stays `running`) →
+terminal: `subagent_reported` (`done`/`failed`, report as summary — also the
+engine-synthesized failure report of a turn error), `member_finished
+{ cancelled }` from `archive`/drain/stop, or `member_finished { failed }` from
+a budget kill or other failure finalization. The terminal writes check the
+folded row first, so a repeated stop or finalize appends nothing.
+
+v1 exposes these (and `subagent_reported`) as the durable `memberUpdated`
+stream event on the parent session and folds `MemberProjection` rows into
+`SessionInfo.members` ([protocol guide](../protocol/README.md#subagents)).
 
 **Log placement:** member lifecycle events live on the **parent** log.
 `AgentRegistered` / `AgentActivityChanged` / `MailSent` / channel events live
@@ -430,6 +441,9 @@ mirrors the enum as `FinishCause` on `MessageFinished.cause` and
    `INTERRUPTED` when the harness closes it).
 3. Every member reaches a terminal status (`member_finished { cancelled }` for
    member rows; roster `failed` for resident members stopped by a drain).
+   A resident whose `task` call already returned is not part of its parent's
+   turn: closing that turn (cancel, crash recovery) leaves its row open, and
+   the resident's own report, archive, or finalization closes it.
    The lead (the root session's `main`) is never made terminal or archived.
 
 The engine keeps it on every path: a cancelled or failed turn closes its own

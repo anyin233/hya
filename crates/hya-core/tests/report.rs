@@ -13,8 +13,8 @@ mod support;
 use async_trait::async_trait;
 use futures::stream;
 use hya_proto::{
-    AgentName, ArchiveReason, Event, FinishReason, MailEndpoint, MailKind, MessageId, ModelRef,
-    PartProjection, ReportOutcome, RosterStatus, SessionId,
+    AgentName, ArchiveReason, Event, FinishReason, MailEndpoint, MailKind, MemberRunStatus,
+    MessageId, ModelRef, PartProjection, ReportOutcome, RosterStatus, SessionId,
 };
 use hya_provider::{
     Capabilities, CompletionRequest, EventStream, FakeProvider, FakeStep, Provider, ProviderError,
@@ -1636,4 +1636,250 @@ fn steer_everything() -> ChannelPolicySnapshot {
         dm_parent: u8::MAX,
         dm_child: u8::MAX,
     }
+}
+
+// ---- member row lifecycle on the parent log (v1 `memberUpdated`) ----
+
+/// The parent-log member row for `child` (first row, as the report marker
+/// resolves it).
+async fn member_row(
+    engine: &SessionEngine,
+    parent: SessionId,
+    child: SessionId,
+) -> hya_proto::MemberProjection {
+    engine
+        .read_projection(parent)
+        .await
+        .unwrap()
+        .session
+        .members
+        .into_iter()
+        .find(|row| row.child == Some(child))
+        .expect("the spawn records a member row on the parent log")
+}
+
+async fn wait_member_status(
+    engine: &SessionEngine,
+    parent: SessionId,
+    child: SessionId,
+    status: MemberRunStatus,
+) {
+    for _ in 0..300 {
+        if member_row(engine, parent, child).await.status == status {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    let row = member_row(engine, parent, child).await;
+    panic!("member row never reached {status:?}: {row:?}");
+}
+
+/// `MemberStatusChanged { Running }` rows for `child` on `parent`'s log.
+async fn running_transitions(engine: &SessionEngine, parent: SessionId, child: SessionId) -> usize {
+    let member = member_row(engine, parent, child).await.member;
+    engine
+        .replay(parent)
+        .await
+        .unwrap()
+        .iter()
+        .filter(|envelope| {
+            matches!(
+                &envelope.event,
+                Event::MemberStatusChanged {
+                    member: row,
+                    status: MemberRunStatus::Running,
+                    ..
+                } if *row == member
+            )
+        })
+        .count()
+}
+
+async fn assistant_turns(engine: &SessionEngine, session: SessionId) -> usize {
+    engine
+        .read_projection(session)
+        .await
+        .unwrap()
+        .session
+        .messages
+        .iter()
+        .filter(|message| message.role == hya_proto::Role::Assistant)
+        .count()
+}
+
+#[tokio::test]
+async fn resident_member_row_runs_once_per_episode_and_reports_done() {
+    let engine = engine().await;
+    let root = root_team(&engine).await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    ensure_main(&supervisor, &engine, root).await;
+    let (child, handle) = spawn_idle_resident(&supervisor, &engine, root, "explore the tree").await;
+
+    // The first turn opened the episode: the row left `spawning`.
+    let row = member_row(&engine, root, child).await;
+    assert_eq!(row.status, MemberRunStatus::Running, "{row:?}");
+    assert_eq!(running_transitions(&engine, root, child).await, 1);
+
+    // A second wake inside the same episode (idle → working) does not
+    // re-emit: the row is already running.
+    engine
+        .mail_send(
+            root,
+            MailEndpoint::Handle(handle.clone()),
+            MailKind::Message,
+            "one more thing".to_string(),
+        )
+        .await
+        .unwrap();
+    for _ in 0..300 {
+        if assistant_turns(&engine, child).await >= 2 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    wait_idle(&engine, root, &handle, child).await;
+    assert_eq!(assistant_turns(&engine, child).await, 2);
+    assert_eq!(running_transitions(&engine, root, child).await, 1);
+
+    // The report closes the episode.
+    supervisor
+        .report_and_archive(root, &handle, ReportOutcome::Done, "found it".to_string())
+        .await
+        .unwrap();
+    let row = member_row(&engine, root, child).await;
+    assert_eq!(row.status, MemberRunStatus::Done);
+    assert_eq!(row.summary, "found it");
+
+    // A revived episode reopens the same row.
+    engine
+        .mail_send(
+            root,
+            MailEndpoint::Handle(handle.clone()),
+            MailKind::Message,
+            "continue".to_string(),
+        )
+        .await
+        .unwrap();
+    wait_member_status(&engine, root, child, MemberRunStatus::Running).await;
+    assert_eq!(running_transitions(&engine, root, child).await, 2);
+}
+
+#[tokio::test]
+async fn stopped_resident_member_row_is_cancelled_once() {
+    let engine = engine().await;
+    let root = root_team(&engine).await;
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    ensure_main(&supervisor, &engine, root).await;
+    let (child, handle) = spawn_idle_resident(&supervisor, &engine, root, "work").await;
+    supervisor.stop_resident(root, &handle).await.unwrap();
+    supervisor.stop_resident(root, &handle).await.unwrap();
+
+    let row = member_row(&engine, root, child).await;
+    assert_eq!(row.status, MemberRunStatus::Cancelled, "{row:?}");
+    let finishes = engine
+        .replay(root)
+        .await
+        .unwrap()
+        .iter()
+        .filter(|envelope| {
+            matches!(
+                &envelope.event,
+                Event::MemberFinished { member, .. } if *member == row.member
+            )
+        })
+        .count();
+    assert_eq!(
+        finishes, 1,
+        "a repeated stop must not re-terminalize the row"
+    );
+}
+
+/// Root turns succeed; every other session's provider call fails.
+struct FailingMembers {
+    root: SessionId,
+}
+
+#[async_trait]
+impl Provider for FailingMembers {
+    fn id(&self) -> &str {
+        "fake"
+    }
+
+    fn capabilities(&self, model: &ModelRef) -> Option<Capabilities> {
+        StubProvider.capabilities(model)
+    }
+
+    async fn stream(
+        &self,
+        req: CompletionRequest,
+        session: SessionId,
+        message: MessageId,
+    ) -> Result<EventStream, ProviderError> {
+        if session == self.root {
+            return StubProvider.stream(req, session, message).await;
+        }
+        Err(ProviderError::Incompatible(
+            "member model exploded".to_string(),
+        ))
+    }
+}
+
+#[tokio::test]
+async fn failing_resident_turn_marks_the_member_row_failed() {
+    let store = SessionStore::connect_memory().await.unwrap();
+    let root_engine = {
+        let (permission, _rx) = PermissionPlane::new(PermissionRules::new(Vec::new()));
+        Arc::new(SessionEngine::new(
+            store.clone(),
+            Arc::new(ProviderRouter::new().with(Arc::new(StubProvider))),
+            support::test_runtime(Arc::new(ToolRegistry::builtins())),
+            permission,
+            EventBus::default(),
+        ))
+    };
+    let root = root_team(&root_engine).await;
+    drop(root_engine);
+    let (permission, _rx) = PermissionPlane::new(PermissionRules::new(Vec::new()));
+    let engine = Arc::new(SessionEngine::new(
+        store,
+        Arc::new(ProviderRouter::new().with(Arc::new(FailingMembers { root }))),
+        support::test_runtime(Arc::new(ToolRegistry::builtins())),
+        permission,
+        EventBus::default(),
+    ));
+    let supervisor = ResidentSupervisor::start(engine.clone());
+    ensure_main(&supervisor, &engine, root).await;
+    let agent = agent_spec();
+    let binding = engine.bind_runtime(&agent.workdir).unwrap();
+    let resources = binding.agent_resource_policy(agent.name.as_str()).unwrap();
+    let (child, _handle) = supervisor
+        .spawn_resident(
+            root,
+            agent,
+            (binding, Arc::from([]), resources, None),
+            "do the impossible".to_string(),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+    wait_member_status(&engine, root, child, MemberRunStatus::Failed).await;
+    let replay = engine.replay(root).await.unwrap();
+    let statuses: Vec<MemberRunStatus> = replay
+        .iter()
+        .filter_map(|envelope| match &envelope.event {
+            Event::MemberStatusChanged { status, .. } => Some(*status),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(statuses, vec![MemberRunStatus::Running]);
+    assert!(replay.iter().any(|envelope| matches!(
+        &envelope.event,
+        Event::SubagentReported {
+            outcome: ReportOutcome::Failed,
+            child: reported,
+            ..
+        } if *reported == child
+    )));
 }

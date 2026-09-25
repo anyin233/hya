@@ -19,6 +19,11 @@
   sanitizes it with `hya_tool::sanitize_handle_prefix` and mints the leaf
   `<prefix>-<operator>` (`hya_core::handle_naming`). `SpawnMember` has no
   name field.
+- The runtime passes a `hya_core::TaskSpawnOrigin` (resolved agent id, the
+  member's `description`, and the operation's source tool call id); the
+  parent-log `MemberSpawned` records that description and
+  `tool_call: Some(call)`, so v1 `memberUpdated.callId` links the member row
+  to the `task` tool card.
 - `name` (top level or per member) was removed in 0.41.0. The input structs
   still deserialize it only to reject it.
 

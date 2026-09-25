@@ -23,6 +23,13 @@
 - Subagents are visible on v1. A durable `memberUpdated` stream event (`MemberInfo {member, child, agent, description, status, summary, callId, depth}`) is emitted on the parent session, and `SessionInfo.members` lists the folded rows. `callId` links a task tool card to its child session, as does `metadata.sessionId` in the task tool's output.
 - A permission `Interaction.payload` now names the decision (`action`, `resource`, `always`) and the tool call that asked (`messageId`, `callId`, `tool`, and `input` with the call's arguments). The `GET /v1/interactions` title includes the resource again. The legacy `permission.asked.properties.tool` object gains optional `name` and `input`.
 - `hya-sdk-v1` `V1SessionMirror` folds tool state frames and member updates.
+- Subagents spawned by `task` now record the spawning call id and the task's `description` on their member row. v1 `memberUpdated.callId` and `SessionInfo.members[].callId` therefore link a member to its tool card.
+- A resident member row now moves through a full status lifecycle:
+  - It becomes `running` when an episode's first turn starts, and stays `running` while idle between wakes.
+  - It then reaches one terminal status: `done` or `failed` from the member's report (now streamed as `memberUpdated`), `cancelled` when it is archived or stopped, or `failed` on a budget kill or a failure finalization.
+  - A revived member goes back to `running`.
+  - Hosts that embed `hya-core` must now pass a `TaskSpawnOrigin` to `spawn_resident_typed` instead of the subagent type string.
+- Fix: cancelling or crash-recovering a parent turn no longer marks subagents whose `task` call already returned as cancelled.
 
 ## Session permission modes
 

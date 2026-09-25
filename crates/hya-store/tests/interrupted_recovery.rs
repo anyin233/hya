@@ -239,3 +239,92 @@ async fn upgrade_backfills_turns_left_open_before_the_index_existed() {
     drop(store);
     remove_db(&path);
 }
+
+/// A resident spawned by a `task` call that already returned outlives its
+/// parent's turn (ADR-0015): crash recovery closes the parent's open turn but
+/// leaves that member row alone — the resident is recovered separately and
+/// its row stays live. A row whose spawning call is still open is cancelled.
+#[tokio::test]
+async fn recovery_keeps_member_rows_whose_task_call_already_returned() {
+    let path = temp_db();
+    let open = SessionId::new();
+    let message = MessageId::new();
+    let (finished_part, finished_call) = (PartId::new(), ToolCallId::new());
+    let (open_part, open_call) = (PartId::new(), ToolCallId::new());
+    let (resident, orphan) = (MemberId::new(), MemberId::new());
+    let spawned = |member, call| Event::MemberSpawned {
+        session: open,
+        member,
+        child: Some(SessionId::new()),
+        subagent_type: "general".into(),
+        description: "worker".into(),
+        depth: 1,
+        directive: "work".into(),
+        tool_call: Some(call),
+    };
+    let events = vec![
+        Event::MessageStarted {
+            session: open,
+            message,
+            role: Role::Assistant,
+            agent: None,
+            model: None,
+        },
+        Event::ToolCallRequested {
+            session: open,
+            message,
+            part: finished_part,
+            call: finished_call,
+            name: "task".into(),
+            input: serde_json::json!({"description": "a", "prompt": "a"}),
+        },
+        spawned(resident, finished_call),
+        Event::MemberStatusChanged {
+            session: open,
+            member: resident,
+            status: MemberRunStatus::Running,
+        },
+        Event::ToolResult {
+            session: open,
+            message,
+            part: finished_part,
+            call: finished_call,
+            output: serde_json::json!({"output": "spawned"}),
+            time_ms: 1,
+        },
+        Event::ToolCallRequested {
+            session: open,
+            message,
+            part: open_part,
+            call: open_call,
+            name: "task".into(),
+            input: serde_json::json!({"description": "b", "prompt": "b"}),
+        },
+        spawned(orphan, open_call),
+    ];
+    {
+        let store = SessionStore::connect(&path).await.unwrap();
+        store.claim_runtime_owner(OwnerRunId::new()).unwrap();
+        for event in &events {
+            store.append_event(open, event).await.unwrap();
+        }
+    }
+
+    let store = SessionStore::connect(&path).await.unwrap();
+    let owner = OwnerRunId::new();
+    store.claim_runtime_owner(owner).unwrap();
+    store.recover_interrupted_turns(owner).await.unwrap();
+    let projection = store.read_projection(open).await.unwrap();
+    let status = |member| {
+        projection
+            .session
+            .members
+            .iter()
+            .find(|row| row.member == member)
+            .map(|row| row.status)
+    };
+    assert_eq!(status(resident), Some(MemberRunStatus::Running));
+    assert_eq!(status(orphan), Some(MemberRunStatus::Cancelled));
+    drop(store);
+    remove_db(&path);
+}

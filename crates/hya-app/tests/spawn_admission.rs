@@ -2491,3 +2491,56 @@ async fn missing_root_definition_fails_before_admission_for_resident_batch() {
         "no provider rounds when root resolution fails before admission"
     );
 }
+
+/// A `task` spawn links its member row to the spawning tool call and the
+/// task's short description (not the prompt), and the first resident turn
+/// moves the row from `spawning` to `running`.
+#[tokio::test]
+async fn task_spawn_member_row_carries_call_id_description_and_runs() {
+    let fixture = admission_fixture(1).await;
+    let call = ToolCallId::new();
+    let outcome = tokio::time::timeout(
+        Duration::from_secs(5),
+        fixture.scoped_spawner().spawn(
+            ToolOperation::from_tool_call(call),
+            vec![SpawnMember {
+                description: "survey the repo".to_string(),
+                prompt: "Walk every crate and list the public entry points you find.".to_string(),
+                subagent_type: "quick".to_string(),
+                ..SpawnMember::default()
+            }],
+            Default::default(),
+        ),
+    )
+    .await
+    .expect("spawn timed out")
+    .expect("resident spawn should be admitted");
+    let child: SessionId = outcome[0].session.parse().expect("valid child session");
+
+    let row = |projection: &hya_proto::Projection| {
+        projection
+            .session
+            .members
+            .iter()
+            .find(|row| row.child == Some(child))
+            .cloned()
+            .expect("member row on the parent log")
+    };
+    let spawned = row(&fixture
+        .engine
+        .read_projection(fixture.parent)
+        .await
+        .unwrap());
+    assert_eq!(spawned.tool_call, Some(call));
+    assert_eq!(spawned.description, "survey the repo");
+    assert_eq!(spawned.subagent_type.as_str(), "quick");
+
+    wait_member_turn_done(&fixture.engine, &outcome[0].session).await;
+    let running = row(&fixture
+        .engine
+        .read_projection(fixture.parent)
+        .await
+        .unwrap());
+    assert_eq!(running.status, hya_proto::MemberRunStatus::Running);
+    assert_eq!(running.member, spawned.member);
+}

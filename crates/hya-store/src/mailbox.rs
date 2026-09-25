@@ -1,6 +1,6 @@
 use hya_proto::{
-    ActorClaim, Envelope, Event, MailEndpoint, MailKind, Projection, Role, RosterEntry,
-    RosterStatus, SessionId, SubagentMode, now_millis, scope,
+    ActorClaim, Envelope, Event, MailEndpoint, MailKind, MemberRunStatus, Projection, Role,
+    RosterEntry, RosterStatus, SessionId, SubagentMode, now_millis, scope,
 };
 
 use crate::{
@@ -322,19 +322,27 @@ impl SessionStore {
     }
 
     /// Graceful resident stop: terminalize in-flight work with reason `resident stopped` and release the claim.
+    /// The resident's still-open member row on its parent's log closes `cancelled`.
     pub async fn finalize_resident_stop(
         &self,
         claim: &ActorClaim,
         root: SessionId,
         handle: &str,
     ) -> Result<(Vec<Envelope>, Vec<AdmissionRecord>), StoreError> {
-        self.finalize_resident_failure(claim, root, handle, "resident stopped")
-            .await
+        self.finalize_resident_with_reason(
+            claim,
+            root,
+            handle,
+            "resident stopped",
+            MemberRunStatus::Cancelled,
+        )
+        .await
     }
 
     /// Atomically terminalize a resident actor with the supplied reason and
-    /// release its claim. The stop path delegates here so activation failures
-    /// use the same rollback and idempotency boundary.
+    /// release its claim. The stop path shares this transaction so activation
+    /// failures use the same rollback and idempotency boundary. The resident's
+    /// still-open member row on its parent's log closes `failed`.
     #[doc(hidden)]
     pub async fn finalize_resident_failure(
         &self,
@@ -343,7 +351,7 @@ impl SessionStore {
         handle: &str,
         reason: &str,
     ) -> Result<(Vec<Envelope>, Vec<AdmissionRecord>), StoreError> {
-        self.finalize_resident_with_reason(claim, root, handle, reason)
+        self.finalize_resident_with_reason(claim, root, handle, reason, MemberRunStatus::Failed)
             .await
     }
 
@@ -353,6 +361,7 @@ impl SessionStore {
         root: SessionId,
         handle: &str,
         reason: &str,
+        member_status: MemberRunStatus,
     ) -> Result<(Vec<Envelope>, Vec<AdmissionRecord>), StoreError> {
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         if let Err(error) = fence_actor_claim(&mut tx, claim).await {
@@ -391,6 +400,16 @@ impl SessionStore {
             reason,
         )
         .await?;
+        envelopes.extend(
+            close_parent_member_row_in_transaction(
+                &self.projections,
+                &mut tx,
+                claim.actor_id,
+                member_status,
+                reason,
+            )
+            .await?,
+        );
 
         let epoch = i64::try_from(claim.epoch.get()).map_err(|_| {
             StoreError::ActorClaimData("actor epoch exceeds SQLite INTEGER range".to_string())
@@ -468,6 +487,42 @@ async fn append_resident_effects_in_transaction(
     let mut envelopes = Vec::with_capacity(events.len());
     for event in events {
         envelopes.push(append_event_in_transaction(tx, actor, event).await?);
+    }
+    Ok(envelopes)
+}
+
+/// Close `actor`'s own member row on its parent's log with `status` when it
+/// is still open (`spawning`/`running`). A row a report or archive already
+/// closed is left alone, so a repeated finalization appends nothing.
+async fn close_parent_member_row_in_transaction(
+    cache: &ProjectionCache,
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    actor: SessionId,
+    status: MemberRunStatus,
+    reason: &str,
+) -> Result<Vec<Envelope>, StoreError> {
+    let actor_projection = replay_projection(cache, tx, actor).await?;
+    let Some(parent) = actor_projection.session.parent else {
+        return Ok(Vec::new());
+    };
+    let parent_projection = replay_projection(cache, tx, parent).await?;
+    let mut envelopes = Vec::new();
+    for row in &parent_projection.session.members {
+        if row.child == Some(actor)
+            && matches!(
+                row.status,
+                MemberRunStatus::Spawning | MemberRunStatus::Running
+            )
+        {
+            let event = Event::MemberFinished {
+                session: parent,
+                member: row.member,
+                status,
+                summary: reason.to_string(),
+                child: Some(actor),
+            };
+            envelopes.push(append_event_in_transaction(tx, parent, event).await?);
+        }
     }
     Ok(envelopes)
 }

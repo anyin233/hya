@@ -5,7 +5,7 @@
 use hya_api::v1 as pb;
 use hya_proto::projection::{MemberProjection, MessageProjection, PartProjection, Projection};
 use hya_proto::{Envelope, Event, Role};
-use hya_proto::{FinishCause, FinishReason, MemberRunStatus, ToolPartState};
+use hya_proto::{FinishCause, FinishReason, MemberRunStatus, ReportOutcome, ToolPartState};
 
 /// Map a domain finish reason to the wire enum.
 pub(crate) fn finish_reason(finish: FinishReason) -> i32 {
@@ -560,6 +560,23 @@ pub(crate) fn stream_event(envelope: &Envelope) -> Option<pb::StreamEvent> {
             child: child.as_ref().map(ToString::to_string).unwrap_or_default(),
             status: member_status(*status),
             summary: summary.clone(),
+            ..Default::default()
+        }),
+        // A resident member's terminal report (ADR-0015) closes its row.
+        Event::SubagentReported {
+            member,
+            child,
+            outcome,
+            report,
+            ..
+        } => P::MemberUpdated(pb::MemberInfo {
+            member: member.to_string(),
+            child: child.to_string(),
+            status: member_status(match outcome {
+                ReportOutcome::Done => MemberRunStatus::Done,
+                ReportOutcome::Failed => MemberRunStatus::Failed,
+            }),
+            summary: report.clone(),
             ..Default::default()
         }),
         Event::Error {
