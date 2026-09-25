@@ -77,9 +77,12 @@ test.describe("hya TUI commands and look", () => {
     await term.waitForText("Sessions")
   })
 
-  test("Ctrl+C quits the TUI", async ({ tui, backend }) => {
+  test("Ctrl+C twice quits the TUI", async ({ tui, backend }) => {
     const term = await tui(hyaTui(backend))
     await term.waitForText("Connected to hya")
+    // The renderer no longer quits on the first Ctrl+C (see hya-tui-composer.spec.ts).
+    await term.press("Control+c")
+    await term.waitForText("Press Ctrl+C again to quit")
     await term.press("Control+c")
     expect(await term.waitForExit()).toBe(0)
   })

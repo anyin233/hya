@@ -96,7 +96,7 @@ test.describe("pending interactions", () => {
     await prompt(term, "run something")
     await term.waitForText(/Pending \(1\)/, 20_000)
     const block = (await term.find("Pending (1)"))!
-    const input = (await term.find("Message or /command"))!
+    const input = (await term.find("Message, /command, !shell, or @file"))!
     expect(block.row).toBeLessThan(input.row)
     expect(block.col).toBeLessThan((await term.size()).cols / 2)
     expect((await term.cell(block.row, block.col - 1))?.fg).toBe(colors.border)

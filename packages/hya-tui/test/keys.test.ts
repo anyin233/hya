@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { keyBindings, resolveBinding } from "../src/keys/bindings"
+import { composerKeyBindings, keyBindings, resolveBinding } from "../src/keys/bindings"
 
 const key = (name: string, extra: Partial<{ ctrl: boolean; meta: boolean; shift: boolean; sequence: string }> = {}) =>
   ({ name, ctrl: false, meta: false, shift: false, sequence: "", ...extra })
@@ -41,9 +41,34 @@ test("every binding is documented and reachable without a browser-reserved short
   const probes = [
     key("tab"), key("r", { ctrl: true }), key("b", { ctrl: true }), key("o", { ctrl: true }),
     key("pageup"), key("pagedown"), key("home", { ctrl: true }), key("end", { ctrl: true }),
+    key("escape"), key("c", { ctrl: true }), key("d", { ctrl: true }),
   ]
-  const reachable = new Set(probes.filter((probe) => !browserReserved.some((reserved) => reserved(probe))).map((probe) => resolveBinding(probe)))
+  const reachable = new Set(probes.filter((probe) => !browserReserved.some((reserved) => reserved(probe)))
+    .map((probe) => resolveBinding(probe, { composerEmpty: probe.name === "d" })))
   expect([...new Set(keyBindings.map((binding) => binding.action))].sort())
-    .toEqual(["complete", "pageDown", "pageUp", "refresh", "scrollBottom", "scrollTop", "toggleSidebar", "toggleThinking"])
+    .toEqual(["complete", "eof", "interrupt", "pageDown", "pageUp", "quit", "refresh", "scrollBottom", "scrollTop", "toggleSidebar", "toggleThinking"])
   for (const binding of keyBindings) expect(reachable.has(binding.action)).toBe(true)
+})
+
+test("Esc interrupts, Ctrl+C quits, and Ctrl+D quits only on an empty input", () => {
+  expect(resolveBinding(key("escape"))).toBe("interrupt")
+  expect(resolveBinding(key("c", { ctrl: true }))).toBe("quit")
+  expect(resolveBinding(key("c"))).toBeUndefined()
+  expect(resolveBinding(key("d", { ctrl: true }), { composerEmpty: true })).toBe("eof")
+  // With text, Ctrl+D stays the editor's forward delete.
+  expect(resolveBinding(key("d", { ctrl: true }), { composerEmpty: false })).toBeUndefined()
+})
+
+test("the composer submits on Enter and inserts a newline on Ctrl+J, Shift+Enter, and Alt+Enter", () => {
+  const action = (name: string, extra: Partial<{ ctrl: boolean; meta: boolean; shift: boolean }> = {}) =>
+    composerKeyBindings.find((binding) =>
+      binding.name === name && !!binding.ctrl === !!extra.ctrl && !!binding.meta === !!extra.meta && !!binding.shift === !!extra.shift)?.action
+  expect(action("return")).toBe("submit")
+  expect(action("kpenter")).toBe("submit")
+  expect(action("linefeed")).toBe("newline")
+  expect(action("j", { ctrl: true })).toBe("newline")
+  expect(action("return", { shift: true })).toBe("newline")
+  expect(action("return", { meta: true })).toBe("newline")
+  expect(action("home")).toBe("visual-line-home")
+  expect(action("end")).toBe("visual-line-end")
 })

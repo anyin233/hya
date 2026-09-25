@@ -112,3 +112,32 @@ test("treats a missing auth list as unavailable and reports empty HTTP errors", 
     new Response("gateway error", { status: 502, statusText: "Bad Gateway" }))
   await expect(invalid.bootstrap()).rejects.toThrow("GET /v1/bootstrap: HTTP 502 Bad Gateway")
 })
+
+test("admits a shell turn and finds files through scoped v1 requests", async () => {
+  const calls: Array<{ url: string; method: string; directory: string | null; body: unknown }> = []
+  const fetcher: FetchLike = async (input, init) => {
+    const url = String(input)
+    calls.push({
+      url,
+      method: init?.method ?? "GET",
+      directory: new Headers(init?.headers).get("x-hya-directory"),
+      body: init?.body ? JSON.parse(String(init.body)) : undefined,
+    })
+    return Response.json(url.includes("/fs/find")
+      ? { paths: ["src/main.ts"] }
+      : { turn: { id: "msg_a", state: "TURN_STATE_FINISHED", finish: "FINISH_REASON_STOP" } })
+  }
+  const client = new HyaClient("http://h", "/work", fetcher)
+  const turn = await client.createShellTurn("hysec_1", "echo hi", "build", { providerId: "fake", modelId: "model" })
+  expect(turn.id).toBe("msg_a")
+  expect(await client.findFiles("**/*ma in*", 20)).toEqual(["src/main.ts"])
+  expect(calls).toEqual([
+    {
+      url: "http://h/v1/sessions/hysec_1/turns",
+      method: "POST",
+      directory: "/work",
+      body: { shell: { command: "echo hi", agent: "build", model: { providerId: "fake", modelId: "model" } } },
+    },
+    { url: "http://h/v1/fs/find?pattern=**%2F*ma%20in*&limit=20", method: "GET", directory: "/work", body: undefined },
+  ])
+})

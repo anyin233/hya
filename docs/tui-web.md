@@ -104,6 +104,16 @@ test("echoes a prompt", async ({ tui }) => {
 })
 ```
 
+**What xterm.js sends.** Keys reach the program as xterm.js 6.0 encodes
+them, and xterm.js does not implement the kitty keyboard protocol or
+modifyOtherKeys. So `press("Shift+Enter")` sends a plain CR, the same as
+Enter; `press("Alt+Enter")` sends ESC CR; `press("Control+j")` sends LF. A
+program that needs a distinct "newline" key in the browser must accept LF or
+ESC CR (the hya TUI does; see [tui.md](tui.md#composer)). To paste, call
+`page.evaluate(() => window.hyaTerm.term.paste(text))`: xterm.js turns line
+feeds into CRs and wraps the text in bracketed-paste markers when the program
+enabled mode 2004 (OpenTUI does). `type()` types key by key and is not a paste.
+
 ### The fake model
 
 `e2e/fake-model.ts` (`startFakeModel(steps)`) serves scripted SSE, one `Step`
@@ -251,7 +261,7 @@ Teardown attaches the final screen and stops the host. `fixture(name)` returns
 | `find(needle)` | `{ row, col }` of the first match, or `null`. |
 | `cell(row, col)` | `{ char, fg, bg, bold, italic, underline, inverse, width }`; colors are `#rrggbb`, `palette:N`, or `default`. |
 | `size()` | `{ cols, rows }`. |
-| `type(text)` / `press(key)` | Playwright keyboard input (`"Enter"`, `"Control+C"`, …). |
+| `type(text)` / `press(key)` | Playwright keyboard input (`"Enter"`, `"Control+C"`, …). For a bracketed paste use `window.hyaTerm.term.paste(text)` (see "What xterm.js sends"). |
 | `resize(width, height)` | Resizes the viewport, waits for a new grid size, and returns it. |
 | `waitForExit(timeout?)` | Child exit code. |
 | `attach(testInfo, name)` | Writes `<name>.png` and `<name>.txt` to the test output dir and attaches both. |

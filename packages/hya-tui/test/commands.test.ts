@@ -14,6 +14,8 @@ function harness(client: Partial<HyaClient> = {}) {
     newSession: async (agent, model) => { calls.push(`new ${agent ?? ""} ${model ?? ""}`.trim()) },
     beginKeyEntry: (provider) => { calls.push(`key ${provider}`) },
     scheduleRefresh: () => { calls.push("scheduleRefresh") },
+    cancelTurn: async () => { calls.push("cancel") },
+    quit: () => { calls.push("quit") },
   }
   const registry = createCommandRegistry()
   const context = { store, client: client as HyaClient, actions }
@@ -57,7 +59,6 @@ test("usage errors are thrown for incomplete commands", async () => {
   const { run } = harness()
   await expect(run("/open")).rejects.toThrow("Usage: /open <session id or number>")
   await expect(run("/key")).rejects.toThrow("Usage: /key set|remove <provider> or /login <provider>")
-  await expect(run("/cancel")).rejects.toThrow("No active turn")
   await expect(run("/answer req_1")).rejects.toThrow("Usage: /answer <interaction id> <text>")
 })
 
@@ -105,4 +106,12 @@ test("/sidebar toggles or sets the sidebar and /thinking expands or collapses re
   expect(store.state.thinking).toBe(false)
   expect(store.state.status).toBe("Reasoning collapsed · Ctrl+O toggles")
   expect(registry.complete("/sidebar o", store.completionContext())).toEqual(["/sidebar off", "/sidebar on"])
+})
+
+test("/exit and /quit quit; /cancel cancels the running turn", async () => {
+  const { calls, run } = harness()
+  await run("/exit")
+  await run("/quit")
+  await run("/cancel")
+  expect(calls).toEqual(["quit", "quit", "cancel"])
 })

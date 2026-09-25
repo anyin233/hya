@@ -15,14 +15,21 @@
  *   slightly after `messageFinished`, so `409 session_busy` is retried with a
  *   short backoff. A prompt that still meets a busy session afterwards stays
  *   queued until the next observed turn end.
+ * - A `!command` is a shell turn and goes through the same queue. Its
+ *   `CreateTurn` returns only when the command has finished, so the turn ends
+ *   with that response; the returned id is the shell turn's assistant message.
+ * - `cancel()` sends `CancelTurn` (the server cancels whatever runs in the
+ *   session, so a shell turn whose id is not known yet is cancelled too) and
+ *   shows `Cancelling…` until the turn ends, then `Cancelled · Ready`.
  */
+import { batch } from "solid-js"
 import { HttpError, type HyaClient } from "../client"
 import { assistantRole, toolCallsFinish, type FinishedInfo, type OverlayEffect } from "../state/overlay"
 import type { AppStore, QueuedPrompt } from "../state/store"
 
 export interface TurnRunnerOptions {
   store: AppStore
-  client: Pick<HyaClient, "createTurn">
+  client: Pick<HyaClient, "createTurn" | "createShellTurn" | "cancelTurn">
   sleep?: (ms: number) => Promise<void>
   /** Delays between `409 session_busy` retries; one retry per entry. */
   backoffMs?: number[]
@@ -48,6 +55,8 @@ export function turnEndStatus(end: FinishedInfo, error: { code: string; message:
 export function createTurnRunner({ store, client, sleep = (ms) => Bun.sleep(ms), backoffMs = defaultBackoffMs }: TurnRunnerOptions) {
   let draining: Promise<void> = Promise.resolve()
   let active = false
+  /** A cancel was requested for the running turn; its end reads `Cancelled · Ready`. */
+  let cancelRequested = false
   /** Wakes a pending busy-retry sleep early when some turn ends. */
   let wake: (() => void) | undefined
 
@@ -64,7 +73,9 @@ export function createTurnRunner({ store, client, sleep = (ms) => Bun.sleep(ms),
     const error = store.fold.error(end.message)
       ?? store.state.messages.find((message) => message.id === end.message)?.error
     store.endTurn()
-    status(turnEndStatus(end, error))
+    const text = turnEndStatus(end, error)
+    status(cancelRequested && !error && !text.startsWith("Error") ? "Cancelled · Ready" : text)
+    cancelRequested = false
     drain()
   }
 
@@ -76,9 +87,38 @@ export function createTurnRunner({ store, client, sleep = (ms) => Bun.sleep(ms),
   }
 
   /** Admit one queued prompt; returns false when the session stayed busy. */
+  /** Run one shell turn; it ends when `CreateTurn` returns. */
+  async function sendShell(item: QueuedPrompt): Promise<boolean> {
+    const session = store.state.selected
+    if (!session || session.id !== item.session) return true
+    status(`Running shell · ${item.text}`)
+    store.setPendingShell(item.text)
+    try {
+      const turn = await client.createShellTurn(item.session, item.text, session.agent, session.model)
+      if (store.state.selected?.id !== item.session) return true
+      store.dequeue(item.id)
+      batch(() => {
+        store.rememberShell(turn.id, item.text)
+        store.setPendingShell(undefined)
+      })
+      complete({ message: turn.id, role: assistantRole, finish: turn.finish ?? "FINISH_REASON_STOP" })
+      return true
+    } catch (error) {
+      if (store.state.selected?.id !== item.session) return true
+      store.setPendingShell(undefined)
+      store.dequeue(item.id)
+      store.endTurn()
+      status(cancelRequested ? "Cancelled · Ready" : `Error: ${String(error)}`)
+      cancelRequested = false
+      return true
+    }
+  }
+
   async function send(item: QueuedPrompt): Promise<boolean> {
     store.beginTurn()
     store.setQueuedState(item.id, "sending")
+    cancelRequested = false
+    if (item.shell) return sendShell(item)
     status("Sending prompt…")
     for (let attempt = 0; ; attempt++) {
       if (store.state.selected?.id !== item.session) return true
@@ -133,17 +173,27 @@ export function createTurnRunner({ store, client, sleep = (ms) => Bun.sleep(ms),
   }
 
   return {
-    /** Queue a prompt for the selected session and send it when the session is free. */
-    async submit(text: string): Promise<void> {
+    /** Queue a prompt (or, with `shell`, a shell command) for the selected session and send it when the session is free. */
+    async submit(text: string, options: { shell?: boolean } = {}): Promise<void> {
       const session = store.state.selected?.id
       if (!session) throw new Error("No session is open")
-      store.enqueue(text, session)
+      store.enqueue(text, session, options.shell)
       if (store.state.running || active) {
         status(store.state.turnId ? runningStatus() : `Queued · ${waiting().length} waiting`)
         return
       }
       drain()
       await draining
+    },
+
+    /** Cancel the running turn (`CancelTurn`); throws when none runs. */
+    async cancel(): Promise<void> {
+      const session = store.state.selected?.id
+      if (!session || !store.state.running) throw new Error("No active turn")
+      cancelRequested = true
+      status("Cancelling…")
+      // Before CreateTurn returns there is no turn id; the route cancels the session's run whatever the id.
+      await client.cancelTurn(session, store.state.turnId || "current")
     },
 
     /** React to a folded stream event: detect the end of the running turn. */

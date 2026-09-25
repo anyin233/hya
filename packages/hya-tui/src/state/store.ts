@@ -38,7 +38,10 @@ import { TranscriptOverlay, type OverlayEffect } from "./overlay"
 export interface QueuedPrompt {
   id: number
   session: string
+  /** The prompt text, or the command of a `!command` shell turn. */
   text: string
+  /** A `!command`: sent as a `ShellTurn`. */
+  shell?: boolean
   /** `sending` while its CreateTurn is in flight (hidden from the transcript). */
   state: "queued" | "sending"
 }
@@ -85,6 +88,10 @@ export interface AppState {
   readonly reasoningToggles: ReadonlyMap<string, boolean>
   /** Bumped when the transcript should jump to its newest line (a prompt was submitted). */
   readonly followTick: number
+  /** Commands of the shell turns run from this TUI, by the turn's assistant message id. */
+  readonly shellCommands: ReadonlyMap<string, string>
+  /** Command of the shell turn running now (its message ids are not known until it returns). */
+  readonly pendingShell: string | undefined
 }
 
 /** Rows loaded by one full catalog refresh. `savedKeys: null` = listing unsupported. */
@@ -130,6 +137,8 @@ function initialState(): { [K in keyof AppState]: AppState[K] } {
     thinking: false,
     reasoningToggles: new Map(),
     followTick: 0,
+    shellCommands: new Map(),
+    pendingShell: undefined,
   }
 }
 
@@ -230,8 +239,8 @@ export function createAppStore() {
     /** A `resync` dropped frames: see `TranscriptOverlay.markLiveLost`. */
     markLiveLost(): void { fold.markLiveLost() },
 
-    enqueue(text: string, session: string): QueuedPrompt {
-      const item: QueuedPrompt = { id: ++queueIds, session, text, state: "queued" }
+    enqueue(text: string, session: string, shell = false): QueuedPrompt {
+      const item: QueuedPrompt = { id: ++queueIds, session, text, ...(shell ? { shell: true } : {}), state: "queued" }
       set("queued", [...state.queued, item])
       return item
     },
@@ -266,6 +275,14 @@ export function createAppStore() {
       next.set(partId, !(state.reasoningToggles.get(partId) ?? state.thinking))
       set("reasoningToggles", next)
     },
+
+    /** Remember the command of a shell turn (its assistant message id) for the transcript. */
+    rememberShell(messageId: string, command: string): void {
+      if (!messageId) return
+      set("shellCommands", new Map(state.shellCommands).set(messageId, command))
+    },
+    /** The shell turn now running (or `undefined` once it returned). */
+    setPendingShell(command: string | undefined): void { set("pendingShell", command) },
 
     /** Ask the transcript to jump to its newest line. */
     followTranscript(): void { set("followTick", state.followTick + 1) },

@@ -41,6 +41,9 @@
 - Messages render by role: user messages as blocks with an accent bar, assistant messages under an `agent · model` header. Assistant text renders as Markdown, using OpenTUI's `<markdown>`, with syntax-highlighted code blocks. Errors, cancellations, and length-limit stops show as colored notices.
 - Reasoning collapses to a `Thinking` line; Ctrl+O, `/thinking [on|off]`, or a click expands it. The transcript scrolls with PgUp/PgDn, Ctrl+Home/End, and the mouse wheel, and shows a "new messages below" hint when scrolled up. The projection is re-read at least every 400 ms while frames keep arriving.
 - The browser test fake model also speaks the OpenAI Responses API (`model: { steps, protocol: "responses" }`), with `reasoningStep` and `textStep(..., { finish: "length" })`.
+- The input is a multi-line editor. Enter sends; Ctrl+J or Alt+Enter insert a newline. Shift+Enter also inserts one in terminals that report it, but in the browser WebUI it sends, because xterm.js has no kitty keyboard support. Pasted text never sends. The box grows to 8 rows, and Up/Down recall earlier inputs.
+- Esc cancels the running turn (`Cancelling…`, then `Cancelled · Ready`); with no turn running it clears the input. Ctrl+C clears the input and quits on a second press within 2 seconds. Ctrl+D on an empty input and the new `/exit` and `/quit` commands also quit.
+- `!command` runs a shell turn, shown as `!command`, `↳ bash`, `$ command`. Typing `@` suggests files from the work directory (`FindFiles`) and inserts `@path` into the prompt.
 
 ## List saved provider keys over the v1 API
 

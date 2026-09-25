@@ -19,6 +19,8 @@
 import type { HyaClient, SessionInfo, StreamEvent, StreamFrame } from "../client"
 import { completeCommand, SecretEntry } from "../completion"
 import { createCommandRegistry, type AppActions, type CommandRegistry } from "../commands"
+import { findPattern, rankPaths } from "../composer/mention"
+import { shellCommand } from "../composer/shell"
 import type { KeyLike } from "../keys/bindings"
 import type { AppStore } from "../state/store"
 import { createDebounce } from "./debounce"
@@ -38,9 +40,15 @@ export interface ControllerOptions {
   /** Workspace directory for new sessions (`--dir`). */
   directory: string
   registry?: CommandRegistry
+  /** Leave the TUI (destroys the renderer, which restores the terminal). */
+  quit?: () => void
 }
 
-export function createController({ client, store, directory, registry = createCommandRegistry() }: ControllerOptions) {
+/** Paths requested per `@file` lookup; the best `fileSuggestionLimit` are shown. */
+const fileLookupLimit = 50
+export const fileSuggestionLimit = 8
+
+export function createController({ client, store, directory, registry = createCommandRegistry(), quit = () => undefined }: ControllerOptions) {
   let streamAbort: AbortController | undefined
   let flushTimer: ReturnType<typeof setTimeout> | undefined
   let streamReady: Promise<void> = Promise.resolve()
@@ -189,9 +197,13 @@ export function createController({ client, store, directory, registry = createCo
     store.endSecret()
   }
 
-  const actions: AppActions = { refresh, refreshMessages, openSession, newSession, beginKeyEntry, scheduleRefresh }
+  const actions: AppActions = {
+    refresh, refreshMessages, openSession, newSession, beginKeyEntry, scheduleRefresh,
+    cancelTurn: () => turns.cancel(),
+    quit,
+  }
 
-  /** Submit one composer line: a prompt, a native command, or a backend command. */
+  /** Submit one composer input: a prompt, a `!command` shell turn, a native command, or a backend command. */
   async function submit(value: string): Promise<void> {
     const text = value.trim()
     if (!text) return
@@ -200,14 +212,27 @@ export function createController({ client, store, directory, registry = createCo
         await registry.dispatch(text, { store, client, actions })
         return
       }
+      const command = shellCommand(text)
+      if (command === "") throw new Error("Usage: !<shell command>")
       if (!store.state.selected) await newSession()
       store.followTranscript()
       // Subscribe before CreateTurn, so no frame of the new turn is missed.
       await Promise.race([streamReady, Bun.sleep(streamWaitMs)])
-      await turns.submit(text)
+      if (command !== undefined) await turns.submit(command, { shell: true })
+      else await turns.submit(text)
     } catch (error) {
       status(`Error: ${String(error)}`)
     }
+  }
+
+  /** Esc: cancel the running turn. */
+  function cancelTurn(): void {
+    void turns.cancel().catch((error: unknown) => status(`Cancel failed: ${String(error)}`))
+  }
+
+  /** `@file` suggestions: paths under `--dir` containing `query`, best first. */
+  async function findFiles(query: string): Promise<string[]> {
+    return rankPaths(await client.findFiles(findPattern(query), fileLookupLimit), query, fileSuggestionLimit)
   }
 
   /** Handle one key during concealed key entry. The key never reaches the store. */
@@ -280,6 +305,8 @@ export function createController({ client, store, directory, registry = createCo
     ...actions,
     registry,
     submit,
+    cancelTurn,
+    findFiles,
     complete: (input: string) => completeCommand(input, store.completionContext(), registry),
     secretKey,
     secretPaste,

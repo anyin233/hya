@@ -12,6 +12,7 @@ export interface SessionInfo {
 export interface TurnInfo {
   id: string
   state: string
+  finish?: string
   errorCode?: string
   errorMessage?: string
 }
@@ -25,7 +26,8 @@ export interface MessagePart {
   id: string
   text?: { text: string }
   reasoning?: { text: string }
-  toolCall?: { tool: string; state?: string; inputJson?: string; errorCode?: string; errorMessage?: string }
+  /** `inputJson` / `outputJson` / `callId` are filled by backends that expose tool input and output (empty otherwise). */
+  toolCall?: { tool: string; state?: string; callId?: string; inputJson?: string; outputJson?: string; errorCode?: string; errorMessage?: string }
   toolResult?: { output: string; errorMessage?: string }
   attachment?: { name: string; path?: string }
 }
@@ -236,6 +238,29 @@ export class HyaClient {
       { prompt: { text } },
     )
     return result.turn
+  }
+
+  /**
+   * Run `command` as a shell turn (`ShellTurn`: the builtin shell tool, no
+   * model round). The call returns when the command has finished; the
+   * returned id is the shell turn's assistant message.
+   */
+  async createShellTurn(session: string, command: string, agent: string, model?: { providerId?: string; modelId?: string }): Promise<TurnInfo> {
+    const result = await this.request<{ turn: TurnInfo }>(
+      "POST",
+      `/v1/sessions/${encodeURIComponent(session)}/turns`,
+      { shell: { command, agent, ...(model?.providerId && model.modelId ? { model: { providerId: model.providerId, modelId: model.modelId } } : {}) } },
+    )
+    return result.turn
+  }
+
+  /** Relative paths under the `--dir` scope matching a glob (`FindFiles`). */
+  async findFiles(pattern: string, limit: number): Promise<string[]> {
+    const result = await this.request<{ paths?: string[] }>(
+      "GET",
+      `/v1/fs/find?pattern=${encodeURIComponent(pattern)}&limit=${limit}`,
+    )
+    return result.paths ?? []
   }
 
   async createCommandTurn(session: string, command: string, argumentsText: string): Promise<TurnInfo> {

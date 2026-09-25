@@ -19,6 +19,10 @@ export interface AppActions {
   /** Switch the composer into concealed key entry for `provider`. */
   beginKeyEntry(provider: string): void
   scheduleRefresh(): void
+  /** Cancel the running turn (`CancelTurn`); throws `No active turn` when none runs. */
+  cancelTurn(): Promise<void>
+  /** Leave the TUI and restore the terminal. */
+  quit(): void
 }
 
 export interface CommandContext {
