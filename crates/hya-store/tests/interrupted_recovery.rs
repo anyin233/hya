@@ -50,6 +50,8 @@ fn crashed_log(open: SessionId, done: SessionId) -> Vec<(SessionId, Event)> {
                 session: open,
                 message: open_message,
                 role: Role::Assistant,
+                agent: None,
+                model: None,
             },
         ),
         (
@@ -82,6 +84,8 @@ fn crashed_log(open: SessionId, done: SessionId) -> Vec<(SessionId, Event)> {
                 session: done,
                 message: done_message,
                 role: Role::Assistant,
+                agent: None,
+                model: None,
             },
         ),
         (

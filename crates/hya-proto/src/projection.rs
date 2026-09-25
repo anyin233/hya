@@ -143,6 +143,21 @@ pub struct MessageProjection {
     pub id: MessageId,
     /// Speaker role.
     pub role: Role,
+    /// Agent the assistant turn ran as, from `MessageStarted`. `None` for
+    /// user/system/shell messages and logs written before attribution.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<AgentName>,
+    /// Model the assistant turn requested, from `MessageStarted`. The model
+    /// that served it is [`MessageProjection::served_model`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<ModelRef>,
+    /// Envelope time (Unix ms) of the message's `MessageStarted`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_created: Option<i64>,
+    /// Envelope time (Unix ms) of the newest event that changed the message
+    /// (parts, live deltas included, usage, error, finish).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_updated: Option<i64>,
     /// Runtime snapshot generation from `TurnBindingRecorded` (assistant turns).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config_generation: Option<ConfigGeneration>,
@@ -170,6 +185,19 @@ pub struct MessageProjection {
     /// event naming it in `failed_message`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<MessageError>,
+}
+
+impl MessageProjection {
+    /// Model that produced this message: the model that served its latest
+    /// recorded round (`UsageRecorded`, after fallback or routing) when one
+    /// exists, otherwise the model its turn requested.
+    #[must_use]
+    pub fn served_model(&self) -> Option<&ModelRef> {
+        self.usage
+            .as_ref()
+            .map(|usage| &usage.model)
+            .or(self.model.as_ref())
+    }
 }
 
 /// Recorded failure of the turn that drove an assistant message.
@@ -665,7 +693,7 @@ pub struct HandoffProjection {
 /// different projection, or when `Projection` (or anything it contains)
 /// changes shape; the `reducer_fingerprint_pins_the_version` test fails until
 /// the bump is recorded.
-pub const PROJECTION_REDUCER_VERSION: u32 = 3;
+pub const PROJECTION_REDUCER_VERSION: u32 = 4;
 
 /// Durable snapshot encoding: the wire projection plus replay-only reducer
 /// state the wire form deliberately omits.
@@ -696,6 +724,36 @@ pub struct Projection {
     pub last_seq: u64,
 }
 
+/// The transcript message an event folds onto, if any (drives
+/// `MessageProjection::time_created` / `time_updated`). Step markers are
+/// reducer no-ops, and switch/compaction anchors only point at a message.
+fn changed_message(event: &Event) -> Option<MessageId> {
+    match event {
+        Event::MessageStarted { message, .. }
+        | Event::TurnBindingRecorded { message, .. }
+        | Event::UserPromptContextRecorded { message, .. }
+        | Event::MessageFinished { message, .. }
+        | Event::PartDeleted { message, .. }
+        | Event::TextStart { message, .. }
+        | Event::TextDelta { message, .. }
+        | Event::TextReplace { message, .. }
+        | Event::TextEnd { message, .. }
+        | Event::ReasoningStart { message, .. }
+        | Event::ReasoningDelta { message, .. }
+        | Event::ReasoningEnd { message, .. }
+        | Event::ReasoningReplace { message, .. }
+        | Event::ToolInputStart { message, .. }
+        | Event::ToolInputDelta { message, .. }
+        | Event::ToolCallRequested { message, .. }
+        | Event::ToolResult { message, .. }
+        | Event::ToolError { message, .. }
+        | Event::ToolPartUpdated { message, .. } => Some(*message),
+        Event::UsageRecorded { message, .. } => *message,
+        Event::Error { failed_message, .. } => *failed_message,
+        _ => None,
+    }
+}
+
 fn team_is_empty(team: &TeamProjection) -> bool {
     team.inboxes.is_empty()
         && team.channels.is_empty()
@@ -719,13 +777,31 @@ impl Projection {
     pub fn apply(&mut self, env: &Envelope) {
         if env.seq.0 == 0 {
             self.apply_event(&env.event);
+            self.stamp_message_time(&env.event, env.ts_millis);
             return;
         }
         if env.seq.0 <= self.last_seq {
             return;
         }
         self.apply_event(&env.event);
+        self.stamp_message_time(&env.event, env.ts_millis);
         self.last_seq = env.seq.0;
+    }
+
+    /// Fold the envelope time onto the message the event changed: its
+    /// `MessageStarted` time is the creation time, and every change
+    /// (including live deltas) moves the update time forward.
+    fn stamp_message_time(&mut self, event: &Event, ts_millis: i64) {
+        let Some(id) = changed_message(event) else {
+            return;
+        };
+        let Some(message) = self.message_mut(id) else {
+            return;
+        };
+        if matches!(event, Event::MessageStarted { .. }) && message.time_created.is_none() {
+            message.time_created = Some(ts_millis);
+        }
+        message.time_updated = Some(message.time_updated.map_or(ts_millis, |t| t.max(ts_millis)));
     }
 
     /// Encode this projection as a durable snapshot.
@@ -1002,11 +1078,21 @@ impl Projection {
                     }
                 }
             }
-            Event::MessageStarted { message, role, .. } => {
+            Event::MessageStarted {
+                message,
+                role,
+                agent,
+                model,
+                ..
+            } => {
                 if self.message_mut(*message).is_none() {
                     self.session.messages.push(MessageProjection {
                         id: *message,
                         role: *role,
+                        agent: agent.clone(),
+                        model: model.clone(),
+                        time_created: None,
+                        time_updated: None,
                         config_generation: None,
                         finish: None,
                         cause: None,
@@ -2302,6 +2388,8 @@ mod usage_fold_tests {
             session,
             message,
             role: Role::Assistant,
+            agent: None,
+            model: None,
         }
     }
 

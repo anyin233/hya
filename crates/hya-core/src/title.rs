@@ -151,6 +151,10 @@ mod tests {
         projection.session.messages.push(MessageProjection {
             id: MessageId::new(),
             role: Role::User,
+            agent: None,
+            model: None,
+            time_created: None,
+            time_updated: None,
             config_generation: None,
             finish: None,
             tokens: None,

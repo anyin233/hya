@@ -26,6 +26,8 @@ async fn migration_applies_and_projection_is_correct() {
             session: s,
             message: m,
             role: Role::Assistant,
+            agent: None,
+            model: None,
         },
         Event::TextStart {
             session: s,

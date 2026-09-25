@@ -12,9 +12,9 @@
 
 use hya_proto::{
     AgentName, CompactionStrategy, Event, FinishReason, MailEndpoint, MailKind, MemberId,
-    MemberRunStatus, MessageId, OwnerRunId, PartId, Role, RosterStatus, SessionId, SubagentMode,
-    TokenUsage, ToolCallId, UsagePurpose, WorkflowIdentity, WorkflowRevision, WorkflowRunId,
-    WorkflowRunStatus, WorkflowSourceId, WorkflowStagePlan,
+    MemberRunStatus, MessageId, ModelRef, OwnerRunId, PartId, Role, RosterStatus, SessionId,
+    SubagentMode, TokenUsage, ToolCallId, UsagePurpose, WorkflowIdentity, WorkflowRevision,
+    WorkflowRunId, WorkflowRunStatus, WorkflowSourceId, WorkflowStagePlan,
 };
 use uuid::Uuid;
 
@@ -105,14 +105,26 @@ impl Script {
             0 | 1 => {
                 let message = MessageId::from_uuid(self.uuid());
                 self.messages.push((message, Vec::new()));
+                let assistant = self.rng.chance(70);
+                let (agent, model) = if assistant {
+                    let pick = self.rng.below(2);
+                    (
+                        Some(AgentName::new(["build", "plan"][pick])),
+                        Some(ModelRef::new(["fake/alpha", "fake/beta"][pick])),
+                    )
+                } else {
+                    (None, None)
+                };
                 Event::MessageStarted {
                     session,
                     message,
-                    role: if self.rng.chance(70) {
+                    role: if assistant {
                         Role::Assistant
                     } else {
                         Role::User
                     },
+                    agent,
+                    model,
                 }
             }
             2 => {

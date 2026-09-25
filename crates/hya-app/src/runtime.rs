@@ -3663,6 +3663,8 @@ mod tests {
                     session,
                     message,
                     role: hya_proto::Role::Assistant,
+                    agent: None,
+                    model: None,
                 },
             )
             .await
@@ -7836,6 +7838,7 @@ for line in sys.stdin:
                     session,
                     message,
                     role: hya_proto::Role::Assistant,
+                    ..
                 } if *session == child => Some(*message),
                 _ => None,
             })

@@ -4022,10 +4022,13 @@ pub struct MessageInfo {
     /// Author role.
     #[prost(enumeration = "Role", tag = "3")]
     pub role: i32,
-    /// Agent name attributed to the message when applicable.
+    /// Agent the message's turn ran as (assistant messages); empty for user,
+    /// system, and shell messages and for messages recorded before 0.41.0.
     #[prost(string, tag = "4")]
     pub agent: ::prost::alloc::string::String,
-    /// Model that produced the message when applicable.
+    /// Model that produced the message (`provider/model`): the model that
+    /// served its latest round (after chat.params, fallback, or routing), else
+    /// the model its turn requested. Empty when unknown.
     #[prost(string, tag = "5")]
     pub model: ::prost::alloc::string::String,
     /// Terminal finish reason for assistant messages.
@@ -4034,10 +4037,11 @@ pub struct MessageInfo {
     /// Ordered message parts.
     #[prost(message, repeated, tag = "7")]
     pub parts: ::prost::alloc::vec::Vec<PartInfo>,
-    /// When the message was created.
+    /// When the message was created (its `MessageStarted` event).
     #[prost(message, optional, tag = "8")]
     pub time_created: ::core::option::Option<::pbjson_types::Timestamp>,
-    /// When the message projection last changed.
+    /// When the message projection last changed (parts, live deltas, usage,
+    /// error, finish).
     #[prost(message, optional, tag = "9")]
     pub time_updated: ::core::option::Option<::pbjson_types::Timestamp>,
     /// Harness cause of the finish (cancel, shutdown, crash recovery, provider failure).
@@ -5844,10 +5848,12 @@ pub struct MessageStarted {
     /// Author role.
     #[prost(enumeration = "Role", tag = "2")]
     pub role: i32,
-    /// Agent name attributed when applicable.
+    /// Agent the assistant turn runs as; empty for user, system, and shell
+    /// messages.
     #[prost(string, tag = "3")]
     pub agent: ::prost::alloc::string::String,
-    /// Model producing the message when applicable.
+    /// Model the assistant turn requested (`provider/model`); the model that
+    /// finally served it is `MessageInfo.model`. Empty where `agent` is.
     #[prost(string, tag = "4")]
     pub model: ::prost::alloc::string::String,
 }

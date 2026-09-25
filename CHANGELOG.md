@@ -13,6 +13,7 @@
 - Protocol docs now state that:
   - the turn id returned by `CreateTurn` is the user message id;
   - a prompt sent while a turn runs gets `409 session_busy`, because the server does not queue prompts.
+- v1 `MessageInfo.agent` and `MessageInfo.model` are now filled per message, so older messages keep their own attribution after a `/model` or agent switch. `model` is the model that served the message's latest round, after `chat.params`, fallback, or routing; before any round reports usage, it is the model the turn requested. `MessageInfo.timeCreated` and `timeUpdated` are now set. The live `messageStarted` event carries the turn's `agent` and requested `model`, and `hya-sdk-v1` folds them. `Event::MessageStarted` gains optional `agent`/`model` fields, omitted when unset, so older logs replay unchanged. The projection reducer version is now 4. Messages recorded before this change have no agent.
 
 ## Session permission modes
 

@@ -164,12 +164,19 @@ pub(crate) fn message(message: &MessageProjection) -> pb::MessageInfo {
         id: message.id.to_string(),
         session: String::new(),
         role: wire_role(message.role),
-        agent: String::new(),
-        model: String::new(),
+        agent: message
+            .agent
+            .as_ref()
+            .map(ToString::to_string)
+            .unwrap_or_default(),
+        model: message
+            .served_model()
+            .map(ToString::to_string)
+            .unwrap_or_default(),
         finish: message.finish.map(finish_reason).unwrap_or(0),
         parts: message.parts.iter().filter_map(part).collect(),
-        time_created: None,
-        time_updated: None,
+        time_created: message.time_created.and_then(timestamp),
+        time_updated: message.time_updated.and_then(timestamp),
         finish_cause: finish_cause(message.cause),
         error: message.error.as_ref().map(|error| pb::MessageError {
             code: error.code.clone(),
@@ -283,11 +290,17 @@ pub(crate) fn stream_event(envelope: &Envelope) -> Option<pb::StreamEvent> {
             background: None,
             permission_mode: Some(mode.clone()),
         }),
-        Event::MessageStarted { message, role, .. } => P::MessageStarted(pb::MessageStarted {
+        Event::MessageStarted {
+            message,
+            role,
+            agent,
+            model,
+            ..
+        } => P::MessageStarted(pb::MessageStarted {
             message: message.to_string(),
             role: wire_role(*role),
-            agent: String::new(),
-            model: String::new(),
+            agent: agent.as_ref().map(ToString::to_string).unwrap_or_default(),
+            model: model.as_ref().map(ToString::to_string).unwrap_or_default(),
         }),
         Event::MessageFinished {
             message,

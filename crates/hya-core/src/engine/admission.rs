@@ -426,6 +426,8 @@ impl SessionEngine {
                 session,
                 message,
                 role,
+                agent: None,
+                model: None,
             },
         )
         .await?;
@@ -488,6 +490,8 @@ impl SessionEngine {
                     session,
                     message,
                     role: Role::System,
+                    agent: None,
+                    model: None,
                 },
                 Event::TextStart {
                     session,
@@ -587,6 +591,8 @@ impl SessionEngine {
                 session,
                 message,
                 role: Role::User,
+                agent: None,
+                model: None,
             },
         )
         .await?;
@@ -666,6 +672,8 @@ impl SessionEngine {
                     session,
                     message,
                     role: Role::User,
+                    agent: None,
+                    model: None,
                 },
                 Event::TextStart {
                     session,

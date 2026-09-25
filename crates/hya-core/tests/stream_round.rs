@@ -251,6 +251,10 @@ async fn forked_reasoning_provider_data_reaches_next_request() {
             messages: vec![MessageProjection {
                 id: MessageId::new(),
                 role: Role::Assistant,
+                agent: None,
+                model: None,
+                time_created: None,
+                time_updated: None,
                 config_generation: None,
                 finish: Some(FinishReason::Stop),
                 tokens: None,

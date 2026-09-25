@@ -59,6 +59,10 @@ impl SessionEngine {
                 session,
                 message,
                 role: source.role,
+                // The copy keeps the original attribution; its usage stays
+                // with the source, so carry the model that served it.
+                agent: source.agent.clone(),
+                model: source.served_model().cloned(),
             },
         )
         .await?;

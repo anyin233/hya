@@ -207,6 +207,7 @@ fn max_open_assistant(events: &[Envelope], session: SessionId) -> usize {
                 session: s,
                 message,
                 role: Role::Assistant,
+                ..
             } if *s == session => {
                 open.insert(*message);
                 max = max.max(open.len());
@@ -275,6 +276,7 @@ fn system_notice_seq(events: &[Envelope], session: SessionId) -> Option<usize> {
                 session: s,
                 message,
                 role: Role::System,
+                ..
             } if *s == session => {
                 system_messages.insert(*message);
             }

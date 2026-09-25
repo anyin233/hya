@@ -114,6 +114,23 @@ server/run stop), `FINISH_CAUSE_LEADER_FAILED`, `FINISH_CAUSE_INTERRUPTED`
 `messageStarted` for an assistant message is followed by exactly one
 `messageFinished` — also across a server stop or crash.
 
+Assistant messages carry their own attribution, independent of the
+session's current binding, so a transcript read after a `/model` or agent
+switch still labels older messages correctly:
+
+- `MessageInfo.agent` is the agent the message's turn ran as.
+- `MessageInfo.model` (`provider/model`) is the model that served the
+  message's latest round (after `chat.params`, fallback, or routing), or the
+  model the turn requested when no round has reported usage yet.
+- `messageStarted.agent` / `.model` carry the same agent and the requested
+  model live, so a streaming header is right before the transcript re-read.
+- `MessageInfo.timeCreated` is when the message started; `timeUpdated` is
+  the newest change to it (parts, live deltas, usage, error, finish). For a
+  finished message `timeUpdated - timeCreated` is its elapsed time.
+
+User, system, and shell messages, and messages recorded before 0.41.0,
+leave `agent` empty; clients fall back to the session binding there.
+
 ```json
 { "event": { "seq": "31", "session": "hysec_...", "messageFinished": { "message": "msg_...", "finish": "FINISH_REASON_CANCELLED", "cause": "FINISH_CAUSE_SHUTDOWN" } } }
 ```
