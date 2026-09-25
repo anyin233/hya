@@ -3,6 +3,7 @@
 // (text and per-cell style); screenshots are attached for visual review.
 
 import { spawn, type ChildProcess } from "node:child_process"
+import { writeFile } from "node:fs/promises"
 import { fileURLToPath } from "node:url"
 import { test as base, expect, type Page, type TestInfo } from "@playwright/test"
 
@@ -117,9 +118,14 @@ export class Tui {
     return (await this.page.evaluate(() => window.hyaTerm.exitCode))!
   }
 
+  /** Write `<name>.png` and `<name>.txt` into the test's output dir and attach both. */
   async attach(testInfo: TestInfo, name: string): Promise<void> {
-    await testInfo.attach(`${name}.png`, { body: await this.page.screenshot(), contentType: "image/png" })
-    await testInfo.attach(`${name}.txt`, { body: await this.text(), contentType: "text/plain" })
+    const png = testInfo.outputPath(`${name}.png`)
+    const txt = testInfo.outputPath(`${name}.txt`)
+    await this.page.screenshot({ path: png })
+    await writeFile(txt, await this.text())
+    await testInfo.attach(`${name}.png`, { path: png, contentType: "image/png" })
+    await testInfo.attach(`${name}.txt`, { path: txt, contentType: "text/plain" })
   }
 }
 

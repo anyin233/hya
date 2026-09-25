@@ -65,8 +65,11 @@ bunx playwright test     # browser E2E (bun run test:e2e)
 Playwright 1.63.0 uses the Chromium 1243 browser build. Run
 `bunx playwright install chromium` once if it is not already cached.
 Test results go to `test-results/`, and the HTML report goes to
-`playwright-report/`. Every test attaches its final screen as
-`final-screen.png` and `final-screen.txt`.
+`playwright-report/`. Every test writes its final screen to
+`test-results/<test>/final-screen.png` and `final-screen.txt` and attaches
+both to the report. Open the PNG to review a visual change. The repository's
+TUI preview and test rules are in `AGENTS.md` ("TUI Preview & Browser Test
+Rule").
 
 ### Writing a TUI test
 
@@ -134,7 +137,7 @@ Teardown attaches the final screen and stops the host. `fixture(name)` returns
 | `type(text)` / `press(key)` | Playwright keyboard input (`"Enter"`, `"Control+C"`, …). |
 | `resize(width, height)` | Resizes the viewport, waits for a new grid size, and returns it. |
 | `waitForExit(timeout?)` | Child exit code. |
-| `attach(testInfo, name)` | Attaches a screenshot and a text dump. |
+| `attach(testInfo, name)` | Writes `<name>.png` and `<name>.txt` to the test output dir and attaches both. |
 
 ### Library
 
