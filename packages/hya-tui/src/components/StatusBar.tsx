@@ -1,6 +1,7 @@
 /**
  * E22 status bar (docs/tui.md "Status bar"): one muted line below the
- * header: the permission mode (colored per mode: manual plain, `⚠ yolo` in
+ * header: with vim mode on, the composer's mode (`-- NORMAL --` in the
+ * accent color, `-- INSERT --` muted; docs/tui.md "Vim mode"), the permission mode (colored per mode: manual plain, `⚠ yolo` in
  * the error color, a bundle mode's title in the accent color —
  * state/modes.ts `modeDisplay`), the context occupancy `ctx N%` (warning
  * color from 80 %, error color from 95 %; state/format.ts `contextUsage`),
@@ -38,9 +39,10 @@ export function StatusBar() {
       todos: shown ? undefined : todosCompactText(state.todos),
       connected: state.connected,
       ...(state.web ? { web: state.web } : {}),
+      ...(state.vim ? { vim: { mode: state.vimMode, pending: state.vimPending } } : {}),
     }, state.columns)
   }
-  const color = (tone: StatusTone): string => tone === "warning" ? colors.warning : tone === "error" ? colors.error : colors.muted
+  const color = (tone: StatusTone): string => tone === "warning" ? colors.warning : tone === "error" ? colors.error : tone === "accent" ? colors.accent : colors.muted
   /** The segments as spans, clipped to the width: `mode <label>` draws the label in the mode's color. */
   const spans = () => {
     let left = store.state.columns

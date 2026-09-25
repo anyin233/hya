@@ -33,6 +33,10 @@ export interface AppActions {
   requestPermissionMode(mode: string): Promise<void>
   /** Merge `patch` into the TUI preferences file (src/prefs.ts); throws when it cannot be written. */
   savePreferences(patch: Partial<TuiPreferences>): void
+  /** Copy `text` to the system clipboard with OSC 52; `false` when the terminal does not accept it. */
+  copyText(text: string): boolean
+  /** Edit the composer's input in the external editor (composer/editor.ts); the result goes back into the input. */
+  openEditor(): void
 }
 
 export interface CommandContext {

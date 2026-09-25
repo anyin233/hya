@@ -13,7 +13,7 @@ import type { PickerRow } from "../state/picker"
 import type { CommandEntry } from "./menu"
 import { sessionPickerActions } from "./native"
 
-export const helpGroups = ["Composer", "Transcript", "Turns", "Prompts", "Modes", "Pickers", "Views", "App", "Commands"] as const
+export const helpGroups = ["Composer", "Vim", "Transcript", "Turns", "Prompts", "Modes", "Pickers", "Views", "App", "Commands"] as const
 export type HelpGroup = (typeof helpGroups)[number]
 
 export interface HelpRow {
@@ -41,6 +41,8 @@ const actionGroups: Record<KeyAction, HelpGroup> = {
   scrollTop: "Transcript",
   scrollBottom: "Transcript",
   help: "Views",
+  chord: "Composer",
+  externalEditor: "Composer",
 }
 
 /** Longest joined key label (the picker's label column is 28 wide). */
@@ -121,8 +123,25 @@ function pickerRows(): HelpRow[] {
   ]
 }
 
+/** Vim normal-mode keys (composer/vim.ts `vimKey`), shown while `/vim` is on; keep in step with that machine. */
+const vimRows: HelpRow[] = [
+  { group: "Vim", keys: "Esc", description: "Insert mode: switch to normal mode (an open list closes first). Normal mode: the usual Esc (deny a prompt, cancel the turn, clear the input)" },
+  { group: "Vim", keys: "i a I A o O", description: "Insert at / after the cursor, at the first non-blank / line end, on a new line below / above" },
+  { group: "Vim", keys: "h j k l", description: "Left, down, up, right; a count repeats any motion (3w, 2j)" },
+  { group: "Vim", keys: "w b e", description: "Next word, previous word, end of word" },
+  { group: "Vim", keys: "0 ^ $", description: "Line start, first non-blank, last character" },
+  { group: "Vim", keys: "gg / G", description: "First / last line (a count picks the line: 3G)" },
+  { group: "Vim", keys: "x / dd / D", description: "Delete the character, the line (a count: 2dd), to the line end" },
+  { group: "Vim", keys: "d c y + motion", description: "Delete / change / yank over a motion (dw de db d$ cw cb y$); dd cc yy take lines" },
+  { group: "Vim", keys: "C / s / S", description: "Change to the line end, the character, the line" },
+  { group: "Vim", keys: "p / P", description: "Put the last deleted or yanked text after / before the cursor (lines below / above)" },
+  { group: "Vim", keys: "u / Ctrl+R", description: "Undo / redo" },
+  { group: "Vim", keys: "Enter", description: "Send the input (normal mode)" },
+]
+
 /** Mouse actions (no binding table; components/Transcript.tsx and MessageView.tsx). */
 const mouseRows: HelpRow[] = [
+  { group: "Transcript", keys: "Mouse drag", description: "Select text; on release it is copied to the clipboard (OSC 52) and the status line says Copied N chars" },
   { group: "Transcript", keys: "Mouse wheel", description: "Scroll the transcript" },
   { group: "Transcript", keys: "Click Thinking / a tool card", description: "Expand or collapse that block; a task card opens the subagent's session" },
 ]
@@ -138,7 +157,7 @@ export function helpRows(commands: readonly CommandEntry[]): HelpRow[] {
     description: entry.description,
     source: sources[entry.source],
   }))
-  const rows = [...composerRows(), ...bindingRows, ...mouseRows, ...promptRows, ...pickerRows(), ...commandRows]
+  const rows = [...composerRows(), ...vimRows, ...bindingRows, ...mouseRows, ...promptRows, ...pickerRows(), ...commandRows]
   // Stable sort: table order within a group.
   return rows.map((row, index) => ({ row, index }))
     .sort((a, b) => helpGroups.indexOf(a.row.group) - helpGroups.indexOf(b.row.group) || a.index - b.index)

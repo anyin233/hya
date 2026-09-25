@@ -174,7 +174,7 @@ backend is running.
 | `@<text>` | Show matching file paths; Up/Down select, Tab or Enter inserts `@<path>`, Esc closes (see [File references](#file-references)). |
 | `/` at the start of the input | Open the command menu; fuzzy-filters as you type the name (see [Command menu](#command-menu)). |
 | `1` `2` `3`, Up/Down + Enter | With a permission prompt shown and an empty input: Allow once, Always allow, Deny. On a question prompt the digits pick its options (see [Permission and question prompts](#permission-and-question-prompts)). |
-| Esc | Close the command menu or the file list; else, with a prompt shown and an empty input, deny the permission / reject the question; else, in a subagent's read-only view, return to the parent session; else cancel the running turn; else clear the input. |
+| Esc | Close the command menu or the file list; else, with vim mode on and the input in insert mode, switch to normal mode (see [Vim mode](#vim-mode)); else, with a prompt shown and an empty input, deny the permission / reject the question; else, in a subagent's read-only view, return to the parent session; else cancel the running turn; else clear the input. |
 | Ctrl+C | Clear the input and show `Press Ctrl+C again to quit`; a second Ctrl+C within 2 s quits. |
 | Ctrl+D | Quit when the input is empty (otherwise delete the character under the cursor). |
 | `/exit`, `/quit` | Quit. |
@@ -199,6 +199,10 @@ backend is running.
 | `/thinking [on\|off]` or Ctrl+O | Expand or collapse every reasoning (`Thinking`) block. |
 | `/tools [on\|off]` or Ctrl+G | Expand or collapse every tool call card (see [Tool calls](#tool-calls)). |
 | `/theme` | Pick the color theme: moving the highlight previews it, Enter keeps it and saves it to the preferences file, Esc restores the previous one (see [Themes](#themes)). |
+| `/copy` | Copy the last assistant reply's text to the clipboard with OSC 52; the status line says `Copied N chars` (see [Copy](#copy)). |
+| Mouse drag over text | Select it (theme selection color); on release it is copied with OSC 52 (see [Copy](#copy)). |
+| `/editor`, Ctrl+X Ctrl+E | Edit the input in `$VISUAL` / `$EDITOR` (fallback `vi`); the edited text comes back into the input, unsent (see [External editor](#external-editor)). |
+| `/vim [on\|off]` | Turn vim mode in the input on or off, saved in the preferences file; `-- INSERT --` / `-- NORMAL --` on the status bar (see [Vim mode](#vim-mode)). |
 | `/compact` | Compact the session's context now (`CompactSession`); the status line shows `Compacting…`, then `Compacted · <strategy>`. |
 | `/summarize` | Summarize the session into a new message (`SummarizeSession`). |
 | `/todos` | Show the session's todo list (`GetSessionTodo`) in the main panel. |
@@ -417,6 +421,7 @@ JSON object:
 ```ts
 interface TuiPreferences {
   theme?: string   // a built-in theme name: "hya" (default), "light", "contrast", "ember"
+  vim?: boolean    // vim mode in the input (/vim); default false
 }
 ```
 
@@ -426,14 +431,15 @@ interface TuiPreferences {
   `Ignored unreadable TUI preferences <path>`; an unknown theme name says
   `Unknown theme <name> in <path>; using hya`. A key whose value has the
   wrong type is ignored.
-- A change (`/theme`'s Enter) merges the changed key into what is on disk —
+- A change (`/theme`'s Enter, `/vim`) merges the changed key into what is on disk —
   keys this TUI does not know are kept — and writes a temporary file in the
   same directory, then renames it over the file, so a crash never leaves a
   half-written file. The directory is created when missing.
 
 **Interfaces for components.** `src/theme.ts` exports the palette of the
 theme in effect as Solid stores: `colors` (`bg`, `panel`, `fg`, `muted`,
-`accent`, `border`, `error`, `warning`), `toolColors` (`done`), `diffColors`
+`accent`, `border`, `error`, `warning`, `selection` — the mouse-selection
+background), `toolColors` (`done`), `diffColors`
 (`add`, `remove`, `hunk`, `context`), and `syntaxColors` (`keyword`,
 `string`, `number`, `comment`, `function`, `type`, `operator`,
 `inlineCode`). Read them where they are used — in JSX (`fg={colors.muted}`),
@@ -469,7 +475,10 @@ While a streaming assistant message has no blocks yet, its header's `●`
 marker is the spinner too, so a slow first token still shows the turn is
 alive before the working line's own elapsed clock is very interesting.
 
-**Status bar.** One muted line under the header: the permission mode
+**Status bar.** One muted line under the header: with
+[vim mode](#vim-mode) on, first the input's mode (`-- INSERT --` muted,
+`-- NORMAL --` in the accent color, followed by a half-typed command such
+as `2d`); then the permission mode
 (`mode <mode>`, from `SessionInfo.permissionMode`, colored per mode — see
 [Permission modes](#permission-modes)), the context occupancy (`ctx 42%`),
 the session's token total (`12.3k tok`), the workspace directory
@@ -805,7 +814,9 @@ Otherwise, while a turn
 admitted by this TUI runs, it cancels that turn (like `/cancel`): the status
 shows `Cancelling…`, then `Cancelled · Ready`, and the transcript shows
 `! Cancelled`. Text you typed meanwhile stays. With no turn running, Esc
-clears the input.
+clears the input. With [vim mode](#vim-mode) on, Esc in insert mode first
+switches to normal mode (after closing an open list) and does nothing else;
+Esc in normal mode has the meanings above.
 
 **Quitting.** The renderer does not quit on Ctrl+C by itself. The first
 Ctrl+C clears the input (on an empty input it only arms) and shows
@@ -928,6 +939,162 @@ idea as a `!command` shell turn showing `!<command>` (see
 (unlike a shell turn), so the TUI remembers the typed `/name args` by that id
 (`state/store.ts` `commandDisplay`, `state/messages.ts`
 `commandUserView`) and shows it once the projection carries that message.
+
+### Copy
+
+The TUI copies text to the system clipboard with an OSC 52 escape sequence
+(`ESC ] 52 ; c ; <base64> BEL`): it writes the text into its own output and
+the terminal puts it on the clipboard. That works in the WebUI (xterm.js)
+and in local terminals that allow OSC 52 (kitty, WezTerm, iTerm2 with
+"Applications in terminal may access clipboard", tmux with
+`set-clipboard on`), also over SSH, since the sequence travels with the
+output. A terminal that ignores OSC 52 copies nothing.
+
+**Usage.**
+
+- **Mouse selection.** Drag over text in the transcript (any text on the
+  screen is selectable): the selected cells get the theme's `selection`
+  background while the text keeps its color. On release the selected text
+  is copied and the status line says `Copied N chars`. A plain click selects
+  nothing and copies nothing (clicks on `Thinking` lines and tool cards keep
+  toggling them).
+- **`/copy`** copies the text of the newest assistant reply that has text
+  (its text blocks joined by a blank line; reasoning and tool calls are left
+  out) and says `Copied N chars`; with no reply yet it says
+  `Nothing to copy: no assistant reply yet`.
+
+When the renderer knows the terminal refuses OSC 52 (its capability probe
+says so), nothing is sent and the status line says
+`Copy failed: this terminal does not accept OSC 52 clipboard writes`.
+
+**Interfaces.** `AppActions.copyText(text): boolean` (commands/registry.ts)
+calls `CliRenderer.copyToClipboardOSC52(text)` (clipboard target `c`);
+`composer/clipboard.ts` `copyNotice(text, sent)` is the status text (`N`
+counts code points). The selection handler is `useSelectionHandler` in
+`app/App.tsx` (OpenTUI emits `selection` when a drag ends);
+`components/selection.ts` `paintSelection(root, color)` sets `selectionBg`
+on every text renderable (Markdown and code blocks included) on each left
+mouse press. The browser specs observe the sequence by registering an
+xterm.js OSC 52 handler on the page hook (`window.hyaTerm.term.parser`,
+see [tui-web.md](tui-web.md#page-test-hook-windowhyaterm)).
+
+### External editor
+
+For long prompts, the input can be edited in your own editor.
+
+**Usage.** Ctrl+X then Ctrl+E (or Ctrl+X then E; the readline/zsh chord,
+browser-safe), or `/editor`. After Ctrl+X the status line shows
+`Ctrl+X · Ctrl+E opens the external editor`; any other next key drops the
+chord and is handled as usual. The TUI writes the input to a temporary file
+(`$TMPDIR/hya-prompt-XXXXXX/prompt.md`), suspends its renderer (the editor
+gets the whole terminal; the TUI's screen comes back afterwards), and runs
+the editor on it. When the editor exits with status 0 the file's text
+replaces the input — it is **not** sent; press Enter to send it — and the
+status line says `Edited in the external editor · Enter sends`. One trailing
+newline the editor adds is dropped. The temporary directory is removed.
+
+```sh
+EDITOR="code -w" hya          # VS Code; -w waits for the tab to close
+VISUAL=nvim hya-tui ...       # VISUAL wins over EDITOR
+```
+
+| Failure | Status line | Input |
+| --- | --- | --- |
+| The editor exits non-zero | `Editor <name> exited with status N · input unchanged` | kept |
+| The binary is not found | `Editor <name> not found · input unchanged` | kept |
+
+**Interfaces.**
+
+| Environment variable | Meaning |
+| --- | --- |
+| `VISUAL` | Editor command, used first. |
+| `EDITOR` | Used when `VISUAL` is unset or blank. |
+| (neither) | `vi`. |
+
+The value is split like a shell word list — blanks separate words, `'…'`
+and `"…"` quote, a backslash escapes — but not run through a shell, and the
+file path is appended as the last argument (`code -w /tmp/…/prompt.md`).
+`composer/editor.ts` exports `splitCommand`, `editorCommand(env)`, and
+`editText(text, { env, suspend, resume, spawn? })`, which never throws and
+returns `{ ok: true, text }` or `{ ok: false, error }`; the controller's
+`openEditor()` (`AppActions.openEditor`) runs it with
+`CliRenderer.suspend()` / `resume()` and the composer's registered input
+(`controller.attachComposer`). The key is the `externalEditor` binding (the
+second key of the `chord` binding Ctrl+X) in `keys/bindings.ts`.
+
+### Vim mode
+
+Vim-style modal editing for the input, for people whose fingers expect it.
+Off by default.
+
+**Usage.** `/vim` toggles it (`/vim on`, `/vim off` set it); the choice is
+saved as `vim` in the [preferences file](#preferences-file) and applies to
+every later start. When on, the status bar starts with `-- INSERT --`
+(muted) or `-- NORMAL --` (accent color), plus a half-typed command
+(`-- NORMAL -- 2d`); the cursor is a bar in insert mode and a block in
+normal mode. The input starts in insert mode, where every key works as
+usual. Esc switches to normal mode (the cursor steps back onto the last
+character, as in vim). After a send, the next input starts in insert mode
+again.
+
+Normal mode (a count before a motion or command repeats it: `3w`, `2dd`,
+`d2w`; `3G` goes to line 3):
+
+| Keys | Action |
+| --- | --- |
+| `h` `j` `k` `l` (Backspace = `h`) | Left, down, up, right; `j`/`k` keep the column. |
+| `w` `b` `e` | Next word start, previous word start, word end (letters/digits/`_` and punctuation runs are words). |
+| `0` `^` `$` | Line start, first non-blank, last character. |
+| `gg` `G` | First / last line (with a count: that line). |
+| `i` `a` `I` `A` `o` `O` | Insert before / after the cursor, at the first non-blank / the line end, on a new line below / above. |
+| `x` (Delete = `x`) | Delete the character under the cursor. |
+| `dd` `D` | Delete the line(s); delete to the line end. |
+| `d` + `w` `e` `b` `h` `l` `0` `^` `$` `j` `k` | Delete over the motion (`dw` stops at the line end; `dj`/`dk` take lines). |
+| `cc` `C` `s` `S`, `c` + motion | Change: like delete, then insert mode (`cw` changes to the word end, like `ce`). |
+| `yy`, `y` + motion | Yank (copy) into the register. |
+| `p` `P` | Put the register after / before the cursor (lines: below / above). |
+| `u`, Ctrl+R | Undo / redo (the input's own undo history; each normal-mode edit is one step). |
+| Enter | Send the input. |
+| Esc | With a count or operator pending: cancel it. Otherwise the usual Esc (below). |
+
+Other printable keys do nothing in normal mode (they never type, so `?`
+does not open help there — `/help` or `i` then `?` does). Ctrl and Alt keys
+(Ctrl+C, Ctrl+D, Ctrl+B, …), arrows, Tab, Shift+Tab, PgUp/PgDn keep their
+usual meaning in both modes. The register is internal (not the system
+clipboard; use [Copy](#copy) for that).
+
+**Esc precedence** (vim on), first match wins:
+
+1. The picker or the one-line yolo confirmation is open: it takes Esc.
+2. The command menu or the file list is open: Esc closes it.
+3. Insert mode: Esc switches to normal mode — nothing else, even while a
+   turn runs or a prompt is shown.
+4. Normal mode with a count or operator pending: Esc cancels it.
+5. Normal mode: today's Esc — deny/reject a shown prompt when the input is
+   empty, return from a subagent view, cancel the running turn, clear the
+   input.
+
+So cancelling a running turn from insert mode is Esc Esc. With a prompt
+shown and an empty input, digits, Up/Down, and Enter still answer the
+prompt in normal mode (the prompt dock sees keys before normal mode does).
+
+```text
+/vim                     → -- INSERT --
+fix the parser bug       ← typed
+Esc 0 w cw the lexer Esc → "fix the lexer bug"   -- NORMAL --
+Enter                    → sent; the next input starts in -- INSERT --
+```
+
+**Interfaces.** The `vim` preference (`boolean`, [Preferences
+file](#preferences-file)); `AppState.vim`, `vimMode` (`"insert" |
+"normal"`), `vimPending` (state/store.ts `setVim`, `setVimMode`).
+`composer/vim.ts` is the pure state machine: `initialVimState()` and
+`vimKey(state, { text, cursor }, key)`, which returns `{ type: "pass" }`
+(the key goes on to the usual handling) or
+`{ type: "handled", state, edit?, cursor?, command? }` (`command`:
+`undo`, `redo`, `submit`). `components/Composer.tsx` applies an `edit`
+with the textarea's `replaceText` (keeping its undo history) and runs
+`undo()` / `redo()` on it.
 
 ## Permission and question prompts
 
@@ -1421,8 +1588,8 @@ together.
 | `src/app/controller.ts` | `createController()`: refreshes, the session SSE loop (subscribe, `ListEvents` gap-fill, `resync`), batched overlay flushes, the debounced projection re-read (`app/debounce.ts`), child-session rounds for subagent cards, `returnToParent()`, session creation, prompt submission (refused in a subagent's read-only view), command dispatch, concealed key entry, and `savePreferences` (the `preferencesPath` option; `actions.savePreferences(patch)` for commands). It writes results into the store. |
 | `src/app/turns.ts` | `createTurnRunner()`: the client-side prompt queue, `409 session_busy` retry, and turn-end detection and status text. |
 | `src/app/App.tsx`, `src/app/run.tsx`, `src/app/context.ts` | Root layout (main column + sidebar), startup (the started backend, the preferences file and saved theme, then the renderer) and the single `shutdown()` every exit path runs (restore the terminal, stop the backend, exit), and the `AppContext` (store, controller, server URL, and `ui` handles such as the transcript's scroll actions) that components read with `useApp()`. |
-| `src/components/` | `Header`, `MainPanel` (transcript or view panel), `Transcript` (scrollbox, follow/hint), `MessageView` (`MessageItem`, user/assistant messages, blocks, reasoning, tool cards and `task` subagent cards, `KeyedFor`), `Spinner` (the shared spinner clock), `Markdown` (the `<markdown>` wrapper, `SyntaxStyle`, code-block boxes), `Panel`, `PendingBlock` (other sessions' asks), `PromptDock` (the permission / question prompt), `ModeConfirm` (the one-line yolo confirmation), `Picker` (the modal picker), `Sidebar`, `StatusLine`, `Composer` (the `<textarea>` editor, its height, history, Esc / Ctrl+C / Ctrl+D, the shell-mode border, the `@file` list, the `/` command menu, Tab completion, key actions, concealed key entry), `Footer`. |
-| `src/composer/` | Pure composer logic: `history.ts` (`InputHistory`), `quit.ts` (`createQuitGuard`, the Ctrl+C double press), `escape.ts` (`escapeAction`), `shell.ts` (`shellCommand`, `isShellInput`), `mention.ts` (`mentionAt`, `insertMention`, `findPattern`, `rankPaths`). |
+| `src/components/` | `Header`, `MainPanel` (transcript or view panel), `Transcript` (scrollbox, follow/hint), `MessageView` (`MessageItem`, user/assistant messages, blocks, reasoning, tool cards and `task` subagent cards, `KeyedFor`), `Spinner` (the shared spinner clock), `Markdown` (the `<markdown>` wrapper, `SyntaxStyle`, code-block boxes), `Panel`, `PendingBlock` (other sessions' asks), `PromptDock` (the permission / question prompt), `ModeConfirm` (the one-line yolo confirmation), `Picker` (the modal picker), `Sidebar`, `StatusLine`, `Composer` (the `<textarea>` editor, its height, history, Esc / Ctrl+C / Ctrl+D, the shell-mode border, the `@file` list, the `/` command menu, Tab completion, key actions, concealed key entry, the [vim mode](#vim-mode) adapter, the Ctrl+X chord), `selection.ts` (`paintSelection`, the theme's mouse-selection color; [Copy](#copy)), `Footer`. |
+| `src/composer/` | Pure composer logic: `history.ts` (`InputHistory`), `quit.ts` (`createQuitGuard`, the Ctrl+C double press), `escape.ts` (`escapeAction`), `shell.ts` (`shellCommand`, `isShellInput`), `mention.ts` (`mentionAt`, `insertMention`, `findPattern`, `rankPaths`), `vim.ts` (`vimKey`, the [vim mode](#vim-mode) state machine), `editor.ts` (`editText`, `editorCommand`, `splitCommand`; [External editor](#external-editor)), `clipboard.ts` (`copyNotice`; [Copy](#copy)). |
 | `src/commands/` | The slash-command registry (`registry.ts`), the built-in commands (`native.ts`), the key and command help (`help.ts`: `helpRows()`, `helpPickerRows()`, `composerKeyLabel()`, `keyHelpText()`, generated from the binding tables), and the command menu's merge/fuzzy-filter/argument-hint logic (`menu.ts`: `mergeCommandEntries`, `filterCommands`, `requiresArgument`). |
 | `src/keys/bindings.ts` | The global key binding table (`keyBindings`, including `cycleMode` on Shift+Tab / CSI Z) and the textarea overrides (`composerKeyBindings`: Enter submits; Ctrl+J, Shift+Enter, Alt+Enter insert a newline; Home/End). |
 | `src/completion.ts`, `src/instructions.ts`, `src/api.ts`, `src/theme.ts` | Tab completion and `SecretEntry`, footer instructions, the `/api` operation catalog (reads `src/operations.json`, generated by `gen-api` so the package ships without the repository's docs; `test/api-catalog.test.ts` checks it matches `docs/protocol/openapi.json` and that no source file imports from outside the package), and the themes: the reactive palette (`colors`, `toolColors`, `diffColors`, `syntaxColors`), `themes`, `themeName()`, `currentTheme()`, `setTheme()`, and `syntaxStylesFor()`, the Markdown/tree-sitter scope styles ([Themes](#themes)). |

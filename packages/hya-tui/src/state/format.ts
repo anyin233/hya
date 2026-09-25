@@ -245,9 +245,11 @@ export interface StatusBarFields {
   connected: boolean
   /** The WebUI bare `hya` serves (`WebUI <url>`), or `WebUI unavailable` in the warning color. */
   web?: WebInfo
+  /** Vim mode is on: the composer's mode and a half-typed command (`2d`), shown first. */
+  vim?: { mode: "insert" | "normal"; pending: string }
 }
 
-export type StatusTone = "muted" | "mode" | "warning" | "error"
+export type StatusTone = "muted" | "mode" | "accent" | "warning" | "error"
 
 export interface StatusSegment {
   text: string
@@ -259,7 +261,8 @@ export const contextWarnPercent = 80
 export const contextAlarmPercent = 95
 
 /**
- * The status bar's segments in order: `mode <mode>`, `ctx N%`, `<n> tok`,
+ * The status bar's segments in order: with vim mode on `-- INSERT --` /
+ * `-- NORMAL --` (plus a pending command, `-- NORMAL -- 2d`), `mode <mode>`, `ctx N%`, `<n> tok`,
  * the directory, `⎇ <branch>`, `WebUI <url>` (or `WebUI unavailable`),
  * `Todos n/m`, `reconnecting`. Segments with no
  * data are omitted; the least essential (from the end) drop first so the
@@ -267,7 +270,9 @@ export const contextAlarmPercent = 95
  */
 export function statusBarSegments(fields: StatusBarFields, width: number): StatusSegment[] {
   const context = fields.context
+  const vim = fields.vim
   const segments: (StatusSegment | undefined)[] = [
+    vim ? { text: `-- ${vim.mode === "normal" ? "NORMAL" : "INSERT"} --${vim.pending ? ` ${vim.pending}` : ""}`, tone: vim.mode === "normal" ? "accent" : "muted" } : undefined,
     { text: `mode ${fields.mode}`, tone: "mode" },
     context !== undefined ? { text: `ctx ${context}%`, tone: context >= contextAlarmPercent ? "error" : context >= contextWarnPercent ? "warning" : "muted" } : undefined,
     fields.tokens ? { text: fields.tokens, tone: "muted" } : undefined,
@@ -278,7 +283,8 @@ export function statusBarSegments(fields: StatusBarFields, width: number): Statu
     fields.connected ? undefined : { text: "reconnecting", tone: "warning" },
   ]
   const shown = segments.filter((segment): segment is StatusSegment => Boolean(segment))
-  while (shown.length > 1 && shown.map((segment) => segment.text).join(" · ").length > width) shown.pop()
+  const keep = vim ? 2 : 1
+  while (shown.length > keep && shown.map((segment) => segment.text).join(" · ").length > width) shown.pop()
   return shown
 }
 

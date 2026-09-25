@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import type { MessageInfo } from "../src/client"
-import { dividerView, finishNotice, messageView, queuedView, reasoningLabel, shellMarker, toolExpanded, transcriptViews } from "../src/state/messages"
+import { dividerView, finishNotice, lastReplyText, messageView, queuedView, reasoningLabel, shellMarker, toolExpanded, transcriptViews } from "../src/state/messages"
 import { createAppStore } from "../src/state/store"
 
 const fallback = { agent: "build", model: "fake/model" }
@@ -213,4 +213,14 @@ test("the running shell turn shows its command before CreateTurn returns", () =>
     { id: "m_a", role: "ROLE_ASSISTANT", parts: [{ id: "p_t", toolCall: { tool: "bash", state: "TOOL_EXECUTION_STATE_RUNNING" } }] },
   ])
   expect(transcriptViews(store.state)[1]!.blocks).toMatchObject([{ kind: "tool", id: "p_t", shell: true, card: { status: "running", command: "sleep 5" } }])
+})
+
+test("lastReplyText: the text of the newest assistant message with text, blocks joined by a blank line", () => {
+  const view = (id: string, role: "ROLE_USER" | "ROLE_ASSISTANT", texts: string[]) =>
+    messageView({ id, role, finish: "FINISH_REASON_STOP", parts: texts.map((text, index) => ({ id: `${id}${index}`, text: { text } })) }, fallback)
+  expect(lastReplyText([])).toBeUndefined()
+  expect(lastReplyText([view("u", "ROLE_USER", ["hi"])])).toBeUndefined()
+  expect(lastReplyText([view("a", "ROLE_ASSISTANT", ["one", "two"]), view("u", "ROLE_USER", ["next"])])).toBe("one\n\ntwo")
+  // An assistant message with no text (only tool calls) is skipped.
+  expect(lastReplyText([view("a", "ROLE_ASSISTANT", ["answer"]), view("b", "ROLE_ASSISTANT", [])])).toBe("answer")
 })

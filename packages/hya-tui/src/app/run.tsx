@@ -1,7 +1,7 @@
 /**
  * Start the TUI: the backend (one-command launch, src/launch.ts) unless
  * `--server` names one, the preferences file (src/prefs.ts: the saved
- * theme), then the renderer, store, controller, Solid tree, and the
+ * theme and vim mode), then the renderer, store, controller, Solid tree, and the
  * initial load.
  *
  * Lifecycle: every way out — Ctrl+C twice, Ctrl+D, `/exit`, or a signal
@@ -80,12 +80,19 @@ export async function run(options: Options): Promise<void> {
   const store = createAppStore()
   if (backend) store.setBackend({ pid: backend.pid, bin: backend.bin, db: backend.db })
   if (options.web) store.setWeb(options.web)
+  if (loaded.preferences.vim) store.setVim(true)
   controller = createController({
     client, store, directory: options.directory,
     quit: () => void shutdown(0),
     startup: { continue: options.continue, ...(options.session ? { session: options.session } : {}) },
     connectionHint: backend ? "the started backend did not answer" : "start hya serve or drop --server",
     preferencesPath: prefsPath,
+    // The renderer exists once the first frame is due; these run on user actions after that.
+    terminal: {
+      copy: (text) => renderer?.copyToClipboardOSC52(text) ?? false,
+      suspend: () => renderer?.suspend(),
+      resume: () => renderer?.resume(),
+    },
   })
   // autoFocus off: a click (on the transcript, a Thinking line, the sidebar)
   // must not move focus from the one input to a scrollbox. Ctrl+C is the

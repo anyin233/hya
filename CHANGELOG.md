@@ -1,5 +1,11 @@
 # 0.41.0
 
+## TUI copy, external editor, and vim mode
+
+- Copy: drag with the mouse to select text; it is copied to the clipboard when you release (OSC 52), and the status line shows `Copied N chars`. `/copy` copies the last assistant reply. On a terminal without OSC 52 the TUI reports `Copy failed`.
+- External editor: `/editor` or Ctrl+X Ctrl+E opens the input in `$VISUAL`, else `$EDITOR`, else `vi`. The edited text goes back into the input without being sent.
+- Vim mode: `/vim` (or `/vim on|off`) turns on vim keys in the input and saves the choice in `tui.json`. It supports normal and insert mode, the common motions, `dd`/`dw`/`cw`/`yy`/`p`, counts, `u` and Ctrl+R. The status bar shows `-- INSERT --` or `-- NORMAL --`. With vim on, Esc in insert mode only switches to normal mode; press it again in normal mode to cancel a turn or deny a prompt. See [TUI](docs/tui.md#vim-mode).
+
 ## Your own `!` commands run without a permission prompt
 
 - A shell command you type yourself (`!cmd` in the TUI, or a v1 `ShellTurn`) no longer asks for permission in any mode: `manual`, `yolo`, or a bundle mode. Explicit deny rules still block it, a working directory outside the project still asks, and a plugin's `tool.execute.before` veto still applies. A plugin's `permission.ask` hook and a bundle mode's `permission.approve` approver are not consulted for it. Commands the model runs through `bash` ask as before. See [Configuration](docs/configuration.md).

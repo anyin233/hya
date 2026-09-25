@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { compactionText, contextText, webLabel, webNotice, headerText, mainContent, mainTitle, pendingLines, sessionListText, sessionTree, statusBarText, todosCompactText, truncate, truncateStart } from "../src/state/format"
+import { compactionText, contextText, webLabel, webNotice, headerText, mainContent, mainTitle, pendingLines, sessionListText, sessionTree, statusBarSegments, statusBarText, todosCompactText, truncate, truncateStart } from "../src/state/format"
 import { createAppStore } from "../src/state/store"
 
 const server = "http://127.0.0.1:8080/"
@@ -167,4 +167,14 @@ test("the WebUI notice names the reason and the --port remedy", () => {
   expect(webNotice({ error: "port 3250 is in use" })).toBe("WebUI unavailable: port 3250 is in use · hya --port <N>")
   expect(webLabel({ url: "http://127.0.0.1:3250/" })).toBe("WebUI http://127.0.0.1:3250")
   expect(webLabel({ error: "x" })).toBe("WebUI unavailable")
+})
+
+test("with vim mode on, the status bar starts with the composer's mode (and a pending command)", () => {
+  const fields = { mode: "manual", directory: "/w", branch: "main", connected: true }
+  expect(statusBarText({ ...fields, vim: { mode: "insert", pending: "" } }, 80)).toBe("-- INSERT -- · mode manual · /w · ⎇ main")
+  expect(statusBarText({ ...fields, vim: { mode: "normal", pending: "2d" } }, 80)).toBe("-- NORMAL -- 2d · mode manual · /w · ⎇ main")
+  expect(statusBarSegments({ ...fields, vim: { mode: "normal", pending: "" } }, 80)[0]).toEqual({ text: "-- NORMAL --", tone: "accent" })
+  expect(statusBarSegments({ ...fields, vim: { mode: "insert", pending: "" } }, 80)[0]).toEqual({ text: "-- INSERT --", tone: "muted" })
+  // Narrow: the vim mode and the permission mode stay longest.
+  expect(statusBarText({ ...fields, vim: { mode: "normal", pending: "" } }, 30)).toBe("-- NORMAL -- · mode manual")
 })

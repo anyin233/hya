@@ -2,8 +2,10 @@
 import { brief, operations } from "../api"
 import { parseApiCommand } from "../client"
 import { agentRows, modelRows, sessionRows } from "../state/catalog"
+import { copyNotice } from "../composer/clipboard"
 import { modelReference, sessionTree } from "../state/format"
 import { parseSwitch, sidebarVisible } from "../state/layout"
+import { lastReplyText, transcriptViews } from "../state/messages"
 import { effectiveMode, modeRows } from "../state/modes"
 import type { PickerAction } from "../state/picker"
 import { setTheme, themeName, themes, type ThemeDefinition } from "../theme"
@@ -459,6 +461,40 @@ export const nativeCommandSpecs: CommandSpec[] = [
     name: "/theme",
     description: "Pick the color theme (live preview while moving; Enter keeps and saves it, Esc restores)",
     run: (context) => { openThemePicker(context) },
+  },
+  {
+    name: "/copy",
+    description: "Copy the last assistant reply's text to the clipboard (OSC 52)",
+    run: ({ store, actions }) => {
+      const text = lastReplyText(transcriptViews(store.state))
+      if (text === undefined) {
+        store.setStatus("Nothing to copy: no assistant reply yet")
+        return
+      }
+      store.setStatus(copyNotice(text, actions.copyText(text)))
+    },
+  },
+  {
+    name: "/editor",
+    description: "Edit the input in $VISUAL / $EDITOR (fallback vi); the text comes back into the input (Ctrl+X Ctrl+E)",
+    run: ({ actions }) => { actions.openEditor() },
+  },
+  {
+    name: "/vim",
+    description: "Turn vim mode in the input on or off (saved); Esc switches to normal mode",
+    argumentHint: "[on|off]",
+    complete: ({ words, current, head }) => words.length === 1 ? matchValues(head, current, switchValues) : [],
+    run: ({ store, actions }, { args }) => {
+      const on = parseSwitch(args[0], store.state.vim, "Usage: /vim [on|off]")
+      store.setVim(on)
+      const text = on ? "Vim mode on · Esc for normal mode, i to insert" : "Vim mode off"
+      try {
+        actions.savePreferences({ vim: on })
+        store.setStatus(text)
+      } catch (error) {
+        store.setStatus(`${text} · not saved: ${error instanceof Error ? error.message : String(error)}`)
+      }
+    },
   },
   {
     name: "/exit",

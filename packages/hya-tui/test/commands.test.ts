@@ -6,7 +6,7 @@ import { createAppStore } from "../src/state/store"
 import type { PickerSpec } from "../src/state/picker"
 import { colors, defaultThemeName, setTheme, themeName, themes } from "../src/theme"
 
-function harness(client: Partial<HyaClient> = {}) {
+function harness(client: Partial<HyaClient> = {}, copyWorks = true) {
   const store = createAppStore()
   const calls: string[] = []
   const pickers: PickerSpec[] = []
@@ -23,6 +23,8 @@ function harness(client: Partial<HyaClient> = {}) {
     requestPermissionMode: async (mode) => { calls.push(`mode ${mode}`) },
     openHelp: () => { calls.push("help") },
     savePreferences: (patch) => { calls.push(`prefs ${JSON.stringify(patch)}`) },
+    copyText: (text) => { calls.push(`copy ${text}`); return copyWorks },
+    openEditor: () => { calls.push("editor") },
   }
   const registry = createCommandRegistry()
   const context = { store, client: client as HyaClient, actions }
@@ -349,4 +351,50 @@ test("/theme opens a picker of the built-in themes with live preview; Enter pers
   } finally {
     setTheme(defaultThemeName)
   }
+})
+
+test("/copy copies the last assistant reply's text through OSC 52 and says how much", async () => {
+  const { store, calls, run } = harness()
+  await run("/copy")
+  expect(calls).toEqual([])
+  expect(store.state.status).toBe("Nothing to copy: no assistant reply yet")
+  store.openSession({ id: "hysec_1", agent: "build", workdir: "/w" })
+  store.setMessages("hysec_1", [
+    { id: "u", role: "ROLE_USER", finish: "FINISH_REASON_STOP", parts: [{ id: "p1", text: { text: "hi" } }] },
+    { id: "a1", role: "ROLE_ASSISTANT", finish: "FINISH_REASON_STOP", parts: [{ id: "p2", text: { text: "first" } }] },
+    { id: "a2", role: "ROLE_ASSISTANT", finish: "FINISH_REASON_STOP", parts: [{ id: "p3", text: { text: "Hello **there**" } }, { id: "p4", text: { text: "second part" } }] },
+  ])
+  await run("/copy")
+  expect(calls).toEqual(["copy Hello **there**\n\nsecond part"])
+  expect(store.state.status).toBe("Copied 28 chars")
+})
+
+test("/copy reports a terminal without OSC 52", async () => {
+  const { store, run } = harness({}, false)
+  store.openSession({ id: "hysec_1", agent: "build", workdir: "/w" })
+  store.setMessages("hysec_1", [{ id: "a1", role: "ROLE_ASSISTANT", finish: "FINISH_REASON_STOP", parts: [{ id: "p", text: { text: "x" } }] }])
+  await run("/copy")
+  expect(store.state.status).toBe("Copy failed: this terminal does not accept OSC 52 clipboard writes")
+})
+
+test("/editor opens the external editor on the input", async () => {
+  const { calls, run } = harness()
+  await run("/editor")
+  expect(calls).toEqual(["editor"])
+})
+
+test("/vim toggles vim mode (or sets it with on/off) and saves it", async () => {
+  const { store, calls, run } = harness()
+  expect(store.state.vim).toBe(false)
+  await run("/vim")
+  expect(store.state.vim).toBe(true)
+  expect(store.state.vimMode).toBe("insert")
+  expect(store.state.status).toBe("Vim mode on · Esc for normal mode, i to insert")
+  await run("/vim on")
+  expect(store.state.vim).toBe(true)
+  await run("/vim off")
+  expect(store.state.vim).toBe(false)
+  expect(store.state.status).toBe("Vim mode off")
+  expect(calls).toEqual(['prefs {"vim":true}', 'prefs {"vim":true}', 'prefs {"vim":false}'])
+  await expect(run("/vim maybe")).rejects.toThrow("Usage: /vim [on|off]")
 })

@@ -1,6 +1,6 @@
 import type { KeyEvent, PasteEvent, TextareaRenderable } from "@opentui/core"
 import { useKeyboard, usePaste, useTerminalDimensions } from "@opentui/solid"
-import { createEffect, createSignal, For, onCleanup, Show } from "solid-js"
+import { createEffect, createSignal, For, on, onCleanup, Show } from "solid-js"
 import { useApp } from "../app/context"
 import { readOnlyStatus } from "../app/controller"
 import { commandSuggestionLimit, filterCommands, requiresArgument, type CommandEntry } from "../commands"
@@ -9,6 +9,7 @@ import { InputHistory } from "../composer/history"
 import { insertMention, mentionAt, type MentionToken } from "../composer/mention"
 import { createQuitGuard, quitWindowMs } from "../composer/quit"
 import { isShellInput } from "../composer/shell"
+import { initialVimState, vimKey, type VimResult } from "../composer/vim"
 import { composerKeyBindings, resolveBinding } from "../keys/bindings"
 import { isShiftTab } from "../state/modes"
 import { currentPrompt, promptKey } from "../state/prompts"
@@ -19,6 +20,8 @@ export const composerMaxRows = 8
 /** Quiet time before an `@file` lookup is sent. */
 const mentionDebounceMs = 120
 export const quitHint = "Press Ctrl+C again to quit"
+/** Status while the Ctrl+X chord waits for its second key. */
+export const chordHint = "Ctrl+X · Ctrl+E opens the external editor"
 
 interface FileMenu {
   token: MentionToken
@@ -52,6 +55,18 @@ interface CmdMenu {
  * quits on an empty input. `!command` input shows a shell-mode border; an
  * `@text` token opens a file suggestion list from `FindFiles`.
  *
+ * Vim mode (`/vim`, composer/vim.ts): the state machine sees keys after the
+ * lists. In insert mode it takes only Esc (unless a list is open, which Esc
+ * closes first) and switches to normal mode. In normal mode it runs after the
+ * prompt dock (so an empty input still answers a prompt with digits, Enter,
+ * Esc) and before history and the bindings; keys it passes on (Ctrl keys,
+ * arrows, Tab, Esc with nothing pending) keep their usual meaning. Edits go
+ * through `replaceText`, so `u` / Ctrl+R use the textarea's undo history.
+ *
+ * Ctrl+X arms a chord for one key: Ctrl+E (or E) then opens the external
+ * editor (`controller.openEditor`, composer/editor.ts); any other key drops
+ * the chord and is handled as usual.
+ *
  * During `/key set` it swaps the editor for a masked `Key: •••` line and
  * routes every key and paste to the controller's secret entry, so the key
  * never enters the editor, the store, or the screen.
@@ -84,6 +99,19 @@ export function Composer() {
   /** A subagent's session is open: prompts are disabled, slash commands still run. */
   const readOnly = () => Boolean(store.state.selected?.parent)
   const shell = () => isShellInput(value())
+  /** Vim state machine (composer/vim.ts); reset whenever vim mode is switched. */
+  let vim = initialVimState()
+  /** First key of a chord (Ctrl+X), for exactly the next key. */
+  let chord: "ctrl+x" | undefined
+  /** The status line before the chord hint, restored when the chord is dropped. */
+  let beforeChord = ""
+
+  createEffect(on(() => store.state.vim, () => { vim = initialVimState() }, { defer: true }))
+
+  onCleanup(controller.attachComposer({
+    text: () => editor?.plainText ?? "",
+    setText: (text) => replace(text),
+  }))
 
   onCleanup(() => {
     if (lookupTimer) clearTimeout(lookupTimer)
@@ -242,7 +270,27 @@ export function Composer() {
     closeMenu()
     closeCmdMenu()
     replace("")
+    // A new input starts in insert mode.
+    if (store.state.vim && vim.mode !== "insert") {
+      vim = initialVimState()
+      store.setVimMode("insert")
+    }
     void controller.submit(text)
+  }
+
+  /** Apply one vim result to the textarea (edits through its undo history) and the status bar. */
+  function applyVim(result: Extract<VimResult, { type: "handled" }>): void {
+    vim = result.state
+    if (editor) {
+      if (result.edit) {
+        if (result.edit.text !== editor.plainText) editor.replaceText(result.edit.text)
+        editor.cursorOffset = result.edit.cursor
+      } else if (result.cursor !== undefined) editor.cursorOffset = result.cursor
+      if (result.command === "undo") editor.undo()
+      else if (result.command === "redo") editor.redo()
+    }
+    store.setVimMode(vim.mode, vim.pending)
+    if (result.command === "submit") submit()
   }
 
   /** Status before the quit hint; restored when the hint expires unchanged. */
@@ -322,6 +370,18 @@ export function Composer() {
       quitGuard.disarm()
       return
     }
+    // The second key of a Ctrl+X chord: Ctrl+E / E opens the external editor; anything else drops the chord.
+    const armed = chord
+    chord = undefined
+    if (armed) {
+      if (store.state.status === chordHint) store.setStatus(beforeChord)
+      if (resolveBinding(key, { chord: armed }) === "externalEditor") {
+        consume()
+        quitGuard.disarm()
+        controller.openEditor()
+        return
+      }
+    }
     // The editor's own text is always live; `sync()` (onContentChange) can
     // lag one render behind fast typing (programmatic or a fast typist), so
     // recompute the command menu from `editor.plainText` right here before
@@ -350,6 +410,16 @@ export function Composer() {
       acceptMention()
       return
     }
+    // Vim insert mode: Esc switches to normal mode (an open list takes Esc first, below).
+    if (store.state.vim && vim.mode === "insert" && !cmdOpen && !open && editor) {
+      const result = vimKey(vim, { text: editor.plainText, cursor: editor.cursorOffset }, key)
+      if (result.type === "handled") {
+        consume()
+        quitGuard.disarm()
+        applyVim(result)
+        return
+      }
+    }
     // A shown permission/question prompt comes next (after the lists): with
     // an empty input it takes digits, Up/Down, Enter, and Esc; with text, a
     // question takes Enter as its answer. Other keys reach the input.
@@ -369,6 +439,16 @@ export function Composer() {
           }
           controller.answer(shown.interaction, result.choice)
         }
+        return
+      }
+    }
+    // Vim normal mode: motions, operators, undo/redo, Enter; passed keys go on below.
+    if (store.state.vim && vim.mode === "normal" && editor) {
+      const result = vimKey(vim, { text: editor.plainText, cursor: editor.cursorOffset }, key)
+      if (result.type === "handled") {
+        consume()
+        quitGuard.disarm()
+        applyVim(result)
         return
       }
     }
@@ -455,6 +535,16 @@ export function Composer() {
         consume()
         controller.openHelp()
         return
+      case "chord":
+        consume()
+        chord = "ctrl+x"
+        if (store.state.status !== chordHint) beforeChord = store.state.status
+        store.setStatus(chordHint)
+        return
+      case "externalEditor":
+        consume()
+        controller.openEditor()
+        return
     }
   })
 
@@ -519,6 +609,7 @@ export function Composer() {
           textColor={colors.fg}
           focusedTextColor={colors.fg}
           cursorColor={colors.accent}
+          cursorStyle={store.state.vim ? { style: store.state.vimMode === "normal" ? "block" : "line", blinking: store.state.vimMode !== "normal" } : { style: "block", blinking: true }}
           wrapMode="word"
           keyBindings={[...composerKeyBindings]}
           visible={!entering()}

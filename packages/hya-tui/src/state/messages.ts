@@ -223,6 +223,21 @@ function withDividers(views: MessageView[], dividers: AppState["dividers"]): Mes
   return result
 }
 
+/**
+ * The text `/copy` copies: the text blocks of the newest assistant message
+ * that has any, joined by a blank line (reasoning and tool calls left out);
+ * `undefined` when there is none.
+ */
+export function lastReplyText(views: readonly MessageView[]): string | undefined {
+  for (let index = views.length - 1; index >= 0; index--) {
+    const view = views[index]!
+    if (view.role !== "assistant") continue
+    const texts = view.blocks.flatMap((block) => block.kind === "text" && block.text ? [block.text] : [])
+    if (texts.length) return texts.join("\n\n")
+  }
+  return undefined
+}
+
 /** The chat transcript: projection + overlay, dividers, then prompts still waiting in the queue. */
 export function transcriptViews(state: AppState): MessageView[] {
   const session = state.selected
