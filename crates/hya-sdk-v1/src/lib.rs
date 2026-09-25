@@ -376,6 +376,8 @@ pub struct V1SessionMirror {
     messages: BTreeMap<String, pb::MessageInfo>,
     /// Part ids whose text is durable (seeded or confirmed by the log).
     durable_parts: std::collections::BTreeSet<String>,
+    /// Spawned subagents by member id.
+    members: BTreeMap<String, pb::MemberInfo>,
     /// Highest applied sequence number.
     pub last_seq: u64,
 }
@@ -392,6 +394,13 @@ impl V1SessionMirror {
             mirror.messages.insert(message.id.clone(), message.clone());
         }
         mirror
+    }
+
+    /// Seed the member rows from a session read (`SessionInfo.members`).
+    pub fn seed_members(&mut self, members: &[pb::MemberInfo]) {
+        for member in members {
+            self.members.insert(member.member.clone(), member.clone());
+        }
     }
 
     /// Apply one live frame; returns `true` when a resync is required.
@@ -451,9 +460,15 @@ impl V1SessionMirror {
                 if let Some(message) = self.messages.get_mut(&started.message)
                     && !message.parts.iter().any(|part| part.id == started.part)
                 {
+                    let mut kind = empty_part_kind(&started.kind);
+                    if let Some(pb::part_info::Kind::ToolCall(tool)) = kind.as_mut() {
+                        tool.tool.clone_from(&started.tool);
+                        tool.call_id.clone_from(&started.call_id);
+                        tool.state = pb::ToolExecutionState::Pending as i32;
+                    }
                     message.parts.push(pb::PartInfo {
                         id: started.part.clone(),
-                        kind: empty_part_kind(&started.kind),
+                        kind,
                     });
                 }
             }
@@ -472,6 +487,15 @@ impl V1SessionMirror {
                 if let Some(text) = self.part_text_mut(&replaced.message, &replaced.part) {
                     text.clone_from(&replaced.text);
                 }
+            }
+            Some(P::ToolStateChanged(changed)) => {
+                if let Some(tool) = self.tool_part_mut(&changed.message, &changed.part) {
+                    fold_tool_state(tool, changed);
+                }
+            }
+            Some(P::MemberUpdated(update)) => {
+                let member = self.members.entry(update.member.clone()).or_default();
+                fold_member(member, update);
             }
             Some(P::ErrorReported(reported)) => {
                 if let Some(message) = self.messages.get_mut(&reported.message) {
@@ -496,14 +520,82 @@ impl V1SessionMirror {
         match part.kind.as_mut()? {
             pb::part_info::Kind::Text(text) => Some(&mut text.text),
             pb::part_info::Kind::Reasoning(reasoning) => Some(&mut reasoning.text),
+            // Argument JSON fragments accumulate until the parsed input
+            // (`toolStateChanged` RUNNING) replaces them.
+            pb::part_info::Kind::ToolCall(tool) => Some(&mut tool.input_json),
             _ => None,
         }
+    }
+
+    /// The tool body of a tool-call part.
+    fn tool_part_mut(&mut self, message: &str, part: &str) -> Option<&mut pb::ToolCallPart> {
+        let part = self
+            .messages
+            .get_mut(message)?
+            .parts
+            .iter_mut()
+            .find(|candidate| candidate.id == part)?;
+        match part.kind.as_mut()? {
+            pb::part_info::Kind::ToolCall(tool) => Some(tool),
+            _ => None,
+        }
+    }
+
+    /// Subagents spawned by the mirrored session, by member id, folded from
+    /// `memberUpdated` frames (seed from `SessionInfo.members`).
+    #[must_use]
+    pub fn members(&self) -> Vec<&pb::MemberInfo> {
+        self.members.values().collect()
     }
 
     /// The mirrored transcript in append order.
     #[must_use]
     pub fn messages(&self) -> Vec<&pb::MessageInfo> {
         self.messages.values().collect()
+    }
+}
+
+/// Apply a `toolStateChanged` frame: the state always, every other field
+/// only when the frame carries it (a frame never clears known data).
+fn fold_tool_state(tool: &mut pb::ToolCallPart, changed: &pb::ToolStateChanged) {
+    tool.state = changed.state;
+    for (target, value) in [
+        (&mut tool.call_id, &changed.call_id),
+        (&mut tool.tool, &changed.tool),
+        (&mut tool.input_json, &changed.input_json),
+        (&mut tool.output_json, &changed.output_json),
+        (&mut tool.error_code, &changed.error_code),
+        (&mut tool.error_message, &changed.error_message),
+    ] {
+        if !value.is_empty() {
+            target.clone_from(value);
+        }
+    }
+    if changed.duration_ms != 0 {
+        tool.duration_ms = changed.duration_ms;
+    }
+}
+
+/// Merge a `memberUpdated` frame into a member row: later frames carry only
+/// what changed.
+fn fold_member(member: &mut pb::MemberInfo, update: &pb::MemberInfo) {
+    member.member.clone_from(&update.member);
+    for (target, value) in [
+        (&mut member.child, &update.child),
+        (&mut member.agent, &update.agent),
+        (&mut member.description, &update.description),
+        (&mut member.summary, &update.summary),
+        (&mut member.call_id, &update.call_id),
+    ] {
+        if !value.is_empty() {
+            target.clone_from(value);
+        }
+    }
+    if update.status != 0 {
+        member.status = update.status;
+    }
+    if update.depth != 0 {
+        member.depth = update.depth;
     }
 }
 
@@ -540,6 +632,7 @@ mod tests {
             message: "m".into(),
             part: part.into(),
             kind: "text".into(),
+            ..Default::default()
         })
     }
 
@@ -695,5 +788,121 @@ mod tests {
         );
         assert_eq!(message.time_created, at(10));
         assert_eq!(message.time_updated, at(12));
+    }
+
+    /// A tool call streams into one part: start (tool, call id), argument
+    /// fragments, the parsed input, then output and duration; members fold
+    /// by id with later frames carrying only what changed.
+    #[test]
+    fn tool_call_frames_and_member_updates_fold_into_the_mirror() {
+        let mut mirror = V1SessionMirror::default();
+        mirror.apply(&frame(
+            1,
+            P::MessageStarted(pb::MessageStarted {
+                message: "m".into(),
+                role: pb::Role::Assistant as i32,
+                ..Default::default()
+            }),
+        ));
+        mirror.apply(&frame(
+            2,
+            P::PartStarted(pb::PartStarted {
+                message: "m".into(),
+                part: "t".into(),
+                kind: "tool_call".into(),
+                tool: "bash".into(),
+                call_id: "c".into(),
+            }),
+        ));
+        mirror.apply(&frame(
+            3,
+            P::PartAppended(pb::PartAppended {
+                message: "m".into(),
+                part: "t".into(),
+                text_delta: "{\"command\":".into(),
+            }),
+        ));
+        mirror.apply(&frame(
+            4,
+            P::PartAppended(pb::PartAppended {
+                message: "m".into(),
+                part: "t".into(),
+                text_delta: "\"ls\"}".into(),
+            }),
+        ));
+        let tool = |mirror: &V1SessionMirror| match mirror.messages()[0].parts[0].kind.clone() {
+            Some(pb::part_info::Kind::ToolCall(tool)) => tool,
+            other => panic!("expected a tool part, got {other:?}"),
+        };
+        let streaming = tool(&mirror);
+        assert_eq!(
+            (streaming.tool.as_str(), streaming.call_id.as_str()),
+            ("bash", "c")
+        );
+        assert_eq!(streaming.input_json, "{\"command\":\"ls\"}");
+        assert_eq!(streaming.state, pb::ToolExecutionState::Pending as i32);
+        mirror.apply(&frame(
+            5,
+            P::ToolStateChanged(pb::ToolStateChanged {
+                message: "m".into(),
+                part: "t".into(),
+                call_id: "c".into(),
+                state: pb::ToolExecutionState::Running as i32,
+                input_json: "{\"command\":\"ls\"}".into(),
+                tool: "bash".into(),
+                ..Default::default()
+            }),
+        ));
+        mirror.apply(&frame(
+            6,
+            P::ToolStateChanged(pb::ToolStateChanged {
+                message: "m".into(),
+                part: "t".into(),
+                call_id: "c".into(),
+                state: pb::ToolExecutionState::Ok as i32,
+                output_json: "\"a b\"".into(),
+                duration_ms: 12,
+                ..Default::default()
+            }),
+        ));
+        let done = tool(&mirror);
+        assert_eq!(done.state, pb::ToolExecutionState::Ok as i32);
+        assert_eq!(done.input_json, "{\"command\":\"ls\"}");
+        assert_eq!(done.output_json, "\"a b\"");
+        assert_eq!(done.duration_ms, 12);
+
+        mirror.apply(&frame(
+            7,
+            P::MemberUpdated(pb::MemberInfo {
+                member: "mem".into(),
+                child: "child".into(),
+                agent: "general".into(),
+                description: "look".into(),
+                status: pb::MemberStatus::Spawning as i32,
+                call_id: "c".into(),
+                depth: 1,
+                ..Default::default()
+            }),
+        ));
+        mirror.apply(&frame(
+            8,
+            P::MemberUpdated(pb::MemberInfo {
+                member: "mem".into(),
+                status: pb::MemberStatus::Done as i32,
+                summary: "ok".into(),
+                ..Default::default()
+            }),
+        ));
+        let members = mirror.members();
+        assert_eq!(members.len(), 1);
+        assert_eq!(members[0].status, pb::MemberStatus::Done as i32);
+        assert_eq!(
+            (
+                members[0].agent.as_str(),
+                members[0].call_id.as_str(),
+                members[0].summary.as_str()
+            ),
+            ("general", "c", "ok")
+        );
     }
 }

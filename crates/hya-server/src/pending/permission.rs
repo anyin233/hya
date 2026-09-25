@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 // allow: SIZE_OK - pending permission state, HTTP views, and SSE payloads share one owner.
-use hya_proto::{Envelope, Event, MessageId, SessionId, ToolCallId};
+use hya_proto::{Envelope, Event, MessageId, PartProjection, SessionId, ToolCallId, ToolPartState};
 use hya_store::{SessionStore, StoreError};
 use hya_tool::{Action, AskRequest, Decision, RememberScope, Resource};
 use serde_json::{Value, json};
@@ -22,10 +22,20 @@ struct PendingPermission {
     session: Option<SessionId>,
     message_id: Option<MessageId>,
     call_id: Option<ToolCallId>,
+    /// Name and parsed arguments of the correlated tool call, read from the
+    /// session projection when the ask arrived.
+    tool: Option<ToolCallArgs>,
     action: Action,
     resource: Resource,
     remember: RememberScope,
     reply: oneshot::Sender<Decision>,
+}
+
+/// The tool call a permission ask is about, as recorded on its tool part.
+#[derive(Clone)]
+struct ToolCallArgs {
+    name: String,
+    input: Value,
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -57,6 +67,12 @@ struct PermissionToolView {
     message_id: String,
     #[serde(rename = "callID")]
     call_id: String,
+    /// Tool name of the correlated call, when known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
+    /// Parsed arguments of the correlated call, when known.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    input: Option<Value>,
 }
 
 #[derive(Clone, Copy)]
@@ -88,10 +104,15 @@ impl PermissionRequests {
         std::mem::drop(tokio::spawn(async move {
             while let Some(req) = rx.recv().await {
                 let (message_id, call_id) = tool_correlation(&store, &req).await;
+                let tool = match (req.session, call_id) {
+                    (Some(session), Some(call)) => tool_call_args(&store, session, call).await,
+                    _ => None,
+                };
                 let entry = PendingPermission {
                     session: req.session,
                     message_id,
                     call_id,
+                    tool,
                     action: req.action,
                     resource: req.resource,
                     remember: req.remember,
@@ -139,6 +160,7 @@ impl PermissionRequests {
                         entry.session,
                         entry.message_id,
                         entry.call_id,
+                        entry.tool.clone(),
                         entry.action,
                         entry.resource.clone(),
                         entry.remember.clone(),
@@ -149,14 +171,13 @@ impl PermissionRequests {
         pending
             .into_iter()
             .map(
-                |(id, session, message_id, call_id, action, resource, remember)| {
+                |(id, session, message_id, call_id, tool, action, resource, remember)| {
                     let properties = legacy_permission_view_from_fields(
                         &id,
                         session
                             .map(|session| session.to_string())
                             .unwrap_or_default(),
-                        message_id,
-                        call_id,
+                        (message_id, call_id, tool.as_ref()),
                         action,
                         &resource,
                         &remember,
@@ -425,8 +446,7 @@ fn legacy_permission_view(
     legacy_permission_view_from_fields(
         id,
         session_id,
-        entry.message_id,
-        entry.call_id,
+        (entry.message_id, entry.call_id, entry.tool.as_ref()),
         entry.action,
         &entry.resource,
         &entry.remember,
@@ -436,8 +456,7 @@ fn legacy_permission_view(
 fn legacy_permission_view_from_fields(
     id: &str,
     session_id: String,
-    message_id: Option<MessageId>,
-    call_id: Option<ToolCallId>,
+    (message_id, call_id, tool): (Option<MessageId>, Option<ToolCallId>, Option<&ToolCallArgs>),
     action: Action,
     resource: &Resource,
     remember: &RememberScope,
@@ -458,7 +477,51 @@ fn legacy_permission_view_from_fields(
                 .as_ref()
                 .map(ToString::to_string)
                 .unwrap_or_default(),
+            name: tool.map(|tool| tool.name.clone()),
+            input: tool.map(|tool| tool.input.clone()),
         },
+    }
+}
+
+/// Name and arguments of tool call `call` from `session`'s projection: the
+/// same input the transcript's tool part carries (no new data is exposed).
+async fn tool_call_args(
+    store: &SessionStore,
+    session: SessionId,
+    call: ToolCallId,
+) -> Option<ToolCallArgs> {
+    store
+        .with_projection(session, |projection| {
+            projection
+                .session
+                .messages
+                .iter()
+                .rev()
+                .flat_map(|message| message.parts.iter())
+                .find_map(|part| match part {
+                    PartProjection::Tool {
+                        call: part_call,
+                        name,
+                        state,
+                        ..
+                    } if *part_call == call => Some(ToolCallArgs {
+                        name: name.to_string(),
+                        input: tool_input(state).clone(),
+                    }),
+                    _ => None,
+                })
+        })
+        .await
+        .ok()
+        .flatten()
+}
+
+fn tool_input(state: &ToolPartState) -> &Value {
+    match state {
+        ToolPartState::Pending { input }
+        | ToolPartState::Running { input }
+        | ToolPartState::Completed { input, .. }
+        | ToolPartState::Error { input, .. } => input,
     }
 }
 
@@ -610,6 +673,7 @@ mod tests {
             session: Some(SessionId::new()),
             message_id: Some(message),
             call_id: Some(call),
+            tool: None,
             action: Action::Bash,
             resource: Resource::Command("pwd".to_string()),
             remember: RememberScope::LegacyAction,
@@ -633,6 +697,7 @@ mod tests {
                 session: Some(session),
                 message_id: None,
                 call_id: None,
+                tool: None,
                 action: Action::Tool,
                 resource: Resource::Tool(tool.to_string()),
                 remember,
@@ -682,6 +747,7 @@ mod tests {
                     session: Some(session),
                     message_id: None,
                     call_id: None,
+                    tool: None,
                     action: Action::Tool,
                     resource: Resource::Tool(tool.to_string()),
                     remember,

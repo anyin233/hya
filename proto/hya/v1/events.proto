@@ -21,6 +21,11 @@
 // frames used, so a client folds both by id: an already-known part id on
 // `partStarted` is not a new part, and `partReplaced` sets the part's text.
 // Reasoning deltas and tool-call argument deltas are durable events.
+// A tool call streams durably as `partStarted` (kind `tool_call`, with
+// `tool` and `callId`), `partAppended` argument fragments,
+// `toolStateChanged` RUNNING with the parsed `inputJson`, then
+// `toolStateChanged` OK (`outputJson`, `durationMs`) or ERROR
+// (`errorCode`, `errorMessage`).
 syntax = "proto3";
 
 package hya.v1;
@@ -162,6 +167,12 @@ message StreamEvent {
     // A runtime error was recorded; when it names a message, the turn that
     // drove that message failed (`MessageInfo.error`).
     ErrorReported error_reported = 21;
+    // A subagent spawned by this session was created or changed status
+    // (durable, on the parent session's stream). `member` is always set;
+    // the spawn frame carries every field, later frames carry `status`
+    // (and `summary`/`child` on finish) and leave the rest empty, so fold
+    // by `member`.
+    MemberInfo member_updated = 22;
   }
 }
 
@@ -229,6 +240,10 @@ message PartStarted {
   string part = 2;
   // Part kind discriminator matching `PartInfo.kind`.
   string kind = 3;
+  // Tool name when `kind` is `tool_call`.
+  string tool = 4;
+  // Tool call id when `kind` is `tool_call`.
+  string call_id = 5;
 }
 
 // Streaming delta appended to a part. Assistant text deltas are live-only
@@ -238,7 +253,8 @@ message PartAppended {
   string message = 1;
   // Part identifier.
   string part = 2;
-  // Incremental text delta for text/reasoning parts.
+  // Incremental delta: text for text/reasoning parts, a raw argument JSON
+  // fragment for `tool_call` parts (append to `ToolCallPart.input_json`).
   string text_delta = 3;
 }
 
@@ -278,12 +294,23 @@ message ToolStateChanged {
   string message = 1;
   // Part identifier of the tool call.
   string part = 2;
-  // Matching call id.
+  // Matching call id (empty on a direct part overwrite).
   string call_id = 3;
   // New execution state.
   ToolExecutionState state = 4;
   // Stable error code when the call failed.
   string error_code = 5;
+  // Error text when the call failed, was denied, or was blocked.
+  string error_message = 6;
+  // Full parsed arguments as JSON text; set when the call is requested
+  // (`RUNNING`) and replaces the streamed argument fragments.
+  string input_json = 7;
+  // Output as JSON text when the call finished OK (same cap as stored).
+  string output_json = 8;
+  // Wall time in milliseconds when the call finished OK.
+  uint64 duration_ms = 9;
+  // Tool name when known (set on `RUNNING`).
+  string tool = 10;
 }
 
 // A permission decision is pending.

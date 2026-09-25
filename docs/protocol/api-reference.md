@@ -1219,6 +1219,7 @@ One curated projected event from the event log.
 | `session_deleted` (19) | `oneof `payload`: SessionDeleted` | A session was deleted. |
 | `part_replaced` (20) | `oneof `payload`: PartReplaced` | A text or reasoning part's whole text was set (the durable record of a streamed text part, or a plugin rewrite of it). |
 | `error_reported` (21) | `oneof `payload`: ErrorReported` | A runtime error was recorded; when it names a message, the turn that drove that message failed (`MessageInfo.error`). |
+| `member_updated` (22) | `oneof `payload`: MemberInfo` | A subagent spawned by this session was created or changed status (durable, on the parent session's stream). `member` is always set; the spawn frame carries every field, later frames carry `status` (and `summary`/`child` on finish) and leave the rest empty, so fold by `member`. |
 
 ### `SessionStarted`
 
@@ -1275,6 +1276,8 @@ A part was appended to a message.
 | `message` (1) | `string` | Owning message identifier. |
 | `part` (2) | `string` | Part identifier. |
 | `kind` (3) | `string` | Part kind discriminator matching `PartInfo.kind`. |
+| `tool` (4) | `string` | Tool name when `kind` is `tool_call`. |
+| `call_id` (5) | `string` | Tool call id when `kind` is `tool_call`. |
 
 ### `PartAppended`
 
@@ -1285,7 +1288,7 @@ Streaming delta appended to a part. Assistant text deltas are live-only
 |---|---|---|
 | `message` (1) | `string` | Owning message identifier. |
 | `part` (2) | `string` | Part identifier. |
-| `text_delta` (3) | `string` | Incremental text delta for text/reasoning parts. |
+| `text_delta` (3) | `string` | Incremental delta: text for text/reasoning parts, a raw argument JSON fragment for `tool_call` parts (append to `ToolCallPart.input_json`). |
 
 ### `PartCompleted`
 
@@ -1326,9 +1329,14 @@ A tool call's execution state changed.
 |---|---|---|
 | `message` (1) | `string` | Owning message identifier. |
 | `part` (2) | `string` | Part identifier of the tool call. |
-| `call_id` (3) | `string` | Matching call id. |
+| `call_id` (3) | `string` | Matching call id (empty on a direct part overwrite). |
 | `state` (4) | `ToolExecutionState` | New execution state. |
 | `error_code` (5) | `string` | Stable error code when the call failed. |
+| `error_message` (6) | `string` | Error text when the call failed, was denied, or was blocked. |
+| `input_json` (7) | `string` | Full parsed arguments as JSON text; set when the call is requested (`RUNNING`) and replaces the streamed argument fragments. |
+| `output_json` (8) | `string` | Output as JSON text when the call finished OK (same cap as stored). |
+| `duration_ms` (9) | `uint64` | Wall time in milliseconds when the call finished OK. |
+| `tool` (10) | `string` | Tool name when known (set on `RUNNING`). |
 
 ### `PermissionRequested`
 
@@ -1516,7 +1524,7 @@ One pending interaction request.
 | `title` (4) | `string` | Short human-readable title (for example the tool call summary). |
 | `detail` (5) | `string` | Longer explanation body when the backend provides one. |
 | `options` (6) | `repeated string` | Selectable option labels when the request is multiple-choice. |
-| `payload` (7) | `google.protobuf.Struct` | Structured payload (tool input, question metadata) as a JSON object. |
+| `payload` (7) | `google.protobuf.Struct` | Structured payload as a JSON object. For a permission request: `action` (permission action, e.g. `bash`, `edit`), `resource` (the pattern being decided, e.g. the command or path), `always` (patterns an "always" reply saves), and, when the ask is correlated with a tool call, `messageId`, `callId`, `tool` (tool name), and `input` (the call's parsed arguments object exactly as recorded on the tool part: e.g. `command` for bash; the path and old/new text or patch for edit tools). |
 | `time_created` (8) | `google.protobuf.Timestamp` | When the request was created. |
 
 ### `ListInteractionsRequest`
@@ -1751,16 +1759,19 @@ Model reasoning trace part.
 
 ### `ToolCallPart`
 
-A tool invocation requested by the model.
+A tool invocation requested by the model. One part covers the whole call:
+arguments, execution state, and (once finished) its output or error.
 
 | Field | Type | Description |
 |---|---|---|
-| `call_id` (1) | `string` | Engine-issued call id used to match the result part. |
+| `call_id` (1) | `string` | Engine-issued call id. It is `MemberInfo.call_id` of a subagent the call spawned. |
 | `tool` (2) | `string` | Canonical tool name. |
-| `input_json` (3) | `string` | Tool input as a JSON object. |
+| `input_json` (3) | `string` | Tool input as JSON text, in every state (empty while the arguments are still streaming and unparsed). |
 | `state` (4) | `ToolExecutionState` | Execution state of the call. |
 | `error_code` (5) | `string` | Stable structured error type when the call failed (e.g. `unknown`). |
-| `error_message` (6) | `string` | Structured error message when the call failed. |
+| `error_message` (6) | `string` | Error text when the call failed, denied, or was blocked. |
+| `output_json` (7) | `string` | Tool output as JSON text when the call finished OK: the stored output, under the same size cap the model saw. For the `task` tool it is `{title, metadata: {sessionId, parentSessionId, subagent_type, status}, output}`; `metadata.sessionId` is the child session. |
+| `duration_ms` (8) | `uint64` | Wall time of a finished OK call in milliseconds. |
 
 ### `ToolResultPart`
 
@@ -1881,6 +1892,21 @@ A session's todo list projection.
 | Field | Type | Description |
 |---|---|---|
 | `items` (1) | `repeated TodoItem` | Ordered todo items. |
+
+### `MemberInfo`
+
+A subagent (member) spawned by a session, as recorded on the parent's log.
+
+| Field | Type | Description |
+|---|---|---|
+| `member` (1) | `string` | Member id within the parent session. |
+| `child` (2) | `string` | Child session id when known. |
+| `agent` (3) | `string` | Subagent type (agent name) of the spawn. |
+| `description` (4) | `string` | Short description of the delegated task. |
+| `status` (5) | `MemberStatus` | Latest lifecycle status. |
+| `summary` (6) | `string` | Bounded finish summary; empty until the member finished. |
+| `call_id` (7) | `string` | Tool call (`ToolCallPart.call_id`) that spawned the member; empty for members started without a tool call. |
+| `depth` (8) | `uint32` | Depth in the subagent tree (children of a root session are 1). |
 
 ### `GetHealthResponse`
 
@@ -2213,6 +2239,7 @@ Projection summary of one session.
 | `last_seq` (10) | `uint64` | Highest event sequence number recorded for this session. |
 | `busy` (11) | `bool` | Whether a run currently owns the session's admission slot (derived from the process run registry, not the durable log). |
 | `permission_mode` (12) | `string` | Effective permission mode of the session tree: `manual`, `yolo`, or `<bundle-id>/<mode-id>`. Recorded on the root session (children report the root's mode); the process default (`yolo` under `--yolo` or `permission.model: danger`, else `manual`) when none was set. |
+| `members` (13) | `repeated MemberInfo` | Subagents this session spawned, in spawn order, with their latest status (folded from the session's own log). The live counterpart is the `memberUpdated` stream event. |
 
 ### `CreateSessionRequest`
 
@@ -2785,6 +2812,19 @@ Lifecycle status of a todo item.
 | `TODO_STATUS_IN_PROGRESS` | 2 | Currently being worked on. |
 | `TODO_STATUS_COMPLETED` | 3 | Done. |
 | `TODO_STATUS_BLOCKED` | 4 | Waiting on an external unblock (dependency, user input, review). |
+
+### `MemberStatus`
+
+Lifecycle status of a spawned subagent (member).
+
+| Value | Number | Description |
+|---|---|---|
+| `MEMBER_STATUS_UNSPECIFIED` | 0 | Unset sentinel; never emitted by the server. |
+| `MEMBER_STATUS_SPAWNING` | 1 | The child session is being created or admitted. |
+| `MEMBER_STATUS_RUNNING` | 2 | The child is running a turn. |
+| `MEMBER_STATUS_DONE` | 3 | The child finished successfully. |
+| `MEMBER_STATUS_FAILED` | 4 | The child failed. |
+| `MEMBER_STATUS_CANCELLED` | 5 | The child was cancelled. |
 
 ### `VcsFileStatus`
 

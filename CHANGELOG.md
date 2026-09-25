@@ -14,6 +14,15 @@
   - the turn id returned by `CreateTurn` is the user message id;
   - a prompt sent while a turn runs gets `409 session_busy`, because the server does not queue prompts.
 - v1 `MessageInfo.agent` and `MessageInfo.model` are now filled per message, so older messages keep their own attribution after a `/model` or agent switch. `model` is the model that served the message's latest round, after `chat.params`, fallback, or routing; before any round reports usage, it is the model the turn requested. `MessageInfo.timeCreated` and `timeUpdated` are now set. The live `messageStarted` event carries the turn's `agent` and requested `model`, and `hya-sdk-v1` folds them. `Event::MessageStarted` gains optional `agent`/`model` fields, omitted when unset, so older logs replay unchanged. The projection reducer version is now 4. Messages recorded before this change have no agent.
+- v1 tool parts now carry the whole call. `ToolCallPart` fills `callId` and `inputJson` in every state. On success it adds `outputJson` (the stored, size-capped output) and `durationMs`; on failure it adds `errorMessage`. A finished tool is still one part.
+- v1 streams deliver tool calls as they happen:
+  - `partStarted` gains `tool` and `callId`.
+  - Argument JSON fragments stream as durable `partAppended` events.
+  - `toolStateChanged` gains `tool` and `inputJson` when the tool starts running, `outputJson` and `durationMs` on success, and `errorMessage` on failure.
+  - Behavior change: the stream's tool `errorCode` now matches the part's (`error.type`, else `unknown`). Before, it was always `tool_error`.
+- Subagents are visible on v1. A durable `memberUpdated` stream event (`MemberInfo {member, child, agent, description, status, summary, callId, depth}`) is emitted on the parent session, and `SessionInfo.members` lists the folded rows. `callId` links a task tool card to its child session, as does `metadata.sessionId` in the task tool's output.
+- A permission `Interaction.payload` now names the decision (`action`, `resource`, `always`) and the tool call that asked (`messageId`, `callId`, `tool`, and `input` with the call's arguments). The `GET /v1/interactions` title includes the resource again. The legacy `permission.asked.properties.tool` object gains optional `name` and `input`.
+- `hya-sdk-v1` `V1SessionMirror` folds tool state frames and member updates.
 
 ## Session permission modes
 

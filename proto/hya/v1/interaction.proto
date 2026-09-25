@@ -59,7 +59,13 @@ message Interaction {
   string detail = 5;
   // Selectable option labels when the request is multiple-choice.
   repeated string options = 6;
-  // Structured payload (tool input, question metadata) as a JSON object.
+  // Structured payload as a JSON object. For a permission request:
+  // `action` (permission action, e.g. `bash`, `edit`), `resource` (the
+  // pattern being decided, e.g. the command or path), `always` (patterns an
+  // "always" reply saves), and, when the ask is correlated with a tool call,
+  // `messageId`, `callId`, `tool` (tool name), and `input` (the call's
+  // parsed arguments object exactly as recorded on the tool part: e.g.
+  // `command` for bash; the path and old/new text or patch for edit tools).
   google.protobuf.Struct payload = 7;
   // When the request was created.
   google.protobuf.Timestamp time_created = 8;

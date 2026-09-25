@@ -7,6 +7,7 @@ package hya.v1;
 import "google/protobuf/timestamp.proto";
 import "hya/v1/catalog.proto";
 import "hya/v1/common.proto";
+import "hya/v1/message.proto";
 
 // Session lifecycle surface. Sessions are the durable event-sourced roots;
 // every turn, message, and projection read hangs off a session id.
@@ -95,6 +96,10 @@ message SessionInfo {
   // the root's mode); the process default (`yolo` under `--yolo` or
   // `permission.model: danger`, else `manual`) when none was set.
   string permission_mode = 12;
+  // Subagents this session spawned, in spawn order, with their latest
+  // status (folded from the session's own log). The live counterpart is
+  // the `memberUpdated` stream event.
+  repeated MemberInfo members = 13;
 }
 
 message CreateSessionRequest {

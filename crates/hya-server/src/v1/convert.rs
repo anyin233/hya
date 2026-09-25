@@ -3,9 +3,9 @@
 //! `StreamEvent` projection used by replay and both live streams.
 
 use hya_api::v1 as pb;
-use hya_proto::projection::{MessageProjection, PartProjection, Projection};
+use hya_proto::projection::{MemberProjection, MessageProjection, PartProjection, Projection};
 use hya_proto::{Envelope, Event, Role};
-use hya_proto::{FinishCause, FinishReason, ToolPartState};
+use hya_proto::{FinishCause, FinishReason, MemberRunStatus, ToolPartState};
 
 /// Map a domain finish reason to the wire enum.
 pub(crate) fn finish_reason(finish: FinishReason) -> i32 {
@@ -51,6 +51,92 @@ pub(crate) fn tool_state(state: &ToolPartState) -> i32 {
     }
 }
 
+/// JSON text of a tool payload; empty for `null` (arguments not known yet).
+fn json_text(value: &serde_json::Value) -> String {
+    if value.is_null() {
+        String::new()
+    } else {
+        value.to_string()
+    }
+}
+
+/// Stable error code of a tool error: the structured `error.type`, else
+/// `fallback`.
+fn tool_error_code(value: Option<&serde_json::Value>, fallback: &str) -> String {
+    value
+        .and_then(|value| value.pointer("/error/type"))
+        .and_then(|code| code.as_str())
+        .unwrap_or(fallback)
+        .to_owned()
+}
+
+/// Wire tool part for one domain tool state: arguments in every state, the
+/// stored (already capped) output and duration once OK, the error text once
+/// failed. The caller fills `call_id` and `tool`.
+fn tool_call_part(state: &ToolPartState) -> pb::ToolCallPart {
+    let mut part = pb::ToolCallPart {
+        state: tool_state(state),
+        ..Default::default()
+    };
+    match state {
+        ToolPartState::Pending { input } | ToolPartState::Running { input } => {
+            part.input_json = json_text(input);
+        }
+        ToolPartState::Completed {
+            input,
+            output,
+            time_ms,
+        } => {
+            part.input_json = json_text(input);
+            part.output_json = output.to_string();
+            part.duration_ms = *time_ms;
+        }
+        ToolPartState::Error {
+            input,
+            message,
+            value,
+        } => {
+            part.input_json = json_text(input);
+            part.error_code = tool_error_code(value.as_ref(), "unknown");
+            part.error_message = message.clone();
+        }
+    }
+    part
+}
+
+/// Wire member status for a domain member run status.
+fn member_status(status: MemberRunStatus) -> i32 {
+    match status {
+        MemberRunStatus::Spawning => pb::MemberStatus::Spawning as i32,
+        MemberRunStatus::Running => pb::MemberStatus::Running as i32,
+        MemberRunStatus::Done => pb::MemberStatus::Done as i32,
+        MemberRunStatus::Failed => pb::MemberStatus::Failed as i32,
+        MemberRunStatus::Cancelled => pb::MemberStatus::Cancelled as i32,
+    }
+}
+
+/// Map a folded member row to the wire member view.
+pub(crate) fn member_info(member: &MemberProjection) -> pb::MemberInfo {
+    pb::MemberInfo {
+        member: member.member.to_string(),
+        child: member
+            .child
+            .as_ref()
+            .map(ToString::to_string)
+            .unwrap_or_default(),
+        agent: member.subagent_type.to_string(),
+        description: member.description.clone(),
+        status: member_status(member.status),
+        summary: member.summary.clone(),
+        call_id: member
+            .tool_call
+            .as_ref()
+            .map(ToString::to_string)
+            .unwrap_or_default(),
+        depth: member.depth,
+    }
+}
+
 /// Map a projected session to the wire session summary.
 ///
 /// `info` supplies wall-clock timestamps from the store's session listing.
@@ -91,6 +177,7 @@ pub(crate) fn session_info(
         // Effective (root-inherited) mode; filled in by the caller, which
         // can walk the lineage.
         permission_mode: String::new(),
+        members: session.members.iter().map(member_info).collect(),
     }
 }
 
@@ -202,31 +289,15 @@ fn part(part: &PartProjection) -> Option<pb::PartInfo> {
             }),
         ),
         PartProjection::Tool {
-            id, name, state, ..
+            id,
+            call,
+            name,
+            state,
         } => {
-            let (error_code, error_message) = match state {
-                ToolPartState::Error { message, value, .. } => {
-                    let code = value
-                        .as_ref()
-                        .and_then(|value| value.pointer("/error/type"))
-                        .and_then(|code| code.as_str())
-                        .unwrap_or("unknown")
-                        .to_owned();
-                    (code, message.clone())
-                }
-                _ => (String::new(), String::new()),
-            };
-            (
-                id.to_string(),
-                K::ToolCall(pb::ToolCallPart {
-                    call_id: String::new(),
-                    tool: name.to_string(),
-                    input_json: String::new(),
-                    state: tool_state(state),
-                    error_code,
-                    error_message,
-                }),
-            )
+            let mut tool = tool_call_part(state);
+            tool.call_id = call.to_string();
+            tool.tool = name.to_string();
+            (id.to_string(), K::ToolCall(tool))
         }
     };
     Some(pb::PartInfo {
@@ -363,34 +434,133 @@ pub(crate) fn stream_event(envelope: &Envelope) -> Option<pb::StreamEvent> {
             message: message.to_string(),
             part: part.to_string(),
         }),
-        Event::ToolInputStart { message, part, .. } => {
-            P::PartStarted(part_started(message, part, "tool_call"))
-        }
+        Event::ToolInputStart {
+            message,
+            part,
+            call,
+            name,
+            ..
+        } => P::PartStarted(pb::PartStarted {
+            tool: name.to_string(),
+            call_id: call.to_string(),
+            ..part_started(message, part, "tool_call")
+        }),
+        Event::ToolInputDelta {
+            message,
+            part,
+            delta,
+            ..
+        } => P::PartAppended(pb::PartAppended {
+            message: message.to_string(),
+            part: part.to_string(),
+            text_delta: delta.clone(),
+        }),
+        Event::ToolCallRequested {
+            message,
+            part,
+            call,
+            name,
+            input,
+            ..
+        } => P::ToolStateChanged(pb::ToolStateChanged {
+            message: message.to_string(),
+            part: part.to_string(),
+            call_id: call.to_string(),
+            state: pb::ToolExecutionState::Running as i32,
+            input_json: input.to_string(),
+            tool: name.to_string(),
+            ..Default::default()
+        }),
         Event::ToolPartUpdated {
             message,
             part,
             state,
             ..
+        } => {
+            let full = tool_call_part(state);
+            P::ToolStateChanged(pb::ToolStateChanged {
+                message: message.to_string(),
+                part: part.to_string(),
+                call_id: String::new(),
+                state: full.state,
+                error_code: full.error_code,
+                error_message: full.error_message,
+                input_json: full.input_json,
+                output_json: full.output_json,
+                duration_ms: full.duration_ms,
+                tool: String::new(),
+            })
+        }
+        Event::ToolResult {
+            message,
+            part,
+            call,
+            output,
+            time_ms,
+            ..
         } => P::ToolStateChanged(pb::ToolStateChanged {
             message: message.to_string(),
             part: part.to_string(),
-            call_id: String::new(),
-            state: tool_state(state),
-            error_code: String::new(),
-        }),
-        Event::ToolResult { message, part, .. } => P::ToolStateChanged(pb::ToolStateChanged {
-            message: message.to_string(),
-            part: part.to_string(),
-            call_id: String::new(),
+            call_id: call.to_string(),
             state: pb::ToolExecutionState::Ok as i32,
-            error_code: String::new(),
+            output_json: output.to_string(),
+            duration_ms: *time_ms,
+            ..Default::default()
         }),
-        Event::ToolError { message, part, .. } => P::ToolStateChanged(pb::ToolStateChanged {
+        Event::ToolError {
+            message,
+            part,
+            call,
+            message_text,
+            value,
+            ..
+        } => P::ToolStateChanged(pb::ToolStateChanged {
             message: message.to_string(),
             part: part.to_string(),
-            call_id: String::new(),
+            call_id: call.to_string(),
             state: pb::ToolExecutionState::Error as i32,
-            error_code: "tool_error".to_owned(),
+            error_code: tool_error_code(value.as_ref(), "unknown"),
+            error_message: message_text.clone(),
+            ..Default::default()
+        }),
+        Event::MemberSpawned {
+            member,
+            child,
+            subagent_type,
+            description,
+            depth,
+            tool_call,
+            ..
+        } => P::MemberUpdated(pb::MemberInfo {
+            member: member.to_string(),
+            child: child.as_ref().map(ToString::to_string).unwrap_or_default(),
+            agent: subagent_type.to_string(),
+            description: description.clone(),
+            status: pb::MemberStatus::Spawning as i32,
+            summary: String::new(),
+            call_id: tool_call
+                .as_ref()
+                .map(ToString::to_string)
+                .unwrap_or_default(),
+            depth: *depth,
+        }),
+        Event::MemberStatusChanged { member, status, .. } => P::MemberUpdated(pb::MemberInfo {
+            member: member.to_string(),
+            status: member_status(*status),
+            ..Default::default()
+        }),
+        Event::MemberFinished {
+            member,
+            status,
+            summary,
+            child,
+            ..
+        } => P::MemberUpdated(pb::MemberInfo {
+            member: member.to_string(),
+            child: child.as_ref().map(ToString::to_string).unwrap_or_default(),
+            status: member_status(*status),
+            summary: summary.clone(),
+            ..Default::default()
         }),
         Event::Error {
             code,
@@ -435,6 +605,8 @@ fn part_started(
         message: message.to_string(),
         part: part.to_string(),
         kind: kind.to_owned(),
+        tool: String::new(),
+        call_id: String::new(),
     }
 }
 
