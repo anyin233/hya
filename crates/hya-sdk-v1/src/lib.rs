@@ -426,11 +426,22 @@ impl V1SessionMirror {
                 if message.session.is_empty() {
                     message.session.clone_from(&event.session);
                 }
+                if !started.agent.is_empty() {
+                    message.agent.clone_from(&started.agent);
+                }
+                if !started.model.is_empty() {
+                    message.model.clone_from(&started.model);
+                }
+                if message.time_created.is_none() {
+                    message.time_created.clone_from(&event.time_recorded);
+                }
+                message.time_updated.clone_from(&event.time_recorded);
             }
             Some(P::MessageFinished(finished)) => {
                 if let Some(message) = self.messages.get_mut(&finished.message) {
                     message.finish = finished.finish;
                     message.finish_cause = finished.cause;
+                    message.time_updated.clone_from(&event.time_recorded);
                 }
             }
             Some(P::PartStarted(started)) => {
@@ -637,5 +648,52 @@ mod tests {
         mirror.apply(&frame(0, appended("p", "lo")));
         mirror.apply(&frame(9, started("p")));
         assert_eq!(text_of(&mirror), vec![("p".into(), "Hello".into())]);
+    }
+
+    /// `messageStarted` carries the turn's own agent/model and the frame
+    /// time seeds the message times; the finish moves the update time.
+    #[test]
+    fn message_started_attribution_and_times_fold_into_the_mirror() {
+        // The well-known Timestamp type lives in a crate this one does not
+        // name; reach it through the generated field.
+        let at = |seconds: i64| {
+            let mut recorded = pb::StreamEvent::default().time_recorded.unwrap_or_default();
+            recorded.seconds = seconds;
+            Some(recorded)
+        };
+        let mut mirror = V1SessionMirror::default();
+        mirror.apply(&pb::StreamFrame {
+            frame: Some(pb::stream_frame::Frame::Event(pb::StreamEvent {
+                seq: 1,
+                session: "s".into(),
+                time_recorded: at(10),
+                payload: Some(P::MessageStarted(pb::MessageStarted {
+                    message: "m".into(),
+                    role: pb::Role::Assistant as i32,
+                    agent: "plan".into(),
+                    model: "fake/beta".into(),
+                })),
+            })),
+        });
+        mirror.apply(&pb::StreamFrame {
+            frame: Some(pb::stream_frame::Frame::Event(pb::StreamEvent {
+                seq: 2,
+                session: "s".into(),
+                time_recorded: at(12),
+                payload: Some(P::MessageFinished(pb::MessageFinished {
+                    message: "m".into(),
+                    finish: pb::FinishReason::Stop as i32,
+                    usage: None,
+                    cause: 0,
+                })),
+            })),
+        });
+        let message = mirror.messages()[0];
+        assert_eq!(
+            (message.agent.as_str(), message.model.as_str()),
+            ("plan", "fake/beta")
+        );
+        assert_eq!(message.time_created, at(10));
+        assert_eq!(message.time_updated, at(12));
     }
 }

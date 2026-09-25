@@ -1252,8 +1252,8 @@ A message started.
 |---|---|---|
 | `message` (1) | `string` | Message identifier. |
 | `role` (2) | `Role` | Author role. |
-| `agent` (3) | `string` | Agent name attributed when applicable. |
-| `model` (4) | `string` | Model producing the message when applicable. |
+| `agent` (3) | `string` | Agent the assistant turn runs as; empty for user, system, and shell messages. |
+| `model` (4) | `string` | Model the assistant turn requested (`provider/model`); the model that finally served it is `MessageInfo.model`. Empty where `agent` is. |
 
 ### `MessageFinished`
 
@@ -1806,12 +1806,12 @@ Projection snapshot of one message.
 | `id` (1) | `string` | Message identifier. |
 | `session` (2) | `string` | Owning session identifier. |
 | `role` (3) | `Role` | Author role. |
-| `agent` (4) | `string` | Agent name attributed to the message when applicable. |
-| `model` (5) | `string` | Model that produced the message when applicable. |
+| `agent` (4) | `string` | Agent the message's turn ran as (assistant messages); empty for user, system, and shell messages and for messages recorded before 0.41.0. |
+| `model` (5) | `string` | Model that produced the message (`provider/model`): the model that served its latest round (after chat.params, fallback, or routing), else the model its turn requested. Empty when unknown. |
 | `finish` (6) | `FinishReason` | Terminal finish reason for assistant messages. |
 | `parts` (7) | `repeated PartInfo` | Ordered message parts. |
-| `time_created` (8) | `google.protobuf.Timestamp` | When the message was created. |
-| `time_updated` (9) | `google.protobuf.Timestamp` | When the message projection last changed. |
+| `time_created` (8) | `google.protobuf.Timestamp` | When the message was created (its `MessageStarted` event). |
+| `time_updated` (9) | `google.protobuf.Timestamp` | When the message projection last changed (parts, live deltas, usage, error, finish). |
 | `finish_cause` (10) | `FinishCause` | Harness cause of the finish (cancel, shutdown, crash recovery, provider failure). |
 | `error` (11) | `MessageError` | Why the turn that drove this assistant message failed; set only when the engine recorded an error for it (`finish` is then `FINISH_REASON_ERROR`). |
 

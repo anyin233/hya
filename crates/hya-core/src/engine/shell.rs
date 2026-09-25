@@ -224,6 +224,8 @@ impl SessionEngine {
                     session,
                     message,
                     role: Role::Assistant,
+                    agent: None,
+                    model: None,
                 },
             )
             .await?;

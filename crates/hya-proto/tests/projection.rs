@@ -29,6 +29,8 @@ fn live_zero_seq_events_apply_without_advancing_durable_cursor() {
             session,
             message,
             role: Role::Assistant,
+            agent: None,
+            model: None,
         },
     ));
     projection.apply(&env(
@@ -135,6 +137,8 @@ fn reasoning_provider_data_survives_serde_and_projection_replay() {
                 session,
                 message,
                 role: Role::Assistant,
+                agent: None,
+                model: None,
             },
         ),
         env(
@@ -315,4 +319,232 @@ fn permission_mode_event_is_opaque_to_the_unknown_fallback() {
     let json = r#"{"type":"session_permission_mode_set_v2","session":"ses_00000000000000000000000000000001","mode":"yolo"}"#;
     let event: Event = serde_json::from_str(json).expect("unknown future variant decodes");
     assert_eq!(event, Event::Unknown);
+}
+
+fn env_at(seq: u64, ts_millis: i64, event: Event) -> Envelope {
+    Envelope {
+        seq: EventSeq(seq),
+        ts_millis,
+        event,
+    }
+}
+
+/// Each assistant message keeps the agent and model its own turn ran with,
+/// not the session's current binding: a later `/model` switch leaves older
+/// messages attributed to the model that produced them.
+#[test]
+fn assistant_messages_keep_their_own_agent_and_model_across_switches() {
+    let session = SessionId::new();
+    let first = MessageId::new();
+    let second = MessageId::new();
+    let projection = Projection::from_events(&[
+        env(
+            1,
+            Event::SessionCreated {
+                session,
+                parent: None,
+                agent: AgentName::new("build"),
+                model: ModelRef::new("fake/alpha"),
+                workdir: "/tmp".to_string(),
+            },
+        ),
+        env(
+            2,
+            Event::MessageStarted {
+                session,
+                message: first,
+                role: Role::Assistant,
+                agent: Some(AgentName::new("build")),
+                model: Some(ModelRef::new("fake/alpha")),
+            },
+        ),
+        env(
+            3,
+            Event::ModelSwitched {
+                session,
+                message: None,
+                model: ModelRef::new("fake/beta"),
+            },
+        ),
+        env(
+            4,
+            Event::AgentSwitched {
+                session,
+                message: None,
+                agent: AgentName::new("plan"),
+            },
+        ),
+        env(
+            5,
+            Event::MessageStarted {
+                session,
+                message: second,
+                role: Role::Assistant,
+                agent: Some(AgentName::new("plan")),
+                model: Some(ModelRef::new("fake/beta")),
+            },
+        ),
+    ]);
+    let messages = &projection.session.messages;
+    assert_eq!(messages[0].agent, Some(AgentName::new("build")));
+    assert_eq!(messages[0].model, Some(ModelRef::new("fake/alpha")));
+    assert_eq!(messages[1].agent, Some(AgentName::new("plan")));
+    assert_eq!(messages[1].model, Some(ModelRef::new("fake/beta")));
+}
+
+/// The model that actually served a message (after fallback or routing, per
+/// `UsageRecorded`) wins over the model the turn requested.
+#[test]
+fn served_model_prefers_the_usage_record_over_the_requested_model() {
+    let session = SessionId::new();
+    let message = MessageId::new();
+    let started = env(
+        1,
+        Event::MessageStarted {
+            session,
+            message,
+            role: Role::Assistant,
+            agent: Some(AgentName::new("build")),
+            model: Some(ModelRef::new("fake/alpha")),
+        },
+    );
+    let requested_only = Projection::from_events(std::slice::from_ref(&started));
+    assert_eq!(
+        requested_only.session.messages[0].served_model(),
+        Some(&ModelRef::new("fake/alpha"))
+    );
+
+    let served = Projection::from_events(&[
+        started,
+        env(
+            2,
+            Event::UsageRecorded {
+                session,
+                message: Some(message),
+                step: Some(0),
+                model: ModelRef::new("fake/fallback"),
+                purpose: hya_proto::UsagePurpose::Turn,
+                tokens: hya_proto::TokenUsage {
+                    input: 1,
+                    output: 1,
+                    ..hya_proto::TokenUsage::default()
+                },
+            },
+        ),
+    ]);
+    let message = &served.session.messages[0];
+    assert_eq!(message.model, Some(ModelRef::new("fake/alpha")));
+    assert_eq!(
+        message.served_model(),
+        Some(&ModelRef::new("fake/fallback"))
+    );
+}
+
+/// Logs written before `MessageStarted` carried attribution still replay;
+/// their messages simply have none.
+#[test]
+fn legacy_message_started_without_attribution_still_decodes() {
+    let json = r#"{"type":"message_started","session":"ses_00000000000000000000000000000001","message":"00000000-0000-0000-0000-000000000002","role":"assistant"}"#;
+    let event: Event = serde_json::from_str(json).expect("legacy message_started decodes");
+    let Event::MessageStarted { agent, model, .. } = &event else {
+        panic!("expected MessageStarted, got {event:?}");
+    };
+    assert_eq!((agent, model), (&None, &None));
+    // Unset attribution stays off the wire.
+    let encoded = serde_json::to_string(&event).expect("encode");
+    assert!(
+        !encoded.contains("agent") && !encoded.contains("model"),
+        "{encoded}"
+    );
+}
+
+/// A message's creation time is its `MessageStarted` envelope time; its
+/// update time follows the newest event that changed it (live deltas included).
+#[test]
+fn message_times_fold_from_envelope_timestamps() {
+    let session = SessionId::new();
+    let message = MessageId::new();
+    let other = MessageId::new();
+    let part = PartId::new();
+    let mut projection = Projection::from_events(&[
+        env_at(
+            1,
+            1_000,
+            Event::MessageStarted {
+                session,
+                message,
+                role: Role::Assistant,
+                agent: None,
+                model: None,
+            },
+        ),
+        env_at(
+            2,
+            1_500,
+            Event::TextStart {
+                session,
+                message,
+                part,
+            },
+        ),
+    ]);
+    assert_eq!(projection.session.messages[0].time_created, Some(1_000));
+    assert_eq!(projection.session.messages[0].time_updated, Some(1_500));
+
+    projection.apply(&env_at(
+        0,
+        1_700,
+        Event::TextDelta {
+            session,
+            message,
+            part,
+            delta: "hi".to_string(),
+        },
+    ));
+    assert_eq!(projection.session.messages[0].time_updated, Some(1_700));
+
+    // Events about another message, or session-level events, leave it alone.
+    projection.apply(&env_at(
+        3,
+        2_000,
+        Event::MessageStarted {
+            session,
+            message: other,
+            role: Role::User,
+            agent: None,
+            model: None,
+        },
+    ));
+    projection.apply(&env_at(
+        4,
+        2_100,
+        Event::SessionTitled {
+            session,
+            title: "t".to_string(),
+        },
+    ));
+    assert_eq!(projection.session.messages[0].time_updated, Some(1_700));
+
+    projection.apply(&env_at(
+        5,
+        3_000,
+        Event::MessageFinished {
+            session,
+            message,
+            role: Role::Assistant,
+            finish: FinishReason::Stop,
+            tokens: None,
+            cause: None,
+        },
+    ));
+    let first = &projection.session.messages[0];
+    assert_eq!(
+        (first.time_created, first.time_updated),
+        (Some(1_000), Some(3_000))
+    );
+    let second = &projection.session.messages[1];
+    assert_eq!(
+        (second.time_created, second.time_updated),
+        (Some(2_000), Some(2_000))
+    );
 }

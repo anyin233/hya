@@ -16,6 +16,8 @@ impl SessionEngine {
                 session,
                 message,
                 role: Role::User,
+                agent: None,
+                model: None,
             },
         )
         .await?;

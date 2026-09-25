@@ -872,6 +872,8 @@ async fn bundle_activation_initialize_preserves_method_roles() {
                 session: SessionId::new(),
                 message: MessageId::new(),
                 role: Role::Assistant,
+                agent: None,
+                model: None,
             },
         },
     };

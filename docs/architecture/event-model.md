@@ -147,7 +147,7 @@ preferred model plus ordered fallback candidates and per-candidate reasoning.
 
 | Wire `type` | Payload fields | Reducer |
 | --- | --- | --- |
-| `message_started` | `session`, `message: MessageId`, `role: Role` | Fold: creates `MessageProjection` if missing |
+| `message_started` | `session`, `message: MessageId`, `role: Role`, optional `agent: AgentName`, optional `model: ModelRef` | Fold: creates `MessageProjection` if missing, with `agent` / `model` copied onto it. The engine sets both on assistant turns: the session's agent and the model the turn's first round requests (explicit request, session override, user-file model, authored policy, then session model). The model that actually served each round is recorded separately by `usage_recorded`. User, system, and shell messages omit both, as do logs written before 0.41.0 (projection reducer version 4). A fork copies the source message's agent and served model. |
 | `turn_binding_recorded` | `session`, `message`, `generation: ConfigGeneration` | Fold: `config_generation` on that message. Engine emits it immediately after `MessageStarted{Assistant}` so the immutable runtime snapshot identity is durable before any provider call. |
 | `user_prompt_context_recorded` | `session`, `message`, `files: Vec<Value>`, `agents: Vec<Value>` | Fold: prompt `@file` / `@agent` attachment metadata. Engine **emits nothing** when both vectors are empty. |
 | `message_finished` | `session`, `message`, `role`, `finish: FinishReason`, `tokens: Option<TokenUsage>`, `cause: Option<FinishCause>` | Fold: finish + cause + tokens. `tokens` is the legacy sum of the message's rounds and is only set on a normal finish. Engine force-emits this with `error` or `cancelled` (and `tokens: None`) on turn failure, cancel, drain, sidecar loss, or crash recovery so clients never wait forever after `message_started` (see [End-event invariant](#end-event-invariant)); `cause` says why (omitted when the model ended the message, and absent in logs written before 0.41.0). Billed rounds of such a message are still counted through `usage_recorded`. For a message with no `usage_recorded` record (a legacy log) a non-zero `tokens` is folded once into `SessionProjection.usage` under model `unattributed`, except in forked sessions, whose copied messages carry the source's sums. |
@@ -565,6 +565,8 @@ Projection {
 | Field | Source |
 | --- | --- |
 | `id`, `role` | `message_started` |
+| `agent`, `model` | `message_started` (requested model; omitted when `None`). `MessageProjection::served_model()` prefers `usage.model` (the model that served the latest round, after fallback or routing) and falls back to `model`. |
+| `time_created`, `time_updated` | Envelope `ts_millis` (Unix ms): the message's `message_started`, and the newest event folded onto the message (lifecycle, part events including live `seq == 0` deltas, `usage_recorded`, `error` with `failed_message`, `message_finished`). Step markers do not move it. Omitted when `None`. |
 | `config_generation` | `turn_binding_recorded` |
 | `finish`, `cause`, `tokens` | `message_finished` (`cause` omitted when `None`) |
 | `usage` | `usage_recorded` with this `message`: `MessageUsage { model /* latest round */, tokens /* sum */, rounds }` (omitted when `None`) |
@@ -593,7 +595,8 @@ another store of attachments).
 - `session_created` sets session metadata.
 - Session metadata / title / archive / share / move / switch events update
   session state.
-- `message_started` creates a message row in memory.
+- `message_started` creates a message row in memory, carrying the turn's
+  agent and requested model and the envelope time as `time_created`.
 - `turn_binding_recorded` stores the assistant message's lightweight
   `ConfigGeneration`; registry contents remain outside the event log.
 - `user_prompt_context_recorded` preserves prompt attachment metadata.

@@ -57,6 +57,8 @@ fn selection_switch_preserves_transcript_exactly() {
                 session,
                 message,
                 role: Role::User,
+                agent: None,
+                model: None,
             },
         ),
         envelope(

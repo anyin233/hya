@@ -110,6 +110,8 @@ async fn stop_fixture(path: &str) -> StopFixture {
             session: actor,
             message: running_message,
             role: Role::Assistant,
+            agent: None,
+            model: None,
         },
         Event::ToolCallRequested {
             session: actor,
@@ -290,6 +292,8 @@ async fn resident_stop_finalization_commits_mail_admission_and_claim_release_tog
             session: actor,
             message: running_message,
             role: Role::Assistant,
+            agent: None,
+            model: None,
         },
         Event::ToolCallRequested {
             session: actor,

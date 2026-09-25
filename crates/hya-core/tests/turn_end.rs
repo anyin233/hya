@@ -220,6 +220,7 @@ fn assistant_finishes(events: &[Envelope], session: SessionId) -> Vec<(MessageId
                 session: s,
                 message,
                 role: Role::Assistant,
+                ..
             } if *s == session => {
                 order.push(*message);
                 finishes.entry(*message).or_default();

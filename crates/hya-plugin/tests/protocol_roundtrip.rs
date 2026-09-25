@@ -289,6 +289,8 @@ fn event_notification_roundtrip() {
                 session: SessionId::new(),
                 message: MessageId::new(),
                 role: Role::Assistant,
+                agent: None,
+                model: None,
             },
         },
     };

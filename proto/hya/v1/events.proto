@@ -201,9 +201,11 @@ message MessageStarted {
   string message = 1;
   // Author role.
   Role role = 2;
-  // Agent name attributed when applicable.
+  // Agent the assistant turn runs as; empty for user, system, and shell
+  // messages.
   string agent = 3;
-  // Model producing the message when applicable.
+  // Model the assistant turn requested (`provider/model`); the model that
+  // finally served it is `MessageInfo.model`. Empty where `agent` is.
   string model = 4;
 }
 

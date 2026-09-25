@@ -840,6 +840,20 @@ impl SessionEngine {
             };
             let (agent, agents, resources) = prepared?;
             let message = MessageId::new();
+            let stable_id = projection
+                .session
+                .agent
+                .as_ref()
+                .unwrap_or(&agent.name)
+                .clone();
+            let requested_model = self.requested_turn_model(
+                &binding,
+                stable_id.as_str(),
+                apply_default_overlays,
+                explicit_model.as_ref(),
+                &projection,
+                &agent,
+            );
             self.emit_for_actor(
                 actor_claim,
                 session,
@@ -847,6 +861,8 @@ impl SessionEngine {
                     session,
                     message,
                     role: Role::Assistant,
+                    agent: Some(stable_id),
+                    model: Some(requested_model),
                 },
             )
             .await?;
@@ -1008,6 +1024,53 @@ impl SessionEngine {
         let messages = projection_to_messages(agent, &projection, model);
         let tokens = self.token_accounting.estimate(&messages);
         Ok((projection, messages, tokens))
+    }
+
+    /// Model a turn round requests before `chat.params`, fallback, or routing.
+    ///
+    /// One explicit request wins for this turn only. Fresh root activations
+    /// then use the captured Session override, user-file model, and authored
+    /// direct/category policy before falling back to the persisted Session
+    /// model. Bound/Resolved child work keeps its already-resolved AgentSpec
+    /// model and never reapplies root defaults over an inline or Workflow
+    /// choice. `MessageStarted` records the first round's answer so the
+    /// transcript can attribute the message before any round is served.
+    fn requested_turn_model(
+        &self,
+        binding: &TurnBinding,
+        stable_id: &str,
+        apply_default_overlays: bool,
+        explicit_model: Option<&ModelRef>,
+        projection: &hya_proto::Projection,
+        agent: &AgentSpec,
+    ) -> ModelRef {
+        let session_model = apply_default_overlays
+            .then(|| binding.session_agent_model(stable_id).cloned())
+            .flatten();
+        let configured_model = apply_default_overlays
+            .then(|| binding.configured_agent_model(stable_id).cloned())
+            .flatten();
+        let authored_model = apply_default_overlays
+            .then(|| {
+                binding
+                    .agent_catalog()
+                    .resolve(stable_id)
+                    .and_then(|definition| {
+                        crate::category::resolve_configured_agent_model(
+                            &definition.model_policy,
+                            &self.model_categories,
+                            &|candidate| self.provider_router().resolve(candidate).is_some(),
+                        )
+                    })
+            })
+            .flatten();
+        explicit_model
+            .cloned()
+            .or(session_model)
+            .or(configured_model)
+            .or(authored_model)
+            .or_else(|| projection.session.model.clone())
+            .unwrap_or_else(|| agent.model.clone())
     }
 
     /// Drive the streaming rounds of one turn activation.
@@ -1204,39 +1267,14 @@ impl SessionEngine {
                     }
                 }
             }
-            // One explicit request wins for this turn only. Fresh root
-            // activations then use the captured Session override, user-file
-            // model, and authored direct/category policy before falling back
-            // to the persisted Session model. Bound/Resolved child work keeps
-            // its already-resolved AgentSpec model and never reapplies root
-            // defaults over an inline or Workflow choice.
-            let session_model = apply_default_overlays
-                .then(|| binding.session_agent_model(&stable_id).cloned())
-                .flatten();
-            let configured_model = apply_default_overlays
-                .then(|| binding.configured_agent_model(&stable_id).cloned())
-                .flatten();
-            let authored_model = apply_default_overlays
-                .then(|| {
-                    binding
-                        .agent_catalog()
-                        .resolve(&stable_id)
-                        .and_then(|definition| {
-                            crate::category::resolve_configured_agent_model(
-                                &definition.model_policy,
-                                &self.model_categories,
-                                &|candidate| self.provider_router().resolve(candidate).is_some(),
-                            )
-                        })
-                })
-                .flatten();
-            let model = explicit_model
-                .cloned()
-                .or(session_model)
-                .or(configured_model)
-                .or(authored_model)
-                .or_else(|| projection.session.model.clone())
-                .unwrap_or_else(|| agent.model.clone());
+            let model = self.requested_turn_model(
+                binding,
+                &stable_id,
+                apply_default_overlays,
+                explicit_model,
+                &projection,
+                agent,
+            );
             let mut messages = projection_to_messages(&live_agent, &projection, &model);
             // Active route for this turn. Its advertised context window scales
             // the compaction threshold, so resolve it before deciding.

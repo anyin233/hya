@@ -254,6 +254,8 @@ async fn queued_resident_message_resumes_but_running_message_aborts() {
             session: running_actor,
             message: running_message,
             role: hya_proto::Role::Assistant,
+            agent: None,
+            model: None,
         },
         Event::ToolCallRequested {
             session: running_actor,
@@ -425,6 +427,8 @@ async fn resident_recovery_rolls_back_actor_admission_and_root_failure_atomicall
                 session: actor,
                 message: MessageId::new(),
                 role: hya_proto::Role::Assistant,
+                agent: None,
+                model: None,
             },
         )
         .await
@@ -531,6 +535,8 @@ async fn repeated_startup_recovery_produces_identical_projection_and_no_duplicat
             session: actor,
             message: user_message,
             role: hya_proto::Role::User,
+            agent: None,
+            model: None,
         },
         Event::TextStart {
             session: actor,

@@ -261,6 +261,16 @@ pub enum Event {
         message: MessageId,
         /// Speaker role for the message.
         role: Role,
+        /// Agent the assistant turn ran as. Absent on user/system/shell
+        /// messages and on logs written before per-message attribution.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent: Option<AgentName>,
+        /// Model the assistant turn requested when it started. The model that
+        /// actually served each round (after `chat.params`, fallback, or
+        /// routing) is recorded separately by `UsageRecorded`. Absent where
+        /// `agent` is.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        model: Option<ModelRef>,
     },
     /// Records which immutable runtime snapshot (`ConfigGeneration`) ran this assistant turn.
     TurnBindingRecorded {
@@ -1145,6 +1155,8 @@ mod tests {
                     session,
                     message,
                     role: Role::Assistant,
+                    agent: None,
+                    model: None,
                 },
             },
             Envelope {
@@ -1763,6 +1775,8 @@ mod tests {
                     session,
                     message,
                     role: Role::Assistant,
+                    agent: None,
+                    model: None,
                 },
             },
             Envelope {

@@ -108,6 +108,8 @@ async fn session_resumes_after_reconnect() {
                     session,
                     message: m,
                     role: Role::Assistant,
+                    agent: None,
+                    model: None,
                 },
             )
             .await
