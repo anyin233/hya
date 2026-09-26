@@ -519,6 +519,18 @@ export function parseApiCommand(input: string): ApiCommand {
   return { method, path, ...(body === undefined ? {} : { body }) }
 }
 
+/** `ReadFile`'s answer as the TUI uses it. */
+export interface ReadFileResult {
+  /** Standard base64 of the bytes read. */
+  data: string
+  /** Bytes read (at most the request's `maxBytes`). */
+  size: number
+  /** Whether the bytes decode as UTF-8. */
+  text: boolean
+  /** The server's guessed MIME type. */
+  mime?: string
+}
+
 export class HyaClient {
   private base: string
   private scope: string
@@ -550,15 +562,20 @@ export class HyaClient {
     this.base = baseUrl.replace(/\/+$/, "")
   }
 
-  /** One v1 call; `signal` aborts it (the Provider View's Esc on a running call). */
-  async request<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
+  /**
+   * One v1 call; `signal` aborts it (the Provider View's Esc on a running
+   * call). `scope` overrides the directory scope for this call only; an
+   * empty scope sends no `x-hya-directory` (a remote start before a Project
+   * is chosen: the local `--dir` means nothing on the remote backend).
+   */
+  async request<T>(method: string, path: string, body?: unknown, signal?: AbortSignal, scope: string = this.directory): Promise<T> {
     if (!path.startsWith("/v1/") || path.startsWith("//")) {
       throw new Error("API path must start with /v1/")
     }
     const response = await this.fetcher(`${this.base}${path}`, {
       method,
       headers: {
-        "x-hya-directory": this.directory,
+        ...(scope ? { "x-hya-directory": scope } : {}),
         ...(body === undefined ? {} : { "content-type": "application/json" }),
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -633,6 +650,20 @@ export class HyaClient {
       `/v1/fs/find?pattern=${encodeURIComponent(pattern)}&limit=${limit}`,
     )
     return result.paths ?? []
+  }
+
+  /**
+   * `ReadFile` (`GET /v1/fs/read`): one file on the backend, `path` relative
+   * to `directory` (default: the client's scope) or absolute inside it; the
+   * server refuses a path that escapes the scope. `maxBytes` caps what is
+   * read. `data` is the content as standard base64 (protojson `bytes`).
+   */
+  async readFile(path: string, options: { directory?: string; maxBytes?: number; signal?: AbortSignal } = {}): Promise<ReadFileResult> {
+    const scope = options.directory ?? this.directory
+    const query = `path=${encodeURIComponent(path)}${options.maxBytes ? `&maxBytes=${options.maxBytes}` : ""}`
+    const result = await this.request<{ content?: string; text?: boolean; mime?: string }>("GET", `/v1/fs/read?${query}`, undefined, options.signal, scope)
+    const data = result.content ?? ""
+    return { data, size: Buffer.from(data, "base64").byteLength, text: result.text === true, ...(result.mime ? { mime: result.mime } : {}) }
   }
 
   async createCommandTurn(session: string, command: string, argumentsText: string): Promise<TurnInfo> {
@@ -1011,7 +1042,7 @@ export class HyaClient {
     onOpen?: () => void | Promise<void>,
   ): Promise<void> {
     const response = await this.fetcher(`${this.base}${path}`, {
-      headers: { "x-hya-directory": this.directory, accept: "text/event-stream" },
+      headers: { ...(this.directory ? { "x-hya-directory": this.directory } : {}), accept: "text/event-stream" },
       signal,
     })
     if (!response.ok || !response.body) throw new Error(`Event stream: HTTP ${response.status}`)

@@ -302,3 +302,21 @@ test("listSessions filters by Project", async () => {
     "/v1/sessions?page.limit=500",
   ])
 })
+
+test("readFile sends its own scope and cap and decodes the size; an empty scope sends no x-hya-directory", async () => {
+  const calls: Array<{ url: string; directory: string | null }> = []
+  const fetcher: FetchLike = async (input, init) => {
+    const url = String(input)
+    calls.push({ url, directory: new Headers(init?.headers).get("x-hya-directory") })
+    if (url.includes("/v1/fs/read")) return Response.json({ content: Buffer.from([1, 2, 3]).toString("base64"), mime: "image/png" })
+    return Response.json({ paths: [] })
+  }
+  const client = new HyaClient("http://127.0.0.1:8080", "", fetcher)
+  await client.findFiles("**/*a*", 5)
+  const read = await client.readFile("shots/a b.png", { directory: "/srv/app", maxBytes: 11 })
+  expect(read).toEqual({ data: "AQID", size: 3, text: false, mime: "image/png" })
+  expect(calls).toEqual([
+    { url: "http://127.0.0.1:8080/v1/fs/find?pattern=**%2F*a*&limit=5", directory: null },
+    { url: "http://127.0.0.1:8080/v1/fs/read?path=shots%2Fa%20b.png&maxBytes=11", directory: "/srv/app" },
+  ])
+})

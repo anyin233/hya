@@ -5,7 +5,7 @@
 // the terminal after it was submitted.
 
 import { spawn, type ChildProcess } from "node:child_process"
-import { mkdir, mkdtemp, rm } from "node:fs/promises"
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { Tui } from "./harness"
@@ -122,6 +122,43 @@ test.describe("/connect-remote", () => {
     await term.waitForText(/hya · hysec_\w+ · .* · http:\/\/127\.0\.0\.1:\d+/)
     expect(await term.find("remote-project")).toBeNull()
     expect(await term.find(secretOf(remote.link))).toBeNull()
+  })
+
+  test("an @path image names a file on the backend: one that exists only in the remote project root is attached and sent", async ({ tui, workspace, remote }, testInfo) => {
+    // The image lives only in the remote Project's root (a directory the TUI's --dir is not);
+    // a same-named-looking file exists only in the TUI's local --dir.
+    const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+    await mkdir(join(remote.root, "shots"), { recursive: true })
+    await writeFile(join(remote.root, "shots", "remote-ui.png"), Buffer.concat([signature, Buffer.alloc(3 * 1024, 1)]))
+    await writeFile(join(workspace.dir, "local-only.png"), Buffer.concat([signature, Buffer.alloc(64, 1)]))
+    const term = await tui(...selfLaunch(workspace))
+    await term.waitForText("Connected to hya", 30_000)
+    await term.type(`/connect-remote ${remote.link}`)
+    await term.press("Enter")
+    await term.waitForText("No projects yet · n creates one", 30_000)
+    await term.press("n")
+    await term.type("remote-project")
+    await term.press("Enter")
+    await term.type(remote.root)
+    await term.press("Enter")
+    await term.press("Enter")
+    await term.waitForText(/Created remote-project/)
+    await term.press("Enter")
+    await term.waitForText(/Project remote-project/)
+
+    // The backend's file: previewed with its size, then sent over the relay and accepted.
+    await term.type("@shots/remote-ui.png what is this")
+    await term.waitForText("[image] remote-ui.png · 3 KB", 10_000)
+    await term.press("Enter")
+    await term.waitForText(/attachment . remote-ui\.png/, 20_000)
+    expect(await term.find("Not sent")).toBeNull()
+
+    // A file of this machine's --dir is not a backend file: shown as not found, not sent.
+    await term.type("@local-only.png ")
+    await term.waitForText("[image] local-only.png · file not found", 10_000)
+    await term.press("Enter")
+    await term.waitForText("Not sent · local-only.png: file not found")
+    await term.attach(testInfo, "remote-attachment")
   })
 
   test("without a link it asks for one in a concealed entry; Esc cancels, a pasted link connects", async ({ tui, workspace, remote }, testInfo) => {

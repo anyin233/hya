@@ -394,10 +394,11 @@ so the bridge exits with it.
 - Each WebUI tab is its own TUI process: `/connect-remote` in one tab moves
   only that tab. The WebUI shows exactly what the TUI draws.
 
-Remote workspaces live on the backend machine: `@file` suggestions come from
-the backend (`GET /v1/fs/find`), but image attachments and a pasted path's
-`@path` conversion still read this machine's files (see
-[Attachments](#attachments)).
+Remote workspaces live on the backend machine, so in remote mode (`--remote`,
+bare `hya --connect`, or after `/connect-remote`) paths name the backend's
+files (see [Remote files](#remote-files)): `@file` suggestions, `@path` image
+attachments, and a pasted path's `@path` conversion all resolve there; only a
+pasted or dragged image that exists on this machine is read here.
 
 To add a provider or set its API key, type `/key`: the full-screen
 [Provider View](#provider-view) lists the providers, adds one through a short
@@ -435,7 +436,11 @@ one new sessions go to and the directory scope (`x-hya-directory`, the
   found too.
 - **`--remote`.** No Project is ensured and none is active. A prompt or
   `/new` without one is refused with `No project is open · choose a project
-  or start a temporary session` on the status line.
+  or start a temporary session` on the status line. Until a Project is
+  chosen the client sends no directory scope at all (no `x-hya-directory`:
+  `--dir` names nothing on the remote; the global catalogs work unscoped);
+  choosing one sets the scope to its primary root. The same holds after
+  `/connect-remote`; `/disconnect-remote` restores `--dir`.
 - **Live list.** The Project list (`ListProjects`, with each Project's
   `busy` flag: a session of it runs a turn) is read with the catalogs and
   re-read on every `projectsUpdated {}` frame of the global stream (live
@@ -1321,6 +1326,32 @@ text: `↳ attachment · shot.png · image/png · 240 KB` (an `AttachmentPart`
 listing never carries the bytes; size is shown once the server records it,
 either in the initial response or right after, via a live `partsAdded` stream
 frame appended to the message).
+
+#### Remote files
+
+In remote mode (`--remote`, bare `hya --connect`, or after `/connect-remote`)
+the workspace is on the backend machine, and the rules above change where a
+path is looked up:
+
+- **`@path` names a backend file**, relative (to the open session's workdir,
+  else the active Project's primary root) or absolute (inside one of the
+  active Project's roots, else the session's workdir). The TUI fetches it
+  with `ReadFile` (`GET /v1/fs/read`, `maxBytes` = the 10 MiB cap + 1, so an
+  oversized file is refused without pulling more) and sends it exactly like a
+  local attachment. A path outside that directory scope is refused by the
+  server (`outside the project on the backend`); before a Project is chosen
+  there is nothing to resolve against (`choose a project first`). The
+  composer's preview fetches each file once while you type; Enter reads it
+  again.
+- **A pasted or dragged image that exists on this machine** (an absolute
+  path) is your local file: it becomes an `@path ` mention and is read here
+  and sent inline, never looked up on the backend.
+- **Any other pasted image path** becomes a mention only when it exists on
+  the backend (a one-byte `ReadFile`); otherwise the raw text is inserted.
+- `@file` suggestions already come from the backend (`FindFiles`).
+
+A file only in this machine's `--dir` is `file not found` in remote mode
+unless pasted as above. Local mode is unchanged: everything is read here.
 
 ### Command menu
 

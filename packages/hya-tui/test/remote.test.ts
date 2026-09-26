@@ -1,6 +1,9 @@
 import { expect, test } from "bun:test"
 import type { Bridge, BridgeFlags } from "../src/bridge"
-import type { HyaClient, ProjectInfo, SessionInfo, SessionPlacement, StreamFrame } from "../src/client"
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import type { HyaClient, ProjectInfo, PromptAttachment, SessionInfo, SessionPlacement, StreamFrame } from "../src/client"
 import { bridgeDownPromptStatus, createController, relayLinkRefusedStatus, secretEntryHint } from "../src/app/controller"
 import type { ServerSwitch } from "../src/app/reconnect"
 import { createAppStore } from "../src/state/store"
@@ -26,6 +29,12 @@ function fakeBridge(url = bridgeUrl) {
     stop: async () => { stopping = true; stops++; exit(0) },
   }
   return { bridge, crash: () => exit(1), get stops() { return stops } }
+}
+
+/** Files that exist only on the remote backend (absolute path → bytes). */
+const remoteFiles: Record<string, Uint8Array> = {
+  "/srv/app/shots/ui.png": new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]),
+  "/srv/app/big.png": new Uint8Array(10 * 1024 * 1024 + 1),
 }
 
 /** A fake server per base URL (local and remote), recording calls with the URL they went to. */
@@ -69,7 +78,22 @@ function harness(options: { home?: boolean; bridgeError?: string; remote?: boole
     listMessages: async () => [],
     listEventsSince: async () => [],
     deleteSession: async (id: string) => { record("deleteSession", id) },
-    createTurn: async (session: string, text: string) => { record("createTurn", session, text); return { id: "turn_1" } },
+    createTurn: async (session: string, text: string, attachments?: PromptAttachment[]) => {
+      record("createTurn", session, text, ...(attachments ? [attachments] : []))
+      return { id: "turn_1" }
+    },
+    // The backend's files (absolute path → bytes): `ReadFile` under a directory scope.
+    readFile: async (path: string, options: { directory?: string; maxBytes?: number } = {}) => {
+      const scope = (options.directory ?? directory).replace(/\/+$/, "")
+      record("readFile", path, scope, options.maxBytes)
+      if (!scope) throw new Error("invalid_argument: this rpc needs a directory scope")
+      const absolute = path.startsWith("/") ? path : `${scope}/${path}`
+      if (!absolute.startsWith(`${scope}/`)) throw new Error("invalid_argument: path escapes the directory scope")
+      const bytes = (base === localUrl ? {} : remoteFiles)[absolute]
+      if (!bytes) throw new Error(`invalid_argument: path not found: ${path}`)
+      const content = options.maxBytes ? bytes.slice(0, options.maxBytes) : bytes
+      return { data: Buffer.from(content).toString("base64"), size: content.byteLength, text: false, mime: "image/png" }
+    },
     request: async (_method: string, path: string) => {
       const id = decodeURIComponent(path.split("/").at(-1) ?? "")
       const row = sessions.find((session) => session.id === id)
@@ -79,7 +103,7 @@ function harness(options: { home?: boolean; bridgeError?: string; remote?: boole
     createSession: async (agent: string, _model: string, placement: SessionPlacement) => {
       record("createSession", placement)
       const projectId = "projectId" in placement ? placement.projectId : undefined
-      const session: SessionInfo = { id: `s${++created}`, agent, workdir: "/work", model: { providerId: "hya", modelId: "echo" }, ...(projectId ? { projectId } : {}) }
+      const session: SessionInfo = { id: `s${++created}`, agent, workdir: projectId === remoteProject.id ? remoteProject.roots[0]! : "/work", model: { providerId: "hya", modelId: "echo" }, ...(projectId ? { projectId } : {}) }
       sessions.unshift(session)
       return session
     },
@@ -117,7 +141,7 @@ function harness(options: { home?: boolean; bridgeError?: string; remote?: boole
   })
   if (options.label) store.setServerLabel(options.label)
   return {
-    store, controller, calls, statuses, sessions, bridges, bridgeCalls, reconnects, homes,
+    store, controller, calls, statuses, sessions, bridges, bridgeCalls, reconnects, homes, client,
     get base() { return base },
     named: (name: string) => calls.filter((call) => call[0] === name),
     /** End every open global stream (the server went away). */
@@ -315,5 +339,110 @@ test("/connect-remote without a link opens a concealed entry; the link stays out
   h.controller.secretKey(key("", "escape"))
   expect(h.store.state.secretEntry).toBeUndefined()
   expect(h.bridgeCalls.length).toBe(1)
+  h.controller.dispose()
+})
+
+/** Connected through `/connect-remote` with the remote Project chosen (scope `/srv/app`, a session there). */
+async function remoteWithProject() {
+  const h = harness()
+  await h.controller.start()
+  await h.controller.submit(`/connect-remote ${link}`)
+  await h.controller.switchProject(remoteProject.id)
+  return h
+}
+
+test("remote mode: an @path image is read from the backend under the session's scope and sent like a local one", async () => {
+  const h = await remoteWithProject()
+  expect(h.store.state.selected?.workdir).toBe("/srv/app")
+  await h.controller.submit("what is wrong with @shots/ui.png")
+  const reads = h.named("readFile")
+  expect(reads.length).toBeGreaterThan(0)
+  // Scoped to the remote session's workdir; never more than the per-file cap + 1 byte.
+  expect(reads.at(-1)).toEqual(["readFile", bridgeUrl, "shots/ui.png", "/srv/app", 10 * 1024 * 1024 + 1])
+  const turn = h.named("createTurn").at(-1)!
+  expect(turn[1]).toBe(bridgeUrl)
+  expect(turn[4]).toEqual([{ name: "ui.png", mime: "image/png", data: Buffer.from(remoteFiles["/srv/app/shots/ui.png"]!).toString("base64"), path: "shots/ui.png" }])
+  h.controller.dispose()
+})
+
+test("remote mode: an absolute @path under a project root is read from the backend; a missing or oversized one is not sent", async () => {
+  const h = await remoteWithProject()
+  const previews = await h.controller.previewAttachments("@/srv/app/shots/ui.png @/srv/app/nope.png @/srv/app/big.png")
+  expect(previews.map((item) => [item.path, item.size, item.error])).toEqual([
+    ["/srv/app/shots/ui.png", 7, undefined],
+    ["/srv/app/nope.png", undefined, "file not found"],
+    ["/srv/app/big.png", 10 * 1024 * 1024 + 1, "big.png: larger than 10 MiB"],
+  ])
+  const before = h.named("createTurn").length
+  await h.controller.submit("look @/srv/app/nope.png")
+  expect(h.named("createTurn").length).toBe(before)
+  expect(h.store.state.status).toContain("nope.png: file not found")
+  h.controller.dispose()
+})
+
+test("remote mode: a pasted image that exists on this machine is read locally and sent inline", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "hya-remote-paste-"))
+  try {
+    const local = join(dir, "local-shot.png")
+    const bytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 9, 9])
+    writeFileSync(local, bytes)
+    const h = await remoteWithProject()
+    const readsBefore = h.named("readFile").length
+    expect(await h.controller.fileExists(local)).toBe(true)
+    await h.controller.submit(`see @${local}`)
+    // Not looked up on the backend: it is this machine's file.
+    expect(h.named("readFile").length).toBe(readsBefore)
+    const turn = h.named("createTurn").at(-1)!
+    expect(turn[4]).toEqual([{ name: "local-shot.png", mime: "image/png", data: Buffer.from(bytes).toString("base64"), path: local }])
+    h.controller.dispose()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("remote mode: a pasted path that is not on this machine becomes a mention only when it exists on the backend", async () => {
+  const h = await remoteWithProject()
+  expect(await h.controller.fileExists("/srv/app/shots/ui.png")).toBe(true)
+  expect(await h.controller.fileExists("shots/ui.png")).toBe(true)
+  expect(await h.controller.fileExists("/srv/app/missing.png")).toBe(false)
+  const reads = h.named("readFile")
+  expect(reads.map((call) => [call[2], call[3], call[4]])).toEqual([
+    ["/srv/app/shots/ui.png", "/srv/app", 1],
+    ["shots/ui.png", "/srv/app", 1],
+    ["/srv/app/missing.png", "/srv/app", 1],
+  ])
+  h.controller.dispose()
+})
+
+test("local mode is unchanged: pasted paths and @path images are checked and read on this machine only", async () => {
+  const h = harness()
+  await h.controller.start()
+  expect(await h.controller.fileExists("/srv/app/shots/ui.png")).toBe(false)
+  const previews = await h.controller.previewAttachments("@/srv/app/shots/ui.png")
+  expect(previews[0]?.error).toBe("file not found")
+  expect(h.named("readFile")).toEqual([])
+  h.controller.dispose()
+})
+
+test("remote mode sends no directory scope until a Project is chosen, then the Project's primary root", async () => {
+  const started = harness({ remote: true })
+  await started.controller.start()
+  expect(started.store.state.activeProjectId).toBeUndefined()
+  expect(started.client.directory).toBe("")
+  // Nothing to resolve an @path against yet: it is refused, not read from the local --dir.
+  const previews = await started.controller.previewAttachments("@shots/ui.png")
+  expect(previews[0]?.error).toContain("choose a project")
+  started.controller.dispose()
+
+  const h = harness()
+  await h.controller.start()
+  expect(h.client.directory).toBe("/work/sub")
+  await h.controller.submit(`/connect-remote ${link}`)
+  expect(h.client.directory).toBe("")
+  await h.controller.switchProject(remoteProject.id)
+  expect(h.client.directory).toBe("/srv/app")
+  // Back home: the local --dir again.
+  await h.controller.submit("/disconnect-remote")
+  expect(h.client.directory).toBe("/work/sub")
   h.controller.dispose()
 })

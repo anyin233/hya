@@ -108,7 +108,8 @@ export async function run(options: Options): Promise<void> {
     warnings.push(`Unknown theme ${loaded.preferences.theme} in ${prefsPath}; using hya`)
   }
 
-  const client = new HyaClient(server, options.directory)
+  // Remote: no directory scope until a Project is chosen (--dir is this machine's).
+  const client = new HyaClient(server, options.remote ? "" : options.directory)
   const store = createAppStore()
   store.setServerUrl(server)
   if (options.serverLabel) store.setServerLabel(options.serverLabel)
