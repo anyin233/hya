@@ -263,6 +263,7 @@ async fn model_summaries_carry_context_and_output_limits() {
         },
         reasoning_variants: Vec::new(),
         reasoning_default: None,
+        display_name: None,
         source: ModelCatalogSource::Configured,
     };
     engine.publish_provider_catalog(

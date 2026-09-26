@@ -135,7 +135,7 @@ async fn bootstrap(
 
     let agents = super::catalog::agent_rows(&st, &workdir).await?;
     let models = super::catalog::model_rows(&st);
-    let providers = super::catalog::provider_rows(&st, &models);
+    let providers = super::catalog::provider_rows(&st, &models).await;
     let commands = super::catalog::command_rows(&workdir);
     let skills = super::catalog::skill_rows(&workdir);
     let tools = super::catalog::tool_rows(&st);

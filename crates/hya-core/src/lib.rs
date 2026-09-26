@@ -112,8 +112,9 @@ pub use completion::{
 };
 pub use engine::{
     AdmissionMemberIdentity, AgentSpec, BoundSpawnRequest, BoundSpawnSender, BoundWorkflowRequest,
-    BoundWorkflowSender, CreateSession, DRAIN_DEADLINE, RuntimeCatalogRefresh, SessionEngine,
-    SpawnAdmissionOutcome, TurnBoundaryObserver, TurnDrainReport, TurnLease, advertise_tool,
+    BoundWorkflowSender, CreateSession, DRAIN_DEADLINE, MODEL_PROBE_PROMPT, ModelProbeReply,
+    RuntimeCatalogRefresh, SessionEngine, SpawnAdmissionOutcome, TurnBoundaryObserver,
+    TurnDrainReport, TurnLease, advertise_tool,
 };
 pub use error::CoreError;
 pub use hooks::{

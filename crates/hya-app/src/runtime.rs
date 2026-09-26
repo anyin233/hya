@@ -2915,6 +2915,7 @@ impl HyaRuntime {
         let agent_model_control = Arc::new(built.agent_model_control());
         let plugin_host = built.plugin_host();
         let mut state = hya_server::AppState::new(engine.clone(), agent)
+            .with_provider_control(Arc::new(crate::ProviderManager::new(engine.clone())))
             .with_question_requests(questions)
             .with_mcp_control(mcp_control)
             .with_workflow_control(workflow_control)

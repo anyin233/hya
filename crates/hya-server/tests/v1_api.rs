@@ -145,21 +145,12 @@ async fn v1_process_config_and_catalog_surfaces_answer() {
     assert_eq!(dispose["error"]["code"], json!("unavailable"));
 }
 
+/// Key writes belong to the app-owned provider control (`hya_app::auth`,
+/// atomic 0600, live rebuild — covered in `hya-app/tests/provider_control.rs`);
+/// a bare server without one answers `unavailable` and never writes a file.
 #[tokio::test]
-async fn v1_auth_stores_and_removes_provider_keys() {
+async fn v1_auth_without_a_provider_control_is_unavailable_and_validates_ids() {
     let app = router(state().await);
-    let home = std::env::temp_dir().join(format!(
-        "hya-v1-auth-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    std::fs::create_dir_all(&home).unwrap();
-    // SAFETY: tests within this binary run sequentially for env-dependent
-    // assertions and no other test reads XDG_CONFIG_HOME.
-    unsafe { std::env::set_var("XDG_CONFIG_HOME", &home) };
 
     let (status, body) = send(
         app.clone(),
@@ -168,25 +159,11 @@ async fn v1_auth_stores_and_removes_provider_keys() {
         json!({"apiKey": "secret-key"}),
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(body["status"], json!("AUTH_STATUS_CREDENTIALED"));
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    assert_eq!(body["error"]["code"], json!("unavailable"));
 
-    let stored = home.join("hya/auth/testprovider.yaml");
-    let content = std::fs::read_to_string(&stored).unwrap();
-    assert!(content.contains("secret-key"));
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        assert_eq!(
-            std::fs::metadata(&stored).unwrap().permissions().mode() & 0o777,
-            0o600
-        );
-    }
-
-    let (status, listed) = send(app.clone(), Method::GET, "/v1/auth", Value::Null).await;
-    assert_eq!(status, StatusCode::OK, "{listed}");
-    assert_eq!(listed["providerIds"], json!(["testprovider"]));
-    assert!(!listed.to_string().contains("secret-key"));
+    let (status, _) = send(app.clone(), Method::GET, "/v1/auth", Value::Null).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
 
     let (status, _) = send(
         app.clone(),
@@ -195,12 +172,7 @@ async fn v1_auth_stores_and_removes_provider_keys() {
         Value::Null,
     )
     .await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(!stored.exists());
-
-    let (status, listed) = send(app.clone(), Method::GET, "/v1/auth", Value::Null).await;
-    assert_eq!(status, StatusCode::OK, "{listed}");
-    assert!(listed.get("providerIds").is_none_or(Value::is_null));
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
 
     let (status, _body) = send(app, Method::PUT, "/v1/auth/bad..id", json!({"apiKey": "x"})).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);

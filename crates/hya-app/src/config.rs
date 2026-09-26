@@ -59,7 +59,8 @@ pub struct ResolvedConfig {
     pub pending_discovery: Vec<PendingCatalogDiscovery>,
 }
 
-/// One empty-`models` provider deferred to background discovery refresh.
+/// One provider deferred to background discovery refresh (no cached rows,
+/// or a discovery-only provider with an empty `models:` list).
 #[derive(Clone, Debug)]
 pub struct PendingCatalogDiscovery {
     /// Declared provider id.
@@ -71,11 +72,6 @@ pub struct PendingCatalogDiscovery {
     pub(crate) credential: ProviderCredential,
     pub(crate) provider: ParsedProvider,
 }
-
-pub use crate::models_cache::{
-    CachedModelEntry, CachedModelLimit, ModelsCacheFile, models_cache_path, read_models_cache,
-    upsert_provider_models, write_models_cache_file,
-};
 
 /// Top-level shape of `~/.config/hya/config.yaml`.
 #[derive(Debug, Deserialize)]
@@ -301,13 +297,29 @@ enum ModelConfig {
 #[derive(Debug, Deserialize)]
 struct DetailedModelConfig {
     id: String,
+    /// Display name shown by pickers and the Provider View; overrides the
+    /// remote list's name.
     #[serde(default)]
-    reasoning: Option<ModelReasoningConfig>,
+    name: Option<String>,
+    /// `true`/`false` switch or a `{ default?, variants? }` mapping.
+    #[serde(default)]
+    reasoning: Option<ReasoningField>,
     /// `{ context?, output? }` token limits. Kept as a raw value so
     /// `resolve_model_limit` can name the provider, model, and field in errors
     /// instead of failing the untagged `ModelConfig` match.
     #[serde(default)]
     limit: Option<Value>,
+}
+
+/// A model entry's `reasoning:` value.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum ReasoningField {
+    /// `reasoning: false` advertises no efforts; `true` keeps the remote or
+    /// provider-kind menu.
+    Flag(bool),
+    /// Explicit default and/or variant menu.
+    Detailed(ModelReasoningConfig),
 }
 
 #[derive(Debug, Deserialize)]
@@ -353,8 +365,19 @@ impl From<ProviderKindConfig> for ProviderKind {
 #[derive(Clone, Debug)]
 struct ParsedModel {
     id: String,
+    /// Configured display name (`name`).
+    display_name: Option<String>,
+    /// Effort menu from config (`reasoning.variants`, `reasoning: false` →
+    /// empty), else the provider-kind fallback menu.
     reasoning_variants: Vec<String>,
+    /// Whether config set the menu itself (`reasoning.variants` or
+    /// `reasoning: false`); otherwise remote-list variants win over the
+    /// kind fallback when the model is also in the model cache.
+    variants_configured: bool,
+    /// Explicit default, else the highest effort in `reasoning_variants`.
     reasoning_default: Option<ReasoningEffort>,
+    /// Explicit `reasoning.default` only.
+    explicit_default: Option<ReasoningEffort>,
     /// Configured token limits (`0` in a field means unspecified).
     limit: Option<hya_provider::ModelLimitOverride>,
 }
@@ -555,7 +578,8 @@ pub fn expected_config_path() -> PathBuf {
 /// Upsert a non-secret OAuth provider route into `config.yaml`.
 ///
 /// Creates the file (and parents) when missing. Preserves unrelated top-level
-/// keys. Does **not** write secrets — tokens live under `auth/<provider>.yaml`.
+/// keys and the provider's other keys. Does **not** write secrets — tokens
+/// live under `auth/<provider>.yaml`.
 ///
 /// Existing user-authored model lists remain untouched. OAuth login creates an
 /// empty model field for a new provider so the next startup can discover it;
@@ -566,78 +590,354 @@ pub fn upsert_oauth_provider(
     kind: &str,
     base_url: &str,
 ) -> anyhow::Result<()> {
-    if let Some(parent) = config_path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("create config dir {}", parent.display()))?;
-    }
+    upsert_provider_entry(config_path, provider_id, kind, base_url)
+        .map(|_| ())
+        .map_err(anyhow::Error::from)
+}
+
+/// Config `kind` labels a provider declaration may use.
+pub const PROVIDER_KIND_LABELS: &[&str] = &[
+    "openai",
+    "openai-compatible",
+    "openai-completion",
+    "openai-response",
+    "openai-codex",
+    "grok-build",
+    "anthropic",
+    "google",
+];
+
+/// Failure of a `config.yaml` edit.
+#[derive(Debug, thiserror::Error)]
+pub enum ConfigEditError {
+    /// The edit would produce an invalid config, or names something absent.
+    #[error("{0}")]
+    Invalid(String),
+    /// The provider or model entry is not in `config.yaml`.
+    #[error("{0}")]
+    NotFound(String),
+    /// Reading, parsing, or writing the file failed.
+    #[error(transparent)]
+    Io(#[from] anyhow::Error),
+}
+
+/// Metadata written into one model's `models:` entry. Replace semantics for
+/// the fields this writer manages (`name`, `limit.context`, `limit.output`,
+/// and a boolean `reasoning`): `None` removes that field; other keys of the
+/// entry are preserved (a detailed `reasoning:` mapping is kept unless
+/// `reasoning` is `Some(false)`).
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ModelEntryOverride {
+    /// Entry `name` (display name).
+    pub display_name: Option<String>,
+    /// Entry `limit.context`.
+    pub context_limit: Option<u32>,
+    /// Entry `limit.output`.
+    pub output_limit: Option<u32>,
+    /// Entry `reasoning: true|false`.
+    pub reasoning: Option<bool>,
+}
+
+/// Non-secret facts about one provider declaration in `config.yaml`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProviderDeclaration {
+    /// Provider id.
+    pub id: String,
+    /// `kind` label as written.
+    pub kind: String,
+    /// `base_url` as written.
+    pub base_url: String,
+    /// Whether the declaration has a non-empty inline `api_key`.
+    pub inline_api_key: bool,
+}
+
+fn key(name: &str) -> Value {
+    Value::String(name.to_string())
+}
+
+/// Read `config.yaml` as a YAML value (the default document when the file is
+/// missing or blank).
+fn read_config_value(config_path: &Path) -> anyhow::Result<Value> {
     let existing = if config_path.exists() {
         std::fs::read_to_string(config_path)
             .with_context(|| format!("read {}", config_path.display()))?
     } else {
-        DEFAULT_CONFIG_YAML.to_string()
+        String::new()
     };
-    let mut root: Value = if existing.trim().is_empty() {
-        serde_norway::from_str(DEFAULT_CONFIG_YAML).context("parse default config")?
+    let raw = if existing.trim().is_empty() {
+        DEFAULT_CONFIG_YAML
     } else {
-        serde_norway::from_str(&existing)
-            .with_context(|| format!("parse {}", config_path.display()))?
+        existing.as_str()
     };
+    let root: Value =
+        serde_norway::from_str(raw).with_context(|| format!("parse {}", config_path.display()))?;
+    if root.as_mapping().is_none() {
+        anyhow::bail!("config root must be a mapping");
+    }
+    Ok(root)
+}
+
+/// Borrow `providers:` as a mapping, creating it when absent.
+fn providers_mapping(root: &mut Value) -> anyhow::Result<&mut Mapping> {
     let map = root
         .as_mapping_mut()
         .ok_or_else(|| anyhow::anyhow!("config root must be a mapping"))?;
-
-    // Ensure providers mapping exists.
-    if !map.contains_key(Value::String("providers".into())) {
-        map.insert(
-            Value::String("providers".into()),
-            Value::Mapping(Mapping::new()),
-        );
+    let slot = map
+        .entry(key("providers"))
+        .or_insert_with(|| Value::Mapping(Mapping::new()));
+    if slot.is_null() {
+        *slot = Value::Mapping(Mapping::new());
     }
-    let providers = map
-        .get_mut(Value::String("providers".into()))
-        .and_then(Value::as_mapping_mut)
-        .ok_or_else(|| anyhow::anyhow!("providers must be a mapping"))?;
+    slot.as_mapping_mut()
+        .ok_or_else(|| anyhow::anyhow!("providers must be a mapping"))
+}
 
-    let mut provider_map = Mapping::new();
-    provider_map.insert(
-        Value::String("kind".into()),
-        Value::String(kind.to_string()),
-    );
-    provider_map.insert(
-        Value::String("base_url".into()),
-        Value::String(base_url.to_string()),
-    );
-
-    let models_value = providers
-        .get(Value::String(provider_id.into()))
-        .and_then(Value::as_mapping)
-        .and_then(|provider| provider.get(Value::String("models".into())))
-        .cloned()
-        .unwrap_or_else(|| Value::Sequence(Vec::new()));
-    provider_map.insert(Value::String("models".into()), models_value);
-
-    // Preserve existing inline api_key when re-logging the same provider.
-    if let Some(existing_provider) = providers
-        .get(Value::String(provider_id.into()))
-        .and_then(Value::as_mapping)
-        && let Some(api_key) = existing_provider.get(Value::String("api_key".into()))
-    {
-        provider_map.insert(Value::String("api_key".into()), api_key.clone());
+/// Validate and atomically write an edited config document.
+///
+/// The rendered YAML must parse and its providers must validate (secrets are
+/// not expanded). The file is replaced through a temp file in the same
+/// directory that inherits the old file's permissions. YAML comments are not
+/// preserved (the document is re-rendered).
+fn write_config_value(config_path: &Path, root: &Value) -> Result<(), ConfigEditError> {
+    let rendered = serde_norway::to_string(root).context("render updated hya config.yaml")?;
+    let file = parse_config(&rendered).map_err(|error| {
+        ConfigEditError::Invalid(format!("edit would make config.yaml invalid: {error:#}"))
+    })?;
+    resolve_providers_filtered(&file, None, false).map_err(|error| {
+        ConfigEditError::Invalid(format!("edit would make config.yaml invalid: {error:#}"))
+    })?;
+    let parent = config_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .context("hya config path should have a parent directory")?;
+    std::fs::create_dir_all(parent)
+        .with_context(|| format!("create config dir {}", parent.display()))?;
+    let tmp = parent.join(format!(".config.yaml.tmp-{}", std::process::id()));
+    std::fs::write(&tmp, rendered).with_context(|| format!("write {}", tmp.display()))?;
+    if let Ok(meta) = std::fs::metadata(config_path) {
+        let _ = std::fs::set_permissions(&tmp, meta.permissions());
     }
-
-    providers.insert(
-        Value::String(provider_id.to_string()),
-        Value::Mapping(provider_map),
-    );
-
-    // Do not change `default_model` during OAuth login. In particular, a
-    // fetched catalog or provider-specific default must not become startup
-    // catalog authority.
-
-    let rendered = serde_norway::to_string(&root).context("render updated hya config.yaml")?;
-    std::fs::write(config_path, rendered)
-        .with_context(|| format!("write {}", config_path.display()))?;
+    std::fs::rename(&tmp, config_path)
+        .with_context(|| format!("rename {} -> {}", tmp.display(), config_path.display()))?;
     Ok(())
+}
+
+/// Add or update `providers.<id>` with `kind` and `base_url` in
+/// `config.yaml`, creating the file when missing. Every other key of the
+/// provider (models, api_key, retry, …) and of the file is preserved; a new
+/// provider gets `models: []` (discovery). Returns whether the provider was
+/// created.
+///
+/// # Errors
+/// [`ConfigEditError::Invalid`] for an unknown kind or an edit that fails
+/// validation; [`ConfigEditError::Io`] for read/parse/write failures.
+pub fn upsert_provider_entry(
+    config_path: &Path,
+    provider_id: &str,
+    kind: &str,
+    base_url: &str,
+) -> Result<bool, ConfigEditError> {
+    if !PROVIDER_KIND_LABELS.contains(&kind) {
+        return Err(ConfigEditError::Invalid(format!(
+            "unknown provider kind `{kind}` (expected one of {})",
+            PROVIDER_KIND_LABELS.join(", ")
+        )));
+    }
+    let mut root = read_config_value(config_path)?;
+    let providers = providers_mapping(&mut root)?;
+    let created = !providers.contains_key(key(provider_id));
+    let entry = providers
+        .entry(key(provider_id))
+        .or_insert_with(|| Value::Mapping(Mapping::new()));
+    if !entry.is_mapping() {
+        *entry = Value::Mapping(Mapping::new());
+    }
+    let provider = entry
+        .as_mapping_mut()
+        .ok_or_else(|| anyhow::anyhow!("provider entry must be a mapping"))?;
+    provider.insert(key("kind"), Value::String(kind.to_string()));
+    provider.insert(key("base_url"), Value::String(base_url.to_string()));
+    if !provider.contains_key(key("models")) {
+        provider.insert(key("models"), Value::Sequence(Vec::new()));
+    }
+    write_config_value(config_path, &root)?;
+    Ok(created)
+}
+
+fn model_entry_id(entry: &Value) -> Option<&str> {
+    match entry {
+        Value::String(id) => Some(id.trim()),
+        Value::Mapping(map) => map.get(key("id")).and_then(Value::as_str).map(str::trim),
+        _ => None,
+    }
+}
+
+/// Borrow `providers.<id>.models` as a sequence, creating it when absent.
+fn provider_models<'a>(
+    root: &'a mut Value,
+    provider_id: &str,
+) -> Result<&'a mut Vec<Value>, ConfigEditError> {
+    let providers = providers_mapping(root)?;
+    let provider = providers
+        .get_mut(key(provider_id))
+        .and_then(Value::as_mapping_mut)
+        .ok_or_else(|| {
+            ConfigEditError::NotFound(format!("provider not configured: {provider_id}"))
+        })?;
+    let models = provider
+        .entry(key("models"))
+        .or_insert_with(|| Value::Sequence(Vec::new()));
+    if models.is_null() {
+        *models = Value::Sequence(Vec::new());
+    }
+    models.as_sequence_mut().ok_or_else(|| {
+        ConfigEditError::Invalid(format!("providers.{provider_id}.models must be a list"))
+    })
+}
+
+/// Write one model's entry into `providers.<provider_id>.models` (see
+/// [`ModelEntryOverride`] for the field semantics). A string entry becomes a
+/// mapping when fields are added; an entry left with only `id` is written
+/// back as a plain string.
+///
+/// # Errors
+/// [`ConfigEditError::NotFound`] when the provider is not declared;
+/// [`ConfigEditError::Invalid`] when the result fails validation.
+pub fn set_model_entry(
+    config_path: &Path,
+    provider_id: &str,
+    model_id: &str,
+    metadata: &ModelEntryOverride,
+) -> Result<(), ConfigEditError> {
+    let mut root = read_config_value(config_path)?;
+    let models = provider_models(&mut root, provider_id)?;
+    let position = models
+        .iter()
+        .position(|entry| model_entry_id(entry) == Some(model_id));
+    let mut entry = match position.map(|index| models[index].clone()) {
+        Some(Value::Mapping(map)) => map,
+        _ => {
+            let mut map = Mapping::new();
+            map.insert(key("id"), Value::String(model_id.to_string()));
+            map
+        }
+    };
+    match metadata
+        .display_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+    {
+        Some(name) => {
+            entry.insert(key("name"), Value::String(name.to_string()));
+        }
+        None => {
+            entry.remove(key("name"));
+        }
+    }
+    let mut limit = match entry.remove(key("limit")) {
+        Some(Value::Mapping(limit)) => limit,
+        _ => Mapping::new(),
+    };
+    for (field, value) in [
+        ("context", metadata.context_limit),
+        ("output", metadata.output_limit),
+    ] {
+        match value.filter(|tokens| *tokens > 0) {
+            Some(tokens) => {
+                limit.insert(key(field), Value::Number(u64::from(tokens).into()));
+            }
+            None => {
+                limit.remove(key(field));
+            }
+        }
+    }
+    if !limit.is_empty() {
+        entry.insert(key("limit"), Value::Mapping(limit));
+    }
+    let detailed_reasoning = entry.get(key("reasoning")).is_some_and(Value::is_mapping);
+    match metadata.reasoning {
+        Some(false) => {
+            entry.insert(key("reasoning"), Value::Bool(false));
+        }
+        Some(true) if !detailed_reasoning => {
+            entry.insert(key("reasoning"), Value::Bool(true));
+        }
+        Some(true) => {}
+        None if detailed_reasoning => {}
+        None => {
+            entry.remove(key("reasoning"));
+        }
+    }
+    let value = if entry.len() == 1 && entry.contains_key(key("id")) {
+        Value::String(model_id.to_string())
+    } else {
+        Value::Mapping(entry)
+    };
+    match position {
+        Some(index) => models[index] = value,
+        None => models.push(value),
+    }
+    write_config_value(config_path, &root)
+}
+
+/// Remove every `providers.<provider_id>.models` entry with `model_id`.
+/// Returns whether an entry existed.
+///
+/// # Errors
+/// [`ConfigEditError::NotFound`] when the provider is not declared.
+pub fn remove_model_entry(
+    config_path: &Path,
+    provider_id: &str,
+    model_id: &str,
+) -> Result<bool, ConfigEditError> {
+    let mut root = read_config_value(config_path)?;
+    let models = provider_models(&mut root, provider_id)?;
+    let before = models.len();
+    models.retain(|entry| model_entry_id(entry) != Some(model_id));
+    if models.len() == before {
+        return Ok(false);
+    }
+    write_config_value(config_path, &root)?;
+    Ok(true)
+}
+
+/// Non-secret provider declarations from the active `config.yaml` (empty
+/// when there is no config file).
+///
+/// # Errors
+/// Returns read or YAML parse failures.
+pub fn provider_declarations() -> anyhow::Result<Vec<ProviderDeclaration>> {
+    let Some(path) = config_path() else {
+        return Ok(Vec::new());
+    };
+    let root = read_config_value(&path)?;
+    let Some(providers) = root.get("providers").and_then(Value::as_mapping) else {
+        return Ok(Vec::new());
+    };
+    let text = |provider: &Mapping, field: &str| {
+        provider
+            .get(key(field))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or_default()
+            .to_string()
+    };
+    let mut out = providers
+        .iter()
+        .filter_map(|(id, provider)| {
+            let id = id.as_str()?.to_string();
+            let provider = provider.as_mapping()?;
+            Some(ProviderDeclaration {
+                kind: text(provider, "kind"),
+                base_url: text(provider, "base_url"),
+                inline_api_key: !text(provider, "api_key").is_empty(),
+                id,
+            })
+        })
+        .collect::<Vec<_>>();
+    out.sort_by(|left, right| left.id.cmp(&right.id));
+    Ok(out)
 }
 
 /// Create the default hya config file if neither supported config path exists.
@@ -1289,19 +1589,39 @@ fn remove_trailing_json_commas(raw: &str) -> String {
 /// Parse every provider declaration, preserving empty model lists for startup
 /// discovery and normalizing explicit ids before route construction.
 fn resolve_providers(file: &FileConfig) -> anyhow::Result<Vec<ParsedProvider>> {
+    resolve_providers_filtered(file, None, true)
+}
+
+/// Parse and validate provider declarations. `only` restricts the result to
+/// those ids; `resolve_secrets: false` validates without expanding
+/// `{env:…}`/`{file:…}` keys (used to validate config edits).
+fn resolve_providers_filtered(
+    file: &FileConfig,
+    only: Option<&BTreeSet<String>>,
+    resolve_secrets: bool,
+) -> anyhow::Result<Vec<ParsedProvider>> {
     let mut out = Vec::new();
     for (id, provider) in &file.providers {
+        if only.is_some_and(|only| !only.contains(id)) {
+            continue;
+        }
         let kind: ProviderKind = provider.kind.into();
         let mut seen = BTreeSet::new();
         let mut models = Vec::new();
         for model in &provider.models {
-            let (raw_id, reasoning, limit) = match model {
-                ModelConfig::Id(id) => (id.as_str(), None, None),
+            let (raw_id, name, reasoning_field, limit) = match model {
+                ModelConfig::Id(id) => (id.as_str(), None, None, None),
                 ModelConfig::Detailed(model) => (
                     model.id.as_str(),
+                    model.name.as_deref(),
                     model.reasoning.as_ref(),
                     model.limit.as_ref(),
                 ),
+            };
+            let reasoning_off = matches!(reasoning_field, Some(ReasoningField::Flag(false)));
+            let reasoning = match reasoning_field {
+                Some(ReasoningField::Detailed(config)) => Some(config),
+                _ => None,
             };
             let model_id = raw_id.trim();
             if model_id.is_empty() || model_id.chars().any(char::is_control) {
@@ -1313,7 +1633,13 @@ fn resolve_providers(file: &FileConfig) -> anyhow::Result<Vec<ParsedProvider>> {
             if !seen.insert(model_id.to_string()) {
                 continue;
             }
-            let fallback_variants = kind.reasoning_variants();
+            let fallback_variants = if reasoning_off {
+                Vec::new()
+            } else {
+                kind.reasoning_variants()
+            };
+            let variants_configured =
+                reasoning_off || reasoning.is_some_and(|config| config.variants.is_some());
             let configured_variants = reasoning
                 .and_then(|config| config.variants.as_ref())
                 .unwrap_or(&fallback_variants);
@@ -1353,18 +1679,29 @@ fn resolve_providers(file: &FileConfig) -> anyhow::Result<Vec<ParsedProvider>> {
             let limit = limit
                 .map(|limit| resolve_model_limit(id, model_id, limit))
                 .transpose()?;
+            let display_name = name
+                .map(str::trim)
+                .filter(|name| !name.is_empty() && !name.chars().any(char::is_control))
+                .map(str::to_string);
             models.push(ParsedModel {
                 id: model_id.to_string(),
+                display_name,
                 reasoning_default: resolve_default_reasoning(explicit_default, None, &variants),
                 reasoning_variants: variants,
+                variants_configured,
+                explicit_default,
                 limit,
             });
         }
-        let api_key = provider
-            .api_key
-            .as_deref()
-            .map(resolve_secret)
-            .transpose()?;
+        let api_key = if resolve_secrets {
+            provider
+                .api_key
+                .as_deref()
+                .map(resolve_secret)
+                .transpose()?
+        } else {
+            provider.api_key.clone()
+        };
         out.push(ParsedProvider {
             id: id.clone(),
             kind,
@@ -1769,39 +2106,185 @@ fn failed_result(error: &CatalogFailure) -> ProviderCatalogResult {
     }
 }
 
-fn route_for_plan(
+/// One model of a provider's effective list: the model cache row merged
+/// with the provider's config `models:` entry of the same id.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct EffectiveModel {
+    id: String,
+    display_name: Option<String>,
+    reasoning_variants: Vec<String>,
+    reasoning_default: Option<ReasoningEffort>,
+    limit: hya_provider::ModelLimitOverride,
+    source: ModelCatalogSource,
+}
+
+/// Merge cached remote rows with config entries, per model id.
+///
+/// Remote-only rows keep their cached metadata; config-only entries keep
+/// today's configured semantics; a model in both is an override whose config
+/// fields win field by field and whose unset config fields fall back to the
+/// cached metadata. Cached rows come first (remote order), then config-only
+/// entries (config order).
+fn merge_provider_models(
+    provider: &ParsedProvider,
+    cached: &[crate::model_cache::CachedModel],
+) -> Vec<EffectiveModel> {
+    let configured = provider
+        .models
+        .iter()
+        .map(|model| (model.id.as_str(), model))
+        .collect::<BTreeMap<_, _>>();
+    let mut seen = BTreeSet::new();
+    let mut out = Vec::new();
+    for row in cached {
+        let id = row.id.trim();
+        if id.is_empty() || (provider.id == "hya" && id == "offline") || !seen.insert(id) {
+            continue;
+        }
+        out.push(match configured.get(id) {
+            Some(config) => override_model(provider.kind, config, row),
+            None => remote_model(provider.kind, row),
+        });
+    }
+    for model in &provider.models {
+        if seen.insert(model.id.as_str()) {
+            out.push(EffectiveModel {
+                id: model.id.clone(),
+                display_name: model.display_name.clone(),
+                reasoning_variants: model.reasoning_variants.clone(),
+                reasoning_default: model.reasoning_default,
+                limit: model.limit.clone().unwrap_or_default(),
+                source: ModelCatalogSource::Configured,
+            });
+        }
+    }
+    out
+}
+
+fn cached_variants(kind: ProviderKind, row: &crate::model_cache::CachedModel) -> Vec<String> {
+    let variants = row
+        .reasoning_variants
+        .iter()
+        .filter_map(|variant| ReasoningEffort::parse(variant))
+        .map(|effort| effort.as_str().to_string())
+        .collect::<Vec<_>>();
+    if variants.is_empty() {
+        kind.reasoning_variants()
+    } else {
+        variants
+    }
+}
+
+fn remote_model(kind: ProviderKind, row: &crate::model_cache::CachedModel) -> EffectiveModel {
+    EffectiveModel {
+        id: row.id.trim().to_string(),
+        display_name: row.display_name.clone(),
+        reasoning_variants: cached_variants(kind, row),
+        reasoning_default: row
+            .reasoning_default
+            .as_deref()
+            .and_then(ReasoningEffort::parse),
+        limit: hya_provider::ModelLimitOverride {
+            context: row.context_limit,
+            output: row.output_limit,
+        },
+        source: ModelCatalogSource::Discovered,
+    }
+}
+
+fn override_model(
+    kind: ProviderKind,
+    config: &ParsedModel,
+    row: &crate::model_cache::CachedModel,
+) -> EffectiveModel {
+    let (reasoning_variants, reasoning_default) = if config.variants_configured {
+        (config.reasoning_variants.clone(), config.reasoning_default)
+    } else {
+        let variants = cached_variants(kind, row);
+        let default = config.explicit_default.or_else(|| {
+            row.reasoning_default
+                .as_deref()
+                .and_then(ReasoningEffort::parse)
+                .filter(|effort| {
+                    *effort == ReasoningEffort::Off
+                        || variants.iter().any(|variant| variant == effort.as_str())
+                })
+        });
+        let default = resolve_default_reasoning(default, None, &variants);
+        (variants, default)
+    };
+    let configured_limit = config.limit.clone().unwrap_or_default();
+    let mut limit = hya_provider::ModelLimitOverride {
+        context: if configured_limit.context > 0 {
+            configured_limit.context
+        } else {
+            row.context_limit
+        },
+        output: if configured_limit.output > 0 {
+            configured_limit.output
+        } else {
+            row.output_limit
+        },
+    };
+    // A cached value never contradicts a configured one: drop the cached side.
+    if limit.context > 0 && limit.output > limit.context {
+        if configured_limit.output == 0 {
+            limit.output = 0;
+        } else {
+            limit.context = 0;
+        }
+    }
+    EffectiveModel {
+        id: config.id.clone(),
+        display_name: config
+            .display_name
+            .clone()
+            .or_else(|| row.display_name.clone()),
+        reasoning_variants,
+        reasoning_default,
+        limit,
+        source: ModelCatalogSource::Overridden,
+    }
+}
+
+/// Build one provider's HTTP route over its effective model list.
+fn route_for_models(
     provider: &ParsedProvider,
     credential: &ProviderCredential,
-    models: &[String],
-    source: ModelCatalogSource,
+    models: &[EffectiveModel],
 ) -> anyhow::Result<HttpProvider> {
     let mut route = HttpProvider::new(
         provider.id.clone(),
         provider.kind,
         &provider.base_url,
         credential.token.clone(),
-        models.iter().cloned(),
+        models.iter().map(|model| model.id.clone()),
     )?
-    .with_catalog_source(source)
+    .with_catalog_source(ModelCatalogSource::Configured)
     .with_retry(provider.retry)
+    .with_model_sources(models.iter().map(|model| (model.id.clone(), model.source)))
     .with_model_reasoning_variants(
-        provider
-            .models
+        models
             .iter()
             .map(|model| (model.id.clone(), model.reasoning_variants.clone())),
     )
     .with_model_reasoning_defaults(
-        provider
-            .models
+        models
             .iter()
             .map(|model| (model.id.clone(), model.reasoning_default)),
     )
     .with_model_limits(
-        provider
-            .models
+        models
             .iter()
-            .filter_map(|model| Some((model.id.clone(), model.limit.clone()?))),
-    );
+            .filter(|model| model.limit.context > 0 || model.limit.output > 0)
+            .map(|model| (model.id.clone(), model.limit.clone())),
+    )
+    .with_model_display_names(models.iter().filter_map(|model| {
+        model
+            .display_name
+            .clone()
+            .map(|name| (model.id.clone(), name))
+    }));
     if credential.use_codex_session {
         route = route.with_codex_session_auth(credential.account_id.clone());
     }
@@ -1831,131 +2314,219 @@ struct ProviderPlanResult {
     state: ProviderCatalogState,
 }
 
-async fn resolve_provider_plan(
-    provider: ParsedProvider,
-    credential: ProviderCredential,
-) -> anyhow::Result<ProviderPlanResult> {
-    let auth_state = status_auth(&credential);
-    if !provider.models.is_empty() {
-        let ids = provider
-            .models
-            .iter()
-            .map(|model| model.id.clone())
-            .collect::<Vec<_>>();
-        let route = route_for_plan(&provider, &credential, &ids, ModelCatalogSource::Configured)?;
-        let models = hya_provider::Provider::catalog(&route);
-        return Ok(ProviderPlanResult {
-            route: Some(route),
-            models,
-            state: ProviderCatalogState {
-                provider_id: provider.id,
-                kind: provider.kind,
-                source: ProviderCatalogSource::Configured,
-                auth: auth_state,
-                result: ProviderCatalogResult::Models,
-            },
-        });
+/// What a discovery run does to the provider's model cache rows.
+#[derive(Clone, Debug)]
+enum CacheAction {
+    /// Replace the rows with a fresh remote list (possibly empty).
+    Replace(Vec<crate::model_cache::CachedModel>),
+    /// Keep the existing rows (transient failure: stale beats nothing).
+    Keep,
+}
+
+/// Outcome of one remote model-list fetch for a provider.
+#[derive(Clone, Debug)]
+pub struct DiscoveryResult {
+    auth: ProviderAuthState,
+    result: ProviderCatalogResult,
+    cache: CacheAction,
+    error: Option<String>,
+}
+
+impl DiscoveryResult {
+    /// Whether the list was fetched and parsed (possibly empty).
+    #[must_use]
+    pub fn ok(&self) -> bool {
+        matches!(
+            self.result,
+            ProviderCatalogResult::Models | ProviderCatalogResult::Empty
+        )
     }
 
-    let outcome = discover_models(CatalogDiscoveryRequest::new(
+    /// Stable wire label: `models`, `empty`, `auth_required`,
+    /// `auth_rejected`, `unavailable`, `invalid`, or `unsupported`.
+    #[must_use]
+    pub fn label(&self) -> &'static str {
+        match (self.auth, self.result) {
+            (ProviderAuthState::AuthRequired, _) => "auth_required",
+            (ProviderAuthState::AuthRejected, _) => "auth_rejected",
+            (_, ProviderCatalogResult::Models) => "models",
+            (_, ProviderCatalogResult::Empty) => "empty",
+            (_, ProviderCatalogResult::Invalid) => "invalid",
+            (_, ProviderCatalogResult::Unsupported) => "unsupported",
+            (_, ProviderCatalogResult::Unavailable | ProviderCatalogResult::Offline) => {
+                "unavailable"
+            }
+        }
+    }
+
+    /// Bounded, non-secret failure description.
+    #[must_use]
+    pub fn error_message(&self) -> Option<&str> {
+        self.error.as_deref()
+    }
+
+    /// Number of remote models fetched.
+    #[must_use]
+    pub fn model_count(&self) -> usize {
+        match &self.cache {
+            CacheAction::Replace(rows) => rows.len(),
+            CacheAction::Keep => 0,
+        }
+    }
+
+    fn timed_out(auth: ProviderAuthState) -> Self {
+        Self {
+            auth,
+            result: ProviderCatalogResult::Unavailable,
+            cache: CacheAction::Keep,
+            error: Some(CatalogFailure::Timeout.to_string()),
+        }
+    }
+}
+
+/// Fetch one provider's remote model list (bounded; no retry loop).
+///
+/// A 401/403 clears the provider's cached rows (they are not usable with this
+/// credential); a transport, status, or decode failure keeps them.
+async fn discover_provider(
+    provider: &ParsedProvider,
+    credential: &ProviderCredential,
+) -> DiscoveryResult {
+    let presence = |auth: AuthPresence| match auth {
+        AuthPresence::Credentialed => ProviderAuthState::Credentialed,
+        AuthPresence::Unauthenticated => ProviderAuthState::Unauthenticated,
+    };
+    let fetched_at = crate::model_cache::now_ms();
+    match discover_models(CatalogDiscoveryRequest::new(
         provider.id.clone(),
         provider.kind,
         provider.base_url.clone(),
-        discovery_auth(provider.kind, &credential),
+        discovery_auth(provider.kind, credential),
     ))
-    .await;
-    let (ids, source, auth, result) = match outcome {
+    .await
+    {
         ProviderDiscoveryOutcome::Discovered { models, auth } => {
-            let ids = models
-                .into_iter()
-                .map(|model| model.id)
-                .filter(|model_id| provider.id != "hya" || model_id != "offline")
+            let rows = models
+                .iter()
+                .filter(|model| provider.id != "hya" || model.id != "offline")
+                .map(|model| crate::model_cache::CachedModel::from_discovered(model, fetched_at))
                 .collect::<Vec<_>>();
-            let (source, result) = if ids.is_empty() {
-                (ProviderCatalogSource::None, ProviderCatalogResult::Empty)
-            } else {
-                (
-                    ProviderCatalogSource::Discovered,
-                    ProviderCatalogResult::Models,
-                )
-            };
-            (
-                ids,
-                source,
-                match auth {
-                    AuthPresence::Credentialed => ProviderAuthState::Credentialed,
-                    AuthPresence::Unauthenticated => ProviderAuthState::Unauthenticated,
+            DiscoveryResult {
+                auth: presence(auth),
+                result: if rows.is_empty() {
+                    ProviderCatalogResult::Empty
+                } else {
+                    ProviderCatalogResult::Models
                 },
-                result,
-            )
+                cache: CacheAction::Replace(rows),
+                error: None,
+            }
         }
-        ProviderDiscoveryOutcome::Empty { auth } => (
-            Vec::new(),
-            ProviderCatalogSource::None,
-            match auth {
-                AuthPresence::Credentialed => ProviderAuthState::Credentialed,
-                AuthPresence::Unauthenticated => ProviderAuthState::Unauthenticated,
-            },
-            ProviderCatalogResult::Empty,
-        ),
-        ProviderDiscoveryOutcome::AuthRequired => (
-            Vec::new(),
-            ProviderCatalogSource::None,
-            ProviderAuthState::AuthRequired,
-            ProviderCatalogResult::Unavailable,
-        ),
-        ProviderDiscoveryOutcome::AuthRejected => (
-            Vec::new(),
-            ProviderCatalogSource::None,
-            ProviderAuthState::AuthRejected,
-            ProviderCatalogResult::Unavailable,
-        ),
-        ProviderDiscoveryOutcome::Unsupported { .. } => (
-            Vec::new(),
-            ProviderCatalogSource::None,
-            auth_state,
-            ProviderCatalogResult::Unsupported,
-        ),
-        ProviderDiscoveryOutcome::Failed { error } => (
-            Vec::new(),
-            ProviderCatalogSource::None,
-            auth_state,
-            failed_result(&error),
-        ),
+        ProviderDiscoveryOutcome::Empty { auth } => DiscoveryResult {
+            auth: presence(auth),
+            result: ProviderCatalogResult::Empty,
+            cache: CacheAction::Replace(Vec::new()),
+            error: None,
+        },
+        ProviderDiscoveryOutcome::AuthRequired => DiscoveryResult {
+            auth: ProviderAuthState::AuthRequired,
+            result: ProviderCatalogResult::Unavailable,
+            cache: CacheAction::Replace(Vec::new()),
+            error: Some("the model list requires an API key (HTTP 401/403)".to_string()),
+        },
+        ProviderDiscoveryOutcome::AuthRejected => DiscoveryResult {
+            auth: ProviderAuthState::AuthRejected,
+            result: ProviderCatalogResult::Unavailable,
+            cache: CacheAction::Replace(Vec::new()),
+            error: Some("the provider rejected the API key (HTTP 401/403)".to_string()),
+        },
+        ProviderDiscoveryOutcome::Unsupported { .. } => DiscoveryResult {
+            auth: status_auth(credential),
+            result: ProviderCatalogResult::Unsupported,
+            cache: CacheAction::Keep,
+            error: Some("no model-list adapter for this provider kind".to_string()),
+        },
+        ProviderDiscoveryOutcome::Failed { error } => DiscoveryResult {
+            auth: status_auth(credential),
+            result: failed_result(&error),
+            cache: CacheAction::Keep,
+            error: Some(error.to_string()),
+        },
+    }
+}
+
+/// Apply a discovery result to the provider's cached rows, persisting a
+/// replacement, and return the rows to plan with.
+async fn apply_discovery(
+    provider_id: &str,
+    cached: Vec<crate::model_cache::CachedModel>,
+    discovery: &DiscoveryResult,
+) -> Vec<crate::model_cache::CachedModel> {
+    match &discovery.cache {
+        CacheAction::Replace(rows) => {
+            crate::model_cache::store_provider_or_warn(provider_id, rows).await;
+            rows.clone()
+        }
+        CacheAction::Keep => cached,
+    }
+}
+
+/// Build one provider's route, catalog rows, and status from its cached rows
+/// merged with its config entries.
+fn plan_for_provider(
+    provider: &ParsedProvider,
+    credential: &ProviderCredential,
+    cached: &[crate::model_cache::CachedModel],
+    discovery: Option<&DiscoveryResult>,
+) -> anyhow::Result<ProviderPlanResult> {
+    let merged = merge_provider_models(provider, cached);
+    let auth = discovery.map_or_else(|| status_auth(credential), |discovery| discovery.auth);
+    let source = if merged.is_empty() {
+        ProviderCatalogSource::None
+    } else if merged
+        .iter()
+        .any(|model| model.source != ModelCatalogSource::Configured)
+    {
+        ProviderCatalogSource::Discovered
+    } else {
+        ProviderCatalogSource::Configured
     };
-    if ids.is_empty() {
+    let result = if merged.is_empty() {
+        discovery.map_or(ProviderCatalogResult::Empty, |discovery| discovery.result)
+    } else {
+        ProviderCatalogResult::Models
+    };
+    let state = ProviderCatalogState {
+        provider_id: provider.id.clone(),
+        kind: provider.kind,
+        source,
+        auth,
+        result,
+    };
+    if merged.is_empty() {
         return Ok(ProviderPlanResult {
             route: None,
             models: Vec::new(),
-            state: ProviderCatalogState {
-                provider_id: provider.id,
-                kind: provider.kind,
-                source,
-                auth,
-                result,
-            },
+            state,
         });
     }
-    let route = route_for_plan(&provider, &credential, &ids, ModelCatalogSource::Discovered)?;
+    let route = route_for_models(provider, credential, &merged)?;
     let models = hya_provider::Provider::catalog(&route);
     Ok(ProviderPlanResult {
         route: Some(route),
         models,
-        state: ProviderCatalogState {
-            provider_id: provider.id,
-            kind: provider.kind,
-            source,
-            auth,
-            result,
-        },
+        state,
     })
 }
 
-/// Load Hya config and resolve every empty provider catalog before publishing.
+/// Load Hya config and resolve every provider catalog before publishing.
 ///
-/// Providers with an explicit non-empty `models:` list stay authoritative.
-/// Empty-`models` providers prefer `$XDG_CONFIG_HOME/hya/models.yml.cache` so
-/// startup does not wait on discovery HTTP. Those providers are also queued on
+/// A provider's effective model list is its model-cache rows
+/// (`$XDG_CACHE_HOME/hya/model_cache.db`) merged per model id with its
+/// config `models:` entries (config fields win). Providers with cached rows
+/// or config entries start without waiting on discovery HTTP; a provider with
+/// neither makes one bounded blocking request. Providers with no cached rows,
+/// and discovery-only providers (empty `models:`), are queued on
 /// [`ResolvedConfig::pending_discovery`] for background refresh.
 pub async fn load() -> anyhow::Result<Option<ResolvedConfig>> {
     let Some(path) = config_path() else {
@@ -1982,86 +2553,54 @@ pub async fn load() -> anyhow::Result<Option<ResolvedConfig>> {
         return Ok(None);
     }
 
-    let cache = crate::models_cache::read_models_cache().unwrap_or_default();
+    let mut cache = if parsed.is_empty() {
+        BTreeMap::new()
+    } else {
+        crate::model_cache::read_all_or_empty().await
+    };
     let semaphore = Arc::new(tokio::sync::Semaphore::new(4));
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
     let mut tasks = tokio::task::JoinSet::new();
     let mut plans = Vec::new();
     let mut pending_discovery = Vec::new();
-    // Providers whose catalog rows are discovery-sourced; the durable cache is
-    // keyed off this list, not the (shorter) refresh queue.
-    let mut discovered_ids = Vec::new();
     for provider in parsed {
         let credential = resolve_provider_credential(&provider);
-        if !provider.models.is_empty() {
-            plans.push(resolve_provider_plan(provider, credential).await?);
-            continue;
-        }
-        // Prefer the durable cache so cold listen does not block on discovery.
-        if let Some(cached_models) = cache.providers.get(&provider.id) {
-            let cleaned = cached_models
-                .iter()
-                .filter(|entry| !entry.id.trim().is_empty())
-                .cloned()
-                .collect::<Vec<_>>();
-            if !cleaned.is_empty() {
-                discovered_ids.push(provider.id.clone());
-                pending_discovery.push(PendingCatalogDiscovery {
-                    provider_id: provider.id.clone(),
-                    kind: provider.kind,
-                    base_url: provider.base_url.clone(),
-                    credential: credential.clone(),
-                    provider: provider.clone(),
-                });
-                plans.push(plan_from_cached_models(provider, credential, cleaned)?);
-                continue;
-            }
-        }
-        // Cache miss: keep today's blocking discovery for correctness. A
-        // queued refresh is only useful when the blocking attempt failed —
-        // re-fetching a just-discovered catalog would double the request on
-        // every cold `models` run.
-        let timeout_provider_id = provider.id.clone();
-        let timeout_kind = provider.kind;
-        let timeout_auth = status_auth(&credential);
-        discovered_ids.push(provider.id.clone());
-        pending_discovery.push(PendingCatalogDiscovery {
+        let cached = cache.remove(&provider.id).unwrap_or_default();
+        let pending = PendingCatalogDiscovery {
             provider_id: provider.id.clone(),
             kind: provider.kind,
             base_url: provider.base_url.clone(),
             credential: credential.clone(),
             provider: provider.clone(),
-        });
+        };
+        if !provider.models.is_empty() || !cached.is_empty() {
+            if cached.is_empty() || provider.models.is_empty() {
+                pending_discovery.push(pending);
+            }
+            plans.push(plan_for_provider(&provider, &credential, &cached, None)?);
+            continue;
+        }
+        // Nothing cached and nothing configured: one bounded blocking
+        // request so a discovery-only provider is usable on first start. A
+        // queued refresh is kept only when this attempt fails.
+        pending_discovery.push(pending);
         let semaphore = Arc::clone(&semaphore);
         tasks.spawn(async move {
-            match tokio::time::timeout_at(deadline, async {
-                let _permit = semaphore
-                    .acquire_owned()
-                    .await
-                    .map_err(|_| anyhow::anyhow!("catalog discovery semaphore closed"))?;
-                resolve_provider_plan(provider, credential).await
+            let discovery = match tokio::time::timeout_at(deadline, async {
+                let _permit = semaphore.acquire_owned().await.ok();
+                discover_provider(&provider, &credential).await
             })
             .await
             {
-                Ok(result) => result,
-                Err(_) => Ok(ProviderPlanResult {
-                    route: None,
-                    models: Vec::new(),
-                    state: ProviderCatalogState {
-                        provider_id: timeout_provider_id,
-                        kind: timeout_kind,
-                        source: ProviderCatalogSource::None,
-                        auth: timeout_auth,
-                        result: ProviderCatalogResult::Unavailable,
-                    },
-                }),
-            }
+                Ok(discovery) => discovery,
+                Err(_) => DiscoveryResult::timed_out(status_auth(&credential)),
+            };
+            let rows = apply_discovery(&provider.id, Vec::new(), &discovery).await;
+            plan_for_provider(&provider, &credential, &rows, Some(&discovery))
         });
     }
     while let Some(result) = tasks.join_next().await {
         let plan = result.map_err(|error| anyhow::anyhow!("catalog discovery task: {error}"))??;
-        // A successful blocking discovery already covers its queued refresh;
-        // keep the queue entry only for providers that still need a fetch.
         if plan.route.is_some() && !plan.models.is_empty() {
             pending_discovery.retain(|entry| entry.provider_id != plan.state.provider_id);
         }
@@ -2093,8 +2632,6 @@ pub async fn load() -> anyhow::Result<Option<ResolvedConfig>> {
     let websearch = file
         .tools
         .map_or_else(WebSearchConfig::default, |tools| tools.websearch);
-    // Persist any newly discovered rows so the next cold start can skip HTTP.
-    write_discovered_models_cache(&discovered_ids, &catalog);
     Ok(Some(ResolvedConfig {
         router,
         default_model: catalog.default_model().to_string(),
@@ -2110,162 +2647,194 @@ pub async fn load() -> anyhow::Result<Option<ResolvedConfig>> {
     }))
 }
 
-fn plan_from_cached_models(
-    provider: ParsedProvider,
-    credential: ProviderCredential,
-    cached: Vec<crate::models_cache::CachedModelEntry>,
-) -> anyhow::Result<ProviderPlanResult> {
-    let auth_state = status_auth(&credential);
-    let ids = cached
-        .iter()
-        .map(|entry| entry.id.trim().to_string())
-        .filter(|id| !id.is_empty())
-        .collect::<Vec<_>>();
-    let route = route_for_plan(&provider, &credential, &ids, ModelCatalogSource::Discovered)?
-        .with_model_reasoning_variants(
-            cached
-                .iter()
-                .filter(|entry| !entry.reasoning_variants.is_empty())
-                .map(|entry| (entry.id.clone(), entry.reasoning_variants.clone())),
-        )
-        .with_model_reasoning_defaults(cached.iter().map(|entry| {
-            (
-                entry.id.clone(),
-                entry
-                    .reasoning_default
-                    .as_deref()
-                    .and_then(ReasoningEffort::parse),
-            )
-        }))
-        .with_model_limits(cached.iter().map(|entry| {
-            (
-                entry.id.clone(),
-                hya_provider::ModelLimitOverride {
-                    context: entry.limit.context,
-                    output: entry.limit.output,
-                },
-            )
-        }));
-    let models = hya_provider::Provider::catalog(&route);
-    Ok(ProviderPlanResult {
-        route: Some(route),
-        models,
-        state: ProviderCatalogState {
-            provider_id: provider.id,
-            kind: provider.kind,
-            source: ProviderCatalogSource::Discovered,
-            auth: auth_state,
-            result: ProviderCatalogResult::Models,
-        },
-    })
-}
-
-fn write_discovered_models_cache(discovered_ids: &[String], catalog: &ProviderCatalogSnapshot) {
-    if discovered_ids.is_empty() {
-        return;
-    }
-    let mut file = crate::models_cache::read_models_cache().unwrap_or_default();
-    for provider_id in discovered_ids {
-        let models = catalog
-            .models()
-            .iter()
-            .filter(|model| {
-                model.provider_id == *provider_id && model.source == ModelCatalogSource::Discovered
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-        crate::models_cache::upsert_provider_models(&mut file, provider_id, &models);
-    }
-    let _ = crate::models_cache::write_models_cache_file(&file);
-}
-
-/// Force network discovery for deferred empty-`models` providers, rewrite
-/// `models.yml.cache`, and return rebuilt routes plus a replacement snapshot.
-///
-/// Callers swap the result onto the live [`hya_core::SessionEngine`] and notify
-/// the TUI (`catalog.updated`) after this future completes.
-///
-/// # Errors
-/// Returns discovery, route-build, or cache write failures.
-pub async fn refresh_pending_catalogs(
-    pending: Vec<PendingCatalogDiscovery>,
+/// Replace the routes, rows, and statuses of `replaced` providers in the
+/// current router/catalog with `plans`, keeping every other provider.
+fn splice_catalog(
     current: &ProviderCatalogSnapshot,
     current_router: &ProviderRouter,
-) -> anyhow::Result<(ProviderRouter, Arc<ProviderCatalogSnapshot>)> {
-    if pending.is_empty() {
-        return Ok((
-            current_router.clone(),
-            Arc::new(ProviderCatalogSnapshot::build(
-                current.models().to_vec(),
-                current.providers().to_vec(),
-                Some(current.default_model().clone()),
-            )),
-        ));
-    }
-    let pending_ids = pending
-        .iter()
-        .map(|entry| entry.provider_id.clone())
-        .collect::<BTreeSet<_>>();
-    let mut refreshed_plans = Vec::with_capacity(pending.len());
-    for entry in pending {
-        refreshed_plans.push(resolve_provider_plan(entry.provider, entry.credential).await?);
-    }
-    let mut cache = crate::models_cache::read_models_cache().unwrap_or_default();
-    for plan in &refreshed_plans {
-        crate::models_cache::upsert_provider_models(
-            &mut cache,
-            &plan.state.provider_id,
-            &plan.models,
-        );
-    }
-    crate::models_cache::write_models_cache_file(&cache)?;
-
+    replaced: &BTreeSet<String>,
+    plans: Vec<ProviderPlanResult>,
+) -> (ProviderRouter, Arc<ProviderCatalogSnapshot>) {
     let mut states = current
         .providers()
         .iter()
-        .filter(|state| !pending_ids.contains(&state.provider_id))
+        .filter(|state| {
+            !replaced.contains(&state.provider_id) && state.source != ProviderCatalogSource::Offline
+        })
         .cloned()
         .collect::<Vec<_>>();
-    states.extend(refreshed_plans.iter().map(|plan| plan.state.clone()));
+    states.extend(plans.iter().map(|plan| plan.state.clone()));
     states.sort_by(|left, right| left.provider_id.cmp(&right.provider_id));
-
     let mut models = current
         .models()
         .iter()
-        .filter(|model| !pending_ids.contains(&model.provider_id))
+        .filter(|model| {
+            !replaced.contains(&model.provider_id) && model.source != ModelCatalogSource::Offline
+        })
         .cloned()
         .collect::<Vec<_>>();
-    for plan in &refreshed_plans {
+    for plan in &plans {
         models.extend(plan.models.iter().cloned());
     }
-
     let catalog = Arc::new(ProviderCatalogSnapshot::build(
         models,
         states,
         Some(current.default_model().clone()),
     ));
-
+    let offline = catalog
+        .models()
+        .iter()
+        .all(|model| model.source == ModelCatalogSource::Offline);
+    // The built-in offline route (`hya`) is present only while the current
+    // catalog has no live row; it is re-added below only while the new one
+    // has none. A configured provider named `hya` is an ordinary route.
+    let offline_route_present = current
+        .models()
+        .iter()
+        .all(|model| model.source == ModelCatalogSource::Offline);
     let mut router = ProviderRouter::new();
     for provider in current_router.providers() {
-        if pending_ids.contains(provider.id()) {
+        if replaced.contains(provider.id()) || (offline_route_present && provider.id() == "hya") {
             continue;
         }
         router = router.with(Arc::clone(provider));
     }
-    for plan in refreshed_plans {
+    for plan in plans {
         if let Some(route) = plan.route {
             router = router.with(Arc::new(route));
         }
     }
-    if catalog
-        .models()
-        .iter()
-        .all(|model| model.source == ModelCatalogSource::Offline)
-    {
+    if offline {
         router = router.with(Arc::new(hya_provider::DevProvider::new()));
     }
     router = router.with_catalog_snapshot(Arc::clone(&catalog));
-    Ok((router, catalog))
+    (router, catalog)
+}
+
+/// Force network discovery for the queued providers, update the model
+/// cache, and return rebuilt routes plus a replacement snapshot.
+///
+/// Callers swap the result onto the live [`hya_core::SessionEngine`] and notify
+/// the TUI (`catalog.updated`) after this future completes.
+///
+/// # Errors
+/// Returns route-build failures.
+pub async fn refresh_pending_catalogs(
+    pending: Vec<PendingCatalogDiscovery>,
+    current: &ProviderCatalogSnapshot,
+    current_router: &ProviderRouter,
+) -> anyhow::Result<(ProviderRouter, Arc<ProviderCatalogSnapshot>)> {
+    let replaced = pending
+        .iter()
+        .map(|entry| entry.provider_id.clone())
+        .collect::<BTreeSet<_>>();
+    let mut cache = crate::model_cache::read_all_or_empty().await;
+    let mut plans = Vec::with_capacity(pending.len());
+    for entry in pending {
+        let discovery = discover_provider(&entry.provider, &entry.credential).await;
+        let cached = cache.remove(&entry.provider_id).unwrap_or_default();
+        let rows = apply_discovery(&entry.provider_id, cached, &discovery).await;
+        plans.push(plan_for_provider(
+            &entry.provider,
+            &entry.credential,
+            &rows,
+            Some(&discovery),
+        )?);
+    }
+    Ok(splice_catalog(current, current_router, &replaced, plans))
+}
+
+/// When a live provider rebuild fetches the remote model list.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DiscoverMode {
+    /// Always fetch (refresh, provider upsert).
+    Always,
+    /// Fetch only when the model cache has no rows for the provider (key save).
+    IfUncached,
+    /// Never fetch (key removal, config model edits).
+    Never,
+}
+
+/// Result of rebuilding providers from the current `config.yaml`.
+pub struct ProviderRebuild {
+    /// Router with the rebuilt routes spliced in.
+    pub router: ProviderRouter,
+    /// Catalog with the rebuilt rows and statuses spliced in.
+    pub catalog: Arc<ProviderCatalogSnapshot>,
+    /// Rebuilt provider ids that are declared in `config.yaml`.
+    pub configured: BTreeSet<String>,
+    /// Fetch outcome per provider that fetched.
+    pub discovery: BTreeMap<String, DiscoveryResult>,
+}
+
+/// Re-read `config.yaml`, credentials, and the model cache, then rebuild
+/// `ids` (every declared provider when `None`) and splice them into the
+/// current router/catalog. A requested id no longer declared in config loses
+/// its route and rows.
+///
+/// # Errors
+/// Returns config read/parse/validation or route-build failures.
+pub async fn rebuild_providers(
+    ids: Option<&BTreeSet<String>>,
+    mode: DiscoverMode,
+    current: &ProviderCatalogSnapshot,
+    current_router: &ProviderRouter,
+) -> anyhow::Result<ProviderRebuild> {
+    let selected = match config_path() {
+        Some(path) => {
+            let yaml = std::fs::read_to_string(&path)
+                .with_context(|| format!("read {}", path.display()))?;
+            if yaml.trim().is_empty() {
+                Vec::new()
+            } else {
+                resolve_providers_filtered(&parse_config(&yaml)?, ids, true)?
+            }
+        }
+        None => Vec::new(),
+    };
+    let configured = selected
+        .iter()
+        .map(|provider| provider.id.clone())
+        .collect::<BTreeSet<_>>();
+    let mut replaced = configured.clone();
+    if let Some(ids) = ids {
+        replaced.extend(ids.iter().cloned());
+    }
+    let mut cache = crate::model_cache::read_all_or_empty().await;
+    let mut plans = Vec::with_capacity(selected.len());
+    let mut discovery = BTreeMap::new();
+    for provider in selected {
+        let credential = resolve_provider_credential(&provider);
+        let mut cached = cache.remove(&provider.id).unwrap_or_default();
+        let fetch = match mode {
+            DiscoverMode::Always => true,
+            DiscoverMode::IfUncached => cached.is_empty(),
+            DiscoverMode::Never => false,
+        };
+        let outcome = if fetch {
+            let outcome = discover_provider(&provider, &credential).await;
+            cached = apply_discovery(&provider.id, cached, &outcome).await;
+            Some(outcome)
+        } else {
+            None
+        };
+        plans.push(plan_for_provider(
+            &provider,
+            &credential,
+            &cached,
+            outcome.as_ref(),
+        )?);
+        if let Some(outcome) = outcome {
+            discovery.insert(provider.id.clone(), outcome);
+        }
+    }
+    let (router, catalog) = splice_catalog(current, current_router, &replaced, plans);
+    Ok(ProviderRebuild {
+        router,
+        catalog,
+        configured,
+        discovery,
+    })
 }
 
 #[cfg(test)]
@@ -3459,7 +4028,7 @@ plugins:
             account_id: None,
             use_oauth_refresh: false,
         };
-        let plan = resolve_provider_plan(provider, credential).await.unwrap();
+        let plan = plan_for_provider(&provider, &credential, &[], None).unwrap();
         let caps = |model: &str| {
             plan.models
                 .iter()
@@ -3482,5 +4051,263 @@ plugins:
             .map(|caps| caps.max_output),
             Some(131_072)
         );
+    }
+
+    fn cached(id: &str) -> crate::model_cache::CachedModel {
+        crate::model_cache::CachedModel {
+            id: id.to_string(),
+            tools: true,
+            fetched_at_ms: 1,
+            ..crate::model_cache::CachedModel::default()
+        }
+    }
+
+    fn no_key() -> ProviderCredential {
+        ProviderCredential {
+            token: None,
+            use_grok_session: false,
+            use_codex_session: false,
+            account_id: None,
+            use_oauth_refresh: false,
+        }
+    }
+
+    #[test]
+    fn effective_models_merge_cache_and_config_per_id_with_field_level_override() {
+        let provider = parse_providers(
+            r#"
+providers:
+  gw:
+    kind: openai-response
+    base_url: https://gw.example/v1
+    models:
+      - id: shared
+        name: Shared (config)
+        limit:
+          context: 100000
+      - id: pinned-only
+        reasoning: false
+"#,
+        )
+        .unwrap()
+        .remove(0);
+        let mut shared = cached("shared");
+        shared.display_name = Some("Shared (remote)".into());
+        shared.context_limit = 50_000;
+        shared.output_limit = 8_000;
+        shared.reasoning_variants = vec!["low".into(), "high".into()];
+        shared.reasoning_default = Some("low".into());
+        let mut remote = cached("remote-only");
+        remote.display_name = Some("Remote Only".into());
+        remote.context_limit = 32_000;
+
+        let merged = merge_provider_models(&provider, &[shared, remote]);
+        let by_id = |id: &str| merged.iter().find(|model| model.id == id).unwrap();
+
+        let shared = by_id("shared");
+        assert_eq!(shared.source, ModelCatalogSource::Overridden);
+        assert_eq!(shared.display_name.as_deref(), Some("Shared (config)"));
+        assert_eq!(shared.limit.context, 100_000, "config field wins");
+        assert_eq!(shared.limit.output, 8_000, "unset config field falls back");
+        assert_eq!(shared.reasoning_variants, vec!["low", "high"]);
+        assert_eq!(shared.reasoning_default, Some(ReasoningEffort::Low));
+
+        let remote = by_id("remote-only");
+        assert_eq!(remote.source, ModelCatalogSource::Discovered);
+        assert_eq!(remote.display_name.as_deref(), Some("Remote Only"));
+        assert_eq!(remote.limit.context, 32_000);
+        assert_eq!(
+            remote.reasoning_variants,
+            ProviderKind::OpenAiResponse.reasoning_variants(),
+            "no remote variants: the kind menu applies"
+        );
+
+        let pinned = by_id("pinned-only");
+        assert_eq!(pinned.source, ModelCatalogSource::Configured);
+        assert!(pinned.reasoning_variants.is_empty(), "reasoning: false");
+        assert_eq!(pinned.reasoning_default, None);
+        assert_eq!(merged.len(), 3);
+
+        let plan = plan_for_provider(&provider, &no_key(), &[], None).unwrap();
+        assert_eq!(plan.state.source, ProviderCatalogSource::Configured);
+        let rows = plan_for_provider(
+            &provider,
+            &no_key(),
+            &[cached("shared"), cached("remote-only")],
+            None,
+        )
+        .unwrap()
+        .models;
+        let shared_row = rows.iter().find(|row| row.model_id == "shared").unwrap();
+        assert_eq!(shared_row.source, ModelCatalogSource::Overridden);
+        assert_eq!(shared_row.display_name.as_deref(), Some("Shared (config)"));
+        assert_eq!(shared_row.capabilities.max_context, 100_000);
+    }
+
+    #[test]
+    fn cached_output_limit_never_contradicts_a_configured_context() {
+        let provider = parse_providers(
+            "providers:\n  gw:\n    kind: openai\n    base_url: https://gw.example/v1\n    models:\n      - id: m\n        limit:\n          context: 1000\n",
+        )
+        .unwrap()
+        .remove(0);
+        let mut row = cached("m");
+        row.output_limit = 4_096;
+        let merged = merge_provider_models(&provider, &[row]);
+        assert_eq!(merged[0].limit.context, 1_000);
+        assert_eq!(merged[0].limit.output, 0);
+    }
+
+    fn temp_config(label: &str, yaml: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |duration| duration.as_nanos());
+        let dir =
+            std::env::temp_dir().join(format!("hya-cfg-{label}-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.yaml");
+        std::fs::write(&path, yaml).unwrap();
+        path
+    }
+
+    #[test]
+    fn upsert_provider_entry_preserves_other_keys_and_creates_discovery_providers() {
+        let path = temp_config(
+            "upsert",
+            "default_model: gw/m\nprovider_retry:\n  max_attempts: 5\nproviders:\n  gw:\n    kind: openai\n    base_url: https://old.example/v1\n    api_key: \"{env:GW_KEY}\"\n    models: [m]\n    retry:\n      max_attempts: 2\n",
+        );
+        assert!(
+            !upsert_provider_entry(&path, "gw", "anthropic", "https://new.example/v1").unwrap()
+        );
+        assert!(upsert_provider_entry(&path, "fresh", "google", "https://g.example").unwrap());
+        let file = parse_config(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let gw = file.providers.get("gw").unwrap();
+        assert_eq!(ProviderKind::from(gw.kind), ProviderKind::Anthropic);
+        assert_eq!(gw.base_url, "https://new.example/v1");
+        assert_eq!(gw.api_key.as_deref(), Some("{env:GW_KEY}"));
+        assert_eq!(gw.models.len(), 1);
+        assert!(gw.retry.is_some());
+        assert!(file.provider_retry.is_some());
+        assert_eq!(file.default_model.as_deref(), Some("gw/m"));
+        let fresh = file.providers.get("fresh").unwrap();
+        assert!(fresh.models.is_empty());
+
+        assert!(matches!(
+            upsert_provider_entry(&path, "x", "bogus", "https://x"),
+            Err(ConfigEditError::Invalid(_))
+        ));
+    }
+
+    #[test]
+    fn set_and_remove_model_entries_round_trip_string_and_mapping_forms() {
+        let path = temp_config(
+            "models",
+            "providers:\n  gw:\n    kind: openai\n    base_url: https://gw.example/v1\n    models:\n      - plain\n      - id: detailed\n        reasoning:\n          variants: [low, high]\n",
+        );
+        set_model_entry(
+            &path,
+            "gw",
+            "plain",
+            &ModelEntryOverride {
+                display_name: Some("Plain".into()),
+                context_limit: Some(64_000),
+                output_limit: Some(4_096),
+                reasoning: Some(false),
+            },
+        )
+        .unwrap();
+        set_model_entry(
+            &path,
+            "gw",
+            "vendor/new:free",
+            &ModelEntryOverride {
+                output_limit: Some(1_000),
+                ..ModelEntryOverride::default()
+            },
+        )
+        .unwrap();
+        set_model_entry(
+            &path,
+            "gw",
+            "detailed",
+            &ModelEntryOverride {
+                reasoning: Some(true),
+                ..ModelEntryOverride::default()
+            },
+        )
+        .unwrap();
+        let parsed = parse_providers(&std::fs::read_to_string(&path).unwrap())
+            .unwrap()
+            .remove(0);
+        let plain = parsed.models.iter().find(|m| m.id == "plain").unwrap();
+        assert_eq!(plain.display_name.as_deref(), Some("Plain"));
+        assert_eq!(
+            plain.limit.as_ref().map(|limit| limit.context),
+            Some(64_000)
+        );
+        assert_eq!(plain.limit.as_ref().map(|limit| limit.output), Some(4_096));
+        assert!(plain.reasoning_variants.is_empty());
+        let added = parsed
+            .models
+            .iter()
+            .find(|m| m.id == "vendor/new:free")
+            .unwrap();
+        assert_eq!(added.limit.as_ref().map(|limit| limit.output), Some(1_000));
+        let detailed = parsed.models.iter().find(|m| m.id == "detailed").unwrap();
+        assert_eq!(
+            detailed.reasoning_variants,
+            vec!["low", "high"],
+            "mapping kept"
+        );
+
+        // Clearing every managed field writes the entry back as a string.
+        set_model_entry(&path, "gw", "plain", &ModelEntryOverride::default()).unwrap();
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(raw.contains("- plain\n"), "{raw}");
+
+        // Validation: an output above the context is rejected, file untouched.
+        let before = std::fs::read_to_string(&path).unwrap();
+        assert!(matches!(
+            set_model_entry(
+                &path,
+                "gw",
+                "plain",
+                &ModelEntryOverride {
+                    context_limit: Some(10),
+                    output_limit: Some(20),
+                    ..ModelEntryOverride::default()
+                },
+            ),
+            Err(ConfigEditError::Invalid(_))
+        ));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+
+        assert!(remove_model_entry(&path, "gw", "vendor/new:free").unwrap());
+        assert!(!remove_model_entry(&path, "gw", "vendor/new:free").unwrap());
+        assert!(matches!(
+            remove_model_entry(&path, "missing", "m"),
+            Err(ConfigEditError::NotFound(_))
+        ));
+        assert!(matches!(
+            set_model_entry(&path, "missing", "m", &ModelEntryOverride::default()),
+            Err(ConfigEditError::NotFound(_))
+        ));
+    }
+
+    #[test]
+    fn detailed_model_entries_accept_name_and_boolean_reasoning() {
+        let parsed = parse_providers(
+            "providers:\n  gw:\n    kind: anthropic\n    base_url: https://gw.example/v1\n    models:\n      - id: a\n        name: Model A\n        reasoning: true\n      - id: b\n        reasoning: false\n",
+        )
+        .unwrap()
+        .remove(0);
+        assert_eq!(parsed.models[0].display_name.as_deref(), Some("Model A"));
+        assert_eq!(
+            parsed.models[0].reasoning_variants,
+            ProviderKind::Anthropic.reasoning_variants()
+        );
+        assert!(!parsed.models[0].variants_configured);
+        assert!(parsed.models[1].reasoning_variants.is_empty());
+        assert!(parsed.models[1].variants_configured);
     }
 }

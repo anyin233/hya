@@ -1,5 +1,18 @@
 # 0.41.0
 
+## Providers can be managed live; model lists are cached in `model_cache.db`
+
+- New v1 routes to manage providers without restarting the server:
+  - `PUT /v1/providers/{providerId}` adds or updates a provider (`kind`, `baseUrl`, optional `apiKey`) and fetches its models.
+  - `POST /v1/providers/{providerId}/refresh` re-fetches the provider's models from its remote.
+  - `PUT` / `DELETE /v1/providers/{providerId}/models` adds or edits a model entry in `config.yaml` (name, context and output limits, reasoning), or removes it.
+  - `POST /v1/providers/{providerId}/test` sends `hi` to one model with a 1-token output limit (16 for Responses-style providers, which reject anything smaller) and reports whether it answered.
+  - gRPC has the same calls. See [Protocol guide](docs/protocol/README.md#providers-and-keys).
+- Saving or removing a key (`PUT` / `DELETE /v1/auth/{id}`) now takes effect immediately; a restart is no longer needed. Keys are written to `auth/<id>.yaml` with mode 0600. Provider rows now show `kind`, `baseUrl`, `keySource` (`saved`, `oauth`, `config`, or `none`; the key itself is never returned), and `modelCount`. Each model row now shows `source` (`remote`, `config`, `override`, or `offline`) and a display name.
+- Model lists fetched from providers are stored in `$XDG_CACHE_HOME/hya/model_cache.db`, which replaces `models.yml.cache` (imported once). A provider's models are the fetched models plus the `models:` in `config.yaml`, merged by model id. Fields set in the config win and unset fields keep the fetched values. Listing models in `config.yaml` no longer turns off fetching. Model entries accept `name` and `reasoning: true|false`. Editing through the API rewrites `config.yaml`. See [Configuration](docs/configuration.md).
+- `hya models --refresh [provider]` re-fetches models; `--verbose` shows each model's source and limits.
+- Discovery also reads display names and limits from Anthropic, Google, and OpenRouter-style model lists.
+
 ## Desktop notifications
 
 - While the terminal is in the background, the TUI sends a desktop notification when a turn finishes or fails, or when a permission or question prompt appears. It uses OSC 9 and OSC 777 and detects focus through terminal focus reporting. Turn it off with `/notifications off` (saved in `tui.json`). See [TUI](docs/tui.md#desktop-notifications).

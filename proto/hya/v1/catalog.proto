@@ -5,8 +5,12 @@ package hya.v1;
 
 import "hya/v1/common.proto";
 
-// Read-only catalog surface used by pickers, completion UIs, and setup
-// flows.
+// Catalog surface used by pickers, completion UIs, and setup flows, plus
+// the provider-management calls behind the TUI Provider View (add or update
+// a provider, refresh its remote model list, override model metadata in
+// `config.yaml`, and test a model). Provider changes apply live: the server
+// rebuilds that provider's route and the catalog, and emits
+// `catalog.updated`.
 service Catalog {
   // Agents that can be bound to a session.
   //
@@ -27,6 +31,40 @@ service Catalog {
   //
   // hya.http: GET /v1/providers/{provider_id}
   rpc GetProvider(GetProviderRequest) returns (ProviderInfo);
+
+  // Add or update a provider in `config.yaml` (and save its API key when
+  // one is given), fetch its remote model list into the model cache, and
+  // apply it live. A failed fetch does not fail the call: `discovery`
+  // reports it.
+  //
+  // hya.http: PUT /v1/providers/{provider_id}
+  rpc UpsertProvider(UpsertProviderRequest) returns (ProviderUpdate);
+
+  // Re-read the provider's config entry and key, fetch its remote model
+  // list into the model cache, and apply it live.
+  //
+  // hya.http: POST /v1/providers/{provider_id}/refresh
+  rpc RefreshProvider(RefreshProviderRequest) returns (ProviderUpdate);
+
+  // Write one model's entry (with its metadata overrides) into the
+  // provider's `models:` in `config.yaml` and apply it live. The model id
+  // travels in the body because ids may contain `/` or `:`.
+  //
+  // hya.http: PUT /v1/providers/{provider_id}/models
+  rpc SetProviderModel(SetProviderModelRequest) returns (ProviderUpdate);
+
+  // Remove one model's entry from the provider's `models:` in
+  // `config.yaml` and apply it live; a remote model stays listed from the
+  // model cache. The model id travels as the `modelId` query parameter.
+  //
+  // hya.http: DELETE /v1/providers/{provider_id}/models
+  rpc RemoveProviderModel(RemoveProviderModelRequest) returns (ProviderUpdate);
+
+  // Send one `hi` user message to a provider's model with max output tokens
+  // 1 (no tools, no reasoning) and report whether a normal reply came back.
+  //
+  // hya.http: POST /v1/providers/{provider_id}/test
+  rpc TestProviderModel(TestProviderModelRequest) returns (TestProviderModelResponse);
 
   // Slash-command catalog entries.
   //
@@ -131,6 +169,11 @@ message ModelSummary {
   uint64 context_limit = 7;
   // Maximum output tokens (`limit.output`); 0 when unknown.
   uint64 output_limit = 8;
+  // Where the row comes from: `remote` (the provider's remote model list,
+  // via the model cache), `config` (only a `models:` entry in
+  // `config.yaml`), `override` (both; config fields win field by field), or
+  // `offline` (the built-in `hya/offline` row).
+  string source = 9;
 }
 
 message ListModelsResponse {
@@ -159,6 +202,17 @@ message ProviderSummary {
   string website = 4;
   // Model discovery outcome: `models`, `empty`, `unavailable`, `invalid`.
   string result = 5;
+  // Config `kind` (`openai`, `openai-response`, `anthropic`, `google`,
+  // `openai-codex`, `grok-build`); empty for the offline provider.
+  string kind = 6;
+  // Config `base_url`; empty for the offline provider.
+  string base_url = 7;
+  // Where the provider's credential comes from: `saved` (an API key in
+  // `auth/<id>.yaml`), `oauth` (a saved OAuth bundle), `config` (an inline
+  // `api_key` in `config.yaml`), or `none`. Never the secret itself.
+  string key_source = 8;
+  // Number of model rows the provider currently serves.
+  uint32 model_count = 9;
 }
 
 message ListProvidersResponse {
@@ -185,6 +239,110 @@ message ProviderInfo {
   bool supports_api_key = 3;
   // Whether an OAuth flow is supported.
   bool supports_oauth = 4;
+}
+
+message UpsertProviderRequest {
+  // Directory context (unused; providers are process-wide).
+  string directory = 1;
+  // Provider id: 1-64 ASCII letters, digits, `-`, or `_` (`hya` is
+  // reserved for the offline provider).
+  string provider_id = 2;
+  // Protocol kind: `openai` (OpenAI-compatible Chat Completions),
+  // `openai-response`, `anthropic`, or `google`; the config aliases
+  // `openai-compatible`, `openai-completion`, `openai-codex`, and
+  // `grok-build` are accepted too.
+  string kind = 3;
+  // API root, `http://` or `https://` (for example
+  // `https://api.openai.com/v1`).
+  string base_url = 4;
+  // API key to save in `auth/<id>.yaml`; absent or empty keeps the current
+  // credential.
+  optional string api_key = 5;
+}
+
+message RefreshProviderRequest {
+  // Directory context (unused; providers are process-wide).
+  string directory = 1;
+  // Configured provider id.
+  string provider_id = 2;
+}
+
+message SetProviderModelRequest {
+  // Directory context (unused; providers are process-wide).
+  string directory = 1;
+  // Configured provider id.
+  string provider_id = 2;
+  // Provider-local model id (may contain `/` and `:`).
+  string model_id = 3;
+  // Display name written as the entry's `name`; absent removes it.
+  optional string display_name = 4;
+  // Context window written as `limit.context`; absent or 0 removes it.
+  optional uint32 context_limit = 5;
+  // Max output tokens written as `limit.output`; absent or 0 removes it.
+  optional uint32 output_limit = 6;
+  // Reasoning switch written as `reasoning: true|false`; absent removes a
+  // boolean `reasoning` (a detailed `reasoning:` mapping is kept when this
+  // is absent or true).
+  optional bool reasoning = 7;
+}
+
+message RemoveProviderModelRequest {
+  // Directory context (unused; providers are process-wide).
+  string directory = 1;
+  // Configured provider id.
+  string provider_id = 2;
+  // Provider-local model id whose config entry is removed.
+  string model_id = 3;
+}
+
+// Outcome of one remote model-list fetch.
+message DiscoveryOutcome {
+  // True when the remote model list was fetched and parsed (possibly
+  // empty).
+  bool ok = 1;
+  // `models`, `empty`, `auth_required`, `auth_rejected`, `unavailable`,
+  // `invalid`, or `unsupported`.
+  string result = 2;
+  // Bounded, non-secret failure description when `ok` is false.
+  string error_message = 3;
+  // Number of remote models fetched (and now in the model cache).
+  uint32 model_count = 4;
+}
+
+// A provider after a change, applied live.
+message ProviderUpdate {
+  // The provider with its effective model rows.
+  ProviderInfo provider = 1;
+  // Remote model-list fetch outcome; unset when the call did not fetch.
+  DiscoveryOutcome discovery = 2;
+}
+
+message TestProviderModelRequest {
+  // Directory context (unused; providers are process-wide).
+  string directory = 1;
+  // Configured provider id.
+  string provider_id = 2;
+  // Provider-local model id to probe.
+  string model_id = 3;
+}
+
+message TestProviderModelResponse {
+  // True when the reply stream completed without an error (a `length`
+  // finish is a normal reply: the probe caps output at one token).
+  bool ok = 1;
+  // Text the model returned (often one token or empty).
+  string text = 2;
+  // Finish reason when the provider reported one: `stop`, `length`,
+  // `tool_calls`, `cancelled`, or `error`.
+  string finish_reason = 3;
+  // Stable failure class when `ok` is false: `http_<status>`, `transport`,
+  // `timeout`, `unknown_model`, `incompatible`, `decode`, `auth_expired`,
+  // or `provider_error`.
+  string error_code = 4;
+  // Bounded provider failure message when `ok` is false.
+  string error_message = 5;
+  // Wall-clock time of the probe in milliseconds.
+  uint32 latency_ms = 6;
 }
 
 message ListCommandsRequest {

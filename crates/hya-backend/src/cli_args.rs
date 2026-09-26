@@ -138,13 +138,17 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: crate::workflow_cmd::WorkflowCliCommand,
     },
-    /// List rows from the fresh startup catalog.
+    /// List the effective model catalog (model cache ∪ config entries).
     Models {
         /// Provider id to filter models by.
         provider: Option<String>,
-        /// Include safe source/status metadata.
+        /// Include safe source/metadata per model.
         #[arg(long)]
         verbose: bool,
+        /// Fetch every provider's remote model list (or only `provider`'s)
+        /// into the model cache before listing.
+        #[arg(long)]
+        refresh: bool,
     },
     /// List sessions stored in a database.
     Sessions {
@@ -404,15 +408,6 @@ mod tests {
         assert_eq!(err.kind(), clap::error::ErrorKind::UnknownArgument);
         assert!(err.to_string().contains("--mini"));
     }
-    #[test]
-    fn models_refresh_is_rejected_as_unknown_argument() {
-        let error = match Cli::try_parse_from(["hya", "models", "--refresh"]) {
-            Ok(_) => panic!("models --refresh must be removed"),
-            Err(error) => error,
-        };
-        assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
-    }
-
     #[test]
     fn help_omits_mini_alias() {
         let help = Cli::command().render_help().to_string();
@@ -721,9 +716,28 @@ mod tests {
     fn parses_models_command_without_refresh() {
         let cli = parse(["hya", "models", "openai", "--verbose"]);
         match cli.command {
-            Some(super::Command::Models { provider, verbose }) => {
+            Some(super::Command::Models {
+                provider,
+                verbose,
+                refresh,
+            }) => {
                 assert_eq!(provider.as_deref(), Some("openai"));
                 assert!(verbose);
+                assert!(!refresh);
+            }
+            _ => panic!("expected models command"),
+        }
+    }
+
+    #[test]
+    fn parses_models_refresh_flag() {
+        let cli = parse(["hya", "models", "--refresh"]);
+        match cli.command {
+            Some(super::Command::Models {
+                provider, refresh, ..
+            }) => {
+                assert_eq!(provider, None);
+                assert!(refresh);
             }
             _ => panic!("expected models command"),
         }

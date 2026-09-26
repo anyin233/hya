@@ -440,6 +440,111 @@ tree's pending permission interactions as allowed once (each emits the usual
 `interactionResolved` event). Semantics: [Configuration — Session permission
 modes](../configuration.md#session-permission-modes).
 
+## Providers and keys
+
+The provider routes back the TUI Provider View (`/key`). Every write applies
+**live**: the server rebuilds that provider's route and catalog rows, swaps
+them into the running engine, and emits `catalog.updated` on the event
+streams — no restart. The effective model list of a provider is its cached
+remote models merged per model id with its `config.yaml` `models:` entries;
+see [Configuration — Model cache and config
+overrides](../configuration.md#model-cache-and-config-overrides).
+
+| Call | HTTP | Body / query | Answer |
+| --- | --- | --- | --- |
+| `Catalog.ListProviders` | `GET /v1/providers` | — | `{providers: [ProviderSummary], page}` |
+| `Catalog.GetProvider` | `GET /v1/providers/{providerId}` | — | `ProviderInfo` |
+| `Catalog.UpsertProvider` | `PUT /v1/providers/{providerId}` | `{kind, baseUrl, apiKey?}` | `ProviderUpdate` (fetches) |
+| `Catalog.RefreshProvider` | `POST /v1/providers/{providerId}/refresh` | `{}` or empty | `ProviderUpdate` (fetches) |
+| `Catalog.SetProviderModel` | `PUT /v1/providers/{providerId}/models` | `{modelId, displayName?, contextLimit?, outputLimit?, reasoning?}` | `ProviderUpdate` |
+| `Catalog.RemoveProviderModel` | `DELETE /v1/providers/{providerId}/models?modelId=…` | query `modelId` | `ProviderUpdate` |
+| `Catalog.TestProviderModel` | `POST /v1/providers/{providerId}/test` | `{modelId}` | `TestProviderModelResponse` |
+| `Auth.ListProviderAuth` | `GET /v1/auth` | — | `{providerIds: [...]}` |
+| `Auth.SetProviderAuth` | `PUT /v1/auth/{providerId}` | `{apiKey}` | `{status, provider?, discovery?}` |
+| `Auth.RemoveProviderAuth` | `DELETE /v1/auth/{providerId}` | — | `{provider?}` |
+
+Model ids may contain `/` and `:`, so they never travel in the path: the
+model id is `modelId` in the body (`PUT …/models`, `POST …/test`) or the
+`modelId` query parameter (`DELETE …/models`, percent-encoded).
+
+**Shapes** (protojson; unset fields, `false`, and `0` are omitted):
+
+```jsonc
+// ProviderSummary
+{ "id": "gw", "name": "gw",
+  "auth": "AUTH_STATUS_CREDENTIALED",   // CREDENTIALED when a key exists (saved or config),
+                                        // UNAUTHENTICATED without one, AUTH_REJECTED /
+                                        // AUTH_REQUIRED after the model list refused the key
+  "result": "models",                   // models | empty | unavailable | invalid
+  "kind": "openai",                     // config kind; empty for the offline `hya` row
+  "baseUrl": "https://gw.example/v1",
+  "keySource": "saved",                 // saved | oauth | config | none (never the secret)
+  "modelCount": 3 }
+
+// ProviderInfo
+{ "summary": ProviderSummary, "models": [ModelSummary],
+  "supportsApiKey": true, "supportsOauth": false }
+
+// ModelSummary (also GET /v1/models)
+{ "id": "gw/alpha", "providerId": "gw", "modelId": "alpha",
+  "displayName": "Alpha", "reasoning": true, "auth": "AUTH_STATUS_CREDENTIALED",
+  "contextLimit": "64000", "outputLimit": "4096",   // uint64 → strings
+  "source": "override" }                            // remote | config | override | offline
+
+// ProviderUpdate
+{ "provider": ProviderInfo,
+  "discovery": {                 // only when the call fetched the remote list
+    "ok": true,                  // fetched and parsed (possibly empty)
+    "result": "models",          // models | empty | auth_required | auth_rejected |
+                                 // unavailable | invalid | unsupported
+    "errorMessage": "…",         // when ok is false (bounded, non-secret)
+    "modelCount": 2 } }
+
+// TestProviderModelResponse
+{ "ok": true, "text": "Hi", "finishReason": "length",   // stop | length | tool_calls | cancelled | error
+  "errorCode": "http_401",       // when ok is false: http_<status> | transport | timeout |
+                                 // unknown_model | incompatible | decode | auth_expired | provider_error
+  "errorMessage": "…", "latencyMs": 412 }
+```
+
+**Semantics.**
+
+- `UpsertProvider` validates the id (1–64 of `A-Z a-z 0-9 - _`; `hya` is
+  reserved), the kind (`openai`, `openai-response`, `anthropic`, `google`;
+  the config aliases `openai-compatible`, `openai-completion`, `openai-codex`,
+  `grok-build` are accepted), and the base URL (`http(s)://host…`, no
+  userinfo). It writes `providers.<id>.kind` / `base_url` into
+  `config.yaml` (a new provider gets `models: []`; every other key is
+  kept), saves a non-empty `apiKey` to `auth/<id>.yaml`, then fetches the
+  model list. A failed fetch does **not** fail the call: `discovery.ok` is
+  false and `discovery.errorMessage` says why; the provider is saved.
+- `RefreshProvider` re-reads the provider's config entry and credential and
+  fetches the model list into the model cache. `404 not_found` when the id
+  is not in `config.yaml`. A 401/403 clears the cached rows; a transport or
+  decode failure keeps them.
+- `SetProviderModel` writes one model entry into the provider's `models:`
+  (replace semantics for `name`, `limit.context`, `limit.output`, and a
+  boolean `reasoning`; an absent or `0` field is removed; other keys are
+  kept). `outputLimit` above `contextLimit` is `invalid_argument`.
+  `RemoveProviderModel` deletes the entry (`404` when there is none); a
+  remote model stays listed from the cache with `source: "remote"`.
+- `SetProviderAuth` writes the key atomically with mode `0600` as
+  `type: api` and rebuilds the provider live; when the cache has no rows for
+  the provider it also fetches the model list (reported in `discovery`).
+  `RemoveProviderAuth` deletes the file and rebuilds (an inline config
+  `api_key` applies again). `provider` is omitted for an id that is not in
+  `config.yaml`.
+- `TestProviderModel` sends one user message `hi` with no system prompt, no
+  tools, and no reasoning effort, with max output tokens `1` (`16` on
+  Responses routes — `openai-response`, `openai-codex`, `grok-build` —
+  whose upstream rejects smaller values), bounded by 60 seconds. `ok` is
+  true when the reply stream completed without an error; a `length` finish
+  is a normal reply. A model not in the catalog is `404 not_found`; a
+  provider failure is `200` with `ok` absent (false) and `errorCode`. Nothing
+  is written to any session.
+- Without an application provider control (a bare `hya_server::router`
+  embedder) the write routes and `GET /v1/auth` answer `503 unavailable`.
+
 ## Bundle API endpoints
 
 Installed bundles with an `extensions.process` may register their own HTTP

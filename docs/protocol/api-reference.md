@@ -77,12 +77,15 @@ List provider ids with saved credentials. Never returns secret values.
 
 ### `Auth.SetProviderAuth`
 
-Store an API key or refresh tokens for a provider.
+Store an API key (written atomically with mode 0600 as `type: api`) and
+rebuild that provider's route live; a provider with no cached remote
+models also fetches its model list.
 
 
 ### `Auth.RemoveProviderAuth`
 
-Delete the stored credentials for a provider.
+Delete the stored credentials for a provider and rebuild its route live
+(an inline config `api_key`, if any, applies again).
 
 
 ### `Auth.StartOauth`
@@ -136,8 +139,12 @@ identical to `InvokeSessionBundleApi`.
 
 ## Service `Catalog`
 
-Read-only catalog surface used by pickers, completion UIs, and setup
-flows.
+Catalog surface used by pickers, completion UIs, and setup flows, plus
+the provider-management calls behind the TUI Provider View (add or update
+a provider, refresh its remote model list, override model metadata in
+`config.yaml`, and test a model). Provider changes apply live: the server
+rebuilds that provider's route and the catalog, and emits
+`catalog.updated`.
 
 | RPC | HTTP | gRPC | Request | Response |
 |---|---|---|---|---|
@@ -145,6 +152,11 @@ flows.
 | `ListModels` | `GET /v1/models` | `hya.v1.Catalog.ListModels` | `ListModelsRequest` | `ListModelsResponse` |
 | `ListProviders` | `GET /v1/providers` | `hya.v1.Catalog.ListProviders` | `ListProvidersRequest` | `ListProvidersResponse` |
 | `GetProvider` | `GET /v1/providers/{provider_id}` | `hya.v1.Catalog.GetProvider` | `GetProviderRequest` | `ProviderInfo` |
+| `UpsertProvider` | `PUT /v1/providers/{provider_id}` | `hya.v1.Catalog.UpsertProvider` | `UpsertProviderRequest` | `ProviderUpdate` |
+| `RefreshProvider` | `POST /v1/providers/{provider_id}/refresh` | `hya.v1.Catalog.RefreshProvider` | `RefreshProviderRequest` | `ProviderUpdate` |
+| `SetProviderModel` | `PUT /v1/providers/{provider_id}/models` | `hya.v1.Catalog.SetProviderModel` | `SetProviderModelRequest` | `ProviderUpdate` |
+| `RemoveProviderModel` | `DELETE /v1/providers/{provider_id}/models` | `hya.v1.Catalog.RemoveProviderModel` | `RemoveProviderModelRequest` | `ProviderUpdate` |
+| `TestProviderModel` | `POST /v1/providers/{provider_id}/test` | `hya.v1.Catalog.TestProviderModel` | `TestProviderModelRequest` | `TestProviderModelResponse` |
 | `ListCommands` | `GET /v1/commands` | `hya.v1.Catalog.ListCommands` | `ListCommandsRequest` | `ListCommandsResponse` |
 | `ListSkills` | `GET /v1/skills` | `hya.v1.Catalog.ListSkills` | `ListSkillsRequest` | `ListSkillsResponse` |
 | `ListTools` | `GET /v1/tools` | `hya.v1.Catalog.ListTools` | `ListToolsRequest` | `ListToolsResponse` |
@@ -168,6 +180,40 @@ Providers with their aggregate auth status.
 ### `Catalog.GetProvider`
 
 One provider's detail including its models.
+
+
+### `Catalog.UpsertProvider`
+
+Add or update a provider in `config.yaml` (and save its API key when
+one is given), fetch its remote model list into the model cache, and
+apply it live. A failed fetch does not fail the call: `discovery`
+reports it.
+
+
+### `Catalog.RefreshProvider`
+
+Re-read the provider's config entry and key, fetch its remote model
+list into the model cache, and apply it live.
+
+
+### `Catalog.SetProviderModel`
+
+Write one model's entry (with its metadata overrides) into the
+provider's `models:` in `config.yaml` and apply it live. The model id
+travels in the body because ids may contain `/` or `:`.
+
+
+### `Catalog.RemoveProviderModel`
+
+Remove one model's entry from the provider's `models:` in
+`config.yaml` and apply it live; a remote model stays listed from the
+model cache. The model id travels as the `modelId` query parameter.
+
+
+### `Catalog.TestProviderModel`
+
+Send one `hi` user message to a provider's model with max output tokens
+1 (no tools, no reasoning) and report whether a normal reply came back.
 
 
 ### `Catalog.ListCommands`
@@ -789,6 +835,8 @@ OAuth tokens captured from a completed provider flow.
 | Field | Type | Description |
 |---|---|---|
 | `status` (1) | `AuthStatus` | Resulting auth status for the provider. |
+| `provider` (2) | `ProviderInfo` | The provider after the live rebuild; unset when the id is not a configured provider. |
+| `discovery` (3) | `DiscoveryOutcome` | Remote model-list fetch outcome when the save triggered one. |
 
 ### `RemoveProviderAuthRequest`
 
@@ -797,6 +845,13 @@ OAuth tokens captured from a completed provider flow.
 |---|---|---|
 | `directory` (1) | `string` | Directory context for auth resolution. |
 | `provider_id` (2) | `string` | Provider identifier whose credentials should be deleted. |
+
+### `RemoveProviderAuthResponse`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `provider` (1) | `ProviderInfo` | The provider after the live rebuild; unset when the id is not a configured provider. |
 
 ### `StartOauthRequest`
 
@@ -949,6 +1004,7 @@ One selectable model.
 | `auth` (6) | `AuthStatus` | Auth state of the owning provider route. |
 | `context_limit` (7) | `uint64` | Context window of the route in tokens: the configured `limit.context`, else the route's advertised default. 0 when unknown. |
 | `output_limit` (8) | `uint64` | Maximum output tokens (`limit.output`); 0 when unknown. |
+| `source` (9) | `string` | Where the row comes from: `remote` (the provider's remote model list, via the model cache), `config` (only a `models:` entry in `config.yaml`), `override` (both; config fields win field by field), or `offline` (the built-in `hya/offline` row). |
 
 ### `ListModelsResponse`
 
@@ -977,6 +1033,10 @@ One provider route with aggregate auth state.
 | `auth` (3) | `AuthStatus` | Aggregate auth status across the provider's routes. |
 | `website` (4) | `string` | Vendor documentation/auth URL when known. |
 | `result` (5) | `string` | Model discovery outcome: `models`, `empty`, `unavailable`, `invalid`. |
+| `kind` (6) | `string` | Config `kind` (`openai`, `openai-response`, `anthropic`, `google`, `openai-codex`, `grok-build`); empty for the offline provider. |
+| `base_url` (7) | `string` | Config `base_url`; empty for the offline provider. |
+| `key_source` (8) | `string` | Where the provider's credential comes from: `saved` (an API key in `auth/<id>.yaml`), `oauth` (a saved OAuth bundle), `config` (an inline `api_key` in `config.yaml`), or `none`. Never the secret itself. |
+| `model_count` (9) | `uint32` | Number of model rows the provider currently serves. |
 
 ### `ListProvidersResponse`
 
@@ -1004,6 +1064,88 @@ Provider detail with its model rows.
 | `models` (2) | `repeated ModelSummary` | Models exposed by this provider. |
 | `supports_api_key` (3) | `bool` | Whether an API-key auth method is supported. |
 | `supports_oauth` (4) | `bool` | Whether an OAuth flow is supported. |
+
+### `UpsertProviderRequest`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `directory` (1) | `string` | Directory context (unused; providers are process-wide). |
+| `provider_id` (2) | `string` | Provider id: 1-64 ASCII letters, digits, `-`, or `_` (`hya` is reserved for the offline provider). |
+| `kind` (3) | `string` | Protocol kind: `openai` (OpenAI-compatible Chat Completions), `openai-response`, `anthropic`, or `google`; the config aliases `openai-compatible`, `openai-completion`, `openai-codex`, and `grok-build` are accepted too. |
+| `base_url` (4) | `string` | API root, `http://` or `https://` (for example `https://api.openai.com/v1`). |
+| `api_key` (5) | `optional string` | API key to save in `auth/<id>.yaml`; absent or empty keeps the current credential. |
+
+### `RefreshProviderRequest`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `directory` (1) | `string` | Directory context (unused; providers are process-wide). |
+| `provider_id` (2) | `string` | Configured provider id. |
+
+### `SetProviderModelRequest`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `directory` (1) | `string` | Directory context (unused; providers are process-wide). |
+| `provider_id` (2) | `string` | Configured provider id. |
+| `model_id` (3) | `string` | Provider-local model id (may contain `/` and `:`). |
+| `display_name` (4) | `optional string` | Display name written as the entry's `name`; absent removes it. |
+| `context_limit` (5) | `optional uint32` | Context window written as `limit.context`; absent or 0 removes it. |
+| `output_limit` (6) | `optional uint32` | Max output tokens written as `limit.output`; absent or 0 removes it. |
+| `reasoning` (7) | `optional bool` | Reasoning switch written as `reasoning: true|false`; absent removes a boolean `reasoning` (a detailed `reasoning:` mapping is kept when this is absent or true). |
+
+### `RemoveProviderModelRequest`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `directory` (1) | `string` | Directory context (unused; providers are process-wide). |
+| `provider_id` (2) | `string` | Configured provider id. |
+| `model_id` (3) | `string` | Provider-local model id whose config entry is removed. |
+
+### `DiscoveryOutcome`
+
+Outcome of one remote model-list fetch.
+
+| Field | Type | Description |
+|---|---|---|
+| `ok` (1) | `bool` | True when the remote model list was fetched and parsed (possibly empty). |
+| `result` (2) | `string` | `models`, `empty`, `auth_required`, `auth_rejected`, `unavailable`, `invalid`, or `unsupported`. |
+| `error_message` (3) | `string` | Bounded, non-secret failure description when `ok` is false. |
+| `model_count` (4) | `uint32` | Number of remote models fetched (and now in the model cache). |
+
+### `ProviderUpdate`
+
+A provider after a change, applied live.
+
+| Field | Type | Description |
+|---|---|---|
+| `provider` (1) | `ProviderInfo` | The provider with its effective model rows. |
+| `discovery` (2) | `DiscoveryOutcome` | Remote model-list fetch outcome; unset when the call did not fetch. |
+
+### `TestProviderModelRequest`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `directory` (1) | `string` | Directory context (unused; providers are process-wide). |
+| `provider_id` (2) | `string` | Configured provider id. |
+| `model_id` (3) | `string` | Provider-local model id to probe. |
+
+### `TestProviderModelResponse`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `ok` (1) | `bool` | True when the reply stream completed without an error (a `length` finish is a normal reply: the probe caps output at one token). |
+| `text` (2) | `string` | Text the model returned (often one token or empty). |
+| `finish_reason` (3) | `string` | Finish reason when the provider reported one: `stop`, `length`, `tool_calls`, `cancelled`, or `error`. |
+| `error_code` (4) | `string` | Stable failure class when `ok` is false: `http_<status>`, `transport`, `timeout`, `unknown_model`, `incompatible`, `decode`, `auth_expired`, or `provider_error`. |
+| `error_message` (5) | `string` | Bounded provider failure message when `ok` is false. |
+| `latency_ms` (6) | `uint32` | Wall-clock time of the probe in milliseconds. |
 
 ### `ListCommandsRequest`
 
@@ -2400,7 +2542,10 @@ A slash-command turn.
 ### `ShellTurn`
 
 A synthetic shell turn: the command runs via the builtin shell tool with
-no model round.
+no model round. The user's own shell command never asks for permission in
+any mode (approved once); an explicit Deny rule still blocks it, a
+`tool.execute.before` hook can still veto it, and a directory outside the
+working directory still asks.
 
 | Field | Type | Description |
 |---|---|---|

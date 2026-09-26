@@ -125,7 +125,9 @@ pub(crate) async fn prepare_server(
     let agent_model_control = Arc::new(built.agent_model_control());
     let workflow_control = Arc::new(built.workflow_control());
     let plugin_host = built.plugin_host();
+    let provider_manager = hya_app::ProviderManager::new(Arc::clone(&engine));
     let mut state = AppState::new(Arc::clone(&engine), agent)
+        .with_provider_control(Arc::new(provider_manager.clone()))
         .with_question_requests(questions)
         .with_mcp_control(mcp_control)
         .with_workflow_control(workflow_control)
@@ -139,7 +141,7 @@ pub(crate) async fn prepare_server(
     }
     state = state.with_permission_requests(asks);
     spawn_provider_catalog_refresh(
-        Arc::clone(&engine),
+        provider_manager,
         state.catalog_updates_sender(),
         pending_discovery,
     );
@@ -197,8 +199,11 @@ pub(crate) async fn prepare_server(
     })
 }
 
+/// Background discovery for providers without cached remote models (and
+/// discovery-only providers), serialized with live provider edits through the
+/// provider manager's lock.
 fn spawn_provider_catalog_refresh(
-    engine: Arc<hya_core::SessionEngine>,
+    manager: hya_app::ProviderManager,
     catalog_updates: tokio::sync::broadcast::Sender<serde_json::Value>,
     pending: Vec<hya_app::config::PendingCatalogDiscovery>,
 ) {
@@ -206,13 +211,9 @@ fn spawn_provider_catalog_refresh(
         return;
     }
     tokio::spawn(async move {
-        let snapshot = engine.provider_catalog_snapshot();
-        let router = engine.provider_router();
-        match hya_app::config::refresh_pending_catalogs(pending, snapshot.as_ref(), router.as_ref())
-            .await
-        {
-            Ok((router, catalog)) => {
-                engine.publish_provider_catalog(Arc::new(router), catalog);
+        match manager.refresh_pending(pending).await {
+            Ok(false) => {}
+            Ok(true) => {
                 let payload = serde_json::json!({
                     "id": format!(
                         "catalog-{}",

@@ -87,12 +87,15 @@ Each `push`/`finish` returns a batch of canonical `Event`s (may be empty).
 - `max_context` = **200_000**
 - `max_output` = 0
 
-Per-model limits (`HttpProvider::with_model_limits`, fed by a configured
-`limit` block or a `models.yml.cache` row) replace `max_context` when the
-context is non-zero and set `max_output`; every other cap is the route default.
-Without a limit a model reports the fixed **200k** context and `max_output` 0.
-The v1 `ModelSummary` rows (`GET /v1/models`, bootstrap) do not carry either
-limit; they reach the engine (compaction threshold) and the request encoders.
+Per-model limits (`HttpProvider::with_model_limits`, fed by the merged
+effective model: a configured `limit` block field by field over the model
+cache row from the remote list) replace `max_context` when the context is
+non-zero and set `max_output`; every other cap is the route default. Without a
+limit a model reports the fixed **200k** context and `max_output` 0. The v1
+`ModelSummary` rows (`GET /v1/models`, bootstrap) carry both as
+`contextLimit`/`outputLimit`, plus `displayName`
+(`HttpProvider::with_model_display_names`) and `source`
+(`HttpProvider::with_model_sources`: `remote`, `config`, `override`).
 
 `DevProvider` claims the same set **minus** `reasoning_request` (left false via
 `Capabilities::default()`). It accepts any `ModelRef` because
@@ -272,8 +275,9 @@ unconditionally.
 
 `ModelLimitOverride { context, output }` (`0` = unspecified) comes from a
 configured object-form model `limit` block
-([configuration](../configuration.md#model-limits)) or a discovered model's
-`models.yml.cache` row. Before encoding, `HttpProvider` resolves the served
+([configuration](../configuration.md#model-limits)) merged field by field
+over the remote model's row in the model cache
+([configuration](../configuration.md#model-cache-and-config-overrides)). Before encoding, `HttpProvider` resolves the served
 model's `max_output`; when it is non-zero:
 
 - an absent `CompletionRequest.max_output_tokens` becomes the limit;

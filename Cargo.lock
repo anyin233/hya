@@ -1268,6 +1268,7 @@ dependencies = [
  "async-trait",
  "axum 0.7.9",
  "base64 0.22.1",
+ "futures",
  "http-body-util",
  "hya-base-tools",
  "hya-bundle",

@@ -80,6 +80,7 @@ impl Provider for DevProvider {
             capabilities: dev_capabilities(),
             reasoning_variants: Vec::new(),
             reasoning_default: None,
+            display_name: None,
             source: crate::ModelCatalogSource::Offline,
         }]
     }

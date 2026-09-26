@@ -10,6 +10,7 @@ use tokio::sync::{broadcast, mpsc};
 
 use crate::agent_model_control::{AgentModelControl, EmptyAgentModelControl};
 use crate::mcp_control::{EmptyMcpControl, McpControl};
+use crate::provider_control::{EmptyProviderControl, ProviderControl};
 use crate::support;
 use crate::workflow_control::{EmptyWorkflowControl, WorkflowControl};
 use crate::{pending, runs};
@@ -28,6 +29,7 @@ pub struct AppState {
     question_requests: pending::QuestionRequests,
     mcp_control: Arc<dyn McpControl>,
     agent_model_control: Arc<dyn AgentModelControl>,
+    provider_control: Arc<dyn ProviderControl>,
     workflow_control: Arc<dyn WorkflowControl>,
     workspace_adapters: Vec<WorkspaceAdapterInfo>,
     formatter_status: Vec<FormatterStatus>,
@@ -50,6 +52,7 @@ impl AppState {
             question_requests: pending::QuestionRequests::default(),
             mcp_control: Arc::new(EmptyMcpControl),
             agent_model_control: Arc::new(EmptyAgentModelControl),
+            provider_control: Arc::new(EmptyProviderControl),
             workflow_control: Arc::new(EmptyWorkflowControl),
             workspace_adapters: Vec::new(),
             formatter_status: Vec::new(),
@@ -120,6 +123,14 @@ impl AppState {
         self
     }
 
+    /// Install the app-owned provider control (keys, provider upsert, model
+    /// refresh, config model overrides) for the provider routes.
+    #[must_use]
+    pub fn with_provider_control(mut self, control: Arc<dyn ProviderControl>) -> Self {
+        self.provider_control = control;
+        self
+    }
+
     /// Install the app-owned Workflow control handle for native and Compat routes.
     #[must_use]
     pub fn with_workflow_control(mut self, control: Arc<dyn WorkflowControl>) -> Self {
@@ -181,6 +192,7 @@ pub(crate) struct ServerState {
     pub(crate) global: support::global_state::GlobalState,
     pub(crate) mcp_control: Arc<dyn McpControl>,
     pub(crate) agent_model_control: Arc<dyn AgentModelControl>,
+    pub(crate) provider_control: Arc<dyn ProviderControl>,
     pub(crate) workflow_control: Arc<dyn WorkflowControl>,
     pub(crate) pty: support::pty_state::PtyState,
     pub(crate) workspace_adapters: Vec<WorkspaceAdapterInfo>,
@@ -203,6 +215,7 @@ impl ServerState {
             global,
             mcp_control: app.mcp_control,
             agent_model_control: app.agent_model_control,
+            provider_control: app.provider_control,
             workflow_control: app.workflow_control,
             pty: support::pty_state::PtyState::new(),
             workspace_adapters: app.workspace_adapters,

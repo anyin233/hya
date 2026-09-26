@@ -150,7 +150,7 @@ impl CatalogDiscoveryRequest {
 }
 
 /// One normalized model returned by a provider catalog endpoint.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct DiscoveredModel {
     /// Provider-owned model id with surrounding whitespace removed.
     pub id: String,
@@ -158,6 +158,78 @@ pub struct DiscoveredModel {
     pub reasoning_default: Option<String>,
     /// Supported reasoning effort labels for this model.
     pub reasoning_variants: Vec<String>,
+    /// Human-readable name when the catalog publishes one (`display_name`,
+    /// `displayName`, or an OpenRouter-style `name`).
+    pub display_name: Option<String>,
+    /// Advertised context window in tokens (`context_length`,
+    /// `context_window`, or Google `inputTokenLimit`), when published.
+    pub context_limit: Option<u32>,
+    /// Advertised max output tokens (`max_output_tokens`,
+    /// `top_provider.max_completion_tokens`, or Google `outputTokenLimit`).
+    pub output_limit: Option<u32>,
+}
+
+/// Read the first non-empty string among `keys`.
+fn first_string(object: &serde_json::Map<String, Value>, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| {
+        object
+            .get(*key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty() && !value.chars().any(char::is_control))
+            .map(str::to_string)
+    })
+}
+
+/// Read the first positive `u32` token count among `keys` (dotted paths
+/// descend one nested object).
+fn first_limit(object: &serde_json::Map<String, Value>, keys: &[&str]) -> Option<u32> {
+    keys.iter().find_map(|key| {
+        let value = match key.split_once('.') {
+            Some((outer, inner)) => object.get(outer)?.get(inner)?,
+            None => object.get(*key)?,
+        };
+        value
+            .as_u64()
+            .and_then(|tokens| u32::try_from(tokens).ok())
+            .filter(|tokens| *tokens > 0)
+    })
+}
+
+/// Display name and token limits published next to one catalog row.
+fn row_metadata(
+    object: &serde_json::Map<String, Value>,
+    kind: ProviderKind,
+) -> (Option<String>, Option<u32>, Option<u32>) {
+    // Grok Build uses `name` as an id fallback and Google as the
+    // `models/<id>` resource name; neither is a display label.
+    let name_keys: &[&str] = if matches!(kind, ProviderKind::GrokBuild | ProviderKind::Google) {
+        &["display_name", "displayName"]
+    } else {
+        &["display_name", "displayName", "name"]
+    };
+    let display_name = first_string(object, name_keys);
+    let context = first_limit(
+        object,
+        &[
+            "context_length",
+            "context_window",
+            "max_context_length",
+            "inputTokenLimit",
+            "input_token_limit",
+        ],
+    );
+    let output = first_limit(
+        object,
+        &[
+            "max_output_tokens",
+            "max_completion_tokens",
+            "top_provider.max_completion_tokens",
+            "outputTokenLimit",
+            "output_token_limit",
+        ],
+    );
+    (display_name, context, output)
 }
 
 /// Parse a provider catalog payload and normalize its model ids and metadata.
@@ -214,8 +286,7 @@ fn parse_data_models(
         {
             models.push(DiscoveredModel {
                 id: id.to_string(),
-                reasoning_default: None,
-                reasoning_variants: Vec::new(),
+                ..DiscoveredModel::default()
             });
             continue;
         }
@@ -241,10 +312,14 @@ fn parse_data_models(
             | ProviderKind::Anthropic
             | ProviderKind::Google => (None, Vec::new()),
         };
+        let (display_name, context_limit, output_limit) = row_metadata(object, kind);
         models.push(DiscoveredModel {
             id: id.to_string(),
             reasoning_default,
             reasoning_variants,
+            display_name: display_name.filter(|name| name.trim() != id.trim()),
+            context_limit,
+            output_limit,
         });
     }
     Ok(())
@@ -272,10 +347,14 @@ fn parse_google(payload: &Value, models: &mut Vec<DiscoveredModel>) -> Result<()
             .iter()
             .any(|method| method.as_str() == Some("generateContent"))
         {
+            let (display_name, context_limit, output_limit) =
+                row_metadata(object, ProviderKind::Google);
             models.push(DiscoveredModel {
                 id: id.to_string(),
-                reasoning_default: None,
-                reasoning_variants: Vec::new(),
+                display_name: display_name.filter(|name| name != id),
+                context_limit,
+                output_limit,
+                ..DiscoveredModel::default()
             });
         }
     }
@@ -826,8 +905,7 @@ mod tests {
             models,
             vec![DiscoveredModel {
                 id: "grok-4.5".to_string(),
-                reasoning_default: None,
-                reasoning_variants: Vec::new(),
+                ..DiscoveredModel::default()
             }],
         );
     }

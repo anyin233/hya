@@ -294,6 +294,36 @@
     "streaming": false
   },
   {
+    "method": "PUT",
+    "path": "/v1/providers/{provider_id}",
+    "operationId": "Catalog.UpsertProvider",
+    "streaming": false
+  },
+  {
+    "method": "DELETE",
+    "path": "/v1/providers/{provider_id}/models",
+    "operationId": "Catalog.RemoveProviderModel",
+    "streaming": false
+  },
+  {
+    "method": "PUT",
+    "path": "/v1/providers/{provider_id}/models",
+    "operationId": "Catalog.SetProviderModel",
+    "streaming": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/providers/{provider_id}/refresh",
+    "operationId": "Catalog.RefreshProvider",
+    "streaming": false
+  },
+  {
+    "method": "POST",
+    "path": "/v1/providers/{provider_id}/test",
+    "operationId": "Catalog.TestProviderModel",
+    "streaming": false
+  },
+  {
     "method": "POST",
     "path": "/v1/pty",
     "operationId": "Pty.CreatePty",

@@ -243,16 +243,22 @@ async fn model_catalog_is_fresh_ephemeral_anonymous_and_offline_on_auth_required
         "stderr={}",
         String::from_utf8_lossy(&explicit.stderr)
     );
+    // A pinned `models:` list no longer disables the remote list: with no
+    // cached rows the provider is fetched once and both sources merge.
     assert_eq!(
         String::from_utf8_lossy(&explicit.stdout).trim(),
-        "gateway/explicit"
+        "gateway/discovered\ngateway/explicit"
     );
-    assert_eq!(state.requests.load(Ordering::SeqCst), 0);
+    assert_eq!(state.requests.load(Ordering::SeqCst), 1);
     assert_eq!(std::fs::read(&config).unwrap(), explicit_bytes);
+    // Cached rows now exist: a pinned provider does not re-fetch.
+    let cached = run_models(&binary, &root);
+    assert!(cached.status.success());
+    assert_eq!(state.requests.load(Ordering::SeqCst), 1);
 
     write_config(&root, &base_url, " []");
     let discovery_bytes = std::fs::read(&config).unwrap();
-    for expected_requests in 1..=2 {
+    for expected_requests in 2..=3 {
         let discovered = run_models(&binary, &root);
         assert!(
             discovered.status.success(),
@@ -279,7 +285,7 @@ async fn model_catalog_is_fresh_ephemeral_anonymous_and_offline_on_auth_required
         String::from_utf8_lossy(&offline.stdout).trim(),
         "hya/offline"
     );
-    assert_eq!(state.requests.load(Ordering::SeqCst), 3);
+    assert_eq!(state.requests.load(Ordering::SeqCst), 4);
     assert_eq!(std::fs::read(&config).unwrap(), discovery_bytes);
     assert_eq!(
         std::fs::read(&foreign).unwrap(),

@@ -210,6 +210,10 @@ pub struct HttpProvider {
     /// Optional per-model context/output limits (configured `limit` blocks or
     /// `models.yml.cache` rows).
     model_limits: BTreeMap<String, ModelLimitOverride>,
+    /// Optional per-model display names published on catalog rows.
+    model_display_names: BTreeMap<String, String>,
+    /// Optional per-model catalog provenance overriding `catalog_source`.
+    model_sources: BTreeMap<String, ModelCatalogSource>,
     caps: Capabilities,
     kind: ProviderKind,
     catalog_source: ModelCatalogSource,
@@ -319,6 +323,8 @@ impl HttpProvider {
             model_reasoning_variants: BTreeMap::new(),
             model_reasoning_defaults: BTreeMap::new(),
             model_limits: BTreeMap::new(),
+            model_display_names: BTreeMap::new(),
+            model_sources: BTreeMap::new(),
             kind,
             catalog_source: ModelCatalogSource::Configured,
             caps: Capabilities {
@@ -437,6 +443,32 @@ impl HttpProvider {
     #[must_use]
     pub fn with_catalog_source(mut self, source: ModelCatalogSource) -> Self {
         self.catalog_source = source;
+        self
+    }
+
+    /// Attach per-model display names (presentation only; not part of the
+    /// configured routing identity).
+    #[must_use]
+    pub fn with_model_display_names(
+        mut self,
+        names: impl IntoIterator<Item = (String, String)>,
+    ) -> Self {
+        self.model_display_names = names
+            .into_iter()
+            .filter(|(_, name)| !name.trim().is_empty())
+            .collect();
+        self
+    }
+
+    /// Attach per-model catalog provenance (`remote`, `config`, or
+    /// `override`); models without an entry use the route-wide source from
+    /// [`Self::with_catalog_source`].
+    #[must_use]
+    pub fn with_model_sources(
+        mut self,
+        sources: impl IntoIterator<Item = (String, ModelCatalogSource)>,
+    ) -> Self {
+        self.model_sources = sources.into_iter().collect();
         self
     }
 
@@ -1012,7 +1044,12 @@ impl Provider for HttpProvider {
                     .cloned()
                     .unwrap_or_else(|| variants.clone()),
                 reasoning_default: self.model_reasoning_defaults.get(model).copied(),
-                source: self.catalog_source,
+                display_name: self.model_display_names.get(model).cloned(),
+                source: self
+                    .model_sources
+                    .get(model)
+                    .copied()
+                    .unwrap_or(self.catalog_source),
             })
             .collect()
     }
@@ -1218,6 +1255,28 @@ mod tests {
             Some("key".to_string()),
             ["claude-opus-4-8".to_string(), "gpt-5.5".to_string()],
         )
+    }
+
+    #[test]
+    fn catalog_rows_carry_per_model_display_names_and_sources() -> Result<(), ProviderError> {
+        let provider = provider()?
+            .with_catalog_source(ModelCatalogSource::Discovered)
+            .with_model_display_names([("gpt-5.5".to_string(), "GPT 5.5".to_string())])
+            .with_model_sources([(
+                "claude-opus-4-8".to_string(),
+                ModelCatalogSource::Overridden,
+            )]);
+        let rows = Provider::catalog(&provider);
+        let gpt = rows.iter().find(|row| row.model_id == "gpt-5.5").unwrap();
+        assert_eq!(gpt.display_name.as_deref(), Some("GPT 5.5"));
+        assert_eq!(gpt.source, ModelCatalogSource::Discovered);
+        let claude = rows
+            .iter()
+            .find(|row| row.model_id == "claude-opus-4-8")
+            .unwrap();
+        assert_eq!(claude.display_name, None);
+        assert_eq!(claude.source, ModelCatalogSource::Overridden);
+        Ok(())
     }
 
     #[test]

@@ -20,6 +20,7 @@ mod mcp;
 mod message;
 mod process;
 mod project;
+mod providers;
 mod pty;
 mod session;
 mod turn;

@@ -21,7 +21,9 @@ pub mod config;
 pub mod formatter_config;
 mod installed_bundle_refresh;
 mod lsp;
-/// Durable `models.yml.cache` beside the Hya config directory.
+/// SQLite remote-model cache (`$XDG_CACHE_HOME/hya/model_cache.db`).
+pub mod model_cache;
+/// Legacy `models.yml.cache` reader (imported once into [`model_cache`]).
 pub mod models_cache;
 /// Interactive OAuth login and access-token refresh.
 pub mod oauth;
@@ -31,6 +33,8 @@ pub mod permission;
 pub mod plugins;
 mod preset_inventory;
 pub mod project_bundles;
+/// Live provider management behind the v1 provider routes.
+pub mod provider_control;
 /// Runtime assembly: store, engine, team supervisor, and [`HyaRuntime`].
 pub mod runtime;
 mod runtime_reconcile;
@@ -51,6 +55,7 @@ pub use installed_bundle_refresh::{
     InstalledBundleRefresh, bundle_registry_path, first_party_catalogs,
 };
 pub use preset_inventory::{TrustedPresetDescriptor, trusted_preset_inventory};
+pub use provider_control::ProviderManager;
 pub use runtime::{
     BUILTIN_DEFAULT_AGENT_ID, BuiltSessionEngine, HARNESS_AGENT_BASE, HyaRuntime, OfflineNotice,
     RuntimeConfig, RuntimeOptions, agent_base_with_model, agent_with_model, agent_with_model_pure,
