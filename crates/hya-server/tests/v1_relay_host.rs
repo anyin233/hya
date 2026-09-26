@@ -491,10 +491,7 @@ async fn rotating_the_key_closes_streams_and_invalidates_the_old_link() {
         "the open stream of the old link was closed"
     );
     let error = tunnel(&old).await.expect_err("the old link is rejected");
-    assert!(
-        error.contains("authentication") || error.contains("handshake"),
-        "{error}"
-    );
+    assert!(error.contains("offline"), "{error}");
     let mut api = http(&new).await;
     let (status, _) = call(&mut api, "GET", "/v1/health", None).await;
     assert_eq!(status, 200);
@@ -621,5 +618,69 @@ async fn server_stopping_reaches_a_relay_side_sse_client_and_the_room_is_release
             .await
             .is_err()
     );
+    relay.stop().await;
+}
+
+#[tokio::test]
+async fn stalled_handshakes_have_their_own_budget_and_never_block_serving_streams() {
+    let relay = Relay::start().await;
+    let backend = backend(RelayHostConfig {
+        max_streams: 2,
+        max_handshakes: 2,
+        handshake_timeout: Duration::from_secs(1),
+        ..host_config(None)
+    })
+    .await;
+    let link = connected(&backend, &relay).await;
+    let mut first = http(&link).await;
+    assert_eq!(call(&mut first, "GET", "/v1/health", None).await.0, 200);
+
+    // Two link holders open streams and never send the Noise hello: they
+    // fill the handshake budget, not the serving slots.
+    let client = RelayClient::from_link(&link, ClientConfig::default()).unwrap();
+    let stalled_a = tokio::time::timeout(WAIT, client.open(link.room_id()))
+        .await
+        .unwrap()
+        .unwrap();
+    let stalled_b = tokio::time::timeout(WAIT, client.open(link.room_id()))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(call(&mut first, "GET", "/v1/health", None).await.0, 200);
+
+    // Once they time out, a second serving stream fits beside the first.
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    let mut second = http(&link).await;
+    assert_eq!(call(&mut second, "GET", "/v1/health", None).await.0, 200);
+    assert_eq!(call(&mut first, "GET", "/v1/health", None).await.0, 200);
+    assert_eq!(backend.relay.status().active_streams, 2);
+    drop((stalled_a, stalled_b));
+    relay.stop().await;
+}
+
+#[tokio::test]
+async fn a_stalled_handshake_does_not_take_a_serving_slot() {
+    let relay = Relay::start().await;
+    let backend = backend(RelayHostConfig {
+        max_streams: 2,
+        max_handshakes: 2,
+        handshake_timeout: Duration::from_secs(10),
+        ..host_config(None)
+    })
+    .await;
+    let link = connected(&backend, &relay).await;
+    let mut first = http(&link).await;
+    assert_eq!(call(&mut first, "GET", "/v1/health", None).await.0, 200);
+    let client = RelayClient::from_link(&link, ClientConfig::default()).unwrap();
+    let stalled = tokio::time::timeout(WAIT, client.open(link.room_id()))
+        .await
+        .unwrap()
+        .unwrap();
+    // While it stalls, the second serving slot is still free.
+    let mut second = tokio::time::timeout(Duration::from_secs(5), http(&link))
+        .await
+        .expect("a serving slot was free");
+    assert_eq!(call(&mut second, "GET", "/v1/health", None).await.0, 200);
+    drop(stalled);
     relay.stop().await;
 }

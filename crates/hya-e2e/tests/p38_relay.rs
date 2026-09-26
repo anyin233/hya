@@ -725,6 +725,8 @@ async fn golden_path(binding: &str) {
     assert_eq!(own["link"], json!(link));
 
     // Rotation: the running bridge is rejected, a new bridge with the new link works.
+    // The proxy refuses the old link's open token like an offline room (it
+    // never reaches the backend), so the bridge cannot tell it from offline.
     let rotated = relay_cli(&env, &["rotate", "--json"]);
     let new_link = rotated["link"].as_str().expect("rotated link").to_owned();
     assert_ne!(new_link, link);
@@ -736,7 +738,7 @@ async fn golden_path(binding: &str) {
                 && body["error"]["code"] == "unavailable"
                 && body["error"]["message"]
                     .as_str()
-                    .is_some_and(|m| m.contains("rejected the relay link"))
+                    .is_some_and(|m| m.contains("offline") || m.contains("rejected the relay link"))
         },
     )
     .await;

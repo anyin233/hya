@@ -303,6 +303,16 @@ fn config(transport: Transport) -> ClientConfig {
     }
 }
 
+/// The open token hash and token of `key`'s room (PSK = the key bytes).
+fn token_of(key: &ed25519_dalek::SigningKey) -> ([u8; 32], hya_relay::keys::OpenToken) {
+    let room = RoomId::from_ed25519(key.verifying_key().as_bytes());
+    let token = hya_relay::keys::OpenToken::derive(
+        &hya_relay::keys::Psk::from_bytes(key.to_bytes()),
+        &room,
+    );
+    (token.hash(), token)
+}
+
 fn offline_room() -> RoomId {
     RoomId::from_ed25519(&[42; 32])
 }
@@ -434,9 +444,15 @@ async fn frames_sent_right_before_drop_are_delivered_on_both_bindings() {
         let key = ed25519_dalek::SigningKey::from_bytes(&[7; 32]);
         let host = RelayClient::new(relay.address(), config(transport)).unwrap();
         let mut control = host.host().await.unwrap();
-        let room = register_host(&mut control, &key, 5 * SECOND).await.unwrap();
+        let (hash, token) = token_of(&key);
+        let room = register_host(&mut control, &key, &hash, 5 * SECOND)
+            .await
+            .unwrap()
+            .room()
+            .clone();
         let opener = host.clone();
-        let opening = tokio::spawn(async move { opener.open(&room).await.unwrap() });
+        let opening =
+            tokio::spawn(async move { opener.open_with_token(&room, &token).await.unwrap() });
         let stream_id = loop {
             let frame = timeout(5 * SECOND, control.next()).await.unwrap();
             if let Some(Ok(hya_relay::proto::ProxyToHost {
@@ -480,11 +496,17 @@ async fn dropping_an_unclosed_stream_aborts_it_on_both_bindings() {
         let key = ed25519_dalek::SigningKey::from_bytes(&[8; 32]);
         let host = RelayClient::new(relay.address(), config(transport)).unwrap();
         let mut control = host.host().await.unwrap();
-        let room = register_host(&mut control, &key, 5 * SECOND).await.unwrap();
+        let (hash, token) = token_of(&key);
+        let room = register_host(&mut control, &key, &hash, 5 * SECOND)
+            .await
+            .unwrap()
+            .room()
+            .clone();
         // The opener shares the host's gRPC connection: the abort must reset
         // only its own stream.
         let opener = host.clone();
-        let opening = tokio::spawn(async move { opener.open(&room).await.unwrap() });
+        let opening =
+            tokio::spawn(async move { opener.open_with_token(&room, &token).await.unwrap() });
         let stream_id = loop {
             let frame = timeout(5 * SECOND, control.next()).await.unwrap();
             if let Some(Ok(hya_relay::proto::ProxyToHost {
@@ -517,9 +539,13 @@ async fn dropping_an_unclosed_stream_aborts_it_on_both_bindings() {
             Err(ClientError::RoomOffline(_))
         ));
         let again = host.clone();
+        let token = token_of(&key).1;
         let reopened = tokio::spawn(async move {
             again
-                .open(&RoomId::from_ed25519(key.verifying_key().as_bytes()))
+                .open_with_token(
+                    &RoomId::from_ed25519(key.verifying_key().as_bytes()),
+                    &token,
+                )
                 .await
         });
         assert!(
@@ -538,4 +564,46 @@ async fn dropping_an_unclosed_stream_aborts_it_on_both_bindings() {
 
 async fn next(open: &mut ChunkTransport) -> Option<Result<Chunk, TransportError>> {
     timeout(5 * SECOND, open.next()).await.unwrap()
+}
+
+#[tokio::test]
+async fn only_link_holders_get_past_the_proxy_on_both_bindings() {
+    use hya_relay::keys::Psk;
+    use hya_relay::link::RelayLink;
+    let relay = Relay::start(support::relay_config()).await;
+    let host = RelayClient::new(relay.address(), config(Transport::Grpc)).unwrap();
+    let backend =
+        support::Backend::start(host, support::Identity::new(31), support::quick_policy()).await;
+    for transport in [Transport::Grpc, Transport::Ws] {
+        let link = backend.identity.link(relay.address(), transport);
+        // Room id only (no link): looks offline.
+        let bare = RelayClient::new(relay.address(), config(transport)).unwrap();
+        assert!(
+            matches!(
+                bare.open(link.room_id()).await,
+                Err(ClientError::RoomOffline(_))
+            ),
+            "{transport}"
+        );
+        // A link with the wrong PSK: also offline, before any handshake.
+        let wrong = RelayLink::from_keys(
+            link.address().clone(),
+            link.room_id().clone(),
+            transport,
+            *link.server_key(),
+            &Psk::from_bytes([1; 32]),
+        );
+        let wrong_client = RelayClient::from_link(&wrong, config(transport)).unwrap();
+        assert!(
+            matches!(
+                wrong_client.open(wrong.room_id()).await,
+                Err(ClientError::RoomOffline(_))
+            ),
+            "{transport}"
+        );
+        // The link opens, through the tunnel.
+        let holder = RelayClient::from_link(&link, config(transport)).unwrap();
+        support::round_trip(&holder, &link, b"link holder").await;
+    }
+    relay.stop().await;
 }

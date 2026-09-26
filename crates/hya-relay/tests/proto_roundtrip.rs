@@ -20,7 +20,16 @@ fn host_frames_round_trip() {
         frame: Some(host_frame::Frame::Register(Register {
             ed25519_pubkey: vec![7; 32],
             signature: vec![9; 64],
+            open_token_hash: vec![3; 32],
         })),
+    });
+    round_trip(HostFrame {
+        frame: Some(host_frame::Frame::UpdateOpenToken(
+            hya_relay::proto::UpdateOpenToken {
+                open_token_hash: vec![4; 32],
+                signature: vec![5; 64],
+            },
+        )),
     });
     round_trip(HostFrame {
         frame: Some(host_frame::Frame::Heartbeat(Heartbeat {
@@ -48,6 +57,7 @@ fn proxy_to_host_frames_round_trip() {
             code: RelayErrorCode::AlreadyExists as i32,
             message: "room taken".into(),
         }),
+        proxy_to_host::Frame::OpenTokenUpdated(hya_relay::proto::OpenTokenUpdated {}),
     ] {
         round_trip(ProxyToHost { frame: Some(frame) });
     }
@@ -58,6 +68,7 @@ fn chunk_frames_round_trip() {
     for frame in [
         chunk::Frame::Open(Open {
             room_id: "abcdefghijklmnopqrstuvwxyz".into(),
+            open_token: vec![6; 32],
         }),
         chunk::Frame::Accept(Accept {
             stream_id: "s-1".into(),
@@ -118,10 +129,23 @@ fn error_codes_mirror_grpc_status_codes() {
 }
 
 #[test]
-fn register_signing_message_is_domain_separated() {
+fn register_signing_message_is_domain_separated_and_versioned() {
     let nonce = [5u8; 32];
-    let message = hya_relay::proto::register_signing_message(&nonce);
-    assert!(message.starts_with(b"hya.relay.v1/register\0"));
-    assert!(message.ends_with(&nonce));
-    assert_eq!(message.len(), b"hya.relay.v1/register\0".len() + 32);
+    let hash = [9u8; 32];
+    let message = hya_relay::proto::register_signing_message(&nonce, &hash);
+    assert!(message.starts_with(b"hya.relay.v1/register/v2\0"));
+    assert_eq!(message.len(), b"hya.relay.v1/register/v2\0".len() + 32 + 32);
+    assert_eq!(&message[message.len() - 64..message.len() - 32], &nonce);
+    assert!(message.ends_with(&hash));
+    // Never a v1 message (context || nonce) or an open-token update.
+    assert!(!message.starts_with(b"hya.relay.v1/register\0"));
+    let update = hya_relay::proto::update_open_token_signing_message(&nonce, &hash);
+    assert!(update.starts_with(b"hya.relay.v1/update-open-token/v1\0"));
+    assert!(update.ends_with(&hash));
+    assert_ne!(update, message);
+    // A different hash signs different bytes.
+    assert_ne!(
+        hya_relay::proto::register_signing_message(&nonce, &[8u8; 32]),
+        message
+    );
 }

@@ -28,6 +28,9 @@ use std::str::FromStr;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use sha2::{Digest, Sha256};
+use zeroize::Zeroizing;
+
+use crate::keys::{OpenToken, Psk};
 
 /// Length of a room id in characters.
 pub const ROOM_ID_LEN: usize = 26;
@@ -61,7 +64,7 @@ impl fmt::Display for KeyField {
 }
 
 /// A relay link or proxy URL failed validation. Messages never contain key
-/// material.
+/// material: echoed input is cut at the first `#` (see [`redact_input`]).
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum LinkError {
     /// The scheme is not `hya`/`hya+insecure` (links) or `http`/`https`
@@ -292,7 +295,7 @@ impl RelayAddress {
             other => return Err(LinkError::UnknownScheme(other.to_owned())),
         };
         if rest.contains(['?', '#']) {
-            return Err(LinkError::InvalidPath(rest.to_owned()));
+            return Err(LinkError::InvalidPath(redact_input(rest)));
         }
         let (authority, path) = rest.split_at(rest.find('/').unwrap_or(rest.len()));
         let (host, port) = split_authority(authority)?;
@@ -392,7 +395,8 @@ pub struct RelayLink {
     room_id: RoomId,
     transport: Transport,
     server_key: [u8; 32],
-    psk: [u8; 32],
+    /// Zeroized on drop.
+    psk: Zeroizing<[u8; 32]>,
 }
 
 impl RelayLink {
@@ -410,7 +414,35 @@ impl RelayLink {
             room_id,
             transport,
             server_key,
-            psk,
+            psk: Zeroizing::new(psk),
+        }
+    }
+
+    /// Assemble a link from a stored [`Psk`] without an unzeroized copy of
+    /// the key.
+    #[must_use]
+    pub fn from_keys(
+        address: RelayAddress,
+        room_id: RoomId,
+        transport: Transport,
+        server_key: [u8; 32],
+        psk: &Psk,
+    ) -> Self {
+        RelayLink {
+            address,
+            room_id,
+            transport,
+            server_key,
+            psk: psk.zeroizing().clone(),
+        }
+    }
+
+    /// The same link with another transport hint.
+    #[must_use]
+    pub fn with_transport(&self, transport: Transport) -> Self {
+        RelayLink {
+            transport,
+            ..self.clone()
         }
     }
 
@@ -423,34 +455,7 @@ impl RelayLink {
             Some((before, fragment)) => (before, Some(fragment)),
             None => (text, None),
         };
-        let (scheme, rest) = split_scheme(before_fragment)?;
-        let secure = match scheme {
-            SECURE_SCHEME => true,
-            INSECURE_SCHEME => false,
-            other => return Err(LinkError::UnknownScheme(other.to_owned())),
-        };
-        let (path_part, query) = match rest.split_once('?') {
-            Some((path, query)) => (path, query),
-            None => (rest, ""),
-        };
-        let (authority, path) = path_part.split_at(path_part.find('/').unwrap_or(path_part.len()));
-        let (host, port) = split_authority(authority)?;
-        let host = parse_host(host)?;
-
-        let path = path.strip_prefix('/').unwrap_or(path);
-        if path.is_empty() {
-            return Err(LinkError::MissingRoom);
-        }
-        let (prefix, room) = match path.rsplit_once('/') {
-            Some((prefix, room)) => (prefix, room),
-            None => ("", path),
-        };
-        if room.is_empty() {
-            return Err(LinkError::InvalidPath(path.to_owned()));
-        }
-        let prefix = parse_prefix(prefix)?;
-        let room_id = RoomId::parse(room)?;
-        let transport = parse_query(query)?;
+        let (address, room_id, transport) = parse_public_part(before_fragment)?;
 
         let fragment = match fragment {
             Some(fragment) if !fragment.is_empty() => fragment,
@@ -460,21 +465,27 @@ impl RelayLink {
         let (Some(key), Some(psk), None) = (parts.next(), parts.next(), parts.next()) else {
             return Err(LinkError::InvalidFragment);
         };
-        let server_key = decode_key(key, KeyField::ServerKey)?;
+        let server_key = *decode_key(key, KeyField::ServerKey)?;
         let psk = decode_key(psk, KeyField::Psk)?;
 
         Ok(RelayLink {
-            address: RelayAddress {
-                secure,
-                host,
-                port: port.unwrap_or(default_port(secure)),
-                prefix,
-            },
+            address,
             room_id,
             transport,
             server_key,
             psk,
         })
+    }
+
+    /// Parse the public part of a link — a [redacted](RelayLink::redacted)
+    /// link, optionally with `?t=` — into its address, room, and transport
+    /// hint. Anything from a `#` on is ignored (never parsed or echoed).
+    ///
+    /// # Errors
+    /// As [`RelayLink::parse`], minus the fragment errors.
+    pub fn parse_public(text: &str) -> Result<(RelayAddress, RoomId, Transport), LinkError> {
+        let before_fragment = text.split_once('#').map_or(text, |(before, _)| before);
+        parse_public_part(before_fragment)
     }
 
     /// The relay address.
@@ -507,6 +518,19 @@ impl RelayLink {
         &self.psk
     }
 
+    /// The pre-shared key as a (zeroizing) [`Psk`].
+    #[must_use]
+    pub fn psk_key(&self) -> Psk {
+        Psk::from_zeroizing(self.psk.clone())
+    }
+
+    /// The room's open token (sent in `Open.open_token`), derived from the
+    /// PSK.
+    #[must_use]
+    pub fn open_token(&self) -> OpenToken {
+        OpenToken::derive(&self.psk_key(), &self.room_id)
+    }
+
     /// The full, canonical link including the secret fragment. Treat the
     /// result as a credential: never log it.
     #[must_use]
@@ -519,7 +543,7 @@ impl RelayLink {
         out.push('#');
         out.push_str(&URL_SAFE_NO_PAD.encode(self.server_key));
         out.push('.');
-        out.push_str(&URL_SAFE_NO_PAD.encode(self.psk));
+        out.push_str(&URL_SAFE_NO_PAD.encode(&self.psk[..]));
         out
     }
 
@@ -565,6 +589,62 @@ impl fmt::Debug for RelayLink {
     }
 }
 
+/// Parse `scheme://authority/[prefix/]room[?query]` (no fragment).
+fn parse_public_part(
+    before_fragment: &str,
+) -> Result<(RelayAddress, RoomId, Transport), LinkError> {
+    let (scheme, rest) = split_scheme(before_fragment)?;
+    let secure = match scheme {
+        SECURE_SCHEME => true,
+        INSECURE_SCHEME => false,
+        other => return Err(LinkError::UnknownScheme(other.to_owned())),
+    };
+    let (path_part, query) = match rest.split_once('?') {
+        Some((path, query)) => (path, query),
+        None => (rest, ""),
+    };
+    let (authority, path) = path_part.split_at(path_part.find('/').unwrap_or(path_part.len()));
+    let (host, port) = split_authority(authority)?;
+    let host = parse_host(host)?;
+
+    let path = path.strip_prefix('/').unwrap_or(path);
+    if path.is_empty() {
+        return Err(LinkError::MissingRoom);
+    }
+    let (prefix, room) = match path.rsplit_once('/') {
+        Some((prefix, room)) => (prefix, room),
+        None => ("", path),
+    };
+    if room.is_empty() {
+        return Err(LinkError::InvalidPath(path.to_owned()));
+    }
+    let prefix = parse_prefix(prefix)?;
+    let room_id = RoomId::parse(room)?;
+    let transport = parse_query(query)?;
+
+    Ok((
+        RelayAddress {
+            secure,
+            host,
+            port: port.unwrap_or(default_port(secure)),
+            prefix,
+        },
+        room_id,
+        transport,
+    ))
+}
+
+/// `text` cut at its first `#`, so an error never echoes a pasted link's
+/// secret fragment (`#<server key>.<psk>`). Anything after the cut is shown
+/// as `#<redacted>`.
+#[must_use]
+pub fn redact_input(text: &str) -> String {
+    match text.split_once('#') {
+        Some((before, _)) => format!("{before}#<redacted>"),
+        None => text.to_owned(),
+    }
+}
+
 fn default_port(secure: bool) -> u16 {
     if secure {
         DEFAULT_SECURE_PORT
@@ -596,10 +676,10 @@ fn split_authority(authority: &str) -> Result<(&str, Option<u16>), LinkError> {
                 } else if let Some(port) = rest.strip_prefix(':') {
                     (host, Some(port))
                 } else {
-                    return Err(LinkError::InvalidHost(authority.to_owned()));
+                    return Err(LinkError::InvalidHost(redact_input(authority)));
                 }
             }
-            None => return Err(LinkError::InvalidHost(authority.to_owned())),
+            None => return Err(LinkError::InvalidHost(redact_input(authority))),
         }
     } else {
         match authority.split_once(':') {
@@ -613,7 +693,7 @@ fn split_authority(authority: &str) -> Result<(&str, Option<u16>), LinkError> {
             let valid = !text.is_empty() && text.bytes().all(|b| b.is_ascii_digit());
             match text.parse::<u16>() {
                 Ok(port) if valid && port != 0 => Some(port),
-                _ => return Err(LinkError::InvalidPort(text.to_owned())),
+                _ => return Err(LinkError::InvalidPort(redact_input(text))),
             }
         }
     };
@@ -637,7 +717,7 @@ fn parse_host(host: &str) -> Result<String, LinkError> {
     if valid {
         Ok(host.to_ascii_lowercase())
     } else {
-        Err(LinkError::InvalidHost(host.to_owned()))
+        Err(LinkError::InvalidHost(redact_input(host)))
     }
 }
 
@@ -657,7 +737,7 @@ pub(crate) fn parse_prefix(prefix: &str) -> Result<String, LinkError> {
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~'));
         if !valid {
-            return Err(LinkError::InvalidPath(prefix.to_owned()));
+            return Err(LinkError::InvalidPath(redact_input(prefix)));
         }
         out.push('/');
         out.push_str(segment);
@@ -680,12 +760,19 @@ fn parse_query(query: &str) -> Result<Transport, LinkError> {
     Ok(transport.unwrap_or_default())
 }
 
-fn decode_key(text: &str, field: KeyField) -> Result<[u8; 32], LinkError> {
-    let bytes = URL_SAFE_NO_PAD
-        .decode(text)
-        .map_err(|_| LinkError::InvalidBase64 { field })?;
-    <[u8; 32]>::try_from(bytes.as_slice()).map_err(|_| LinkError::InvalidKeyLength {
-        field,
-        len: bytes.len(),
-    })
+fn decode_key(text: &str, field: KeyField) -> Result<Zeroizing<[u8; 32]>, LinkError> {
+    let bytes = Zeroizing::new(
+        URL_SAFE_NO_PAD
+            .decode(text)
+            .map_err(|_| LinkError::InvalidBase64 { field })?,
+    );
+    let mut key = Zeroizing::new([0u8; 32]);
+    if bytes.len() != key.len() {
+        return Err(LinkError::InvalidKeyLength {
+            field,
+            len: bytes.len(),
+        });
+    }
+    key.copy_from_slice(&bytes);
+    Ok(key)
 }

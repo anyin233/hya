@@ -7,16 +7,25 @@
 //! [`ProxyCore::serve_accept`] together with an opaque [`PeerInfo`].
 //!
 //! - **Host.** The proxy sends `challenge{nonce}` (32 fresh random bytes);
-//!   the host answers `register{ed25519_pubkey, signature}` over
+//!   the host answers `register{ed25519_pubkey, signature, open_token_hash}`
+//!   signed over
 //!   [`register_signing_message`](crate::proto::register_signing_message),
 //!   checked with Ed25519 `verify_strict`. The room id is derived from the
 //!   key ([`RoomId::from_ed25519`](crate::link::RoomId::from_ed25519)) and
-//!   returned in `registered`. A later valid registration for the same room
+//!   returned in `registered`. `update_open_token` (signed over the same
+//!   nonce) replaces the room's open token hash; `open_token_updated`
+//!   confirms it. A later valid registration for the same room
 //!   replaces the current host: the old control stream ends with
 //!   `ALREADY_EXISTS` and the old room's streams with `UNAVAILABLE`. When a
 //!   control stream ends the room is evicted and all its streams end with
 //!   `UNAVAILABLE`.
-//! - **Open.** The first frame names the room. The proxy allocates a
+//! - **Open.** The first frame names the room and carries its open token.
+//!   Unless `sha256(open_token)` equals the room's registered hash (compared
+//!   in constant time) the open fails with the same `NOT_FOUND` "room is
+//!   offline" as a room nobody registered — before any stream slot is
+//!   taken or the host hears of it — so room ids alone neither reveal
+//!   whether a room is online nor let anyone spend the host's or the room's
+//!   resources. Otherwise the proxy allocates a
 //!   128-bit random stream id, sends `incoming{stream_id}` on the host's
 //!   control stream, and waits for an `Accept` whose first frame names that
 //!   id. Once spliced it sends `opened` to the opener, then relays both
@@ -53,6 +62,9 @@ pub use limits::{
     DEFAULT_STREAM_RATE_BYTES_PER_SEC, ProxyLimits,
 };
 
+use subtle::ConstantTimeEq as _;
+
+use crate::keys::open_token_hash;
 use crate::link::RoomId;
 use crate::proto::{RelayError, RelayErrorCode};
 use crate::transport::{ChunkTransport, ProxyControlTransport};
@@ -227,6 +239,19 @@ pub(crate) struct Room {
     incoming: mpsc::Sender<String>,
     /// Streams admitted to this room; changed only under the state lock.
     streams: AtomicUsize,
+    /// `sha256(open_token)` an `Open` must match; changed only under the
+    /// state lock.
+    open_token_hash: Mutex<[u8; 32]>,
+}
+
+impl Room {
+    fn open_token_matches(&self, presented: &[u8]) -> bool {
+        let expected = *self
+            .open_token_hash
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        bool::from(open_token_hash(presented).ct_eq(&expected))
+    }
 }
 
 /// An opener waiting for its host's `Accept`.
@@ -328,10 +353,12 @@ impl Inner {
         })
     }
 
-    /// Register (or replace) the room owned by `room_id` for `peer`.
+    /// Register (or replace) the room owned by `room_id` for `peer`; opens
+    /// must present a token whose sha256 is `open_token_hash`.
     pub(crate) fn register_room(
         self: &Arc<Self>,
         room_id: &RoomId,
+        open_token_hash: [u8; 32],
         peer: &PeerInfo,
     ) -> Result<(RoomRegistration, mpsc::Receiver<String>), RelayError> {
         let mut state = self.state();
@@ -363,6 +390,7 @@ impl Inner {
             replaced: AtomicBool::new(false),
             incoming: tx,
             streams: AtomicUsize::new(0),
+            open_token_hash: Mutex::new(open_token_hash),
         });
         state.rooms.insert(room.id.clone(), room.clone());
         if let Some(old) = &previous {
@@ -383,11 +411,26 @@ impl Inner {
         ))
     }
 
-    /// Admit a new stream to `room_id`, announce it to the host, and return
-    /// its slot plus the receiver its host leg arrives on.
+    /// Replace the open token hash of `room` (still registered by this
+    /// control stream).
+    pub(crate) fn update_open_token(&self, room: &Room, open_token_hash: [u8; 32]) {
+        let _state = self.state();
+        *room
+            .open_token_hash
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = open_token_hash;
+    }
+
+    /// Admit a new stream to `room_id` for a holder of its open token,
+    /// announce it to the host, and return its slot plus the receiver its
+    /// host leg arrives on.
+    ///
+    /// A wrong or missing token fails exactly like an offline room, before
+    /// any limit is consulted, so the answer reveals nothing about the room.
     pub(crate) fn admit_stream(
         self: &Arc<Self>,
         room_id: &str,
+        open_token: &[u8],
         peer: &PeerInfo,
     ) -> Result<(StreamSlot, oneshot::Receiver<ChunkTransport>), RelayError> {
         let mut state = self.state();
@@ -397,8 +440,9 @@ impl Inner {
         let room = state
             .rooms
             .get(room_id)
+            .filter(|room| room.open_token_matches(open_token))
             .cloned()
-            .ok_or_else(|| RelayError::new(RelayErrorCode::NotFound, "room is offline"))?;
+            .ok_or_else(room_offline)?;
         if room.streams.load(Ordering::Relaxed) >= self.limits.max_streams_per_room {
             return Err(RelayError::new(
                 RelayErrorCode::ResourceExhausted,
@@ -424,9 +468,7 @@ impl Inner {
                     RelayErrorCode::ResourceExhausted,
                     "the room has too many unannounced streams",
                 ),
-                mpsc::error::TrySendError::Closed(_) => {
-                    RelayError::new(RelayErrorCode::NotFound, "room is offline")
-                }
+                mpsc::error::TrySendError::Closed(_) => room_offline(),
             })?;
         let (deliver, arrival) = oneshot::channel();
         state
@@ -490,6 +532,11 @@ impl Inner {
             RelayError::new(RelayErrorCode::Unavailable, "room closed")
         }
     }
+}
+
+/// The answer for an offline room and for a wrong open token alike.
+fn room_offline() -> RelayError {
+    RelayError::new(RelayErrorCode::NotFound, "room is offline")
 }
 
 pub(crate) fn shutting_down() -> RelayError {

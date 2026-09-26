@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ed25519_dalek::SigningKey;
-use hya_relay::keys::{Psk, StaticKeypair};
+use hya_relay::keys::{OpenToken, Psk, StaticKeypair};
 use hya_relay::link::RoomId;
 use rand_core::{OsRng, TryRngCore as _};
 use serde::{Deserialize, Serialize};
@@ -116,6 +116,13 @@ impl RelayIdentity {
     #[must_use]
     pub fn psk(&self) -> &Psk {
         &self.psk
+    }
+
+    /// `sha256` of the room's open token (derived from the PSK): what the
+    /// host registers with the proxy.
+    #[must_use]
+    pub fn open_token_hash(&self) -> [u8; 32] {
+        OpenToken::derive(&self.psk, &self.room_id()).hash()
     }
 
     /// The same room and Noise keys with a new random PSK.

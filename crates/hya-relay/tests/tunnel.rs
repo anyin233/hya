@@ -411,6 +411,7 @@ async fn heartbeats_and_unknown_frames_are_transparent_and_probes_get_pongs() {
             Chunk {
                 frame: Some(chunk::Frame::Open(Open {
                     room_id: "ignored".into(),
+                    open_token: Vec::new(),
                 })),
             },
             frame,

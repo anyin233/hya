@@ -113,7 +113,9 @@ async fn start_host(relay: SocketAddr, seed: u8, mode: Mode) -> Host {
     let identity = Arc::new(Identity::new(seed));
     let client = RelayClient::new(relay_address(relay), ClientConfig::default()).unwrap();
     let mut control = client.host().await.unwrap();
-    let room = register_host(&mut control, &identity.key, WAIT)
+    let open_token_hash =
+        hya_relay::keys::OpenToken::derive(&identity.psk, &identity.room()).hash();
+    let room = register_host(&mut control, &identity.key, &open_token_hash, WAIT)
         .await
         .unwrap();
     assert_eq!(room, identity.room());

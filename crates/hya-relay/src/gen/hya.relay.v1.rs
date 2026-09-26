@@ -3,7 +3,7 @@
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct HostFrame {
     /// The frame kind.
-    #[prost(oneof = "host_frame::Frame", tags = "1, 2")]
+    #[prost(oneof = "host_frame::Frame", tags = "1, 2, 3")]
     pub frame: ::core::option::Option<host_frame::Frame>,
 }
 /// Nested message and enum types in `HostFrame`.
@@ -17,13 +17,16 @@ pub mod host_frame {
         /// Liveness probe or reply.
         #[prost(message, tag = "2")]
         Heartbeat(super::Heartbeat),
+        /// Replace the room's open token hash (after a PSK rotation).
+        #[prost(message, tag = "3")]
+        UpdateOpenToken(super::UpdateOpenToken),
     }
 }
 /// A frame sent by the proxy on a host control stream.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ProxyToHost {
     /// The frame kind.
-    #[prost(oneof = "proxy_to_host::Frame", tags = "1, 2, 3, 4, 5")]
+    #[prost(oneof = "proxy_to_host::Frame", tags = "1, 2, 3, 4, 5, 6")]
     pub frame: ::core::option::Option<proxy_to_host::Frame>,
 }
 /// Nested message and enum types in `ProxyToHost`.
@@ -46,6 +49,9 @@ pub mod proxy_to_host {
         /// Terminal failure (WebSocket binding); the proxy closes after it.
         #[prost(message, tag = "5")]
         Error(super::RelayError),
+        /// The `update_open_token` was applied: only the new token opens streams.
+        #[prost(message, tag = "6")]
+        OpenTokenUpdated(super::OpenTokenUpdated),
     }
 }
 /// Registration challenge from the proxy.
@@ -63,10 +69,37 @@ pub struct Register {
     #[prost(bytes = "vec", tag = "1")]
     pub ed25519_pubkey: ::prost::alloc::vec::Vec<u8>,
     /// Ed25519 signature (64 bytes) over the bytes
-    /// `"hya.relay.v1/register\0" || challenge.nonce`.
+    /// `"hya.relay.v1/register/v2\0" || challenge.nonce || open_token_hash`.
+    /// (The v1 message `"hya.relay.v1/register\0" || nonce`, without a hash,
+    /// is no longer accepted.)
+    #[prost(bytes = "vec", tag = "2")]
+    pub signature: ::prost::alloc::vec::Vec<u8>,
+    /// `sha256(open_token)` (32 bytes), where
+    /// `open_token = HMAC-SHA256(key = psk, "hya.relay.v1/open\0" || room_id)`.
+    /// The proxy admits an `Open` only when the sha256 of its `open_token`
+    /// equals this hash, so only link holders can make the host do work; the
+    /// proxy never learns the PSK or the token itself before an open presents
+    /// it.
+    #[prost(bytes = "vec", tag = "3")]
+    pub open_token_hash: ::prost::alloc::vec::Vec<u8>,
+}
+/// Replace the room's open token hash on a registered control stream (the
+/// host rotated its PSK). Old tokens stop opening streams once the proxy
+/// answers `open_token_updated`.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct UpdateOpenToken {
+    /// The new `sha256(open_token)` (32 bytes).
+    #[prost(bytes = "vec", tag = "1")]
+    pub open_token_hash: ::prost::alloc::vec::Vec<u8>,
+    /// Ed25519 signature (64 bytes, the room key) over the bytes
+    /// `"hya.relay.v1/update-open-token/v1\0" || challenge.nonce ||
+    /// open_token_hash`, with the nonce of this control stream's challenge.
     #[prost(bytes = "vec", tag = "2")]
     pub signature: ::prost::alloc::vec::Vec<u8>,
 }
+/// The proxy applied an `UpdateOpenToken`.
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct OpenTokenUpdated {}
 /// Registration accepted.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Registered {
@@ -99,6 +132,11 @@ pub struct Open {
     /// Room to connect to.
     #[prost(string, tag = "1")]
     pub room_id: ::prost::alloc::string::String,
+    /// The room's open token (32 bytes) from the link:
+    /// `HMAC-SHA256(key = psk, "hya.relay.v1/open\0" || room_id)`. A missing
+    /// or wrong token fails exactly like an offline room (`NOT_FOUND`).
+    #[prost(bytes = "vec", tag = "2")]
+    pub open_token: ::prost::alloc::vec::Vec<u8>,
 }
 /// First frame of an `Accept` stream.
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -327,10 +365,12 @@ pub mod relay_client {
             self
         }
         /// Host control stream. The proxy first sends `challenge`; the host answers
-        /// with `register` (its Ed25519 key and a signature over the challenge
-        /// nonce); the proxy answers with `registered`. From then on the proxy
-        /// sends one `incoming` per client stream, and both sides exchange
-        /// heartbeats. The room is online while this stream is open.
+        /// with `register` (its Ed25519 key, the hash of the room's open token,
+        /// and a signature over both and the challenge nonce); the proxy answers
+        /// with `registered`. From then on the proxy sends one `incoming` per
+        /// client stream, the host may replace the open token hash with
+        /// `update_open_token` (answered by `open_token_updated`), and both sides
+        /// exchange heartbeats. The room is online while this stream is open.
         pub async fn host(
             &mut self,
             request: impl tonic::IntoStreamingRequest<Message = super::HostFrame>,
@@ -379,8 +419,10 @@ pub mod relay_client {
             self.inner.streaming(req, path, codec).await
         }
         /// Client side of one data stream. The first client frame must be `open`
-        /// naming the room; afterwards both directions carry `data`, `heartbeat`,
-        /// and a final `close`. An offline room fails with `NOT_FOUND`. Once the
+        /// naming the room and carrying its open token; afterwards both directions
+        /// carry `data`, `heartbeat`, and a final `close`. An offline room, and an
+        /// open token that does not match the host's registered hash, both fail
+        /// with the same `NOT_FOUND`, before the host hears of the stream. Once the
         /// host has accepted the stream the proxy sends `opened`; openers should
         /// wait for it before sending `data` (the proxy buffers only a small,
         /// bounded amount of early data and otherwise stops reading until the
@@ -429,10 +471,12 @@ pub mod relay_server {
             + std::marker::Send
             + 'static;
         /// Host control stream. The proxy first sends `challenge`; the host answers
-        /// with `register` (its Ed25519 key and a signature over the challenge
-        /// nonce); the proxy answers with `registered`. From then on the proxy
-        /// sends one `incoming` per client stream, and both sides exchange
-        /// heartbeats. The room is online while this stream is open.
+        /// with `register` (its Ed25519 key, the hash of the room's open token,
+        /// and a signature over both and the challenge nonce); the proxy answers
+        /// with `registered`. From then on the proxy sends one `incoming` per
+        /// client stream, the host may replace the open token hash with
+        /// `update_open_token` (answered by `open_token_updated`), and both sides
+        /// exchange heartbeats. The room is online while this stream is open.
         async fn host(
             &self,
             request: tonic::Request<tonic::Streaming<super::HostFrame>>,
@@ -457,8 +501,10 @@ pub mod relay_server {
             + std::marker::Send
             + 'static;
         /// Client side of one data stream. The first client frame must be `open`
-        /// naming the room; afterwards both directions carry `data`, `heartbeat`,
-        /// and a final `close`. An offline room fails with `NOT_FOUND`. Once the
+        /// naming the room and carrying its open token; afterwards both directions
+        /// carry `data`, `heartbeat`, and a final `close`. An offline room, and an
+        /// open token that does not match the host's registered hash, both fail
+        /// with the same `NOT_FOUND`, before the host hears of the stream. Once the
         /// host has accepted the stream the proxy sends `opened`; openers should
         /// wait for it before sending `data` (the proxy buffers only a small,
         /// bounded amount of early data and otherwise stops reading until the
