@@ -40,8 +40,8 @@ export interface PickerAction {
   ctrl?: boolean
   /** Hint text, e.g. `"F2 rename"`. */
   label: string
-  /** `"value"` edits the row's label inline before committing (rename); `"confirm"` shows a yes/no line (delete). */
-  prompt: "value" | "confirm"
+  /** `"value"` edits the row's label inline before committing (rename); `"confirm"` shows a yes/no line (delete); `"toggle"` commits at once, no prompt (a view switch, e.g. `/sessions`' all-projects toggle). */
+  prompt: "value" | "confirm" | "toggle"
   /** Confirmation text template for `prompt: "confirm"`; `{label}` is replaced by the row's label. */
   confirmText?: string
 }
@@ -174,6 +174,9 @@ export function pickerKey(state: PickerState, key: KeyLike): PickerOutcome {
     if (!row) return { type: "none" }
     if (action.prompt === "value") {
       return { type: "update", state: { ...state, mode: "rename", actionRow: row.id, actionId: action.id, editValue: row.label } }
+    }
+    if (action.prompt === "toggle") {
+      return { type: "commit", id: action.id, row }
     }
     const template = action.confirmText ?? 'Delete "{label}"? Enter confirms · Esc cancels'
     return { type: "update", state: { ...state, mode: "confirm", actionRow: row.id, actionId: action.id, confirmText: template.replace("{label}", row.label) } }
