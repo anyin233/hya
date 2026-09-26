@@ -945,6 +945,17 @@ impl RuntimeMcpControl {
             .collect()
     }
 
+    fn effective_tools(&self) -> BTreeMap<String, Vec<String>> {
+        self.reconciler
+            .registry
+            .effective_manifest()
+            .sources
+            .into_iter()
+            .filter(|(source, _)| source.kind() == RuntimeSourceKind::Mcp)
+            .map(|(source, manifest)| (source.configured_id().to_string(), manifest.exports))
+            .collect()
+    }
+
     fn effective_resources(&self) -> BTreeMap<String, Value> {
         self.reconciler
             .registry
@@ -1014,6 +1025,10 @@ impl hya_server::McpControl for RuntimeMcpControl {
 
     fn resources(&self) -> ControlFuture<'_, BTreeMap<String, Value>> {
         Box::pin(async move { self.effective_resources() })
+    }
+
+    fn tools(&self) -> ControlFuture<'_, BTreeMap<String, Vec<String>>> {
+        Box::pin(async move { self.effective_tools() })
     }
 }
 

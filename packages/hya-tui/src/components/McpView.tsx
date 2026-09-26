@@ -6,7 +6,7 @@ import { useTerminalDimensions } from "@opentui/solid"
 import { createSignal, For, onCleanup, Show } from "solid-js"
 import { useApp } from "../app/context"
 import { pickerWindow } from "../state/picker"
-import { mcpToolIndex, mcpToolWindow, mcpViewHint, serverHeaderLine, serverLine, serverStateText, shownServers, type McpBusy, type McpNotice, type McpViewState } from "../state/mcp"
+import { mcpToolIndex, mcpToolLabel, mcpToolWindow, mcpViewHint, serverHeaderLine, serverLine, serverStateText, shownServers, type McpBusy, type McpNotice, type McpViewState } from "../state/mcp"
 import { colors } from "../theme"
 import { useSpinner } from "./Spinner"
 
@@ -89,7 +89,7 @@ export function McpView() {
                         return (
                           <text height={1} wrapMode="none">
                             <span style={{ fg: colors.accent }}>{on() ? "▸ " : "  "}</span>
-                            <span style={{ fg: on() ? colors.accent : colors.fg }}>{item.tool}</span>
+                            <span style={{ fg: on() ? colors.accent : colors.fg }}>{mcpToolLabel(open().server ?? "", item.tool)}</span>
                           </text>
                         )
                       }}

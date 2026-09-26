@@ -1,5 +1,10 @@
 # 0.41.0
 
+## `/v1/mcp` lists a connected server's tools
+
+- `McpServerStatus.tools` now holds a connected server's tools as their namespaced `mcp__<server>__<tool>` names, in the server's order. The list comes from `GET /v1/mcp` and from the add, connect, and disconnect answers. Servers that aren't connected report none. The list is read at connect time; the server's `tools/list_changed` notices aren't followed.
+- The TUI's `/mcp` detail screen shows the tools under the server's own names. See [Protocol guide](docs/protocol/README.md).
+
 ## Fix: `/diff` shows its last line
 
 - In a diff longer than the screen, End, paging down, and scrolling down with the mouse wheel now reach the last line. Before, the key hint was drawn over it.
