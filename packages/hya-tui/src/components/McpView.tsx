@@ -6,7 +6,7 @@ import { useTerminalDimensions } from "@opentui/solid"
 import { createSignal, For, onCleanup, Show } from "solid-js"
 import { useApp } from "../app/context"
 import { pickerWindow } from "../state/picker"
-import { mcpViewHint, serverHeaderLine, serverLine, serverStateText, shownServers, type McpBusy, type McpNotice, type McpViewState } from "../state/mcp"
+import { mcpToolIndex, mcpToolWindow, mcpViewHint, serverHeaderLine, serverLine, serverStateText, shownServers, type McpBusy, type McpNotice, type McpViewState } from "../state/mcp"
 import { colors } from "../theme"
 import { useSpinner } from "./Spinner"
 
@@ -21,7 +21,7 @@ function BusyLine(props: { busy: McpBusy }) {
   onCleanup(() => clearInterval(timer))
   const seconds = () => Math.max(0, Math.floor((now() - props.busy.startedAt) / 1000))
   return (
-    <text height={1} wrapMode="none">
+    <text height={1} flexShrink={0} wrapMode="none">
       <span style={{ fg: colors.accent }}>{frame()}</span>
       <span style={{ fg: colors.fg }}>{` ${props.busy.label}… ${seconds()}s`}</span>
       <span style={{ fg: colors.muted }}>{" · Esc cancels"}</span>
@@ -46,6 +46,12 @@ export function McpView() {
           const window = pickerWindow(all.length, at, visible)
           return all.slice(window.start, window.end)
         }
+        const tools = () => server()?.tools ?? []
+        const toolWindow = () => mcpToolWindow(tools().length, mcpToolIndex(open()), Math.max(1, size().height - 12))
+        const shownTools = () => {
+          const window = toolWindow()
+          return tools().slice(window.start, window.end).map((tool, offset) => ({ tool, at: window.start + offset }))
+        }
         const title = () => detail() ? `MCP › ${open().server ?? ""}` : "MCP servers"
         const empty = () => detail() ? "No tools" : (open().filter ? "No server matches the filter" : "No MCP servers configured")
         return (
@@ -63,19 +69,35 @@ export function McpView() {
             flexDirection="column"
             paddingX={1}
           >
-            <Show when={!detail()} fallback={<text height={1} wrapMode="none" fg={colors.fg}>{server() ? `${server()!.name} · ${serverStateText(server()!.state)}` : ""}</text>}>
-              <text height={1} wrapMode="none" fg={colors.fg}>{`${store.state.mcpServers.length} configured server${store.state.mcpServers.length === 1 ? "" : "s"}`}</text>
+            <Show when={!detail()} fallback={<text height={1} flexShrink={0} wrapMode="none" fg={colors.fg}>{server() ? `${server()!.name} · ${serverStateText(server()!.state)}` : ""}</text>}>
+              <text height={1} flexShrink={0} wrapMode="none" fg={colors.fg}>{`${store.state.mcpServers.length} configured server${store.state.mcpServers.length === 1 ? "" : "s"}`}</text>
             </Show>
             <Show when={!detail()}>
-              <text height={1} wrapMode="none" fg={colors.muted}>{`  ${serverHeaderLine(lineWidth())}`}</text>
+              <text height={1} flexShrink={0} wrapMode="none" fg={colors.muted}>{`  ${serverHeaderLine(lineWidth())}`}</text>
             </Show>
             <box flexGrow={1} flexDirection="column">
               <Show
                 when={!detail()}
                 fallback={
-                  <For each={server()?.tools ?? []}>
-                    {(tool) => <text height={1} wrapMode="none" fg={colors.fg}>{`  ${tool}`}</text>}
-                  </For>
+                  <>
+                    <Show when={toolWindow().moreAbove > 0}>
+                      <text height={1} flexShrink={0} wrapMode="none" fg={colors.muted}>{`  ↑ ${toolWindow().moreAbove} more`}</text>
+                    </Show>
+                    <For each={shownTools()}>
+                      {(item) => {
+                        const on = () => item.at === mcpToolIndex(open())
+                        return (
+                          <text height={1} wrapMode="none">
+                            <span style={{ fg: colors.accent }}>{on() ? "▸ " : "  "}</span>
+                            <span style={{ fg: on() ? colors.accent : colors.fg }}>{item.tool}</span>
+                          </text>
+                        )
+                      }}
+                    </For>
+                    <Show when={toolWindow().moreBelow > 0}>
+                      <text height={1} flexShrink={0} wrapMode="none" fg={colors.muted}>{`  ↓ ${toolWindow().moreBelow} more`}</text>
+                    </Show>
+                  </>
                 }
               >
                 <For each={shown()}>
@@ -96,7 +118,7 @@ export function McpView() {
             </box>
             <Show when={open().auth}>
               {(auth) => (
-                <box flexDirection="column">
+                <box flexDirection="column" flexShrink={0}>
                   <text width="100%" wrapMode="word" fg={colors.accent}>{`Open ${auth().url} (copied to the clipboard)`}</text>
                   <text height={1} wrapMode="none">
                     <span style={{ fg: colors.muted }}>Code </span>
@@ -110,16 +132,16 @@ export function McpView() {
               {(busy) => <BusyLine busy={busy()} />}
             </Show>
             <Show when={open().notice}>
-              {(notice) => <text width="100%" wrapMode="word" fg={noticeColor(notice())}>{notice().text}</text>}
+              {(notice) => <text width="100%" flexShrink={0} wrapMode="word" fg={noticeColor(notice())}>{notice().text}</text>}
             </Show>
             <Show when={open().filtering || open().filter}>
-              <text height={1} wrapMode="none">
+              <text height={1} flexShrink={0} wrapMode="none">
                 <span style={{ fg: colors.muted }}>Filter </span>
                 <span style={{ fg: colors.fg }}>{open().filter}</span>
                 <span style={{ fg: colors.accent }}>{open().filtering ? "▏" : ""}</span>
               </text>
             </Show>
-            <text width="100%" wrapMode="word" fg={colors.muted}>{mcpViewHint(open())}</text>
+            <text width="100%" flexShrink={0} wrapMode="word" fg={colors.muted}>{mcpViewHint(open())}</text>
           </box>
         )
       }}

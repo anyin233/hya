@@ -3,6 +3,7 @@
 ## Fix: `/diff` shows its last line
 
 - In a diff longer than the screen, End, paging down, and scrolling down with the mouse wheel now reach the last line. Before, the key hint was drawn over it.
+- The `/diff` file list and the `/mcp` server's tool list now show only what fits, marked `↑/↓ N more`, instead of spilling over the lines below. In the `/mcp` tool list, Up/Down/PgUp/PgDn/Home/End move through the tools.
 
 ## TUI sidebar follows other clients live
 
