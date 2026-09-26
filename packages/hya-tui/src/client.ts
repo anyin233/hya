@@ -19,6 +19,37 @@ export interface SessionInfo {
   timeUpdated?: string
   /** Everything billed for the session (turn rounds and side calls); the status bar's token total. */
   usage?: TokenUsage
+  /** Where a forked session came from (`ForkSession`); unset for sessions that are not forks. */
+  forkedFrom?: ForkSource
+  /** A pending revert (`RevertSession`, `/undo`): set until `/redo` undoes it or the next prompt or shell turn commits it. */
+  revert?: SessionRevert
+}
+
+/** `ForkSource`: the source session and the user message the fork was cut before (empty for a head fork). */
+export interface ForkSource {
+  session: string
+  messageId?: string
+}
+
+/** `SessionRevert` (docs/protocol/README.md "Revert and redo"). */
+export interface SessionRevert {
+  /** The reverted user message (the first hidden message). */
+  messageId: string
+  /** Its text: `/undo` puts it back in the composer. */
+  text?: string
+  /** The reverted message and every later one. */
+  hiddenMessages?: number
+  files?: RevertedFile[]
+}
+
+/** One file a revert or redo wrote (or could not restore). */
+export interface RevertedFile {
+  /** Absolute path. */
+  path: string
+  /** `restored`, `deleted`, `unchanged`, `skipped`, or `failed`. */
+  action?: string
+  /** Why it was `skipped` (`too_large`, `session_cap`, `snapshot_budget`, `unreadable`) or the error of a `failed` write. */
+  reason?: string
 }
 
 /**
@@ -339,6 +370,8 @@ export interface StreamEvent {
   tokensRecorded?: { message?: string; model?: string; usage?: TokenUsage }
   /** The session's whole todo list after a todo tool changed it (durable). */
   todoUpdated?: { items?: TodoItem[] }
+  /** A revert (`messageId` set) or its undo (`undone`, `messageId` empty) of the session (durable); re-read the session and its messages. */
+  sessionReverted?: { messageId?: string; undone?: boolean; files?: RevertedFile[] }
 }
 
 export interface StreamFrame {
@@ -689,6 +722,26 @@ export class HyaClient {
       if (error instanceof HttpError && error.status === 404) return []
       throw error
     }
+  }
+
+  /**
+   * `RevertSession` (`POST /v1/sessions/{id}/revert`): `{}` reverts the last
+   * visible user message (`/undo`; again = further back), `{messageId}`
+   * reverts to that user message, `{undo: true}` undoes the pending revert
+   * (`/redo`). `409 session_busy` while a turn runs; `400 invalid_argument`
+   * when there is nothing to revert or undo.
+   */
+  async revertSession(session: string, body: { messageId?: string; undo?: boolean }): Promise<{ session: SessionInfo; files?: RevertedFile[] }> {
+    return this.request("POST", `/v1/sessions/${encodeURIComponent(session)}/revert`, body)
+  }
+
+  /**
+   * `ForkSession` (`POST /v1/sessions/{id}/fork`): a new root session with
+   * the messages strictly before user message `messageId` (its text comes
+   * back as `promptText`), or every message when `messageId` is unset.
+   */
+  async forkSession(session: string, messageId?: string): Promise<{ session: SessionInfo; promptText?: string }> {
+    return this.request("POST", `/v1/sessions/${encodeURIComponent(session)}/fork`, messageId ? { messageId } : {})
   }
 
   /** `CompactSession`: compact the session's context now (`/compact`). */

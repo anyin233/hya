@@ -11,6 +11,7 @@
 import type { MessageInfo, MessagePart } from "../client"
 import { historyCompactionText, modelReference } from "./format"
 import { mergeTranscript } from "./overlay"
+import { revertIndicator, revertIndicatorId } from "./revert"
 import type { AppState, QueuedPrompt } from "./store"
 import { toolCard, type ToolCardView } from "./tools"
 
@@ -50,6 +51,8 @@ export interface MessageView {
   queued: boolean
   /** A compaction's summary system message (its text started with `compactedMarker`): a divider goes right before it. */
   compaction?: true
+  /** A notice drawn in the warning color (the pending-revert line, state/revert.ts). */
+  tone?: "warning"
 }
 
 export interface Attribution {
@@ -254,7 +257,11 @@ export function lastReplyText(views: readonly MessageView[]): string | undefined
   return undefined
 }
 
-/** The chat transcript: projection + overlay, dividers, then prompts still waiting in the queue. */
+/**
+ * The chat transcript: projection + overlay, dividers, the pending-revert
+ * line (`SessionInfo.revert`, `/undo`), then prompts still waiting in the
+ * queue.
+ */
 export function transcriptViews(state: AppState): MessageView[] {
   const session = state.selected
   const fallback = { agent: session?.agent ?? "", model: session ? modelReference(session) : "" }
@@ -288,7 +295,11 @@ export function transcriptViews(state: AppState): MessageView[] {
     const command = known ?? (text === shellMarker ? shellCommandOf(views[index + 1]) : undefined)
     return command === undefined ? view : shellUserView(view, command)
   })
-  return [...withDividers(shown, state.dividers), ...state.queued.filter((item) => item.state === "queued").map(queuedView)]
+  const revert = session?.revert
+  const pending: MessageView[] = revert
+    ? [{ ...dividerView({ id: revertIndicatorId, text: revertIndicator(revert) }), tone: "warning" }]
+    : []
+  return [...withDividers(shown, state.dividers), ...pending, ...state.queued.filter((item) => item.state === "queued").map(queuedView)]
 }
 
 /** Whether a tool card is expanded: its own toggle, else the global `/tools` switch, else only shell-turn cards. */

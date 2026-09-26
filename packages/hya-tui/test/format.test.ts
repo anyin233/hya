@@ -195,3 +195,10 @@ test("pending asks of other sessions name the session they belong to (its /open 
   expect(otherAskNotice(store.state.interactions[0]!, store.state.sessions)).toBe("Permission needed in 2. Other work · /open 2 to answer there")
   expect(otherAskNotice(store.state.interactions[1]!, store.state.sessions)).toBe("Question in hysec_9 · /open hysec_9 to answer there")
 })
+
+test("the context box names the session a fork came from", () => {
+  const store = createAppStore()
+  store.setSessions([{ id: "hysec_src", agent: "build", workdir: "/w", title: "Parser" }])
+  store.openSession({ id: "hysec_2", agent: "build", workdir: "/w", forkedFrom: { session: "hysec_src", messageId: "m" } })
+  expect(contextText(store.state, server, 30).split("\n")[1]).toBe("Forked   from Parser")
+})

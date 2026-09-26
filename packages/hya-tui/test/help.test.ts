@@ -74,6 +74,7 @@ test("the key help text (connection-failure view) is generated from the same row
 test("help lists the external editor chord, mouse copy, and the vim normal-mode keys", () => {
   const rows = helpRows(entries)
   expect(rows.find((row) => row.keys === "Ctrl+X Ctrl+E")?.group).toBe("Composer")
+  for (const keys of ["Ctrl+X U", "Ctrl+X R", "Ctrl+X F"]) expect(rows.find((row) => row.keys === keys)?.group, keys).toBe("Turns")
   expect(rows.some((row) => row.group === "Transcript" && row.keys.startsWith("Mouse drag") && row.description.includes("clipboard"))).toBe(true)
   const vim = rows.filter((row) => row.group === "Vim")
   for (const keys of ["h j k l", "w b e", "0 ^ $", "gg / G", "i a I A o O", "x / dd / D", "u / Ctrl+R", "Enter", "Esc"]) {

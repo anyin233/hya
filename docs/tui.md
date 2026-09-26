@@ -193,8 +193,11 @@ Changes apply to the running backend at once; no restart is needed.
 | `/notifications [on\|off]` | Turn desktop notifications on or off, saved in the preferences file (see [Desktop notifications](#desktop-notifications)). |
 | `/compact` | Compact the session's context now (`CompactSession`); the status line shows `Compacting…`, then `Compacted · <strategy>`. |
 | `/summarize` | Summarize the session into a new message (`SummarizeSession`). |
+| `/undo` | Revert the last prompt: it and every later message leave the transcript, the files its tools changed are restored, and the prompt goes back into an empty input. Again = one prompt further back (see [Undo, redo, and fork](#undo-redo-and-fork)). |
+| `/redo`, Ctrl+X R | Undo the pending `/undo` (messages and files come back); only until the next prompt, which makes the revert permanent. Ctrl+X U is `/undo` and Ctrl+X F is `/fork`; the chord works whatever the input holds. |
+| `/fork` | Pick where to fork the session (the latest message, or before one of its prompts); Enter creates the fork, switches to it, and puts the picked prompt in the input. |
 | `/todos` | Show the session's todo list (`GetSessionTodo`) in the main panel. |
-| `/status` | Show the server URL, backend version, directory, session, agent, model, permission mode, and the backend (started by this TUI with its pid, binary, and database, in the `hya` process under bare `hya`, or external with `--server`); under bare `hya` also the WebUI address or why it is unavailable. |
+| `/status` | Show the server URL, backend version, directory, session (and `Forked from <title>` for a fork), agent, model, permission mode, and the backend (started by this TUI with its pid, binary, and database, in the `hya` process under bare `hya`, or external with `--server`); under bare `hya` also the WebUI address or why it is unavailable. |
 | `/init`, `/review` | Server built-in commands from the backend command catalog, run as `CommandTurn`s. |
 | `/<skill> [args]` | Run a discovered skill as a `CommandTurn` (see [Skill commands](#skill-commands)). |
 | `/api` | List the HTTP operations from the generated operation catalog (`src/operations.json`, written with `docs/protocol/openapi.json` by `cargo run -p xtask -- gen-api`). |
@@ -989,7 +992,8 @@ For long prompts, the input can be edited in your own editor.
 
 **Usage.** Ctrl+X then Ctrl+E (or Ctrl+X then E; the readline/zsh chord,
 browser-safe), or `/editor`. After Ctrl+X the status line shows
-`Ctrl+X · Ctrl+E opens the external editor`; any other next key drops the
+`Ctrl+X · Ctrl+E opens the external editor · U undo · R redo · F fork`
+(see [Undo, redo, and fork](#undo-redo-and-fork)); any other next key drops the
 chord and is handled as usual. The TUI writes the input to a temporary file
 (`$TMPDIR/hya-prompt-XXXXXX/prompt.md`), suspends its renderer (the editor
 gets the whole terminal; the TUI's screen comes back afterwards), and runs
@@ -1466,6 +1470,78 @@ a bundle `e2e/approver` whose mode `echo-only` allows `echo …` commands —
 `/permissions`, type `echo`, Enter: the status bar reads `mode Echo only`,
 a model's `echo hi` call runs without a prompt, and its `ls` call asks.
 
+## Undo, redo, and fork
+
+`/undo` takes back the last prompt: the prompt and every message after it
+leave the transcript, the files the turn's `edit`, `write`, `patch`, and
+`bash` tools changed are written back to what they were before
+(`RevertSession`; see the protocol guide's
+[Revert and redo](protocol/README.md#revert-and-redo) for what the backend
+keeps and its size limits), and the prompt goes back into the input so you
+can edit and resend it. `/redo` undoes that until the next prompt; `/fork`
+copies the session into a new one, at its end or before a picked prompt.
+
+**Usage.**
+
+- **`/undo`** reverts the last visible prompt; `/undo` again goes one prompt
+  further back. The status line summarizes the files:
+  `Reverted · 2 files restored · 1 deleted` (`deleted`: the turn created
+  the file), then every file that could not be restored with its reason,
+  `skipped big.bin (too_large)` or `failed /etc/x (permission denied)`.
+  Paths inside the session's directory are shown relative to it.
+- **Keys.** Ctrl+X U undoes, Ctrl+X R redoes, and Ctrl+X F opens the fork
+  picker (Ctrl+X Ctrl+U / Ctrl+R / Ctrl+F work too). They act whatever the
+  input holds — after `/undo` it holds the reverted prompt, so typing
+  `/redo` would first need it cleared, while Ctrl+X R does not. The help
+  overlay lists them in the `Turns` group.
+- **The input.** The reverted prompt goes into the input only when the input
+  is empty, or still holds, untouched, the prompt a previous `/undo` or
+  `/fork` put there (so `/undo` twice leaves the older prompt in it). Text
+  you typed is never replaced; the status line then ends with
+  `the input kept your text`.
+- **While a revert is pending** the transcript ends with a line in the
+  warning color:
+  `↶ 2 messages reverted · /redo or Ctrl+X R restores them · the next prompt makes it permanent`.
+  It follows the session live: a revert or redo from another client (a
+  `sessionReverted` frame) updates it, and the next prompt or `!command`
+  (its `messageStarted`) removes it.
+- **`/redo`** works only while that line is shown. It brings the messages
+  and files back (`Restored · 2 files restored`) and empties the input if it
+  still holds exactly the reverted prompt. After the next prompt it says
+  `Nothing to redo · /redo works after /undo, until the next prompt`.
+- **A running turn.** The backend refuses a revert while a turn runs
+  (`409 session_busy`): `Undo refused: a turn is running · wait for it to
+  finish or press Esc to cancel it`. With no earlier prompt, `/undo` says
+  `Nothing to undo: …` with the server's reason. In a subagent's read-only
+  view both are refused.
+- **`/fork`** opens a picker: `Fork at the latest message` first
+  (highlighted), then the session's prompts newest first, tagged `#1` (the
+  oldest) upward; typing filters. Enter on the first row copies every
+  message; on a prompt, the new session holds the messages strictly before
+  it and the prompt goes into the (empty) input. The TUI switches to the new
+  session (`Forked before “<prompt>” · the prompt is in the input`, or
+  `Forked at the latest message`); the backend titles it `forked from
+  <source>`. The sidebar's `Context` box and `/status` show where it came
+  from: `Forked   from <source title>`. Messages hidden by a pending revert
+  are never copied.
+
+For example, after the model wrote `notes.txt` in reply to `write notes`:
+
+```text
+/undo      → Reverted · 1 deleted · the prompt is back in the input
+             (notes.txt is gone; the input holds "write notes")
+/redo      → Restored · 1 file restored   (notes.txt is back)
+```
+
+**Interfaces.**
+
+| Action | Call | Body | Reads |
+| --- | --- | --- | --- |
+| `/undo` | `POST /v1/sessions/{id}/revert` | `{}` | `RevertSessionResponse {session, files}`: `session.revert {messageId, text, hiddenMessages, files}`, `files[] {path, action, reason}`; then `GET /v1/sessions/{id}/messages` |
+| `/redo` | `POST /v1/sessions/{id}/revert` | `{undo: true}` | `{session (no revert), files}`; then the messages |
+| `/fork` Enter | `POST /v1/sessions/{id}/fork` | `{}` (head) or `{messageId}` | `ForkSessionResponse {session, promptText}`; `session.forkedFrom {session, messageId}`; then `GET /v1/sessions` and the new session is opened |
+| Live | session stream | — | `sessionReverted {messageId, undone, files}` (durable): the overlay is dropped and the session row and transcript are re-read; a later durable `messageStarted` clears `revert` locally |
+
 ## Pickers
 
 `/model`, `/agent`, and `/sessions` (with no argument) open the same
@@ -1844,6 +1920,8 @@ string encoded 64-bit values, and the error envelope documented in the
 | `GET /v1/sessions/{id}/messages` | No body | `ListMessagesResponse.messages: MessageInfo[]` (`roundUsage` and `model` of the newest assistant message give the status bar's `ctx N%`); tool cards read `parts[].toolCall` (`ToolCallPart {callId, tool, state, inputJson, outputJson, durationMs, errorCode, errorMessage}`). For a child session: its latest activity. |
 | `POST /v1/sessions/{id}/compact` | `{}` (`CompactSession`) | `CompactSessionResponse {compactedUntilSeq, strategy}` for `/compact` |
 | `POST /v1/sessions/{id}/summarize` | No body (`SummarizeSession`) | `SummarizeSessionResponse {summaryMessage}` for `/summarize` |
+| `POST /v1/sessions/{id}/revert` | `{}` (`/undo`) or `{undo: true}` (`/redo`) (`RevertSession`) | `RevertSessionResponse {session, files}`; `SessionInfo.revert` drives the pending-revert line (see [Undo, redo, and fork](#undo-redo-and-fork)) |
+| `POST /v1/sessions/{id}/fork` | `{}` or `{messageId}` (`ForkSession`, `/fork`) | `ForkSessionResponse {session, promptText}`; `SessionInfo.forkedFrom` is shown in the sidebar and `/status` |
 | `GET /v1/sessions/{id}/todo` | No body (`GetSessionTodo`) | `TodoList.items: TodoItem[]` for `/todos` and to seed the sidebar's `Todos` box when a session opens; `todoUpdated` frames keep it current. |
 | `GET /v1/vcs?directory=<--dir>` | No body (`GetVcsStatus`) | `VcsStatus.branch` for the status bar's git branch; read when a session opens and after a turn ends. Never errors on a non-repository directory (`branch` comes back empty, so the segment is omitted). |
 | `POST /v1/sessions/{id}/turns` | `{prompt: {text: string}}` | `CreateTurnResponse.turn: TurnInfo` |
@@ -1911,6 +1989,7 @@ rules follow the protocol guide's
 | `compactionApplied {untilSeq, strategy, message, foldedCount, manual}` | durable | Appended to `state.dividers` (once per seq) and spliced into the transcript right before `message`, the summary, or right after the message that was newest at the time until the summary is read (see [Notices](#notices)). A summary message (system role, `HYA_COMPACTED_CONTEXT` first line) without such a divider — a compaction from before the session was opened — gets a derived `── context compacted ──` divider (`state/messages.ts` `withDividers`, id `compaction-<message id>`). |
 | `tokensRecorded {message, model, usage}` | durable | With a non-empty `message`: the newest round, the live source of `ctx N%` (`state.liveRound`). Any `tokensRecorded` also re-reads the open session (debounced) for `SessionInfo.usage`. |
 | `todoUpdated {items}` | durable | Replaces the sidebar's todo list with `items` (the whole list). |
+| `sessionReverted {messageId, undone, files}` | durable | A revert or redo (this TUI's or another client's): the overlay is dropped (it may hold hidden messages) and the session row (`revert`) and the transcript are re-read. A later durable `messageStarted` committed the revert: `revert` is cleared locally (see [Undo, redo, and fork](#undo-redo-and-fork)). |
 | `resync {lastSeq}` | — | Live parts that were mid-stream stop taking deltas until their durable `partReplaced`; `ListEvents` fills the gap; the projection is re-read. |
 
 - **Sequence numbers.** The client keeps the last applied durable `seq` as a
@@ -1987,6 +2066,7 @@ together.
 | `src/state/format.ts` | Pure text for the header, sidebar (session list with `sessionTree()` nesting, context box), pending lines, the status bar (`statusBarSegments()`, `contextUsage()`, `sessionTokens()`, `formatTokens()`), the compaction divider (`compactionText()`), and the non-chat views. |
 | `src/app/controller.ts` | `createController()`: refreshes, the session SSE loop (subscribe, `ListEvents` gap-fill, `resync`), the global SSE loop for other sessions' asks (`onGlobalFrame`, backoff), batched overlay flushes, the debounced projection re-read (`app/debounce.ts`), child-session rounds for subagent cards, `returnToParent()`, session creation, prompt submission (refused in a subagent's read-only view), command dispatch, the Provider View (`providerKey`, `providerPaste`, `closeProviders`; app/providers.ts), and `savePreferences` (the `preferencesPath` option; `actions.savePreferences(patch)` for commands). It writes results into the store. |
 | `src/app/turns.ts` | `createTurnRunner()`: the client-side prompt queue, `409 session_busy` retry, and turn-end detection and status text. |
+| `src/app/revert.ts`, `src/state/revert.ts` | [Undo, redo, and fork](#undo-redo-and-fork): `createRevertController()` (`undo()`, `redo()`, `fork()`, the input prefill rule); `revertSummary()`, `revertIndicator()`, `forkRows()`, `forkSourceText()`, `sessionRow()` (a fresh session row over the open one, dropping a `revert` it no longer has). |
 | `src/app/App.tsx`, `src/app/run.tsx`, `src/app/context.ts` | Root layout (main column + sidebar), startup (the started backend, the preferences file and saved theme, then the renderer) and the single `shutdown()` every exit path runs (restore the terminal, stop the backend, exit), and the `AppContext` (store, controller, server URL, and `ui` handles such as the transcript's scroll actions) that components read with `useApp()`. |
 | `src/components/` | `Header`, `MainPanel` (transcript or view panel), `Transcript` (scrollbox, follow/hint), `MessageView` (`MessageItem`, user/assistant messages, blocks, reasoning, tool cards and `task` subagent cards, `KeyedFor`), `Spinner` (the shared spinner clock), `Markdown` (the `<markdown>` wrapper, `SyntaxStyle`, code-block boxes), `Panel`, `PendingBlock` (other sessions' asks), `PromptDock` (the permission / question prompt), `ModeConfirm` (the one-line yolo confirmation), `Picker` (the modal picker), `ProviderView` (the full-screen Provider View and its pop-up forms), `Sidebar`, `StatusLine`, `Composer` (the `<textarea>` editor, its height, history, Esc / Ctrl+C / Ctrl+D, the shell-mode border, the `@file` list, the `/` command menu, Tab completion, key actions, routing keys and pastes to an open Provider View, the [vim mode](#vim-mode) adapter, the Ctrl+X chord), `selection.ts` (`paintSelection`, the theme's mouse-selection color; [Copy](#copy)), `Footer`. |
 | `src/composer/` | Pure composer logic: `history.ts` (`InputHistory`), `quit.ts` (`createQuitGuard`, the Ctrl+C double press), `escape.ts` (`escapeAction`), `shell.ts` (`shellCommand`, `isShellInput`), `mention.ts` (`mentionAt`, `insertMention`, `findPattern`, `rankPaths`), `vim.ts` (`vimKey`, the [vim mode](#vim-mode) state machine), `editor.ts` (`editText`, `editorCommand`, `splitCommand`; [External editor](#external-editor)), `clipboard.ts` (`copyNotice`; [Copy](#copy)). |

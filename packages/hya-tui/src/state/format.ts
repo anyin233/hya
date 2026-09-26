@@ -5,6 +5,7 @@ import { keyHelpText } from "../commands/help"
 import type { View } from "../instructions"
 import { mergeTranscript } from "./overlay"
 import { promptQueue, waitingKind } from "./prompts"
+import { forkSourceText } from "./revert"
 import type { AppState } from "./store"
 
 export function modelReference(session: SessionInfo): string {
@@ -134,8 +135,11 @@ export function contextText(state: AppState, server: string, width = 30): string
   const messageCount = mergeTranscript(state.messages, state.overlay).length
   const usage = contextUsage(state)
   const tokens = sessionTokens(session.usage)
+  const forked = forkSourceText(session.forkedFrom, state.sessions)
   return [
     row("Session", session.title || session.id),
+    // The source's name is cut at its end (a title reads from the start), unlike the path rows.
+    ...(forked ? [`${"Forked".padEnd(9)}${truncate(forked.replace(/^forked /, ""), Math.max(4, width - 9))}`] : []),
     row("Agent", session.agent),
     row("Model", modelReference(session) || "default"),
     row("Messages", String(messageCount)),

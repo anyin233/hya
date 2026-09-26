@@ -63,7 +63,7 @@ export function MessageItem(props: { view: MessageView; first: boolean }) {
  */
 function NoticeMessage(props: { view: MessageView }) {
   const text = () => props.view.blocks.map((block) => (block.kind === "text" ? block.text : "")).filter(Boolean).join("\n")
-  return <text width="100%" wrapMode="word" fg={colors.muted}>{text()}</text>
+  return <text width="100%" wrapMode="word" fg={props.view.tone === "warning" ? colors.warning : colors.muted}>{text()}</text>
 }
 
 function UserMessage(props: { view: MessageView }) {

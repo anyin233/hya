@@ -197,3 +197,31 @@ test("streamGlobal subscribes to the global stream past every durable seq (live 
   expect(opened).toBe(true)
   expect(frames).toEqual([{ event: { session: "hysec_9", permissionRequested: { interaction: { id: "perm_1", title: "bash" } } } }])
 })
+
+test("revertSession and forkSession post RevertSession / ForkSession bodies", async () => {
+  const calls: Array<{ url: string; method: string; body: unknown }> = []
+  const fetcher: FetchLike = async (input, init) => {
+    const url = String(input)
+    calls.push({ url, method: init?.method ?? "GET", body: init?.body ? JSON.parse(String(init.body)) : undefined })
+    return Response.json(url.endsWith("/fork")
+      ? { session: { id: "hysec_2", agent: "build", workdir: "/work", forkedFrom: { session: "hysec_1", messageId: "msg_2" } }, promptText: "again" }
+      : { session: { id: "hysec_1", agent: "build", workdir: "/work", revert: { messageId: "msg_2", text: "again", hiddenMessages: 2 } }, files: [{ path: "/work/a", action: "restored" }] })
+  }
+  const client = new HyaClient("http://127.0.0.1:8080", "/work", fetcher)
+  const reverted = await client.revertSession("hysec_1", {})
+  expect(reverted.session.revert?.text).toBe("again")
+  expect(reverted.files?.[0]?.action).toBe("restored")
+  await client.revertSession("hysec_1", { messageId: "msg_2" })
+  await client.revertSession("hysec_1", { undo: true })
+  const fork = await client.forkSession("hysec_1", "msg_2")
+  expect(fork.promptText).toBe("again")
+  expect(fork.session.forkedFrom?.session).toBe("hysec_1")
+  await client.forkSession("hysec_1")
+  expect(calls).toEqual([
+    { url: "http://127.0.0.1:8080/v1/sessions/hysec_1/revert", method: "POST", body: {} },
+    { url: "http://127.0.0.1:8080/v1/sessions/hysec_1/revert", method: "POST", body: { messageId: "msg_2" } },
+    { url: "http://127.0.0.1:8080/v1/sessions/hysec_1/revert", method: "POST", body: { undo: true } },
+    { url: "http://127.0.0.1:8080/v1/sessions/hysec_1/fork", method: "POST", body: { messageId: "msg_2" } },
+    { url: "http://127.0.0.1:8080/v1/sessions/hysec_1/fork", method: "POST", body: {} },
+  ])
+})

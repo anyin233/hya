@@ -21,7 +21,7 @@ export const composerMaxRows = 8
 const mentionDebounceMs = 120
 export const quitHint = "Press Ctrl+C again to quit"
 /** Status while the Ctrl+X chord waits for its second key. */
-export const chordHint = "Ctrl+X · Ctrl+E opens the external editor"
+export const chordHint = "Ctrl+X · Ctrl+E opens the external editor · U undo · R redo · F fork"
 
 interface FileMenu {
   token: MentionToken
@@ -64,8 +64,9 @@ interface CmdMenu {
  * through `replaceText`, so `u` / Ctrl+R use the textarea's undo history.
  *
  * Ctrl+X arms a chord for one key: Ctrl+E (or E) then opens the external
- * editor (`controller.openEditor`, composer/editor.ts); any other key drops
- * the chord and is handled as usual.
+ * editor (`controller.openEditor`, composer/editor.ts); U, R, F (or with
+ * Ctrl) run `/undo`, `/redo`, `/fork` whatever the input holds
+ * (app/revert.ts); any other key drops the chord and is handled as usual.
  *
  * While the Provider View (`/key`, components/ProviderView.tsx) — or the
  * Diff (`/diff`), MCP (`/mcp`), Saved Rules (`/rules`), or Agent Models
@@ -400,10 +401,19 @@ export function Composer() {
     chord = undefined
     if (armed) {
       if (store.state.status === chordHint) store.setStatus(beforeChord)
-      if (resolveBinding(key, { chord: armed }) === "externalEditor") {
+      const action = resolveBinding(key, { chord: armed })
+      if (action === "externalEditor") {
         consume()
         quitGuard.disarm()
         controller.openEditor()
+        return
+      }
+      // Undo / redo / fork act on the session, whatever the input holds (the input may hold the reverted prompt).
+      if (action === "undo" || action === "redo" || action === "fork") {
+        consume()
+        quitGuard.disarm()
+        if (action === "fork") controller.fork()
+        else void controller[action]()
         return
       }
     }
@@ -569,6 +579,11 @@ export function Composer() {
       case "externalEditor":
         consume()
         controller.openEditor()
+        return
+      case "undo":
+      case "redo":
+      case "fork":
+        // Reached only through the chord (handled above).
         return
     }
   })
