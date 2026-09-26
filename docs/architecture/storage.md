@@ -212,7 +212,7 @@ Store API ([`project.rs`](../../crates/hya-store/src/project.rs)):
 | `replace_project_roots(id, roots) -> Project` | Replaces the whole ordered list; bumps `updated_at`. Running sessions see the new roots from their next turn |
 | `update_project(id, name?, roots?) -> Project` | Rename and/or replace the roots in one transaction (both inputs validated first; all or nothing); bumps `updated_at` when either is given. `rename_project` / `replace_project_roots` delegate to it |
 | `project_session_count(id) -> u64` | The `session_count` of one Project, as `list_projects` computes it |
-| `delete_project(id) -> bool` | Deletes the Project and (by cascade) its roots; `false` when absent. Refused with `ProjectInUse` while a non-archived root session with an event log belongs to it |
+| `delete_project(id) -> bool` | Deletes the Project and (by cascade) its roots; `false` when absent. Refused with `ProjectInUse` while a non-archived root session with an event log belongs to it. Also deletes the Project's saved permissions (`saved_permission.project_id`) in the same transaction. |
 | `resolve_project_by_path(path) -> Option<Project>` | The non-archived Project with a root that contains `path`, component-wise (`/a/b` contains `/a/b/c`, not `/a/bc`). Longest matching root wins; among equal lengths, the most recently updated Project |
 | `list_sessions_in(project: Option<ProjectId>)` | `list_sessions`, narrowed to sessions (root and subagent) whose `session_created` named the Project; `None` lists all |
 | `normalize_project_path(path)` (free fn) | Root and resolve-path normalization, below |
@@ -516,13 +516,14 @@ row via `SavedPermissions::remember`:
 | Field | Value |
 | --- | --- |
 | `id` | `psv_<requestId>` |
-| `project_id` | literal **`"global"`** (not scoped per project or session) |
+| `project_id` | **`"global"`** for exact invocation grants and action-wide `*` grants (they apply to every session); the Project id for an `ExternalDirectory` grant of one canonical directory (ADR-0026). A session-scoped grant is never persisted. |
 | `action` | lowercase `Action` name (`tool`, `read`, `edit`, `glob`, `grep`, `bash`, `task`, `mcp`, `webfetch`, `websearch`, `todowrite`, `skill`, `lsp`, `externaldirectory`) |
 | `resource` | remembered match pattern string |
 
-**Global scoping means an allow-always granted in one workspace applies in all
-of them** for that action/pattern pair (subject to the unique constraint on
-`(project_id, action, resource)`).
+A `"global"` row applies in every workspace for that action/pattern pair; a
+Project row applies only to sessions of that Project (subject to the unique
+constraint on `(project_id, action, resource)`). Deleting a Project deletes
+its rows in the same transaction.
 
 Store API:
 
@@ -541,7 +542,8 @@ v1 HTTP (see [Server and Client](server-client.md)):
 Rows survive server restart because they live in the session SQLite file, and
 so do the grants: at startup `AppState::restore_saved_permissions` reads every
 row into the process `PermissionPlane` (`persistent` rules for `*` rows,
-`native_grants` for exact `tool` / `mcp` / `bash` subjects), and
+`native_grants` for exact `tool` / `mcp` / `bash` subjects, and
+`grant_scoped(GrantScope::Project)` for Project rows), and
 `DELETE /v1/permissions/rules/{rule}` revokes the in-memory grant along with
 the row. See [Tools and permissions — Saved
 grants](tools-and-permissions.md#saved-grants).

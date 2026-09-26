@@ -15,7 +15,7 @@ standalone `hya-updater` binary are gone.
 | Providers and auth | `login`, `oauth`, `auth` (alias `providers`), `models` |
 | Agents, bundles, Workflows | `agent`, `bundle`, `workflow` |
 | Self-update TCB | `update` (`version`, `status`, `recover`, `apply`, `discard`, `init-roots`) |
-| Secure relay | `proxy`, `relay doctor` (see [`docs/relay.md`](relay.md)) |
+| Secure relay | `proxy`, `bridge`, `relay doctor`, `serve --relay`, `serve relay connect\|disconnect\|status\|link\|rotate`, bare `hya --connect` (see [`docs/relay.md`](relay.md)) |
 
 ```sh
 cargo build -p hya-backend --bin hya   # ./target/debug/hya
@@ -27,7 +27,8 @@ hya <subcommand> --help                # flags for one area
 
 ```text
 hya [--model <MODEL>] [--prompt <GOAL>] [--max-iterations <N>]
-     [--port <PORT>] [--backend <URL>] [--resume [<ID>]] [--yolo] [--db <PATH>] [COMMAND]
+     [--port <PORT>] [--backend <URL>] [--connect [<LINK>]] [--relay-ca <PEM>]
+     [--transport <auto|grpc|ws>] [--allow-host <HOST>]... [--resume [<ID>]] [--yolo] [--db <PATH>] [COMMAND]
 ```
 
 | Option | Meaning |
@@ -37,6 +38,10 @@ hya [--model <MODEL>] [--prompt <GOAL>] [--max-iterations <N>]
 | `--max-iterations <N>` | Iteration cap for goal mode. Defaults to `6` in the CLI. |
 | `--port <PORT>` | WebUI port of [bare `hya`](#bare-hya) on `127.0.0.1`. Default `3250`; `0` picks a free port. Only valid without a subcommand and without `-p` (`hya --port 1 sessions` is an error); `hya serve --port` is the server's own flag. |
 | `--backend <URL>` | [Bare `hya`](#bare-hya) only: use this running server (`http://host:port`) instead of the database's backend daemon — no discovery, no auto-start. An unreachable URL is an error (exit **1**). |
+| `--connect [<LINK>]` | [Bare `hya`](#bare-hya) only: reach a remote backend through a relay link with an in-process bridge; no local daemon. `-` reads the link from the terminal without echo, no value reads `$HYA_RELAY_LINK`. See [Secure relay](relay.md#connecting-from-a-client). |
+| `--relay-ca <PEM>` | With `--connect` only: extra trusted CA certificates for the relay's TLS. |
+| `--transport <BINDING>` | With `--connect` only: `auto`, `grpc`, or `ws`, overriding the link's `t=`. |
+| `--allow-host <HOST>` | [Bare `hya`](#bare-hya) without `--backend`/`--connect`: accept this Host name on the daemon it starts, besides `localhost`, `127.0.0.1`, and `[::1]` (repeatable; see [Allowed Host names](#allowed-host-names)). |
 | `--resume [<ID>]` | [Bare `hya`](#bare-hya) only: the terminal TUI opens that session and unarchives it; without an id it opens a picker of the sessions of the Project that contains the current directory, archived ones included. Before another flag it takes no id (`hya --resume --port 0`). |
 | `--yolo` | Auto-approve every tool action. This applies to headless and server composition. |
 | `--db <PATH>` | SQLite database path. Semantics of an empty value depend on the command (see below). |
@@ -904,8 +909,8 @@ after the action. The path is made absolute.
 
 | Action | Behavior | Output | Exit |
 | --- | --- | --- | --- |
-| `start [--json]` | If a server of the database answers (discovery file, live pid, healthy), report it. Else run `hya serve --bind 127.0.0.1:0 --db <db>` (plus this command's `--model`, `--yolo`, `--pure`) **detached**: its own session (`setsid`), working directory your home directory (`$HOME` when it exists, else `/`; never the caller's, since the backend serves every client wherever it runs), stdin `/dev/null`, stdout and stderr appended to `<db>.server.log` (rotated to `.1` above 4 MiB). Wait up to 60 s until it answers. If its start exits 75 (another client's daemon won the race, or the last one is still shutting down), wait for that server, or start again once the lock is free. | `started hya server pid <pid> at <url> (db <db>, log <log>)` or `hya server pid <pid> already running at <url> (hya <version>, db <db>)`. `--json`: `{"url", "pid", "version", "startedAt", "db", "log", "started"}` (`started` is true only when this call started it). A server of another hya version adds `note: the running server is hya X, this is hya Y; run `hya serve restart` to switch` on stderr. | **0**; **1** when the daemon exits with an error (its log tail is printed) or does not answer in 60 s |
-| `status [--json]` | Read the discovery file and probe the server. | `hya server pid <pid> running at <url>` and `version`, `db`, `uptime`, `log` lines. `--json`: `{"url", "pid", "version", "startedAt", "uptimeMs", "db", "log"}`. | **0** running; **1** with `no hya server is running on <db>` (or `hya server pid <pid> holds <db> but does not answer (starting or stopping)`) on stderr |
+| `start [--json]` | If a server of the database answers (discovery file, live pid, healthy), report it. Else run `hya serve --bind 127.0.0.1:0 --db <db>` (plus this command's `--model`, `--yolo`, `--pure`, `--allow-host`, and relay flags) **detached**: its own session (`setsid`), working directory your home directory (`$HOME` when it exists, else `/`; never the caller's, since the backend serves every client wherever it runs), stdin `/dev/null`, stdout and stderr appended to `<db>.server.log` (rotated to `.1` above 4 MiB). Wait up to 60 s until it answers. If its start exits 75 (another client's daemon won the race, or the last one is still shutting down), wait for that server, or start again once the lock is free. | `started hya server pid <pid> at <url> (db <db>, log <log>)` or `hya server pid <pid> already running at <url> (hya <version>, db <db>)`. `--json`: `{"url", "pid", "version", "startedAt", "db", "log", "started"}` (`started` is true only when this call started it). A server of another hya version adds `note: the running server is hya X, this is hya Y; run `hya serve restart` to switch` on stderr. | **0**; **1** when the daemon exits with an error (its log tail is printed) or does not answer in 60 s |
+| `status [--json]` | Read the discovery file and probe the server. | `hya server pid <pid> running at <url>` and `version`, `db`, `uptime`, `log` lines. `--json`: `{"url", "pid", "version", "startedAt", "uptimeMs", "db", "log", "relay"?, "allowHosts"?}` (text: `relay` and `hosts` lines when set). | **0** running; **1** with `no hya server is running on <db>` (or `hya server pid <pid> holds <db> but does not answer (starting or stopping)`) on stderr |
 | `stop [--force] [--timeout <s>]` | Write the stop request (`<db>.server.stop`, reason `stop`), SIGTERM to the lock holder (pid from `<db>.lock`, else the discovery file), then wait until the lock is free. The server drains turns (5 s) and ends every client stream with `serverStopping {reason: "stop"}`. `--force`: SIGKILL when it has not stopped within `--timeout` (default 30). | `stopped hya server pid <pid> (db <db>)` and `connected TUIs stay disconnected until /reconnect, or until a new hya client starts the next server`; `killed …` with `--force`; or `no hya server is running on <db>`. | **0** (also when nothing ran); **1** when it did not stop in time without `--force` |
 | `restart [--json] [--force] [--timeout <s>]` | `stop` with reason `restart`, then `start`. The new daemon rejoins the relay recorded in the old one's discovery file (same identity, so the same link) unless `restart` is given its own `--relay …`. | As `start`; the stop line goes to stderr with `--json`. | As `stop`, then `start` |
 | `relay connect\|disconnect\|status\|link\|rotate` | Control the running backend's relay connector over its loopback-only `RelayControl` rpcs; see [the command table](relay.md#hosting-a-backend-on-a-relay). | `status`: `relay <state>` plus detail lines (`--json`: `RelayStatus`); `link`: the link alone; `connect`/`rotate`: `hya relay link: <link>`. | **0**; **1** when no server runs or the rpc fails (not joined for `link`, a bad URL for `connect`) |

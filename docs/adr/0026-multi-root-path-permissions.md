@@ -30,10 +30,12 @@ path boundary.
   is judged by canonicalizing its nearest existing ancestor and re-appending
   the rest, after rejecting `..` in the remainder. Nested and overlapping roots
   are fine: a path is inside if any root contains it.
-- **Tools that use it.** `read`, `write`, `edit`, `glob`, `ls`, `grep`, and
-  `apply_patch` replace their per-tool helpers with `ProjectScope`.
-  `apply_patch` accepts absolute paths and paths inside any root instead of
-  only relative, workdir-local paths. Relative paths still resolve against
+- **Tools that use it.** `read`, `write`, `edit`, `glob`, `ls`, `grep`,
+  `find`, `lsp`, and `apply_patch` replace their per-tool helpers with
+  `ProjectScope`. `apply_patch` accepts absolute paths and paths inside any
+  root instead of only relative, workdir-local paths; a patch path outside
+  every root is an input error (`apply_patch path is outside the Project
+  roots`), not an ask. Relative paths still resolve against
   the session's workdir.
 - **Outside is an ask.** A path outside every root raises the existing
   `Action::ExternalDirectory` ask for the directory in question. It goes

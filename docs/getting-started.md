@@ -186,6 +186,25 @@ HYA_BIN=target/debug/hya bun packages/hya-tui/src/main.ts --dir "$PWD"
 section instead, pass `--server http://127.0.0.1:8080`. See
 [OpenTUI frontend](tui.md#start-it) for every flag.
 
+## Remote control through a relay
+
+To drive a backend on another machine, run a relay, put the backend on it,
+and connect with the link it prints. The link is the credential: whoever
+holds it controls that backend, so share it like a password.
+
+```sh
+hya proxy --port 8766                                      # the relay (any reachable host)
+hya serve start --relay http://relay-host:8766             # on the backend machine; prints the link once
+hya --connect -                                            # on your machine; paste the link (not echoed)
+```
+
+The TUI opens the remote's Project view, where you pick or create a Project
+(its roots are directories on the backend machine) or start a temporary
+session. `/connect-remote` and `/disconnect-remote` switch a running TUI to
+a remote and back. Publish the relay over HTTPS (Cloudflare Tunnel, nginx,
+Caddy, Tailscale) and check it with `hya relay doctor`; see
+[Secure relay](relay.md).
+
 ## Replay a Session
 
 ```sh

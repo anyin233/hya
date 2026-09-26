@@ -800,7 +800,7 @@ provider/runtime error — never a user cancel, a drain, or a SIGINT:
   session stays live and resumable and members keep their DM back to it;
 - the harness mails every live resident member of the team (all depths) a
   wrap-up notice from `harness` (see
-  [Subagent Orchestration — Leader failure](subagent-orchestration.md#leader-failure));
+  [Subagent Orchestration — Leader failure](subagent-orchestration.md#34-leader-failure));
 - the supervisor marks the lead failed: it starts **no** lead turn on its own
   — no `TEAM QUIESCED` synthesis, no mail wake — until a turn on the lead
   starts from outside the supervisor (the user resumes it). Members' reports

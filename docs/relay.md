@@ -9,21 +9,24 @@ forwards is end-to-end encrypted by the backend and the client (Noise
 proxy — and any HTTPS hop in front of it (nginx, Cloudflare Tunnel, Caddy,
 Tailscale, …) — sees room ids, stream ids, and ciphertext only.
 
-The relay is being built in steps (`crates/hya-relay`). This page documents
-what exists today; the parts marked *coming in later steps* are not
-implemented yet.
+The relay has three parts: `hya proxy` (the blind rendezvous server),
+the host connector in `hya serve` (`hya serve --relay`, `hya serve relay …`),
+and the client bridge (`hya bridge`, bare `hya --connect`, and the TUI's
+`/connect-remote`). The design and threat model are in
+[ADR-0025](adr/0025-secure-relay.md).
 
 ## Usage
 
-The proxy server library (`hya_relay::server`, see [Bindings](#bindings)),
-the client library (`hya_relay::client`, see
-[Client transport](#client-transport)), the `hya proxy` command, and
-`hya relay doctor` exist, and so do the client side, `hya bridge` and
-`hya --connect <link>` ([Connecting from a client](#connecting-from-a-client)),
-and the backend side, `hya serve --relay` and `hya serve relay …`
-([Hosting a backend on a relay](#hosting-a-backend-on-a-relay)), and the
-TUI's `/connect-remote` / `/disconnect-remote`
-([From a running TUI](#from-a-running-tui-connect-remote)).
+| Goal | Command | Section |
+| --- | --- | --- |
+| Run a relay | `hya proxy [--host H] [--port P]` | [`hya proxy`](#hya-proxy) |
+| Check a relay path | `hya relay doctor <proxy-url\|link>` | [`hya relay doctor`](#hya-relay-doctor) |
+| Put a backend on a relay | `hya serve --relay <url>`, `hya serve relay connect\|disconnect\|status\|link\|rotate` | [Hosting a backend on a relay](#hosting-a-backend-on-a-relay) |
+| Use a remote backend | `hya --connect -`, `hya bridge -`, `/connect-remote` in the TUI | [Connecting from a client](#connecting-from-a-client) |
+| Publish the relay over HTTPS | Cloudflare Tunnel, nginx, Caddy, Tailscale, direct TLS | [Deployment recipes](#deployment-recipes) |
+
+The libraries behind them are `hya_relay::server` ([Bindings](#bindings))
+and `hya_relay::client` ([Client transport](#client-transport)).
 
 ### `hya proxy`
 
@@ -409,8 +412,8 @@ the next connection probes again.
 **`hya --connect [<LINK>|-]`.** Bare `hya` without the local daemon: it
 starts the bridge in its own process (with the checks above, before the
 terminal is touched), then the WebUI host and the terminal TUI exactly like
-`hya --backend <url>`, with `--server <bridge-url> --remote --server-label
-"remote: <relay>/<room>"` in both TUI commands and no `--db`/`--hya`
+`hya --backend <url>`, with `--server <bridge-url> --hya <hya> --remote
+--server-label "remote: <relay>/<room>"` in both TUI commands and no `--db`
 ([cli.md](cli.md#bare-hya)); both TUIs (and the WebUI host, whose tabs run
 the TUI) get the bridge token as `HYA_SERVER_TOKEN` in their environment and
 send it on every request. `--connect` conflicts with `--backend`; without a
@@ -650,8 +653,8 @@ the total when many addresses (a botnet, or an IPv6 range) act together:
 ### Bindings
 
 `hya_relay::server::RelayServer` serves both bindings of `hya.relay.v1` on
-**one port** in front of one `ProxyCore`. `hya proxy` (coming in a later
-step) is a thin CLI around it.
+**one port** in front of one `ProxyCore`. `hya proxy` is a thin CLI around
+it.
 
 ```rust
 use hya_relay::server::{ForwardedHeader, RelayServer, RelayServerConfig, TlsFiles};
@@ -1368,5 +1371,5 @@ short version.
 | Both failed `Tls` | Wrong certificate, wrong CA, or a host name mismatch. | Pass `--relay-ca <pem>` for a private CA, or check the link/proxy URL host against the certificate's name. |
 | Both failed `Connect` | Wrong host/port, firewall, or the proxy is not running. | Check the address and that `hya proxy` is listening (its own readiness line). |
 | Both failed `Timeout` | A hop buffers streaming responses instead of forwarding them as they arrive. | Disable response buffering on that hop (for nginx: `proxy_buffering off`; see the [nginx recipe](#2-nginx)). |
-| `--measure-idle` reports a cut | An intermediary's idle timeout is shorter than the relay's own heartbeat interval reaching it (rare with the 15s default). | Lower `--relay-heartbeat` (Phase 6) below the hop's idle cut, or configure the hop's idle timeout upward (see the [nginx](#2-nginx)/[Cloudflare Tunnel](#1-cloudflare-tunnel) recipes). |
+| `--measure-idle` reports a cut | An intermediary's idle timeout is shorter than the relay's own heartbeat interval reaching it (rare with the 15s default). | Lower `--relay-heartbeat` (on `hya serve`) below the hop's idle cut, or configure the hop's idle timeout upward (see the [nginx](#2-nginx)/[Cloudflare Tunnel](#1-cloudflare-tunnel) recipes). |
 | Neither binding works (exit 1) | The path is not reaching a relay at all. | Confirm the proxy is running, the hop's upstream address/port, and DNS for the host in the URL/link. |

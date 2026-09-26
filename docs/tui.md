@@ -143,7 +143,7 @@ without `--db`.
 | --- | --- |
 | `--server <url>` | Base HTTP URL of a running `hya serve`. Without it the TUI uses the database's daemon. |
 | `--dir <path>` | Workspace directory: the TUI makes the Project that contains it active at start (see [Projects](#projects)), new sessions of that Project work in it, and it is the `x-hya-directory` scope of every request. A daemon the TUI starts does not run in it: it starts in your home directory (the backend has no working directory of its own). Default: the TUI's working directory. |
-| `--hya <path>` | `hya` binary that starts the daemon (first in the lookup order above). |
+| `--hya <path>` | `hya` binary that starts the daemon and that `/connect-remote` runs `hya bridge` with (first in the lookup order above). |
 | `--db <path>` | SQLite database whose daemon to use, relative to `--dir`. Default without `--server`: `$XDG_STATE_HOME/hya/sessions.db`, else `~/.local/state/hya/sessions.db` — the store `hya sessions` reads, so sessions survive restarts. With `--server`: the database behind that URL; the TUI falls back to its daemon when the URL does not answer or the server goes away. |
 | `-c`, `--continue` | Open the most recently updated top-level session of the Project that contains `--dir` that is not archived, whatever its workdir inside the Project (subagent sessions are opened from their parent). |
 | `--remote` | The backend runs on another machine, so `--dir` names nothing there: start without an active Project (and without a new session). The first prompt or `/new` is refused until a Project is chosen; a temporary session needs none. |
@@ -326,15 +326,15 @@ backend without restarting it; `/disconnect-remote` brings it back. Bare
 
 **Connecting.** The TUI runs `<hya> bridge - --json --exit-with-stdin
 [--transport T] [--relay-ca PEM]` (the same binary lookup as the daemon start:
-`--hya`, `HYA_BIN`, `hya` on PATH; a TUI started by bare `hya --connect` gets
-no `--hya`, so there it needs `HYA_BIN` or `hya` on PATH), writes the link and a newline to the
+`--hya`, `HYA_BIN`, `hya` on PATH; bare `hya`, `--connect` included, passes
+its own executable as `--hya`), writes the link and a newline to the
 child's stdin, and keeps that pipe open. The status line counts
 `Connecting to the relay… Ns · <the bridge's latest line>` for up to 20 s.
 When the bridge prints its readiness line
 (`{"url","room","proxy","label","token"}`), the TUI:
 
-1. drops the open session when this client created it and never used it
-   (on the server it leaves; a used one keeps running there),
+1. closes the open session's stream (an unused one is ephemeral, so the
+   server it leaves drops it; a used one keeps running there),
 2. switches every request to the bridge's loopback URL, each carrying the
    bridge's per-bridge `token` as `x-hya-bridge-token` (the bridge answers
    `401 unauthenticated` to a connection without it, so another local

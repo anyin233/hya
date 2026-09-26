@@ -36,7 +36,7 @@ API clients / transcript renderers
 | Persistence | [`hya-store`](../../crates/hya-store) | Append and replay events from SQLite; fold projections on read. |
 | Runtime | [`hya-core`](../../crates/hya-core) | Own sessions, turn execution, durable Workflow execution/replay, event publication, hooks, compaction, goal/loop/team primitives. |
 | Composition/control | [`hya-app`](../../crates/hya-app), [`hya-bundle`](../../crates/hya-bundle) | Build runtime bindings, admit Workflow commands, and model AgentBundle/WorkflowBundle packages. |
-| Surfaces/transports | [`hya-backend`](../../crates/hya-backend) (the `hya` executable), [`hya-server`](../../crates/hya-server), [`hya-api`](../../crates/hya-api), [`hya-client`](../../crates/hya-client), [`hya-sdk-v1`](../../crates/hya-sdk-v1), [`hya-plugin-compat`](../../crates/hya-plugin-compat) | Expose the CLI, the `hya.v1` HTTP/SSE/WebSocket + gRPC contract, typed clients, and the Compat plugin adapter. The legacy Compat transport crates and the TypeScript TUI were removed; there is no interactive frontend today. |
+| Surfaces/transports | [`hya-backend`](../../crates/hya-backend) (the `hya` executable), [`hya-server`](../../crates/hya-server), [`hya-api`](../../crates/hya-api), [`hya-client`](../../crates/hya-client), [`hya-sdk-v1`](../../crates/hya-sdk-v1), [`hya-relay`](../../crates/hya-relay) | Expose the CLI, the `hya.v1` HTTP/SSE/WebSocket + gRPC contract, and typed clients; `hya-relay` carries that contract end to end encrypted through a third-party `hya proxy` ([Secure relay](../relay.md)). The interactive frontend is the Bun TUI in `packages/hya-tui` (the WebUI renders it in a browser, `packages/hya-tui-web`). |
 
 ## Turn Flow
 
@@ -72,18 +72,25 @@ The event log is the source of truth. This gives hya a few useful properties:
 
 ## Current Runtime Surfaces
 
-- Bare `hya` on a terminal runs the v1 server in-process and starts the Bun
-  frontends as child processes: the OpenTUI TUI (`packages/hya-tui`, shipped
-  as `lib/hya/tui`) on the terminal and the WebUI host
-  (`packages/hya-tui-web`, `lib/hya/tui-web`) on `127.0.0.1:3250`
-  (ADR-0020). Rendering stays in those Bun processes, not in the binary.
-  Without a terminal it prints a version banner plus guidance.
+- Bare `hya` on a terminal finds or starts the database's backend daemon
+  (ADR-0023; the daemon runs in `$HOME` and has no working directory, the
+  client names the workspace, ADR-0024) and starts the Bun frontends as child
+  processes: the OpenTUI TUI (`packages/hya-tui`, shipped as `lib/hya/tui`)
+  on the terminal and the WebUI host (`packages/hya-tui-web`,
+  `lib/hya/tui-web`) on `127.0.0.1:3250` (ADR-0020). Rendering stays in
+  those Bun processes, not in the binary. `hya --connect <link>` starts no
+  daemon: an in-process bridge carries both frontends to a remote backend
+  through a relay ([Secure relay](../relay.md)). Without a terminal it prints
+  a version banner plus guidance.
 - `hya exec` runs one turn and prints a transcript.
 - `hya run` is the headless prompt entry point.
 - `hya -p` runs goal mode with an independent model-backed evaluator.
 - `hya serve` exposes the `hya.v1` contract over HTTP/JSON+SSE+WebSocket
   on `/v1` and, with `HYA_GRPC_BIND`, over gRPC (see
   [Server and Client](server-client.md)).
+  `hya serve --relay <url>` (or `hya serve relay connect` on a running one)
+  also offers it through a relay; `hya proxy` runs the relay and
+  `hya bridge` is the client side (ADR-0025).
 - `hya tail-session` replays JSON envelopes from a persisted SQLite event log.
 - `hya models`, `login`, `auth`/`providers`, `agent`, `sessions`, and
   `rpc` expose local catalogs, auth tokens, session listing, and JSONL

@@ -110,11 +110,11 @@ Important modules:
 | --- | --- |
 | [`permission.rs`](../crates/hya-tool/src/permission.rs) | Action/resource rules, `Allow`/`Ask`/`Deny`, ask requests, persistent allow-always decisions. |
 | [`tool.rs`](../crates/hya-tool/src/tool.rs) | Tool trait, registry, aliases, shared context, path/search helpers. |
-| [`read.rs`](../crates/hya-tool/src/read.rs), [`write.rs`](../crates/hya-tool/src/write.rs), [`edit.rs`](../crates/hya-tool/src/edit.rs), [`apply_patch`](../crates/hya-tool/src/apply_patch) | File read/write/edit/patch tools. |
-| [`shell.rs`](../crates/hya-tool/src/shell.rs) | Canonical `bash` execution tool with real PTY support; legacy `shell` remains a hidden dispatch alias. |
-| [`webfetch`](../crates/hya-tool/src/webfetch), [`websearch.rs`](../crates/hya-tool/src/websearch.rs) | Web fetch/search tools. |
-| [`lsp.rs`](../crates/hya-tool/src/lsp.rs), [`formatter.rs`](../crates/hya-tool/src/formatter.rs) | LSP and formatter planes. |
-| [`skill.rs`](../crates/hya-tool/src/skill.rs), [`task.rs`](../crates/hya-tool/src/task.rs), [`todo.rs`](../crates/hya-tool/src/todo.rs), [`ask_user.rs`](../crates/hya-tool/src/ask_user.rs) | Skill, subtask, todo, and human-question tools. |
+| [`read.rs`](../bundles/presets/base-tools/native/src/read.rs), [`write.rs`](../bundles/presets/base-tools/native/src/write.rs), [`edit.rs`](../bundles/presets/base-tools/native/src/edit.rs), [`apply_patch`](../bundles/presets/base-tools/native/src/apply_patch) | File read/write/edit/patch tools. |
+| [`shell.rs`](../bundles/presets/base-tools/native/src/shell.rs) | Canonical `bash` execution tool with real PTY support; legacy `shell` remains a hidden dispatch alias. |
+| [`webfetch`](../bundles/presets/network-tools/native/src/webfetch), [`websearch.rs`](../crates/hya-tool/src/websearch.rs) | Web fetch/search tools. |
+| [`lsp.rs`](../bundles/presets/extended-tools/native/src/lsp.rs), [`formatter.rs`](../crates/hya-tool/src/formatter.rs) | LSP and formatter planes. |
+| [`skill.rs`](../crates/hya-tool/src/skill.rs), [`task.rs`](../bundles/presets/extended-tools/native/src/task.rs), [`todo.rs`](../crates/hya-tool/src/todo.rs), [`ask_user.rs`](../bundles/presets/base-tools/native/src/ask_user.rs) | Skill, subtask, todo, and human-question tools. |
 | [`workflow_plane.rs`](../crates/hya-tool/src/workflow_plane.rs) | Workflow list/info/use/run/state tool integration through `WorkflowControl`. |
 
 Builtins currently include **28 canonical schema names** (aliases are listed
