@@ -1031,6 +1031,9 @@ fn limits_have_documented_defaults() {
     assert_eq!(l.stream_rate_burst_bytes, 1024 * 1024);
     assert_eq!(l.max_chunk_data, 256 * 1024);
     assert_eq!(l.early_data_limit, 64 * 1024);
+    assert_eq!(l.max_streams, 8192);
+    assert_eq!(l.max_pending_registrations, 256);
+    assert_eq!(l.max_early_data_bytes, 64 * 1024 * 1024);
     assert_eq!(l.accept_timeout, Duration::from_secs(10));
     assert_eq!(l.handshake_timeout, Duration::from_secs(10));
 }
@@ -1219,3 +1222,90 @@ async fn a_token_update_must_be_signed_over_this_streams_nonce() {
     assert_eq!(host_error(&mut host).await, RelayErrorCode::Unauthenticated);
 }
 
+// ---- global caps ----
+
+#[tokio::test]
+async fn max_streams_is_enforced_across_rooms_and_clients() {
+    let core = ProxyCore::new(ProxyLimits {
+        max_streams: 2,
+        ..ProxyLimits::default()
+    });
+    let (a, b) = (key(1), key(2));
+    let mut host_a = register(&core, &a).await;
+    let mut host_b = register(&core, &b).await;
+    let _one = start_open_as(&core, &room_of(&a), "10.0.0.1").await;
+    let _ = incoming(&mut host_a).await;
+    let _two = start_open_as(&core, &room_of(&b), "10.0.0.2").await;
+    let _ = incoming(&mut host_b).await;
+    let mut third = start_open_as(&core, &room_of(&a), "10.0.0.3").await;
+    assert_eq!(
+        chunk_error(&mut third).await,
+        RelayErrorCode::ResourceExhausted
+    );
+    assert_eq!(core.stats().streams, 2);
+}
+
+#[tokio::test]
+async fn max_pending_registrations_is_enforced_across_clients() {
+    let core = ProxyCore::new(ProxyLimits {
+        max_pending_registrations: 2,
+        ..ProxyLimits::default()
+    });
+    let mut p1 = start_host(&core, "10.0.0.1");
+    let mut p2 = start_host(&core, "10.0.0.2");
+    let _ = challenge(&mut p1).await;
+    let nonce2 = challenge(&mut p2).await;
+    assert_eq!(core.stats().pending_registrations, 2);
+    let mut p3 = start_host(&core, "10.0.0.3");
+    assert_eq!(host_error(&mut p3).await, RelayErrorCode::ResourceExhausted);
+    // A finished registration frees its slot.
+    p2.send(register_frame(&key(1), &nonce2)).await.unwrap();
+    match recv_host(&mut p2).await {
+        proxy_to_host::Frame::Registered(_) => {}
+        other => panic!("expected registered, got {other:?}"),
+    }
+    let mut p4 = start_host(&core, "10.0.0.4");
+    let _ = challenge(&mut p4).await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn early_data_is_capped_across_all_openers() {
+    let core = ProxyCore::new(ProxyLimits {
+        early_data_limit: 1024,
+        max_early_data_bytes: 16,
+        ..ProxyLimits::default()
+    });
+    let k = key(1);
+    let mut host = register(&core, &k).await;
+    let mut first = start_open_as(&core, &room_of(&k), "10.0.0.1").await;
+    let first_id = incoming(&mut host).await;
+    let mut second = start_open_as(&core, &room_of(&k), "10.0.0.2").await;
+    let _second_id = incoming(&mut host).await;
+    // 8-byte chunks from both openers: together the proxy buffers 16 bytes
+    // (plus at most one chunk per opener), then stops reading both.
+    let mut sent = [0usize; 2];
+    for i in 0..40u8 {
+        for (n, opener) in [&mut first, &mut second].into_iter().enumerate() {
+            if let Ok(Ok(())) = timeout(Duration::from_millis(50), opener.send(data(&[i; 8]))).await
+            {
+                sent[n] += 1;
+            }
+        }
+    }
+    let buffered = core.stats().early_data_bytes;
+    assert!(buffered >= 16, "{buffered}");
+    assert!(buffered <= 16 + 2 * 8, "{buffered}");
+    assert!(sent[0] < 40 && sent[1] < 40, "{sent:?}");
+    // Accepting the first stream delivers its early data and frees the
+    // buffer.
+    let mut leg = start_accept(&core, &first_id).await;
+    assert_eq!(recv(&mut first).await, opened());
+    assert_eq!(recv(&mut leg).await, data(&[0; 8]));
+    timeout(WAIT, async {
+        while core.stats().early_data_bytes > 16 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+}

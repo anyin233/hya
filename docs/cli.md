@@ -1131,8 +1131,8 @@ empty. Source: [`proxy_cmd.rs`](../crates/hya-backend/src/proxy_cmd.rs).
 | `--port <PORT>` | `8766` | Bind port; `0` picks a free port. |
 | `--tls-cert <PEM>` / `--tls-key <PEM>` | none | TLS certificate/key; both or neither. |
 | `--path-prefix <PREFIX>` | none | Serve both bindings under a path prefix. |
-| `--trust-forwarded` | off | Identify clients by forwarding headers instead of the socket address. |
-| `--max-rooms`, `--max-streams-per-room`, `--max-streams-per-peer`, `--max-rooms-per-peer`, `--max-pending-registrations-per-peer`, `--idle-timeout-secs`, `--stream-rate-bytes-per-sec`, `--stream-rate-burst-bytes`, `--max-chunk-data`, `--early-data-limit`, `--accept-timeout-secs`, `--handshake-timeout-secs` | library defaults | One flag per `ProxyLimits` field (durations in whole seconds); see [docs/relay.md](relay.md#hya-proxy) for the full table. |
+| `--trust-forwarded <HEADER>` | off | Identify clients by the address in exactly one forwarding header instead of the socket address: `cf-connecting-ip`, `x-real-ip`, or `x-forwarded-for` (its rightmost entry, appended by your hop). Only behind a hop that sets that header; see the [recipes](relay.md#deployment-recipes). |
+| `--max-rooms`, `--max-streams-per-room`, `--max-streams-per-peer`, `--max-streams`, `--max-rooms-per-peer`, `--max-pending-registrations-per-peer`, `--max-pending-registrations`, `--idle-timeout-secs`, `--stream-rate-bytes-per-sec`, `--stream-rate-burst-bytes`, `--max-chunk-data`, `--early-data-limit`, `--max-early-data-bytes`, `--accept-timeout-secs`, `--handshake-timeout-secs` | library defaults | One flag per `ProxyLimits` field (durations in whole seconds); see [docs/relay.md](relay.md#hya-proxy) for the full table. |
 | `--drain-timeout-secs <N>` | `10` | How long shutdown waits for streams and connections to drain. |
 
 **Shutdown.** SIGINT or SIGTERM stops accepting new connections, drains

@@ -55,17 +55,20 @@ stops accepting, drains every stream (`RelayServer`'s graceful shutdown, see
 | `--tls-cert <PEM>` | none | Certificate chain; requires `--tls-key`. |
 | `--tls-key <PEM>` | none | Private key; requires `--tls-cert`. |
 | `--path-prefix <PREFIX>` | none | Serve both bindings under a path prefix. |
-| `--trust-forwarded` | off | Identify clients by `CF-Connecting-IP`/`X-Real-IP`/`X-Forwarded-For` instead of the socket address. Only safe behind a hop that overwrites these headers. |
+| `--trust-forwarded <HEADER>` | off | Identify clients by the address in exactly one forwarding header instead of the socket address: `cf-connecting-ip`, `x-real-ip`, or `x-forwarded-for` (its **rightmost** entry, the one your hop appended). Other forwarding headers are ignored. Only safe when every client reaches the proxy through a hop that sets exactly that header; see [Client identity](#bindings) and the [recipes](#deployment-recipes). |
 | `--max-rooms <N>` | `1024` | [`ProxyLimits::max_rooms`](#proxy-behavior). |
 | `--max-streams-per-room <N>` | `64` | `ProxyLimits::max_streams_per_room`. |
 | `--max-streams-per-peer <N>` | `256` | `ProxyLimits::max_streams_per_peer`. |
+| `--max-streams <N>` | `8192` | `ProxyLimits::max_streams` (the whole proxy). |
 | `--max-rooms-per-peer <N>` | `16` | `ProxyLimits::max_rooms_per_peer`. |
 | `--max-pending-registrations-per-peer <N>` | `8` | `ProxyLimits::max_pending_registrations_per_peer`. |
+| `--max-pending-registrations <N>` | `256` | `ProxyLimits::max_pending_registrations` (the whole proxy). |
 | `--idle-timeout-secs <N>` | `120` | `ProxyLimits::idle_timeout`. |
 | `--stream-rate-bytes-per-sec <N>` | `8388608` | `ProxyLimits::stream_rate_bytes_per_sec` (`0` = unlimited). |
 | `--stream-rate-burst-bytes <N>` | `1048576` | `ProxyLimits::stream_rate_burst_bytes`. |
 | `--max-chunk-data <N>` | `262144` | `ProxyLimits::max_chunk_data`. |
 | `--early-data-limit <N>` | `65536` | `ProxyLimits::early_data_limit`. |
+| `--max-early-data-bytes <N>` | `67108864` | `ProxyLimits::max_early_data_bytes` (the whole proxy). |
 | `--accept-timeout-secs <N>` | `10` | `ProxyLimits::accept_timeout`. |
 | `--handshake-timeout-secs <N>` | `10` | `ProxyLimits::handshake_timeout`. |
 | `--drain-timeout-secs <N>` | `10` | `RelayServerConfig::drain_timeout`. |
@@ -458,8 +461,9 @@ calls `serve_host(ProxyControlTransport, PeerInfo)`,
 `serve_open(ChunkTransport, PeerInfo)`, or
 `serve_accept(ChunkTransport, PeerInfo)`; each returns a `'static` future the
 binding spawns. `PeerInfo::new(id)` is an opaque client identity (normally the
-client IP) used only for per-client limits. `ProxyCore::stats()` returns
-`ProxyStats{rooms, streams, pending_streams}`; `ProxyCore::shutdown()` ends
+client IP, IPv6 bucketed by /64) used only for per-client limits.
+`ProxyCore::stats()` returns `ProxyStats{rooms, streams, pending_streams,
+pending_registrations, early_data_bytes}`; `ProxyCore::shutdown()` ends
 every stream with `UNAVAILABLE`, refuses new ones, and waits until all served
 streams have finished. The proxy keeps no state on disk.
 
@@ -534,25 +538,30 @@ final frame as the stream status instead.
 | `DEADLINE_EXCEEDED` | No first frame (registration, `open`, `accept`) within the handshake timeout; a leg or control stream idle past the idle timeout; a peer that stops reading for that long. |
 | `NOT_FOUND` | `open` to an offline room or with a missing or wrong open token (indistinguishable); `accept` with an unknown, expired, or already accepted stream id. |
 | `ALREADY_EXISTS` | Sent to a host whose room was taken over by a newer registration. |
-| `RESOURCE_EXHAUSTED` | A room, stream, or per-client limit is reached; a `data` payload over the chunk limit (sent to both sides). |
+| `RESOURCE_EXHAUSTED` | A room, stream, per-client, or proxy-wide limit is reached; a `data` payload over the chunk limit (sent to both sides). |
 | `FAILED_PRECONDITION` | A second `register` on a registered control stream. |
 | `UNAVAILABLE` | The host did not accept in time; the room went offline or was replaced; the other side went away; the proxy is shutting down. |
 | `UNAUTHENTICATED` | Registration or open token update key or signature is malformed or does not verify. |
 
-**Limits** (`hya_relay::proxy::ProxyLimits`, ADR-0025 D8):
+**Limits** (`hya_relay::proxy::ProxyLimits`, ADR-0025 D8). The per-client
+limits bound what one address can take; the proxy-wide `max_*` caps bound
+the total when many addresses (a botnet, or an IPv6 range) act together:
 
 | Field | Default | Effect |
 | --- | --- | --- |
 | `max_rooms` | 1024 | Registered rooms; a replacement needs no new slot. Over: `RESOURCE_EXHAUSTED`. |
 | `max_streams_per_room` | 64 | Concurrent streams (waiting or spliced) per room. Over: `RESOURCE_EXHAUSTED`. |
 | `max_streams_per_peer` | 256 | Concurrent streams opened by one `PeerInfo`. Over: `RESOURCE_EXHAUSTED`. |
+| `max_streams` | 8192 | Concurrent streams on the whole proxy, whoever opened them. Over: `RESOURCE_EXHAUSTED`. |
 | `max_rooms_per_peer` | 16 | Rooms registered by one `PeerInfo`. Replacing a room the same client holds needs no new slot; a room taken over by another client frees the old owner's slot. Over: `RESOURCE_EXHAUSTED`. |
 | `max_pending_registrations_per_peer` | 8 | Host control streams of one `PeerInfo` that have not finished registration (challenge sent, no valid `register` yet). Over: the new control stream gets `RESOURCE_EXHAUSTED` instead of a challenge. |
+| `max_pending_registrations` | 256 | The same, over all clients together. |
 | `idle_timeout` | 120 s | A leg or control stream with no frame at all (heartbeats count), or a peer not taking a frame, for this long: `DEADLINE_EXCEEDED`. |
 | `stream_rate_bytes_per_sec` | 8 MiB/s | Token-bucket cap on `data` bytes per stream and direction; excess is delayed, not dropped. `0` = unlimited. |
 | `stream_rate_burst_bytes` | 1 MiB | Burst of that bucket. |
 | `max_chunk_data` | 256 KiB | Largest `data` payload. Over: `RESOURCE_EXHAUSTED` to both sides. |
 | `early_data_limit` | 64 KiB | Opener `data` buffered before the accept; beyond it the proxy stops reading. |
+| `max_early_data_bytes` | 64 MiB | Opener `data` buffered before accepts, over all streams; beyond it the proxy stops reading every waiting opener until buffered data is delivered. Checked before each read, so it can be exceeded by at most one chunk per waiting stream. |
 | `accept_timeout` | 10 s | Wait for the host's `Accept`; then `UNAVAILABLE` to the opener. |
 | `handshake_timeout` | 10 s | Deadline for the first frame of every stream (the registration timeout for hosts). |
 
@@ -563,12 +572,12 @@ final frame as the stream status instead.
 step) is a thin CLI around it.
 
 ```rust
-use hya_relay::server::{RelayServer, RelayServerConfig, TlsFiles};
+use hya_relay::server::{ForwardedHeader, RelayServer, RelayServerConfig, TlsFiles};
 
 let config = RelayServerConfig::new("0.0.0.0:8766".parse()?)
     .path_prefix("/relay")?                      // optional
     .tls(TlsFiles { cert: "cert.pem".into(), key: "key.pem".into() }) // optional
-    .trust_forwarded(true)                       // only behind a hop that sets the headers
+    .trust_forwarded(Some(ForwardedHeader::XRealIp)) // only behind a hop that sets it
     .limits(hya_relay::proxy::ProxyLimits::default());
 let (addr, serve) = RelayServer::bind(config, async { let _ = tokio::signal::ctrl_c().await; }).await?;
 println!("listening on {addr}");
@@ -582,7 +591,7 @@ serve.await; // returns after the shutdown signal and the drain
 | `new(bind: SocketAddr)` | — | Listen address (`127.0.0.1:0` picks a free port; `bind` returns the real one). |
 | `path_prefix(&str) -> Result<_, RelayServerError>` | none | Serve both bindings under a prefix. Segments of `A-Za-z0-9-._~`, no `.`/`..`; leading and one trailing `/` are optional (`"relay"`, `"/relay/"`, `"/a/b"`). |
 | `tls(TlsFiles { cert, key })` | plaintext | Terminate TLS with PEM files (certificate chain, then a PKCS#8, PKCS#1, or SEC1 key). rustls with the ring provider, TLS 1.2 and 1.3, ALPN `h2` and `http/1.1`. |
-| `trust_forwarded(bool)` | `false` | Identify clients by forwarding headers (below). |
+| `trust_forwarded(Option<ForwardedHeader>)` | `None` | Identify clients by one named forwarding header (below). |
 | `limits(ProxyLimits)` | defaults | The proxy core limits (see Limits). |
 | `drain_timeout(Duration)` | 10 s | Upper bound of the shutdown drain. |
 
@@ -640,12 +649,19 @@ closing handshake is a transport failure (the other side gets
 upgrade check (`400`, `405`, or `426`).
 
 **Client identity** (`PeerInfo`, used only for the per-client limits). By
-default it is the socket's remote IP (IPv4-mapped IPv6 shown as IPv4). With
-`trust_forwarded(true)` it is the first valid IP from, in order,
-`CF-Connecting-IP` (first entry), `X-Real-IP` (first entry), and the leftmost
-`X-Forwarded-For` entry; the socket IP when none parses. Enable it only when
-every request reaches the proxy through a hop that overwrites these headers,
-otherwise clients can pick their own identity.
+default it is the socket's remote IP: an IPv4 address (IPv4-mapped IPv6
+shown as IPv4) as is, an IPv6 address as its **/64** (`2001:db8:1:2::/64`),
+since one host commonly holds a whole /64 and could otherwise take a new
+identity per address. With `trust_forwarded(Some(header))` it is the address
+in exactly that `ForwardedHeader` — `CfConnectingIp` (`CF-Connecting-IP`),
+`XRealIp` (`X-Real-IP`), or `XForwardedFor` (the **rightmost**
+`X-Forwarded-For` entry of the last header line, the one the trusted hop
+appended; entries to its left come from the client) — bucketed the same
+way, and the socket IP when it is missing or does not parse. Every other
+forwarding header is ignored, so a client cannot pick a more favorable one.
+Name a header only when every request reaches the proxy through a hop that
+sets (overwrites, or for `X-Forwarded-For` appends to) exactly that header;
+otherwise clients choose their own identity.
 
 **Graceful shutdown.** When the shutdown future completes the server stops
 accepting (the port closes), ends every relay stream with `UNAVAILABLE`
@@ -1057,8 +1073,15 @@ default heartbeat (15s, dead after 45s) stays well under that, so open
 streams survive (case (e)). Targets this Cloudflare Tunnel targeting
 `cloudflared` 2024+.
 
+Every client reaches the proxy from `cloudflared` on localhost, so the
+per-client limits need the client address from Cloudflare: it sets
+`CF-Connecting-IP` (overwriting any client value) on every request. Trust
+that header and nothing else — and only when the proxy port is reachable
+through the tunnel alone (bind `--host 127.0.0.1`), since a direct client
+could send its own `CF-Connecting-IP`.
+
 ```sh
-hya proxy --port 8766
+hya proxy --host 127.0.0.1 --port 8766 --trust-forwarded cf-connecting-ip
 hya relay doctor https://relay.example.com
 # expect: WebSocket ok, recommended t=auto (or t=ws if pinning); with
 # http2Origin: true, gRPC ok too.
@@ -1086,6 +1109,7 @@ server {
             break;
         }
         grpc_pass grpc://127.0.0.1:8766;
+        grpc_set_header X-Real-IP $remote_addr;
         grpc_read_timeout 1h;
         grpc_send_timeout 1h;
     }
@@ -1096,6 +1120,7 @@ server {
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
+        proxy_set_header X-Real-IP $remote_addr;
         proxy_read_timeout 1h;
         proxy_send_timeout 1h;
         proxy_buffering off;
@@ -1109,7 +1134,10 @@ server {
 `proxy_send_timeout` at 1h (or any value comfortably above the relay's own
 120s idle timeout) keep nginx from cutting long-lived streams itself;
 `proxy_buffering off` and `client_max_body_size 0` keep it from buffering
-the streaming bodies. Path-prefix variant (`hya proxy --path-prefix
+the streaming bodies. `X-Real-IP $remote_addr` overwrites whatever the
+client sent with the address nginx saw, so `hya proxy --trust-forwarded
+x-real-ip` gives the per-client limits the real client (bind the proxy to
+`127.0.0.1` so nothing bypasses nginx). Path-prefix variant (`hya proxy --path-prefix
 /relay`): change both `location` blocks to match under `/relay/` and keep
 the prefix in the link/proxy URL:
 
@@ -1117,17 +1145,19 @@ the prefix in the link/proxy URL:
     location /relay/ {
         if ($content_type !~ "^application/grpc") { break; }
         grpc_pass grpc://127.0.0.1:8766;
+        grpc_set_header X-Real-IP $remote_addr;
     }
     location /relay/hya.relay.v1/ws/ {
         proxy_pass http://127.0.0.1:8766;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "upgrade";
+        proxy_set_header X-Real-IP $remote_addr;
     }
 ```
 
 ```sh
-hya proxy --port 8766                      # or: --path-prefix /relay
+hya proxy --host 127.0.0.1 --port 8766 --trust-forwarded x-real-ip   # or: --path-prefix /relay
 hya relay doctor https://relay.example.com
 # expect: gRPC ok, WebSocket ok, recommended t=auto.
 ```
@@ -1151,8 +1181,14 @@ are forwarded immediately (needed for both bindings). This is the suite's
 "canary" shape: case (a) (h2c carries both bindings) plus, if you rewrite the
 Host header, case (h).
 
+Caddy appends the address it saw to `X-Forwarded-For` (and, unless you
+configure `trusted_proxies`, drops any value the client sent), so the
+**rightmost** entry is the client — which is exactly the entry `hya proxy
+--trust-forwarded x-forwarded-for` reads; entries to its left are never
+used.
+
 ```sh
-hya proxy --port 8766
+hya proxy --host 127.0.0.1 --port 8766 --trust-forwarded x-forwarded-for
 hya relay doctor https://relay.example.com
 # expect: gRPC ok, WebSocket ok, recommended t=auto.
 ```

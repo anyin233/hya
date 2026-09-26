@@ -9,19 +9,22 @@ use std::time::Duration;
 use anyhow::Context as _;
 use hya_relay::proxy::{
     DEFAULT_ACCEPT_TIMEOUT, DEFAULT_EARLY_DATA_LIMIT, DEFAULT_HANDSHAKE_TIMEOUT,
-    DEFAULT_IDLE_TIMEOUT, DEFAULT_MAX_CHUNK_DATA, DEFAULT_MAX_PENDING_REGISTRATIONS_PER_PEER,
-    DEFAULT_MAX_ROOMS, DEFAULT_MAX_ROOMS_PER_PEER, DEFAULT_MAX_STREAMS_PER_PEER,
-    DEFAULT_MAX_STREAMS_PER_ROOM, DEFAULT_STREAM_RATE_BURST_BYTES,
+    DEFAULT_IDLE_TIMEOUT, DEFAULT_MAX_CHUNK_DATA, DEFAULT_MAX_EARLY_DATA_BYTES,
+    DEFAULT_MAX_PENDING_REGISTRATIONS, DEFAULT_MAX_PENDING_REGISTRATIONS_PER_PEER,
+    DEFAULT_MAX_ROOMS, DEFAULT_MAX_ROOMS_PER_PEER, DEFAULT_MAX_STREAMS,
+    DEFAULT_MAX_STREAMS_PER_PEER, DEFAULT_MAX_STREAMS_PER_ROOM, DEFAULT_STREAM_RATE_BURST_BYTES,
     DEFAULT_STREAM_RATE_BYTES_PER_SEC, ProxyLimits,
 };
-use hya_relay::server::{DEFAULT_DRAIN_TIMEOUT, RelayServer, RelayServerConfig, TlsFiles};
+use hya_relay::server::{
+    DEFAULT_DRAIN_TIMEOUT, ForwardedHeader, RelayServer, RelayServerConfig, TlsFiles,
+};
 
 /// Default `hya proxy` bind host.
 pub(crate) const DEFAULT_PROXY_HOST: &str = "0.0.0.0";
 /// Default `hya proxy` bind port.
 pub(crate) const DEFAULT_PROXY_PORT: u16 = 8766;
 
-/// `--tls-cert`/`--tls-key`, `--path-prefix`, `--trust-forwarded`, and every
+/// `--tls-cert`/`--tls-key`, `--path-prefix`, `--trust-forwarded <header>`, and every
 /// [`ProxyLimits`] field, one flag each (kebab-case; durations in whole
 /// seconds since nothing in the codebase parses `10s`-style durations yet).
 #[derive(clap::Args, Debug, Clone)]
@@ -43,11 +46,13 @@ pub(crate) struct ProxyArgs {
     /// and cannot rewrite gRPC paths).
     #[arg(long)]
     pub(crate) path_prefix: Option<String>,
-    /// Identify clients by `CF-Connecting-IP` / `X-Real-IP` /
-    /// `X-Forwarded-For` instead of the socket address. Only safe behind a
-    /// hop that overwrites these headers.
-    #[arg(long)]
-    pub(crate) trust_forwarded: bool,
+    /// Identify clients by the address in this one forwarding header
+    /// instead of the socket address: `cf-connecting-ip`, `x-real-ip`, or
+    /// `x-forwarded-for` (its rightmost entry, the one the trusted hop
+    /// appended). Only safe when every client reaches the proxy through a
+    /// hop that sets exactly that header; other headers are ignored.
+    #[arg(long, value_name = "HEADER", value_parser = parse_forwarded_header)]
+    pub(crate) trust_forwarded: Option<ForwardedHeader>,
     /// Maximum registered rooms (`RESOURCE_EXHAUSTED` over the limit).
     #[arg(long, default_value_t = DEFAULT_MAX_ROOMS)]
     pub(crate) max_rooms: usize,
@@ -57,12 +62,18 @@ pub(crate) struct ProxyArgs {
     /// Maximum concurrent streams opened by one client identity.
     #[arg(long, default_value_t = DEFAULT_MAX_STREAMS_PER_PEER)]
     pub(crate) max_streams_per_peer: usize,
+    /// Maximum concurrent streams on the whole proxy.
+    #[arg(long, default_value_t = DEFAULT_MAX_STREAMS)]
+    pub(crate) max_streams: usize,
     /// Maximum rooms registered by one client identity.
     #[arg(long, default_value_t = DEFAULT_MAX_ROOMS_PER_PEER)]
     pub(crate) max_rooms_per_peer: usize,
     /// Maximum unfinished host registrations per client identity.
     #[arg(long, default_value_t = DEFAULT_MAX_PENDING_REGISTRATIONS_PER_PEER)]
     pub(crate) max_pending_registrations_per_peer: usize,
+    /// Maximum unfinished host registrations on the whole proxy.
+    #[arg(long, default_value_t = DEFAULT_MAX_PENDING_REGISTRATIONS)]
+    pub(crate) max_pending_registrations: usize,
     /// A stream leg or control stream idle this long (seconds; heartbeats
     /// count as activity) is closed with `DEADLINE_EXCEEDED`.
     #[arg(long, default_value_t = DEFAULT_IDLE_TIMEOUT.as_secs())]
@@ -79,6 +90,9 @@ pub(crate) struct ProxyArgs {
     /// Opener `data` bytes buffered before the host accepts the stream.
     #[arg(long, default_value_t = DEFAULT_EARLY_DATA_LIMIT)]
     pub(crate) early_data_limit: usize,
+    /// Opener `data` bytes buffered before accept, over all streams.
+    #[arg(long, default_value_t = DEFAULT_MAX_EARLY_DATA_BYTES)]
+    pub(crate) max_early_data_bytes: usize,
     /// Seconds an `Open` waits for the host's `Accept` before `UNAVAILABLE`.
     #[arg(long, default_value_t = DEFAULT_ACCEPT_TIMEOUT.as_secs())]
     pub(crate) accept_timeout_secs: u64,
@@ -98,13 +112,16 @@ impl ProxyArgs {
             max_rooms: self.max_rooms,
             max_streams_per_room: self.max_streams_per_room,
             max_streams_per_peer: self.max_streams_per_peer,
+            max_streams: self.max_streams,
             max_rooms_per_peer: self.max_rooms_per_peer,
             max_pending_registrations_per_peer: self.max_pending_registrations_per_peer,
+            max_pending_registrations: self.max_pending_registrations,
             idle_timeout: Duration::from_secs(self.idle_timeout_secs),
             stream_rate_bytes_per_sec: self.stream_rate_bytes_per_sec,
             stream_rate_burst_bytes: self.stream_rate_burst_bytes,
             max_chunk_data: self.max_chunk_data,
             early_data_limit: self.early_data_limit,
+            max_early_data_bytes: self.max_early_data_bytes,
             accept_timeout: Duration::from_secs(self.accept_timeout_secs),
             handshake_timeout: Duration::from_secs(self.handshake_timeout_secs),
         }
@@ -119,6 +136,11 @@ impl ProxyArgs {
             _ => None,
         }
     }
+}
+
+fn parse_forwarded_header(text: &str) -> Result<ForwardedHeader, String> {
+    text.parse()
+        .map_err(|error: hya_relay::server::UnknownForwardedHeader| error.to_string())
 }
 
 /// Run `hya proxy` until SIGINT/SIGTERM, then drain and exit 0.
@@ -192,7 +214,7 @@ mod tests {
         assert_eq!(cli.proxy.port, super::DEFAULT_PROXY_PORT);
         assert_eq!(cli.proxy.port, 8766);
         assert_eq!(cli.proxy.host, "0.0.0.0");
-        assert!(!cli.proxy.trust_forwarded);
+        assert!(cli.proxy.trust_forwarded.is_none());
         assert!(cli.proxy.tls_cert.is_none());
         assert!(cli.proxy.tls_key.is_none());
         let limits = cli.proxy.limits();
@@ -240,6 +262,12 @@ mod tests {
             "11",
             "--handshake-timeout-secs",
             "12",
+            "--max-streams",
+            "13",
+            "--max-pending-registrations",
+            "14",
+            "--max-early-data-bytes",
+            "15",
         ])
         .expect("all limit flags parse");
         let limits = cli.proxy.limits();
@@ -255,6 +283,27 @@ mod tests {
         assert_eq!(limits.early_data_limit, 10);
         assert_eq!(limits.accept_timeout, std::time::Duration::from_secs(11));
         assert_eq!(limits.handshake_timeout, std::time::Duration::from_secs(12));
+        assert_eq!(limits.max_streams, 13);
+        assert_eq!(limits.max_pending_registrations, 14);
+        assert_eq!(limits.max_early_data_bytes, 15);
+    }
+
+    #[test]
+    fn trust_forwarded_names_exactly_one_header() {
+        use hya_relay::server::ForwardedHeader;
+        assert!(
+            parse(&["--trust-forwarded"]).is_err(),
+            "a header is required"
+        );
+        assert!(parse(&["--trust-forwarded", "forwarded"]).is_err());
+        for (name, header) in [
+            ("cf-connecting-ip", ForwardedHeader::CfConnectingIp),
+            ("x-real-ip", ForwardedHeader::XRealIp),
+            ("x-forwarded-for", ForwardedHeader::XForwardedFor),
+        ] {
+            let cli = parse(&["--trust-forwarded", name]).expect("parses");
+            assert_eq!(cli.proxy.trust_forwarded, Some(header));
+        }
     }
 
     #[test]
@@ -267,11 +316,15 @@ mod tests {
             "--path-prefix",
             "/relay",
             "--trust-forwarded",
+            "x-real-ip",
         ])
         .expect("parses");
         assert_eq!(cli.proxy.host, "127.0.0.1");
         assert_eq!(cli.proxy.port, 0);
         assert_eq!(cli.proxy.path_prefix.as_deref(), Some("/relay"));
-        assert!(cli.proxy.trust_forwarded);
+        assert_eq!(
+            cli.proxy.trust_forwarded,
+            Some(hya_relay::server::ForwardedHeader::XRealIp)
+        );
     }
 }

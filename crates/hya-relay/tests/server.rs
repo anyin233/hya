@@ -19,7 +19,9 @@ use hya_relay::proto::{
     host_frame, proxy_to_host, register_signing_message,
 };
 use hya_relay::proxy::ProxyLimits;
-use hya_relay::server::{RelayServer, RelayServerConfig, TlsFiles, WS_CLOSE_ERROR_BASE};
+use hya_relay::server::{
+    ForwardedHeader, RelayServer, RelayServerConfig, TlsFiles, WS_CLOSE_ERROR_BASE,
+};
 use hyper_util::rt::TokioIo;
 use rustls_pki_types::{CertificateDer, ServerName};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -781,32 +783,57 @@ async fn register_outcome(
 }
 
 #[tokio::test]
-async fn trusted_forwarding_headers_identify_clients() {
-    let server = start(config().trust_forwarded(true).limits(one_room_per_client())).await;
+async fn only_the_trusted_forwarding_header_identifies_clients() {
+    let server = start(
+        config()
+            .trust_forwarded(Some(ForwardedHeader::XForwardedFor))
+            .limits(one_room_per_client()),
+    )
+    .await;
     let base = Target::new(&server);
+    // The rightmost X-Forwarded-For entry (appended by the trusted hop).
     let a = base
         .clone()
-        .header("x-forwarded-for", "203.0.113.1, 10.0.0.1");
-    let b = base.clone().header("cf-connecting-ip", "203.0.113.2");
+        .header("x-forwarded-for", "10.0.0.1, 203.0.113.1");
+    let b = base.clone().header("x-forwarded-for", "203.0.113.2");
     let _a = register_outcome(&a, Binding::Grpc, &key(1)).await.unwrap();
     let _b = register_outcome(&b, Binding::Ws, &key(2)).await.unwrap();
-    // CF-Connecting-IP wins over X-Real-IP and X-Forwarded-For.
-    let c = base
+    // A forged left entry does not make a new client: 203.0.113.1 again.
+    let forged = base
         .clone()
-        .header("cf-connecting-ip", "203.0.113.3")
-        .header("x-real-ip", "203.0.113.1")
-        .header("x-forwarded-for", "203.0.113.1");
-    let _c = register_outcome(&c, Binding::Ws, &key(3)).await.unwrap();
-    // X-Real-IP wins over X-Forwarded-For.
-    let d = base
-        .clone()
-        .header("x-real-ip", "203.0.113.4")
-        .header("x-forwarded-for", "203.0.113.1");
-    let _d = register_outcome(&d, Binding::Grpc, &key(4)).await.unwrap();
-    // The leftmost X-Forwarded-For entry is the client: 203.0.113.1 again.
-    let e = base.clone().header("x-forwarded-for", "203.0.113.1");
+        .header("x-forwarded-for", "198.51.100.99, 203.0.113.1");
     assert_eq!(
-        register_outcome(&e, Binding::Ws, &key(5)).await.err(),
+        register_outcome(&forged, Binding::Ws, &key(3)).await.err(),
+        Some(RelayErrorCode::ResourceExhausted)
+    );
+    // Other forwarding headers are ignored: 203.0.113.2 again.
+    let other = base
+        .clone()
+        .header("cf-connecting-ip", "198.51.100.1")
+        .header("x-real-ip", "198.51.100.2")
+        .header("x-forwarded-for", "203.0.113.2");
+    assert_eq!(
+        register_outcome(&other, Binding::Grpc, &key(4)).await.err(),
+        Some(RelayErrorCode::ResourceExhausted)
+    );
+    server.shutdown().await;
+
+    let server = start(
+        config()
+            .trust_forwarded(Some(ForwardedHeader::CfConnectingIp))
+            .limits(one_room_per_client()),
+    )
+    .await;
+    let base = Target::new(&server);
+    let c = base.clone().header("cf-connecting-ip", "203.0.113.3");
+    let _c = register_outcome(&c, Binding::Ws, &key(5)).await.unwrap();
+    // Without the trusted header: the socket address (127.0.0.1), whatever
+    // X-Forwarded-For claims.
+    let d = base.clone().header("x-forwarded-for", "203.0.113.4");
+    let _d = register_outcome(&d, Binding::Grpc, &key(6)).await.unwrap();
+    let e = base.clone().header("x-forwarded-for", "203.0.113.5");
+    assert_eq!(
+        register_outcome(&e, Binding::Ws, &key(7)).await.err(),
         Some(RelayErrorCode::ResourceExhausted)
     );
     server.shutdown().await;
