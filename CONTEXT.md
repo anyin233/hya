@@ -345,6 +345,57 @@ An older terminal user interface surface. Use this term only when contrasting th
 with another TUI surface; it does not mean every terminal renderer or client.
 _Avoid_: TUI (too broad), all terminal UI
 
+### Projects & remote access
+
+**Project**:
+A named workspace on the backend machine made of one or more ordered Project roots, chosen by the
+client (ADR-0024). Sessions of a Project see all its roots without asking; paths outside need an
+explicit escalation (ADR-0026). Stored as a mutable record, not as events.
+_Avoid_: workspace (too vague), repo, folder
+
+**Project root**:
+One absolute directory of a Project. The first root is the primary root and the default workdir of
+remote or explicitly created Project sessions; a local session keeps its cwd as workdir when the cwd
+is inside a root.
+_Avoid_: workdir (that is the session's cwd), mount, scope
+
+**Temporary session**:
+A Session that belongs to no Project. Its workdir and only root is a fresh scratch directory
+`$XDG_CACHE_HOME/hya/scratch/<session_id>`, which hya never deletes.
+_Avoid_: scratch project, anonymous session, ephemeral session
+
+**Relay**:
+The `hya proxy` process that forwards end-to-end-encrypted streams between a backend and its remote
+clients. It sees Room ids and ciphertext only and holds no key (ADR-0025).
+_Avoid_: server, gateway, tunnel (the tunnel is the encrypted stream, not the relay)
+
+**Relay link**:
+The `hya://…/<room_id>?t=…#<server key>.<psk>` URL that names a Relay, a Room, and the keys needed
+to reach the backend. Holding it is full control; `hya serve relay rotate` revokes it.
+_Avoid_: invite, token, pairing code
+
+**Relay binding**:
+One of the two transports that carry the `hya.relay.v1` messages to and from a Relay: gRPC
+(primary) or WebSocket (fallback), chosen by `t=auto|grpc|ws`.
+_Avoid_: protocol (the protocol is the same in both), transport mode
+
+**Bridge**:
+The client-side loopback HTTP listener started by `hya --connect`, `hya bridge`, or
+`/connect-remote`. It encrypts each client connection with Noise and carries it through the Relay,
+so the TUI stays a plain `hya.v1` HTTP client.
+_Avoid_: proxy (that is the Relay), tunnel client, agent
+
+**Room**:
+The Relay's in-memory rendezvous for one backend, keyed by a `room_id` derived from the backend's
+Ed25519 identity. Only the key holder can register it.
+_Avoid_: channel (that is the agent Channel), session, lobby
+
+**Host connector**:
+The part of `hya serve` that registers a Room with a Relay, accepts relayed streams, completes the
+Noise handshake as responder, and serves the decrypted HTTP through the `hya.v1` router with
+`Origin::Relay`.
+_Avoid_: relay client, agent, bridge (that is the client side)
+
 ### Models
 
 **Category**:
