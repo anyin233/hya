@@ -270,9 +270,15 @@ async fn delete_session(
     AxumPath(id): AxumPath<String>,
 ) -> Result<Json<pb::DeleteSessionResponse>, V1Error> {
     let session = parse_session(&id)?;
+    // Root-ness must be read before the log (and so the parent link) goes.
+    let root = crate::session_list::is_root(&st, session).await;
     let deleted = st.engine.store().delete_session(session).await?;
     if !deleted {
         return Err(V1Error::session_not_found(&id));
+    }
+    if root {
+        st.session_list
+            .publish(crate::session_list::SessionListNotice::Deleted { session });
     }
     Ok(Json(pb::DeleteSessionResponse {}))
 }

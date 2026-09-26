@@ -1,5 +1,16 @@
 # 0.41.0
 
+## Session list changes reach every client
+
+- The global stream now reports every change to a root session:
+  - creation: `sessionStarted`;
+  - rename, agent or model switch, permission mode, archive state: `sessionUpdated`;
+  - busy/idle: `sessionUpdated {busy}`, live-only, one frame per transition;
+  - deletion: `sessionDeleted`, live-only.
+- These frames also reach `interactionsOnly=true` subscribers; a `resync` there means you should re-list sessions. Subagent sessions produce none of these frames. See [Protocol guide](docs/protocol/README.md).
+- The HTTP router and gRPC now share one run registry, so a run started over HTTP counts as busy over gRPC too.
+- `CreateSession`'s docs now say that an empty agent or model uses the server default.
+
 ## `hya serve stop` really stops the backend
 
 - Before ending its streams, the server sends a last live frame, `serverStopping {reason}`, where `reason` is `stop`, `restart`, or `signal`. `hya serve stop` and `restart` set the reason: they write `<db>.server.stop`, then send SIGTERM.

@@ -176,8 +176,8 @@ is running keeps running and finishes, and the transcript stays readable.
   lists only them. Filtering happens before pagination.
 - **Stream:** each change is a durable `sessionUpdated` event with only
   `archived` set (`true` or `false`), on the per-session stream and on the
-  global stream (not with `interactionsOnly`), so other clients update
-  live.
+  global stream (also with `interactionsOnly`), so other clients update
+  live (see [Session list push](#session-list-push)).
 - **Fork:** a fork of an archived session is not archived.
 - **Durable events:** `session_archived` (with an epoch-millisecond stamp)
   and `session_unarchived`; see
@@ -191,6 +191,52 @@ curl 'localhost:3250/v1/sessions?archivedOnly=true'
 
 ```json
 { "event": { "seq": "88", "session": "hysec_...", "sessionUpdated": { "archived": true } } }
+```
+
+## Session list push
+
+A client that shows the session list (a sidebar, a session picker) keeps it
+current from the global stream instead of polling `ListSessions`: every
+change of a **root** session's list row reaches every global-stream
+subscriber — whichever client (or headless writer routed through the
+server) made it. Child (subagent) sessions never produce these frames.
+
+| Change | Frame | Kind |
+| --- | --- | --- |
+| Created (also a fork) | `sessionStarted {agent, model, workdir}` | durable |
+| Renamed, automatic title | `sessionUpdated {title}` | durable |
+| Agent / model switched | `sessionUpdated {agent}` / `{model}` | durable |
+| Permission mode set | `sessionUpdated {permissionMode}` | durable |
+| Archived / unarchived | `sessionUpdated {archived: true \| false}` | durable |
+| Went busy / idle | `sessionUpdated {busy: true \| false}` | live-only |
+| Deleted | `sessionDeleted {}` | live-only |
+
+- **Which streams.** The unfiltered global stream (`GET /v1/events/stream`)
+  and the interactions-only one (`?interactionsOnly=true`) both carry every
+  row above; session streams carry the durable ones of their own session
+  (as before) but never `busy` or `sessionDeleted`.
+- **Busy.** `sessionUpdated.busy` mirrors `SessionInfo.busy`: `true` when a
+  turn (prompt, command, shell, engine wake) or a Workflow run starts on the
+  session, `false` when it is idle again. It is sent once per transition —
+  never per token — with `seq` 0 and no other field set; a transition that
+  the server notices late (an engine-internal turn, a Workflow run) arrives
+  within about a second.
+- **Deleted.** `sessionDeleted` is live-only because deletion removes the
+  session's log: there is nothing to replay. Its `session` names the deleted
+  session; drop the row.
+- **Recovering.** None of these frames is replayed (`sinceSeq` only skips
+  durable ones), so list sessions (`GET /v1/sessions`, with
+  `includeArchived=true` if the client shows archived ones) once the stream
+  is open, then fold the frames by `session`. A `resync` frame on the global
+  stream means frames were lost: list the sessions again. A frame for a
+  session the client has not listed (a creation it missed) is a reason to
+  re-list too.
+
+```json
+{ "event": { "seq": "1", "session": "hysec_...", "sessionStarted": { "agent": "build", "model": "openai/gpt-5", "workdir": "/repo" } } }
+{ "event": { "session": "hysec_...", "timeRecorded": "2026-09-26T10:00:00Z", "sessionUpdated": { "busy": true } } }
+{ "event": { "session": "hysec_...", "timeRecorded": "2026-09-26T10:00:09Z", "sessionUpdated": { "busy": false } } }
+{ "event": { "session": "hysec_...", "timeRecorded": "2026-09-26T10:01:00Z", "sessionDeleted": {} } }
 ```
 
 ## Usage and context occupancy
@@ -424,7 +470,9 @@ Stream events come in two kinds:
   They are never persisted and `ListEvents` never returns them: the
   assistant text of an in-flight provider round, the pending
   interaction frames (`permissionRequested`, `questionRequested`,
-  `interactionResolved`; `GET /v1/interactions` is their listing), the
+  `interactionResolved`; `GET /v1/interactions` is their listing), a root
+  session's `sessionUpdated {busy}` and `sessionDeleted` on the global
+  stream (see [Session list push](#session-list-push)), the
   process-wide `catalogUpdated` notice, and `serverStopping` (see
   [Server shutdown](#server-shutdown)).
 
@@ -439,11 +487,19 @@ empty `session`. Re-read `GET /v1/models` / `GET /v1/providers`.
 ```
 
 **Interactions-only global stream.** `GET /v1/events/stream?interactionsOnly=true`
-(gRPC `StreamGlobalEventsRequest.interactions_only`) delivers only the live
-interaction frames of every session plus `catalogUpdated`; every session's
-engine events (text, tools, messages, status) and their `resync` frames are
-left out. A client that follows its open session on the session stream uses
-it to see the other sessions' asks without receiving their live text.
+(gRPC `StreamGlobalEventsRequest.interactions_only`) delivers only
+interaction and session-list frames: the live interaction frames of every
+session, `catalogUpdated`, and the [session-list frames](#session-list-push)
+of root sessions (durable `sessionStarted` / `sessionUpdated`, live
+`sessionUpdated {busy}` and `sessionDeleted`). Every other engine event
+(text, tools, messages, a child session's list changes) is left out. A
+`resync` frame means session-list frames were lost: list the sessions again.
+A client that follows its open session on the session stream uses it to see
+the other sessions' asks and keep its session list live without receiving
+their text. The option keeps its name for compatibility: it used to carry
+no session frames and no `resync`, and a client written for that — one that
+ignores payloads it does not know and treats `resync` as "re-list" — keeps
+working.
 
 While a provider round streams, each assistant text part arrives live as
 `partStarted` (`kind: "text"`), one `partAppended` per delta, and
