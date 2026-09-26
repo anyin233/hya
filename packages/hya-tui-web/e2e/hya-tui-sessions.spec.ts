@@ -71,7 +71,7 @@ test("lists a New session row first, then the tree with the open session marked;
   await term.waitForText("New session")
   await term.waitForText(new RegExp(`▸ ● ${second}`))
   await term.waitForText("First session")
-  await term.waitForText("F2 renames")
+  await term.waitForText("F2 rename")
   await term.attach(testInfo, "sessions-picker")
 
   // Filtering narrows to the other session; Enter opens it.

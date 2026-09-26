@@ -220,12 +220,41 @@ picker shows archived sessions too after Ctrl+A (see
 (for example one another client archived while it was open here) unarchives
 it on the backend as well.
 
-A `sessionUpdated {archived}` frame (another client archived or unarchived
-a session) updates the sidebar live: an archived session leaves the list,
-except the open one, which stays with `· archived` after its agent; an
-unarchived one is marked back, or listed again. The open session's own
-stream carries the frame; other sessions' frames arrive on the global stream
-once the backend sends session frames there.
+### Sidebar live updates
+
+The sidebar's `Sessions` box (and an open `/sessions` picker, see
+[Pickers](#pickers)) stays current without polling: every root session's
+list-affecting change reaches every TUI over the global stream (unfiltered
+or `interactionsOnly`), following the protocol guide's
+[Session list push](protocol/README.md#session-list-push). At global-stream
+open the TUI lists sessions (respecting the sidebar's own default, which
+hides archived ones), then folds frames by `event.session`:
+
+| Frame | Effect |
+| --- | --- |
+| `sessionStarted {agent, model, workdir}` | A session this TUI has not listed (another client's, a fork, a headless writer): the frame carries too little to build a row cheaply (no title yet), so the list is re-read, debounced with the same 120 ms/400 ms rule as the projection re-read. |
+| `sessionUpdated {title\|agent\|model\|permissionMode}` | Patches the row in place (`state/store.ts` `patchSessionRow`); an id not listed yet re-lists instead. |
+| `sessionUpdated {archived}` | An archived session leaves the list, except the open one, which stays with `· archived` after its agent (`applyArchived`); an unarchived one is marked back, or re-listed if it was missing. |
+| `sessionUpdated {busy}` (live-only) | Patches `busy` on the row (`· running`), independent of any turn this client admitted. |
+| `sessionDeleted {}` (live-only) | Drops the row. If it was the *open* session — deleted by another client, not by this TUI's own `/sessions` Ctrl+D (`deleteSession` marks its own deletes so this echo is not mistaken for one) — a status notice (`Session <id> was deleted elsewhere; opened a new session`) is shown and a fresh session opens, like `/new`: the TUI is never left pointed at a session with no log behind it. |
+
+A `resync` on the global stream means these frames were lost: sessions (and
+pending interactions, as before) are listed again. This complements
+[Session titles](#session-titles) (title/agent/model on the *open*
+session's own stream) and the archived-marking above: `patchSessionRow`
+never touches `state.selected` — the open session's header and its
+`permissionMode` notice stay the own stream's job — so a frame that reaches
+both streams (a root session's own change, echoed on the global stream too)
+is applied twice, harmlessly (each setter is an idempotent "set to this
+value", not a counter).
+
+Open `/model`/`/agent`/`/permissions` pickers already read live state
+(`store.state`) each time they render. `/sessions` and `/resume` snapshot
+their rows when they open (`sessionRows`/`resumeRows` over `store.state` or
+a fresh `ListSessions`) and do not repaint while held open; re-opening them
+(closing with Esc and pressing `/sessions` or `/resume` again) picks up
+every change made meanwhile. The row is small enough, and reopening cheap
+enough, that this was chosen over patching an open picker's rows in place.
 
 ### When the server goes away
 
@@ -450,7 +479,9 @@ the bordered input, and the instruction line. The permission mode picker
   session syncs its row to the fresh `GetSession` read, so a stale `running`
   from before it was opened does not linger, and its own stream's turn-end
   frame clears it live if the turn was already running when it was opened;
-  `state/store.ts` `openSession()` / `setSessionBusy()`), `Todos` (the
+  `state/store.ts` `openSession()` / `setSessionBusy()`; every root
+  session's row also stays current live from another client's changes —
+  see [Sidebar live updates](#sidebar-live-updates)), `Todos` (the
   live todo list — see
   [Working indicator, status bar, and todo panel](#working-indicator-status-bar-and-todo-panel)),
   and `Context` (session, agent, model, the merged transcript's message
@@ -1788,7 +1819,7 @@ at start and `/refresh`/Ctrl+R), so a picker opens with no loading state.
 │ ▸   New session          [new]       Create a session with the curr… │
 │   ● Fix the flaky test              build · fake/model · 3m           │
 │       ↳ Explore the auth code [subagent]  explore · fake/model · 1m  │
-│ Enter opens · F2 renames · Ctrl+D deletes · Ctrl+A shows archived · E… │
+│ Enter open · F2 rename · Ctrl+D del · Ctrl+A shows archived · Esc clo… │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 

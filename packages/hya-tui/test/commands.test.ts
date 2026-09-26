@@ -34,6 +34,7 @@ function harness(client: Partial<HyaClient> = {}, copyWorks = true) {
     redo: async () => { calls.push("redo") },
     fork: () => { calls.push("fork") },
     reconnect: async () => { calls.push("reconnect") },
+    deleteSession: async (id) => { calls.push(`delete ${id}`); await (client as HyaClient).deleteSession(id) },
   }
   const registry = createCommandRegistry()
   const context = { store, client: client as HyaClient, actions }
