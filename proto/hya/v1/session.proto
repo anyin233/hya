@@ -127,6 +127,10 @@ message SessionInfo {
   bool archived = 17;
   // When the session was archived; unset when it is not archived.
   google.protobuf.Timestamp archived_at = 18;
+  // Whether this root session was created `ephemeral` and is still unused
+  // (no message, title, archive, or fork from it yet): the server deletes
+  // it once no client has a `StreamSessionEvents` stream open on it.
+  bool ephemeral = 19;
 }
 
 // Where a forked session came from.
@@ -166,6 +170,12 @@ message CreateSessionRequest {
   bool initialize = 5;
   // Initial title; empty lets the backend derive one.
   string title = 6;
+  // Create the session ephemeral: the server deletes it while it is still
+  // unused (no message, title, archive, or fork from it) once no client has
+  // a `StreamSessionEvents` stream open on it, after a short grace. For
+  // sessions a client opens before the user asked for one (the TUI's
+  // session on connect). Ignored with `parent` or `title` set.
+  bool ephemeral = 7;
 }
 
 message CreateSessionResponse {

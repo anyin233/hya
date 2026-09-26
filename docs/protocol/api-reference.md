@@ -2469,6 +2469,7 @@ Projection summary of one session.
 | `revert` (16) | `SessionRevert` | Pending revert (`RevertSession`): its messages are hidden from `ListMessages` until an undo restores them or the next prompt or shell turn commits the revert. Unset when nothing is pending. |
 | `archived` (17) | `bool` | Whether this root session is archived: hidden from `ListSessions` unless requested. Subagent child sessions are never archived; they follow their root. Archiving does not cancel a running turn. |
 | `archived_at` (18) | `google.protobuf.Timestamp` | When the session was archived; unset when it is not archived. |
+| `ephemeral` (19) | `bool` | Whether this root session was created `ephemeral` and is still unused (no message, title, archive, or fork from it yet): the server deletes it once no client has a `StreamSessionEvents` stream open on it. |
 
 ### `ForkSource`
 
@@ -2501,6 +2502,7 @@ A pending revert of a session.
 | `parent` (4) | `string` | When set, marks the new session as a child of this parent id. |
 | `initialize` (5) | `bool` | When true, run the directory initialization turn after creation. |
 | `title` (6) | `string` | Initial title; empty lets the backend derive one. |
+| `ephemeral` (7) | `bool` | Create the session ephemeral: the server deletes it while it is still unused (no message, title, archive, or fork from it) once no client has a `StreamSessionEvents` stream open on it, after a short grace. For sessions a client opens before the user asked for one (the TUI's session on connect). Ignored with `parent` or `title` set. |
 
 ### `CreateSessionResponse`
 

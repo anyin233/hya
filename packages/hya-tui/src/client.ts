@@ -27,6 +27,8 @@ export interface SessionInfo {
   archived?: boolean
   /** When it was archived (RFC 3339); unset when not archived. */
   archivedAt?: string
+  /** Created ephemeral and still unused: the daemon deletes it once no client watches it (docs/protocol/README.md "Ephemeral sessions"). */
+  ephemeral?: boolean
 }
 
 /** `ForkSource`: the source session and the user message the fork was cut before (empty for a head fork). */
@@ -537,11 +539,17 @@ export class HyaClient {
     return payload as T
   }
 
-  async createSession(agent: string, model: string, workdir: string): Promise<SessionInfo> {
+  /**
+   * `CreateSession`. `ephemeral`: the daemon deletes the session while it is
+   * still unused once no client watches it (the TUI's sessions on connect and
+   * `/new`; docs/protocol/README.md "Ephemeral sessions").
+   */
+  async createSession(agent: string, model: string, workdir: string, options: { ephemeral?: boolean } = {}): Promise<SessionInfo> {
     const result = await this.request<{ session: SessionInfo }>("POST", "/v1/sessions", {
       agent,
       model,
       workdir,
+      ...(options.ephemeral ? { ephemeral: true } : {}),
     })
     return result.session
   }

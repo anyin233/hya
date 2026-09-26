@@ -147,4 +147,37 @@ test.describe("two frontends, one database", () => {
     expect(await owner.waitForExit()).toBe(0)
     expect(alive(pid)).toBe(true)
   })
+  test("an empty session shown by two TUIs stays while either shows it; the daemon drops it after the last one quits", async ({ tui, workspace, page }) => {
+    test.setTimeout(90_000)
+    const creator = await tui(...selfLaunch(workspace))
+    await creator.waitForText("Connected to hya", 30_000)
+    await creator.waitForText("No messages yet")
+    const session = /hya · (hysec_\w+)/.exec(await creator.text())![1]!
+    const server = (await status(creator)).server
+    const listed = async (): Promise<string[]> =>
+      ((await (await fetch(`${server}/v1/sessions`)).json()) as { sessions?: { id: string }[] }).sessions?.map((row) => row.id) ?? []
+
+    const [command] = selfLaunch(workspace, ["--session", session])
+    const { term: viewer, host } = await secondTab(page, command, workspace.dir, workspace.env)
+    try {
+      await viewer.waitForText(new RegExp(`hya · ${session}`), 30_000)
+      // The creator quits: its session is still empty, but the viewer shows it.
+      await prompt(creator, "/exit")
+      expect(await creator.waitForExit()).toBe(0)
+      // A kept session has no event to wait for: stay well past the daemon's 5 s grace.
+      await page.waitForTimeout(8_000)
+      expect(await listed()).toContain(session)
+      await viewer.waitForText(new RegExp(`hya · ${session}`))
+      expect(await viewer.text()).not.toContain("was deleted elsewhere")
+
+      // The last viewer quits: now nobody shows it, so the daemon drops it (never archived).
+      await prompt(viewer, "/exit")
+      await expect.poll(() => viewer.page.evaluate(() => window.hyaTerm.exitCode), { timeout: 15_000 }).toBe(0)
+    } finally {
+      await stopHost(host)
+    }
+    await expect.poll(listed, { timeout: 20_000 }).not.toContain(session)
+    const archived = ((await (await fetch(`${server}/v1/sessions?archivedOnly=true`)).json()) as { sessions?: { id: string }[] }).sessions ?? []
+    expect(archived.map((row) => row.id)).not.toContain(session)
+  })
 })

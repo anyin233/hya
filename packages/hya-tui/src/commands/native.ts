@@ -596,7 +596,7 @@ export const nativeCommandSpecs: CommandSpec[] = [
   },
   {
     name: "/exit",
-    description: "Quit the TUI and archive the session (Ctrl+C twice); an empty session is deleted. /resume brings an archived one back",
+    description: "Quit the TUI and archive the session (Ctrl+C twice); an unused one is dropped by the daemon. /resume brings an archived one back",
     run: ({ actions }) => { actions.quit("archive") },
   },
   {

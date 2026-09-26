@@ -42,6 +42,8 @@ pub(crate) struct RunGuard {
     session: SessionId,
     id: u64,
     token: CancellationToken,
+    /// No change signal on start or end (no busy notice).
+    quiet: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -54,6 +56,16 @@ pub(crate) struct RunStatus {
 impl RunRegistry {
     #[allow(dead_code)]
     pub(crate) fn start(&self, session: SessionId) -> Option<RunGuard> {
+        self.start_with(session, false)
+    }
+
+    /// Like [`Self::start`], without the change signal on start and end, so
+    /// no busy notice is published (a reservation that is not a turn).
+    pub(crate) fn start_quiet(&self, session: SessionId) -> Option<RunGuard> {
+        self.start_with(session, true)
+    }
+
+    fn start_with(&self, session: SessionId, quiet: bool) -> Option<RunGuard> {
         let mut runs = self.lock_runs();
         if runs.contains_key(&session) {
             return None;
@@ -68,12 +80,15 @@ impl RunRegistry {
             },
         );
         drop(runs);
-        let _ = self.inner.changes.send(session);
+        if !quiet {
+            let _ = self.inner.changes.send(session);
+        }
         Some(RunGuard {
             registry: self.clone(),
             session,
             id,
             token,
+            quiet,
         })
     }
 
@@ -142,7 +157,7 @@ impl Drop for RunGuard {
                 false
             }
         };
-        if removed {
+        if removed && !self.quiet {
             let _ = self.registry.inner.changes.send(self.session);
         }
     }

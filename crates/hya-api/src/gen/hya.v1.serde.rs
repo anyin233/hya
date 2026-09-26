@@ -3839,6 +3839,9 @@ impl serde::Serialize for CreateSessionRequest {
         if !self.title.is_empty() {
             len += 1;
         }
+        if self.ephemeral {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("hya.v1.CreateSessionRequest", len)?;
         if !self.agent.is_empty() {
             struct_ser.serialize_field("agent", &self.agent)?;
@@ -3858,6 +3861,9 @@ impl serde::Serialize for CreateSessionRequest {
         if !self.title.is_empty() {
             struct_ser.serialize_field("title", &self.title)?;
         }
+        if self.ephemeral {
+            struct_ser.serialize_field("ephemeral", &self.ephemeral)?;
+        }
         struct_ser.end()
     }
 }
@@ -3874,6 +3880,7 @@ impl<'de> serde::Deserialize<'de> for CreateSessionRequest {
             "parent",
             "initialize",
             "title",
+            "ephemeral",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -3884,6 +3891,7 @@ impl<'de> serde::Deserialize<'de> for CreateSessionRequest {
             Parent,
             Initialize,
             Title,
+            Ephemeral,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -3911,6 +3919,7 @@ impl<'de> serde::Deserialize<'de> for CreateSessionRequest {
                             "parent" => Ok(GeneratedField::Parent),
                             "initialize" => Ok(GeneratedField::Initialize),
                             "title" => Ok(GeneratedField::Title),
+                            "ephemeral" => Ok(GeneratedField::Ephemeral),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -3936,6 +3945,7 @@ impl<'de> serde::Deserialize<'de> for CreateSessionRequest {
                 let mut parent__ = None;
                 let mut initialize__ = None;
                 let mut title__ = None;
+                let mut ephemeral__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Agent => {
@@ -3974,6 +3984,12 @@ impl<'de> serde::Deserialize<'de> for CreateSessionRequest {
                             }
                             title__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::Ephemeral => {
+                            if ephemeral__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("ephemeral"));
+                            }
+                            ephemeral__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(CreateSessionRequest {
@@ -3983,6 +3999,7 @@ impl<'de> serde::Deserialize<'de> for CreateSessionRequest {
                     parent: parent__.unwrap_or_default(),
                     initialize: initialize__.unwrap_or_default(),
                     title: title__.unwrap_or_default(),
+                    ephemeral: ephemeral__.unwrap_or_default(),
                 })
             }
         }
@@ -22027,6 +22044,9 @@ impl serde::Serialize for SessionInfo {
         if self.archived_at.is_some() {
             len += 1;
         }
+        if self.ephemeral {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("hya.v1.SessionInfo", len)?;
         if !self.id.is_empty() {
             struct_ser.serialize_field("id", &self.id)?;
@@ -22084,6 +22104,9 @@ impl serde::Serialize for SessionInfo {
         if let Some(v) = self.archived_at.as_ref() {
             struct_ser.serialize_field("archivedAt", v)?;
         }
+        if self.ephemeral {
+            struct_ser.serialize_field("ephemeral", &self.ephemeral)?;
+        }
         struct_ser.end()
     }
 }
@@ -22118,6 +22141,7 @@ impl<'de> serde::Deserialize<'de> for SessionInfo {
             "archived",
             "archived_at",
             "archivedAt",
+            "ephemeral",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -22140,6 +22164,7 @@ impl<'de> serde::Deserialize<'de> for SessionInfo {
             Revert,
             Archived,
             ArchivedAt,
+            Ephemeral,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -22179,6 +22204,7 @@ impl<'de> serde::Deserialize<'de> for SessionInfo {
                             "revert" => Ok(GeneratedField::Revert),
                             "archived" => Ok(GeneratedField::Archived),
                             "archivedAt" | "archived_at" => Ok(GeneratedField::ArchivedAt),
+                            "ephemeral" => Ok(GeneratedField::Ephemeral),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -22216,6 +22242,7 @@ impl<'de> serde::Deserialize<'de> for SessionInfo {
                 let mut revert__ = None;
                 let mut archived__ = None;
                 let mut archived_at__ = None;
+                let mut ephemeral__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Id => {
@@ -22328,6 +22355,12 @@ impl<'de> serde::Deserialize<'de> for SessionInfo {
                             }
                             archived_at__ = map_.next_value()?;
                         }
+                        GeneratedField::Ephemeral => {
+                            if ephemeral__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("ephemeral"));
+                            }
+                            ephemeral__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(SessionInfo {
@@ -22349,6 +22382,7 @@ impl<'de> serde::Deserialize<'de> for SessionInfo {
                     revert: revert__,
                     archived: archived__.unwrap_or_default(),
                     archived_at: archived_at__,
+                    ephemeral: ephemeral__.unwrap_or_default(),
                 })
             }
         }

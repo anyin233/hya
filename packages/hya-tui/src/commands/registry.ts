@@ -34,8 +34,9 @@ export interface AppActions {
   /**
    * Leave the TUI and restore the terminal. `archive` (`/exit`, Ctrl+C twice)
    * archives the open session's root; `background` (`/to-background`,
-   * Ctrl+D) leaves it running on the daemon. An empty session this client
-   * created is dropped either way (app/sessionKeeper.ts).
+   * Ctrl+D) leaves it running on the daemon. An unused (ephemeral) session
+   * is never archived: the daemon drops it once no client watches it
+   * (app/sessionKeeper.ts).
    */
   quit(mode: "archive" | "background"): void
   /** `/resume [id]`, `--resume [id]`: unarchive and open a session, or pick one (app/resume.ts). */

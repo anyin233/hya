@@ -74,10 +74,11 @@ async fn create_session(
         .map_err(|error| V1Error::new(hya_api::error::Code::Internal, error.text().to_owned()))?;
         (agent, hya_proto::ModelRef::new(request.model.clone()))
     };
+    let parent: Option<SessionId> = request.parent.parse().ok();
     let session = st
         .engine
         .create(CreateSession {
-            parent: request.parent.parse().ok(),
+            parent,
             agent,
             model,
             workdir: request.workdir.clone(),
@@ -85,6 +86,12 @@ async fn create_session(
         .await?;
     if !request.title.is_empty() {
         st.engine.set_title(session, request.title.clone()).await?;
+    } else if request.ephemeral && parent.is_none() {
+        // Dropped while unused once nobody watches it; checked after the
+        // creation grace even if no client ever does (`crate::ephemeral`).
+        st.engine.set_session_ephemeral(session, true).await?;
+        st.watchers
+            .schedule(session, crate::ephemeral::Wait::Unclaimed);
     }
     let info = projection_info(&st, session).await?;
     Ok(Json(pb::CreateSessionResponse {
@@ -294,6 +301,8 @@ async fn fork_session(
         return Err(V1Error::session_not_found(&id));
     }
     let projection = hya_proto::Projection::from_events(&envs);
+    // A fork taken from an unused ephemeral session keeps the source.
+    st.engine.set_session_ephemeral(source, false).await?;
     let at = if !request.message_id.is_empty() {
         hya_core::ForkAt::Message(parse_message(&request.message_id)?)
     } else if request.until_seq > 0 {

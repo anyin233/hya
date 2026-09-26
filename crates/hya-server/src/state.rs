@@ -43,6 +43,8 @@ pub struct AppState {
     auto_title: bool,
     runs: runs::RunRegistry,
     session_list: SessionListHub,
+    ephemeral_grace: crate::EphemeralGrace,
+    watchers: crate::ephemeral::SessionWatchers,
 }
 
 impl AppState {
@@ -69,7 +71,17 @@ impl AppState {
             auto_title: false,
             runs: runs::RunRegistry::default(),
             session_list: SessionListHub::default(),
+            ephemeral_grace: crate::EphemeralGrace::default(),
+            watchers: crate::ephemeral::SessionWatchers::default(),
         }
+    }
+
+    /// How long the server waits before it drops an unused ephemeral
+    /// session (tests shorten it).
+    #[must_use]
+    pub fn with_ephemeral_grace(mut self, grace: crate::EphemeralGrace) -> Self {
+        self.ephemeral_grace = grace;
+        self
     }
 
     /// Title root sessions automatically: the first prompt turn of a root
@@ -235,6 +247,8 @@ pub(crate) struct ServerState {
     pub(crate) pure_guidance: bool,
     pub(crate) auto_title: bool,
     pub(crate) session_list: SessionListHub,
+    pub(crate) ephemeral_grace: crate::EphemeralGrace,
+    pub(crate) watchers: crate::ephemeral::SessionWatchers,
 }
 
 impl ServerState {
@@ -260,6 +274,8 @@ impl ServerState {
             pure_guidance: app.pure_guidance,
             auto_title: app.auto_title,
             session_list: app.session_list,
+            ephemeral_grace: app.ephemeral_grace,
+            watchers: app.watchers,
         }
     }
 
@@ -279,6 +295,15 @@ impl ServerState {
         session: hya_proto::SessionId,
     ) -> Option<runs::RunGuard> {
         self.reserve_run(session)
+    }
+
+    /// Reserve the Session's admission slot without a busy notice (the
+    /// drop of an unused ephemeral session, `crate::ephemeral`).
+    pub(crate) fn reserve_quiet(&self, session: hya_proto::SessionId) -> Option<runs::RunGuard> {
+        if self.workflow_control.active_run(session).is_some() {
+            return None;
+        }
+        self.runs.start_quiet(session)
     }
 
     fn reserve_run(&self, session: hya_proto::SessionId) -> Option<runs::RunGuard> {

@@ -359,8 +359,55 @@ impl SessionStore {
 
     /// Delete ledger and event rows for a session; returns whether any event rows were removed.
     pub async fn delete_session(&self, session: SessionId) -> Result<bool, StoreError> {
+        self.delete_session_where(session, None).await
+    }
+
+    /// Delete the session like [`SessionStore::delete_session`], but only
+    /// when its log still ends at `last_seq` (the newest sequence the caller
+    /// checked). Returns `false`, deleting nothing, when the log grew since
+    /// (or the session is gone). The check and the delete are one write
+    /// statement, so no append can land between them.
+    pub async fn delete_session_at(
+        &self,
+        session: SessionId,
+        last_seq: EventSeq,
+    ) -> Result<bool, StoreError> {
+        self.delete_session_where(session, Some(last_seq)).await
+    }
+
+    async fn delete_session_where(
+        &self,
+        session: SessionId,
+        last_seq: Option<EventSeq>,
+    ) -> Result<bool, StoreError> {
         let key = session.storage_key();
         let mut tx = self.pool.begin().await?;
+        // The event log goes first: its conditional delete is the check (and
+        // takes the write lock), so the side tables below only go with it.
+        let result = match last_seq {
+            None => {
+                sqlx::query("DELETE FROM event_log WHERE session_id = ?")
+                    .bind(key.clone())
+                    .execute(&mut *tx)
+                    .await?
+            }
+            Some(last_seq) => {
+                sqlx::query(
+                    "DELETE FROM event_log WHERE session_id = ? \
+                     AND (SELECT MAX(seq) FROM event_log WHERE session_id = ?) = ?",
+                )
+                .bind(key.clone())
+                .bind(key.clone())
+                .bind(i64::try_from(last_seq.0).unwrap_or(i64::MAX))
+                .execute(&mut *tx)
+                .await?
+            }
+        };
+        let deleted = result.rows_affected() > 0;
+        if !deleted && last_seq.is_some() {
+            tx.rollback().await?;
+            return Ok(false);
+        }
         sqlx::query("DELETE FROM token_ledger WHERE session_id = ?")
             .bind(key.clone())
             .execute(&mut *tx)
@@ -374,16 +421,12 @@ impl SessionStore {
             .execute(&mut *tx)
             .await?;
         sqlx::query("DELETE FROM file_blob WHERE session_id = ?")
-            .bind(key.clone())
-            .execute(&mut *tx)
-            .await?;
-        let result = sqlx::query("DELETE FROM event_log WHERE session_id = ?")
             .bind(key)
             .execute(&mut *tx)
             .await?;
         tx.commit().await?;
         self.projections.remove(session);
-        Ok(result.rows_affected() > 0)
+        Ok(deleted)
     }
 
     /// Fold the session event log into a [`Projection`] via the shared reducer.
