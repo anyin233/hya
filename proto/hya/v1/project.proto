@@ -16,9 +16,8 @@ service Project {
   // hya.http: GET /v1/projects
   rpc ListProjects(ListProjectsRequest) returns (ListProjectsResponse);
 
-  // The Project whose root contains the request's directory scope (the
-  // `x-hya-directory` header, else `directory`), matched like
-  // `ResolveProject`. `invalid_argument` without a scope or for a relative
+  // The Project whose root contains the request's directory scope (its
+  // `directory` field), matched like `ResolveProject`. `invalid_argument` without a scope or for a relative
   // scope; `not_found` when no Project contains it.
   //
   // hya.http: GET /v1/projects/current
@@ -133,7 +132,8 @@ message ListProjectsResponse {
 }
 
 message GetCurrentProjectRequest {
-  // Directory scope; the `x-hya-directory` header overrides it.
+  // Directory scope (absolute). Required: without one the rpc fails with
+  // invalid_argument.
   string directory = 1;
 }
 
@@ -209,7 +209,7 @@ message InitProjectGitResponse {
 }
 
 message GetVcsStatusRequest {
-  // Directory scope (absolute; or the x-hya-directory header). Required:
+  // Directory scope (absolute). Required:
   // without one the rpc fails with invalid_argument (the backend has no
   // working directory of its own).
   string directory = 1;
@@ -256,7 +256,7 @@ message VcsFileChange {
 }
 
 message GetVcsDiffRequest {
-  // Directory scope (absolute; or the x-hya-directory header). Required:
+  // Directory scope (absolute). Required:
   // without one the rpc fails with invalid_argument (the backend has no
   // working directory of its own).
   string directory = 1;
@@ -276,7 +276,7 @@ message GetVcsDiffResponse {
 }
 
 message ApplyPatchRequest {
-  // Directory scope (absolute; or the x-hya-directory header). Required:
+  // Directory scope (absolute). Required:
   // without one the rpc fails with invalid_argument (the backend has no
   // working directory of its own).
   string directory = 1;

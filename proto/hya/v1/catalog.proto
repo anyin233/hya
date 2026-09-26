@@ -119,7 +119,7 @@ enum AuthStatus {
 }
 
 message ListAgentsRequest {
-  // Directory scope (absolute; or the x-hya-directory header). Optional:
+  // Directory scope (absolute). Optional:
   // empty lists the global view (no project sources).
   string directory = 1;
   // Standard pagination controls.
@@ -368,7 +368,7 @@ message TestProviderModelResponse {
 }
 
 message ListCommandsRequest {
-  // Directory scope (absolute; or the x-hya-directory header). Optional:
+  // Directory scope (absolute). Optional:
   // empty lists the global view (no project sources).
   string directory = 1;
   // Standard pagination controls.
@@ -405,7 +405,7 @@ message ListCommandsResponse {
 }
 
 message ListSkillsRequest {
-  // Directory scope (absolute; or the x-hya-directory header). Optional:
+  // Directory scope (absolute). Optional:
   // empty lists the global view (no project sources).
   string directory = 1;
   // Standard pagination controls.
@@ -460,7 +460,7 @@ message ListToolsResponse {
 }
 
 message ListPermissionModesRequest {
-  // Directory scope (absolute; or the x-hya-directory header). Optional:
+  // Directory scope (absolute). Optional:
   // with neither it nor `session`, the global view is listed.
   string directory = 1;
   // List the modes `UpdateSession.permission_mode` accepts for this

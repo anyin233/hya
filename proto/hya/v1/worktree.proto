@@ -42,7 +42,7 @@ message Worktree {
 }
 
 message ListWorktreesRequest {
-  // Directory scope (absolute; or the x-hya-directory header). Required:
+  // Directory scope (absolute). Required:
   // without one the rpc fails with invalid_argument (the backend has no
   // working directory of its own).
   string directory = 1;
@@ -54,7 +54,7 @@ message ListWorktreesResponse {
 }
 
 message CreateWorktreeRequest {
-  // Directory scope (absolute; or the x-hya-directory header). Required:
+  // Directory scope (absolute). Required:
   // without one the rpc fails with invalid_argument (the backend has no
   // working directory of its own).
   string directory = 1;
@@ -69,6 +69,9 @@ message DeleteWorktreeRequest {
   string worktree = 1;
   // Also delete the checked-out branch.
   bool delete_branch = 2;
+  // Directory scope (absolute): the repository the worktree belongs to.
+  // Required: without one the rpc fails with invalid_argument.
+  string directory = 3;
 }
 
 message DeleteWorktreeResponse {}
@@ -76,4 +79,7 @@ message DeleteWorktreeResponse {}
 message ResetWorktreeRequest {
   // Worktree identifier to reset.
   string worktree = 1;
+  // Directory scope (absolute): the repository the worktree belongs to.
+  // Required: without one the rpc fails with invalid_argument.
+  string directory = 2;
 }

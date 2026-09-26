@@ -39,7 +39,7 @@ service BundleApi {
 }
 
 message ListBundleApisRequest {
-  // Directory scope (absolute; or the x-hya-directory header). Optional:
+  // Directory scope (absolute). Optional:
   // with neither it nor `session`, the global view (installed and
   // first-party bundles; no Project bundle) is listed.
   string directory = 1;

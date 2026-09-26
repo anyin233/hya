@@ -528,9 +528,8 @@ first.
 
 ### `Project.GetCurrentProject`
 
-The Project whose root contains the request's directory scope (the
-`x-hya-directory` header, else `directory`), matched like
-`ResolveProject`. `invalid_argument` without a scope or for a relative
+The Project whose root contains the request's directory scope (its
+`directory` field), matched like `ResolveProject`. `invalid_argument` without a scope or for a relative
 scope; `not_found` when no Project contains it.
 
 
@@ -1021,7 +1020,7 @@ OAuth tokens captured from a completed provider flow.
 
 | Field | Type | Description |
 |---|---|---|
-| `directory` (1) | `string` | Directory scope (absolute; or the x-hya-directory header). Optional: with neither it nor `session`, the global view (installed and first-party bundles; no Project bundle) is listed. |
+| `directory` (1) | `string` | Directory scope (absolute). Optional: with neither it nor `session`, the global view (installed and first-party bundles; no Project bundle) is listed. |
 | `session` (2) | `string` | List the endpoints visible to this session (its own catalog scope, Project bundles included). Wins over `directory`. |
 
 ### `BundleApiInfo`
@@ -1097,7 +1096,7 @@ Provider/model identity pair. `model_id` is provider-local.
 
 | Field | Type | Description |
 |---|---|---|
-| `directory` (1) | `string` | Directory scope (absolute; or the x-hya-directory header). Optional: empty lists the global view (no project sources). |
+| `directory` (1) | `string` | Directory scope (absolute). Optional: empty lists the global view (no project sources). |
 | `page` (2) | `PageRequest` | Standard pagination controls. |
 
 ### `AgentSummary`
@@ -1291,7 +1290,7 @@ A provider after a change, applied live.
 
 | Field | Type | Description |
 |---|---|---|
-| `directory` (1) | `string` | Directory scope (absolute; or the x-hya-directory header). Optional: empty lists the global view (no project sources). |
+| `directory` (1) | `string` | Directory scope (absolute). Optional: empty lists the global view (no project sources). |
 | `page` (2) | `PageRequest` | Standard pagination controls. |
 
 ### `CommandSummary`
@@ -1323,7 +1322,7 @@ One slash-command entry.
 
 | Field | Type | Description |
 |---|---|---|
-| `directory` (1) | `string` | Directory scope (absolute; or the x-hya-directory header). Optional: empty lists the global view (no project sources). |
+| `directory` (1) | `string` | Directory scope (absolute). Optional: empty lists the global view (no project sources). |
 | `page` (2) | `PageRequest` | Standard pagination controls. |
 
 ### `SkillSummary`
@@ -1378,7 +1377,7 @@ One tool registry entry.
 
 | Field | Type | Description |
 |---|---|---|
-| `directory` (1) | `string` | Directory scope (absolute; or the x-hya-directory header). Optional: with neither it nor `session`, the global view is listed. |
+| `directory` (1) | `string` | Directory scope (absolute). Optional: with neither it nor `session`, the global view is listed. |
 | `session` (2) | `string` | List the modes `UpdateSession.permission_mode` accepts for this session (its own catalog scope). Wins over `directory`. |
 
 ### `PermissionModeSummary`
@@ -1747,7 +1746,7 @@ automatic mid-turn strategies and by a manual `CompactSession`.
 
 | Field | Type | Description |
 |---|---|---|
-| `directory` (1) | `string` | Directory scope (absolute; or the x-hya-directory header). Required: without one the rpc fails with invalid_argument (the backend has no working directory of its own). |
+| `directory` (1) | `string` | Directory scope (absolute). Required: without one the rpc fails with invalid_argument (the backend has no working directory of its own). |
 | `path` (2) | `string` | File path relative to the directory. |
 | `max_bytes` (3) | `uint64` | Truncate after this many bytes; 0 reads the whole file. |
 
@@ -1765,7 +1764,7 @@ automatic mid-turn strategies and by a manual `CompactSession`.
 
 | Field | Type | Description |
 |---|---|---|
-| `directory` (1) | `string` | Directory scope (absolute; or the x-hya-directory header). Required: without one the rpc fails with invalid_argument (the backend has no working directory of its own). |
+| `directory` (1) | `string` | Directory scope (absolute). Required: without one the rpc fails with invalid_argument (the backend has no working directory of its own). |
 | `path` (2) | `string` | Subdirectory path relative to the directory; empty lists the root. |
 
 ### `DirEntry`
@@ -1791,7 +1790,7 @@ One directory entry.
 
 | Field | Type | Description |
 |---|---|---|
-| `directory` (1) | `string` | Directory scope (absolute; or the x-hya-directory header). Required: without one the rpc fails with invalid_argument (the backend has no working directory of its own). |
+| `directory` (1) | `string` | Directory scope (absolute). Required: without one the rpc fails with invalid_argument (the backend has no working directory of its own). |
 | `pattern` (2) | `string` | Glob pattern matched against relative paths (`**/*.rs`). |
 | `limit` (3) | `uint32` | Maximum paths to return; 0 uses the server default. |
 
@@ -1807,7 +1806,7 @@ One directory entry.
 
 | Field | Type | Description |
 |---|---|---|
-| `directory` (1) | `string` | Directory scope (absolute; or the x-hya-directory header). Required: without one the rpc fails with invalid_argument (the backend has no working directory of its own). |
+| `directory` (1) | `string` | Directory scope (absolute). Required: without one the rpc fails with invalid_argument (the backend has no working directory of its own). |
 | `query` (2) | `string` | Search query (regex when the backend enables it, else literal). |
 | `glob` (3) | `string` | Restrict search to files matching this glob; empty searches all. |
 | `limit` (4) | `uint32` | Maximum matches to return; 0 uses the server default. |
@@ -1834,7 +1833,7 @@ One text search match.
 
 | Field | Type | Description |
 |---|---|---|
-| `directory` (1) | `string` | Directory scope (absolute; or the x-hya-directory header). Required: without one the rpc fails with invalid_argument (the backend has no working directory of its own). |
+| `directory` (1) | `string` | Directory scope (absolute). Required: without one the rpc fails with invalid_argument (the backend has no working directory of its own). |
 | `query` (2) | `string` | Symbol name query. |
 | `limit` (3) | `uint32` | Maximum symbols to return; 0 uses the server default. |
 
@@ -2280,6 +2279,13 @@ One file a session revert or unrevert wrote (or could not restore).
 | `ok` (1) | `bool` | Always `true` when the endpoint answers successfully. |
 | `version` (2) | `string` | Backend version string (workspace release version). |
 
+### `GetLocationRequest`
+
+
+| Field | Type | Description |
+|---|---|---|
+| `directory` (1) | `string` | Directory scope (absolute), echoed in `LocationInfo.directory`. Optional: empty answers an empty `directory`. |
+
 ### `LocationInfo`
 
 Where this backend runs and which directory it serves.
@@ -2325,7 +2331,7 @@ Where this backend runs and which directory it serves.
 
 | Field | Type | Description |
 |---|---|---|
-| `directory` (1) | `string` | Directory scope (absolute; or the x-hya-directory header). Optional: empty lists the global view (no project sources). |
+| `directory` (1) | `string` | Directory scope (absolute). Optional: empty lists the global view (no project sources). |
 
 ### `Bootstrap`
 
@@ -2380,7 +2386,7 @@ One Project.
 
 | Field | Type | Description |
 |---|---|---|
-| `directory` (1) | `string` | Directory scope; the `x-hya-directory` header overrides it. |
+| `directory` (1) | `string` | Directory scope (absolute). Required: without one the rpc fails with invalid_argument. |
 
 ### `ResolveProjectRequest`
 
@@ -2475,7 +2481,7 @@ One Project.
 
 | Field | Type | Description |
 |---|---|---|
-| `directory` (1) | `string` | Directory scope (absolute; or the x-hya-directory header). Required: without one the rpc fails with invalid_argument (the backend has no working directory of its own). |
+| `directory` (1) | `string` | Directory scope (absolute). Required: without one the rpc fails with invalid_argument (the backend has no working directory of its own). |
 
 ### `VcsStatus`
 
@@ -2504,7 +2510,7 @@ One changed file.
 
 | Field | Type | Description |
 |---|---|---|
-| `directory` (1) | `string` | Directory scope (absolute; or the x-hya-directory header). Required: without one the rpc fails with invalid_argument (the backend has no working directory of its own). |
+| `directory` (1) | `string` | Directory scope (absolute). Required: without one the rpc fails with invalid_argument (the backend has no working directory of its own). |
 | `raw` (2) | `bool` | Accepted and ignored: the diff is always git's unified patch (`git diff HEAD` plus untracked files). |
 | `paths` (3) | `repeated string` | Restrict to these paths (git pathspecs relative to the scope directory: a file or a directory prefix); empty diffs everything. Over HTTP repeat the query key (`?paths=a&paths=b`). A path that is absolute or contains `..` is `invalid_argument`. |
 
@@ -2520,7 +2526,7 @@ One changed file.
 
 | Field | Type | Description |
 |---|---|---|
-| `directory` (1) | `string` | Directory scope (absolute; or the x-hya-directory header). Required: without one the rpc fails with invalid_argument (the backend has no working directory of its own). |
+| `directory` (1) | `string` | Directory scope (absolute). Required: without one the rpc fails with invalid_argument (the backend has no working directory of its own). |
 | `patch` (2) | `string` | Unified diff patch to apply. |
 
 ### `ApplyPatchResponse`
@@ -2555,7 +2561,7 @@ State snapshot of one PTY session.
 
 | Field | Type | Description |
 |---|---|---|
-| `directory` (1) | `string` | Directory scope (absolute; or the x-hya-directory header). Required when `cwd` is empty: without either the rpc fails with invalid_argument. |
+| `directory` (1) | `string` | Directory scope (absolute). Required when `cwd` is empty: without either the rpc fails with invalid_argument. |
 | `shell` (2) | `string` | Shell binary name or path; empty picks the default shell. |
 | `cols` (3) | `uint32` | Initial terminal width in columns. |
 | `rows` (4) | `uint32` | Initial terminal height in rows. |
@@ -3159,7 +3165,7 @@ One git worktree.
 
 | Field | Type | Description |
 |---|---|---|
-| `directory` (1) | `string` | Directory scope (absolute; or the x-hya-directory header). Required: without one the rpc fails with invalid_argument (the backend has no working directory of its own). |
+| `directory` (1) | `string` | Directory scope (absolute). Required: without one the rpc fails with invalid_argument (the backend has no working directory of its own). |
 
 ### `ListWorktreesResponse`
 
@@ -3173,7 +3179,7 @@ One git worktree.
 
 | Field | Type | Description |
 |---|---|---|
-| `directory` (1) | `string` | Directory scope (absolute; or the x-hya-directory header). Required: without one the rpc fails with invalid_argument (the backend has no working directory of its own). |
+| `directory` (1) | `string` | Directory scope (absolute). Required: without one the rpc fails with invalid_argument (the backend has no working directory of its own). |
 | `name` (2) | `string` | Worktree name; derived from the branch when empty. |
 | `branch` (3) | `string` | Branch to check out; created from the current HEAD when empty. |
 
@@ -3184,6 +3190,7 @@ One git worktree.
 |---|---|---|
 | `worktree` (1) | `string` | Worktree identifier to delete. |
 | `delete_branch` (2) | `bool` | Also delete the checked-out branch. |
+| `directory` (3) | `string` | Directory scope (absolute): the repository the worktree belongs to. Required: without one the rpc fails with invalid_argument. |
 
 ### `ResetWorktreeRequest`
 
@@ -3191,6 +3198,7 @@ One git worktree.
 | Field | Type | Description |
 |---|---|---|
 | `worktree` (1) | `string` | Worktree identifier to reset. |
+| `directory` (2) | `string` | Directory scope (absolute): the repository the worktree belongs to. Required: without one the rpc fails with invalid_argument. |
 
 ## Enums
 

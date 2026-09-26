@@ -5745,12 +5745,18 @@ impl serde::Serialize for DeleteWorktreeRequest {
         if self.delete_branch {
             len += 1;
         }
+        if !self.directory.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("hya.v1.DeleteWorktreeRequest", len)?;
         if !self.worktree.is_empty() {
             struct_ser.serialize_field("worktree", &self.worktree)?;
         }
         if self.delete_branch {
             struct_ser.serialize_field("deleteBranch", &self.delete_branch)?;
+        }
+        if !self.directory.is_empty() {
+            struct_ser.serialize_field("directory", &self.directory)?;
         }
         struct_ser.end()
     }
@@ -5765,12 +5771,14 @@ impl<'de> serde::Deserialize<'de> for DeleteWorktreeRequest {
             "worktree",
             "delete_branch",
             "deleteBranch",
+            "directory",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Worktree,
             DeleteBranch,
+            Directory,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -5794,6 +5802,7 @@ impl<'de> serde::Deserialize<'de> for DeleteWorktreeRequest {
                         match value {
                             "worktree" => Ok(GeneratedField::Worktree),
                             "deleteBranch" | "delete_branch" => Ok(GeneratedField::DeleteBranch),
+                            "directory" => Ok(GeneratedField::Directory),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -5815,6 +5824,7 @@ impl<'de> serde::Deserialize<'de> for DeleteWorktreeRequest {
             {
                 let mut worktree__ = None;
                 let mut delete_branch__ = None;
+                let mut directory__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Worktree => {
@@ -5829,11 +5839,18 @@ impl<'de> serde::Deserialize<'de> for DeleteWorktreeRequest {
                             }
                             delete_branch__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::Directory => {
+                            if directory__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("directory"));
+                            }
+                            directory__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(DeleteWorktreeRequest {
                     worktree: worktree__.unwrap_or_default(),
                     delete_branch: delete_branch__.unwrap_or_default(),
+                    directory: directory__.unwrap_or_default(),
                 })
             }
         }
@@ -8326,8 +8343,14 @@ impl serde::Serialize for GetLocationRequest {
         S: serde::Serializer,
     {
         use serde::ser::SerializeStruct;
-        let len = 0;
-        let struct_ser = serializer.serialize_struct("hya.v1.GetLocationRequest", len)?;
+        let mut len = 0;
+        if !self.directory.is_empty() {
+            len += 1;
+        }
+        let mut struct_ser = serializer.serialize_struct("hya.v1.GetLocationRequest", len)?;
+        if !self.directory.is_empty() {
+            struct_ser.serialize_field("directory", &self.directory)?;
+        }
         struct_ser.end()
     }
 }
@@ -8338,10 +8361,12 @@ impl<'de> serde::Deserialize<'de> for GetLocationRequest {
         D: serde::Deserializer<'de>,
     {
         const FIELDS: &[&str] = &[
+            "directory",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
+            Directory,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -8362,7 +8387,10 @@ impl<'de> serde::Deserialize<'de> for GetLocationRequest {
                     where
                         E: serde::de::Error,
                     {
-                            Err(serde::de::Error::unknown_field(value, FIELDS))
+                        match value {
+                            "directory" => Ok(GeneratedField::Directory),
+                            _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
+                        }
                     }
                 }
                 deserializer.deserialize_identifier(GeneratedVisitor)
@@ -8380,10 +8408,19 @@ impl<'de> serde::Deserialize<'de> for GetLocationRequest {
                 where
                     V: serde::de::MapAccess<'de>,
             {
-                while map_.next_key::<GeneratedField>()?.is_some() {
-                    let _ = map_.next_value::<serde::de::IgnoredAny>()?;
+                let mut directory__ = None;
+                while let Some(k) = map_.next_key()? {
+                    match k {
+                        GeneratedField::Directory => {
+                            if directory__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("directory"));
+                            }
+                            directory__ = Some(map_.next_value()?);
+                        }
+                    }
                 }
                 Ok(GetLocationRequest {
+                    directory: directory__.unwrap_or_default(),
                 })
             }
         }
@@ -22055,9 +22092,15 @@ impl serde::Serialize for ResetWorktreeRequest {
         if !self.worktree.is_empty() {
             len += 1;
         }
+        if !self.directory.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("hya.v1.ResetWorktreeRequest", len)?;
         if !self.worktree.is_empty() {
             struct_ser.serialize_field("worktree", &self.worktree)?;
+        }
+        if !self.directory.is_empty() {
+            struct_ser.serialize_field("directory", &self.directory)?;
         }
         struct_ser.end()
     }
@@ -22070,11 +22113,13 @@ impl<'de> serde::Deserialize<'de> for ResetWorktreeRequest {
     {
         const FIELDS: &[&str] = &[
             "worktree",
+            "directory",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Worktree,
+            Directory,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -22097,6 +22142,7 @@ impl<'de> serde::Deserialize<'de> for ResetWorktreeRequest {
                     {
                         match value {
                             "worktree" => Ok(GeneratedField::Worktree),
+                            "directory" => Ok(GeneratedField::Directory),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -22117,6 +22163,7 @@ impl<'de> serde::Deserialize<'de> for ResetWorktreeRequest {
                     V: serde::de::MapAccess<'de>,
             {
                 let mut worktree__ = None;
+                let mut directory__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Worktree => {
@@ -22125,10 +22172,17 @@ impl<'de> serde::Deserialize<'de> for ResetWorktreeRequest {
                             }
                             worktree__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::Directory => {
+                            if directory__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("directory"));
+                            }
+                            directory__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(ResetWorktreeRequest {
                     worktree: worktree__.unwrap_or_default(),
+                    directory: directory__.unwrap_or_default(),
                 })
             }
         }
