@@ -54,6 +54,7 @@ fn ctx_with(rules: Vec<Rule>, workdir: PathBuf) -> ToolCtx {
         lsp: LspPlane::default(),
         formatter: hya_tool::FormatterPlane::default(),
         agents: Default::default(),
+        roots: vec![workdir.clone()],
         workdir,
         cancel: CancellationToken::new(),
     }
@@ -510,6 +511,7 @@ async fn bash_happy_and_cancelled() {
         lsp: ctx.lsp.clone(),
         formatter: ctx.formatter.clone(),
         agents: Default::default(),
+        roots: vec![dir.clone()],
         workdir: dir,
         cancel: {
             let t = CancellationToken::new();
@@ -547,6 +549,7 @@ async fn task_tool_is_lead_only() {
         lsp: LspPlane::default(),
         formatter: hya_tool::FormatterPlane::default(),
         agents: Default::default(),
+        roots: vec![dir.clone()],
         workdir: dir,
         cancel: CancellationToken::new(),
     };

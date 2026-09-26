@@ -68,6 +68,7 @@ mod members;
 pub(crate) use members::MemberSpawnRecord;
 mod model_probe;
 mod revert;
+mod roots;
 pub use model_probe::{MODEL_PROBE_PROMPT, ModelProbeReply};
 mod session_cleanup;
 mod session_state;
@@ -118,6 +119,13 @@ pub struct CreateSession {
     pub model: ModelRef,
     /// Working directory string stored on the session.
     pub workdir: String,
+    /// Project the root session belongs to (ADR-0024). Ignored for a
+    /// subagent session, which always carries its parent's Project.
+    pub project: Option<ProjectId>,
+    /// Kind of the root session (ADR-0024). Ignored for a subagent session,
+    /// which always carries its parent's kind. A temporary session never
+    /// belongs to a Project.
+    pub kind: SessionKind,
 }
 
 /// Turn-time agent identity: name, model, prompt, workdir, and reasoning effort.
@@ -1586,15 +1594,20 @@ impl SessionEngine {
     }
 
     /// Project and kind recorded on a new session's `SessionCreated`
-    /// (ADR-0024): a subagent session carries its parent's; a root session
-    /// records no Project yet (`CreateSession` gains project/kind with the
-    /// engine wiring).
-    async fn inherited_project(
+    /// (ADR-0024): a subagent session carries its parent's, whatever the
+    /// spec says; a root session records the spec's own. A temporary root
+    /// session naming a Project is refused.
+    async fn session_project(
         &self,
-        parent: Option<SessionId>,
+        spec: &CreateSession,
     ) -> Result<(Option<ProjectId>, SessionKind), CoreError> {
-        let Some(parent) = parent else {
-            return Ok((None, SessionKind::Project));
+        let Some(parent) = spec.parent else {
+            if spec.kind == SessionKind::Temporary && spec.project.is_some() {
+                return Err(CoreError::Invalid(
+                    "a temporary session cannot belong to a project".to_string(),
+                ));
+            }
+            return Ok((spec.project, spec.kind));
         };
         Ok(self
             .store
@@ -1623,7 +1636,7 @@ impl SessionEngine {
         spec: CreateSession,
     ) -> Result<SessionId, CoreError> {
         let id = SessionId::new();
-        let (project, kind) = self.inherited_project(spec.parent).await?;
+        let (project, kind) = self.session_project(&spec).await?;
         self.commit_resident_mutation(
             claim,
             id,
@@ -1662,7 +1675,7 @@ impl SessionEngine {
         let is_root = spec.parent.is_none();
         let stable_agent_id = spec.agent.as_str().to_string();
         let workdir = PathBuf::from(&spec.workdir);
-        let (project, kind) = self.inherited_project(spec.parent).await?;
+        let (project, kind) = self.session_project(&spec).await?;
         self.emit(
             id,
             Event::SessionCreated {

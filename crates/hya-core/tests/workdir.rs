@@ -193,6 +193,8 @@ async fn run_turn_injects_one_ordered_skill_section_from_session_workdir_not_age
             agent: AgentName::new("build"),
             model: ModelRef::new("fake"),
             workdir: session_dir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -259,6 +261,8 @@ async fn run_turn_shell_tool_uses_session_workdir_not_agent_workdir() {
             agent: AgentName::new("build"),
             model: ModelRef::new("fake"),
             workdir: session_dir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -308,6 +312,8 @@ async fn run_shell_uses_session_workdir_not_agent_workdir() {
             agent: AgentName::new("build"),
             model: ModelRef::new("fake"),
             workdir: session_dir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();

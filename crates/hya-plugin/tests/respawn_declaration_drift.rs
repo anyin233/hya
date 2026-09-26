@@ -84,6 +84,7 @@ fn ctx() -> ToolCtx {
         agents: Default::default(),
         lsp: LspPlane::default(),
         workdir: PathBuf::from("."),
+        roots: vec![PathBuf::from(".")],
         cancel: CancellationToken::new(),
     }
 }

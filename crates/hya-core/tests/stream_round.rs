@@ -156,6 +156,8 @@ async fn stream_round_deltas_are_live_but_replay_commits_final_text_once() {
             agent: AgentName::new("build"),
             model: ModelRef::new("fake"),
             workdir: workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .expect("create session");
@@ -238,6 +240,8 @@ async fn forked_reasoning_provider_data_reaches_next_request() {
             agent: AgentName::new("build"),
             model: ModelRef::new("fake"),
             workdir: workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .expect("create session");

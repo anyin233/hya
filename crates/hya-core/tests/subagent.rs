@@ -1257,6 +1257,8 @@ async fn recorded_observability_never_enters_the_parent_model_input() {
             agent: agent.name.clone(),
             model: agent.model.clone(),
             workdir: agent.workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -1343,6 +1345,8 @@ async fn member_spawn_records_directive_verbatim_and_originating_tool_call() {
             agent: agent.name.clone(),
             model: agent.model.clone(),
             workdir: agent.workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -1455,6 +1459,8 @@ async fn pre_admitted_member_nested_spawn_carries_parent_admission_identity() {
             agent: AgentName::new("build"),
             model: ModelRef::new("fake"),
             workdir: workdir.path().to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -1641,6 +1647,8 @@ async fn provider_streams_partition_100_general_28_reserved_and_root_progresses(
             agent: agent.name.clone(),
             model: agent.model.clone(),
             workdir: agent.workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -1743,6 +1751,8 @@ async fn sidecar_ack_precedes_running_state_provider_poll_and_task_admission() {
             agent: AgentName::new("build"),
             model: ModelRef::new("fake"),
             workdir: "/tmp".to_string(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -1862,6 +1872,8 @@ async fn bundle_sidecar_tool_permission_denial_prevents_dispatch() {
             agent: agent.name.clone(),
             model: agent.model.clone(),
             workdir: agent.workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -1957,6 +1969,8 @@ async fn activation_bound_sidecar_hooks_mutate_tool_and_observe_only_child_event
             agent: agent.name.clone(),
             model: agent.model.clone(),
             workdir: agent.workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -2133,6 +2147,8 @@ async fn plugin_hooks_reach_bundle_subagent_alongside_its_sidecar_hooks() {
             agent: AgentName::new("build"),
             model: agent.model.clone(),
             workdir: agent.workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -2224,6 +2240,8 @@ async fn resident_sidecar_tool_binding_reaches_captured_turn_view() {
             agent: agent.name.clone(),
             model: agent.model.clone(),
             workdir: agent.workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -2302,6 +2320,8 @@ async fn explicit_idle_resident_stop_is_final_idempotent_and_releases_claim() {
             agent: agent.name.clone(),
             model: agent.model.clone(),
             workdir: agent.workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -2403,6 +2423,8 @@ async fn duplicate_stop_shares_cleanup_failure_and_later_retries_cleanup_without
             agent: agent.name.clone(),
             model: agent.model.clone(),
             workdir: agent.workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -2552,6 +2574,8 @@ async fn failed_running_stop_cleanup_cannot_become_ok_after_team_kill() {
             agent: agent.name.clone(),
             model: agent.model.clone(),
             workdir: agent.workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -2706,6 +2730,8 @@ async fn resident_stop_durable_failure_defers_cleanup_and_allows_retry() {
             agent: agent.name.clone(),
             model: agent.model.clone(),
             workdir: agent.workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -2912,6 +2938,8 @@ async fn resident_registration_failure_releases_claim_and_leaves_no_slot() {
             agent: agent.name.clone(),
             model: agent.model.clone(),
             workdir: agent.workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -2921,6 +2949,8 @@ async fn resident_registration_failure_releases_claim_and_leaves_no_slot() {
             agent: agent.name.clone(),
             model: agent.model.clone(),
             workdir: agent.workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -2997,6 +3027,8 @@ async fn explicit_stop_fails_closed_instead_of_taking_over_a_newer_resident_clai
             agent: agent.name.clone(),
             model: agent.model.clone(),
             workdir: agent.workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -3083,6 +3115,8 @@ async fn resident_direct_send_committed_before_stop_is_durably_cancelled() {
             agent: agent.name.clone(),
             model: agent.model.clone(),
             workdir: agent.workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -3207,6 +3241,8 @@ async fn message_budget_kill_terminates_sidecar_and_removes_resident_slot() {
             agent: agent.name.clone(),
             model: agent.model.clone(),
             workdir: agent.workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -3331,6 +3367,8 @@ async fn message_budget_kill_terminate_failure_allows_explicit_cleanup_retry() {
             agent: agent.name.clone(),
             model: agent.model.clone(),
             workdir: agent.workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -3525,6 +3563,8 @@ async fn message_budget_kill_store_failure_preserves_claim_and_slot_for_retry() 
             agent: agent.name.clone(),
             model: agent.model.clone(),
             workdir: agent.workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -3534,6 +3574,8 @@ async fn message_budget_kill_store_failure_preserves_claim_and_slot_for_retry() 
             agent: agent.name.clone(),
             model: agent.model.clone(),
             workdir: agent.workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -3739,6 +3781,8 @@ async fn explicit_running_resident_stop_is_idempotent_fences_and_drops_queued_ma
             agent: agent.name.clone(),
             model: agent.model.clone(),
             workdir: agent.workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -3892,6 +3936,8 @@ async fn resident_replacement_declaration_drift_disables_once_and_releases_claim
             agent: agent.name.clone(),
             model: agent.model.clone(),
             workdir: agent.workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -4076,6 +4122,8 @@ async fn assert_resident_hook_transport_loss(stage: HookLossStage) {
             agent: agent.name.clone(),
             model: agent.model.clone(),
             workdir: agent.workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -4180,6 +4228,8 @@ async fn resident_mailbox_message_waits_for_sidecar_ack_before_running() {
             agent: AgentName::new("build"),
             model: ModelRef::new("fake"),
             workdir: "/tmp".to_string(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -4189,6 +4239,8 @@ async fn resident_mailbox_message_waits_for_sidecar_ack_before_running() {
             agent: AgentName::new("build"),
             model: ModelRef::new("fake"),
             workdir: "/tmp".to_string(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -4280,6 +4332,8 @@ async fn transient_sidecar_loss_interrupts_running_member_before_provider_releas
             agent: AgentName::new("build"),
             model: ModelRef::new("fake"),
             workdir: "/tmp".to_string(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -4348,6 +4402,8 @@ async fn resident_sidecar_ready_failure_terminates_handle_once_and_removes_slot(
             agent: agent.name.clone(),
             model: agent.model.clone(),
             workdir: agent.workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -4357,6 +4413,8 @@ async fn resident_sidecar_ready_failure_terminates_handle_once_and_removes_slot(
             agent: agent.name.clone(),
             model: agent.model.clone(),
             workdir: agent.workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -4452,6 +4510,8 @@ async fn resident_sidecar_ready_failure_finalize_rollback_keeps_slot_for_retry()
             agent: agent.name.clone(),
             model: agent.model.clone(),
             workdir: agent.workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -4461,6 +4521,8 @@ async fn resident_sidecar_ready_failure_finalize_rollback_keeps_slot_for_retry()
             agent: agent.name.clone(),
             model: agent.model.clone(),
             workdir: agent.workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -4613,6 +4675,8 @@ async fn resident_stop_concurrent_with_ready_failure_cleanup_completes_idempoten
             agent: agent.name.clone(),
             model: agent.model.clone(),
             workdir: agent.workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -4622,6 +4686,8 @@ async fn resident_stop_concurrent_with_ready_failure_cleanup_completes_idempoten
             agent: agent.name.clone(),
             model: agent.model.clone(),
             workdir: agent.workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -4729,6 +4795,8 @@ async fn idle_resident_sidecar_loss_is_reaped_before_next_mail() {
             agent: agent.name.clone(),
             model: agent.model.clone(),
             workdir: agent.workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -4825,6 +4893,8 @@ async fn resident_prework_sidecar_loss_rearms_queued_mail_under_recovered_claim(
             agent: agent.name.clone(),
             model: agent.model.clone(),
             workdir: agent.workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -4928,6 +4998,8 @@ async fn running_resident_sidecar_loss_aborts_before_provider_release() {
             agent: agent.name.clone(),
             model: agent.model.clone(),
             workdir: agent.workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -5071,6 +5143,8 @@ async fn resident_running_loss_recover_claim_failure_finalizes_old_claim() {
             agent: agent.name.clone(),
             model: agent.model.clone(),
             workdir: agent.workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -5248,6 +5322,8 @@ async fn resident_running_loss_recovery_transaction_failure_finalizes_recovered_
             agent: agent.name.clone(),
             model: agent.model.clone(),
             workdir: agent.workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -5421,6 +5497,8 @@ async fn resident_running_loss_terminate_failure_disables_and_releases_claim() {
             agent: agent.name.clone(),
             model: agent.model.clone(),
             workdir: agent.workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -5536,6 +5614,8 @@ async fn governor_caps_streaming_concurrency() {
             agent: AgentName::new("build"),
             model: ModelRef::new("fake"),
             workdir: "/tmp".to_string(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -5569,6 +5649,8 @@ async fn governor_rejects_members_beyond_budget() {
             agent: AgentName::new("build"),
             model: ModelRef::new("fake"),
             workdir: "/tmp".to_string(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -5614,6 +5696,8 @@ async fn governor_rejects_spawn_beyond_max_depth() {
             agent: AgentName::new("build"),
             model: ModelRef::new("fake"),
             workdir: "/tmp".to_string(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -5625,6 +5709,8 @@ async fn governor_rejects_spawn_beyond_max_depth() {
             agent: AgentName::new("build"),
             model: ModelRef::new("fake"),
             workdir: "/tmp".to_string(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -5634,6 +5720,8 @@ async fn governor_rejects_spawn_beyond_max_depth() {
             agent: AgentName::new("build"),
             model: ModelRef::new("fake"),
             workdir: "/tmp".to_string(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -5658,6 +5746,8 @@ async fn run_team_records_member_lifecycle_on_lead() {
             agent: AgentName::new("build"),
             model: ModelRef::new("fake"),
             workdir: "/tmp".to_string(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -5698,6 +5788,8 @@ async fn transient_sidecar_shutdown_follows_member_finished() {
             agent: AgentName::new("build"),
             model: ModelRef::new("fake"),
             workdir: "/tmp".to_string(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -5731,6 +5823,8 @@ async fn transient_sidecar_failure_terminates_opaque_handle_once() {
             agent: AgentName::new("build"),
             model: ModelRef::new("fake"),
             workdir: "/tmp".to_string(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -5768,6 +5862,8 @@ async fn transient_sidecar_parent_cancellation_marks_member_cancelled_and_termin
             agent: AgentName::new("build"),
             model: ModelRef::new("fake"),
             workdir: "/tmp".to_string(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -5827,6 +5923,8 @@ async fn transient_sidecar_ack_failure_terminates_opaque_handle_once() {
             agent: AgentName::new("build"),
             model: ModelRef::new("fake"),
             workdir: "/tmp".to_string(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -5859,6 +5957,8 @@ async fn team_evidence_envelope_has_no_transcript_leak() {
             agent: AgentName::new("build"),
             model: ModelRef::new("fake"),
             workdir: "/tmp".to_string(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -5926,6 +6026,8 @@ async fn run_team_can_resume_existing_member_session() {
             agent: AgentName::new("build"),
             model: ModelRef::new("fake"),
             workdir: "/tmp".to_string(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -5935,6 +6037,8 @@ async fn run_team_can_resume_existing_member_session() {
             agent: AgentName::new("build"),
             model: ModelRef::new("fake"),
             workdir: "/tmp".to_string(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -5976,6 +6080,8 @@ async fn run_team_resume_reuses_member_and_roster_handle() {
             agent: AgentName::new("build"),
             model: ModelRef::new("fake"),
             workdir: "/tmp".to_string(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -5985,6 +6091,8 @@ async fn run_team_resume_reuses_member_and_roster_handle() {
             agent: AgentName::new("build"),
             model: ModelRef::new("fake"),
             workdir: "/tmp".to_string(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -6112,6 +6220,8 @@ async fn run_team_marks_failed_member_without_session_on_engine_error() {
             agent: AgentName::new("build"),
             model: ModelRef::new("fake"),
             workdir: "/tmp".to_string(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -6182,6 +6292,8 @@ async fn run_team_preserves_input_member_order_with_mixed_outcomes() {
             agent: AgentName::new("build"),
             model: ModelRef::new("fake"),
             workdir: "/tmp".to_string(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();

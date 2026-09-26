@@ -207,6 +207,8 @@ async fn fixture(
             agent: agent.name.clone(),
             model: agent.model.clone(),
             workdir: workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();

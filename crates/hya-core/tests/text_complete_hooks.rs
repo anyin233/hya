@@ -85,6 +85,8 @@ async fn text_complete_replaces_assistant_text_before_projection_finishes() {
             agent: AgentName::new("build"),
             model: ModelRef::new("fake"),
             workdir: ".".to_string(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();

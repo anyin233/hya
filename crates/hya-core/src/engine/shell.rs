@@ -451,6 +451,9 @@ impl SessionEngine {
                             lsp: self.lsp.clone(),
                             formatter: self.formatter.clone(),
                             workdir: binding.workdir().to_path_buf(),
+                            roots: self
+                                .session_roots(session, &projection, binding.workdir())
+                                .await,
                             cancel,
                         };
                         file_capture = Box::pin(super::file_snapshot::capture_before(

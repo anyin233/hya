@@ -139,6 +139,8 @@ async fn team() -> Team {
             agent: AgentName::new("build"),
             model: ModelRef::new("fake"),
             workdir: ".".to_string(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();

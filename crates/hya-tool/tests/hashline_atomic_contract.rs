@@ -115,6 +115,7 @@ fn ctx_with_formatter_session(
         lsp: LspPlane::default(),
         formatter,
         agents: Default::default(),
+        roots: vec![workdir.clone()],
         workdir,
         cancel,
     }

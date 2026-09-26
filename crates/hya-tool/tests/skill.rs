@@ -95,6 +95,7 @@ fn ctx_with(rules: Vec<Rule>, skills: SkillPlane) -> ToolCtx {
         artifacts: ArtifactPlane::default(),
         agents: Default::default(),
         workdir: PathBuf::from("."),
+        roots: vec![PathBuf::from(".")],
         cancel: CancellationToken::new(),
     }
 }

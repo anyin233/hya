@@ -103,6 +103,13 @@ MCP/plugin discovery I/O; the engine only rebinds after a successful refresh.
 - agent name
 - model reference
 - workdir
+- Project and kind (ADR-0024)
+
+`CreateSession.project` / `CreateSession.kind` apply to a **root** session
+only. A subagent session always records its parent's Project and kind,
+whatever its spec says. A temporary root session naming a Project is refused
+(`CoreError::Invalid`). A fork (`parent: None`) passes its source's Project
+and kind, so it stays in the same Project.
 
 `create_with_id(id, spec)` is **idempotent**: if the supplied id already has
 events in the log it returns immediately without re-emitting `SessionCreated`.
@@ -113,6 +120,26 @@ That makes resume, fork, and recovery paths safe to call unconditionally.
 
 Parent sessions are used by goal, loop, and team-related helpers to keep child
 runs connected to a lead session.
+
+### Workspace roots
+
+Every turn resolves the session's workspace roots once, at turn start, and
+hands them to each tool call as `ToolCtx::roots` (`SessionEngine::session_roots`,
+[`engine/roots.rs`](../../crates/hya-core/src/engine/roots.rs)). Shell turns
+resolve them the same way. They are read from the store fresh per turn, so a
+Project rename or root replacement applies to the next turn, never mid-turn.
+
+| Session | `roots` |
+| --- | --- |
+| `kind: project` with a Project | the Project's roots in order; the workdir is prepended when it lies inside none of them (component-wise containment) |
+| `kind: project` whose Project was deleted (or cannot be read) | `[workdir]`, with a warning |
+| `kind: project` with no Project, or `kind: temporary` | `[workdir]` |
+
+A session created from a local cwd inside a root keeps `workdir = cwd`; the
+roots stay the Project's. Subagent sessions inherit their parent's Project,
+so they see the same roots. `ToolCtx::workdir` and `bind_session_runtime`
+(bundles, skills, AGENTS context) keep using the workdir; path permission
+checks do not consult `roots` yet.
 
 ## Prompt Admission
 
@@ -929,7 +956,7 @@ cut with `hya_core::fork_cut` over the source's **visible** messages
 
 `messageId` must name a visible user message of the source (`invalid_argument`
 for another role, `not_found` when absent). The server then creates the
-session (source agent, model, workdir), records
+session (source agent, model, workdir, Project, kind), records
 `session_forked { source, before_message }` (the cut, `None` for a head
 fork), titles it `<source title> (fork)` (the source id when the source has
 no title or a default one; a fork of a fork keeps one suffix, so automatic

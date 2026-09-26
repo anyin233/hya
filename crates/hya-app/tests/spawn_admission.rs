@@ -488,6 +488,8 @@ async fn inline_child_spawns_through_its_authorized_base_roster() {
             agent: base.name,
             model: base.model,
             workdir: base.workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -1083,6 +1085,8 @@ async fn admission_fixture_with_store_and_gate(
             agent: agent.name,
             model: agent.model,
             workdir: agent.workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -1196,6 +1200,8 @@ async fn queued_spawn_uses_parent_turn_binding_after_catalog_publication() {
             agent: base.name.clone(),
             model: base.model.clone(),
             workdir: workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -1416,6 +1422,8 @@ async fn guidance_spawn_fixture(
             agent: agent.name.clone(),
             model: agent.model.clone(),
             workdir: agent.workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -2170,6 +2178,8 @@ async fn nested_first_resident_main_synthesis_uses_root_definition_not_caller() 
             agent: AgentName::new("root-main"),
             model: ModelRef::new("fake"),
             workdir: workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -2180,6 +2190,8 @@ async fn nested_first_resident_main_synthesis_uses_root_definition_not_caller() 
             agent: AgentName::new("planner"),
             model: ModelRef::new("fake"),
             workdir: workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -2414,6 +2426,8 @@ async fn missing_root_definition_fails_before_admission_for_resident_batch() {
             agent: AgentName::new("ghost-root"),
             model: ModelRef::new("fake"),
             workdir: workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -2423,6 +2437,8 @@ async fn missing_root_definition_fails_before_admission_for_resident_batch() {
             agent: AgentName::new("planner"),
             model: ModelRef::new("fake"),
             workdir: workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();

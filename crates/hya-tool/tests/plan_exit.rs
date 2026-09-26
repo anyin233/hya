@@ -34,6 +34,7 @@ fn ctx_with(interaction: InteractionPlane, session: SessionId) -> ToolCtx {
         formatter: hya_tool::FormatterPlane::default(),
         agents: Default::default(),
         workdir: PathBuf::from("."),
+        roots: vec![PathBuf::from(".")],
         cancel: CancellationToken::new(),
     }
 }

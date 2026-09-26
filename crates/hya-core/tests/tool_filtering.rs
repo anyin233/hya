@@ -103,6 +103,8 @@ async fn completion_request(
             agent: AgentName::new("build"),
             model: ModelRef::new(model),
             workdir: dir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();

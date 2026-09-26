@@ -45,6 +45,7 @@ fn ctx_with(rules: Vec<Rule>) -> ToolCtx {
         formatter: hya_tool::FormatterPlane::default(),
         agents: Default::default(),
         workdir: PathBuf::from("."),
+        roots: vec![PathBuf::from(".")],
         cancel: CancellationToken::new(),
     }
 }

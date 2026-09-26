@@ -324,6 +324,8 @@ async fn agent_origin_decides_the_visible_tool_skill_and_mcp_plane() {
                 agent: AgentName::new(stable_id),
                 model: ModelRef::new("fake"),
                 workdir: workdir.path().to_string_lossy().into_owned(),
+                project: None,
+                kind: hya_proto::SessionKind::Project,
             })
             .await
             .unwrap();
@@ -489,6 +491,8 @@ async fn canonical_allow_deny_and_alias_share_schema_and_dispatch() {
             agent: AgentName::new("alias-agent"),
             model: ModelRef::new("fake"),
             workdir: workdir.path().to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -655,6 +659,8 @@ async fn mcp_selected_public_name_dispatches_once_with_canonical_permission() {
             agent: AgentName::new("general"),
             model: ModelRef::new("fake"),
             workdir: workdir.path().to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();

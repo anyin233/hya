@@ -17,7 +17,11 @@ remain in `hya-tool` so host authority stays with the session runtime.
 
 - `Tool`: name, schema, async execute.
 - `ToolCtx`: permission plane, interaction/spawner/todo/skill/websearch/LSP/
-  formatter/`WorkflowPlane` planes, session ids, workdir, cancellation token.
+  formatter/`WorkflowPlane` planes, session ids, workdir, workspace `roots`,
+  cancellation token. `roots` are the session's ordered, deduplicated
+  workspace roots resolved at turn start (ADR-0024; see
+  [Workspace roots](runtime.md#workspace-roots)). They are carried only:
+  path permission checks still resolve against `workdir`.
 - `ToolRegistry`: name-to-tool map, aliases, and model-facing schemas.
 
 `ToolRegistry::builtins()` installs **27** canonical schema names before model

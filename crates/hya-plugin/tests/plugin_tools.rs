@@ -100,6 +100,7 @@ fn ctx_with(session: SessionId) -> ToolCtx {
         agents: Default::default(),
         lsp: LspPlane::default(),
         workdir: PathBuf::from("."),
+        roots: vec![PathBuf::from(".")],
         cancel: CancellationToken::new(),
     }
 }

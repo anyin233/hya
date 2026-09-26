@@ -32,6 +32,8 @@ fn spec() -> CreateSession {
         agent: AgentName::new("build"),
         model: ModelRef::new("fake"),
         workdir: "/tmp/hya-core-session-cleanup".to_string(),
+        project: None,
+        kind: hya_proto::SessionKind::Project,
     }
 }
 

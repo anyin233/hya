@@ -50,6 +50,7 @@ fn ctx_with_session(session: SessionId, rules: Vec<Rule>, websearch: WebSearchPl
         formatter: hya_tool::FormatterPlane::default(),
         agents: Default::default(),
         workdir: PathBuf::from("."),
+        roots: vec![PathBuf::from(".")],
         cancel: CancellationToken::new(),
     }
 }

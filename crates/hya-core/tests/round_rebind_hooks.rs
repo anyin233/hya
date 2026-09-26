@@ -166,6 +166,8 @@ async fn root_second_round_adopts_new_hook_when_first_round_had_none() {
             agent: AgentName::new("general"),
             model: ModelRef::new("fake"),
             workdir: workdir.path().to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();

@@ -1052,7 +1052,8 @@ Only `permission` is protected from rewriting by `tool.execute.after` hooks.
 
 All builtin schemas are registered before runtime capabilities are considered.
 `ToolCtx` carries permission, interaction, spawner, mailbox, todo, skills, web
-search, LSP, formatter, workdir, session, and cancellation planes/resources,
+search, LSP, formatter, workdir, workspace roots, session, and cancellation
+planes/resources,
 plus an immutable caller-reachable `AgentDef` roster derived from the bound
 agent's `can_spawn` reachability (not a mutable agent catalog plane). The
 single `BundleCatalog` authority lives on `RuntimeSnapshot` / `TurnBinding`;

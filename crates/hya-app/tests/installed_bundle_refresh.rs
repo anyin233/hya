@@ -46,6 +46,7 @@ fn process_tool_ctx(workdir: &std::path::Path) -> ToolCtx {
         formatter: hya_tool::FormatterPlane::default(),
         agents: Default::default(),
         workdir: workdir.to_path_buf(),
+        roots: vec![workdir.to_path_buf()],
         cancel: tokio_util::sync::CancellationToken::new(),
     }
 }
@@ -430,6 +431,8 @@ async fn installed_workflow_refresh_publishes_workflow_and_agent_atomically_and_
             agent: AgentName::new("general"),
             model: ModelRef::new("hya/offline"),
             workdir: workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .expect("create root session");

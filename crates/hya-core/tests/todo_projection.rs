@@ -112,6 +112,8 @@ async fn the_todo_list_survives_a_restart_and_the_next_edit_builds_on_it() {
             agent: AgentName::new("build"),
             model: ModelRef::new("fake"),
             workdir: dir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -157,6 +159,8 @@ async fn a_session_without_todos_updated_reads_its_todo_tool_results() {
             agent: AgentName::new("build"),
             model: ModelRef::new("fake"),
             workdir: dir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();

@@ -122,6 +122,8 @@ async fn fixture(dir: &Path, script: Vec<Vec<FakeStep>>) -> Fixture {
             agent: AgentName::new("build"),
             model: ModelRef::new("fake"),
             workdir: dir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();

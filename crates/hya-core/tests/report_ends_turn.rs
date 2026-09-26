@@ -190,6 +190,8 @@ async fn team(provider: Arc<ScriptProvider>) -> Team {
             agent: AgentName::new("lead"),
             model: ModelRef::new("fake"),
             workdir: ".".to_string(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();

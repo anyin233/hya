@@ -572,6 +572,8 @@ async fn run_loop_with_predicate_stops_on_first_judgment() {
             agent: agent.name.clone(),
             model: agent.model.clone(),
             workdir: agent.workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -631,6 +633,8 @@ async fn run_loop_with_should_stop_hook_stops_after_first_iteration() {
             agent: agent.name.clone(),
             model: agent.model.clone(),
             workdir: agent.workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();

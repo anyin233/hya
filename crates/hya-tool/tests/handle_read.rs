@@ -59,6 +59,7 @@ fn ctx_with(workdir: PathBuf, artifacts: ArtifactPlane) -> ToolCtx {
         websearch: WebSearchPlane::default(),
         lsp: LspPlane::default(),
         formatter: hya_tool::FormatterPlane::default(),
+        roots: vec![workdir.clone()],
         workdir,
         cancel: CancellationToken::new(),
     }

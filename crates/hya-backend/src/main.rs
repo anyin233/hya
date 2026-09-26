@@ -166,6 +166,8 @@ async fn cmd_exec(
             agent: agent.name.clone(),
             model: session_model,
             workdir: agent.workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .context("create session")?;
@@ -392,6 +394,8 @@ async fn cmd_rpc(model_override: Option<String>, yolo: bool, pure: bool) -> anyh
             agent: agent.name.clone(),
             model: session_model,
             workdir: agent.workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .context("create session")?;
@@ -532,6 +536,8 @@ async fn cmd_goal(
             agent: agent.name.clone(),
             model: session_model,
             workdir: agent.workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .context("create session")?;
@@ -687,6 +693,8 @@ async fn cmd_loop(
             agent: agent.name.clone(),
             model: session_model,
             workdir: agent.workdir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .context("create session")?;

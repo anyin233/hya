@@ -782,6 +782,8 @@ async fn root_turn_missing_definition_fails_closed_without_general_fallback() {
             agent: AgentName::new("ghost"),
             model: ModelRef::new("session-model"),
             workdir: workdir.path().to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -831,6 +833,8 @@ async fn root_turn_prompt_none_preserves_composed_base_and_appends_skills_once()
             agent: AgentName::new("build"),
             model: ModelRef::new("session-model"),
             workdir: workdir.path().to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -894,6 +898,8 @@ async fn root_turn_bundle_prompt_replaces_base_and_sees_no_workdir_skill() {
             agent: AgentName::new("bundle-explorer"),
             model: ModelRef::new("session-model"),
             workdir: workdir.path().to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -961,6 +967,8 @@ async fn root_turn_session_model_and_model_switched_win_over_base_and_bundle_def
             agent: AgentName::new("build"),
             model: ModelRef::new("created-session-model"),
             workdir: workdir.path().to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -1035,6 +1043,8 @@ async fn root_turn_bundle_reasoning_override_and_absent_preserves_base() {
             agent: AgentName::new("with-reasoning"),
             model: ModelRef::new("session-model"),
             workdir: workdir.path().to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -1057,6 +1067,8 @@ async fn root_turn_bundle_reasoning_override_and_absent_preserves_base() {
             agent: AgentName::new("no-reasoning"),
             model: ModelRef::new("session-model"),
             workdir: workdir.path().to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -1110,6 +1122,8 @@ async fn root_turn_session_workdir_wins_over_bundle_and_base_workdir() {
             agent: AgentName::new("build"),
             model: ModelRef::new("session-model"),
             workdir: session_dir.path().to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -1160,6 +1174,8 @@ async fn root_turn_records_one_turn_binding() {
             agent: AgentName::new("build"),
             model: ModelRef::new("session-model"),
             workdir: workdir.path().to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -1228,6 +1244,8 @@ async fn root_sidecar_resolver_uses_captured_binding_and_acks_before_model_poll(
             agent: AgentName::new("build"),
             model: ModelRef::new("session-model"),
             workdir: workdir.path().to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -1419,6 +1437,8 @@ async fn root_sidecar_length_completion_gracefully_shuts_down() {
             agent: AgentName::new("build"),
             model: ModelRef::new("session-model"),
             workdir: workdir.path().to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -1489,6 +1509,8 @@ async fn root_sidecar_loss_after_ack_fails_before_dispatch_and_model_poll() {
             agent: AgentName::new("build"),
             model: ModelRef::new("session-model"),
             workdir: workdir.path().to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -1574,6 +1596,8 @@ async fn root_sidecar_loss_during_model_terminates_before_released_output() {
             agent: AgentName::new("build"),
             model: ModelRef::new("session-model"),
             workdir: workdir.path().to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -1685,6 +1709,8 @@ async fn root_sidecar_activation_dispatcher_observes_post_ack_turn_events() {
             agent: AgentName::new("build"),
             model: ModelRef::new("session-model"),
             workdir: workdir.path().to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -1815,6 +1841,8 @@ async fn root_sidecar_after_hook_transport_loss_fences_tool_event_before_commit(
             agent: AgentName::new("build"),
             model: ModelRef::new("session-model"),
             workdir: workdir.path().to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -1912,6 +1940,8 @@ async fn root_sidecar_before_hook_transport_loss_stops_before_after_hook_or_comm
             agent: AgentName::new("build"),
             model: ModelRef::new("session-model"),
             workdir: workdir.path().to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -2002,6 +2032,8 @@ async fn root_sidecar_event_transport_loss_stops_before_model_poll() {
             agent: AgentName::new("build"),
             model: ModelRef::new("session-model"),
             workdir: workdir.path().to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -2082,6 +2114,8 @@ async fn root_sidecar_shutdown_failure_is_not_reported_as_success() {
             agent: AgentName::new("build"),
             model: ModelRef::new("session-model"),
             workdir: workdir.path().to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();
@@ -2152,6 +2186,8 @@ async fn root_sidecar_cancel_while_factory_start_is_pending_stops_before_model_p
             agent: AgentName::new("build"),
             model: ModelRef::new("session-model"),
             workdir: workdir.path().to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();

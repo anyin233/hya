@@ -73,6 +73,7 @@ fn ctx_with_session(workdir: PathBuf, session: Option<SessionId>) -> ToolCtx {
         lsp: LspPlane::default(),
         formatter: hya_tool::FormatterPlane::default(),
         agents: Default::default(),
+        roots: vec![workdir.clone()],
         workdir,
         cancel: CancellationToken::new(),
     }

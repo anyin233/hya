@@ -53,6 +53,7 @@ fn ctx_with_formatter(rules: Vec<Rule>, workdir: PathBuf, formatter: FormatterPl
         lsp: LspPlane::default(),
         formatter,
         agents: Default::default(),
+        roots: vec![workdir.clone()],
         workdir,
         cancel: CancellationToken::new(),
     }

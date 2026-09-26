@@ -91,6 +91,8 @@ async fn run_turn_uses_session_selected_model() {
             agent: AgentName::new("build"),
             model: ModelRef::new("base"),
             workdir: dir.to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .unwrap();

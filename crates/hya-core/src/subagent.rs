@@ -258,6 +258,8 @@ async fn run_member(
                             agent: spec.agent.name.clone(),
                             model: spec.agent.model.clone(),
                             workdir: spec.agent.workdir.to_string_lossy().into_owned(),
+                            project: None,
+                            kind: hya_proto::SessionKind::Project,
                         },
                     )
                     .await?
@@ -269,6 +271,8 @@ async fn run_member(
                         agent: spec.agent.name.clone(),
                         model: spec.agent.model.clone(),
                         workdir: spec.agent.workdir.to_string_lossy().into_owned(),
+                        project: None,
+                        kind: hya_proto::SessionKind::Project,
                     })
                     .await?
             }
@@ -903,6 +907,8 @@ mod handle_tests {
                 agent: AgentName::new("build"),
                 model: ModelRef::new("fake"),
                 workdir: ".".to_string(),
+                project: None,
+                kind: hya_proto::SessionKind::Project,
             })
             .await
             .unwrap()
@@ -940,6 +946,8 @@ mod handle_tests {
                 agent: AgentName::new(ty),
                 model: ModelRef::new("fake"),
                 workdir: ".".to_string(),
+                project: None,
+                kind: hya_proto::SessionKind::Project,
             })
             .await
             .unwrap();

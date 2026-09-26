@@ -108,6 +108,7 @@ fn ctx_with_components(workdir: PathBuf, cancel: CancellationToken, rules: Vec<R
         lsp: LspPlane::default(),
         formatter: hya_tool::FormatterPlane::default(),
         agents: Default::default(),
+        roots: vec![workdir.clone()],
         workdir,
         cancel,
     }

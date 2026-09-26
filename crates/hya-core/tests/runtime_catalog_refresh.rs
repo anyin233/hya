@@ -166,6 +166,8 @@ async fn root_turn_refreshes_installed_catalog_before_agent_resolution() {
             agent: AgentName::new("installed-agent"),
             model: model.clone(),
             workdir: workdir.path().to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .expect("create root session");
@@ -224,6 +226,8 @@ async fn root_shell_refreshes_catalog_before_agent_resolution() {
             agent: AgentName::new("installed-agent"),
             model: model.clone(),
             workdir: workdir.path().to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .expect("create root session");
@@ -286,6 +290,8 @@ async fn loop_children_reuse_one_root_catalog_binding() {
             agent: agent.name.clone(),
             model: agent.model.clone(),
             workdir: workdir.path().to_string_lossy().into_owned(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await
         .expect("create loop root session");

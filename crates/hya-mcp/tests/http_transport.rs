@@ -98,6 +98,7 @@ fn ctx_allowing_mcp() -> hya_tool::ToolCtx {
         formatter: hya_tool::FormatterPlane::default(),
         agents: Default::default(),
         workdir: std::env::temp_dir(),
+        roots: vec![std::env::temp_dir()],
         cancel: tokio_util::sync::CancellationToken::new(),
     }
 }

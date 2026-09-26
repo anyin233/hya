@@ -71,6 +71,9 @@ async fn create_session(
             agent,
             model: hya_proto::ModelRef::new(request.model.clone()),
             workdir: request.workdir.clone(),
+            // set by 1.4: the v1 request names its Project and kind.
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         })
         .await?;
     if !request.title.is_empty() {
@@ -320,6 +323,9 @@ async fn fork_session(
                 .workdir
                 .clone()
                 .unwrap_or_else(|| st.agent.workdir.to_string_lossy().into_owned()),
+            // A fork stays in its source's Project and keeps its kind.
+            project: projection.session.project,
+            kind: projection.session.kind,
         })
         .await?;
     st.engine
