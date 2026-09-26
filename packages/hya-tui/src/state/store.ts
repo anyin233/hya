@@ -20,15 +20,18 @@ import { batch, createSignal, type Accessor, type Setter } from "solid-js"
 import { apiOperationNames, operations } from "../api"
 import type { VimMode } from "../composer/vim"
 import type {
+  AgentModelState,
   AgentSummary,
   Bootstrap,
   CommandSummary,
   Interaction,
+  McpServerStatus,
   MemberInfo,
   MessageInfo,
   ModelSummary,
   StreamEvent,
   ProviderSummary,
+  SavedRule,
   SessionInfo,
   TodoItem,
   TokenUsage,
@@ -37,14 +40,18 @@ import type {
 import type { WebInfo } from "../cli"
 import type { CompletionContext } from "../completion"
 import type { View } from "../instructions"
+import type { AgentModelsViewState } from "./agentModels"
+import type { DiffViewState } from "./diff"
 import { toggledSidebar, type SidebarMode } from "./layout"
 import { foldMember, type ChildState } from "./members"
+import type { McpViewState } from "./mcp"
 import { mergeTranscript, TranscriptOverlay, type OverlayEffect } from "./overlay"
 import { mergeInteractions } from "./prompts"
 import { compactionText } from "./format"
 import { manualMode, modeCycle, modeNotice, type ModeConfirm, type PermissionModeInfo } from "./modes"
 import type { ActivePicker, PickerState } from "./picker"
 import type { ProviderViewState } from "./providers"
+import type { RulesViewState } from "./rules"
 
 /** A prompt submitted while a turn runs; sent when the session is free. */
 export interface QueuedPrompt {
@@ -89,6 +96,20 @@ export interface AppState {
   readonly status: string
   /** The full-screen Provider View (`/key`, state/providers.ts), while open. */
   readonly providerView: ProviderViewState | undefined
+  /** The full-screen Diff View (`/diff`, state/diff.ts), while open. */
+  readonly diffView: DiffViewState | undefined
+  /** The full-screen MCP View (`/mcp`, state/mcp.ts), while open. */
+  readonly mcpView: McpViewState | undefined
+  /** `GetMcpStatus`: every configured MCP server, read when `/mcp` opens. */
+  readonly mcpServers: McpServerStatus[]
+  /** The full-screen Saved Rules view (`/rules`, state/rules.ts), while open. */
+  readonly rulesView: RulesViewState | undefined
+  /** `ListSavedRules`: saved permission rules, read when `/rules` opens. */
+  readonly savedRules: SavedRule[]
+  /** The full-screen Agent Models view (`/agent-models`, state/agentModels.ts), while open. */
+  readonly agentModelsView: AgentModelsViewState | undefined
+  /** `ListAgentModels`: effective base model of every catalog agent, read when `/agent-models` opens. */
+  readonly agentModelRows: AgentModelState[]
   /** Sidebar mode (state/layout.ts): `auto` follows the terminal width. */
   readonly sidebar: SidebarMode
   /** Terminal width in columns, kept current by the root layout. */
@@ -233,6 +254,13 @@ function initialState(): { [K in keyof AppState]: AppState[K] } {
     apiOutput: "Use /api METHOD /v1/path [JSON object] to call any HTTP/JSON endpoint.\n\n" + operations(),
     status: startupStatus,
     providerView: undefined,
+    diffView: undefined,
+    mcpView: undefined,
+    mcpServers: [],
+    rulesView: undefined,
+    savedRules: [],
+    agentModelsView: undefined,
+    agentModelRows: [],
     sidebar: "auto",
     columns: 80,
     thinking: false,
@@ -652,6 +680,21 @@ export function createAppStore() {
         set("models", models)
       })
     },
+
+    /** Open, update, or (`undefined`) close the Diff View (`/diff`). */
+    setDiffView(view: DiffViewState | undefined): void { set("diffView", view) },
+
+    /** Open, update, or (`undefined`) close the MCP View (`/mcp`). */
+    setMcpView(view: McpViewState | undefined): void { set("mcpView", view) },
+    setMcpServers(servers: McpServerStatus[]): void { set("mcpServers", servers) },
+
+    /** Open, update, or (`undefined`) close the Saved Rules view (`/rules`). */
+    setRulesView(view: RulesViewState | undefined): void { set("rulesView", view) },
+    setSavedRules(rules: SavedRule[]): void { set("savedRules", rules) },
+
+    /** Open, update, or (`undefined`) close the Agent Models view (`/agent-models`). */
+    setAgentModelsView(view: AgentModelsViewState | undefined): void { set("agentModelsView", view) },
+    setAgentModelRows(rows: AgentModelState[]): void { set("agentModelRows", rows) },
 
     completionContext(): CompletionContext {
       return {

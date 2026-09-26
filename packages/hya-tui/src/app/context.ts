@@ -3,9 +3,10 @@ import { createContext, useContext } from "solid-js"
 import type { AppStore } from "../state/store"
 import type { Controller } from "./controller"
 
-/** Imperative handles registered by mounted components (the transcript's scroll actions). */
+/** Imperative handles registered by mounted components (the transcript's and Diff view's scroll actions). */
 export interface UiHandles {
   transcript?: TranscriptScroller
+  diff?: DiffScroller
 }
 
 export interface TranscriptScroller {
@@ -13,6 +14,16 @@ export interface TranscriptScroller {
   page(direction: -1 | 1): void
   top(): void
   /** Jump to the newest line and follow it again. */
+  bottom(): void
+}
+
+/** The Diff view's open file body (components/DiffView.tsx); mirrors `TranscriptScroller` plus a single-line step. */
+export interface DiffScroller {
+  /** Scroll by one line; `-1` up, `1` down. */
+  line(direction: -1 | 1): void
+  /** Scroll by one page; `-1` up, `1` down. */
+  page(direction: -1 | 1): void
+  top(): void
   bottom(): void
 }
 

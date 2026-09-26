@@ -65,9 +65,14 @@ import { createPicker, pickerHighlighted, pickerKey as pickerKeyOutcome, type Pi
 import { askFrameRoute, globalAskRoute, type PromptChoice } from "../state/prompts"
 import { defaultModelRef } from "../state/providers"
 import type { AppStore } from "../state/store"
+import { createAgentModelsController } from "./agentModels"
+import type { UiHandles } from "./context"
+import { createDiffController } from "./diff"
+import { createMcpController } from "./mcp"
 import { createModeSwitcher } from "./modes"
 import { createProviderController } from "./providers"
 import { answerPrompt } from "./prompts"
+import { createRulesController } from "./rules"
 import { createDebounce } from "./debounce"
 import { createTurnRunner, turnEndStatus } from "./turns"
 import { tuiVersion } from "../version"
@@ -587,10 +592,20 @@ export function createController({ client, store, directory, registry = createCo
     refresh,
     pickModel: (provider, onChosen) => openModelPicker({ store, client, actions }, { title: `Model · pick one of ${provider}'s models for this session`, highlight: provider, onChosen }),
   })
+  /** Imperative handles registered by mounted components (the transcript's and Diff view's scroll actions); shared with the AppContext `ui` prop (app/run.tsx). */
+  const ui: UiHandles = {}
+  const diffView = createDiffController({ store, client, ui })
+  const mcp = createMcpController({ store, client, copyText: (text) => terminal?.copy(text) ?? false })
+  const rules = createRulesController({ store, client })
+  const agentModels = createAgentModelsController({ store, client, openPicker })
 
   const actions: AppActions = {
     refresh, refreshMessages, openSession, newSession, scheduleRefresh, openHelp, openEditor,
     openProviders: () => providers.open(),
+    openDiff: () => diffView.open(),
+    openMcp: () => mcp.open(),
+    openRules: () => rules.open(),
+    openAgentModels: () => agentModels.open(),
     copyText: (text) => terminal?.copy(text) ?? false,
     cancelTurn: () => turns.cancel(),
     quit,
@@ -683,6 +698,10 @@ export function createController({ client, store, directory, registry = createCo
     refreshLater.cancel()
     if (flushTimer) clearTimeout(flushTimer)
     providers.dispose()
+    diffView.dispose()
+    mcp.dispose()
+    rules.dispose()
+    agentModels.dispose()
     unsubscribeFocus?.()
   }
 
@@ -714,6 +733,17 @@ export function createController({ client, store, directory, registry = createCo
     providerKey: (key: KeyLike) => providers.key(key),
     providerPaste: (text: string) => providers.paste(text),
     closeProviders: () => providers.close(),
+    /** One key while the Diff / MCP / Saved Rules / Agent Models view is open (components/Composer.tsx routes them). */
+    diffKey: (key: KeyLike) => diffView.key(key),
+    closeDiff: () => diffView.close(),
+    mcpKey: (key: KeyLike) => mcp.key(key),
+    closeMcp: () => mcp.close(),
+    rulesKey: (key: KeyLike) => rules.key(key),
+    closeRules: () => rules.close(),
+    agentModelsKey: (key: KeyLike) => agentModels.key(key),
+    closeAgentModels: () => agentModels.close(),
+    /** Shared with the AppContext `ui` prop (app/run.tsx): the Diff view registers its scroller here. */
+    ui,
     refreshAll,
     start,
     dispose,

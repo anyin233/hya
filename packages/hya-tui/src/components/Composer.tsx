@@ -67,11 +67,14 @@ interface CmdMenu {
  * editor (`controller.openEditor`, composer/editor.ts); any other key drops
  * the chord and is handled as usual.
  *
- * While the Provider View (`/key`, components/ProviderView.tsx) is open,
- * every key but Ctrl+C and every paste go to it (after the modal picker,
- * which may open over the view); its key fields keep the key in the
- * controller's `SecretEntry`, so it never enters the editor, the store, or
- * the screen. Ctrl+C closes the view and keeps its quit meaning.
+ * While the Provider View (`/key`, components/ProviderView.tsx) — or the
+ * Diff (`/diff`), MCP (`/mcp`), Saved Rules (`/rules`), or Agent Models
+ * (`/agent-models`) view, at most one at a time — is open, every key but
+ * Ctrl+C goes to it (after the modal picker, which may open over any of
+ * them); a paste goes to the Provider View's secret field (the controller's
+ * `SecretEntry`, so a key never enters the editor, the store, or the
+ * screen) and is otherwise ignored. Ctrl+C closes the open view and keeps
+ * its quit meaning.
  */
 export function Composer() {
   const { store, controller, ui } = useApp()
@@ -99,6 +102,12 @@ export function Composer() {
   let hintTimer: ReturnType<typeof setTimeout> | undefined
   /** The Provider View is open: keys and pastes go to it (the editor keeps its text). */
   const providersOpen = () => store.state.providerView !== undefined
+  /** The Diff / MCP / Saved Rules / Agent Models view is open (at most one at a time): keys go to it, the editor keeps its text. */
+  const diffOpen = () => store.state.diffView !== undefined
+  const mcpOpen = () => store.state.mcpView !== undefined
+  const rulesOpen = () => store.state.rulesView !== undefined
+  const agentModelsOpen = () => store.state.agentModelsView !== undefined
+  const overlayViewOpen = () => providersOpen() || diffOpen() || mcpOpen() || rulesOpen() || agentModelsOpen()
   /** A subagent's session is open: prompts are disabled, slash commands still run. */
   const readOnly = () => Boolean(store.state.selected?.parent)
   const shell = () => isShellInput(value())
@@ -162,7 +171,7 @@ export function Composer() {
    * backend (commands and skills) command list; see commands/menu.ts.
    */
   function updateCommandMenu(): void {
-    if (!editor || providersOpen()) return closeCmdMenu()
+    if (!editor || overlayViewOpen()) return closeCmdMenu()
     const text = editor.plainText
     if (!text.startsWith("/") || /\s/.test(text)) return closeCmdMenu()
     const items = filterCommands(controller.commandEntries(), text.slice(1)).slice(0, commandSuggestionLimit)
@@ -187,7 +196,7 @@ export function Composer() {
 
   /** Open, refresh, or close the `@file` list for the token at the cursor. */
   function updateMention(): void {
-    if (!editor || providersOpen()) return closeMenu()
+    if (!editor || overlayViewOpen()) return closeMenu()
     if (editor.plainText.startsWith("/")) return closeMenu()
     const token = mentionAt(editor.plainText, editor.cursorOffset)
     if (!token) {
@@ -261,7 +270,7 @@ export function Composer() {
   }
 
   function submit(): void {
-    if (!editor || providersOpen()) return
+    if (!editor || overlayViewOpen()) return
     const text = editor.plainText
     if (!text.trim()) return
     if (readOnly() && !text.trim().startsWith("/")) {
@@ -359,12 +368,22 @@ export function Composer() {
         return
       }
     }
-    // The Provider View takes every key but Ctrl+C, which closes it and keeps its quit meaning.
-    else if (providersOpen()) {
-      if (key.ctrl && !key.meta && key.name === "c") controller.closeProviders()
-      else {
+    // The Provider / Diff / MCP / Saved Rules / Agent Models view takes every
+    // key but Ctrl+C, which closes it and keeps its quit meaning.
+    else if (overlayViewOpen()) {
+      if (key.ctrl && !key.meta && key.name === "c") {
+        if (providersOpen()) controller.closeProviders()
+        else if (diffOpen()) controller.closeDiff()
+        else if (mcpOpen()) controller.closeMcp()
+        else if (rulesOpen()) controller.closeRules()
+        else controller.closeAgentModels()
+      } else {
         consume()
-        controller.providerKey(key)
+        if (providersOpen()) controller.providerKey(key)
+        else if (diffOpen()) controller.diffKey(key)
+        else if (mcpOpen()) controller.mcpKey(key)
+        else if (rulesOpen()) controller.rulesKey(key)
+        else controller.agentModelsKey(key)
         return
       }
     }
@@ -558,8 +577,8 @@ export function Composer() {
     event.preventDefault()
     event.stopPropagation()
     const text = new TextDecoder().decode(event.bytes)
-    if (providersOpen() && !store.state.picker) {
-      controller.providerPaste(text)
+    if (overlayViewOpen() && !store.state.picker) {
+      if (providersOpen()) controller.providerPaste(text)
       return
     }
     // A bracketed paste never submits: its line breaks (CR from xterm.js) become newlines.
@@ -618,7 +637,7 @@ export function Composer() {
           cursorStyle={store.state.vim ? { style: store.state.vimMode === "normal" ? "block" : "line", blinking: store.state.vimMode !== "normal" } : { style: "block", blinking: true }}
           wrapMode="word"
           keyBindings={[...composerKeyBindings]}
-          focused={!providersOpen() && !store.state.picker}
+          focused={!overlayViewOpen() && !store.state.picker}
           onSubmit={submit}
           onContentChange={sync}
           onCursorChange={() => updateMention()}

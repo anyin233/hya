@@ -20,6 +20,14 @@ export interface AppActions {
   newSession(agent?: string, model?: string): Promise<void>
   /** Open the full-screen Provider View (`/key`; state/providers.ts, app/providers.ts). */
   openProviders(): void
+  /** Open the full-screen Diff View (`/diff`; state/diff.ts, app/diff.ts). */
+  openDiff(): void
+  /** Open the full-screen MCP view (`/mcp`; state/mcp.ts, app/mcp.ts). */
+  openMcp(): void
+  /** Open the full-screen Saved Rules view (`/rules`; state/rules.ts, app/rules.ts). */
+  openRules(): void
+  /** Open the full-screen Agent Models view (`/agent-models`; state/agentModels.ts, app/agentModels.ts). */
+  openAgentModels(): void
   scheduleRefresh(): void
   /** Cancel the running turn (`CancelTurn`); throws `No active turn` when none runs. */
   cancelTurn(): Promise<void>
