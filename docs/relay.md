@@ -423,6 +423,38 @@ separate schedules. Call `connected()` once the room is registered;
 `NoBinding{grpc, ws}`, `Transport`, `Timeout`, `Protocol`, `Config`;
 `ClientError::code()` returns the relay code when there is one.
 
+### Conformance
+
+`crates/hya-relay/tests/conformance.rs` runs a real `RelayServer` behind
+in-process intermediaries (`tests/support/hops.rs`) and, in every case,
+drives a full splice through `RelayClient`: a backend with a
+reconnecting host control stream accepts the stream as the Noise
+responder and echoes, and a client opens it as the Noise initiator. It
+runs in about 2.5 s and is the CI gate for "works behind arbitrary
+proxies".
+
+| Case | Hop | Checks |
+| --- | --- | --- |
+| (a) | h2c-capable HTTP reverse proxy (HTTP/1.1 and h2c in, h2c or HTTP/1.1 out) | both bindings round-trip; `auto` picks gRPC |
+| (b) | TLS on the relay (rcgen certificate, `extra_ca_pem`) | both bindings over TLS (ALPN `h2` / `http/1.1`); `auto` picks gRPC |
+| (c) | HTTP/1.1-only reverse proxy that forwards WebSocket upgrades | `auto` lands on WebSocket (`NoHttp2`); pinned gRPC fails |
+| (d) | HTTP/2 proxy that strips trailers | `auto` lands on WebSocket (`TrailersStripped`) |
+| (e) | TCP hop that cuts connections idle for 300 ms | with a 50 ms heartbeat an idle tunnel and the control stream survive 4× the cut, on both bindings; without heartbeats the cut happens |
+| (f) | TCP hop that cuts every connection after 400 ms | the host re-registers through the reconnect policy after each cut and new opens succeed, on both bindings |
+| (g) | proxy that routes only `/relay/…` to a relay with `--path-prefix /relay` | both bindings under the prefix; without the prefix both probes report `HopRejected` |
+| (h) | proxy that rewrites Host / `:authority` | both bindings round-trip |
+| (i) | none: a parsed `hya+insecure://` link straight to the relay | `t=auto`, `t=grpc`, `t=ws` |
+
+Which cases stand for each first-class deployment:
+
+| Deployment | Cases |
+| --- | --- |
+| Cloudflare Tunnel | (c) + (e) + (h) |
+| nginx | (a) or (c), + (e) |
+| Caddy | (a) + (h) |
+| Tailscale, plain tailnet | (i) |
+| `tailscale serve` / `funnel` | (b) + (h) |
+
 ### The transport abstraction
 
 `hya_relay::transport::RelayTransport<Tx, Rx>` is any
