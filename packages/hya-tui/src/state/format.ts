@@ -33,6 +33,11 @@ export function truncateStart(text: string, width: number): string {
   return text.length <= width ? text : `…${text.slice(text.length - width + 1)}`
 }
 
+/** What the header and sidebar call the server: its label (`--server-label`), else its URL, else `fallback`. */
+export function shownServer(state: AppState, fallback: string): string {
+  return state.serverLabel || state.serverUrl || fallback
+}
+
 export function headerText(state: AppState, server: string): string {
   if (!state.ready) return "hya · connecting…"
   const selected = state.selected

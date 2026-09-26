@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { askSessionLabel, compactionText, contextText, currentModel, otherAskNotice, webLabel, webNotice, headerText, mainContent, mainTitle, pendingLines, sessionListText, sessionTree, statusBarSegments, statusBarText, todosCompactText, truncate, truncateStart } from "../src/state/format"
+import { askSessionLabel, compactionText, contextText, shownServer, currentModel, otherAskNotice, webLabel, webNotice, headerText, mainContent, mainTitle, pendingLines, sessionListText, sessionTree, statusBarSegments, statusBarText, todosCompactText, truncate, truncateStart } from "../src/state/format"
 import { createAppStore } from "../src/state/store"
 
 const server = "http://127.0.0.1:8080/"
@@ -211,4 +211,18 @@ test("currentModel looks up the open session's model in the catalog by providerI
   expect(currentModel(store.state)?.imageInput).toBe(false)
   store.setSelected({ id: "s1", agent: "main", workdir: "/tmp", model: { providerId: "unknown", modelId: "x" } })
   expect(currentModel(store.state)).toBeUndefined()
+})
+
+test("a server label replaces the URL in the header and the context box (remote backends)", () => {
+  const store = createAppStore()
+  expect(shownServer(store.state, server)).toBe(server)
+  store.setServerUrl("http://127.0.0.1:6001")
+  expect(shownServer(store.state, server)).toBe("http://127.0.0.1:6001")
+  store.setServerLabel("remote: relay.example.com/eh7ddx5bksrgcytl7bkai36se4")
+  expect(shownServer(store.state, server)).toBe("remote: relay.example.com/eh7ddx5bksrgcytl7bkai36se4")
+  store.applyCatalog({ sessions: [], interactions: [], models: [], workflows: [], providers: [], commands: [] })
+  expect(headerText(store.state, shownServer(store.state, server))).toBe("hya · no session · remote: relay.example.com/eh7ddx5bksrgcytl7bkai36se4")
+  expect(contextText(store.state, shownServer(store.state, server), 70)).toBe("Session  none\nServer   remote: relay.example.com/eh7ddx5bksrgcytl7bkai36se4")
+  store.setServerLabel(undefined)
+  expect(shownServer(store.state, server)).toBe("http://127.0.0.1:6001")
 })

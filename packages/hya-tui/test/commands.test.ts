@@ -223,6 +223,13 @@ test("/status shows server, version, directory, session, agent, model, and mode"
   expect(text).not.toContain("WebUI")
 })
 
+test("/status names a labelled server and the local URL that reaches it", async () => {
+  const { store, run } = harness({ baseUrl: "http://127.0.0.1:6001" } as Partial<HyaClient>)
+  store.setServerLabel("remote: relay.example.com/eh7ddx5bksrgcytl7bkai36se4")
+  await run("/status")
+  expect(store.state.statusText).toContain("Server      remote: relay.example.com/eh7ddx5bksrgcytl7bkai36se4 · via http://127.0.0.1:6001")
+})
+
 test("/status shows the WebUI that bare hya serves, or why it is unavailable", async () => {
   const { store, run } = harness()
   store.setWeb({ url: "http://127.0.0.1:3250/" })

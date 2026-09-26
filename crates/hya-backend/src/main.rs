@@ -911,6 +911,7 @@ async fn main() -> anyhow::Result<()> {
     let web_port = cli_args::bare_web_port(&cli)?;
     let backend = cli_args::bare_backend(&cli)?;
     let resume = cli_args::bare_resume(&cli)?;
+    let connect = cli_args::bare_connect(&cli)?;
     let model = cli.model.clone();
     let yolo = cli.yolo;
     let pure = cli.pure;
@@ -937,6 +938,17 @@ async fn main() -> anyhow::Result<()> {
                 std::io::stdin().is_terminal(),
                 std::io::stdout().is_terminal(),
             ) {
+                // The link (read before the TUI owns the terminal) is the
+                // credential: only its redacted form is ever printed.
+                let connect = match connect {
+                    Some(source) => {
+                        if bridge::exposed_in_argv(&source) {
+                            eprintln!("hya: {}", bridge::ARGV_WARNING);
+                        }
+                        Some(bridge::read_link(&source, "--connect")?)
+                    }
+                    None => None,
+                };
                 return frontend::run(frontend::LaunchRequest {
                     port: web_port,
                     db: absolute_db(resolve_interactive_db(&db)),
@@ -946,6 +958,7 @@ async fn main() -> anyhow::Result<()> {
                     yolo,
                     pure,
                     state_dir: state_dir(),
+                    connect,
                 })
                 .await;
             }

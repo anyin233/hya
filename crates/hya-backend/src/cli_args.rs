@@ -40,6 +40,20 @@ pub(crate) struct Cli {
     /// unreachable URL is an error. Only for bare `hya`.
     #[arg(long, value_name = "URL")]
     pub(crate) backend: Option<String>,
+    /// Connect bare `hya` to a remote backend through a secure relay link:
+    /// no local daemon; an in-process bridge carries the TUI and the WebUI
+    /// to the backend, end-to-end encrypted. `--connect -` reads the link
+    /// from the terminal without echoing it (recommended: an argument is
+    /// visible in process listings); `--connect` alone reads
+    /// `$HYA_RELAY_LINK`. Only for bare `hya`.
+    #[arg(
+        long,
+        value_name = "LINK",
+        num_args = 0..=1,
+        default_missing_value = "",
+        conflicts_with = "backend"
+    )]
+    pub(crate) connect: Option<String>,
     /// Open this session in the terminal TUI and unarchive it; without an
     /// id, pick one of the directory's sessions (archived ones included).
     /// Only for bare `hya`.
@@ -356,6 +370,20 @@ pub(crate) fn bare_backend(cli: &Cli) -> anyhow::Result<Option<String>> {
         anyhow::bail!("--backend needs an http:// or https:// URL, got {url:?}");
     }
     Ok(Some(trimmed.to_string()))
+}
+
+/// Bare `hya`'s `--connect [LINK]`: where the relay link comes from. Only
+/// without a subcommand or `-p` (`hya bridge` is the standalone form).
+pub(crate) fn bare_connect(cli: &Cli) -> anyhow::Result<Option<crate::bridge::LinkSource>> {
+    let Some(value) = &cli.connect else {
+        return Ok(None);
+    };
+    if cli.command.is_some() || cli.prompt.is_some() {
+        anyhow::bail!(
+            "--connect only applies to bare `hya`; use `hya bridge` for a standalone bridge"
+        );
+    }
+    Ok(Some(crate::bridge::LinkSource::from_arg(Some(value))))
 }
 
 /// Bare `hya`'s `--resume [ID]` for the terminal TUI: a session id, or the
@@ -859,6 +887,37 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(error.contains("only applies to bare"), "{error}");
+    }
+
+    #[test]
+    fn connect_is_a_bare_hya_link_source() {
+        use crate::bridge::LinkSource;
+        let link = "hya://relay.example.com/eh7ddx5bksrgcytl7bkai36se4#k.p";
+        assert_eq!(
+            super::bare_connect(&parse(["hya", "--connect", link])).unwrap(),
+            Some(LinkSource::Arg(link.into()))
+        );
+        assert_eq!(
+            super::bare_connect(&parse(["hya", "--connect", "-"])).unwrap(),
+            Some(LinkSource::Stdin)
+        );
+        // Without a value: `$HYA_RELAY_LINK`.
+        assert_eq!(
+            super::bare_connect(&parse(["hya", "--connect"])).unwrap(),
+            Some(LinkSource::Env)
+        );
+        assert_eq!(super::bare_connect(&parse(["hya"])).unwrap(), None);
+        assert!(
+            Cli::try_parse_from(["hya", "--connect", "-", "--backend", "http://x"]).is_err(),
+            "--connect conflicts with --backend"
+        );
+        let error = super::bare_connect(&parse(["hya", "--connect", "-", "sessions"]))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("only applies to bare"), "{error}");
+        // The standalone form parses as a subcommand.
+        let cli = parse(["hya", "bridge", "-", "--json", "--listen", "127.0.0.1:0"]);
+        assert!(matches!(cli.command, Some(super::Command::Bridge { .. })));
     }
 
     #[test]

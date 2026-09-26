@@ -161,6 +161,8 @@ export interface AppState {
   readonly serverPid: number | undefined
   /** The server's base URL (header, sidebar); switches when the TUI moves to another server (app/reconnect.ts). */
   readonly serverUrl: string
+  /** Shown instead of `serverUrl` when set (`--server-label`: a remote backend behind the local bridge). */
+  readonly serverLabel: string | undefined
   /** The open session's todo list (`/todos`, `GetSessionTodo`). */
   readonly todos: TodoItem[]
   /** Text of the `/status` view. */
@@ -321,6 +323,7 @@ function initialState(): { [K in keyof AppState]: AppState[K] } {
     serverVersion: "",
     serverPid: undefined,
     serverUrl: "",
+    serverLabel: undefined,
     todos: [],
     statusText: "",
     promptSelection: undefined,
@@ -677,6 +680,8 @@ export function createAppStore() {
     /** The backend this TUI started (`/status`). */
     setBackend(info: BackendInfo | undefined): void { set("backend", info) },
     setServerUrl(url: string): void { set("serverUrl", url) },
+    /** `--server-label` (src/cli.ts); `undefined` shows the URL again. */
+    setServerLabel(label: string | undefined): void { set("serverLabel", label) },
     /** The WebUI state from bare `hya` (status bar, sidebar, `/status`). */
     setWeb(info: WebInfo | undefined): void { set("web", info) },
     /** `--web-tab` (src/cli.ts). */

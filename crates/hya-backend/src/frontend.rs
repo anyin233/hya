@@ -8,14 +8,19 @@
 //! 1. the backend: the running daemon of the database (`<db>.server.json`
 //!    whose `/v1/health` answers), else a newly started detached daemon
 //!    (`daemon::start`); with `--backend <url>` that URL, which must answer;
+//!    with `--connect <link>` no daemon at all: an in-process relay bridge
+//!    (`bridge.rs`) whose loopback URL reaches the remote backend;
 //! 2. the web host (`packages/hya-tui-web`) serves the WebUI on
 //!    `127.0.0.1:<port>`; every browser tab runs the TUI against the backend;
 //! 3. the terminal TUI (`packages/hya-tui`) runs on this terminal with
 //!    `--web-url <url>` or `--web-error <reason>` (and `--resume [id]` when
 //!    `hya --resume [id]` asked for it).
 //!
-//! Both TUIs also get `--db <db> --hya <this binary>` (not with `--backend`),
-//! so when the backend stops or crashes they find (or start) the next one.
+//! Both TUIs also get `--db <db> --hya <this binary>` (not with `--backend`
+//! or `--connect`), so when the backend stops or crashes they find (or
+//! start) the next one. With `--connect` they get `--remote --server-label
+//! "remote: <relay>/<room>"` instead (no local Project for the directory;
+//! the header shows the relay, not the loopback URL).
 //! The tab command also carries `--web-tab`: a tab's TUI then does not offer
 //! `/to-background` and Ctrl+D does not quit it (closing the tab already
 //! leaves the session running). The host itself stays generic.
@@ -206,11 +211,15 @@ pub(crate) fn web_failure_reason(code: Option<i32>, stderr: &str, port: u16) -> 
 /// How the TUIs reach the backend: its URL, and (for a database's daemon,
 /// not an explicit `--backend`) the database and the `hya` binary, so a TUI
 /// that loses the backend rediscovers or restarts it (`--db`, `--hya`).
+/// A remote backend (`--connect`) is reached through the in-process bridge:
+/// `remote` is its display label, and the TUIs get `--remote
+/// --server-label <label>`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct BackendLink {
     pub(crate) url: String,
     pub(crate) db: Option<String>,
     pub(crate) hya: Option<PathBuf>,
+    pub(crate) remote: Option<String>,
 }
 
 /// `hya --resume [id]`: what the terminal TUI opens at start.
@@ -263,6 +272,9 @@ fn tui_base_argv(bun: &Path, tui_dir: &Path, backend: &BackendLink, cwd: &Path) 
     if let Some(hya) = &backend.hya {
         argv.extend(["--hya".into(), hya.into()]);
     }
+    if let Some(label) = &backend.remote {
+        argv.extend(["--remote".into(), "--server-label".into(), label.into()]);
+    }
     argv
 }
 
@@ -314,6 +326,7 @@ pub(crate) async fn connect(
             url: url.clone(),
             db: None,
             hya: None,
+            remote: None,
         };
         return Ok((link, vec![format!("hya: using --backend {url}")]));
     }
@@ -346,8 +359,33 @@ pub(crate) async fn connect(
         url: found.url.clone(),
         db: Some(request.db.clone()),
         hya: Some(exe.to_path_buf()),
+        remote: None,
     };
     Ok((link, notes))
+}
+
+/// `--connect <link>`: no daemon; start the bridge in this process (it
+/// lives as long as bare `hya`) and hand its loopback URL to the TUIs as a
+/// fixed remote backend. A lost connection is retried against the same
+/// URL: every new connection opens a new tunnel.
+pub(crate) async fn connect_remote(
+    link: hya_relay::link::RelayLink,
+    log: crate::bridge::Log,
+) -> anyhow::Result<(crate::bridge::Bridge, BackendLink, Vec<String>)> {
+    let bridge =
+        crate::bridge::Bridge::start(link, crate::bridge::BridgeOptions::default(), log).await?;
+    let backend = BackendLink {
+        url: bridge.url(),
+        db: None,
+        hya: None,
+        remote: Some(bridge.label().to_owned()),
+    };
+    let notes = vec![format!(
+        "hya: relay bridge to {} on {}",
+        bridge.label(),
+        bridge.url()
+    )];
+    Ok((bridge, backend, notes))
 }
 
 /// `hya`'s exit status for the TUI's: its code, or `128 + signal`.
@@ -379,6 +417,9 @@ pub(crate) struct LaunchRequest {
     pub(crate) pure: bool,
     /// `$XDG_STATE_HOME/hya` (created), home of the log file.
     pub(crate) state_dir: PathBuf,
+    /// `--connect <link>`: a remote backend through the relay, instead of
+    /// the database's daemon.
+    pub(crate) connect: Option<hya_relay::link::RelayLink>,
 }
 
 /// The paths bare `hya` runs: Bun, the two packages, and the workspace.
@@ -422,7 +463,18 @@ pub(crate) async fn run(request: LaunchRequest) -> anyhow::Result<()> {
     // Everything that can fail cheaply fails here, before the terminal is touched.
     let resolved = resolve()?;
     let exe = std::env::current_exe().context("find the hya binary")?;
-    let (backend, notes) = connect(&request, &exe).await?;
+    // Held until `hya` exits: the remote backend's in-process bridge.
+    let (_bridge, backend, notes) = match request.connect.clone() {
+        Some(link) => {
+            let (bridge, backend, notes) =
+                connect_remote(link, crate::bridge::stderr_log()).await?;
+            (Some(bridge), backend, notes)
+        }
+        None => {
+            let (backend, notes) = connect(&request, &exe).await?;
+            (None, backend, notes)
+        }
+    };
     let log_file = log_path(&request.state_dir);
     let log =
         open_log(&log_file).with_context(|| format!("open the log file {}", log_file.display()))?;
@@ -434,7 +486,11 @@ pub(crate) async fn run(request: LaunchRequest) -> anyhow::Result<()> {
         std::process::id(),
         resolved.cwd.display(),
         backend.url,
-        backend.db.as_deref().unwrap_or("(explicit --backend)")
+        backend
+            .db
+            .as_deref()
+            .or(backend.remote.as_deref())
+            .unwrap_or("(explicit --backend)")
     );
     for note in notes {
         eprintln!("{note}");
@@ -880,6 +936,7 @@ mod tests {
             url: "http://127.0.0.1:5555".into(),
             db: Some("/state/hya/sessions.db".into()),
             hya: Some(PathBuf::from("/bin/hya")),
+            remote: None,
         }
     }
 
@@ -984,6 +1041,7 @@ mod tests {
             url: "http://127.0.0.1:5555".into(),
             db: None,
             hya: None,
+            remote: None,
         };
         let argv = tui_argv(
             Path::new("/b/bun"),
@@ -996,6 +1054,68 @@ mod tests {
         let mut expected = os(&base[..6]);
         expected.extend(os(&["--web-url", "http://127.0.0.1:3250/"]));
         assert_eq!(argv, expected);
+    }
+
+    fn remote_link() -> BackendLink {
+        BackendLink {
+            url: "http://127.0.0.1:6001".into(),
+            db: None,
+            hya: None,
+            remote: Some("remote: relay.example.com/hya/eh7ddx5bksrgcytl7bkai36se4".into()),
+        }
+    }
+
+    #[test]
+    fn a_remote_backend_marks_both_tuis_remote_with_a_label_and_no_database() {
+        let tui = [
+            "/b/bun",
+            "/lib/tui/src/main.ts",
+            "--server",
+            "http://127.0.0.1:6001",
+            "--dir",
+            "/work",
+            "--remote",
+            "--server-label",
+            "remote: relay.example.com/hya/eh7ddx5bksrgcytl7bkai36se4",
+        ];
+        let host = web_host_argv(
+            Path::new("/b/bun"),
+            Path::new("/lib/tui-web"),
+            Path::new("/lib/tui"),
+            3250,
+            Path::new("/work"),
+            &remote_link(),
+        );
+        let mut expected = os(&[
+            "/b/bun",
+            "/lib/tui-web/src/main.ts",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "3250",
+            "--cwd",
+            "/work",
+            "--",
+        ]);
+        expected.extend(os(&tui));
+        expected.push("--web-tab".into());
+        assert_eq!(host, expected);
+
+        let terminal = tui_argv(
+            Path::new("/b/bun"),
+            Path::new("/lib/tui"),
+            &remote_link(),
+            Path::new("/work"),
+            &WebStatus::Ready("http://127.0.0.1:3250/".into()),
+            None,
+        );
+        let mut expected = os(&tui);
+        expected.extend(os(&["--web-url", "http://127.0.0.1:3250/"]));
+        assert_eq!(terminal, expected);
+        for argv in [&host, &terminal] {
+            assert!(!argv.contains(&OsString::from("--db")));
+            assert!(!argv.contains(&OsString::from("--hya")));
+        }
     }
 
     /// A `/v1/health` responder (`ok` true or false).
@@ -1028,7 +1148,51 @@ mod tests {
             yolo: false,
             pure: false,
             state_dir: PathBuf::from("/nonexistent/hya"),
+            connect: None,
         }
+    }
+
+    #[tokio::test]
+    async fn connect_starts_a_loopback_bridge_and_labels_the_remote() {
+        use hya_relay::link::{RelayAddress, RelayLink, RoomId, Transport};
+        use hya_relay::server::{RelayServer, RelayServerConfig};
+        let (relay, serve) = RelayServer::bind(
+            RelayServerConfig::new("127.0.0.1:0".parse().unwrap()),
+            std::future::pending(),
+        )
+        .await
+        .unwrap();
+        let relay_task = tokio::spawn(serve);
+        // Nobody hosts the room: an offline backend is not a start error.
+        let link = RelayLink::new(
+            RelayAddress::new(false, "127.0.0.1", Some(relay.port()), "").unwrap(),
+            RoomId::from_ed25519(&[7; 32]),
+            Transport::Auto,
+            [1; 32],
+            [2; 32],
+        );
+        let lines = Arc::new(Mutex::new(Vec::<String>::new()));
+        let keep = lines.clone();
+        let log: crate::bridge::Log =
+            Arc::new(move |line| keep.lock().unwrap().push(line.to_owned()));
+        let (bridge, link_out, notes) = connect_remote(link.clone(), log).await.unwrap();
+        assert!(
+            link_out.url.starts_with("http://127.0.0.1:"),
+            "{link_out:?}"
+        );
+        assert_eq!(link_out.url, bridge.url());
+        assert_eq!(link_out.db, None);
+        assert_eq!(link_out.hya, None);
+        assert_eq!(
+            link_out.remote.as_deref(),
+            Some(format!("remote: 127.0.0.1:{}/{}", relay.port(), link.room_id()).as_str())
+        );
+        let secret = link.to_secret_string();
+        let fragment = secret.split_once('#').unwrap().1;
+        for line in notes.iter().chain(lines.lock().unwrap().iter()) {
+            assert!(!line.contains(fragment), "{line}");
+        }
+        relay_task.abort();
     }
 
     #[tokio::test]
@@ -1042,7 +1206,8 @@ mod tests {
             BackendLink {
                 url,
                 db: None,
-                hya: None
+                hya: None,
+                remote: None,
             }
         );
     }
