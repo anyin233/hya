@@ -76,6 +76,8 @@ async fn seed(
                 agent: AgentName::new("build"),
                 model: ModelRef::new("fake"),
                 workdir: "/tmp".to_string(),
+                project: None,
+                kind: hya_proto::SessionKind::Project,
             },
         )
         .await?;

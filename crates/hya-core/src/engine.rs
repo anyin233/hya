@@ -7,8 +7,8 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use hya_proto::{
-    AgentName, Envelope, Event, EventSeq, MessageId, ModelRef, OperationId, Projection, Role,
-    SessionId, ToolCallId, ToolSchema, now_millis,
+    AgentName, Envelope, Event, EventSeq, MessageId, ModelRef, OperationId, ProjectId, Projection,
+    Role, SessionId, SessionKind, ToolCallId, ToolSchema, now_millis,
 };
 use hya_provider::{ProviderCatalogSnapshot, ProviderModel, ProviderRouter, ReasoningEffort};
 use hya_store::{ActorClaim, SessionStore};
@@ -1585,6 +1585,25 @@ impl SessionEngine {
         self.bus.publish(envelope);
     }
 
+    /// Project and kind recorded on a new session's `SessionCreated`
+    /// (ADR-0024): a subagent session carries its parent's; a root session
+    /// records no Project yet (`CreateSession` gains project/kind with the
+    /// engine wiring).
+    async fn inherited_project(
+        &self,
+        parent: Option<SessionId>,
+    ) -> Result<(Option<ProjectId>, SessionKind), CoreError> {
+        let Some(parent) = parent else {
+            return Ok((None, SessionKind::Project));
+        };
+        Ok(self
+            .store
+            .with_projection(parent, |projection| {
+                (projection.session.project, projection.session.kind)
+            })
+            .await?)
+    }
+
     /// Create a new session id and append `SessionCreated`.
     ///
     /// # Errors
@@ -1604,6 +1623,7 @@ impl SessionEngine {
         spec: CreateSession,
     ) -> Result<SessionId, CoreError> {
         let id = SessionId::new();
+        let (project, kind) = self.inherited_project(spec.parent).await?;
         self.commit_resident_mutation(
             claim,
             id,
@@ -1613,6 +1633,8 @@ impl SessionEngine {
                 agent: spec.agent,
                 model: spec.model,
                 workdir: spec.workdir,
+                project,
+                kind,
             }],
         )
         .await?;
@@ -1640,6 +1662,7 @@ impl SessionEngine {
         let is_root = spec.parent.is_none();
         let stable_agent_id = spec.agent.as_str().to_string();
         let workdir = PathBuf::from(&spec.workdir);
+        let (project, kind) = self.inherited_project(spec.parent).await?;
         self.emit(
             id,
             Event::SessionCreated {
@@ -1648,6 +1671,8 @@ impl SessionEngine {
                 agent: spec.agent,
                 model: spec.model,
                 workdir: spec.workdir,
+                project,
+                kind,
             },
         )
         .await?;

@@ -769,6 +769,8 @@ async fn resident_finalization_closes_its_member_row_on_the_parent_log() {
                         agent: AgentName::new("resident"),
                         model: hya_proto::ModelRef::new("fake"),
                         workdir: "/tmp".to_string(),
+                        project: None,
+                        kind: hya_proto::SessionKind::Project,
                     },
                 )
                 .await

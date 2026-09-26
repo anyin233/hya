@@ -30,6 +30,7 @@ pub(crate) async fn materialize_event_side_tables(
             agent,
             model,
             workdir,
+            ..
         } => {
             sqlx::query(
                 "INSERT OR IGNORE INTO session \
@@ -250,6 +251,8 @@ mod tests {
                     agent: AgentName::new("build"),
                     model: ModelRef::new("fake"),
                     workdir: ".".into(),
+                    project: None,
+                    kind: hya_proto::SessionKind::Project,
                 },
             )
             .await
@@ -263,6 +266,8 @@ mod tests {
                     agent: AgentName::new("general"),
                     model: ModelRef::new("fake"),
                     workdir: ".".into(),
+                    project: None,
+                    kind: hya_proto::SessionKind::Project,
                 },
             )
             .await

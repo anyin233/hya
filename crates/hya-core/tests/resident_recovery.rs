@@ -700,6 +700,8 @@ async fn actor_bound_admission_cannot_be_finalized_without_its_claim() {
                 agent: AgentName::new("main"),
                 model: hya_proto::ModelRef::new("fake/fake"),
                 workdir: ".".to_string(),
+                project: None,
+                kind: hya_proto::SessionKind::Project,
             },
         )
         .await
@@ -713,6 +715,8 @@ async fn actor_bound_admission_cannot_be_finalized_without_its_claim() {
                 agent: AgentName::new("resident"),
                 model: hya_proto::ModelRef::new("fake/fake"),
                 workdir: ".".to_string(),
+                project: None,
+                kind: hya_proto::SessionKind::Project,
             },
         )
         .await

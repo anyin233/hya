@@ -145,6 +145,8 @@ mod tests {
                 agent: "build".into(),
                 model: "hya/offline".into(),
                 workdir: ".".into(),
+                project: None,
+                kind: hya_proto::SessionKind::Project,
             },
         }
     }

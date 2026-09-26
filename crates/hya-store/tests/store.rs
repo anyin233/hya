@@ -21,6 +21,8 @@ async fn migration_applies_and_projection_is_correct() {
             agent: "build".into(),
             model: "fake".into(),
             workdir: "/tmp".into(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         },
         Event::MessageStarted {
             session: s,
@@ -170,6 +172,8 @@ async fn hysec_session_round_trips_through_replay_list_and_delete() {
         agent: "build".into(),
         model: "fake".into(),
         workdir: "/tmp".into(),
+        project: None,
+        kind: hya_proto::SessionKind::Project,
     };
 
     let (seq, ts) = store.append_event(session, &event).await.unwrap();

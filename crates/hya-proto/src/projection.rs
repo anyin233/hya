@@ -9,9 +9,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 
 use self::helpers::{find_part, push_part, tool_input, upsert_tool};
-use crate::event::{ArchiveReason, Envelope, Event, ReportOutcome, WorkflowStageRouteOutcome};
+use crate::event::{
+    ArchiveReason, Envelope, Event, ReportOutcome, SessionKind, WorkflowStageRouteOutcome,
+};
 use crate::ids::{
-    ActorEpoch, ConfigGeneration, MemberId, MessageId, PartId, SessionId, ToolCallId, WorkflowRunId,
+    ActorEpoch, ConfigGeneration, MemberId, MessageId, PartId, ProjectId, SessionId, ToolCallId,
+    WorkflowRunId,
 };
 use crate::mail::{ChannelKind, MailEndpoint, MailKind, is_minted_channel_id};
 use crate::message::{
@@ -41,6 +44,15 @@ pub struct SessionProjection {
     pub model: Option<ModelRef>,
     /// Absolute workdir for tools.
     pub workdir: Option<String>,
+    /// Project the session belongs to (ADR-0024), from `SessionCreated`.
+    /// `None` for temporary sessions and sessions created before Projects.
+    /// Omitted from serialized projections when `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<ProjectId>,
+    /// Project or temporary session (ADR-0024), from `SessionCreated`;
+    /// [`SessionKind::Project`] for sessions created before the field.
+    #[serde(default)]
+    pub kind: SessionKind,
     /// Temporary Agent model choices shared by this root Session tree.
     ///
     /// The map is event-sourced on the root log and omitted from serialized
@@ -790,7 +802,7 @@ pub fn session_archive_event(
 /// different projection, or when `Projection` (or anything it contains)
 /// changes shape; the `reducer_fingerprint_pins_the_version` test fails until
 /// the bump is recorded.
-pub const PROJECTION_REDUCER_VERSION: u32 = 7;
+pub const PROJECTION_REDUCER_VERSION: u32 = 8;
 
 /// Durable snapshot encoding: the wire projection plus replay-only reducer
 /// state the wire form deliberately omits.
@@ -995,13 +1007,16 @@ impl Projection {
                 agent,
                 model,
                 workdir,
-                ..
+                project,
+                kind,
             } => {
                 self.session.id = Some(*session);
                 self.session.parent = *parent;
                 self.session.agent = Some(agent.clone());
                 self.session.model = Some(model.clone());
                 self.session.workdir = Some(workdir.clone());
+                self.session.project = *project;
+                self.session.kind = *kind;
             }
             Event::SessionAgentModelOverrideSet { agent, model, .. } => match model {
                 Some(model) => {
@@ -2472,6 +2487,8 @@ mod context_status_tests {
                 agent: AgentName::new("build"),
                 model: ModelRef::new("fake"),
                 workdir: "/tmp".to_string(),
+                project: None,
+                kind: crate::SessionKind::Project,
             },
         ));
         assert!(
@@ -2553,6 +2570,8 @@ mod usage_fold_tests {
             agent: AgentName::new("build"),
             model: ModelRef::new("session-model"),
             workdir: "/tmp".to_string(),
+            project: None,
+            kind: crate::SessionKind::Project,
         }
     }
 
@@ -3105,6 +3124,8 @@ mod orchestration_tests {
                     agent: AgentName::new("explore"),
                     model: ModelRef::new("fake"),
                     workdir: "/w".to_string(),
+                    project: None,
+                    kind: crate::SessionKind::Project,
                 },
             ),
             env(

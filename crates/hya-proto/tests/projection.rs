@@ -199,6 +199,8 @@ fn session_agent_model_overrides_replay_replace_and_clear() {
                 agent: agent.clone(),
                 model: ModelRef::new("provider/base"),
                 workdir: "/tmp".to_string(),
+                project: None,
+                kind: hya_proto::SessionKind::Project,
             },
         ),
         env(
@@ -261,6 +263,8 @@ fn session_permission_mode_replays_last_write_wins() {
                 agent: AgentName::new("build"),
                 model: ModelRef::new("provider/base"),
                 workdir: "/tmp".to_string(),
+                project: None,
+                kind: hya_proto::SessionKind::Project,
             },
         ),
         env(
@@ -302,6 +306,8 @@ fn session_permission_mode_is_omitted_from_the_wire_until_set() {
             agent: AgentName::new("build"),
             model: ModelRef::new("provider/base"),
             workdir: "/tmp".to_string(),
+            project: None,
+            kind: hya_proto::SessionKind::Project,
         },
     )]);
     assert_eq!(projection.session.permission_mode, None);
@@ -346,6 +352,8 @@ fn assistant_messages_keep_their_own_agent_and_model_across_switches() {
                 agent: AgentName::new("build"),
                 model: ModelRef::new("fake/alpha"),
                 workdir: "/tmp".to_string(),
+                project: None,
+                kind: hya_proto::SessionKind::Project,
             },
         ),
         env(
