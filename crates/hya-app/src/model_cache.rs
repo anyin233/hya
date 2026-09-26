@@ -116,12 +116,7 @@ pub fn now_ms() -> i64 {
 /// `None` when neither variable is set.
 #[must_use]
 pub fn model_cache_path() -> Option<PathBuf> {
-    if let Some(dir) = std::env::var_os("XDG_CACHE_HOME").filter(|dir| !dir.is_empty()) {
-        return Some(PathBuf::from(dir).join("hya/model_cache.db"));
-    }
-    std::env::var_os("HOME")
-        .filter(|home| !home.is_empty())
-        .map(|home| PathBuf::from(home).join(".cache/hya/model_cache.db"))
+    hya_store::user_cache_dir().map(|dir| dir.join("model_cache.db"))
 }
 
 /// An open model cache database.

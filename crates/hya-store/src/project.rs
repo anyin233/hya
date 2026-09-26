@@ -221,24 +221,7 @@ impl SessionStore {
     /// [`StoreError::ProjectNameEmpty`], [`StoreError::ProjectNotFound`], or
     /// SQLite failures.
     pub async fn rename_project(&self, id: ProjectId, name: &str) -> Result<Project, StoreError> {
-        let name = validate_name(name)?;
-        let mut tx = self.pool.begin().await?;
-        let updated = sqlx::query(
-            "UPDATE project SET name = ?, updated_at = max(?, updated_at + 1) WHERE id = ?",
-        )
-        .bind(&name)
-        .bind(now_millis())
-        .bind(id.to_string())
-        .execute(&mut *tx)
-        .await?;
-        if updated.rows_affected() == 0 {
-            return Err(StoreError::ProjectNotFound { project: id });
-        }
-        let project = load_project(&mut tx, id)
-            .await?
-            .ok_or(StoreError::ProjectNotFound { project: id })?;
-        tx.commit().await?;
-        Ok(project)
+        self.update_project(id, Some(name), None).await
     }
 
     /// Replace a Project's whole root list (validated like
@@ -254,22 +237,48 @@ impl SessionStore {
         id: ProjectId,
         roots: &[String],
     ) -> Result<Project, StoreError> {
-        let roots = normalize_roots(roots)?;
+        self.update_project(id, None, Some(roots)).await
+    }
+
+    /// Rename a Project and/or replace its whole root list in one
+    /// transaction: both changes apply, or neither does. Both inputs are
+    /// validated before anything is written. Bumps `updated_at` when either
+    /// is given; with neither, returns the Project unchanged.
+    ///
+    /// # Errors
+    /// [`StoreError::ProjectNameEmpty`], [`StoreError::ProjectRootsEmpty`],
+    /// [`StoreError::ProjectRootNotAbsolute`], [`StoreError::ProjectRootInvalid`],
+    /// [`StoreError::ProjectNotFound`], or SQLite failures.
+    pub async fn update_project(
+        &self,
+        id: ProjectId,
+        name: Option<&str>,
+        roots: Option<&[String]>,
+    ) -> Result<Project, StoreError> {
+        let name = name.map(validate_name).transpose()?;
+        let roots = roots.map(normalize_roots).transpose()?;
         let mut tx = self.pool.begin().await?;
-        let updated =
-            sqlx::query("UPDATE project SET updated_at = max(?, updated_at + 1) WHERE id = ?")
-                .bind(now_millis())
-                .bind(id.to_string())
-                .execute(&mut *tx)
-                .await?;
-        if updated.rows_affected() == 0 {
-            return Err(StoreError::ProjectNotFound { project: id });
-        }
-        sqlx::query("DELETE FROM project_root WHERE project_id = ?")
+        if name.is_some() || roots.is_some() {
+            let updated = sqlx::query(
+                "UPDATE project SET name = coalesce(?, name), \
+                 updated_at = max(?, updated_at + 1) WHERE id = ?",
+            )
+            .bind(&name)
+            .bind(now_millis())
             .bind(id.to_string())
             .execute(&mut *tx)
             .await?;
-        insert_roots(&mut tx, id, &roots).await?;
+            if updated.rows_affected() == 0 {
+                return Err(StoreError::ProjectNotFound { project: id });
+            }
+        }
+        if let Some(roots) = &roots {
+            sqlx::query("DELETE FROM project_root WHERE project_id = ?")
+                .bind(id.to_string())
+                .execute(&mut *tx)
+                .await?;
+            insert_roots(&mut tx, id, roots).await?;
+        }
         let project = load_project(&mut tx, id)
             .await?
             .ok_or(StoreError::ProjectNotFound { project: id })?;
@@ -277,7 +286,23 @@ impl SessionStore {
         Ok(project)
     }
 
-    /// Delete a Project and its roots. Returns whether a Project was removed.
+    /// Root sessions (not subagent sessions) of a Project that still have an
+    /// event log, archived ones included — the
+    /// [`ProjectSummary::session_count`] of one Project.
+    ///
+    /// # Errors
+    /// SQLite failures.
+    pub async fn project_session_count(&self, id: ProjectId) -> Result<u64, StoreError> {
+        let count: i64 =
+            sqlx::query_scalar(&format!("SELECT count(*) {}", live_root_sessions("?")))
+                .bind(id.to_string())
+                .fetch_one(&self.pool)
+                .await?;
+        Ok(count.max(0) as u64)
+    }
+
+    /// Delete a Project, its roots, and its saved permission rows (ADR-0026).
+    /// Returns whether a Project was removed.
     ///
     /// Refused while any non-archived root session that still has an event
     /// log belongs to the Project. Archived and deleted sessions keep the
@@ -309,10 +334,17 @@ impl SessionStore {
                 sessions: live,
             });
         }
+        let mut tx = self.pool.begin().await?;
         let deleted = sqlx::query("DELETE FROM project WHERE id = ?")
             .bind(id.to_string())
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await?;
+        // ADR-0026: the Project's remembered "allow always" rules go with it.
+        sqlx::query("DELETE FROM saved_permission WHERE project_id = ?")
+            .bind(id.to_string())
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
         Ok(deleted.rows_affected() > 0)
     }
 
