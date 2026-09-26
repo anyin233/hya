@@ -7,8 +7,26 @@
  * verbatim when a live session blocks it), and start a temporary session.
  * Pure state and keys; the calls live in app/projectView.ts.
  */
-import type { ProjectInfo } from "../client"
+import { HttpError, type ProjectInfo } from "../client"
 import type { KeyLike } from "../keys/bindings"
+import { stripTerminalControls } from "../sanitize"
+
+/**
+ * A failed call as one status line, `<code>: <message>`: the server's
+ * error (`HttpError.detail`, without the method and path), or
+ * `unavailable: <reason>` when the request never got an answer (a fetch
+ * failure). Only the first line is kept, so a stack never reaches the
+ * screen.
+ */
+export function errorLine(error: unknown): string {
+  const text = error instanceof HttpError
+    ? error.detail
+    : error instanceof TypeError
+      ? `unavailable: ${error.message}`
+      : error instanceof Error ? error.message : String(error)
+  const line = text.split(/\r?\n/).map((part) => stripTerminalControls(part).trim()).find(Boolean)
+  return line ?? "unknown error"
+}
 
 export interface ProjectViewBusy {
   label: string
