@@ -1,11 +1,12 @@
 import { expect, test } from "bun:test"
-import type { SavedRule } from "../src/client"
+import type { ProjectInfo, SavedRule } from "../src/client"
 import type { KeyLike } from "../src/keys/bindings"
 import {
   initialRulesView,
   permissionText,
   ruleHeaderLine,
   ruleLine,
+  ruleProjectLabel,
   ruleTimeText,
   rulesViewHint,
   rulesViewKey,
@@ -54,6 +55,22 @@ test("ruleLine keeps a tool-wide grant's empty pattern distinct from an action-w
   const actionWide: SavedRule = { id: "r4", permission: "RULE_PERMISSION_ALLOW", tool: "bash", pattern: "*" }
   expect(ruleLine(toolWide, 80)).not.toContain("*")
   expect(ruleLine(actionWide, 80)).toContain("*")
+})
+
+test("ruleProjectLabel shows the project name when known, the id otherwise, and \"global\" for a global row", () => {
+  const projects: ProjectInfo[] = [{ id: "prj_1", name: "hya", roots: ["/repo"] }]
+  expect(ruleProjectLabel({ id: "r", permission: "RULE_PERMISSION_ALLOW", projectId: "prj_1" }, projects)).toBe("hya")
+  expect(ruleProjectLabel({ id: "r", permission: "RULE_PERMISSION_ALLOW", projectId: "prj_unknown" }, projects)).toBe("prj_unknown")
+  expect(ruleProjectLabel({ id: "r", permission: "RULE_PERMISSION_ALLOW", projectId: "global" }, projects)).toBe("global")
+  expect(ruleProjectLabel({ id: "r", permission: "RULE_PERMISSION_ALLOW" }, projects)).toBe("global")
+})
+
+test("ruleLine and ruleHeaderLine show the project column", () => {
+  const projects: ProjectInfo[] = [{ id: "prj_1", name: "hya", roots: ["/repo"] }]
+  const scoped: SavedRule = { id: "r5", permission: "RULE_PERMISSION_ALLOW", tool: "externaldirectory", pattern: "/outside/*", projectId: "prj_1" }
+  expect(ruleLine(scoped, 100, projects)).toContain("hya")
+  expect(ruleLine({ ...scoped, projectId: "global" }, 100, projects)).toContain("global")
+  expect(ruleHeaderLine(100)).toContain("PROJECT")
 })
 
 test("shownRules filters by tool, pattern, or effect", () => {

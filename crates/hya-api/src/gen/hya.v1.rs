@@ -3834,9 +3834,11 @@ pub struct RespondInteractionResponse {
     #[prost(bool, tag = "1")]
     pub applied: bool,
 }
-/// A persisted permission decision: an "allow always" reply. Saved rules are
-/// process-wide (shared by every session and project), reload into the
-/// permission plane when the server starts, and deleting one revokes it live.
+/// A persisted permission decision: an "allow always" reply. Most saved rules
+/// are global (shared by every session and project) and reload into the
+/// permission plane when the server starts; an `ExternalDirectory` grant
+/// (ADR-0026) is scoped to one Project instead. Deleting a rule revokes it
+/// live.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SavedRule {
     /// Rule identifier.
@@ -3858,10 +3860,16 @@ pub struct SavedRule {
     /// were recorded.
     #[prost(message, optional, tag = "5")]
     pub time_created: ::core::option::Option<::pbjson_types::Timestamp>,
+    /// Project the rule is scoped to, or the literal `"global"` for a rule that
+    /// applies to every session and project (ADR-0026's `GLOBAL_PROJECT`; every
+    /// pre-ADR-0026 row is global).
+    #[prost(string, tag = "6")]
+    pub project_id: ::prost::alloc::string::String,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListSavedRulesRequest {
-    /// Accepted for symmetry and ignored: saved rules are process-wide.
+    /// Accepted for symmetry and ignored: this lists rules of every Project (and
+    /// global rules) regardless of directory; see `SavedRule.project_id`.
     #[prost(string, tag = "1")]
     pub directory: ::prost::alloc::string::String,
     /// Standard pagination controls.
@@ -3879,7 +3887,8 @@ pub struct ListSavedRulesResponse {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct DeleteSavedRuleRequest {
-    /// Accepted for symmetry and ignored: saved rules are process-wide.
+    /// Accepted for symmetry and ignored: a rule id is unique across every
+    /// Project (and global rules); see `SavedRule.project_id`.
     #[prost(string, tag = "1")]
     pub directory: ::prost::alloc::string::String,
     /// Rule identifier to delete.

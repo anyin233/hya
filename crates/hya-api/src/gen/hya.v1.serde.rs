@@ -22155,6 +22155,9 @@ impl serde::Serialize for SavedRule {
         if self.time_created.is_some() {
             len += 1;
         }
+        if !self.project_id.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("hya.v1.SavedRule", len)?;
         if !self.id.is_empty() {
             struct_ser.serialize_field("id", &self.id)?;
@@ -22173,6 +22176,9 @@ impl serde::Serialize for SavedRule {
         if let Some(v) = self.time_created.as_ref() {
             struct_ser.serialize_field("timeCreated", v)?;
         }
+        if !self.project_id.is_empty() {
+            struct_ser.serialize_field("projectId", &self.project_id)?;
+        }
         struct_ser.end()
     }
 }
@@ -22189,6 +22195,8 @@ impl<'de> serde::Deserialize<'de> for SavedRule {
             "pattern",
             "time_created",
             "timeCreated",
+            "project_id",
+            "projectId",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -22198,6 +22206,7 @@ impl<'de> serde::Deserialize<'de> for SavedRule {
             Tool,
             Pattern,
             TimeCreated,
+            ProjectId,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -22224,6 +22233,7 @@ impl<'de> serde::Deserialize<'de> for SavedRule {
                             "tool" => Ok(GeneratedField::Tool),
                             "pattern" => Ok(GeneratedField::Pattern),
                             "timeCreated" | "time_created" => Ok(GeneratedField::TimeCreated),
+                            "projectId" | "project_id" => Ok(GeneratedField::ProjectId),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -22248,6 +22258,7 @@ impl<'de> serde::Deserialize<'de> for SavedRule {
                 let mut tool__ = None;
                 let mut pattern__ = None;
                 let mut time_created__ = None;
+                let mut project_id__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Id => {
@@ -22280,6 +22291,12 @@ impl<'de> serde::Deserialize<'de> for SavedRule {
                             }
                             time_created__ = map_.next_value()?;
                         }
+                        GeneratedField::ProjectId => {
+                            if project_id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("projectId"));
+                            }
+                            project_id__ = Some(map_.next_value()?);
+                        }
                     }
                 }
                 Ok(SavedRule {
@@ -22288,6 +22305,7 @@ impl<'de> serde::Deserialize<'de> for SavedRule {
                     tool: tool__.unwrap_or_default(),
                     pattern: pattern__.unwrap_or_default(),
                     time_created: time_created__,
+                    project_id: project_id__.unwrap_or_default(),
                 })
             }
         }

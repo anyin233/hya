@@ -71,7 +71,7 @@ export function RulesView() {
                   return (
                     <text height={1} wrapMode="none">
                       <span style={{ fg: colors.accent }}>{on() ? "▸ " : "  "}</span>
-                      <span style={{ fg: on() ? colors.accent : colors.fg }}>{ruleLine(row, lineWidth())}</span>
+                      <span style={{ fg: on() ? colors.accent : colors.fg }}>{ruleLine(row, lineWidth(), store.state.projects)}</span>
                     </text>
                   )
                 }}

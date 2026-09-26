@@ -1831,9 +1831,11 @@ Response to a question request.
 
 ### `SavedRule`
 
-A persisted permission decision: an "allow always" reply. Saved rules are
-process-wide (shared by every session and project), reload into the
-permission plane when the server starts, and deleting one revokes it live.
+A persisted permission decision: an "allow always" reply. Most saved rules
+are global (shared by every session and project) and reload into the
+permission plane when the server starts; an `ExternalDirectory` grant
+(ADR-0026) is scoped to one Project instead. Deleting a rule revokes it
+live.
 
 | Field | Type | Description |
 |---|---|---|
@@ -1842,13 +1844,14 @@ permission plane when the server starts, and deleting one revokes it live.
 | `tool` (3) | `string` | Tool the rule matches: the exact tool or MCP tool name for a tool grant, `bash` for a command grant, or the action name (`read`, `edit`, `webfetch`, ...) for an action-wide grant. |
 | `pattern` (4) | `string` | Pattern the rule matches: the exact command for a `bash` grant, `*` for an action-wide grant, empty for an exact tool grant. |
 | `time_created` (5) | `google.protobuf.Timestamp` | When the rule was saved; absent for rules saved before creation times were recorded. |
+| `project_id` (6) | `string` | Project the rule is scoped to, or the literal `"global"` for a rule that applies to every session and project (ADR-0026's `GLOBAL_PROJECT`; every pre-ADR-0026 row is global). |
 
 ### `ListSavedRulesRequest`
 
 
 | Field | Type | Description |
 |---|---|---|
-| `directory` (1) | `string` | Accepted for symmetry and ignored: saved rules are process-wide. |
+| `directory` (1) | `string` | Accepted for symmetry and ignored: this lists rules of every Project (and global rules) regardless of directory; see `SavedRule.project_id`. |
 | `page` (2) | `PageRequest` | Standard pagination controls. |
 
 ### `ListSavedRulesResponse`
@@ -1864,7 +1867,7 @@ permission plane when the server starts, and deleting one revokes it live.
 
 | Field | Type | Description |
 |---|---|---|
-| `directory` (1) | `string` | Accepted for symmetry and ignored: saved rules are process-wide. |
+| `directory` (1) | `string` | Accepted for symmetry and ignored: a rule id is unique across every Project (and global rules); see `SavedRule.project_id`. |
 | `rule` (2) | `string` | Rule identifier to delete. |
 
 ### `IngestLogRequest`

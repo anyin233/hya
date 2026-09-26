@@ -7,7 +7,7 @@
  * `d` asks to confirm, Enter deletes; `r` refreshes; Esc closes. While a call
  * runs (`busy`) Esc cancels it.
  */
-import type { SavedRule } from "../client"
+import type { ProjectInfo, SavedRule } from "../client"
 import { relativeTime } from "./catalog"
 import type { KeyLike } from "../keys/bindings"
 import { truncate } from "./format"
@@ -92,14 +92,28 @@ function patternText(rule: SavedRule): string {
   return rule.pattern ?? ""
 }
 
-/** One rule row: effect, tool, pattern, relative saved time (fits `width`), e.g. `allow  bash  git status  · 2m ago`. */
-export function ruleLine(rule: SavedRule, width: number): string {
-  const line = `${cell(permissionText(rule.permission), 6)} ${cell(rule.tool || "*", 12)} ${cell(patternText(rule), width > 60 ? 40 : 20)} · ${ruleTimeText(rule.timeCreated)}`
+/**
+ * A rule's project column: the Project's name when `projects` (`state.projects`)
+ * has it, else the raw `projectId`; `"global"` for a rule scoped to every
+ * Project (ADR-0026's `GLOBAL_PROJECT`, or an older/pre-ADR-0026 row with no
+ * `projectId` at all).
+ */
+export function ruleProjectLabel(rule: SavedRule, projects: readonly ProjectInfo[] = []): string {
+  const id = rule.projectId
+  if (!id || id === "global") return "global"
+  return projects.find((project) => project.id === id)?.name ?? id
+}
+
+const patternWidth = (width: number): number => (width > 60 ? 30 : 20)
+
+/** One rule row: effect, tool, pattern, project, relative saved time (fits `width`), e.g. `allow  bash  git status  hya  · 2m ago`. */
+export function ruleLine(rule: SavedRule, width: number, projects: readonly ProjectInfo[] = []): string {
+  const line = `${cell(permissionText(rule.permission), 6)} ${cell(rule.tool || "*", 12)} ${cell(patternText(rule), patternWidth(width))} ${cell(ruleProjectLabel(rule, projects), 10)} · ${ruleTimeText(rule.timeCreated)}`
   return truncate(line.trimEnd(), width)
 }
 
 export function ruleHeaderLine(width: number): string {
-  return truncate(`${cell("EFFECT", 6)} ${cell("TOOL", 12)} ${cell("PATTERN", width > 60 ? 40 : 20)} · SAVED`, width)
+  return truncate(`${cell("EFFECT", 6)} ${cell("TOOL", 12)} ${cell("PATTERN", patternWidth(width))} ${cell("PROJECT", 10)} · SAVED`, width)
 }
 
 function matches(haystack: string, filter: string): boolean {

@@ -304,6 +304,8 @@ export interface SavedRule {
   tool?: string
   pattern?: string
   timeCreated?: string
+  /** Project the rule is scoped to, or the literal `"global"` for a rule that applies everywhere (ADR-0026). */
+  projectId?: string
 }
 
 /** `McpServerStatus` (`GET /v1/mcp`): one configured MCP server. */
