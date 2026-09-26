@@ -279,6 +279,10 @@ for line in sys.stdin:
             "content": [{"type": "text", "text": "echo:" + str(msg)}],
             "isError": False
         })
+    else:
+        # Answer everything else (e.g. `resources/list` on connect) at once;
+        # a silent server makes each connect wait out the MCP call timeout.
+        response(request["id"], {})
 "#;
 
 /// MCP fixture that exposes two tool names whose server prefixes can be crafted
@@ -307,6 +311,8 @@ for line in sys.stdin:
         ]})
     elif method == "tools/call":
         response(request["id"], {"content": [{"type": "text", "text": "collision-result"}], "isError": False})
+    else:
+        response(request["id"], {})
 "#;
 /// Encode a Skill fixture with the parser's exact frontmatter/body contract.
 fn skill_markdown(name: &str, description: &str, body: &str) -> String {

@@ -181,16 +181,18 @@ show that a new spec fails without the change it covers).
 ### CI
 
 `.github/workflows/ci.yml`'s `tui` job runs this suite on every push and pull
-request, alongside the Rust `check` job. It installs the pinned Bun (the same
-`bun-v1.4.2` install used by the release workflow), runs
-`bun install --frozen-lockfile` in both `packages/hya-tui` and
-`packages/hya-tui-web`, then `bun run typecheck && bun test` in `hya-tui` and
-`bun run typecheck && bun test ./test` in `hya-tui-web`. It builds `hya`
-(`cargo build --locked -p hya-backend --bin hya`) with the same Rust
-toolchain/cache actions as `check`, sets `HYA_BIN` to that binary, installs
-Chromium (`bunx playwright install --with-deps chromium`), and runs
-`bunx playwright test` from `packages/hya-tui-web`. On failure it uploads
-`packages/hya-tui-web/test-results/` as the `tui-web-test-results` artifact.
+request, alongside the Rust `lint`, `test`, and `e2e` jobs. It installs the
+pinned Bun (the same `bun-v1.4.2` install used by the release workflow), runs
+`bun install --frozen-lockfile` in `packages/hya-tui`, `packages/hya-tui-web`,
+and `crates/hya-plugin-bun/adapter`, then `bun run typecheck && bun test` in
+`hya-tui` and the adapter and `bun run typecheck && bun test ./test` in
+`hya-tui-web`. It builds `hya` (`cargo build --locked -p hya-backend --bin hya`)
+with the same Rust toolchain/cache actions as the Rust jobs, sets `HYA_BIN` to
+that binary, installs Chromium (`bunx playwright install --with-deps chromium`),
+and runs `bunx playwright test` from `packages/hya-tui-web`, retrying a failed
+test once (`retries` in `playwright.config.ts` when `CI` is set). On failure it
+uploads `packages/hya-tui-web/test-results/` as the `tui-web-test-results`
+artifact.
 
 Reproduce it locally with the commands in
 ["Running the tests"](#running-the-tests) above; the only CI-specific pieces

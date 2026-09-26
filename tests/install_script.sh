@@ -50,10 +50,17 @@ not_contains "$script" "hya-tui-ts"
 not_contains "$release_workflow" "hya-tui-ts"
 not_contains "$ci_workflow" "hya-tui-ts"
 
-for workflow in "$ci_workflow" "$release_workflow"; do
+# Local actions (`./…`) are versioned with this commit; the external actions
+# they use are checked like the workflows' own.
+local_actions=""
+for action in .github/actions/*/action.yml; do
+  [[ -e "$action" ]] && local_actions+=$(<"$action")$'\n'
+done
+for workflow in "$ci_workflow" "$release_workflow" "$local_actions"; do
   while IFS= read -r line; do
     [[ "$line" =~ uses:[[:space:]]*([^[:space:]#]+) ]] || continue
     ref=${BASH_REMATCH[1]}
+    [[ "$ref" == ./* ]] && continue
     [[ "$ref" =~ @[0-9a-f]{40}$ ]] || fail "workflow action is not pinned to a commit: $ref"
   done <<<"$workflow"
 done

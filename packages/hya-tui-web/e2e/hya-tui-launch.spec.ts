@@ -32,8 +32,9 @@ const alive = (pid: number): boolean => {
 async function backendPid(term: Tui): Promise<number> {
   await prompt(term, "/status")
   await term.waitForText(/Backend\s+daemon · pid \d+ · db \//)
-  // The row wraps in the status view; the start time is on it too.
-  await term.waitForText(/started \d+[sm] ago/)
+  // The row wraps in the status view, at a point that depends on the temp
+  // path's length: the start time may be on the next line, behind the border.
+  await term.waitForText(/started[\s│]*\d+[sm] ago/)
   const pid = Number(/Backend\s+daemon · pid (\d+)/.exec(await term.text())![1])
   expect(alive(pid)).toBe(true)
   expect(execFileSync("ps", ["-o", "command=", "-p", String(pid)]).toString()).toContain("serve --bind 127.0.0.1:0")
@@ -158,7 +159,8 @@ test.describe("launch errors", () => {
   test("a missing binary is a clear error and exit status 1", async ({ tui, workspace }) => {
     const term = await tui(...selfLaunch(workspace, [], { env: { HYA_BIN: join(workspace.root, "no-such-hya") } }))
     await term.waitForText("could not reach or start the hya server: hya binary not found: HYA_BIN=")
-    await term.waitForText("does not exist")
+    // The message wraps at a point that depends on the temp path's length.
+    await term.waitForText(/does not\s+exist/)
     expect(await term.waitForExit()).toBe(1)
   })
 
