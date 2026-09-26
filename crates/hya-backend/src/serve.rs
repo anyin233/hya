@@ -18,9 +18,12 @@ pub(crate) async fn cmd_serve(
     yolo: bool,
     pure: bool,
     relay: RelayFlags,
+    allow_hosts: Vec<String>,
 ) -> anyhow::Result<()> {
-    // A bad relay URL or CA file fails before anything starts.
+    // A bad relay URL or CA file, or a bad --allow-host, fails before
+    // anything starts.
     let relay_settings = serve_relay::settings(&relay)?;
+    let hosts = crate::cli_args::serve_host_policy(&bind, &allow_hosts)?;
     // One writer per database: fail fast, before composing anything, when
     // another server owns it (ADR-0022).
     let lock = match db_lock::try_claim(&db).context("lock the database")? {
@@ -31,7 +34,8 @@ pub(crate) async fn cmd_serve(
             std::process::exit(db_lock::EXIT_DB_IN_USE);
         }
     };
-    let prepared = prepare_server(&bind, db, lock, model_override, yolo, pure, &relay).await?;
+    let prepared =
+        prepare_server(&bind, db, lock, model_override, yolo, pure, &relay, &hosts).await?;
     // Join the relay before announcing readiness, so an identity-file
     // failure stops the start; the link is printed after the listen line.
     let link = match relay_settings {
@@ -72,8 +76,10 @@ pub(crate) async fn cmd_serve_action(
     yolo: bool,
     pure: bool,
     parent_relay: RelayFlags,
+    allow_hosts: Vec<String>,
 ) -> anyhow::Result<()> {
     use crate::cli_args::ServeAction;
+    let allow_hosts = crate::cli_args::allow_host_names(&allow_hosts)?;
     // `hya serve --relay X start` means `hya serve start --relay X`.
     let relay_flags = |own: RelayFlags| -> anyhow::Result<RelayFlags> {
         let flags = if own.is_set() {
@@ -108,12 +114,13 @@ pub(crate) async fn cmd_serve_action(
         }
     };
     use crate::daemon;
-    let spec = || -> anyhow::Result<daemon::DaemonSpec> {
+    let spec = |allow_hosts: Vec<String>| -> anyhow::Result<daemon::DaemonSpec> {
         Ok(daemon::DaemonSpec {
             db: db.clone(),
             model: model.clone(),
             yolo,
             pure,
+            allow_hosts,
             exe: std::env::current_exe().context("find the hya binary")?,
         })
     };
@@ -159,8 +166,15 @@ pub(crate) async fn cmd_serve_action(
     match action {
         ServeAction::Start { json, relay } => {
             let relay = relay_flags(relay)?;
-            let ready = daemon::start_with_relay(&spec()?, &relay, daemon::START_WAIT).await?;
+            let asked_hosts = !allow_hosts.is_empty();
+            let ready =
+                daemon::start_with_relay(&spec(allow_hosts)?, &relay, daemon::START_WAIT).await?;
             print_ready(&ready, json);
+            if asked_hosts && !ready.started {
+                eprintln!(
+                    "hya: a server was already running; --allow-host was not applied (use `hya serve restart --allow-host …`)"
+                );
+            }
             print_daemon_link(&ready, &relay).await;
         }
         ServeAction::Restart {
@@ -174,11 +188,16 @@ pub(crate) async fn cmd_serve_action(
             let old = db_lock::holder(&db)
                 .ok()
                 .flatten()
-                .and_then(|busy| busy.discovery)
-                .and_then(|found| found.relay);
-            let relay = serve_relay::restart_flags(relay_flags(relay)?, old.as_ref());
+                .and_then(|busy| busy.discovery);
+            let relay = serve_relay::restart_flags(
+                relay_flags(relay)?,
+                old.as_ref().and_then(|found| found.relay.as_ref()),
+            );
+            // Likewise its --allow-host names, unless new ones are given.
+            let allow_hosts = restart_allow_hosts(allow_hosts, old.as_ref());
             stop(timeout, force, json, hya_server::ShutdownReason::Restart).await?;
-            let ready = daemon::start_with_relay(&spec()?, &relay, daemon::START_WAIT).await?;
+            let ready =
+                daemon::start_with_relay(&spec(allow_hosts)?, &relay, daemon::START_WAIT).await?;
             print_ready(&ready, json);
             print_daemon_link(&ready, &relay).await;
         }
@@ -214,6 +233,7 @@ pub(crate) async fn cmd_serve_action(
                         "db": db,
                         "log": log,
                         "relay": found.relay,
+                        "allowHosts": found.allow_hosts,
                     })
                 );
             } else {
@@ -230,6 +250,9 @@ pub(crate) async fn cmd_serve_action(
                         relay.proxy_url
                     );
                 }
+                if !found.allow_hosts.is_empty() {
+                    println!("  hosts    {}", found.allow_hosts.join(", "));
+                }
             }
             if let Some(note) = daemon::version_note(&found) {
                 eprintln!("{note}");
@@ -237,6 +260,19 @@ pub(crate) async fn cmd_serve_action(
         }
     }
     Ok(())
+}
+
+/// The `--allow-host` names of the daemon `hya serve restart` starts: the
+/// ones given to `restart`, else the old backend's (its discovery file).
+pub(crate) fn restart_allow_hosts(
+    explicit: Vec<String>,
+    old: Option<&db_lock::Discovery>,
+) -> Vec<String> {
+    if !explicit.is_empty() {
+        return explicit;
+    }
+    old.map(|found| found.allow_hosts.clone())
+        .unwrap_or_default()
 }
 
 /// A composed `hya serve` whose listener is bound but not yet serving.
@@ -316,6 +352,8 @@ pub(crate) async fn serve_until(
 ///
 /// `lock` is the caller's claim on `db` ([`db_lock::try_claim`]); once the
 /// listener is bound its discovery file is published.
+// The composition inputs of one server; a struct would only rename them.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn prepare_server(
     bind: &str,
     db: String,
@@ -324,6 +362,7 @@ pub(crate) async fn prepare_server(
     yolo: bool,
     pure: bool,
     relay_flags: &RelayFlags,
+    hosts: &hya_server::HostPolicy,
 ) -> anyhow::Result<PreparedServer> {
     emit_startup_mark("backend_start", None);
     super::first_run_config_bootstrap(false)?;
@@ -382,7 +421,8 @@ pub(crate) async fn prepare_server(
         .with_workspace_adapters(plugin_host.workspace_adapters())
         .with_default_agent(runtime.default_agent.clone())
         .with_pure_guidance(pure)
-        .with_auto_title(true);
+        .with_auto_title(true)
+        .with_allowed_hosts(hosts.clone());
     if yolo {
         eprintln!("hya: --yolo on serve auto-approves ALL tool actions for any client (RCE risk)");
     }
@@ -417,6 +457,7 @@ pub(crate) async fn prepare_server(
         .filter(|value| !value.is_empty())
     {
         let grpc_state = state.clone();
+        let grpc_hosts = hosts.clone();
         tokio::spawn(async move {
             if let Ok(listener) = tokio::net::TcpListener::bind(&grpc_bind).await {
                 let addr = listener
@@ -425,7 +466,10 @@ pub(crate) async fn prepare_server(
                 println!("hya grpc listening on http://{addr}");
                 let grpc = hya_server::V1Grpc::new(grpc_state);
                 use hya_api::v1 as pbv1;
+                // The same Host allowlist on `:authority`; unknown peers
+                // are refused by the loopback-only rpcs themselves.
                 let server = tonic::transport::Server::builder()
+                    .layer(hya_server::GrpcHostLayer::new(grpc_hosts))
                     .add_service(pbv1::process_server::ProcessServer::new(grpc.clone()))
                     .add_service(pbv1::catalog_server::CatalogServer::new(grpc.clone()))
                     .add_service(pbv1::agent_models_server::AgentModelsServer::new(
@@ -463,7 +507,7 @@ pub(crate) async fn prepare_server(
         .with_context(|| format!("bind {bind}"))?;
     let addr = listener.local_addr().context("read local addr")?;
     if let Some(lock) = lock.as_mut() {
-        lock.publish(&db_lock::connect_url(addr))
+        lock.publish_with(&db_lock::connect_url(addr), &hosts.extra_hosts())
             .context("publish the server discovery file")?;
     }
     let router = server_router(state.clone());

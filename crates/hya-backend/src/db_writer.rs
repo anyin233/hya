@@ -128,6 +128,7 @@ mod tests {
             version: "0".into(),
             started_at: 0,
             relay: None,
+            allow_hosts: Vec::new(),
         };
         let message = unroutable_message("exec", "/d/s.db", &server, "--pure cannot apply to it");
         assert!(message.contains("pid 7 at http://127.0.0.1:5"), "{message}");

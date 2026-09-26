@@ -248,9 +248,28 @@ the whole `/v1` API — holding the link means owner trust — except:
 | `Process.DisposeProcess`, `Process.UpgradeProcess` | A link holder must not stop or replace the backend. |
 
 `RelayControl` is also refused for a TCP peer that is not a loopback address
-(a server bound to `0.0.0.0`) and for browser requests (an `Origin` or
-`Sec-Fetch-Site` header), because the server's CORS policy mirrors any
-origin; the gRPC binding refuses non-loopback peers the same way.
+(a server bound to `0.0.0.0`), for a request whose client address is unknown
+(fail-closed: no TCP peer and no gRPC peer), and for browser requests (an
+`Origin` or `Sec-Fetch-Site` header), because the server's CORS policy
+mirrors any origin; the gRPC binding refuses non-loopback and unknown peers
+the same way.
+
+**No browsers over the relay.** A relay-origin request that carries an
+`Origin`, `Sec-Fetch-Site`, `Sec-Fetch-Mode`, or `Sec-Fetch-Dest` header is
+refused before any route runs — `403 {"error":{"code":"permission_denied",
+"message":"browser requests are not accepted over the relay …"}}` — so a web
+page can neither fetch through a bridge (CORS request or preflight) nor open
+a WebSocket through it (browsers always send `Origin` on a WebSocket
+handshake). hya's own clients (the TUI, `hya-client`, the SDK, curl) send
+none of these headers.
+
+**Allowed Host names.** Every request, local or relay-origin, must name an
+allowed Host: `localhost`, `127.0.0.1`, or `[::1]` on any port, plus the
+server's `--allow-host` names and a non-wildcard `--bind` host
+([protocol](protocol/README.md#allowed-host-names)). A request through a
+bridge carries the bridge's loopback address (`127.0.0.1:<port>`) and passes;
+a DNS-rebinding page, whose requests name the attacker's host, gets `403
+permission_denied` and cannot read `GET /v1/relay/link` or anything else.
 
 **`hya serve relay` commands** find the running backend of `--db` through
 its discovery file (like `hya serve status`) and call its `RelayControl`
@@ -1028,8 +1047,8 @@ of the backend it is called on. Loopback only, see
 | `GetRelayLink` | `GET /v1/relay/link` | | `{link, status}` | `failed_precondition` when not joined |
 | `RotateRelayKey` | `POST /v1/relay/rotate` | `{}` | `{link, status}` (`link` empty when not joined) | `failed_precondition` without an identity |
 
-All of them answer `permission_denied` from relay origin, a non-loopback
-peer, or a browser. `RelayStatus` (protojson):
+All of them answer `permission_denied` from relay origin, a non-loopback or
+unknown peer, or a browser. `RelayStatus` (protojson):
 
 | Field | Type | Meaning |
 | --- | --- | --- |

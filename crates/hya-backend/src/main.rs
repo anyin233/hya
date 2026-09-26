@@ -913,6 +913,7 @@ async fn main() -> anyhow::Result<()> {
     let backend = cli_args::bare_backend(&cli)?;
     let resume = cli_args::bare_resume(&cli)?;
     let connect = cli_args::bare_connect(&cli)?;
+    let allow_hosts = cli_args::bare_allow_hosts(&cli)?;
     let model = cli.model.clone();
     let yolo = cli.yolo;
     let pure = cli.pure;
@@ -965,6 +966,7 @@ async fn main() -> anyhow::Result<()> {
                     state_dir: state_dir(),
                     connect,
                     connect_relay_ca,
+                    allow_hosts,
                 })
                 .await;
             }
@@ -1002,6 +1004,7 @@ async fn main() -> anyhow::Result<()> {
             action: Some(action),
             db: command_db,
             relay,
+            allow_host,
             ..
         }) => {
             let path = command_db.unwrap_or_else(|| db.clone());
@@ -1012,6 +1015,7 @@ async fn main() -> anyhow::Result<()> {
                 yolo,
                 pure,
                 relay,
+                allow_host,
             )
             .await
         }
@@ -1023,6 +1027,7 @@ async fn main() -> anyhow::Result<()> {
             db: command_db,
             action: None,
             relay,
+            allow_host,
             ..
         }) => {
             serve::cmd_serve(
@@ -1032,6 +1037,7 @@ async fn main() -> anyhow::Result<()> {
                 yolo,
                 pure,
                 relay,
+                allow_host,
             )
             .await
         }

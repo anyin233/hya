@@ -336,6 +336,7 @@ pub(crate) async fn connect(
         model: request.model.clone(),
         yolo: request.yolo,
         pure: request.pure,
+        allow_hosts: request.allow_hosts.clone(),
         exe: exe.to_path_buf(),
     };
     let ready = daemon::start(&spec, daemon::START_WAIT).await?;
@@ -351,7 +352,7 @@ pub(crate) async fn connect(
         )
     } else {
         format!(
-            "hya: using the running backend daemon pid {} at {} (hya {}); --model/--yolo/--pure of this launch do not apply",
+            "hya: using the running backend daemon pid {} at {} (hya {}); --model/--yolo/--pure/--allow-host of this launch do not apply",
             found.pid, found.url, found.version
         )
     }];
@@ -433,6 +434,8 @@ pub(crate) struct LaunchRequest {
     pub(crate) connect: Option<hya_relay::link::RelayLink>,
     /// `--relay-ca <pem>` of `--connect`'s bridge.
     pub(crate) connect_relay_ca: Option<PathBuf>,
+    /// `--allow-host` names for a daemon this launch starts.
+    pub(crate) allow_hosts: Vec<String>,
 }
 
 /// The paths bare `hya` runs: Bun, the two packages, and the workspace.
@@ -1170,6 +1173,7 @@ mod tests {
             state_dir: PathBuf::from("/nonexistent/hya"),
             connect: None,
             connect_relay_ca: None,
+            allow_hosts: Vec::new(),
         }
     }
 

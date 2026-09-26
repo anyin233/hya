@@ -632,6 +632,7 @@ so Ctrl+C in the terminal reaches only the TUI and `hya`.
 | `--backend <URL>` | `http://` or `https://` URL of a running server; bare invocation only; must answer `GET /v1/health`. |
 | `--connect [<LINK>\|-]` | A relay link, `-` (read from the terminal, not echoed), or no value (`HYA_RELAY_LINK`); bare invocation only; conflicts with `--backend`. |
 | `--relay-ca <PEM>`, `--transport <auto\|grpc\|ws>` | Only with `--connect`: the in-process bridge's extra CA file and relay binding. |
+| `--allow-host <HOST>` | Repeatable; passed to a daemon this launch starts (not to a running one); conflicts with `--backend` and `--connect`. See [Allowed Host names](#allowed-host-names). |
 | `--resume [<ID>]` | Bare invocation only (else an error); passed to the terminal TUI as `--resume [<ID>]`. |
 | TUI flags | `--server <url> --dir <cwd> --db <db> --hya <hya>` (only `--server <url> --dir <cwd>` with `--backend`; `--server <bridge-url> --dir <cwd> --hya <hya> --remote --server-label <label>` with `--connect`); the terminal TUI adds exactly one of `--web-url <url>` / `--web-error <reason>` and `--resume [<id>]` when given ([tui.md](tui.md#start-it)); the WebUI tabs' command adds `--web-tab` instead. |
 | Web host readiness | First stdout line matching `hya-tui-web listening on <url>` ([tui-web.md](tui-web.md#usage)). |
@@ -782,6 +783,7 @@ caller's cwd as their session's workdir.
 | `--mdns` | Bind to `0.0.0.0` when no hostname is supplied. hya does not advertise mDNS yet. |
 | `--mdns-domain <NAME>` | Accepted for Compat CLI compatibility. |
 | `--cors <ORIGIN>` | Accepted for Compat CLI compatibility; hya mirrors CORS origins globally. |
+| `--allow-host <HOST>` | Also accept requests whose `Host` names `HOST` (a host name or IP address, no port; repeatable; also after `start`/`restart`). See [Allowed Host names](#allowed-host-names). |
 | `--db <PATH>` | SQLite path. Empty string uses an in-memory store. A file database is locked for this process (see "One server per database" below); a second `serve` on it exits **75**. |
 | `--relay <URL>` | Join the secure relay published at this public URL (`https://host[:port][/prefix]`, or `http://…` for plaintext on a LAN or tailnet) and print the relay link once on stderr as `hya relay link: <link>`. The link is a **secret**: whoever holds it controls this backend. See [Hosting a backend on a relay](relay.md#hosting-a-backend-on-a-relay). |
 | `--relay-transport auto\|grpc\|ws` | Relay binding (default `auto`); also the link's `t=`. Needs `--relay`. |
@@ -801,6 +803,39 @@ change its wording. Source: [`serve.rs`](../crates/hya-backend/src/serve.rs).
 With `--relay` the relay is joined before this line, and the link follows it
 on stderr, once, as `hya relay link: <link>` plus a one-line secrecy note.
 
+### Allowed Host names
+
+Every HTTP request (and every gRPC call on `HYA_GRPC_BIND`, by its
+`:authority`) must name an allowed host, or it gets `403
+{"error":{"code":"permission_denied","message":"request refused: Host \"…\" is
+not an allowed name for this server (allowed: …); …"}}` before any route runs.
+This stops **DNS rebinding**: a web page whose name resolves to 127.0.0.1
+still sends its own name as `Host`, so it cannot drive the backend or read
+`GET /v1/relay/link` through your browser.
+
+| Accepted | Why |
+| --- | --- |
+| `localhost`, `127.0.0.1`, `[::1]`, on any port | Loopback clients (the TUI, `hya-client`, curl, a relay bridge's `127.0.0.1:<port>`). The port is not compared: a bridge forwards its own port. |
+| The host of `--bind` when it is not a wildcard (`--bind 192.168.1.20:8080` accepts `192.168.1.20`) | The address you chose to serve on. |
+| Each `--allow-host <HOST>` (case-insensitive, a trailing dot ignored, IPv6 with or without brackets) | Names you reach the server by on purpose. |
+
+A request with no `Host` (HTTP/1.0) from a network peer is refused too;
+requests through the secure relay pass the same check. `--allow-host` is
+also a bare `hya` flag (for the daemon it starts), is passed to the daemon
+by `hya serve start`, is recorded in the discovery file as `allowHosts`, and
+is kept by `hya serve restart` unless new names are given; `hya serve
+status` shows them (`hosts`).
+
+**LAN migration.** A wildcard bind (`--bind 0.0.0.0:8080`, `--mdns`) used to
+answer any `Host`; now only loopback names pass until you list the LAN names
+clients use:
+
+```sh
+hya serve --bind 0.0.0.0:8080 --allow-host 192.168.1.20 --allow-host hya.lan
+```
+
+See [troubleshooting](troubleshooting.md#403-permission_denied-request-refused-host--is-not-an-allowed-name).
+
 **One server per database.** With a file `--db`, `serve` takes an exclusive
 lock on the database before it opens it, and publishes a discovery file once
 it listens, so a TUI or bare `hya` can attach to it instead of opening the
@@ -810,7 +845,7 @@ same file a second time ([ADR-0022](adr/0022-one-writer-per-database.md)).
 | --- | --- |
 | `<db>.lock` | Exclusive advisory lock (`flock`), taken without waiting before the store opens and held until the process exits; the OS releases it on a crash or SIGKILL. Contents: the owner's pid. Never deleted. |
 | `<db>.server.stop` | Written atomically by `hya serve stop` / `restart` just before their SIGTERM: `{"pid": <lock holder>, "reason": "stop" \| "restart"}`. The server reads it when a termination signal arrives, uses it only when `pid` is its own, and deletes it; the reason becomes the last frame of every client stream (`serverStopping`, see below). Deleted by whoever takes the lock. |
-| `<db>.server.json` | Written atomically after the listener is bound: `{"url": "http://127.0.0.1:<port>", "pid": <u32>, "version": "<hya version>", "startedAt": <unix ms>}`. While the server is joined to a relay it also has `"relay": {"proxyUrl", "transport", "ephemeral", "ca"?, "heartbeatSecs"?}` (public settings only, never the link; read by `hya serve restart`). An unspecified bind address (`0.0.0.0`, `::`) is published as loopback. Removed on a clean shutdown (after the drain); a file left by a crash is ignored and replaced by the next owner. |
+| `<db>.server.json` | Written atomically after the listener is bound: `{"url": "http://127.0.0.1:<port>", "pid": <u32>, "version": "<hya version>", "startedAt": <unix ms>}`. While the server is joined to a relay it also has `"relay": {"proxyUrl", "transport", "ephemeral", "ca"?, "heartbeatSecs"?}` (public settings only, never the link; read by `hya serve restart`), and with `--allow-host` names `"allowHosts": ["<host>", …]` (normalized; kept by `hya serve restart`). An unspecified bind address (`0.0.0.0`, `::`) is published as loopback. Removed on a clean shutdown (after the drain); a file left by a crash is ignored and replaced by the next owner. |
 | `<db>.relay-identity.json` | The relay identity (room key, Noise static key, link PSK), mode 0600, created on the first relay join and kept across restarts; see [relay.md](relay.md#hosting-a-backend-on-a-relay). |
 
 `<db>` is the `--db` path with its directory resolved (symlinks and `..`), so

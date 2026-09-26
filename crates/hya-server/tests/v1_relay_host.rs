@@ -201,7 +201,7 @@ fn request(method: &str, uri: &str, body: Option<Value>) -> hyper::Request<Full<
     let mut builder = hyper::Request::builder()
         .method(method)
         .uri(uri)
-        .header("host", "hya");
+        .header("host", "127.0.0.1");
     let bytes = match body {
         Some(body) => {
             builder = builder.header("content-type", "application/json");
@@ -376,9 +376,10 @@ async fn the_pty_websocket_upgrades_through_the_tunnel() {
     let path = token["url"].as_str().unwrap().to_owned();
 
     let io = tunnel(&link).await.unwrap();
-    let (mut socket, response) = tokio_tungstenite::client_async(format!("ws://hya{path}"), io)
-        .await
-        .unwrap();
+    let (mut socket, response) =
+        tokio_tungstenite::client_async(format!("ws://127.0.0.1{path}"), io)
+            .await
+            .unwrap();
     assert_eq!(response.status(), 101);
     let input = json!({"input": base64_of(b"echo relay-pty-ok\n")}).to_string();
     socket
@@ -468,6 +469,101 @@ async fn relay_control_and_process_stop_are_loopback_only() {
         .insert("origin", "https://evil.example".parse().unwrap());
     let response = sender.send_request(browser).await.unwrap();
     assert_eq!(response.status(), 403);
+    relay.stop().await;
+}
+
+#[tokio::test]
+async fn browser_requests_and_foreign_hosts_are_refused_over_the_relay() {
+    let relay = Relay::start().await;
+    let backend = backend(host_config(None)).await;
+    let link = connected(&backend, &relay).await;
+    let mut api = http(&link).await;
+    // A browser fetch (CORS or not) carries Origin or Sec-Fetch-*.
+    for (name, value) in [
+        ("origin", "https://evil.example"),
+        ("origin", "null"),
+        ("sec-fetch-site", "cross-site"),
+        ("sec-fetch-mode", "cors"),
+    ] {
+        let mut browser = request("GET", "/v1/health", None);
+        browser.headers_mut().insert(name, value.parse().unwrap());
+        api.ready().await.unwrap();
+        let response = api.send_request(browser).await.unwrap();
+        assert_eq!(response.status(), 403, "{name}: {value}");
+        let body: Value =
+            serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
+                .unwrap();
+        assert_eq!(body["error"]["code"], json!("permission_denied"));
+        assert!(
+            body["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("browser requests are not accepted over the relay"),
+            "{body}"
+        );
+    }
+    // The CORS preflight is refused too (it never gets the mirrored headers).
+    let mut preflight = request("OPTIONS", "/v1/sessions", None);
+    preflight
+        .headers_mut()
+        .insert("origin", "https://evil.example".parse().unwrap());
+    preflight
+        .headers_mut()
+        .insert("access-control-request-method", "POST".parse().unwrap());
+    api.ready().await.unwrap();
+    let response = api.send_request(preflight).await.unwrap();
+    assert_eq!(response.status(), 403);
+    assert!(
+        response
+            .headers()
+            .get("access-control-allow-origin")
+            .is_none()
+    );
+    // A rebound Host through the bridge.
+    let mut rebound = request("GET", "/v1/health", None);
+    rebound
+        .headers_mut()
+        .insert("host", "evil.example:4000".parse().unwrap());
+    api.ready().await.unwrap();
+    assert_eq!(api.send_request(rebound).await.unwrap().status(), 403);
+    // A plain client through the relay still works.
+    let (status, body) = call(&mut api, "GET", "/v1/health", None).await;
+    assert_eq!(status, 200, "{body}");
+
+    // A browser WebSocket handshake always carries Origin.
+    let (status, pty) = call(
+        &mut api,
+        "POST",
+        "/v1/pty",
+        Some(json!({"shell": "/bin/sh", "cwd": backend.dir.to_string_lossy()})),
+    )
+    .await;
+    assert_eq!(status, 200, "{pty}");
+    let id = pty["id"].as_str().unwrap().to_owned();
+    let (status, token) = call(
+        &mut api,
+        "POST",
+        &format!("/v1/pty/{id}/connect-token"),
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, 200, "{token}");
+    let path = token["url"].as_str().unwrap().to_owned();
+    let io = tunnel(&link).await.unwrap();
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
+    let mut upgrade = format!("ws://127.0.0.1{path}")
+        .into_client_request()
+        .unwrap();
+    upgrade
+        .headers_mut()
+        .insert("origin", "https://evil.example".parse().unwrap());
+    let refused = tokio_tungstenite::client_async(upgrade, io).await;
+    match refused {
+        Err(tokio_tungstenite::tungstenite::Error::Http(response)) => {
+            assert_eq!(response.status(), 403);
+        }
+        other => panic!("the browser WebSocket upgrade was not refused: {other:?}"),
+    }
     relay.stop().await;
 }
 

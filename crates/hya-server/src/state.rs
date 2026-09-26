@@ -10,6 +10,7 @@ use serde_json::Value;
 use tokio::sync::{broadcast, mpsc};
 
 use crate::agent_model_control::{AgentModelControl, EmptyAgentModelControl};
+use crate::host::HostPolicy;
 use crate::mcp_control::{EmptyMcpControl, McpControl};
 use crate::provider_control::{EmptyProviderControl, ProviderControl};
 use crate::relay_host::RelayHost;
@@ -49,6 +50,7 @@ pub struct AppState {
     runs: runs::RunRegistry,
     session_list: SessionListHub,
     relay: RelayHost,
+    hosts: Arc<HostPolicy>,
 }
 
 impl AppState {
@@ -80,7 +82,24 @@ impl AppState {
             runs: runs::RunRegistry::default(),
             session_list: SessionListHub::default(),
             relay: RelayHost::default(),
+            hosts: Arc::new(HostPolicy::loopback()),
         }
+    }
+
+    /// The Host names the router accepts besides loopback (`--allow-host`,
+    /// a non-wildcard bind host; docs/protocol/README.md "Allowed Host
+    /// names"). The default accepts only `localhost`, `127.0.0.1`, and
+    /// `[::1]`.
+    #[must_use]
+    pub fn with_allowed_hosts(mut self, hosts: HostPolicy) -> Self {
+        self.hosts = Arc::new(hosts);
+        self
+    }
+
+    /// The Host allowlist of routers built from this state.
+    #[must_use]
+    pub fn allowed_hosts(&self) -> HostPolicy {
+        self.hosts.as_ref().clone()
     }
 
     /// Install the relay host connector (ADR-0025) the `RelayControl` rpcs

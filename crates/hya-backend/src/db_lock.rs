@@ -49,6 +49,10 @@ pub(crate) struct Discovery {
     /// link or any key; absent while not joined.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) relay: Option<DiscoveredRelay>,
+    /// `--allow-host` names the server accepts besides loopback, so `hya
+    /// serve restart` keeps them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) allow_hosts: Vec<String>,
 }
 
 /// The relay settings recorded in the discovery file (public values only).
@@ -161,6 +165,8 @@ impl Busy {
 
 /// The result of trying to take a database's lock.
 #[derive(Debug)]
+// A one-shot return value of `try_claim`; boxing `Owned` buys nothing.
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum Claim {
     /// The store is not locked (in-memory, SQLite URI).
     Unlocked,
@@ -345,8 +351,19 @@ impl DbLock {
         self.paths.stop.clone()
     }
 
-    /// Atomically write the discovery file for a server listening on `url`.
+    /// [`Self::publish_with`] without `--allow-host` names (tests).
+    #[cfg(test)]
     pub(crate) fn publish(&mut self, url: &str) -> std::io::Result<Discovery> {
+        self.publish_with(url, &[])
+    }
+
+    /// Atomically write the discovery file for a server listening on `url`
+    /// that accepts the `--allow-host` names `allow_hosts`.
+    pub(crate) fn publish_with(
+        &mut self,
+        url: &str,
+        allow_hosts: &[String],
+    ) -> std::io::Result<Discovery> {
         let discovery = Discovery {
             url: url.to_string(),
             pid: std::process::id(),
@@ -357,6 +374,7 @@ impl DbLock {
                     u64::try_from(since.as_millis()).unwrap_or(u64::MAX)
                 }),
             relay: None,
+            allow_hosts: allow_hosts.to_vec(),
         };
         write_discovery(&self.paths.discovery, &discovery)?;
         self.published = true;

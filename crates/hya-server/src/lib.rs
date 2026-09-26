@@ -6,7 +6,9 @@
 //!   `hya.v1` IDL (`crates/hya-api`), plus the gRPC binding (`V1Grpc`)
 //!   dispatching through the same router.
 //!
-//! CORS mirrors the request origin and headers and allows any method. See
+//! CORS mirrors the request origin and headers and allows any method, behind
+//! a guard that accepts only allowed Host names and refuses browser requests
+//! that arrive through the relay (`host.rs`). See
 //! `docs/protocol/` for the contract, integration guide, and generated
 //! reference/OpenAPI.
 
@@ -16,6 +18,7 @@ use axum::{Json, Router};
 use tower_http::cors::{AllowHeaders, AllowOrigin, Any, CorsLayer};
 
 mod agent_model_control;
+mod host;
 mod mcp_control;
 mod origin;
 mod pending;
@@ -36,6 +39,7 @@ pub use agent_model_control::{
     AgentModelControl, AgentModelControlError, AgentModelControlFuture, AgentModelEffective,
     AgentModelIdentity, AgentModelSource, AgentModelState,
 };
+pub use host::{GrpcHostGuard, GrpcHostLayer, HostPolicy, LOOPBACK_HOSTS};
 pub use hya_proto::WorkspaceAdapterInfo;
 pub use hya_tool::FormatterStatus;
 pub use mcp_control::McpControl;
@@ -66,16 +70,24 @@ pub use workflow_control::{
     WorkflowControl, WorkflowControlError, WorkflowControlFuture, WorkflowDecorationFuture,
 };
 
-/// Build the full HTTP app: the `/v1` contract routes + CORS.
+/// Build the full HTTP app: the `/v1` contract routes + CORS, behind the
+/// request admission guard (Host allowlist, no browsers over the relay;
+/// `host.rs`), which runs first — also for CORS preflights.
 ///
 /// The gRPC binding (`V1Grpc`) dispatches through this same router, so the
 /// two transports share one handler set.
 pub fn router(state: AppState) -> Router {
+    let hosts = std::sync::Arc::new(state.allowed_hosts());
     let state = ServerState::new(state);
     spawn_background_reclaim_driver(state.clone());
     spawn_project_busy_watcher(state.clone());
     session_list::spawn_busy_tracker(state.clone());
-    v1::router().with_state(state).layer(cors())
+    v1::router()
+        .with_state(state)
+        .layer(cors())
+        .layer(axum::middleware::from_fn(move |request, next| {
+            host::guard(hosts.clone(), request, next)
+        }))
 }
 
 /// Drive the reclaim turn for backgrounded MCP calls.

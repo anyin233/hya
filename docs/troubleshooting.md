@@ -359,6 +359,38 @@ hya serve --bind 127.0.0.1:8080 --db hya.db
 Use `127.0.0.1:0` only when you want the OS to choose an ephemeral port; hya
 prints the actual listening address on startup.
 
+## `403 permission_denied: request refused: Host "…" is not an allowed name`
+
+The server answers only requests whose `Host` (or HTTP/2 `:authority`) names
+`localhost`, `127.0.0.1`, or `[::1]` (any port), the host of a non-wildcard
+`--bind`, or an `--allow-host` name. This stops DNS-rebinding web pages from
+driving the backend (or reading `GET /v1/relay/link`) through your browser.
+A request with no `Host` at all (an HTTP/1.0 client) gets `403 … names no
+Host`. On the gRPC listener (`HYA_GRPC_BIND`) the same check answers
+`PERMISSION_DENIED`.
+
+You see this when you reach the server by another name on purpose — a LAN
+address with `--bind 0.0.0.0:8080` or `--mdns`, a name in `/etc/hosts`, a
+reverse proxy that forwards its own `Host`. Name it:
+
+```sh
+hya serve --bind 0.0.0.0:8080 --allow-host 192.168.1.20 --allow-host hya.lan
+hya serve restart --allow-host hya.lan   # the daemon; a later restart keeps the names
+```
+
+A server bound to one specific address (`--bind 192.168.1.20:8080`) accepts
+that address by itself. `hya serve status` lists the extra names (`hosts`).
+Before this check, a server bound to `0.0.0.0` answered any `Host`; now each
+LAN name must be listed. See [docs/cli.md](cli.md#allowed-host-names).
+
+## `403 browser requests are not accepted over the relay`
+
+A request that arrived through the secure relay carried an `Origin` or
+`Sec-Fetch-*` header — it came from a web page, which may never drive a
+remote backend through a bridge. Use the TUI or the WebUI of `hya --connect`
+(its browser tab talks to the TUI, not to the bridge), `hya-client`, or
+curl; none of them send those headers.
+
 ## Relay: `hya proxy`/`hya relay doctor` Cannot Reach Each Other
 
 The secure relay (`hya proxy`, `hya relay doctor`) works through nginx,

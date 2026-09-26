@@ -34,6 +34,27 @@ ignores it:
 `ListWorkflows` does not read its `directory` yet: it lists the workflow
 catalog of the most recently listed session.
 
+## Allowed Host names
+
+Before any route runs, every HTTP request must name an allowed host in its
+`Host` header (and in the request URI's authority, HTTP/2 `:authority`):
+`localhost`, `127.0.0.1`, or `[::1]` on any port, the server's non-wildcard
+`--bind` host, and its `--allow-host` names (case-insensitive; see
+[cli.md](../cli.md#allowed-host-names)). Anything else — typically a
+DNS-rebinding web page — gets
+
+```json
+HTTP 403
+{"error": {"code": "permission_denied", "message": "request refused: Host \"evil.example:8080\" is not an allowed name for this server (allowed: localhost, 127.0.0.1, [::1]); …"}}
+```
+
+including CORS preflights, which are answered only after the check. A network
+request that names no host is refused the same way; the gRPC listener checks
+`:authority` and answers `PERMISSION_DENIED`. Requests through the secure
+relay pass the same check (a bridge's client names `127.0.0.1:<port>`).
+Relay-origin requests with browser headers are refused as well — see
+[Relay control](#relay-control-loopback-only).
+
 ## Versioning
 
 `/v1` is additive-only within a major version: new fields and rpcs appear
@@ -1123,8 +1144,15 @@ relay the backend is hosted on ([ADR-0025](../adr/0025-secure-relay.md),
 server-side extension `Origin::Relay`. Such requests may use every rpc except
 `RelayControl` and `Process.DisposeProcess` / `Process.UpgradeProcess`, which
 answer `permission_denied`. `RelayControl` also answers `permission_denied`
-to a non-loopback TCP (or gRPC) peer and to a browser request (an `Origin` or
+to a non-loopback TCP (or gRPC) peer, to a request whose peer address is
+unknown (fail-closed), and to a browser request (an `Origin` or
 `Sec-Fetch-Site` header). Field reference: [api-reference.md](api-reference.md).
+
+**No browsers over the relay.** Any relay-origin request that carries
+`Origin`, `Sec-Fetch-Site`, `Sec-Fetch-Mode`, or `Sec-Fetch-Dest` — a CORS
+fetch or preflight, or a browser WebSocket handshake — is refused with `403
+permission_denied` ("browser requests are not accepted over the relay")
+before any route runs.
 
 ## Minimal client walkthrough
 
