@@ -33,6 +33,13 @@ export interface TurnRunnerOptions {
   sleep?: (ms: number) => Promise<void>
   /** Delays between `409 session_busy` retries; one retry per entry. */
   backoffMs?: number[]
+  /**
+   * Called once the open session's own turn finishes, success or error (not
+   * for a user-cancelled turn) — the hook for desktop notifications
+   * (src/notify.ts, app/controller.ts). `detail` is the error message on
+   * failure, else "".
+   */
+  onEnd?: (outcome: { ok: boolean; detail: string }) => void
 }
 
 export const defaultBackoffMs = [100, 150, 250, 400, 600, 800, 1000, 1000, 1000, 1000]
@@ -52,7 +59,7 @@ export function turnEndStatus(end: FinishedInfo, error: { code: string; message:
   }
 }
 
-export function createTurnRunner({ store, client, sleep = (ms) => Bun.sleep(ms), backoffMs = defaultBackoffMs }: TurnRunnerOptions) {
+export function createTurnRunner({ store, client, sleep = (ms) => Bun.sleep(ms), backoffMs = defaultBackoffMs, onEnd }: TurnRunnerOptions) {
   let draining: Promise<void> = Promise.resolve()
   let active = false
   /** A cancel was requested for the running turn; its end reads `Cancelled · Ready`. */
@@ -68,13 +75,18 @@ export function createTurnRunner({ store, client, sleep = (ms) => Bun.sleep(ms),
     return `Running · ${store.state.turnId}${count ? ` · ${count} queued` : ""}`
   }
 
-  /** The turn ended: show its outcome and send the next queued prompt. */
+  /** The turn ended: show its outcome, notify (unless cancelled), and send the next queued prompt. */
   function complete(end: FinishedInfo): void {
     const error = store.fold.error(end.message)
       ?? store.state.messages.find((message) => message.id === end.message)?.error
     store.endTurn()
     const text = turnEndStatus(end, error)
-    status(cancelRequested && !error && !text.startsWith("Error") ? "Cancelled · Ready" : text)
+    const cancelled = end.finish === "FINISH_REASON_CANCELLED" || (cancelRequested && !error && !text.startsWith("Error"))
+    status(cancelled ? "Cancelled · Ready" : text)
+    if (!cancelled) {
+      const failed = Boolean(error) || end.finish === "FINISH_REASON_ERROR"
+      onEnd?.({ ok: !failed, detail: error ? `${error.code ? `${error.code}: ` : ""}${error.message}` : "" })
+    }
     cancelRequested = false
     drain()
   }
@@ -108,7 +120,9 @@ export function createTurnRunner({ store, client, sleep = (ms) => Bun.sleep(ms),
       store.setPendingShell(undefined)
       store.dequeue(item.id)
       store.endTurn()
-      status(cancelRequested ? "Cancelled · Ready" : `Error: ${String(error)}`)
+      const cancelled = cancelRequested
+      status(cancelled ? "Cancelled · Ready" : `Error: ${String(error)}`)
+      if (!cancelled) onEnd?.({ ok: false, detail: String(error) })
       cancelRequested = false
       return true
     }
@@ -138,6 +152,7 @@ export function createTurnRunner({ store, client, sleep = (ms) => Bun.sleep(ms),
           store.dequeue(item.id)
           store.endTurn()
           status(`Error: ${String(error)}`)
+          onEnd?.({ ok: false, detail: String(error) })
           return true
         }
         store.setQueuedState(item.id, "queued")

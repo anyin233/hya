@@ -107,6 +107,37 @@ closes the listener and exits 0. No tab process outlives the host.
 
 Page query parameters: `font` (CSS font family) and `fontSize` (pixels).
 
+### Desktop notifications
+
+The page (`web/client.ts`) maps two terminal escape sequences to a browser
+`Notification`, for whatever program runs on the PTY — it has no notion of
+hya (ADR-0021):
+
+- **OSC 9** (`ESC ] 9 ; <message> BEL`): the payload is the notification
+  body.
+- **OSC 777** (`ESC ] 777 ; notify ; <title> ; <body> BEL`): only the
+  `notify` subcommand is a notification; the title and body are the second
+  and third `;`-separated fields (`src/notify.ts` `osc777Notification`).
+
+A notification is shown only while the tab is not the one in front of the
+user (`document.hidden`, or the window lacks focus). The `Notification`
+permission prompt only opens on a user gesture (the page asks once, on the
+first pointer or key event on the terminal); a denial or an unsupported
+browser is silent. The hya TUI is one consumer of this (its own gate — the
+terminal's focus reporting and the `/notifications` preference — is
+documented in [tui.md](tui.md#desktop-notifications)); any other program run
+through this host that sends these sequences gets the same browser
+notification.
+
+A program may send both sequences for one event (the hya TUI does, for
+terminals that honor only one), which would otherwise show two OS
+notifications for it. `src/notify.ts`'s `createNotificationDeduper` drops a
+repeat with the same body within 250ms of the last one shown — generic:
+keyed on the opaque body text, not on what it means — and `showNotification`
+also passes `tag` (`notificationTag`, title+body) to `new Notification`, so
+the browser's own notification center coalesces a duplicate the window
+missed instead of stacking it.
+
 ### Running the tests
 
 ```sh
@@ -416,7 +447,7 @@ Unknown or malformed client frames are ignored. `attach` is not used.
 
 | Field | Type | Meaning |
 | --- | --- | --- |
-| `term` | xterm.js `Terminal` | Live terminal; read `term.buffer.active`, `cols`, `rows`. A spec can also observe escape sequences the program writes, e.g. `term.parser.registerOscHandler(52, (data) => …)` records OSC 52 clipboard writes (`e2e/hya-tui-clipboard.spec.ts`); return `true` to consume them. |
+| `term` | xterm.js `Terminal` | Live terminal; read `term.buffer.active`, `cols`, `rows`. A spec can also observe escape sequences the program writes, e.g. `term.parser.registerOscHandler(52, (data) => …)` records OSC 52 clipboard writes (`e2e/hya-tui-clipboard.spec.ts`), and `registerOscHandler(9, …)` / `registerOscHandler(777, …)` record desktop-notification writes (`e2e/hya-tui-notifications.spec.ts`, [Desktop notifications](#desktop-notifications)); return `true` to consume them. |
 | `connected` | `boolean` | WebSocket open. |
 | `exitCode` | `number \| null` | Child exit code once reported. |
 | `frames` | `number` | Output frames written so far. |

@@ -92,6 +92,23 @@ export async function run(options: Options): Promise<void> {
       copy: (text) => renderer?.copyToClipboardOSC52(text) ?? false,
       suspend: () => renderer?.suspend(),
       resume: () => renderer?.resume(),
+      // OSC 9 / OSC 777 (src/notify.ts): no visible effect, so this can go
+      // straight to stdout rather than through the renderer's own frame
+      // buffer (which has no generic "write this sequence" method).
+      notify: (sequence) => { process.stdout.write(sequence) },
+      // CliRenderer already tracks the terminal's CSI ?1004h focus reporting
+      // (FocusIn/FocusOut) and emits "focus"/"blur"; no hand-rolling needed.
+      onFocusChange: (handler) => {
+        if (!renderer) return () => {}
+        const onFocus = () => handler(true)
+        const onBlur = () => handler(false)
+        renderer.on("focus", onFocus)
+        renderer.on("blur", onBlur)
+        return () => {
+          renderer?.off("focus", onFocus)
+          renderer?.off("blur", onBlur)
+        }
+      },
     },
   })
   // autoFocus off: a click (on the transcript, a Thinking line, the sidebar)

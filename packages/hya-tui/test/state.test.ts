@@ -210,6 +210,16 @@ test("a sessionUpdated title/agent/model frame updates the open session and its 
   expect(store.state.sessions.find((row) => row.id === "hysec_2")?.title).toBe("Renamed elsewhere")
 })
 
+test("notifications default on and focused defaults true; both are settable", () => {
+  const store = createAppStore()
+  expect(store.state.notifications).toBe(true)
+  expect(store.state.focused).toBe(true)
+  store.setNotifications(false)
+  expect(store.state.notifications).toBe(false)
+  store.setFocused(false)
+  expect(store.state.focused).toBe(false)
+})
+
 test("the highlighted prompt option belongs to one ask; the draft flag follows the input", () => {
   const store = createAppStore()
   expect(store.promptIndex("perm_1")).toBe(0)

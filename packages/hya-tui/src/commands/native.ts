@@ -497,6 +497,23 @@ export const nativeCommandSpecs: CommandSpec[] = [
     },
   },
   {
+    name: "/notifications",
+    description: "Turn desktop notifications on or off (saved): a turn finishing, or a permission/question ask, while the terminal is unfocused",
+    argumentHint: "[on|off]",
+    complete: ({ words, current, head }) => words.length === 1 ? matchValues(head, current, switchValues) : [],
+    run: ({ store, actions }, { args }) => {
+      const on = parseSwitch(args[0], store.state.notifications, "Usage: /notifications [on|off]")
+      store.setNotifications(on)
+      const text = `Desktop notifications ${on ? "on" : "off"}`
+      try {
+        actions.savePreferences({ notifications: on })
+        store.setStatus(text)
+      } catch (error) {
+        store.setStatus(`${text} · not saved: ${error instanceof Error ? error.message : String(error)}`)
+      }
+    },
+  },
+  {
     name: "/exit",
     description: "Quit the TUI (Ctrl+C twice, Ctrl+D on an empty input)",
     run: ({ actions }) => { actions.quit() },

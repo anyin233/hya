@@ -24,6 +24,8 @@ export interface TuiPreferences {
   theme?: string
   /** Vim mode in the composer (`/vim`); default off. */
   vim?: boolean
+  /** Desktop notifications when unfocused (`/notifications`; src/notify.ts); default on. */
+  notifications?: boolean
 }
 
 type Validators = { [Key in keyof Required<TuiPreferences>]: (value: unknown) => value is TuiPreferences[Key] }
@@ -31,6 +33,7 @@ type Validators = { [Key in keyof Required<TuiPreferences>]: (value: unknown) =>
 const validators: Validators = {
   theme: (value): value is string => typeof value === "string" && value.length > 0,
   vim: (value): value is boolean => typeof value === "boolean",
+  notifications: (value): value is boolean => typeof value === "boolean",
 }
 
 /** The environment variable that points the TUI at another preferences file (tests, several profiles). */
