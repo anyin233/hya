@@ -75,9 +75,10 @@ struct TurnExecution<'a> {
     agents: Arc<[AgentDef]>,
     cancel: &'a CancellationToken,
     external_dirs: &'a [PathBuf],
-    /// Workspace roots resolved at this turn's start (ADR-0024); every tool
-    /// call of the turn carries them in `ToolCtx::roots`.
-    roots: Arc<[PathBuf]>,
+    /// Workspace roots and grant scope resolved at this turn's start
+    /// (ADR-0024, ADR-0026); every tool call of the turn carries the roots in
+    /// `ToolCtx::roots` and remembers scoped grants under the grant scope.
+    workspace: Arc<super::roots::SessionWorkspace>,
     actor_claim: Option<&'a ActorClaim>,
     /// Immutable triggering-turn guidance scoped into child SpawnerPlane.
     guidance: Option<Arc<str>>,
@@ -773,10 +774,10 @@ impl SessionEngine {
                 ),
             };
         // Read fresh per turn so a Project edit applies to the next turn.
-        let roots: Arc<[PathBuf]> = self
-            .session_roots(session, &projection, binding.workdir())
-            .await
-            .into();
+        let workspace = Arc::new(
+            self.session_workspace(session, &projection, binding.workdir())
+                .await,
+        );
         let sidecar_hooks = sidecar_handle
             .as_ref()
             .and_then(|handle| handle.hook_dispatcher())
@@ -891,7 +892,7 @@ impl SessionEngine {
                 agents,
                 cancel: &cancel,
                 external_dirs,
-                roots: Arc::clone(&roots),
+                workspace: Arc::clone(&workspace),
                 actor_claim,
                 // Same Arc for nested spawn scope; no re-discovery.
                 guidance: guidance.clone(),
@@ -1155,7 +1156,7 @@ impl SessionEngine {
             cancel,
             apply_default_overlays,
             external_dirs,
-            roots,
+            workspace,
             actor_claim,
             guidance,
             workflow_route,
@@ -1926,7 +1927,8 @@ impl SessionEngine {
                             .mode_permission_plane(binding, session, Some(&live_agent.name))
                             .await?;
                         let mut permission =
-                            permission_for_session(&mode_plane, session, external_dirs);
+                            permission_for_session(&mode_plane, session, external_dirs)
+                                .with_grant_scope(workspace.grant_scope.clone());
                         if let Some(hooks) = &activation_hooks {
                             permission = permission.prepend_interceptor(Arc::new(
                                 crate::bundle_hooks::BundlePermissionInterceptor::new(Arc::clone(
@@ -1978,7 +1980,7 @@ impl SessionEngine {
                                     lsp: self.lsp.clone(),
                                     formatter: self.formatter.clone(),
                                     workdir: binding.workdir().to_path_buf(),
-                                    roots: roots.to_vec(),
+                                    roots: workspace.roots.clone(),
                                     cancel: cancel.clone(),
                                 };
                                 // Permission and plugin hooks can await. Recheck at the

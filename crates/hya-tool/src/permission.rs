@@ -9,7 +9,7 @@
 //! Call-scoped grants from a successful invocation authorize later resource
 //! checks **except** [`Action::ExternalDirectory`], which always re-evaluates.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 // allow: SIZE_OK - permission rules, async asks, and tests already share one module.
@@ -500,17 +500,39 @@ pub enum RememberScope {
     LegacyAction,
     /// Native invocation grant: remember only the exact subject.
     Exact(ExactSubject),
+    /// Concrete resource grant (ADR-0026, [`Action::ExternalDirectory`]):
+    /// store `Rule(action, pattern, Allow)` under `scope` only.
+    Scoped {
+        /// Concrete resource pattern that was asked (for example `/dir/*`).
+        pattern: String,
+        /// Who the grant is remembered for; `None` when the asking plane has
+        /// neither a Project nor a session (the grant is then plane-wide).
+        scope: Option<GrantScope>,
+    },
 }
 
 impl RememberScope {
-    /// Pattern string for diagnostics (`"*"` or the exact subject value).
+    /// Pattern string for diagnostics (`"*"`, the exact subject value, or the
+    /// concrete scoped pattern).
     #[must_use]
     pub fn pattern(&self) -> &str {
         match self {
             Self::LegacyAction => "*",
             Self::Exact(subject) => &subject.value,
+            Self::Scoped { pattern, .. } => pattern,
         }
     }
+}
+
+/// Who a scoped "allow always" grant applies to (ADR-0026).
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum GrantScope {
+    /// Every session of this Project (the id as stored in
+    /// `saved_permission.project_id`). Persisted by the host.
+    Project(String),
+    /// Only this session: a temporary session or one without a Project.
+    /// Never persisted.
+    Session(SessionId),
 }
 
 /// Optional async hook consulted after remembered grants and before the user ask.
@@ -541,6 +563,11 @@ pub struct PermissionPlane {
     persistent: Arc<Mutex<PermissionRules>>,
     invocation_policy: Option<Arc<InvocationPolicy>>,
     native_grants: Arc<Mutex<HashSet<ExactSubject>>>,
+    /// Allow-always rules remembered for one Project or one session, shared
+    /// with every derived plane and consulted only by planes of that scope.
+    scoped: Arc<Mutex<HashMap<GrantScope, PermissionRules>>>,
+    /// Scope of this plane's scoped grants; defaults to the session.
+    grant_scope: Option<GrantScope>,
     asks: mpsc::UnboundedSender<AskRequest>,
     session: Option<SessionId>,
     message_id: Option<MessageId>,
@@ -603,6 +630,8 @@ impl PermissionPlane {
             persistent: Arc::new(Mutex::new(rules)),
             invocation_policy: invocation_policy.map(Arc::new),
             native_grants: Arc::default(),
+            scoped: Arc::default(),
+            grant_scope: None,
             asks: tx,
             session: None,
             message_id: None,
@@ -718,6 +747,49 @@ impl PermissionPlane {
         plane
     }
 
+    /// Remember scoped grants (ADR-0026) for `scope`, and honor the grants
+    /// already remembered for it. Without this, a session-scoped plane uses
+    /// [`GrantScope::Session`].
+    #[must_use]
+    pub fn with_grant_scope(&self, scope: GrantScope) -> Self {
+        let mut plane = self.clone();
+        plane.grant_scope = Some(scope);
+        plane
+    }
+
+    /// Effective scope for scoped grants: the explicit grant scope, else the
+    /// session, else `None`.
+    #[must_use]
+    pub fn grant_scope(&self) -> Option<GrantScope> {
+        self.grant_scope
+            .clone()
+            .or_else(|| self.session.map(GrantScope::Session))
+    }
+
+    /// Install a persisted scoped "allow always" grant (a saved-permission
+    /// row of a Project). Idempotent; shared with every derived plane but
+    /// honored only by planes whose [`Self::grant_scope`] is `scope`.
+    pub async fn grant_scoped(&self, scope: GrantScope, action: Action, pattern: &str) {
+        let mut scoped = self.scoped.lock().await;
+        push_allow(&mut scoped.entry(scope).or_default().rules, action, pattern);
+    }
+
+    /// Remove a grant installed by [`Self::grant_scoped`] or a scoped "allow
+    /// always" reply.
+    pub async fn revoke_scoped(&self, scope: &GrantScope, action: Action, pattern: &str) {
+        let mut scoped = self.scoped.lock().await;
+        if let Some(rules) = scoped.get_mut(scope) {
+            rules.rules.retain(|rule| {
+                !(rule.action == action
+                    && rule.resource_pattern == pattern
+                    && rule.mode == Mode::Allow)
+            });
+            if rules.rules.is_empty() {
+                scoped.remove(scope);
+            }
+        }
+    }
+
     /// Attach message/tool-call correlation for native asks.
     #[must_use]
     pub fn for_tool_call(&self, message_id: MessageId, call_id: ToolCallId) -> Self {
@@ -785,19 +857,7 @@ impl PermissionPlane {
             Some(subject) => {
                 self.native_grants.lock().await.insert(subject);
             }
-            None => {
-                let mut persistent = self.persistent.lock().await;
-                let exists = persistent.rules.iter().any(|rule| {
-                    rule.action == action
-                        && rule.resource_pattern == pattern
-                        && rule.mode == Mode::Allow
-                });
-                if !exists {
-                    persistent
-                        .rules
-                        .push(Rule::new(action, pattern, Mode::Allow));
-                }
-            }
+            None => push_allow(&mut self.persistent.lock().await.rules, action, pattern),
         }
     }
 
@@ -861,15 +921,35 @@ impl PermissionPlane {
         if self.persistent.lock().await.evaluate(action, &resource) == Mode::Allow {
             return Ok(());
         }
+        let scope = self.grant_scope();
+        if let Some(scope) = &scope
+            && self
+                .scoped
+                .lock()
+                .await
+                .get(scope)
+                .is_some_and(|rules| rules.evaluate(action, &resource) == Mode::Allow)
+        {
+            return Ok(());
+        }
+        // ADR-0026: an outside directory is remembered as the concrete
+        // directory for this Project (or session), never as `*`.
+        let remember = if action == Action::ExternalDirectory {
+            RememberScope::Scoped {
+                pattern: resource.pattern(),
+                scope,
+            }
+        } else {
+            RememberScope::LegacyAction
+        };
         if let Some(interceptor) = &self.interceptor
             && let Some(decision) = interceptor.intercept(self.session, action, &resource).await
         {
             return self
-                .apply_decision(action, resource, RememberScope::LegacyAction, decision)
+                .apply_decision(action, resource, remember, decision)
                 .await;
         }
-        self.ask(action, resource, RememberScope::LegacyAction)
-            .await
+        self.ask(action, resource, remember).await
     }
 
     async fn ask(
@@ -918,6 +998,14 @@ impl PermissionPlane {
                     RememberScope::Exact(subject) => {
                         self.native_grants.lock().await.insert(subject);
                     }
+                    RememberScope::Scoped {
+                        pattern,
+                        scope: Some(scope),
+                    } => self.grant_scoped(scope, action, &pattern).await,
+                    RememberScope::Scoped {
+                        pattern,
+                        scope: None,
+                    } => push_allow(&mut self.persistent.lock().await.rules, action, &pattern),
                 }
                 Ok(())
             }
@@ -927,6 +1015,16 @@ impl PermissionPlane {
                 feedback,
             }),
         }
+    }
+}
+
+/// Append `Rule(action, pattern, Allow)` unless an identical rule exists.
+fn push_allow(rules: &mut Vec<Rule>, action: Action, pattern: &str) {
+    let exists = rules.iter().any(|rule| {
+        rule.action == action && rule.resource_pattern == pattern && rule.mode == Mode::Allow
+    });
+    if !exists {
+        rules.push(Rule::new(action, pattern, Mode::Allow));
     }
 }
 

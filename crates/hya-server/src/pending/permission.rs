@@ -8,7 +8,7 @@ use hya_tool::{Action, AskRequest, Decision, RememberScope, Resource};
 use serde_json::{Value, json};
 use tokio::sync::{Mutex, broadcast, mpsc, oneshot};
 
-use super::saved_permission::{SavedPermissions, action_name};
+use super::saved_permission::{SavedPermissions, action_name, install, uninstall};
 
 #[derive(Clone)]
 pub(crate) struct PermissionRequests {
@@ -262,10 +262,10 @@ impl PermissionRequests {
             return Ok(false);
         };
         let save_action = entry.action;
-        let save_pattern = entry.remember.pattern().to_string();
+        let save_remember = entry.remember.clone();
         let ok = entry.reply.send(decision(reply, message)).is_ok();
         if ok && matches!(reply, PermissionReply::Always) {
-            self.saved.remember(id, save_action, save_pattern).await?;
+            self.saved.remember(id, save_action, &save_remember).await?;
         }
         for item in related {
             let _sent = item.reply.send(related_decision(reply));
@@ -301,11 +301,11 @@ impl PermissionRequests {
             return Ok(false);
         };
         let save_action = entry.action;
-        let save_pattern = entry.remember.pattern().to_string();
+        let save_remember = entry.remember.clone();
         let replied_session = entry.session;
         let ok = entry.reply.send(decision(reply, message)).is_ok();
         if ok && matches!(reply, PermissionReply::Always) {
-            self.saved.remember(id, save_action, save_pattern).await?;
+            self.saved.remember(id, save_action, &save_remember).await?;
         }
         for item in related {
             let _sent = item.reply.send(related_decision(reply));
@@ -358,23 +358,22 @@ impl PermissionRequests {
         id: &str,
         plane: &hya_tool::PermissionPlane,
     ) -> Result<(), StoreError> {
-        if let Some(row) = self.saved.remove(id).await?
-            && let Some(action) = super::saved_permission::parse_action(&row.action)
-        {
-            plane.revoke_saved(action, &row.resource).await;
+        if let Some(row) = self.saved.remove(id).await? {
+            uninstall(plane, &row).await;
         }
         Ok(())
     }
 
     /// Install every saved grant on `plane`; returns how many were restored.
+    /// Global rows apply to every session; a Project's rows (ADR-0026) only
+    /// to planes scoped to that Project.
     pub(crate) async fn restore_saved(
         &self,
         plane: &hya_tool::PermissionPlane,
     ) -> Result<usize, StoreError> {
         let mut restored = 0;
         for row in self.saved.list(None).await? {
-            if let Some(action) = super::saved_permission::parse_action(&row.action) {
-                plane.grant_saved(action, &row.resource).await;
+            if install(plane, &row).await {
                 restored += 1;
             }
         }
@@ -424,7 +423,9 @@ fn take_related_for_reply(
         (PermissionReply::Always, _) | (PermissionReply::Reject, RememberScope::Exact(_)) => {
             Some((remember, action))
         }
-        (PermissionReply::Reject, RememberScope::LegacyAction) => None,
+        (PermissionReply::Reject, RememberScope::LegacyAction | RememberScope::Scoped { .. }) => {
+            None
+        }
     };
     take_related(pending, session, scope)
 }
@@ -442,7 +443,9 @@ fn take_related(
                     RememberScope::LegacyAction => {
                         entry.action == action && entry.remember == RememberScope::LegacyAction
                     }
-                    RememberScope::Exact(_) => entry.remember == *remember,
+                    RememberScope::Exact(_) | RememberScope::Scoped { .. } => {
+                        entry.remember == *remember
+                    }
                 })
         })
         .map(|(id, _)| id.clone())

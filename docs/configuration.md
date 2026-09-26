@@ -1174,6 +1174,13 @@ are reloaded when the server starts), and are listed and deleted with
 `/rules` in the TUI or `GET` / `DELETE /v1/permissions/rules` — a deleted
 grant stops applying at once. They are not written to `config.yaml`; see
 [Protocol guide — Saved permission rules](protocol/README.md#saved-permission-rules).
+The exception is access to a directory outside the session's Project roots
+(ADR-0026): *allow always* there remembers only that directory (`<dir>/*`,
+subdirectories included) and only for the session's Project; other Projects
+still ask, and deleting the Project deletes the grant. A temporary session (or
+one without a Project) keeps such a grant for itself until the server stops;
+it is not saved. Older saved grants that allowed every outside directory keep
+working for every session until you delete them.
 
 Omitting `permission` is equivalent to `model: default` with no rules. A
 permission-only config remains active while hya uses the offline provider **only

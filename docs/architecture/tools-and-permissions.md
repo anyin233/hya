@@ -300,9 +300,11 @@ persistence writes that serde string into the DB `action` column
 | `Any` | — | Matches everything at the resource layer. |
 
 Every resource flattens to a single match-pattern string via `Resource::pattern()`.
-`Any` flattens to `"*"`. That is why a resource-level **allow always** grant
-stores `Rule(action, "*", Allow)` and then allows the entire action
-([`apply_decision`](../../crates/hya-tool/src/permission.rs)).
+`Any` flattens to `"*"`. A resource-level **allow always** grant stores
+`Rule(action, "*", Allow)` and then allows the entire action
+([`apply_decision`](../../crates/hya-tool/src/permission.rs)), except for
+`ExternalDirectory`, which remembers only the concrete `<dir>/*` it asked for
+(see [Remember scope for outside directories](#remember-scope-for-outside-directories)).
 
 The plugin wire form of the same union is `WireResource`: tagged variants
 `tool`, `path`, `glob`, `command`, `subagent`, `url`, `web_search`, `skill`,
@@ -333,7 +335,9 @@ When an action evaluates to `Ask`:
 
 1. `PermissionPlane` checks the applicable invocation or resource rules and
    remembered grant (snapshot Allow/Deny first; then persistent allow-always
-   rules; call-scoped grants do **not** satisfy `ExternalDirectory`).
+   rules; then the allow-always rules of the plane's grant scope — its
+   Project, else its session; call-scoped grants do **not** satisfy
+   `ExternalDirectory`).
 2. **Interceptor stage**: if a `PermissionInterceptor` is installed via
    `PermissionPlane::with_interceptor`, it runs **after** remembered grants and
    **before** the user ask channel, at both the invocation gate
@@ -353,29 +357,58 @@ When an action evaluates to `Ask`:
 5. `AllowOnce` permits only the current call.
 6. Native invocation `AllowAlways` remembers only the selected exact target and
    value. Legacy resource `AllowAlways` continues to allow the whole action
-   (`Rule(action, "*", Allow)`).
+   (`Rule(action, "*", Allow)`), except `ExternalDirectory`, which remembers
+   the concrete directory for the grant scope
+   (`RememberScope::Scoped`; see below).
 7. `Reject` returns a permission error, optionally carrying user feedback.
+
+### Remember scope for outside directories
+
+ADR-0026: an "allow always" on an `ExternalDirectory` ask approves one
+directory for one Project, not the disk. The ask carries
+`RememberScope::Scoped { pattern, scope }`, where `pattern` is the concrete
+`<dir>/*` resource that was asked (it also covers subdirectories, since `*`
+matches `/`) and `scope` is the plane's `GrantScope`:
+
+- **`GrantScope::Project(id)`** — set by the engine at each turn start
+  (`PermissionPlane::with_grant_scope`) when the session (or, for a
+  subagent, its inherited Project) names a Project that still exists. The
+  rule applies to every session of that Project and to no other Project.
+- **`GrantScope::Session(id)`** — the default for a temporary session, a
+  session without a Project, or one whose Project was deleted. The rule lasts
+  for that session only, in memory.
+
+Scoped rules live in the process plane keyed by scope and are consulted only
+by planes of the same scope. Other actions keep their remember behavior.
+Global rules (configured rules, legacy action-wide `*` grants, including an
+old saved `externaldirectory` `*` row) still apply to every session.
 
 ### Saved grants
 
 An "allow always" answered by a client through the server
 (`POST /v1/interactions/{id}/respond`) is also persisted as a
-`saved_permission` row (`id`, `project_id` — always `global`, `action` — the
-serde name above, `resource` — the exact subject value or `*`,
+`saved_permission` row (`id`, `project_id`, `action` — the serde name above,
+`resource` — the exact subject value, `*`, or a concrete `<dir>/*`,
 `time_created` — ms since the epoch; migration `0013` added it, older rows
-keep it `NULL`). Grants are process-wide because the permission plane is:
-every session plane is derived from the one process plane and shares its
-remembered grants.
+keep it `NULL`). `project_id` is `global` for invocation and action-wide
+grants, which apply to every session because every session plane is derived
+from the one process plane and shares its remembered grants. An
+`ExternalDirectory` grant is saved under its Project's id; a session-scoped
+one is not saved.
 
 - **Startup.** `AppState::restore_saved_permissions` (called by `hya serve`
   and the in-process runtime before serving) replays every row into the
-  process plane with `PermissionPlane::grant_saved`: `*` restores the
-  action-wide `Rule(action, "*", Allow)`; any other value restores the exact
-  subject for `tool` (`PermissionTarget::Tool`), `mcp` (`Mcp`), and `bash`
-  (`Command`).
+  process plane. A `global` row goes through `PermissionPlane::grant_saved`:
+  `*` restores the action-wide `Rule(action, "*", Allow)`; any other value
+  restores the exact subject for `tool` (`PermissionTarget::Tool`), `mcp`
+  (`Mcp`), and `bash` (`Command`), or the concrete rule for other actions. A
+  Project row goes through `PermissionPlane::grant_scoped` for
+  `GrantScope::Project(project_id)`, so only that Project's sessions see it.
 - **Delete.** `DELETE /v1/permissions/rules/{rule}` removes the row and calls
-  `PermissionPlane::revoke_saved`, so the next matching call asks again.
-  Configured (snapshot) rules are never touched.
+  `PermissionPlane::revoke_saved` (or `revoke_scoped` for a Project row), so
+  the next matching call asks again. Configured (snapshot) rules are never
+  touched. Deleting a Project deletes its rows in the same transaction
+  (`SessionStore::delete_project`).
 - **Listing.** `GET /v1/permissions/rules` reports each row as a
   `SavedRule` with `permission: RULE_PERMISSION_ALLOW` and its
   `timeCreated`; see the [protocol guide](../protocol/README.md#saved-permission-rules).
@@ -383,8 +416,9 @@ remembered grants.
 Grants answered by an interceptor (plugin bridge, bundle approver) stay
 in-memory only.
 
-Pending asks coalesce using the same remember scope: native asks group only an
-identical subject, while legacy asks retain action-wide grouping. The server
+Pending asks coalesce using the same remember scope: native and scoped
+(`ExternalDirectory`) asks group only an identical subject and scope, while
+legacy asks retain action-wide grouping. The server
 surfaces pending asks to connected clients through its interaction endpoints.
 Headless `exec`, RPC, and goal flows answer residual asks with `Reject`.
 

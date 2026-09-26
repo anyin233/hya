@@ -401,10 +401,14 @@ impl SessionEngine {
         let mut file_capture = super::file_snapshot::FileCapture::None;
         let result = match resources.resolve_tool(&tool) {
             Some(resolved) => {
+                let workspace = self
+                    .session_workspace(session, &projection, binding.workdir())
+                    .await;
                 let mut permission = self
                     .mode_permission_plane(binding, session, Some(&agent.name))
                     .await?
-                    .for_session(session);
+                    .for_session(session)
+                    .with_grant_scope(workspace.grant_scope);
                 if let Some(hooks) = activation_hook_for(session) {
                     permission = permission.prepend_interceptor(Arc::new(
                         crate::bundle_hooks::BundlePermissionInterceptor::new(hooks),
@@ -451,9 +455,7 @@ impl SessionEngine {
                             lsp: self.lsp.clone(),
                             formatter: self.formatter.clone(),
                             workdir: binding.workdir().to_path_buf(),
-                            roots: self
-                                .session_roots(session, &projection, binding.workdir())
-                                .await,
+                            roots: workspace.roots,
                             cancel,
                         };
                         file_capture = Box::pin(super::file_snapshot::capture_before(

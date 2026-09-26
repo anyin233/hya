@@ -863,6 +863,15 @@ directory; the `directory` field is accepted and ignored), survive a server
 restart (they are reloaded into the permission plane at startup), and a
 deleted rule stops applying immediately: the next matching call asks again.
 
+The exception is an `externaldirectory` rule (ADR-0026): "allow always" on a
+directory outside the session's Project roots saves `pattern` `<dir>/*` for
+that Project only; sessions of other Projects still ask, and deleting the
+Project deletes its rules. A temporary session's (or a Project-less
+session's) outside-directory grant is not saved and is not listed. The list
+includes every Project's rules; `SavedRule` does not yet report which Project
+a rule belongs to. An older `externaldirectory` rule with pattern `*` still
+applies to every session.
+
 | Call | HTTP | Answer |
 | --- | --- | --- |
 | `Interactions.ListSavedRules` | `GET /v1/permissions/rules` | `{rules: [SavedRule], page}`, stable id order |
